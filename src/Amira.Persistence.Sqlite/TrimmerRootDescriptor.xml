@@ -1,0 +1,9 @@
+<linker>
+  <assembly fullname="System.Private.CoreLib">
+    <type fullname="System.Boolean" preserve="all" />
+    <type fullname="System.DateTimeOffset" preserve="all" />
+    <type fullname="System.Double" preserve="all" />
+    <type fullname="System.Int32" preserve="all" />
+    <type fullname="System.String" preserve="all" />
+  </assembly>
+</linker>

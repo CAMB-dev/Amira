@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)Generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Amira.Contracts\Amira.Contracts.csproj" />
+    <ProjectReference Include="..\Amira.Domain\Amira.Domain.csproj" />
+    <ProjectReference Include="..\Amira.Errors\Amira.Errors.csproj" />
+    <PackageReference Include="SQLite.Framework.Bundled" />
+    <PackageReference Include="SQLite.Framework.SourceGenerator" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <TrimmerRootDescriptor Include="TrimmerRootDescriptor.xml" />
+  </ItemGroup>
+
+</Project>

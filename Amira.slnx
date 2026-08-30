@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Amira.Errors/Amira.Errors.csproj" />
+    <Project Path="src/Amira.Domain/Amira.Domain.csproj" />
+    <Project Path="src/Amira.Contracts/Amira.Contracts.csproj" />
+    <Project Path="src/Amira.Persistence.Sqlite/Amira.Persistence.Sqlite.csproj" />
+    <Project Path="src/Amira.Providers/Amira.Providers.csproj" />
+    <Project Path="src/Amira.Runtime/Amira.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Amira.Errors.Tests/Amira.Errors.Tests.csproj" />
+    <Project Path="tests/Amira.Domain.Tests/Amira.Domain.Tests.csproj" />
+    <Project Path="tests/Amira.Contracts.Tests/Amira.Contracts.Tests.csproj" />
+    <Project Path="tests/Amira.Persistence.Sqlite.Tests/Amira.Persistence.Sqlite.Tests.csproj" />
+    <Project Path="tests/Amira.Providers.Tests/Amira.Providers.Tests.csproj" />
+    <Project Path="tests/Amira.Runtime.Tests/Amira.Runtime.Tests.csproj" />
+  </Folder>
+</Solution>
