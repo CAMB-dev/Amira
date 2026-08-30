@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Amira.Contracts\Amira.Contracts.csproj" />
+    <ProjectReference Include="..\Amira.Domain\Amira.Domain.csproj" />
+    <ProjectReference Include="..\Amira.Errors\Amira.Errors.csproj" />
+    <ProjectReference Include="..\Amira.Runtime\Amira.Runtime.csproj" />
+    <ProjectReference Include="..\Amira.Providers\Amira.Providers.csproj" />
+    <ProjectReference Include="..\Amira.Persistence.Sqlite\Amira.Persistence.Sqlite.csproj" />
+    <ProjectReference Include="..\Amira.Observability\Amira.Observability.csproj" />
+    <ProjectReference Include="..\Amira.Credentials.Windows\Amira.Credentials.Windows.csproj" />
+  </ItemGroup>
+</Project>
