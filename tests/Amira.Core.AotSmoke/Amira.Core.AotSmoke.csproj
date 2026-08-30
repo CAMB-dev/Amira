@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Amira.Contracts\Amira.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Amira.Domain\Amira.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Amira.Errors\Amira.Errors.csproj" />
+    <ProjectReference Include="..\..\src\Amira.Persistence.Sqlite\Amira.Persistence.Sqlite.csproj" />
+    <ProjectReference Include="..\..\src\Amira.Providers\Amira.Providers.csproj" />
+    <ProjectReference Include="..\..\src\Amira.Runtime\Amira.Runtime.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <TrimmerRootDescriptor Include="TrimmerRootDescriptor.xml" />
+  </ItemGroup>
+</Project>

@@ -8,6 +8,7 @@
     <Project Path="src/Amira.Runtime/Amira.Runtime.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Amira.Core.AotSmoke/Amira.Core.AotSmoke.csproj" />
     <Project Path="tests/Amira.Errors.Tests/Amira.Errors.Tests.csproj" />
     <Project Path="tests/Amira.Domain.Tests/Amira.Domain.Tests.csproj" />
     <Project Path="tests/Amira.Contracts.Tests/Amira.Contracts.Tests.csproj" />
