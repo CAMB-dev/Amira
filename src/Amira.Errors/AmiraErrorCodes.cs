@@ -22,6 +22,8 @@ public static class AmiraErrorCodes
     public const string ContextEmpty = "context_empty";
     public const string CredentialHeaderNotAllowed = "credential_header_not_allowed";
     public const string CredentialMissing = "credential_missing";
+    public const string CredentialVaultFailed = "credential_vault_failed";
+    public const string CredentialVaultInvalidConfiguration = "credential_vault_invalid_configuration";
     public const string EmptyResponse = "empty_response";
     public const string IncompletePersistedError = "incomplete_persisted_error";
     public const string InvalidBaseUrl = "invalid_base_url";

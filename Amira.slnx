@@ -7,6 +7,7 @@
     <Project Path="src/Amira.Providers/Amira.Providers.csproj" />
     <Project Path="src/Amira.Runtime/Amira.Runtime.csproj" />
     <Project Path="src/Amira.Observability/Amira.Observability.csproj" />
+    <Project Path="src/Amira.Credentials.Windows/Amira.Credentials.Windows.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Amira.Core.AotSmoke/Amira.Core.AotSmoke.csproj" />
@@ -17,5 +18,6 @@
     <Project Path="tests/Amira.Providers.Tests/Amira.Providers.Tests.csproj" />
     <Project Path="tests/Amira.Runtime.Tests/Amira.Runtime.Tests.csproj" />
     <Project Path="tests/Amira.Observability.Tests/Amira.Observability.Tests.csproj" />
+    <Project Path="tests/Amira.Credentials.Windows.Tests/Amira.Credentials.Windows.Tests.csproj" />
   </Folder>
 </Solution>
