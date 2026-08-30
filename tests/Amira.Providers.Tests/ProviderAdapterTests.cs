@@ -281,6 +281,75 @@ public sealed class ProviderAdapterTests
     }
 
     [Fact]
+    public async Task ChatFinishReasonThenUsageThenDoneEmitsTerminalEventsOnce()
+    {
+        var handler = new RecordingHandler(_ => Sse(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n" +
+            "data: [DONE]\n\n"));
+        using var transport = CustomTransport(handler);
+        var provider = new OpenAiChatCompatibleProvider(transport, new FixedCredentials());
+        var (connection, request) = Request(ProviderProtocol.OpenAIChatCompatible, new GenerationOptions());
+
+        var events = await Collect(provider.StreamAsync(connection, request, TestContext.Current.CancellationToken));
+
+        Assert.Collection(events,
+            e => Assert.IsType<ModelStreamEvent.Started>(e),
+            e => Assert.Equal("ok", Assert.IsType<ModelStreamEvent.TextDelta>(e).Text),
+            e => Assert.Equal((7, 3), Tokens(Assert.IsType<ModelStreamEvent.Usage>(e))),
+            e => Assert.IsType<ModelStreamEvent.Completed>(e));
+        Assert.Single(events.OfType<ModelStreamEvent.Usage>());
+        Assert.Single(events.OfType<ModelStreamEvent.Completed>());
+    }
+
+    [Fact]
+    public async Task ChatFinishReasonThenDoneCompletesWithoutUsage()
+    {
+        var handler = new RecordingHandler(_ => Sse(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n" +
+            "data: [DONE]\n\n"));
+        using var transport = CustomTransport(handler);
+        var provider = new OpenAiChatCompatibleProvider(transport, new FixedCredentials());
+        var (connection, request) = Request(ProviderProtocol.OpenAIChatCompatible, new GenerationOptions());
+
+        var events = await Collect(provider.StreamAsync(connection, request, TestContext.Current.CancellationToken));
+
+        Assert.Collection(events,
+            e => Assert.IsType<ModelStreamEvent.Started>(e),
+            e => Assert.Equal("ok", Assert.IsType<ModelStreamEvent.TextDelta>(e).Text),
+            e => Assert.IsType<ModelStreamEvent.Completed>(e));
+        Assert.Empty(events.OfType<ModelStreamEvent.Usage>());
+        Assert.Single(events.OfType<ModelStreamEvent.Completed>());
+    }
+
+    [Theory]
+    [InlineData(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"late\"}}]}\n\n" +
+        "data: [DONE]\n\n")]
+    [InlineData(
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n" +
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n" +
+        "data: [DONE]\n\n")]
+    [InlineData(
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n" +
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+        "data: [DONE]\n\n")]
+    public async Task ChatRejectsEventsAfterFinishOrUsageAndDuplicateUsage(string stream)
+    {
+        var handler = new RecordingHandler(_ => Sse(stream));
+        using var transport = CustomTransport(handler);
+        var provider = new OpenAiChatCompatibleProvider(transport, new FixedCredentials());
+        var (connection, request) = Request(ProviderProtocol.OpenAIChatCompatible, new GenerationOptions());
+
+        var exception = await Assert.ThrowsAsync<AmiraException>(async () =>
+            await Collect(provider.StreamAsync(connection, request, TestContext.Current.CancellationToken)));
+
+        Assert.Equal("stream_protocol", exception.Code);
+    }
+
+    [Fact]
     public async Task Utf8BomBeforeFirstSseFieldIsAccepted()
     {
         var handler = new RecordingHandler(_ => Sse(

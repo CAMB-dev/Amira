@@ -63,7 +63,8 @@ public sealed class OpenAiChatCompatibleProvider : IModelProvider, IDisposable
         using var response = await ProviderHttp.SendAsync(transport, httpRequest, cancellationToken).ConfigureAwait(false);
 
         yield return new ModelStreamEvent.Started();
-        bool terminal = false;
+        bool finishReceived = false;
+        bool doneReceived = false;
         ProviderUsage? usage = null;
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await using (var enumerator = SseParser.ParseAsync(stream, cancellationToken).GetAsyncEnumerator(cancellationToken))
@@ -73,7 +74,7 @@ public sealed class OpenAiChatCompatibleProvider : IModelProvider, IDisposable
                 var item = enumerator.Current;
                 if (item.Data.Trim().Equals("[DONE]", StringComparison.Ordinal))
                 {
-                    terminal = true;
+                    doneReceived = true;
                     break;
                 }
                 if (item.EventName is not null && !item.EventName.Equals("message", StringComparison.Ordinal)) continue;
@@ -89,20 +90,29 @@ public sealed class OpenAiChatCompatibleProvider : IModelProvider, IDisposable
                     throw ProviderHttp.Failure(AmiraErrorCodes.StreamProtocol, "The provider stream contained invalid JSON.");
                 }
 
+                ChatChoiceDto[] choices = chunk.Choices ?? [];
                 if (chunk.Usage is { } chunkUsage)
+                {
+                    if (usage is not null || choices.Length != 0)
+                        throw ProviderHttp.Failure(AmiraErrorCodes.StreamProtocol, "The provider stream contained invalid event ordering.");
                     usage = new ProviderUsage(chunkUsage.PromptTokens, chunkUsage.CompletionTokens);
-                foreach (var choice in chunk.Choices ?? [])
+                    continue;
+                }
+
+                foreach (var choice in choices)
                 {
                     if (choice.Index != 0) continue;
+                    if (finishReceived || usage is not null)
+                        throw ProviderHttp.Failure(AmiraErrorCodes.StreamProtocol, "The provider stream contained invalid event ordering.");
                     if (!string.IsNullOrEmpty(choice.Delta?.Content)) yield return new ModelStreamEvent.TextDelta(choice.Delta.Content);
                     if (!string.IsNullOrEmpty(choice.Delta?.Refusal)) yield return new ModelStreamEvent.TextDelta(choice.Delta.Refusal);
-                    if (choice.FinishReason is not null) terminal = true;
+                    if (choice.FinishReason is not null) finishReceived = true;
                 }
-                if (terminal) break;
             }
         }
 
-        if (!terminal) throw ProviderHttp.Failure(AmiraErrorCodes.StreamProtocol, "The provider stream ended before completion.");
+        if (!doneReceived && !finishReceived)
+            throw ProviderHttp.Failure(AmiraErrorCodes.StreamProtocol, "The provider stream ended before completion.");
         if (usage is not null) yield return new ModelStreamEvent.Usage(usage);
         yield return new ModelStreamEvent.Completed();
     }
