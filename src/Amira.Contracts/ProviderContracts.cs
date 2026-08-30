@@ -136,7 +136,7 @@ public sealed record ClaimedTurn
 }
 
 /// <summary>Deep persistence seam for chat use cases. Implementations must make each operation atomic.</summary>
-public interface IChatStore
+public interface IChatStore : ITurnReader
 {
     /// <summary>Commits the Human Message and queues its first BotTurn in one transaction.</summary>
     ValueTask<QueuedMessageResult> CommitHumanMessageAndQueueTurnAsync(HumanMessageCommand command, CancellationToken cancellationToken = default);

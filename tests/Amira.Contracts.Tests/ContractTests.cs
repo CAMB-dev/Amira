@@ -94,6 +94,47 @@ public sealed class ContractTests
         Assert.Equal(ErrorCategory.DomainRule, exception.Category);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(101)]
+    public void Turn_query_rejects_invalid_page_size_as_product_input(int pageSize)
+    {
+        AmiraException exception = Assert.Throws<AmiraException>(() => new TurnQuery(pageSize: pageSize));
+
+        Assert.Equal(AmiraErrorCodes.InvalidTurnQuery, exception.Code);
+        Assert.Equal(ErrorCategory.Input, exception.Category);
+    }
+
+    [Fact]
+    public void Turn_query_has_bounded_defaults_and_rejects_invalid_cursor()
+    {
+        var defaultQuery = new TurnQuery();
+        var maximumQuery = new TurnQuery(pageSize: TurnQuery.MaximumPageSize);
+
+        Assert.Equal(TurnQuery.DefaultPageSize, defaultQuery.PageSize);
+        Assert.Equal(TurnQuery.MaximumPageSize, maximumQuery.PageSize);
+
+        AmiraException exception = Assert.Throws<AmiraException>(() =>
+            new TurnQuery(before: new TurnCursor(DateTimeOffset.UtcNow, default)));
+        Assert.Equal(AmiraErrorCodes.InvalidTurnQuery, exception.Code);
+        Assert.Equal(ErrorCategory.Input, exception.Category);
+    }
+
+    [Fact]
+    public void Turn_query_rejects_invalid_filters_as_product_input()
+    {
+        AmiraException bot = Assert.Throws<AmiraException>(() => new TurnQuery(botId: default(BotId)));
+        AmiraException chat = Assert.Throws<AmiraException>(() => new TurnQuery(chatId: default(DirectChatId)));
+        AmiraException status = Assert.Throws<AmiraException>(() => new TurnQuery(status: (BotTurnStatus)999));
+
+        Assert.All([bot, chat, status], exception =>
+        {
+            Assert.Equal(AmiraErrorCodes.InvalidTurnQuery, exception.Code);
+            Assert.Equal(ErrorCategory.Input, exception.Category);
+        });
+    }
+
     private static Bot CreateBot() =>
         Bot.Create(BotProfile.Create("Amira"), ModelProfile.Create(ProviderConnectionId.New(), "model"));
 }

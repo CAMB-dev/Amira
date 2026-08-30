@@ -102,6 +102,8 @@ internal static partial class AotSmoke
 
             Bot bot;
             QueuedMessageResult primaryQueued;
+            QueuedMessageResult retrySeed;
+            BotTurn retry;
             ActivityContext expectedParent;
             using (var store = new SqliteAmiraStore(databasePath))
             {
@@ -143,7 +145,7 @@ internal static partial class AotSmoke
                     runtime.ExecuteClaimedAsync(workspaceId, primaryClaim)).ConfigureAwait(false);
                 EnsureRuntimeSuccess(primaryEvents, PrimaryReply, 5, 3);
 
-                QueuedMessageResult retrySeed = await runtime.QueueHumanMessageAsync(
+                retrySeed = await runtime.QueueHumanMessageAsync(
                     workspaceId,
                     bot.Id,
                     RetryPrompt).ConfigureAwait(false);
@@ -152,7 +154,7 @@ internal static partial class AotSmoke
                 Ensure(failureEvents is [ChatRuntimeEvent.Started, ChatRuntimeEvent.Failed { Failure.Code: AmiraErrorCodes.ProviderStreamError }],
                     "The scripted provider failure was not durably observed.");
 
-                BotTurn retry = await runtime.RetryAsync(retrySeed.Turn.Id).ConfigureAwait(false);
+                retry = await runtime.RetryAsync(retrySeed.Turn.Id).ConfigureAwait(false);
                 Ensure(retry.Attempt == 2 && retry.RetryOfTurnId == retrySeed.Turn.Id, "Retry lineage was not preserved.");
                 ClaimedTurn retryClaim = await store.TryClaimNextTurnAsync(bot.Id).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("The retry was not claimable.");
@@ -178,6 +180,38 @@ internal static partial class AotSmoke
                 EnsureMessage(timeline[1], MessageAuthor.Bot, PrimaryReply);
                 EnsureMessage(timeline[2], MessageAuthor.Human, RetryPrompt);
                 EnsureMessage(timeline[3], MessageAuthor.Bot, RetryReply);
+
+                TurnView primaryView = await store.GetTurnAsync(primaryQueued.Turn.Id).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("The completed primary turn was not queryable.");
+                Ensure(primaryView.Status == BotTurnStatus.Completed, "The primary turn query status changed.");
+                Ensure(primaryView.Usage is { InputTokens: 5, OutputTokens: 3 }, "The primary turn query usage changed.");
+
+                TurnView failedView = await store.GetTurnAsync(retrySeed.Turn.Id).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("The failed turn was not queryable.");
+                Ensure(failedView.Status == BotTurnStatus.Failed, "The failed turn query status changed.");
+                Ensure(failedView.Failure is { Code: AmiraErrorCodes.ProviderStreamError }, "The failed turn query error changed.");
+
+                TurnView retryView = await store.GetTurnAsync(retry.Id).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("The completed retry was not queryable.");
+                Ensure(retryView.RetryOfTurnId == retrySeed.Turn.Id && retryView.Attempt == 2,
+                    "The turn query retry lineage changed.");
+                Ensure(retryView.Usage is { InputTokens: 7, OutputTokens: 4 }, "The retry turn query usage changed.");
+
+                TurnPage firstPage = await store.QueryTurnsAsync(new TurnQuery(botId: bot.Id, pageSize: 2)).ConfigureAwait(false);
+                Ensure(firstPage.Items.Count == 2 && firstPage.NextCursor is not null,
+                    "The first turn query page shape changed.");
+                TurnPage finalPage = await store.QueryTurnsAsync(new TurnQuery(
+                    botId: bot.Id,
+                    pageSize: 2,
+                    before: firstPage.NextCursor)).ConfigureAwait(false);
+                Ensure(finalPage.Items.Count == 1 && finalPage.NextCursor is null,
+                    "The final turn query page shape changed.");
+                BotTurnId[] queriedTurnIds = [.. firstPage.Items.Select(item => item.TurnId), .. finalPage.Items.Select(item => item.TurnId)];
+                Ensure(queriedTurnIds.Distinct().Count() == 3, "Turn keyset paging duplicated or skipped a turn.");
+                string safeTurns = string.Join('|', firstPage.Items.Concat(finalPage.Items));
+                Ensure(!safeTurns.Contains(PrimaryPrompt, StringComparison.Ordinal)
+                    && !safeTurns.Contains(RetryPrompt, StringComparison.Ordinal),
+                    "The safe turn projection exposed message content.");
             }
         }
         finally

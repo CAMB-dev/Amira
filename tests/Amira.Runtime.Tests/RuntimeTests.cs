@@ -9,6 +9,18 @@ namespace Amira.Runtime.Tests;
 public sealed partial class RuntimeTests
 {
     [Fact]
+    public async Task Turn_reader_contract_rejects_empty_lookup_identifier_as_product_input()
+    {
+        var fixture = new Fixture();
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            fixture.Store.GetTurnAsync(default, TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidTurnQuery, exception.Code);
+        Assert.Equal(ErrorCategory.Input, exception.Category);
+    }
+
+    [Fact]
     public async Task Context_keeps_latest_and_crops_old_committed_messages_exactly()
     {
         var fixture = new Fixture();

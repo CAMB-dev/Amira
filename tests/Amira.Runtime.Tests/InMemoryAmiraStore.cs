@@ -81,6 +81,73 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
         }
     }
 
+    public ValueTask<TurnView?> GetTurnAsync(
+        BotTurnId turnId,
+        CancellationToken cancellationToken = default)
+    {
+        if (turnId.IsEmpty)
+        {
+            throw new AmiraException(new(
+                AmiraErrorCodes.InvalidTurnQuery,
+                ErrorCategory.Input,
+                "A turn identifier is required."));
+        }
+
+        lock (_gate)
+        {
+            TurnView? view = _turns.TryGetValue(turnId, out BotTurn? turn)
+                ? ToTurnView(turn)
+                : null;
+            return ValueTask.FromResult(view);
+        }
+    }
+
+    public ValueTask<TurnPage> QueryTurnsAsync(
+        TurnQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        lock (_gate)
+        {
+            IEnumerable<BotTurn> turns = _turns.Values;
+            if (query.BotId is { } botId)
+            {
+                turns = turns.Where(turn => turn.BotId == botId);
+            }
+
+            if (query.ChatId is { } chatId)
+            {
+                turns = turns.Where(turn => turn.ChatId == chatId);
+            }
+
+            if (query.Status is { } status)
+            {
+                turns = turns.Where(turn => turn.Status == status);
+            }
+
+            if (query.Before is { } before)
+            {
+                turns = turns.Where(turn =>
+                    turn.QueuedAt < before.QueuedAt
+                    || turn.QueuedAt == before.QueuedAt
+                        && string.Compare(turn.Id.Value, before.TurnId.Value, StringComparison.Ordinal) < 0);
+            }
+
+            TurnView[] candidates = turns
+                .OrderByDescending(turn => turn.QueuedAt)
+                .ThenByDescending(turn => turn.Id.Value, StringComparer.Ordinal)
+                .Take(query.PageSize + 1)
+                .Select(ToTurnView)
+                .ToArray();
+            bool hasMore = candidates.Length > query.PageSize;
+            TurnView[] items = hasMore ? candidates[..query.PageSize] : candidates;
+            TurnCursor? nextCursor = hasMore
+                ? new TurnCursor(items[^1].QueuedAt, items[^1].TurnId)
+                : null;
+            return ValueTask.FromResult(new TurnPage(items, nextCursor));
+        }
+    }
+
     public ValueTask<QueuedMessageResult> CommitHumanMessageAndQueueTurnAsync(
         HumanMessageCommand command,
         CancellationToken cancellationToken = default)
@@ -441,6 +508,24 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
                 "The turn has a durable stop request."));
         }
     }
+
+    private static TurnView ToTurnView(BotTurn turn) => new(
+        turn.Id,
+        turn.BotId,
+        turn.ChatId,
+        turn.ModelProfileSnapshot.ModelProfileId,
+        turn.ModelProfileSnapshot.ConnectionId,
+        turn.ModelProfileSnapshot.Protocol,
+        turn.ModelProfileSnapshot.Model,
+        turn.Attempt,
+        turn.Status,
+        turn.QueuedAt,
+        turn.StartedAt,
+        turn.FinishedAt,
+        turn.StopRequested,
+        turn.Failure,
+        turn.RetryOfTurnId,
+        turn.Usage);
 
     private BotTurnId NextTurnId() => BotTurnId.Create($"turn-{++_turnOrdinal}");
 

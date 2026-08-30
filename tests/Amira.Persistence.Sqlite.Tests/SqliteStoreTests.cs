@@ -854,6 +854,197 @@ public sealed class SqliteStoreTests
         Assert.Equal(ErrorCategory.Persistence, exception.Category);
     }
 
+    [Fact]
+    public async Task Turn_reader_filters_safe_state_and_terminal_details_across_reopen()
+    {
+        const string messageCanary = "TURN-QUERY-MESSAGE-CANARY";
+        const string optionCanary = "TURN-QUERY-OPTION-CANARY";
+        await using var database = TestDatabase.Create();
+        await database.Store.InitializeAsync();
+
+        ProviderConnection connectionA = await SaveConnectionAsync(
+            database,
+            "turn-query-a",
+            ProviderProtocol.AnthropicMessages);
+        var modelA = ModelProfile.Create(
+            connectionA.Id,
+            "query-model-a",
+            new GenerationOptions(0.2, 144),
+            new Dictionary<string, string> { ["private-option"] = optionCanary });
+        Bot botA = await database.Store.CreateBotAsync(
+            new CreateBotCommand(BotProfile.Create("turn-query-a"), modelA));
+        var seededA = new SeededBot(botA, connectionA);
+        SeededBot seededB = await SeedBotAsync(database, "turn-query-b");
+
+        QueuedMessageResult failedSeed = await QueueAsync(database, seededA, messageCanary);
+        ClaimedTurn failedClaim = Assert.IsType<ClaimedTurn>(
+            await database.Store.TryClaimNextTurnAsync(botA.Id));
+        var safeFailure = new AmiraError(
+            AmiraErrorCodes.ProviderTimeout,
+            ErrorCategory.Provider,
+            "The provider timed out.",
+            true);
+        await database.Store.FailTurnAsync(failedClaim.Turn.Id, failedClaim.ClaimToken, safeFailure);
+
+        BotTurn retry = await database.Store.RetryTurnAsync(failedSeed.Turn.Id);
+        ClaimedTurn retryClaim = Assert.IsType<ClaimedTurn>(
+            await database.Store.TryClaimNextTurnAsync(botA.Id));
+        await database.Store.CompleteTurnAsync(
+            new CompleteTurnCommand(retryClaim.Turn, "safe reply", usage: new TurnUsage(17, 9)),
+            retryClaim.ClaimToken);
+
+        QueuedMessageResult cancelled = await QueueAsync(database, seededA, "cancel me");
+        await database.Store.RequestStopAsync(cancelled.Turn.Id);
+
+        QueuedMessageResult running = await QueueAsync(database, seededB, "running secret");
+        ClaimedTurn runningClaim = Assert.IsType<ClaimedTurn>(
+            await database.Store.TryClaimNextTurnAsync(seededB.Bot.Id));
+
+        database.DisposeStore();
+        database.ReopenStore();
+        await database.Store.InitializeAsync();
+
+        TurnView failed = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(failedSeed.Turn.Id));
+        Assert.Equal(failedSeed.Turn.Id, failed.TurnId);
+        Assert.Equal(botA.Id, failed.BotId);
+        Assert.Equal(botA.DirectChatId, failed.ChatId);
+        Assert.Equal(botA.ModelProfile.Id, failed.ModelProfileId);
+        Assert.Equal(connectionA.Id, failed.ConnectionId);
+        Assert.Equal(ProviderProtocol.AnthropicMessages, failed.Protocol);
+        Assert.Equal("query-model-a", failed.Model);
+        Assert.Equal(BotTurnStatus.Failed, failed.Status);
+        Assert.Equal(1, failed.Attempt);
+        Assert.NotNull(failed.StartedAt);
+        Assert.NotNull(failed.FinishedAt);
+        Assert.Equal(safeFailure, failed.Failure);
+        Assert.Null(failed.RetryOfTurnId);
+        Assert.Null(failed.Usage);
+
+        TurnView completedRetry = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(retry.Id));
+        Assert.Equal(BotTurnStatus.Completed, completedRetry.Status);
+        Assert.Equal(2, completedRetry.Attempt);
+        Assert.Equal(failed.TurnId, completedRetry.RetryOfTurnId);
+        Assert.Equal(new TurnUsage(17, 9), completedRetry.Usage);
+        Assert.Null(completedRetry.Failure);
+
+        TurnView cancelledView = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(cancelled.Turn.Id));
+        Assert.Equal(BotTurnStatus.Cancelled, cancelledView.Status);
+        Assert.True(cancelledView.StopRequested);
+
+        TurnPage failedPage = await database.Store.QueryTurnsAsync(new TurnQuery(status: BotTurnStatus.Failed));
+        Assert.Equal(failed.TurnId, Assert.Single(failedPage.Items).TurnId);
+        Assert.Null(failedPage.NextCursor);
+
+        TurnPage completedPage = await database.Store.QueryTurnsAsync(new TurnQuery(
+            botId: botA.Id,
+            chatId: botA.DirectChatId,
+            status: BotTurnStatus.Completed));
+        Assert.Equal(completedRetry.TurnId, Assert.Single(completedPage.Items).TurnId);
+
+        TurnPage botBPage = await database.Store.QueryTurnsAsync(new TurnQuery(botId: seededB.Bot.Id));
+        TurnView runningView = Assert.Single(botBPage.Items);
+        Assert.Equal(running.Turn.Id, runningView.TurnId);
+        Assert.Equal(BotTurnStatus.Running, runningView.Status);
+
+        string safeProjection = string.Join('|', failed, completedRetry, cancelledView, runningView);
+        Assert.DoesNotContain(messageCanary, safeProjection, StringComparison.Ordinal);
+        Assert.DoesNotContain(optionCanary, safeProjection, StringComparison.Ordinal);
+        Assert.DoesNotContain(runningClaim.ClaimToken.Value, safeProjection, StringComparison.Ordinal);
+        string[] publicProperties = typeof(TurnView).GetProperties().Select(property => property.Name).ToArray();
+        Assert.DoesNotContain("ClaimToken", publicProperties);
+        Assert.DoesNotContain("ParentActivityContext", publicProperties);
+        Assert.DoesNotContain("ProviderOptions", publicProperties);
+        Assert.DoesNotContain("TriggerMessageIds", publicProperties);
+        Assert.DoesNotContain("Content", publicProperties);
+
+        Assert.Null(await database.Store.GetTurnAsync(BotTurnId.New()));
+        TurnPage mismatched = await database.Store.QueryTurnsAsync(new TurnQuery(
+            botId: botA.Id,
+            chatId: seededB.Bot.DirectChatId));
+        Assert.Empty(mismatched.Items);
+        Assert.Null(mismatched.NextCursor);
+    }
+
+    [Fact]
+    public async Task Turn_query_keyset_paging_is_stable_for_equal_timestamps_without_duplicates_or_gaps()
+    {
+        await using var database = TestDatabase.Create();
+        await database.Store.InitializeAsync();
+        SeededBot seeded = await SeedBotAsync(database, "turn-keyset");
+        var turns = new List<BotTurn>();
+        for (int index = 0; index < 7; index++)
+        {
+            QueuedMessageResult queued = await QueueAsync(database, seeded, $"message {index}");
+            turns.Add(queued.Turn);
+        }
+
+        var sharedQueuedAt = new DateTimeOffset(2026, 8, 31, 12, 0, 0, TimeSpan.Zero);
+        await database.ExecuteAsync($"UPDATE bot_turns SET queued_at = {sharedQueuedAt.Ticks} WHERE bot_id = '{seeded.Bot.Id.Value}';");
+
+        BotTurnId[] expected = turns
+            .Select(turn => turn.Id)
+            .OrderByDescending(turnId => turnId.Value, StringComparer.Ordinal)
+            .ToArray();
+        var actual = new List<BotTurnId>();
+        TurnCursor? cursor = null;
+        var pageSizes = new List<int>();
+        do
+        {
+            TurnPage page = await database.Store.QueryTurnsAsync(new TurnQuery(
+                botId: seeded.Bot.Id,
+                pageSize: 3,
+                before: cursor));
+            pageSizes.Add(page.Items.Count);
+            actual.AddRange(page.Items.Select(item => item.TurnId));
+            cursor = page.NextCursor;
+        }
+        while (cursor is not null);
+
+        Assert.Equal([3, 3, 1], pageSizes);
+        Assert.Equal(expected, actual);
+        Assert.Equal(actual.Count, actual.Distinct().Count());
+
+        TurnPage afterOldest = await database.Store.QueryTurnsAsync(new TurnQuery(
+            botId: seeded.Bot.Id,
+            pageSize: 3,
+            before: new TurnCursor(sharedQueuedAt, expected[^1])));
+        Assert.Empty(afterOldest.Items);
+        Assert.Null(afterOldest.NextCursor);
+
+        TurnPage empty = await database.Store.QueryTurnsAsync(new TurnQuery(botId: BotId.New()));
+        Assert.Empty(empty.Items);
+        Assert.Null(empty.NextCursor);
+    }
+
+    [Fact]
+    public async Task Turn_lookup_rejects_empty_identifier_before_querying_sqlite()
+    {
+        await using var database = TestDatabase.Create();
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.GetTurnAsync(default, TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidTurnQuery, exception.Code);
+        Assert.Equal(ErrorCategory.Input, exception.Category);
+    }
+
+    [Fact]
+    public async Task Turn_view_maps_corrupt_structural_identity_to_persistence_error()
+    {
+        await using var database = TestDatabase.Create();
+        await database.Store.InitializeAsync();
+        SeededBot seeded = await SeedBotAsync(database, "turn-view-corruption");
+        QueuedMessageResult queued = await QueueAsync(database, seeded, "message");
+        await database.ExecuteAsync(
+            $"UPDATE bot_turns SET model_profile_id = '' WHERE turn_id = '{queued.Turn.Id.Value}';");
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.GetTurnAsync(queued.Turn.Id, TestContext.Current.CancellationToken).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidPersistedValue, exception.Code);
+        Assert.Equal(ErrorCategory.Persistence, exception.Category);
+    }
+
     private static async Task<SeededBot> SeedBotAsync(TestDatabase database, string name)
     {
         var connection = await SaveConnectionAsync(database, $"{name}-connection");

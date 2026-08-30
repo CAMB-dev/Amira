@@ -32,6 +32,7 @@ public static class AmiraErrorCodes
     public const string InvalidRevision = "invalid_revision";
     public const string InvalidStream = "invalid_stream";
     public const string InvalidTemperature = "invalid_temperature";
+    public const string InvalidTurnQuery = "invalid_turn_query";
     public const string InvalidTurnTransition = "invalid_turn_transition";
     public const string ModelProfileIdentityMismatch = "model_profile_identity_mismatch";
     public const string NetworkError = "network_error";
