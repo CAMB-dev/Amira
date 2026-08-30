@@ -36,6 +36,7 @@ public static class AmiraErrorCodes
     public const string ModelProfileIdentityMismatch = "model_profile_identity_mismatch";
     public const string NetworkError = "network_error";
     public const string NotFound = "not_found";
+    public const string ObservabilityInvalidConfiguration = "observability_invalid_configuration";
     public const string PermissionError = "permission_error";
     public const string PersistenceFailed = "persistence_failed";
     public const string PersistenceRowCount = "persistence_row_count";

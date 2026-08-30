@@ -7,14 +7,18 @@ using System.Text.Json;
 using Amira.Contracts;
 using Amira.Domain;
 using Amira.Errors;
+using Amira.Observability;
 using Amira.Persistence.Sqlite;
 using Amira.Providers;
 using Amira.Runtime;
+using Microsoft.Extensions.Logging;
 
 return await AotSmoke.RunAsync().ConfigureAwait(false);
 
-internal static class AotSmoke
+internal static partial class AotSmoke
 {
+    private const string AotLogPromptCanary = "AOT_LOG_PROMPT_CANARY_793D1A";
+    private const string AotLogSafeMarker = "AOT_LOG_SAFE_MARKER";
     private const string ParentActivitySourceName = "Amira.Core.AotSmoke.Parent";
     private const string PrimaryPrompt = "Core AOT prompt.";
     private const string PrimaryReply = "Core AOT reply.";
@@ -26,6 +30,7 @@ internal static class AotSmoke
         try
         {
             Ensure(!JsonSerializer.IsReflectionEnabledByDefault, "JSON reflection must remain disabled.");
+            VerifyObservability();
             await VerifyCoreAsync().ConfigureAwait(false);
             await VerifyProviderAdaptersAsync().ConfigureAwait(false);
             Console.WriteLine("AMIRA_CORE_AOT_SMOKE_SAFE");
@@ -37,6 +42,43 @@ internal static class AotSmoke
             return 1;
         }
     }
+
+    private static void VerifyObservability()
+    {
+        string directoryPath = Path.Combine(Path.GetTempPath(), $"amira-aot-observability-{Guid.NewGuid():N}");
+        try
+        {
+            using (ILoggerFactory factory = AmiraLogging.CreateJsonFileLoggerFactory(new JsonFileLoggingOptions
+            {
+                DirectoryPath = directoryPath,
+                BlockWhenFull = true,
+            }))
+            {
+                WriteAotLog(factory.CreateLogger("Amira.Core.AotSmoke"), AotLogSafeMarker, AotLogPromptCanary);
+            }
+
+            string filePath = Directory.GetFiles(directoryPath, "*.jsonl", SearchOption.TopDirectoryOnly).Single();
+            string json = File.ReadAllText(filePath);
+            Ensure(json.Contains(AotLogSafeMarker, StringComparison.Ordinal), "The safe AOT log marker was not written.");
+            Ensure(!json.Contains(AotLogPromptCanary, StringComparison.Ordinal), "The AOT log leaked prompt content.");
+            using JsonDocument document = JsonDocument.Parse(json);
+            Ensure(document.RootElement.GetProperty("event_id").GetInt32() == 9101, "The AOT log event ID changed.");
+        }
+        finally
+        {
+            if (Directory.Exists(directoryPath))
+            {
+                Directory.Delete(directoryPath, recursive: true);
+            }
+        }
+    }
+
+    [LoggerMessage(
+        EventId = 9101,
+        EventName = "aot.observability.safe",
+        Level = LogLevel.Information,
+        Message = "AOT log {SafeMarker} {Prompt}")]
+    private static partial void WriteAotLog(ILogger logger, string safeMarker, string prompt);
 
     private static async Task VerifyCoreAsync()
     {
