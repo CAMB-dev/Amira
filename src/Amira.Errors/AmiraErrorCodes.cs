@@ -1,0 +1,66 @@
+namespace Amira.Errors;
+
+/// <summary>Stable product error codes used across Amira's internal boundaries.</summary>
+public static class AmiraErrorCodes
+{
+    public const string AuthenticationError = "authentication_error";
+    public const string BotInactive = "bot_inactive";
+    public const string BotLoadInconsistent = "bot_load_inconsistent";
+    public const string BotNotFound = "bot_not_found";
+    public const string BotProfileIdentityMismatch = "bot_profile_identity_mismatch";
+    public const string BotRequired = "bot_required";
+    public const string ChatBotMismatch = "chat_bot_mismatch";
+    public const string ChatRequired = "chat_required";
+    public const string ClaimedTurnMissing = "claimed_turn_missing";
+    public const string CompletionRequired = "completion_required";
+    public const string ConnectionDisabled = "connection_disabled";
+    public const string ConnectionLoadInconsistent = "connection_load_inconsistent";
+    public const string ConnectionNotFound = "connection_not_found";
+    public const string ContentRequired = "content_required";
+    public const string ContextEmpty = "context_empty";
+    public const string CredentialHeaderNotAllowed = "credential_header_not_allowed";
+    public const string CredentialMissing = "credential_missing";
+    public const string EmptyResponse = "empty_response";
+    public const string IncompletePersistedError = "incomplete_persisted_error";
+    public const string InvalidBaseUrl = "invalid_base_url";
+    public const string InvalidHeader = "invalid_header";
+    public const string InvalidIdentifier = "invalid_identifier";
+    public const string InvalidMaxOutputTokens = "invalid_max_output_tokens";
+    public const string InvalidPersistedValue = "invalid_persisted_value";
+    public const string InvalidProviderEndpoint = "invalid_provider_endpoint";
+    public const string InvalidRequest = "invalid_request";
+    public const string InvalidRevision = "invalid_revision";
+    public const string InvalidStream = "invalid_stream";
+    public const string InvalidTemperature = "invalid_temperature";
+    public const string InvalidTurnTransition = "invalid_turn_transition";
+    public const string ModelProfileIdentityMismatch = "model_profile_identity_mismatch";
+    public const string NetworkError = "network_error";
+    public const string NotFound = "not_found";
+    public const string PermissionError = "permission_error";
+    public const string PersistenceFailed = "persistence_failed";
+    public const string PersistenceRowCount = "persistence_row_count";
+    public const string ProviderDuplicate = "provider_duplicate";
+    public const string ProviderHttpError = "provider_http_error";
+    public const string ProviderOverloaded = "provider_overloaded";
+    public const string ProviderRedirect = "provider_redirect";
+    public const string ProviderRegistryFrozen = "provider_registry_frozen";
+    public const string ProviderServerError = "provider_server_error";
+    public const string ProviderStreamError = "provider_stream_error";
+    public const string ProviderTimeout = "provider_timeout";
+    public const string ProviderUnavailable = "provider_unavailable";
+    public const string RateLimit = "rate_limit";
+    public const string ResponseIncomplete = "response_incomplete";
+    public const string RevisionMessageMismatch = "revision_message_mismatch";
+    public const string SchemaMigrationGap = "schema_migration_gap";
+    public const string SnapshotMismatch = "snapshot_mismatch";
+    public const string StaleClaim = "stale_claim";
+    public const string StreamProtocol = "stream_protocol";
+    public const string TextRequired = "text_required";
+    public const string TriggerNotFound = "trigger_not_found";
+    public const string TurnAlreadyRunning = "turn_already_running";
+    public const string TurnNotFound = "turn_not_found";
+    public const string TurnStopRequested = "turn_stop_requested";
+    public const string UnsupportedOutput = "unsupported_output";
+    public const string UnsupportedSchemaVersion = "unsupported_schema_version";
+    public const string WorkspaceRequired = "workspace_required";
+}
