@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Amira.Contracts\Amira.Contracts.csproj" />
+    <ProjectReference Include="..\Amira.Domain\Amira.Domain.csproj" />
+    <ProjectReference Include="..\Amira.Errors\Amira.Errors.csproj" />
+  </ItemGroup>
+
+</Project>
