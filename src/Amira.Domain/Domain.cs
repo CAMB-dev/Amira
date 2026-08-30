@@ -161,7 +161,7 @@ public sealed record ProviderConnection
         DisplayName = BotProfile.RequireText(displayName, nameof(displayName));
         BaseUrl = baseUrl ?? throw new ArgumentNullException(nameof(baseUrl));
         if (!baseUrl.IsAbsoluteUri || (baseUrl.Scheme != Uri.UriSchemeHttps && !(baseUrl.Scheme == Uri.UriSchemeHttp && baseUrl.IsLoopback)) || !string.IsNullOrEmpty(baseUrl.UserInfo) || !string.IsNullOrEmpty(baseUrl.Query) || !string.IsNullOrEmpty(baseUrl.Fragment))
-                throw new AmiraException(new(AmiraErrorCodes.InvalidProviderEndpoint, ErrorCategory.Configuration, "The provider endpoint must be absolute HTTPS, or loopback HTTP, without user information, query, or fragment."));
+            throw new AmiraException(new(AmiraErrorCodes.InvalidProviderEndpoint, ErrorCategory.Configuration, "The provider endpoint must be absolute HTTPS, or loopback HTTP, without user information, query, or fragment."));
         CredentialReference = credentialReference;
         DefaultModel = string.IsNullOrWhiteSpace(defaultModel) ? null : defaultModel.Trim();
         foreach (var headerName in extraHeaders.Keys)
@@ -187,6 +187,16 @@ public sealed record ProviderConnection
 
     public static ProviderConnection Rehydrate(ProviderConnectionId id, ProviderProtocol protocol, string displayName, Uri baseUrl, CredentialReference credentialReference, string? defaultModel, IReadOnlyDictionary<string, string> extraHeaders, bool enabled) =>
         new(id, protocol, displayName, baseUrl, credentialReference, defaultModel, extraHeaders, enabled);
+
+    /// <summary>Edits connection settings while preserving this connection's durable identity and protocol.</summary>
+    public ProviderConnection WithSettings(
+        string displayName,
+        Uri baseUrl,
+        CredentialReference credentialReference,
+        string? defaultModel,
+        IReadOnlyDictionary<string, string> extraHeaders,
+        bool enabled) =>
+        new(Id, Protocol, displayName, baseUrl, credentialReference, defaultModel, extraHeaders, enabled);
 
     private static bool IsSecretHeaderName(string name)
     {

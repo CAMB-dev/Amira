@@ -40,6 +40,86 @@ public sealed class DomainModelTests
     }
 
     [Fact]
+    public void Editing_provider_connection_settings_preserves_identity_and_protocol()
+    {
+        ProviderConnection original = ProviderConnection.Create(
+            ProviderProtocol.AnthropicMessages,
+            "Original",
+            new Uri("https://old.example.test/"),
+            CredentialReference.Create("old-credential"),
+            "old-model",
+            new Dictionary<string, string> { ["X-Original"] = "old" });
+
+        ProviderConnection edited = original.WithSettings(
+            "Updated",
+            new Uri("https://new.example.test/api/"),
+            CredentialReference.Create("new-credential"),
+            "new-model",
+            new Dictionary<string, string> { ["X-Region"] = "new" },
+            enabled: false);
+
+        Assert.Equal(original.Id, edited.Id);
+        Assert.Equal(original.Protocol, edited.Protocol);
+        Assert.Equal("Updated", edited.DisplayName);
+        Assert.Equal(new Uri("https://new.example.test/api/"), edited.BaseUrl);
+        Assert.Equal(CredentialReference.Create("new-credential"), edited.CredentialReference);
+        Assert.Equal("new-model", edited.DefaultModel);
+        Assert.Equal("new", Assert.Single(edited.ExtraHeaders).Value);
+        Assert.False(edited.Enabled);
+    }
+
+    [Fact]
+    public void Editing_provider_connection_settings_reuses_input_and_endpoint_rules()
+    {
+        ProviderConnection original = ProviderConnection.Create(
+            ProviderProtocol.OpenAIResponses,
+            "Original",
+            new Uri("https://example.test/"),
+            CredentialReference.Create("credential"));
+
+        AmiraException blankName = Assert.Throws<AmiraException>(() => original.WithSettings(
+            "  ",
+            new Uri("https://example.test/"),
+            CredentialReference.Create("credential"),
+            defaultModel: null,
+            extraHeaders: new Dictionary<string, string>(),
+            enabled: true));
+        AmiraException unsafeEndpoint = Assert.Throws<AmiraException>(() => original.WithSettings(
+            "Updated",
+            new Uri("http://example.test/"),
+            CredentialReference.Create("credential"),
+            defaultModel: null,
+            extraHeaders: new Dictionary<string, string>(),
+            enabled: true));
+
+        Assert.Equal(AmiraErrorCodes.TextRequired, blankName.Code);
+        Assert.Equal(ErrorCategory.Input, blankName.Category);
+        Assert.Equal(AmiraErrorCodes.InvalidProviderEndpoint, unsafeEndpoint.Code);
+        Assert.Equal(ErrorCategory.Configuration, unsafeEndpoint.Category);
+    }
+
+    [Fact]
+    public void Editing_provider_connection_settings_rejects_secret_headers()
+    {
+        ProviderConnection original = ProviderConnection.Create(
+            ProviderProtocol.OpenAIChatCompatible,
+            "Original",
+            new Uri("https://example.test/"),
+            CredentialReference.Create("credential"));
+
+        AmiraException exception = Assert.Throws<AmiraException>(() => original.WithSettings(
+            "Updated",
+            new Uri("https://example.test/"),
+            CredentialReference.Create("credential"),
+            defaultModel: null,
+            extraHeaders: new Dictionary<string, string> { ["X-API-Key"] = "secret" },
+            enabled: true));
+
+        Assert.Equal(AmiraErrorCodes.CredentialHeaderNotAllowed, exception.Code);
+        Assert.Equal(ErrorCategory.Configuration, exception.Category);
+    }
+
+    [Fact]
     public void Replacing_model_profile_identity_is_a_domain_rule_error()
     {
         Bot bot = Bot.Create(BotProfile.Create("Amira"), ModelProfile.Create(ProviderConnectionId.New(), "model-a"));
