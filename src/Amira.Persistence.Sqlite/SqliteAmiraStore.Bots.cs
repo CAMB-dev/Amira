@@ -195,6 +195,7 @@ public sealed partial class SqliteAmiraStore
         try
         {
             await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+            await using SQLiteTransaction transaction = await _database.BeginTransactionAsync(cancellationToken);
             int rows = await _database.Table<BotRow>()
                 .Where(item => item.BotId == botId.Value)
                 .ExecuteUpdateAsync(setters => setters.Set(item => item.Archived, archived), cancellationToken)
@@ -208,11 +209,13 @@ public sealed partial class SqliteAmiraStore
             }
 
             RequireSingleRow(rows);
-            return await LoadBotAsync(botId, cancellationToken).ConfigureAwait(false)
+            Bot bot = await LoadBotAsync(botId, cancellationToken).ConfigureAwait(false)
                 ?? throw new AmiraException(new(
                     AmiraErrorCodes.BotLoadInconsistent,
                     ErrorCategory.Persistence,
                     "A Bot disappeared after its lifecycle was updated."));
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return bot;
         }
         catch (OperationCanceledException)
         {
@@ -257,11 +260,7 @@ public sealed partial class SqliteAmiraStore
             .OrderBy(item => item.Name)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        var options = new Dictionary<string, string>(optionRows.Count, StringComparer.Ordinal);
-        foreach (ModelOptionRow option in optionRows)
-        {
-            options.Add(option.Name, option.Value);
-        }
+        Dictionary<string, string> options = MaterializeModelOptions(optionRows);
 
         BotProfile domainProfile = BotProfile.Rehydrate(
             BotProfileId.Create(profile.ProfileId),

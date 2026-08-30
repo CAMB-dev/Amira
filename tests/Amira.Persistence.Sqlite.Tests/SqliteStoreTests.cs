@@ -201,13 +201,13 @@ public sealed class SqliteStoreTests
     {
         await using var database = TestDatabase.Create();
         var seeded = await SeedBotAsync(database, "snapshot");
-        var snapshot = new ModelProfileSnapshot(
-            seeded.Bot.ModelProfile.Id,
+        Bot configured = seeded.Bot.EditModelSettings(
             seeded.Connection.Id,
-            seeded.Connection.Protocol,
             "snap-model",
             new GenerationOptions(0.75, 321),
             new Dictionary<string, string> { ["mode"] = "precise" });
+        await database.Store.UpdateBotAsync(configured);
+        var snapshot = configured.ModelProfile.Snapshot(seeded.Connection.Protocol);
         const string content = "  first line\r\nsecond line\nemoji: 🦊  ";
 
         var queued = await database.Store.CommitHumanMessageAndQueueTurnAsync(
@@ -278,6 +278,51 @@ public sealed class SqliteStoreTests
 
         Assert.Empty(await database.Store.LoadTimelineAsync(first.Bot.DirectChatId));
         Assert.Null(await database.Store.TryClaimNextTurnAsync(second.Bot.Id));
+    }
+
+    [Fact]
+    public async Task Snapshot_from_another_bot_commits_neither_message_nor_turn()
+    {
+        await using var database = TestDatabase.Create();
+        var first = await SeedBotAsync(database, "snapshot-first");
+        var second = await SeedBotAsync(database, "snapshot-second");
+
+        AmiraException mismatch = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.CommitHumanMessageAndQueueTurnAsync(
+                new HumanMessageCommand(
+                    first.Bot.DirectChatId,
+                    "wrong snapshot",
+                    first.Bot.Id,
+                    second.Bot.ModelProfile.Snapshot(second.Connection.Protocol))).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.SnapshotMismatch, mismatch.Code);
+        Assert.Equal(ErrorCategory.DomainRule, mismatch.Category);
+        Assert.Empty(await database.Store.LoadTimelineAsync(first.Bot.DirectChatId));
+        Assert.Null(await database.Store.TryClaimNextTurnAsync(first.Bot.Id));
+    }
+
+    [Fact]
+    public async Task Forged_snapshot_with_same_profile_id_but_different_settings_commits_neither_message_nor_turn()
+    {
+        await using var database = TestDatabase.Create();
+        var first = await SeedBotAsync(database, "forged-snapshot");
+        var second = await SaveConnectionAsync(database, "forged-snapshot-other");
+        var forged = new ModelProfileSnapshot(
+            first.Bot.ModelProfile.Id,
+            second.Id,
+            second.Protocol,
+            "forged-model",
+            new GenerationOptions(1.5, 999),
+            new Dictionary<string, string> { ["seed"] = "forged" });
+
+        AmiraException mismatch = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.CommitHumanMessageAndQueueTurnAsync(
+                new HumanMessageCommand(first.Bot.DirectChatId, "forged", first.Bot.Id, forged)).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.SnapshotMismatch, mismatch.Code);
+        Assert.Equal(ErrorCategory.DomainRule, mismatch.Category);
+        Assert.Empty(await database.Store.LoadTimelineAsync(first.Bot.DirectChatId));
+        Assert.Null(await database.Store.TryClaimNextTurnAsync(first.Bot.Id));
     }
 
     [Fact]
@@ -718,6 +763,94 @@ public sealed class SqliteStoreTests
         update.CommandText = "UPDATE messages SET author = 0, status = 99 WHERE message_id = $id;";
         await update.ExecuteNonQueryAsync();
         exception = await Assert.ThrowsAsync<AmiraException>(() => database.Store.LoadTimelineAsync(seeded.Bot.DirectChatId).AsTask());
+        Assert.Equal(ErrorCategory.Persistence, exception.Category);
+    }
+
+    [Fact]
+    public async Task Invalid_persisted_provider_uri_is_a_controlled_data_error()
+    {
+        await using var database = TestDatabase.Create();
+        var connection = await SaveConnectionAsync(database, "corrupt-uri");
+        await database.ExecuteAsync($"UPDATE provider_connections SET base_url = 'not a uri' WHERE connection_id = '{connection.Id.Value}';");
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.GetProviderConnectionAsync(connection.Id).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidPersistedValue, exception.Code);
+        Assert.Equal(ErrorCategory.Persistence, exception.Category);
+    }
+
+    [Fact]
+    public async Task Duplicate_persisted_headers_are_a_controlled_data_error()
+    {
+        await using var database = TestDatabase.Create();
+        var connection = await SaveConnectionAsync(database, "duplicate-header");
+        await database.ExecuteAsync($"INSERT INTO connection_headers (header_id, connection_id, name, value) VALUES ('duplicate-header-row', '{connection.Id.Value}', 'X-Duplicate', 'one');");
+        await database.ExecuteAsync($"INSERT INTO connection_headers (header_id, connection_id, name, value) VALUES ('duplicate-header-row-2', '{connection.Id.Value}', 'X-Duplicate', 'two');");
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.GetProviderConnectionAsync(connection.Id).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidPersistedValue, exception.Code);
+        Assert.Equal(ErrorCategory.Persistence, exception.Category);
+    }
+
+    [Fact]
+    public async Task Duplicate_persisted_model_options_are_a_controlled_data_error()
+    {
+        await using var database = TestDatabase.Create();
+        var seeded = await SeedBotAsync(database, "duplicate-model-option");
+        await database.ExecuteAsync($"INSERT INTO model_options (option_id, model_profile_id, name, value) VALUES ('duplicate-model-option-row', '{seeded.Bot.ModelProfile.Id.Value}', 'seed', 'duplicate');");
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.GetBotAsync(seeded.Bot.Id).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidPersistedValue, exception.Code);
+        Assert.Equal(ErrorCategory.Persistence, exception.Category);
+    }
+
+    [Fact]
+    public async Task Duplicate_persisted_turn_options_are_a_controlled_data_error()
+    {
+        await using var database = TestDatabase.Create();
+        var seeded = await SeedBotAsync(database, "duplicate-turn-option");
+        QueuedMessageResult queued = await QueueAsync(database, seeded, "trigger");
+        await database.ExecuteAsync($"INSERT INTO turn_options (option_id, turn_id, name, value) VALUES ('duplicate-turn-option-row', '{queued.Turn.Id.Value}', 'seed', 'duplicate');");
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.TryClaimNextTurnAsync(seeded.Bot.Id).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidPersistedValue, exception.Code);
+        Assert.Equal(ErrorCategory.Persistence, exception.Category);
+    }
+
+    [Fact]
+    public async Task Duplicate_persisted_turn_triggers_are_a_controlled_data_error()
+    {
+        await using var database = TestDatabase.Create();
+        var seeded = await SeedBotAsync(database, "duplicate-trigger");
+        QueuedMessageResult queued = await QueueAsync(database, seeded, "trigger");
+        await database.ExecuteAsync($"INSERT INTO turn_triggers (trigger_id, turn_id, ordinal, message_id) VALUES ('duplicate-trigger-row', '{queued.Turn.Id.Value}', 0, '{queued.Message.Id.Value}');");
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.TryClaimNextTurnAsync(seeded.Bot.Id).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidPersistedValue, exception.Code);
+        Assert.Equal(ErrorCategory.Persistence, exception.Category);
+    }
+
+    [Fact]
+    public async Task Duplicate_persisted_trigger_message_ids_are_a_controlled_data_error()
+    {
+        await using var database = TestDatabase.Create();
+        var seeded = await SeedBotAsync(database, "duplicate-trigger-message");
+        QueuedMessageResult queued = await QueueAsync(database, seeded, "trigger");
+        await database.ExecuteAsync($"INSERT INTO turn_triggers (trigger_id, turn_id, ordinal, message_id) VALUES ('duplicate-trigger-message-row', '{queued.Turn.Id.Value}', 1, '{queued.Message.Id.Value}');");
+
+        AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.TryClaimNextTurnAsync(seeded.Bot.Id).AsTask());
+
+        Assert.Equal(AmiraErrorCodes.InvalidPersistedValue, exception.Code);
         Assert.Equal(ErrorCategory.Persistence, exception.Category);
     }
 

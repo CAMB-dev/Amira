@@ -156,21 +156,36 @@ public sealed partial class SqliteAmiraStore
             .OrderBy(item => item.Name)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        var headers = new Dictionary<string, string>(headerRows.Count, StringComparer.Ordinal);
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (ConnectionHeaderRow header in headerRows)
         {
-            headers.Add(header.Name, header.Value);
+            if (!headers.TryAdd(header.Name, header.Value))
+            {
+                throw InvalidDatabaseValue();
+            }
         }
 
-        return ProviderConnection.Rehydrate(
-            connectionId,
-            ReadProtocol(row.Protocol),
-            row.DisplayName,
-            new Uri(row.BaseUrl, UriKind.Absolute),
-            CredentialReference.Create(row.CredentialReference),
-            row.DefaultModel,
-            headers,
-            row.Enabled);
+        if (!Uri.TryCreate(row.BaseUrl, UriKind.Absolute, out Uri? baseUrl))
+        {
+            throw InvalidDatabaseValue();
+        }
+
+        try
+        {
+            return ProviderConnection.Rehydrate(
+                connectionId,
+                ReadProtocol(row.Protocol),
+                row.DisplayName,
+                baseUrl,
+                CredentialReference.Create(row.CredentialReference),
+                row.DefaultModel,
+                headers,
+                row.Enabled);
+        }
+        catch (AmiraException exception) when (exception.Code == AmiraErrorCodes.InvalidProviderEndpoint)
+        {
+            throw InvalidDatabaseValue();
+        }
     }
 
     private static string ChildKey(string parentId, string name) => $"{parentId}:{name}";

@@ -53,6 +53,7 @@ public sealed partial class SqliteAmiraStore
 
             await using SQLiteTransaction transaction = await _database.BeginTransactionAsync(cancellationToken);
             await EnsureChatBelongsToBotAsync(command.ChatId, command.BotId, cancellationToken).ConfigureAwait(false);
+            await EnsureModelProfileSnapshotMatchesBotAsync(command.BotId, command.ModelProfileSnapshot, cancellationToken).ConfigureAwait(false);
             await InsertMessageAndRevisionAsync(message, revision, cancellationToken).ConfigureAwait(false);
             await InsertTurnAsync(turn, command.ParentActivityContext, cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -490,6 +491,87 @@ public sealed partial class SqliteAmiraStore
         }
     }
 
+    private async Task EnsureModelProfileSnapshotMatchesBotAsync(
+        BotId botId,
+        ModelProfileSnapshot snapshot,
+        CancellationToken cancellationToken)
+    {
+        ModelProfileRow? model = await _database.Table<ModelProfileRow>()
+            .SingleOrDefaultAsync(row => row.BotId == botId.Value, cancellationToken)
+            .ConfigureAwait(false);
+        ProviderConnectionRow? connection = await _database.Table<ProviderConnectionRow>()
+            .SingleOrDefaultAsync(row => row.ConnectionId == snapshot.ConnectionId.Value, cancellationToken)
+            .ConfigureAwait(false);
+        if (model is null || connection is null)
+        {
+            throw SnapshotMismatch();
+        }
+
+        Dictionary<string, string> options = await LoadModelOptionsAsync(model.ModelProfileId, cancellationToken).ConfigureAwait(false);
+        ProviderProtocol persistedProtocol = ReadProtocol(connection.Protocol);
+        if (model.ModelProfileId != snapshot.ModelProfileId.Value
+            || model.ConnectionId != snapshot.ConnectionId.Value
+            || model.Model != snapshot.Model
+            || model.Temperature != snapshot.GenerationOptions.Temperature
+            || model.MaxOutputTokens != snapshot.GenerationOptions.MaxOutputTokens
+            || persistedProtocol != snapshot.Protocol
+            || !OptionsMatch(options, snapshot.ProviderOptions))
+        {
+            throw SnapshotMismatch();
+        }
+    }
+
+    private async Task<Dictionary<string, string>> LoadModelOptionsAsync(
+        string modelProfileId,
+        CancellationToken cancellationToken)
+    {
+        List<ModelOptionRow> rows = await _database.Table<ModelOptionRow>()
+            .Where(row => row.ModelProfileId == modelProfileId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return MaterializeModelOptions(rows);
+    }
+
+    private static Dictionary<string, string> MaterializeModelOptions(IEnumerable<ModelOptionRow> rows)
+    {
+        var options = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (ModelOptionRow option in rows)
+        {
+            if (!options.TryAdd(option.Name, option.Value))
+            {
+                throw InvalidDatabaseValue();
+            }
+        }
+
+        return options;
+    }
+
+    private static bool OptionsMatch(
+        IReadOnlyDictionary<string, string> persisted,
+        IReadOnlyDictionary<string, string> expected)
+    {
+        if (persisted.Count != expected.Count)
+        {
+            return false;
+        }
+
+        foreach ((string name, string value) in expected)
+        {
+            if (!persisted.TryGetValue(name, out string? persistedValue)
+                || persistedValue != value)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static AmiraException SnapshotMismatch() => new(new(
+        AmiraErrorCodes.SnapshotMismatch,
+        ErrorCategory.DomainRule,
+        "The model profile snapshot does not match the current Bot configuration."));
+
     private async Task InsertMessageAndRevisionAsync(
         Message message,
         MessageRevision revision,
@@ -590,11 +672,7 @@ public sealed partial class SqliteAmiraStore
             .OrderBy(item => item.Name)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        var options = new Dictionary<string, string>(optionRows.Count, StringComparer.Ordinal);
-        foreach (TurnOptionRow option in optionRows)
-        {
-            options.Add(option.Name, option.Value);
-        }
+        Dictionary<string, string> options = MaterializeTurnOptions(optionRows);
 
         AmiraError? failure = null;
         if (row.FailureCode is not null)
@@ -625,8 +703,15 @@ public sealed partial class SqliteAmiraStore
             ? null
             : new TurnUsage(row.InputTokens, row.OutputTokens);
         var triggerMessageIds = new List<MessageId>(triggerRows.Count);
-        foreach (TurnTriggerRow trigger in triggerRows)
+        var messageIds = new HashSet<string>(StringComparer.Ordinal);
+        for (int index = 0; index < triggerRows.Count; index++)
         {
+            TurnTriggerRow trigger = triggerRows[index];
+            if (trigger.Ordinal != index || !messageIds.Add(trigger.MessageId))
+            {
+                throw InvalidDatabaseValue();
+            }
+
             triggerMessageIds.Add(MessageId.Create(trigger.MessageId));
         }
 
@@ -645,6 +730,20 @@ public sealed partial class SqliteAmiraStore
             usage,
             row.StopRequested,
             row.RetryOfTurnId is null ? null : BotTurnId.Create(row.RetryOfTurnId));
+    }
+
+    private static Dictionary<string, string> MaterializeTurnOptions(IEnumerable<TurnOptionRow> rows)
+    {
+        var options = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (TurnOptionRow option in rows)
+        {
+            if (!options.TryAdd(option.Name, option.Value))
+            {
+                throw InvalidDatabaseValue();
+            }
+        }
+
+        return options;
     }
 
     private async Task RequireClaimedRowAsync(
