@@ -21,3 +21,28 @@ public abstract record ChatRuntimeEvent(BotTurnId TurnId, BotId BotId, ProviderP
 }
 
 public sealed record StopResult(bool DurableStopRequested, bool CancellationSignaled);
+
+/// <summary>Backpressured delivery seam between one Bot worker and its host.</summary>
+public interface IChatRuntimeEventSink
+{
+    ValueTask PublishAsync(ChatRuntimeEvent runtimeEvent, CancellationToken cancellationToken = default);
+}
+
+/// <summary>One-shot background execution loop for a single Bot.</summary>
+public interface IBotWorker : IAsyncDisposable
+{
+    BotId BotId { get; }
+
+    Task RunAsync(IChatRuntimeEventSink sink, CancellationToken cancellationToken = default);
+
+    /// <summary>Coalesces pending work into one latched wake signal. May be called before RunAsync.</summary>
+    void Wake();
+}
+
+/// <summary>Idle polling policy for a Bot worker.</summary>
+public sealed record BotWorkerOptions
+{
+    public TimeSpan InitialIdleDelay { get; init; } = TimeSpan.FromMilliseconds(100);
+    public TimeSpan MaximumIdleDelay { get; init; } = TimeSpan.FromSeconds(2);
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+}

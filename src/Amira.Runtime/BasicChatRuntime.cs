@@ -96,7 +96,6 @@ public sealed class BasicChatRuntime
     {
         ClaimedTurn? claimed = await _chatStore.TryClaimNextTurnAsync(botId, cancellationToken).ConfigureAwait(false);
         if (claimed is null) yield break;
-        RuntimeLog.TurnClaimed(_logger, claimed.Turn.Id.Value, claimed.Turn.BotId.Value);
         await foreach (ChatRuntimeEvent item in ExecuteClaimedAsync(workspaceId, claimed, cancellationToken).ConfigureAwait(false))
             yield return item;
     }
@@ -109,6 +108,7 @@ public sealed class BasicChatRuntime
     {
         ArgumentNullException.ThrowIfNull(claimed);
         BotTurn turn = claimed.Turn;
+        RuntimeLog.TurnClaimed(_logger, turn.Id.Value, turn.BotId.Value);
         using CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellation);
         if (!_activeTurns.TryAdd(turn.Id, linkedCancellation))
         {
@@ -374,6 +374,30 @@ public sealed class BasicChatRuntime
 
     public ValueTask<BotTurn> RetryAsync(BotTurnId turnId, CancellationToken cancellationToken = default) =>
         _chatStore.RetryTurnAsync(turnId, cancellationToken);
+
+    public IBotWorker CreateBotWorker(
+        WorkspaceId workspaceId,
+        BotId botId,
+        BotWorkerOptions? options = null)
+    {
+        if (workspaceId.IsEmpty)
+            throw new AmiraException(Error(AmiraErrorCodes.WorkspaceRequired, ErrorCategory.Input, "A workspace is required."));
+        if (botId.IsEmpty)
+            throw new AmiraException(Error(AmiraErrorCodes.BotRequired, ErrorCategory.Input, "A Bot is required."));
+
+        BotWorkerOptions resolvedOptions = options ?? new BotWorkerOptions();
+        if (resolvedOptions.TimeProvider is null
+            || resolvedOptions.InitialIdleDelay <= TimeSpan.Zero
+            || resolvedOptions.MaximumIdleDelay < resolvedOptions.InitialIdleDelay)
+        {
+            throw new AmiraException(Error(
+                AmiraErrorCodes.BotWorkerInvalidConfiguration,
+                ErrorCategory.Configuration,
+                "Bot worker idle delays and time provider must form a valid configuration."));
+        }
+
+        return new BotWorker(this, _chatStore, workspaceId, botId, resolvedOptions);
+    }
 
     private async ValueTask<ChatRuntimeEvent> SettleObservedFailureAsync(
         BotTurn turn,

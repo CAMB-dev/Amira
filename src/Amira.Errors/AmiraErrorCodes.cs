@@ -9,6 +9,8 @@ public static class AmiraErrorCodes
     public const string BotNotFound = "bot_not_found";
     public const string BotProfileIdentityMismatch = "bot_profile_identity_mismatch";
     public const string BotRequired = "bot_required";
+    public const string BotWorkerInvalidConfiguration = "bot_worker_invalid_configuration";
+    public const string BotWorkerNotRunnable = "bot_worker_not_runnable";
     public const string ChatBotMismatch = "chat_bot_mismatch";
     public const string ChatRequired = "chat_required";
     public const string ClaimedTurnMissing = "claimed_turn_missing";

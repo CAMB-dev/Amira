@@ -38,7 +38,10 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
     public int CompletedCount { get; private set; }
     public int StopCount { get; private set; }
     public int CancelledCount { get; private set; }
+    public int ClaimAttemptCount { get; private set; }
+    public int RecoveryCount { get; private set; }
     public AmiraException? CommitFailure { get; set; }
+    public Action? EmptyClaimObserved { get; set; }
 
     public void AddBot(Bot bot)
     {
@@ -190,22 +193,32 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
 
     public ValueTask<ClaimedTurn?> TryClaimNextTurnAsync(BotId botId, CancellationToken cancellationToken = default)
     {
+        Action? emptyClaimObserved = null;
+        ClaimedTurn? claimed = null;
         lock (_gate)
         {
+            ClaimAttemptCount++;
+            bool alreadyRunning = _turns.Values.Any(turn =>
+                turn.BotId == botId && turn.Status == BotTurnStatus.Running);
             int queueIndex = _queue.FindIndex(turnId => _turns[turnId].BotId == botId);
-            if (queueIndex < 0)
+            if (alreadyRunning || queueIndex < 0)
             {
-                return ValueTask.FromResult<ClaimedTurn?>(null);
+                emptyClaimObserved = EmptyClaimObserved;
             }
-
-            BotTurnId turnId = _queue[queueIndex];
-            _queue.RemoveAt(queueIndex);
-            BotTurn running = _turns[turnId].Start(NextTimestamp());
-            var claimToken = new TurnClaimToken($"claim-{++_claimOrdinal}");
-            _turns[turnId] = running;
-            _claims[turnId] = claimToken;
-            return ValueTask.FromResult<ClaimedTurn?>(new ClaimedTurn(running, claimToken, _parentActivityContexts[turnId]));
+            else
+            {
+                BotTurnId turnId = _queue[queueIndex];
+                _queue.RemoveAt(queueIndex);
+                BotTurn running = _turns[turnId].Start(NextTimestamp());
+                var claimToken = new TurnClaimToken($"claim-{++_claimOrdinal}");
+                _turns[turnId] = running;
+                _claims[turnId] = claimToken;
+                claimed = new ClaimedTurn(running, claimToken, _parentActivityContexts[turnId]);
+            }
         }
+
+        emptyClaimObserved?.Invoke();
+        return ValueTask.FromResult(claimed);
     }
 
     public ValueTask CompleteTurnAsync(
@@ -294,6 +307,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
     {
         lock (_gate)
         {
+            RecoveryCount++;
             foreach (BotTurn running in _turns.Values.Where(static turn => turn.Status == BotTurnStatus.Running).ToArray())
             {
                 _claims.Remove(running.Id);

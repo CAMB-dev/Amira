@@ -154,14 +154,26 @@ internal static partial class AotSmoke
                 Ensure(failureEvents is [ChatRuntimeEvent.Started, ChatRuntimeEvent.Failed { Failure.Code: AmiraErrorCodes.ProviderStreamError }],
                     "The scripted provider failure was not durably observed.");
 
+                var retrySink = new SmokeRuntimeSink();
+                await using IBotWorker retryWorker = runtime.CreateBotWorker(
+                    workspaceId,
+                    bot.Id,
+                    new BotWorkerOptions
+                    {
+                        InitialIdleDelay = TimeSpan.FromHours(1),
+                        MaximumIdleDelay = TimeSpan.FromHours(1),
+                    });
+                Task retryWorkerRun = retryWorker.RunAsync(retrySink);
                 retry = await runtime.RetryAsync(retrySeed.Turn.Id).ConfigureAwait(false);
                 Ensure(retry.Attempt == 2 && retry.RetryOfTurnId == retrySeed.Turn.Id, "Retry lineage was not preserved.");
-                ClaimedTurn retryClaim = await store.TryClaimNextTurnAsync(bot.Id).ConfigureAwait(false)
-                    ?? throw new InvalidOperationException("The retry was not claimable.");
-                Ensure(retryClaim.Turn.Id == retry.Id, "The retry claim returned the wrong turn.");
-                List<ChatRuntimeEvent> retryEvents = await CollectAsync(
-                    runtime.ExecuteClaimedAsync(workspaceId, retryClaim)).ConfigureAwait(false);
+                retryWorker.Wake();
+                List<ChatRuntimeEvent> retryEvents = await retrySink.TerminalEvents.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                 EnsureRuntimeSuccess(retryEvents, RetryReply, 7, 4);
+                TurnView workerTerminal = await store.GetTurnAsync(retry.Id).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("The worker terminal turn was not queryable.");
+                Ensure(workerTerminal.Status == BotTurnStatus.Completed, "The worker did not persist a terminal turn.");
+                await retryWorker.DisposeAsync().ConfigureAwait(false);
+                await retryWorkerRun.ConfigureAwait(false);
             }
 
             using (var store = new SqliteAmiraStore(databasePath))
@@ -448,6 +460,25 @@ internal static partial class AotSmoke
                 ? new ModelStreamEvent.Usage(new ProviderUsage(5, 3))
                 : new ModelStreamEvent.Usage(new ProviderUsage(7, 4));
             yield return new ModelStreamEvent.Completed();
+        }
+    }
+
+    private sealed class SmokeRuntimeSink : IChatRuntimeEventSink
+    {
+        private readonly List<ChatRuntimeEvent> _events = [];
+        private readonly TaskCompletionSource<List<ChatRuntimeEvent>> _terminal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<List<ChatRuntimeEvent>> TerminalEvents => _terminal.Task;
+
+        public ValueTask PublishAsync(ChatRuntimeEvent runtimeEvent, CancellationToken cancellationToken = default)
+        {
+            _events.Add(runtimeEvent);
+            if (runtimeEvent is ChatRuntimeEvent.Completed or ChatRuntimeEvent.Failed or ChatRuntimeEvent.Cancelled)
+            {
+                _terminal.TrySetResult([.. _events]);
+            }
+
+            return ValueTask.CompletedTask;
         }
     }
 
