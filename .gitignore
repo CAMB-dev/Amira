@@ -1,0 +1,79 @@
+# Build output
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+[Ll]og/
+[Ll]ogs/
+[Bb]uild[Ll]og.*
+[Bb]in/
+[Oo]bj/
+[Tt]estResults/
+[Cc]overage/
+[Pp]ublish/
+BenchmarkDotNet.Artifacts/
+*.publishsettings
+*.pubxml.user
+
+# Visual Studio and local IDE state
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.idea/
+*.rsuser
+*.userprefs
+mono_crash.*
+.tye/
+.paket/paket.exe
+paket-files/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# .NET generated files
+*.nupkg
+*.snupkg
+packages/
+artifacts/
+*.nupkg.metadata
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+*.tmp
+*.tmp_proj
+*.binlog
+*.coverage
+*.coveragexml
+project.lock.json
+project.fragment.lock.json
+
+# Publish and local deployment settings
+*.pubxml
+*.publishproj
+*.[Pp]ublish.xml
+
+# Common tooling output
+node_modules/
+__pycache__/
+*.pyc
+.history/
+.localhistory/
+.ionide/
+*.code-workspace
+
+# Codex-local generated artifacts; keep .codex configuration files tracked.
+.codex/**/[Bb]in/
+.codex/**/[Oo]bj/
+.codex/**/TestResults/
+.codex/**/*.log
+.codex/**/*.tmp
+.codex/worktrees/
