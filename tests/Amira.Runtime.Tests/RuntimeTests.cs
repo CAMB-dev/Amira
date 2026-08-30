@@ -6,7 +6,7 @@ using Amira.Runtime;
 
 namespace Amira.Runtime.Tests;
 
-public sealed class RuntimeTests
+public sealed partial class RuntimeTests
 {
     [Fact]
     public async Task Context_keeps_latest_and_crops_old_committed_messages_exactly()
@@ -281,7 +281,13 @@ public sealed class RuntimeTests
 
     private sealed class Fixture
     {
-        public Fixture(IModelProvider? provider = null, bool connectionEnabled = true)
+        public Fixture(
+            IModelProvider? provider = null,
+            bool connectionEnabled = true,
+            Microsoft.Extensions.Logging.ILogger? logger = null,
+            System.Diagnostics.Metrics.IMeterFactory? meterFactory = null,
+            string credentialReference = "cred",
+            IReadOnlyDictionary<string, string>? extraHeaders = null)
         {
             WorkspaceId = WorkspaceId.Create("workspace");
             Connection = ProviderConnection.Rehydrate(
@@ -289,14 +295,14 @@ public sealed class RuntimeTests
                 ProviderProtocol.OpenAIChatCompatible,
                 "test",
                 new Uri("https://example.test"),
-                CredentialReference.Create("cred"),
+                CredentialReference.Create(credentialReference),
                 "model",
-                new Dictionary<string, string>(),
+                extraHeaders ?? new Dictionary<string, string>(),
                 connectionEnabled);
             Bot = MakeBot("primary", Connection.Id);
             Store = new InMemoryAmiraStore(Bot, Connection);
             Provider = provider ?? new FakeProvider(new ModelStreamEvent.Started(), new ModelStreamEvent.TextDelta("reply"), new ModelStreamEvent.Completed());
-            Runtime = new BasicChatRuntime(Store, Store, new ProviderRegistry([Provider]), 100);
+            Runtime = new BasicChatRuntime(Store, Store, new ProviderRegistry([Provider]), 100, logger, meterFactory);
         }
         public WorkspaceId WorkspaceId { get; }
         public Bot Bot { get; }

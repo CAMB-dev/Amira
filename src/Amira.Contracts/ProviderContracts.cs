@@ -1,5 +1,6 @@
 using Amira.Domain;
 using Amira.Errors;
+using System.Diagnostics;
 
 namespace Amira.Contracts;
 
@@ -120,15 +121,18 @@ public readonly record struct TurnClaimToken : IAmiraId
 /// <summary>A turn plus its opaque store lease. A stale worker's token must be rejected by the store.</summary>
 public sealed record ClaimedTurn
 {
-    public ClaimedTurn(BotTurn turn, TurnClaimToken claimToken)
+    public ClaimedTurn(BotTurn turn, TurnClaimToken claimToken, ActivityContext parentActivityContext = default)
     {
         Turn = turn ?? throw new ArgumentNullException(nameof(turn));
         if (claimToken.IsEmpty) throw new ArgumentException("A claim token is required.", nameof(claimToken));
         ClaimToken = claimToken;
+        ParentActivityContext = parentActivityContext;
     }
 
     public BotTurn Turn { get; }
     public TurnClaimToken ClaimToken { get; }
+    /// <summary>Optional W3C trace parent persisted as execution metadata with the turn.</summary>
+    public ActivityContext ParentActivityContext { get; }
 }
 
 /// <summary>Deep persistence seam for chat use cases. Implementations must make each operation atomic.</summary>
@@ -161,7 +165,7 @@ public interface IChatStore
     /// </summary>
     ValueTask RecoverInterruptedTurnsAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Creates a new queued attempt that references the original trigger IDs and does not insert another Human Message.</summary>
+    /// <summary>Creates a new queued attempt that references the original trigger IDs, retains its trace parent, and does not insert another Human Message.</summary>
     ValueTask<BotTurn> RetryTurnAsync(BotTurnId turnId, CancellationToken cancellationToken = default);
 
     ValueTask<IReadOnlyList<ChatMessage>> LoadTimelineAsync(DirectChatId chatId, CancellationToken cancellationToken = default);
@@ -195,7 +199,7 @@ public sealed record CreateBotCommand
 
 public sealed record HumanMessageCommand
 {
-    public HumanMessageCommand(DirectChatId chatId, string content, BotId botId, ModelProfileSnapshot modelProfileSnapshot)
+    public HumanMessageCommand(DirectChatId chatId, string content, BotId botId, ModelProfileSnapshot modelProfileSnapshot, ActivityContext parentActivityContext = default)
     {
         if (chatId == default)
             throw new AmiraException(new(AmiraErrorCodes.ChatRequired, ErrorCategory.Input, "A chat is required."));
@@ -208,12 +212,15 @@ public sealed record HumanMessageCommand
         Content = content;
         BotId = botId;
         ModelProfileSnapshot = modelProfileSnapshot ?? throw new ArgumentNullException(nameof(modelProfileSnapshot));
+        ParentActivityContext = parentActivityContext;
     }
 
     public DirectChatId ChatId { get; }
     public string Content { get; }
     public BotId BotId { get; }
     public ModelProfileSnapshot ModelProfileSnapshot { get; }
+    /// <summary>Optional W3C trace parent to persist with the queued turn.</summary>
+    public ActivityContext ParentActivityContext { get; }
 }
 
 public sealed record QueuedMessageResult

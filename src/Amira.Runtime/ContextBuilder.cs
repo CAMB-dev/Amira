@@ -35,7 +35,7 @@ public sealed class ContextBuilder
         if (turn.BotId != bot.Id || turn.ChatId != bot.DirectChatId)
             throw new InvalidOperationException("The turn does not belong to the requested Bot.");
 
-        using var activity = RuntimeTelemetry.Activities.StartActivity(AmiraTelemetry.ContextBuildActivity);
+        using var activity = AmiraTelemetry.Source.StartActivity(AmiraTelemetry.ContextBuildActivity);
         activity?.SetTag(AmiraTelemetry.Tags.BotId, turn.BotId.Value).SetTag(AmiraTelemetry.Tags.ChatId, turn.ChatId.Value).SetTag(AmiraTelemetry.Tags.TurnId, turn.Id.Value);
         IReadOnlyList<ChatMessage> timeline = await _store.LoadTimelineAsync(turn.ChatId, cancellationToken).ConfigureAwait(false);
         var committed = timeline

@@ -1,6 +1,7 @@
 using Amira.Contracts;
 using Amira.Domain;
 using Amira.Errors;
+using System.Diagnostics;
 
 namespace Amira.Runtime.Tests;
 
@@ -12,6 +13,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
     private readonly Dictionary<DirectChatId, List<ChatMessage>> _timelines = [];
     private readonly Dictionary<BotTurnId, BotTurn> _turns = [];
     private readonly Dictionary<BotTurnId, TurnClaimToken> _claims = [];
+    private readonly Dictionary<BotTurnId, ActivityContext> _parentActivityContexts = [];
     private readonly List<BotTurnId> _queue = [];
     private readonly List<AmiraError> _failures = [];
     private readonly List<BotTurn> _retried = [];
@@ -36,6 +38,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
     public int CompletedCount { get; private set; }
     public int StopCount { get; private set; }
     public int CancelledCount { get; private set; }
+    public AmiraException? CommitFailure { get; set; }
 
     public void AddBot(Bot bot)
     {
@@ -82,6 +85,8 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
         HumanMessageCommand command,
         CancellationToken cancellationToken = default)
     {
+        if (CommitFailure is not null) throw CommitFailure;
+
         lock (_gate)
         {
             DateTimeOffset timestamp = NextTimestamp();
@@ -103,6 +108,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
                 null);
             _timelines[command.ChatId].Add(chatMessage);
             _turns.Add(turn.Id, turn);
+            _parentActivityContexts[turn.Id] = command.ParentActivityContext;
             _queue.Add(turn.Id);
             Message message = Message.Rehydrate(
                 chatMessage.Id,
@@ -131,7 +137,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
             var claimToken = new TurnClaimToken($"claim-{++_claimOrdinal}");
             _turns[turnId] = running;
             _claims[turnId] = claimToken;
-            return ValueTask.FromResult<ClaimedTurn?>(new ClaimedTurn(running, claimToken));
+            return ValueTask.FromResult<ClaimedTurn?>(new ClaimedTurn(running, claimToken, _parentActivityContexts[turnId]));
         }
     }
 
@@ -275,6 +281,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
                 false,
                 terminal.Id);
             _turns.Add(retried.Id, retried);
+            _parentActivityContexts[retried.Id] = _parentActivityContexts[terminal.Id];
             _queue.Add(retried.Id);
             _retried.Add(retried);
             return ValueTask.FromResult(retried);

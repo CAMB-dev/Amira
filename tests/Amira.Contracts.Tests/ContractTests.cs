@@ -1,6 +1,7 @@
 using Amira.Contracts;
 using Amira.Domain;
 using Amira.Errors;
+using System.Diagnostics;
 
 namespace Amira.Contracts.Tests;
 
@@ -25,6 +26,42 @@ public sealed class ContractTests
 
         Assert.Equal(5, Assert.IsType<ModelStreamEvent.Usage>(usage).Value.OutputTokens);
         Assert.Equal("provider.request", AmiraTelemetry.ProviderRequestActivity);
+        Assert.Equal("turn.execute", AmiraTelemetry.TurnExecuteActivity);
+        Assert.Equal("Amira.Runtime", AmiraTelemetry.ActivitySourceName);
+        Assert.Equal("Amira.Runtime", AmiraTelemetry.MeterName);
+        Assert.Equal(1200, (int)AmiraLogEvent.ProviderRequestStarted);
+        Assert.Equal("amira.provider.request.count", AmiraTelemetry.Metrics.ProviderRequestCount);
+    }
+
+    [Fact]
+    public void Durable_turn_contract_round_trips_optional_activity_context_without_domain_coupling()
+    {
+        Bot bot = CreateBot();
+        var parent = new ActivityContext(
+            ActivityTraceId.CreateRandom(),
+            ActivitySpanId.CreateRandom(),
+            ActivityTraceFlags.Recorded,
+            "vendor=value",
+            true);
+        var command = new HumanMessageCommand(
+            bot.DirectChatId,
+            "hello",
+            bot.Id,
+            bot.ModelProfile.Snapshot(ProviderProtocol.OpenAIChatCompatible),
+            parent);
+        BotTurn turn = BotTurn.Queue(
+            bot.Id,
+            bot.DirectChatId,
+            [MessageId.New()],
+            bot.ModelProfile.Snapshot(ProviderProtocol.OpenAIChatCompatible));
+        var claimed = new ClaimedTurn(turn.Start(), TurnClaimToken.New(), command.ParentActivityContext);
+
+        Assert.Equal(parent, claimed.ParentActivityContext);
+        Assert.Equal(default, new HumanMessageCommand(
+            bot.DirectChatId,
+            "hello",
+            bot.Id,
+            bot.ModelProfile.Snapshot(ProviderProtocol.OpenAIChatCompatible)).ParentActivityContext);
     }
 
     [Fact]
