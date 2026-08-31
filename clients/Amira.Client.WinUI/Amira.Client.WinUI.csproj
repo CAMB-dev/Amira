@@ -20,7 +20,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="Assets\bot-avatar-gem.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Markdig" />
     <ProjectReference Include="..\..\src\Amira.Client.Composition.Windows\Amira.Client.Composition.Windows.csproj" />
     <ProjectReference Include="..\..\src\Amira.Domain\Amira.Domain.csproj" />
     <ProjectReference Include="..\..\src\Amira.Contracts\Amira.Contracts.csproj" />
