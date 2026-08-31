@@ -141,8 +141,34 @@ public sealed class TurnActivityTimeConverter : IValueConverter
 public sealed class TurnUsageTotalConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, string language) => value is TurnUsage usage
-        ? (usage.InputTokens ?? 0) + (usage.OutputTokens ?? 0)
-        : string.Empty;
+        ? TokenCountFormatter.Format(usage.TotalTokens, CultureInfo.CurrentCulture)
+        : TokenCountFormatter.Unavailable;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnUsageTokenConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        TurnUsage? usage = value as TurnUsage;
+        int? tokenCount = parameter switch
+        {
+            "input" => usage?.InputTokens,
+            "output" => usage?.OutputTokens,
+            _ => throw new ArgumentOutOfRangeException(nameof(parameter), parameter, "Token usage parameters must be input or output.")
+        };
+        return TokenCountFormatter.Format(tokenCount, CultureInfo.CurrentCulture);
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnDurationConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value is TimeSpan duration
+        ? TurnDurationFormatter.Format(duration, CultureInfo.CurrentCulture)
+        : TurnDurationFormatter.Unavailable;
 
     public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
 }

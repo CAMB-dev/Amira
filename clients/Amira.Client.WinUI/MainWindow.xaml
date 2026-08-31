@@ -37,6 +37,8 @@
         <local:TurnActivityTimeLabelConverter x:Key="ActivityTimeLabel" />
         <local:TurnActivityTimeConverter x:Key="ActivityTime" />
         <local:TurnUsageTotalConverter x:Key="UsageTotal" />
+        <local:TurnUsageTokenConverter x:Key="UsageToken" />
+        <local:TurnDurationConverter x:Key="TurnDuration" />
         <Style x:Key="Quiet" TargetType="Button">
           <Setter Property="Background" Value="Transparent" />
           <Setter Property="BorderBrush" Value="Transparent" />
@@ -344,8 +346,9 @@
             <TextBlock Text="No activity yet" HorizontalAlignment="Center" FontWeight="SemiBold" Opacity=".8" />
             <TextBlock Text="The latest bot turn will appear here." HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" FontSize="13" Opacity=".6" />
           </StackPanel>
-          <ContentControl Content="{Binding CurrentActivity}" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" Visibility="{Binding CurrentActivity, Converter={StaticResource NullVisibility}}">
-            <ContentControl.ContentTemplate>
+          <ScrollViewer VerticalScrollBarVisibility="Auto" VerticalScrollMode="Enabled" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled" ZoomMode="Disabled" Visibility="{Binding CurrentActivity, Converter={StaticResource NullVisibility}}">
+            <ContentControl Content="{Binding CurrentActivity}" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top">
+              <ContentControl.ContentTemplate>
               <DataTemplate x:DataType="contracts:TurnView">
                 <StackPanel HorizontalAlignment="Stretch">
                   <Grid Height="64">
@@ -404,24 +407,45 @@
                     <TextBlock Text="Retry of" FontSize="14" Opacity=".68" />
                     <TextBlock Grid.Column="1" Text="{Binding RetryOfTurnId, Converter={StaticResource TurnIdShort}}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" ToolTipService.ToolTip="{Binding RetryOfTurnId}" />
                   </Grid>
-                  <StackPanel Visibility="{Binding Usage, Converter={StaticResource NullVisibility}}">
-                    <Border Height="1" Background="{ThemeResource Line}" Margin="0,13,0,11" />
-                    <Grid Height="28">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                      <TextBlock Text="Prompt" FontSize="14" Opacity=".68" />
-                      <TextBlock Grid.Column="1" Text="{Binding Usage.InputTokens}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
-                    </Grid>
-                    <Grid Height="28">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                      <TextBlock Text="Completion" FontSize="14" Opacity=".68" />
-                      <TextBlock Grid.Column="1" Text="{Binding Usage.OutputTokens}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
-                    </Grid>
-                    <Grid Height="28">
-                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                      <TextBlock Text="Total" FontSize="14" Opacity=".68" />
-                      <TextBlock Grid.Column="1" Text="{Binding Usage, Converter={StaticResource UsageTotal}}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
-                    </Grid>
-                  </StackPanel>
+                  <Border Height="1" Background="{ThemeResource Line}" Margin="0,13,0,11" />
+                  <TextBlock Text="TOKENS" FontSize="11" FontWeight="SemiBold" CharacterSpacing="80" Opacity=".62" Margin="0,0,0,7" />
+                  <Grid Height="28">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="Input" FontSize="14" Opacity=".68" AutomationProperties.Name="Input tokens" />
+                    <TextBlock Grid.Column="1" Text="{Binding Usage, Converter={StaticResource UsageToken}, ConverterParameter=input}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
+                  </Grid>
+                  <Grid Height="28">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="Output" FontSize="14" Opacity=".68" AutomationProperties.Name="Output tokens" />
+                    <TextBlock Grid.Column="1" Text="{Binding Usage, Converter={StaticResource UsageToken}, ConverterParameter=output}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
+                  </Grid>
+                  <Grid Height="28">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="Total" FontSize="14" Opacity=".68" AutomationProperties.Name="Total tokens" />
+                    <TextBlock Grid.Column="1" Text="{Binding Usage, Converter={StaticResource UsageTotal}}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
+                  </Grid>
+                  <Border Height="1" Background="{ThemeResource Line}" Margin="0,13,0,11" />
+                  <TextBlock Text="TIMING" FontSize="11" FontWeight="SemiBold" CharacterSpacing="80" Opacity=".62" Margin="0,0,0,7" />
+                  <Grid Height="28">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="Queue wait" FontSize="14" Opacity=".68" AutomationProperties.Name="Queue wait" />
+                    <TextBlock Grid.Column="1" Text="{Binding QueueWaitDuration, Converter={StaticResource TurnDuration}}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
+                  </Grid>
+                  <Grid Height="28">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="TTFT" FontSize="14" Opacity=".68" AutomationProperties.Name="TTFT: start to first non-empty text token" ToolTipService.ToolTip="Start to first non-empty text token" />
+                    <TextBlock Grid.Column="1" Text="{Binding TimeToFirstToken, Converter={StaticResource TurnDuration}}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
+                  </Grid>
+                  <Grid Height="28">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="Generation" FontSize="14" Opacity=".68" AutomationProperties.Name="Generation duration" />
+                    <TextBlock Grid.Column="1" Text="{Binding GenerationDuration, Converter={StaticResource TurnDuration}}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
+                  </Grid>
+                  <Grid Height="28">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="End-to-end" FontSize="14" Opacity=".68" AutomationProperties.Name="End-to-end duration" />
+                    <TextBlock Grid.Column="1" Text="{Binding EndToEndDuration, Converter={StaticResource TurnDuration}}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
+                  </Grid>
                   <InfoBar Title="Turn failed" Message="{Binding Failure.Message}" Severity="Error" IsClosable="False" IsOpen="True" Margin="0,16,0,0" Visibility="{Binding Failure, Converter={StaticResource NullVisibility}}" />
                   <StackPanel Visibility="{Binding Converter={StaticResource ActionAreaVisibility}}">
                     <Border Height="1" Background="{ThemeResource Line}" Margin="0,16,0,12" />
@@ -440,8 +464,9 @@
                   </StackPanel>
                 </StackPanel>
               </DataTemplate>
-            </ContentControl.ContentTemplate>
-          </ContentControl>
+              </ContentControl.ContentTemplate>
+            </ContentControl>
+          </ScrollViewer>
         </Grid>
       </Grid>
     </Border>
