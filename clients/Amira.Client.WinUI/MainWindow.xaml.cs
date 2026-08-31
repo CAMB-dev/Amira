@@ -19,6 +19,7 @@ public sealed partial class MainWindow : Window
     private readonly IClientSession _session;
     private readonly WinUiChatRuntimeEventSink _sink;
     private readonly BotDialogCoordinator _botDialogs;
+    private readonly ConnectionDialogCoordinator _connectionDialogs;
     private bool _closeAllowed;
     private Task? _shutdown;
     private bool _sidebarExpanded = true;
@@ -35,6 +36,7 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         Root.DataContext = _viewModel;
         _botDialogs = new BotDialogCoordinator(_viewModel, () => Root.XamlRoot);
+        _connectionDialogs = new ConnectionDialogCoordinator(_viewModel, () => Root.XamlRoot);
         Title = "Amira";
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
@@ -287,6 +289,8 @@ public sealed partial class MainWindow : Window
         await _botDialogs.ShowCreateAsync();
 
     private async void ManageBotsClick(object sender, RoutedEventArgs args) => await _botDialogs.ShowManagementAsync();
+
+    private async void ConnectionsClick(object sender, RoutedEventArgs args) => await _connectionDialogs.ShowManagementAsync();
 
     private async void StopClick(object sender, RoutedEventArgs args)
     {

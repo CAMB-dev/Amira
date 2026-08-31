@@ -229,7 +229,7 @@
                     <TextBlock Text="{Binding Profile.Name}" FontSize="17" FontWeight="SemiBold" />
                     <StackPanel Orientation="Horizontal" Spacing="7">
                       <Ellipse Width="9" Height="9" Fill="{ThemeResource Online}" />
-                      <TextBlock Text="Available" FontSize="13" Opacity=".7" />
+                      <TextBlock Text="Active" FontSize="13" Opacity=".7" />
                     </StackPanel>
                   </StackPanel>
                 </Grid>
@@ -242,10 +242,13 @@
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
-          <StackPanel Orientation="Horizontal" Spacing="10">
-            <Ellipse Width="11" Height="11" Fill="{ThemeResource Online}" />
-            <TextBlock Text="{Binding ConnectionSummary}" Opacity=".7" />
-          </StackPanel>
+          <Button x:Name="ConnectionsButton" Style="{StaticResource Quiet}" Click="ConnectionsClick" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" ToolTipService.ToolTip="Manage provider connections" AutomationProperties.Name="Manage provider connections">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <Ellipse Width="11" Height="11" Fill="{ThemeResource Avatar}" />
+              <TextBlock Text="Connections" />
+              <TextBlock Text="{Binding ConnectionSummary}" Opacity=".7" />
+            </StackPanel>
+          </Button>
           <Button x:Name="ThemeButton" Grid.Column="1" Style="{StaticResource Quiet}" Click="ToggleThemeClick" AutomationProperties.Name="Switch to light appearance" ToolTipService.ToolTip="Switch to light appearance">
             <FontIcon x:Name="ThemeIcon" FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&#xE706;" />
           </Button>
