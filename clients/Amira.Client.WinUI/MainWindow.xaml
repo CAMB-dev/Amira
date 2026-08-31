@@ -1,4 +1,4 @@
-﻿<Window x:Class="Amira.Client.WinUI.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:Amira.Client.WinUI" xmlns:domain="using:Amira.Domain" xmlns:contracts="using:Amira.Contracts">
+<Window x:Class="Amira.Client.WinUI.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:Amira.Client.WinUI" xmlns:domain="using:Amira.Domain" xmlns:contracts="using:Amira.Contracts">
   <Grid x:Name="Root" RequestedTheme="Dark" xmlns:primitives="using:Microsoft.UI.Xaml.Controls.Primitives">
     <Grid.Resources>
       <ResourceDictionary>

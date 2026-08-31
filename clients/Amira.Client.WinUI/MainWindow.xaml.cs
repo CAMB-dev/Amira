@@ -68,7 +68,11 @@ public sealed partial class MainWindow : Window
             ElementTheme target = Root.RequestedTheme == ElementTheme.Dark ? ElementTheme.Light : ElementTheme.Dark;
             await FadeRootAsync(0);
             SetTheme(target);
-            await WaitForUiTurnAsync();
+            if (!await WaitForUiTurnAsync())
+            {
+                Root.Opacity = 1;
+                return;
+            }
             await FadeRootAsync(1);
         }
         finally
@@ -135,15 +139,15 @@ public sealed partial class MainWindow : Window
         return completion.Task;
     }
 
-    private Task WaitForUiTurnAsync()
+    private Task<bool> WaitForUiTurnAsync()
     {
-        TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         bool enqueued = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             Root.UpdateLayout();
-            completion.SetResult();
+            completion.SetResult(true);
         });
-        if (!enqueued) completion.SetResult();
+        if (!enqueued) completion.SetResult(false);
         return completion.Task;
     }
 
