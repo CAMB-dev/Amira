@@ -1,11 +1,11 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Text.Json;
 using Amira.Client.Composition.Windows;
 using Amira.Contracts;
 using Amira.Credentials.Windows;
 using Amira.Domain;
 using Amira.Errors;
-using Amira.Persistence.Sqlite;
 using Amira.Runtime;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -135,7 +135,7 @@ public sealed class CompositionTests
     }
 
     [Fact]
-    public async Task Host_creates_durable_trace_and_runtime_instruments_without_an_ambient_activity()
+    public async Task Host_jsonl_correlates_pre_provider_and_provider_failures_without_an_ambient_activity()
     {
         const string promptCanary = "HOST_PROMPT_CANARY_47C8";
         const string secretCanary = "HOST_SECRET_CANARY_71A9";
@@ -178,28 +178,66 @@ public sealed class CompositionTests
                 new Uri("http://127.0.0.1:1"),
                 secretCanary,
                 defaultModel: "test-model",
-                enabled: true,
+                enabled: false,
                 cancellationToken: TestContext.Current.CancellationToken);
             credentialReference = connection.CredentialReference;
             Bot bot = await host.CreateBotAsync(
                 new CreateBotCommand(BotProfile.Create("Trace bot"), ModelProfile.Create(connection.Id, "test-model")),
                 TestContext.Current.CancellationToken);
 
-            QueuedMessageResult queued = await host.SendAsync(bot.Id, promptCanary, TestContext.Current.CancellationToken);
-            _ = await sink.Failed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-            await host.StopAsync();
+            QueuedMessageResult disabledQueued = await host.SendAsync(bot.Id, promptCanary, TestContext.Current.CancellationToken);
+            ChatRuntimeEvent.Failed disabledFailure = await sink.NextFailureAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(disabledQueued.Turn.Id, disabledFailure.TurnId);
+            Assert.Equal(AmiraErrorCodes.ConnectionDisabled, disabledFailure.Failure.Code);
 
-            using var store = new SqliteAmiraStore(Path.Combine(directory, "amira.db"));
-            await store.InitializeAsync(TestContext.Current.CancellationToken);
-            BotTurn retry = await store.RetryTurnAsync(queued.Turn.Id, TestContext.Current.CancellationToken);
-            ClaimedTurn durableTurn = await store.TryClaimNextTurnAsync(retry.BotId, TestContext.Current.CancellationToken)
-                ?? throw new InvalidOperationException("The retried turn was not available for inspection.");
-            Assert.NotEqual(default, durableTurn.ParentActivityContext.TraceId);
+            connection = await host.UpdateProviderConnectionAsync(
+                connection,
+                connection.DisplayName,
+                connection.BaseUrl,
+                replacementSecret: null,
+                connection.DefaultModel,
+                connection.ExtraHeaders,
+                enabled: true,
+                cancellationToken: TestContext.Current.CancellationToken);
+            QueuedMessageResult providerQueued = await host.SendAsync(bot.Id, promptCanary, TestContext.Current.CancellationToken);
+            ChatRuntimeEvent.Failed providerFailure = await sink.NextFailureAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(providerQueued.Turn.Id, providerFailure.TurnId);
+            Assert.Equal(ErrorCategory.Provider, providerFailure.Failure.Category);
+            await host.StopAsync();
 
             string logs = string.Join(Environment.NewLine, Directory.EnumerateFiles(host.LogsDirectory, "*.jsonl")
                 .SelectMany(File.ReadLines));
             Assert.DoesNotContain(promptCanary, logs, StringComparison.Ordinal);
             Assert.DoesNotContain(secretCanary, logs, StringComparison.Ordinal);
+
+            JsonElement[] entries = ParseJsonLines(logs);
+            JsonElement[] disabledLogs = LogsForTurn(entries, disabledQueued.Turn.Id);
+            JsonElement[] providerLogs = LogsForTurn(entries, providerQueued.Turn.Id);
+            Assert.NotEmpty(disabledLogs);
+            Assert.NotEmpty(providerLogs);
+            Assert.All(disabledLogs, entry => AssertRuntimeLogIdentity(entry, bot, disabledQueued.Turn));
+            Assert.All(providerLogs, entry => AssertRuntimeLogIdentity(entry, bot, providerQueued.Turn));
+
+            string disabledTraceId = Assert.Single(disabledLogs.Select(GetTraceId).Distinct(StringComparer.Ordinal));
+            string providerTraceId = Assert.Single(providerLogs.Select(GetTraceId).Distinct(StringComparer.Ordinal));
+            Assert.NotEqual(disabledTraceId, providerTraceId);
+
+            JsonElement disabledTerminal = Assert.Single(
+                disabledLogs,
+                static entry => entry.GetProperty("event_id").GetInt32() == (int)AmiraLogEvent.TurnFailed);
+            Assert.Equal(AmiraErrorCodes.ConnectionDisabled, disabledTerminal.GetProperty("ErrorCode").GetString());
+            Assert.Equal(ErrorCategory.Configuration.ToString(), disabledTerminal.GetProperty("ErrorCategory").GetString());
+            Assert.Equal("Warning", disabledTerminal.GetProperty("level").GetString());
+
+            JsonElement providerTerminal = Assert.Single(
+                providerLogs,
+                static entry => entry.GetProperty("event_id").GetInt32() == (int)AmiraLogEvent.ProviderRequestFailed);
+            Assert.Equal(providerFailure.Failure.Code, providerTerminal.GetProperty("ErrorCode").GetString());
+            Assert.Equal(providerFailure.Failure.Category.ToString(), providerTerminal.GetProperty("ErrorCategory").GetString());
+            Assert.Equal(JsonValueKind.Number, providerTerminal.GetProperty("DurationMs").ValueKind);
+            Assert.Equal(JsonValueKind.Null, providerTerminal.GetProperty("UsageInput").ValueKind);
+            Assert.Equal(JsonValueKind.Null, providerTerminal.GetProperty("UsageOutput").ValueKind);
+            Assert.Equal("Warning", providerTerminal.GetProperty("level").GetString());
 
             Assert.Contains(AmiraTelemetry.Metrics.ProviderRequestDuration, publishedInstruments);
             Assert.Contains(observedMeasurements, measurement =>
@@ -262,6 +300,40 @@ public sealed class CompositionTests
         return null;
     }
 
+    private static JsonElement[] ParseJsonLines(string payload)
+    {
+        var entries = new List<JsonElement>();
+        foreach (string line in payload.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
+        {
+            using JsonDocument document = JsonDocument.Parse(line);
+            entries.Add(document.RootElement.Clone());
+        }
+
+        return [.. entries];
+    }
+
+    private static JsonElement[] LogsForTurn(IEnumerable<JsonElement> entries, BotTurnId turnId) =>
+        [.. entries.Where(entry =>
+            entry.TryGetProperty("TurnId", out JsonElement value)
+            && value.GetString() == turnId.Value)];
+
+    private static string GetTraceId(JsonElement entry)
+    {
+        string? traceId = entry.GetProperty("@tr").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(traceId));
+        return traceId;
+    }
+
+    private static void AssertRuntimeLogIdentity(JsonElement entry, Bot bot, BotTurn turn)
+    {
+        Assert.Equal(bot.Id.Value, entry.GetProperty("BotId").GetString());
+        Assert.Equal(bot.DirectChatId.Value, entry.GetProperty("ChatId").GetString());
+        Assert.Equal(turn.Id.Value, entry.GetProperty("TurnId").GetString());
+        Assert.Equal(turn.ModelProfileSnapshot.Protocol.ToString(), entry.GetProperty("ProviderProtocol").GetString());
+        Assert.Equal(turn.ModelProfileSnapshot.Model, entry.GetProperty("Model").GetString());
+        _ = GetTraceId(entry);
+    }
+
     private sealed class FakeVault : IWindowsCredentialVault
     {
         public Exception? DeleteFailure { get; init; }
@@ -296,12 +368,26 @@ public sealed class CompositionTests
 
     private sealed class TerminalEventSink : IChatRuntimeEventSink
     {
-        public TaskCompletionSource<ChatRuntimeEvent.Failed> Failed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly System.Collections.Concurrent.ConcurrentQueue<ChatRuntimeEvent.Failed> _failures = new();
+        private readonly SemaphoreSlim _available = new(0);
 
         public ValueTask PublishAsync(ChatRuntimeEvent runtimeEvent, CancellationToken cancellationToken = default)
         {
-            if (runtimeEvent is ChatRuntimeEvent.Failed failed) Failed.TrySetResult(failed);
+            if (runtimeEvent is ChatRuntimeEvent.Failed failed)
+            {
+                _failures.Enqueue(failed);
+                _available.Release();
+            }
             return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask<ChatRuntimeEvent.Failed> NextFailureAsync(CancellationToken cancellationToken)
+        {
+            if (!await _available.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false))
+                throw new TimeoutException("The runtime did not publish a failure within the test timeout.");
+            return _failures.TryDequeue(out ChatRuntimeEvent.Failed? failure)
+                ? failure
+                : throw new InvalidOperationException("A signalled runtime failure was not queued.");
         }
     }
 

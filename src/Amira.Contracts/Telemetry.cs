@@ -27,6 +27,7 @@ public static class AmiraTelemetry
         public const string DurationMilliseconds = "duration_ms";
         public const string Outcome = "outcome";
         public const string ErrorCode = "error_code";
+        public const string ErrorCategory = "error_category";
     }
 
     public static class Outcomes

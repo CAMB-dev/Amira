@@ -25,11 +25,14 @@ public sealed class ContractTests
         ModelStreamEvent usage = new ModelStreamEvent.Usage(new ProviderUsage(3, 5));
 
         Assert.Equal(5, Assert.IsType<ModelStreamEvent.Usage>(usage).Value.OutputTokens);
+        Assert.Equal("turn.queue", AmiraTelemetry.TurnQueueActivity);
         Assert.Equal("provider.request", AmiraTelemetry.ProviderRequestActivity);
+        Assert.Equal("provider.stream", AmiraTelemetry.ProviderStreamActivity);
         Assert.Equal("turn.execute", AmiraTelemetry.TurnExecuteActivity);
         Assert.Equal("Amira.Runtime", AmiraTelemetry.ActivitySourceName);
         Assert.Equal("Amira.Runtime", AmiraTelemetry.MeterName);
         Assert.Equal(1200, (int)AmiraLogEvent.ProviderRequestStarted);
+        Assert.Equal("error_category", AmiraTelemetry.Tags.ErrorCategory);
         Assert.Equal("amira.provider.request.count", AmiraTelemetry.Metrics.ProviderRequestCount);
     }
 

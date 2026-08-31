@@ -66,8 +66,25 @@ public sealed class BasicChatRuntime
         {
             QueuedMessageResult result = await _chatStore.CommitHumanMessageAndQueueTurnAsync(
                 new HumanMessageCommand(bot.DirectChatId, content, bot.Id, snapshot, telemetry.Context), cancellationToken).ConfigureAwait(false);
-            RuntimeLog.MessageCommitted(_logger, bot.Id.Value);
-            RuntimeLog.TurnQueued(_logger, result.Turn.Id.Value, bot.Id.Value);
+            telemetry.AttachTurn(result.Turn);
+            RuntimeLog.MessageCommitted(
+                _logger,
+                result.Turn.BotId.Value,
+                result.Turn.ChatId.Value,
+                result.Turn.Id.Value,
+                result.Turn.ModelProfileSnapshot.Protocol.ToString(),
+                result.Turn.ModelProfileSnapshot.Model);
+            using (RuntimeTelemetryScope queueTelemetry = RuntimeTelemetry.StartTurnQueue(result.Turn, telemetry.Context))
+            {
+                RuntimeLog.TurnQueued(
+                    _logger,
+                    result.Turn.BotId.Value,
+                    result.Turn.ChatId.Value,
+                    result.Turn.Id.Value,
+                    result.Turn.ModelProfileSnapshot.Protocol.ToString(),
+                    result.Turn.ModelProfileSnapshot.Model);
+                queueTelemetry.Success();
+            }
             _telemetry.TurnQueued();
             telemetry.Success();
             return result;
@@ -79,12 +96,12 @@ public sealed class BasicChatRuntime
         }
         catch (AmiraException exception)
         {
-            telemetry.Failure(exception.Code);
+            telemetry.Failure(exception.Code, exception.Category);
             throw;
         }
         catch
         {
-            telemetry.Failure(AmiraTelemetry.ErrorCodes.UnexpectedException);
+            telemetry.Failure(AmiraTelemetry.ErrorCodes.UnexpectedException, ErrorCategory.Infrastructure);
             throw;
         }
     }
@@ -109,8 +126,6 @@ public sealed class BasicChatRuntime
     {
         ArgumentNullException.ThrowIfNull(claimed);
         BotTurn turn = claimed.Turn;
-        _telemetry.TurnClaimed();
-        RuntimeLog.TurnClaimed(_logger, turn.Id.Value, turn.BotId.Value);
         using CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellation);
         if (!_activeTurns.TryAdd(turn.Id, linkedCancellation))
         {
@@ -119,6 +134,14 @@ public sealed class BasicChatRuntime
         }
 
         using RuntimeTelemetryScope turnTelemetry = RuntimeTelemetry.StartTurnExecution(turn, claimed.ParentActivityContext, _logger);
+        _telemetry.TurnClaimed();
+        RuntimeLog.TurnClaimed(
+            _logger,
+            turn.BotId.Value,
+            turn.ChatId.Value,
+            turn.Id.Value,
+            turn.ModelProfileSnapshot.Protocol.ToString(),
+            turn.ModelProfileSnapshot.Model);
         _telemetry.TurnBecameActive();
         bool terminalSettled = false;
         try
@@ -181,7 +204,16 @@ public sealed class BasicChatRuntime
             try
             {
                 context = await _contextBuilder.BuildAsync(workspaceId, bot, turn, _characterBudget, externalCancellation).ConfigureAwait(false);
-                RuntimeLog.ContextBuilt(_logger, turn.Id.Value, context.Diagnostics.IncludedMessageCount, context.Diagnostics.DroppedMessageCount, context.Diagnostics.IncludedCharacters);
+                RuntimeLog.ContextBuilt(
+                    _logger,
+                    turn.BotId.Value,
+                    turn.ChatId.Value,
+                    turn.Id.Value,
+                    turn.ModelProfileSnapshot.Protocol.ToString(),
+                    turn.ModelProfileSnapshot.Model,
+                    context.Diagnostics.IncludedMessageCount,
+                    context.Diagnostics.DroppedMessageCount,
+                    context.Diagnostics.IncludedCharacters);
             }
             catch (AmiraException exception)
             {
@@ -222,6 +254,7 @@ public sealed class BasicChatRuntime
             ProviderUsage? usage = null;
 
             Exception? streamError = null;
+            using RuntimeTelemetryScope streamTelemetry = RuntimeTelemetry.StartProviderStream(turn, requestTelemetry.Context);
             IAsyncEnumerator<ModelStreamEvent>? enumerator = null;
             try
             {
@@ -316,16 +349,38 @@ public sealed class BasicChatRuntime
                     runCancellation.ThrowIfCancellationRequested();
                     if (!started || !completed) throw StreamFailure("The provider stream ended before Started and Completed.");
                     if (response.Length == 0 || string.IsNullOrWhiteSpace(response.ToString())) throw StreamFailure("The provider returned an empty response.", AmiraErrorCodes.EmptyResponse);
+                }
+                catch (Exception exception)
+                {
+                    streamError = exception;
+                }
+            }
+            CompleteOperationTelemetry(streamTelemetry, streamError);
+
+            if (streamError is null)
+            {
+                using RuntimeTelemetryScope commitTelemetry = RuntimeTelemetry.StartMessageCommit(turn, requestTelemetry.Context);
+                try
+                {
                     TurnUsage? committedUsage = usage is null ? null : new TurnUsage(usage.InputTokens, usage.OutputTokens);
                     // Terminal commit is claim-authoritative. A caller disconnect racing this call must not turn a committed reply into Cancelled.
                     await _chatStore.CompleteTurnAsync(new CompleteTurnCommand(turn, response.ToString(), usage: committedUsage), claimed.ClaimToken, CancellationToken.None).ConfigureAwait(false);
                     terminalSettled = true;
+                    RuntimeLog.MessageCommitted(
+                        _logger,
+                        turn.BotId.Value,
+                        turn.ChatId.Value,
+                        turn.Id.Value,
+                        turn.ModelProfileSnapshot.Protocol.ToString(),
+                        turn.ModelProfileSnapshot.Model);
+                    commitTelemetry.Success();
                     requestTelemetry.Success();
                     turnTelemetry.Success();
                     completionOutput = new ChatRuntimeEvent.Completed(turn.Id, turn.BotId, turn.ModelProfileSnapshot.Protocol, turn.ModelProfileSnapshot.Model, response.ToString(), usage);
                 }
                 catch (Exception exception)
                 {
+                    CompleteOperationTelemetry(commitTelemetry, exception);
                     streamError = exception;
                 }
             }
@@ -342,23 +397,23 @@ public sealed class BasicChatRuntime
             }
             else if (streamError is AmiraException { Code: AmiraErrorCodes.TurnStopRequested })
             {
-                requestTelemetry.Cancelled(AmiraErrorCodes.TurnStopRequested);
+                requestTelemetry.Cancelled(AmiraErrorCodes.TurnStopRequested, ErrorCategory.Concurrency);
                 await CancelAfterProviderExitAsync(turn, claimed.ClaimToken).ConfigureAwait(false);
                 terminalSettled = true;
-                turnTelemetry.Cancelled(AmiraErrorCodes.TurnStopRequested);
+                turnTelemetry.Cancelled(AmiraErrorCodes.TurnStopRequested, ErrorCategory.Concurrency);
                 yield return new ChatRuntimeEvent.Cancelled(turn.Id, turn.BotId, turn.ModelProfileSnapshot.Protocol, turn.ModelProfileSnapshot.Model);
             }
             else if (streamError is AmiraException productFailure)
             {
                 AmiraError failure = productFailure.Error;
-                requestTelemetry.Failure(failure.Code);
+                requestTelemetry.Failure(failure.Code, failure.Category);
                 ChatRuntimeEvent terminal = await SettleObservedFailureAsync(turn, claimed.ClaimToken, failure, turnTelemetry).ConfigureAwait(false);
                 terminalSettled = true;
                 yield return terminal;
             }
             else if (streamError is not null)
             {
-                requestTelemetry.Failure(AmiraTelemetry.ErrorCodes.UnexpectedException);
+                requestTelemetry.Failure(AmiraTelemetry.ErrorCodes.UnexpectedException, ErrorCategory.Infrastructure);
                 ExceptionDispatchInfo.Capture(streamError).Throw();
             }
         }
@@ -457,7 +512,7 @@ public sealed class BasicChatRuntime
                 telemetry.Cancelled();
                 break;
             case ChatRuntimeEvent.Failed failed:
-                telemetry.Failure(failed.Failure.Code);
+                telemetry.Failure(failed.Failure.Code, failed.Failure.Category);
                 break;
         }
         return terminal;
@@ -503,6 +558,28 @@ public sealed class BasicChatRuntime
 
     private static ChatRuntimeEvent.Failed FailureEvent(BotTurn turn, AmiraError failure) =>
         new(turn.Id, turn.BotId, turn.ModelProfileSnapshot.Protocol, turn.ModelProfileSnapshot.Model, failure);
+
+    private static void CompleteOperationTelemetry(RuntimeTelemetryScope telemetry, Exception? exception)
+    {
+        switch (exception)
+        {
+            case null:
+                telemetry.Success();
+                break;
+            case OperationCanceledException:
+                telemetry.Cancelled();
+                break;
+            case AmiraException { Code: AmiraErrorCodes.TurnStopRequested }:
+                telemetry.Cancelled(AmiraErrorCodes.TurnStopRequested, ErrorCategory.Concurrency);
+                break;
+            case AmiraException productFailure:
+                telemetry.Failure(productFailure.Code, productFailure.Category);
+                break;
+            default:
+                telemetry.Failure(AmiraTelemetry.ErrorCodes.UnexpectedException, ErrorCategory.Infrastructure);
+                break;
+        }
+    }
 
     private static AmiraError Error(string code, ErrorCategory category, string message, bool isTransient = false) =>
         new(code, category, message, isTransient);

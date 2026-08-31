@@ -43,28 +43,104 @@ public sealed partial class RuntimeTests
                 fixture.Bot.Id,
                 TestContext.Current.CancellationToken));
 
-            ActivitySnapshot commit = Assert.Single(telemetry.Activities, static item => item.Name == AmiraTelemetry.MessageCommitActivity);
-            Assert.Equal(ActivityStatusCode.Ok, commit.Status);
-            Assert.Equal(AmiraTelemetry.Outcomes.Success, commit.Tags[AmiraTelemetry.Tags.Outcome]);
+            ActivitySnapshot[] commits = [.. telemetry.Activities.Where(static item => item.Name == AmiraTelemetry.MessageCommitActivity)];
+            Assert.Equal(3, commits.Length);
+            ActivitySnapshot initialCommit = Assert.Single(commits, item => item.ParentSpanId == parent.SpanId);
+            Assert.Equal(ActivityStatusCode.Ok, initialCommit.Status);
+            Assert.Equal(AmiraTelemetry.Outcomes.Success, initialCommit.Tags[AmiraTelemetry.Tags.Outcome]);
+            ActivitySnapshot queue = Assert.Single(telemetry.Activities, static item => item.Name == AmiraTelemetry.TurnQueueActivity);
+            Assert.Equal(initialCommit.SpanId, queue.ParentSpanId);
+            Assert.Equal(ActivityStatusCode.Ok, queue.Status);
             ActivitySnapshot[] turns = [.. telemetry.Activities.Where(static item => item.Name == AmiraTelemetry.TurnExecuteActivity)];
             ActivitySnapshot[] contexts = [.. telemetry.Activities.Where(static item => item.Name == AmiraTelemetry.ContextBuildActivity)];
             ActivitySnapshot[] requests = [.. telemetry.Activities.Where(static item => item.Name == AmiraTelemetry.ProviderRequestActivity)];
+            ActivitySnapshot[] streams = [.. telemetry.Activities.Where(static item => item.Name == AmiraTelemetry.ProviderStreamActivity)];
             Assert.Equal(2, turns.Length);
             Assert.Equal(2, contexts.Length);
             Assert.Equal(2, requests.Length);
+            Assert.Equal(2, streams.Length);
+            Assert.All(telemetry.Activities, activity =>
+            {
+                Assert.Equal(expectedTraceId, activity.TraceId);
+                AssertTurnIdentity(activity);
+            });
             Assert.All(turns, turn =>
             {
-                Assert.Equal(expectedTraceId, turn.TraceId);
-                Assert.Equal(commit.SpanId, turn.ParentSpanId);
+                Assert.Equal(initialCommit.SpanId, turn.ParentSpanId);
                 Assert.Equal(AmiraTelemetry.Outcomes.Success, turn.Tags[AmiraTelemetry.Tags.Outcome]);
                 string turnId = turn.Tags[AmiraTelemetry.Tags.TurnId];
                 ActivitySnapshot context = Assert.Single(contexts, item => item.Tags[AmiraTelemetry.Tags.TurnId] == turnId);
                 ActivitySnapshot request = Assert.Single(requests, item => item.Tags[AmiraTelemetry.Tags.TurnId] == turnId);
-                Assert.Equal(expectedTraceId, context.TraceId);
                 Assert.Equal(turn.SpanId, context.ParentSpanId);
-                Assert.Equal(expectedTraceId, request.TraceId);
                 Assert.Equal(turn.SpanId, request.ParentSpanId);
+                ActivitySnapshot stream = Assert.Single(streams, item => item.Tags[AmiraTelemetry.Tags.TurnId] == turnId);
+                Assert.Equal(request.SpanId, stream.ParentSpanId);
+                ActivitySnapshot assistantCommit = Assert.Single(commits, item => item.ParentSpanId == request.SpanId);
+                Assert.Equal(turnId, assistantCommit.Tags[AmiraTelemetry.Tags.TurnId]);
             });
+        }
+        finally
+        {
+            Activity.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task Pre_provider_failure_is_correlated_without_an_ambient_activity()
+    {
+        using var telemetry = new TelemetryCollector();
+        var logger = new CapturingLogger();
+        var fixture = new Fixture();
+        var runtime = new BasicChatRuntime(
+            fixture.Store,
+            fixture.Store,
+            new ProviderRegistry(),
+            logger: logger);
+        Activity? previous = Activity.Current;
+
+        try
+        {
+            Activity.Current = null;
+            QueuedMessageResult queued = await runtime.QueueHumanMessageAsync(
+                fixture.WorkspaceId,
+                fixture.Bot.Id,
+                "safe prompt",
+                TestContext.Current.CancellationToken);
+            List<ChatRuntimeEvent> events = await CollectWithoutRuntimeActivity(runtime.ExecuteNextAsync(
+                fixture.WorkspaceId,
+                fixture.Bot.Id,
+                TestContext.Current.CancellationToken));
+
+            ChatRuntimeEvent.Failed failed = Assert.IsType<ChatRuntimeEvent.Failed>(events[^1]);
+            Assert.Equal(AmiraErrorCodes.ProviderUnavailable, failed.Failure.Code);
+            Assert.Equal(ErrorCategory.Configuration, failed.Failure.Category);
+            Assert.DoesNotContain(
+                telemetry.Activities,
+                static activity => activity.Name is AmiraTelemetry.ProviderRequestActivity or AmiraTelemetry.ProviderStreamActivity);
+
+            ActivitySnapshot turn = Assert.Single(
+                telemetry.Activities,
+                activity => activity.Name == AmiraTelemetry.TurnExecuteActivity
+                    && activity.Tags[AmiraTelemetry.Tags.TurnId] == queued.Turn.Id.Value);
+            Assert.Equal(ActivityStatusCode.Error, turn.Status);
+            Assert.Equal(AmiraErrorCodes.ProviderUnavailable, turn.Tags[AmiraTelemetry.Tags.ErrorCode]);
+            Assert.Equal(ErrorCategory.Configuration.ToString(), turn.Tags[AmiraTelemetry.Tags.ErrorCategory]);
+
+            LogSnapshot claimed = Assert.Single(
+                logger.Entries,
+                static entry => entry.EventId.Id == (int)AmiraLogEvent.TurnClaimed);
+            LogSnapshot terminal = Assert.Single(
+                logger.Entries,
+                static entry => entry.EventId.Id == (int)AmiraLogEvent.TurnFailed);
+            Assert.Equal(LogLevel.Information, claimed.Level);
+            Assert.Equal(LogLevel.Warning, terminal.Level);
+            Assert.Equal(turn.TraceId, claimed.TraceId);
+            Assert.Equal(turn.TraceId, terminal.TraceId);
+            Assert.NotEqual(default, terminal.TraceId);
+            Assert.Equal(AmiraErrorCodes.ProviderUnavailable, FindProperty(terminal, "ErrorCode"));
+            Assert.Equal(ErrorCategory.Configuration.ToString(), FindProperty(terminal, "ErrorCategory"));
+            AssertTurnIdentity(claimed);
+            AssertTurnIdentity(terminal);
         }
         finally
         {
@@ -140,14 +216,31 @@ public sealed partial class RuntimeTests
         Assert.False(succeeded.Tags.ContainsKey(AmiraTelemetry.Tags.ErrorCode));
         Assert.Equal(ActivityStatusCode.Error, failed.Status);
         Assert.Equal("provider_bad", failed.Tags[AmiraTelemetry.Tags.ErrorCode]);
+        Assert.Equal(ErrorCategory.Provider.ToString(), failed.Tags[AmiraTelemetry.Tags.ErrorCategory]);
         Assert.Equal(ActivityStatusCode.Error, stopped.Status);
         Assert.Equal(AmiraTelemetry.ErrorCodes.OperationCancelled, stopped.Tags[AmiraTelemetry.Tags.ErrorCode]);
+        Assert.Equal(ErrorCategory.Concurrency.ToString(), stopped.Tags[AmiraTelemetry.Tags.ErrorCategory]);
+
+        ActivitySnapshot[] streams = [.. telemetry.Activities.Where(static item => item.Name == AmiraTelemetry.ProviderStreamActivity)];
+        Assert.Equal(3, streams.Length);
+        Assert.Equal(
+            ErrorCategory.Provider.ToString(),
+            Assert.Single(streams, item => item.Tags[AmiraTelemetry.Tags.Outcome] == AmiraTelemetry.Outcomes.Failure)
+                .Tags[AmiraTelemetry.Tags.ErrorCategory]);
+        Assert.Equal(
+            ErrorCategory.Concurrency.ToString(),
+            Assert.Single(streams, item => item.Tags[AmiraTelemetry.Tags.Outcome] == AmiraTelemetry.Outcomes.Cancelled)
+                .Tags[AmiraTelemetry.Tags.ErrorCategory]);
 
         ActivitySnapshot[] turns = [.. telemetry.Activities.Where(static item => item.Name == AmiraTelemetry.TurnExecuteActivity)];
         Assert.Equal(3, turns.Length);
         Assert.Equal(ActivityStatusCode.Ok, Assert.Single(turns, item => item.Tags[AmiraTelemetry.Tags.Outcome] == AmiraTelemetry.Outcomes.Success).Status);
-        Assert.Equal("provider_bad", Assert.Single(turns, item => item.Tags[AmiraTelemetry.Tags.Outcome] == AmiraTelemetry.Outcomes.Failure).Tags[AmiraTelemetry.Tags.ErrorCode]);
-        Assert.Equal(AmiraTelemetry.ErrorCodes.OperationCancelled, Assert.Single(turns, item => item.Tags[AmiraTelemetry.Tags.Outcome] == AmiraTelemetry.Outcomes.Cancelled).Tags[AmiraTelemetry.Tags.ErrorCode]);
+        ActivitySnapshot failedTurn = Assert.Single(turns, item => item.Tags[AmiraTelemetry.Tags.Outcome] == AmiraTelemetry.Outcomes.Failure);
+        Assert.Equal("provider_bad", failedTurn.Tags[AmiraTelemetry.Tags.ErrorCode]);
+        Assert.Equal(ErrorCategory.Provider.ToString(), failedTurn.Tags[AmiraTelemetry.Tags.ErrorCategory]);
+        ActivitySnapshot cancelledTurn = Assert.Single(turns, item => item.Tags[AmiraTelemetry.Tags.Outcome] == AmiraTelemetry.Outcomes.Cancelled);
+        Assert.Equal(AmiraTelemetry.ErrorCodes.OperationCancelled, cancelledTurn.Tags[AmiraTelemetry.Tags.ErrorCode]);
+        Assert.Equal(ErrorCategory.Concurrency.ToString(), cancelledTurn.Tags[AmiraTelemetry.Tags.ErrorCategory]);
 
         MeasurementSnapshot[] requestCounts = [.. telemetry.Measurements.Where(static item => item.Name == AmiraTelemetry.Metrics.ProviderRequestCount)];
         Assert.Equal(3, requestCounts.Length);
@@ -183,6 +276,57 @@ public sealed partial class RuntimeTests
         Assert.Contains((int)AmiraLogEvent.TurnCompleted, eventIds);
         Assert.Contains((int)AmiraLogEvent.TurnFailed, eventIds);
         Assert.Contains((int)AmiraLogEvent.TurnCancelled, eventIds);
+
+        int[] lifecycleEventIds =
+        [
+            (int)AmiraLogEvent.MessageCommitted,
+            (int)AmiraLogEvent.TurnQueued,
+            (int)AmiraLogEvent.TurnClaimed,
+            (int)AmiraLogEvent.TurnCompleted,
+            (int)AmiraLogEvent.TurnFailed,
+            (int)AmiraLogEvent.TurnCancelled,
+            (int)AmiraLogEvent.ProviderRequestStarted,
+            (int)AmiraLogEvent.ProviderRequestCompleted,
+            (int)AmiraLogEvent.ProviderRequestFailed,
+            (int)AmiraLogEvent.ProviderRequestCancelled,
+            (int)AmiraLogEvent.ContextBuilt,
+        ];
+        LogSnapshot[] lifecycleLogs = [.. logger.Entries.Where(entry => lifecycleEventIds.Contains(entry.EventId.Id))];
+        Assert.NotEmpty(lifecycleLogs);
+        Assert.All(lifecycleLogs, AssertTurnIdentity);
+
+        LogSnapshot completedRequest = Assert.Single(
+            lifecycleLogs,
+            static entry => entry.EventId.Id == (int)AmiraLogEvent.ProviderRequestCompleted);
+        Assert.Equal(LogLevel.Information, completedRequest.Level);
+        Assert.IsType<double>(FindProperty(completedRequest, "DurationMs"));
+        Assert.Equal(11, FindProperty(completedRequest, "UsageInput"));
+        Assert.Equal(13, FindProperty(completedRequest, "UsageOutput"));
+        Assert.Null(FindProperty(completedRequest, "ErrorCode"));
+        Assert.Null(FindProperty(completedRequest, "ErrorCategory"));
+
+        LogSnapshot failedRequest = Assert.Single(
+            lifecycleLogs,
+            static entry => entry.EventId.Id == (int)AmiraLogEvent.ProviderRequestFailed);
+        Assert.Equal(LogLevel.Warning, failedRequest.Level);
+        Assert.Equal("provider_bad", FindProperty(failedRequest, "ErrorCode"));
+        Assert.Equal(ErrorCategory.Provider.ToString(), FindProperty(failedRequest, "ErrorCategory"));
+        Assert.Null(FindProperty(failedRequest, "UsageInput"));
+        Assert.Null(FindProperty(failedRequest, "UsageOutput"));
+
+        LogSnapshot cancelledRequest = Assert.Single(
+            lifecycleLogs,
+            static entry => entry.EventId.Id == (int)AmiraLogEvent.ProviderRequestCancelled);
+        Assert.Equal(LogLevel.Information, cancelledRequest.Level);
+        Assert.Equal(AmiraTelemetry.ErrorCodes.OperationCancelled, FindProperty(cancelledRequest, "ErrorCode"));
+        Assert.Equal(ErrorCategory.Concurrency.ToString(), FindProperty(cancelledRequest, "ErrorCategory"));
+
+        Assert.Equal(
+            LogLevel.Warning,
+            Assert.Single(lifecycleLogs, static entry => entry.EventId.Id == (int)AmiraLogEvent.TurnFailed).Level);
+        Assert.All(
+            lifecycleLogs.Where(static entry => entry.EventId.Id is (int)AmiraLogEvent.TurnCompleted or (int)AmiraLogEvent.TurnCancelled),
+            static entry => Assert.Equal(LogLevel.Information, entry.Level));
 
         string exportedText = string.Join("\n", [
             .. logger.Entries.SelectMany(static entry => entry.ExportValues()),
@@ -302,6 +446,7 @@ public sealed partial class RuntimeTests
         Assert.Equal(ActivityStatusCode.Error, commit.Status);
         Assert.Equal(AmiraTelemetry.Outcomes.Failure, commit.Tags[AmiraTelemetry.Tags.Outcome]);
         Assert.Equal("commit_failed", commit.Tags[AmiraTelemetry.Tags.ErrorCode]);
+        Assert.Equal(ErrorCategory.Persistence.ToString(), commit.Tags[AmiraTelemetry.Tags.ErrorCategory]);
         Assert.DoesNotContain(failureCanary, string.Join("\n", commit.Tags.Values), StringComparison.Ordinal);
     }
 
@@ -316,6 +461,27 @@ public sealed partial class RuntimeTests
         Assert.Null(Activity.Current);
         return events;
     }
+
+    private static void AssertTurnIdentity(ActivitySnapshot activity)
+    {
+        Assert.False(string.IsNullOrWhiteSpace(activity.Tags[AmiraTelemetry.Tags.BotId]));
+        Assert.False(string.IsNullOrWhiteSpace(activity.Tags[AmiraTelemetry.Tags.ChatId]));
+        Assert.False(string.IsNullOrWhiteSpace(activity.Tags[AmiraTelemetry.Tags.TurnId]));
+        Assert.False(string.IsNullOrWhiteSpace(activity.Tags[AmiraTelemetry.Tags.ProviderProtocol]));
+        Assert.False(string.IsNullOrWhiteSpace(activity.Tags[AmiraTelemetry.Tags.Model]));
+    }
+
+    private static void AssertTurnIdentity(LogSnapshot entry)
+    {
+        Assert.False(string.IsNullOrWhiteSpace(FindProperty(entry, "BotId")?.ToString()));
+        Assert.False(string.IsNullOrWhiteSpace(FindProperty(entry, "ChatId")?.ToString()));
+        Assert.False(string.IsNullOrWhiteSpace(FindProperty(entry, "TurnId")?.ToString()));
+        Assert.False(string.IsNullOrWhiteSpace(FindProperty(entry, "ProviderProtocol")?.ToString()));
+        Assert.False(string.IsNullOrWhiteSpace(FindProperty(entry, "Model")?.ToString()));
+    }
+
+    private static object? FindProperty(LogSnapshot entry, string name) =>
+        Assert.Single(entry.Properties, property => property.Key == name).Value;
 
     private static void AssertQueuedTurns(TelemetryCollector telemetry, double expected)
     {
@@ -426,7 +592,13 @@ public sealed partial class RuntimeTests
             IReadOnlyList<KeyValuePair<string, object?>> properties = state is IEnumerable<KeyValuePair<string, object?>> values
                 ? [.. values]
                 : [];
-            Entries.Add(new LogSnapshot(eventId, formatter(state, exception), properties, exception?.ToString()));
+            Entries.Add(new LogSnapshot(
+                logLevel,
+                eventId,
+                Activity.Current?.TraceId ?? default,
+                formatter(state, exception),
+                properties,
+                exception?.ToString()));
         }
     }
 
@@ -450,7 +622,9 @@ public sealed partial class RuntimeTests
         IReadOnlyDictionary<string, string> Tags);
 
     private sealed record LogSnapshot(
+        LogLevel Level,
         EventId EventId,
+        ActivityTraceId TraceId,
         string Message,
         IReadOnlyList<KeyValuePair<string, object?>> Properties,
         string? Exception)

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using Amira.Contracts;
 using Amira.Domain;
+using Amira.Errors;
 using Microsoft.Extensions.Logging;
 
 namespace Amira.Runtime;
@@ -72,6 +73,20 @@ internal sealed class RuntimeTelemetry
         return new RuntimeTelemetryScope(activity, ambientParent);
     }
 
+    public static RuntimeTelemetryScope StartMessageCommit(BotTurn turn, ActivityContext parentActivityContext)
+    {
+        Activity? activity = StartActivity(AmiraTelemetry.MessageCommitActivity, ActivityKind.Internal, parentActivityContext);
+        SetTurnTags(activity, turn);
+        return new RuntimeTelemetryScope(activity, parentActivityContext);
+    }
+
+    public static RuntimeTelemetryScope StartTurnQueue(BotTurn turn, ActivityContext parentActivityContext)
+    {
+        Activity? activity = StartActivity(AmiraTelemetry.TurnQueueActivity, ActivityKind.Producer, parentActivityContext);
+        SetTurnTags(activity, turn);
+        return new RuntimeTelemetryScope(activity, parentActivityContext);
+    }
+
     public static RuntimeTelemetryScope StartTurnExecution(BotTurn turn, ActivityContext parentActivityContext, ILogger logger)
     {
         Activity? activity = StartActivity(AmiraTelemetry.TurnExecuteActivity, ActivityKind.Internal, parentActivityContext);
@@ -84,8 +99,21 @@ internal sealed class RuntimeTelemetry
         ActivityContext parent = Activity.Current?.Context ?? durableParent;
         Activity? activity = StartActivity(AmiraTelemetry.ProviderRequestActivity, ActivityKind.Client, parent);
         SetTurnTags(activity, turn);
-        RuntimeLog.RequestStarted(logger, turn.Id.Value, turn.BotId.Value, turn.ModelProfileSnapshot.Protocol.ToString());
+        RuntimeLog.RequestStarted(
+            logger,
+            turn.BotId.Value,
+            turn.ChatId.Value,
+            turn.Id.Value,
+            turn.ModelProfileSnapshot.Protocol.ToString(),
+            turn.ModelProfileSnapshot.Model);
         return new RuntimeTelemetryScope(activity, parent, this, turn, logger);
+    }
+
+    public static RuntimeTelemetryScope StartProviderStream(BotTurn turn, ActivityContext parentActivityContext)
+    {
+        Activity? activity = StartActivity(AmiraTelemetry.ProviderStreamActivity, ActivityKind.Internal, parentActivityContext);
+        SetTurnTags(activity, turn);
+        return new RuntimeTelemetryScope(activity, parentActivityContext);
     }
 
     public void TurnQueued()
@@ -146,7 +174,7 @@ internal sealed class RuntimeTelemetry
             ? AmiraTelemetry.Source.StartActivity(name, kind)
             : AmiraTelemetry.Source.StartActivity(name, kind, parentActivityContext);
 
-    private static void SetTurnTags(Activity? activity, BotTurn turn)
+    internal static void SetTurnTags(Activity? activity, BotTurn turn)
     {
         activity?
             .SetTag(AmiraTelemetry.Tags.BotId, turn.BotId.Value)
@@ -212,20 +240,28 @@ internal sealed class RuntimeTelemetryScope : IDisposable
 
     public ActivityContext Context => _activity?.Context ?? _fallbackContext;
 
+    public void AttachTurn(BotTurn turn) => RuntimeTelemetry.SetTurnTags(_activity, turn);
+
     public void FirstToken() => _timeToFirstToken ??= _clock!.Elapsed;
 
     public void Usage(ProviderUsage usage) => _usage = usage;
 
     public void Success() => Complete(AmiraTelemetry.Outcomes.Success);
 
-    public void Failure(string errorCode) => Complete(AmiraTelemetry.Outcomes.Failure, errorCode);
+    public void Failure(string errorCode, ErrorCategory errorCategory) =>
+        Complete(AmiraTelemetry.Outcomes.Failure, errorCode, errorCategory);
 
-    public void Cancelled(string errorCode = AmiraTelemetry.ErrorCodes.OperationCancelled) =>
-        Complete(AmiraTelemetry.Outcomes.Cancelled, errorCode);
+    public void Cancelled(
+        string errorCode = AmiraTelemetry.ErrorCodes.OperationCancelled,
+        ErrorCategory errorCategory = ErrorCategory.Concurrency) =>
+        Complete(AmiraTelemetry.Outcomes.Cancelled, errorCode, errorCategory);
 
     public void Dispose() => Cancelled();
 
-    private void Complete(string outcome, string? errorCode = null)
+    private void Complete(
+        string outcome,
+        string? errorCode = null,
+        ErrorCategory? errorCategory = null)
     {
         if (_completed) return;
         _completed = true;
@@ -236,42 +272,85 @@ internal sealed class RuntimeTelemetryScope : IDisposable
 
         _activity?.SetTag(AmiraTelemetry.Tags.Outcome, outcome);
         if (errorCode is not null) _activity?.SetTag(AmiraTelemetry.Tags.ErrorCode, errorCode);
+        if (errorCategory is not null)
+            _activity?.SetTag(AmiraTelemetry.Tags.ErrorCategory, errorCategory.Value.ToString());
         _activity?.SetStatus(outcome == AmiraTelemetry.Outcomes.Success
             ? ActivityStatusCode.Ok
             : ActivityStatusCode.Error);
 
-        if (_kind == ScopeKind.Provider)
-            LogProviderCompletion(_logger!, _turn!, _clock!.Elapsed, outcome, errorCode);
-        else if (_kind == ScopeKind.Turn)
-            LogTurnCompletion(_logger!, _turn!, outcome, errorCode);
-
-        _activity?.Dispose();
-        _activity = null;
+        Activity? activity = _activity;
+        Activity? previous = Activity.Current;
+        bool activateForLog = activity is not null && previous != activity;
+        if (activateForLog) Activity.Current = activity;
+        try
+        {
+            if (_kind == ScopeKind.Provider)
+                LogProviderCompletion(_logger!, _turn!, _clock!.Elapsed, _usage, outcome, errorCode, errorCategory);
+            else if (_kind == ScopeKind.Turn)
+                LogTurnCompletion(_logger!, _turn!, outcome, errorCode, errorCategory);
+        }
+        finally
+        {
+            activity?.Dispose();
+            _activity = null;
+            if (activateForLog) Activity.Current = previous;
+        }
     }
 
     private static void LogProviderCompletion(
         ILogger logger,
         BotTurn turn,
         TimeSpan duration,
+        ProviderUsage? usage,
         string outcome,
-        string? errorCode)
+        string? errorCode,
+        ErrorCategory? errorCategory)
     {
+        string botId = turn.BotId.Value;
+        string chatId = turn.ChatId.Value;
+        string turnId = turn.Id.Value;
+        string protocol = turn.ModelProfileSnapshot.Protocol.ToString();
+        string model = turn.ModelProfileSnapshot.Model;
+        double durationMs = duration.TotalMilliseconds;
+        int? usageInput = usage?.InputTokens;
+        int? usageOutput = usage?.OutputTokens;
+        string? category = errorCategory?.ToString();
+
         if (outcome == AmiraTelemetry.Outcomes.Success)
-            RuntimeLog.RequestCompleted(logger, turn.Id.Value, duration.TotalMilliseconds);
+            RuntimeLog.RequestCompleted(
+                logger, botId, chatId, turnId, protocol, model, durationMs, usageInput, usageOutput, errorCode, category);
         else if (outcome == AmiraTelemetry.Outcomes.Cancelled)
-            RuntimeLog.RequestCancelled(logger, turn.Id.Value);
+            RuntimeLog.RequestCancelled(
+                logger, botId, chatId, turnId, protocol, model, durationMs, usageInput, usageOutput, errorCode, category);
         else
-            RuntimeLog.RequestFailed(logger, turn.Id.Value, errorCode!);
+            RuntimeLog.RequestFailed(
+                logger, botId, chatId, turnId, protocol, model, durationMs, usageInput, usageOutput, errorCode, category);
     }
 
-    private static void LogTurnCompletion(ILogger logger, BotTurn turn, string outcome, string? errorCode)
+    private static void LogTurnCompletion(
+        ILogger logger,
+        BotTurn turn,
+        string outcome,
+        string? errorCode,
+        ErrorCategory? errorCategory)
     {
+        string protocol = turn.ModelProfileSnapshot.Protocol.ToString();
         if (outcome == AmiraTelemetry.Outcomes.Success)
-            RuntimeLog.TurnCompleted(logger, turn.Id.Value, turn.BotId.Value);
+            RuntimeLog.TurnCompleted(
+                logger, turn.BotId.Value, turn.ChatId.Value, turn.Id.Value, protocol, turn.ModelProfileSnapshot.Model);
         else if (outcome == AmiraTelemetry.Outcomes.Cancelled)
-            RuntimeLog.TurnCancelled(logger, turn.Id.Value, turn.BotId.Value);
+            RuntimeLog.TurnCancelled(
+                logger, turn.BotId.Value, turn.ChatId.Value, turn.Id.Value, protocol, turn.ModelProfileSnapshot.Model);
         else
-            RuntimeLog.TurnFailed(logger, turn.Id.Value, turn.BotId.Value, errorCode!);
+            RuntimeLog.TurnFailed(
+                logger,
+                turn.BotId.Value,
+                turn.ChatId.Value,
+                turn.Id.Value,
+                protocol,
+                turn.ModelProfileSnapshot.Model,
+                errorCode,
+                errorCategory?.ToString());
     }
 
     private enum ScopeKind { Activity, Turn, Provider }
@@ -279,36 +358,36 @@ internal sealed class RuntimeTelemetryScope : IDisposable
 
 internal static partial class RuntimeLog
 {
-    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnClaimed, Level = LogLevel.Debug, Message = "Turn {TurnId} claimed for bot {BotId}.")]
-    public static partial void TurnClaimed(ILogger logger, string turnId, string botId);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnClaimed, Level = LogLevel.Information, Message = "Turn {TurnId} claimed for bot {BotId} in chat {ChatId} using {ProviderProtocol} model {Model}.")]
+    public static partial void TurnClaimed(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.MessageCommitted, Level = LogLevel.Debug, Message = "Human message committed for bot {BotId}.")]
-    public static partial void MessageCommitted(ILogger logger, string botId);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.MessageCommitted, Level = LogLevel.Information, Message = "Message committed for turn {TurnId}, bot {BotId}, chat {ChatId}, protocol {ProviderProtocol}, model {Model}.")]
+    public static partial void MessageCommitted(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnQueued, Level = LogLevel.Debug, Message = "Turn {TurnId} queued for bot {BotId}.")]
-    public static partial void TurnQueued(ILogger logger, string turnId, string botId);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnQueued, Level = LogLevel.Information, Message = "Turn {TurnId} queued for bot {BotId} in chat {ChatId} using {ProviderProtocol} model {Model}.")]
+    public static partial void TurnQueued(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnCompleted, Level = LogLevel.Debug, Message = "Turn {TurnId} completed for bot {BotId}.")]
-    public static partial void TurnCompleted(ILogger logger, string turnId, string botId);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnCompleted, Level = LogLevel.Information, Message = "Turn {TurnId} completed for bot {BotId} in chat {ChatId} using {ProviderProtocol} model {Model}.")]
+    public static partial void TurnCompleted(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnFailed, Level = LogLevel.Debug, Message = "Turn {TurnId} failed for bot {BotId} with error code {ErrorCode}.")]
-    public static partial void TurnFailed(ILogger logger, string turnId, string botId, string errorCode);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnFailed, Level = LogLevel.Warning, Message = "Turn {TurnId} failed for bot {BotId} in chat {ChatId} using {ProviderProtocol} model {Model} with error {ErrorCode}/{ErrorCategory}.")]
+    public static partial void TurnFailed(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model, string? errorCode, string? errorCategory);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnCancelled, Level = LogLevel.Debug, Message = "Turn {TurnId} cancelled for bot {BotId}.")]
-    public static partial void TurnCancelled(ILogger logger, string turnId, string botId);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.TurnCancelled, Level = LogLevel.Information, Message = "Turn {TurnId} cancelled for bot {BotId} in chat {ChatId} using {ProviderProtocol} model {Model}.")]
+    public static partial void TurnCancelled(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.ProviderRequestStarted, Level = LogLevel.Information, Message = "Provider request started for turn {TurnId}, bot {BotId}, protocol {Protocol}.")]
-    public static partial void RequestStarted(ILogger logger, string turnId, string botId, string protocol);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.ProviderRequestStarted, Level = LogLevel.Information, Message = "Provider request started for turn {TurnId}, bot {BotId}, chat {ChatId}, protocol {ProviderProtocol}, model {Model}.")]
+    public static partial void RequestStarted(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.ProviderRequestCompleted, Level = LogLevel.Information, Message = "Provider request completed for turn {TurnId} in {DurationMs} ms.")]
-    public static partial void RequestCompleted(ILogger logger, string turnId, double durationMs);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.ProviderRequestCompleted, Level = LogLevel.Information, Message = "Provider request completed for turn {TurnId}, bot {BotId}, chat {ChatId}, protocol {ProviderProtocol}, model {Model} in {DurationMs} ms with usage {UsageInput}/{UsageOutput} and error {ErrorCode}/{ErrorCategory}.")]
+    public static partial void RequestCompleted(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model, double durationMs, int? usageInput, int? usageOutput, string? errorCode, string? errorCategory);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.ProviderRequestFailed, Level = LogLevel.Warning, Message = "Provider request failed for turn {TurnId} with error code {ErrorCode}.")]
-    public static partial void RequestFailed(ILogger logger, string turnId, string errorCode);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.ProviderRequestFailed, Level = LogLevel.Warning, Message = "Provider request failed for turn {TurnId}, bot {BotId}, chat {ChatId}, protocol {ProviderProtocol}, model {Model} in {DurationMs} ms with usage {UsageInput}/{UsageOutput} and error {ErrorCode}/{ErrorCategory}.")]
+    public static partial void RequestFailed(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model, double durationMs, int? usageInput, int? usageOutput, string? errorCode, string? errorCategory);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.ProviderRequestCancelled, Level = LogLevel.Information, Message = "Provider request cancelled for turn {TurnId}.")]
-    public static partial void RequestCancelled(ILogger logger, string turnId);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.ProviderRequestCancelled, Level = LogLevel.Information, Message = "Provider request cancelled for turn {TurnId}, bot {BotId}, chat {ChatId}, protocol {ProviderProtocol}, model {Model} in {DurationMs} ms with usage {UsageInput}/{UsageOutput} and error {ErrorCode}/{ErrorCategory}.")]
+    public static partial void RequestCancelled(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model, double durationMs, int? usageInput, int? usageOutput, string? errorCode, string? errorCategory);
 
-    [LoggerMessage(EventId = (int)AmiraLogEvent.ContextBuilt, Level = LogLevel.Debug, Message = "Context built for turn {TurnId}: included {IncludedMessages}, dropped {DroppedMessages}, characters {Characters}.")]
-    public static partial void ContextBuilt(ILogger logger, string turnId, int includedMessages, int droppedMessages, int characters);
+    [LoggerMessage(EventId = (int)AmiraLogEvent.ContextBuilt, Level = LogLevel.Debug, Message = "Context built for turn {TurnId}, bot {BotId}, chat {ChatId}, protocol {ProviderProtocol}, model {Model}: included {IncludedMessages}, dropped {DroppedMessages}, characters {Characters}.")]
+    public static partial void ContextBuilt(ILogger logger, string botId, string chatId, string turnId, string providerProtocol, string model, int includedMessages, int droppedMessages, int characters);
 }
