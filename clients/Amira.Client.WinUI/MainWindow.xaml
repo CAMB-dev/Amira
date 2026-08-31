@@ -27,6 +27,7 @@
           </ResourceDictionary>
         </ResourceDictionary.ThemeDictionaries>
         <local:NullToVisibilityConverter x:Key="NullVisibility" />
+        <local:EnumValueToVisibilityConverter x:Key="EnumVisibility" />
         <local:UserNoticeSeverityConverter x:Key="NoticeSeverity" />
         <local:UserNoticeLiveSettingConverter x:Key="NoticeLiveSetting" />
         <local:LocalTimeConverter x:Key="LocalTime" />
@@ -191,14 +192,12 @@
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="30" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="28" />
               </Grid.ColumnDefinitions>
               <SymbolIcon Symbol="Folder" />
               <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="Work" FontSize="16" />
                 <TextBlock Text="Local workspace" FontSize="12" Opacity=".62" />
               </StackPanel>
-              <FontIcon Grid.Column="2" FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&#xE70D;" HorizontalAlignment="Right" />
             </Grid>
           </Button>
           <Grid Grid.Row="1" Height="47" Margin="0,16,0,28">
@@ -223,33 +222,94 @@
               <SymbolIcon Symbol="Setting" />
             </Button>
           </Grid>
-          <ListView x:Name="BotsList" Grid.Row="3" ItemsSource="{Binding VisibleBots}" SelectedItem="{Binding SelectedBot, Mode=OneWay}" SelectionChanged="BotsSelectionChanged" ItemContainerStyle="{StaticResource BotListItem}" AutomationProperties.Name="Bots">
-            <ListView.Resources>
-              <SolidColorBrush x:Key="ListViewItemSelectedBackgroundThemeBrush" Color="#182F51" />
-              <SolidColorBrush x:Key="ListViewItemSelectedPointerOverBackgroundThemeBrush" Color="#20406D" />
-              <SolidColorBrush x:Key="ListViewItemSelectedForegroundThemeBrush" Color="#FFFFFF" />
-            </ListView.Resources>
-            <ListView.ItemTemplate>
-              <DataTemplate x:DataType="domain:Bot">
-                <Grid MinHeight="76" Padding="12,10">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="52" />
-                    <ColumnDefinition Width="*" />
-                  </Grid.ColumnDefinitions>
-                  <Border Width="46" Height="46" CornerRadius="23" Background="{ThemeResource Raised}">
-                    <Image Source="ms-appx:///Assets/bot-avatar-gem.png" Stretch="Uniform" />
-                  </Border>
-                  <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding Profile.Name}" FontSize="17" FontWeight="SemiBold" />
-                    <StackPanel Orientation="Horizontal" Spacing="7">
-                      <Ellipse Width="9" Height="9" Fill="{ThemeResource Online}" />
-                      <TextBlock Text="Active" FontSize="13" Opacity=".7" />
+          <Grid Grid.Row="3">
+            <ListView x:Name="BotsList"
+                      ItemsSource="{Binding VisibleBots}"
+                      SelectedItem="{Binding SelectedBot, Mode=OneWay}"
+                      SelectionChanged="BotsSelectionChanged"
+                      ItemContainerStyle="{StaticResource BotListItem}"
+                      Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Content}"
+                      AutomationProperties.Name="Bots">
+              <ListView.Resources>
+                <SolidColorBrush x:Key="ListViewItemSelectedBackgroundThemeBrush" Color="#182F51" />
+                <SolidColorBrush x:Key="ListViewItemSelectedPointerOverBackgroundThemeBrush" Color="#20406D" />
+                <SolidColorBrush x:Key="ListViewItemSelectedForegroundThemeBrush" Color="#FFFFFF" />
+              </ListView.Resources>
+              <ListView.ItemTemplate>
+                <DataTemplate x:DataType="domain:Bot">
+                  <Grid MinHeight="76" Padding="12,10">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="52" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="46" Height="46" CornerRadius="23" Background="{ThemeResource Raised}">
+                      <Image Source="ms-appx:///Assets/bot-avatar-gem.png" Stretch="Uniform" />
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Profile.Name}" FontSize="17" FontWeight="SemiBold" />
+                      <StackPanel Orientation="Horizontal" Spacing="7">
+                        <Ellipse Width="9" Height="9" Fill="{ThemeResource Online}" />
+                        <TextBlock Text="Active" FontSize="13" Opacity=".7" />
+                      </StackPanel>
                     </StackPanel>
-                  </StackPanel>
-                </Grid>
-              </DataTemplate>
-            </ListView.ItemTemplate>
-          </ListView>
+                  </Grid>
+                </DataTemplate>
+              </ListView.ItemTemplate>
+            </ListView>
+            <StackPanel Width="230"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,28,0,0"
+                        Spacing="10"
+                        Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Loading}"
+                        AutomationProperties.Name="Loading Bots">
+              <ProgressRing Width="24" Height="24" IsActive="True" HorizontalAlignment="Center" />
+              <TextBlock Text="Loading Bots…" HorizontalAlignment="Center" Opacity=".68" />
+            </StackPanel>
+            <StackPanel Width="230"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,28,0,0"
+                        Spacing="10"
+                        Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=NoEnabledConnections}"
+                        AutomationProperties.Name="No enabled connections">
+              <TextBlock Text="No connections" FontWeight="SemiBold" HorizontalAlignment="Center" />
+              <TextBlock Text="Add an enabled connection to create a Bot." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+              <Button Content="Manage connections" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ConnectionsClick" AutomationProperties.Name="Manage connections" />
+            </StackPanel>
+            <StackPanel Width="230"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,28,0,0"
+                        Spacing="10"
+                        Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=NoBots}"
+                        AutomationProperties.Name="No Bots yet">
+              <TextBlock Text="No Bots yet" FontWeight="SemiBold" HorizontalAlignment="Center" />
+              <TextBlock Text="Create a Bot to start a Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+              <Button Content="Create Bot" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="NewBotClick" IsEnabled="{Binding CanCreateBot}" AutomationProperties.Name="Create Bot" />
+            </StackPanel>
+            <StackPanel Width="230"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,28,0,0"
+                        Spacing="10"
+                        Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=ArchivedOnly}"
+                        AutomationProperties.Name="All Bots are archived">
+              <TextBlock Text="All Bots are archived" FontWeight="SemiBold" HorizontalAlignment="Center" />
+              <TextBlock Text="Restore a Bot to return it to the sidebar." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+              <Button Content="Manage Bots" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ManageBotsClick" AutomationProperties.Name="Manage Bots" />
+            </StackPanel>
+            <StackPanel Width="230"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,28,0,0"
+                        Spacing="10"
+                        Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=SearchNoResults}"
+                        AutomationProperties.Name="No Bots match your search">
+              <TextBlock Text="No Bots match your search" FontWeight="SemiBold" HorizontalAlignment="Center" TextAlignment="Center" />
+              <Button Content="Clear search" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ClearBotSearchClick" AutomationProperties.Name="Clear Bot search" />
+            </StackPanel>
+          </Grid>
         </Grid>
         <Grid x:Name="SidebarFooter" Grid.Row="2">
           <Grid.ColumnDefinitions>
@@ -257,8 +317,7 @@
             <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
           <Button x:Name="ConnectionsButton" Style="{StaticResource Quiet}" Click="ConnectionsClick" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" ToolTipService.ToolTip="Manage provider connections" AutomationProperties.Name="Manage provider connections">
-            <StackPanel Orientation="Horizontal" Spacing="10">
-              <Ellipse Width="11" Height="11" Fill="{ThemeResource Avatar}" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Text="Connections" />
               <TextBlock Text="{Binding ConnectionSummary}" Opacity=".7" />
             </StackPanel>
@@ -294,7 +353,8 @@
           </Button>
         </Grid>
       </Border>
-      <ListView x:Name="ConversationList" Grid.Row="1" Padding="24,12" ItemsSource="{Binding Timeline}" ItemTemplateSelector="{StaticResource Messages}" SelectionMode="None" IsItemClickEnabled="False" Loaded="ConversationListLoaded" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.VerticalScrollMode="Enabled" ScrollViewer.ZoomMode="Disabled" AutomationProperties.Name="Conversation">
+      <Grid Grid.Row="1">
+      <ListView x:Name="ConversationList" Padding="24,12" ItemsSource="{Binding Timeline}" ItemTemplateSelector="{StaticResource Messages}" SelectionMode="None" IsItemClickEnabled="False" Loaded="ConversationListLoaded" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.VerticalScrollMode="Enabled" ScrollViewer.ZoomMode="Disabled" Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Content}" AutomationProperties.Name="Conversation">
         <ListView.ItemsPanel>
           <ItemsPanelTemplate><ItemsStackPanel /></ItemsPanelTemplate>
         </ListView.ItemsPanel>
@@ -323,6 +383,34 @@
           </ItemsControl>
         </ListView.Footer>
       </ListView>
+        <StackPanel Width="310"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="10"
+                    Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Loading}"
+                    AutomationProperties.Name="Loading Direct chat">
+          <ProgressRing Width="28" Height="28" IsActive="True" HorizontalAlignment="Center" />
+          <TextBlock Text="Loading Direct chat…" HorizontalAlignment="Center" Opacity=".68" />
+        </StackPanel>
+        <StackPanel Width="360"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="8"
+                    Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=NoSelection}"
+                    AutomationProperties.Name="Choose a Bot">
+          <TextBlock Text="Choose a Bot" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" />
+          <TextBlock Text="Select an active Bot from the sidebar to open its Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+        </StackPanel>
+        <StackPanel Width="420"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="8"
+                    Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=EmptyChat}"
+                    AutomationProperties.Name="No messages yet">
+          <TextBlock Text="No messages yet" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" />
+          <TextBlock Text="Send a message to start this Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+        </StackPanel>
+      </Grid>
       <Border Grid.Row="2" Margin="12,10,12,16" Padding="16,12" Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Accent}" BorderThickness="1" CornerRadius="12">
         <Grid>
           <Grid.RowDefinitions>

@@ -22,6 +22,8 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
     private string _statusText = string.Empty;
     private UserNotice? _notice;
     private bool _isBusy;
+    private bool _isCatalogLoading = true;
+    private bool _isConversationLoading = true;
     private bool _shuttingDown;
     private bool _activitySelectionPinned;
     private readonly HashSet<BotTurnId> _firstTokenRefreshes = [];
@@ -43,6 +45,7 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
             OnChanged(nameof(CanSend));
             OnChanged(nameof(CanEditSelectedBot));
             OnChanged(nameof(CanArchiveSelectedBot));
+            OnChanged(nameof(ConversationState));
         }
     }
     public string MessageText { get => _messageText; set { Set(ref _messageText, value); OnChanged(nameof(CanSend)); } }
@@ -86,6 +89,18 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
     public bool CanEditSelectedBot => BotManagementPolicy.CanEdit(SelectedBot) && !IsBusy && !_shuttingDown;
     public bool CanArchiveSelectedBot => BotManagementPolicy.CanArchive(SelectedBot) && !IsBusy && !_shuttingDown;
     public bool HasArchivedBots => AllBots.Any(bot => bot.LifecycleState == BotLifecycleState.Archived);
+    public BotNavigationState NavigationState => ClientViewStatePolicy.ResolveNavigation(
+        _isCatalogLoading,
+        HasEnabledConnections,
+        Bots.Count,
+        AllBots.Count(bot => bot.LifecycleState == BotLifecycleState.Archived),
+        !string.IsNullOrWhiteSpace(SearchText),
+        VisibleBots.Count);
+    public ConversationState ConversationState => ClientViewStatePolicy.ResolveConversation(
+        _isConversationLoading,
+        SelectedBot is not null,
+        Timeline.Count,
+        StreamingTurns.Count);
     public string WorkspaceId => _session.WorkspaceId.ToString();
     public TurnView? SelectedActivity
     {
@@ -108,23 +123,42 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
             return enabledConnections == 0 ? "None enabled" : $"{enabledConnections} enabled";
         }
     }
-    public async Task InitializeAsync() { await RefreshCatalogAsync(); if (Bots.FirstOrDefault() is Bot bot) await SelectBotAsync(bot); }
+    public async Task InitializeAsync()
+    {
+        try
+        {
+            await RefreshCatalogAsync();
+            if (Bots.FirstOrDefault() is Bot bot) await SelectBotAsync(bot);
+        }
+        finally
+        {
+            if (SelectedBot is null) SetConversationLoading(false);
+        }
+    }
     public async Task RefreshCatalogAsync()
     {
-        BotId? selected = SelectedBot?.Id;
-        IReadOnlyList<Bot> bots = await _session.ListBotsAsync();
-        IReadOnlyList<ProviderConnection> connections = await _session.ListConnectionsAsync();
-        Replace(AllBots, bots);
-        Replace(Bots, bots.Where(BotManagementPolicy.CanSelect));
-        Replace(Connections, connections);
-        RefreshVisibleBots();
-        OnChanged(nameof(HasEnabledConnections));
-        OnChanged(nameof(ConnectionSummary));
-        OnChanged(nameof(HasArchivedBots));
-        if (selected is not { } id) return;
-        Bot? refreshed = Bots.FirstOrDefault(bot => bot.Id == id);
-        if (refreshed is null) ClearSelection();
-        else SelectedBot = refreshed;
+        SetCatalogLoading(true);
+        try
+        {
+            BotId? selected = SelectedBot?.Id;
+            IReadOnlyList<Bot> bots = await _session.ListBotsAsync();
+            IReadOnlyList<ProviderConnection> connections = await _session.ListConnectionsAsync();
+            Replace(AllBots, bots);
+            Replace(Bots, bots.Where(BotManagementPolicy.CanSelect));
+            Replace(Connections, connections);
+            RefreshVisibleBots();
+            OnChanged(nameof(HasEnabledConnections));
+            OnChanged(nameof(ConnectionSummary));
+            OnChanged(nameof(HasArchivedBots));
+            if (selected is not { } id) return;
+            Bot? refreshed = Bots.FirstOrDefault(bot => bot.Id == id);
+            if (refreshed is null) ClearSelection();
+            else SelectedBot = refreshed;
+        }
+        finally
+        {
+            SetCatalogLoading(false);
+        }
     }
     public async Task SelectBotAsync(Bot? bot)
     {
@@ -144,14 +178,20 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         CancellationTokenSource cancellation = new();
         _selectionCancellation = cancellation;
         long generation = _selection.Next();
+        SetConversationLoading(true);
         SelectedBot = bot;
         Timeline.Clear();
         Turns.Clear();
         StreamingTurns.Clear();
         _firstTokenRefreshes.Clear();
         SetSelectedActivity(null, pinned: false);
+        OnChanged(nameof(ConversationState));
         OnChanged(nameof(CanSend));
-        if (bot is null || _shuttingDown) return;
+        if (bot is null || _shuttingDown)
+        {
+            SetConversationLoading(false);
+            return;
+        }
         try
         {
             Task<IReadOnlyList<ChatMessage>> timeline = _session.LoadTimelineAsync(bot.DirectChatId, cancellation.Token).AsTask();
@@ -162,9 +202,14 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
             Replace(Turns, (await turns).Items);
             foreach (TurnView turn in Turns) RememberFirstToken(turn);
             RestoreActivitySelection(selectedActivityId, preservePinnedActivity);
+            OnChanged(nameof(ConversationState));
         }
         catch (OperationCanceledException) when (!IsCurrent(generation, bot.Id)) { }
         catch (Exception exception) when (IsCurrent(generation, bot.Id)) { PublishError(exception); }
+        finally
+        {
+            if (IsCurrent(generation, bot.Id)) SetConversationLoading(false);
+        }
     }
     public async Task SendAsync()
     {
@@ -347,6 +392,7 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
     private async Task ReloadSelectedAsync() { Bot? bot = SelectedBot; if (bot is not null && !_shuttingDown) await SelectBotAsync(bot); }
     private void ClearSelection()
     {
+        SetConversationLoading(true);
         _selectionCancellation?.Cancel();
         _selectionCancellation?.Dispose();
         _selectionCancellation = null;
@@ -357,6 +403,8 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         StreamingTurns.Clear();
         _firstTokenRefreshes.Clear();
         SetSelectedActivity(null, pinned: false);
+        OnChanged(nameof(ConversationState));
+        SetConversationLoading(false);
     }
     private void RefreshVisibleBots()
     {
@@ -364,6 +412,8 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         Replace(VisibleBots, string.IsNullOrEmpty(query)
             ? Bots
             : Bots.Where(bot => bot.Profile.Name.Contains(query, StringComparison.OrdinalIgnoreCase)));
+        OnChanged(nameof(NavigationState));
+        OnChanged(nameof(SelectedBot));
     }
     private async Task RefreshTurnAsync(ChatRuntimeEvent runtimeEvent, long generation, CancellationToken cancellationToken)
     {
@@ -388,7 +438,11 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
     {
         if (SelectedBot is not { } bot || bot.Id != runtimeEvent.BotId) return;
         IReadOnlyList<ChatMessage> timeline = await _session.LoadTimelineAsync(bot.DirectChatId, cancellationToken);
-        if (IsCurrent(generation, runtimeEvent.BotId)) Replace(Timeline, timeline);
+        if (IsCurrent(generation, runtimeEvent.BotId))
+        {
+            Replace(Timeline, timeline);
+            OnChanged(nameof(ConversationState));
+        }
     }
     private void ProjectUsage(ChatRuntimeEvent.UsageReported runtimeEvent, long generation)
     {
@@ -446,16 +500,22 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         {
             if (StreamingTurns[index].TurnId != projection.TurnId) continue;
             StreamingTurns[index] = projection;
+            OnChanged(nameof(ConversationState));
             return;
         }
         StreamingTurns.Add(projection);
+        OnChanged(nameof(ConversationState));
     }
     private void RemoveStreamingTurn(BotTurnId turnId)
     {
+        bool removed = false;
         for (int index = StreamingTurns.Count - 1; index >= 0; index--)
         {
-            if (StreamingTurns[index].TurnId == turnId) StreamingTurns.RemoveAt(index);
+            if (StreamingTurns[index].TurnId != turnId) continue;
+            StreamingTurns.RemoveAt(index);
+            removed = true;
         }
+        if (removed) OnChanged(nameof(ConversationState));
     }
     private bool IsCurrent(long generation, BotId botId) => !_shuttingDown && SelectedBot is { Id: var selected } && _selection.IsCurrent(generation, selected, botId);
     private async Task RunAsync(Func<Task> operation)
@@ -481,6 +541,18 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
             return false;
         }
         finally { IsBusy = false; }
+    }
+    private void SetCatalogLoading(bool value)
+    {
+        if (_isCatalogLoading == value) return;
+        _isCatalogLoading = value;
+        OnChanged(nameof(NavigationState));
+    }
+    private void SetConversationLoading(bool value)
+    {
+        if (_isConversationLoading == value) return;
+        _isConversationLoading = value;
+        OnChanged(nameof(ConversationState));
     }
     private static void Replace<T>(ObservableCollection<T> destination, IEnumerable<T> source) { destination.Clear(); foreach (T item in source) destination.Add(item); }
     private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null) { if (EqualityComparer<T>.Default.Equals(field, value)) return false; field = value; OnChanged(name); return true; }

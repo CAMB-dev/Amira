@@ -43,6 +43,16 @@ public sealed class NullToVisibilityConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
 }
 
+public sealed class EnumValueToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) =>
+        parameter is string expected && string.Equals(value?.ToString(), expected, StringComparison.Ordinal)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
 public sealed class LocalTimeConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, string language) => value is DateTimeOffset timestamp

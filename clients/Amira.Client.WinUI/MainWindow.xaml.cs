@@ -50,7 +50,7 @@ public sealed partial class MainWindow : Window
     private async void BotsSelectionChanged(object sender, SelectionChangedEventArgs args)
     {
         Bot? selected = BotsList.SelectedItem as Bot;
-        if (selected?.Id == _viewModel.SelectedBot?.Id) return;
+        if (!BotNavigationSelectionPolicy.ShouldOpen(selected, _viewModel.SelectedBot)) return;
         await _viewModel.SelectBotAsync(selected);
     }
     private async void SendClick(object sender, RoutedEventArgs args) { _viewModel.MessageText = MessageBox.Text; await _viewModel.SendAsync(); }
@@ -63,6 +63,11 @@ public sealed partial class MainWindow : Window
     }
     private void UserNoticeClosed(InfoBar sender, InfoBarClosedEventArgs args) => _viewModel.DismissNotice();
     private void SearchBotsTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args) => _viewModel.SearchText = sender.Text;
+    private void ClearBotSearchClick(object sender, RoutedEventArgs args)
+    {
+        SearchBotsBox.Text = string.Empty;
+        SearchBotsBox.Focus(FocusState.Programmatic);
+    }
     private void SearchAcceleratorInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) { SearchBotsBox.Focus(FocusState.Programmatic); args.Handled = true; }
     private async void ToggleThemeClick(object sender, RoutedEventArgs args)
     {
