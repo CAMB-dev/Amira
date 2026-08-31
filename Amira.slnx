@@ -11,6 +11,7 @@
     <Project Path="src/Amira.Client.Composition.Windows/Amira.Client.Composition.Windows.csproj" />
   </Folder>
   <Folder Name="/clients/">
+    <Project Path="clients/Amira.Client.WinUI/Amira.Client.WinUI.csproj" />
     <Project Path="clients/Amira.Client.Wpf/Amira.Client.Wpf.csproj" />
   </Folder>
   <Folder Name="/tests/">
