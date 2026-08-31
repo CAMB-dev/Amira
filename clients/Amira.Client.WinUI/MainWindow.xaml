@@ -11,7 +11,6 @@
             <SolidColorBrush x:Key="Select" Color="#182A45" />
             <SolidColorBrush x:Key="Line" Color="#363A40" />
             <SolidColorBrush x:Key="Accent" Color="#4D91FF" />
-            <SolidColorBrush x:Key="Online" Color="#58D587" />
             <SolidColorBrush x:Key="Avatar" Color="#2B2E34" />
           </ResourceDictionary>
           <ResourceDictionary x:Key="Light">
@@ -22,7 +21,6 @@
             <SolidColorBrush x:Key="Select" Color="#E6F0FF" />
             <SolidColorBrush x:Key="Line" Color="#D4D9E1" />
             <SolidColorBrush x:Key="Accent" Color="#286FD9" />
-            <SolidColorBrush x:Key="Online" Color="#25A55B" />
             <SolidColorBrush x:Key="Avatar" Color="#E4E7ED" />
           </ResourceDictionary>
         </ResourceDictionary.ThemeDictionaries>
@@ -39,6 +37,8 @@
         <local:TurnStatusIconVisibilityConverter x:Key="TurnStatusIconVisibility" />
         <local:TurnActivityTimeLabelConverter x:Key="ActivityTimeLabel" />
         <local:TurnActivityTimeConverter x:Key="ActivityTime" />
+        <local:ProviderProtocolTextConverter x:Key="ProviderProtocolText" />
+        <local:TurnFailureDetailConverter x:Key="FailureDetailText" />
         <local:TurnUsageTotalConverter x:Key="UsageTotal" />
         <local:TurnUsageTokenConverter x:Key="UsageToken" />
         <local:TurnDurationConverter x:Key="TurnDuration" />
@@ -247,10 +247,7 @@
                     </Border>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                       <TextBlock Text="{Binding Profile.Name}" FontSize="17" FontWeight="SemiBold" />
-                      <StackPanel Orientation="Horizontal" Spacing="7">
-                        <Ellipse Width="9" Height="9" Fill="{ThemeResource Online}" />
-                        <TextBlock Text="Active" FontSize="13" Opacity=".7" />
-                      </StackPanel>
+                      <TextBlock Text="Direct chat" FontSize="13" Opacity=".7" />
                     </StackPanel>
                   </Grid>
                 </DataTemplate>
@@ -523,6 +520,11 @@
                   </Grid>
                   <Grid Height="28">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="Provider" FontSize="14" Opacity=".68" AutomationProperties.Name="Provider protocol" />
+                    <TextBlock Grid.Column="1" Text="{Binding Protocol, Converter={StaticResource ProviderProtocolText}}" TextAlignment="Right" TextTrimming="CharacterEllipsis" FontSize="14" FontWeight="SemiBold" ToolTipService.ToolTip="{Binding Protocol, Converter={StaticResource ProviderProtocolText}}" />
+                  </Grid>
+                  <Grid Height="28">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                     <TextBlock Text="Attempt" FontSize="14" Opacity=".68" />
                     <TextBlock Grid.Column="1" Text="{Binding Attempt}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
                   </Grid>
@@ -575,7 +577,19 @@
                     <TextBlock Text="End-to-end" FontSize="14" Opacity=".68" AutomationProperties.Name="End-to-end duration" />
                     <TextBlock Grid.Column="1" Text="{Binding EndToEndDuration, Converter={StaticResource TurnDuration}}" TextAlignment="Right" FontSize="14" FontWeight="SemiBold" />
                   </Grid>
-                  <InfoBar Title="Turn failed" Message="{Binding Failure.Message}" Severity="Error" IsClosable="False" IsOpen="True" Margin="0,16,0,0" Visibility="{Binding Failure, Converter={StaticResource NullVisibility}}" />
+                  <StackPanel Margin="0,16,0,0" Spacing="8" Visibility="{Binding Failure, Converter={StaticResource NullVisibility}}">
+                    <InfoBar Title="Turn failed" Message="{Binding Failure.Message}" Severity="Error" IsClosable="False" IsOpen="True" />
+                    <Grid Height="28">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                      <TextBlock Text="Error category" FontSize="14" Opacity=".68" AutomationProperties.Name="Error category" />
+                      <TextBlock Grid.Column="1" Text="{Binding Failure, Converter={StaticResource FailureDetailText}, ConverterParameter=category}" TextAlignment="Right" TextTrimming="CharacterEllipsis" FontSize="14" FontWeight="SemiBold" AutomationProperties.Name="Error category value" ToolTipService.ToolTip="{Binding Failure, Converter={StaticResource FailureDetailText}, ConverterParameter=category}" />
+                    </Grid>
+                    <Grid Height="28">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                      <TextBlock Text="Error code" FontSize="14" Opacity=".68" AutomationProperties.Name="Error code" />
+                      <TextBlock Grid.Column="1" Text="{Binding Failure, Converter={StaticResource FailureDetailText}, ConverterParameter=code}" TextAlignment="Right" TextTrimming="CharacterEllipsis" FontSize="14" FontWeight="SemiBold" AutomationProperties.Name="Error code value" ToolTipService.ToolTip="{Binding Failure, Converter={StaticResource FailureDetailText}, ConverterParameter=code}" />
+                    </Grid>
+                  </StackPanel>
                   <StackPanel Visibility="{Binding Converter={StaticResource ActionAreaVisibility}}">
                     <Border Height="1" Background="{ThemeResource Line}" Margin="0,16,0,12" />
                     <Button Height="44" HorizontalAlignment="Stretch" Style="{StaticResource Action}" Click="StopClick" Tag="{Binding}" Visibility="{Binding Converter={StaticResource ActionVisibility}, ConverterParameter=stop}" AutomationProperties.Name="Stop turn">

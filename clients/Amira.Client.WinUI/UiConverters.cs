@@ -173,6 +173,27 @@ public sealed class TurnActivityTimeConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
 }
 
+public sealed class ProviderProtocolTextConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value is ProviderProtocol protocol
+        ? ConnectionDialogDisplayPolicy.ProtocolLabel(protocol)
+        : string.Empty;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnFailureDetailConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => parameter switch
+    {
+        "category" => value is Amira.Errors.AmiraError failure ? failure.Category.ToString() : string.Empty,
+        "code" => value is Amira.Errors.AmiraError failure ? failure.Code : string.Empty,
+        _ => throw new ArgumentOutOfRangeException(nameof(parameter), parameter, "Failure detail parameters must be category or code.")
+    };
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
 public sealed class TurnUsageTotalConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, string language) => value is TurnUsage usage
