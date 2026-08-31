@@ -328,7 +328,7 @@ public sealed partial class SqliteAmiraStore
         }
     }
 
-    public async ValueTask RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default)
+    public async ValueTask<DurableStopRequestResult> RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -346,17 +346,23 @@ public sealed partial class SqliteAmiraStore
                     .Set(row => row.FinishedAt, finishedAt)
                     .Set(row => row.ClaimToken, (string?)null), cancellationToken)
                 .ConfigureAwait(false);
-            if (rows == 0)
-            {
-                rows = await _database.Table<BotTurnRow>()
-                    .Where(row => row.TurnId == id && row.Status == running)
-                    .ExecuteUpdateAsync(setters => setters.Set(row => row.StopRequested, true), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
             if (rows == 1)
             {
-                return;
+                return new DurableStopRequestResult(StopRequested: true, Cancelled: true);
+            }
+
+            if (rows != 0)
+            {
+                RequireSingleRow(rows);
+            }
+
+            rows = await _database.Table<BotTurnRow>()
+                .Where(row => row.TurnId == id && row.Status == running && !row.StopRequested)
+                .ExecuteUpdateAsync(setters => setters.Set(row => row.StopRequested, true), cancellationToken)
+                .ConfigureAwait(false);
+            if (rows == 1)
+            {
+                return new DurableStopRequestResult(StopRequested: true, Cancelled: false);
             }
 
             if (rows != 0)
@@ -374,6 +380,8 @@ public sealed partial class SqliteAmiraStore
                     ErrorCategory.NotFound,
                     "The requested turn was not found."));
             }
+
+            return default;
         }
         catch (OperationCanceledException)
         {

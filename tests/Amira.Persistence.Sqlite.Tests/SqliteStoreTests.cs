@@ -476,13 +476,18 @@ public sealed class SqliteStoreTests
         await using var database = TestDatabase.Create();
         var queuedSeed = await SeedBotAsync(database, "queued-stop");
         var queued = await QueueAsync(database, queuedSeed, "queued");
-        await database.Store.RequestStopAsync(queued.Turn.Id);
+        DurableStopRequestResult queuedStop = await database.Store.RequestStopAsync(queued.Turn.Id);
+        Assert.True(queuedStop.StopRequested);
+        Assert.True(queuedStop.Cancelled);
 
         var runningSeed = await SeedBotAsync(database, "running-stop");
         await QueueAsync(database, runningSeed, "running");
         var claim = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(runningSeed.Bot.Id));
         await database.Store.RecordFirstTokenAsync(claim.Turn.Id, claim.ClaimToken);
-        await database.Store.RequestStopAsync(claim.Turn.Id);
+        DurableStopRequestResult runningStop = await database.Store.RequestStopAsync(claim.Turn.Id);
+        Assert.True(runningStop.StopRequested);
+        Assert.False(runningStop.Cancelled);
+        Assert.Equal(default, await database.Store.RequestStopAsync(claim.Turn.Id));
 
         Assert.Null(await database.Store.TryClaimNextTurnAsync(queuedSeed.Bot.Id));
         Assert.Equal(4L, await database.ScalarAsync<long>(
@@ -519,7 +524,7 @@ public sealed class SqliteStoreTests
         var before = await database.ScalarAsync<string>(
             $"SELECT finished_at FROM bot_turns WHERE turn_id = '{claim.Turn.Id.Value}';");
 
-        await database.Store.RequestStopAsync(claim.Turn.Id);
+        Assert.Equal(default, await database.Store.RequestStopAsync(claim.Turn.Id));
 
         Assert.Equal(2L, await database.ScalarAsync<long>(
             $"SELECT status FROM bot_turns WHERE turn_id = '{claim.Turn.Id.Value}';"));

@@ -68,6 +68,7 @@ public sealed class BasicChatRuntime
                 new HumanMessageCommand(bot.DirectChatId, content, bot.Id, snapshot, telemetry.Context), cancellationToken).ConfigureAwait(false);
             RuntimeLog.MessageCommitted(_logger, bot.Id.Value);
             RuntimeLog.TurnQueued(_logger, result.Turn.Id.Value, bot.Id.Value);
+            _telemetry.TurnQueued();
             telemetry.Success();
             return result;
         }
@@ -108,6 +109,7 @@ public sealed class BasicChatRuntime
     {
         ArgumentNullException.ThrowIfNull(claimed);
         BotTurn turn = claimed.Turn;
+        _telemetry.TurnClaimed();
         RuntimeLog.TurnClaimed(_logger, turn.Id.Value, turn.BotId.Value);
         using CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellation);
         if (!_activeTurns.TryAdd(turn.Id, linkedCancellation))
@@ -117,6 +119,7 @@ public sealed class BasicChatRuntime
         }
 
         using RuntimeTelemetryScope turnTelemetry = RuntimeTelemetry.StartTurnExecution(turn, claimed.ParentActivityContext, _logger);
+        _telemetry.TurnBecameActive();
         bool terminalSettled = false;
         try
         {
@@ -361,29 +364,61 @@ public sealed class BasicChatRuntime
         }
         finally
         {
-            if (!terminalSettled)
+            try
             {
-                linkedCancellation.Cancel();
-                await CancelAfterProviderExitAsync(turn, claimed.ClaimToken).ConfigureAwait(false);
+                if (!terminalSettled)
+                {
+                    linkedCancellation.Cancel();
+                    await CancelAfterProviderExitAsync(turn, claimed.ClaimToken).ConfigureAwait(false);
+                }
             }
-            _activeTurns.TryRemove(new KeyValuePair<BotTurnId, CancellationTokenSource>(turn.Id, linkedCancellation));
+            finally
+            {
+                _activeTurns.TryRemove(new KeyValuePair<BotTurnId, CancellationTokenSource>(turn.Id, linkedCancellation));
+                _telemetry.TurnBecameInactive();
+            }
         }
     }
 
     public async ValueTask<StopResult> StopAsync(BotTurnId turnId, CancellationToken cancellationToken = default)
     {
-        await _chatStore.RequestStopAsync(turnId, cancellationToken).ConfigureAwait(false);
+        DurableStopRequestResult durableResult = await _chatStore.RequestStopAsync(turnId, cancellationToken).ConfigureAwait(false);
+        if (durableResult.StopRequested) _telemetry.StopRequested();
+        if (durableResult.Cancelled)
+        {
+            _telemetry.TurnCancelled();
+            _telemetry.TurnLeftQueue();
+        }
         bool signaled = _activeTurns.TryGetValue(turnId, out CancellationTokenSource? source);
         if (signaled) source!.Cancel();
-        return new StopResult(true, signaled);
+        return new StopResult(durableResult.StopRequested, signaled);
     }
 
     /// <summary>Explicit host startup recovery; call only after excluding workers from the previous process.</summary>
-    public ValueTask RecoverInterruptedTurnsAsync(CancellationToken cancellationToken = default) =>
-        _chatStore.RecoverInterruptedTurnsAsync(cancellationToken);
+    public async ValueTask RecoverInterruptedTurnsAsync(CancellationToken cancellationToken = default)
+    {
+        await _chatStore.RecoverInterruptedTurnsAsync(cancellationToken).ConfigureAwait(false);
+        long queuedTurns = 0;
+        TurnCursor? cursor = null;
+        do
+        {
+            TurnPage page = await _chatStore.QueryTurnsAsync(
+                new TurnQuery(status: BotTurnStatus.Queued, pageSize: TurnQuery.MaximumPageSize, before: cursor),
+                cancellationToken).ConfigureAwait(false);
+            queuedTurns += page.Items.Count;
+            cursor = page.NextCursor;
+        }
+        while (cursor is not null);
 
-    public ValueTask<BotTurn> RetryAsync(BotTurnId turnId, CancellationToken cancellationToken = default) =>
-        _chatStore.RetryTurnAsync(turnId, cancellationToken);
+        _telemetry.SeedQueuedTurns(queuedTurns);
+    }
+
+    public async ValueTask<BotTurn> RetryAsync(BotTurnId turnId, CancellationToken cancellationToken = default)
+    {
+        BotTurn retry = await _chatStore.RetryTurnAsync(turnId, cancellationToken).ConfigureAwait(false);
+        _telemetry.TurnQueued();
+        return retry;
+    }
 
     public IBotWorker CreateBotWorker(
         WorkspaceId workspaceId,
@@ -448,10 +483,17 @@ public sealed class BasicChatRuntime
 
     private async ValueTask CancelAfterProviderExitAsync(BotTurn turn, TurnClaimToken token)
     {
-        await _chatStore.RequestStopAsync(turn.Id, CancellationToken.None).ConfigureAwait(false);
+        DurableStopRequestResult durableResult = await _chatStore.RequestStopAsync(turn.Id, CancellationToken.None).ConfigureAwait(false);
+        if (durableResult.StopRequested) _telemetry.StopRequested();
+        if (durableResult.Cancelled)
+        {
+            _telemetry.TurnCancelled();
+            _telemetry.TurnLeftQueue();
+        }
         try
         {
             await _chatStore.CancelClaimedTurnAsync(turn.Id, token, CancellationToken.None).ConfigureAwait(false);
+            _telemetry.TurnCancelled();
         }
         catch (AmiraException exception) when (exception.Category == ErrorCategory.Concurrency && exception.Code == AmiraErrorCodes.StaleClaim)
         {

@@ -158,12 +158,22 @@ public sealed partial class RuntimeTests
         Assert.Equal(2, telemetry.Measurements.Count(static item => item.Name == AmiraTelemetry.Metrics.ProviderTimeToFirstToken));
         Assert.Equal(11d, Assert.Single(telemetry.Measurements, static item => item.Name == AmiraTelemetry.Metrics.ProviderInputTokens).Value);
         Assert.Equal(13d, Assert.Single(telemetry.Measurements, static item => item.Name == AmiraTelemetry.Metrics.ProviderOutputTokens).Value);
-        Assert.All(telemetry.Measurements, measurement =>
+        MeasurementSnapshot[] providerMeasurements = [.. telemetry.Measurements.Where(static measurement => measurement.Name.StartsWith("amira.provider.", StringComparison.Ordinal))];
+        Assert.All(providerMeasurements, measurement =>
         {
             Assert.Equal(2, measurement.Tags.Count);
             Assert.Contains(AmiraTelemetry.Tags.ProviderProtocol, measurement.Tags.Keys);
             Assert.Contains(AmiraTelemetry.Tags.Outcome, measurement.Tags.Keys);
         });
+
+        Assert.Equal(3, telemetry.Measurements.Count(static item => item.Name == AmiraTelemetry.Metrics.TurnQueuedTotal && item.Value == 1d));
+        MeasurementSnapshot[] activeTurns = [.. telemetry.Measurements.Where(static item => item.Name == AmiraTelemetry.Metrics.ActiveTurns)];
+        Assert.Equal(6, activeTurns.Length);
+        Assert.Equal(3, activeTurns.Count(static item => item.Value == 1d));
+        Assert.Equal(3, activeTurns.Count(static item => item.Value == -1d));
+        Assert.All(activeTurns, static item => Assert.Empty(item.Tags));
+        Assert.Equal(1d, Assert.Single(telemetry.Measurements, static item => item.Name == AmiraTelemetry.Metrics.TurnStopRequestedTotal).Value);
+        Assert.Equal(1d, Assert.Single(telemetry.Measurements, static item => item.Name == AmiraTelemetry.Metrics.TurnCancelledTotal).Value);
 
         int[] eventIds = [.. logger.Entries.Select(static entry => entry.EventId.Id)];
         Assert.Contains((int)AmiraLogEvent.ProviderRequestStarted, eventIds);
@@ -185,6 +195,90 @@ public sealed partial class RuntimeTests
         Assert.DoesNotContain(headerNameCanary, exportedText, StringComparison.Ordinal);
         Assert.DoesNotContain(headerValueCanary, exportedText, StringComparison.Ordinal);
         Assert.DoesNotContain(providerErrorCanary, exportedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Queued_turn_stop_counts_one_durable_stop_and_one_terminal_cancellation()
+    {
+        using var telemetry = new TelemetryCollector();
+        using var meterFactory = new TestMeterFactory();
+        var fixture = new Fixture(meterFactory: meterFactory);
+
+        QueuedMessageResult queued = await fixture.Runtime.QueueHumanMessageAsync(
+            fixture.WorkspaceId,
+            fixture.Bot.Id,
+            "hello",
+            TestContext.Current.CancellationToken);
+        StopResult first = await fixture.Runtime.StopAsync(queued.Turn.Id, TestContext.Current.CancellationToken);
+        StopResult second = await fixture.Runtime.StopAsync(queued.Turn.Id, TestContext.Current.CancellationToken);
+
+        Assert.True(first.DurableStopRequested);
+        Assert.False(second.DurableStopRequested);
+        Assert.Equal(1d, Assert.Single(telemetry.Measurements, static item => item.Name == AmiraTelemetry.Metrics.TurnQueuedTotal).Value);
+        Assert.Equal(1d, Assert.Single(telemetry.Measurements, static item => item.Name == AmiraTelemetry.Metrics.TurnStopRequestedTotal).Value);
+        Assert.Equal(1d, Assert.Single(telemetry.Measurements, static item => item.Name == AmiraTelemetry.Metrics.TurnCancelledTotal).Value);
+        Assert.DoesNotContain(telemetry.Measurements, static item => item.Name == AmiraTelemetry.Metrics.ActiveTurns);
+    }
+
+    [Fact]
+    public async Task Retry_creates_another_durable_queued_turn_measurement()
+    {
+        using var telemetry = new TelemetryCollector();
+        using var meterFactory = new TestMeterFactory();
+        var fixture = new Fixture(
+            new FakeProvider(new AmiraException(new AmiraError("retryable", ErrorCategory.Provider, "retry", true))),
+            meterFactory: meterFactory);
+
+        QueuedMessageResult queued = await fixture.Runtime.QueueHumanMessageAsync(
+            fixture.WorkspaceId,
+            fixture.Bot.Id,
+            "hello",
+            TestContext.Current.CancellationToken);
+        await Collect(fixture.Runtime.ExecuteNextAsync(fixture.WorkspaceId, fixture.Bot.Id, TestContext.Current.CancellationToken));
+        _ = await fixture.Runtime.RetryAsync(queued.Turn.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, telemetry.Measurements.Count(static item =>
+            item.Name == AmiraTelemetry.Metrics.TurnQueuedTotal && item.Value == 1d));
+    }
+
+    [Fact]
+    public async Task Queued_turn_gauge_tracks_new_claimed_cancelled_and_recovered_turns()
+    {
+        using var telemetry = new TelemetryCollector();
+        using var meterFactory = new TestMeterFactory();
+        var fixture = new Fixture(
+            new FakeProvider(new AmiraException(new AmiraError("retryable", ErrorCategory.Provider, "retry", true))),
+            meterFactory: meterFactory);
+
+        QueuedMessageResult initial = await fixture.Runtime.QueueHumanMessageAsync(
+            fixture.WorkspaceId,
+            fixture.Bot.Id,
+            "initial",
+            TestContext.Current.CancellationToken);
+        AssertQueuedTurns(telemetry, 1);
+
+        await Collect(fixture.Runtime.ExecuteNextAsync(fixture.WorkspaceId, fixture.Bot.Id, TestContext.Current.CancellationToken));
+        AssertQueuedTurns(telemetry, 0);
+
+        BotTurn retry = await fixture.Runtime.RetryAsync(initial.Turn.Id, TestContext.Current.CancellationToken);
+        AssertQueuedTurns(telemetry, 1);
+
+        StopResult stop = await fixture.Runtime.StopAsync(retry.Id, TestContext.Current.CancellationToken);
+        Assert.True(stop.DurableStopRequested);
+        AssertQueuedTurns(telemetry, 0);
+
+        for (int index = 0; index <= TurnQuery.MaximumPageSize; index++)
+        {
+            _ = await fixture.Store.CommitHumanMessageAndQueueTurnAsync(
+                new HumanMessageCommand(
+                    fixture.Bot.DirectChatId,
+                    $"recovered-{index}",
+                    fixture.Bot.Id,
+                    fixture.Bot.ModelProfile.Snapshot(fixture.Provider.Protocol)),
+                TestContext.Current.CancellationToken);
+        }
+        await fixture.Runtime.RecoverInterruptedTurnsAsync(TestContext.Current.CancellationToken);
+        AssertQueuedTurns(telemetry, TurnQuery.MaximumPageSize + 1);
     }
 
     [Fact]
@@ -221,6 +315,12 @@ public sealed partial class RuntimeTests
         }
         Assert.Null(Activity.Current);
         return events;
+    }
+
+    private static void AssertQueuedTurns(TelemetryCollector telemetry, double expected)
+    {
+        telemetry.RecordObservableInstruments();
+        Assert.Equal(expected, telemetry.Measurements.Last(static item => item.Name == AmiraTelemetry.Metrics.QueuedTurns).Value);
     }
 
     private sealed class TelemetryCollector : IDisposable
@@ -266,6 +366,8 @@ public sealed partial class RuntimeTests
 
         public List<ActivitySnapshot> Activities { get; } = [];
         public List<MeasurementSnapshot> Measurements { get; } = [];
+
+        public void RecordObservableInstruments() => _meterListener.RecordObservableInstruments();
 
         public void Dispose()
         {

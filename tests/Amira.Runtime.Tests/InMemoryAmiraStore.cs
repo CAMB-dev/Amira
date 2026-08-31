@@ -294,14 +294,14 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
         }
     }
 
-    public ValueTask RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default)
+    public ValueTask<DurableStopRequestResult> RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
             BotTurn turn = _turns[turnId];
             if (turn.StopRequested || turn.Status is BotTurnStatus.Completed or BotTurnStatus.Failed or BotTurnStatus.Cancelled)
             {
-                return ValueTask.CompletedTask;
+                return ValueTask.FromResult(default(DurableStopRequestResult));
             }
 
             StopCount++;
@@ -311,13 +311,13 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
                 _turns[turnId] = stopRequested.Cancel(NextTimestamp());
                 _queue.Remove(turnId);
                 CancelledCount++;
+                return ValueTask.FromResult(new DurableStopRequestResult(StopRequested: true, Cancelled: true));
             }
             else
             {
                 _turns[turnId] = stopRequested;
+                return ValueTask.FromResult(new DurableStopRequestResult(StopRequested: true, Cancelled: false));
             }
-
-            return ValueTask.CompletedTask;
         }
     }
 

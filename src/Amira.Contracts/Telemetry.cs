@@ -49,6 +49,11 @@ public static class AmiraTelemetry
         public const string ProviderTimeToFirstToken = "amira.provider.request.time_to_first_token";
         public const string ProviderInputTokens = "amira.provider.usage.input_tokens";
         public const string ProviderOutputTokens = "amira.provider.usage.output_tokens";
+        public const string TurnQueuedTotal = "amira.turn.queued.total";
+        public const string QueuedTurns = "amira.turn.queued";
+        public const string ActiveTurns = "amira.turn.active";
+        public const string TurnStopRequestedTotal = "amira.turn.stop.requested.total";
+        public const string TurnCancelledTotal = "amira.turn.cancelled.total";
     }
 }
 

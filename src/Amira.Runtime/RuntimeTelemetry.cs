@@ -9,6 +9,7 @@ namespace Amira.Runtime;
 internal sealed class RuntimeTelemetry
 {
     private readonly Instruments? _instruments;
+    private long _queuedTurns;
 
     public RuntimeTelemetry(IMeterFactory? meterFactory)
     {
@@ -38,7 +39,28 @@ internal sealed class RuntimeTelemetry
             meter.CreateCounter<long>(
                 AmiraTelemetry.Metrics.ProviderOutputTokens,
                 "{token}",
-                "Provider-reported output tokens."));
+                "Provider-reported output tokens."),
+            meter.CreateCounter<long>(
+                AmiraTelemetry.Metrics.TurnQueuedTotal,
+                "{turn}",
+                "New durable Turns queued by initial send or retry. This is cumulative, not current queue depth."),
+            meter.CreateObservableGauge(
+                AmiraTelemetry.Metrics.QueuedTurns,
+                () => Volatile.Read(ref _queuedTurns),
+                "{turn}",
+                "Turns currently in the durable queued state."),
+            meter.CreateUpDownCounter<long>(
+                AmiraTelemetry.Metrics.ActiveTurns,
+                "{turn}",
+                "Turns currently executing in this runtime process. The value resets when the process restarts."),
+            meter.CreateCounter<long>(
+                AmiraTelemetry.Metrics.TurnStopRequestedTotal,
+                "{turn}",
+                "New durable stop request transitions."),
+            meter.CreateCounter<long>(
+                AmiraTelemetry.Metrics.TurnCancelledTotal,
+                "{turn}",
+                "Turns durably transitioned to Cancelled."));
     }
 
     public static RuntimeTelemetryScope StartMessageCommit(Bot bot, ActivityContext ambientParent)
@@ -65,6 +87,34 @@ internal sealed class RuntimeTelemetry
         RuntimeLog.RequestStarted(logger, turn.Id.Value, turn.BotId.Value, turn.ModelProfileSnapshot.Protocol.ToString());
         return new RuntimeTelemetryScope(activity, parent, this, turn, logger);
     }
+
+    public void TurnQueued()
+    {
+        Interlocked.Increment(ref _queuedTurns);
+        _instruments?.TurnsQueued.Add(1);
+    }
+
+    public void TurnClaimed() => TurnLeftQueue();
+
+    public void TurnLeftQueue()
+    {
+        while (true)
+        {
+            long current = Volatile.Read(ref _queuedTurns);
+            if (current <= 0) return;
+            if (Interlocked.CompareExchange(ref _queuedTurns, current - 1, current) == current) return;
+        }
+    }
+
+    public void SeedQueuedTurns(long count) => Interlocked.Exchange(ref _queuedTurns, count);
+
+    public void TurnBecameActive() => _instruments?.ActiveTurns.Add(1);
+
+    public void TurnBecameInactive() => _instruments?.ActiveTurns.Add(-1);
+
+    public void StopRequested() => _instruments?.StopRequests.Add(1);
+
+    public void TurnCancelled() => _instruments?.CancelledTurns.Add(1);
 
     internal void RecordProviderRequest(
         BotTurn turn,
@@ -111,7 +161,12 @@ internal sealed class RuntimeTelemetry
         Histogram<double> RequestDuration,
         Histogram<double> TimeToFirstToken,
         Counter<long> InputTokens,
-        Counter<long> OutputTokens);
+        Counter<long> OutputTokens,
+        Counter<long> TurnsQueued,
+        ObservableGauge<long> QueuedTurns,
+        UpDownCounter<long> ActiveTurns,
+        Counter<long> StopRequests,
+        Counter<long> CancelledTurns);
 }
 
 internal sealed class RuntimeTelemetryScope : IDisposable

@@ -159,8 +159,8 @@ public interface IChatStore : ITurnReader
     /// </summary>
     ValueTask CancelClaimedTurnAsync(BotTurnId turnId, TurnClaimToken claimToken, CancellationToken cancellationToken = default);
 
-    /// <summary>Durably records a stop request and, when applicable, the Cancelled state.</summary>
-    ValueTask RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default);
+    /// <summary>Durably records a new stop request and, when applicable, the Cancelled state.</summary>
+    ValueTask<DurableStopRequestResult> RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Explicit startup recovery. Orphaned stop-requested turns become Cancelled; other orphaned Running turns return to Queued.
@@ -173,6 +173,9 @@ public interface IChatStore : ITurnReader
 
     ValueTask<IReadOnlyList<ChatMessage>> LoadTimelineAsync(DirectChatId chatId, CancellationToken cancellationToken = default);
 }
+
+/// <summary>One durable stop transition. Repeated or terminal requests return the default result.</summary>
+public readonly record struct DurableStopRequestResult(bool StopRequested, bool Cancelled);
 
 /// <summary>Deep workspace lifecycle seam. Creating a Bot and its unique DirectChat is one atomic operation.</summary>
 public interface IWorkspaceStore

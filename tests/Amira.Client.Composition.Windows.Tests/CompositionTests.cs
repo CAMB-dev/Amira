@@ -166,6 +166,11 @@ public sealed class CompositionTests
             await using WindowsClientHost host = await WindowsClientHost.StartAsync(sink, directory, TestContext.Current.CancellationToken);
             Assert.Equal(Path.Combine(directory, "logs"), host.LogsDirectory);
             Assert.Contains(AmiraTelemetry.Metrics.ProviderRequestCount, publishedInstruments);
+            Assert.Contains(AmiraTelemetry.Metrics.TurnQueuedTotal, publishedInstruments);
+            Assert.Contains(AmiraTelemetry.Metrics.QueuedTurns, publishedInstruments);
+            Assert.Contains(AmiraTelemetry.Metrics.ActiveTurns, publishedInstruments);
+            Assert.Contains(AmiraTelemetry.Metrics.TurnStopRequestedTotal, publishedInstruments);
+            Assert.Contains(AmiraTelemetry.Metrics.TurnCancelledTotal, publishedInstruments);
 
             ProviderConnection connection = await host.CreateProviderConnectionAsync(
                 ProviderProtocol.OpenAIChatCompatible,
@@ -203,6 +208,12 @@ public sealed class CompositionTests
             Assert.Contains(observedMeasurements, measurement =>
                 measurement.Name == AmiraTelemetry.Metrics.ProviderRequestDuration
                 && measurement.Outcome == AmiraTelemetry.Outcomes.Failure);
+            Assert.Contains(observedMeasurements, measurement =>
+                measurement.Name == AmiraTelemetry.Metrics.TurnQueuedTotal
+                && measurement.Outcome is null);
+            Assert.Contains(observedMeasurements, measurement =>
+                measurement.Name == AmiraTelemetry.Metrics.ActiveTurns
+                && measurement.Outcome is null);
         }
         finally
         {
@@ -304,7 +315,7 @@ public sealed class CompositionTests
         public ValueTask CompleteTurnAsync(CompleteTurnCommand command, TurnClaimToken claimToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask FailTurnAsync(BotTurnId turnId, TurnClaimToken claimToken, AmiraError failure, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask CancelClaimedTurnAsync(BotTurnId turnId, TurnClaimToken claimToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public ValueTask RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<DurableStopRequestResult> RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask RecoverInterruptedTurnsAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
         public ValueTask<BotTurn> RetryTurnAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask<IReadOnlyList<ChatMessage>> LoadTimelineAsync(DirectChatId chatId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
