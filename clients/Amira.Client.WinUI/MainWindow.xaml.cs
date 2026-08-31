@@ -289,13 +289,13 @@ public sealed partial class MainWindow : Window
     {
         ContentDialog dialog = new()
         {
-            XamlRoot = Root.XamlRoot,
             Title = "Local workspace",
             Content = $"Workspace ID\n{_viewModel.WorkspaceId}\n\nThis client is using the local Windows workspace.",
             PrimaryButtonText = "Open logs folder",
             CloseButtonText = "Close",
             DefaultButton = ContentDialogButton.Primary
         };
+        ContentDialogChrome.Apply(dialog, Root.XamlRoot);
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
             await _viewModel.OpenLogsFolderAsync();
@@ -307,12 +307,12 @@ public sealed partial class MainWindow : Window
         if (bot is null) return;
         ContentDialog dialog = new()
         {
-            XamlRoot = Root.XamlRoot,
             Title = bot.Profile.Name,
             Content = $"{bot.Profile.Description}\n\nModel\n{bot.ModelProfile.Model}\n\n{bot.Profile.Instructions}",
             PrimaryButtonText = "Edit",
             CloseButtonText = "Close"
         };
+        ContentDialogChrome.Apply(dialog, Root.XamlRoot);
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
             await _botDialogs.ShowEditAsync(bot);

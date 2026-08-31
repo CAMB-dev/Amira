@@ -92,7 +92,6 @@ internal sealed class BotDialogCoordinator(MainViewModel viewModel, Func<XamlRoo
 
         ContentDialog dialog = new()
         {
-            XamlRoot = XamlRoot,
             Title = "Manage Bots",
             Content = content,
             PrimaryButtonText = "Edit",
@@ -100,10 +99,9 @@ internal sealed class BotDialogCoordinator(MainViewModel viewModel, Func<XamlRoo
             CloseButtonText = "Close",
             IsPrimaryButtonEnabled = false,
             IsSecondaryButtonEnabled = false,
-            DefaultButton = ContentDialogButton.Primary,
-            MinWidth = 440,
-            MaxWidth = 520
+            DefaultButton = ContentDialogButton.Primary
         };
+        ContentDialogChrome.Apply(dialog, XamlRoot);
         if (list is not null)
         {
             list.SelectionChanged += (_, _) => ConfigureManagerActions(dialog, list.SelectedItem as ListViewItem);
@@ -146,13 +144,13 @@ internal sealed class BotDialogCoordinator(MainViewModel viewModel, Func<XamlRoo
     {
         ContentDialog dialog = new()
         {
-            XamlRoot = XamlRoot,
             Title = "Archive Bot?",
             Content = $"Archive {bot.Profile.Name}? It will be removed from chat navigation until restored.",
             PrimaryButtonText = "Archive",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close
         };
+        ContentDialogChrome.Apply(dialog, XamlRoot);
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 
@@ -169,7 +167,8 @@ internal sealed class BotDialogCoordinator(MainViewModel viewModel, Func<XamlRoo
             ItemsSource = connections,
             SelectedItem = connections.FirstOrDefault(item => item.Id == draft.Connection?.Id),
             DisplayMemberPath = nameof(ProviderConnection.DisplayName),
-            IsEnabled = connections.Count > 0
+            IsEnabled = connections.Count > 0,
+            MaxDropDownHeight = 240
         };
         AutomationProperties.SetName(connection, "Provider connection");
         TextBox model = WithAutomationName(new TextBox { Text = draft.Model, PlaceholderText = "Model" }, "Model");
@@ -195,7 +194,6 @@ internal sealed class BotDialogCoordinator(MainViewModel viewModel, Func<XamlRoo
         ScrollViewer content = new() { Content = fields, MaxHeight = 560, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         ContentDialog dialog = new()
         {
-            XamlRoot = XamlRoot,
             Title = draft.Editing is null ? "Create Bot" : "Edit Bot",
             Content = content,
             PrimaryButtonText = draft.Editing is null ? "Create" : "Save",
@@ -203,6 +201,7 @@ internal sealed class BotDialogCoordinator(MainViewModel viewModel, Func<XamlRoo
             IsPrimaryButtonEnabled = connections.Count > 0,
             DefaultButton = ContentDialogButton.Primary
         };
+        ContentDialogChrome.Apply(dialog, XamlRoot);
         dialog.Opened += (_, _) => name.Focus(FocusState.Programmatic);
         bool saved = false;
         dialog.PrimaryButtonClick += async (_, args) =>
