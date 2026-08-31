@@ -18,6 +18,7 @@ public static class AmiraErrorCodes
     public const string ChatBotMismatch = "chat_bot_mismatch";
     public const string ChatRequired = "chat_required";
     public const string ClaimedTurnMissing = "claimed_turn_missing";
+    public const string ClipboardWriteFailed = "clipboard_write_failed";
     public const string ClientHostStopped = "client_host_stopped";
     public const string ClientInstanceAlreadyRunning = "client_instance_already_running";
     public const string ClientInstanceFailed = "client_instance_failed";
@@ -33,6 +34,7 @@ public static class AmiraErrorCodes
     public const string CredentialMissing = "credential_missing";
     public const string CredentialVaultFailed = "credential_vault_failed";
     public const string CredentialVaultInvalidConfiguration = "credential_vault_invalid_configuration";
+    public const string DataFolderOpenFailed = "data_folder_open_failed";
     public const string EmptyResponse = "empty_response";
     public const string IncompletePersistedError = "incomplete_persisted_error";
     public const string InvalidBaseUrl = "invalid_base_url";
@@ -78,6 +80,9 @@ public static class AmiraErrorCodes
     public const string TurnStopRequested = "turn_stop_requested";
     public const string UnsupportedOutput = "unsupported_output";
     public const string UnsupportedSchemaVersion = "unsupported_schema_version";
+    public const string UiPreferencesInvalid = "ui_preferences_invalid";
+    public const string UiPreferencesLoadFailed = "ui_preferences_load_failed";
+    public const string UiPreferencesSaveFailed = "ui_preferences_save_failed";
     public const string WorkspaceIdentityInvalid = "workspace_identity_invalid";
     public const string WorkspaceIdentityPersistenceFailed = "workspace_identity_persistence_failed";
     public const string WorkspaceRequired = "workspace_required";
