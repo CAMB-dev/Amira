@@ -15,6 +15,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     private CancellationTokenSource? _selectionCancellation;
     private Bot? _selectedBot;
     private string _messageText = string.Empty;
+    private string _searchText = string.Empty;
     private string _statusText = string.Empty;
     private bool _isBusy;
     private bool _shuttingDown;
@@ -22,6 +23,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     private bool _terminalRefreshPending;
     private bool _terminalRefreshDirty;
     public ObservableCollection<Bot> Bots { get; } = [];
+    public ObservableCollection<Bot> VisibleBots { get; } = [];
     public ObservableCollection<ChatMessage> Timeline { get; } = [];
     public ObservableCollection<ProviderConnection> Connections { get; } = [];
     public ObservableCollection<TurnView> Turns { get; } = [];
@@ -29,9 +31,23 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     public event PropertyChangedEventHandler? PropertyChanged;
     public Bot? SelectedBot { get => _selectedBot; private set => Set(ref _selectedBot, value); }
     public string MessageText { get => _messageText; set { Set(ref _messageText, value); OnChanged(nameof(CanSend)); } }
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (string.Equals(_searchText, value, StringComparison.Ordinal)) return;
+            _searchText = value;
+            OnChanged(nameof(SearchText));
+            RefreshVisibleBots();
+        }
+    }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
     public bool IsBusy { get => _isBusy; private set => Set(ref _isBusy, value); }
     public bool CanSend => SelectedBot is not null && !IsBusy && !string.IsNullOrWhiteSpace(MessageText) && !_shuttingDown;
+    public string WorkspaceId => _session.WorkspaceId.ToString();
+    public TurnView? CurrentActivity => Turns.FirstOrDefault();
+    public string ConnectionSummary => Connections.Any(connection => connection.Enabled) ? "Connected" : "Not connected";
     public async Task InitializeAsync() { await RefreshCatalogAsync(); if (Bots.FirstOrDefault() is Bot bot) await SelectBotAsync(bot); }
     public async Task RefreshCatalogAsync()
     {
@@ -40,6 +56,8 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         IReadOnlyList<ProviderConnection> connections = await _session.ListConnectionsAsync();
         Replace(Bots, bots.Where(bot => bot.LifecycleState == BotLifecycleState.Active));
         Replace(Connections, connections);
+        RefreshVisibleBots();
+        OnChanged(nameof(ConnectionSummary));
         if (selected is { } id) SelectedBot = Bots.FirstOrDefault(bot => bot.Id == id);
     }
     public async Task SelectBotAsync(Bot? bot)
@@ -50,7 +68,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         _selectionCancellation = cancellation;
         long generation = _selection.Next();
         SelectedBot = bot;
-        Timeline.Clear(); Turns.Clear(); StreamingTurns.Clear(); OnChanged(nameof(CanSend));
+        Timeline.Clear(); Turns.Clear(); StreamingTurns.Clear(); OnChanged(nameof(CurrentActivity)); OnChanged(nameof(CanSend));
         if (bot is null || _shuttingDown) return;
         try
         {
@@ -58,7 +76,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
             Task<TurnPage> turns = _session.QueryTurnsAsync(new TurnQuery(botId: bot.Id), cancellation.Token).AsTask();
             await Task.WhenAll(timeline, turns);
             if (!IsCurrent(generation, bot.Id)) return;
-            Replace(Timeline, await timeline); Replace(Turns, (await turns).Items);
+            Replace(Timeline, await timeline); Replace(Turns, (await turns).Items); OnChanged(nameof(CurrentActivity));
         }
         catch (OperationCanceledException) when (!IsCurrent(generation, bot.Id)) { }
         catch (Exception exception) when (IsCurrent(generation, bot.Id)) { StatusText = ErrorPresentation.For(exception); }
@@ -117,6 +135,13 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     }
     public void BeginShutdown() { _shuttingDown = true; _selectionCancellation?.Cancel(); OnChanged(nameof(CanSend)); }
     private async Task ReloadSelectedAsync() { Bot? bot = SelectedBot; if (bot is not null && !_shuttingDown) await SelectBotAsync(bot); }
+    private void RefreshVisibleBots()
+    {
+        string query = SearchText.Trim();
+        Replace(VisibleBots, string.IsNullOrEmpty(query)
+            ? Bots
+            : Bots.Where(bot => bot.Profile.Name.Contains(query, StringComparison.OrdinalIgnoreCase)));
+    }
     private void ScheduleTerminalRefresh() { _terminalRefreshDirty = true; if (_terminalRefreshPending) return; _terminalRefreshPending = true; _ = RefreshAfterTerminalAsync(); }
     private async Task RefreshAfterTerminalAsync()
     {

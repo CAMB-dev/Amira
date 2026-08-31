@@ -1,0 +1,163 @@
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Data;
+using Amira.Domain;
+using System.Globalization;
+
+namespace Amira.Client.WinUI;
+
+public sealed class NullToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        bool visible = value is not null;
+        if (parameter is "Invert") visible = !visible;
+        return visible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class LocalTimeConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value is DateTimeOffset timestamp
+        ? timestamp.ToLocalTime().ToString("h:mm tt", CultureInfo.InvariantCulture)
+        : string.Empty;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnActionVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value is BotTurnStatus status && parameter is string action &&
+        ((action == "stop" && status is BotTurnStatus.Queued or BotTurnStatus.Running) ||
+         (action == "retry" && status is BotTurnStatus.Failed or BotTurnStatus.Cancelled))
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnActionAreaVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value is BotTurnStatus.Queued or BotTurnStatus.Running or BotTurnStatus.Failed or BotTurnStatus.Cancelled
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnIdShortConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        string identifier = value?.ToString() ?? string.Empty;
+        return identifier.Length > 8 ? identifier[..8] : identifier;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnStatusTextConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value is Amira.Contracts.TurnView turn
+        ? turn.StopRequested ? "Stop requested" : turn.Status.ToString()
+        : string.Empty;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnStatusBrushConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        Windows.UI.Color color = value is Amira.Contracts.TurnView { StopRequested: true }
+            ? Windows.UI.Color.FromArgb(255, 214, 151, 45)
+            : value is Amira.Contracts.TurnView { Status: BotTurnStatus.Running }
+                ? Windows.UI.Color.FromArgb(255, 77, 145, 255)
+                : value is Amira.Contracts.TurnView { Status: BotTurnStatus.Completed }
+                    ? Windows.UI.Color.FromArgb(255, 88, 213, 135)
+                    : value is Amira.Contracts.TurnView { Status: BotTurnStatus.Failed }
+                        ? Windows.UI.Color.FromArgb(255, 239, 92, 92)
+                        : Windows.UI.Color.FromArgb(255, 150, 156, 168);
+        return new Microsoft.UI.Xaml.Media.SolidColorBrush(color);
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnStatusIconVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        if (value is not Amira.Contracts.TurnView turn || parameter is not string icon) return Visibility.Collapsed;
+        bool visible = icon switch
+        {
+            "StopRequested" => turn.StopRequested,
+            "Queued" => !turn.StopRequested && turn.Status is BotTurnStatus.Queued,
+            "Running" => !turn.StopRequested && turn.Status is BotTurnStatus.Running,
+            "Completed" => !turn.StopRequested && turn.Status is BotTurnStatus.Completed,
+            "Failed" => !turn.StopRequested && turn.Status is BotTurnStatus.Failed,
+            "Cancelled" => !turn.StopRequested && turn.Status is BotTurnStatus.Cancelled,
+            _ => false
+        };
+        return visible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnActivityTimeLabelConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value is Amira.Contracts.TurnView turn
+        ? turn.Status switch
+        {
+            BotTurnStatus.Queued => "Queued",
+            BotTurnStatus.Running => "Started",
+            _ => "Finished"
+        }
+        : string.Empty;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnActivityTimeConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        if (value is not Amira.Contracts.TurnView turn) return string.Empty;
+        DateTimeOffset timestamp = turn.Status switch
+        {
+            BotTurnStatus.Queued => turn.QueuedAt,
+            BotTurnStatus.Running => turn.StartedAt ?? turn.QueuedAt,
+            _ => turn.FinishedAt ?? turn.StartedAt ?? turn.QueuedAt
+        };
+        return timestamp.ToLocalTime().ToString("h:mm tt", CultureInfo.InvariantCulture);
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class TurnUsageTotalConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value is TurnUsage usage
+        ? (usage.InputTokens ?? 0) + (usage.OutputTokens ?? 0)
+        : string.Empty;
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class ChatMessageTemplateSelector : DataTemplateSelector
+{
+    public DataTemplate? HumanTemplate { get; set; }
+    public DataTemplate? BotTemplate { get; set; }
+    public DataTemplate? LongBotTemplate { get; set; }
+
+    protected override DataTemplate SelectTemplateCore(object item) => item is ChatMessage { Author: MessageAuthor.Human }
+        ? HumanTemplate!
+        : item is ChatMessage { Revision.Content.Length: > 220 }
+            ? LongBotTemplate!
+            : BotTemplate!;
+
+    protected override DataTemplate SelectTemplateCore(object item, DependencyObject container) => SelectTemplateCore(item);
+}
