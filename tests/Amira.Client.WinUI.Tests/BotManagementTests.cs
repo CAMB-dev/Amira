@@ -268,6 +268,9 @@ public sealed class BotManagementTests
         public ValueTask<IReadOnlyList<ChatMessage>> LoadTimelineAsync(DirectChatId chatId, CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<IReadOnlyList<ChatMessage>>([]);
 
+        public ValueTask<TurnView?> GetTurnAsync(BotTurnId turnId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public ValueTask<TurnPage> QueryTurnsAsync(TurnQuery query, CancellationToken cancellationToken = default) =>
             ValueTask.FromResult(new TurnPage([], null));
 

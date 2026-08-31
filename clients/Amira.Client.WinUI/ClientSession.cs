@@ -17,6 +17,7 @@ public interface IClientSession : IAsyncDisposable
     ValueTask<Bot> ArchiveBotAsync(BotId botId, CancellationToken cancellationToken = default);
     ValueTask<Bot> RestoreBotAsync(BotId botId, CancellationToken cancellationToken = default);
     ValueTask<IReadOnlyList<ChatMessage>> LoadTimelineAsync(DirectChatId chatId, CancellationToken cancellationToken = default);
+    ValueTask<TurnView?> GetTurnAsync(BotTurnId turnId, CancellationToken cancellationToken = default);
     ValueTask<TurnPage> QueryTurnsAsync(TurnQuery query, CancellationToken cancellationToken = default);
     ValueTask<QueuedMessageResult> SendAsync(BotId botId, string content, CancellationToken cancellationToken = default);
     ValueTask<BotTurn> RetryAsync(BotTurnId turnId, CancellationToken cancellationToken = default);
@@ -37,6 +38,7 @@ public sealed class WindowsClientSession(WindowsClientHost host) : IClientSessio
     public ValueTask<Bot> ArchiveBotAsync(BotId botId, CancellationToken cancellationToken = default) => Host.ArchiveBotAsync(botId, cancellationToken);
     public ValueTask<Bot> RestoreBotAsync(BotId botId, CancellationToken cancellationToken = default) => Host.RestoreBotAsync(botId, cancellationToken);
     public ValueTask<IReadOnlyList<ChatMessage>> LoadTimelineAsync(DirectChatId chatId, CancellationToken cancellationToken = default) => Host.LoadTimelineAsync(chatId, cancellationToken);
+    public ValueTask<TurnView?> GetTurnAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => Host.GetTurnAsync(turnId, cancellationToken);
     public ValueTask<TurnPage> QueryTurnsAsync(TurnQuery query, CancellationToken cancellationToken = default) => Host.QueryTurnsAsync(query, cancellationToken);
     public ValueTask<QueuedMessageResult> SendAsync(BotId botId, string content, CancellationToken cancellationToken = default) => Host.SendAsync(botId, content, cancellationToken);
     public ValueTask<BotTurn> RetryAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => Host.RetryAsync(turnId, cancellationToken);

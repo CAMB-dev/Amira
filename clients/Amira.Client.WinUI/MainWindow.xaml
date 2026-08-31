@@ -356,7 +356,31 @@
           <RowDefinition Height="54" />
           <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <TextBlock Text="Activity" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Text="Activity" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <ComboBox Grid.Column="1"
+                    MinWidth="150"
+                    MaxWidth="180"
+                    Height="36"
+                    HorizontalAlignment="Right"
+                    ItemsSource="{Binding Turns}"
+                    SelectedItem="{Binding SelectedActivity, Mode=TwoWay}"
+                    PlaceholderText="No turns"
+                    AutomationProperties.Name="Selected activity turn">
+            <ComboBox.ItemTemplate>
+              <DataTemplate x:DataType="contracts:TurnView">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding TurnId, Converter={StaticResource TurnIdShort}}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding Converter={StaticResource TurnStatusText}}" Opacity=".7" />
+                </StackPanel>
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
+        </Grid>
         <Grid Grid.Row="1">
           <StackPanel Width="250" HorizontalAlignment="Center" Margin="0,48,0,0" Spacing="9" Visibility="{Binding CurrentActivity, Converter={StaticResource NullVisibility}, ConverterParameter=Invert}">
             <SymbolIcon Symbol="Clock" HorizontalAlignment="Center" Opacity=".55" />

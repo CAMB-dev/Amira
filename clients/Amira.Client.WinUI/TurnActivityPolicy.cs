@@ -12,4 +12,18 @@ public static class TurnActivityPolicy
         turn.Status is BotTurnStatus.Failed or BotTurnStatus.Cancelled;
 
     public static bool HasAnyAction(TurnView turn) => CanStop(turn) || CanRetry(turn);
+
+    public static TurnView? SelectDefault(IEnumerable<TurnView> turns)
+    {
+        ArgumentNullException.ThrowIfNull(turns);
+        TurnView[] newestFirst =
+        [
+            .. turns
+                .OrderByDescending(turn => turn.QueuedAt)
+                .ThenByDescending(turn => turn.TurnId.Value, StringComparer.Ordinal),
+        ];
+        return newestFirst.FirstOrDefault(CanStop)
+            ?? newestFirst.FirstOrDefault(CanRetry)
+            ?? newestFirst.FirstOrDefault();
+    }
 }

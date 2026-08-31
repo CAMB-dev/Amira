@@ -15,15 +15,15 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     private readonly SelectionCoordinator _selection = new();
     private CancellationTokenSource? _selectionCancellation;
     private Bot? _selectedBot;
+    private TurnView? _selectedActivity;
     private string _messageText = string.Empty;
     private string _searchText = string.Empty;
     private string _statusText = string.Empty;
     private UserNotice? _notice;
     private bool _isBusy;
     private bool _shuttingDown;
-    private readonly HashSet<BotTurnId> _pendingTerminalTurns = [];
-    private bool _terminalRefreshPending;
-    private bool _terminalRefreshDirty;
+    private bool _activitySelectionPinned;
+    private readonly HashSet<BotTurnId> _firstTokenRefreshes = [];
     public ObservableCollection<Bot> AllBots { get; } = [];
     /// <summary>Active Bots shown in the chat navigation.</summary>
     public ObservableCollection<Bot> Bots { get; } = [];
@@ -86,7 +86,18 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     public bool CanArchiveSelectedBot => BotManagementPolicy.CanArchive(SelectedBot) && !IsBusy && !_shuttingDown;
     public bool HasArchivedBots => AllBots.Any(bot => bot.LifecycleState == BotLifecycleState.Archived);
     public string WorkspaceId => _session.WorkspaceId.ToString();
-    public TurnView? CurrentActivity => Turns.FirstOrDefault();
+    public TurnView? SelectedActivity
+    {
+        get => _selectedActivity;
+        set
+        {
+            TurnView? selected = value is null
+                ? null
+                : Turns.FirstOrDefault(turn => turn.TurnId == value.TurnId);
+            SetSelectedActivity(selected, selected is not null);
+        }
+    }
+    public TurnView? CurrentActivity => SelectedActivity;
     public bool HasEnabledConnections => Connections.Any(connection => connection.Enabled);
     public string ConnectionSummary
     {
@@ -124,13 +135,21 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
                 "The requested Bot is not active."));
             return;
         }
+        bool sameBot = bot is not null && SelectedBot?.Id == bot.Id;
+        BotTurnId? selectedActivityId = sameBot ? SelectedActivity?.TurnId : null;
+        bool preservePinnedActivity = sameBot && _activitySelectionPinned;
         _selectionCancellation?.Cancel();
         _selectionCancellation?.Dispose();
         CancellationTokenSource cancellation = new();
         _selectionCancellation = cancellation;
         long generation = _selection.Next();
         SelectedBot = bot;
-        Timeline.Clear(); Turns.Clear(); StreamingTurns.Clear(); OnChanged(nameof(CurrentActivity)); OnChanged(nameof(CanSend));
+        Timeline.Clear();
+        Turns.Clear();
+        StreamingTurns.Clear();
+        _firstTokenRefreshes.Clear();
+        SetSelectedActivity(null, pinned: false);
+        OnChanged(nameof(CanSend));
         if (bot is null || _shuttingDown) return;
         try
         {
@@ -138,7 +157,10 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
             Task<TurnPage> turns = _session.QueryTurnsAsync(new TurnQuery(botId: bot.Id), cancellation.Token).AsTask();
             await Task.WhenAll(timeline, turns);
             if (!IsCurrent(generation, bot.Id)) return;
-            Replace(Timeline, await timeline); Replace(Turns, (await turns).Items); OnChanged(nameof(CurrentActivity));
+            Replace(Timeline, await timeline);
+            Replace(Turns, (await turns).Items);
+            foreach (TurnView turn in Turns) RememberFirstToken(turn);
+            RestoreActivitySelection(selectedActivityId, preservePinnedActivity);
         }
         catch (OperationCanceledException) when (!IsCurrent(generation, bot.Id)) { }
         catch (Exception exception) when (IsCurrent(generation, bot.Id)) { PublishError(exception); }
@@ -262,15 +284,51 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
             }
         }, "Bot restored.");
     }
-    public Task ProjectRuntimeEvent(ChatRuntimeEvent runtimeEvent)
+    public async Task ProjectRuntimeEvent(ChatRuntimeEvent runtimeEvent)
     {
-        if (_shuttingDown) return Task.CompletedTask;
+        ArgumentNullException.ThrowIfNull(runtimeEvent);
+        if (_shuttingDown) return;
         RuntimeTurnProjection projection = _projection.Apply(runtimeEvent);
-        if (SelectedBot?.Id != runtimeEvent.BotId) { if (projection.IsTerminal) _projection.Forget(projection.TurnId); return Task.CompletedTask; }
-        int index = StreamingTurns.ToList().FindIndex(item => item.TurnId == projection.TurnId);
-        if (projection.IsTerminal) { _pendingTerminalTurns.Add(projection.TurnId); ScheduleTerminalRefresh(); }
-        else if (index >= 0) StreamingTurns[index] = projection; else StreamingTurns.Add(projection);
-        return Task.CompletedTask;
+        if (SelectedBot?.Id != runtimeEvent.BotId)
+        {
+            if (projection.IsTerminal) _projection.Forget(projection.TurnId);
+            return;
+        }
+
+        if (!projection.IsTerminal) UpsertStreamingTurn(projection);
+        long generation = _selection.Capture();
+        CancellationToken cancellationToken = _selectionCancellation?.Token ?? CancellationToken.None;
+        try
+        {
+            switch (runtimeEvent)
+            {
+                case ChatRuntimeEvent.Started:
+                    await RefreshTurnAsync(runtimeEvent, generation, cancellationToken);
+                    break;
+                case ChatRuntimeEvent.TextDelta when _firstTokenRefreshes.Add(runtimeEvent.TurnId):
+                    await RefreshTurnAsync(runtimeEvent, generation, cancellationToken);
+                    break;
+                case ChatRuntimeEvent.UsageReported usage:
+                    ProjectUsage(usage, generation);
+                    break;
+                case ChatRuntimeEvent.Completed or ChatRuntimeEvent.Failed or ChatRuntimeEvent.Cancelled:
+                    await RefreshTerminalAsync(runtimeEvent, generation, cancellationToken);
+                    break;
+            }
+        }
+        catch (Exception exception)
+        {
+            if (IsCurrent(generation, runtimeEvent.BotId)) PublishError(exception);
+        }
+        finally
+        {
+            if (projection.IsTerminal)
+            {
+                RemoveStreamingTurn(runtimeEvent.TurnId);
+                _projection.Forget(runtimeEvent.TurnId);
+                _firstTokenRefreshes.Remove(runtimeEvent.TurnId);
+            }
+        }
     }
     public void BeginShutdown()
     {
@@ -293,7 +351,8 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         Timeline.Clear();
         Turns.Clear();
         StreamingTurns.Clear();
-        OnChanged(nameof(CurrentActivity));
+        _firstTokenRefreshes.Clear();
+        SetSelectedActivity(null, pinned: false);
     }
     private void RefreshVisibleBots()
     {
@@ -302,11 +361,97 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
             ? Bots
             : Bots.Where(bot => bot.Profile.Name.Contains(query, StringComparison.OrdinalIgnoreCase)));
     }
-    private void ScheduleTerminalRefresh() { _terminalRefreshDirty = true; if (_terminalRefreshPending) return; _terminalRefreshPending = true; _ = RefreshAfterTerminalAsync(); }
-    private async Task RefreshAfterTerminalAsync()
+    private async Task RefreshTurnAsync(ChatRuntimeEvent runtimeEvent, long generation, CancellationToken cancellationToken)
     {
-        try { while (_terminalRefreshDirty && !_shuttingDown) { _terminalRefreshDirty = false; await ReloadSelectedAsync(); } foreach (BotTurnId id in _pendingTerminalTurns) _projection.Forget(id); _pendingTerminalTurns.Clear(); }
-        finally { _terminalRefreshPending = false; if (_terminalRefreshDirty && !_shuttingDown) ScheduleTerminalRefresh(); }
+        TurnView? refreshed = await _session.GetTurnAsync(runtimeEvent.TurnId, cancellationToken);
+        if (!IsCurrent(generation, runtimeEvent.BotId)) return;
+        if (refreshed is null)
+            throw ProductError(AmiraErrorCodes.TurnNotFound, ErrorCategory.NotFound, "The updated turn could not be found.");
+        if (refreshed.BotId != runtimeEvent.BotId)
+            throw ProductError(AmiraErrorCodes.BotLoadInconsistent, ErrorCategory.Persistence, "The updated turn belongs to another Bot.");
+        UpsertTurn(refreshed);
+    }
+    private async Task RefreshTerminalAsync(ChatRuntimeEvent runtimeEvent, long generation, CancellationToken cancellationToken)
+    {
+        Exception? firstFailure = null;
+        try { await RefreshTurnAsync(runtimeEvent, generation, cancellationToken); }
+        catch (Exception exception) { firstFailure = exception; }
+        try { await RefreshTimelineAsync(runtimeEvent, generation, cancellationToken); }
+        catch (Exception exception) { firstFailure ??= exception; }
+        if (firstFailure is not null) throw firstFailure;
+    }
+    private async Task RefreshTimelineAsync(ChatRuntimeEvent runtimeEvent, long generation, CancellationToken cancellationToken)
+    {
+        if (SelectedBot is not { } bot || bot.Id != runtimeEvent.BotId) return;
+        IReadOnlyList<ChatMessage> timeline = await _session.LoadTimelineAsync(bot.DirectChatId, cancellationToken);
+        if (IsCurrent(generation, runtimeEvent.BotId)) Replace(Timeline, timeline);
+    }
+    private void ProjectUsage(ChatRuntimeEvent.UsageReported runtimeEvent, long generation)
+    {
+        if (!IsCurrent(generation, runtimeEvent.BotId)) return;
+        TurnView? current = Turns.FirstOrDefault(turn => turn.TurnId == runtimeEvent.TurnId);
+        if (current is null) return;
+        UpsertTurn(current with
+        {
+            Usage = new TurnUsage(runtimeEvent.Value.InputTokens, runtimeEvent.Value.OutputTokens),
+        });
+    }
+    private void UpsertTurn(TurnView turn)
+    {
+        BotTurnId? selectedActivityId = SelectedActivity?.TurnId;
+        bool preservePinnedActivity = _activitySelectionPinned;
+        TurnView[] newestFirst =
+        [
+            .. Turns
+                .Where(current => current.TurnId != turn.TurnId)
+                .Append(turn)
+                .OrderByDescending(current => current.QueuedAt)
+                .ThenByDescending(current => current.TurnId.Value, StringComparer.Ordinal),
+        ];
+        Replace(Turns, newestFirst);
+        RememberFirstToken(turn);
+        RestoreActivitySelection(selectedActivityId, preservePinnedActivity);
+    }
+    private void RememberFirstToken(TurnView turn)
+    {
+        if (turn.FirstTokenAt is not null) _firstTokenRefreshes.Add(turn.TurnId);
+    }
+    private void RestoreActivitySelection(BotTurnId? selectedActivityId, bool preservePinnedActivity)
+    {
+        TurnView? preserved = selectedActivityId is { } turnId
+            ? Turns.FirstOrDefault(turn => turn.TurnId == turnId)
+            : null;
+        if (preservePinnedActivity && preserved is not null)
+        {
+            SetSelectedActivity(preserved, pinned: true);
+            return;
+        }
+        SetSelectedActivity(TurnActivityPolicy.SelectDefault(Turns), pinned: false);
+    }
+    private void SetSelectedActivity(TurnView? activity, bool pinned)
+    {
+        _activitySelectionPinned = pinned && activity is not null;
+        if (ReferenceEquals(_selectedActivity, activity)) return;
+        _selectedActivity = activity;
+        OnChanged(nameof(SelectedActivity));
+        OnChanged(nameof(CurrentActivity));
+    }
+    private void UpsertStreamingTurn(RuntimeTurnProjection projection)
+    {
+        for (int index = 0; index < StreamingTurns.Count; index++)
+        {
+            if (StreamingTurns[index].TurnId != projection.TurnId) continue;
+            StreamingTurns[index] = projection;
+            return;
+        }
+        StreamingTurns.Add(projection);
+    }
+    private void RemoveStreamingTurn(BotTurnId turnId)
+    {
+        for (int index = StreamingTurns.Count - 1; index >= 0; index--)
+        {
+            if (StreamingTurns[index].TurnId == turnId) StreamingTurns.RemoveAt(index);
+        }
     }
     private bool IsCurrent(long generation, BotId botId) => !_shuttingDown && SelectedBot is { Id: var selected } && _selection.IsCurrent(generation, selected, botId);
     private async Task RunAsync(Func<Task> operation)
