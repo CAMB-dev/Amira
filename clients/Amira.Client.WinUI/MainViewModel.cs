@@ -18,6 +18,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     private string _messageText = string.Empty;
     private string _searchText = string.Empty;
     private string _statusText = string.Empty;
+    private UserNotice? _notice;
     private bool _isBusy;
     private bool _shuttingDown;
     private readonly HashSet<BotTurnId> _pendingTerminalTurns = [];
@@ -56,6 +57,17 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         }
     }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
+    public UserNotice? Notice
+    {
+        get => _notice;
+        private set
+        {
+            _notice = value;
+            OnChanged(nameof(Notice));
+            OnChanged(nameof(HasNotice));
+        }
+    }
+    public bool HasNotice => Notice is not null;
     public bool IsBusy
     {
         get => _isBusy;
@@ -106,7 +118,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     {
         if (bot is not null && !BotManagementPolicy.CanSelect(bot))
         {
-            StatusText = ErrorPresentation.For(ProductError(
+            PublishError(ProductError(
                 AmiraErrorCodes.BotInactive,
                 ErrorCategory.DomainRule,
                 "The requested Bot is not active."));
@@ -129,14 +141,14 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
             Replace(Timeline, await timeline); Replace(Turns, (await turns).Items); OnChanged(nameof(CurrentActivity));
         }
         catch (OperationCanceledException) when (!IsCurrent(generation, bot.Id)) { }
-        catch (Exception exception) when (IsCurrent(generation, bot.Id)) { StatusText = ErrorPresentation.For(exception); }
+        catch (Exception exception) when (IsCurrent(generation, bot.Id)) { PublishError(exception); }
     }
     public async Task SendAsync()
     {
         Bot? bot = SelectedBot; string content = MessageText;
         if (bot is null || !BotManagementPolicy.CanSelect(bot))
         {
-            StatusText = ErrorPresentation.For(ProductError(
+            PublishError(ProductError(
                 AmiraErrorCodes.BotInactive,
                 ErrorCategory.DomainRule,
                 "Choose an active Bot."));
@@ -144,7 +156,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         }
         if (string.IsNullOrWhiteSpace(content))
         {
-            StatusText = ErrorPresentation.For(ProductError(
+            PublishError(ProductError(
                 AmiraErrorCodes.ContentRequired,
                 ErrorCategory.Input,
                 "Enter a message."));
@@ -269,6 +281,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         OnChanged(nameof(CanEditSelectedBot));
         OnChanged(nameof(CanArchiveSelectedBot));
     }
+    public void DismissNotice() => Notice = null;
     private async Task ReloadSelectedAsync() { Bot? bot = SelectedBot; if (bot is not null && !_shuttingDown) await SelectBotAsync(bot); }
     private void ClearSelection()
     {
@@ -300,7 +313,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     {
         if (_shuttingDown || IsBusy) return;
         IsBusy = true;
-        try { await operation(); } catch (Exception exception) { StatusText = ErrorPresentation.For(exception); }
+        try { await operation(); } catch (Exception exception) { PublishError(exception); }
         finally { IsBusy = false; }
     }
     private async Task<bool> RunManagementAsync(Func<Task> operation, string successMessage)
@@ -310,18 +323,24 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         try
         {
             await operation();
-            StatusText = successMessage;
+            PublishNotice(UserNotice.Successful(successMessage));
             return true;
         }
         catch (Exception exception)
         {
-            StatusText = ErrorPresentation.For(exception);
+            PublishError(exception);
             return false;
         }
         finally { IsBusy = false; }
     }
     private static void Replace<T>(ObservableCollection<T> destination, IEnumerable<T> source) { destination.Clear(); foreach (T item in source) destination.Add(item); }
     private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null) { if (EqualityComparer<T>.Default.Equals(field, value)) return false; field = value; OnChanged(name); return true; }
+    private void PublishError(Exception exception) => PublishNotice(UserNotice.FromError(exception));
+    private void PublishNotice(UserNotice notice)
+    {
+        StatusText = notice.Message;
+        Notice = notice;
+    }
     private static AmiraException ProductError(string code, ErrorCategory category, string message) =>
         new(new AmiraError(code, category, message));
     private void OnChanged(string? name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

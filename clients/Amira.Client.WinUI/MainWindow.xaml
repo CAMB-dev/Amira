@@ -27,6 +27,8 @@
           </ResourceDictionary>
         </ResourceDictionary.ThemeDictionaries>
         <local:NullToVisibilityConverter x:Key="NullVisibility" />
+        <local:UserNoticeSeverityConverter x:Key="NoticeSeverity" />
+        <local:UserNoticeLiveSettingConverter x:Key="NoticeLiveSetting" />
         <local:LocalTimeConverter x:Key="LocalTime" />
         <local:TurnActionVisibilityConverter x:Key="ActionVisibility" />
         <local:TurnActionAreaVisibilityConverter x:Key="ActionAreaVisibility" />
@@ -133,6 +135,7 @@
     </Grid.KeyboardAccelerators>
     <Grid.RowDefinitions>
       <RowDefinition Height="48" />
+      <RowDefinition Height="Auto" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
     <Grid.ColumnDefinitions>
@@ -143,7 +146,18 @@
     <Grid x:Name="AppTitleBar" Grid.ColumnSpan="3" Height="48" Padding="14,0,160,0">
       <TextBlock Text="Amira" FontSize="14" VerticalAlignment="Center" />
     </Grid>
-    <Border Grid.Row="1" Grid.Column="0" Background="{ThemeResource Side}" BorderBrush="{ThemeResource Line}" BorderThickness="0,0,1,0">
+    <InfoBar x:Name="UserNoticeBar"
+             Grid.Row="1"
+             Grid.ColumnSpan="3"
+             Margin="12,8"
+             Message="{Binding Notice.Message}"
+             Severity="{Binding Notice.Severity, Converter={StaticResource NoticeSeverity}}"
+             IsOpen="{Binding HasNotice}"
+             IsClosable="True"
+             Closed="UserNoticeClosed"
+             AutomationProperties.Name="{Binding Notice.Message}"
+             AutomationProperties.LiveSetting="{Binding Notice.Severity, Converter={StaticResource NoticeLiveSetting}}" />
+    <Border Grid.Row="2" Grid.Column="0" Background="{ThemeResource Side}" BorderBrush="{ThemeResource Line}" BorderThickness="0,0,1,0">
       <Grid Padding="16,16,12,14">
         <Grid.RowDefinitions>
           <RowDefinition Height="54" />
@@ -255,7 +269,7 @@
         </Grid>
       </Grid>
     </Border>
-    <Grid Grid.Row="1" Grid.Column="1" MinWidth="450">
+    <Grid Grid.Row="2" Grid.Column="1" MinWidth="450">
       <Grid.RowDefinitions>
         <RowDefinition Height="87" />
         <RowDefinition Height="*" />
@@ -336,7 +350,7 @@
         </Grid>
       </Border>
     </Grid>
-    <Border Grid.Row="1" Grid.Column="2" Background="{ThemeResource Side}" BorderBrush="{ThemeResource Line}" BorderThickness="1,0,0,0">
+    <Border Grid.Row="2" Grid.Column="2" Background="{ThemeResource Side}" BorderBrush="{ThemeResource Line}" BorderThickness="1,0,0,0">
       <Grid Padding="16,0">
         <Grid.RowDefinitions>
           <RowDefinition Height="54" />

@@ -61,6 +61,7 @@ public sealed partial class MainWindow : Window
         _viewModel.MessageText = MessageBox.Text;
         await _viewModel.SendAsync();
     }
+    private void UserNoticeClosed(InfoBar sender, InfoBarClosedEventArgs args) => _viewModel.DismissNotice();
     private void SearchBotsTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args) => _viewModel.SearchText = sender.Text;
     private void SearchAcceleratorInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) { SearchBotsBox.Focus(FocusState.Programmatic); args.Handled = true; }
     private async void ToggleThemeClick(object sender, RoutedEventArgs args)

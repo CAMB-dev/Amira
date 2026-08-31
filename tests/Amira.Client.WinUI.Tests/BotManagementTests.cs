@@ -31,6 +31,7 @@ public sealed class BotManagementTests
         Assert.Equal(0.25, created.ModelProfile.GenerationOptions.Temperature);
         Assert.Equal(512, created.ModelProfile.GenerationOptions.MaxOutputTokens);
         Assert.Equal("Bot created.", viewModel.StatusText);
+        Assert.Equal(UserNoticeSeverity.Success, viewModel.Notice?.Severity);
     }
 
     [Fact]
@@ -149,6 +150,7 @@ public sealed class BotManagementTests
         Assert.Empty(viewModel.AllBots);
         Assert.Null(session.LastCreated);
         Assert.Contains("invalid_temperature", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.Equal(UserNoticeSeverity.Error, viewModel.Notice?.Severity);
     }
 
     [Fact]

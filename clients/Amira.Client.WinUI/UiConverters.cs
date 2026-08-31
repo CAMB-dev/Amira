@@ -1,10 +1,35 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Data;
 using Amira.Domain;
 using System.Globalization;
 
 namespace Amira.Client.WinUI;
+
+public sealed class UserNoticeSeverityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value switch
+    {
+        UserNoticeSeverity.Success => InfoBarSeverity.Success,
+        UserNoticeSeverity.Error => InfoBarSeverity.Error,
+        _ => InfoBarSeverity.Informational,
+    };
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class UserNoticeLiveSettingConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value switch
+    {
+        UserNoticeSeverity.Success => AutomationLiveSetting.Polite,
+        UserNoticeSeverity.Error => AutomationLiveSetting.Assertive,
+        _ => AutomationLiveSetting.Off,
+    };
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
 
 public sealed class NullToVisibilityConverter : IValueConverter
 {
