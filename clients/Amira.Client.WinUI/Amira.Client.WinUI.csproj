@@ -21,5 +21,9 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <ProjectReference Include="..\..\src\Amira.Client.Composition.Windows\Amira.Client.Composition.Windows.csproj" />
+    <ProjectReference Include="..\..\src\Amira.Domain\Amira.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Amira.Contracts\Amira.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Amira.Runtime\Amira.Runtime.csproj" />
   </ItemGroup>
 </Project>

@@ -26,5 +26,6 @@
     <Project Path="tests/Amira.Credentials.Windows.Tests/Amira.Credentials.Windows.Tests.csproj" />
     <Project Path="tests/Amira.Client.Composition.Windows.Tests/Amira.Client.Composition.Windows.Tests.csproj" />
     <Project Path="tests/Amira.Client.Wpf.Tests/Amira.Client.Wpf.Tests.csproj" />
+    <Project Path="tests/Amira.Client.WinUI.Tests/Amira.Client.WinUI.Tests.csproj" />
   </Folder>
 </Solution>
