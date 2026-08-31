@@ -18,9 +18,9 @@ public sealed class SqliteStoreTests
         await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => database.Store.InitializeAsync().AsTask()));
         await database.Store.InitializeAsync();
 
-        Assert.Equal(4L, await database.ScalarAsync<long>("SELECT MAX(version) FROM schema_migrations;"));
-        Assert.Equal(4L, await database.ScalarAsync<long>("SELECT COUNT(*) FROM schema_migrations;"));
-        Assert.Equal(4L, await database.ScalarAsync<long>("PRAGMA user_version;"));
+        Assert.Equal(5L, await database.ScalarAsync<long>("SELECT MAX(version) FROM schema_migrations;"));
+        Assert.Equal(5L, await database.ScalarAsync<long>("SELECT COUNT(*) FROM schema_migrations;"));
+        Assert.Equal(5L, await database.ScalarAsync<long>("PRAGMA user_version;"));
         Assert.Equal("wal", await database.ScalarAsync<string>("PRAGMA journal_mode;"));
         var messagesSql = await database.ScalarAsync<string>(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages';");
@@ -35,7 +35,7 @@ public sealed class SqliteStoreTests
 
         await Task.WhenAll(database.Store.InitializeAsync().AsTask(), second.InitializeAsync().AsTask());
 
-        Assert.Equal(["1", "2", "3", "4"], await database.QueryStringsAsync("SELECT version FROM schema_migrations ORDER BY version;"));
+        Assert.Equal(["1", "2", "3", "4", "5"], await database.QueryStringsAsync("SELECT version FROM schema_migrations ORDER BY version;"));
     }
 
     [Fact]
@@ -55,6 +55,7 @@ public sealed class SqliteStoreTests
         await database.ExecuteAsync("ALTER TABLE bot_turns DROP COLUMN parent_trace_flags;");
         await database.ExecuteAsync("ALTER TABLE bot_turns DROP COLUMN parent_trace_state;");
         await database.ExecuteAsync("ALTER TABLE bot_turns DROP COLUMN parent_is_remote;");
+        await database.ExecuteAsync("ALTER TABLE bot_turns DROP COLUMN first_token_at;");
         await database.ExecuteAsync("DELETE FROM schema_migrations WHERE version >= 2;");
         await database.ExecuteAsync("PRAGMA user_version=1;");
 
@@ -68,10 +69,12 @@ public sealed class SqliteStoreTests
         Assert.Contains("failure_category", columns);
         Assert.Contains("parent_trace_id", columns);
         Assert.Contains("parent_span_id", columns);
-        Assert.Equal(4L, await database.ScalarAsync<long>("SELECT MAX(version) FROM schema_migrations;"));
-        Assert.Equal(4L, await database.ScalarAsync<long>("PRAGMA user_version;"));
+        Assert.Contains("first_token_at", columns);
+        Assert.Equal(5L, await database.ScalarAsync<long>("SELECT MAX(version) FROM schema_migrations;"));
+        Assert.Equal(5L, await database.ScalarAsync<long>("PRAGMA user_version;"));
         ClaimedTurn claimed = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(seeded.Bot.Id));
         Assert.Equal(queued.Turn.Id, claimed.Turn.Id);
+        Assert.Null(claimed.Turn.FirstTokenAt);
     }
 
     [Fact]
@@ -383,6 +386,38 @@ public sealed class SqliteStoreTests
     }
 
     [Fact]
+    public async Task First_token_checkpoint_is_claim_authoritative_idempotent_and_queryable()
+    {
+        await using var database = TestDatabase.Create();
+        SeededBot seeded = await SeedBotAsync(database, "first-token");
+        await QueueAsync(database, seeded, "question");
+        ClaimedTurn claim = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(seeded.Bot.Id));
+
+        AmiraException stale = await Assert.ThrowsAsync<AmiraException>(() =>
+            database.Store.RecordFirstTokenAsync(claim.Turn.Id, TurnClaimToken.New()).AsTask());
+        await database.Store.RecordFirstTokenAsync(claim.Turn.Id, claim.ClaimToken);
+        TurnView first = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(claim.Turn.Id));
+        await database.Store.RecordFirstTokenAsync(claim.Turn.Id, claim.ClaimToken);
+        TurnView repeated = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(claim.Turn.Id));
+        await database.Store.CompleteTurnAsync(
+            new CompleteTurnCommand(claim.Turn, "answer", usage: new TurnUsage(12, 34)),
+            claim.ClaimToken);
+        TurnView completed = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(claim.Turn.Id));
+
+        Assert.Equal(AmiraErrorCodes.StaleClaim, stale.Code);
+        Assert.NotNull(first.FirstTokenAt);
+        Assert.Equal(first.FirstTokenAt, repeated.FirstTokenAt);
+        Assert.NotNull(first.QueueWaitDuration);
+        Assert.NotNull(first.TimeToFirstToken);
+        Assert.Null(first.GenerationDuration);
+        Assert.Null(first.EndToEndDuration);
+        Assert.Equal(first.FirstTokenAt, completed.FirstTokenAt);
+        Assert.NotNull(completed.GenerationDuration);
+        Assert.NotNull(completed.EndToEndDuration);
+        Assert.Equal(46, completed.Usage?.TotalTokens);
+    }
+
+    [Fact]
     public async Task Stale_completion_is_rejected_without_leaving_an_assistant_message()
     {
         await using var database = TestDatabase.Create();
@@ -416,6 +451,7 @@ public sealed class SqliteStoreTests
                 new AmiraError("sentinel", ErrorCategory.Provider, "wrong")).AsTask());
         Assert.Equal("stale_claim", stale.Code);
         Assert.Equal(ErrorCategory.Concurrency, stale.Category);
+        await database.Store.RecordFirstTokenAsync(claim.Turn.Id, claim.ClaimToken);
         await database.Store.FailTurnAsync(
             claim.Turn.Id,
             claim.ClaimToken,
@@ -429,6 +465,9 @@ public sealed class SqliteStoreTests
             $"SELECT length(failure_message) FROM bot_turns WHERE turn_id = '{claim.Turn.Id.Value}';"));
         Assert.Equal(1L, await database.ScalarAsync<long>(
             $"SELECT failure_transient FROM bot_turns WHERE turn_id = '{claim.Turn.Id.Value}';"));
+        TurnView failed = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(claim.Turn.Id));
+        Assert.NotNull(failed.FirstTokenAt);
+        Assert.NotNull(failed.GenerationDuration);
     }
 
     [Fact]
@@ -442,6 +481,7 @@ public sealed class SqliteStoreTests
         var runningSeed = await SeedBotAsync(database, "running-stop");
         await QueueAsync(database, runningSeed, "running");
         var claim = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(runningSeed.Bot.Id));
+        await database.Store.RecordFirstTokenAsync(claim.Turn.Id, claim.ClaimToken);
         await database.Store.RequestStopAsync(claim.Turn.Id);
 
         Assert.Null(await database.Store.TryClaimNextTurnAsync(queuedSeed.Bot.Id));
@@ -463,6 +503,9 @@ public sealed class SqliteStoreTests
         await database.Store.CancelClaimedTurnAsync(claim.Turn.Id, claim.ClaimToken);
         Assert.Equal(4L, await database.ScalarAsync<long>(
             $"SELECT status FROM bot_turns WHERE turn_id = '{claim.Turn.Id.Value}';"));
+        TurnView cancelled = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(claim.Turn.Id));
+        Assert.NotNull(cancelled.FirstTokenAt);
+        Assert.NotNull(cancelled.GenerationDuration);
     }
 
     [Fact]
@@ -493,6 +536,7 @@ public sealed class SqliteStoreTests
         var seeded = await SeedBotAsync(database, "retry");
         var queued = await QueueAsync(database, seeded, "only human");
         var claim = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(seeded.Bot.Id));
+        await database.Store.RecordFirstTokenAsync(claim.Turn.Id, claim.ClaimToken);
         await database.Store.FailTurnAsync(
             claim.Turn.Id,
             claim.ClaimToken,
@@ -512,6 +556,7 @@ public sealed class SqliteStoreTests
             claim.Turn.ModelProfileSnapshot.GenerationOptions,
             retry.ModelProfileSnapshot.GenerationOptions);
         Assert.Equal("retry", retry.ModelProfileSnapshot.ProviderOptions["seed"]);
+        Assert.Null(retry.FirstTokenAt);
         Assert.Single(await database.Store.LoadTimelineAsync(seeded.Bot.DirectChatId));
         var retryClaim = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(seeded.Bot.Id));
         Assert.Equal(retry.Id, retryClaim.Turn.Id);
@@ -594,9 +639,11 @@ public sealed class SqliteStoreTests
         var retrySeed = await SeedBotAsync(database, "recover-retry");
         await QueueAsync(database, retrySeed, "retry me");
         ClaimedTurn retryClaim = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(retrySeed.Bot.Id));
+        await database.Store.RecordFirstTokenAsync(retryClaim.Turn.Id, retryClaim.ClaimToken);
         var cancelSeed = await SeedBotAsync(database, "recover-cancel");
         await QueueAsync(database, cancelSeed, "cancel me");
         ClaimedTurn cancelClaim = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(cancelSeed.Bot.Id));
+        await database.Store.RecordFirstTokenAsync(cancelClaim.Turn.Id, cancelClaim.ClaimToken);
         await database.Store.RequestStopAsync(cancelClaim.Turn.Id);
 
         database.DisposeStore();
@@ -608,7 +655,10 @@ public sealed class SqliteStoreTests
 
         ClaimedTurn recovered = Assert.IsType<ClaimedTurn>(await database.Store.TryClaimNextTurnAsync(retrySeed.Bot.Id));
         Assert.Equal(retryClaim.Turn.Id, recovered.Turn.Id);
+        Assert.Null(recovered.Turn.FirstTokenAt);
         Assert.Equal(4L, await database.ScalarAsync<long>($"SELECT status FROM bot_turns WHERE turn_id = '{cancelClaim.Turn.Id.Value}';"));
+        TurnView cancelled = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(cancelClaim.Turn.Id));
+        Assert.NotNull(cancelled.FirstTokenAt);
     }
 
     [Fact]
@@ -635,7 +685,7 @@ public sealed class SqliteStoreTests
     {
         await using (var future = TestDatabase.Create())
         {
-            await future.ExecuteAsync("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (5, 'now');");
+            await future.ExecuteAsync("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL); INSERT INTO schema_migrations VALUES (6, 'now');");
             AmiraException exception = await Assert.ThrowsAsync<AmiraException>(() => future.Store.InitializeAsync().AsTask());
             Assert.Equal(AmiraErrorCodes.UnsupportedSchemaVersion, exception.Code);
         }
@@ -930,6 +980,12 @@ public sealed class SqliteStoreTests
         TurnView cancelledView = Assert.IsType<TurnView>(await database.Store.GetTurnAsync(cancelled.Turn.Id));
         Assert.Equal(BotTurnStatus.Cancelled, cancelledView.Status);
         Assert.True(cancelledView.StopRequested);
+        Assert.Null(cancelledView.StartedAt);
+        Assert.Null(cancelledView.FirstTokenAt);
+        Assert.Null(cancelledView.QueueWaitDuration);
+        Assert.Null(cancelledView.TimeToFirstToken);
+        Assert.Null(cancelledView.GenerationDuration);
+        Assert.NotNull(cancelledView.EndToEndDuration);
 
         TurnPage failedPage = await database.Store.QueryTurnsAsync(new TurnQuery(status: BotTurnStatus.Failed));
         Assert.Equal(failed.TurnId, Assert.Single(failedPage.Items).TurnId);

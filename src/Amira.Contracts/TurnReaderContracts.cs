@@ -16,11 +16,18 @@ public sealed record TurnView(
     BotTurnStatus Status,
     DateTimeOffset QueuedAt,
     DateTimeOffset? StartedAt,
+    DateTimeOffset? FirstTokenAt,
     DateTimeOffset? FinishedAt,
     bool StopRequested,
     AmiraError? Failure,
     BotTurnId? RetryOfTurnId,
-    TurnUsage? Usage);
+    TurnUsage? Usage)
+{
+    public TimeSpan? QueueWaitDuration => StartedAt - QueuedAt;
+    public TimeSpan? TimeToFirstToken => FirstTokenAt - StartedAt;
+    public TimeSpan? GenerationDuration => FinishedAt - FirstTokenAt;
+    public TimeSpan? EndToEndDuration => FinishedAt - QueuedAt;
+}
 
 /// <summary>Exclusive keyset boundary for the fixed QueuedAt/TurnId descending order.</summary>
 public readonly record struct TurnCursor(DateTimeOffset QueuedAt, BotTurnId TurnId);

@@ -86,7 +86,7 @@ public abstract record ModelStreamEvent
     public sealed record Started : ModelStreamEvent;
     public sealed record TextDelta : ModelStreamEvent
     {
-        public TextDelta(string text) => Text = ContractValidation.RequireContent(text, nameof(text));
+        public TextDelta(string text) => Text = text ?? throw new ArgumentNullException(nameof(text));
         public string Text { get; }
     }
     public sealed record Usage : ModelStreamEvent
@@ -143,6 +143,9 @@ public interface IChatStore : ITurnReader
 
     /// <summary>Atomically claims the next queued turn for a Bot; null means no turn was available or another worker won.</summary>
     ValueTask<ClaimedTurn?> TryClaimNextTurnAsync(BotId botId, CancellationToken cancellationToken = default);
+
+    /// <summary>Idempotently records when the current claim observed its first non-empty provider TextDelta.</summary>
+    ValueTask RecordFirstTokenAsync(BotTurnId turnId, TurnClaimToken claimToken, CancellationToken cancellationToken = default);
 
     /// <summary>Atomically commits the completed assistant Message and Completed turn, or commits neither.</summary>
     ValueTask CompleteTurnAsync(CompleteTurnCommand command, TurnClaimToken claimToken, CancellationToken cancellationToken = default);

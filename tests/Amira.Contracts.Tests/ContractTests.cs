@@ -135,6 +135,70 @@ public sealed class ContractTests
         });
     }
 
+    [Fact]
+    public void Turn_view_projects_full_timing_and_reported_token_total()
+    {
+        DateTimeOffset queuedAt = DateTimeOffset.UnixEpoch;
+        DateTimeOffset startedAt = queuedAt.AddSeconds(4);
+        DateTimeOffset firstTokenAt = startedAt.AddMilliseconds(750);
+        DateTimeOffset finishedAt = firstTokenAt.AddSeconds(6);
+        TurnView view = CreateTurnView(queuedAt, startedAt, firstTokenAt, finishedAt, new TurnUsage(13, 8));
+
+        Assert.Equal(TimeSpan.FromSeconds(4), view.QueueWaitDuration);
+        Assert.Equal(TimeSpan.FromMilliseconds(750), view.TimeToFirstToken);
+        Assert.Equal(TimeSpan.FromSeconds(6), view.GenerationDuration);
+        Assert.Equal(TimeSpan.FromMilliseconds(10_750), view.EndToEndDuration);
+        Assert.Equal(21, view.Usage?.TotalTokens);
+    }
+
+    [Theory]
+    [InlineData(13, null)]
+    [InlineData(null, 8)]
+    public void Turn_usage_leaves_total_unknown_when_either_component_is_missing(int? inputTokens, int? outputTokens)
+    {
+        var usage = new TurnUsage(inputTokens, outputTokens);
+
+        Assert.Null(usage.TotalTokens);
+    }
+
+    [Fact]
+    public void Turn_view_leaves_token_timings_unknown_when_no_text_delta_was_observed()
+    {
+        DateTimeOffset queuedAt = DateTimeOffset.UnixEpoch;
+        DateTimeOffset startedAt = queuedAt.AddSeconds(4);
+        DateTimeOffset finishedAt = startedAt.AddSeconds(2);
+        TurnView view = CreateTurnView(queuedAt, startedAt, firstTokenAt: null, finishedAt, usage: null);
+
+        Assert.Equal(TimeSpan.FromSeconds(4), view.QueueWaitDuration);
+        Assert.Null(view.TimeToFirstToken);
+        Assert.Null(view.GenerationDuration);
+        Assert.Equal(TimeSpan.FromSeconds(6), view.EndToEndDuration);
+    }
+
+    private static TurnView CreateTurnView(
+        DateTimeOffset queuedAt,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? firstTokenAt,
+        DateTimeOffset? finishedAt,
+        TurnUsage? usage) => new(
+            BotTurnId.New(),
+            BotId.New(),
+            DirectChatId.New(),
+            ModelProfileId.New(),
+            ProviderConnectionId.New(),
+            ProviderProtocol.OpenAIResponses,
+            "model",
+            1,
+            BotTurnStatus.Completed,
+            queuedAt,
+            startedAt,
+            firstTokenAt,
+            finishedAt,
+            false,
+            null,
+            null,
+            usage);
+
     private static Bot CreateBot() =>
         Bot.Create(BotProfile.Create("Amira"), ModelProfile.Create(ProviderConnectionId.New(), "model"));
 }

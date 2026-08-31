@@ -214,6 +214,7 @@ public sealed class BasicChatRuntime
             bool started = false;
             bool completed = false;
             bool usageSeen = false;
+            bool firstTokenRecorded = turn.FirstTokenAt is not null;
             var response = new System.Text.StringBuilder();
             ProviderUsage? usage = null;
 
@@ -259,8 +260,17 @@ public sealed class BasicChatRuntime
                                         break;
                                     case ModelStreamEvent.TextDelta delta:
                                         if (!started || completed) throw StreamFailure("A provider text delta was outside the active stream.");
-                                        response.Append(delta.Text);
+                                        if (delta.Text.Length == 0) break;
                                         requestTelemetry.FirstToken();
+                                        if (!firstTokenRecorded)
+                                        {
+                                            await _chatStore.RecordFirstTokenAsync(
+                                                turn.Id,
+                                                claimed.ClaimToken,
+                                                CancellationToken.None).ConfigureAwait(false);
+                                            firstTokenRecorded = true;
+                                        }
+                                        response.Append(delta.Text);
                                         output = new ChatRuntimeEvent.TextDelta(turn.Id, turn.BotId, turn.ModelProfileSnapshot.Protocol, turn.ModelProfileSnapshot.Model, delta.Text);
                                         break;
                                     case ModelStreamEvent.Usage reportedUsage:

@@ -197,17 +197,31 @@ internal static partial class AotSmoke
                     ?? throw new InvalidOperationException("The completed primary turn was not queryable.");
                 Ensure(primaryView.Status == BotTurnStatus.Completed, "The primary turn query status changed.");
                 Ensure(primaryView.Usage is { InputTokens: 5, OutputTokens: 3 }, "The primary turn query usage changed.");
+                Ensure(primaryView.Usage is { TotalTokens: 8 }, "The primary turn token total changed.");
+                Ensure(primaryView.FirstTokenAt is not null
+                    && primaryView.QueueWaitDuration is not null
+                    && primaryView.TimeToFirstToken is not null
+                    && primaryView.GenerationDuration is not null
+                    && primaryView.EndToEndDuration is not null,
+                    "The primary turn timing projection is incomplete.");
 
                 TurnView failedView = await store.GetTurnAsync(retrySeed.Turn.Id).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("The failed turn was not queryable.");
                 Ensure(failedView.Status == BotTurnStatus.Failed, "The failed turn query status changed.");
                 Ensure(failedView.Failure is { Code: AmiraErrorCodes.ProviderStreamError }, "The failed turn query error changed.");
+                Ensure(failedView.FirstTokenAt is null
+                    && failedView.TimeToFirstToken is null
+                    && failedView.GenerationDuration is null
+                    && failedView.EndToEndDuration is not null,
+                    "The no-token failure timing projection changed.");
 
                 TurnView retryView = await store.GetTurnAsync(retry.Id).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("The completed retry was not queryable.");
                 Ensure(retryView.RetryOfTurnId == retrySeed.Turn.Id && retryView.Attempt == 2,
                     "The turn query retry lineage changed.");
                 Ensure(retryView.Usage is { InputTokens: 7, OutputTokens: 4 }, "The retry turn query usage changed.");
+                Ensure(retryView.FirstTokenAt is not null && retryView.Usage is { TotalTokens: 11 },
+                    "The retry turn timing or token total changed.");
 
                 TurnPage firstPage = await store.QueryTurnsAsync(new TurnQuery(botId: bot.Id, pageSize: 2)).ConfigureAwait(false);
                 Ensure(firstPage.Items.Count == 2 && firstPage.NextCursor is not null,

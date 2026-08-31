@@ -140,4 +140,34 @@ public sealed class DomainModelTests
         Assert.Equal("invalid_turn_transition", exception.Code);
         Assert.Equal(ErrorCategory.DomainRule, exception.Category);
     }
+
+    [Fact]
+    public void Turn_first_token_is_idempotent_and_retry_starts_with_fresh_timing_and_usage()
+    {
+        DateTimeOffset queuedAt = DateTimeOffset.UnixEpoch;
+        DateTimeOffset startedAt = queuedAt.AddSeconds(2);
+        DateTimeOffset firstTokenAt = startedAt.AddMilliseconds(250);
+        DateTimeOffset finishedAt = firstTokenAt.AddSeconds(3);
+        Bot bot = Bot.Create(BotProfile.Create("Amira"), ModelProfile.Create(ProviderConnectionId.New(), "model"));
+        BotTurn queued = BotTurn.Queue(
+            bot.Id,
+            bot.DirectChatId,
+            [MessageId.New()],
+            bot.ModelProfile.Snapshot(ProviderProtocol.OpenAIResponses),
+            queuedAt);
+
+        BotTurn running = queued.Start(startedAt);
+        BotTurn first = running.RecordFirstToken(firstTokenAt);
+        BotTurn repeated = first.RecordFirstToken(firstTokenAt.AddSeconds(1));
+        BotTurn failed = repeated.Fail(new AmiraError("provider_failed", ErrorCategory.Provider, "failed"), finishedAt);
+        BotTurn retry = failed.Retry(finishedAt.AddSeconds(1));
+
+        Assert.Equal(firstTokenAt, first.FirstTokenAt);
+        Assert.Same(first, repeated);
+        Assert.Equal(firstTokenAt, failed.FirstTokenAt);
+        Assert.Null(retry.StartedAt);
+        Assert.Null(retry.FirstTokenAt);
+        Assert.Null(retry.FinishedAt);
+        Assert.Null(retry.Usage);
+    }
 }

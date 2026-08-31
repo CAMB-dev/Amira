@@ -36,6 +36,7 @@ public sealed class TurnActivityPolicyTests
         DateTimeOffset.UtcNow,
         null,
         null,
+        null,
         stopRequested,
         null,
         null,

@@ -7,7 +7,7 @@ namespace Amira.Persistence.Sqlite;
 
 internal static class SqliteSchema
 {
-    internal const int LatestVersion = 4;
+    internal const int LatestVersion = 5;
 
     internal static async Task MigrateAsync(SQLiteDatabase database, CancellationToken cancellationToken)
     {
@@ -39,6 +39,9 @@ internal static class SqliteSchema
             .Version(4, step => step
                 .Run(context => AddTraceContextColumns(context.Database))
                 .Insert(new SchemaMigrationRow { Version = 4, AppliedAt = DateTimeOffset.UtcNow }))
+            .Version(5, step => step
+                .Run(context => AddFirstTokenColumn(context.Database))
+                .Insert(new SchemaMigrationRow { Version = 5, AppliedAt = DateTimeOffset.UtcNow }))
             .MigrateAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -159,6 +162,14 @@ internal static class SqliteSchema
         if (!database.Schema.ColumnExists<BotTurnRow>("parent_is_remote"))
         {
             _ = database.Schema.AddColumn<BotTurnRow>(row => row.ParentIsRemote, default(bool?));
+        }
+    }
+
+    private static void AddFirstTokenColumn(SQLiteDatabase database)
+    {
+        if (!database.Schema.ColumnExists<BotTurnRow>("first_token_at"))
+        {
+            _ = database.Schema.AddColumn<BotTurnRow>(row => row.FirstTokenAt, default(DateTimeOffset?));
         }
     }
 

@@ -468,6 +468,9 @@ internal sealed class BotTurnRow
     [Column("started_at")]
     public DateTimeOffset? StartedAt { get; set; }
 
+    [Column("first_token_at")]
+    public DateTimeOffset? FirstTokenAt { get; set; }
+
     [Column("finished_at")]
     public DateTimeOffset? FinishedAt { get; set; }
 

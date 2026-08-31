@@ -174,6 +174,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
                 null,
                 null,
                 null,
+                null,
                 false,
                 null);
             _timelines[command.ChatId].Add(chatMessage);
@@ -219,6 +220,23 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
 
         emptyClaimObserved?.Invoke();
         return ValueTask.FromResult(claimed);
+    }
+
+    public ValueTask RecordFirstTokenAsync(
+        BotTurnId turnId,
+        TurnClaimToken claimToken,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            BotTurn running = GetClaimedTurn(turnId, claimToken);
+            if (running.FirstTokenAt is null)
+            {
+                _turns[turnId] = running.RecordFirstToken(NextTimestamp());
+            }
+
+            return ValueTask.CompletedTask;
+        }
     }
 
     public ValueTask CompleteTurnAsync(
@@ -331,6 +349,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
                     null,
                     null,
                     null,
+                    null,
                     false,
                     running.RetryOfTurnId);
                 _turns[running.Id] = queued;
@@ -355,6 +374,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
                 terminal.Attempt + 1,
                 BotTurnStatus.Queued,
                 NextTimestamp(),
+                null,
                 null,
                 null,
                 null,
@@ -535,6 +555,7 @@ internal sealed class InMemoryAmiraStore : IChatStore, IWorkspaceStore
         turn.Status,
         turn.QueuedAt,
         turn.StartedAt,
+        turn.FirstTokenAt,
         turn.FinishedAt,
         turn.StopRequested,
         turn.Failure,

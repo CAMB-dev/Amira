@@ -373,12 +373,15 @@ public sealed record TurnUsage
 
     public int? InputTokens { get; }
     public int? OutputTokens { get; }
+    public int? TotalTokens => InputTokens is { } inputTokens && OutputTokens is { } outputTokens
+        ? inputTokens + outputTokens
+        : null;
 }
 
 /// <summary>Immutable turn state. Complete, fail, and cancel only accept a Running turn; retry creates a new TurnId.</summary>
 public sealed record BotTurn
 {
-    private BotTurn(BotTurnId id, BotId botId, DirectChatId chatId, IReadOnlyList<MessageId> triggerMessageIds, ModelProfileSnapshot modelProfileSnapshot, int attempt, BotTurnStatus status, DateTimeOffset queuedAt, DateTimeOffset? startedAt, DateTimeOffset? finishedAt, AmiraError? failure, TurnUsage? usage, bool stopRequested, BotTurnId? retryOfTurnId)
+    private BotTurn(BotTurnId id, BotId botId, DirectChatId chatId, IReadOnlyList<MessageId> triggerMessageIds, ModelProfileSnapshot modelProfileSnapshot, int attempt, BotTurnStatus status, DateTimeOffset queuedAt, DateTimeOffset? startedAt, DateTimeOffset? firstTokenAt, DateTimeOffset? finishedAt, AmiraError? failure, TurnUsage? usage, bool stopRequested, BotTurnId? retryOfTurnId)
     {
         if (id.IsEmpty) throw new ArgumentException("Turn ID is required.", nameof(id));
         if (botId.IsEmpty) throw new ArgumentException("Bot ID is required.", nameof(botId));
@@ -396,6 +399,7 @@ public sealed record BotTurn
         Status = status;
         QueuedAt = queuedAt;
         StartedAt = startedAt;
+        FirstTokenAt = firstTokenAt;
         FinishedAt = finishedAt;
         Failure = failure;
         Usage = usage;
@@ -412,6 +416,7 @@ public sealed record BotTurn
     public BotTurnStatus Status { get; private init; }
     public DateTimeOffset QueuedAt { get; }
     public DateTimeOffset? StartedAt { get; private init; }
+    public DateTimeOffset? FirstTokenAt { get; private init; }
     public DateTimeOffset? FinishedAt { get; private init; }
     public AmiraError? Failure { get; private init; }
     public TurnUsage? Usage { get; private init; }
@@ -419,10 +424,10 @@ public sealed record BotTurn
     public BotTurnId? RetryOfTurnId { get; private init; }
 
     public static BotTurn Queue(BotId botId, DirectChatId chatId, IEnumerable<MessageId> triggerMessageIds, ModelProfileSnapshot snapshot, DateTimeOffset? now = null) =>
-        new(BotTurnId.New(), botId, chatId, triggerMessageIds?.ToArray() ?? throw new ArgumentNullException(nameof(triggerMessageIds)), snapshot, 1, BotTurnStatus.Queued, now ?? DateTimeOffset.UtcNow, null, null, null, null, false, null);
+        new(BotTurnId.New(), botId, chatId, triggerMessageIds?.ToArray() ?? throw new ArgumentNullException(nameof(triggerMessageIds)), snapshot, 1, BotTurnStatus.Queued, now ?? DateTimeOffset.UtcNow, null, null, null, null, null, false, null);
 
-    public static BotTurn Rehydrate(BotTurnId id, BotId botId, DirectChatId chatId, IEnumerable<MessageId> triggerMessageIds, ModelProfileSnapshot snapshot, int attempt, BotTurnStatus status, DateTimeOffset queuedAt, DateTimeOffset? startedAt, DateTimeOffset? finishedAt, AmiraError? failure, TurnUsage? usage, bool stopRequested, BotTurnId? retryOfTurnId) =>
-        new(id, botId, chatId, triggerMessageIds?.ToArray() ?? throw new ArgumentNullException(nameof(triggerMessageIds)), snapshot, attempt, status, queuedAt, startedAt, finishedAt, failure, usage, stopRequested, retryOfTurnId);
+    public static BotTurn Rehydrate(BotTurnId id, BotId botId, DirectChatId chatId, IEnumerable<MessageId> triggerMessageIds, ModelProfileSnapshot snapshot, int attempt, BotTurnStatus status, DateTimeOffset queuedAt, DateTimeOffset? startedAt, DateTimeOffset? firstTokenAt, DateTimeOffset? finishedAt, AmiraError? failure, TurnUsage? usage, bool stopRequested, BotTurnId? retryOfTurnId) =>
+        new(id, botId, chatId, triggerMessageIds?.ToArray() ?? throw new ArgumentNullException(nameof(triggerMessageIds)), snapshot, attempt, status, queuedAt, startedAt, firstTokenAt, finishedAt, failure, usage, stopRequested, retryOfTurnId);
 
     public BotTurn Start(DateTimeOffset? now = null)
     {
@@ -430,6 +435,14 @@ public sealed record BotTurn
         if (StopRequested)
             throw new AmiraException(new(AmiraErrorCodes.TurnStopRequested, ErrorCategory.DomainRule, "A stop-requested turn cannot start."));
         return this with { Status = BotTurnStatus.Running, StartedAt = now ?? DateTimeOffset.UtcNow };
+    }
+
+    public BotTurn RecordFirstToken(DateTimeOffset? now = null)
+    {
+        EnsureStatus(BotTurnStatus.Running);
+        return FirstTokenAt is null
+            ? this with { FirstTokenAt = now ?? DateTimeOffset.UtcNow }
+            : this;
     }
 
     public BotTurn Complete(TurnUsage? usage = null, DateTimeOffset? now = null)
@@ -461,7 +474,7 @@ public sealed record BotTurn
     {
         if (Status is not (BotTurnStatus.Failed or BotTurnStatus.Cancelled))
             throw new AmiraException(new(AmiraErrorCodes.InvalidTurnTransition, ErrorCategory.DomainRule, "Only a failed or cancelled turn can be retried."));
-        return new(BotTurnId.New(), BotId, ChatId, TriggerMessageIds, ModelProfileSnapshot, Attempt + 1, BotTurnStatus.Queued, now ?? DateTimeOffset.UtcNow, null, null, null, null, false, Id);
+        return new(BotTurnId.New(), BotId, ChatId, TriggerMessageIds, ModelProfileSnapshot, Attempt + 1, BotTurnStatus.Queued, now ?? DateTimeOffset.UtcNow, null, null, null, null, null, false, Id);
     }
 
     private void EnsureStatus(BotTurnStatus expected)

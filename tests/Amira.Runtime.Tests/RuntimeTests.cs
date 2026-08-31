@@ -73,6 +73,43 @@ public sealed partial class RuntimeTests
         Assert.Empty(fixture.Store.Failures);
         Assert.Contains(fixture.Store.Timeline, x => x.Author == MessageAuthor.Bot && x.Revision.Content == "a b");
         Assert.Equal(queued.Message.Id, fixture.Store.Timeline[0].Id);
+        TurnView completed = Assert.IsType<TurnView>(await fixture.Store.GetTurnAsync(queued.Turn.Id, TestContext.Current.CancellationToken));
+        Assert.Equal(TimeSpan.FromTicks(1), completed.QueueWaitDuration);
+        Assert.Equal(TimeSpan.FromTicks(1), completed.TimeToFirstToken);
+        Assert.Equal(TimeSpan.FromTicks(1), completed.GenerationDuration);
+        Assert.Equal(TimeSpan.FromTicks(3), completed.EndToEndDuration);
+        Assert.Equal(5, completed.Usage?.TotalTokens);
+    }
+
+    [Fact]
+    public async Task Empty_delta_is_ignored_before_first_text_and_does_not_start_ttft()
+    {
+        var fixture = new Fixture(new FakeProvider(
+            new ModelStreamEvent.Started(),
+            new ModelStreamEvent.TextDelta(string.Empty),
+            new ModelStreamEvent.TextDelta("reply"),
+            new ModelStreamEvent.Completed()));
+        QueuedMessageResult queued = await fixture.Runtime.QueueHumanMessageAsync(
+            fixture.WorkspaceId,
+            fixture.Bot.Id,
+            "hello",
+            TestContext.Current.CancellationToken);
+
+        List<ChatRuntimeEvent> events = await Collect(fixture.Runtime.ExecuteNextAsync(
+            fixture.WorkspaceId,
+            fixture.Bot.Id,
+            TestContext.Current.CancellationToken));
+        TurnView completed = Assert.IsType<TurnView>(await fixture.Store.GetTurnAsync(
+            queued.Turn.Id,
+            TestContext.Current.CancellationToken));
+
+        Assert.Collection(
+            events,
+            item => Assert.IsType<ChatRuntimeEvent.Started>(item),
+            item => Assert.Equal("reply", Assert.IsType<ChatRuntimeEvent.TextDelta>(item).Text),
+            item => Assert.Equal("reply", Assert.IsType<ChatRuntimeEvent.Completed>(item).Text));
+        Assert.NotNull(completed.FirstTokenAt);
+        Assert.Equal(TimeSpan.FromTicks(1), completed.TimeToFirstToken);
     }
 
     [Fact]
@@ -86,6 +123,11 @@ public sealed partial class RuntimeTests
         Assert.Equal("provider_bad", failed.Failure.Code);
         Assert.Equal("The provider request failed.\n", failed.Failure.Message);
         Assert.Equal("provider_bad", Assert.Single(fixture.Store.Failures).Code);
+        TurnView persisted = Assert.IsType<TurnView>(await fixture.Store.GetTurnAsync(failed.TurnId, TestContext.Current.CancellationToken));
+        Assert.Null(persisted.FirstTokenAt);
+        Assert.Null(persisted.TimeToFirstToken);
+        Assert.Null(persisted.GenerationDuration);
+        Assert.NotNull(persisted.EndToEndDuration);
     }
 
     [Fact]
@@ -108,6 +150,8 @@ public sealed partial class RuntimeTests
 
         Assert.Equal("empty_response", Assert.IsType<ChatRuntimeEvent.Failed>(events[^1]).Failure.Code);
         Assert.Equal(0, fixture.Store.CompletedCount);
+        TurnView persisted = Assert.IsType<TurnView>(await fixture.Store.GetTurnAsync(events[^1].TurnId, TestContext.Current.CancellationToken));
+        Assert.NotNull(persisted.FirstTokenAt);
     }
 
     [Fact]
@@ -127,7 +171,7 @@ public sealed partial class RuntimeTests
     public async Task Caller_stopping_after_a_delta_disposes_provider_then_durably_cancels_claim()
     {
         var fixture = new Fixture(new BlockingProvider());
-        await fixture.Runtime.QueueHumanMessageAsync(fixture.WorkspaceId, fixture.Bot.Id, "hello", TestContext.Current.CancellationToken);
+        QueuedMessageResult queued = await fixture.Runtime.QueueHumanMessageAsync(fixture.WorkspaceId, fixture.Bot.Id, "hello", TestContext.Current.CancellationToken);
         await using IAsyncEnumerator<ChatRuntimeEvent> enumerator = fixture.Runtime
             .ExecuteNextAsync(fixture.WorkspaceId, fixture.Bot.Id, TestContext.Current.CancellationToken)
             .GetAsyncEnumerator(TestContext.Current.CancellationToken);
@@ -140,6 +184,10 @@ public sealed partial class RuntimeTests
 
         Assert.Equal(1, fixture.Store.StopCount);
         Assert.Equal(1, fixture.Store.CancelledCount);
+        TurnView cancelled = Assert.IsType<TurnView>(await fixture.Store.GetTurnAsync(queued.Turn.Id, TestContext.Current.CancellationToken));
+        Assert.Equal(BotTurnStatus.Cancelled, cancelled.Status);
+        Assert.NotNull(cancelled.FirstTokenAt);
+        Assert.NotNull(cancelled.GenerationDuration);
     }
 
     [Fact]
@@ -282,6 +330,12 @@ public sealed partial class RuntimeTests
         Assert.Equal(2, retry.Attempt);
         Assert.Single(fixture.Store.Retried);
         Assert.Single(fixture.Store.Timeline, x => x.Author == MessageAuthor.Human);
+        TurnView failed = Assert.IsType<TurnView>(await fixture.Store.GetTurnAsync(queued.Turn.Id, TestContext.Current.CancellationToken));
+        TurnView retryView = Assert.IsType<TurnView>(await fixture.Store.GetTurnAsync(retry.Id, TestContext.Current.CancellationToken));
+        Assert.NotNull(failed.FirstTokenAt);
+        Assert.Null(retryView.StartedAt);
+        Assert.Null(retryView.FirstTokenAt);
+        Assert.Null(retryView.FinishedAt);
     }
 
     private static async Task<List<ChatRuntimeEvent>> Collect(IAsyncEnumerable<ChatRuntimeEvent> source)

@@ -163,6 +163,7 @@ public sealed partial class SqliteAmiraStore
             ReadTurnStatus(row.Status),
             row.QueuedAt,
             row.StartedAt,
+            row.FirstTokenAt,
             row.FinishedAt,
             row.StopRequested,
             failure,

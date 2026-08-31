@@ -128,6 +128,63 @@ public sealed partial class SqliteAmiraStore
         }
     }
 
+    public async ValueTask RecordFirstTokenAsync(
+        BotTurnId turnId,
+        TurnClaimToken claimToken,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+            string id = turnId.Value;
+            string token = claimToken.Value;
+            int running = WriteTurnStatus(BotTurnStatus.Running);
+            DateTimeOffset firstTokenAt = DateTimeOffset.UtcNow;
+            int rows = await _database.Table<BotTurnRow>()
+                .Where(row => row.TurnId == id
+                    && row.Status == running
+                    && row.ClaimToken == token
+                    && row.FirstTokenAt == null)
+                .ExecuteUpdateAsync(
+                    setters => setters.Set(row => row.FirstTokenAt, firstTokenAt),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (rows == 1)
+            {
+                return;
+            }
+
+            if (rows != 0)
+            {
+                RequireSingleRow(rows);
+            }
+
+            BotTurnRow? current = await _database.Table<BotTurnRow>()
+                .SingleOrDefaultAsync(row => row.TurnId == id, cancellationToken)
+                .ConfigureAwait(false);
+            if (current is { FirstTokenAt: not null }
+                && current.Status == running
+                && current.ClaimToken == token)
+            {
+                return;
+            }
+
+            await RequireClaimedRowAsync(turnId, claimToken, rows, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (AmiraException)
+        {
+            throw;
+        }
+        catch (SQLiteException exception)
+        {
+            throw PersistenceFailure(exception);
+        }
+    }
+
     public async ValueTask CompleteTurnAsync(
         CompleteTurnCommand command,
         TurnClaimToken claimToken,
@@ -354,6 +411,7 @@ public sealed partial class SqliteAmiraStore
                 .ExecuteUpdateAsync(setters => setters
                     .Set(row => row.Status, queued)
                     .Set(row => row.StartedAt, (DateTimeOffset?)null)
+                    .Set(row => row.FirstTokenAt, (DateTimeOffset?)null)
                     .Set(row => row.ClaimToken, (string?)null), cancellationToken)
                 .ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -611,6 +669,7 @@ public sealed partial class SqliteAmiraStore
             StopRequested = turn.StopRequested,
             QueuedAt = turn.QueuedAt,
             StartedAt = turn.StartedAt,
+            FirstTokenAt = turn.FirstTokenAt,
             FinishedAt = turn.FinishedAt,
             FailureCode = turn.Failure?.Code,
             FailureMessage = turn.Failure?.Message,
@@ -725,6 +784,7 @@ public sealed partial class SqliteAmiraStore
             ReadTurnStatus(row.Status),
             row.QueuedAt,
             row.StartedAt,
+            row.FirstTokenAt,
             row.FinishedAt,
             failure,
             usage,
