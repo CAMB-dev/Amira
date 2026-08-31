@@ -18,6 +18,7 @@ public sealed partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly IClientSession _session;
     private readonly WinUiChatRuntimeEventSink _sink;
+    private readonly BotDialogCoordinator _botDialogs;
     private bool _closeAllowed;
     private Task? _shutdown;
     private bool _sidebarExpanded = true;
@@ -33,6 +34,7 @@ public sealed partial class MainWindow : Window
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
         InitializeComponent();
         Root.DataContext = _viewModel;
+        _botDialogs = new BotDialogCoordinator(_viewModel, () => Root.XamlRoot);
         Title = "Amira";
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
@@ -272,10 +274,20 @@ public sealed partial class MainWindow : Window
             XamlRoot = Root.XamlRoot,
             Title = bot.Profile.Name,
             Content = $"{bot.Profile.Description}\n\nModel\n{bot.ModelProfile.Model}\n\n{bot.Profile.Instructions}",
+            PrimaryButtonText = "Edit",
             CloseButtonText = "Close"
         };
-        await dialog.ShowAsync();
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            await _botDialogs.ShowEditAsync(bot);
+        }
     }
+
+    private async void NewBotClick(object sender, RoutedEventArgs args) =>
+        await _botDialogs.ShowCreateAsync();
+
+    private async void ManageBotsClick(object sender, RoutedEventArgs args) => await _botDialogs.ShowManagementAsync();
+
     private async void StopClick(object sender, RoutedEventArgs args)
     {
         if ((sender as FrameworkElement)?.Tag is TurnView turn) await _viewModel.StopAsync(turn);

@@ -193,7 +193,20 @@
             </AutoSuggestBox>
             <TextBlock Text="Ctrl+K" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,38,0" FontSize="12" Opacity=".58" IsHitTestVisible="False" />
           </Grid>
-          <TextBlock Grid.Row="2" Text="Bots" FontSize="20" FontWeight="SemiBold" Margin="8,0,0,10" />
+          <Grid Grid.Row="2" Margin="8,0,0,10">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Bots" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Style="{StaticResource Quiet}" Click="NewBotClick" IsEnabled="{Binding CanCreateBot}" ToolTipService.ToolTip="Create Bot" AutomationProperties.Name="Create Bot">
+              <SymbolIcon Symbol="Add" />
+            </Button>
+            <Button Grid.Column="2" Style="{StaticResource Quiet}" Click="ManageBotsClick" ToolTipService.ToolTip="Manage Bots" AutomationProperties.Name="Manage Bots">
+              <SymbolIcon Symbol="Setting" />
+            </Button>
+          </Grid>
           <ListView x:Name="BotsList" Grid.Row="3" ItemsSource="{Binding VisibleBots}" SelectedItem="{Binding SelectedBot, Mode=OneWay}" SelectionChanged="BotsSelectionChanged" ItemContainerStyle="{StaticResource BotListItem}" AutomationProperties.Name="Bots">
             <ListView.Resources>
               <SolidColorBrush x:Key="ListViewItemSelectedBackgroundThemeBrush" Color="#182F51" />
