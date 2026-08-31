@@ -75,7 +75,15 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     public bool HasArchivedBots => AllBots.Any(bot => bot.LifecycleState == BotLifecycleState.Archived);
     public string WorkspaceId => _session.WorkspaceId.ToString();
     public TurnView? CurrentActivity => Turns.FirstOrDefault();
-    public string ConnectionSummary => Connections.Any(connection => connection.Enabled) ? "Connected" : "Not connected";
+    public bool HasEnabledConnections => Connections.Any(connection => connection.Enabled);
+    public string ConnectionSummary
+    {
+        get
+        {
+            int enabledConnections = Connections.Count(connection => connection.Enabled);
+            return enabledConnections == 0 ? "None enabled" : $"{enabledConnections} enabled";
+        }
+    }
     public async Task InitializeAsync() { await RefreshCatalogAsync(); if (Bots.FirstOrDefault() is Bot bot) await SelectBotAsync(bot); }
     public async Task RefreshCatalogAsync()
     {
@@ -86,6 +94,7 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         Replace(Bots, bots.Where(BotManagementPolicy.CanSelect));
         Replace(Connections, connections);
         RefreshVisibleBots();
+        OnChanged(nameof(HasEnabledConnections));
         OnChanged(nameof(ConnectionSummary));
         OnChanged(nameof(HasArchivedBots));
         if (selected is not { } id) return;
@@ -145,24 +154,35 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     }
     public Task StopAsync(TurnView turn) => RunAsync(async () => { await _session.StopTurnAsync(turn.TurnId); await ReloadSelectedAsync(); });
     public Task RetryAsync(TurnView turn) => RunAsync(async () => { await _session.RetryAsync(turn.TurnId); await ReloadSelectedAsync(); });
-    public async Task<bool> SaveConnectionAsync(ConnectionDraft draft, string? apiKey)
+    public Task<bool> SaveConnectionAsync(ConnectionDraft draft, string? apiKey)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        if (_shuttingDown || IsBusy) return false;
-        IsBusy = true; OnChanged(nameof(CanSend));
-        try
+        return RunManagementAsync(async () =>
         {
-            if (!Uri.TryCreate(draft.BaseUrl, UriKind.Absolute, out Uri? baseUrl)) { StatusText = "Base URL must be an absolute URL."; return false; }
-            if (draft.Editing is null)
+            ValidatedConnectionDraft values = ConnectionDraftPolicy.Validate(draft);
+            ConnectionDraftPolicy.RequireCreateSecret(draft, apiKey);
+            if (values.Editing is null)
             {
-                if (string.IsNullOrWhiteSpace(apiKey)) { StatusText = "An API key is required for a new connection."; return false; }
-                await _session.CreateProviderConnectionAsync(draft.Protocol, draft.DisplayName, baseUrl, apiKey, draft.DefaultModel, draft.Enabled);
+                await _session.CreateProviderConnectionAsync(
+                    values.Protocol,
+                    values.DisplayName,
+                    values.BaseUrl,
+                    apiKey!,
+                    values.DefaultModel,
+                    values.Enabled);
             }
-            else await _session.UpdateProviderConnectionAsync(draft.Editing, draft.DisplayName, baseUrl, string.IsNullOrWhiteSpace(apiKey) ? null : apiKey, draft.DefaultModel, draft.Enabled);
-            await RefreshCatalogAsync(); StatusText = "Connection saved."; return true;
-        }
-        catch (Exception exception) { StatusText = ErrorPresentation.For(exception); return false; }
-        finally { IsBusy = false; OnChanged(nameof(CanSend)); }
+            else
+            {
+                await _session.UpdateProviderConnectionAsync(
+                    values.Editing,
+                    values.DisplayName,
+                    values.BaseUrl,
+                    string.IsNullOrWhiteSpace(apiKey) ? null : apiKey,
+                    values.DefaultModel,
+                    values.Enabled);
+            }
+            await RefreshCatalogAsync();
+        }, "Connection saved.");
     }
     public Task<bool> SaveBotAsync(BotDraft draft)
     {
@@ -306,5 +326,3 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         new(new AmiraError(code, category, message));
     private void OnChanged(string? name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
-
-public sealed record ConnectionDraft(ProviderProtocol Protocol, string DisplayName, string BaseUrl, string? DefaultModel, bool Enabled, ProviderConnection? Editing = null);
