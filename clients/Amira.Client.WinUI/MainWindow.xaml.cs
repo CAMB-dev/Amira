@@ -20,6 +20,7 @@ public sealed partial class MainWindow : Window
     private readonly WinUiChatRuntimeEventSink _sink;
     private readonly BotDialogCoordinator _botDialogs;
     private readonly ConnectionDialogCoordinator _connectionDialogs;
+    private readonly IUiStringProvider _strings;
     private bool _closeAllowed;
     private Task? _shutdown;
     private bool _sidebarExpanded = true;
@@ -35,6 +36,7 @@ public sealed partial class MainWindow : Window
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
         InitializeComponent();
         Root.DataContext = _viewModel;
+        _strings = new MrtCoreUiStringProvider();
         _botDialogs = new BotDialogCoordinator(_viewModel, () => Root.XamlRoot);
         _connectionDialogs = new ConnectionDialogCoordinator(_viewModel, () => Root.XamlRoot);
         Title = "Amira";
@@ -101,11 +103,10 @@ public sealed partial class MainWindow : Window
     private void SetTheme(ElementTheme target)
     {
         Root.RequestedTheme = target;
-        bool dark = target == ElementTheme.Dark;
-        string tooltip = dark ? "Switch to light appearance" : "Switch to dark appearance";
-        ThemeIcon.Glyph = dark ? "\uE706" : "\uE708";
-        ToolTipService.SetToolTip(ThemeButton, tooltip);
-        AutomationProperties.SetName(ThemeButton, tooltip);
+        ThemeButtonText text = ThemeButtonTextPolicy.For(target, _strings);
+        ThemeIcon.Glyph = text.Glyph;
+        ToolTipService.SetToolTip(ThemeButton, text.ToolTip);
+        AutomationProperties.SetName(ThemeButton, text.ToolTip);
         ApplyTitleBarTheme(target);
     }
 

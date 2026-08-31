@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <data name="BotSearchInput.PlaceholderText" xml:space="preserve"><value>Search bots</value></data>
+  <data name="BotSearchInput.AutomationProperties.Name" xml:space="preserve"><value>Search bots</value></data>
+  <data name="LoadingBotsState.AutomationProperties.Name" xml:space="preserve"><value>Loading Bots</value></data>
+  <data name="LoadingBotsText.Text" xml:space="preserve"><value>Loading Bots…</value></data>
+  <data name="NoEnabledConnectionsState.AutomationProperties.Name" xml:space="preserve"><value>No enabled connections</value></data>
+  <data name="NoEnabledConnectionsHeading.Text" xml:space="preserve"><value>No connections</value></data>
+  <data name="NoEnabledConnectionsDescription.Text" xml:space="preserve"><value>Add an enabled connection to create a Bot.</value></data>
+  <data name="ManageConnectionsEmptyAction.Content" xml:space="preserve"><value>Manage connections</value></data>
+  <data name="ManageConnectionsEmptyAction.AutomationProperties.Name" xml:space="preserve"><value>Manage connections</value></data>
+  <data name="NoBotsHeading.Text" xml:space="preserve"><value>No Bots yet</value></data>
+  <data name="NoBotsState.AutomationProperties.Name" xml:space="preserve"><value>No Bots yet</value></data>
+  <data name="NoBotsDescription.Text" xml:space="preserve"><value>Create a Bot to start a Direct chat.</value></data>
+  <data name="CreateBotEmptyAction.Content" xml:space="preserve"><value>Create Bot</value></data>
+  <data name="CreateBotEmptyAction.AutomationProperties.Name" xml:space="preserve"><value>Create Bot</value></data>
+  <data name="ArchivedOnlyState.AutomationProperties.Name" xml:space="preserve"><value>All Bots are archived</value></data>
+  <data name="ArchivedOnlyHeading.Text" xml:space="preserve"><value>All Bots are archived</value></data>
+  <data name="ArchivedOnlyDescription.Text" xml:space="preserve"><value>Restore a Bot to return it to the sidebar.</value></data>
+  <data name="ManageArchivedBotsAction.Content" xml:space="preserve"><value>Manage Bots</value></data>
+  <data name="ManageArchivedBotsAction.AutomationProperties.Name" xml:space="preserve"><value>Manage Bots</value></data>
+  <data name="SearchNoResultsState.AutomationProperties.Name" xml:space="preserve"><value>No Bots match your search</value></data>
+  <data name="NoBotSearchResultsHeading.Text" xml:space="preserve"><value>No Bots match your search</value></data>
+  <data name="ClearBotSearchAction.Content" xml:space="preserve"><value>Clear search</value></data>
+  <data name="ClearBotSearchAction.AutomationProperties.Name" xml:space="preserve"><value>Clear Bot search</value></data>
+  <data name="LoadingConversationText.Text" xml:space="preserve"><value>Loading Direct chat…</value></data>
+  <data name="LoadingConversationState.AutomationProperties.Name" xml:space="preserve"><value>Loading Direct chat</value></data>
+  <data name="NoSelectionState.AutomationProperties.Name" xml:space="preserve"><value>Choose a Bot</value></data>
+  <data name="NoSelectionHeading.Text" xml:space="preserve"><value>Choose a Bot</value></data>
+  <data name="SelectBotEmptyDescription.Text" xml:space="preserve"><value>Select an active Bot from the sidebar to open its Direct chat.</value></data>
+  <data name="EmptyChatState.AutomationProperties.Name" xml:space="preserve"><value>No messages yet</value></data>
+  <data name="EmptyChatHeading.Text" xml:space="preserve"><value>No messages yet</value></data>
+  <data name="NoMessagesEmptyDescription.Text" xml:space="preserve"><value>Send a message to start this Direct chat.</value></data>
+  <data name="ActivityProviderLabel.Text" xml:space="preserve"><value>Provider</value></data>
+  <data name="ActivityProviderLabel.AutomationProperties.Name" xml:space="preserve"><value>Provider protocol</value></data>
+  <data name="ActivityErrorCategoryLabel.Text" xml:space="preserve"><value>Error category</value></data>
+  <data name="ActivityErrorCategoryLabel.AutomationProperties.Name" xml:space="preserve"><value>Error category</value></data>
+  <data name="ActivityErrorCodeLabel.Text" xml:space="preserve"><value>Error code</value></data>
+  <data name="ActivityErrorCodeLabel.AutomationProperties.Name" xml:space="preserve"><value>Error code</value></data>
+  <data name="ThemeSwitchToLight" xml:space="preserve"><value>Switch to light appearance</value></data>
+  <data name="ThemeSwitchToDark" xml:space="preserve"><value>Switch to dark appearance</value></data>
+</root>

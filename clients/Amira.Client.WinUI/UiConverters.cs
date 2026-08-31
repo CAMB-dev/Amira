@@ -56,7 +56,7 @@ public sealed class EnumValueToVisibilityConverter : IValueConverter
 public sealed class LocalTimeConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, string language) => value is DateTimeOffset timestamp
-        ? timestamp.ToLocalTime().ToString("h:mm tt", CultureInfo.InvariantCulture)
+        ? timestamp.ToLocalTime().ToString("t", CultureInfo.CurrentCulture)
         : string.Empty;
 
     public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
@@ -167,7 +167,7 @@ public sealed class TurnActivityTimeConverter : IValueConverter
             BotTurnStatus.Running => turn.StartedAt ?? turn.QueuedAt,
             _ => turn.FinishedAt ?? turn.StartedAt ?? turn.QueuedAt
         };
-        return timestamp.ToLocalTime().ToString("h:mm tt", CultureInfo.InvariantCulture);
+        return timestamp.ToLocalTime().ToString("t", CultureInfo.CurrentCulture);
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();

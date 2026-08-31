@@ -201,7 +201,7 @@
             </Grid>
           </Button>
           <Grid Grid.Row="1" Height="47" Margin="0,16,0,28">
-            <AutoSuggestBox x:Name="SearchBotsBox" PlaceholderText="Search bots" TextChanged="SearchBotsTextChanged" AutomationProperties.Name="Search bots">
+            <AutoSuggestBox x:Name="SearchBotsBox" x:Uid="BotSearchInput" PlaceholderText="Search bots" TextChanged="SearchBotsTextChanged" AutomationProperties.Name="Search bots">
               <AutoSuggestBox.QueryIcon>
                 <SymbolIcon Symbol="Find" />
               </AutoSuggestBox.QueryIcon>
@@ -253,7 +253,7 @@
                 </DataTemplate>
               </ListView.ItemTemplate>
             </ListView>
-            <StackPanel Width="230"
+            <StackPanel x:Uid="LoadingBotsState" Width="230"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Top"
                         Margin="0,28,0,0"
@@ -261,50 +261,50 @@
                         Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Loading}"
                         AutomationProperties.Name="Loading Bots">
               <ProgressRing Width="24" Height="24" IsActive="True" HorizontalAlignment="Center" />
-              <TextBlock Text="Loading Bots…" HorizontalAlignment="Center" Opacity=".68" />
+              <TextBlock x:Uid="LoadingBotsText" Text="Loading Bots…" HorizontalAlignment="Center" Opacity=".68" />
             </StackPanel>
-            <StackPanel Width="230"
+            <StackPanel x:Uid="NoEnabledConnectionsState" Width="230"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Top"
                         Margin="0,28,0,0"
                         Spacing="10"
                         Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=NoEnabledConnections}"
                         AutomationProperties.Name="No enabled connections">
-              <TextBlock Text="No connections" FontWeight="SemiBold" HorizontalAlignment="Center" />
-              <TextBlock Text="Add an enabled connection to create a Bot." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
-              <Button Content="Manage connections" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ConnectionsClick" AutomationProperties.Name="Manage connections" />
+              <TextBlock x:Uid="NoEnabledConnectionsHeading" Text="No connections" FontWeight="SemiBold" HorizontalAlignment="Center" />
+              <TextBlock x:Uid="NoEnabledConnectionsDescription" Text="Add an enabled connection to create a Bot." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+              <Button x:Uid="ManageConnectionsEmptyAction" Content="Manage connections" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ConnectionsClick" AutomationProperties.Name="Manage connections" />
             </StackPanel>
-            <StackPanel Width="230"
+            <StackPanel x:Uid="NoBotsState" Width="230"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Top"
                         Margin="0,28,0,0"
                         Spacing="10"
                         Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=NoBots}"
                         AutomationProperties.Name="No Bots yet">
-              <TextBlock Text="No Bots yet" FontWeight="SemiBold" HorizontalAlignment="Center" />
-              <TextBlock Text="Create a Bot to start a Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
-              <Button Content="Create Bot" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="NewBotClick" IsEnabled="{Binding CanCreateBot}" AutomationProperties.Name="Create Bot" />
+              <TextBlock x:Uid="NoBotsHeading" Text="No Bots yet" FontWeight="SemiBold" HorizontalAlignment="Center" />
+              <TextBlock x:Uid="NoBotsDescription" Text="Create a Bot to start a Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+              <Button x:Uid="CreateBotEmptyAction" Content="Create Bot" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="NewBotClick" IsEnabled="{Binding CanCreateBot}" AutomationProperties.Name="Create Bot" />
             </StackPanel>
-            <StackPanel Width="230"
+            <StackPanel x:Uid="ArchivedOnlyState" Width="230"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Top"
                         Margin="0,28,0,0"
                         Spacing="10"
                         Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=ArchivedOnly}"
                         AutomationProperties.Name="All Bots are archived">
-              <TextBlock Text="All Bots are archived" FontWeight="SemiBold" HorizontalAlignment="Center" />
-              <TextBlock Text="Restore a Bot to return it to the sidebar." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
-              <Button Content="Manage Bots" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ManageBotsClick" AutomationProperties.Name="Manage Bots" />
+              <TextBlock x:Uid="ArchivedOnlyHeading" Text="All Bots are archived" FontWeight="SemiBold" HorizontalAlignment="Center" />
+              <TextBlock x:Uid="ArchivedOnlyDescription" Text="Restore a Bot to return it to the sidebar." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+              <Button x:Uid="ManageArchivedBotsAction" Content="Manage Bots" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ManageBotsClick" AutomationProperties.Name="Manage Bots" />
             </StackPanel>
-            <StackPanel Width="230"
+            <StackPanel x:Uid="SearchNoResultsState" Width="230"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Top"
                         Margin="0,28,0,0"
                         Spacing="10"
                         Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=SearchNoResults}"
                         AutomationProperties.Name="No Bots match your search">
-              <TextBlock Text="No Bots match your search" FontWeight="SemiBold" HorizontalAlignment="Center" TextAlignment="Center" />
-              <Button Content="Clear search" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ClearBotSearchClick" AutomationProperties.Name="Clear Bot search" />
+              <TextBlock x:Uid="NoBotSearchResultsHeading" Text="No Bots match your search" FontWeight="SemiBold" HorizontalAlignment="Center" TextAlignment="Center" />
+              <Button x:Uid="ClearBotSearchAction" Content="Clear search" Style="{StaticResource Quiet}" HorizontalAlignment="Center" Click="ClearBotSearchClick" AutomationProperties.Name="Clear Bot search" />
             </StackPanel>
           </Grid>
         </Grid>
@@ -380,32 +380,32 @@
           </ItemsControl>
         </ListView.Footer>
       </ListView>
-        <StackPanel Width="310"
+        <StackPanel x:Uid="LoadingConversationState" Width="310"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Spacing="10"
                     Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Loading}"
                     AutomationProperties.Name="Loading Direct chat">
           <ProgressRing Width="28" Height="28" IsActive="True" HorizontalAlignment="Center" />
-          <TextBlock Text="Loading Direct chat…" HorizontalAlignment="Center" Opacity=".68" />
+          <TextBlock x:Uid="LoadingConversationText" Text="Loading Direct chat…" HorizontalAlignment="Center" Opacity=".68" />
         </StackPanel>
-        <StackPanel Width="360"
+        <StackPanel x:Uid="NoSelectionState" Width="360"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Spacing="8"
                     Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=NoSelection}"
                     AutomationProperties.Name="Choose a Bot">
-          <TextBlock Text="Choose a Bot" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" />
-          <TextBlock Text="Select an active Bot from the sidebar to open its Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+          <TextBlock x:Uid="NoSelectionHeading" Text="Choose a Bot" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" />
+          <TextBlock x:Uid="SelectBotEmptyDescription" Text="Select an active Bot from the sidebar to open its Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
         </StackPanel>
-        <StackPanel Width="420"
+        <StackPanel x:Uid="EmptyChatState" Width="420"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Spacing="8"
                     Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=EmptyChat}"
                     AutomationProperties.Name="No messages yet">
-          <TextBlock Text="No messages yet" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" />
-          <TextBlock Text="Send a message to start this Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
+          <TextBlock x:Uid="EmptyChatHeading" Text="No messages yet" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" />
+          <TextBlock x:Uid="NoMessagesEmptyDescription" Text="Send a message to start this Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
         </StackPanel>
       </Grid>
       <Border Grid.Row="2" Margin="12,10,12,16" Padding="16,12" Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Accent}" BorderThickness="1" CornerRadius="12">
@@ -520,7 +520,7 @@
                   </Grid>
                   <Grid Height="28">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                    <TextBlock Text="Provider" FontSize="14" Opacity=".68" AutomationProperties.Name="Provider protocol" />
+                    <TextBlock x:Uid="ActivityProviderLabel" Text="Provider" FontSize="14" Opacity=".68" AutomationProperties.Name="Provider protocol" />
                     <TextBlock Grid.Column="1" Text="{Binding Protocol, Converter={StaticResource ProviderProtocolText}}" TextAlignment="Right" TextTrimming="CharacterEllipsis" FontSize="14" FontWeight="SemiBold" ToolTipService.ToolTip="{Binding Protocol, Converter={StaticResource ProviderProtocolText}}" />
                   </Grid>
                   <Grid Height="28">
@@ -581,12 +581,12 @@
                     <InfoBar Title="Turn failed" Message="{Binding Failure.Message}" Severity="Error" IsClosable="False" IsOpen="True" />
                     <Grid Height="28">
                       <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                      <TextBlock Text="Error category" FontSize="14" Opacity=".68" AutomationProperties.Name="Error category" />
+                      <TextBlock x:Uid="ActivityErrorCategoryLabel" Text="Error category" FontSize="14" Opacity=".68" AutomationProperties.Name="Error category" />
                       <TextBlock Grid.Column="1" Text="{Binding Failure, Converter={StaticResource FailureDetailText}, ConverterParameter=category}" TextAlignment="Right" TextTrimming="CharacterEllipsis" FontSize="14" FontWeight="SemiBold" AutomationProperties.Name="Error category value" ToolTipService.ToolTip="{Binding Failure, Converter={StaticResource FailureDetailText}, ConverterParameter=category}" />
                     </Grid>
                     <Grid Height="28">
                       <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                      <TextBlock Text="Error code" FontSize="14" Opacity=".68" AutomationProperties.Name="Error code" />
+                      <TextBlock x:Uid="ActivityErrorCodeLabel" Text="Error code" FontSize="14" Opacity=".68" AutomationProperties.Name="Error code" />
                       <TextBlock Grid.Column="1" Text="{Binding Failure, Converter={StaticResource FailureDetailText}, ConverterParameter=code}" TextAlignment="Right" TextTrimming="CharacterEllipsis" FontSize="14" FontWeight="SemiBold" AutomationProperties.Name="Error code value" ToolTipService.ToolTip="{Binding Failure, Converter={StaticResource FailureDetailText}, ConverterParameter=code}" />
                     </Grid>
                   </StackPanel>
