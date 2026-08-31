@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Amira.Contracts;
 using Amira.Domain;
+using Amira.Errors;
 using Amira.Runtime;
 
 namespace Amira.Client.WinUI;
@@ -22,6 +23,8 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     private readonly HashSet<BotTurnId> _pendingTerminalTurns = [];
     private bool _terminalRefreshPending;
     private bool _terminalRefreshDirty;
+    public ObservableCollection<Bot> AllBots { get; } = [];
+    /// <summary>Active Bots shown in the chat navigation.</summary>
     public ObservableCollection<Bot> Bots { get; } = [];
     public ObservableCollection<Bot> VisibleBots { get; } = [];
     public ObservableCollection<ChatMessage> Timeline { get; } = [];
@@ -29,7 +32,17 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     public ObservableCollection<TurnView> Turns { get; } = [];
     public ObservableCollection<RuntimeTurnProjection> StreamingTurns { get; } = [];
     public event PropertyChangedEventHandler? PropertyChanged;
-    public Bot? SelectedBot { get => _selectedBot; private set => Set(ref _selectedBot, value); }
+    public Bot? SelectedBot
+    {
+        get => _selectedBot;
+        private set
+        {
+            if (!Set(ref _selectedBot, value)) return;
+            OnChanged(nameof(CanSend));
+            OnChanged(nameof(CanEditSelectedBot));
+            OnChanged(nameof(CanArchiveSelectedBot));
+        }
+    }
     public string MessageText { get => _messageText; set { Set(ref _messageText, value); OnChanged(nameof(CanSend)); } }
     public string SearchText
     {
@@ -43,8 +56,23 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         }
     }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
-    public bool IsBusy { get => _isBusy; private set => Set(ref _isBusy, value); }
-    public bool CanSend => SelectedBot is not null && !IsBusy && !string.IsNullOrWhiteSpace(MessageText) && !_shuttingDown;
+    public bool IsBusy
+    {
+        get => _isBusy;
+        private set
+        {
+            if (!Set(ref _isBusy, value)) return;
+            OnChanged(nameof(CanSend));
+            OnChanged(nameof(CanCreateBot));
+            OnChanged(nameof(CanEditSelectedBot));
+            OnChanged(nameof(CanArchiveSelectedBot));
+        }
+    }
+    public bool CanSend => BotManagementPolicy.CanSelect(SelectedBot) && !IsBusy && !string.IsNullOrWhiteSpace(MessageText) && !_shuttingDown;
+    public bool CanCreateBot => !IsBusy && !_shuttingDown;
+    public bool CanEditSelectedBot => BotManagementPolicy.CanEdit(SelectedBot) && !IsBusy && !_shuttingDown;
+    public bool CanArchiveSelectedBot => BotManagementPolicy.CanArchive(SelectedBot) && !IsBusy && !_shuttingDown;
+    public bool HasArchivedBots => AllBots.Any(bot => bot.LifecycleState == BotLifecycleState.Archived);
     public string WorkspaceId => _session.WorkspaceId.ToString();
     public TurnView? CurrentActivity => Turns.FirstOrDefault();
     public string ConnectionSummary => Connections.Any(connection => connection.Enabled) ? "Connected" : "Not connected";
@@ -54,14 +82,27 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         BotId? selected = SelectedBot?.Id;
         IReadOnlyList<Bot> bots = await _session.ListBotsAsync();
         IReadOnlyList<ProviderConnection> connections = await _session.ListConnectionsAsync();
-        Replace(Bots, bots.Where(bot => bot.LifecycleState == BotLifecycleState.Active));
+        Replace(AllBots, bots);
+        Replace(Bots, bots.Where(BotManagementPolicy.CanSelect));
         Replace(Connections, connections);
         RefreshVisibleBots();
         OnChanged(nameof(ConnectionSummary));
-        if (selected is { } id) SelectedBot = Bots.FirstOrDefault(bot => bot.Id == id);
+        OnChanged(nameof(HasArchivedBots));
+        if (selected is not { } id) return;
+        Bot? refreshed = Bots.FirstOrDefault(bot => bot.Id == id);
+        if (refreshed is null) ClearSelection();
+        else SelectedBot = refreshed;
     }
     public async Task SelectBotAsync(Bot? bot)
     {
+        if (bot is not null && !BotManagementPolicy.CanSelect(bot))
+        {
+            StatusText = ErrorPresentation.For(ProductError(
+                AmiraErrorCodes.BotInactive,
+                ErrorCategory.DomainRule,
+                "The requested Bot is not active."));
+            return;
+        }
         _selectionCancellation?.Cancel();
         _selectionCancellation?.Dispose();
         CancellationTokenSource cancellation = new();
@@ -84,7 +125,22 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     public async Task SendAsync()
     {
         Bot? bot = SelectedBot; string content = MessageText;
-        if (bot is null || string.IsNullOrWhiteSpace(content)) { StatusText = "Choose a Bot and enter a message."; return; }
+        if (bot is null || !BotManagementPolicy.CanSelect(bot))
+        {
+            StatusText = ErrorPresentation.For(ProductError(
+                AmiraErrorCodes.BotInactive,
+                ErrorCategory.DomainRule,
+                "Choose an active Bot."));
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            StatusText = ErrorPresentation.For(ProductError(
+                AmiraErrorCodes.ContentRequired,
+                ErrorCategory.Input,
+                "Enter a message."));
+            return;
+        }
         await RunAsync(async () => { await _session.SendAsync(bot.Id, content); MessageText = string.Empty; await SelectBotAsync(bot); });
     }
     public Task StopAsync(TurnView turn) => RunAsync(async () => { await _session.StopTurnAsync(turn.TurnId); await ReloadSelectedAsync(); });
@@ -108,20 +164,71 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         catch (Exception exception) { StatusText = ErrorPresentation.For(exception); return false; }
         finally { IsBusy = false; OnChanged(nameof(CanSend)); }
     }
-    public async Task CreateBotAsync(BotDraft draft)
+    public Task<bool> SaveBotAsync(BotDraft draft)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        await RunAsync(async () =>
+        return draft.Editing is null ? CreateBotAsync(draft) : EditBotAsync(draft);
+    }
+
+    public Task<bool> CreateBotAsync(BotDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        return RunManagementAsync(async () =>
         {
-            if (draft.Connection is null) { StatusText = "Choose a provider connection."; return; }
-            if (!double.TryParse(draft.Temperature, out double temperature) || temperature is < 0 or > 2) { StatusText = "Temperature must be a number between 0 and 2."; return; }
-            if (!int.TryParse(draft.MaxTokens, out int maxTokens) || maxTokens <= 0) { StatusText = "Maximum tokens must be a positive whole number."; return; }
-            BotProfile profile = BotProfile.Create(draft.Name, draft.Description, draft.Instructions);
-            ModelProfile model = ModelProfile.Create(draft.Connection.Id, draft.Model, new GenerationOptions(temperature, maxTokens));
-            Bot created = await _session.CreateBotAsync(new CreateBotCommand(profile, model));
-            await RefreshCatalogAsync(); Bot? refreshed = Bots.FirstOrDefault(bot => bot.Id == created.Id); if (refreshed is not null) await SelectBotAsync(refreshed);
-            StatusText = "Bot created.";
-        });
+            CreateBotCommand command = BotDraftPolicy.CreateCommand(draft);
+            Bot created = await _session.CreateBotAsync(command);
+            await RefreshCatalogAsync();
+            Bot? refreshed = Bots.FirstOrDefault(bot => bot.Id == created.Id);
+            if (refreshed is not null) await SelectBotAsync(refreshed);
+        }, "Bot created.");
+    }
+
+    public Task<bool> EditBotAsync(BotDraft draft)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        return RunManagementAsync(async () =>
+        {
+            Bot edited = BotDraftPolicy.ApplyEdit(draft);
+            bool wasSelected = SelectedBot?.Id == edited.Id;
+            Bot saved = await _session.UpdateBotAsync(edited);
+            await RefreshCatalogAsync();
+            if (!wasSelected) return;
+            Bot? refreshed = Bots.FirstOrDefault(bot => bot.Id == saved.Id);
+            if (refreshed is null) ClearSelection();
+            else await SelectBotAsync(refreshed);
+        }, "Bot saved.");
+    }
+
+    public Task<bool> ArchiveBotAsync(Bot bot)
+    {
+        ArgumentNullException.ThrowIfNull(bot);
+        return RunManagementAsync(async () =>
+        {
+            if (!BotManagementPolicy.CanArchive(bot))
+                throw ProductError(AmiraErrorCodes.BotInactive, ErrorCategory.DomainRule, "Only an active Bot can be archived.");
+            bool wasSelected = SelectedBot?.Id == bot.Id;
+            _ = await _session.ArchiveBotAsync(bot.Id);
+            await RefreshCatalogAsync();
+            if (wasSelected) await SelectBotAsync(Bots.FirstOrDefault());
+        }, "Bot archived.");
+    }
+
+    public Task<bool> RestoreBotAsync(Bot bot)
+    {
+        ArgumentNullException.ThrowIfNull(bot);
+        return RunManagementAsync(async () =>
+        {
+            if (!BotManagementPolicy.CanRestore(bot))
+                throw ProductError(AmiraErrorCodes.InvalidRequest, ErrorCategory.DomainRule, "Only an archived Bot can be restored.");
+            BotId? selected = SelectedBot?.Id;
+            Bot restored = await _session.RestoreBotAsync(bot.Id);
+            await RefreshCatalogAsync();
+            if (selected is null)
+            {
+                Bot? refreshed = Bots.FirstOrDefault(item => item.Id == restored.Id);
+                if (refreshed is not null) await SelectBotAsync(refreshed);
+            }
+        }, "Bot restored.");
     }
     public Task ProjectRuntimeEvent(ChatRuntimeEvent runtimeEvent)
     {
@@ -133,8 +240,28 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
         else if (index >= 0) StreamingTurns[index] = projection; else StreamingTurns.Add(projection);
         return Task.CompletedTask;
     }
-    public void BeginShutdown() { _shuttingDown = true; _selectionCancellation?.Cancel(); OnChanged(nameof(CanSend)); }
+    public void BeginShutdown()
+    {
+        _shuttingDown = true;
+        _selectionCancellation?.Cancel();
+        OnChanged(nameof(CanSend));
+        OnChanged(nameof(CanCreateBot));
+        OnChanged(nameof(CanEditSelectedBot));
+        OnChanged(nameof(CanArchiveSelectedBot));
+    }
     private async Task ReloadSelectedAsync() { Bot? bot = SelectedBot; if (bot is not null && !_shuttingDown) await SelectBotAsync(bot); }
+    private void ClearSelection()
+    {
+        _selectionCancellation?.Cancel();
+        _selectionCancellation?.Dispose();
+        _selectionCancellation = null;
+        _selection.Next();
+        SelectedBot = null;
+        Timeline.Clear();
+        Turns.Clear();
+        StreamingTurns.Clear();
+        OnChanged(nameof(CurrentActivity));
+    }
     private void RefreshVisibleBots()
     {
         string query = SearchText.Trim();
@@ -152,14 +279,32 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     private async Task RunAsync(Func<Task> operation)
     {
         if (_shuttingDown || IsBusy) return;
-        IsBusy = true; OnChanged(nameof(CanSend));
+        IsBusy = true;
         try { await operation(); } catch (Exception exception) { StatusText = ErrorPresentation.For(exception); }
-        finally { IsBusy = false; OnChanged(nameof(CanSend)); }
+        finally { IsBusy = false; }
+    }
+    private async Task<bool> RunManagementAsync(Func<Task> operation, string successMessage)
+    {
+        if (_shuttingDown || IsBusy) return false;
+        IsBusy = true;
+        try
+        {
+            await operation();
+            StatusText = successMessage;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            StatusText = ErrorPresentation.For(exception);
+            return false;
+        }
+        finally { IsBusy = false; }
     }
     private static void Replace<T>(ObservableCollection<T> destination, IEnumerable<T> source) { destination.Clear(); foreach (T item in source) destination.Add(item); }
-    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null) { if (EqualityComparer<T>.Default.Equals(field, value)) return; field = value; OnChanged(name); }
+    private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null) { if (EqualityComparer<T>.Default.Equals(field, value)) return false; field = value; OnChanged(name); return true; }
+    private static AmiraException ProductError(string code, ErrorCategory category, string message) =>
+        new(new AmiraError(code, category, message));
     private void OnChanged(string? name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
 public sealed record ConnectionDraft(ProviderProtocol Protocol, string DisplayName, string BaseUrl, string? DefaultModel, bool Enabled, ProviderConnection? Editing = null);
-public sealed record BotDraft(string Name, string Description, string Instructions, ProviderConnection? Connection, string Model, string Temperature, string MaxTokens);

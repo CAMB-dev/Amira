@@ -115,6 +115,25 @@ public sealed class WindowsClientHost : IAsyncDisposable
             return bot;
         }, cancellationToken);
 
+    public ValueTask<Bot> UpdateBotAsync(Bot bot, CancellationToken cancellationToken = default) =>
+        OperateAsync(token => _store.UpdateBotAsync(bot, token), cancellationToken);
+
+    public ValueTask<Bot> ArchiveBotAsync(BotId botId, CancellationToken cancellationToken = default) =>
+        OperateAsync(async token =>
+        {
+            Bot bot = await _store.ArchiveBotAsync(botId, token).ConfigureAwait(false);
+            _ = await _workers.UnregisterAsync(bot.Id).ConfigureAwait(false);
+            return bot;
+        }, cancellationToken);
+
+    public ValueTask<Bot> RestoreBotAsync(BotId botId, CancellationToken cancellationToken = default) =>
+        OperateAsync(async token =>
+        {
+            Bot bot = await _store.RestoreBotAsync(botId, token).ConfigureAwait(false);
+            if (bot.LifecycleState == BotLifecycleState.Active) _workers.EnsureRegistered(bot.Id);
+            return bot;
+        }, cancellationToken);
+
     public ValueTask<IReadOnlyList<ChatMessage>> LoadTimelineAsync(DirectChatId chatId, CancellationToken cancellationToken = default) =>
         OperateAsync(token => _store.LoadTimelineAsync(chatId, token), cancellationToken);
 

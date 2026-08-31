@@ -131,6 +131,27 @@ public sealed class CompositionTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
+    [Fact]
+    public async Task Worker_registry_unregisters_on_archive_path_and_can_register_again_on_restore_path()
+    {
+        var store = new IdleStore();
+        var runtime = new BasicChatRuntime(store, store, new ProviderRegistry());
+        var registry = new BotWorkerRegistry(
+            runtime,
+            WorkspaceId.New(),
+            new NullSink(),
+            NullLogger<BotWorkerRegistry>.Instance);
+        BotId botId = BotId.New();
+
+        Assert.True(registry.EnsureRegistered(botId));
+        Assert.False(registry.EnsureRegistered(botId));
+        Assert.True(await registry.UnregisterAsync(botId));
+        Assert.False(await registry.UnregisterAsync(botId));
+        Assert.True(registry.EnsureRegistered(botId));
+
+        await registry.DisposeAsync();
+    }
+
     private static string CreateDirectory()
     {
         string path = Path.Combine(Path.GetTempPath(), "Amira.Tests", Guid.NewGuid().ToString("N"));
@@ -168,5 +189,32 @@ public sealed class CompositionTests
     private sealed class NullSink : IChatRuntimeEventSink
     {
         public ValueTask PublishAsync(ChatRuntimeEvent runtimeEvent, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+    }
+
+    private sealed class IdleStore : IChatStore, IWorkspaceStore
+    {
+        public ValueTask<ClaimedTurn?> TryClaimNextTurnAsync(BotId botId, CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<ClaimedTurn?>(null);
+
+        public ValueTask<QueuedMessageResult> CommitHumanMessageAndQueueTurnAsync(HumanMessageCommand command, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask RecordFirstTokenAsync(BotTurnId turnId, TurnClaimToken claimToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask CompleteTurnAsync(CompleteTurnCommand command, TurnClaimToken claimToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask FailTurnAsync(BotTurnId turnId, TurnClaimToken claimToken, AmiraError failure, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask CancelClaimedTurnAsync(BotTurnId turnId, TurnClaimToken claimToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask RequestStopAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask RecoverInterruptedTurnsAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+        public ValueTask<BotTurn> RetryTurnAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<IReadOnlyList<ChatMessage>> LoadTimelineAsync(DirectChatId chatId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<TurnPage> QueryTurnsAsync(TurnQuery query, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<TurnView?> GetTurnAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<Bot> CreateBotAsync(CreateBotCommand command, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<Bot?> GetBotAsync(BotId botId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<IReadOnlyList<Bot>> ListBotsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<Bot> UpdateBotAsync(Bot bot, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<Bot> ArchiveBotAsync(BotId botId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<Bot> RestoreBotAsync(BotId botId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask SaveProviderConnectionAsync(ProviderConnection connection, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<ProviderConnection?> GetProviderConnectionAsync(ProviderConnectionId connectionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public ValueTask<IReadOnlyList<ProviderConnection>> ListProviderConnectionsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 }

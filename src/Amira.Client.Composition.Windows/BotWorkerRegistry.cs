@@ -31,11 +31,45 @@ public sealed class BotWorkerRegistry
 
     public void Register(BotId botId)
     {
+        if (!RegisterCore(botId))
+            throw new AmiraException(new(AmiraErrorCodes.BotWorkerAlreadyRegistered, ErrorCategory.Concurrency, "A worker is already registered for this Bot."));
+    }
+
+    /// <summary>Registers a worker when one is not already present.</summary>
+    /// <returns><see langword="true"/> when a new worker was registered.</returns>
+    public bool EnsureRegistered(BotId botId) => RegisterCore(botId);
+
+    public async ValueTask<bool> UnregisterAsync(BotId botId)
+    {
+        Entry? entry;
         lock (_gate)
         {
             if (_stopping) throw Stopped();
-            if (_entries.ContainsKey(botId))
-                throw new AmiraException(new(AmiraErrorCodes.BotWorkerAlreadyRegistered, ErrorCategory.Concurrency, "A worker is already registered for this Bot."));
+            if (!_entries.Remove(botId, out entry)) return false;
+        }
+
+        try
+        {
+            await entry.Worker.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            // DisposeAsync waits until the run loop stops. Observe a previously
+            // faulted run task without turning a successful archive into a
+            // misleading lifecycle failure; the continuation registered below
+            // has already logged the worker fault.
+            if (entry.RunTask.IsFaulted) _ = entry.RunTask.Exception;
+        }
+
+        return true;
+    }
+
+    private bool RegisterCore(BotId botId)
+    {
+        lock (_gate)
+        {
+            if (_stopping) throw Stopped();
+            if (_entries.ContainsKey(botId)) return false;
             IBotWorker worker = _runtime.CreateBotWorker(_workspaceId, botId);
             Task task = worker.RunAsync(_sink);
             _ = task.ContinueWith(static (completed, state) =>
@@ -46,6 +80,7 @@ public sealed class BotWorkerRegistry
                 logger.LogError("Bot worker failed: {Code} {BotId}", AmiraErrorCodes.BotWorkerFailed, id.Value);
             }, (_logger, botId), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             _entries.Add(botId, new Entry(worker, task));
+            return true;
         }
     }
 
