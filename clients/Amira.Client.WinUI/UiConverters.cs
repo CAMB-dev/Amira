@@ -29,9 +29,9 @@ public sealed class LocalTimeConverter : IValueConverter
 
 public sealed class TurnActionVisibilityConverter : IValueConverter
 {
-    public object Convert(object value, Type targetType, object parameter, string language) => value is BotTurnStatus status && parameter is string action &&
-        ((action == "stop" && status is BotTurnStatus.Queued or BotTurnStatus.Running) ||
-         (action == "retry" && status is BotTurnStatus.Failed or BotTurnStatus.Cancelled))
+    public object Convert(object value, Type targetType, object parameter, string language) => value is Amira.Contracts.TurnView turn && parameter is string action &&
+        ((action == "stop" && TurnActivityPolicy.CanStop(turn)) ||
+         (action == "retry" && TurnActivityPolicy.CanRetry(turn)))
             ? Visibility.Visible
             : Visibility.Collapsed;
 
@@ -40,7 +40,7 @@ public sealed class TurnActionVisibilityConverter : IValueConverter
 
 public sealed class TurnActionAreaVisibilityConverter : IValueConverter
 {
-    public object Convert(object value, Type targetType, object parameter, string language) => value is BotTurnStatus.Queued or BotTurnStatus.Running or BotTurnStatus.Failed or BotTurnStatus.Cancelled
+    public object Convert(object value, Type targetType, object parameter, string language) => value is Amira.Contracts.TurnView turn && TurnActivityPolicy.HasAnyAction(turn)
         ? Visibility.Visible
         : Visibility.Collapsed;
 
