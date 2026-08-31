@@ -1,8 +1,11 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using Amira.Client.Composition.Windows;
 using Amira.Contracts;
 using Amira.Credentials.Windows;
 using Amira.Domain;
 using Amira.Errors;
+using Amira.Persistence.Sqlite;
 using Amira.Runtime;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -132,6 +135,85 @@ public sealed class CompositionTests
     }
 
     [Fact]
+    public async Task Host_creates_durable_trace_and_runtime_instruments_without_an_ambient_activity()
+    {
+        const string promptCanary = "HOST_PROMPT_CANARY_47C8";
+        const string secretCanary = "HOST_SECRET_CANARY_71A9";
+        string directory = CreateDirectory();
+        var sink = new TerminalEventSink();
+        var publishedInstruments = new List<string>();
+        var observedMeasurements = new List<(string Name, string? Outcome)>();
+        using var meterListener = new MeterListener
+        {
+            InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name != AmiraTelemetry.MeterName) return;
+                publishedInstruments.Add(instrument.Name);
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((instrument, _, tags, _) =>
+            observedMeasurements.Add((instrument.Name, FindTag(tags, AmiraTelemetry.Tags.Outcome))));
+        meterListener.SetMeasurementEventCallback<double>((instrument, _, tags, _) =>
+            observedMeasurements.Add((instrument.Name, FindTag(tags, AmiraTelemetry.Tags.Outcome))));
+        meterListener.Start();
+
+        Activity? previous = Activity.Current;
+        CredentialReference? credentialReference = null;
+        try
+        {
+            Activity.Current = null;
+            await using WindowsClientHost host = await WindowsClientHost.StartAsync(sink, directory, TestContext.Current.CancellationToken);
+            Assert.Equal(Path.Combine(directory, "logs"), host.LogsDirectory);
+            Assert.Contains(AmiraTelemetry.Metrics.ProviderRequestCount, publishedInstruments);
+
+            ProviderConnection connection = await host.CreateProviderConnectionAsync(
+                ProviderProtocol.OpenAIChatCompatible,
+                "Loopback test connection",
+                new Uri("http://127.0.0.1:1"),
+                secretCanary,
+                defaultModel: "test-model",
+                enabled: true,
+                cancellationToken: TestContext.Current.CancellationToken);
+            credentialReference = connection.CredentialReference;
+            Bot bot = await host.CreateBotAsync(
+                new CreateBotCommand(BotProfile.Create("Trace bot"), ModelProfile.Create(connection.Id, "test-model")),
+                TestContext.Current.CancellationToken);
+
+            QueuedMessageResult queued = await host.SendAsync(bot.Id, promptCanary, TestContext.Current.CancellationToken);
+            _ = await sink.Failed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await host.StopAsync();
+
+            using var store = new SqliteAmiraStore(Path.Combine(directory, "amira.db"));
+            await store.InitializeAsync(TestContext.Current.CancellationToken);
+            BotTurn retry = await store.RetryTurnAsync(queued.Turn.Id, TestContext.Current.CancellationToken);
+            ClaimedTurn durableTurn = await store.TryClaimNextTurnAsync(retry.BotId, TestContext.Current.CancellationToken)
+                ?? throw new InvalidOperationException("The retried turn was not available for inspection.");
+            Assert.NotEqual(default, durableTurn.ParentActivityContext.TraceId);
+
+            string logs = string.Join(Environment.NewLine, Directory.EnumerateFiles(host.LogsDirectory, "*.jsonl")
+                .SelectMany(File.ReadLines));
+            Assert.DoesNotContain(promptCanary, logs, StringComparison.Ordinal);
+            Assert.DoesNotContain(secretCanary, logs, StringComparison.Ordinal);
+
+            Assert.Contains(AmiraTelemetry.Metrics.ProviderRequestDuration, publishedInstruments);
+            Assert.Contains(observedMeasurements, measurement =>
+                measurement.Name == AmiraTelemetry.Metrics.ProviderRequestCount
+                && measurement.Outcome == AmiraTelemetry.Outcomes.Failure);
+            Assert.Contains(observedMeasurements, measurement =>
+                measurement.Name == AmiraTelemetry.Metrics.ProviderRequestDuration
+                && measurement.Outcome == AmiraTelemetry.Outcomes.Failure);
+        }
+        finally
+        {
+            Activity.Current = previous;
+            if (credentialReference is { } reference)
+                await new WindowsCredentialVault().DeleteAsync(reference, TestContext.Current.CancellationToken);
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Worker_registry_unregisters_on_archive_path_and_can_register_again_on_restore_path()
     {
         var store = new IdleStore();
@@ -157,6 +239,16 @@ public sealed class CompositionTests
         string path = Path.Combine(Path.GetTempPath(), "Amira.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static string? FindTag(ReadOnlySpan<KeyValuePair<string, object?>> tags, string name)
+    {
+        foreach (KeyValuePair<string, object?> tag in tags)
+        {
+            if (tag.Key == name) return tag.Value?.ToString();
+        }
+
+        return null;
     }
 
     private sealed class FakeVault : IWindowsCredentialVault
@@ -189,6 +281,17 @@ public sealed class CompositionTests
     private sealed class NullSink : IChatRuntimeEventSink
     {
         public ValueTask PublishAsync(ChatRuntimeEvent runtimeEvent, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+    }
+
+    private sealed class TerminalEventSink : IChatRuntimeEventSink
+    {
+        public TaskCompletionSource<ChatRuntimeEvent.Failed> Failed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ValueTask PublishAsync(ChatRuntimeEvent runtimeEvent, CancellationToken cancellationToken = default)
+        {
+            if (runtimeEvent is ChatRuntimeEvent.Failed failed) Failed.TrySetResult(failed);
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class IdleStore : IChatStore, IWorkspaceStore

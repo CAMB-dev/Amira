@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Amira.Contracts;
 using Amira.Credentials.Windows;
 using Amira.Domain;
@@ -17,6 +18,8 @@ public sealed class WindowsClientHost : IAsyncDisposable
     private readonly SqliteAmiraStore _store;
     private readonly ProviderTransport _transport;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ActivityListener _activityListener;
+    private readonly WindowsHostMeterFactory _meterFactory;
     private readonly SingleInstanceLease _lease;
     private readonly BotWorkerRegistry _workers;
     private readonly BasicChatRuntime _runtime;
@@ -24,14 +27,18 @@ public sealed class WindowsClientHost : IAsyncDisposable
     private readonly ProviderConnectionService _connections;
     private bool _stopping;
 
-    private WindowsClientHost(WorkspaceId workspaceId, SqliteAmiraStore store, ProviderTransport transport,
-        ILoggerFactory loggerFactory, SingleInstanceLease lease, BotWorkerRegistry workers, BasicChatRuntime runtime,
+    private WindowsClientHost(WorkspaceId workspaceId, string logsDirectory, SqliteAmiraStore store, ProviderTransport transport,
+        ILoggerFactory loggerFactory, ActivityListener activityListener, WindowsHostMeterFactory meterFactory,
+        SingleInstanceLease lease, BotWorkerRegistry workers, BasicChatRuntime runtime,
         ProviderConnectionService connections)
     {
         WorkspaceId = workspaceId;
+        LogsDirectory = logsDirectory;
         _store = store;
         _transport = transport;
         _loggerFactory = loggerFactory;
+        _activityListener = activityListener;
+        _meterFactory = meterFactory;
         _lease = lease;
         _workers = workers;
         _runtime = runtime;
@@ -39,12 +46,15 @@ public sealed class WindowsClientHost : IAsyncDisposable
     }
 
     public WorkspaceId WorkspaceId { get; }
+    public string LogsDirectory { get; }
 
     public static async ValueTask<WindowsClientHost> StartAsync(IChatRuntimeEventSink sink, string? rootDirectory = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(sink);
         SingleInstanceLease? lease = null;
         ILoggerFactory? loggerFactory = null;
+        ActivityListener? activityListener = null;
+        WindowsHostMeterFactory? meterFactory = null;
         ProviderTransport? transport = null;
         SqliteAmiraStore? store = null;
         BotWorkerRegistry? workers = null;
@@ -53,6 +63,8 @@ public sealed class WindowsClientHost : IAsyncDisposable
             ClientPaths paths = ClientPaths.Create(rootDirectory);
             lease = await SingleInstanceLease.AcquireAsync(paths.DatabasePath, cancellationToken).ConfigureAwait(false);
             loggerFactory = AmiraLogging.CreateJsonFileLoggerFactory(new JsonFileLoggingOptions { DirectoryPath = paths.LogsDirectory });
+            activityListener = CreateRuntimeActivityListener();
+            meterFactory = new WindowsHostMeterFactory();
             WorkspaceId workspaceId = await new WorkspaceIdentityStore(paths.WorkspaceIdentityPath).LoadOrCreateAsync(cancellationToken).ConfigureAwait(false);
             var vault = new WindowsCredentialVault();
             store = new SqliteAmiraStore(paths.DatabasePath);
@@ -63,12 +75,12 @@ public sealed class WindowsClientHost : IAsyncDisposable
             registry.Register(new OpenAiResponsesProvider(transport, vault));
             registry.Register(new AnthropicMessagesProvider(transport, vault));
             registry.Freeze();
-            var runtime = new BasicChatRuntime(store, store, registry, logger: loggerFactory.CreateLogger<BasicChatRuntime>());
+            var runtime = new BasicChatRuntime(store, store, registry, logger: loggerFactory.CreateLogger<BasicChatRuntime>(), meterFactory: meterFactory);
             await runtime.RecoverInterruptedTurnsAsync(cancellationToken).ConfigureAwait(false);
             workers = new BotWorkerRegistry(runtime, workspaceId, sink, loggerFactory.CreateLogger<BotWorkerRegistry>());
             IReadOnlyList<Bot> bots = await store.ListBotsAsync(cancellationToken).ConfigureAwait(false);
             foreach (Bot bot in bots.Where(bot => bot.LifecycleState == BotLifecycleState.Active)) workers.Register(bot.Id);
-            return new WindowsClientHost(workspaceId, store, transport, loggerFactory, lease, workers, runtime, new ProviderConnectionService(vault, store, loggerFactory.CreateLogger<ProviderConnectionService>()));
+            return new WindowsClientHost(workspaceId, paths.LogsDirectory, store, transport, loggerFactory, activityListener, meterFactory, lease, workers, runtime, new ProviderConnectionService(vault, store, loggerFactory.CreateLogger<ProviderConnectionService>()));
         }
         catch (Exception original)
         {
@@ -82,8 +94,10 @@ public sealed class WindowsClientHost : IAsyncDisposable
             catch (Exception cleanup) { logger?.LogError("Startup cleanup failed: {Code} {ExceptionType}", AmiraErrorCodes.ClientInstanceFailed, cleanup.GetType().Name); }
             try { store?.Dispose(); }
             catch (Exception cleanup) { logger?.LogError("Startup cleanup failed: {Code} {ExceptionType}", AmiraErrorCodes.PersistenceFailed, cleanup.GetType().Name); }
+            meterFactory?.Dispose();
             try { loggerFactory?.Dispose(); }
             catch { }
+            activityListener?.Dispose();
             try { lease?.Dispose(); }
             catch { }
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(original).Throw();
@@ -185,7 +199,9 @@ public sealed class WindowsClientHost : IAsyncDisposable
             catch (Exception exception) { failure = exception; }
             try { _transport.Dispose(); } catch (Exception exception) { failure ??= exception; }
             try { _store.Dispose(); } catch (Exception exception) { failure ??= exception; }
+            try { _meterFactory.Dispose(); } catch (Exception exception) { failure ??= exception; }
             try { _loggerFactory.Dispose(); } catch (Exception exception) { failure ??= exception; }
+            try { _activityListener.Dispose(); } catch (Exception exception) { failure ??= exception; }
             try { _lease.Dispose(); } catch (Exception exception) { failure ??= exception; }
         }
         finally
@@ -210,4 +226,16 @@ public sealed class WindowsClientHost : IAsyncDisposable
     }
 
     private static AmiraException Stopped() => new(new(AmiraErrorCodes.ClientHostStopped, ErrorCategory.Concurrency, "The client host is stopping or has stopped."));
+
+    private static ActivityListener CreateRuntimeActivityListener()
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = static source => source.Name == AmiraTelemetry.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.PropagationData,
+            SampleUsingParentId = static (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.PropagationData,
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
+    }
 }
