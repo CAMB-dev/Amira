@@ -1,29 +1,7 @@
 <Window x:Class="Amira.Client.WinUI.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:Amira.Client.WinUI" xmlns:domain="using:Amira.Domain" xmlns:contracts="using:Amira.Contracts">
-  <Grid x:Name="Root" RequestedTheme="Dark" xmlns:primitives="using:Microsoft.UI.Xaml.Controls.Primitives">
+  <Grid x:Name="Root" xmlns:primitives="using:Microsoft.UI.Xaml.Controls.Primitives">
     <Grid.Resources>
       <ResourceDictionary>
-        <ResourceDictionary.ThemeDictionaries>
-          <ResourceDictionary x:Key="Dark">
-            <SolidColorBrush x:Key="Side" Color="#141619" />
-            <SolidColorBrush x:Key="Surface" Color="#1A1C20" />
-            <SolidColorBrush x:Key="Raised" Color="#202329" />
-            <SolidColorBrush x:Key="User" Color="#1D2B43" />
-            <SolidColorBrush x:Key="Select" Color="#182A45" />
-            <SolidColorBrush x:Key="Line" Color="#363A40" />
-            <SolidColorBrush x:Key="Accent" Color="#4D91FF" />
-            <SolidColorBrush x:Key="Avatar" Color="#2B2E34" />
-          </ResourceDictionary>
-          <ResourceDictionary x:Key="Light">
-            <SolidColorBrush x:Key="Side" Color="#F9FAFC" />
-            <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="Raised" Color="#F0F3F8" />
-            <SolidColorBrush x:Key="User" Color="#E6F0FF" />
-            <SolidColorBrush x:Key="Select" Color="#E6F0FF" />
-            <SolidColorBrush x:Key="Line" Color="#D4D9E1" />
-            <SolidColorBrush x:Key="Accent" Color="#286FD9" />
-            <SolidColorBrush x:Key="Avatar" Color="#E4E7ED" />
-          </ResourceDictionary>
-        </ResourceDictionary.ThemeDictionaries>
         <local:NullToVisibilityConverter x:Key="NullVisibility" />
         <local:EnumValueToVisibilityConverter x:Key="EnumVisibility" />
         <local:UserNoticeSeverityConverter x:Key="NoticeSeverity" />
@@ -53,12 +31,114 @@
           <Setter Property="BorderThickness" Value="1" />
           <Setter Property="Padding" Value="14,8" />
           <Setter Property="CornerRadius" Value="8" />
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <ContentPresenter x:Name="ContentPresenter"
+                                  Background="{TemplateBinding Background}"
+                                  BorderBrush="{TemplateBinding BorderBrush}"
+                                  BorderThickness="{TemplateBinding BorderThickness}"
+                                  CornerRadius="{TemplateBinding CornerRadius}"
+                                  Content="{TemplateBinding Content}"
+                                  ContentTransitions="{TemplateBinding ContentTransitions}"
+                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                  Padding="{TemplateBinding Padding}"
+                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                  AutomationProperties.AccessibilityView="Raw">
+                  <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup x:Name="CommonStates">
+                      <VisualState x:Name="Normal" />
+                      <VisualState x:Name="PointerOver">
+                        <Storyboard>
+                          <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
+                            <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource Surface}" />
+                          </ObjectAnimationUsingKeyFrames>
+                        </Storyboard>
+                      </VisualState>
+                      <VisualState x:Name="Pressed">
+                        <Storyboard>
+                          <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
+                            <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource Line}" />
+                          </ObjectAnimationUsingKeyFrames>
+                        </Storyboard>
+                      </VisualState>
+                      <VisualState x:Name="Disabled">
+                        <Storyboard>
+                          <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Opacity">
+                            <DiscreteObjectKeyFrame KeyTime="0" Value="0.5" />
+                          </ObjectAnimationUsingKeyFrames>
+                        </Storyboard>
+                      </VisualState>
+                    </VisualStateGroup>
+                  </VisualStateManager.VisualStateGroups>
+                </ContentPresenter>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+        <Style x:Key="PrimaryAction" TargetType="Button" BasedOn="{StaticResource Action}">
+          <Setter Property="Background" Value="{ThemeResource Accent}" />
+          <Setter Property="BorderBrush" Value="{ThemeResource Accent}" />
+          <Setter Property="Foreground" Value="White" />
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <ContentPresenter x:Name="ContentPresenter"
+                                  Background="{TemplateBinding Background}"
+                                  BorderBrush="{TemplateBinding BorderBrush}"
+                                  BorderThickness="{TemplateBinding BorderThickness}"
+                                  CornerRadius="{TemplateBinding CornerRadius}"
+                                  Content="{TemplateBinding Content}"
+                                  ContentTransitions="{TemplateBinding ContentTransitions}"
+                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                  Padding="{TemplateBinding Padding}"
+                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                  Foreground="{TemplateBinding Foreground}"
+                                  AutomationProperties.AccessibilityView="Raw">
+                  <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup x:Name="CommonStates">
+                      <VisualState x:Name="Normal" />
+                      <VisualState x:Name="PointerOver">
+                        <Storyboard>
+                          <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
+                            <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentHover}" />
+                          </ObjectAnimationUsingKeyFrames>
+                          <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="BorderBrush">
+                            <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentHover}" />
+                          </ObjectAnimationUsingKeyFrames>
+                        </Storyboard>
+                      </VisualState>
+                      <VisualState x:Name="Pressed">
+                        <Storyboard>
+                          <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
+                            <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentPressed}" />
+                          </ObjectAnimationUsingKeyFrames>
+                          <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="BorderBrush">
+                            <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AccentPressed}" />
+                          </ObjectAnimationUsingKeyFrames>
+                        </Storyboard>
+                      </VisualState>
+                      <VisualState x:Name="Disabled">
+                        <Storyboard>
+                          <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Opacity">
+                            <DiscreteObjectKeyFrame KeyTime="0" Value="0.5" />
+                          </ObjectAnimationUsingKeyFrames>
+                        </Storyboard>
+                      </VisualState>
+                    </VisualStateGroup>
+                  </VisualStateManager.VisualStateGroups>
+                </ContentPresenter>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
         </Style>
         <Style x:Key="BotListItem" TargetType="ListViewItem">
           <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-          <Setter Property="MinHeight" Value="76" />
+          <Setter Property="MinHeight" Value="64" />
           <Setter Property="Padding" Value="0" />
-          <Setter Property="Margin" Value="0,0,0,6" />
+          <Setter Property="Margin" Value="0,0,0,4" />
           <Setter Property="Template">
             <Setter.Value>
               <ControlTemplate TargetType="ListViewItem">
@@ -187,7 +267,7 @@
               <SolidColorBrush Color="Transparent" />
             </Button.Background>
             <Button.BorderThickness>1</Button.BorderThickness>
-            <Button.CornerRadius>10</Button.CornerRadius>
+            <Button.CornerRadius>8</Button.CornerRadius>
             <Grid>
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="30" />
@@ -196,7 +276,7 @@
               <SymbolIcon Symbol="Folder" />
               <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="Work" FontSize="16" />
-                <TextBlock Text="Local workspace" FontSize="12" Opacity=".62" />
+                <TextBlock Text="Local workspace" FontSize="12" Foreground="{ThemeResource MutedText}" />
               </StackPanel>
             </Grid>
           </Button>
@@ -237,17 +317,17 @@
               </ListView.Resources>
               <ListView.ItemTemplate>
                 <DataTemplate x:DataType="domain:Bot">
-                  <Grid MinHeight="76" Padding="12,10">
+                  <Grid MinHeight="64" Padding="12,8">
                     <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="52" />
+                      <ColumnDefinition Width="48" />
                       <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Border Width="46" Height="46" CornerRadius="23" Background="{ThemeResource Raised}">
+                    <Border Width="40" Height="40" CornerRadius="20" Background="{ThemeResource Raised}">
                       <Image Source="ms-appx:///Assets/bot-avatar-gem.png" Stretch="Uniform" />
                     </Border>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                       <TextBlock Text="{Binding Profile.Name}" FontSize="17" FontWeight="SemiBold" />
-                      <TextBlock Text="Direct chat" FontSize="13" Opacity=".7" />
+                      <TextBlock Text="Direct chat" FontSize="13" Foreground="{ThemeResource MutedText}" />
                     </StackPanel>
                   </Grid>
                 </DataTemplate>
@@ -317,7 +397,7 @@
           <Button x:Name="ConnectionsButton" Style="{StaticResource Quiet}" Click="ConnectionsClick" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" ToolTipService.ToolTip="Manage provider connections" AutomationProperties.Name="Manage provider connections">
             <StackPanel Orientation="Horizontal" Spacing="8">
               <TextBlock Text="Connections" />
-              <TextBlock Text="{Binding ConnectionSummary}" Opacity=".7" />
+              <TextBlock Text="{Binding ConnectionSummary}" Foreground="{ThemeResource MutedText}" />
             </StackPanel>
           </Button>
           <Button x:Name="ThemeButton" Grid.Column="1" Width="44" Height="44" Style="{StaticResource Quiet}" Click="ToggleThemeClick" AutomationProperties.Name="Switch to light appearance" ToolTipService.ToolTip="Switch to light appearance">
@@ -339,23 +419,23 @@
     </Border>
     <Grid x:Name="ConversationPane" Grid.Row="2" Grid.Column="1" MinWidth="450">
       <Grid.RowDefinitions>
-        <RowDefinition Height="87" />
+        <RowDefinition Height="76" />
         <RowDefinition Height="*" />
-      <RowDefinition Height="172" />
+      <RowDefinition Height="Auto" />
       </Grid.RowDefinitions>
       <Border BorderBrush="{ThemeResource Line}" BorderThickness="0,0,0,1" Padding="22,11">
         <Grid>
           <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="72" />
+            <ColumnDefinition Width="60" />
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="48" />
           </Grid.ColumnDefinitions>
-          <Border Width="64" Height="64" CornerRadius="32" Background="{ThemeResource Raised}">
+          <Border Width="52" Height="52" CornerRadius="26" Background="{ThemeResource Raised}">
             <Image Source="ms-appx:///Assets/bot-avatar-gem.png" />
           </Border>
           <StackPanel Grid.Column="1" VerticalAlignment="Center">
-            <TextBlock Text="{Binding SelectedBot.Profile.Name, TargetNullValue=Choose a Bot}" FontSize="25" FontWeight="SemiBold" />
-            <TextBlock Text="Direct chat" FontSize="16" Opacity=".7" />
+            <TextBlock Text="{Binding SelectedBot.Profile.Name, TargetNullValue=Choose a Bot}" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock Text="Direct chat" FontSize="14" Foreground="{ThemeResource MutedText}" />
           </StackPanel>
           <Button Grid.Column="2" Style="{StaticResource Quiet}" Click="BotDetailsClick" AutomationProperties.Name="Bot details">
             <SymbolIcon Symbol="More" />
@@ -420,7 +500,7 @@
           <TextBlock x:Uid="NoMessagesEmptyDescription" Text="Send a message to start this Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
         </StackPanel>
       </Grid>
-      <Border Grid.Row="2" Margin="12,10,12,16" Padding="16,12" Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Accent}" BorderThickness="1" CornerRadius="12">
+      <Border Grid.Row="2" MinHeight="132" MaxHeight="220" Margin="12,10,12,16" Padding="16,12" Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Accent}" BorderThickness="1" CornerRadius="12">
         <Grid>
           <Grid.RowDefinitions>
             <RowDefinition Height="*" />
@@ -435,14 +515,18 @@
               <ColumnDefinition Width="Auto" />
               <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Button Style="{StaticResource Quiet}" IsEnabled="False" ToolTipService.ToolTip="Attachments are not available yet">
-              <SymbolIcon Symbol="Attach" />
-            </Button>
-            <Button Grid.Column="1" Style="{StaticResource Quiet}" IsEnabled="False" ToolTipService.ToolTip="Code snippets are not available yet">
-              <SymbolIcon Symbol="Edit" />
-            </Button>
+            <Border ToolTipService.ToolTip="Attachments are not available yet">
+              <Button Style="{StaticResource Quiet}" IsEnabled="False">
+                <SymbolIcon Symbol="Attach" />
+              </Button>
+            </Border>
+            <Border Grid.Column="1" ToolTipService.ToolTip="Code snippets are not available yet">
+              <Button Style="{StaticResource Quiet}" IsEnabled="False">
+                <SymbolIcon Symbol="Edit" />
+              </Button>
+            </Border>
             <TextBlock Grid.Column="3" Text="Enter to send · Shift+Enter for a new line" FontSize="12" Opacity=".65" VerticalAlignment="Center" />
-            <Button Grid.Column="4" MinWidth="99" Height="56" Style="{StaticResource Action}" Background="{ThemeResource Accent}" Foreground="White" Content="Send" Click="SendClick" IsEnabled="{Binding CanSend}" />
+            <Button Grid.Column="4" MinWidth="99" Height="48" Style="{StaticResource PrimaryAction}" Content="Send" Click="SendClick" IsEnabled="{Binding CanSend}" />
           </Grid>
         </Grid>
       </Border>

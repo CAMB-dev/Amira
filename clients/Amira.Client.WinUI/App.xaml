@@ -4,6 +4,42 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:Microsoft.UI.Xaml.Controls">
     <Application.Resources>
-        <controls:XamlControlsResources />
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <controls:XamlControlsResources />
+            </ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="Side" Color="#141619" />
+                    <SolidColorBrush x:Key="Surface" Color="#1A1C20" />
+                    <SolidColorBrush x:Key="Raised" Color="#202329" />
+                    <SolidColorBrush x:Key="User" Color="#1D2B43" />
+                    <SolidColorBrush x:Key="Select" Color="#182A45" />
+                    <SolidColorBrush x:Key="Line" Color="#363A40" />
+                    <SolidColorBrush x:Key="Accent" Color="#4D91FF" />
+                    <SolidColorBrush x:Key="AccentHover" Color="#6AA4FF" />
+                    <SolidColorBrush x:Key="AccentPressed" Color="#3574D2" />
+                    <SolidColorBrush x:Key="Avatar" Color="#2B2E34" />
+                    <SolidColorBrush x:Key="MutedText" Color="#A8AFBA" />
+                    <SolidColorBrush x:Key="Success" Color="#54D48A" />
+                    <SolidColorBrush x:Key="Danger" Color="#FF7070" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="Side" Color="#F9FAFC" />
+                    <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="Raised" Color="#F0F3F8" />
+                    <SolidColorBrush x:Key="User" Color="#E6F0FF" />
+                    <SolidColorBrush x:Key="Select" Color="#E6F0FF" />
+                    <SolidColorBrush x:Key="Line" Color="#D4D9E1" />
+                    <SolidColorBrush x:Key="Accent" Color="#286FD9" />
+                    <SolidColorBrush x:Key="AccentHover" Color="#165BC7" />
+                    <SolidColorBrush x:Key="AccentPressed" Color="#1455BA" />
+                    <SolidColorBrush x:Key="Avatar" Color="#E4E7ED" />
+                    <SolidColorBrush x:Key="MutedText" Color="#5D6879" />
+                    <SolidColorBrush x:Key="Success" Color="#14844A" />
+                    <SolidColorBrush x:Key="Danger" Color="#C93636" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>
