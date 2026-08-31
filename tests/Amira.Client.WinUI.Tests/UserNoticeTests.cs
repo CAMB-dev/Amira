@@ -49,6 +49,22 @@ public sealed class UserNoticeTests
     }
 
     [Fact]
+    public async Task Client_level_notice_can_surface_a_settings_failure()
+    {
+        await using var session = new EmptyClientSession();
+        var viewModel = new MainViewModel(session);
+        UserNotice notice = UserNotice.FromError(new Amira.Errors.AmiraException(new(
+            Amira.Errors.AmiraErrorCodes.UiPreferencesSaveFailed,
+            Amira.Errors.ErrorCategory.Persistence,
+            "The interface settings could not be saved.")));
+
+        viewModel.ShowNotice(notice);
+
+        Assert.Same(notice, viewModel.Notice);
+        Assert.Equal(notice.Message, viewModel.StatusText);
+    }
+
+    [Fact]
     public void Severity_converter_maps_typed_severity_to_infobar_severity()
     {
         var converter = new UserNoticeSeverityConverter();

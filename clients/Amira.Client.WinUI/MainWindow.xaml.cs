@@ -16,6 +16,7 @@ namespace Amira.Client.WinUI;
 public sealed partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
+    private readonly SettingsViewModel _settingsViewModel;
     private readonly IClientSession _session;
     private readonly WinUiChatRuntimeEventSink _sink;
     private readonly BotDialogCoordinator _botDialogs;
@@ -27,11 +28,13 @@ public sealed partial class MainWindow : Window
     private bool _conversationPinnedToBottom = true;
     private bool _scrollRequestPending;
     private bool _themeTransitionInProgress;
+    private bool _settingsOpen;
     private bool _conversationHandlersAttached;
     private ScrollViewer? _conversationScrollViewer;
-    public MainWindow(MainViewModel viewModel, IClientSession session, WinUiChatRuntimeEventSink sink)
+    public MainWindow(MainViewModel viewModel, SettingsViewModel settingsViewModel, IClientSession session, WinUiChatRuntimeEventSink sink)
     {
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        _settingsViewModel = settingsViewModel ?? throw new ArgumentNullException(nameof(settingsViewModel));
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
         InitializeComponent();
@@ -39,12 +42,18 @@ public sealed partial class MainWindow : Window
         _strings = new MrtCoreUiStringProvider();
         _botDialogs = new BotDialogCoordinator(_viewModel, () => Root.XamlRoot);
         _connectionDialogs = new ConnectionDialogCoordinator(_viewModel, () => Root.XamlRoot);
+        SettingsContent.Configure(_settingsViewModel);
+        SettingsContent.CloseRequested += CloseSettings;
+        SettingsContent.ManageBotsRequested += SettingsManageBotsRequested;
+        SettingsContent.ManageConnectionsRequested += SettingsManageConnectionsRequested;
+        SettingsContent.ThemePreferenceApplied += SettingsThemePreferenceApplied;
+        _settingsViewModel.NoticePublished += SettingsNoticePublished;
         Title = "Amira";
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         SystemBackdrop = new MicaBackdrop();
         Root.ActualThemeChanged += RootActualThemeChanged;
-        SetTheme(ElementTheme.Dark);
+        ApplyThemePreference(_settingsViewModel.ThemePreference);
         AttachConversationHandlers();
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1586, 992));
         AppWindow.Closing += AppWindowClosing;
@@ -73,20 +82,31 @@ public sealed partial class MainWindow : Window
     private void SearchAcceleratorInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) { SearchBotsBox.Focus(FocusState.Programmatic); args.Handled = true; }
     private async void ToggleThemeClick(object sender, RoutedEventArgs args)
     {
-        if (_themeTransitionInProgress) return;
+        AppThemePreference target = ThemePreferencePolicy.QuickToggle(Root.ActualTheme);
+        if (await _settingsViewModel.ChangeThemeAsync(target)) await TransitionThemeAsync(target);
+        else SettingsContent.SyncThemeSelection();
+    }
+
+    private async Task TransitionThemeAsync(AppThemePreference preference)
+    {
+        if (_themeTransitionInProgress)
+        {
+            ApplyThemePreference(preference);
+            return;
+        }
+
         _themeTransitionInProgress = true;
         try
         {
-            ElementTheme target = Root.RequestedTheme == ElementTheme.Dark ? ElementTheme.Light : ElementTheme.Dark;
             MotionSettings motion = MotionPolicy.Current;
             if (!motion.AnimationsEnabled)
             {
-                SetTheme(target);
+                ApplyThemePreference(preference);
                 return;
             }
 
             await FadeRootAsync(0, motion);
-            SetTheme(target);
+            ApplyThemePreference(preference);
             if (!await WaitForUiTurnAsync())
             {
                 Root.Opacity = 1;
@@ -94,23 +114,25 @@ public sealed partial class MainWindow : Window
             }
             await FadeRootAsync(1, motion);
         }
-        finally
-        {
-            _themeTransitionInProgress = false;
-        }
+        finally { _themeTransitionInProgress = false; }
     }
 
-    private void SetTheme(ElementTheme target)
+    private void ApplyThemePreference(AppThemePreference preference)
     {
-        Root.RequestedTheme = target;
-        ThemeButtonText text = ThemeButtonTextPolicy.For(target, _strings);
+        Root.RequestedTheme = ThemePreferencePolicy.RequestedTheme(preference);
+        ApplyThemeChrome(Root.ActualTheme);
+    }
+
+    private void RootActualThemeChanged(FrameworkElement sender, object args) => ApplyThemeChrome(sender.ActualTheme);
+
+    private void ApplyThemeChrome(ElementTheme actualTheme)
+    {
+        ThemeButtonText text = ThemeButtonTextPolicy.For(actualTheme, _strings);
         ThemeIcon.Glyph = text.Glyph;
         ToolTipService.SetToolTip(ThemeButton, text.ToolTip);
         AutomationProperties.SetName(ThemeButton, text.ToolTip);
-        ApplyTitleBarTheme(target);
+        ApplyTitleBarTheme(actualTheme);
     }
-
-    private void RootActualThemeChanged(FrameworkElement sender, object args) => ApplyTitleBarTheme(sender.ActualTheme);
 
     private void ApplyTitleBarTheme(ElementTheme theme)
     {
@@ -303,6 +325,41 @@ public sealed partial class MainWindow : Window
     private async void ManageBotsClick(object sender, RoutedEventArgs args) => await _botDialogs.ShowManagementAsync();
 
     private async void ConnectionsClick(object sender, RoutedEventArgs args) => await _connectionDialogs.ShowManagementAsync();
+
+    private void SettingsClick(object sender, RoutedEventArgs args) => OpenSettings();
+
+    private void OpenSettings()
+    {
+        if (_settingsOpen) return;
+        _settingsOpen = true;
+        SidebarPane.Visibility = Visibility.Collapsed;
+        ConversationPane.Visibility = Visibility.Collapsed;
+        ActivityPane.Visibility = Visibility.Collapsed;
+        SettingsHost.Visibility = Visibility.Visible;
+        SettingsContent.FocusCloseButton();
+    }
+
+    private void CloseSettings()
+    {
+        if (!_settingsOpen) return;
+        _settingsOpen = false;
+        SettingsHost.Visibility = Visibility.Collapsed;
+        SidebarPane.Visibility = Visibility.Visible;
+        ConversationPane.Visibility = Visibility.Visible;
+        ActivityPane.Visibility = Visibility.Visible;
+        SettingsButton.Focus(FocusState.Programmatic);
+    }
+
+    private async void SettingsManageBotsRequested() => await _botDialogs.ShowManagementAsync();
+
+    private async void SettingsManageConnectionsRequested() => await _connectionDialogs.ShowManagementAsync();
+
+    private async void SettingsThemePreferenceApplied(AppThemePreference preference) => await TransitionThemeAsync(preference);
+
+    private void SettingsNoticePublished(UserNotice notice)
+    {
+        if (!_settingsOpen) _viewModel.ShowNotice(notice);
+    }
 
     private async void StopClick(object sender, RoutedEventArgs args)
     {

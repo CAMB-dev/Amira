@@ -39,4 +39,45 @@
   <data name="ActivityErrorCodeLabel.AutomationProperties.Name" xml:space="preserve"><value>Error code</value></data>
   <data name="ThemeSwitchToLight" xml:space="preserve"><value>Switch to light appearance</value></data>
   <data name="ThemeSwitchToDark" xml:space="preserve"><value>Switch to dark appearance</value></data>
+  <data name="OpenSettingsButton.AutomationProperties.Name" xml:space="preserve"><value>Open settings</value></data>
+  <data name="SettingsPageTitle.Text" xml:space="preserve"><value>Settings</value></data>
+  <data name="SettingsPageSubtitle.Text" xml:space="preserve"><value>Configure this Windows client.</value></data>
+  <data name="SettingsCloseButton.AutomationProperties.Name" xml:space="preserve"><value>Close settings</value></data>
+  <data name="SettingsCloseButton.ToolTipService.ToolTip" xml:space="preserve"><value>Close settings</value></data>
+  <data name="SettingsAppearanceSection.Text" xml:space="preserve"><value>APPEARANCE</value></data>
+  <data name="SettingsThemeTitle.Text" xml:space="preserve"><value>App theme</value></data>
+  <data name="SettingsThemeDescription.Text" xml:space="preserve"><value>Use the Windows theme or choose an explicit appearance.</value></data>
+  <data name="SettingsThemeSelector.AutomationProperties.Name" xml:space="preserve"><value>App theme</value></data>
+  <data name="SettingsThemeSystemOption.Content" xml:space="preserve"><value>Use system setting</value></data>
+  <data name="SettingsThemeLightOption.Content" xml:space="preserve"><value>Light</value></data>
+  <data name="SettingsThemeDarkOption.Content" xml:space="preserve"><value>Dark</value></data>
+  <data name="SettingsThemeFootnote.Text" xml:space="preserve"><value>Theme changes apply to the whole window and are saved automatically.</value></data>
+  <data name="SettingsWorkspaceSection.Text" xml:space="preserve"><value>WORKSPACE &amp; DIAGNOSTICS</value></data>
+  <data name="SettingsWorkspaceIdTitle.Text" xml:space="preserve"><value>Workspace ID</value></data>
+  <data name="SettingsCopyWorkspaceButton.Content" xml:space="preserve"><value>Copy</value></data>
+  <data name="SettingsCopyWorkspaceButton.AutomationProperties.Name" xml:space="preserve"><value>Copy workspace ID</value></data>
+  <data name="SettingsDataFolderTitle.Text" xml:space="preserve"><value>Local data</value></data>
+  <data name="SettingsOpenDataButton.Content" xml:space="preserve"><value>Open folder</value></data>
+  <data name="SettingsOpenDataButton.AutomationProperties.Name" xml:space="preserve"><value>Open data folder</value></data>
+  <data name="SettingsLogsFolderTitle.Text" xml:space="preserve"><value>Structured logs</value></data>
+  <data name="SettingsOpenLogsButton.Content" xml:space="preserve"><value>Open folder</value></data>
+  <data name="SettingsOpenLogsButton.AutomationProperties.Name" xml:space="preserve"><value>Open logs folder</value></data>
+  <data name="SettingsLoggingPrivacyNote.Text" xml:space="preserve"><value>Logs contain operational identifiers and timings, never prompts, responses, API keys, or request bodies.</value></data>
+  <data name="SettingsManagementSection.Text" xml:space="preserve"><value>MANAGEMENT</value></data>
+  <data name="SettingsConnectionsTitle.Text" xml:space="preserve"><value>Provider connections</value></data>
+  <data name="SettingsConnectionsDescription.Text" xml:space="preserve"><value>Configure endpoints, protocols, credentials, and default models.</value></data>
+  <data name="SettingsManageConnectionsButton.Content" xml:space="preserve"><value>Manage</value></data>
+  <data name="SettingsManageConnectionsButton.AutomationProperties.Name" xml:space="preserve"><value>Manage provider connections from settings</value></data>
+  <data name="SettingsBotsTitle.Text" xml:space="preserve"><value>Bots</value></data>
+  <data name="SettingsBotsDescription.Text" xml:space="preserve"><value>Create, edit, archive, and restore Bot identities.</value></data>
+  <data name="SettingsManageBotsButton.Content" xml:space="preserve"><value>Manage</value></data>
+  <data name="SettingsManageBotsButton.AutomationProperties.Name" xml:space="preserve"><value>Manage Bots from settings</value></data>
+  <data name="SettingsAboutSection.Text" xml:space="preserve"><value>ABOUT</value></data>
+  <data name="SettingsVersionLabel.Text" xml:space="preserve"><value>Version</value></data>
+  <data name="SettingsOperatingSystemLabel.Text" xml:space="preserve"><value>Operating system</value></data>
+  <data name="SettingsRuntimeLabel.Text" xml:space="preserve"><value>Runtime</value></data>
+  <data name="SettingsArchitectureLabel.Text" xml:space="preserve"><value>Architecture</value></data>
+  <data name="SettingsDiagnosticsDescription.Text" xml:space="preserve"><value>Copy environment details when reporting a problem. Local paths and credentials are excluded.</value></data>
+  <data name="SettingsCopyDiagnosticsButton.Content" xml:space="preserve"><value>Copy diagnostics</value></data>
+  <data name="SettingsCopyDiagnosticsButton.AutomationProperties.Name" xml:space="preserve"><value>Copy diagnostic information</value></data>
 </root>

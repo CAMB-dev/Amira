@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Dispatching;
 using Amira.Client.Composition.Windows;
+using Amira.Errors;
 
 namespace Amira.Client.WinUI;
 
@@ -29,14 +30,36 @@ public partial class App : Application
         WinUiChatRuntimeEventSink? sink = null;
         try
         {
+            ClientPaths paths = ClientPaths.Create();
+            var preferencesStore = new JsonUiPreferencesStore(Path.Combine(paths.RootDirectory, "ui-preferences.json"));
+            UiPreferences preferences;
+            Exception? preferencesFailure = null;
+            try { preferences = await preferencesStore.LoadAsync(); }
+            catch (AmiraException exception)
+            {
+                preferences = UiPreferences.Default;
+                preferencesFailure = exception;
+            }
+
             sink = new WinUiChatRuntimeEventSink(DispatcherQueue.GetForCurrentThread());
-            WindowsClientHost host = await WindowsClientHost.StartAsync(sink);
+            WindowsClientHost host = await WindowsClientHost.StartAsync(sink, paths.RootDirectory);
             session = new WindowsClientSession(host);
             MainViewModel viewModel = new(session);
             sink.Attach(viewModel.ProjectRuntimeEvent);
             await viewModel.InitializeAsync();
 
-            MainWindow window = new(viewModel, session, sink);
+            SettingsEnvironmentInfo environment = SettingsEnvironmentInfo.Create(
+                session.WorkspaceId.ToString(),
+                paths.RootDirectory,
+                paths.LogsDirectory);
+            var settingsViewModel = new SettingsViewModel(environment, preferences, preferencesStore);
+            if (preferencesFailure is not null)
+            {
+                settingsViewModel.Report(preferencesFailure);
+                viewModel.ShowNotice(UserNotice.FromError(preferencesFailure));
+            }
+
+            MainWindow window = new(viewModel, settingsViewModel, session, sink);
             window.Activate();
             _session = session;
             _sink = sink;

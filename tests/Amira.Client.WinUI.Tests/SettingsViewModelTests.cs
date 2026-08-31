@@ -30,7 +30,9 @@ public sealed class SettingsViewModelTests
             "The interface settings could not be saved."));
         var viewModel = CreateViewModel(store: new RecordingPreferencesStore { Failure = failure });
         bool published = false;
+        UserNotice? publishedNotice = null;
         viewModel.ThemeChanged += _ => published = true;
+        viewModel.NoticePublished += notice => publishedNotice = notice;
 
         bool changed = await viewModel.ChangeThemeAsync(AppThemePreference.Light);
 
@@ -40,6 +42,7 @@ public sealed class SettingsViewModelTests
         Assert.Equal(UserNoticeSeverity.Error, viewModel.Notice?.Severity);
         Assert.Contains(failure.Message, viewModel.Notice?.Message, StringComparison.Ordinal);
         Assert.Contains(AmiraErrorCodes.UiPreferencesSaveFailed, viewModel.Notice?.Message, StringComparison.Ordinal);
+        Assert.Same(viewModel.Notice, publishedNotice);
     }
 
     [Fact]

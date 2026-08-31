@@ -82,6 +82,7 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action<AppThemePreference>? ThemeChanged;
+    public event Action<UserNotice>? NoticePublished;
 
     public async Task<bool> ChangeThemeAsync(AppThemePreference preference)
     {
@@ -156,7 +157,11 @@ public sealed class SettingsViewModel : INotifyPropertyChanged
         finally { IsBusy = false; }
     }
 
-    private void Publish(UserNotice notice) => Notice = notice;
+    private void Publish(UserNotice notice)
+    {
+        Notice = notice;
+        NoticePublished?.Invoke(notice);
+    }
 
     private bool Set<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {

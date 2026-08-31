@@ -389,6 +389,11 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         OnChanged(nameof(CanArchiveSelectedBot));
     }
     public void DismissNotice() => Notice = null;
+    public void ShowNotice(UserNotice notice)
+    {
+        ArgumentNullException.ThrowIfNull(notice);
+        PublishNotice(notice);
+    }
     private async Task ReloadSelectedAsync() { Bot? bot = SelectedBot; if (bot is not null && !_shuttingDown) await SelectBotAsync(bot); }
     private void ClearSelection()
     {
@@ -522,7 +527,14 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
     {
         if (_shuttingDown || IsBusy) return;
         IsBusy = true;
-        try { await operation(); } catch (Exception exception) { PublishError(exception); }
+        try
+        {
+            await operation();
+        }
+        catch (Exception exception)
+        {
+            PublishError(exception);
+        }
         finally { IsBusy = false; }
     }
     private async Task<bool> RunManagementAsync(Func<Task> operation, string successMessage)
