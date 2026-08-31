@@ -8,6 +8,7 @@ namespace Amira.Client.WinUI;
 public interface IClientSession : IAsyncDisposable
 {
     WorkspaceId WorkspaceId { get; }
+    string LogsDirectory { get; }
     ValueTask<IReadOnlyList<Bot>> ListBotsAsync(CancellationToken cancellationToken = default);
     ValueTask<IReadOnlyList<ProviderConnection>> ListConnectionsAsync(CancellationToken cancellationToken = default);
     ValueTask<ProviderConnection> CreateProviderConnectionAsync(ProviderProtocol protocol, string displayName, Uri baseUrl, string secret, string? defaultModel, bool enabled, CancellationToken cancellationToken = default);
@@ -29,6 +30,7 @@ public sealed class WindowsClientSession(WindowsClientHost host) : IClientSessio
     private WindowsClientHost? _host = host ?? throw new ArgumentNullException(nameof(host));
     private WindowsClientHost Host => _host ?? throw new ObjectDisposedException(nameof(WindowsClientSession));
     public WorkspaceId WorkspaceId => Host.WorkspaceId;
+    public string LogsDirectory => Host.LogsDirectory;
     public ValueTask<IReadOnlyList<Bot>> ListBotsAsync(CancellationToken cancellationToken = default) => Host.ListBotsAsync(cancellationToken);
     public ValueTask<IReadOnlyList<ProviderConnection>> ListConnectionsAsync(CancellationToken cancellationToken = default) => Host.ListConnectionsAsync(cancellationToken);
     public ValueTask<ProviderConnection> CreateProviderConnectionAsync(ProviderProtocol protocol, string displayName, Uri baseUrl, string secret, string? defaultModel, bool enabled, CancellationToken cancellationToken = default) => Host.CreateProviderConnectionAsync(protocol, displayName, baseUrl, secret, defaultModel, null, enabled, cancellationToken);

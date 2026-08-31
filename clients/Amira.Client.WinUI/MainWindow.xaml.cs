@@ -264,9 +264,14 @@ public sealed partial class MainWindow : Window
             XamlRoot = Root.XamlRoot,
             Title = "Local workspace",
             Content = $"Workspace ID\n{_viewModel.WorkspaceId}\n\nThis client is using the local Windows workspace.",
-            CloseButtonText = "Close"
+            PrimaryButtonText = "Open logs folder",
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Primary
         };
-        await dialog.ShowAsync();
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            await _viewModel.OpenLogsFolderAsync();
+        }
     }
     private async void BotDetailsClick(object sender, RoutedEventArgs args)
     {

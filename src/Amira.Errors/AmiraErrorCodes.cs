@@ -47,6 +47,7 @@ public static class AmiraErrorCodes
     public const string InvalidTemperature = "invalid_temperature";
     public const string InvalidTurnQuery = "invalid_turn_query";
     public const string InvalidTurnTransition = "invalid_turn_transition";
+    public const string LogsFolderOpenFailed = "logs_folder_open_failed";
     public const string ModelProfileIdentityMismatch = "model_profile_identity_mismatch";
     public const string NetworkError = "network_error";
     public const string NotFound = "not_found";

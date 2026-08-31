@@ -8,9 +8,10 @@ using Amira.Runtime;
 
 namespace Amira.Client.WinUI;
 
-public sealed class MainViewModel(IClientSession session) : INotifyPropertyChanged
+public sealed class MainViewModel(IClientSession session, IFolderLauncher? folderLauncher = null) : INotifyPropertyChanged
 {
     private readonly IClientSession _session = session ?? throw new ArgumentNullException(nameof(session));
+    private readonly IFolderLauncher _folderLauncher = folderLauncher ?? new WindowsFolderLauncher();
     private readonly RuntimeEventProjection _projection = new();
     private readonly SelectionCoordinator _selection = new();
     private CancellationTokenSource? _selectionCancellation;
@@ -188,6 +189,9 @@ public sealed class MainViewModel(IClientSession session) : INotifyPropertyChang
     }
     public Task StopAsync(TurnView turn) => RunAsync(async () => { await _session.StopTurnAsync(turn.TurnId); await ReloadSelectedAsync(); });
     public Task RetryAsync(TurnView turn) => RunAsync(async () => { await _session.RetryAsync(turn.TurnId); await ReloadSelectedAsync(); });
+    public Task<bool> OpenLogsFolderAsync() => RunManagementAsync(
+        () => LogsFolderLaunchPolicy.OpenAsync(_folderLauncher, _session.LogsDirectory),
+        "Logs folder opened.");
     public Task<bool> SaveConnectionAsync(ConnectionDraft draft, string? apiKey)
     {
         ArgumentNullException.ThrowIfNull(draft);

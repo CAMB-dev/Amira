@@ -80,9 +80,55 @@ public sealed class UserNoticeTests
             converter.Convert(null!, typeof(AutomationLiveSetting), null!, string.Empty));
     }
 
+    [Fact]
+    public async Task Open_logs_success_publishes_a_success_notice()
+    {
+        await using var session = new EmptyClientSession();
+        var viewModel = new MainViewModel(session, new FakeFolderLauncher(result: true));
+
+        bool opened = await viewModel.OpenLogsFolderAsync();
+
+        Assert.True(opened);
+        Assert.Equal(UserNoticeSeverity.Success, viewModel.Notice?.Severity);
+        Assert.Equal("Logs folder opened.", viewModel.Notice?.Message);
+    }
+
+    [Fact]
+    public async Task Open_logs_failure_publishes_a_safe_error_notice_without_the_path()
+    {
+        await using var session = new EmptyClientSession();
+        var viewModel = new MainViewModel(session, new FakeFolderLauncher(result: false));
+
+        bool opened = await viewModel.OpenLogsFolderAsync();
+
+        Assert.False(opened);
+        Assert.Equal(UserNoticeSeverity.Error, viewModel.Notice?.Severity);
+        Assert.Contains(Amira.Errors.AmiraErrorCodes.LogsFolderOpenFailed, viewModel.Notice?.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.LogsDirectory, viewModel.Notice?.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Open_logs_launcher_exception_is_safely_presented_without_its_details()
+    {
+        await using var session = new EmptyClientSession();
+        var launcher = new FakeFolderLauncher(
+            result: false,
+            failure: new InvalidOperationException($"Explorer failed for {session.LogsDirectory} with secret details"));
+        var viewModel = new MainViewModel(session, launcher);
+
+        bool opened = await viewModel.OpenLogsFolderAsync();
+
+        Assert.False(opened);
+        Assert.Equal(UserNoticeSeverity.Error, viewModel.Notice?.Severity);
+        Assert.Contains(Amira.Errors.AmiraErrorCodes.LogsFolderOpenFailed, viewModel.Notice?.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(session.LogsDirectory, viewModel.Notice?.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secret details", viewModel.Notice?.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class EmptyClientSession : IClientSession
     {
         public WorkspaceId WorkspaceId { get; } = WorkspaceId.New();
+        public string LogsDirectory { get; } = @"D:\private\amira\logs";
 
         public ValueTask<IReadOnlyList<Bot>> ListBotsAsync(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<IReadOnlyList<Bot>>([]);
@@ -103,5 +149,12 @@ public sealed class UserNoticeTests
         public ValueTask<BotTurn> RetryAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask<StopResult> StopTurnAsync(BotTurnId turnId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class FakeFolderLauncher(bool result, Exception? failure = null) : IFolderLauncher
+    {
+        public ValueTask<bool> LaunchAsync(string folderPath) => failure is null
+            ? ValueTask.FromResult(result)
+            : ValueTask.FromException<bool>(failure);
     }
 }

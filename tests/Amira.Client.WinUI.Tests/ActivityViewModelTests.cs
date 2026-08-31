@@ -222,7 +222,7 @@ public sealed class ActivityViewModelTests
     }
 
     [Fact]
-    public async Task Windows_session_forwards_get_turn_to_the_host()
+    public async Task Windows_session_forwards_get_turn_and_logs_directory_to_the_host()
     {
         string directory = Path.Combine(Path.GetTempPath(), "Amira.WinUI.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -235,6 +235,7 @@ public sealed class ActivityViewModelTests
             TurnView? turn = await session.GetTurnAsync(BotTurnId.New(), TestContext.Current.CancellationToken);
 
             Assert.Null(turn);
+            Assert.Equal(Path.Combine(directory, "logs"), session.LogsDirectory);
         }
         finally
         {
@@ -297,6 +298,7 @@ public sealed class ActivityViewModelTests
         }
 
         public WorkspaceId WorkspaceId { get; } = WorkspaceId.New();
+        public string LogsDirectory { get; } = @"D:\Amira\logs";
         public int GetTurnCalls { get; private set; }
         public int QueryTurnCalls { get; private set; }
         public int LoadTimelineCalls { get; private set; }

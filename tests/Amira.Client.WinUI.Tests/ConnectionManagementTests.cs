@@ -252,6 +252,7 @@ public sealed class ConnectionManagementTests
             _connections = connections is null ? [] : [.. connections];
 
         public WorkspaceId WorkspaceId { get; } = WorkspaceId.New();
+        public string LogsDirectory { get; } = @"D:\Amira\logs";
         public int CreateCalls { get; private set; }
         public bool CreateReceivedNonBlankSecret { get; private set; }
         public bool UpdateReceivedNullReplacementSecret { get; private set; }

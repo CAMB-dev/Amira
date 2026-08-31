@@ -221,6 +221,7 @@ public sealed class BotManagementTests
         }
 
         public WorkspaceId WorkspaceId { get; } = WorkspaceId.New();
+        public string LogsDirectory { get; } = @"D:\Amira\logs";
         public CreateBotCommand? LastCreated { get; private set; }
         public Bot? LastUpdated { get; private set; }
 
