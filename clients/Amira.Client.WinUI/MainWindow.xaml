@@ -281,8 +281,8 @@
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="local:RuntimeTurnProjection">
                 <Border Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12" Padding="16,12">
-                  <StackPanel>
-                    <TextBlock Text="Responding…" Foreground="{ThemeResource Accent}" />
+                  <StackPanel Spacing="6">
+                    <local:ResponseLoadingIndicator AccentBrush="{ThemeResource Accent}" />
                     <TextBlock Text="{Binding Text}" TextWrapping="Wrap" LineHeight="24" />
                   </StackPanel>
                 </Border>

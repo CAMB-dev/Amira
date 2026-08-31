@@ -66,14 +66,21 @@ public sealed partial class MainWindow : Window
         try
         {
             ElementTheme target = Root.RequestedTheme == ElementTheme.Dark ? ElementTheme.Light : ElementTheme.Dark;
-            await FadeRootAsync(0);
+            MotionSettings motion = MotionPolicy.Current;
+            if (!motion.AnimationsEnabled)
+            {
+                SetTheme(target);
+                return;
+            }
+
+            await FadeRootAsync(0, motion);
             SetTheme(target);
             if (!await WaitForUiTurnAsync())
             {
                 Root.Opacity = 1;
                 return;
             }
-            await FadeRootAsync(1);
+            await FadeRootAsync(1, motion);
         }
         finally
         {
@@ -121,14 +128,14 @@ public sealed partial class MainWindow : Window
         titleBar.ButtonPressedForegroundColor = foreground;
     }
 
-    private Task FadeRootAsync(double targetOpacity)
+    private Task FadeRootAsync(double targetOpacity, MotionSettings motion)
     {
         TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Storyboard storyboard = new();
         DoubleAnimation animation = new()
         {
             To = targetOpacity,
-            Duration = new Duration(TimeSpan.FromMilliseconds(70)),
+            Duration = new Duration(motion.ThemeFadeDuration),
             EnableDependentAnimation = true
         };
         Storyboard.SetTarget(animation, Root);
