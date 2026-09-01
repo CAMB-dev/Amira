@@ -33,10 +33,7 @@
       </Style>
     </ResourceDictionary>
   </UserControl.Resources>
-  <Grid Background="{ThemeResource Side}">
-    <Grid.KeyboardAccelerators>
-      <KeyboardAccelerator Key="Escape" Invoked="CloseAcceleratorInvoked" />
-    </Grid.KeyboardAccelerators>
+  <Grid Background="{ThemeResource Side}" PreviewKeyDown="PagePreviewKeyDown">
     <Grid.RowDefinitions>
       <RowDefinition Height="86" />
       <RowDefinition Height="*" />

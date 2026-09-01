@@ -27,7 +27,7 @@
                 <ResourceDictionary x:Key="Light">
                     <SolidColorBrush x:Key="Side" Color="#F9FAFC" />
                     <SolidColorBrush x:Key="Surface" Color="#FFFFFF" />
-                    <SolidColorBrush x:Key="Raised" Color="#F0F3F8" />
+                    <SolidColorBrush x:Key="Raised" Color="#E9EEF6" />
                     <SolidColorBrush x:Key="User" Color="#E6F0FF" />
                     <SolidColorBrush x:Key="Select" Color="#E6F0FF" />
                     <SolidColorBrush x:Key="Line" Color="#D4D9E1" />

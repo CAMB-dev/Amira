@@ -1,5 +1,5 @@
 <Window x:Class="Amira.Client.WinUI.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:Amira.Client.WinUI" xmlns:domain="using:Amira.Domain" xmlns:contracts="using:Amira.Contracts">
-  <Grid x:Name="Root" xmlns:primitives="using:Microsoft.UI.Xaml.Controls.Primitives">
+  <Grid x:Name="Root" xmlns:primitives="using:Microsoft.UI.Xaml.Controls.Primitives" PreviewKeyDown="RootPreviewKeyDown">
     <Grid.Resources>
       <ResourceDictionary>
         <local:NullToVisibilityConverter x:Key="NullVisibility" />
@@ -155,12 +155,10 @@
                   SelectedBackground="{ThemeResource Select}"
                   SelectedPointerOverBackground="{ThemeResource Select}"
                   SelectedPressedBackground="{ThemeResource Select}"
-                  SelectedBorderBrush="{ThemeResource Accent}"
-                  SelectedPointerOverBorderBrush="{ThemeResource Accent}"
-                  SelectedPressedBorderBrush="{ThemeResource Accent}"
-                  SelectedInnerBorderBrush="{ThemeResource Accent}"
-                  SelectedBorderThickness="1"
-                  SelectionIndicatorVisualEnabled="False"
+                  SelectedBorderThickness="0"
+                  SelectionIndicatorVisualEnabled="True"
+                  SelectionIndicatorBrush="{ThemeResource Accent}"
+                  SelectionIndicatorCornerRadius="2"
                   SelectionCheckMarkVisualEnabled="False" />
               </ControlTemplate>
             </Setter.Value>
@@ -174,7 +172,7 @@
             </Grid.ColumnDefinitions>
             <StackPanel HorizontalAlignment="Right">
               <TextBlock Text="{Binding CreatedAt, Converter={StaticResource LocalTime}}" HorizontalAlignment="Right" FontSize="12" Opacity=".65" Margin="0,0,2,6" />
-              <Border Background="{ThemeResource User}" CornerRadius="12" Padding="18,14">
+              <Border Background="{ThemeResource User}" CornerRadius="12,12,4,12" Padding="18,14">
                 <TextBlock Text="{Binding Revision.Content}" TextWrapping="Wrap" LineHeight="26" FontSize="17" />
               </Border>
             </StackPanel>
@@ -189,11 +187,13 @@
               <ColumnDefinition Width="66" />
               <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Border Width="50" Height="50" CornerRadius="25" Background="{ThemeResource Raised}" VerticalAlignment="Top">
-              <Image Source="ms-appx:///Assets/bot-avatar-gem.png" Stretch="Uniform" />
-            </Border>
+            <Button Style="{StaticResource Quiet}" Padding="0" VerticalAlignment="Top" Click="BotDetailsClick" ToolTipService.ToolTip="Bot details" AutomationProperties.Name="Bot details">
+              <Border Width="50" Height="50" CornerRadius="25" Background="{ThemeResource Raised}">
+                <Image Source="ms-appx:///Assets/bot-avatar-gem.png" Stretch="Uniform" />
+              </Border>
+            </Button>
             <StackPanel Grid.Column="1" Spacing="6">
-              <TextBlock Text="{Binding DataContext.SelectedBot.Profile.Name, ElementName=Root, TargetNullValue=Bot}" FontWeight="SemiBold" />
+              <StackPanel Orientation="Horizontal" Spacing="10"><TextBlock Text="{Binding DataContext.SelectedBot.Profile.Name, ElementName=Root, TargetNullValue=Bot}" FontWeight="SemiBold" /><TextBlock Text="{Binding CreatedAt, Converter={StaticResource LocalTime}}" FontSize="12" Opacity=".65" /></StackPanel>
               <local:MarkdownView Markdown="{Binding Revision.Content}" />
             </StackPanel>
           </Grid>
@@ -201,19 +201,17 @@
         <DataTemplate x:Key="LongBot" x:DataType="domain:ChatMessage">
           <Grid HorizontalAlignment="Left" MaxWidth="650" Margin="0,16,0,8">
             <Grid.ColumnDefinitions><ColumnDefinition Width="66" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-            <Border Width="50" Height="50" CornerRadius="25" Background="{ThemeResource Raised}" VerticalAlignment="Top"><Image Source="ms-appx:///Assets/bot-avatar-gem.png" Stretch="Uniform" /></Border>
+            <Button Style="{StaticResource Quiet}" Padding="0" VerticalAlignment="Top" Click="BotDetailsClick" ToolTipService.ToolTip="Bot details" AutomationProperties.Name="Bot details"><Border Width="50" Height="50" CornerRadius="25" Background="{ThemeResource Raised}"><Image Source="ms-appx:///Assets/bot-avatar-gem.png" Stretch="Uniform" /></Border></Button>
             <StackPanel Grid.Column="1" Spacing="6">
               <StackPanel Orientation="Horizontal" Spacing="10"><TextBlock Text="{Binding DataContext.SelectedBot.Profile.Name, ElementName=Root, TargetNullValue=Bot}" FontWeight="SemiBold" /><TextBlock Text="{Binding CreatedAt, Converter={StaticResource LocalTime}}" FontSize="12" Opacity=".65" /></StackPanel>
-              <Border Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12" Padding="18,14"><local:MarkdownView Markdown="{Binding Revision.Content}" /></Border>
+              <Border Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12,12,12,4" Padding="18,14"><local:MarkdownView Markdown="{Binding Revision.Content}" /></Border>
             </StackPanel>
           </Grid>
         </DataTemplate>
         <local:ChatMessageTemplateSelector x:Key="Messages" HumanTemplate="{StaticResource Human}" BotTemplate="{StaticResource Bot}" LongBotTemplate="{StaticResource LongBot}" />
+        <CollectionViewSource x:Key="TimelineDaysView" Source="{Binding TimelineDays}" IsSourceGrouped="True" />
       </ResourceDictionary>
     </Grid.Resources>
-    <Grid.KeyboardAccelerators>
-      <KeyboardAccelerator Key="K" Modifiers="Control" Invoked="SearchAcceleratorInvoked" />
-    </Grid.KeyboardAccelerators>
     <Grid.RowDefinitions>
       <RowDefinition Height="48" />
       <RowDefinition Height="Auto" />
@@ -310,11 +308,6 @@
                       ItemContainerStyle="{StaticResource BotListItem}"
                       Visibility="{Binding NavigationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Content}"
                       AutomationProperties.Name="Bots">
-              <ListView.Resources>
-                <SolidColorBrush x:Key="ListViewItemSelectedBackgroundThemeBrush" Color="#182F51" />
-                <SolidColorBrush x:Key="ListViewItemSelectedPointerOverBackgroundThemeBrush" Color="#20406D" />
-                <SolidColorBrush x:Key="ListViewItemSelectedForegroundThemeBrush" Color="#FFFFFF" />
-              </ListView.Resources>
               <ListView.ItemTemplate>
                 <DataTemplate x:DataType="domain:Bot">
                   <Grid MinHeight="64" Padding="12,8">
@@ -327,7 +320,7 @@
                     </Border>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                       <TextBlock Text="{Binding Profile.Name}" FontSize="17" FontWeight="SemiBold" />
-                      <TextBlock Text="Direct chat" FontSize="13" Foreground="{ThemeResource MutedText}" />
+                      <TextBlock Text="{Binding ModelProfile.Model}" FontSize="13" Foreground="{ThemeResource MutedText}" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                   </Grid>
                 </DataTemplate>
@@ -435,7 +428,7 @@
           </Border>
           <StackPanel Grid.Column="1" VerticalAlignment="Center">
             <TextBlock Text="{Binding SelectedBot.Profile.Name, TargetNullValue=Choose a Bot}" FontSize="24" FontWeight="SemiBold" />
-            <TextBlock Text="Direct chat" FontSize="14" Foreground="{ThemeResource MutedText}" />
+            <TextBlock Text="{Binding SelectedBot.ModelProfile.Model, TargetNullValue=Direct chat}" FontSize="14" Foreground="{ThemeResource MutedText}" />
           </StackPanel>
           <Button Grid.Column="2" Style="{StaticResource Quiet}" Click="BotDetailsClick" AutomationProperties.Name="Bot details">
             <SymbolIcon Symbol="More" />
@@ -443,9 +436,17 @@
         </Grid>
       </Border>
       <Grid Grid.Row="1">
-      <ListView x:Name="ConversationList" Padding="24,12" ItemsSource="{Binding Timeline}" ItemTemplateSelector="{StaticResource Messages}" SelectionMode="None" IsItemClickEnabled="False" Loaded="ConversationListLoaded" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.VerticalScrollMode="Enabled" ScrollViewer.ZoomMode="Disabled" Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Content}" AutomationProperties.Name="Conversation">
+      <ListView x:Name="ConversationList" Padding="24,12" ItemsSource="{Binding Source={StaticResource TimelineDaysView}, Path=View}" ItemTemplateSelector="{StaticResource Messages}" SelectionMode="None" IsItemClickEnabled="False" Loaded="ConversationListLoaded" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.VerticalScrollMode="Enabled" ScrollViewer.ZoomMode="Disabled" Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Content}" AutomationProperties.Name="Conversation">
         <ListView.ItemsPanel>
-          <ItemsPanelTemplate><ItemsStackPanel /></ItemsPanelTemplate>
+          <ItemsPanelTemplate>
+            <ItemsStackPanel>
+              <ItemsStackPanel.ChildrenTransitions>
+                <TransitionCollection>
+                  <EntranceThemeTransition FromVerticalOffset="14" />
+                </TransitionCollection>
+              </ItemsStackPanel.ChildrenTransitions>
+            </ItemsStackPanel>
+          </ItemsPanelTemplate>
         </ListView.ItemsPanel>
         <ListView.ItemContainerStyle>
           <Style TargetType="ListViewItem">
@@ -457,8 +458,39 @@
             <Setter Property="UseSystemFocusVisuals" Value="False" />
           </Style>
         </ListView.ItemContainerStyle>
+        <ListView.GroupStyle>
+          <GroupStyle HidesIfEmpty="True">
+            <GroupStyle.HeaderTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding Label}" FontSize="12" FontWeight="SemiBold" Foreground="{ThemeResource MutedText}" Margin="0,14,0,2" AutomationProperties.HeadingLevel="Level2" />
+              </DataTemplate>
+            </GroupStyle.HeaderTemplate>
+            <GroupStyle.HeaderContainerStyle>
+              <Style TargetType="ListViewHeaderItem">
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Margin" Value="0" />
+                <Setter Property="IsTabStop" Value="False" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+              </Style>
+            </GroupStyle.HeaderContainerStyle>
+          </GroupStyle>
+        </ListView.GroupStyle>
         <ListView.Footer>
           <ItemsControl x:Name="StreamingTurnsItems" ItemsSource="{Binding StreamingTurns}" Margin="90,0,24,8">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <ItemsStackPanel>
+                  <ItemsStackPanel.ChildrenTransitions>
+                    <TransitionCollection>
+                      <EntranceThemeTransition FromVerticalOffset="10" />
+                    </TransitionCollection>
+                  </ItemsStackPanel.ChildrenTransitions>
+                </ItemsStackPanel>
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="local:RuntimeTurnProjection">
                 <Border Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12" Padding="16,12">
@@ -500,13 +532,14 @@
           <TextBlock x:Uid="NoMessagesEmptyDescription" Text="Send a message to start this Direct chat." TextWrapping="Wrap" TextAlignment="Center" Opacity=".66" />
         </StackPanel>
       </Grid>
-      <Border Grid.Row="2" MinHeight="132" MaxHeight="220" Margin="12,10,12,16" Padding="16,12" Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Accent}" BorderThickness="1" CornerRadius="12">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-          </Grid.RowDefinitions>
-          <TextBox x:Name="MessageBox" Text="{Binding MessageText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" PlaceholderText="Type your message…" KeyDown="MessageKeyDown" AutomationProperties.Name="Message" />
+      <Grid Grid.Row="2" Margin="12,10,12,16">
+        <Border MinHeight="132" MaxHeight="220" Padding="16,12" Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBox x:Name="MessageBox" Text="{Binding MessageText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" PlaceholderText="Type your message…" KeyDown="MessageKeyDown" GotFocus="MessageFocusChanged" LostFocus="MessageFocusChanged" AutomationProperties.Name="Message" />
           <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="Auto" />
@@ -528,8 +561,10 @@
             <TextBlock Grid.Column="3" Text="Enter to send · Shift+Enter for a new line" FontSize="12" Opacity=".65" VerticalAlignment="Center" />
             <Button Grid.Column="4" MinWidth="99" Height="48" Style="{StaticResource PrimaryAction}" Content="Send" Click="SendClick" IsEnabled="{Binding CanSend}" />
           </Grid>
-        </Grid>
-      </Border>
+          </Grid>
+        </Border>
+        <Border x:Name="ComposerFocusRing" BorderBrush="{ThemeResource Accent}" BorderThickness="1" CornerRadius="12" Opacity="0" IsHitTestVisible="False" />
+      </Grid>
     </Grid>
     <Border x:Name="ActivityPane" Grid.Row="2" Grid.Column="2" Background="{ThemeResource Side}" BorderBrush="{ThemeResource Line}" BorderThickness="1,0,0,0">
       <Grid Padding="16,0">
@@ -580,11 +615,13 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                       </Grid.ColumnDefinitions>
-                      <Border Width="44" Height="44" CornerRadius="22" Background="{ThemeResource Raised}">
-                        <Image Source="ms-appx:///Assets/bot-avatar-gem.png" />
-                      </Border>
+                      <Button Style="{StaticResource Quiet}" Padding="0" VerticalAlignment="Center" Click="BotDetailsClick" ToolTipService.ToolTip="Bot details" AutomationProperties.Name="Bot details">
+                        <Border Width="44" Height="44" CornerRadius="22" Background="{ThemeResource Raised}">
+                          <Image Source="ms-appx:///Assets/bot-avatar-gem.png" />
+                        </Border>
+                      </Button>
                       <StackPanel Grid.Column="1">
-                        <TextBlock Text="{Binding DataContext.SelectedBot.Profile.Name, ElementName=Root, TargetNullValue=Bot}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding DataContext.SelectedBot.Profile.Name, ElementName=Root, TargetNullValue=Bot}" FontWeight="SemiBold" IsHitTestVisible="False" />
                         <TextBlock Text="{Binding QueuedAt, Converter={StaticResource LocalTime}}" FontSize="13" Opacity=".65" />
                       </StackPanel>
                       <Border Grid.Column="2" Height="34" Padding="11,0" CornerRadius="17" BorderThickness="1" BorderBrush="{Binding Converter={StaticResource TurnStatusBrush}}" VerticalAlignment="Center">

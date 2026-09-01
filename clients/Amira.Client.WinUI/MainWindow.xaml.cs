@@ -64,13 +64,40 @@ public sealed partial class MainWindow : Window
         if (!BotNavigationSelectionPolicy.ShouldOpen(selected, _viewModel.SelectedBot)) return;
         await _viewModel.SelectBotAsync(selected);
     }
-    private async void SendClick(object sender, RoutedEventArgs args) { _viewModel.MessageText = MessageBox.Text; await _viewModel.SendAsync(); }
+    private async void SendClick(object sender, RoutedEventArgs args) { PinConversationToBottom(); _viewModel.MessageText = MessageBox.Text; await _viewModel.SendAsync(); }
     private async void MessageKeyDown(object sender, KeyRoutedEventArgs args)
     {
         if (args.Key != VirtualKey.Enter || IsShiftDown()) return;
         args.Handled = true;
+        PinConversationToBottom();
         _viewModel.MessageText = MessageBox.Text;
         await _viewModel.SendAsync();
+    }
+    private void PinConversationToBottom()
+    {
+        _conversationPinnedToBottom = true;
+        ScheduleScrollToBottom();
+    }
+    private void MessageFocusChanged(object sender, RoutedEventArgs args) => AnimateComposerFocus(MessageBox.FocusState != FocusState.Unfocused);
+    private void AnimateComposerFocus(bool focused)
+    {
+        double target = focused ? 1 : 0;
+        if (!MotionPolicy.Current.AnimationsEnabled)
+        {
+            ComposerFocusRing.Opacity = target;
+            return;
+        }
+        Storyboard storyboard = new();
+        DoubleAnimation animation = new()
+        {
+            To = target,
+            Duration = new Duration(TimeSpan.FromMilliseconds(90)),
+            EnableDependentAnimation = true
+        };
+        Storyboard.SetTarget(animation, ComposerFocusRing);
+        Storyboard.SetTargetProperty(animation, "Opacity");
+        storyboard.Children.Add(animation);
+        storyboard.Begin();
     }
     private void UserNoticeClosed(InfoBar sender, InfoBarClosedEventArgs args) => _viewModel.DismissNotice();
     private void SearchBotsTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args) => _viewModel.SearchText = sender.Text;
@@ -79,7 +106,13 @@ public sealed partial class MainWindow : Window
         SearchBotsBox.Text = string.Empty;
         SearchBotsBox.Focus(FocusState.Programmatic);
     }
-    private void SearchAcceleratorInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) { SearchBotsBox.Focus(FocusState.Programmatic); args.Handled = true; }
+    private void RootPreviewKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key != VirtualKey.K || !IsControlDown()) return;
+        args.Handled = true;
+        SearchBotsBox.Focus(FocusState.Programmatic);
+    }
+    private static bool IsControlDown() => Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
     private async void ToggleThemeClick(object sender, RoutedEventArgs args)
     {
         AppThemePreference target = ThemePreferencePolicy.QuickToggle(Root.ActualTheme);
@@ -277,13 +310,72 @@ public sealed partial class MainWindow : Window
         }
         return null;
     }
-    private void ToggleSidebarClick(object sender, RoutedEventArgs args)
+    private const double SidebarExpandedWidth = 337;
+    private const double SidebarCollapsedWidth = 68;
+    private bool _sidebarAnimating;
+    private async void ToggleSidebarClick(object sender, RoutedEventArgs args)
     {
+        if (_sidebarAnimating) return;
         _sidebarExpanded = !_sidebarExpanded;
-        SidebarColumn.Width = new GridLength(_sidebarExpanded ? 337 : 68);
-        BrandText.Visibility = _sidebarExpanded ? Visibility.Visible : Visibility.Collapsed;
-        SidebarDetails.Visibility = _sidebarExpanded ? Visibility.Visible : Visibility.Collapsed;
-        SidebarFooter.Visibility = _sidebarExpanded ? Visibility.Visible : Visibility.Collapsed;
+        if (!MotionPolicy.Current.AnimationsEnabled)
+        {
+            ApplySidebarState();
+            return;
+        }
+        _sidebarAnimating = true;
+        try
+        {
+            if (_sidebarExpanded)
+            {
+                SidebarColumn.Width = new GridLength(SidebarExpandedWidth);
+                SetSidebarContentVisibility(true);
+                await FadeElementsAsync(1, 110, BrandText, SidebarDetails, SidebarFooter);
+            }
+            else
+            {
+                await FadeElementsAsync(0, 70, BrandText, SidebarDetails, SidebarFooter);
+                SetSidebarContentVisibility(false);
+                SidebarColumn.Width = new GridLength(SidebarCollapsedWidth);
+            }
+        }
+        finally { _sidebarAnimating = false; }
+    }
+    private void ApplySidebarState()
+    {
+        SidebarColumn.Width = new GridLength(_sidebarExpanded ? SidebarExpandedWidth : SidebarCollapsedWidth);
+        Visibility value = _sidebarExpanded ? Visibility.Visible : Visibility.Collapsed;
+        BrandText.Visibility = value;
+        SidebarDetails.Visibility = value;
+        SidebarFooter.Visibility = value;
+        BrandText.Opacity = SidebarDetails.Opacity = SidebarFooter.Opacity = 1;
+    }
+    private void SetSidebarContentVisibility(bool visible)
+    {
+        if (visible) BrandText.Opacity = SidebarDetails.Opacity = SidebarFooter.Opacity = 0;
+        Visibility value = visible ? Visibility.Visible : Visibility.Collapsed;
+        BrandText.Visibility = value;
+        SidebarDetails.Visibility = value;
+        SidebarFooter.Visibility = value;
+    }
+    private static Task FadeElementsAsync(double target, int milliseconds, params FrameworkElement[] elements)
+    {
+        TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Storyboard storyboard = new();
+        foreach (FrameworkElement element in elements)
+        {
+            DoubleAnimation animation = new()
+            {
+                To = target,
+                Duration = new Duration(TimeSpan.FromMilliseconds(milliseconds)),
+                EnableDependentAnimation = true
+            };
+            Storyboard.SetTarget(animation, element);
+            Storyboard.SetTargetProperty(animation, "Opacity");
+            storyboard.Children.Add(animation);
+        }
+        storyboard.Completed += (_, _) => completion.SetResult();
+        storyboard.Begin();
+        return completion.Task;
     }
     private async void WorkspaceClick(object sender, RoutedEventArgs args)
     {
@@ -328,22 +420,33 @@ public sealed partial class MainWindow : Window
 
     private void SettingsClick(object sender, RoutedEventArgs args) => OpenSettings();
 
-    private void OpenSettings()
+    private async void OpenSettings()
     {
         if (_settingsOpen) return;
         _settingsOpen = true;
         SidebarPane.Visibility = Visibility.Collapsed;
         ConversationPane.Visibility = Visibility.Collapsed;
         ActivityPane.Visibility = Visibility.Collapsed;
-        SettingsHost.Visibility = Visibility.Visible;
+        if (MotionPolicy.Current.AnimationsEnabled)
+        {
+            SettingsHost.Opacity = 0;
+            SettingsHost.Visibility = Visibility.Visible;
+            await FadeElementsAsync(1, 140, SettingsHost);
+        }
+        else
+        {
+            SettingsHost.Visibility = Visibility.Visible;
+        }
         SettingsContent.FocusCloseButton();
     }
 
-    private void CloseSettings()
+    private async void CloseSettings()
     {
         if (!_settingsOpen) return;
         _settingsOpen = false;
+        if (MotionPolicy.Current.AnimationsEnabled) await FadeElementsAsync(0, 110, SettingsHost);
         SettingsHost.Visibility = Visibility.Collapsed;
+        SettingsHost.Opacity = 1;
         SidebarPane.Visibility = Visibility.Visible;
         ConversationPane.Visibility = Visibility.Visible;
         ActivityPane.Visibility = Visibility.Visible;
