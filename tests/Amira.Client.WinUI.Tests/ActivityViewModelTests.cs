@@ -216,6 +216,8 @@ public sealed class ActivityViewModelTests
 
         Assert.Equal(timelineCallsBeforeTerminal + 1, session.LoadTimelineCalls);
         Assert.Same(completedMessage, Assert.Single(viewModel.Timeline));
+        TimelineDayGroup timelineDay = Assert.Single(viewModel.TimelineDays);
+        Assert.Same(completedMessage, Assert.Single(timelineDay));
         Assert.Equal(UserNoticeSeverity.Error, viewModel.Notice?.Severity);
         Assert.Equal("Something unexpected went wrong. Please try again.", viewModel.Notice?.Message);
         Assert.DoesNotContain("api-key-secret", viewModel.Notice?.Message ?? string.Empty, StringComparison.Ordinal);
