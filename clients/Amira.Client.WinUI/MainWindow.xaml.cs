@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Automation;
 using Windows.System;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -39,6 +40,9 @@ public sealed partial class MainWindow : Window
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
         InitializeComponent();
         Root.DataContext = _viewModel;
+        CollectionViewSource timelineDaysView = (CollectionViewSource)Root.Resources["TimelineDaysView"];
+        timelineDaysView.Source = _viewModel.TimelineDays;
+        ConversationList.ItemsSource = timelineDaysView.View;
         _strings = new MrtCoreUiStringProvider();
         _botDialogs = new BotDialogCoordinator(_viewModel, () => Root.XamlRoot);
         _connectionDialogs = new ConnectionDialogCoordinator(_viewModel, () => Root.XamlRoot);
@@ -65,7 +69,7 @@ public sealed partial class MainWindow : Window
         await _viewModel.SelectBotAsync(selected);
     }
     private async void SendClick(object sender, RoutedEventArgs args) { PinConversationToBottom(); _viewModel.MessageText = MessageBox.Text; await _viewModel.SendAsync(); }
-    private async void MessageKeyDown(object sender, KeyRoutedEventArgs args)
+    private async void MessagePreviewKeyDown(object sender, KeyRoutedEventArgs args)
     {
         if (args.Key != VirtualKey.Enter || IsShiftDown()) return;
         args.Handled = true;

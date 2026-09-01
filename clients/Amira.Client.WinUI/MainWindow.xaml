@@ -209,7 +209,7 @@
           </Grid>
         </DataTemplate>
         <local:ChatMessageTemplateSelector x:Key="Messages" HumanTemplate="{StaticResource Human}" BotTemplate="{StaticResource Bot}" LongBotTemplate="{StaticResource LongBot}" />
-        <CollectionViewSource x:Key="TimelineDaysView" Source="{Binding TimelineDays}" IsSourceGrouped="True" />
+        <CollectionViewSource x:Key="TimelineDaysView" IsSourceGrouped="True" />
       </ResourceDictionary>
     </Grid.Resources>
     <Grid.RowDefinitions>
@@ -436,7 +436,7 @@
         </Grid>
       </Border>
       <Grid Grid.Row="1">
-      <ListView x:Name="ConversationList" Padding="24,12" ItemsSource="{Binding Source={StaticResource TimelineDaysView}, Path=View}" ItemTemplateSelector="{StaticResource Messages}" SelectionMode="None" IsItemClickEnabled="False" Loaded="ConversationListLoaded" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.VerticalScrollMode="Enabled" ScrollViewer.ZoomMode="Disabled" Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Content}" AutomationProperties.Name="Conversation">
+      <ListView x:Name="ConversationList" Padding="24,12" ItemTemplateSelector="{StaticResource Messages}" SelectionMode="None" IsItemClickEnabled="False" Loaded="ConversationListLoaded" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.VerticalScrollMode="Enabled" ScrollViewer.ZoomMode="Disabled" Visibility="{Binding ConversationState, Converter={StaticResource EnumVisibility}, ConverterParameter=Content}" AutomationProperties.Name="Conversation">
         <ListView.ItemsPanel>
           <ItemsPanelTemplate>
             <ItemsStackPanel>
@@ -539,7 +539,7 @@
               <RowDefinition Height="*" />
               <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <TextBox x:Name="MessageBox" Text="{Binding MessageText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" PlaceholderText="Type your message…" KeyDown="MessageKeyDown" GotFocus="MessageFocusChanged" LostFocus="MessageFocusChanged" AutomationProperties.Name="Message" />
+            <TextBox x:Name="MessageBox" Text="{Binding MessageText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" PlaceholderText="Type your message…" PreviewKeyDown="MessagePreviewKeyDown" GotFocus="MessageFocusChanged" LostFocus="MessageFocusChanged" AutomationProperties.Name="Message" />
           <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
               <ColumnDefinition Width="Auto" />
