@@ -67,16 +67,14 @@ internal sealed class ConnectionDialogCoordinator(MainViewModel viewModel, Func<
 
         ContentDialog dialog = new()
         {
-            XamlRoot = XamlRoot,
             Title = "Manage Connections",
             Content = content,
             PrimaryButtonText = "Add",
             SecondaryButtonText = "Edit",
             CloseButtonText = "Close",
-            IsSecondaryButtonEnabled = false,
-            MinWidth = 440,
-            MaxWidth = 540
+            IsSecondaryButtonEnabled = false
         };
+        ContentDialogChrome.Apply(dialog, XamlRoot);
         if (list is not null)
         {
             list.SelectionChanged += (_, _) => dialog.IsSecondaryButtonEnabled = list.SelectedItem is ListViewItem;
@@ -126,7 +124,8 @@ internal sealed class ConnectionDialogCoordinator(MainViewModel viewModel, Func<
             ItemsSource = protocols,
             SelectedItem = selectedProtocol,
             DisplayMemberPath = nameof(ConnectionProtocolOption.DisplayName),
-            IsEnabled = draft.Editing is null
+            IsEnabled = draft.Editing is null,
+            MaxDropDownHeight = 240
         };
         AutomationProperties.SetName(protocol, draft.Editing is null ? "Protocol" : "Protocol, locked after creation");
         ToolTipService.SetToolTip(protocol, draft.Editing is null ? "Choose the provider protocol" : "Protocol cannot be changed after creation");
@@ -148,13 +147,13 @@ internal sealed class ConnectionDialogCoordinator(MainViewModel viewModel, Func<
         ScrollViewer content = new() { Content = fields, MaxHeight = 560, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         ContentDialog dialog = new()
         {
-            XamlRoot = XamlRoot,
             Title = draft.Editing is null ? "Add Connection" : "Edit Connection",
             Content = content,
             PrimaryButtonText = draft.Editing is null ? "Add" : "Save",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary
         };
+        ContentDialogChrome.Apply(dialog, XamlRoot);
         dialog.Opened += (_, _) => displayName.Focus(FocusState.Programmatic);
         bool saved = false;
         dialog.PrimaryButtonClick += async (_, args) =>

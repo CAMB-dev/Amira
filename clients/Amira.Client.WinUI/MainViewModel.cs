@@ -32,6 +32,8 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
     public ObservableCollection<Bot> Bots { get; } = [];
     public ObservableCollection<Bot> VisibleBots { get; } = [];
     public ObservableCollection<ChatMessage> Timeline { get; } = [];
+    /// <summary>Timeline bucketed into consecutive calendar-day groups for Direct chat display.</summary>
+    public ObservableCollection<TimelineDayGroup> TimelineDays { get; } = [];
     public ObservableCollection<ProviderConnection> Connections { get; } = [];
     public ObservableCollection<TurnView> Turns { get; } = [];
     public ObservableCollection<RuntimeTurnProjection> StreamingTurns { get; } = [];
@@ -181,6 +183,7 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         SetConversationLoading(true);
         SelectedBot = bot;
         Timeline.Clear();
+        TimelineDays.Clear();
         Turns.Clear();
         StreamingTurns.Clear();
         _firstTokenRefreshes.Clear();
@@ -198,7 +201,9 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
             Task<TurnPage> turns = _session.QueryTurnsAsync(new TurnQuery(botId: bot.Id), cancellation.Token).AsTask();
             await Task.WhenAll(timeline, turns);
             if (!IsCurrent(generation, bot.Id)) return;
-            Replace(Timeline, await timeline);
+            IReadOnlyList<ChatMessage> messages = await timeline;
+            Replace(Timeline, messages);
+            RebuildTimelineDays();
             Replace(Turns, (await turns).Items);
             foreach (TurnView turn in Turns) RememberFirstToken(turn);
             RestoreActivitySelection(selectedActivityId, preservePinnedActivity);
@@ -230,7 +235,28 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
                 "Enter a message."));
             return;
         }
-        await RunAsync(async () => { await _session.SendAsync(bot.Id, content); MessageText = string.Empty; await SelectBotAsync(bot); });
+        if (IsBusy || _shuttingDown) return;
+        ChatMessage optimisticEcho = CreateOptimisticEcho(bot, content);
+        Timeline.Add(optimisticEcho);
+        RebuildTimelineDays();
+        OnChanged(nameof(ConversationState));
+        MessageText = string.Empty;
+        await RunAsync(async () =>
+        {
+            try
+            {
+                await _session.SendAsync(bot.Id, content);
+            }
+            catch
+            {
+                Timeline.Remove(optimisticEcho);
+                RebuildTimelineDays();
+                OnChanged(nameof(ConversationState));
+                MessageText = content;
+                throw;
+            }
+            await SelectBotAsync(bot);
+        });
     }
     public Task StopAsync(TurnView turn) => RunAsync(async () => { await _session.StopTurnAsync(turn.TurnId); await ReloadSelectedAsync(); });
     public Task RetryAsync(TurnView turn) => RunAsync(async () => { await _session.RetryAsync(turn.TurnId); await ReloadSelectedAsync(); });
@@ -404,6 +430,7 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         _selection.Next();
         SelectedBot = null;
         Timeline.Clear();
+        TimelineDays.Clear();
         Turns.Clear();
         StreamingTurns.Clear();
         _firstTokenRefreshes.Clear();
@@ -446,6 +473,7 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         if (IsCurrent(generation, runtimeEvent.BotId))
         {
             Replace(Timeline, timeline);
+            RebuildTimelineDays();
             OnChanged(nameof(ConversationState));
         }
     }
@@ -567,6 +595,13 @@ public sealed class MainViewModel(IClientSession session, IFolderLauncher? folde
         OnChanged(nameof(ConversationState));
     }
     private static void Replace<T>(ObservableCollection<T> destination, IEnumerable<T> source) { destination.Clear(); foreach (T item in source) destination.Add(item); }
+    private void RebuildTimelineDays() => Replace(TimelineDays, TimelineGroupingPolicy.GroupByDay(Timeline));
+    private static ChatMessage CreateOptimisticEcho(Bot bot, string content)
+    {
+        MessageId messageId = MessageId.New();
+        MessageRevision revision = MessageRevision.Create(messageId, content);
+        return new ChatMessage(messageId, bot.DirectChatId, MessageAuthor.Human, revision, DateTimeOffset.UtcNow, MessageStatus.Committed);
+    }
     private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null) { if (EqualityComparer<T>.Default.Equals(field, value)) return false; field = value; OnChanged(name); return true; }
     private void PublishError(Exception exception) => PublishNotice(UserNotice.FromError(exception));
     private void PublishNotice(UserNotice notice)

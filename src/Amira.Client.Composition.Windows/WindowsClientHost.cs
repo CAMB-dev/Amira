@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Amira.Client.Composition.Windows;
 
-/// <summary>WPF-agnostic Windows composition root and durable client lifecycle facade.</summary>
+/// <summary>UI-framework-agnostic Windows composition root and durable client lifecycle facade.</summary>
 public sealed class WindowsClientHost : IAsyncDisposable
 {
     private readonly SemaphoreSlim _operationGate = new(1, 1);

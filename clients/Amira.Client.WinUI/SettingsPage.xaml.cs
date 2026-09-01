@@ -68,8 +68,9 @@ public sealed partial class SettingsPage : UserControl
 
     private void CloseClick(object sender, RoutedEventArgs args) => CloseRequested?.Invoke();
 
-    private void CloseAcceleratorInvoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    private void PagePreviewKeyDown(object sender, KeyRoutedEventArgs args)
     {
+        if (args.Key != Windows.System.VirtualKey.Escape) return;
         args.Handled = true;
         CloseRequested?.Invoke();
     }

@@ -7,20 +7,6 @@
     AutomationProperties.Name="Settings">
   <UserControl.Resources>
     <ResourceDictionary>
-      <ResourceDictionary.ThemeDictionaries>
-        <ResourceDictionary x:Key="Dark">
-          <SolidColorBrush x:Key="SettingsBackground" Color="#141619" />
-          <SolidColorBrush x:Key="SettingsSurface" Color="#1A1C20" />
-          <SolidColorBrush x:Key="SettingsRaised" Color="#202329" />
-          <SolidColorBrush x:Key="SettingsLine" Color="#363A40" />
-        </ResourceDictionary>
-        <ResourceDictionary x:Key="Light">
-          <SolidColorBrush x:Key="SettingsBackground" Color="#F9FAFC" />
-          <SolidColorBrush x:Key="SettingsSurface" Color="#FFFFFF" />
-          <SolidColorBrush x:Key="SettingsRaised" Color="#F0F3F8" />
-          <SolidColorBrush x:Key="SettingsLine" Color="#D4D9E1" />
-        </ResourceDictionary>
-      </ResourceDictionary.ThemeDictionaries>
       <local:UserNoticeSeverityConverter x:Key="NoticeSeverity" />
       <local:UserNoticeLiveSettingConverter x:Key="NoticeLiveSetting" />
       <Style x:Key="SectionHeading" TargetType="TextBlock">
@@ -36,7 +22,7 @@
       </Style>
       <Style x:Key="RowDescription" TargetType="TextBlock">
         <Setter Property="FontSize" Value="13" />
-        <Setter Property="Opacity" Value=".66" />
+        <Setter Property="Foreground" Value="{ThemeResource MutedText}" />
         <Setter Property="TextWrapping" Value="Wrap" />
       </Style>
       <Style x:Key="SettingsAction" TargetType="Button">
@@ -47,16 +33,13 @@
       </Style>
     </ResourceDictionary>
   </UserControl.Resources>
-  <Grid Background="{ThemeResource SettingsBackground}">
-    <Grid.KeyboardAccelerators>
-      <KeyboardAccelerator Key="Escape" Invoked="CloseAcceleratorInvoked" />
-    </Grid.KeyboardAccelerators>
+  <Grid Background="{ThemeResource Side}" PreviewKeyDown="PagePreviewKeyDown">
     <Grid.RowDefinitions>
       <RowDefinition Height="86" />
       <RowDefinition Height="*" />
     </Grid.RowDefinitions>
 
-    <Border BorderBrush="{ThemeResource SettingsLine}" BorderThickness="0,0,0,1">
+    <Border BorderBrush="{ThemeResource Line}" BorderThickness="0,0,0,1">
       <Grid MaxWidth="860" Padding="30,0">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*" />
@@ -64,7 +47,7 @@
         </Grid.ColumnDefinitions>
         <StackPanel VerticalAlignment="Center" Spacing="2">
           <TextBlock x:Uid="SettingsPageTitle" Text="Settings" FontSize="28" FontWeight="SemiBold" AutomationProperties.HeadingLevel="Level1" />
-          <TextBlock x:Uid="SettingsPageSubtitle" Text="Configure this Windows client." FontSize="13" Opacity=".66" />
+          <TextBlock x:Uid="SettingsPageSubtitle" Text="Configure this Windows client." FontSize="13" Foreground="{ThemeResource MutedText}" />
         </StackPanel>
         <Button x:Name="CloseButton"
                 x:Uid="SettingsCloseButton"
@@ -103,7 +86,7 @@
 
         <StackPanel Spacing="11">
           <TextBlock x:Uid="SettingsAppearanceSection" Text="APPEARANCE" Style="{StaticResource SectionHeading}" />
-          <Border Background="{ThemeResource SettingsSurface}" BorderBrush="{ThemeResource SettingsLine}" BorderThickness="1" CornerRadius="12">
+          <Border Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12">
             <Grid MinHeight="82" Padding="18,13">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
@@ -132,7 +115,7 @@
 
         <StackPanel Spacing="11">
           <TextBlock x:Uid="SettingsWorkspaceSection" Text="WORKSPACE &amp; DIAGNOSTICS" Style="{StaticResource SectionHeading}" />
-          <Border Background="{ThemeResource SettingsSurface}" BorderBrush="{ThemeResource SettingsLine}" BorderThickness="1" CornerRadius="12">
+          <Border Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12">
             <Grid>
               <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -149,12 +132,12 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center" Spacing="3" Margin="0,0,24,0">
                   <TextBlock x:Uid="SettingsWorkspaceIdTitle" Text="Workspace ID" Style="{StaticResource RowTitle}" />
-                  <TextBlock Text="{Binding Environment.WorkspaceId}" FontFamily="Consolas" FontSize="13" Opacity=".72" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Environment.WorkspaceId}" />
+                  <TextBlock Text="{Binding Environment.WorkspaceId}" FontFamily="Consolas" FontSize="13" Foreground="{ThemeResource MutedText}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Environment.WorkspaceId}" />
                 </StackPanel>
                 <Button x:Uid="SettingsCopyWorkspaceButton" Grid.Column="1" Content="Copy" Style="{StaticResource SettingsAction}" Click="CopyWorkspaceClick" AutomationProperties.Name="Copy workspace ID" />
               </Grid>
 
-              <Border Grid.Row="1" Height="1" Background="{ThemeResource SettingsLine}" Margin="18,0" />
+              <Border Grid.Row="1" Height="1" Background="{ThemeResource Line}" Margin="18,0" />
 
               <Grid Grid.Row="2" MinHeight="82" Padding="18,13">
                 <Grid.ColumnDefinitions>
@@ -168,7 +151,7 @@
                 <Button x:Uid="SettingsOpenDataButton" Grid.Column="1" Content="Open folder" Style="{StaticResource SettingsAction}" Click="OpenDataClick" AutomationProperties.Name="Open data folder" />
               </Grid>
 
-              <Border Grid.Row="3" Height="1" Background="{ThemeResource SettingsLine}" Margin="18,0" />
+              <Border Grid.Row="3" Height="1" Background="{ThemeResource Line}" Margin="18,0" />
 
               <Grid Grid.Row="4" MinHeight="82" Padding="18,13">
                 <Grid.ColumnDefinitions>
@@ -188,7 +171,7 @@
 
         <StackPanel Spacing="11">
           <TextBlock x:Uid="SettingsManagementSection" Text="MANAGEMENT" Style="{StaticResource SectionHeading}" />
-          <Border Background="{ThemeResource SettingsSurface}" BorderBrush="{ThemeResource SettingsLine}" BorderThickness="1" CornerRadius="12">
+          <Border Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12">
             <Grid>
               <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -206,7 +189,7 @@
                 </StackPanel>
                 <Button x:Uid="SettingsManageConnectionsButton" Grid.Column="1" Content="Manage" Style="{StaticResource SettingsAction}" Click="ManageConnectionsClick" AutomationProperties.Name="Manage provider connections from settings" />
               </Grid>
-              <Border Grid.Row="1" Height="1" Background="{ThemeResource SettingsLine}" Margin="18,0" />
+              <Border Grid.Row="1" Height="1" Background="{ThemeResource Line}" Margin="18,0" />
               <Grid Grid.Row="2" MinHeight="82" Padding="18,13">
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width="*" />
@@ -224,7 +207,7 @@
 
         <StackPanel Spacing="11">
           <TextBlock x:Uid="SettingsAboutSection" Text="ABOUT" Style="{StaticResource SectionHeading}" />
-          <Border Background="{ThemeResource SettingsSurface}" BorderBrush="{ThemeResource SettingsLine}" BorderThickness="1" CornerRadius="12">
+          <Border Background="{ThemeResource Surface}" BorderBrush="{ThemeResource Line}" BorderThickness="1" CornerRadius="12">
             <Grid Padding="18,16">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="2*" />
