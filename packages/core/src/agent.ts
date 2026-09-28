@@ -209,8 +209,13 @@ export class Agent {
       this.#abort = undefined
       this.#turn = undefined
       const leftover = this.#steering.splice(0)
-      if (result.reason !== "done") {
-        for (const message of leftover) this.#emit(turn, "turn.steer", { message, state: "dropped" })
+      const nextTurnId = result.reason === "done" && leftover.length ? newTurnId() : undefined
+      for (const message of leftover) {
+        this.#emit(
+          turn,
+          "turn.steer",
+          nextTurnId ? { message, state: "promoted", nextTurnId } : { message, state: "dropped" },
+        )
       }
       if (result.reason === "error") this.#setStatus(turn, "error", result.error)
       this.#emit(turn, "turn.end", {
@@ -219,8 +224,9 @@ export class Agent {
         ...(result.error !== undefined ? { error: result.error } : {}),
       })
       this.#setStatus(turn, "idle")
-      if (result.reason === "done" && leftover.length) {
-        this.prompt({ role: "user", content: leftover.flatMap((m) => m.content) }).catch(() => {})
+      if (nextTurnId) {
+        const prompt: UserMessage = { role: "user", content: leftover.flatMap((m) => m.content) }
+        this.prompt(prompt, { turnId: nextTurnId }).catch(() => {})
       }
     }
     return result

@@ -262,7 +262,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (i !== -1) steering.splice(i, 1)
         if (e.data.state === "injected") renderer.commit([...userLines(theme, text), ""])
         // Put a message the turn dropped back into the editor rather than losing it.
-        else editor.setText(editor.getText() ? `${editor.getText()}\n${text}` : text)
+        else if (e.data.state === "dropped")
+          editor.setText(editor.getText() ? `${editor.getText()}\n${text}` : text)
+        // A promoted one shows up again as the next turn's prompt.
         break
       }
       case "ui.request": {

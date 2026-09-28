@@ -107,7 +107,13 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   }),
   "turn.start": obj({ prompt: ref("UserMessage") }),
   "turn.end": obj({ reason: strings("done", "error", "aborted"), "error?": str, steps: num }),
-  "turn.steer": obj({ message: ref("UserMessage"), state: strings("queued", "injected", "dropped") }),
+  "turn.steer": oneOf(
+    obj({ message: ref("UserMessage"), state: strings("queued", "injected", "dropped") }),
+    obj(
+      { message: ref("UserMessage"), state: strings("promoted"), nextTurnId: str },
+      "The turn ended before the message reached it. Every promoted message of a turn starts nextTurnId together; that turn's prompt is their content concatenated in order.",
+    ),
+  ),
   "message.start": obj({ model: modelRef, "contextWindow?": num }),
   "message.delta": oneOf(
     obj({ kind: strings("text"), text: str }),

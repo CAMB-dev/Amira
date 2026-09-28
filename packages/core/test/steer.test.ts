@@ -84,7 +84,16 @@ test("messages queued when the turn ends become the next prompt, as one turn", a
     "user:one|two",
     "assistant:second",
   ])
-  expect(events.filter((e) => e.type === "turn.start").length).toBe(2)
+  const starts = events.filter((e) => e.type === "turn.start")
+  expect(starts.length).toBe(2)
+  // Each queued message is marked promoted, pointing at the turn it starts.
+  const steers = events.flatMap((e) => (e.type === "turn.steer" ? [e] : []))
+  expect(steers.map((e) => e.data.state)).toEqual(["queued", "queued", "promoted", "promoted"])
+  for (const e of steers.slice(2)) {
+    expect(e.data.state === "promoted" && e.data.nextTurnId).toBe(starts[1]!.turnId!)
+    expect(e.turnId).toBe(starts[0]!.turnId!)
+    expect(e.seq).toBeLessThan(starts[1]!.seq)
+  }
 })
 
 test("steering with no turn running starts one", async () => {

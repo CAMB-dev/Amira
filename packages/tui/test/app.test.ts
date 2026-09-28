@@ -331,6 +331,25 @@ test("Enter while working steers the turn; the message joins it before the next 
   await exited
 })
 
+test("steering the final reply becomes the next turn, not editor text", async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    { text: "next reply" },
+  ])
+  terminal.send("go\r")
+  await shows("01234567")
+  terminal.send("then this\r")
+  await shows("next reply")
+  await idle()
+  expect(agent.messages.filter((m) => m.role === "user").length).toBe(2)
+  expect(live()).not.toContain("steering ›")
+  // The editor is empty (its placeholder shows) and the message appears once, as a prompt.
+  expect(live()).toContain("› Message Amira")
+  expect(live().split("› then this").length).toBe(2)
+  terminal.send("\x03")
+  await exited
+})
+
 test("a steering message an interrupt drops goes back into the editor", async () => {
   const { terminal, live, agent, shows, idle, exited } = await setup([
     { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },

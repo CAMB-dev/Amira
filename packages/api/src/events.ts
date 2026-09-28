@@ -89,9 +89,12 @@ export interface EventMap {
   /**
    * A message sent while a turn runs (D29): `queued` when accepted, `injected` when added to
    * the history before the next model call, `dropped` when the turn failed or was aborted
-   * first. Messages still queued when a turn finishes normally become the next turn's prompt.
+   * first, `promoted` when the turn finished before reaching it. Promoted messages start the
+   * turn `nextTurnId` together, as one prompt holding their content in order.
    */
-  "turn.steer": { message: UserMessage; state: "queued" | "injected" | "dropped" }
+  "turn.steer":
+    | { message: UserMessage; state: "queued" | "injected" | "dropped" }
+    | { message: UserMessage; state: "promoted"; nextTurnId: string }
   /** A dialog waiting for an answer (D42); `source` is the extension that asked. */
   "ui.request": UiRequest & { requestId: string; source?: string }
   /** A dialog was answered or cancelled; frontends showing it should close it. */
