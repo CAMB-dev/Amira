@@ -73,6 +73,14 @@ test("paste inserts text with newlines at the caret", () => {
   expect(ed.cursor).toEqual({ line: 1, col: 3 })
 })
 
+test("a paste of hundreds of thousands of lines does not overflow the stack", () => {
+  const ed = new Editor()
+  type(ed, "x")
+  ed.handleInput({ type: "paste", text: "a\n".repeat(700_000) })
+  expect(ed.cursor).toEqual({ line: 700_000, col: 0 })
+  expect(ed.getText().length).toBe(1 + 2 * 700_000)
+})
+
 test("left/right cross line boundaries; backspace at line start joins lines", () => {
   const ed = new Editor()
   ed.setText("ab\ncd")

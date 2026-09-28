@@ -62,7 +62,8 @@ export class Editor implements Component {
     const after = this.current.slice(this.col)
     const last = parts.length - 1
     const inserted = parts.map((p, i) => (i === 0 ? before : "") + p + (i === last ? after : ""))
-    this.lines.splice(this.line, 1, ...inserted)
+    // Not splice(..., ...inserted): spreading a huge paste as arguments overflows the stack.
+    this.lines = this.lines.slice(0, this.line).concat(inserted, this.lines.slice(this.line + 1))
     this.line += last
     this.col = (last === 0 ? before.length : 0) + parts[last]!.length
     this.changed()

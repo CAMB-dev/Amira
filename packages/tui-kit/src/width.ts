@@ -118,7 +118,10 @@ const SGR = /^\x1b\[[0-9;:]*m$/
 export function wrapText(text: string, width: number): string[] {
   const w = Math.max(1, width)
   const raw: Token[][] = []
-  for (const para of text.replace(/\r\n?/g, "\n").split("\n")) raw.push(...wrapParagraph(tokenize(para), w))
+  for (const para of text.replace(/\r\n?/g, "\n").split("\n")) {
+    // Pushed one by one: spreading a huge paragraph's rows as arguments overflows the stack.
+    for (const row of wrapParagraph(tokenize(para), w)) raw.push(row)
+  }
   return carryStyles(raw)
 }
 
