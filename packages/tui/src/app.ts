@@ -105,7 +105,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             "…",
           )
         })
-        return [...lines, ""]
+        // Plus a spinner underneath, so it is obvious that work is going on.
+        spinner.label = `running ${[...new Set(running.values())].join(", ")}`
+        return [...lines, ...spinner.render(width, ctx), ""]
       }
       spinner.label = preparing ? `preparing ${preparing}` : thinking ? "thinking" : "working"
       return [...spinner.render(width, ctx), ""]

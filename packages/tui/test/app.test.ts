@@ -249,7 +249,7 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   await idle()
   // The running tool is drawn as its own line with a blinking bullet.
   expect(seenWhileRunning).toContain("● block")
-  expect(seenWhileRunning).not.toContain("running block")
+  expect(seenWhileRunning).toContain("running block")
   terminal.send("\x03")
   await exited
 })
