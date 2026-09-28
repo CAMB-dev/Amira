@@ -7,6 +7,13 @@ export type SpawnContext = "fresh" | "fork"
 export interface SpawnOptions {
   /** Role name, recorded with the child and shown by frontends. */
   role?: string
+  /** A few words naming the task ("US market trend"), shown by frontends. Default: the task's first words. */
+  title?: string
+  /**
+   * The tool call that starts the child, so frontends show it under that call. Set by the host
+   * from the calling tool's context; a tool does not need to pass it.
+   */
+  toolCallId?: string
   /** The task. With `fork` it follows the parent's history as a new user message. */
   prompt: string
   /** "provider/model". Default: the parent's current model. */
@@ -21,6 +28,21 @@ export interface SpawnOptions {
   excludeTools?: string[]
   /** Instructions for the child, placed in its system prompt's "role" section. */
   systemPrompt?: string
+}
+
+/** Longest a sub-agent's title may be. */
+export const MAX_TITLE_CHARS = 60
+
+/**
+ * What a sub-agent is called when it was given no title (as in sessions from before titles):
+ * the first few words of its task.
+ */
+export function fallbackTitle(task: string, words = 5, max = 40): string {
+  const all = task.replace(/\s+/g, " ").trim().split(" ")
+  const head = all.slice(0, words).join(" ")
+  if (!head) return "sub-agent"
+  if (head.length > max) return `${head.slice(0, max - 1)}…`
+  return all.length > words ? `${head}…` : head
 }
 
 export type SubagentStatus = "done" | "error" | "aborted"

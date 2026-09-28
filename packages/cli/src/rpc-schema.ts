@@ -239,6 +239,8 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "subagent.start": obj({
     childSessionId: str,
     "role?": str,
+    "title?": str,
+    "toolCallId?": str,
     prompt: str,
     model: modelRef,
     depth: num,
@@ -248,6 +250,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   }),
   "subagent.end": obj({
     childSessionId: str,
+    "toolCallId?": str,
     status: strings("done", "error", "aborted"),
     "error?": str,
     usage: usage,

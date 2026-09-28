@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test"
+import { readFileSync, writeFileSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type ModelRequest } from "@amira/ai"
-import { defineTool, textResult } from "@amira/api"
+import { defineTool, fallbackTitle, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { SessionStore } from "../src/session-store.ts"
@@ -160,7 +161,12 @@ test("a resumed session lists the sub-agents of its earlier runs from their file
     "t",
   )
   await root.prompt("start")
-  const mid = tree.spawn(root, { role: "mid", prompt: "mid task", systemPrompt: "ROLE mid" })
+  const mid = tree.spawn(root, {
+    role: "mid",
+    title: "Middle step",
+    prompt: "mid task",
+    systemPrompt: "ROLE mid",
+  })
   await mid.result()
   // A later process: a new tree that knows nothing, and the session reopened from its file.
   const resumed = make(SessionStore.open(session!.file), new AgentTree({ ai, sections: () => [] }))
@@ -170,6 +176,7 @@ test("a resumed session lists the sub-agents of its earlier runs from their file
       id: mid.id,
       depth: 1,
       role: "mid",
+      title: "Middle step",
       task: "mid task",
       status: "done",
       usage: { input: 15, output: 6, cacheRead: 0, cacheWrite: 0 },
@@ -177,6 +184,8 @@ test("a resumed session lists the sub-agents of its earlier runs from their file
     expect.objectContaining({
       depth: 2,
       role: "leaf",
+      // Given none: its task's first words.
+      title: "leaf task",
       task: "leaf task",
       status: "done",
       parentSessionId: mid.id,
@@ -184,6 +193,17 @@ test("a resumed session lists the sub-agents of its earlier runs from their file
   ])
   expect(list[0]!.info.startedAt).toBeGreaterThan(0)
   expect(list[1]!.messages().at(-1)).toMatchObject({ role: "assistant", content: [{ text: "leaf answer" }] })
+  // A session from before titles has none in its entries: the task's first words stand in.
+  writeFileSync(session!.file, readFileSync(session!.file, "utf8").replace(/,"title":"[^"]*"/g, ""))
+  const old = make(SessionStore.open(session!.file), new AgentTree({ ai, sections: () => [] }))
+  expect(listSubagents(old, old.tree)[0]!.info.title).toBe("mid task")
+})
+
+test("a sub-agent without a title is named by its task's first words", () => {
+  expect(fallbackTitle("find   the config\nfile")).toBe("find the config file")
+  expect(fallbackTitle("look at every file in the repo and report")).toBe("look at every file in…")
+  expect(fallbackTitle("x".repeat(50))).toBe(`${"x".repeat(39)}…`)
+  expect(fallbackTitle("  ")).toBe("sub-agent")
 })
 
 test("without a session file, only this process's sub-agents are known", async () => {

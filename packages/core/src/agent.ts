@@ -398,8 +398,24 @@ export class Agent {
   }
 
   /** Notes a sub-agent in this session's file, so its branch points at the child's session. */
-  recordSubagent(childSessionId: string, role: string | undefined): void {
-    this.#store({ type: "subagent", childSessionId, role: role ?? "" })
+  recordSubagent(childSessionId: string, role: string | undefined, title?: string): void {
+    this.#store({ type: "subagent", childSessionId, role: role ?? "", ...(title ? { title } : {}) })
+  }
+
+  /**
+   * The tool session one call gets: sub-agents it spawns carry the call's id, so frontends
+   * show them under that call without guessing.
+   */
+  #callSession(toolCallId: string): ToolSession {
+    const base = this.#toolSession
+    const spawn = base.spawn
+    if (!spawn) return base
+    return Object.create(base, {
+      spawn: {
+        value: (o: SpawnOptions) => spawn({ ...o, toolCallId: o.toolCallId ?? toolCallId }),
+        enumerable: true,
+      },
+    }) as ToolSession
   }
 
   /** Offers deferred tools to the model from its next call on, e.g. when restoring a session. */
@@ -980,7 +996,7 @@ export class Agent {
             cwd: this.cwd,
             toolCallId: call.id,
             signal: turn.signal,
-            session: this.#toolSession,
+            session: this.#callSession(call.id),
             update: (partial) => {
               if (run.finished) return
               this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })

@@ -22,7 +22,7 @@ export type SessionEntryData =
   | { type: "compaction"; summary: string; replaces: string[] }
   /** Makes `target` the tip of the current branch. */
   | { type: "checkout"; target: string }
-  | { type: "subagent"; childSessionId: string; role: string }
+  | { type: "subagent"; childSessionId: string; role: string; title?: string }
   /** Deferred tools the session loaded (via tool_search), offered to the model from then on. */
   | { type: "tools_loaded"; names: string[] }
   | { type: "custom"; ext: string; data: unknown }

@@ -10,16 +10,17 @@ import {
   unansweredCalls,
   userMessage,
 } from "@amira/ai"
-import type {
-  AnyEvent,
-  ApprovalRequest,
-  Budget,
-  ChildSession,
-  SpawnContext,
-  SpawnOptions,
-  SubagentInfo,
-  SubagentResult,
-  SubagentStatus,
+import {
+  type AnyEvent,
+  type ApprovalRequest,
+  type Budget,
+  type ChildSession,
+  fallbackTitle,
+  type SpawnContext,
+  type SpawnOptions,
+  type SubagentInfo,
+  type SubagentResult,
+  type SubagentStatus,
 } from "@amira/api"
 import { Agent, type ApprovalDecision } from "./agent.ts"
 import type { CompactionOptions } from "./compaction.ts"
@@ -125,6 +126,8 @@ class Child implements ChildSession {
   constructor(
     readonly agent: Agent,
     readonly role: string | undefined,
+    readonly title: string,
+    readonly toolCallId: string | undefined,
     readonly prompt: string,
     readonly context: SpawnContext,
     /** Who its subagent.end is sent as: its parent, with the grandparent if there is one. */
@@ -222,6 +225,8 @@ export class AgentTree {
       parentSessionId: c.parentSessionId,
       depth: c.depth,
       role: c.role ?? "agent",
+      title: c.title,
+      ...(c.toolCallId ? { toolCallId: c.toolCallId } : {}),
       task: c.prompt,
       status: r ? r.status : c.started ? "running" : "queued",
       model: c.model,
@@ -281,8 +286,18 @@ export class AgentTree {
       ...(this.#opts.compaction ? { compaction: this.#opts.compaction } : {}),
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
     })
-    parent.recordSubagent(agent.sessionId, opts.role)
-    const child = new Child(agent, opts.role, opts.prompt, context, parentMeta(parent), this)
+    const title = opts.title?.replace(/\s+/g, " ").trim() || fallbackTitle(opts.prompt)
+    parent.recordSubagent(agent.sessionId, opts.role, title)
+    const child = new Child(
+      agent,
+      opts.role,
+      title,
+      opts.toolCallId,
+      opts.prompt,
+      context,
+      parentMeta(parent),
+      this,
+    )
     this.#live.set(child.id, child)
     this.#spawned.set(child.id, child)
     this.#liveKids.set(parent.sessionId, (this.#liveKids.get(parent.sessionId) ?? 0) + 1)
@@ -295,6 +310,8 @@ export class AgentTree {
       {
         childSessionId: child.id,
         ...(opts.role ? { role: opts.role } : {}),
+        title,
+        ...(opts.toolCallId ? { toolCallId: opts.toolCallId } : {}),
         prompt: opts.prompt,
         model: child.model,
         depth,
@@ -480,6 +497,7 @@ export class AgentTree {
       "subagent.end",
       {
         childSessionId: child.id,
+        ...(child.toolCallId ? { toolCallId: child.toolCallId } : {}),
         status: result.status,
         ...(result.error !== undefined ? { error: result.error } : {}),
         usage: result.usage,
