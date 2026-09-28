@@ -417,7 +417,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
 ${
   api.settings.subagents?.background === false
     ? `- The call waits for the sub-agents and returns their results. background: true returns at once with their ids instead: in the main session their results then come to you by themselves as a message when they finish; a sub-agent must collect them with ${AGENT_RESULT_TOOL} before it finishes.`
-    : `- In the main session sub-agents run in the background by default: the call returns at once with their ids, and when they finish their results come to you by themselves as a message. Meanwhile go on with other work, or end your turn if there is nothing else to do; do not wait or poll for them. Call ${AGENT_RESULT_TOOL} only when you cannot go on without a result. background: false waits for them and returns their results. A sub-agent's calls wait by default; with background: true it must collect the results with ${AGENT_RESULT_TOOL} before it finishes.`
+    : `- In the main session sub-agents always run in the background: the call returns at once with their ids, and when they finish their results come to you by themselves as a message, in a new turn of your own. Do your summary or follow-up work then, even when you need the results to answer: end your turn now (or go on with other work) instead of waiting; background is ignored there and ${AGENT_RESULT_TOOL} only reports progress. A sub-agent's calls wait by default; with background: true it must collect the results with ${AGENT_RESULT_TOOL} before it finishes.`
 }
 - A result holds each sub-agent's final answer and what it changed.
 Roles:
@@ -457,7 +457,7 @@ ${list.join("\n")}`
           background: {
             type: "boolean",
             description:
-              "true: return right away with the sub-agents' ids; false: wait for their results. Default: see above.",
+              "true: return right away with the sub-agents' ids; false: wait for their results. Ignored in the main session, which always runs them in the background (see above).",
           },
         },
         required: ["tasks"],
@@ -478,7 +478,9 @@ ${list.join("\n")}`
         }
         // Results can be sent by themselves only to a session that can be woken: the main one.
         const auto = session.expectNotice !== undefined
-        const bg = params.background ?? (auto && api.settings.subagents?.background !== false)
+        // The main session never waits (the user keeps talking to it), whatever the model asks.
+        const alwaysBackground = mainAlwaysBackground(session)
+        const bg = alwaysBackground || (params.background ?? false)
         const jobs: Job[] = []
         const failed: string[] = []
         // Listening before anything starts: starting (making worktrees) can take seconds. An
@@ -510,9 +512,13 @@ ${list.join("\n")}`
       },
     })
 
+    /** Whether `session` runs sub-agents in the background whatever the call says (D79). */
+    const mainAlwaysBackground = (session: { expectNotice?: unknown }) =>
+      session.expectNotice !== undefined && api.settings.subagents?.background !== false
+
     const resultTool = defineTool<{ ids?: string[]; wait?: boolean }>({
       name: AGENT_RESULT_TOOL,
-      description: `Gets the results of sub-agents started in the background with ${AGENT_TOOL}. Waits for them to finish unless wait is false. Without ids, covers every background sub-agent you started whose result you have not received yet. A result is handed out once: one that already came to you as a message is not repeated. In the main session results come by themselves, so use this only when you cannot go on without one.`,
+      description: `Gets the results of sub-agents started in the background with ${AGENT_TOOL}. Waits for them to finish unless wait is false. Without ids, covers every background sub-agent you started whose result you have not received yet. A result is handed out once: one that already came to you as a message is not repeated. In the main session results come by themselves and this never waits: it only reports which are still running.`,
       parameters: {
         type: "object",
         properties: {
@@ -539,7 +545,9 @@ ${list.join("\n")}`
           if (!job) parts.push(gone(id))
           return job ? [job] : []
         })
-        if (p.wait !== false) {
+        // Waiting here would block the main session, whose results come by themselves anyway.
+        const wait = p.wait !== false && !(ctx.session && mainAlwaysBackground(ctx.session))
+        if (wait) {
           // The turn may have been interrupted before this tool even started.
           const aborted = new Promise<void>((resolve) => {
             if (ctx.signal.aborted) resolve()
