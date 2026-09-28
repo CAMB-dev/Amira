@@ -63,6 +63,21 @@ test("reports content_filter as an error that keeps the partial message", async 
   expect(e.message.content).toEqual([{ type: "text", text: "par" }])
 })
 
+test("reads OpenAI cached_tokens usage and keeps the latest usage report", async () => {
+  const e = last(
+    await run(() =>
+      sseResponse([
+        { ...delta({ content: "a" }), usage: { prompt_tokens: 10, completion_tokens: 1 } },
+        {
+          ...delta({ content: "b" }, "stop"),
+          usage: { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 4 } },
+        },
+      ]),
+    ),
+  )
+  expect(e.type === "done" && e.message.usage).toEqual({ input: 6, output: 2, cacheRead: 4, cacheWrite: 0 })
+})
+
 const json = (v: unknown, type = "application/json") =>
   new Response(JSON.stringify(v), { headers: { "content-type": type } })
 
