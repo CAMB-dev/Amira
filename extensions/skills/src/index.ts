@@ -37,56 +37,68 @@ export function skillPrompt(skill: Skill, args = ""): string {
 export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
   return defineExtension((api: ExtensionAPI) => {
     const where: DiscoverOptions = { cwd: api.cwd, home: api.home, ...opts }
-    const found = discoverSkills(where)
-    for (const p of found.problems) api.reportError(`skipped skill ${p}`)
-    let skills = found.skills
-    if (!skills.some((s) => !s.userOnly)) return
+    const reported = new Set<string>()
+    let skills: Skill[] = []
+    let registered = false
+    // Rescanned before every model call, so skills written during a session are listed (and
+    // the tool appears) right away; the listing only changes when the skills do.
+    const scan = () => {
+      const found = discoverSkills(where)
+      for (const p of found.problems) {
+        if (reported.has(p)) continue
+        reported.add(p)
+        api.reportError(`skipped skill ${p}`)
+      }
+      skills = found.skills
+      if (!registered && skills.some((s) => !s.userOnly)) {
+        registered = true
+        api.registerTool(skillTool)
+      }
+      return skills
+    }
 
     const find = (name: string) => {
       const hit = skills.find((s) => s.name === name && !s.userOnly)
       if (hit) return hit
-      // A skill added during the session is picked up on first use.
-      skills = discoverSkills(where).skills
-      return skills.find((s) => s.name === name && !s.userOnly)
+      return scan().find((s) => s.name === name && !s.userOnly)
     }
 
-    api.registerTool(
-      defineTool<{ name: string; args?: string }>({
-        name: SKILL_TOOL,
-        description: `Loads a skill's full instructions by name. Skills are listed in the system prompt under "Skills"; use one when a task matches its description.`,
-        parameters: {
-          type: "object",
-          properties: {
-            name: { type: "string", description: "The skill's name, as listed." },
-            args: { type: "string", description: "Optional arguments or context for the skill." },
-          },
-          required: ["name"],
+    const skillTool = defineTool<{ name: string; args?: string }>({
+      name: SKILL_TOOL,
+      description: `Loads a skill's full instructions by name. Skills are listed in the system prompt under "Skills"; use one when a task matches its description.`,
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The skill's name, as listed." },
+          args: { type: "string", description: "Optional arguments or context for the skill." },
         },
-        concurrency: "parallel",
-        async execute(p) {
-          const skill = find(p.name.trim())
-          if (!skill) {
-            const names = skills.filter((s) => !s.userOnly).map((s) => s.name)
-            return textResult(`No skill named "${p.name}". Available skills: ${names.join(", ")}`, true)
-          }
-          try {
-            return textResult(skillPrompt(skill, p.args))
-          } catch (err) {
-            return textResult(
-              `Could not read ${skill.path}: ${err instanceof Error ? err.message : err}`,
-              true,
-            )
-          }
-        },
-      }),
-    )
+        required: ["name"],
+      },
+      concurrency: "parallel",
+      async execute(p) {
+        const skill = find(p.name.trim())
+        if (!skill) {
+          const names = skills.filter((s) => !s.userOnly).map((s) => s.name)
+          return textResult(`No skill named "${p.name}". Available skills: ${names.join(", ")}`, true)
+        }
+        try {
+          return textResult(skillPrompt(skill, p.args))
+        } catch (err) {
+          return textResult(`Could not read ${skill.path}: ${err instanceof Error ? err.message : err}`, true)
+        }
+      },
+    })
 
+    scan()
     // Until named prompt sections land, the listing is appended as its own block here.
-    const section = skillsSection(skills)
-    api.intercept("context.build", (ctx) => ({
-      action: "modify",
-      value: { ...ctx, systemPrompt: `${ctx.systemPrompt.trimEnd()}\n\n${section}` },
-    }))
+    api.intercept("context.build", (ctx) => {
+      const section = skillsSection(scan())
+      if (!section) return { action: "pass" }
+      return {
+        action: "modify",
+        value: { ...ctx, systemPrompt: `${ctx.systemPrompt.trimEnd()}\n\n${section}` },
+      }
+    })
   })
 }
 

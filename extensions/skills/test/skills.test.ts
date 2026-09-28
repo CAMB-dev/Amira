@@ -117,7 +117,7 @@ async function run(d: ReturnType<typeof layout>, steps: MockStep[]) {
   })
   await agent.prompt("go")
   await bus.flush()
-  return { mock, events }
+  return { mock, events, agent }
 }
 
 test("the skill tool loads a skill's instructions; the listing goes into the system prompt", async () => {
@@ -150,4 +150,27 @@ test("no skills: no tool and no prompt block; broken skills are reported", async
   const err = events.find((e) => e.type === "extension.error")
   expect(err?.data).toMatchObject({ source: "builtin:skills" })
   expect(JSON.stringify(err?.data)).toContain("missing description")
+})
+
+test("skills written during a session are listed and usable from the next model call", async () => {
+  const d = layout()
+  const project = path.join(d.cwd, ".amira", "skills")
+  const { mock, agent, events } = await run(d, [{ text: "one" }, { text: "two" }, { text: "three" }])
+  expect(mock.requests[0]!.tools).toEqual([])
+  expect(mock.requests[0]!.systemPrompt).toBe("sys")
+
+  skill(project, "deploy", "description: Ship it")
+  await agent.prompt("again")
+  expect(mock.requests[1]!.tools.map((t) => t.name)).toEqual(["skill"])
+  expect(mock.requests[1]!.systemPrompt).toContain("- deploy: Ship it")
+
+  skill(project, "review", "description: Review it")
+  skill(project, "bad", "name: bad")
+  await agent.prompt("third")
+  expect(mock.requests[2]!.tools.map((t) => t.name)).toEqual(["skill"])
+  expect(mock.requests[2]!.systemPrompt).toContain("- deploy: Ship it")
+  expect(mock.requests[2]!.systemPrompt).toContain("- review: Review it")
+  await agent.bus.flush()
+  // A broken skill is reported once, not on every model call.
+  expect(events.filter((e) => e.type === "extension.error")).toHaveLength(1)
 })
