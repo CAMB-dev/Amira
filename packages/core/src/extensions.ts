@@ -27,32 +27,38 @@ export interface ExtensionHostOptions {
   bus: EventBus
   interceptors: InterceptorRegistry
   tools: ToolRegistry
-  /** Reports load failures; the failing extension is skipped and others keep loading. */
-  onError?: (source: string, error: string) => void
+  /** Session id used on extension.* events. Default "host". */
+  sessionId?: string
 }
 
+/**
+ * Loads extensions and tracks everything each one registers, so a failed load is
+ * rolled back completely and a loaded extension can be unloaded.
+ */
 export class ExtensionHost {
   #opts: ExtensionHostOptions
-  #loaded: string[] = []
+  #disposers = new Map<string, (() => void)[]>()
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
   }
 
-  get loaded(): readonly string[] {
-    return this.#loaded
+  get loaded(): string[] {
+    return [...this.#disposers.keys()]
   }
 
   async load(ext: Extension, source: string): Promise<boolean> {
-    const api = this.#apiFor(source)
+    if (this.#disposers.has(source)) return this.#fail(source, "already loaded")
+    const disposers: (() => void)[] = []
     try {
-      await ext(api)
-      this.#loaded.push(source)
-      return true
+      await ext(this.#apiFor(source, disposers))
     } catch (err) {
-      this.#opts.onError?.(source, err instanceof Error ? err.message : String(err))
-      return false
+      for (const d of disposers.reverse()) d()
+      return this.#fail(source, err instanceof Error ? err.message : String(err))
     }
+    this.#disposers.set(source, disposers)
+    this.#opts.bus.emit("extension.loaded", { source }, this.#meta())
+    return true
   }
 
   async loadFile(file: string): Promise<boolean> {
@@ -62,23 +68,49 @@ export class ExtensionHost {
     try {
       mod = await import(pathToFileURL(abs).href)
     } catch (err) {
-      this.#opts.onError?.(abs, `failed to import: ${err instanceof Error ? err.message : String(err)}`)
-      return false
+      return this.#fail(abs, `failed to import: ${err instanceof Error ? err.message : String(err)}`)
     }
-    if (typeof mod.default !== "function") {
-      this.#opts.onError?.(abs, "extension must default-export a function")
-      return false
-    }
+    if (typeof mod.default !== "function") return this.#fail(abs, "extension must default-export a function")
     return this.load(mod.default as Extension, abs)
   }
 
-  #apiFor(source: string): ExtensionAPI {
+  /** Removes every tool, listener and interceptor the extension registered. */
+  unload(source: string): boolean {
+    const disposers = this.#disposers.get(source)
+    if (!disposers) return false
+    for (const d of disposers.reverse()) d()
+    this.#disposers.delete(source)
+    return true
+  }
+
+  #fail(source: string, error: string): false {
+    this.#opts.bus.emit("extension.error", { source, error }, this.#meta())
+    return false
+  }
+
+  #meta() {
+    return { sessionId: this.#opts.sessionId ?? "host" }
+  }
+
+  #apiFor(source: string, disposers: (() => void)[]): ExtensionAPI {
     const { bus, interceptors, tools } = this.#opts
+    const track = (d: () => void) => {
+      disposers.push(d)
+      return d
+    }
     return {
       apiVersion: API_VERSION,
-      registerTool: (tool) => void tools.register(tool, source),
-      on: (type, handler) => bus.subscribe((e) => handler(e as never), { types: [type] }),
-      intercept: (point, handler, options) => interceptors.add(point, handler, options, source),
+      registerTool: (tool) => track(tools.register(tool, source)),
+      on: (type, handler) =>
+        track(
+          bus.subscribe(
+            (e) => {
+              if (e.type === type) return handler(e as never)
+            },
+            { types: [type] },
+          ),
+        ),
+      intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
     }
   }
 }
