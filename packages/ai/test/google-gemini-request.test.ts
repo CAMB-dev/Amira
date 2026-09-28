@@ -132,6 +132,48 @@ test("strips unsupported schema keys recursively", () => {
   })
 })
 
+test("inlines local refs, stops at recursion, and turns oneOf and allOf into what Gemini takes", () => {
+  expect(
+    toGeminiSchema({
+      type: "object",
+      $defs: {
+        Point: { type: "object", properties: { x: { type: "number" } }, required: ["x"] },
+        Tree: { type: "object", properties: { child: { $ref: "#/$defs/Tree" }, name: { type: "string" } } },
+      },
+      properties: {
+        at: { $ref: "#/$defs/Point", description: "where" },
+        tree: { $ref: "#/$defs/Tree" },
+        remote: { $ref: "https://example.com/schema.json" },
+        shape: { oneOf: [{ type: "string" }, { $ref: "#/definitions/Missing" }] },
+        both: {
+          allOf: [
+            { $ref: "#/$defs/Point" },
+            { type: "object", properties: { y: { type: "number" } }, required: ["y"] },
+          ],
+          description: "x and y",
+        },
+      },
+    }),
+  ).toEqual({
+    type: "object",
+    properties: {
+      at: { type: "object", properties: { x: { type: "number" } }, required: ["x"], description: "where" },
+      tree: {
+        type: "object",
+        properties: { child: { type: "object" }, name: { type: "string" } },
+      },
+      remote: { type: "object" },
+      shape: { anyOf: [{ type: "string" }, { type: "object" }] },
+      both: {
+        description: "x and y",
+        type: "object",
+        properties: { x: { type: "number" }, y: { type: "number" } },
+        required: ["x", "y"],
+      },
+    },
+  })
+})
+
 test("translates every block type into contents", async () => {
   const messages: Message[] = [
     {
