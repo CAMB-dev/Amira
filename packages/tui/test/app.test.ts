@@ -1178,6 +1178,56 @@ test("running sub-agents show with role, elapsed time, tokens and task, and go a
   await exited
 })
 
+test("a sub-agent's end line stays with its call when that call is held behind a slower one", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup(
+    [
+      {
+        toolCalls: [
+          { name: "slow", args: { path: "big.log" } },
+          { name: "delegate", args: { task: "look around" } },
+        ],
+      },
+      { text: "child answer" },
+      { text: "all done" },
+    ],
+    { cols: 80, tree: true },
+  )
+  let release!: () => void
+  agent.tools.register(
+    defineTool({
+      name: "slow",
+      ...parallel,
+      execute: () =>
+        new Promise((r) => {
+          release = () => r(textResult("slow result"))
+        }),
+    }),
+    "test",
+  )
+  agent.tools.register(
+    defineTool<{ task: string }>({
+      name: "delegate",
+      ...parallel,
+      execute: async (p, ctx) => {
+        const r = await ctx.session!.spawn!({ role: "explorer", prompt: p.task }).result()
+        return textResult(r.text)
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  // The child is done and so is its call, but both wait below the running slow call.
+  await waitFor(() => /● slow big\.log .*\n◆ explorer ✓ .*child answer\n● delegate/m.test(live()), "held")
+  release()
+  await shows("all done")
+  await idle()
+  const text = all()
+  expect(text).toMatch(/● slow big\.log\n {2}⎿ slow result\n◆ explorer ✓ [^\n]*child answer\n● delegate/)
+  expect(text.match(/◆ explorer ✓/g)).toHaveLength(1)
+  terminal.send("\x03")
+  await exited
+})
+
 test("a sub-agent's line shows its latest tool call while it works", async () => {
   const { terminal, live, shows, idle, exited, agent } = await setup(
     [

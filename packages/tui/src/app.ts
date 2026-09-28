@@ -177,6 +177,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let hintTimer: ReturnType<typeof setTimeout> | undefined
   /** This session's sub-agents (and theirs) that are queued or running, in start order. */
   const subagents = new Map<string, SubagentLine>()
+  /** The tool call of this session each sub-agent (and its own ones) was started by, when known. */
+  const subagentCalls = new Map<string, string>()
+  /**
+   * End lines of sub-agents whose call is not committed yet, by call id: they go out with the
+   * call, right above it, so a call held behind a slower one keeps its sub-agents' lines.
+   */
+  const heldEnds = new Map<string, ((width: number, theme: Theme) => string)[]>()
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tickSubagents = () => {
@@ -267,6 +274,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const rows: string[] = transcript.gapBefore("tool") ? [""] : []
     const now = Date.now()
     for (const c of live) {
+      for (const end of heldEnds.get(c.id) ?? []) rows.push(end(width, ctx.theme))
       const presenter = presenters?.get(c.name)
       if (c.end) rows.push(heldToolLine(ctx.theme, presenter, finished(c), width))
       else rows.push(...runningToolLines(ctx.theme, presenter, c, now, spinner.glyph, width))
@@ -364,18 +372,42 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   function commitCalls(calls: TrackedCall[]) {
     for (const c of calls) {
+      commitHeldEnds(c.id)
       const lines = finishedToolLines(theme, presenters?.get(c.name), finished(c), detail, terminal.columns)
       commitBlock("tool", lines)
       turnShowedOutput = true
     }
   }
 
+  /** Commits the end lines held for a call (all of them without an id), each as its own block. */
+  function commitHeldEnds(callId?: string) {
+    const ids = callId === undefined ? [...heldEnds.keys()] : [callId]
+    for (const id of ids) {
+      for (const end of heldEnds.get(id) ?? []) commitBlock("tool", [end(terminal.columns, theme)])
+      heldEnds.delete(id)
+    }
+  }
+
+  /**
+   * The running call of this session that started a sub-agent: the only one running, or the one
+   * whose arguments hold the sub-agent's task. Events do not name the call, so it is a guess.
+   */
+  function spawningCall(prompt: string): string | undefined {
+    const running = toolCalls.live.filter((c) => !c.end)
+    if (running.length <= 1) return running[0]?.id
+    const task = JSON.stringify(prompt).slice(1, -1)
+    return running.find((c) => JSON.stringify(c.args).includes(task))?.id
+  }
+
   /** Keeps the sub-agent lines current; true when the event was about a sub-agent. */
   function trackSubagent(e: AnyEvent): boolean {
     const mine = e.sessionId === agent.sessionId || subagents.has(e.sessionId)
     switch (e.type) {
-      case "subagent.start":
+      case "subagent.start": {
         if (!mine) return false
+        const call =
+          e.sessionId === agent.sessionId ? spawningCall(e.data.prompt) : subagentCalls.get(e.sessionId)
+        if (call) subagentCalls.set(e.data.childSessionId, call)
         subagents.set(e.data.childSessionId, {
           role: e.data.role ?? "agent",
           task: e.data.prompt,
@@ -384,12 +416,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           ...(e.data.queued ? {} : { startedAt: e.ts }),
         })
         break
+      }
       case "subagent.end": {
         const sub = subagents.get(e.data.childSessionId)
         if (!sub) return false
         subagents.delete(e.data.childSessionId)
+        const call = subagentCalls.get(e.data.childSessionId)
+        subagentCalls.delete(e.data.childSessionId)
         const end = { ...e.data, tokens: sub.tokens }
-        commitBlock("tool", [subagentEndLine(sub, end, terminal.columns, theme)])
+        const line = (width: number, t: Theme) => subagentEndLine(sub, end, width, t)
+        // Its call still running or held: the line waits for it. A background one's call is done.
+        if (call && toolCalls.live.some((c) => c.id === call)) {
+          heldEnds.set(call, [...(heldEnds.get(call) ?? []), line])
+        } else commitBlock("tool", [line(terminal.columns, theme)])
         break
       }
       case "budget.exceeded":
@@ -498,6 +537,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       case "turn.end":
         commitCalls(toolCalls.flush())
+        // Lines held for calls that never ended.
+        commitHeldEnds()
         working = false
         preparing = undefined
         spinner.stop()
@@ -655,6 +696,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function followAgent(next: Agent) {
     agent = next
     toolCalls.flush()
+    heldEnds.clear()
+    subagentCalls.clear()
     if (next.messages.length) showHistory(next)
     renderer.requestRender()
   }
