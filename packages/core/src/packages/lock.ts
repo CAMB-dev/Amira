@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { amiraHome, projectAmiraDir } from "../home.ts"
-import { PackageError } from "./manifest.ts"
+import { isValidPackageName, PackageError } from "./manifest.ts"
 
 export type ScopeKind = "user" | "project"
 
@@ -57,7 +57,28 @@ export function readLock(file: string): LockFile {
   if (v?.lockfileVersion !== 1 || typeof v.packages !== "object" || v.packages === null) {
     throw new PackageError(`${file}: not an Amira packages lock file (lockfileVersion 1)`)
   }
+  for (const [name, entry] of Object.entries(v.packages)) {
+    const problem = entryProblem(name, entry)
+    if (problem) throw new PackageError(`${file}: entry "${name}" ${problem}`)
+  }
   return v as LockFile
+}
+
+/** Lock files are committed and hand-edited; later code relies on these fields being there. */
+function entryProblem(name: string, e: any): string | undefined {
+  if (!isValidPackageName(name)) return "is not a package name"
+  if (typeof e !== "object" || e === null) return "is not an object"
+  if (typeof e.version !== "string") return 'has no "version"'
+  const s = e.source
+  const sourceOk =
+    (s?.type === "path" && typeof s.path === "string") ||
+    (s?.type === "git" && typeof s.url === "string") ||
+    (s?.type === "npm" && typeof s.spec === "string")
+  if (!sourceOk) return 'has no valid "source" (path, git or npm)'
+  if (typeof e.pinned !== "object" || e.pinned === null) return 'has no "pinned" object'
+  if (e.index !== undefined && (typeof e.index?.name !== "string" || typeof e.index?.url !== "string"))
+    return 'has an invalid "index"'
+  return undefined
 }
 
 /** Written through a temporary file, with names sorted so diffs stay small. */
@@ -77,8 +98,13 @@ export function writeLock(file: string, lock: LockFile): void {
   }
 }
 
-/** The directory a package of this name is installed in; scoped npm names nest one level. */
+/**
+ * The directory a package of this name is installed in; scoped npm names nest one level.
+ * Names come from the command line and hand-edited lock files, and the result is deleted
+ * recursively, so anything that is not a package name is refused.
+ */
 export function packageDir(scope: PackageScope, name: string): string {
+  if (!isValidPackageName(name)) throw new PackageError(`"${name}" is not a package name`)
   return path.join(scope.dir, ...name.split("/"))
 }
 

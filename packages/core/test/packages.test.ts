@@ -154,6 +154,37 @@ test("installs a local directory into the user scope and records it in the lock 
   expect(removePackage("local-pkg", user())).toBe(false)
 })
 
+test("remove refuses names that would reach outside the packages directory", async () => {
+  const src = makePackage(path.join(dir, "src"), "keep-me", "1.0.0")
+  await installPackage(src, { scope: user(), cwd })
+  writeFileSync(path.join(home, "settings.json"), "{}")
+  for (const bad of ["..", ".", "a/../b", "../home", "@x/..", "", "a\\..\\.."]) {
+    expect(() => removePackage(bad, user())).toThrow(PackageError)
+  }
+  expect(existsSync(path.join(home, "settings.json"))).toBe(true)
+  expect(existsSync(path.join(home, "packages", "keep-me", "index.ts"))).toBe(true)
+  expect(() => removePackage("../..", project())).toThrow(PackageError)
+  expect(existsSync(cwd)).toBe(true)
+})
+
+test("readLock rejects entries it cannot use, naming the file and key", () => {
+  const file = path.join(home, "packages.lock")
+  const write = (packages: object) => writeFileSync(file, JSON.stringify({ lockfileVersion: 1, packages }))
+  const ok = { version: "1.0.0", source: { type: "path", path: "/x" }, pinned: {}, installedAt: "" }
+  write({ a: ok })
+  expect(Object.keys(readLock(file).packages)).toEqual(["a"])
+  const { pinned: _, ...noPin } = ok
+  write({ a: noPin })
+  expect(() => readLock(file)).toThrow(/entry "a" has no "pinned"/)
+  write({ a: { ...ok, source: { type: "svn" } } })
+  expect(() => readLock(file)).toThrow(/entry "a" has no valid "source"/)
+  write({ "..": ok })
+  expect(() => readLock(file)).toThrow(/entry "\.\." is not a package name/)
+  // Listing reports the broken lock file instead of crashing.
+  write({ a: noPin })
+  expect(listInstalled({ home, cwd })[0]?.error).toMatch(/has no "pinned"/)
+})
+
 test("refuses a package whose engine range this Amira does not satisfy", async () => {
   const src = makePackage(path.join(dir, "src"), "future", "1.0.0", "f", { engines: { amira: ">=9" } })
   await expect(installPackage(src, { scope: user(), cwd })).rejects.toThrow(/needs Amira extension API >=9/)
