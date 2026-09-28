@@ -281,6 +281,34 @@ async function gitRepo(): Promise<string> {
 
 const readText = (file: string) => readFileSync(file, "utf8").replace(/\r\n/g, "\n")
 
+test("agent_result with wait false reports a sub-agent still running and keeps it collectible", async () => {
+  const { root, bus } = await setup((req) => {
+    const last = req.messages.at(-1)
+    if (who(req) === "explorer") return { text: "slow answer", delayMs: 30_000 }
+    if (last?.role === "toolResult" && last.toolName === "agent") {
+      return { toolCalls: [{ name: "agent_result", args: { wait: false } }] }
+    }
+    if (last?.role === "toolResult") return { text: "later" }
+    return {
+      toolCalls: [
+        { name: "agent", args: { tasks: [{ role: "explorer", prompt: "look far" }], background: true } },
+      ],
+    }
+  })
+  await root.prompt("go")
+  expect(agentResult(root, "agent_result")).toMatch(
+    /^## explorer · s_\w+ · still running \(\d+s\): look far$/,
+  )
+  // The job outlived the turn; the session's end stops it.
+  const ended = new Promise<void>((resolve) => {
+    bus.subscribe((e) => {
+      if (e.type === "subagent.end") resolve()
+    })
+  })
+  bus.emit("session.end", { reason: "exit" }, { sessionId: root.sessionId })
+  await ended
+})
+
 test("a coder in a worktree has its change merged into the commander's checkout", async () => {
   const repo = await gitRepo()
   let childCwd = ""

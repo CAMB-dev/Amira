@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { defineExtension, defineTool, type Extension, textResult } from "@amira/api"
+import { EventBus, UiRequests } from "@amira/core"
 import { parseCliArgs, UsageError } from "../src/args.ts"
 import { type PrintIO, runPrint, safeJson } from "../src/print.ts"
 import { createSession } from "../src/session.ts"
@@ -332,4 +333,30 @@ test("unknown names to disable are reported at startup, with where they came fro
   expect(errors).toHaveLength(1)
   expect(errors[0]).toBe(`settings tools.disabled: no tool named "nope"`)
   expect(agent.tools.specs().map((s) => s.name)).toEqual(["bash"])
+})
+
+test("the top-level session asks the user to approve, and nobody answering denies", async () => {
+  const { userApprover } = await import("../src/session.ts")
+  const bus = new EventBus()
+  const ui = new UiRequests(bus)
+  const answers: (boolean | null)[] = [true, false, null]
+  const asked: string[] = []
+  bus.subscribe((e) => {
+    if (e.type !== "ui.request") return
+    asked.push(`${e.data.title} | ${e.data.kind === "confirm" ? e.data.message : ""}`)
+    ui.respond(e.data.requestId, answers.shift())
+  })
+  const approve = userApprover(ui)
+  const request = {
+    sessionId: "s",
+    toolCallId: "t",
+    name: "bash",
+    args: { command: "rm x" },
+    reason: "policy",
+  }
+  const signal = new AbortController().signal
+  expect(await approve(request, signal)).toEqual({ approved: true })
+  expect(await approve(request, signal)).toEqual({ approved: false, reason: "the user said no" })
+  expect(await approve(request, signal)).toEqual({ approved: false, reason: "nobody answered" })
+  expect(asked[0]).toBe('Allow bash? | policy\n{"command":"rm x"}')
 })
