@@ -1,7 +1,7 @@
-import { cursor, erase, RESET, syncOutput } from "./ansi.ts"
+import { cursor, erase, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER } from "./component.ts"
 import type { Terminal } from "./terminal.ts"
-import { sanitize, truncateToWidth, visibleWidth } from "./width.ts"
+import { closeStyles, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
 
 export interface RendererOptions {
   /** Wrap frames in synchronized-output sequences (mode 2026). */
@@ -141,7 +141,7 @@ export class LiveRenderer {
   private fullBody(frame: Frame, committed: string[], width: number): string {
     let out = this.prev ? this.toTop(width) : "\r"
     out += erase.toScreenEnd
-    for (const line of committed) out += `${line}${line.includes("\x1b") ? RESET : ""}\r\n`
+    for (const line of committed) out += `${closeStyles(line)}\r\n`
     out += frame.lines.join("\r\n")
     this.row = Math.max(0, frame.lines.length - 1)
     return out
@@ -203,8 +203,7 @@ function rowsFor(cells: number, width: number): number {
 }
 
 function fit(line: string, width: number): string {
-  const out = truncateToWidth(line, width)
-  return out.includes("\x1b") && !out.endsWith(RESET) ? out + RESET : out
+  return closeStyles(truncateToWidth(line, width))
 }
 
 function sameCursor(a: Frame["cursor"], b: Frame["cursor"]): boolean {

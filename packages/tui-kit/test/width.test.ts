@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
-import { sanitize, tokenize, truncateToWidth, visibleWidth, wrapText } from "../src/width.ts"
+import { closeStyles, sanitize, tokenize, truncateToWidth, visibleWidth, wrapText } from "../src/width.ts"
 
 test("visibleWidth counts CJK and emoji as two cells and ignores escapes", () => {
   expect(visibleWidth("abc")).toBe(3)
@@ -72,4 +72,35 @@ test("tabs expand to the next tab stop", () => {
 test("styled text starting with a space never wraps into a style-only blank line", () => {
   const lines = wrapText("\x1b[31m abcdefgh\x1b[0m", 4)
   expect(lines.map(stripAnsi)).toEqual([" abc", "defg", "h"])
+})
+
+test("truncating inside a hyperlink still closes it", () => {
+  const link = "\x1b]8;;http://x\x07linktext\x1b]8;;\x07 more"
+  expect(truncateToWidth(link, 4)).toBe("\x1b]8;;http://x\x07link\x1b]8;;\x07")
+  expect(truncateToWidth(`\x1b[1m${link}`, 4)).toBe("\x1b[1m\x1b]8;;http://x\x07link\x1b]8;;\x07\x1b[0m")
+  expect(closeStyles("\x1b]8;;http://x\x07link")).toBe("\x1b]8;;http://x\x07link\x1b]8;;\x07\x1b[0m")
+  expect(closeStyles("plain")).toBe("plain")
+})
+
+test("wrapping closes and re-opens a hyperlink on each line", () => {
+  const lines = wrapText("\x1b]8;;http://x\x07aaaa bbbb\x1b]8;;\x07 cc", 4)
+  expect(lines).toEqual([
+    "\x1b]8;;http://x\x07aaaa\x1b]8;;\x07",
+    "\x1b]8;;http://x\x07bbbb\x1b]8;;\x07",
+    "cc",
+  ])
+})
+
+test("combined and colon SGR parameters are closed by their own close codes", () => {
+  expect(wrapText("\x1b[1;31mab\x1b[22mcd efgh", 4)).toEqual([
+    "\x1b[1;31mab\x1b[22mcd\x1b[0m",
+    "\x1b[31mefgh\x1b[0m",
+  ])
+  expect(wrapText("\x1b[38:5:196mab\x1b[39mcd efgh", 4)).toEqual(["\x1b[38:5:196mab\x1b[39mcd", "efgh"])
+  expect(wrapText("\x1b[1;38;5;196mab\x1b[39mcd ef", 4)).toEqual([
+    "\x1b[1;38;5;196mab\x1b[39mcd\x1b[0m",
+    "\x1b[1mef\x1b[0m",
+  ])
+  expect(wrapText("\x1b[31m\x1b[32mab cd", 2)).toEqual(["\x1b[31m\x1b[32mab\x1b[0m", "\x1b[32mcd\x1b[0m"])
+  expect(wrapText("\x1b[4:3mab\x1b[4:0m cd", 2)).toEqual(["\x1b[4:3mab\x1b[4:0m", "cd"])
 })

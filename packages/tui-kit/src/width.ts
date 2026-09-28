@@ -90,10 +90,12 @@ export function truncateToWidth(s: string, width: number, ellipsis = ""): string
   let out = ""
   let used = 0
   let styled = false
+  let link: string | undefined
   for (const t of tokenize(line)) {
     if (t.ansi) {
       out += t.text
-      styled = true
+      styled ||= SGR.test(t.text)
+      link = applyLink(link, t.text)
       continue
     }
     if (used + t.width > limit) break
@@ -101,15 +103,12 @@ export function truncateToWidth(s: string, width: number, ellipsis = ""): string
     used += t.width
   }
   if (ellWidth > 0 && ellWidth <= width) out += ellipsis
+  if (link) out += LINK_CLOSE
   return styled ? out + RESET : out
 }
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR sequences
 const SGR = /^\x1b\[[0-9;:]*m$/
-
-function isReset(seq: string): boolean {
-  return seq === "\x1b[0m" || seq === "\x1b[m"
-}
 
 /**
  * Wraps text to `width` cells. Breaks at spaces when possible, after wide (CJK) characters,
@@ -172,32 +171,98 @@ function wrapParagraph(tokens: Token[], width: number): Token[][] {
   return lines
 }
 
-/** Which open codes each close code ends, so closed styles are not re-opened on the next line. */
-const CLOSES: Record<string, (open: string) => boolean> = {
-  "22": (o) => o === "1" || o === "2",
-  "23": (o) => o === "3",
-  "24": (o) => o === "4",
-  "27": (o) => o === "7",
-  "39": (o) => /^(3[0-8]|9[0-7])(;|$)/.test(o),
-  "49": (o) => /^(4[0-8]|10[0-7])(;|$)/.test(o),
+/**
+ * Splits SGR parameters into single attributes: `1;38;5;196` is `1` and `38;5;196`, while the
+ * colon form `38:5:196` is one parameter already.
+ */
+function sgrAttributes(params: string): string[] {
+  const parts = params.split(";")
+  const out: string[] = []
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i]!
+    if ((p === "38" || p === "48" || p === "58") && (parts[i + 1] === "5" || parts[i + 1] === "2")) {
+      const n = parts[i + 1] === "5" ? 2 : 4
+      out.push(parts.slice(i, i + 1 + n).join(";"))
+      i += n
+    } else out.push(p === "" ? "0" : p)
+  }
+  return out
 }
 
+/** Attributes in the same group replace each other; a close code ends whole groups. */
+function sgrGroup(attr: string): string {
+  const n = Number.parseInt(attr, 10)
+  if ((n >= 30 && n <= 38) || (n >= 90 && n <= 97)) return "fg"
+  if ((n >= 40 && n <= 48) || (n >= 100 && n <= 107)) return "bg"
+  return String(n)
+}
+
+const CLOSES: Record<string, string[]> = {
+  "22": ["1", "2"],
+  "23": ["3"],
+  "24": ["4", "21"],
+  "4:0": ["4", "21"],
+  "25": ["5", "6"],
+  "27": ["7"],
+  "28": ["8"],
+  "29": ["9"],
+  "39": ["fg"],
+  "49": ["bg"],
+  "55": ["53"],
+  "59": ["58"],
+}
+
+/** Applies an SGR sequence to the list of active attributes. */
 function applySgr(active: string[], seq: string): string[] {
-  if (isReset(seq)) return []
-  const params = seq.slice(2, -1)
-  const closes = CLOSES[params]
-  if (!closes) return [...active, seq]
-  return active.filter((a) => !closes(a.slice(2, -1)))
+  let next = active
+  for (const attr of sgrAttributes(seq.slice(2, -1))) {
+    if (Number.parseInt(attr, 10) === 0) {
+      next = []
+      continue
+    }
+    const closes = CLOSES[attr] ?? CLOSES[String(Number.parseInt(attr, 10))]
+    if (closes) {
+      next = next.filter((a) => !closes.includes(sgrGroup(a)))
+      continue
+    }
+    const group = sgrGroup(attr)
+    next = [...next.filter((a) => sgrGroup(a) !== group), attr]
+  }
+  return next
+}
+
+const LINK_CLOSE = "\x1b]8;;\x07"
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching OSC 8 hyperlinks
+const LINK = /^\x1b\]8;[^;\x07\x1b]*;([^\x07\x1b]*)/
+
+/** Tracks the open hyperlink: returns the opening sequence, or undefined once it is closed. */
+function applyLink(open: string | undefined, seq: string): string | undefined {
+  const m = seq.match(LINK)
+  if (!m) return open
+  return m[1] ? seq : undefined
+}
+
+/** Ends a line so that no style or hyperlink it opened bleeds into the cells after it. */
+export function closeStyles(line: string): string {
+  if (!line.includes("\x1b")) return line
+  let link: string | undefined
+  for (const m of line.matchAll(ANSI_PATTERN)) link = applyLink(link, m[0])
+  const out = link ? line + LINK_CLOSE : line
+  return out.endsWith(RESET) ? out : out + RESET
 }
 
 function carryStyles(lines: Token[][]): string[] {
   let active: string[] = []
+  let link: string | undefined
   return lines.map((tokens) => {
-    let out = active.join("")
+    let out = (active.length > 0 ? `\x1b[${active.join(";")}m` : "") + (link ?? "")
     for (const t of tokens) {
       out += t.text
-      if (t.ansi && SGR.test(t.text)) active = applySgr(active, t.text)
+      if (!t.ansi) continue
+      if (SGR.test(t.text)) active = applySgr(active, t.text)
+      else link = applyLink(link, t.text)
     }
+    if (link) out += LINK_CLOSE
     return active.length > 0 ? out + RESET : out
   })
 }
