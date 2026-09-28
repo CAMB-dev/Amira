@@ -173,6 +173,25 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         throw new RpcError(problem.startsWith("no pending") ? "not_found" : "invalid_params", problem)
       return {}
     },
+    "ui.action": async (p) => {
+      const requestId = text(p, "requestId")
+      const action = text(p, "action")
+      const values = p.values ?? {}
+      if (typeof values !== "object" || values === null || Array.isArray(values)) {
+        throw new RpcError("invalid_params", '"values" must be an object')
+      }
+      if (ui.validateForm(requestId, {}) === undefined) {
+        throw new RpcError("not_found", `no pending form "${requestId}"`)
+      }
+      return { result: await ui.runFormAction(requestId, action, values as Record<string, unknown>) }
+    },
+    "ui.configure": (p) => {
+      if (p.forms !== "native" && p.forms !== "dialogs") {
+        throw new RpcError("invalid_params", '"forms" must be "native" or "dialogs"')
+      }
+      ui.formMode = p.forms
+      return {}
+    },
     "session.read": (p) => {
       if (p.what === "messages") return { messages: agent.messages }
       if (p.what !== "lastTurn")
@@ -272,8 +291,9 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       if (err instanceof RpcError) fail(id, err.code, err.message)
       else fail(id, "internal", err instanceof Error ? err.message : String(err))
     }
-    if (p.cmd === "command.run") {
-      // Not awaited: a command may ask a question that a later line (ui.respond) answers.
+    if (p.cmd === "command.run" || p.cmd === "ui.action") {
+      // Not awaited: a command may ask a question that a later line (ui.respond) answers, and
+      // an action may take a while; later lines must still be handled meanwhile.
       const run = (async () => {
         try {
           reply(id, await handler(p))
