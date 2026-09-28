@@ -31,7 +31,10 @@ const shellTools: Extension = (api) => {
   }
 }
 
-async function setup(steps: MockStep[] = [], opts: { platform?: string; loads?: string[] } = {}) {
+async function setup(
+  steps: MockStep[] = [],
+  opts: { platform?: string; loads?: string[]; aliases?: Record<string, string> } = {},
+) {
   const ai = createAi({
     dialects: [createMockDialect(steps)],
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
@@ -44,6 +47,7 @@ async function setup(steps: MockStep[] = [], opts: { platform?: string; loads?: 
     noBuiltins: false,
     ai,
     store: SessionStore.create({ cwd: here }),
+    ...(opts.aliases ? { settings: { commandAliases: opts.aliases }, warnings: [] } : {}),
     builtins: async () => [
       { source: "builtin:commands", extension: commandsExtension },
       { source: "tools", extension: shellTools },
@@ -58,6 +62,7 @@ async function setup(steps: MockStep[] = [], opts: { platform?: string; loads?: 
     home,
     disabled: ["read"],
     platform: opts.platform ?? "win32",
+    ...(opts.aliases ? { aliases: opts.aliases } : {}),
     announce: (a: Agent, reason) => void announced.push([reason, a.sessionId]),
   })
   const run = async (line: string) => (await host.run(line, { frontend: "print" })).output.join("\n")
@@ -189,4 +194,30 @@ test("print mode runs a slash command instead of a turn", async () => {
   expect(session.agent.messages).toEqual([])
   expect(await runPrint(session.agent, "/nope", false, { io, commands: host })).toBe(1)
   expect(err.join("")).toContain("error: Unknown command /nope")
+})
+
+test("print mode runs built-in and settings aliases; shadowed settings aliases warn at startup", async () => {
+  const { host, session } = await setup([{ text: "never" }], {
+    aliases: { st: "status", mm: "model mock/m", q: "status", bad: "nope" },
+  })
+  const warnings = session.startupEvents.flatMap((e) => (e.type === "extension.error" ? [e.data] : []))
+  expect(warnings).toEqual([
+    {
+      source: "settings",
+      error:
+        "commandAliases: /q is already an alias of /quit (from builtin:commands); the setting is ignored",
+    },
+  ])
+  const out: string[] = []
+  const err: string[] = []
+  const io = { stdout: (s: string) => void out.push(s), stderr: (s: string) => void err.push(s) }
+  expect(await runPrint(session.agent, "/usage", false, { io, commands: host })).toBe(0)
+  expect(out.join("")).toContain("No model replies with usage")
+  expect(await runPrint(session.agent, "/st", false, { io, commands: host })).toBe(0)
+  expect(out.join("")).toMatch(/Model\s+mock\/m/)
+  expect(await runPrint(session.agent, "/mm", false, { io, commands: host })).toBe(0)
+  expect(out.join("")).toContain("Model: mock/m")
+  expect(await runPrint(session.agent, "/bad", false, { io, commands: host })).toBe(1)
+  expect(err.join("")).toContain("error: The alias /bad runs /nope, which is not a command")
+  expect(session.agent.messages).toEqual([])
 })

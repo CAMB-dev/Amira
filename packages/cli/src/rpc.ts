@@ -217,7 +217,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       lastTurn = undefined
       return { sessionId: agent.sessionId }
     },
-    "command.list": () => ({ commands: needCommands().list() }),
+    "command.list": () => ({ commands: needCommands().list(), aliases: needCommands().aliases() }),
     "command.complete": async (p) => await needCommands().complete(text(p)),
     "command.run": async (p) => {
       const r = await needCommands().run(text(p), { frontend: "rpc" })
