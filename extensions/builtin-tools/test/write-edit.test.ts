@@ -61,3 +61,27 @@ test("edit preserves CRLF line endings", async () => {
   expect(r.isError).toBeUndefined()
   expect(await readFile(join(dir, "crlf.txt"), "utf8")).toBe("1\r\n2\r\n2.5\r\nthree\r\n")
 })
+
+test("edit matches in files with mixed line endings and keeps each region's style", async () => {
+  await writeFile(join(dir, "mixed.txt"), "a\r\nb\r\nc\nd\ne\n")
+  expect(
+    (await edit({ path: "mixed.txt", old_string: "c\nd\n", new_string: "C\nD\nD2\n" })).isError,
+  ).toBeUndefined()
+  expect((await edit({ path: "mixed.txt", old_string: "a\nb", new_string: "A\nB" })).isError).toBeUndefined()
+  expect(await readFile(join(dir, "mixed.txt"), "utf8")).toBe("A\r\nB\r\nC\nD\nD2\ne\n")
+})
+
+test("edit accepts an old_string written with CRLF against an LF file", async () => {
+  await writeFile(join(dir, "lf.txt"), "one\ntwo\nthree\n")
+  const r = await edit({ path: "lf.txt", old_string: "one\r\ntwo\r\n", new_string: "1\r\n2\r\n" })
+  expect(r.isError).toBeUndefined()
+  expect(await readFile(join(dir, "lf.txt"), "utf8")).toBe("1\n2\nthree\n")
+})
+
+test("a multi-line new_string follows the file's line endings when old_string has none", async () => {
+  await writeFile(join(dir, "crlf2.txt"), "x = 1\r\ny = 2\r\n")
+  expect(
+    (await edit({ path: "crlf2.txt", old_string: "y = 2", new_string: "y = 2\nz = 3" })).isError,
+  ).toBeUndefined()
+  expect(await readFile(join(dir, "crlf2.txt"), "utf8")).toBe("x = 1\r\ny = 2\r\nz = 3\r\n")
+})

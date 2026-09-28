@@ -66,11 +66,8 @@ export const editTool = defineTool<EditParams>({
     }
     const { text } = decoded
 
-    const crlf = text.includes("\r\n")
-    const oldStr = crlf ? toCrlf(old_string) : old_string
-    const newStr = crlf ? toCrlf(new_string) : new_string
-
-    const count = countOccurrences(text, oldStr)
+    const { needle: oldStr, count } = findNeedle(text, old_string)
+    const newStr = withEol(new_string, eolFor(oldStr, text))
     if (count === 0) {
       return textResult(
         `old_string was not found in ${abs} (0 matches). It must match exactly, including whitespace. Read the file again to check.`,
@@ -103,8 +100,27 @@ export const editTool = defineTool<EditParams>({
   },
 })
 
-function toCrlf(s: string): string {
-  return s.replaceAll("\r\n", "\n").replaceAll("\n", "\r\n")
+function withEol(s: string, eol: "\n" | "\r\n"): string {
+  const lf = s.replaceAll("\r\n", "\n")
+  return eol === "\n" ? lf : lf.replaceAll("\n", "\r\n")
+}
+
+/** Tries old_string as given, then with CRLF and with LF line endings, so mixed-EOL files still match. */
+function findNeedle(text: string, old: string): { needle: string; count: number } {
+  for (const needle of new Set([old, withEol(old, "\r\n"), withEol(old, "\n")])) {
+    const count = countOccurrences(text, needle)
+    if (count > 0) return { needle, count }
+  }
+  return { needle: old, count: 0 }
+}
+
+/** The line ending of the matched text, or the file's most common one when the match has none. */
+function eolFor(needle: string, text: string): "\n" | "\r\n" {
+  if (needle.includes("\r\n")) return "\r\n"
+  if (needle.includes("\n")) return "\n"
+  const crlf = text.split("\r\n").length - 1
+  const lf = text.split("\n").length - 1 - crlf
+  return crlf > lf ? "\r\n" : "\n"
 }
 
 function countOccurrences(haystack: string, needle: string): number {
