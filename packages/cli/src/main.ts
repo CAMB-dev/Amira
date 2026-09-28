@@ -29,7 +29,7 @@ async function run(argv: string[]): Promise<number> {
   }
   if (!args.model) throw new UsageError("no model selected. Pass --model provider/model or set AMIRA_MODEL.")
   const interactive = !args.print
-  if (interactive && !process.stdin.isTTY) {
+  if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
   }
 
@@ -53,14 +53,21 @@ async function run(argv: string[]): Promise<number> {
   })
   agentRef = agent
 
-  agent.start("startup")
-  const stopWorkspace = trackWorkspace(agent.bus, agent.sessionId, agent.cwd)
+  // Announce the session once the frontend listens, then fill in git facts in the background.
+  let stopWorkspace = () => {}
+  const onReady = () => {
+    agent.start("startup")
+    stopWorkspace = trackWorkspace(agent.bus, agent.sessionId, agent.cwd)
+  }
   try {
-    if (!interactive) return await runPrint(agent, args.prompt ?? "", args.json, { pending: startupEvents })
+    if (!interactive) {
+      return await runPrint(agent, args.prompt ?? "", args.json, { pending: startupEvents, onReady })
+    }
     return await runInteractive({
       agent,
       status: host.status,
       startupEvents,
+      onReady,
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
     })
   } finally {
