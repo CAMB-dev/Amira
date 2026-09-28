@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
 import { type Agent, activePackages, listSessions, SessionStore, trackWorkspace } from "@amira/core"
-import { runInteractive } from "@amira/tui"
+import { PromptHistory, runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { resolveConfig } from "./config.ts"
@@ -159,6 +159,7 @@ async function run(argv: string[]): Promise<number> {
       toolRenderers: host.renderers,
       startupEvents,
       onReady,
+      history: PromptHistory.forProject(args.cwd),
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
     })
   } finally {

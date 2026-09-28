@@ -23,6 +23,7 @@ import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { subagentLines } from "../src/format.ts"
+import { PromptHistory } from "../src/prompt-history.ts"
 
 const noProbe = async () => ({
   capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -61,6 +62,10 @@ interface SetupOptions {
   tuiCommands?: boolean
   /** A conversation the session starts with, as if resumed. */
   history?: Message[]
+  /** Prompts sent before, for ↑/↓ and Ctrl+R. */
+  promptHistory?: PromptHistory
+  /** The files the @ picker offers. */
+  files?: string[]
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -126,6 +131,8 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     terminal,
     setup: async () => ({ ...(await noProbe()), leftoverInput: o.leftoverInput ?? "" }),
     onReady: () => agent.start("startup"),
+    files: { files: async () => o.files ?? [] },
+    ...(o.promptHistory ? { history: o.promptHistory } : {}),
     ...(o.initialPrompt ? { initialPrompt: o.initialPrompt } : {}),
     ...(o.startupEvents ? { startupEvents: o.startupEvents } : {}),
   })
@@ -719,7 +726,8 @@ test("the editor sits in a rounded box above the status bar, with the caret insi
 test("a long draft scrolls inside the input box instead of growing past the screen", async () => {
   const { terminal, screen, live, exited } = await setup([], { cols: 30, rows: 12 })
   await waitFor(() => live().includes("Message Amira"), "input box")
-  terminal.send(`\x1b[200~${Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join("\n")}\x1b[201~`)
+  // Typed with Shift+Enter between rows: a paste this long would be folded into a placeholder.
+  terminal.send(Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join("\x1b[13;2u"))
   await waitFor(() => live().includes("row 20"), "draft")
   const rows = screen.lines
   const top = rows.findIndex((l) => l.startsWith("╭"))
@@ -1412,6 +1420,109 @@ test("a diff review shows the diff above its options", async () => {
     type: "text",
     text: "keep",
   })
+  terminal.send("\x03")
+  await exited
+})
+
+const userTexts = (agent: Agent) =>
+  agent.messages.flatMap((m) =>
+    m.role === "user" ? [m.content.map((b) => (b.type === "text" ? b.text : "")).join("")] : [],
+  )
+
+test("a big paste shows as one placeholder, in the input box and the transcript, and is sent in full", async () => {
+  const { terminal, agent, all, live, shows, idle, exited } = await setup([{ text: "got it" }])
+  const log = Array.from({ length: 30 }, (_, i) => `log line ${i}`).join("\n")
+  terminal.send(`see \x1b[200~${log}\x1b[201~ please`)
+  await waitFor(() => live().includes("see [pasted 30 lines #1] please"), "placeholder")
+  expect(live()).not.toContain("log line 3")
+  terminal.send("\r")
+  await shows("got it")
+  await idle()
+  expect(userTexts(agent)).toEqual([`see ${log} please`])
+  expect(all()).toContain("› see [pasted 30 lines #1] please")
+  expect(all()).not.toContain("log line 3")
+  terminal.send("\x03")
+  await exited
+})
+
+test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty", async () => {
+  const history = new PromptHistory()
+  const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "one" }, { text: "two" }], {
+    promptHistory: history,
+  })
+  terminal.send("first message\r")
+  await shows("one")
+  await idle()
+  expect(history.entries.map((e) => e.text)).toEqual(["first message"])
+  terminal.send("\x1b[A")
+  await waitFor(() => live().includes("› first message"), "recalled")
+  terminal.send("\x1b[B")
+  await waitFor(() => live().includes("Message Amira"), "empty again")
+  terminal.send("\x1b[A\r")
+  await shows("two")
+  await idle()
+  expect(userTexts(agent)).toEqual(["first message", "first message"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("Ctrl+R searches the history; Enter keeps the match in the editor to send or edit", async () => {
+  const history = new PromptHistory()
+  for (const t of ["deploy to staging", "run the tests", "deploy to prod"]) history.add([t])
+  const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "on it" }], {
+    promptHistory: history,
+  })
+  terminal.send("\x12")
+  await waitFor(() => live().includes("search history"), "search line")
+  expect(live()).toContain("Esc cancel")
+  terminal.send("deploy")
+  await waitFor(() => live().includes("› deploy to prod"), "newest match")
+  expect(live()).toContain("1 of 2")
+  terminal.send("\x12")
+  await waitFor(() => live().includes("› deploy to staging"), "older match")
+  terminal.send("\r")
+  await waitFor(() => !live().includes("search history"), "search closed")
+  expect(live()).toContain("› deploy to staging")
+  terminal.send("\r")
+  await shows("on it")
+  await idle()
+  expect(userTexts(agent)).toEqual(["deploy to staging"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("Esc leaves the history search with the draft back", async () => {
+  const history = new PromptHistory()
+  history.add(["old prompt"])
+  const { terminal, live, exited } = await setup([], { promptHistory: history })
+  terminal.send("my draft\x12old")
+  await waitFor(() => live().includes("› old prompt"), "match")
+  terminal.send("\x1b")
+  await waitFor(() => live().includes("› my draft"), "draft back")
+  expect(live()).not.toContain("search history")
+  terminal.send("\x03\x03")
+  await exited
+})
+
+test("typing @ offers project files; Tab inserts the path and the message keeps it", async () => {
+  const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "read it" }], {
+    files: ["src/app.ts", "src/format.ts", "README.md"],
+  })
+  terminal.send("look at @form")
+  await waitFor(() => live().includes("› src/format.ts"), "file list")
+  expect(live()).toContain("Tab/Enter insert")
+  // Like the command list, it opens below the input box, in place of the status bar.
+  const rows = live().split("\n")
+  expect(rows.findIndex((l) => l.includes("› src/format.ts"))).toBeGreaterThan(
+    rows.findIndex((l) => l.startsWith("╰")),
+  )
+  terminal.send("\t")
+  await waitFor(() => live().includes("› look at @src/format.ts"), "inserted")
+  expect(live()).not.toContain("Tab/Enter insert")
+  terminal.send("please\r")
+  await shows("read it")
+  await idle()
+  expect(userTexts(agent)).toEqual(["look at @src/format.ts please"])
   terminal.send("\x03")
   await exited
 })

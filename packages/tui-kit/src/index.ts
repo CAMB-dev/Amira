@@ -7,7 +7,14 @@ export {
 } from "./capabilities.ts"
 export { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 export { Box, type BoxOptions } from "./components/box.ts"
-export { Editor, type EditorOptions } from "./components/editor.ts"
+export {
+  defaultPasteLabel,
+  Editor,
+  type EditorOptions,
+  type EditorPart,
+  type PasteInfo,
+  type SubmitInfo,
+} from "./components/editor.ts"
 export { MarkdownStream, type MarkdownStreamOptions, renderMarkdown } from "./components/markdown-stream.ts"
 export { type ScrollPosition, ScrollView } from "./components/scroll-view.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"

@@ -40,10 +40,18 @@ export interface RestoredSession {
   loadedTools: string[]
 }
 
-/** Sessions for a working directory live in `~/.amira/sessions/<hash of cwd>/`. */
-export function sessionsDir(cwd: string): string {
+/**
+ * Names a working directory in per-project files under the user directory: a hash of its
+ * resolved path (case-insensitive on Windows), e.g. for sessions and the prompt history.
+ */
+export function projectKey(cwd: string): string {
   const key = process.platform === "win32" ? path.resolve(cwd).toLowerCase() : path.resolve(cwd)
-  return amiraPath("sessions", createHash("sha256").update(key).digest("hex").slice(0, 16))
+  return createHash("sha256").update(key).digest("hex").slice(0, 16)
+}
+
+/** Sessions for a working directory live in `~/.amira/sessions/<project key>/`. */
+export function sessionsDir(cwd: string): string {
+  return amiraPath("sessions", projectKey(cwd))
 }
 
 export function newSessionId(): string {
