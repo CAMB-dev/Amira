@@ -53,6 +53,68 @@ test("web_fetch returns the page with its title and content type", async () => {
   expect(headersOf(t.calls[0])["user-agent"]).toContain("Amira")
 })
 
+test("requests go to the address that was checked, with the name in Host and TLS", async () => {
+  const resolve = publicResolver({ "v6.test": ["2606:4700::1111"], "dual.test": ["2606:4700::1", "1.1.1.1"] })
+  const t = tools(() => html("<p>ok</p>"), {}, resolve)
+  await t.webFetch.execute({ url: "https://example.com:8443/page?q=1" }, ctx())
+  await t.webFetch.execute({ url: "http://v6.test/" }, ctx())
+  await t.webFetch.execute({ url: "http://dual.test/" }, ctx())
+  expect(t.calls.map((c) => [c.wire, headersOf(c).host])).toEqual([
+    ["https://93.184.215.14:8443/page?q=1", "example.com:8443"],
+    ["http://[2606:4700::1111]/", "v6.test"],
+    ["http://1.1.1.1/", "dual.test"],
+  ])
+  expect((t.calls[0]?.init as { tls?: unknown } | undefined)?.tls).toEqual({ serverName: "example.com" })
+  expect((t.calls[1]?.init as { tls?: unknown } | undefined)?.tls).toBeUndefined()
+
+  const direct = tools(() => html("<p>ok</p>"), { allowPrivateNetwork: true })
+  await direct.webFetch.execute({ url: "https://example.com/" }, ctx())
+  expect([direct.calls[0]?.wire, headersOf(direct.calls[0]).host]).toEqual([
+    "https://example.com/",
+    undefined,
+  ])
+})
+
+test("the charset comes from the header, else from the page's BOM or meta tag", async () => {
+  const latin1 = (s: string) => new Uint8Array([...s].map((c) => c.charCodeAt(0)))
+  const t = tools((url) => {
+    const body = url.endsWith("/meta")
+      ? latin1('<html><head><meta charset="iso-8859-1"></head><body><p>caf\xe9</p></body></html>')
+      : latin1(
+          '<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252"></head><body><p>\x93q\x94</p></body></html>',
+        )
+    return new Response(body, { headers: { "content-type": "text/html" } })
+  })
+  expect(text(await t.webFetch.execute({ url: "https://x.test/meta" }, ctx()))).toEndWith("café")
+  expect(text(await t.webFetch.execute({ url: "https://x.test/equiv" }, ctx()))).toEndWith("“q”")
+})
+
+test("a binary content type is refused without reading the body", async () => {
+  let pulled = 0
+  const body = new ReadableStream({
+    pull(c) {
+      pulled++
+      c.enqueue(new Uint8Array(1024))
+    },
+  })
+  const t = tools(() => new Response(body, { headers: { "content-type": "application/pdf" } }))
+  expect(text(await t.webFetch.execute({ url: "https://x.test/a.pdf" }, ctx()))).toContain("is a PDF")
+  expect(pulled).toBeLessThan(3)
+})
+
+test("an abort during the name lookup ends the call at once", async () => {
+  const ac = new AbortController()
+  const never = () => new Promise<string[]>(() => {})
+  const t = tools(() => html(""), {}, never)
+  const pending = t.webFetch.execute({ url: "https://slow-dns.test/" }, ctx(ac.signal))
+  ac.abort(new Error("stopped"))
+  await expect(pending).rejects.toThrow("stopped")
+  const timed = tools(() => html(""), { timeoutMs: 20 }, never)
+  expect(text(await timed.webFetch.execute({ url: "https://slow-dns.test/" }, ctx()))).toBe(
+    "timed out after 20 ms fetching https://slow-dns.test/",
+  )
+})
+
 test("redirects are followed, reported, and each hop is checked", async () => {
   const t = tools((url) => {
     if (url === "http://a.test/")
@@ -179,6 +241,24 @@ test("the cache expires after its time to live", () => {
   cache.set("b", page)
   cache.set("c", page)
   expect([cache.get("a"), cache.get("b"), cache.get("c")]).toEqual([undefined, page, page])
+})
+
+test("the cache keeps a character budget, dropping the oldest pages", () => {
+  const cache = new PageCache(60_000, 50, Date.now, 10)
+  const page = (text: string) => ({
+    url: "u",
+    finalUrl: "u",
+    status: 200,
+    contentType: "",
+    text,
+    bodyTruncated: false,
+  })
+  cache.set("a", page("aaaa"))
+  cache.set("b", page("bbbb"))
+  cache.set("c", page("cccc"))
+  expect([cache.get("a"), cache.get("b")?.text, cache.get("c")?.text]).toEqual([undefined, "bbbb", "cccc"])
+  cache.set("big", page("x".repeat(11)))
+  expect([cache.get("big"), cache.get("b")?.text]).toEqual([undefined, "bbbb"])
 })
 
 test("timeouts and aborts", async () => {

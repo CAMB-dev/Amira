@@ -1,7 +1,10 @@
 import type { ToolContext, ToolResult } from "@amira/api"
 
 export interface Call {
+  /** The URL as the caller meant it: a request pinned to an IP is mapped back by its Host header. */
   url: string
+  /** The URL actually requested. */
+  wire: string
   init: RequestInit
 }
 
@@ -11,8 +14,15 @@ type Handler = (url: string, init: RequestInit) => Response | Promise<Response>
 export function mockFetch(handler: Handler): { fetch: typeof fetch; calls: Call[] } {
   const calls: Call[] = []
   const fn = async (input: string | URL | Request, init: RequestInit = {}) => {
-    const url = input instanceof Request ? input.url : String(input)
-    calls.push({ url, init })
+    const wire = input instanceof Request ? input.url : String(input)
+    const host = (init.headers as Record<string, string> | undefined)?.host
+    let url = wire
+    if (host) {
+      const u = new URL(wire)
+      u.host = host
+      url = u.href
+    }
+    calls.push({ url, wire, init })
     init.signal?.throwIfAborted()
     return handler(url, init)
   }

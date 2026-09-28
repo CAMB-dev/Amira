@@ -93,7 +93,12 @@ export function htmlTitle(html: string): string | undefined {
  * dropped, links and images are made absolute against `base`.
  */
 export function htmlToMarkdown(html: string, base: string): string {
-  const md = service(base).turndown(html)
+  // Dropped anyway; cutting them out first keeps the DOM turndown builds small (on large
+  // pages scripts and inline SVG are often half the bytes).
+  const lean = html
+    .replace(/<(script|style|svg|noscript|template)\b[\s\S]*?<\/\1\s*>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+  const md = service(base).turndown(lean)
   return md
     .replace(/[ \t]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")

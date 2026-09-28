@@ -90,9 +90,25 @@ async function readCapped(res: Response, max: number): Promise<{ bytes: Uint8Arr
   return { bytes, truncated }
 }
 
+/**
+ * The charset an HTML page declares in its first bytes (BOM or <meta>), for when the
+ * Content-Type header names none.
+ */
+function sniffCharset(bytes: Uint8Array): string | undefined {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8"
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be"
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le"
+  const head = new TextDecoder("latin1").decode(bytes.subarray(0, 4096))
+  return (
+    /<meta[^>]+charset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1] ??
+    /<\?xml[^>]+encoding\s*=\s*["']([\w.:-]+)/i.exec(head)?.[1]
+  )
+}
+
 type Kind = "html" | "json" | "text" | "pdf" | "binary"
 
-function kindOf(contentType: string, bytes: Uint8Array): Kind {
+/** What the Content-Type header says; undefined when it says nothing useful. */
+function headerKind(contentType: string): Kind | undefined {
   const type = contentType.split(";")[0]?.trim().toLowerCase() ?? ""
   if (type === "text/html" || type === "application/xhtml+xml") return "html"
   if (type === "application/json" || type.endsWith("+json")) return "json"
@@ -106,11 +122,23 @@ function kindOf(contentType: string, bytes: Uint8Array): Kind {
   )
     return "text"
   if (type && type !== "application/octet-stream") return "binary"
+  return undefined
+}
+
+function kindOf(contentType: string, bytes: Uint8Array): Kind {
+  const byHeader = headerKind(contentType)
+  if (byHeader) return byHeader
   // No usable type: look at the bytes.
   const head = bytes.subarray(0, 1024)
   if (new TextDecoder().decode(head.subarray(0, 5)) === "%PDF-") return "pdf"
   if (head.includes(0)) return "binary"
   return /<html|<!doctype html/i.test(new TextDecoder().decode(head)) ? "html" : "text"
+}
+
+function unreadable(kind: "pdf" | "binary", url: URL, contentType: string): FetchError {
+  return kind === "pdf"
+    ? new FetchError(`${url.href} is a PDF; web_fetch cannot extract text from PDFs yet`)
+    : new FetchError(`${url.href} is ${contentType || "binary data"}, which web_fetch cannot read as text`)
 }
 
 function toText(kind: Kind, body: string, base: string): string {
@@ -139,21 +167,34 @@ export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSi
   let res: Response
   try {
     for (let hop = 0; ; hop++) {
+      let target = url
+      const headers: Record<string, string> = {
+        "user-agent": USER_AGENT,
+        accept: "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5",
+        "accept-language": "en-US,en;q=0.9",
+      }
+      let tls: { serverName: string } | undefined
       if (!opts.allowPrivateNetwork) {
-        await assertPublicHost(url, resolve).catch((err: Error) => {
-          throw new FetchError(err.message)
+        const addresses = await assertPublicHost(url, resolve, all).catch((err: Error) => {
+          throw all.aborted ? err : new FetchError(err.message)
         })
+        // Connect to the address just checked, so a second DNS answer (rebinding) cannot
+        // send the request elsewhere; Host and TLS server name keep the original name.
+        const ip = addresses?.find((a) => !a.includes(":")) ?? addresses?.[0]
+        if (ip) {
+          target = new URL(url.href)
+          target.hostname = ip.includes(":") ? `[${ip}]` : ip
+          headers.host = url.host
+          if (url.protocol === "https:") tls = { serverName: url.hostname }
+        }
       }
       all.throwIfAborted()
-      res = await doFetch(url.href, {
+      res = await doFetch(target.href, {
         redirect: "manual",
         signal: all,
-        headers: {
-          "user-agent": USER_AGENT,
-          accept: "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5",
-          "accept-language": "en-US,en;q=0.9",
-        },
-      })
+        headers,
+        ...(tls ? { tls } : {}),
+      } as RequestInit)
       const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null
       if (!location) break
       await res.body?.cancel().catch(() => {})
@@ -167,6 +208,11 @@ export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSi
       url = next
     }
     const contentType = res.headers.get("content-type") ?? ""
+    const declared = headerKind(contentType)
+    if (res.ok && (declared === "pdf" || declared === "binary")) {
+      await res.body?.cancel().catch(() => {})
+      throw unreadable(declared, url, contentType)
+    }
     const { bytes, truncated } = await readCapped(res, opts.maxBytes)
     if (!res.ok) {
       const snippet = decode(bytes.subarray(0, 2000), charsetOf(contentType)).replace(/\s+/g, " ").trim()
@@ -175,13 +221,9 @@ export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSi
       )
     }
     const kind = kindOf(contentType, bytes)
-    if (kind === "pdf")
-      throw new FetchError(`${url.href} is a PDF; web_fetch cannot extract text from PDFs yet`)
-    if (kind === "binary")
-      throw new FetchError(
-        `${url.href} is ${contentType || "binary data"}, which web_fetch cannot read as text`,
-      )
-    const body = decode(bytes, charsetOf(contentType))
+    if (kind === "pdf" || kind === "binary") throw unreadable(kind, url, contentType)
+    const charset = charsetOf(contentType) ?? (kind === "html" ? sniffCharset(bytes) : undefined)
+    const body = decode(bytes, charset)
     const title = kind === "html" ? htmlTitle(body) : undefined
     return {
       url: start.href,
@@ -203,29 +245,41 @@ export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSi
 /** Converted pages by URL, kept for 15 minutes so paging through one does not refetch it. */
 export class PageCache {
   #entries = new Map<string, { page: Page; at: number }>()
+  #chars = 0
   constructor(
     readonly ttlMs = 15 * 60_000,
     readonly maxEntries = 50,
     readonly now: () => number = Date.now,
+    /** Total text kept, in characters; the oldest pages go first. */
+    readonly maxChars = 10_000_000,
   ) {}
+
+  #delete(url: string): void {
+    const hit = this.#entries.get(url)
+    if (!hit) return
+    this.#chars -= hit.page.text.length
+    this.#entries.delete(url)
+  }
 
   get(url: string): Page | undefined {
     const hit = this.#entries.get(url)
     if (!hit) return undefined
     if (this.now() - hit.at > this.ttlMs) {
-      this.#entries.delete(url)
+      this.#delete(url)
       return undefined
     }
     return hit.page
   }
 
   set(url: string, page: Page): void {
-    this.#entries.delete(url)
+    this.#delete(url)
+    if (page.text.length > this.maxChars) return
     this.#entries.set(url, { page, at: this.now() })
-    while (this.#entries.size > this.maxEntries) {
+    this.#chars += page.text.length
+    while (this.#entries.size > this.maxEntries || this.#chars > this.maxChars) {
       const oldest = this.#entries.keys().next().value
       if (oldest === undefined) break
-      this.#entries.delete(oldest)
+      this.#delete(oldest)
     }
   }
 }

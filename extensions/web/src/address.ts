@@ -87,11 +87,37 @@ export function isPrivateAddress(ip: string): boolean {
   )
 }
 
+/** Rejects with the signal's reason when it aborts first; the lookup itself cannot be cancelled. */
+function raceAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work
+  signal.throwIfAborted()
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason)
+    signal.addEventListener("abort", onAbort, { once: true })
+    const done = () => signal.removeEventListener("abort", onAbort)
+    work.then(
+      (v) => {
+        done()
+        resolve(v)
+      },
+      (e) => {
+        done()
+        reject(e)
+      },
+    )
+  })
+}
+
 /**
  * Throws when a URL's host is, or resolves to, a private address. Host names are resolved
- * and every address must be public.
+ * and every address must be public; they are returned so the caller can connect to one of
+ * them. An IP literal returns undefined.
  */
-export async function assertPublicHost(url: URL, resolve: Resolver): Promise<void> {
+export async function assertPublicHost(
+  url: URL,
+  resolve: Resolver,
+  signal?: AbortSignal,
+): Promise<string[] | undefined> {
   const host = url.hostname
     .replace(/^\[|\]$/g, "")
     .replace(/\.$/, "")
@@ -103,14 +129,16 @@ export async function assertPublicHost(url: URL, resolve: Resolver): Promise<voi
   if (!host || host === "localhost" || host.endsWith(".localhost")) throw blocked()
   if (isIP(host)) {
     if (isPrivateAddress(host)) throw blocked()
-    return
+    return undefined
   }
   let addresses: string[]
   try {
-    addresses = await resolve(host)
+    addresses = await raceAbort(resolve(host), signal)
   } catch (err) {
+    if (signal?.aborted) throw err
     throw new Error(`cannot resolve ${host}: ${err instanceof Error ? err.message : String(err)}`)
   }
   if (!addresses.length) throw new Error(`cannot resolve ${host}`)
   if (addresses.some(isPrivateAddress)) throw blocked()
+  return addresses
 }

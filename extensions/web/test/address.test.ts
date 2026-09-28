@@ -56,7 +56,7 @@ test("hosts are refused by name, by literal address and by what they resolve to"
   await expect(check("http://0x7f.1/")).rejects.toThrow("private-network")
   await expect(check("http://[::ffff:127.0.0.1]/")).rejects.toThrow("private-network")
   await expect(check("http://evil.test/")).rejects.toThrow("private-network")
-  await expect(check("http://ok.test./")).resolves.toBeUndefined()
+  await expect(check("http://ok.test./")).resolves.toEqual(["1.1.1.1"])
   await expect(check("https://1.1.1.1/")).resolves.toBeUndefined()
   const failing = async () => {
     throw new Error("ENOTFOUND")

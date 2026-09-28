@@ -253,7 +253,8 @@ export const exa: Backend = async (q, ctx) => {
         name: "web_search_exa",
         arguments: {
           query: q.query,
-          objective: [`Find pages answering: ${q.query}`, ...scope].filter(Boolean).join(" "),
+          // The server allows at most 4096 characters.
+          objective: [`Find pages answering: ${q.query}`, ...scope].filter(Boolean).join(" ").slice(0, 4000),
           numResults: overfetch(q),
         },
       },
