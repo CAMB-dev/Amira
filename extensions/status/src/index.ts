@@ -17,6 +17,13 @@ export function formatContext(used: number, window: number | undefined): string 
   return `${formatTokens(used)}/${formatTokens(window)} (${pct}%)`
 }
 
+/** "$1.25", "$0.012", "$0.0004"; tinier amounts show as "<$0.0001". */
+export function formatCost(usd: number): string {
+  if (usd >= 1) return `$${usd.toFixed(2)}`
+  if (usd >= 0.01 || usd === 0) return `$${usd.toFixed(3)}`
+  return usd < 0.00005 ? "<$0.0001" : `$${usd.toFixed(4)}`
+}
+
 /**
  * Output tokens per second of one reply, timed from its first streamed piece to its end.
  * Undefined when the reply was too short to time meaningfully.
@@ -39,7 +46,7 @@ export function cacheHitRate(input: number, cacheRead: number, cacheWrite: numbe
 
 /**
  * The default status bar: model, activity, context use against the model's window,
- * output tokens, the speed of the last reply, and the git branch or folder.
+ * output tokens and session cost, the speed of the last reply, and the git branch or folder.
  */
 export default defineExtension((api) => {
   let model = ""
@@ -51,6 +58,7 @@ export default defineExtension((api) => {
   let promptInput = 0
   let promptCacheRead = 0
   let promptCacheWrite = 0
+  let cost: number | undefined
   let firstDeltaAt: number | undefined
   let tps: number | undefined
   let place = ""
@@ -63,6 +71,7 @@ export default defineExtension((api) => {
       promptInput = 0
       promptCacheRead = 0
       promptCacheWrite = 0
+      cost = undefined
       tps = undefined
       status = "idle"
       statusReason = ""
@@ -92,6 +101,7 @@ export default defineExtension((api) => {
     promptInput += u.input
     promptCacheRead += u.cacheRead
     promptCacheWrite += u.cacheWrite
+    if (u.cost !== undefined) cost = (cost ?? 0) + u.cost
     if (firstDeltaAt !== undefined) tps = tokensPerSecond(u.output, firstDeltaAt, e.ts) ?? tps
     api.requestRender()
   })
@@ -107,7 +117,13 @@ export default defineExtension((api) => {
     align: "left",
     order: 10,
     text: () =>
-      status === "idle" ? "" : status === "blocked" && statusReason ? `waiting: ${statusReason}` : status,
+      status === "idle"
+        ? ""
+        : status === "blocked" && statusReason
+          ? `waiting: ${statusReason}`
+          : status === "working" && statusReason
+            ? statusReason
+            : status,
   })
   api.registerStatusItem({
     id: "tokens",
@@ -115,7 +131,9 @@ export default defineExtension((api) => {
     order: 0,
     tone: "muted",
     text: () =>
-      context || output ? `ctx ${formatContext(context, contextWindow)} · out ${formatTokens(output)}` : "",
+      context || output
+        ? `ctx ${formatContext(context, contextWindow)} · out ${formatTokens(output)}${cost === undefined ? "" : ` · ${formatCost(cost)}`}`
+        : "",
   })
   api.registerStatusItem({
     id: "cache",

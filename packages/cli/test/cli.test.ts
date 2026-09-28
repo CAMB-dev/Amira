@@ -205,7 +205,7 @@ test("startup failures are reported: missing extension files and broken built-in
 
 test("an unknown provider is a usage error", async () => {
   await expect(
-    createSession({ model: "nope/x", cwd: here, extensions: [], noBuiltins: true }),
+    createSession({ model: "nope/x", cwd: here, extensions: [], noBuiltins: true, catalog: false }),
   ).rejects.toThrow(UsageError)
 })
 

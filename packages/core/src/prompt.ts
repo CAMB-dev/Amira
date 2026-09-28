@@ -15,7 +15,7 @@ export interface PromptEnv {
 }
 
 /** Section names in prompt order (D43). Other names go after these. */
-export const SECTION_ORDER = ["identity", "environment", "project", "skills", "deferred-tools", "role"]
+export const SECTION_ORDER = ["identity", "environment", "project", "skills", "deferred-tools", "mcp", "role"]
 
 const IDENTITY = `You are Amira, a coding agent working in the user's terminal.
 You help with software engineering tasks: reading and changing code, running commands, and explaining what you find.

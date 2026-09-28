@@ -1,5 +1,6 @@
 import type { AssistantMessage, Message, ModelRef, UserMessage } from "@amira/ai"
 import type { ToolResult } from "./tools.ts"
+import type { UiRequest } from "./ui.ts"
 
 /** Envelope shared by every event, whether seen by the TUI, headless clients or extensions. */
 export interface EventEnvelope<K extends keyof EventMap = keyof EventMap> {
@@ -99,12 +100,38 @@ export interface EventMap {
    * compact.start precedes it then.
    */
   "compact.failed": { error: string; blocked?: boolean }
+  /**
+   * A message sent while a turn runs (D29): `queued` when accepted, `injected` when added to
+   * the history before the next model call, `dropped` when the turn failed or was aborted
+   * first, `promoted` when the turn finished before reaching it. Promoted messages start the
+   * turn `nextTurnId` together, as one prompt holding their content in order.
+   */
+  "turn.steer":
+    | { message: UserMessage; state: "queued" | "injected" | "dropped" }
+    | { message: UserMessage; state: "promoted"; nextTurnId: string }
+  /** A dialog waiting for an answer (D42); `source` is the extension that asked. */
+  "ui.request": UiRequest & { requestId: string; source?: string }
+  /** A dialog was answered or cancelled; frontends showing it should close it. */
+  "ui.resolved": { requestId: string; cancelled: boolean; value?: string | boolean }
 }
 
 /** A named part of the system prompt (D43). */
 export interface SystemSection {
   name: string
   text: string
+}
+
+/**
+ * For system.build handlers: replaces the named section's text, or adds the section before
+ * "role" (or last) when the prompt has none of that name. Returns a new list.
+ */
+export function withSection(sections: SystemSection[], name: string, text: string): SystemSection[] {
+  if (sections.some((s) => s.name === name))
+    return sections.map((s) => (s.name === name ? { name, text } : s))
+  const role = sections.findIndex((s) => s.name === "role")
+  const out = [...sections]
+  out.splice(role === -1 ? out.length : role, 0, { name, text })
+  return out
 }
 
 export type Intercept<T> =

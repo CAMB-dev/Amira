@@ -65,6 +65,13 @@ export class ToolRegistry {
       .filter((t) => (t.exposure ?? "active") === "active" && !this.#disabled.has(t.name))
   }
 
+  /** Tools the model only sees by name until a session loads them (see tool_search). */
+  deferred(): ToolDefinition[] {
+    return this.#current()
+      .map((r) => r.tool)
+      .filter((t) => t.exposure === "deferred" && !this.#disabled.has(t.name))
+  }
+
   specs(): ToolSpec[] {
     return this.active().map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))
   }

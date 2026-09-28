@@ -62,6 +62,7 @@ export function textReply(text: string, stop = "end_turn") {
 export function anthropicAi(fetchImpl?: typeof fetch, baseUrl = "http://anth") {
   return createAi({
     ...(fetchImpl ? { fetch: fetchImpl } : {}),
+    retry: { retries: 0 },
     providers: [
       {
         id: "anth",

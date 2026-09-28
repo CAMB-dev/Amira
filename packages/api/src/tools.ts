@@ -13,6 +13,27 @@ export interface ToolContext {
   signal: AbortSignal
   /** Reports progress; emitted as tool.execute.update. */
   update(partial: ToolResult): void
+  /** The calling session's tool state; absent when a tool runs outside an agent (e.g. in tests). */
+  session?: ToolSession
+}
+
+export interface DeferredToolInfo {
+  name: string
+  description: string
+  parameters: JSONSchema
+  /** This session already offers the tool to the model. */
+  loaded: boolean
+}
+
+export interface ToolSession {
+  readonly sessionId: string
+  /** Deferred tools registered right now, in registration order. */
+  deferredTools(): DeferredToolInfo[]
+  /**
+   * Offers these deferred tools to the model from its next call on. Names not registered yet are
+   * kept and offered once they register as deferred. Returns the names newly loaded.
+   */
+  loadTools(names: string[]): string[]
 }
 
 export type ToolExposure = "active" | "inactive" | "deferred"
@@ -21,7 +42,10 @@ export interface ToolDefinition<P = any> {
   name: string
   description: string
   parameters: JSONSchema
-  /** Default "active": the model sees it on every call. */
+  /**
+   * Default "active": the model sees it on every call. "deferred" tools are only named in the
+   * system prompt until the model loads them with tool_search. "inactive" tools are hidden.
+   */
   exposure?: ToolExposure
   /**
    * "parallel" calls may run at the same time as other calls; "serial" (the default) waits for

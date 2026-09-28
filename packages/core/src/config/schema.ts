@@ -126,6 +126,7 @@ const provider = object(
     apiKeyEnv: string,
     apiKeyEnvFallbacks: list(string),
     headers: record(string),
+    catalogId: expect("a string or false", (v) => typeof v === "string" || v === false),
     compat: object({
       maxTokensField: oneOf("max_tokens", "max_completion_tokens"),
       streamUsage: boolean,
@@ -146,8 +147,9 @@ const settings = object({
   tools: object({ disabled: list(string) }),
   maxParallelTools: integer(1),
   compact: object({ threshold: number, model: modelRef }),
-  retry: object({ attempts: integer(0) }),
+  retry: object({ attempts: integer(0), baseDelayMs: integer(0), maxDelayMs: integer(0) }),
   mcpServers: record(anyObject),
+  mcpTrustedProjects: list(string),
   skills: object({ dirs: list(string) }),
 })
 

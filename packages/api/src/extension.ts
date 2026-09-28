@@ -2,7 +2,7 @@ import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOpt
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
 import type { ToolDefinition } from "./tools.ts"
-import type { StatusItem } from "./ui.ts"
+import type { StatusItem, UiApi } from "./ui.ts"
 
 export interface InterceptContext {
   sessionId: string
@@ -11,6 +11,10 @@ export interface InterceptContext {
 
 export interface ExtensionAPI {
   readonly apiVersion: string
+  /** The working directory of the sessions this host serves. */
+  readonly cwd: string
+  /** Amira's per-user directory: `$AMIRA_HOME`, or `~/.amira`. */
+  readonly home: string
   /** Returns a function that removes this registration. */
   registerTool(tool: ToolDefinition): () => void
   /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */
@@ -24,6 +28,10 @@ export interface ExtensionAPI {
    * whole process tree on abort, timeout and exit.
    */
   runCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult>
+  /** Reports a failure that happened after loading (e.g. in background work) as extension.error. */
+  reportError(error: string): void
+  /** Asks the user through whichever frontend is attached (select, confirm, input). */
+  readonly ui: UiApi
   on<K extends keyof EventMap>(type: K, handler: (event: EventEnvelope<K>) => void): () => void
   intercept<K extends keyof InterceptorMap>(
     point: K,

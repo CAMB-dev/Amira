@@ -20,6 +20,10 @@ export interface CliArgs {
   disabledTools?: string[]
   help: boolean
   version: boolean
+  /** Headless JSONL protocol on stdin and stdout. */
+  rpc: boolean
+  /** Print the JSON Schema of the rpc protocol and exit. */
+  rpcSchema: boolean
 }
 
 export type ShellMode = "auto" | "bash" | "powershell"
@@ -33,6 +37,9 @@ Without --print, opens the interactive UI; a prompt becomes the first message.
 Options:
   -p, --print           Run one turn non-interactively and print the reply
       --json            With --print, write every event as a JSON line to stdout
+      --rpc             Headless mode: JSONL commands on stdin, responses and
+                        events on stdout (see --rpc-schema)
+      --rpc-schema      Print the JSON Schema of the --rpc protocol
   -m, --model <ref>     Model as provider/model (default: $AMIRA_MODEL, then
                         "model" in settings.json)
   -e, --extension <f>   Load an extension file (repeatable; relative to where
@@ -87,6 +94,8 @@ export function parseCliArgs(
     continue: values.continue ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
+    rpc: values.rpc ?? false,
+    rpcSchema: values["rpc-schema"] ?? false,
   }
   if (positionals.length) args.prompt = positionals.join(" ")
   if (values.resume !== undefined) args.resume = values.resume
@@ -102,6 +111,12 @@ export function parseCliArgs(
   }
   const model = values.model ?? env.AMIRA_MODEL
   if (model) args.model = model
+  if (args.rpc && (args.print || args.prompt !== undefined)) {
+    throw new UsageError("--rpc takes prompts on stdin; it cannot be combined with --print or a prompt")
+  }
+  if (args.rpc && args.resume === "") {
+    throw new UsageError("--rpc cannot pick a session; pass --resume <id>, or send session.resume")
+  }
   if (args.json && !args.print) throw new UsageError("--json requires --print")
   const listing = args.resume === ""
   if (args.print && !args.prompt && !args.help && !args.version && !listing)
@@ -174,6 +189,8 @@ function parse(argv: string[]) {
       resume: { type: "string", short: "r" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
+      rpc: { type: "boolean" },
+      "rpc-schema": { type: "boolean" },
     },
   })
 }

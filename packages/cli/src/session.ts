@@ -1,4 +1,4 @@
-import { type Ai, createAi, type ModelInfo, type ProviderConfig } from "@amira/ai"
+import { type Ai, createAi, type ModelInfo, type ProviderConfig, type RetryOptions } from "@amira/ai"
 import type { AnyEvent, Extension, Settings } from "@amira/api"
 import {
   Agent,
@@ -11,9 +11,12 @@ import {
   loadInstructions,
   type SessionStore,
   ToolRegistry,
+  toolSearchExtension,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
+import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
 import { withPresetHint } from "./provider-command.ts"
+import { testAiOptions } from "./test-hooks.ts"
 
 export interface SessionOptions {
   model: string
@@ -29,6 +32,8 @@ export interface SessionOptions {
   store?: SessionStore
   /** Compaction options; unset, they come from settings `compact`. */
   compaction?: CompactionOptions
+  /** Where the model catalog is cached and fetched from; false leaves it out. Unused with `ai`. */
+  catalog?: CatalogCacheOptions | false
   /** Receives failures of event subscribers (extensions or frontends). The core itself never prints. */
   onSubscriberError?: (error: unknown, event: AnyEvent) => void
   /** Loads the bundled extensions; injectable for tests. */
@@ -48,11 +53,14 @@ export interface Session {
   host: ExtensionHost
   /** Extension events emitted while loading, before any frontend subscribed. */
   startupEvents: AnyEvent[]
+  /** Settles when a background catalog refresh is done (at once when none was due). */
+  catalogRefresh: Promise<void>
+  ai: Ai
   /**
-   * Retry hook: settings retry.attempts, for the retry support that is still to come. Pass it
-   * to the Agent once it takes a retry option.
+   * A new agent on this session's bus, registries and settings, for another stored session
+   * (rpc session.resume). It starts with `model`, by default the current model.
    */
-  retryAttempts?: number
+  resume(store: SessionStore, model?: ModelInfo): Agent
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -60,6 +68,9 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
   const bundled: [string, () => Promise<{ default?: unknown }>][] = [
     ["builtin:tools", () => import("@amira/builtin-tools")],
     ["builtin:status", () => import("@amira/ext-status")],
+    ["builtin:tool-search", async () => ({ default: toolSearchExtension })],
+    ["builtin:skills", () => import("@amira/ext-skills")],
+    ["builtin:mcp", () => import("@amira/ext-mcp")],
   ]
   const out: { source: string; extension: Extension }[] = []
   for (const [source, load] of bundled) {
@@ -75,8 +86,23 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  const ai = opts.ai ?? createAi({ providers: opts.providers ?? [], apiKeys: opts.apiKeys ?? {} })
   const settings = opts.settings ?? {}
+  // AMIRA_TEST_MOCK (end-to-end tests only) adds a scripted "mock" provider and keeps the
+  // catalog download out of the test run.
+  const mock = testAiOptions()
+  const noCatalog = opts.ai || opts.catalog === false || mock.providers
+  const catalogOpts = noCatalog ? undefined : (opts.catalog ?? {})
+  const cached = catalogOpts ? await readCatalogCache(catalogOpts) : undefined
+  const retry = retryFromSettings(settings.retry)
+  const ai =
+    opts.ai ??
+    createAi({
+      providers: [...(opts.providers ?? []), ...(mock.providers ?? [])],
+      ...(mock.dialects ? { dialects: mock.dialects } : {}),
+      apiKeys: opts.apiKeys ?? {},
+      ...(cached?.catalog ? { catalog: cached.catalog } : {}),
+      ...(retry ? { retry } : {}),
+    })
   const model = resolveModel(ai, opts.model)
   const compaction = opts.compaction ?? compactionFromSettings(ai, settings.compact)
   const bus = new EventBus(opts.onSubscriberError)
@@ -85,7 +111,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       bus.emit("extension.error", { source, error: `${point}: ${error}` }, { sessionId: "host" }),
   })
   const tools = new ToolRegistry()
-  const host = new ExtensionHost({ bus, interceptors, tools, settings })
+  const host = new ExtensionHost({ bus, interceptors, tools, settings, cwd: opts.cwd })
   const startupEvents: AnyEvent[] = []
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
     types: ["extension.error", "extension.loaded"],
@@ -113,20 +139,50 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   await bus.flush()
   stopCapture()
 
-  const agent = new Agent({
+  const newAgent = (m: ModelInfo, store: SessionStore | undefined) =>
+    new Agent({
+      ai,
+      model: m,
+      cwd: opts.cwd,
+      sections: defaultSections({ cwd: opts.cwd, project: instructionsSection(loadInstructions(opts.cwd)) }),
+      bus,
+      interceptors,
+      tools,
+      ...(store ? { session: store } : {}),
+      ...(compaction ? { compaction } : {}),
+      ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
+    })
+  const agent = newAgent(model, opts.store)
+  // A stale or missing catalog is refreshed in the background; startup never waits for it.
+  const catalogRefresh =
+    catalogOpts && cached?.stale
+      ? refreshCatalog(catalogOpts)
+          .then((catalog) => {
+            if (!catalog) return
+            ai.setCatalog?.(catalog)
+            // Only replace the model this session started with, not one chosen since.
+            if (agent.model === model) agent.model = ai.model(opts.model)
+          })
+          .catch(() => {})
+      : Promise.resolve()
+  return {
+    agent,
+    host,
+    startupEvents,
+    catalogRefresh,
     ai,
-    model,
-    cwd: opts.cwd,
-    sections: defaultSections({ cwd: opts.cwd, project: instructionsSection(loadInstructions(opts.cwd)) }),
-    bus,
-    interceptors,
-    tools,
-    ...(opts.store ? { session: opts.store } : {}),
-    ...(compaction ? { compaction } : {}),
-    ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
-  })
-  const retryAttempts = settings.retry?.attempts
-  return { agent, host, startupEvents, ...(retryAttempts !== undefined ? { retryAttempts } : {}) }
+    resume: (store, m) => newAgent(m ?? agent.model, store),
+  }
+}
+
+/** Settings `retry` as ai retry options (D52); `attempts` counts the retries after the first try. */
+export function retryFromSettings(retry: Settings["retry"]): RetryOptions | undefined {
+  if (!retry) return undefined
+  const out: RetryOptions = {}
+  if (retry.attempts !== undefined) out.retries = retry.attempts
+  if (retry.baseDelayMs !== undefined) out.baseDelayMs = retry.baseDelayMs
+  if (retry.maxDelayMs !== undefined) out.maxDelayMs = retry.maxDelayMs
+  return Object.keys(out).length ? out : undefined
 }
 
 function resolveModel(ai: Ai, ref: string): ModelInfo {

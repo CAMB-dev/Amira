@@ -40,6 +40,8 @@ export interface Usage {
   output: number
   cacheRead: number
   cacheWrite: number
+  /** Cost of these tokens in USD, when the model's prices are known. */
+  cost?: number
 }
 
 export type StopReason = "end" | "toolUse" | "maxTokens" | "aborted" | "error"
@@ -135,19 +137,30 @@ export type StreamEvent =
       argsDelta: string
     }
   | { type: "done"; message: AssistantMessage }
-  | { type: "error"; error: ModelError; retryable: boolean; message: AssistantMessage }
+  | {
+      type: "error"
+      error: ModelError
+      retryable: boolean
+      message: AssistantMessage
+      /** How long the server asked to wait before retrying (from Retry-After). */
+      retryAfterMs?: number
+    }
+  /** A retryable failure before any content streamed; the request is sent again after delayMs. */
+  | { type: "retry"; attempt: number; maxRetries: number; delayMs: number; error: ModelError }
 
 export function emptyUsage(): Usage {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 }
 
 export function addUsage(a: Usage, b: Usage): Usage {
-  return {
+  const sum: Usage = {
     input: a.input + b.input,
     output: a.output + b.output,
     cacheRead: a.cacheRead + b.cacheRead,
     cacheWrite: a.cacheWrite + b.cacheWrite,
   }
+  if (a.cost !== undefined || b.cost !== undefined) sum.cost = (a.cost ?? 0) + (b.cost ?? 0)
+  return sum
 }
 
 export function text(t: string): TextBlock {

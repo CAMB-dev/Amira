@@ -180,6 +180,7 @@ test("checks every documented key", () => {
         baseUrl: "http://p",
         apiKeyEnv: "P_KEY",
         headers: { "x-a": "1" },
+        catalogId: false,
         compat: { maxTokensField: "max_completion_tokens", streamUsage: false, thinking: "budget" },
         models: [{ id: "m", contextWindow: 1000, caps: { images: true }, cost: { input: 1, output: 2 } }],
         defaultModel: { maxOutput: 100 },
@@ -189,7 +190,7 @@ test("checks every documented key", () => {
     tools: { disabled: ["bash"] },
     maxParallelTools: 4,
     compact: { threshold: 0.8, model: "p/small" },
-    retry: { attempts: 0 },
+    retry: { attempts: 0, baseDelayMs: 500, maxDelayMs: 30_000 },
     mcpServers: { fs: { command: "mcp-fs", args: ["."] } },
     skills: { dirs: ["~/skills"] },
   }
@@ -198,6 +199,10 @@ test("checks every documented key", () => {
   expect(bad({ model: "gpt" })).toThrow('"model" must be a "provider/model" reference')
   expect(bad({ maxParallelTools: 0 })).toThrow('"maxParallelTools" must be a whole number of at least 1')
   expect(bad({ retry: { attempts: 1.5 } })).toThrow('"retry.attempts"')
+  expect(bad({ retry: { baseDelayMs: -1 } })).toThrow('"retry.baseDelayMs"')
+  expect(bad({ providers: { p: { catalogId: true } } })).toThrow(
+    '"providers.p.catalogId" must be a string or false',
+  )
   expect(bad({ tools: { disabled: "bash" } })).toThrow('"tools.disabled" must be a list')
   expect(bad({ mcpServers: { a: 1 } })).toThrow('"mcpServers.a" must be an object')
   expect(bad({ providers: { p: { headers: { a: 1 } } } })).toThrow('"providers.p.headers.a" must be a string')

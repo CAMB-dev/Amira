@@ -2,7 +2,13 @@ import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
 import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
-import statusExtension, { cacheHitRate, formatContext, formatTokens, tokensPerSecond } from "../src/index.ts"
+import statusExtension, {
+  cacheHitRate,
+  formatContext,
+  formatCost,
+  formatTokens,
+  tokensPerSecond,
+} from "../src/index.ts"
 
 test("formats token counts compactly, rounding before picking the unit", () => {
   expect([999, 1234, 9_999, 45_600, 999_950, 2_500_000].map(formatTokens)).toEqual([
@@ -178,4 +184,49 @@ test("cache hit rate is the share of prompt tokens read from cache", () => {
   expect(cacheHitRate(0, 0, 0)).toBeUndefined()
   expect(cacheHitRate(200, 800, 0)).toBe(0.8)
   expect(cacheHitRate(100, 0, 300)).toBe(0)
+})
+
+test("formats costs with more digits for small amounts", () => {
+  expect([0, 0.00001, 0.00012, 0.0123, 0.4567, 1.234, 25].map(formatCost)).toEqual([
+    "$0.000",
+    "<$0.0001",
+    "$0.0001",
+    "$0.012",
+    "$0.457",
+    "$1.23",
+    "$25.00",
+  ])
+})
+
+test("the session cost adds up the replies that have one, and a retry shows as activity", async () => {
+  const bus = new EventBus()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  await host.load(statusExtension, "builtin:status")
+  const meta = { sessionId: "s" }
+  const model = { provider: "p", model: "m" }
+  const end = (cost?: number) =>
+    bus.emit(
+      "message.end",
+      {
+        message: {
+          role: "assistant",
+          content: [],
+          model,
+          usage: { input: 1000, output: 100, cacheRead: 0, cacheWrite: 0, ...(cost ? { cost } : {}) },
+        },
+      },
+      meta,
+    )
+  const item = (id: string) => host.status.snapshot().find((i) => i.id === id)?.text
+  end()
+  await bus.flush()
+  expect(item("tokens")).toBe("ctx 1.1k · out 100")
+  end(0.004)
+  end(0.008)
+  await bus.flush()
+  expect(item("tokens")).toBe("ctx 1.1k · out 300 · $0.012")
+
+  bus.emit("status.changed", { status: "working", reason: "retrying (2/3)" }, meta)
+  await bus.flush()
+  expect(item("activity")).toBe("retrying (2/3)")
 })

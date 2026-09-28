@@ -1,6 +1,7 @@
 import type { DialectContext } from "../dialect.ts"
 import type { ModelError, StreamEvent } from "../types.ts"
 import { bodyError, isRetryableStatus } from "./openai-chat-errors.ts"
+import { withRetryAfter } from "./retry-after.ts"
 
 export type ErrorEvent = Extract<StreamEvent, { type: "error" }>
 
@@ -49,7 +50,8 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
     return
   }
   if (!res.ok) {
-    yield acc.fail(...httpError(res.status, await res.text().catch(() => ""), r.errorOf ?? bodyError))
+    const detail = await res.text().catch(() => "")
+    yield withRetryAfter(acc.fail(...httpError(res.status, detail, r.errorOf ?? bodyError)), res.headers)
     return
   }
   if (!res.body) {

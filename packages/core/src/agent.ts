@@ -16,13 +16,16 @@ import type {
   ToolDefinition,
   ToolRejection,
   ToolResult,
+  ToolSession,
   TurnEndReason,
 } from "@amira/api"
 import { type CompactionOptions, contextTokens, splitHistory, summarize } from "./compaction.ts"
+import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { newSessionId, type SessionEntryData, type SessionStore, summaryMessages } from "./session-store.ts"
+import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 import { checkArgs } from "./validate-args.ts"
 
@@ -61,7 +64,16 @@ export interface TurnResult {
   error?: string
 }
 
+export interface PromptOptions {
+  /** Id for the new turn, so a caller can report it before the turn runs. Default: a fresh one. */
+  turnId?: string
+}
+
 export class AgentBusyError extends Error {}
+
+export function newTurnId(): string {
+  return `t_${crypto.randomUUID().slice(0, 8)}`
+}
 
 /** State that belongs to one turn, so late callbacks never leak into the next turn. */
 interface Turn {
@@ -104,6 +116,12 @@ export class Agent {
   #contextTokens: number | undefined
   #storeFailed = false
   #maxParallelTools: number
+  /** Deferred tools this session loaded (via tool_search), in load order. */
+  #loadedTools = new Set<string>()
+  #toolSession: ToolSession
+  #turn: Turn | undefined
+  /** Steering messages waiting for the next model call of the running turn. */
+  #steering: UserMessage[] = []
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -138,6 +156,16 @@ export class Agent {
     if (opts.session && (stored?.provider !== this.model.provider || stored.model !== this.model.id)) {
       this.#store({ type: "model_change", model: modelRef(this.model) })
     }
+    this.#toolSession = createToolSession(this.sessionId, this.tools, this.#loadedTools)
+  }
+
+  /** Offers deferred tools to the model from its next call on, e.g. when restoring a session. */
+  loadTools(names: string[]): string[] {
+    return this.#toolSession.loadTools(names)
+  }
+
+  get loadedTools(): string[] {
+    return [...this.#loadedTools]
   }
 
   get status(): SessionStatus {
@@ -196,6 +224,11 @@ export class Agent {
     return this.#maxParallelTools
   }
 
+  /** Id of the running turn, if any. */
+  get turnId(): string | undefined {
+    return this.#turn?.id
+  }
+
   /** Announces the session to subscribers. Frontends call this once they are listening. */
   start(
     reason: EventMap["session.start"]["reason"],
@@ -216,16 +249,37 @@ export class Agent {
     this.#abort?.abort()
   }
 
-  async prompt(input: string | UserMessage): Promise<TurnResult> {
+  /**
+   * Adds a message to the running turn without interrupting it (D29): it joins the history
+   * before the next model call, and a running tool finishes first. Queued messages the turn
+   * never reached become the next prompt; with no turn running, the message starts one.
+   */
+  steer(input: string | UserMessage): void {
+    const message = typeof input === "string" ? userMessage(input) : input
+    const turn = this.#turn
+    if (!turn) {
+      this.prompt(message).catch(() => {})
+      return
+    }
+    this.#steering.push(message)
+    this.#emit(turn, "turn.steer", { message, state: "queued" })
+  }
+
+  /**
+   * Runs one turn. Everything up to the turn.start event happens synchronously, so once this
+   * returns the turn is running and `turnId` is set.
+   */
+  async prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
     if (this.#abort) throw new AgentBusyError("a turn is already running")
     const abort = new AbortController()
     this.#abort = abort
     const turn: Turn = {
-      id: `t_${crypto.randomUUID().slice(0, 8)}`,
+      id: opts.turnId ?? newTurnId(),
       signal: abort.signal,
       started: new Set(),
       finished: new Set(),
     }
+    this.#turn = turn
     const user = typeof input === "string" ? userMessage(input) : input
 
     let steps = 0
@@ -248,6 +302,7 @@ export class Agent {
           break
         }
         steps++
+        this.#injectSteering(turn)
         const reply = await this.#callModel(turn)
         if (reply.kind === "aborted") {
           result = { reason: "aborted", steps }
@@ -273,6 +328,16 @@ export class Agent {
     } finally {
       this.#repairHistory()
       this.#abort = undefined
+      this.#turn = undefined
+      const leftover = this.#steering.splice(0)
+      const nextTurnId = result.reason === "done" && leftover.length ? newTurnId() : undefined
+      for (const message of leftover) {
+        this.#emit(
+          turn,
+          "turn.steer",
+          nextTurnId ? { message, state: "promoted", nextTurnId } : { message, state: "dropped" },
+        )
+      }
       if (result.reason === "error") this.#setStatus(turn, "error", result.error)
       this.#emit(turn, "turn.end", {
         reason: result.reason,
@@ -280,20 +345,39 @@ export class Agent {
         ...(result.error !== undefined ? { error: result.error } : {}),
       })
       this.#setStatus(turn, "idle")
+      if (nextTurnId) {
+        const prompt: UserMessage = { role: "user", content: leftover.flatMap((m) => m.content) }
+        this.prompt(prompt, { turnId: nextTurnId }).catch(() => {})
+      }
     }
     return result
   }
 
+  #injectSteering(turn: Turn) {
+    for (const message of this.#steering.splice(0)) {
+      this.#push(message)
+      this.#emit(turn, "turn.steer", { message, state: "injected" })
+    }
+  }
+
   async #callModel(turn: Turn): Promise<ModelReply> {
+    // The core owns the "deferred-tools" section: interceptors see it filled in, and it is
+    // listed again afterwards so tools registered while they waited (e.g. MCP servers that
+    // were still connecting) are included, unless an interceptor rewrote the section.
+    const listed = deferredToolsSection(this.tools.deferred())
     const built = await this.interceptors.run(
       "system.build",
-      { sections: this.#sections.map((s) => ({ ...s })) },
+      { sections: setSection(this.#sections, "deferred-tools", listed).map((s) => ({ ...s })) },
       { sessionId: this.sessionId, signal: turn.signal },
     )
     if (turn.signal.aborted) return { kind: "aborted" }
+    let sections = built.value.sections
+    if (sections.find((s) => s.name === "deferred-tools")?.text === listed) {
+      sections = setSection(sections, "deferred-tools", deferredToolsSection(this.tools.deferred()))
+    }
     const ctx = await this.interceptors.run(
       "context.build",
-      { systemPrompt: renderPrompt(built.value.sections), messages: [...this.messages] },
+      { systemPrompt: renderPrompt(sections), messages: [...this.messages] },
       { sessionId: this.sessionId, signal: turn.signal },
     )
     if (turn.signal.aborted) return { kind: "aborted" }
@@ -305,19 +389,31 @@ export class Agent {
     let final: AssistantMessage | undefined
     let error: string | undefined
     let aborted = false
+    let retrying = false
     try {
       const stream = this.#ai.stream(
         {
           model: this.model,
           systemPrompt: ctx.value.systemPrompt,
           messages: ctx.value.messages,
-          tools: this.tools.specs(),
+          tools: offeredTools(this.tools, this.#loadedTools),
           ...(this.#maxTokens ? { maxTokens: this.#maxTokens } : {}),
         },
         turn.signal,
       )
       for await (const ev of stream) {
+        if (retrying && ev.type !== "retry") {
+          retrying = false
+          this.#emit(turn, "status.changed", { status: "working" })
+        }
         switch (ev.type) {
+          case "retry":
+            retrying = true
+            this.#emit(turn, "status.changed", {
+              status: "working",
+              reason: `retrying (${ev.attempt}/${ev.maxRetries})`,
+            })
+            break
           case "text.delta":
             this.#emit(turn, "message.delta", { kind: "text", text: ev.text })
             break
@@ -357,6 +453,7 @@ export class Agent {
     }
     // An interrupted reply keeps its text but drops tool calls, which were never executed.
     if (aborted || error) message.content = message.content.filter((b) => b.type !== "toolCall")
+    else message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
     if (message.content.length) this.#push(message)
     if (message.usage) this.#contextTokens = contextTokens(message.usage)
     this.#emit(turn, "message.end", { message })
@@ -364,6 +461,16 @@ export class Agent {
     if (aborted) return { kind: "aborted" }
     if (error) return { kind: "error", error }
     return { kind: "ok", message }
+  }
+
+  /** Renames a call to a tool the model misspelled, so history, events and results agree. */
+  #fixToolName(call: ToolCallBlock): ToolCallBlock {
+    if (this.tools.get(call.name)) return call
+    const name = resolveToolName(
+      call.name,
+      this.tools.active().map((t) => t.name),
+    )
+    return name ? { ...call, name } : call
   }
 
   /**
@@ -483,6 +590,7 @@ export class Agent {
             cwd: this.cwd,
             toolCallId: call.id,
             signal: turn.signal,
+            session: this.#toolSession,
             update: (partial) => {
               if (turn.finished.has(call.id)) return
               this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })

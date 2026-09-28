@@ -12,7 +12,11 @@ import { ToolRegistry } from "../src/tool-registry.ts"
 
 function setup(steps: MockStep[]) {
   const mock = createMockDialect(steps)
-  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
+  const ai = createAi({
+    dialects: [mock],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    retry: { retries: 0 },
+  })
   const bus = new EventBus()
   const events: AnyEvent[] = []
   bus.subscribe((e) => void events.push(e))
