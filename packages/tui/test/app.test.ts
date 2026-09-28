@@ -20,7 +20,7 @@ import statusExtension from "@amira/ext-status"
 import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
-import { subagentLines, summarizeArgs, toolLines } from "../src/format.ts"
+import { subagentLines } from "../src/format.ts"
 
 const noProbe = async () => ({
   capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -400,27 +400,6 @@ test("startup extension errors are shown in the transcript", async () => {
   await exited
 })
 
-test("summarizeArgs keeps short scalar arguments on one line", () => {
-  expect(summarizeArgs({ command: "bun  test\n--watch", timeout: 5, obj: { a: 1 } })).toBe(
-    "bun test --watch 5",
-  )
-  expect(summarizeArgs({ x: "a".repeat(200) }, 10)).toBe(`${"a".repeat(9)}…`)
-})
-
-test("tool lines fit the terminal width", () => {
-  const plain = {
-    text: (s: string) => s,
-    accent: (s: string) => s,
-    muted: (s: string) => s,
-    error: (s: string) => s,
-    success: (s: string) => s,
-    warning: (s: string) => s,
-    border: (s: string) => s,
-  }
-  const lines = toolLines(plain, "bash", { command: "x".repeat(300) }, textResult("y".repeat(300)), 0, 40)
-  expect(lines.every((l) => l.length <= 40)).toBe(true)
-})
-
 test("the running tool is on screen before the tool starts, even if it blocks the event loop", async () => {
   const { terminal, screen, shows, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "block", args: {} }] },
@@ -444,9 +423,10 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   terminal.send("go\r")
   await shows("● block")
   await idle()
-  // The running tool is drawn as its own line with a blinking bullet.
-  expect(seenWhileRunning).toContain("● block")
-  expect(seenWhileRunning).toContain("running block")
+  // The running tool is drawn as its own line with a spinner and its time on the right, and the
+  // activity line under it has the turn's time and how to interrupt.
+  expect(seenWhileRunning).toMatch(/● block +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 0s/)
+  expect(seenWhileRunning).toMatch(/^0s · (↓ \d+ tokens · )?Esc interrupt$/m)
   terminal.send("\x03")
   await exited
 })
@@ -747,7 +727,9 @@ test("running sub-agents show with role, elapsed time, tokens and task, and go a
   await waitFor(() => live().includes("◆ explorer · 0s · 0 tok · find the config file"), "sub-agent line")
   await shows("all done")
   await idle()
-  expect(live()).not.toContain("◆ explorer")
+  // The running line is gone; a one-line summary of how it ended is in the transcript instead.
+  expect(live()).not.toContain("◆ explorer ·")
+  expect(all()).toMatch(/◆ explorer ✓ \d+\.\ds · 1\.5k tok · child says hi\n● delegate/)
   // The child's reply only shows as its commander's tool result, not as a reply of its own.
   expect(all()).toContain("⎿ child says hi")
   expect(all()).not.toMatch(/^child says hi$/m)

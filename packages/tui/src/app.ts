@@ -1,4 +1,5 @@
-import type { AnyEvent, UserMessage } from "@amira/api"
+import { statSync } from "node:fs"
+import type { AnyEvent, CommandDefinition, ToolDetailLevel, UserMessage } from "@amira/api"
 import {
   type Agent,
   AgentBusyError,
@@ -26,20 +27,27 @@ import {
   type Terminal,
   type Theme,
   truncateToWidth,
+  visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
-import {
-  historyLines,
-  type SubagentLine,
-  subagentLines,
-  summarizeArgs,
-  toolLines,
-  userLines,
-} from "./format.ts"
+import { compactTokens, type SubagentLine, subagentEndLine, subagentLines, userLines } from "./format.ts"
+import { glyphs } from "./glyphs.ts"
+import { historyLines } from "./history.ts"
 import { InputBox } from "./input-box.ts"
 import { StatusBar } from "./status-bar.ts"
+import { ToolCalls, type TrackedCall } from "./tool-calls.ts"
+import {
+  callSummary,
+  finishedToolLines,
+  formatElapsed,
+  heldToolLine,
+  type PresenterSource,
+  runningToolLines,
+} from "./tool-view.ts"
+import { type BlockKind, commandOutputLines, noticeLines, Transcript } from "./transcript.ts"
+import { detailCommand, nextDetail } from "./verbose.ts"
 
 export interface InteractiveOptions {
   agent: Agent
@@ -51,6 +59,13 @@ export interface InteractiveOptions {
    * the agent it switches to (/clear, /resume).
    */
   commands?: CommandHost
+  /**
+   * Adds the TUI's own slash commands (/verbose) to the registry `commands` runs from; the
+   * returned function removes them again when the UI quits.
+   */
+  registerCommand?: (command: CommandDefinition) => () => void
+  /** Presenters of tool calls registered by extensions (D1); unknown tools use a generic one. */
+  toolRenderers?: PresenterSource
   /** Events emitted before the UI subscribed, such as extension load errors. */
   startupEvents?: AnyEvent[]
   /** Sent as the first message once the UI is up. */
@@ -81,10 +96,16 @@ const HOST_EVENTS = new Set<string>([
   "command.output",
 ])
 
+/** How long a note such as "Tool output: full" replaces the key hints. */
+const HINT_NOTE_MS = 4000
+
 /** How a user message reads in the transcript. */
 function messageText(m: UserMessage): string {
   return m.content.map((b) => (b.type === "text" ? b.text : `[image ${b.mimeType}]`)).join("\n\n")
 }
+
+/** Output tokens a streamed text is worth, until the reply's usage says. */
+const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 
 /**
  * The interactive terminal UI. Finished messages and tool calls are committed to the
@@ -95,38 +116,36 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let { agent } = opts
   const theme = opts.theme ?? defaultTheme
   const terminal = opts.terminal ?? new ProcessTerminal()
+  const presenters = opts.toolRenderers
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal)
 
   const streaming = new StreamText()
   const spinner = new Spinner()
+  const transcript = new Transcript()
+  const toolCalls = new ToolCalls()
   const queued: string[] = []
   /** Messages steering the running turn that have not reached the model yet. */
   const steering: string[] = []
   /** Open extension dialogs; the first one has the keyboard. */
   const dialogs: Dialog[] = []
-  const running = new Map<string, string>()
   let working = false
   let thinking = false
   let compacting = false
-  /** Blink state of the bullet in front of running tools. */
-  let blinkOn = true
-  let blinkTimer: ReturnType<typeof setInterval> | undefined
-  const setBlinking = (on: boolean) => {
-    if (on && !blinkTimer) {
-      blinkOn = true
-      blinkTimer = setInterval(() => {
-        blinkOn = !blinkOn
-        renderer.requestRender()
-      }, 1000)
-    } else if (!on && blinkTimer) {
-      clearInterval(blinkTimer)
-      blinkTimer = undefined
-    }
-  }
   /** Tool the model is currently writing a call for, before it runs. */
   let preparing: string | undefined
   /** Whether the current turn showed anything besides the user's message. */
   let turnShowedOutput = false
+  /** When the running turn started, and the output tokens its finished replies used. */
+  let turnStartedAt = 0
+  let turnTokens = 0
+  /** Characters of the reply streaming now: its tokens until its usage arrives. */
+  let streamedChars = 0
+  /** The user interrupted this turn: the failures of calls it cut short are not the tools'. */
+  let interrupted = false
+  /** How much of each finished tool call is committed; Ctrl+O and /verbose change it. */
+  let detail: ToolDetailLevel = "summary"
+  /** A short note shown in place of the key hints, such as the new tool output level. */
+  let hintNote: { text: string; until: number } | undefined
   /** This session's sub-agents (and theirs) that are queued or running, in start order. */
   const subagents = new Map<string, SubagentLine>()
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
@@ -139,6 +158,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
+  /** Commits a whole block, spaced by the transcript's rule. */
+  const commitBlock = (kind: BlockKind, lines: string[]) => renderer.commit(transcript.block(kind, lines))
+
   const editor = new Editor({ prompt: theme.accent("› "), placeholder: "Message Amira", onSubmit: submit })
   const commands = opts.commands
   const popup = commands ? new CommandPopup(commands, () => renderer.requestRender()) : undefined
@@ -147,31 +169,27 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
   const inputBox = new InputBox(editor)
   const bottom = new Stack([
+    // The activity line: what the turn is doing, how long it has run, the tokens it wrote.
+    // Running tools carry their own spinner, so it is left out while they run.
     new View((width, ctx) => {
       if (!working) return []
-      // A running tool shows as its own line with a blinking bullet, like the line it becomes.
-      if (running.size) {
-        const bullet = blinkOn ? ctx.theme.accent("●") : ctx.theme.muted("●")
-        const lines = [...running.entries()].map(([id, name]) => {
-          const summary = summarizeArgs(lastArgs.get(id) ?? {})
-          return truncateToWidth(
-            `${bullet} ${ctx.theme.accent(name)}${summary ? ` ${summary}` : ""}`,
-            width,
-            "…",
-          )
-        })
-        // Plus a spinner underneath, so it is obvious that work is going on.
-        spinner.label = `running ${[...new Set(running.values())].join(", ")}`
-        return [...lines, ...spinner.render(width, ctx), ""]
-      }
-      spinner.label = compacting
+      const label = compacting
         ? "compacting the conversation"
         : preparing
           ? `preparing ${preparing}`
           : thinking
             ? "thinking"
-            : "working"
-      return [...spinner.render(width, ctx), ""]
+            : toolCalls.running
+              ? ""
+              : "working"
+      const tokens = turnTokens + estimateTokens(streamedChars)
+      const stats = [
+        formatElapsed(Date.now() - turnStartedAt),
+        ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
+        "Esc interrupt",
+      ].join(" · ")
+      const head = label ? `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} · `)}` : ""
+      return [truncateToWidth(head + ctx.theme.muted(stats), width, glyphs.more), ""]
     }),
     new View((width, ctx) => subagentLines([...subagents.values()], Date.now(), width, ctx.theme)),
     new View((width, ctx) => [
@@ -193,19 +211,55 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           ctx.theme.muted(truncateToWidth("↑↓ select · Tab complete · Enter run · Esc close", width, "…")),
         ]
       }
+      if (hintNote && Date.now() < hintNote.until) {
+        return [ctx.theme.muted(truncateToWidth(hintNote.text, width, "…"))]
+      }
       const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
-      const esc = working ? "Esc interrupt · " : ""
-      const hint = `${send} · ${newlineKey} newline · ${esc}Ctrl+C ${ctrlC}`
+      // Esc to interrupt is on the activity line while working.
+      const hint = `${send} · ${newlineKey} newline · Ctrl+C ${ctrlC}`
       return [ctx.theme.muted(truncateToWidth(hint, width, "…"))]
     }),
   ])
+
+  /** The tool calls of the step, in call order: running ones with their output, held ones done. */
+  function liveToolRows(width: number, ctx: RenderContext): string[] {
+    const live = toolCalls.live
+    if (!live.length) return []
+    const rows: string[] = transcript.gapBefore("tool") ? [""] : []
+    const now = Date.now()
+    for (const c of live) {
+      const presenter = presenters?.get(c.name)
+      if (c.end) rows.push(heldToolLine(ctx.theme, presenter, finished(c), width))
+      else rows.push(...runningToolLines(ctx.theme, presenter, c, now, spinner.glyph, width))
+    }
+    return rows
+  }
+
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
-  // before it in view. Rows past that go to the scrollback as they are finished (StreamText).
+  // before it in view. Rows past that go to the scrollback as they are finished (StreamText),
+  // indented like the committed reply and spaced by the transcript's rule.
+  const gutter = glyphs.assistant
   const root = new View((width, ctx) => {
     const rest = bottom.render(width, ctx)
-    streaming.maxRows = Math.max(1, ctx.rows - rest.length - 1)
-    return [...streaming.render(width, ctx), ...rest]
+    const tools = liveToolRows(width, ctx)
+    streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - 3)
+    const commit = ctx.commit
+    const replyCtx: RenderContext = commit
+      ? {
+          ...ctx,
+          commit: (rows) =>
+            commit(
+              transcript.continue(
+                "assistant",
+                rows.map((r) => gutter + r),
+              ),
+            ),
+        }
+      : ctx
+    const reply = streaming.render(Math.max(1, width - visibleWidth(gutter)), replyCtx)
+    const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
+    return [...lead, ...reply.map((r) => gutter + r), ...tools, "", ...rest]
   })
   const renderer = new LiveRenderer(terminal, root, {
     synchronizedOutput: capabilities.synchronizedOutput,
@@ -216,6 +270,25 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const exited = new Promise<number>((r) => {
     resolveExit = r
   })
+
+  function finished(c: TrackedCall) {
+    return {
+      name: c.name,
+      args: c.args,
+      result: c.end!.result,
+      durationMs: c.end!.durationMs,
+      ...(c.end!.rejected ? { rejected: c.end!.rejected } : {}),
+      interrupted,
+    }
+  }
+
+  function commitCalls(calls: TrackedCall[]) {
+    for (const c of calls) {
+      const lines = finishedToolLines(theme, presenters?.get(c.name), finished(c), detail, terminal.columns)
+      commitBlock("tool", lines)
+      turnShowedOutput = true
+    }
+  }
 
   /** Keeps the sub-agent lines current; true when the event was about a sub-agent. */
   function trackSubagent(e: AnyEvent): boolean {
@@ -231,22 +304,35 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           ...(e.data.queued ? {} : { startedAt: e.ts }),
         })
         break
-      case "subagent.end":
-        if (!subagents.delete(e.data.childSessionId)) return false
+      case "subagent.end": {
+        const sub = subagents.get(e.data.childSessionId)
+        if (!sub) return false
+        subagents.delete(e.data.childSessionId)
+        const end = { ...e.data, tokens: sub.tokens }
+        commitBlock("tool", [subagentEndLine(sub, end, terminal.columns, theme)])
         break
+      }
       case "budget.exceeded":
-        renderer.commit([
-          theme.warning(`Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`),
-          "",
-        ])
+        commitBlock(
+          "notice",
+          noticeLines(theme, "warning", `Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`),
+        )
         return true
       default: {
         const sub = subagents.get(e.sessionId)
         if (!sub) return false
         if (e.type === "session.start") sub.startedAt ??= e.ts
-        else if (e.type === "message.end" && e.data.message.usage) {
+        else if (e.type === "tool.execute.start") {
+          const summary = callSummary(presenters?.get(e.data.name), e.data.args)
+          sub.activity = summary ? `${e.data.name} ${summary}` : e.data.name
+        } else if (e.type === "message.end") {
           const u = e.data.message.usage
-          sub.tokens += u.input + u.output + u.cacheRead + u.cacheWrite
+          if (u) sub.tokens += u.input + u.output + u.cacheRead + u.cacheWrite
+          const text = e.data.message.content
+            .map((b) => (b.type === "text" ? b.text : ""))
+            .join("")
+            .trim()
+          if (text) sub.lastText = text
         }
         return true
       }
@@ -261,67 +347,84 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
-        renderer.commit([...userLines(theme, messageText(e.data.prompt)), ""])
+        commitBlock("user", userLines(theme, messageText(e.data.prompt)))
         working = true
         thinking = false
+        interrupted = false
         turnShowedOutput = false
+        turnStartedAt = Date.now()
+        turnTokens = 0
+        streamedChars = 0
         spinner.start(() => renderer.requestRender())
         break
       case "message.start":
         thinking = false
         preparing = undefined
+        streamedChars = 0
         break
       case "message.delta":
         if (e.data.kind === "text") {
           thinking = false
           streaming.append(e.data.text)
+          streamedChars += e.data.text.length
         } else if (e.data.kind === "thinking") {
           thinking = true
-        } else if (e.data.name) {
-          thinking = false
-          preparing = e.data.name
+          streamedChars += e.data.text.length
+        } else {
+          streamedChars += e.data.argsDelta.length
+          if (e.data.name) {
+            thinking = false
+            preparing = e.data.name
+          }
         }
         break
       case "message.end": {
         // The rows still live are committed as they are shown; earlier ones already were.
         const early = streaming.committedRows > 0
-        const rows = streaming.take(terminal.columns)
-        if (rows.length || early) {
-          renderer.commit([...rows, ""])
-          turnShowedOutput = true
-        }
+        const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(gutter)))
+        if (rows.length)
+          renderer.commit(
+            transcript.continue(
+              "assistant",
+              rows.map((r) => gutter + r),
+            ),
+          )
+        if (rows.length || early) turnShowedOutput = true
+        transcript.end()
+        const { message } = e.data
+        turnTokens += message.usage?.output ?? estimateTokens(streamedChars)
+        streamedChars = 0
+        toolCalls.expect(message.content.flatMap((b) => (b.type === "toolCall" ? [b.id] : [])))
         break
       }
       case "tool.execute.start":
         preparing = undefined
-        running.set(e.data.toolCallId, e.data.name)
-        lastArgs.set(e.data.toolCallId, e.data.args)
-        setBlinking(true)
+        toolCalls.start(e.data.toolCallId, e.data.name, e.data.args, Date.now())
         // Draw now: the tool may block the event loop before a scheduled frame would run.
         renderer.render()
         return
+      case "tool.execute.update":
+        toolCalls.update(e.data.toolCallId, e.data.partial)
+        break
       case "tool.execute.end": {
-        running.delete(e.data.toolCallId)
-        if (!running.size) setBlinking(false)
-        const args = lastArgs.get(e.data.toolCallId) ?? {}
-        renderer.commit(
-          toolLines(theme, e.data.name, args, e.data.result, e.data.durationMs, terminal.columns),
+        const { result, durationMs, rejected } = e.data
+        commitCalls(
+          toolCalls.end(e.data.toolCallId, { result, durationMs, ...(rejected ? { rejected } : {}) }),
         )
-        turnShowedOutput = true
         break
       }
       case "turn.end":
+        commitCalls(toolCalls.flush())
         working = false
         preparing = undefined
-        running.clear()
-        setBlinking(false)
-        lastArgs.clear()
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
-        if (e.data.reason === "error") renderer.commit([theme.error(`✗ ${e.data.error ?? "error"}`), ""])
-        else if (e.data.reason === "aborted") renderer.commit([theme.muted("Interrupted."), ""])
-        else if (!turnShowedOutput) renderer.commit([theme.muted("(no reply)"), ""])
+        if (e.data.reason === "error")
+          commitBlock("notice", noticeLines(theme, "error", e.data.error ?? "error"))
+        else if (e.data.reason === "aborted")
+          commitBlock("notice", noticeLines(theme, "interrupted", "Interrupted."))
+        else if (!turnShowedOutput) commitBlock("notice", noticeLines(theme, "info", "(no reply)"))
         if (queued.length) {
           const next = queued.splice(0, queued.length).join("\n\n")
           queueMicrotask(() => send(next))
@@ -332,27 +435,32 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "compact.end":
         compacting = false
-        renderer.commit([theme.muted(`Compacted ${e.data.replaced} older messages into a summary.`), ""])
+        commitBlock(
+          "notice",
+          noticeLines(theme, "success", `Compacted ${e.data.replaced} older messages into a summary.`),
+        )
         break
       case "compact.failed":
         compacting = false
-        renderer.commit([
+        commitBlock(
+          "notice",
           e.data.blocked
-            ? theme.muted(`Compaction skipped: ${e.data.error}`)
-            : theme.warning(`Compaction failed: ${e.data.error}`),
-          "",
-        ])
+            ? noticeLines(theme, "info", `Compaction skipped: ${e.data.error}`)
+            : noticeLines(theme, "warning", `Compaction failed: ${e.data.error}`),
+        )
         break
       case "extension.error":
         // Settings warnings travel as extension.error from "settings" but are not extension failures.
-        renderer.commit([
-          theme.warning(
+        commitBlock(
+          "notice",
+          noticeLines(
+            theme,
+            "warning",
             e.data.source === "settings"
               ? `warning: ${e.data.error}`
               : `[extension ${e.data.source}] ${e.data.error}`,
           ),
-          "",
-        ])
+        )
         break
       case "turn.steer": {
         const text = messageText(e.data.message)
@@ -362,7 +470,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        if (e.data.state === "injected") renderer.commit([...userLines(theme, text), ""])
+        if (e.data.state === "injected") commitBlock("user", userLines(theme, text))
         // Put a message the turn dropped back into the editor rather than losing it.
         else if (e.data.state === "dropped")
           editor.setText(editor.getText() ? `${editor.getText()}\n${text}` : text)
@@ -382,16 +490,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       }
       case "command.output": {
-        const style =
-          e.data.level === "error" ? theme.error : e.data.level === "warning" ? theme.warning : theme.text
-        renderer.commit([...e.data.text.split("\n").map((l) => style(l)), ""])
+        const { level, text } = e.data
+        // Right after its command it hangs under the echo; on its own it is a notice.
+        if (transcript.last === "command" || transcript.last === "command-output") {
+          const style = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.text
+          commitBlock("command-output", commandOutputLines(style, theme.muted, text))
+        } else commitBlock("notice", noticeLines(theme, level, text))
         break
       }
     }
     renderer.requestRender()
   }
-  // tool.execute.end does not repeat the arguments; remember them from the start event.
-  const lastArgs = new Map<string, Record<string, unknown>>()
 
   /** The user's message shows up in the transcript on turn.start. */
   function send(text: string) {
@@ -404,7 +513,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       } else {
         working = false
         spinner.stop()
-        renderer.commit([theme.error(`✗ ${err instanceof Error ? err.message : String(err)}`), ""])
+        commitBlock("notice", noticeLines(theme, "error", err instanceof Error ? err.message : String(err)))
       }
       renderer.requestRender()
     })
@@ -423,15 +532,39 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Runs at once, even during a turn; commands that need an idle session say so. */
   function runCommand(line: string) {
-    renderer.commit([theme.muted(`› ${line}`), ""])
+    commitBlock("command", [theme.muted(`${glyphs.user} ${line}`)])
     void commands!.run(line, { frontend: "tui", quit: () => quit() }).then(() => renderer.requestRender())
+  }
+
+  /** The lines of a session's history, with its id and last write in the separator. */
+  function showHistory(a: Agent) {
+    let updatedAt: number | undefined
+    try {
+      if (a.session?.file) updatedAt = statSync(a.session.file).mtimeMs
+    } catch {}
+    renderer.commit(
+      historyLines(theme, a.messages, {
+        ...(presenters ? { presenters } : {}),
+        width: terminal.columns,
+        detail,
+        session: { id: a.sessionId, ...(updatedAt !== undefined ? { updatedAt } : {}) },
+        transcript,
+      }),
+    )
   }
 
   /** Follows the session a command switched to; a resumed one shows its history. */
   function followAgent(next: Agent) {
     agent = next
-    if (next.messages.length) renderer.commit(historyLines(theme, next.messages))
+    toolCalls.flush()
+    if (next.messages.length) showHistory(next)
     renderer.requestRender()
+  }
+
+  /** Sets how much of later tool results is committed; what is in the scrollback stays. */
+  function setDetail(level: ToolDetailLevel): string {
+    detail = level
+    return `Tool output: ${level} (applies to tool results from now on; Ctrl+O cycles)`
   }
 
   /** Alt+Enter or Ctrl+Q: while a turn runs, queues the message to send after it. */
@@ -443,6 +576,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     else send(trimmed)
   }
 
+  /** Esc or Ctrl+C while working. */
+  function interrupt() {
+    interrupted = true
+    agent.abort()
+  }
+
   function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
     const i = dialogs.indexOf(dialog)
     if (i !== -1) dialogs.splice(i, 1)
@@ -450,16 +589,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
     const shown =
       answer === undefined ? "cancelled" : answer === true ? "yes" : answer === false ? "no" : answer
-    renderer.commit([`${theme.accent("?")} ${title} ${theme.muted(`› ${shown}`)}`, ""])
+    commitBlock("dialog", [`${theme.accent(glyphs.question)} ${title} ${theme.muted(`› ${shown}`)}`])
     renderer.requestRender()
   }
 
   function quit(code = 0) {
     off()
     offSwitch?.()
+    offCommand?.()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
-    setBlinking(false)
     subagents.clear()
     tickSubagents()
     reader.stop()
@@ -482,13 +621,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (matchesKey(e, "enter", { alt: true }) || matchesKey(e, "q", { ctrl: true })) {
       queue()
     } else if (matchesKey(e, "c", { ctrl: true })) {
-      if (working) agent.abort()
+      if (working) interrupt()
       else if (editor.getText()) editor.clear()
       else return quit()
     } else if (matchesKey(e, "d", { ctrl: true }) && !working && !editor.getText()) {
       return quit()
+    } else if (matchesKey(e, "o", { ctrl: true })) {
+      hintNote = { text: setDetail(nextDetail(detail)), until: Date.now() + HINT_NOTE_MS }
+      setTimeout(() => renderer.requestRender(), HINT_NOTE_MS + 10)
     } else if (matchesKey(e, "escape")) {
-      if (working) agent.abort()
+      if (working) interrupt()
     } else {
       editor.handleInput(e)
     }
@@ -509,15 +651,20 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const off = agent.bus.subscribe(onEvent)
   const offSwitch = commands?.onSwitch(followAgent)
+  const offCommand = opts.registerCommand?.(
+    detailCommand(
+      () => detail,
+      (level) => setDetail(level),
+    ),
+  )
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
   renderer.start()
-  renderer.commit([
+  commitBlock("banner", [
     `${theme.accent("Amira")} ${theme.muted(`· ${agent.model.provider}/${agent.model.id} · ${agent.cwd}`)}`,
-    "",
   ])
-  if (agent.messages.length) renderer.commit(historyLines(theme, agent.messages))
+  if (agent.messages.length) showHistory(agent)
   for (const e of opts.startupEvents ?? []) onEvent(e)
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)

@@ -1,4 +1,5 @@
 import type { ToolRejection } from "./events.ts"
+import type { DiffHunk } from "./tool-details.ts"
 import type { ToolResult } from "./tools.ts"
 
 /**
@@ -77,6 +78,29 @@ export interface ToolPresenter<A = Record<string, unknown>, D = unknown> {
    * first). Frontends show at most three. Defaults to the last lines of the partial result.
    */
   running?(args: A, partial: ToolResult | undefined): ToolLine[]
+}
+
+/**
+ * Diff hunks as presenter lines, numbered with the new file's line numbers (the old one's for
+ * removed lines), with a `diff-hunk` line between hunks.
+ */
+export function diffToolLines(hunks: readonly DiffHunk[]): ToolLine[] {
+  const out: ToolLine[] = []
+  for (const [i, h] of hunks.entries()) {
+    if (i > 0) out.push({ kind: "diff-hunk", text: "⋮" })
+    let oldNo = h.oldStart
+    let newNo = h.newStart
+    for (const line of h.lines) {
+      const text = line.slice(1)
+      if (line.startsWith("+")) out.push({ kind: "diff-add", text, lineNo: newNo++ })
+      else if (line.startsWith("-")) out.push({ kind: "diff-remove", text, lineNo: oldNo++ })
+      else {
+        out.push({ kind: "diff-context", text, lineNo: newNo++ })
+        oldNo++
+      }
+    }
+  }
+  return out
 }
 
 /** The text blocks of a tool result joined with newlines and trimmed; images as placeholders. */

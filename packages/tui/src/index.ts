@@ -1,3 +1,5 @@
 export { type InteractiveOptions, runInteractive } from "./app.ts"
-export { summarizeArgs, toolLines, userLines } from "./format.ts"
+export { summarizeArgs, userLines } from "./format.ts"
+export { type Glyphs, glyphs } from "./glyphs.ts"
 export { StatusBar } from "./status-bar.ts"
+export { fallbackPresenter, finishedToolLines, type PresenterSource } from "./tool-view.ts"
