@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
-import { defineTool, textResult } from "@amira/api"
+import { defineTool, type GrepDetails, textResult } from "@amira/api"
 import { statOrNull, type WalkEntry, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
 import { decodeText, looksBinary } from "./text.ts"
@@ -83,6 +83,7 @@ export const grepTool = defineTool<GrepParams>({
     const out: string[] = []
     let total = 0
     let matchedFiles = 0
+    let matches = 0
     for await (const f of files) {
       if (ctx.signal.aborted) return textResult("Aborted", true)
       if (!filter(f.rel)) continue
@@ -104,6 +105,7 @@ export const grepTool = defineTool<GrepParams>({
       }
       if (count === 0) continue
       matchedFiles++
+      matches += count
       if (mode === "content") continue
       total++
       if (out.length < limit) out.push(mode === "count" ? `${shown}:${count}` : shown)
@@ -117,7 +119,14 @@ export const grepTool = defineTool<GrepParams>({
     const res = await truncateOutput(text, "grep")
     return {
       content: [{ type: "text", text: res.text }],
-      details: { mode, matchedFiles, total, fullOutputPath: res.fullOutputPath },
+      details: {
+        mode,
+        matchedFiles,
+        // files_with_matches stops at a file's first match, so it cannot count them.
+        ...(mode === "files_with_matches" ? {} : { matches }),
+        total,
+        fullOutputPath: res.fullOutputPath,
+      } satisfies GrepDetails,
     }
   },
 })

@@ -1,6 +1,6 @@
 import { statSync } from "node:fs"
 import path from "node:path"
-import { defineTool, textResult } from "@amira/api"
+import { defineTool, type GlobDetails, textResult } from "@amira/api"
 import { statOrNull, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
 import { truncateOutput } from "./truncate.ts"
@@ -59,7 +59,7 @@ export const globTool = defineTool<GlobParams>({
     const out = await truncateOutput(text, "glob")
     return {
       content: [{ type: "text", text: out.text }],
-      details: { count: matches.length, fullOutputPath: out.fullOutputPath },
+      details: { count: matches.length, fullOutputPath: out.fullOutputPath } satisfies GlobDetails,
     }
   },
 })

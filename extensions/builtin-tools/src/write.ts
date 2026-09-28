@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
-import { defineTool, textResult } from "@amira/api"
+import { defineTool, textResult, type WriteDetails } from "@amira/api"
+import { fileDiff } from "./diff.ts"
 import { statOrNull } from "./files.ts"
 import { displayPath, fileKey, resolvePath } from "./paths.ts"
 
@@ -40,6 +41,7 @@ export const writeTool = defineTool<WriteParams>({
     if (blocker) {
       return textResult(`Cannot create ${abs}: ${blocker} is a file, not a directory`, true)
     }
+    const before = existing ? await previousText(abs, existing.size) : ""
     try {
       await mkdir(dirname(abs), { recursive: true })
       await writeFile(abs, content, { signal: ctx.signal })
@@ -53,10 +55,31 @@ export const writeTool = defineTool<WriteParams>({
       content: [
         { type: "text", text: `${verb} ${displayPath(ctx.cwd, abs)} (${lines} lines, ${bytes} bytes)` },
       ],
-      details: { path: abs, created: !existing, lines, bytes },
+      details: {
+        path: abs,
+        created: !existing,
+        lines,
+        bytes,
+        ...(before === undefined
+          ? { hunks: [], added: lines, removed: 0, truncated: true }
+          : fileDiff(before, content)),
+      } satisfies WriteDetails,
     }
   },
 })
+
+/** Files up to this size are diffed against what they held before a write. */
+const MAX_DIFF_BYTES = 1024 * 1024
+
+/** What a file held before it is overwritten, for the diff; undefined when too large or unreadable. */
+async function previousText(abs: string, size: number): Promise<string | undefined> {
+  if (size > MAX_DIFF_BYTES) return undefined
+  try {
+    return (await readFile(abs)).toString("utf8")
+  } catch {
+    return undefined
+  }
+}
 
 /** The nearest existing ancestor of `dir`, if it is not a directory. */
 async function fileAncestor(dir: string): Promise<string | undefined> {

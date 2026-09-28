@@ -42,7 +42,7 @@ test.if(hasBash)("non-zero exit is reported as an error", async () => {
   const r = await bashTool.execute({ command: "echo failing; exit 3" }, makeCtx(dir))
   expect(r.isError).toBe(true)
   expect(textOf(r)).toBe("failing\n\nExit code: 3")
-  expect(r.details).toMatchObject({ exitCode: 3 })
+  expect(r.details).toMatchObject({ exitCode: 3, outputLines: 1, durationMs: expect.any(Number) })
 })
 
 test.if(hasBash)("times out and kills the command", async () => {

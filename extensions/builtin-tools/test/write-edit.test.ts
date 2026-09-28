@@ -35,6 +35,28 @@ test("edit replaces a unique match", async () => {
   expect(await readFile(join(dir, "e.ts"), "utf8")).toBe("const a = 1\nconst b = $&3\n")
 })
 
+test("edit and write put the change as diff hunks in details, not in the result text", async () => {
+  await writeFile(join(dir, "d.ts"), "one\ntwo\nthree\n")
+  const r = await edit({ path: "d.ts", old_string: "two", new_string: "2\n2b" })
+  expect(textOf(r)).toBe("Edited d.ts: replaced 1 occurrence")
+  expect(r.details).toMatchObject({
+    path: join(dir, "d.ts"),
+    replacements: 1,
+    added: 2,
+    removed: 1,
+    hunks: [{ oldStart: 1, newStart: 1, lines: [" one", "-two", "+2", "+2b", " three"] }],
+  })
+  const w = await writeTool.execute({ path: "d.ts", content: "one\n2\nthree\n" }, makeCtx(dir))
+  expect(w.details).toMatchObject({
+    created: false,
+    added: 0,
+    removed: 1,
+    hunks: [{ lines: expect.any(Array) }],
+  })
+  const n = await writeTool.execute({ path: "new.ts", content: "a\nb\n" }, makeCtx(dir))
+  expect(n.details).toMatchObject({ created: true, added: 2, removed: 0 })
+})
+
 test("edit reports the match count when not unique, and replace_all replaces all", async () => {
   await writeFile(join(dir, "m.txt"), "foo bar foo baz foo")
   const r = await edit({ path: "m.txt", old_string: "foo", new_string: "qux" })
