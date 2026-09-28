@@ -92,9 +92,9 @@ export default defineExtension((api: ExtensionAPI) => {
   add({
     name: "help",
     aliases: ["?", "h"],
-    description: "List the slash commands",
+    description: "List the slash commands and skills",
     run(_args, ctx) {
-      // Grouped by where they come from, this extension's first; skills can be many and wordy.
+      // Grouped by where they come from, this extension's first; descriptions can be wordy.
       const all = ctx.commands()
       const own = all.find((c) => c.name === "help")?.source
       const sources = [...new Set(all.map((c) => c.source))].sort(
@@ -109,6 +109,13 @@ export default defineExtension((api: ExtensionAPI) => {
           ])
         return `${source === own ? "Commands" : `From ${source}`}:\n${table(rows)}`
       })
+      // Skills run with a $, not a slash; they can be many.
+      const skills = ctx.skills()
+      groups.push(
+        skills.length
+          ? `Skills ($ runs a skill: $<name> [arguments]):\n${table(skills.map((s) => [`$${s.name}`, oneLine(s.description, 70)]))}`
+          : "Skills: none found ($ runs a skill: $<name> [arguments]).",
+      )
       const aliases = ctx.aliases()
       if (aliases.length) {
         const rows = aliases.map((a) => [`/${a.name}`, `→ /${oneLine(a.expansion, 70)}`])

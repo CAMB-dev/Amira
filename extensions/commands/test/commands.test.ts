@@ -115,6 +115,7 @@ async function setup(
   const { control, calls } = fakeControl(over)
   const host = new CommandHost({
     registry: ext.commands,
+    skills: ext.skills,
     bus,
     ui: ext.ui,
     control,
@@ -204,12 +205,28 @@ test("/help lists the settings aliases with what they run", async () => {
 test("/help lists other extensions' commands in their own group, descriptions cut short", async () => {
   const { run, ext } = await setup()
   await ext.load((api) => {
-    api.registerCommand({ name: "deploy", description: `Skill: ${"very long ".repeat(20)}`, run: () => {} })
+    api.registerCommand({ name: "deploy", description: `Ship: ${"very long ".repeat(20)}`, run: () => {} })
+  }, "my-ext")
+  const { text } = await run("/help")
+  expect(text.indexOf("Commands:")).toBeLessThan(text.indexOf("From my-ext:"))
+  expect(text).toMatch(/\/deploy\s+Ship: very long.*…\n/)
+  expect(text.split("\n").every((l) => l.length < 120)).toBe(true)
+})
+
+test("/help lists the skills in their own section, run with $", async () => {
+  const { run, ext } = await setup({}, [], { ds: "model deepseek/deepseek-flash" })
+  expect((await run("/help")).text).toContain("Skills: none found ($ runs a skill: $<name> [arguments]).")
+  await ext.load((api) => {
+    api.registerSkill({ name: "review-pr", description: "Review a pull request", run: () => {} })
+    api.registerSkill({ name: "deploy", description: `Ship ${"very long ".repeat(20)}`, run: () => {} })
   }, "builtin:skills")
   const { text } = await run("/help")
-  expect(text.indexOf("Commands:")).toBeLessThan(text.indexOf("From builtin:skills:"))
-  expect(text).toMatch(/\/deploy\s+Skill: very long.*…\n?$/)
-  expect(text.split("\n").every((l) => l.length < 120)).toBe(true)
+  expect(text).toMatch(
+    /\n\nSkills \(\$ runs a skill: \$<name> \[arguments\]\):\n\$deploy\s+Ship very long.*…\n\$review-pr\s+Review a pull request\n\nAliases from settings/,
+  )
+  // Skills are not commands.
+  expect(text).not.toContain("/deploy")
+  expect(text).not.toContain("From builtin:skills")
 })
 
 test("/status right at startup waits briefly for the git facts", async () => {
