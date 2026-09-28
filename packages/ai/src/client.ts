@@ -54,6 +54,7 @@ export function createAi(opts: AiOptions = {}): Ai {
         },
         signal: signal ?? new AbortController().signal,
         fetch: doFetch,
+        ...(p.compat ? { compat: p.compat } : {}),
       })
     },
     registerProvider: (p) => void providers.set(p.id, p),

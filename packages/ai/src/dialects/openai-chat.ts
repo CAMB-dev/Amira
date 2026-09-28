@@ -1,4 +1,4 @@
-import type { Dialect, DialectContext } from "../dialect.ts"
+import type { Dialect, DialectContext, ProviderCompat } from "../dialect.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
 import { ChatAccumulator } from "./openai-chat-accumulate.ts"
@@ -22,7 +22,7 @@ export const openaiChat: Dialect = {
           ...(ctx.endpoint.apiKey ? { authorization: `Bearer ${ctx.endpoint.apiKey}` } : {}),
           ...ctx.endpoint.headers,
         },
-        body: JSON.stringify(requestBody(req)),
+        body: JSON.stringify(requestBody(req, ctx.compat)),
         signal: ctx.signal,
       })
     } catch (e) {
@@ -87,20 +87,20 @@ export const openaiChat: Dialect = {
   },
 }
 
-function requestBody(req: ModelRequest): Record<string, unknown> {
+function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model.id,
     messages: toChatMessages(req.systemPrompt, req.messages, { images: req.model.caps.images }),
     stream: true,
-    stream_options: { include_usage: true },
   }
+  if (compat.streamUsage !== false) body.stream_options = { include_usage: true }
   if (req.tools.length && req.model.caps.tools === "native") {
     body.tools = req.tools.map((t) => ({
       type: "function",
       function: { name: t.name, description: t.description, parameters: t.parameters },
     }))
   }
-  if (req.maxTokens) body.max_tokens = req.maxTokens
+  if (req.maxTokens) body[compat.maxTokensField ?? "max_tokens"] = req.maxTokens
   if (req.temperature !== undefined) body.temperature = req.temperature
   return body
 }

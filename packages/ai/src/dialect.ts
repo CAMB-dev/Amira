@@ -7,10 +7,19 @@ export interface Endpoint {
   headers?: Record<string, string>
 }
 
+/** Wire-format differences between services that speak the same dialect. */
+export interface ProviderCompat {
+  /** Field carrying the output token limit. Defaults to "max_tokens". */
+  maxTokensField?: "max_tokens" | "max_completion_tokens"
+  /** Whether to ask for usage in the stream. Defaults to true. */
+  streamUsage?: boolean
+}
+
 export interface DialectContext {
   endpoint: Endpoint
   signal: AbortSignal
   fetch: typeof fetch
+  compat?: ProviderCompat
 }
 
 /** A wire protocol adapter. There are few dialects and many providers. */
