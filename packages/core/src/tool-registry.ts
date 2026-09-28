@@ -69,7 +69,7 @@ export class ToolRegistry {
   deferred(): ToolDefinition[] {
     return this.#current()
       .map((r) => r.tool)
-      .filter((t) => t.exposure === "deferred")
+      .filter((t) => t.exposure === "deferred" && !this.#disabled.has(t.name))
   }
 
   specs(): ToolSpec[] {

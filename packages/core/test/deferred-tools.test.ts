@@ -54,6 +54,30 @@ test("deferred tools are hidden from the tool list but named in the system promp
   expect(req.systemPrompt).toContain("- mcp__web__fetch: Fetches a web page.")
 })
 
+test("disabled deferred tools are left out of the listing", async () => {
+  const tools = registry()
+  tools.setDisabled(["mcp__web__fetch"])
+  const { agent, mock } = setup([{ text: "hi" }], tools)
+  await agent.prompt("go")
+  expect(mock.requests[0]!.systemPrompt).toContain("- mcp__math__add:")
+  expect(mock.requests[0]!.systemPrompt).not.toContain("mcp__web__fetch")
+})
+
+test("system.build sees the deferred-tools section, and tools registered meanwhile are listed", async () => {
+  const tools = registry()
+  const { agent, mock } = setup([{ text: "hi" }], tools)
+  let seen = ""
+  agent.interceptors.add("system.build", async (v) => {
+    seen = v.sections.find((s) => s.name === "deferred-tools")?.text ?? ""
+    tools.register(deferredTool("mcp__late__tool", "Registered while waiting."), "test")
+    return { action: "pass" }
+  })
+  await agent.prompt("go")
+  expect(seen).toContain("- mcp__math__add:")
+  expect(seen).not.toContain("mcp__late__tool")
+  expect(mock.requests[0]!.systemPrompt).toContain("- mcp__late__tool: Registered while waiting.")
+})
+
 test("without deferred tools there is no section and no tool_search", async () => {
   const tools = new ToolRegistry()
   tools.register(plain, "test")
