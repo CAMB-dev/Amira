@@ -111,7 +111,11 @@ test("plain print mode shows sub-agents' tool calls on stderr but only the comma
       description: "",
       parameters: {},
       execute: async (_p, ctx) => {
-        const r = await ctx.session!.spawn!({ role: "explorer", prompt: "sub task" }).result()
+        const r = await ctx.session!.spawn!({
+          role: "explorer",
+          title: "Look into it",
+          prompt: "sub task",
+        }).result()
         return textResult(r.text)
       },
     }),
@@ -121,7 +125,7 @@ test("plain print mode shows sub-agents' tool calls on stderr but only the comma
   expect(await runPrint(agent, "go", false, { io })).toBe(0)
   expect(io.out).toBe("all done\n")
   expect(io.err).toMatch(
-    /^● delegate \n◆ explorer started: sub task\n {2}↳ explorer ● echo y\n◆ explorer done \(\d+\.\ds\)\n$/,
+    /^● delegate \n◆ Look into it · explorer started: sub task\n {2}↳ explorer ● echo y\n◆ Look into it · explorer done \(\d+\.\ds\)\n$/,
   )
 })
 

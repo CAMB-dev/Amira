@@ -16,6 +16,7 @@ import {
   type Budget,
   type ChildSession,
   fallbackTitle,
+  MAX_TITLE_CHARS,
   type SpawnContext,
   type SpawnOptions,
   type SubagentInfo,
@@ -286,7 +287,12 @@ export class AgentTree {
       ...(this.#opts.compaction ? { compaction: this.#opts.compaction } : {}),
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
     })
-    const title = opts.title?.replace(/\s+/g, " ").trim() || fallbackTitle(opts.prompt)
+    const given = opts.title?.replace(/\s+/g, " ").trim()
+    const title = !given
+      ? fallbackTitle(opts.prompt)
+      : given.length > MAX_TITLE_CHARS
+        ? `${given.slice(0, MAX_TITLE_CHARS - 1)}…`
+        : given
     parent.recordSubagent(agent.sessionId, opts.role, title)
     const child = new Child(
       agent,
