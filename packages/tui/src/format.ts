@@ -1,5 +1,5 @@
 import type { ToolResult } from "@amira/api"
-import type { Theme } from "@amira/tui-kit"
+import { type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 
 /** One-line summary of tool arguments, e.g. `read src/index.ts` or `bash bun test`. */
 export function summarizeArgs(args: Record<string, unknown>, max = 80): string {
@@ -19,13 +19,17 @@ function resultText(result: ToolResult): string {
     .trim()
 }
 
-/** The committed lines for a finished tool call: a header and a one-line result preview. */
+/**
+ * The committed lines for a finished tool call: a header and a one-line result preview,
+ * each fitted to `width` so a tool call always takes exactly two rows.
+ */
 export function toolLines(
   theme: Theme,
   name: string,
   args: Record<string, unknown>,
   result: ToolResult,
   durationMs: number,
+  width = 80,
 ): string[] {
   const failed = result.isError === true
   const bullet = failed ? theme.error("●") : theme.success("●")
@@ -33,11 +37,13 @@ export function toolLines(
   const head = `${bullet} ${theme.accent(name)}${summary ? ` ${summary}` : ""}`
   const text = resultText(result)
   const lines = text ? text.split("\n") : []
-  const first = (lines[0] ?? "(no output)").slice(0, 200)
   const more = lines.length > 1 ? ` (+${lines.length - 1} lines)` : ""
   const time = durationMs >= 1000 ? ` · ${(durationMs / 1000).toFixed(1)}s` : ""
+  const suffix = more + time
+  const room = Math.max(8, width - 4 - visibleWidth(suffix))
+  const first = truncateToWidth(lines[0] ?? "(no output)", room, "…")
   const preview = failed ? theme.error(first) : theme.muted(first)
-  return [head, `  ${theme.muted("⎿")} ${preview}${theme.muted(more + time)}`]
+  return [truncateToWidth(head, width, "…"), `  ${theme.muted("⎿")} ${preview}${theme.muted(suffix)}`]
 }
 
 /** Committed lines for the user's message. */
