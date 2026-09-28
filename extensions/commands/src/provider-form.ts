@@ -72,24 +72,43 @@ export function draftFromValues(values: FormValues, id?: string): ProviderDraft 
   }
 }
 
+/** What a new provider's form starts with, e.g. from `amira provider add` flags. */
+export type ProviderFormInitial = Partial<
+  Pick<ProviderDraft, "dialect" | "id" | "baseUrl" | "keySource" | "apiKeyEnv" | "models">
+>
+
 /**
  * The form of /provider add and /provider edit: where the provider is, how it gets its key,
  * which models it offers (fetched from it, or typed), defaults for models the catalog does
  * not know, and an opt-in connection test. Nothing is sent anywhere unless the user presses
- * Fetch models or Test connection. `dialect` preselects the protocol picked before the form.
+ * Fetch models or Test connection. `initial` fills in a new provider's form, such as the
+ * protocol picked before it.
  */
 export function providerFormSpec(
   admin: ProviderAdmin,
   existing?: ProviderDraft,
-  opts: { dialect?: string } = {},
+  initial: ProviderFormInitial = {},
 ): FormSpec {
   const editing = existing !== undefined
+  const start: ProviderFormInitial = existing ?? initial
   const stored = existing ? admin.storedKeyHint(existing.id) : undefined
   const dialects = admin.dialects().map((d) => ({
     value: d,
     ...(DIALECT_NOTES[d] ? { description: DIALECT_NOTES[d] } : {}),
   }))
-  const known = existing?.models.length ? admin.describeModels(existing, existing.models) : []
+  const startModels = start.models ?? []
+  const known = startModels.length
+    ? admin.describeModels(
+        existing ?? {
+          id: initial.id ?? "",
+          dialect: initial.dialect ?? "",
+          baseUrl: initial.baseUrl ?? "",
+          keySource: "none",
+          models: startModels,
+        },
+        startModels,
+      )
+    : []
   const draft = (values: FormValues) => draftFromValues(values, existing?.id)
   return {
     title: editing ? `Edit provider ${existing.id}` : "Add a provider",
@@ -118,6 +137,7 @@ export function providerFormSpec(
               pattern: "[a-z0-9][a-z0-9._-]*",
               patternMessage: "use lower-case letters, digits and . _ -",
               help: "Models are then chosen as <id>/<model>.",
+              ...(initial.id ? { default: initial.id } : {}),
               validate: (v: string) =>
                 admin.exists(v) ? `"${v}" exists already; change it with /provider edit ${v}` : undefined,
             },
@@ -128,7 +148,7 @@ export function providerFormSpec(
         label: "Protocol",
         section: "Provider",
         options: dialects,
-        default: existing?.dialect ?? opts.dialect ?? "openai-chat",
+        default: start.dialect ?? "openai-chat",
       },
       {
         type: "text",
@@ -137,7 +157,7 @@ export function providerFormSpec(
         section: "Provider",
         required: true,
         placeholder: "https://api.example.com/v1",
-        ...(existing ? { default: existing.baseUrl } : {}),
+        ...(start.baseUrl ? { default: start.baseUrl } : {}),
         validate: (v) => {
           try {
             const u = new URL(v.trim())
@@ -155,7 +175,7 @@ export function providerFormSpec(
         label: "Key",
         section: "API key",
         options: KEY_CHOICES,
-        default: existing?.keySource ?? "auth",
+        default: start.keySource ?? "auth",
       },
       {
         type: "secret",
@@ -176,7 +196,7 @@ export function providerFormSpec(
         placeholder: "e.g. MY_PROVIDER_API_KEY",
         pattern: "[A-Za-z_][A-Za-z0-9_]*",
         patternMessage: "letters, digits and _",
-        ...(existing?.apiKeyEnv ? { default: existing.apiKeyEnv } : {}),
+        ...(start.apiKeyEnv ? { default: start.apiKeyEnv } : {}),
         help: "Read each time a request is sent.",
       },
       {
@@ -213,7 +233,7 @@ export function providerFormSpec(
         section: "Models",
         allowCustom: true,
         options: known.map((m) => ({ value: m.id, description: modelDescription(m) })),
-        default: existing?.models ?? [],
+        default: startModels,
         help: "Space picks · type an id and press Enter to add one the list lacks.",
       },
       {

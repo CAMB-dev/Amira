@@ -1,11 +1,12 @@
 import { statSync } from "node:fs"
-import type {
-  AnyEvent,
-  CommandDefinition,
-  FrontendView,
-  ToolDetailLevel,
-  TuiSettings,
-  UserMessage,
+import {
+  type AnyEvent,
+  type CommandDefinition,
+  type FrontendView,
+  modelLabel,
+  type ToolDetailLevel,
+  type TuiSettings,
+  type UserMessage,
 } from "@amira/api"
 import {
   type Agent,
@@ -103,6 +104,8 @@ export interface InteractiveOptions {
   startupEvents?: AnyEvent[]
   /** Sent as the first message once the UI is up. */
   initialPrompt?: string
+  /** Shown as a warning under the banner, e.g. that no model is selected yet. */
+  notice?: string
   /** Called once the UI listens to the bus, e.g. to announce the session. */
   onReady?: () => void
   terminal?: Terminal
@@ -1186,10 +1189,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   reader.start()
   termStatus.start()
   commitBlock("banner", [
-    `${theme.accent("Amira")} ${theme.muted(`· ${agent.model.provider}/${agent.model.id} · ${agent.cwd}`)}`,
+    `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${agent.cwd}`)}`,
   ])
   if (agent.messages.length) showHistory(agent)
   for (const e of opts.startupEvents ?? []) onEvent(e)
+  if (opts.notice) commitBlock("notice", note("warning", opts.notice))
   // The first frame carries the banner, history and startup messages.
   renderer.start()
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)

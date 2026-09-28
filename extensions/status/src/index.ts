@@ -1,5 +1,5 @@
 import path from "node:path"
-import { defineExtension, type SessionStatus } from "@amira/api"
+import { defineExtension, modelLabel, type SessionStatus } from "@amira/api"
 
 /** Compact token counts: 999, 1.2k, 46k, 2.5M. Rounds before picking the unit. */
 export function formatTokens(n: number): string {
@@ -81,7 +81,7 @@ export default defineExtension((api) => {
   })
   api.on("session.start", (e) => {
     if (!own(e)) return
-    model = `${e.data.model.provider}/${e.data.model.model}`
+    model = modelLabel(e.data.model)
     if (e.data.reason !== "resume") {
       context = 0
       output = 0
@@ -105,9 +105,14 @@ export default defineExtension((api) => {
   })
   api.on("message.start", (e) => {
     if (!own(e)) return
-    model = `${e.data.model.provider}/${e.data.model.model}`
+    model = modelLabel(e.data.model)
     if (e.data.contextWindow) contextWindow = e.data.contextWindow
     firstDeltaAt = undefined
+  })
+  api.on("model.changed", (e) => {
+    if (!own(e)) return
+    model = modelLabel(e.data.to)
+    api.requestRender()
   })
   api.on("message.delta", (e) => {
     if (own(e)) firstDeltaAt ??= e.ts

@@ -234,6 +234,26 @@ test("/model switches with an argument and asks without one", async () => {
   expect(done.candidates.map((c) => c.value)).toEqual(["deepseek/deepseek-pro"])
 })
 
+test("/model without a model or anything to pick says what to do", async () => {
+  const none = { provider: "", model: "" }
+  const info = () => ({
+    id: "s1",
+    cwd: "/work",
+    model: none,
+    contextWindow: 1000,
+    busy: false,
+    shell: "auto" as const,
+  })
+  const empty = await setup({ info, models: () => [], providers: () => [] })
+  expect((await empty.run("/model")).error).toBe("No providers configured — add one with /provider add")
+  const unlisted = await setup({ info, models: () => [] })
+  expect((await unlisted.run("/model")).error).toContain("No models to pick from")
+  const some = await setup({ info }, [undefined])
+  expect((await some.run("/model")).text).toBe("Model: (no model). Pass one to switch: /model provider/model")
+  expect(some.asked[0]).toContain("Model (now (no model))")
+  expect((await some.run("/status")).text).toContain("(no model)")
+})
+
 test("/status shows model, provider, session, context, cost, cwd and git", async () => {
   const { run, bus } = await setup({
     replies: () => [reply("deepseek/deepseek-flash", 1000, 100, 0.002)],

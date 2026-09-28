@@ -101,7 +101,11 @@ test("project files cannot change where requests and API keys go", () => {
   expect(r.warnings.join("\n")).toContain('"providers.mine.apiKeyEnvFallbacks" is ignored')
   expect(r.warnings[4]).toContain(`${localFile()}: "providers.anthropic.baseUrl" is ignored`)
   const anthropic = providersFromSettings(r.settings.providers).find((p) => p.id === "anthropic")
-  expect(anthropic).toEqual({ id: "anthropic", dialect: "anthropic-messages", baseUrl: "https://api.anthropic.com" })
+  expect(anthropic).toEqual({
+    id: "anthropic",
+    dialect: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+  })
 })
 
 test("project files cannot choose web backends' endpoints or open the private network", () => {

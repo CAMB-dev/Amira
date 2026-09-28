@@ -72,3 +72,8 @@ export interface ProviderAdmin {
   /** Stores a new key for the provider in auth.json and uses it at once. */
   setKey(id: string, apiKey: string): Promise<string>
 }
+
+/** "provider/model", or "(no model)" while none is selected (NO_MODEL has no provider). */
+export function modelLabel(m: { provider: string; model: string }): string {
+  return m.provider ? `${m.provider}/${m.model}` : "(no model)"
+}

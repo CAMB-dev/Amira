@@ -105,7 +105,9 @@ test("no provider is built in: only the configured ones exist", () => {
 })
 
 test("removing a provider forgets it", () => {
-  const ai = createAi({ providers: [{ id: "anthropic", dialect: "anthropic-messages", baseUrl: "http://a" }] })
+  const ai = createAi({
+    providers: [{ id: "anthropic", dialect: "anthropic-messages", baseUrl: "http://a" }],
+  })
   ai.removeProvider?.("anthropic")
   expect(ai.providers()).toEqual([])
   expect(() => ai.model("anthropic/x")).toThrow(/unknown provider "anthropic"/)

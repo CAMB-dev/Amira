@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect } from "@amira/ai"
+import { createAi, createMockDialect, NO_MODEL } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
 import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import statusExtension, {
@@ -29,10 +29,23 @@ function setup() {
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
   })
   const agent = new Agent({ ai, model: ai.model("mock/m1"), cwd: "/work/proj", systemPrompt: "", bus })
-  return { bus, host, agent }
+  return { bus, host, agent, ai }
 }
 
 const texts = (host: ExtensionHost) => host.status.snapshot().map((i) => [i.id, i.align, i.text])
+
+test("shows (no model) until one is picked, and follows a model switch at once", async () => {
+  const { bus, host, agent, ai } = setup()
+  await host.load(statusExtension, "builtin:status")
+  const model = () => host.status.snapshot().find((i) => i.id === "model")?.text
+  agent.setModel(NO_MODEL)
+  agent.start("startup")
+  await bus.flush()
+  expect(model()).toBe("(no model)")
+  agent.setModel(ai.model("mock/m2"))
+  await bus.flush()
+  expect(model()).toBe("mock/m2")
+})
 
 test("fills the status bar from session and workspace events", async () => {
   const { bus, host, agent } = setup()
