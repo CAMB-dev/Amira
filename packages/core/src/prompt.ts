@@ -1,9 +1,8 @@
 import os from "node:os"
+import type { SystemSection } from "@amira/api"
 
-export interface PromptSection {
-  name: string
-  text: string
-}
+/** The same shape extensions see in the system.build interceptor. */
+export type PromptSection = SystemSection
 
 export interface PromptEnv {
   cwd: string

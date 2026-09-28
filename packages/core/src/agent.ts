@@ -557,7 +557,7 @@ export class Agent {
     }
     this.#emit(turn, "compact.start", {
       reason,
-      messages: split.older.length,
+      replacing: split.older.length,
       kept: split.kept.length,
       ...(this.#contextTokens !== undefined ? { tokens: this.#contextTokens } : {}),
     })

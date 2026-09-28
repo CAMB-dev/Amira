@@ -85,7 +85,7 @@ export async function runPrint(
           io.stdout("\n")
           endedWithNewline = true
         }
-        io.stderr(`● compacting ${e.data.messages} older messages\n`)
+        io.stderr(`● compacting ${e.data.replacing} older messages\n`)
         break
       case "compact.failed":
         io.stderr(`  ✗ compaction failed: ${e.data.error}\n`)

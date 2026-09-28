@@ -162,7 +162,7 @@ test("compacts before the next model call once the context passes the threshold"
   expect((next[0]!.content[0] as { text: string }).text).toContain("SUMMARY OF r1")
   expect(types(events).filter((t) => t.startsWith("compact."))).toEqual(["compact.start", "compact.end"])
   const start = events.find((e) => e.type === "compact.start")!
-  expect(start.data).toMatchObject({ reason: "threshold", messages: 2, kept: 3, tokens: 900 })
+  expect(start.data).toMatchObject({ reason: "threshold", replacing: 2, kept: 3, tokens: 900 })
   expect(start.turnId).toBeDefined()
 
   // The file keeps the originals and restores to the compacted view.

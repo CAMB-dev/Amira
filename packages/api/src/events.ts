@@ -88,10 +88,10 @@ export interface EventMap {
   /** The session switched models; later turns use `to`. */
   "model.changed": { from: ModelRef; to: ModelRef }
   /**
-   * Older history is being summarized. `messages` will be replaced, `kept` stay verbatim;
-   * `tokens` is the context size that triggered it, when known.
+   * Older history is being summarized. `replacing` counts the messages that will be replaced,
+   * `kept` those that stay verbatim; `tokens` is the context size that triggered it, when known.
    */
-  "compact.start": { reason: "threshold" | "manual"; messages: number; kept: number; tokens?: number }
+  "compact.start": { reason: "threshold" | "manual"; replacing: number; kept: number; tokens?: number }
   "compact.end": { summary: string; replaced: number; kept: number }
   /** Compaction did not happen; the conversation continues uncompacted. */
   "compact.failed": { error: string }
