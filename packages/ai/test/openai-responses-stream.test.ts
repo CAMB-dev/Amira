@@ -80,6 +80,12 @@ const callEvents = (id: string, callId: string, name: string, index: number, del
 const stream = (events: { type: string }[]) => () => sse(namedSSE(events))
 const go = (events: { type: string }[]) => run(openaiResponses, req("openai-responses"), stream(events))
 const done = (evs: StreamEvent[]) => evs.at(-1) as DoneEvent
+/** Text from an output message, signed with its item id for replay. */
+const said = (text: string, id = "msg_1") => ({
+  type: "text" as const,
+  text,
+  signature: { dialect: "openai-responses", value: JSON.stringify({ id }) },
+})
 
 test("streams text and maps usage with cached tokens", async () => {
   const { evs } = await go([
@@ -95,7 +101,7 @@ test("streams text and maps usage with cached tokens", async () => {
   ])
   expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "text.delta", "done"])
   const { message } = done(evs)
-  expect(message.content).toEqual([{ type: "text", text: "Hello" }])
+  expect(message.content).toEqual([said("Hello")])
   expect(message.stopReason).toBe("end")
   expect(message.usage).toEqual({ input: 60, output: 12, cacheRead: 40, cacheWrite: 0 })
 })
@@ -186,7 +192,7 @@ test("reasoning summaries stream as thinking and keep the encrypted content as t
         value: JSON.stringify({ id: "rs_1", encrypted_content: "gAAAA-enc" }),
       },
     },
-    { type: "text", text: "Hi" },
+    said("Hi"),
   ])
 })
 
@@ -225,9 +231,36 @@ test("round trips reasoning: the streamed message replays as the same reasoning 
     stream([completed()]),
   )
   expect(seen.body.input).toEqual([
-    { type: "reasoning", summary: [], encrypted_content: "secret" },
+    { type: "reasoning", id: "rs_9", summary: [], encrypted_content: "secret" },
     { type: "function_call", call_id: "call_a", name: "read", arguments: "{}" },
     { type: "function_call_output", call_id: "call_a", output: "" },
+  ])
+})
+
+test("round trips output messages with their id and phase", async () => {
+  const item = { id: "msg_7", type: "message", role: "assistant", phase: "final_answer", content: [] }
+  const { evs } = await go([
+    created,
+    ev("response.output_item.added", { output_index: 0, item: { ...item, status: "in_progress" } }),
+    ev("response.output_text.delta", { item_id: "msg_7", output_index: 0, content_index: 0, delta: "Hi" }),
+    ev("response.output_item.done", { output_index: 0, item: { ...item, status: "completed" } }),
+    completed(),
+  ])
+  const first = done(evs).message
+  const { seen } = await run(
+    openaiResponses,
+    req("openai-responses", { messages: [first] }),
+    stream([completed()]),
+  )
+  expect(seen.body.input).toEqual([
+    {
+      type: "message",
+      id: "msg_7",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "Hi", annotations: [] }],
+      phase: "final_answer",
+    },
   ])
 })
 
@@ -245,7 +278,7 @@ test("drops empty reasoning items that carry nothing to replay", async () => {
     ...textEvents("msg_1", 1, ["ok"]),
     completed(),
   ])
-  expect(done(evs).message.content).toEqual([{ type: "text", text: "ok" }])
+  expect(done(evs).message.content).toEqual([said("ok")])
 })
 
 test("response.incomplete for max_output_tokens reports maxTokens", async () => {
@@ -276,7 +309,7 @@ test("response.incomplete for content_filter is an error with the partial messag
   const e = evs.at(-1) as ErrorEvent
   expect(e.type).toBe("error")
   expect(e.error.code).toBe("content_filter")
-  expect(e.message.content).toEqual([{ type: "text", text: "par" }])
+  expect(e.message.content).toEqual([said("par")])
 })
 
 test("response.failed keeps code and partial message; server errors are retryable", async () => {
@@ -292,7 +325,7 @@ test("response.failed keeps code and partial message; server errors are retryabl
   expect(e.error).toEqual({ message: "The server had an error", code: "server_error", status: 500 })
   expect(e.retryable).toBe(true)
   expect(e.message.stopReason).toBe("error")
-  expect(e.message.content).toEqual([{ type: "text", text: "par" }])
+  expect(e.message.content).toEqual([said("par")])
 })
 
 test("an in-stream error event keeps its code; rate limits are retryable, bad requests are not", async () => {
@@ -314,7 +347,7 @@ test("a stream that ends before response.completed is a retryable error", async 
   const e = evs.at(-1) as ErrorEvent
   expect(e.type).toBe("error")
   expect(e.retryable).toBe(true)
-  expect(e.message.content).toEqual([{ type: "text", text: "par" }])
+  expect(e.message.content).toEqual([said("par")])
 })
 
 test("reads events named only in the SSE event field", async () => {
@@ -389,7 +422,7 @@ test("a non-SSE 200 with a whole response is read as one", async () => {
         value: JSON.stringify({ id: "rs_1", encrypted_content: "enc" }),
       },
     },
-    { type: "text", text: "hi" },
+    said("hi"),
     { type: "toolCall", id: "call_a", name: "read", args: { p: 1 } },
   ])
 })

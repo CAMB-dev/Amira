@@ -4,6 +4,8 @@
 export interface TextBlock {
   type: "text"
   text: string
+  /** Opaque provider data about the text, such as its output item id; only its own dialect reads it. */
+  signature?: { dialect: string; value: string }
 }
 
 export interface ImageBlock {

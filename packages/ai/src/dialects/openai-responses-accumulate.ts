@@ -11,7 +11,12 @@ import type {
 import { emptyUsage } from "../types.ts"
 import type { ErrorEvent } from "./http-stream.ts"
 import { responsesError } from "./openai-responses-errors.ts"
-import { encodeReasoning, RESPONSES_DIALECT } from "./openai-responses-input.ts"
+import {
+  encodeMessage,
+  encodeReasoning,
+  type MessageSignature,
+  RESPONSES_DIALECT,
+} from "./openai-responses-input.ts"
 
 interface Call {
   index: number
@@ -36,6 +41,7 @@ export class ResponsesAccumulator {
   readonly #calls = new Map<string, Call>()
   readonly #reasoning = new Map<string, Reasoning>()
   readonly #texts = new Map<string, TextBlock>()
+  readonly #messages = new Map<string, MessageSignature>()
   #terminal: StreamEvent | undefined
 
   constructor(model: ModelRef) {
@@ -120,6 +126,7 @@ export class ResponsesAccumulator {
     const key = itemKey({ item_id: item?.id, output_index: outputIndex })
     if (item?.type === "function_call") yield* this.#call(key, item)
     else if (item?.type === "reasoning") this.#reasoningFor(key)
+    else if (item?.type === "message") this.#noteMessage(key, item)
   }
 
   *#itemDone(item: any, outputIndex: unknown): Generator<StreamEvent> {
@@ -151,13 +158,31 @@ export class ResponsesAccumulator {
         }
         if (!r.block.text) r.block.redacted = true
       }
-    } else if (item?.type === "message" && !this.#texts.has(key)) {
+    } else if (item?.type === "message") {
+      this.#noteMessage(key, item)
+      if (this.#texts.has(key)) return
       // Servers that skip the deltas still send the whole message here.
       for (const part of item.content ?? []) {
         if (part?.type === "output_text" && part.text) yield* this.#text(key, part.text)
         else if (part?.type === "refusal" && part.refusal) yield* this.#text(key, part.refusal)
       }
     }
+  }
+
+  /** Remembers an output message's id and phase so its text can be replayed as that item. */
+  #noteMessage(key: string, item: any) {
+    if (typeof item.id !== "string" || !item.id) return
+    this.#messages.set(key, {
+      id: item.id,
+      ...(typeof item.phase === "string" && item.phase ? { phase: item.phase } : {}),
+    })
+    this.#sign(key)
+  }
+
+  #sign(key: string) {
+    const block = this.#texts.get(key)
+    const meta = this.#messages.get(key)
+    if (block && meta) block.signature = { dialect: RESPONSES_DIALECT, value: encodeMessage(meta) }
   }
 
   *#text(key: string, delta: unknown): Generator<StreamEvent> {
@@ -167,6 +192,7 @@ export class ResponsesAccumulator {
       block = { type: "text", text: "" }
       this.#texts.set(key, block)
       this.message.content.push(block)
+      this.#sign(key)
     }
     block.text += delta
     yield { type: "text.delta", text: delta }

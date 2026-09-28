@@ -69,8 +69,16 @@ test("translates every block type into input items", async () => {
             value: JSON.stringify({ id: "rs_1", encrypted_content: "enc" }),
           },
         },
-        { type: "text", text: "Reading" },
-        { type: "text", text: " it." },
+        {
+          type: "text",
+          text: "Reading",
+          signature: { dialect: "openai-responses", value: '{"id":"msg_1"}' },
+        },
+        {
+          type: "text",
+          text: " it.",
+          signature: { dialect: "openai-responses", value: '{"id":"msg_2","phase":"commentary"}' },
+        },
         { type: "toolCall", id: "call_1", name: "read", args: { path: "a" } },
       ],
     },
@@ -93,18 +101,48 @@ test("translates every block type into input items", async () => {
         { type: "input_image", image_url: "data:image/png;base64,AAA", detail: "auto" },
       ],
     },
-    { type: "reasoning", summary: [{ type: "summary_text", text: "plan" }], encrypted_content: "enc" },
+    {
+      type: "reasoning",
+      id: "rs_1",
+      summary: [{ type: "summary_text", text: "plan" }],
+      encrypted_content: "enc",
+    },
     {
       type: "message",
+      id: "msg_1",
       role: "assistant",
-      content: [
-        { type: "output_text", text: "Reading" },
-        { type: "output_text", text: " it." },
-      ],
+      status: "completed",
+      content: [{ type: "output_text", text: "Reading", annotations: [] }],
+    },
+    {
+      type: "message",
+      id: "msg_2",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: " it.", annotations: [] }],
+      phase: "commentary",
     },
     { type: "function_call", call_id: "call_1", name: "read", arguments: '{"path":"a"}' },
     { type: "function_call_output", call_id: "call_1", output: "file a" },
-    { type: "message", role: "assistant", content: [{ type: "output_text", text: "Done." }] },
+    { role: "assistant", content: "Done." },
+  ])
+})
+
+test("drops reasoning that is not followed by output in its turn", async () => {
+  const signed = (id: string) => ({
+    type: "thinking" as const,
+    text: "",
+    redacted: true,
+    signature: { dialect: "openai-responses", value: JSON.stringify({ id, encrypted_content: id }) },
+  })
+  const messages: Message[] = [
+    { role: "assistant", model, content: [signed("rs_1"), { type: "text", text: "a" }, signed("rs_2")] },
+    { role: "assistant", model, content: [signed("rs_3")] },
+  ]
+  const { body } = await sent({ messages })
+  expect(body.input).toEqual([
+    { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "rs_1" },
+    { role: "assistant", content: "a" },
   ])
 })
 
@@ -129,15 +167,7 @@ test("replays redacted reasoning and turns foreign thinking into text", async ()
   const { body } = await sent({ messages })
   expect(body.input).toEqual([
     { type: "reasoning", summary: [], encrypted_content: "raw" },
-    {
-      type: "message",
-      role: "assistant",
-      content: [
-        { type: "output_text", text: "<thinking>\ntheirs\n</thinking>" },
-        { type: "output_text", text: "<thinking>\nunsigned\n</thinking>" },
-        { type: "output_text", text: "hi" },
-      ],
-    },
+    { role: "assistant", content: "<thinking>\ntheirs\n</thinking><thinking>\nunsigned\n</thinking>hi" },
   ])
 })
 
