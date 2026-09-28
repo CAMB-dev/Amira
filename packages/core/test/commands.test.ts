@@ -254,6 +254,13 @@ test("completion ranks command names, then the command's own argument candidates
     "test",
   )
   expect((await host.complete("/mo")).candidates.map((c) => c.value)).toEqual(["mode", "model"])
+  // Names and sync completers answer at once, so the popup draws them with the key.
+  expect(host.complete("/mo")).not.toBeInstanceOf(Promise)
+  expect(host.complete("/model flash")).not.toBeInstanceOf(Promise)
+  registry.register(cmd("later", { args: { complete: async () => [{ value: "x" }] } }), "test")
+  const later = host.complete("/later ")
+  expect(later).toBeInstanceOf(Promise)
+  expect(await later).toEqual({ command: "later", candidates: [{ value: "x" }] })
   expect(await host.complete("/model flash")).toEqual({
     command: "model",
     candidates: [{ value: "deepseek/deepseek-flash" }],

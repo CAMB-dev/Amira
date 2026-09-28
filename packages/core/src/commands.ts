@@ -257,6 +257,12 @@ export interface CommandHostOptions {
   aliases?: Record<string, string>
 }
 
+/** Candidates for a command line; `command` is set once the arguments are being completed. */
+export type CompletionResult = {
+  command?: string
+  candidates: CommandCandidate[]
+}
+
 /** What a typed name runs: a command, with the argument text an alias puts in front. */
 type Resolved =
   | { entry: Registered; prepend: string }
@@ -339,8 +345,11 @@ export class CommandHost {
    * typed, otherwise the command's own argument candidates. Both are ranked against the text.
    * A command matches by its name or any alias and is offered by its name; settings aliases
    * are offered by their own name, labelled with what they run.
+   *
+   * The answer comes at once unless the command's completer is async, so a frontend can
+   * draw the list in the same frame as the key that asked for it.
    */
-  async complete(line: string): Promise<{ command?: string; candidates: CommandCandidate[] }> {
+  complete(line: string): CompletionResult | Promise<CompletionResult> {
     const nameOnly = /^\/(\S*)$/.exec(line)
     if (nameOnly) {
       const items = [
@@ -375,12 +384,20 @@ export class CommandHost {
     // An alias that fixes arguments leaves nothing to complete.
     if (!complete || prepend) return { command, candidates: [] }
     const prefix = withArgs[2]!.trimStart()
+    const ranked = (all: unknown): CompletionResult => ({
+      command,
+      candidates: rankMatches(prefix, Array.isArray(all) ? (all as CommandCandidate[]) : [], (c) => c.value),
+    })
+    let all: CommandCandidate[] | Promise<CommandCandidate[]>
     try {
-      const all = await complete(prefix, { cwd: this.#agent.cwd, session: this.#opts.control })
-      return { command, candidates: rankMatches(prefix, Array.isArray(all) ? all : [], (c) => c.value) }
+      all = complete(prefix, { cwd: this.#agent.cwd, session: this.#opts.control })
     } catch {
       return { command, candidates: [] }
     }
+    if (Array.isArray(all) || typeof (all as { then?: unknown } | undefined)?.then !== "function") {
+      return ranked(all)
+    }
+    return Promise.resolve(all).then(ranked, () => ({ command, candidates: [] }))
   }
 
   /** Runs one command line. Never throws: failures are printed and returned. */
