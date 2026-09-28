@@ -59,7 +59,7 @@ export class Dialog implements Component {
       else if (matchesKey(e, "down") || matchesKey(e, "tab"))
         this.#selected = n ? (this.#selected + 1) % n : 0
       else if (matchesKey(e, "enter")) return n ? this.#finish(options[this.#selected]!) : true
-      else if (!this.#filter && e.type === "key" && e.text && /^[1-9]$/.test(e.text) && Number(e.text) <= n) {
+      else if (this.#digitsPick && e.type === "key" && e.text && /^[1-9]$/.test(e.text) && Number(e.text) <= n) {
         return this.#finish(options[Number(e.text) - 1]!)
       } else if (e.type === "key" && e.name === "backspace" && this.#filter) {
         this.#setFilter(this.#filter.slice(0, -1))
@@ -92,7 +92,7 @@ export class Dialog implements Component {
       options.slice(start, start + MAX_OPTIONS).forEach((o, j) => {
         const i = start + j
         const line = i === this.#selected ? `${theme.accent("›")} ${theme.accent(o)}` : `  ${o}`
-        const digit = i < 9 && !this.#filter ? theme.muted(` ${i + 1}`) : ""
+        const digit = i < 9 && this.#digitsPick ? theme.muted(` ${i + 1}`) : ""
         lines.push(truncateToWidth(`${line}${digit}`, width, "…"))
       })
       if (!options.length) lines.push(theme.muted("  no match"))
@@ -109,6 +109,14 @@ export class Dialog implements Component {
   /** The select's options that match the filter, best first. */
   #options(): string[] {
     return this.request.kind === "select" ? rankMatches(this.#filter, this.request.options, (o) => o) : []
+  }
+
+  /**
+   * Digits choose an option in a short unfiltered list. A longer list needs them for its
+   * filter: model ids like gpt-4o start with or turn on a digit.
+   */
+  get #digitsPick(): boolean {
+    return this.request.kind === "select" && this.request.options.length <= 9 && !this.#filter
   }
 
   #setFilter(filter: string) {
