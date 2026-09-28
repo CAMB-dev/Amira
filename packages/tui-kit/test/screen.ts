@@ -2,7 +2,8 @@ import { graphemes } from "../src/width.ts"
 
 /**
  * A tiny VT emulator, just enough to check what the renderer leaves on screen: printing with
- * autowrap, CR/LF with scrolling, CUU/CUD/CHA, EL 2 and ED 0. Colors and modes are ignored.
+ * autowrap, CR/LF with scrolling, CUU/CUD/CHA, EL 2 and ED 0. Colors, modes and OSC strings
+ * (hyperlinks) are ignored.
  */
 export class VirtualScreen {
   grid: string[][]
@@ -75,7 +76,7 @@ export class VirtualScreen {
   }
 
   private escape(data: string, i: number): number {
-    if (data[i + 1] === "_") {
+    if (data[i + 1] === "_" || data[i + 1] === "]") {
       const end = data.indexOf("\x07", i)
       return end === -1 ? data.length : end + 1
     }

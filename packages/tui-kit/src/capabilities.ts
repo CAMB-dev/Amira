@@ -19,6 +19,22 @@ export function detectEnv(env: Env = process.env): TerminalEnv {
   return { vscode, windowsTerminal: !!env.WT_SESSION && !nested }
 }
 
+/**
+ * Whether the terminal turns OSC 8 sequences into clickable links; terminals that do not
+ * support them mostly ignore them, but some print them. `FORCE_HYPERLINK=1` or `=0` overrides.
+ */
+export function supportsHyperlinks(env: Env = process.env): boolean {
+  const force = env.FORCE_HYPERLINK
+  if (force !== undefined && force !== "") return force !== "0"
+  if (env.TMUX || env.STY) return false
+  if (env.WT_SESSION) return true
+  const program = env.TERM_PROGRAM ?? ""
+  if (["vscode", "iTerm.app", "WezTerm", "ghostty", "Hyper"].includes(program)) return true
+  const term = env.TERM ?? ""
+  if (/kitty|alacritty|foot|wezterm|ghostty/.test(term)) return true
+  return Number.parseInt(env.VTE_VERSION ?? "", 10) >= 5000
+}
+
 export interface Capabilities {
   win32InputMode: boolean
   kittyKeyboard: boolean

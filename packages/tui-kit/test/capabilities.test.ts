@@ -2,7 +2,13 @@ import { expect, test } from "bun:test"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
 import { modes, queries } from "../src/ansi.ts"
-import { detectEnv, parseProbeReplies, probeTerminal, setupTerminalInput } from "../src/capabilities.ts"
+import {
+  detectEnv,
+  parseProbeReplies,
+  probeTerminal,
+  setupTerminalInput,
+  supportsHyperlinks,
+} from "../src/capabilities.ts"
 import { InputReader } from "../src/reader.ts"
 import { FakeTerminal, ProcessTerminal } from "../src/terminal.ts"
 
@@ -124,4 +130,14 @@ test("setup starts a ProcessTerminal that was not started, so the replies reach 
   } finally {
     term.stop()
   }
+})
+
+test("supportsHyperlinks: Windows Terminal and VS Code yes, tmux and unknown terminals no, FORCE_HYPERLINK wins", () => {
+  expect(supportsHyperlinks({ WT_SESSION: "1" })).toBe(true)
+  expect(supportsHyperlinks({ TERM_PROGRAM: "vscode" })).toBe(true)
+  expect(supportsHyperlinks({ WT_SESSION: "1", TMUX: "/tmp/tmux" })).toBe(false)
+  expect(supportsHyperlinks({ TERM: "xterm-256color" })).toBe(false)
+  expect(supportsHyperlinks({ VTE_VERSION: "6800" })).toBe(true)
+  expect(supportsHyperlinks({ FORCE_HYPERLINK: "1" })).toBe(true)
+  expect(supportsHyperlinks({ WT_SESSION: "1", FORCE_HYPERLINK: "0" })).toBe(false)
 })
