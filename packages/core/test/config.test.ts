@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -274,6 +274,15 @@ test("adding a provider refuses to run beside another writer and always releases
   rmSync(`${file}.lock`)
   mkdirSync(file)
   expect(() => addProviderToSettings(file, "a", { dialect: "openai-chat" })).toThrow(SettingsError)
+  expect(readdirSync(home).sort()).toEqual(["settings.json"])
+})
+
+test("adding a provider takes over a lock left behind by a process that died", () => {
+  const file = path.join(home, "settings.json")
+  put(`${file}.lock`, "")
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(`${file}.lock`, old, old)
+  expect(addProviderToSettings(file, "a", { dialect: "openai-chat" })).toBe("added")
   expect(readdirSync(home).sort()).toEqual(["settings.json"])
 })
 
