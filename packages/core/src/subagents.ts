@@ -354,6 +354,14 @@ export class AgentTree {
     this.abortAll(`the agent tree's budget ran out (${over})`)
   }
 
+  /** Aborts one queued or running child by id; false when it is not live. */
+  stop(id: string, reason: string): boolean {
+    const child = this.#live.get(id)
+    if (!child || child.abortReason) return false
+    this.abortChild(child, reason)
+    return true
+  }
+
   /** Aborts every queued and running child. */
   abortAll(reason: string): void {
     for (const child of [...this.#live.values()]) this.abortChild(child, reason)

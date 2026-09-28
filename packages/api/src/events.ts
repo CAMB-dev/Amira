@@ -107,6 +107,9 @@ export interface EventMap {
    * the history before the next model call, `dropped` when the turn failed or was aborted
    * first, `promoted` when the turn finished before reaching it. Promoted messages start the
    * turn `nextTurnId` together, as one prompt holding their content in order.
+   * Notices (ToolSession.expectNotice, e.g. background sub-agents' results; their display has
+   * an `origin`) go through the same states but are never dropped: an interrupted or failed
+   * turn leaves them for the next one. Notices waiting together are injected as one message.
    */
   "turn.steer":
     | { message: UserMessage; state: "queued" | "injected" | "dropped" }

@@ -61,6 +61,11 @@ export interface MessageDisplay {
   text: string
   /** A short line frontends may show under `text`, e.g. "Loaded skill review-pr (120 lines)". */
   note?: string
+  /**
+   * Set when the user did not write the message: "subagent" for the results of background
+   * sub-agents delivered to their commander. Frontends show it as a notice, not as the user's.
+   */
+  origin?: string
 }
 
 export interface UserMessage {

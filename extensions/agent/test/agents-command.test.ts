@@ -74,6 +74,8 @@ async function setup(reply: (req: ModelRequest) => MockReply | Promise<MockReply
       listSubagents(root, tree)
         .find((e) => e.info.id === id)
         ?.messages(),
+    stopSubagent: (id: string) =>
+      listSubagents(root, tree).some((e) => e.info.id === id) && tree.stop(id, "stopped by the user"),
   } as Partial<SessionControl> as SessionControl
   const commands = new CommandHost({ registry: host.commands, bus, ui: host.ui, control, agent: root })
   const views: FrontendView[] = []

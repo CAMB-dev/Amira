@@ -87,6 +87,9 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     },
     subagents: () => listSubagents(agent(), session.tree).map((e) => e.info),
     subagentMessages: (id) => subagentMessages(agent(), session.tree, id),
+    stopSubagent: (id) =>
+      listSubagents(agent(), session.tree).some((e) => e.info.id === id) &&
+      session.tree.stop(id, "stopped by the user"),
     models: () => {
       const current = `${agent().model.provider}/${agent().model.id}`
       return [...new Set([current, ...ai.knownModels()])]

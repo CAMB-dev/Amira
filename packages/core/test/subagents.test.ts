@@ -264,6 +264,19 @@ test("aborting a queued child settles it without running it", async () => {
   expect((await first.result()).status).toBe("done")
 })
 
+test("tree.stop aborts one live child by id and refuses unknown or ended ones", async () => {
+  const { root, tree } = await setup(() => ({ text: "x", delayMs: 50 }))
+  const a = tree.spawn(root, { prompt: "a" })
+  const b = tree.spawn(root, { prompt: "b" })
+  await Bun.sleep(5)
+  expect(tree.stop(a.id, "stopped by the user")).toBe(true)
+  expect(tree.stop(a.id, "again")).toBe(false)
+  expect(tree.stop("s_nope", "x")).toBe(false)
+  expect(await a.result()).toMatchObject({ status: "aborted", error: "stopped by the user" })
+  expect((await b.result()).status).toBe("done")
+  expect(tree.stop(b.id, "late")).toBe(false)
+})
+
 test("going over the budget aborts running children and refuses new ones", async () => {
   const { root, tree, bus, events } = await setup(
     (req) =>

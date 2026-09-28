@@ -15,6 +15,7 @@ import {
 import type {
   ApprovalRequest,
   EventMap,
+  PendingNotice,
   SessionStatus,
   SpawnOptions,
   ToolDefinition,
@@ -151,6 +152,15 @@ export class Agent {
   #turn: Turn | undefined
   /** Steering messages waiting for the next model call of the running turn. */
   #steering: UserMessage[] = []
+  /**
+   * Delivered notices (expectNotice) waiting for a model call. Unlike steering they are never
+   * dropped: after an interrupted or failed turn they wait for the next one.
+   */
+  #notices: UserMessage[] = []
+  /** Notices announced and not yet delivered or cancelled. */
+  #expected = 0
+  /** A notice arrived during a manual compaction: it starts a turn once that ends. */
+  #wakeAfterCompact = false
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -200,7 +210,57 @@ export class Agent {
         return modelRef(agent.model)
       },
       ...(tree ? { spawn: (o: SpawnOptions) => tree.spawn(agent, o) } : {}),
+      // A sub-agent's life is one turn: nothing may wake it afterwards.
+      ...(this.depth === 0 ? { expectNotice: () => agent.expectNotice() } : {}),
     }
+  }
+
+  /**
+   * Announces a message this session gets later from outside its turns, such as a background
+   * sub-agent's result (see PendingNotice). Delivered while a turn runs it joins the turn
+   * before its next model call (and starts the next turn if the turn ends first); delivered
+   * while idle it starts a turn. Notices waiting together reach the model as one message. One
+   * that an interrupted or failed turn did not reach waits for the next turn.
+   */
+  expectNotice(): PendingNotice {
+    this.#expected++
+    let open = true
+    const close = () => {
+      if (!open) return false
+      open = false
+      this.#expected--
+      return true
+    }
+    return {
+      deliver: (message) => {
+        if (close()) this.#receive(message)
+      },
+      cancel: () => void close(),
+    }
+  }
+
+  /** Notices announced (expectNotice) and not yet delivered or cancelled. */
+  get expectedNotices(): number {
+    return this.#expected
+  }
+
+  /** Delivered notices that have not reached the model yet. */
+  get waitingNotices(): number {
+    return this.#notices.length
+  }
+
+  #receive(message: UserMessage) {
+    this.#notices.push(message)
+    const turn = this.#turn
+    if (turn) this.#emit(turn, "turn.steer", { message, state: "queued" })
+    else if (this.#abort) this.#wakeAfterCompact = true
+    else this.#wake()
+  }
+
+  /** Starts a turn with the waiting notices. */
+  #wake() {
+    if (this.#abort || !this.#notices.length) return
+    this.prompt(joinMessages(this.#notices.splice(0))).catch(() => {})
   }
 
   /** Notes a sub-agent in this session's file, so its branch points at the child's session. */
@@ -261,6 +321,10 @@ export class Agent {
       return await this.#compact("manual", abort.signal, undefined, instructions)
     } finally {
       this.#abort = undefined
+      if (this.#wakeAfterCompact) {
+        this.#wakeAfterCompact = false
+        this.#wake()
+      }
     }
   }
 
@@ -409,13 +473,21 @@ export class Agent {
       this.#abort = undefined
       this.#turn = undefined
       const leftover = this.#steering.splice(0)
-      const nextTurnId = result.reason === "done" && leftover.length ? newTurnId() : undefined
+      // Notices are never dropped: after an interrupted or failed turn they wait for the next.
+      const notices = result.reason === "done" ? this.#notices.splice(0) : []
+      const nextTurnId =
+        result.reason === "done" && (leftover.length || notices.length) ? newTurnId() : undefined
       for (const message of leftover) {
         this.#emit(
           turn,
           "turn.steer",
           nextTurnId ? { message, state: "promoted", nextTurnId } : { message, state: "dropped" },
         )
+      }
+      if (notices.length && nextTurnId) {
+        const message = joinMessages(notices)
+        this.#emit(turn, "turn.steer", { message, state: "promoted", nextTurnId })
+        leftover.push(message)
       }
       if (result.reason === "error") this.#setStatus(turn, "error", result.error)
       this.#emit(turn, "turn.end", {
@@ -432,7 +504,8 @@ export class Agent {
   }
 
   #injectSteering(turn: Turn) {
-    for (const message of this.#steering.splice(0)) {
+    const notices = this.#notices.splice(0)
+    for (const message of [...this.#steering.splice(0), ...(notices.length ? [joinMessages(notices)] : [])]) {
       this.#push(message)
       this.#emit(turn, "turn.steer", { message, state: "injected" })
     }
@@ -882,7 +955,13 @@ function joinMessages(messages: UserMessage[]): UserMessage {
     .map((m) => m.display?.text ?? m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n"))
     .join("\n")
   const notes = messages.flatMap((m) => (m.display?.note ? [m.display.note] : []))
-  return { ...joined, display: { text, ...(notes.length ? { note: notes.join(" · ") } : {}) } }
+  // Notices of one kind stay notices; mixed with what the user wrote they read as the user's.
+  const origins = new Set(messages.map((m) => m.display?.origin))
+  const origin = origins.size === 1 ? [...origins][0] : undefined
+  return {
+    ...joined,
+    display: { text, ...(notes.length ? { note: notes.join(" · ") } : {}), ...(origin ? { origin } : {}) },
+  }
 }
 
 function modelRef(model: ModelInfo): ModelRef {
