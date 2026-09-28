@@ -1,6 +1,13 @@
 import type { ProviderConfig } from "@amira/ai"
 import type { Settings, ShellMode } from "@amira/api"
-import { amiraHome, authFile, loadAuth, loadSettings, ProviderSettingsError, providersFromSettings } from "@amira/core"
+import {
+  amiraHome,
+  authFile,
+  loadAuth,
+  loadSettings,
+  ProviderSettingsError,
+  providersFromSettings,
+} from "@amira/core"
 import type { CliArgs } from "./args.ts"
 import { toolsToDisable } from "./session.ts"
 

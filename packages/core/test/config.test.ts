@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -309,7 +318,8 @@ test("an extension cannot change the settings another extension reads", async ()
     settings,
   })
   await host.load((api) => {
-    ;(api.settings.tools?.disabled as string[]).push("grep")
+    const disabled = api.settings.tools?.disabled as string[]
+    disabled.push("grep")
   }, "a")
   let seen: unknown
   await host.load((api) => {

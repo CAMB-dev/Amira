@@ -26,7 +26,10 @@ test.skipIf(!process.env[KEY_ENV])(
       const user = JSON.parse(readFileSync(userFile, "utf8"))
       user.providers.deepseek.apiKeyEnv = KEY_ENV
       writeFileSync(userFile, JSON.stringify(user))
-      writeFileSync(path.join(cwd, ".amira", "settings.json"), JSON.stringify({ model: "deepseek/deepseek-flash" }))
+      writeFileSync(
+        path.join(cwd, ".amira", "settings.json"),
+        JSON.stringify({ model: "deepseek/deepseek-flash" }),
+      )
       const config = resolveConfig(parseCliArgs(["-C", cwd, "-p", "x"], dir, {}), home)
       expect(config.warnings).toEqual([])
       expect(config.providers.find((p) => p.id === "deepseek")?.apiKeyEnv).toBe(KEY_ENV)
