@@ -1,8 +1,16 @@
 import { expect, test } from "bun:test"
 import { catalogProviderId, createCatalog, trimModelsDev } from "../src/catalog.ts"
 import { createAi } from "../src/client.ts"
-import { findPreset } from "../src/presets.ts"
+import type { ProviderConfig } from "../src/providers.ts"
 import fixture from "./fixtures/models-dev.json" with { type: "json" }
+
+const deepseek: ProviderConfig = {
+  id: "deepseek",
+  dialect: "openai-chat",
+  baseUrl: "http://ds",
+  apiKeyEnv: "DEEPSEEK_API_KEY",
+}
+const ollama: ProviderConfig = { id: "ollama", dialect: "openai-chat", baseUrl: "http://localhost:11434/v1" }
 
 test("maps a models.dev entry to limits, caps and prices", () => {
   const c = createCatalog(fixture)
@@ -64,6 +72,7 @@ test("provider ids map through config, then the table, then themselves", () => {
   expect(catalogProviderId({ id: "deepseek-anthropic" })).toBe("deepseek")
   expect(catalogProviderId({ id: "ds-anthropic", catalogId: "deepseek" })).toBe("deepseek")
   expect(catalogProviderId({ id: "openai", catalogId: false })).toBeUndefined()
+  expect(catalogProviderId({ id: "constructor" })).toBe("constructor")
 })
 
 test("provider config wins over the catalog, which wins over defaults", () => {
@@ -102,8 +111,7 @@ test("provider config wins over the catalog, which wins over defaults", () => {
 })
 
 test("without a catalog, or after replacing it, models resolve as before", () => {
-  // DeepSeek is a preset now, not built in; settings add it as a provider.
-  const ai = createAi({ providers: [findPreset("deepseek")!, findPreset("ollama")!] })
+  const ai = createAi({ providers: [deepseek, ollama] })
   expect(ai.model("deepseek/deepseek-flash").contextWindow).toBe(128_000)
   ai.setCatalog?.(createCatalog(fixture))
   expect(ai.model("deepseek/deepseek-flash").contextWindow).toBe(1_000_000)
@@ -118,17 +126,18 @@ test("lists a provider's models, and the ai offers them only for providers with 
     catalog,
     env: { DEEPSEEK_API_KEY: "k" },
     providers: [
-      findPreset("deepseek")!,
+      deepseek,
+      { id: "keyed", dialect: "anthropic-messages", baseUrl: "http://k", apiKeyEnv: "KEYED_API_KEY" },
       { id: "local", dialect: "openai-chat", baseUrl: "http://x", models: [{ id: "tiny" }] },
     ],
   })
   const known = ai.knownModels()
   expect(known).toContain("deepseek/deepseek-flash")
   expect(known).toContain("local/tiny")
-  // No ANTHROPIC_API_KEY here, so its models are not offered.
-  expect(known.some((m) => m.startsWith("anthropic/"))).toBe(false)
+  // No KEYED_API_KEY here, so its models are not offered.
+  expect(known.some((m) => m.startsWith("keyed/"))).toBe(false)
   expect(ai.hasKey("deepseek")).toBe(true)
-  expect(ai.hasKey("anthropic")).toBe(false)
+  expect(ai.hasKey("keyed")).toBe(false)
   expect(ai.hasKey("local")).toBe(true)
   expect(ai.hasKey("missing")).toBe(false)
 })

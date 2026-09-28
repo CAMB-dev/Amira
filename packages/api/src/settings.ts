@@ -3,7 +3,11 @@ import type { Budget } from "./subagents.ts"
 
 export type ShellMode = "auto" | "bash" | "powershell"
 
-/** A provider in settings.json; merged over a built-in provider of the same id (D54). */
+/**
+ * A provider in settings.json (D54). Amira has none built in, so an entry needs `dialect` (the
+ * protocol: openai-chat, openai-responses, anthropic-messages or google-gemini) and `baseUrl`;
+ * both are optional here only because project files may add to a user entry.
+ */
 export interface ProviderSettings {
   dialect?: string
   baseUrl?: string

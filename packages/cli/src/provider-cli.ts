@@ -6,15 +6,17 @@ import {
   type FormSpec,
   type FormValues,
   type ProviderAdmin,
+  type ProviderDraft,
   runFormDialogs,
 } from "@amira/api"
 import { amiraHome, authFile, loadAuth, loadSettings, providersFromSettings } from "@amira/core"
-import { draftFromValues, providerFormSpec } from "@amira/ext-commands"
+import { draftFromValues, type ProviderFormInitial, providerFormSpec } from "@amira/ext-commands"
 import { runFormScreen } from "@amira/tui"
 import { UsageError } from "./args.ts"
 import { readCatalogCache } from "./catalog.ts"
 import type { PrintIO } from "./print.ts"
 import { createProviderAdmin } from "./provider-admin.ts"
+import { PROVIDER_USAGE as USAGE } from "./provider-command.ts"
 
 /** Reads one answer from the user; undefined at the end of input. */
 export type ReadLine = (prompt: string) => Promise<string | undefined>
@@ -34,32 +36,112 @@ export interface ProviderCliOptions {
   admin?: ProviderAdmin
 }
 
-const USAGE = `Usage:
-  amira provider add custom            Add any provider in a form (fetch models, test it)
-  amira provider edit <id>             Change a provider in a form
-  amira provider remove <id> [--yes] [--keep-key]
-                                       Remove a provider from settings.json (and its key)
-  amira provider key <id>              Store a new API key (masked; or piped on stdin)`
+/** The flags of `amira provider add`; with all of them no question is asked. */
+interface AddFlags {
+  id?: string
+  baseUrl?: string
+  keyEnv?: string
+  keyStdin: boolean
+  noKey: boolean
+  models: string[]
+}
+
+const VALUE_FLAGS: Record<string, "id" | "baseUrl" | "keyEnv" | "model"> = {
+  "--id": "id",
+  "--base-url": "baseUrl",
+  "--key-env": "keyEnv",
+  "--model": "model",
+}
+
+/** Splits `add` arguments into the protocol and the flags (`--flag value` or `--flag=value`). */
+function parseAdd(args: string[]): { protocol?: string; flags: AddFlags } {
+  const flags: AddFlags = { keyStdin: false, noKey: false, models: [] }
+  const positional: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (!arg.startsWith("--")) {
+      positional.push(arg)
+      continue
+    }
+    const eq = arg.indexOf("=")
+    const name = eq > 0 ? arg.slice(0, eq) : arg
+    if (name === "--key-stdin" || name === "--no-key") {
+      if (eq > 0) throw new UsageError(`${name} takes no value\n\n${USAGE}`)
+      if (name === "--key-stdin") flags.keyStdin = true
+      else flags.noKey = true
+      continue
+    }
+    const key = Object.hasOwn(VALUE_FLAGS, name) ? VALUE_FLAGS[name] : undefined
+    if (!key) throw new UsageError(`unexpected "${arg}"\n\n${USAGE}`)
+    const value = eq > 0 ? arg.slice(eq + 1) : args[++i]
+    if (value === undefined || value === "" || (eq < 0 && value.startsWith("--")))
+      throw new UsageError(`${name} needs a value\n\n${USAGE}`)
+    if (key === "model") {
+      if (!flags.models.includes(value)) flags.models.push(value)
+    } else if (flags[key] !== undefined) throw new UsageError(`${name} is given twice\n\n${USAGE}`)
+    else flags[key] = value
+  }
+  if (positional.length > 1) throw new UsageError(`unexpected "${positional.slice(1).join(" ")}"\n\n${USAGE}`)
+  const keys = [flags.keyEnv !== undefined, flags.keyStdin, flags.noKey].filter(Boolean).length
+  if (keys > 1) throw new UsageError(`pass one of --key-env, --key-stdin and --no-key\n\n${USAGE}`)
+  return { ...(positional[0] ? { protocol: positional[0] } : {}), flags }
+}
+
+/** A draft when the flags say everything; undefined when the form has to ask the rest. */
+function draftFromFlags(
+  protocol: string | undefined,
+  f: AddFlags,
+): Omit<ProviderDraft, "apiKey"> | undefined {
+  const keyGiven = f.keyEnv !== undefined || f.keyStdin || f.noKey
+  if (!protocol || !f.id || !f.baseUrl || !keyGiven) return undefined
+  return {
+    id: f.id,
+    dialect: protocol,
+    baseUrl: f.baseUrl.trim().replace(/\/+$/, ""),
+    keySource: f.keyEnv !== undefined ? "env" : f.keyStdin ? "auth" : "none",
+    ...(f.keyEnv !== undefined ? { apiKeyEnv: f.keyEnv } : {}),
+    models: f.models,
+    defaults: {},
+  }
+}
+
+/** What the form starts with when the flags leave something out. */
+function formInitial(protocol: string | undefined, f: AddFlags): ProviderFormInitial {
+  return {
+    ...(protocol ? { dialect: protocol } : {}),
+    ...(f.id ? { id: f.id } : {}),
+    ...(f.baseUrl ? { baseUrl: f.baseUrl } : {}),
+    ...(f.keyEnv !== undefined ? { keySource: "env" as const, apiKeyEnv: f.keyEnv } : {}),
+    ...(f.noKey ? { keySource: "none" as const } : {}),
+    ...(f.models.length ? { models: f.models } : {}),
+  }
+}
 
 /**
- * `amira provider add custom | edit | remove | key`, the same as /provider in a session: forms
- * show full screen on a terminal and are asked line by line from piped stdin. Undefined for
- * the subcommands this does not handle (presets, add <preset>).
+ * `amira provider add | edit | remove | key`, the same as /provider in a session: forms show
+ * full screen on a terminal and are asked line by line from piped stdin. `add` with the
+ * protocol, --id, --base-url and a key flag asks nothing. Undefined for other subcommands.
  */
 export async function runProviderAdminCommand(
   argv: string[],
   opts: ProviderCliOptions,
 ): Promise<number | undefined> {
   const [sub, id, ...rest] = argv
-  const flags = new Set(rest.filter((a) => a.startsWith("--")))
-  const extra = rest.filter((a) => !a.startsWith("--"))
-  if (sub === "add" && id !== "custom") return undefined
   if (sub !== "add" && sub !== "edit" && sub !== "remove" && sub !== "key") return undefined
-  if (sub !== "add" && !id) throw new UsageError(`missing provider id\n\n${USAGE}`)
-  const allowed = sub === "remove" ? ["--yes", "--keep-key"] : []
-  const unknown = [...flags].filter((f) => !allowed.includes(f))
-  if (extra.length || unknown.length)
-    throw new UsageError(`unexpected "${[...extra, ...unknown].join(" ")}"\n\n${USAGE}`)
+  const added = sub === "add" ? parseAdd(argv.slice(1)) : undefined
+  const flags = new Set(rest.filter((a) => a.startsWith("--")))
+  if (!added) {
+    const extra = rest.filter((a) => !a.startsWith("--"))
+    if (!id || id.startsWith("--")) throw new UsageError(`missing provider id\n\n${USAGE}`)
+    const allowed = sub === "remove" ? ["--yes", "--keep-key"] : []
+    const unknown = [...flags].filter((f) => !allowed.includes(f))
+    if (extra.length || unknown.length)
+      throw new UsageError(`unexpected "${[...extra, ...unknown].join(" ")}"\n\n${USAGE}`)
+  }
+  const complete = added ? draftFromFlags(added.protocol, added.flags) : undefined
+  if (added?.flags.keyStdin && !complete) {
+    throw new UsageError(`--key-stdin needs the protocol, --id and --base-url too\n\n${USAGE}`)
+  }
 
   const { io } = opts
   const interactive = opts.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)
@@ -74,8 +156,30 @@ export async function runProviderAdminCommand(
     const { admin, model } = opts.admin
       ? { admin: opts.admin, model: undefined }
       : await adminFor(home, opts.cwd ?? process.cwd(), opts.env ?? process.env)
-    if (sub === "add") {
-      const values = await ask(providerFormSpec(admin))
+    if (added) {
+      const protocols = admin.dialects()
+      if (added.protocol && !protocols.includes(added.protocol)) {
+        throw new UsageError(`unknown protocol "${added.protocol}"; protocols: ${protocols.join(", ")}`)
+      }
+      if (complete) {
+        if (admin.exists(complete.id)) {
+          throw new UsageError(
+            `provider "${complete.id}" exists already; change it with amira provider edit ${complete.id}`,
+          )
+        }
+        let apiKey: string | undefined
+        if (added.flags.keyStdin) {
+          // Typed at a terminal the key would show; the masked form is for that.
+          if (!opts.readLine && process.stdin.isTTY) {
+            throw new UsageError("--key-stdin reads a piped key; to type it masked, leave out the key flags")
+          }
+          apiKey = (await readLine(""))?.trim()
+          if (!apiKey) throw new UsageError("--key-stdin: no key on stdin")
+        }
+        io.stdout(`${await admin.save({ ...complete, ...(apiKey ? { apiKey } : {}) })}\n`)
+        return 0
+      }
+      const values = await ask(providerFormSpec(admin, undefined, formInitial(added.protocol, added.flags)))
       if (!values) return cancelled(io)
       io.stdout(`${await admin.save(draftFromValues(values))}\n`)
       return 0

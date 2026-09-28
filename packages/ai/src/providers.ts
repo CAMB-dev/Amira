@@ -36,39 +36,22 @@ export const DEFAULT_CAPS: ModelCaps = {
 }
 
 /**
- * Providers available without configuration (D53). Others, such as DeepSeek or a local
- * server, are added in settings.json; PROVIDER_PRESETS has ready-made entries for them.
+ * The model while no provider is configured or none was picked. Its empty provider matches
+ * no configured one, so stream() explains what to do instead of sending a request.
  */
-export const BUILTIN_PROVIDERS: ProviderConfig[] = [
-  {
-    id: "anthropic",
-    dialect: "anthropic-messages",
-    baseUrl: "https://api.anthropic.com",
-    apiKeyEnv: "ANTHROPIC_API_KEY",
-    defaultModel: { caps: { promptCache: true, thinking: true } },
-  },
-  {
-    id: "openai",
-    dialect: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    apiKeyEnv: "OPENAI_API_KEY",
-  },
-  {
-    id: "openai-chat",
-    dialect: "openai-chat",
-    baseUrl: "https://api.openai.com/v1",
-    apiKeyEnv: "OPENAI_API_KEY",
-    // o-series and gpt-5 models reject max_tokens.
-    compat: { maxTokensField: "max_completion_tokens" },
-  },
-  {
-    id: "google",
-    dialect: "google-gemini",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    apiKeyEnv: "GEMINI_API_KEY",
-    apiKeyEnvFallbacks: ["GOOGLE_API_KEY"],
-  },
-]
+export const NO_MODEL: ModelInfo = {
+  id: "",
+  provider: "",
+  dialect: "",
+  contextWindow: 128_000,
+  maxOutput: 8_192,
+  caps: DEFAULT_CAPS,
+}
+
+/** Whether a model is the NO_MODEL placeholder (any model without a provider). */
+export function isNoModel(model: Pick<ModelInfo, "provider">): boolean {
+  return model.provider === ""
+}
 
 /**
  * A model's settings. A model the provider lists wins over the catalog, which wins over the

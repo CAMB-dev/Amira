@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
+import { createAi, createMockDialect, type MockStep, NO_MODEL, userMessage } from "@amira/ai"
 import {
   type AnyEvent,
   type CommandDefinition,
@@ -76,6 +76,10 @@ interface SetupOptions {
   env?: Record<string, string | undefined>
   keybindings?: Keybindings
   settings?: TuiSettings
+  /** Start without a model (NO_MODEL); "none" also configures no provider. */
+  noModel?: "none" | "unpicked"
+  /** The startup notice, as the CLI passes it when there is no model. */
+  notice?: string
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -84,11 +88,14 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools })
   await host.load(statusExtension, "builtin:status")
   const mock = createMockDialect(steps)
-  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
+  const ai = createAi({
+    dialects: [mock],
+    providers: o.noModel === "none" ? [] : [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
   const tree = o.tree ? { tree: new AgentTree({ ai, sections: () => [] }) } : {}
   const agent = new Agent({
     ai,
-    model: ai.model("mock/m1"),
+    model: o.noModel ? NO_MODEL : ai.model("mock/m1"),
     cwd: "/work/proj",
     systemPrompt: "",
     bus,
@@ -150,6 +157,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     ...(o.settings ? { settings: o.settings } : {}),
     ...(o.initialPrompt ? { initialPrompt: o.initialPrompt } : {}),
     ...(o.startupEvents ? { startupEvents: o.startupEvents } : {}),
+    ...(o.notice ? { notice: o.notice } : {}),
   })
   const all = () => [...screen.scrollback, ...screen.lines].join("\n")
   const live = () => screen.lines.join("\n")
@@ -195,6 +203,33 @@ test("a conversation: user message, tool call and reply end up in the transcript
   terminal.send("\x03")
   expect(await exited).toBe(0)
   expect(terminal.isRaw).toBe(false)
+})
+
+test("without providers the UI starts, says how to add one, and a message explains it again", async () => {
+  const notice = "No providers configured — add one with /provider add, then pick a model with /model."
+  const { terminal, all, live, shows, idle, exited, mock } = await setup([], {
+    noModel: "none",
+    notice,
+    cols: 100,
+  })
+  await shows(notice)
+  expect(all()).toContain("Amira · (no model) · /work/proj")
+  await waitFor(() => live().includes("(no model)  "), "the status bar's (no model)")
+  terminal.send("hello\r")
+  await shows("no providers configured; add one with /provider add, then pick a model with /model")
+  await idle()
+  expect(mock.requests).toHaveLength(0)
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
+})
+
+test("with providers but no model picked, a message says to pick one", async () => {
+  const { terminal, shows, idle, exited } = await setup([], { noModel: "unpicked" })
+  terminal.send("hello\r")
+  await shows("no model selected; pick one with /model")
+  await idle()
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
 })
 
 const parallel = { description: "", parameters: {}, concurrency: "parallel" as const }

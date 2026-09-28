@@ -2,6 +2,7 @@ import {
   type Ai,
   type AssistantMessage,
   invalidArgs,
+  isNoModel,
   type Message,
   type ModelInfo,
   type ModelRef,
@@ -257,7 +258,9 @@ export class Agent {
       if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
     }
     const stored = opts.session?.model()
-    if (opts.session && (stored?.provider !== this.model.provider || stored.model !== this.model.id)) {
+    // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
+    const changed = stored?.provider !== this.model.provider || stored.model !== this.model.id
+    if (opts.session && changed && !isNoModel(this.model)) {
       this.#store({ type: "model_change", model: modelRef(this.model) })
     }
     const agent = this
@@ -440,7 +443,7 @@ export class Agent {
     if (from.provider === model.provider && from.model === model.id) return
     // The floor was measured against the old model's window.
     this.#compactFloor = undefined
-    this.#store({ type: "model_change", model: modelRef(model) })
+    if (!isNoModel(model)) this.#store({ type: "model_change", model: modelRef(model) })
     this.#emit(undefined, "model.changed", { from, to: modelRef(model) })
   }
 

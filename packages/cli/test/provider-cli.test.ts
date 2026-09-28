@@ -38,9 +38,9 @@ const script = (answers: (string | undefined)[]) => async () => answers.shift()
 const settings = () => JSON.parse(readFileSync(path.join(home, "settings.json"), "utf8"))
 const auth = () => JSON.parse(readFileSync(path.join(home, "auth.json"), "utf8"))
 
-test("provider add custom from piped stdin asks field by field and saves", async () => {
+test("provider add from piped stdin asks field by field and saves", async () => {
   const { io: out, out: seen } = io()
-  const code = await runProviderAdminCommand(["add", "custom"], {
+  const code = await runProviderAdminCommand(["add"], {
     io: out,
     home,
     cwd,
@@ -155,11 +155,129 @@ test("provider edit shows the prefilled form; remove and key work without a sess
   expect(auth()).toEqual({})
 })
 
-test("usage errors and subcommands left to the preset command", async () => {
+const noInput = async (): Promise<string | undefined> => {
+  throw new Error("asked a question")
+}
+
+test("provider add <protocol> with every flag saves without asking anything", async () => {
+  const { io: out, out: seen } = io()
+  const code = await runProviderAdminCommand(
+    [
+      "add",
+      "openai-chat",
+      "--id",
+      "ds",
+      "--base-url=https://api.deepseek.com/",
+      "--key-env",
+      "DEEPSEEK_API_KEY",
+      "--model",
+      "deepseek-flash",
+      "--model",
+      "deepseek-pro",
+      "--model",
+      "deepseek-flash",
+    ],
+    { io: out, home, cwd, env: {}, interactive: false, readLine: noInput },
+  )
+  expect(seen.stderr).toBe("")
+  expect(code).toBe(0)
+  expect(seen.stdout).toContain('Saved provider "ds" (openai-chat, https://api.deepseek.com)')
+  expect(seen.stdout).toContain("Key: read from $DEEPSEEK_API_KEY (not set now).")
+  expect(settings().providers.ds).toEqual({
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+    models: [{ id: "deepseek-flash" }, { id: "deepseek-pro" }],
+  })
+
+  const local = io()
+  expect(
+    await runProviderAdminCommand(
+      ["add", "anthropic-messages", "--id", "proxy", "--base-url", "http://localhost:4000", "--no-key"],
+      { io: local.io, home, cwd, env: {}, interactive: false, readLine: noInput },
+    ),
+  ).toBe(0)
+  expect(settings().providers.proxy).toEqual({
+    dialect: "anthropic-messages",
+    baseUrl: "http://localhost:4000",
+  })
+})
+
+test("provider add --key-stdin stores the piped key in auth.json and never prints it", async () => {
+  const { io: out, out: seen } = io()
+  const code = await runProviderAdminCommand(
+    ["add", "google-gemini", "--id", "g", "--base-url", "https://llm.example.com/v1beta", "--key-stdin"],
+    { io: out, home, cwd, env: {}, interactive: false, readLine: script([` ${KEY} `]) },
+  )
+  expect(code).toBe(0)
+  expect(auth()).toEqual({ g: { apiKey: KEY } })
+  expect(settings().providers.g).toEqual({
+    dialect: "google-gemini",
+    baseUrl: "https://llm.example.com/v1beta",
+  })
+  expect(seen.stdout + seen.stderr).not.toContain(KEY)
+})
+
+test("provider add with some flags opens the form with them filled in", async () => {
+  let shown: FormSpec | undefined
+  const { io: out } = io()
+  const code = await runProviderAdminCommand(
+    ["add", "anthropic-messages", "--id", "mine", "--key-env", "MY_KEY", "--model", "m1"],
+    {
+      io: out,
+      home,
+      cwd,
+      env: {},
+      interactive: true,
+      runForm: async (spec) => {
+        shown = spec
+        return undefined
+      },
+    },
+  )
+  expect(code).toBe(1)
+  const byId = Object.fromEntries(shown!.fields.map((f) => [f.id, f as unknown as Record<string, unknown>]))
+  expect(shown!.title).toBe("Add a provider")
+  expect(byId.id!.default).toBe("mine")
+  expect(byId.dialect!.default).toBe("anthropic-messages")
+  expect("default" in byId.baseUrl!).toBe(false)
+  expect(byId.baseUrl!.placeholder).toBe("https://api.example.com/v1")
+  expect(byId.keySource!.default).toBe("env")
+  expect(byId.apiKeyEnv!.default).toBe("MY_KEY")
+  expect(byId.models!.default).toEqual(["m1"])
+})
+
+test("provider add refuses unknown protocols, clashing flags and ids that exist", async () => {
+  const { io: out } = io()
+  const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: noInput }
+  const full = ["--id", "x", "--base-url", "http://x", "--no-key"]
+  await expect(runProviderAdminCommand(["add", "deepseek", ...full], opts)).rejects.toThrow(
+    'unknown protocol "deepseek"; protocols: openai-chat, openai-responses, anthropic-messages, google-gemini',
+  )
+  await expect(
+    runProviderAdminCommand(["add", "openai-chat", ...full, "--key-env", "K"], opts),
+  ).rejects.toThrow("pass one of --key-env, --key-stdin and --no-key")
+  await expect(runProviderAdminCommand(["add", "openai-chat", "--key-stdin"], opts)).rejects.toThrow(
+    "--key-stdin needs the protocol, --id and --base-url too",
+  )
+  await expect(runProviderAdminCommand(["add", "openai-chat", "--id"], opts)).rejects.toThrow(
+    "--id needs a value",
+  )
+  await expect(runProviderAdminCommand(["add", "openai-chat", "--colour", "x"], opts)).rejects.toThrow(
+    'unexpected "--colour"',
+  )
+  await expect(runProviderAdminCommand(["add", "a", "b"], opts)).rejects.toThrow('unexpected "b"')
+  expect(await runProviderAdminCommand(["add", "openai-chat", ...full], opts)).toBe(0)
+  await expect(runProviderAdminCommand(["add", "openai-chat", ...full], opts)).rejects.toThrow(
+    'provider "x" exists already; change it with amira provider edit x',
+  )
+})
+
+test("usage errors and subcommands left to the help command", async () => {
   const { io: out } = io()
   const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: script([]) }
   expect(await runProviderAdminCommand(["presets"], opts)).toBeUndefined()
-  expect(await runProviderAdminCommand(["add", "deepseek"], opts)).toBeUndefined()
+  expect(await runProviderAdminCommand(["help"], opts)).toBeUndefined()
   await expect(runProviderAdminCommand(["edit"], opts)).rejects.toThrow(UsageError)
   await expect(runProviderAdminCommand(["remove", "x", "--force"], opts)).rejects.toThrow(UsageError)
   await expect(runProviderAdminCommand(["edit", "nope"], opts)).rejects.toThrow('no provider "nope"')

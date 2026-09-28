@@ -6,7 +6,7 @@ import {
   type UserMessage,
   userMessage,
 } from "@amira/ai"
-import type { AnyEvent, TurnEndReason } from "@amira/api"
+import { type AnyEvent, modelLabel, type TurnEndReason } from "@amira/api"
 import { type Agent, type CommandHost, newTurnId, type UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
 import type { COMMAND_PARAMS } from "./rpc-schema.ts"
@@ -217,13 +217,13 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       } catch (err) {
         throw new RpcError("invalid_params", err instanceof Error ? err.message : String(err))
       }
-      return { model: `${agent.model.provider}/${agent.model.id}` }
+      return { model: modelLabel({ provider: agent.model.provider, model: agent.model.id }) }
     },
     state: () => {
       const last = lastAssistantText(agent.messages)
       return {
         status: agent.status,
-        model: `${agent.model.provider}/${agent.model.id}`,
+        model: modelLabel({ provider: agent.model.provider, model: agent.model.id }),
         sessionId: agent.sessionId,
         ...(agent.turnId ? { turnId: agent.turnId } : {}),
         messages: agent.messages.length,

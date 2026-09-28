@@ -55,7 +55,17 @@ function fakeAdmin() {
   return { admin, calls, drafts }
 }
 
-async function setup(answer: (r: Request) => unknown, opts: { dialogs?: boolean; current?: string } = {}) {
+type Listed = ReturnType<SessionControl["providers"]>
+
+const CONFIGURED: Listed = [
+  { id: "deepseek", dialect: "openai-chat", baseUrl: "https://api.deepseek.com", hasKey: true },
+  { id: "mock", dialect: "mock", baseUrl: "", hasKey: true },
+]
+
+async function setup(
+  answer: (r: Request) => unknown,
+  opts: { dialogs?: boolean; current?: string; providers?: Listed } = {},
+) {
   const bus = new EventBus()
   const ext = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
   if (opts.dialogs) ext.ui.formMode = "dialogs"
@@ -75,12 +85,7 @@ async function setup(answer: (r: Request) => unknown, opts: { dialogs?: boolean;
       busy: false,
       shell: "auto",
     }),
-    providers: () => [
-      { id: "deepseek", dialect: "openai-chat", baseUrl: "https://api.deepseek.com", hasKey: true },
-      { id: "mock", dialect: "mock", baseUrl: "", hasKey: true },
-    ],
-    providerPresets: () => ["deepseek", "ollama"],
-    addProvider: async (id: string) => `Added provider "${id}".`,
+    providers: () => opts.providers ?? CONFIGURED,
     providerAdmin: admin,
   } as unknown as SessionControl
   const host = new CommandHost({ registry: ext.commands, bus, ui: ext.ui, control, agent })
@@ -108,13 +113,13 @@ async function setup(answer: (r: Request) => unknown, opts: { dialogs?: boolean;
   return { run, calls, drafts, asked, host, events }
 }
 
-test("/provider add offers the presets and Custom…; Custom opens the provider form", async () => {
+test("/provider add asks for the protocol, then opens the provider form with it picked", async () => {
   const { run, asked, drafts, calls } = await setup((r) => {
-    if (r.kind === "select") return "Custom…"
+    if (r.kind === "select") return r.options[1]
     if (r.kind === "form") {
       return {
         id: "ds-test",
-        dialect: "openai-chat",
+        dialect: "anthropic-messages",
         baseUrl: "https://api.deepseek.com/",
         keySource: "auth",
         apiKey: "sk-typed-123456789",
@@ -126,9 +131,22 @@ test("/provider add offers the presets and Custom…; Custom opens the provider 
   })
   const r = await run("/provider add")
   expect(r.ok).toBe(true)
-  expect(asked[0]).toMatchObject({ kind: "select", options: ["deepseek", "ollama", "Custom…"] })
+  // Only protocols are offered: no vendors, no presets.
+  expect(asked[0]).toMatchObject({
+    kind: "select",
+    title: "Which protocol does the provider speak?",
+    options: [
+      "openai-chat — OpenAI-compatible chat completions (most providers, local servers)",
+      "anthropic-messages — Anthropic Messages API",
+    ],
+  })
   const form = asked[1] as Extract<Request, { kind: "form" }>
   expect(form.title).toBe("Add a provider")
+  const dialect = form.fields.find((f) => f.id === "dialect") as Record<string, unknown>
+  expect(dialect.default).toBe("anthropic-messages")
+  const baseUrl = form.fields.find((f) => f.id === "baseUrl") as Record<string, unknown>
+  expect(baseUrl.placeholder).toBe("https://api.example.com/v1")
+  expect("default" in baseUrl).toBe(false)
   expect(form.fields.map((f) => f.id)).toEqual([
     "id",
     "dialect",
@@ -149,7 +167,7 @@ test("/provider add offers the presets and Custom…; Custom opens the provider 
   expect(calls).toEqual(["save ds-test"])
   expect(drafts[0]).toEqual({
     id: "ds-test",
-    dialect: "openai-chat",
+    dialect: "anthropic-messages",
     baseUrl: "https://api.deepseek.com",
     keySource: "auth",
     apiKey: "sk-typed-123456789",
@@ -157,6 +175,43 @@ test("/provider add offers the presets and Custom…; Custom opens the provider 
     defaults: { contextWindow: 32000, thinking: false, images: false, promptCache: false },
   })
   expect(r.text).toBe('Saved provider "ds-test".')
+})
+
+test("/provider add <protocol> skips the question; an unknown one or a cancel saves nothing", async () => {
+  const direct = await setup((r) =>
+    r.kind === "form" ? { id: "x", baseUrl: "http://x", keySource: "none" } : undefined,
+  )
+  expect((await direct.run("/provider add anthropic-messages")).ok).toBe(true)
+  expect(direct.asked.map((a) => a.kind)).toEqual(["form"])
+  const form = direct.asked[0] as Extract<Request, { kind: "form" }>
+  expect((form.fields.find((f) => f.id === "dialect") as Record<string, unknown>).default).toBe(
+    "anthropic-messages",
+  )
+  expect(direct.calls).toEqual(["save x"])
+
+  const unknown = await setup(() => undefined)
+  expect((await unknown.run("/provider add deepseek")).error).toBe(
+    'unknown protocol "deepseek"; protocols: openai-chat, anthropic-messages',
+  )
+  expect(unknown.asked).toEqual([])
+
+  const cancelled = await setup(() => undefined)
+  expect((await cancelled.run("/provider add")).text).toBe("Cancelled; nothing was saved.")
+  expect(cancelled.calls).toEqual([])
+})
+
+test("/provider lists only configured providers; with none it says how to add one", async () => {
+  const some = await setup(() => undefined)
+  const listed = (await some.run("/provider")).text
+  expect(listed).toContain("deepseek")
+  for (const name of ["anthropic", "openai-chat ", "google", "ollama", "presets"]) {
+    expect(listed.split("\n").some((l) => l.trim().startsWith(name))).toBe(false)
+  }
+  const none = await setup(() => undefined, { providers: [] })
+  expect((await none.run("/provider")).text).toBe("No providers configured — add one with /provider add")
+  expect((await none.run("/provider edit anthropic")).error).toBe(
+    "No providers configured — add one with /provider add",
+  )
 })
 
 test("the form refuses an id that exists and a base URL that is no URL", async () => {
@@ -186,9 +241,7 @@ test("the form refuses an id that exists and a base URL that is no URL", async (
 })
 
 test("step by step, fetching models is offered first and the connection test defaults to no", async () => {
-  const answers: Record<string, unknown> = {
-    "Add which provider?": "Custom…",
-  }
+  const answers: Record<string, unknown> = {}
   const { run, asked, calls, drafts } = await setup(
     (r) => {
       if (answers[r.title] !== undefined) return answers[r.title]
@@ -280,11 +333,11 @@ test("/provider key asks with a masked input and never echoes the key", async ()
   expect(JSON.stringify(events)).not.toContain("sk-new-secret")
 })
 
-test("completion offers the subcommands, presets and provider ids", async () => {
+test("completion offers the subcommands, protocols and provider ids", async () => {
   const { host } = await setup(() => undefined)
   const values = async (line: string) => (await host.complete(line)).candidates.map((c) => c.value)
   expect(await values("/provider ")).toEqual(["add", "edit", "remove", "key"])
-  expect(await values("/provider add ")).toEqual(["add deepseek", "add ollama", "add custom"])
+  expect(await values("/provider add ")).toEqual(["add openai-chat", "add anthropic-messages"])
   expect(await values("/provider edit ")).toEqual(["edit deepseek", "edit mock"])
 })
 

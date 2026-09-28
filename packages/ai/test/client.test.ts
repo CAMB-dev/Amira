@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createAi } from "../src/client.ts"
-import { DEFAULT_CAPS } from "../src/providers.ts"
+import { DEFAULT_CAPS, isNoModel, NO_MODEL } from "../src/providers.ts"
 import type { ModelRequest } from "../src/types.ts"
 import { type ErrorEvent, events, fakeFetch, type Seen, sseResponse } from "./helpers.ts"
 
@@ -12,13 +12,14 @@ const req = (provider: string, dialect = "openai-chat"): ModelRequest => ({
 })
 
 test("yields an error event for an unknown provider instead of throwing", async () => {
-  const ai = createAi()
+  const ai = createAi({ providers: [{ id: "a", dialect: "openai-chat", baseUrl: "http://a" }] })
   const stream = ai.stream(req("nope"))
   const evs = await events(stream)
   expect(evs).toHaveLength(1)
   const e = evs[0] as ErrorEvent
   expect(e.type).toBe("error")
-  expect(e.error.message).toMatch(/unknown provider "nope"/)
+  expect(e.error.message).toBe('unknown provider "nope" (configured: a)')
+  expect(e.error.code).toBe("unknown_provider")
   expect(e.message.stopReason).toBe("error")
 })
 
@@ -85,11 +86,54 @@ test("the key comes from the variable, then its fallbacks, then the stored keys"
   expect(await auth({})).toBe("MAIN or ALT is not set; export it to use provider p")
 })
 
-test("the built-in providers are anthropic, openai, openai-chat and google", () => {
-  const ai = createAi()
-  expect(ai.providers().map((p) => p.id)).toEqual(["anthropic", "openai", "openai-chat", "google"])
-  expect(ai.model("anthropic/claude-x").caps).toMatchObject({ thinking: true, promptCache: true })
-  expect(ai.model("openai/gpt-5").dialect).toBe("openai-responses")
-  expect(ai.model("google/gemini-x").dialect).toBe("google-gemini")
-  expect(() => ai.model("deepseek/x")).toThrow(/unknown provider "deepseek"/)
+test("no provider is built in: only the configured ones exist", () => {
+  const empty = createAi()
+  expect(empty.providers()).toEqual([])
+  for (const id of ["anthropic", "openai", "openai-chat", "google"]) {
+    expect(() => empty.model(`${id}/x`)).toThrow(`unknown provider "${id}" (no providers are configured)`)
+  }
+  expect(empty.knownModels()).toEqual([])
+  const ai = createAi({
+    providers: [
+      { id: "a", dialect: "anthropic-messages", baseUrl: "http://a" },
+      { id: "b", dialect: "google-gemini", baseUrl: "http://b" },
+    ],
+  })
+  expect(ai.providers().map((p) => p.id)).toEqual(["a", "b"])
+  expect(ai.model("b/gemini-x").dialect).toBe("google-gemini")
+  expect(() => ai.model("openai/gpt-5")).toThrow('unknown provider "openai" (configured: a, b)')
+})
+
+test("ids that are Object members find no stored key or catalog alias", async () => {
+  const ai = createAi({
+    env: {},
+    providers: [{ id: "constructor", dialect: "openai-chat", baseUrl: "http://c", apiKeyEnv: "C_KEY" }],
+  })
+  expect(ai.hasKey("constructor")).toBe(false)
+  const evs = await events(ai.stream({ ...req("constructor"), model: ai.model("constructor/m") }))
+  expect((evs[0] as ErrorEvent).error.code).toBe("missing_api_key")
+})
+
+test("removing a provider forgets it", () => {
+  const ai = createAi({
+    providers: [{ id: "anthropic", dialect: "anthropic-messages", baseUrl: "http://a" }],
+  })
+  ai.removeProvider?.("anthropic")
+  expect(ai.providers()).toEqual([])
+  expect(() => ai.model("anthropic/x")).toThrow(/unknown provider "anthropic"/)
+})
+
+test("streaming with NO_MODEL explains how to add a provider or pick a model", async () => {
+  expect(isNoModel(NO_MODEL)).toBe(true)
+  const request = { ...req(""), model: NO_MODEL }
+  const none = (await events(createAi().stream(request)))[0] as ErrorEvent
+  expect(none.error).toEqual({
+    code: "no_model",
+    message: "no providers configured; add one with /provider add, then pick a model with /model",
+  })
+  const some = createAi({ providers: [{ id: "a", dialect: "openai-chat", baseUrl: "http://a" }] })
+  const unpicked = (await events(some.stream(request))) as ErrorEvent[]
+  expect(unpicked).toHaveLength(1)
+  expect(unpicked[0]?.error).toEqual({ code: "no_model", message: "no model selected; pick one with /model" })
+  expect(unpicked[0]?.retryable).toBe(false)
 })

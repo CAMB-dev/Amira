@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type Message, type MockStep, userMessage } from "@amira/ai"
+import { createAi, createMockDialect, type Message, type MockStep, NO_MODEL, userMessage } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
 import { splitHistory, summaryMessages } from "../src/compaction.ts"
@@ -138,6 +138,19 @@ test("setModel records a model_change and emits model.changed", async () => {
   ])
   expect(mock.requests[1]!.model.id).toBe("big")
   expect(SessionStore.open(session.file).model()).toEqual({ provider: "other", model: "big" })
+})
+
+test("NO_MODEL is never recorded as the session's model; the model picked later is", async () => {
+  const { agent, ai, session, bus, events, mock } = await setup([{ text: "x" }], { model: NO_MODEL })
+  expect(session.model()).toBeUndefined()
+  await agent.prompt("hi").catch(() => undefined)
+  await bus.flush()
+  expect(mock.requests).toHaveLength(0)
+  expect(JSON.stringify(events)).toContain("no model selected; pick one with /model")
+  agent.setModel(ai.model("other/big"))
+  agent.setModel(NO_MODEL)
+  const changes = session.entries.filter((e) => e.type === "model_change")
+  expect(changes.map((e) => (e as { model: unknown }).model)).toEqual([{ provider: "other", model: "big" }])
 })
 
 test("system.build can edit sections before every model call", async () => {

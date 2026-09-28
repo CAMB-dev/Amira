@@ -79,15 +79,13 @@ function fakeControl(over: Partial<SessionControl> = {}) {
     providers: () => [
       { id: "deepseek", dialect: "openai-chat", baseUrl: "https://api.deepseek.com", hasKey: true },
       {
-        id: "openai",
+        id: "work",
         dialect: "openai-chat",
-        baseUrl: "https://api.openai.com/v1",
-        apiKeyEnv: "OPENAI_API_KEY",
+        baseUrl: "https://llm.example.com/v1",
+        apiKeyEnv: "WORK_API_KEY",
         hasKey: false,
       },
     ],
-    providerPresets: () => ["deepseek", "openai", "ollama"],
-    addProvider: async (id) => `Added provider "${id}".`,
     preview: async () => ({
       systemPrompt: "x".repeat(4000),
       tools: [{ name: "read", description: "reads", parameters: {} }],
@@ -253,6 +251,26 @@ test("/model switches with an argument and asks without one", async () => {
   expect(done.candidates.map((c) => c.value)).toEqual(["deepseek/deepseek-pro"])
 })
 
+test("/model without a model or anything to pick says what to do", async () => {
+  const none = { provider: "", model: "" }
+  const info = () => ({
+    id: "s1",
+    cwd: "/work",
+    model: none,
+    contextWindow: 1000,
+    busy: false,
+    shell: "auto" as const,
+  })
+  const empty = await setup({ info, models: () => [], providers: () => [] })
+  expect((await empty.run("/model")).error).toBe("No providers configured — add one with /provider add")
+  const unlisted = await setup({ info, models: () => [] })
+  expect((await unlisted.run("/model")).error).toContain("No models to pick from")
+  const some = await setup({ info }, [undefined])
+  expect((await some.run("/model")).text).toBe("Model: (no model). Pass one to switch: /model provider/model")
+  expect(some.asked[0]).toContain("Model (now (no model))")
+  expect((await some.run("/status")).text).toContain("(no model)")
+})
+
 test("/status shows model, provider, session, context, cost, cwd and git", async () => {
   const { run, bus } = await setup({
     replies: () => [reply("deepseek/deepseek-flash", 1000, 100, 0.002)],
@@ -319,13 +337,12 @@ test("/shell shows and sets the mode; /tools lists, disables and enables tools",
   expect((await host.complete("/shell p")).candidates.map((c) => c.value)).toEqual(["powershell"])
 })
 
-test("/provider lists providers and adds presets", async () => {
-  const { run, host } = await setup()
+test("/provider lists the configured providers", async () => {
+  const { run } = await setup()
   const list = (await run("/provider")).text
   expect(list).toMatch(/\*\s+deepseek\s+openai-chat/)
-  expect(list).toContain("no key (OPENAI_API_KEY)")
-  expect((await run("/provider add ollama")).text).toBe('Added provider "ollama".')
-  expect((await host.complete("/provider add ol")).candidates.map((c) => c.value)).toEqual(["add ollama"])
+  expect(list).toContain("no key (WORK_API_KEY)")
+  expect((await run("/provider add")).error).toBe("this host cannot change providers")
 })
 
 test("/cost breaks the session cost down by model", async () => {

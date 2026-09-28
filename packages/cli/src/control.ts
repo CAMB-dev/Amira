@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { PROVIDER_PRESETS, userMessage } from "@amira/ai"
+import { isNoModel, userMessage } from "@amira/ai"
 import type { AssistantMessage, SessionControl, ShellMode } from "@amira/api"
 import {
   type Agent,
@@ -11,7 +11,7 @@ import {
   subagentMessages,
 } from "@amira/core"
 import { createProviderAdmin } from "./provider-admin.ts"
-import { addPreset, withPresetHint } from "./provider-command.ts"
+import { withProviderHint } from "./provider-command.ts"
 import type { Session } from "./session.ts"
 import { toolsToDisable } from "./session.ts"
 
@@ -94,15 +94,17 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       listSubagents(agent(), session.tree).some((e) => e.info.id === id) &&
       session.tree.stop(id, "stopped by the user"),
     models: () => {
-      const current = `${agent().model.provider}/${agent().model.id}`
-      return [...new Set([current, ...ai.knownModels()])]
+      const m = agent().model
+      // NO_MODEL is no choice to offer.
+      const current = isNoModel(m) ? [] : [`${m.provider}/${m.id}`]
+      return [...new Set([...current, ...ai.knownModels()])]
     },
     setModel: (ref) => {
       idle("switch models")
       try {
         agent().setModel(ai.model(ref))
       } catch (err) {
-        throw new Error(withPresetHint(ref, err instanceof Error ? err.message : String(err)))
+        throw new Error(withProviderHint(err instanceof Error ? err.message : String(err)))
       }
     },
     newSession: async () => {
@@ -174,13 +176,6 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         ...(p.apiKeyEnv ? { apiKeyEnv: p.apiKeyEnv } : {}),
         hasKey: ai.hasKey(p.id),
       })),
-    providerPresets: () => PROVIDER_PRESETS.map((p) => p.id),
-    addProvider: async (id) => {
-      const { preset, added, lines } = addPreset(id, opts.home)
-      if (!ai.providers().some((p) => p.id === preset.id)) ai.registerProvider(preset)
-      if (added) lines.push(`Switch to it with /model ${preset.id}/<model>.`)
-      return lines.join("\n")
-    },
     providerAdmin: createProviderAdmin({
       ai,
       ...(opts.home ? { home: opts.home } : {}),

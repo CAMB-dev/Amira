@@ -13,7 +13,7 @@ import { toolsToDisable } from "./session.ts"
 
 export interface Config {
   settings: Settings
-  /** Settings providers, merged over the built-ins by createAi. */
+  /** The providers in settings; Amira has no others. */
   providers: ProviderConfig[]
   /** Keys from auth.json, used when the environment has none. */
   apiKeys: Record<string, string>
@@ -67,7 +67,7 @@ export function resolveConfig(
  */
 function settingsProviders(settings: Settings, warnings: string[]): ProviderConfig[] {
   try {
-    return providersFromSettings(settings.providers)
+    return providersFromSettings(settings.providers, warnings)
   } catch (err) {
     if (!(err instanceof ProviderSettingsError)) throw err
     const related = warnings.filter((w) => w.includes(`"providers.${err.provider}.`))

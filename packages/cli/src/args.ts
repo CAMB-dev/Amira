@@ -41,7 +41,8 @@ Options:
                         events on stdout (see --rpc-schema)
       --rpc-schema      Print the JSON Schema of the --rpc protocol
   -m, --model <ref>     Model as provider/model (default: $AMIRA_MODEL, then
-                        "model" in settings.json)
+                        "model" in settings.json, then the first model of the
+                        only configured provider)
   -e, --extension <f>   Load an extension file (repeatable; relative to where
                         amira is run, not to --cwd)
       --no-builtins     Do not load the built-in tools
@@ -67,8 +68,8 @@ after a turn with their results fails; Ctrl+C stops waiting. Sub-agents still ru
 at exit are stopped and given up to 5 s to wrap up.
 
 Commands:
-  amira provider presets [id]   Print settings.json entries for known providers
-  amira provider add <id>       Add a preset to ~/.amira/settings.json
+  amira provider <command>      Add, edit and remove providers and their keys
+                                (see amira provider help)
   amira ext <command>           Install, list, update, remove and search extension
                                 packages (see amira ext help)
   amira <name> ...              A command an installed package provides
@@ -77,10 +78,11 @@ Settings come from ~/.amira/settings.json, <cwd>/.amira/settings.json and
 <cwd>/.amira/settings.local.json (later files win; flags win over all). Provider
 baseUrl, apiKeyEnv and headers are only read from ~/.amira/settings.json.
 
-Built-in providers: anthropic, openai, openai-chat and google. Others, such as
-deepseek, openrouter, ollama or lmstudio, are added with amira provider add.
-API keys come from the environment (ANTHROPIC_API_KEY, OPENAI_API_KEY,
-GEMINI_API_KEY, ...) or from ~/.amira/auth.json: {"<provider>": {"apiKey": "..."}}.
+Amira has no built-in providers: add each one with amira provider add (or
+/provider add in a session), picking the protocol it speaks (openai-chat,
+openai-responses, anthropic-messages or google-gemini), its base URL and models.
+API keys come from the environment variable a provider names (apiKeyEnv) or from
+~/.amira/auth.json: {"<provider>": {"apiKey": "..."}}.
 $AMIRA_HOME replaces ~/.amira.`
 
 export function parseCliArgs(

@@ -5,6 +5,7 @@ import {
   defineExtension,
   type EventMap,
   type ExtensionAPI,
+  modelLabel,
   type ShellMode,
   type StoredSessionInfo,
 } from "@amira/api"
@@ -20,7 +21,12 @@ export {
   formatTokens,
   table,
 } from "./format.ts"
-export { draftFromValues, modelDescription, providerFormSpec } from "./provider-form.ts"
+export {
+  draftFromValues,
+  modelDescription,
+  type ProviderFormInitial,
+  providerFormSpec,
+} from "./provider-form.ts"
 
 const SHELLS: ShellMode[] = ["auto", "bash", "powershell"]
 
@@ -161,7 +167,15 @@ export default defineExtension((api: ExtensionAPI) => {
       let ref = args
       if (!ref) {
         const current = modelRef(ctx.session.info().model)
-        const picked = await ctx.ui.select(`Model (now ${current})`, ctx.session.models(), {
+        const models = ctx.session.models()
+        if (!models.length) {
+          throw new Error(
+            ctx.session.providers().length
+              ? "No models to pick from: list some with /provider edit <id>, store a key with /provider key <id>, or pass one: /model provider/model"
+              : "No providers configured — add one with /provider add",
+          )
+        }
+        const picked = await ctx.ui.select(`Model (now ${current})`, models, {
           signal: ctx.signal,
         })
         if (!picked) {
@@ -199,11 +213,13 @@ export default defineExtension((api: ExtensionAPI) => {
           ["Model", modelRef(info.model)],
           [
             "Provider",
-            provider ? `${provider.id} (${provider.dialect}, ${provider.baseUrl})` : info.model.provider,
+            provider
+              ? `${provider.id} (${provider.dialect}, ${provider.baseUrl})`
+              : info.model.provider || "(none; add one with /provider add, pick a model with /model)",
           ],
           ["Session", `${info.id}${info.busy ? " (turn running)" : ""}`],
           ...(info.file ? [["Session file", info.file]] : []),
-          ["Context", context],
+          ["Context", info.model.provider ? context : "no model yet"],
           ["Cost", cost],
           ["Shell", info.shell],
           ["Directory", info.cwd],
@@ -356,6 +372,4 @@ export default defineExtension((api: ExtensionAPI) => {
   })
 })
 
-function modelRef(m: { provider: string; model: string }): string {
-  return `${m.provider}/${m.model}`
-}
+const modelRef = modelLabel

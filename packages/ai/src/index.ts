@@ -12,7 +12,6 @@ export { openaiResponses, responsesBody, toResponsesInput } from "./dialects/ope
 export { retryAfterMs } from "./dialects/retry-after.ts"
 export { unansweredCalls } from "./dialects/tool-results.ts"
 export { repairJsonObject } from "./json-repair.ts"
-export * from "./presets.ts"
 export * from "./probe.ts"
 export * from "./providers.ts"
 export type { RetryOptions } from "./retry.ts"
