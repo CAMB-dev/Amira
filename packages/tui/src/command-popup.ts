@@ -2,12 +2,11 @@ import type { CommandCandidate, CommandInfo } from "@amira/api"
 import {
   type Component,
   type InputEvent,
-  isSubmitKey,
-  matchesKey,
   type RenderContext,
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
+import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 
 /** Where the popup gets its candidates; the CommandHost in the app. */
 export interface CompletionSource {
@@ -53,6 +52,7 @@ export class CommandPopup implements Component {
   constructor(
     private source: CompletionSource,
     private onUpdate: () => void,
+    private keys: Keybindings = defaultKeybindings(),
   ) {}
 
   /** Call with the editor text whenever it may have changed. */
@@ -97,23 +97,23 @@ export class CommandPopup implements Component {
   handleKey(e: InputEvent): PopupAction | undefined {
     const r = this.#current
     if (!this.open || !r) return undefined
-    if (matchesKey(e, "escape")) {
+    if (this.keys.is(e, "popup.close")) {
       this.#dismissed = true
       return { type: "handled" }
     }
     const n = r.candidates.length
     if (!n) return undefined
-    if (matchesKey(e, "up") || matchesKey(e, "down")) {
-      const step = matchesKey(e, "up") ? -1 : 1
+    if (this.keys.is(e, "popup.up") || this.keys.is(e, "popup.down")) {
+      const step = this.keys.is(e, "popup.up") ? -1 : 1
       this.#selected = (this.#selected + step + n) % n
       this.#navigated = true
       return { type: "handled" }
     }
     const chosen = r.candidates[this.#selected]!.value
-    if (matchesKey(e, "tab")) {
+    if (this.keys.is(e, "popup.complete")) {
       return { type: "replace", text: r.command ? `/${r.command} ${chosen}` : `/${chosen} ` }
     }
-    if (!isSubmitKey(e)) return undefined
+    if (!this.keys.is(e, "popup.accept")) return undefined
     if (!r.command) {
       // A bare "/" names nothing yet; Enter only runs a command once one is picked or typed.
       if (r.text === "/" && !this.#navigated) return { type: "handled" }
