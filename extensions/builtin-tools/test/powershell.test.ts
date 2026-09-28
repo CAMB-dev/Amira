@@ -22,7 +22,7 @@ const onWindows = process.platform === "win32"
 test("the script reads the command from the gate line before running it", () => {
   const gate = POWERSHELL_SCRIPT.indexOf("[Console]::In.ReadLine()")
   expect(gate).toBeGreaterThan(0)
-  expect(POWERSHELL_SCRIPT.indexOf("FromBase64String")).toBeGreaterThan(gate)
+  expect(POWERSHELL_SCRIPT.indexOf("__amira_open $__amira")).toBeGreaterThan(gate)
   // Before the gate the process is not yet known to be in its job: it must start nothing.
   expect(POWERSHELL_SCRIPT.slice(0, gate)).not.toMatch(/Start-Process|Invoke-Expression|\.exe|&\s*\$/i)
   expect(POWERSHELL_SCRIPT).toContain("UTF8Encoding")
@@ -34,9 +34,10 @@ test("the script reads the command from the gate line before running it", () => 
   expect(Buffer.from(dir ?? "", "base64").toString()).toBe("C:\\a b")
   expect(Buffer.from(cmd ?? "", "base64").toString()).toBe("x y")
   // Every PowerShell process starts outside the session directory.
-  const home = gatedPowerShell("pwsh").command("x", process.cwd()).cwd
-  expect(home).toBe(powershellStartDir())
-  expect(home).not.toBe(process.cwd())
+  const project = "D:\\work\\project"
+  const start = gatedPowerShell("pwsh").command("x", project).cwd
+  expect(start).toBe(powershellStartDir())
+  expect(start).not.toBe(project)
 })
 
 test("the description names the edition and its syntax", () => {
@@ -198,14 +199,17 @@ for (const path of editions) {
         const parent = await temp.make()
         const dir = join(parent, "gone [x] 'q' $y é")
         const marker = join(parent, "ran.txt")
-        const { argv, ...spawn } = shell.command(`New-Item -ItemType File -Path '${marker}'`, dir)
-        const run = await runCommand(argv, {
-          ...spawn,
-          timeoutMs: 60_000,
-          signal: new AbortController().signal,
-        })
-        expect(run.output.trim()).toBe(`Working directory does not exist: ${dir}`)
-        expect(run.exitCode).toBe(1)
+        const runCold = (cwd: string) => {
+          const { argv, ...spawn } = shell.command(`New-Item -ItemType File -Path '${marker}'`, cwd)
+          return runCommand(argv, { ...spawn, timeoutMs: 60_000, signal: new AbortController().signal })
+        }
+        const gone = await runCold(dir)
+        expect(gone.output.trim()).toBe(`Working directory does not exist: ${dir}`)
+        expect(gone.exitCode).toBe(1)
+        // An empty one must not fall back to running in the start directory.
+        const empty = await runCold("")
+        expect(empty.output.trim()).toBe("No working directory was given")
+        expect(empty.exitCode).toBe(1)
         expect(existsSync(marker)).toBe(false)
       })
 
@@ -218,14 +222,21 @@ for (const path of editions) {
         expect(lf(textOf(r))).toBe(`${unc}\n${unc}\nTrue\n\nExit code: 0`)
       })
 
-      test("a working directory longer than MAX_PATH still runs cmdlets there", async () => {
+      test("a working directory longer than MAX_PATH runs cmdlets there, or fails cleanly", async () => {
         let dir = await temp.make()
         while (dir.length < 300) dir = join(dir, "d".repeat(40))
         await mkdir(dir, { recursive: true })
         await writeFile(join(dir, "rel.txt"), "long")
         const text = lf(textOf(await runIn(dir, "(Get-Location).ProviderPath; Get-Content rel.txt")))
-        // Where the process cannot take the directory, .NET and native programs cannot use it: said so.
-        expect(text.replace(/^Warning: .*\n/, "")).toBe(`${dir}\nlong\n\nExit code: 0`)
+        // 5.1 without long paths enabled in the registry cannot enter it at all.
+        if (text.startsWith("Cannot enter the working directory")) {
+          expect(path.toLowerCase()).not.toContain("pwsh")
+          expect(text).toEndWith("Exit code: 1")
+          return
+        }
+        // What cannot use the directory is named: always native programs, in pwsh 7 also .NET.
+        expect(text).toContain("Warning: native programs cannot start")
+        expect(text.replace(/^Warning: .*\n/gm, "")).toBe(`${dir}\nlong\n\nExit code: 0`)
       })
 
       test("one standby serves every working directory, and it starts outside them", async () => {
@@ -247,21 +258,27 @@ for (const path of editions) {
         const { pool, counts, run } = countingPool()
         try {
           const parent = await temp.make()
-          const project = join(parent, "project")
-          await mkdir(project)
-          pool.fill(shell.command("", project))
-          // Starts the standby's replacement and waits until it is surely running.
-          await run(project, "$null")
-          await Bun.sleep(2000)
-          await rename(project, join(parent, "renamed"))
-          const renamedAt = Date.now()
-          const r = await run(
-            join(parent, "renamed"),
-            "[DateTimeOffset]::new((Get-Process -Id $PID).StartTime).ToUnixTimeMilliseconds()",
-          )
+          let [from, to] = [join(parent, "project"), join(parent, "renamed")]
+          await mkdir(from)
+          pool.fill(shell.command("", from))
+          // Starts the standby's replacement; it serves the next command.
+          await run(from, "$null")
+          // Proven once the process that runs the next command was already started before the
+          // rename. A slow spawn (antivirus) can start it later; then the next attempt checks.
+          let startedFirst = false
+          for (let attempt = 1; attempt <= 4 && !startedFirst; attempt++) {
+            await Bun.sleep(1000 * attempt)
+            const before = Date.now()
+            await rename(from, to)
+            ;[from, to] = [to, from]
+            const r = await run(
+              from,
+              "[DateTimeOffset]::new((Get-Process -Id $PID).StartTime).ToUnixTimeMilliseconds()",
+            )
+            startedFirst = Number(r.output.trim()) < before
+          }
+          expect(startedFirst).toBe(true)
           expect(counts.cold).toBe(0)
-          // The process that ran it was already started while the directory was renamed.
-          expect(Number(r.output.trim())).toBeLessThan(renamedAt)
         } finally {
           pool.dispose()
         }
