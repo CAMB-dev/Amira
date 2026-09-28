@@ -60,11 +60,15 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
   const body = res.body
   try {
     const type = res.headers.get("content-type") ?? ""
-    if (!type.includes("text/event-stream")) {
-      yield* r.readPlain(await res.text(), type || "no content-type", acc)
-      return
+    const events = type.includes("text/event-stream")
+      ? r.readSSE(body, acc)
+      : r.readPlain(await res.text(), type || "no content-type", acc)
+    // Exactly one terminal event, whatever the reader does.
+    for await (const ev of events) {
+      yield ev
+      if (ev.type === "done" || ev.type === "error") return
     }
-    yield* r.readSSE(body, acc)
+    yield acc.fail({ message: "the response ended without a result" }, true)
   } catch (e) {
     if (ctx.signal.aborted) yield aborted()
     else yield acc.fail({ message: `stream failed: ${(e as Error).message}` }, true)
