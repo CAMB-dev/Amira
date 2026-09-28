@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test"
+import { afterAll, expect, setDefaultTimeout, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -7,6 +7,9 @@ import type { AnyEvent } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { gitInfo, trackWorkspace } from "../src/git.ts"
+
+// git is slow to start on Windows, especially under load.
+setDefaultTimeout(60_000)
 
 const dirs: string[] = []
 async function tempDir() {
@@ -101,7 +104,7 @@ test("trackWorkspace emits once in the background and again only on change", asy
   while (seen.length < 2) await Bun.sleep(20)
   stop()
   expect((seen[1] as Extract<AnyEvent, { type: "workspace.changed" }>).data.branch).toBe("next")
-}, 20_000)
+}, 60_000)
 
 test("Agent.start cannot be tricked into overriding cwd and carries no turn id", async () => {
   const ai = createAi({

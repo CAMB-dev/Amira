@@ -28,7 +28,7 @@ async function git(cwd: string, args: string[], timeoutMs: number): Promise<stri
  * repositories without commits and with git versions back to 2.13. Paths use the
  * platform's separators.
  */
-export async function gitInfo(cwd: string, timeoutMs = 5000): Promise<GitInfo> {
+export async function gitInfo(cwd: string, timeoutMs = 15_000): Promise<GitInfo> {
   const [dirs, branch, head] = await Promise.all([
     git(cwd, ["rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"], timeoutMs),
     git(cwd, ["symbolic-ref", "--short", "-q", "HEAD"], timeoutMs),
