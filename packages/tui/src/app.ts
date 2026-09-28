@@ -33,6 +33,7 @@ import {
   Spinner,
   Stack,
   setupTerminalInput,
+  supportsHyperlinks,
   type Terminal,
   type Theme,
   truncateToWidth,
@@ -194,7 +195,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal)
 
   // The reply is Markdown: its finished blocks go to the scrollback as they close.
-  const streaming = new MarkdownStream()
+  const env = opts.env ?? process.env
+  // Links are clickable (OSC 8) where the terminal is known to support them.
+  const hyperlinks = supportsHyperlinks(env)
+  const streaming = new MarkdownStream({ hyperlinks })
   const spinner = new Spinner()
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
@@ -281,7 +285,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
-  const env = opts.env ?? process.env
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
   const settings = opts.settings ?? {}
   const termStatus = new TerminalStatus(terminal, agent.cwd, {
@@ -915,6 +918,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         detail,
         session: { id: a.sessionId, ...(updatedAt !== undefined ? { updatedAt } : {}) },
         transcript,
+        hyperlinks,
       }),
     )
   }

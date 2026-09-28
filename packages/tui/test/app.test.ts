@@ -1816,6 +1816,22 @@ test("keybindings replace the default keys, and the hints name them", async () =
   expect(await exited).toBe(0)
 })
 
+test("links in a reply are clickable where the UI's environment says the terminal supports it", async () => {
+  for (const env of [{ WT_SESSION: "1" }, {}]) {
+    const { terminal, screen, shows, idle, exited } = await setup(
+      [{ text: "See [the docs](https://example.com/docs) now." }],
+      { env },
+    )
+    terminal.send("go\r")
+    await shows("now.")
+    await idle()
+    const linked = screen.oscs.some((o) => o.startsWith("8;") && o.endsWith("https://example.com/docs"))
+    expect(linked).toBe("WT_SESSION" in env)
+    terminal.send("\x03")
+    await exited
+  }
+})
+
 test("history, the history search, the file list and Ctrl+O take their keys from the keybindings too", async () => {
   const keys = new Keybindings({
     ...defaultKeys({ vscode: false }),

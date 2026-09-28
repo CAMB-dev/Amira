@@ -11,6 +11,8 @@ export interface HistoryOptions {
   detail?: ToolDetailLevel
   /** Names the session in the separator after the history. */
   session?: { id: string; updatedAt?: number }
+  /** Make links in replies clickable (OSC 8); default: what the terminal is known to support. */
+  hyperlinks?: boolean
   /** Spacing continues from the blocks committed before; a fresh one when left out. */
   transcript?: Transcript
 }
@@ -42,7 +44,12 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
       for (const b of m.content) {
         if (b.type === "text" && b.text.trim()) {
           // Markdown, as the reply showed when it streamed in.
-          const rows = renderMarkdown(b.text, Math.max(1, opts.width - visibleWidth(gutter)), theme)
+          const rows = renderMarkdown(
+            b.text,
+            Math.max(1, opts.width - visibleWidth(gutter)),
+            theme,
+            opts.hyperlinks === undefined ? {} : { hyperlinks: opts.hyperlinks },
+          )
           out.push(...t.block("assistant", replyRows(rows)))
         } else if (b.type === "toolCall") {
           const result = results.get(b.id) ?? { content: [], isError: true }
