@@ -47,7 +47,7 @@ export function createToolSession(
   sessionId: string,
   registry: ToolRegistry,
   loaded: Set<string>,
-): ToolSession {
+): Pick<ToolSession, "sessionId" | "deferredTools" | "loadTools"> {
   return {
     sessionId,
     deferredTools: () =>

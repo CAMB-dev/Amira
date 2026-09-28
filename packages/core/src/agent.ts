@@ -11,8 +11,10 @@ import {
   userMessage,
 } from "@amira/ai"
 import type {
+  ApprovalRequest,
   EventMap,
   SessionStatus,
+  SpawnOptions,
   ToolDefinition,
   ToolRejection,
   ToolResult,
@@ -25,9 +27,19 @@ import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { newSessionId, type SessionEntryData, type SessionStore, summaryMessages } from "./session-store.ts"
+import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 import { checkArgs } from "./validate-args.ts"
+
+export interface ApprovalDecision {
+  approved: boolean
+  /** Shown to the model when the call is denied. */
+  reason?: string
+}
+
+/** Decides a tool call that a tool.call.before interceptor asked about (D13, D14). */
+export type Approver = (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalDecision>
 
 export interface AgentOptions {
   ai: Ai
@@ -56,6 +68,15 @@ export interface AgentOptions {
   /** Most tool calls running at once (D71). Default 8. */
   maxParallelTools?: number
   messages?: Message[]
+  /** Sub-agent nesting depth; 0 (the default) for a top-level session. */
+  depth?: number
+  /** The agent tree this session belongs to: it spawns sub-agents and keeps the shared budget. */
+  tree?: AgentTree
+  /**
+   * Decides tool calls an interceptor asked about. Sub-agents get one from their tree that
+   * asks the parent's model; without one such calls are denied.
+   */
+  approve?: Approver
 }
 
 export interface TurnResult {
@@ -100,9 +121,15 @@ export class Agent {
   readonly cwd: string
   readonly messages: Message[]
   readonly session: SessionStore | undefined
+  /** 0 for a top-level session, 1 for its sub-agents, and so on. */
+  readonly depth: number
+  readonly tree: AgentTree | undefined
   model: ModelInfo
 
   #ai: Ai
+  #approve: Approver | undefined
+  /** Tool calls waiting for approval right now. */
+  #approvals = 0
   #status: SessionStatus = "idle"
   #abort: AbortController | undefined
   #maxSteps: number
@@ -139,6 +166,9 @@ export class Agent {
     this.#maxTokens = opts.maxTokens
     this.#abortGraceMs = opts.abortGraceMs ?? 2000
     this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
+    this.depth = opts.depth ?? 0
+    this.tree = opts.tree
+    this.#approve = opts.approve
 
     if (opts.messages || !opts.session) {
       this.messages = opts.messages ?? []
@@ -156,7 +186,24 @@ export class Agent {
     if (opts.session && (stored?.provider !== this.model.provider || stored.model !== this.model.id)) {
       this.#store({ type: "model_change", model: modelRef(this.model) })
     }
-    this.#toolSession = createToolSession(this.sessionId, this.tools, this.#loadedTools)
+    const agent = this
+    const tree = opts.tree
+    this.#toolSession = {
+      ...createToolSession(this.sessionId, this.tools, this.#loadedTools),
+      depth: this.depth,
+      get maxDepth() {
+        return tree?.maxDepth ?? 0
+      },
+      get model() {
+        return modelRef(agent.model)
+      },
+      ...(tree ? { spawn: (o: SpawnOptions) => tree.spawn(agent, o) } : {}),
+    }
+  }
+
+  /** Notes a sub-agent in this session's file, so its branch points at the child's session. */
+  recordSubagent(childSessionId: string, role: string | undefined): void {
+    this.#store({ type: "subagent", childSessionId, role: role ?? "" })
   }
 
   /** Offers deferred tools to the model from its next call on, e.g. when restoring a session. */
@@ -457,6 +504,7 @@ export class Agent {
     if (message.content.length) this.#push(message)
     if (message.usage) this.#contextTokens = contextTokens(message.usage)
     this.#emit(turn, "message.end", { message })
+    if (message.usage) this.tree?.recordUsage(this, message.usage)
 
     if (aborted) return { kind: "aborted" }
     if (error) return { kind: "error", error }
@@ -576,6 +624,14 @@ export class Agent {
           : reject("blocked", `Tool call blocked: ${gate.reason}`)
       }
       const args = gate.value.args
+      if (gate.ask) {
+        const request = { sessionId: this.sessionId, toolCallId: call.id, name: call.name, args }
+        const verdict = await this.#askApproval(turn, { ...request, reason: gate.ask.join("; ") })
+        if (turn.signal.aborted) return reject("aborted", "Aborted by the user before this tool ran.")
+        if (!verdict.approved) {
+          return reject("blocked", `Tool call not approved${verdict.reason ? `: ${verdict.reason}` : "."}`)
+        }
+      }
       const problem = checkArgs(tool.parameters, args)
       if (problem) return reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`)
 
@@ -618,6 +674,32 @@ export class Agent {
         "blocked",
         `Tool call failed before running: ${err instanceof Error ? err.message : String(err)}`,
       )
+    }
+  }
+
+  /**
+   * Waits for the approver while the session shows as blocked (D44: with the number of calls
+   * waiting). A missing or failing approver denies.
+   */
+  async #askApproval(turn: Turn, request: ApprovalRequest): Promise<ApprovalDecision> {
+    if (!this.#approve) return { approved: false, reason: "it needs approval and nobody can approve it here" }
+    this.#approvals++
+    this.#status = "blocked"
+    this.#emit(turn, "status.changed", {
+      status: "blocked",
+      reason: `approval for ${request.name}`,
+      pending: this.#approvals,
+    })
+    try {
+      return await this.#approve(request, turn.signal)
+    } catch (err) {
+      return {
+        approved: false,
+        reason: `approval failed: ${err instanceof Error ? err.message : String(err)}`,
+      }
+    } finally {
+      this.#approvals--
+      if (this.#approvals === 0) this.#setStatus(turn, "working")
     }
   }
 

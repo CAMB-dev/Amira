@@ -13,6 +13,8 @@ export interface RunCommandOptions {
    * once the process tree is contained, so nothing it starts can escape a kill.
    */
   gated?: boolean
+  /** Windows: start through cmd.exe, which avoids the long spawn stalls some machines have with git. */
+  viaCmd?: boolean
 }
 
 export interface RunCommandResult {
