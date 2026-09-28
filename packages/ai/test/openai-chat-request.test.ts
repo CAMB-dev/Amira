@@ -9,7 +9,10 @@ async function sentBody(ref: string, providers: ProviderConfig[] = []) {
   const ai = createAi({
     fetch: fakeFetch(() => sseResponse([]), seen),
     env: { OPENAI_API_KEY: "k", DEEPSEEK_API_KEY: "k" },
-    providers,
+    providers: [
+      { id: "deepseek", dialect: "openai-chat", baseUrl: "http://ds", apiKeyEnv: "DEEPSEEK_API_KEY" },
+      ...providers,
+    ],
   })
   await collect(
     ai.stream({ model: ai.model(ref), systemPrompt: "", messages: [], tools: [], maxTokens: 100 }),
@@ -17,8 +20,8 @@ async function sentBody(ref: string, providers: ProviderConfig[] = []) {
   return seen.body
 }
 
-test("the openai provider sends max_completion_tokens", async () => {
-  const body = await sentBody("openai/gpt-5")
+test("the openai-chat provider sends max_completion_tokens", async () => {
+  const body = await sentBody("openai-chat/gpt-5")
   expect(body.max_completion_tokens).toBe(100)
   expect(body.max_tokens).toBeUndefined()
 })

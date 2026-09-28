@@ -7,6 +7,7 @@ export { createMockDialect, type MockReply, type MockStep } from "./dialects/moc
 export { openaiChat, toChatMessages } from "./dialects/openai-chat.ts"
 export type { ChatMessageOptions } from "./dialects/openai-chat-messages.ts"
 export { openaiResponses, responsesBody, toResponsesInput } from "./dialects/openai-responses.ts"
+export * from "./presets.ts"
 export * from "./providers.ts"
 export { parseSSE, type SSEMessage } from "./sse.ts"
 export { adaptThinking } from "./thinking.ts"

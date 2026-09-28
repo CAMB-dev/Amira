@@ -8,6 +8,8 @@ export interface AiOptions {
   dialects?: Dialect[]
   fetch?: typeof fetch
   env?: Record<string, string | undefined>
+  /** Stored API keys by provider id (e.g. from auth.json), used when the key variables are unset. */
+  apiKeys?: Record<string, string>
 }
 
 export interface Ai {
@@ -46,9 +48,10 @@ export function createAi(opts: AiOptions = {}): Ai {
       if (!p) return failed(req, `unknown provider "${req.model.provider}"`, "unknown_provider")
       const dialect = dialects.get(req.model.dialect)
       if (!dialect) return failed(req, `unknown dialect "${req.model.dialect}"`, "unknown_dialect")
-      const apiKey = p.apiKey ?? (p.apiKeyEnv ? env[p.apiKeyEnv] : undefined)
+      const apiKey = p.apiKey ?? keyFromEnv(p, env) ?? opts.apiKeys?.[p.id]
       if (p.apiKeyEnv && !apiKey) {
-        return failed(req, `${p.apiKeyEnv} is not set; export it to use provider ${p.id}`, "missing_api_key")
+        const names = [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])].join(" or ")
+        return failed(req, `${names} is not set; export it to use provider ${p.id}`, "missing_api_key")
       }
       return dialect.stream(req, {
         endpoint: {
@@ -65,6 +68,14 @@ export function createAi(opts: AiOptions = {}): Ai {
     registerDialect: (d) => void dialects.set(d.id, d),
     providers: () => [...providers.values()],
   }
+}
+
+function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>): string | undefined {
+  for (const name of [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])]) {
+    const value = name ? env[name] : undefined
+    if (value) return value
+  }
+  return undefined
 }
 
 /** A stream that ends at once with an error, so callers see one failure path. */

@@ -11,6 +11,8 @@ export interface ProviderConfig {
   baseUrl: string
   /** Environment variable holding the API key. */
   apiKeyEnv?: string
+  /** Variables tried in order when apiKeyEnv is unset. */
+  apiKeyEnvFallbacks?: string[]
   apiKey?: string
   headers?: Record<string, string>
   compat?: ProviderCompat
@@ -27,10 +29,26 @@ export const DEFAULT_CAPS: ModelCaps = {
   parallelToolCalls: true,
 }
 
-/** OpenAI-compatible services that work with the openai-chat dialect out of the box. */
+/**
+ * Providers available without configuration (D53). Others, such as DeepSeek or a local
+ * server, are added in settings.json; PROVIDER_PRESETS has ready-made entries for them.
+ */
 export const BUILTIN_PROVIDERS: ProviderConfig[] = [
   {
+    id: "anthropic",
+    dialect: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    apiKeyEnv: "ANTHROPIC_API_KEY",
+    defaultModel: { caps: { promptCache: true, thinking: true } },
+  },
+  {
     id: "openai",
+    dialect: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    apiKeyEnv: "OPENAI_API_KEY",
+  },
+  {
+    id: "openai-chat",
     dialect: "openai-chat",
     baseUrl: "https://api.openai.com/v1",
     apiKeyEnv: "OPENAI_API_KEY",
@@ -38,19 +56,12 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
     compat: { maxTokensField: "max_completion_tokens" },
   },
   {
-    id: "deepseek",
-    dialect: "openai-chat",
-    baseUrl: "https://api.deepseek.com",
-    apiKeyEnv: "DEEPSEEK_API_KEY",
+    id: "google",
+    dialect: "google-gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    apiKeyEnv: "GEMINI_API_KEY",
+    apiKeyEnvFallbacks: ["GOOGLE_API_KEY"],
   },
-  {
-    id: "openrouter",
-    dialect: "openai-chat",
-    baseUrl: "https://openrouter.ai/api/v1",
-    apiKeyEnv: "OPENROUTER_API_KEY",
-  },
-  { id: "ollama", dialect: "openai-chat", baseUrl: "http://localhost:11434/v1" },
-  { id: "lmstudio", dialect: "openai-chat", baseUrl: "http://localhost:1234/v1" },
 ]
 
 export function resolveModelInfo(provider: ProviderConfig, modelId: string): ModelInfo {
