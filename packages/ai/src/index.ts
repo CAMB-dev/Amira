@@ -1,5 +1,6 @@
 export * from "./client.ts"
 export * from "./dialect.ts"
+export { geminiBody, googleGemini, toGeminiContents, toGeminiSchema } from "./dialects/google-gemini.ts"
 export { BUILTIN_DIALECTS } from "./dialects/index.ts"
 export { createMockDialect, type MockReply, type MockStep } from "./dialects/mock.ts"
 export { openaiChat, toChatMessages } from "./dialects/openai-chat.ts"
