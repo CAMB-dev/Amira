@@ -4,6 +4,7 @@ import * as publicApi from "@amira/api"
 import { API_VERSION, type Extension, type ExtensionAPI } from "@amira/api"
 import type { EventBus } from "./event-bus.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
+import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
 
 let virtualApiInstalled = false
@@ -27,7 +28,8 @@ export interface ExtensionHostOptions {
   bus: EventBus
   interceptors: InterceptorRegistry
   tools: ToolRegistry
-  /** Session id used on extension.* events. Default "host". */
+  status?: StatusRegistry
+  /** Session id used on extension.* and ui.* events. Default "host". */
   sessionId?: string
 }
 
@@ -38,9 +40,12 @@ export interface ExtensionHostOptions {
 export class ExtensionHost {
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
+  #renderPending = false
+  readonly status: StatusRegistry
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
+    this.status = opts.status ?? new StatusRegistry()
   }
 
   get loaded(): string[] {
@@ -54,6 +59,7 @@ export class ExtensionHost {
       await ext(this.#apiFor(source, disposers))
     } catch (err) {
       for (const d of disposers.reverse()) d()
+      this.#requestRender()
       return this.#fail(source, err instanceof Error ? err.message : String(err))
     }
     this.#disposers.set(source, disposers)
@@ -80,7 +86,18 @@ export class ExtensionHost {
     if (!disposers) return false
     for (const d of disposers.reverse()) d()
     this.#disposers.delete(source)
+    this.#requestRender()
     return true
+  }
+
+  /** Coalesces render requests into one ui.render per macrotask. */
+  #requestRender() {
+    if (this.#renderPending) return
+    this.#renderPending = true
+    setTimeout(() => {
+      this.#renderPending = false
+      this.#opts.bus.emit("ui.render", {}, this.#meta())
+    }, 0)
   }
 
   #fail(source: string, error: string): false {
@@ -111,6 +128,15 @@ export class ExtensionHost {
           ),
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
+      registerStatusItem: (item) => {
+        const off = this.status.register(item)
+        this.#requestRender()
+        return track(() => {
+          off()
+          this.#requestRender()
+        })
+      },
+      requestRender: () => this.#requestRender(),
     }
   }
 }
