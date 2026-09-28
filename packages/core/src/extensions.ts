@@ -1,0 +1,116 @@
+import path from "node:path"
+import { pathToFileURL } from "node:url"
+import * as publicApi from "@amira/api"
+import { API_VERSION, type Extension, type ExtensionAPI } from "@amira/api"
+import type { EventBus } from "./event-bus.ts"
+import type { InterceptorRegistry } from "./interceptors.ts"
+import type { ToolRegistry } from "./tool-registry.ts"
+
+let virtualApiInstalled = false
+
+/**
+ * Lets extensions anywhere on disk `import "@amira/api"` without installing it,
+ * including when Amira runs as a compiled executable.
+ */
+export function installVirtualApi(): void {
+  if (virtualApiInstalled) return
+  virtualApiInstalled = true
+  Bun.plugin({
+    name: "amira-virtual-api",
+    setup(build) {
+      build.module("@amira/api", () => ({ exports: { ...publicApi }, loader: "object" }))
+    },
+  })
+}
+
+export interface ExtensionHostOptions {
+  bus: EventBus
+  interceptors: InterceptorRegistry
+  tools: ToolRegistry
+  /** Session id used on extension.* events. Default "host". */
+  sessionId?: string
+}
+
+/**
+ * Loads extensions and tracks everything each one registers, so a failed load is
+ * rolled back completely and a loaded extension can be unloaded.
+ */
+export class ExtensionHost {
+  #opts: ExtensionHostOptions
+  #disposers = new Map<string, (() => void)[]>()
+
+  constructor(opts: ExtensionHostOptions) {
+    this.#opts = opts
+  }
+
+  get loaded(): string[] {
+    return [...this.#disposers.keys()]
+  }
+
+  async load(ext: Extension, source: string): Promise<boolean> {
+    if (this.#disposers.has(source)) return this.#fail(source, "already loaded")
+    const disposers: (() => void)[] = []
+    try {
+      await ext(this.#apiFor(source, disposers))
+    } catch (err) {
+      for (const d of disposers.reverse()) d()
+      return this.#fail(source, err instanceof Error ? err.message : String(err))
+    }
+    this.#disposers.set(source, disposers)
+    this.#opts.bus.emit("extension.loaded", { source }, this.#meta())
+    return true
+  }
+
+  async loadFile(file: string): Promise<boolean> {
+    installVirtualApi()
+    const abs = path.resolve(file)
+    let mod: { default?: unknown }
+    try {
+      mod = await import(pathToFileURL(abs).href)
+    } catch (err) {
+      return this.#fail(abs, `failed to import: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (typeof mod.default !== "function") return this.#fail(abs, "extension must default-export a function")
+    return this.load(mod.default as Extension, abs)
+  }
+
+  /** Removes every tool, listener and interceptor the extension registered. */
+  unload(source: string): boolean {
+    const disposers = this.#disposers.get(source)
+    if (!disposers) return false
+    for (const d of disposers.reverse()) d()
+    this.#disposers.delete(source)
+    return true
+  }
+
+  #fail(source: string, error: string): false {
+    this.#opts.bus.emit("extension.error", { source, error }, this.#meta())
+    return false
+  }
+
+  #meta() {
+    return { sessionId: this.#opts.sessionId ?? "host" }
+  }
+
+  #apiFor(source: string, disposers: (() => void)[]): ExtensionAPI {
+    const { bus, interceptors, tools } = this.#opts
+    const track = (d: () => void) => {
+      disposers.push(d)
+      return d
+    }
+    return {
+      apiVersion: API_VERSION,
+      registerTool: (tool) => track(tools.register(tool, source)),
+      on: (type, handler) =>
+        track(
+          bus.subscribe(
+            (e) => {
+              if (e.type === type) return handler(e as never)
+            },
+            { types: [type] },
+          ),
+        ),
+      intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
+    }
+  }
+}

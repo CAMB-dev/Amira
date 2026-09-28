@@ -1,0 +1,61 @@
+import type { ToolSpec } from "@amira/ai"
+import type { ToolDefinition } from "@amira/api"
+
+export class ToolConflictError extends Error {}
+
+interface Registered {
+  tool: ToolDefinition
+  source: string
+}
+
+export class ToolRegistry {
+  /** Per name, a stack of registrations; the last one wins. */
+  #tools = new Map<string, Registered[]>()
+
+  /**
+   * Replacing an existing tool requires `override: true`; otherwise it is a conflict.
+   * The returned function removes exactly this registration, whatever its position.
+   */
+  register(tool: ToolDefinition, source: string): () => void {
+    const stack = this.#tools.get(tool.name) ?? []
+    const top = stack.at(-1)
+    if (top && !tool.override) {
+      throw new ToolConflictError(
+        `tool "${tool.name}" from ${source} conflicts with the one from ${top.source}; set override: true to replace it`,
+      )
+    }
+    const entry = { tool, source }
+    stack.push(entry)
+    this.#tools.set(tool.name, stack)
+    return () => {
+      const s = this.#tools.get(tool.name)
+      if (!s) return
+      const rest = s.filter((e) => e !== entry)
+      if (rest.length) this.#tools.set(tool.name, rest)
+      else this.#tools.delete(tool.name)
+    }
+  }
+
+  get(name: string): ToolDefinition | undefined {
+    return this.#tools.get(name)?.at(-1)?.tool
+  }
+
+  #current(): Registered[] {
+    return [...this.#tools.values()].map((s) => s.at(-1)!)
+  }
+
+  /** Tools the model sees on every call. */
+  active(): ToolDefinition[] {
+    return this.#current()
+      .map((r) => r.tool)
+      .filter((t) => (t.exposure ?? "active") === "active")
+  }
+
+  specs(): ToolSpec[] {
+    return this.active().map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))
+  }
+
+  all(): { tool: ToolDefinition; source: string }[] {
+    return this.#current()
+  }
+}
