@@ -43,9 +43,11 @@ from `terminal.integrated.commandsToSkipShell`.
 
 | Action | Default | What it does |
 | --- | --- | --- |
-| `submit` | `enter` | Send the message; while a turn runs, steer it |
+| `submit` | `enter` | Send the message; while a turn runs, steer it (queue it with `tui.submitWhileWorking: "queue"`) |
 | `newline` | `shift+enter`, `ctrl+enter` | Insert a line break |
-| `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it |
+| `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it (steer it with `tui.submitWhileWorking: "queue"`) |
+| `submit.steer` | none | Send the message; while a turn runs, always steer it |
+| `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |
 | `interrupt` | `escape` | Stop the running turn |
 | `cancel` | `ctrl+c` | Stop the running turn, else clear the input, else quit |
 | `exit` | `ctrl+d` | Quit when the input is empty and nothing runs |
@@ -103,7 +105,7 @@ now.
 
 ## Terminal settings
 
-These live under `tui` in `settings.json`:
+These live under `tui` in `settings.json`, the user's or a project's (`.amira/settings.json`, which wins):
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -111,3 +113,4 @@ These live under `tui` in `settings.json`:
 | `tui.progress` | `true` | Show a busy indicator on the tab and taskbar while a turn runs, and a paused one while a dialog waits (OSC 9;4: Windows Terminal, ConEmu, VS Code, Ghostty) |
 | `tui.bell` | `true` | Ring the bell when a turn ends or a dialog opens while the terminal is in the background; where the terminal does not report focus, only after a turn of 15 seconds or more |
 | `tui.reflow` | `"auto"` | `"off"` for terminals that do not re-wrap lines when they get narrower, so a resize does not erase the transcript above the input; `"auto"` and `"on"` assume they do |
+| `tui.submitWhileWorking` | `"steer"` | What `submit` (Enter) does while a turn runs: `"steer"` sends the message into the running turn, `"queue"` sends it after the turn. The `queue` key does the other one, and the hint line says which (`Enter queue · Ctrl+Q steer`). Slash commands run at once either way |

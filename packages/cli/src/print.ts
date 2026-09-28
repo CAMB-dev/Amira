@@ -1,4 +1,4 @@
-import type { AnyEvent } from "@amira/api"
+import { type AnyEvent, fallbackTitle } from "@amira/api"
 import { type Agent, type CommandHost, parseCommandLine, type TurnResult, type UiRequests } from "@amira/core"
 
 export interface PrintIO {
@@ -64,8 +64,8 @@ export async function runPrint(
 ): Promise<number> {
   const io = opts.io ?? defaultIO
   let endedWithNewline = true
-  /** Role and line indent of each sub-agent, by session id. */
-  const subagents = new Map<string, { role: string; indent: string }>()
+  /** Name, role and line indent of each sub-agent, by session id. */
+  const subagents = new Map<string, { title: string; role: string; indent: string }>()
   /** How the main session's latest turn ended. */
   let lastEnd: TurnResult | undefined
   const handle = (e: AnyEvent) => {
@@ -86,9 +86,11 @@ export async function runPrint(
     }
     if (e.type === "subagent.start") {
       const indent = "  ".repeat(e.data.depth - 1)
-      subagents.set(e.data.childSessionId, { role: e.data.role ?? "agent", indent: `${indent}  ` })
+      const title = e.data.title || fallbackTitle(e.data.prompt)
+      const role = e.data.role ?? "agent"
+      subagents.set(e.data.childSessionId, { title, role, indent: `${indent}  ` })
       const when = e.data.queued ? "queued" : "started"
-      io.stderr(`${indent}◆ ${e.data.role ?? "agent"} ${when}: ${oneLine(e.data.prompt, 80)}\n`)
+      io.stderr(`${indent}◆ ${title} · ${role} ${when}: ${oneLine(e.data.prompt, 80)}\n`)
       return
     }
     if (e.type === "subagent.end") {
@@ -96,7 +98,7 @@ export async function runPrint(
       const secs = (e.data.durationMs / 1000).toFixed(1)
       const error = e.data.error ? `: ${oneLine(e.data.error, 120)}` : ""
       io.stderr(
-        `${sub?.indent.slice(2) ?? ""}◆ ${sub?.role ?? "agent"} ${e.data.status} (${secs}s)${error}\n`,
+        `${sub?.indent.slice(2) ?? ""}◆ ${sub ? `${sub.title} · ${sub.role}` : "agent"} ${e.data.status} (${secs}s)${error}\n`,
       )
       return
     }

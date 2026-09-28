@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep, NO_MODEL, userMessage } from "@amira/ai"
 import {
   type AnyEvent,
+  type ChildSession,
   type CommandDefinition,
   defineTool,
   type Message,
@@ -25,7 +26,6 @@ import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 
-import { subagentLines } from "../src/format.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
 
@@ -60,6 +60,8 @@ interface SetupOptions {
   control?: Partial<SessionControl>
   /** Give the agent a tree, so tools can start sub-agents. */
   tree?: boolean
+  /** Sub-agents working at once in that tree. */
+  maxConcurrent?: number
   /** Called after every write to the terminal, once the screen shows it. */
   onWrite?: (screen: VirtualScreen) => void
   /** Present tool calls with the built-in tools' presenters. */
@@ -92,7 +94,15 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     dialects: [mock],
     providers: o.noModel === "none" ? [] : [{ id: "mock", dialect: "mock", baseUrl: "" }],
   })
-  const tree = o.tree ? { tree: new AgentTree({ ai, sections: () => [] }) } : {}
+  const tree = o.tree
+    ? {
+        tree: new AgentTree({
+          ai,
+          sections: () => [],
+          ...(o.maxConcurrent ? { maxConcurrent: o.maxConcurrent } : {}),
+        }),
+      }
+    : {}
   const agent = new Agent({
     ai,
     model: o.noModel ? NO_MODEL : ai.model("mock/m1"),
@@ -912,6 +922,70 @@ test("Enter while working steers the turn; the message joins it before the next 
   await exited
 })
 
+test('with tui.submitWhileWorking "queue", Enter queues while working and the queue key steers', async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup(
+    [
+      { text: "looking", delayMs: 60, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+      (req) => ({ text: `saw ${lastUserText(req)}` }),
+      (req) => ({ text: `then ${lastUserText(req)}` }),
+    ],
+    { settings: { submitWhileWorking: "queue" }, cols: 80 },
+  )
+  // Idle, Enter just sends.
+  await waitFor(() => live().includes("Enter send"), "idle hint")
+  terminal.send("go\r")
+  await waitFor(() => live().includes(`Enter queue · ${QUEUE_HINT} steer`), "the swapped hint")
+  terminal.send("after it\r")
+  await shows("queued › after it")
+  terminal.send("now B\x11")
+  await shows("saw now B")
+  await shows("then after it")
+  await idle()
+  const users = agent.messages
+    .filter((m) => m.role === "user")
+    .map((m) => (m.content[0] as { text: string }).text)
+  // The steer joined the first turn; the queued one became the next.
+  expect(users).toEqual(["go", "now B", "after it"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("submit.steer and submit.queue keys do one thing whatever the setting; commands still run at once", async () => {
+  for (const mode of ["steer", "queue"] as const) {
+    const keys = new Keybindings({
+      ...defaultKeys({ vscode: false }),
+      "submit.steer": ["ctrl+t"],
+      "submit.queue": ["ctrl+g"],
+    })
+    const { terminal, agent, shows, idle, exited } = await setup(
+      [
+        { text: "looking", delayMs: 300, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+        (req) => ({ text: `saw ${lastUserText(req)}` }),
+        (req) => ({ text: `then ${lastUserText(req)}` }),
+      ],
+      { keybindings: keys, settings: { submitWhileWorking: mode }, commands: testCommands([]), cols: 80 },
+    )
+    terminal.send("go\r")
+    await waitFor(() => agent.status === "working", "working")
+    terminal.send("later\x07")
+    await shows("queued › later")
+    terminal.send("B\x14")
+    // A slash command sent with either key runs now, not after the turn.
+    terminal.send("/status\x07")
+    await shows("STATUS OK")
+    expect(agent.status).toBe("working")
+    await shows("saw B")
+    await shows("then later")
+    await idle()
+    const users = agent.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content[0] as { text: string }).text)
+    expect(users).toEqual(["go", "B", "later"])
+    terminal.send("\x03")
+    await exited
+  }
+})
+
 test("steering the final reply becomes the next turn, not editor text", async () => {
   const { terminal, live, agent, shows, idle, exited } = await setup([
     { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
@@ -1506,37 +1580,62 @@ test("a command typed during a turn runs at once instead of steering it", async 
   await exited
 })
 
-test("running sub-agents show with role, elapsed time, tokens and task, and go away when done", async () => {
+/** A tool that starts one sub-agent per title, all at once, and waits for them. */
+function delegateTool(role = "explorer") {
+  return defineTool<{ titles: string[] }>({
+    name: "delegate",
+    description: "",
+    parameters: {},
+    concurrency: "parallel",
+    execute: async (p, ctx) => {
+      const kids = p.titles.map((title) =>
+        ctx.session!.spawn!({
+          role: title.startsWith("Add") ? "coder" : role,
+          title,
+          prompt: `do: ${title}`,
+        }),
+      )
+      const results = await Promise.all(kids.map((k) => k.result()))
+      return textResult(results.map((r) => r.text).join("\n"))
+    },
+  })
+}
+
+test("sub-agents show under their call: title, role, time, tokens, current tool, queued ones", async () => {
   const { terminal, live, all, shows, idle, exited, agent } = await setup(
     [
-      { toolCalls: [{ name: "delegate", args: {} }] },
-      { text: "child says hi", delayMs: 150, usage: { input: 1500, output: 20 } },
+      { toolCalls: [{ name: "delegate", args: { titles: ["US market trend", "Add status bar test"] } }] },
+      { toolCalls: [{ name: "read", args: { path: "a.ts" } }], usage: { input: 4000, output: 100 } },
+      { text: "trend is up", delayMs: 400 },
+      { text: "test added", usage: { input: 1200, output: 30 } },
       { text: "all done" },
     ],
-    { cols: 80, tree: true },
+    { cols: 80, tree: true, maxConcurrent: 1 },
   )
-  agent.tools.register(
-    defineTool({
-      name: "delegate",
-      description: "",
-      parameters: {},
-      execute: async (_p, ctx) => {
-        const r = await ctx.session!.spawn!({ role: "explorer", prompt: "find the   config file" }).result()
-        return textResult(r.text)
-      },
-    }),
-    "test",
-  )
+  agent.tools.register(delegateTool(), "test")
   terminal.send("go\r")
-  await waitFor(() => live().includes("◆ explorer · 0s · 0 tok · find the config file"), "sub-agent line")
+  // The first one runs its tool; the second waits for the slot.
+  await waitFor(
+    () =>
+      /● delegate +. \d+s\n {2}⎿ ◆ US market trend · explorer · \d+s · 4\.1k tok\n {2}│ {3}● read a\.ts\n {2}⎿ ◆ Add status bar test · coder · queued\n/.test(
+        live(),
+      ),
+    "rows under the call",
+  )
+  // No list of sub-agents at the bottom of the live region: only the activity line is there.
+  expect(live().match(/◆/g)).toHaveLength(2)
   await shows("all done")
   await idle()
-  // The running line is gone; a one-line summary of how it ended is in the transcript instead.
-  expect(live()).not.toContain("◆ explorer ·")
-  expect(all()).toMatch(/◆ explorer ✓ \d+\.\ds · 1\.5k tok · child says hi\n● delegate/)
-  // The child's reply only shows as its commander's tool result, not as a reply of its own.
-  expect(all()).toContain("⎿ child says hi")
-  expect(all()).not.toMatch(/^child says hi$/m)
+  const text = all()
+  // Each one's rows became its end line, committed with the call right under its head, in order.
+  expect(text).toMatch(
+    /● delegate\n {2}⎿ ◆ US market trend ✓ explorer · \d+\.\ds · 4\.1k tok · trend is up\n {2}⎿ ◆ Add status bar test ✓ coder · \d+\.\ds · 1\.2k tok · test added\n {2}⎿ trend is up/,
+  )
+  expect(text.match(/◆ US market trend/g)).toHaveLength(1)
+  // Nothing is left of them in the live region below the transcript.
+  expect(live().split("  all done")[1]).not.toContain("◆")
+  // The children's replies only show as their commander's tool result, not as replies of their own.
+  expect(text).not.toMatch(/^ {2}trend is up$/m)
   terminal.send("\x03")
   await exited
 })
@@ -1547,7 +1646,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
       {
         toolCalls: [
           { name: "slow", args: { path: "big.log" } },
-          { name: "delegate", args: { task: "look around" } },
+          { name: "delegate", args: { titles: ["Look around"] } },
         ],
       },
       { text: "child answer" },
@@ -1567,56 +1666,196 @@ test("a sub-agent's end line stays with its call when that call is held behind a
     }),
     "test",
   )
-  agent.tools.register(
-    defineTool<{ task: string }>({
-      name: "delegate",
-      ...parallel,
-      execute: async (p, ctx) => {
-        const r = await ctx.session!.spawn!({ role: "explorer", prompt: p.task }).result()
-        return textResult(r.text)
-      },
-    }),
-    "test",
-  )
+  agent.tools.register(delegateTool(), "test")
   terminal.send("go\r")
   // The child is done and so is its call, but both wait below the running slow call.
-  await waitFor(() => /● slow big\.log .*\n◆ explorer ✓ .*child answer\n● delegate/m.test(live()), "held")
+  await waitFor(
+    () => /● slow big\.log .*\n● delegate\n {2}⎿ ◆ Look around ✓ .*child answer/m.test(live()),
+    "held",
+  )
   release()
   await shows("all done")
   await idle()
   const text = all()
-  expect(text).toMatch(/● slow big\.log\n {2}⎿ slow result\n◆ explorer ✓ [^\n]*child answer\n● delegate/)
-  expect(text.match(/◆ explorer ✓/g)).toHaveLength(1)
+  expect(text).toMatch(
+    /● slow big\.log\n {2}⎿ slow result\n● delegate\n {2}⎿ ◆ Look around ✓ [^\n]*child answer\n {2}⎿ child answer/,
+  )
+  expect(text.match(/◆ Look around ✓/g)).toHaveLength(1)
   terminal.send("\x03")
   await exited
 })
 
-test("a sub-agent's line shows its latest tool call while it works", async () => {
-  const { terminal, live, shows, idle, exited, agent } = await setup(
+test("parallel calls each keep their own sub-agents, matched by call id, not by task", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup(
     [
-      { toolCalls: [{ name: "delegate", args: {} }] },
-      { toolCalls: [{ name: "read", args: { path: "config.ts" } }] },
-      { text: "found it", delayMs: 150 },
+      {
+        toolCalls: [
+          { name: "delegate", args: { titles: ["First pass"] } },
+          { name: "delegate", args: { titles: ["Second pass"] } },
+        ],
+      },
+      { text: "one", delayMs: 200 },
+      { text: "two", delayMs: 200 },
       { text: "all done" },
     ],
     { cols: 80, tree: true },
   )
+  agent.tools.register(delegateTool(), "test")
+  terminal.send("go\r")
+  await waitFor(
+    () => /● delegate .*\n {2}⎿ ◆ First pass · .*\n● delegate .*\n {2}⎿ ◆ Second pass · /.test(live()),
+    "each under its own call",
+  )
+  await shows("all done")
+  await idle()
+  expect(all()).toMatch(
+    /● delegate\n {2}⎿ ◆ First pass ✓ [^\n]*\n {2}⎿ \w+\n● delegate\n {2}⎿ ◆ Second pass ✓ [^\n]*\n {2}⎿ \w+/,
+  )
+  terminal.send("\x03")
+  await exited
+})
+
+test("nested sub-agents sit one level deeper under their parent's row", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup(
+    [
+      { toolCalls: [{ name: "delegate", args: { titles: ["Outer task"] } }] },
+      { toolCalls: [{ name: "delegate", args: { titles: ["Inner check"] } }] },
+      { text: "inner done", delayMs: 400 },
+      { text: "outer done" },
+      { text: "all done" },
+    ],
+    { cols: 80, tree: true },
+  )
+  agent.tools.register(delegateTool(), "test")
+  terminal.send("go\r")
+  await waitFor(
+    () =>
+      /● delegate +. \d+s\n {2}⎿ ◆ Outer task · explorer · \d+s · 0 tok\n {2}│ {3}● delegate\n {4}⎿ ◆ Inner check · explorer · \d+s · 0 tok\n/.test(
+        live(),
+      ),
+    "nested rows",
+  )
+  await shows("all done")
+  await idle()
+  expect(all()).toMatch(
+    /● delegate\n {2}⎿ ◆ Outer task ✓ explorer [^\n]*outer done\n {4}⎿ ◆ Inner check ✓ explorer [^\n]*inner done\n {2}⎿ outer done/,
+  )
+  terminal.send("\x03")
+  await exited
+})
+
+test("after an interrupt, a sub-agent it stopped gets its end line; one that runs on and finishes does not", async () => {
+  // Replies go by who asks: the commander, or a child by its task.
+  const reply = (req: { messages: { role: string; content: unknown }[] }) => {
+    const task = JSON.stringify(req.messages[0]?.content)
+    if (task.includes("keep going")) return { text: "kept at it", delayMs: 300 }
+    if (task.includes("stop me")) return { text: "never", delayMs: 5000 }
+    return { toolCalls: [{ name: "pair", args: {} }] }
+  }
+  const { terminal, live, all, shows, idle, exited, agent, bus } = await setup([reply, reply, reply], {
+    cols: 90,
+    tree: true,
+  })
+  let survivor: ChildSession | undefined
   agent.tools.register(
     defineTool({
-      name: "delegate",
+      name: "pair",
       description: "",
       parameters: {},
-      execute: async (_p, ctx) => {
-        const r = await ctx.session!.spawn!({ role: "explorer", prompt: "find the config" }).result()
-        return textResult(r.text)
+      // Like the main session's agent calls: an interrupt stops one child, the other runs on.
+      execute: (_p, ctx) => {
+        survivor = ctx.session!.spawn!({ role: "explorer", title: "Keep going", prompt: "keep going" })
+        const stopped = ctx.session!.spawn!({ role: "explorer", title: "Stop me", prompt: "stop me" })
+        return new Promise((r) =>
+          ctx.signal.addEventListener("abort", () => {
+            stopped.abort("interrupted")
+            r(textResult("Started in the background"))
+          }),
+        )
       },
     }),
     "test",
   )
   terminal.send("go\r")
-  await waitFor(() => /◆ explorer · \d+s · \d+ tok · ● read config\.ts/.test(live()), "activity")
-  await shows("all done")
+  await waitFor(() => live().includes("◆ Stop me · explorer"), "both running")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  await survivor!.result()
   await idle()
+  await bus.flush()
+  await waitFor(() => !live().includes("◆ background"), "the rows gone")
+  expect(all()).toMatch(/⎿ ◆ Stop me ⊘ explorer · [^\n]*stopped/)
+  expect(all().match(/◆ Stop me ⊘/g)).toHaveLength(1)
+  // The survivor's notice (the agent extension's) reports it; no line of its own here.
+  expect(all()).not.toContain("◆ Keep going ✓")
+  terminal.send("\x03")
+  await exited
+})
+
+test("sub-agents that outlive their call run on under a background header, with no end line", async () => {
+  let finish!: () => void
+  // The child and the commander ask in no fixed order: each reply goes by who asks.
+  const reply = (req: { messages: { role: string; content: unknown }[] }) => {
+    const child = JSON.stringify(req.messages[0]?.content).includes('"scan"')
+    const answered = req.messages.at(-1)?.role === "toolResult"
+    if (child)
+      return answered
+        ? { text: "scanned" }
+        : { toolCalls: [{ name: "scan", args: { path: "logs/app.log" } }] }
+    return answered ? { text: "started it" } : { toolCalls: [{ name: "launch", args: {} }] }
+  }
+  const { terminal, live, all, shows, idle, exited, agent, bus } = await setup([reply, reply, reply, reply], {
+    cols: 80,
+    tree: true,
+  })
+  const gate = new Promise<void>((r) => {
+    finish = r
+  })
+  agent.tools.register(
+    defineTool({
+      name: "scan",
+      description: "",
+      parameters: {},
+      execute: async () => {
+        await gate
+        return textResult("log lines")
+      },
+    }),
+    "test",
+  )
+  let child: ChildSession | undefined
+  agent.tools.register(
+    defineTool({
+      name: "launch",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        child = ctx.session!.spawn!({ role: "explorer", title: "Scan the logs", prompt: "scan" })
+        return textResult("Started in the background")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("started it")
+  await idle()
+  // The call is committed; its sub-agent runs on in the live region.
+  expect(all()).toMatch(/● launch\n {2}⎿ Started in the background/)
+  await waitFor(
+    () =>
+      /◆ background\n {2}⎿ ◆ Scan the logs · explorer · \d+s · 0 tok\n {2}│ {3}● scan logs\/app\.log\n/.test(
+        live(),
+      ),
+    "background rows",
+  )
+  const committed = all().split("◆ background")[0]!
+  expect(committed).not.toContain("Scan the logs")
+  finish()
+  await child!.result()
+  await bus.flush()
+  await waitFor(() => !live().includes("◆ background"), "the rows gone")
+  // Its end is reported by its notice (the agent extension's), not by an end line of its own.
+  expect(all()).not.toContain("◆ Scan the logs ✓")
   terminal.send("\x03")
   await exited
 })
@@ -1649,20 +1888,6 @@ test("the UI follows the session a command switches to, and /quit leaves", async
   expect(s.agent.messages).toEqual([])
   terminal.send("/quit\r")
   expect(await exited).toBe(0)
-})
-
-test("sub-agent lines: queued ones say so, deeper ones are indented, long tasks are cut", () => {
-  const theme = { accent: (s: string) => s, muted: (s: string) => s } as never
-  const lines = subagentLines(
-    [
-      { role: "coder", task: "a\nb", depth: 1, startedAt: 1000, tokens: 12_345 },
-      { role: "explorer", task: "x".repeat(100), depth: 2, tokens: 0 },
-    ],
-    6500,
-    40,
-    theme,
-  )
-  expect(lines).toEqual(["◆ coder · 5s · 12.3k tok · a b", "  ◆ explorer · queued · 0 tok · xxxxxxx…", ""])
 })
 
 test("a diff review shows the diff above its options", async () => {

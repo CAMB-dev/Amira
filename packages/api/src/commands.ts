@@ -106,6 +106,10 @@ export interface SubagentInfo {
   depth: number
   /** "agent" when it was started without a role. */
   role: string
+  /** A few words naming its task; the task's first words when it was given none. */
+  title: string
+  /** The parent's tool call that started it, when known. */
+  toolCallId?: string
   /** The prompt it was given. */
   task: string
   status: SubagentState

@@ -123,8 +123,8 @@ test("the commander runs an explorer and a coder in parallel and gets both answe
                 name: "agent",
                 args: {
                   tasks: [
-                    { role: "explorer", prompt: "find the config" },
-                    { role: "coder", prompt: "create y.txt" },
+                    { role: "explorer", title: "Do find the config", prompt: "find the config" },
+                    { role: "coder", title: "Do create y.txt", prompt: "create y.txt" },
                   ],
                 },
               },
@@ -143,12 +143,12 @@ test("the commander runs an explorer and a coder in parallel and gets both answe
   await bus.flush()
   expect(r.reason).toBe("done")
   const text = agentResult(root)
-  expect(text).toContain("## explorer · s_")
+  expect(text).toContain("## Do find the config · explorer · s_")
   expect(text).toContain("done (")
   expect(text).toContain("1.2k tokens")
   expect(text).toContain("The config is in a.ts:3")
   expect(text).toContain("Changes: none.")
-  expect(text).toContain("## coder")
+  expect(text).toContain("## Do create y.txt · coder")
   expect(text).toContain("Created y.txt.")
   expect(text).toContain("Changes: changed y.txt.")
 
@@ -168,9 +168,13 @@ test("a child at the deepest level does not get the agent tools", async () => {
     const last = req.messages.at(-1)
     if (last?.role === "toolResult") return { text: `${role} done` }
     if (role === "commander")
-      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "coder", prompt: "one" }] } }] }
+      return {
+        toolCalls: [{ name: "agent", args: { tasks: [{ role: "coder", title: "Do one", prompt: "one" }] } }],
+      }
     if (role === "coder" && !lastText(req).includes("two")) {
-      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "coder", prompt: "two" }] } }] }
+      return {
+        toolCalls: [{ name: "agent", args: { tasks: [{ role: "coder", title: "Do two", prompt: "two" }] } }],
+      }
     }
     return { text: "leaf" }
   })
@@ -184,7 +188,7 @@ test("unknown roles are refused before anything starts", async () => {
   const { root, events, bus } = await setup((req) =>
     req.messages.at(-1)?.role === "toolResult"
       ? { text: "ok" }
-      : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "wizard", prompt: "x" }] } }] },
+      : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "wizard", title: "Do x", prompt: "x" }] } }] },
   )
   await root.prompt("go")
   await bus.flush()
@@ -192,11 +196,78 @@ test("unknown roles are refused before anything starts", async () => {
   expect(events.some((e) => e.type === "subagent.start")).toBe(false)
 })
 
+test("every task needs a short title; without one, or with a long one, nothing starts", async () => {
+  for (const [title, expected] of [
+    [undefined, 'Task 2 has no "title"'],
+    ["   ", 'Task 2 has no "title"'],
+    ["x".repeat(61), `Task 2's "title" is 61 characters long`],
+  ] as const) {
+    const { root, events, bus } = await setup((req) =>
+      req.messages.at(-1)?.role === "toolResult"
+        ? { text: "ok" }
+        : {
+            toolCalls: [
+              {
+                name: "agent",
+                args: {
+                  tasks: [
+                    { role: "explorer", title: "Look around", prompt: "x" },
+                    { role: "explorer", ...(title !== undefined ? { title } : {}), prompt: "y" },
+                  ],
+                },
+              },
+            ],
+          },
+    )
+    await root.prompt("go")
+    await bus.flush()
+    expect(agentResult(root)).toContain(expected)
+    expect(events.some((e) => e.type === "subagent.start")).toBe(false)
+  }
+})
+
+test("a sub-agent carries its title and the id of the call that started it", async () => {
+  const { root, events, bus, mock } = await setup((req) =>
+    who(req) === "commander" && req.messages.at(-1)?.role !== "toolResult"
+      ? {
+          toolCalls: [
+            {
+              name: "agent",
+              args: { tasks: [{ role: "explorer", title: "  US   market trend ", prompt: "look" }] },
+            },
+          ],
+        }
+      : { text: "ok" },
+  )
+  await root.prompt("go")
+  await bus.flush()
+  const call = root.messages.find((m) => m.role === "toolResult" && m.toolName === "agent")
+  const callId = call?.role === "toolResult" ? call.toolCallId : ""
+  expect(callId).not.toBe("")
+  const start = events.find((e) => e.type === "subagent.start")
+  const end = events.find((e) => e.type === "subagent.end")
+  expect(start?.type === "subagent.start" && start.data).toMatchObject({
+    title: "US market trend",
+    toolCallId: callId,
+  })
+  expect(end?.type === "subagent.end" && end.data.toolCallId).toBe(callId)
+  expect(agentResult(root)).toContain("## US market trend · explorer · ")
+  // The model is told to give one.
+  const schema = mock.requests[0]!.tools?.find((t) => t.name === "agent")?.parameters as {
+    properties: { tasks: { items: { required: string[] } } }
+  }
+  expect(schema.properties.tasks.items.required).toEqual(["title", "prompt"])
+})
+
 test("settings agents.<role>.model picks the child's model", async () => {
   const { root, mock } = await setup(
     (req) =>
       who(req) === "commander" && req.messages.at(-1)?.role !== "toolResult"
-        ? { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "look" }] } }] }
+        ? {
+            toolCalls: [
+              { name: "agent", args: { tasks: [{ role: "explorer", title: "Do look", prompt: "look" }] } },
+            ],
+          }
         : { text: "ok" },
     { settings: { agents: { explorer: { model: "cheap/small" } }, subagents: { background: false } } },
   )
@@ -220,7 +291,14 @@ test("project role files are offered and used", async () => {
         ? { text: "noted" }
         : req.messages.at(-1)?.role === "toolResult"
           ? { text: "ok" }
-          : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "scribe", prompt: "note it" }] } }] },
+          : {
+              toolCalls: [
+                {
+                  name: "agent",
+                  args: { tasks: [{ role: "scribe", title: "Do note it", prompt: "note it" }] },
+                },
+              ],
+            },
     { cwd },
   )
   await root.prompt("go")
@@ -240,7 +318,7 @@ test("background sub-agents return ids at once; agent_result collects each resul
     const last = req.messages.at(-1)
     if (role === "explorer") return { text: "background answer", delayMs: 20 }
     if (last?.role === "toolResult" && last.toolName === "agent") {
-      childId = /(s_\w+) \(explorer\)/.exec(lastText(req))?.[1] ?? ""
+      childId = /(s_\w+) \(explorer: /.exec(lastText(req))?.[1] ?? ""
       return { toolCalls: [{ name: "agent_result", args: { ids: [childId] } }] }
     }
     if (
@@ -252,7 +330,12 @@ test("background sub-agents return ids at once; agent_result collects each resul
     }
     if (last?.role === "toolResult") return { text: "finished" }
     return {
-      toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "bg" }], background: true } }],
+      toolCalls: [
+        {
+          name: "agent",
+          args: { tasks: [{ role: "explorer", title: "Do bg", prompt: "bg" }], background: true },
+        },
+      ],
     }
   })
   await root.prompt("go")
@@ -293,13 +376,16 @@ test("agent_result with wait false reports a sub-agent still running and keeps i
     if (last?.role === "toolResult") return { text: "later" }
     return {
       toolCalls: [
-        { name: "agent", args: { tasks: [{ role: "explorer", prompt: "look far" }], background: true } },
+        {
+          name: "agent",
+          args: { tasks: [{ role: "explorer", title: "Do look far", prompt: "look far" }], background: true },
+        },
       ],
     }
   })
   await root.prompt("go")
   expect(agentResult(root, "agent_result")).toMatch(
-    /^## explorer · s_\w+ · still running \(\d+s\): look far$/,
+    /^## Do look far · explorer · s_\w+ · still running \(\d+s\): look far$/,
   )
   // The job outlived the turn; the session's end stops it.
   const ended = new Promise<void>((resolve) => {
@@ -330,7 +416,9 @@ test("a coder in a worktree has its change merged into the commander's checkout"
             toolCalls: [
               {
                 name: "agent",
-                args: { tasks: [{ role: "coder", prompt: "change f", isolation: "worktree" }] },
+                args: {
+                  tasks: [{ role: "coder", title: "Do change f", prompt: "change f", isolation: "worktree" }],
+                },
               },
             ],
           }
@@ -361,7 +449,7 @@ function slowCoder(opts: { background?: boolean } = {}) {
             {
               name: "agent",
               args: {
-                tasks: [{ role: "coder", prompt: "change f", isolation: "worktree" }],
+                tasks: [{ role: "coder", title: "Do change f", prompt: "change f", isolation: "worktree" }],
                 ...(opts.background ? { background: true } : {}),
               },
             },
@@ -414,7 +502,10 @@ test("a sub-agent that fails keeps its worktree changes unmerged", async () => {
         ? { text: "ok" }
         : {
             toolCalls: [
-              { name: "agent", args: { tasks: [{ role: "coder", prompt: "x", isolation: "worktree" }] } },
+              {
+                name: "agent",
+                args: { tasks: [{ role: "coder", title: "Do x", prompt: "x", isolation: "worktree" }] },
+              },
             ],
           }
     },
@@ -451,8 +542,8 @@ test("an interrupt while worktrees are being made starts nothing further", async
                   name: "agent",
                   args: {
                     tasks: [
-                      { role: "coder", prompt: "a", isolation: "worktree" },
-                      { role: "coder", prompt: "b", isolation: "worktree" },
+                      { role: "coder", title: "Do a", prompt: "a", isolation: "worktree" },
+                      { role: "coder", title: "Do b", prompt: "b", isolation: "worktree" },
                     ],
                   },
                 },
@@ -483,7 +574,10 @@ test("worktree isolation outside a repository falls back to the shared directory
       ? { text: "ok" }
       : {
           toolCalls: [
-            { name: "agent", args: { tasks: [{ role: "coder", prompt: "z", isolation: "worktree" }] } },
+            {
+              name: "agent",
+              args: { tasks: [{ role: "coder", title: "Do z", prompt: "z", isolation: "worktree" }] },
+            },
           ],
         }
   })
@@ -501,7 +595,9 @@ test("a spent budget is reported for tasks that cannot start", async () => {
         ? { text: "ok" }
         : who(req) === "commander"
           ? {
-              toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }],
+              toolCalls: [
+                { name: "agent", args: { tasks: [{ role: "explorer", title: "Do x", prompt: "x" }] } },
+              ],
               usage: { input: 500 },
             }
           : { text: "x" },
@@ -546,13 +642,16 @@ test("a sub-agent's own background sub-agents end with its turn", async () => {
         ? { text: "coder done without collecting" }
         : {
             toolCalls: [
-              { name: "agent", args: { tasks: [{ role: "explorer", prompt: "bg" }], background: true } },
+              {
+                name: "agent",
+                args: { tasks: [{ role: "explorer", title: "Do bg", prompt: "bg" }], background: true },
+              },
             ],
           }
     }
     return last?.role === "toolResult"
       ? { text: "ok" }
-      : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "coder", prompt: "c" }] } }] }
+      : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "coder", title: "Do c", prompt: "c" }] } }] }
   })
   const grandchildEnded = new Promise<void>((resolve) => {
     bus.subscribe((e) => {
@@ -600,10 +699,14 @@ test("by default sub-agents run in the background and their result wakes the idl
       if (isNotice(req)) return { toolCalls: [{ name: "agent_result", args: { ids: [childId] } }] }
       if (last?.role === "toolResult" && last.toolName === "agent_result") return { text: "thanks, reacting" }
       if (last?.role === "toolResult") {
-        childId = /(s_\w+) \(explorer\)/.exec(lastText(req))?.[1] ?? ""
+        childId = /(s_\w+) \(explorer: /.exec(lastText(req))?.[1] ?? ""
         return { text: "started it; ask me anything meanwhile" }
       }
-      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "look" }] } }] }
+      return {
+        toolCalls: [
+          { name: "agent", args: { tasks: [{ role: "explorer", title: "Do look", prompt: "look" }] } },
+        ],
+      }
     },
     { settings: {} },
   )
@@ -613,9 +716,9 @@ test("by default sub-agents run in the background and their result wakes the idl
   await until(() => replied(root, "thanks, reacting"))
   await bus.flush()
   const [notice] = notices(root)
-  expect(notice?.shown).toMatch(/^◆ explorer finished · \d+s · \d+ tok$/)
+  expect(notice?.shown).toMatch(/^◆ Do look finished · explorer · \d+s · \d+ tok$/)
   expect(notice?.text).toContain("the user did not write this message")
-  expect(notice?.text).toContain(`## explorer · ${childId} · done`)
+  expect(notice?.text).toContain(`## Do look · explorer · ${childId} · done`)
   expect(notice?.text).toContain("found it in a.ts")
   // The woken turn is an ordinary turn whose prompt is the notice.
   const starts = events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId)
@@ -634,7 +737,11 @@ test("settings subagents.background false makes calls wait again", async () => {
         ? { text: "waited answer" }
         : req.messages.at(-1)?.role === "toolResult"
           ? { text: "ok" }
-          : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] },
+          : {
+              toolCalls: [
+                { name: "agent", args: { tasks: [{ role: "explorer", title: "Do x", prompt: "x" }] } },
+              ],
+            },
     { settings: { subagents: { background: false } } },
   )
   await root.prompt("go")
@@ -671,7 +778,9 @@ test("a result that arrives while the commander works joins its turn before the 
       if (last?.role === "toolResult" && last.toolName === "agent")
         return { toolCalls: [{ name: "hold", args: {} }] }
       if (last?.role === "toolResult") return { text: "no notice?" }
-      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "q" }] } }] }
+      return {
+        toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", title: "Do q", prompt: "q" }] } }],
+      }
     },
     { settings: {} },
   )
@@ -714,8 +823,8 @@ test("sub-agents finishing close together come back as one message", async () =>
             name: "agent",
             args: {
               tasks: [
-                { role: "explorer", prompt: "a" },
-                { role: "explorer", prompt: "b" },
+                { role: "explorer", title: "Do a", prompt: "a" },
+                { role: "explorer", title: "Do b", prompt: "b" },
               ],
             },
           },
@@ -746,7 +855,9 @@ test("in the main session agent_result does not wait: the result still comes onc
         return { toolCalls: [{ name: "agent_result", args: {} }] }
       }
       if (last?.role === "toolResult") return { text: "collected" }
-      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] }
+      return {
+        toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", title: "Do x", prompt: "x" }] } }],
+      }
     },
     { settings: {} },
   )
@@ -773,7 +884,10 @@ test("the main session runs sub-agents in the background even when the model ask
       if (last?.role === "toolResult") return { text: "started" }
       return {
         toolCalls: [
-          { name: "agent", args: { background: false, tasks: [{ role: "explorer", prompt: "x" }] } },
+          {
+            name: "agent",
+            args: { background: false, tasks: [{ role: "explorer", title: "Do x", prompt: "x" }] },
+          },
         ],
       }
     },
@@ -799,7 +913,9 @@ test("interrupting the commander leaves its background sub-agents running; their
       if (last?.role === "toolResult" && last.toolName === "agent")
         return { toolCalls: [{ name: "hold", args: {} }] }
       if (last?.role === "toolResult") return { text: "?" }
-      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] }
+      return {
+        toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", title: "Do x", prompt: "x" }] } }],
+      }
     },
     { settings: {} },
   )
@@ -834,7 +950,11 @@ test("agent_result called after an interrupt returns at once and leaves the resu
           ? { text: "got it" }
           : req.messages.at(-1)?.role === "toolResult"
             ? { text: "started" }
-            : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] },
+            : {
+                toolCalls: [
+                  { name: "agent", args: { tasks: [{ role: "explorer", title: "Do x", prompt: "x" }] } },
+                ],
+              },
     { settings: {} },
   )
   await root.prompt("go")
@@ -867,7 +987,11 @@ test("a new conversation stops the old one's background sub-agents", async () =>
         ? { text: "slow", delayMs: 30_000 }
         : req.messages.at(-1)?.role === "toolResult"
           ? { text: "started" }
-          : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] },
+          : {
+              toolCalls: [
+                { name: "agent", args: { tasks: [{ role: "explorer", title: "Do x", prompt: "x" }] } },
+              ],
+            },
     { settings: {} },
   )
   await root.prompt("go")

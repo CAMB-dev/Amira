@@ -127,11 +127,14 @@ export interface EventMap {
   "command.output": { command: string; text: string; level: CommandOutputLevel }
   /**
    * A session started a sub-agent (D12). Sent with the parent's session id; the child's own
-   * events carry `parentSessionId`. A `queued` child waits for a free slot (D63).
+   * events carry `parentSessionId`. A `queued` child waits for a free slot (D63). `toolCallId`
+   * is the parent's tool call that started it, when a tool did.
    */
   "subagent.start": {
     childSessionId: string
     role?: string
+    title?: string
+    toolCallId?: string
     prompt: string
     model: ModelRef
     depth: number
@@ -142,6 +145,7 @@ export interface EventMap {
   /** A sub-agent finished; sent with the parent's session id. `usage` is the child's alone. */
   "subagent.end": {
     childSessionId: string
+    toolCallId?: string
     status: SubagentStatus
     error?: string
     usage: Usage

@@ -455,11 +455,27 @@ test("sub-agent settings: role models, limits, budget and the merge review thres
   expect(() => validateSettings({ budget: { costUsd: "1" } }, "f")).toThrow('"budget.costUsd"')
 })
 
-test("tui settings: bell, title, progress and reflow", () => {
-  const raw = { tui: { bell: false, title: true, progress: false, reflow: "off" as const } }
+test("tui settings: bell, title, progress, reflow and submitWhileWorking", () => {
+  const raw = {
+    tui: {
+      bell: false,
+      title: true,
+      progress: false,
+      reflow: "off" as const,
+      submitWhileWorking: "queue" as const,
+    },
+  }
   expect(validateSettings(raw, "f")).toEqual({ settings: raw, warnings: [] })
   expect(() => validateSettings({ tui: { reflow: "maybe" } }, "f")).toThrow('"tui.reflow"')
+  expect(() => validateSettings({ tui: { submitWhileWorking: "send" } }, "f")).toThrow(
+    '"tui.submitWhileWorking"',
+  )
   expect(() => validateSettings({ tui: { bell: "no" } }, "f")).toThrow('"tui.bell"')
+  // The user file sets it, a project overrides it.
+  put(userFile(), { tui: { submitWhileWorking: "queue", bell: false } })
+  expect(loadSettings({ cwd, home }).settings.tui).toEqual({ submitWhileWorking: "queue", bell: false })
+  put(projectFile(), { tui: { submitWhileWorking: "steer" } })
+  expect(loadSettings({ cwd, home }).settings.tui).toEqual({ submitWhileWorking: "steer", bell: false })
   expect(validateSettings({ tui: { blink: true } }, "f").warnings).toEqual([
     'f: unknown setting "tui.blink" (ignored)',
   ])

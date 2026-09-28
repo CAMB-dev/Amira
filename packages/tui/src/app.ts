@@ -3,6 +3,7 @@ import {
   type AnyEvent,
   type CommandDefinition,
   type FrontendView,
+  fallbackTitle,
   modelLabel,
   type ToolDetailLevel,
   type TuiSettings,
@@ -51,7 +52,7 @@ import {
   replyRows,
   type SubagentLine,
   subagentEndLine,
-  subagentLines,
+  subagentRows,
   userLines,
   userText,
 } from "./format.ts"
@@ -121,7 +122,7 @@ export interface InteractiveOptions {
   files?: FileSource
   /** The keys of every action; defaults to the defaults for this terminal. See loadKeybindings. */
   keybindings?: Keybindings
-  /** The `tui` settings: bell, title, progress indicator, reflow. */
+  /** The `tui` settings: bell, title, progress indicator, reflow, what Enter does while working. */
   settings?: TuiSettings
   /** Tells the terminal apart (Windows Terminal, VS Code); injectable for tests. */
   env?: Record<string, string | undefined>
@@ -153,6 +154,26 @@ function toPrompt(o: Outgoing): string | UserMessage {
   if (!o.display) return o.text
   return { role: "user", content: [{ type: "text", text: o.text }], display: { text: o.display } }
 }
+
+/** A sub-agent the UI follows: its row, where it hangs, and how it ended once it did. */
+interface SubagentNode extends SubagentLine {
+  id: string
+  /** The session that started it: the main one, or another sub-agent's. */
+  parent: string
+  /** The call of `parent` that started it. */
+  toolCallId?: string
+  end?: { status: "done" | "error" | "aborted"; error?: string; durationMs: number; tokens: number }
+  /**
+   * Its call was committed while it ran: it returned at once (the sub-agent runs in the
+   * background and a notice reports it) or it was cut short (its end line is committed alone).
+   */
+  detached?: "background" | "interrupted"
+}
+
+/** What a message sent while a turn runs does: joins that turn, or waits for the next. */
+type WhileWorking = "steer" | "queue"
+
+const otherWay = (w: WhileWorking): WhileWorking => (w === "steer" ? "queue" : "steer")
 
 /** A component that draws a function's lines; handy for small pieces of view state. */
 class View implements Component {
@@ -270,20 +291,18 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** A short note shown in place of the key hints, such as the new tool output level. */
   let hintNote: { text: string; until: number } | undefined
   let hintTimer: ReturnType<typeof setTimeout> | undefined
-  /** This session's sub-agents (and theirs) that are queued or running, in start order. */
-  const subagents = new Map<string, SubagentLine>()
-  /** The tool call of this session each sub-agent (and its own ones) was started by, when known. */
-  const subagentCalls = new Map<string, string>()
   /**
-   * End lines of sub-agents whose call is not committed yet, by call id: they go out with the
-   * call, right above it, so a call held behind a slower one keeps its sub-agents' lines.
+   * This session's sub-agents (and theirs), in start order, from their start until their line
+   * is committed: one that ends while its call is live stays, as its end line, until the call
+   * is committed with it; one whose call was committed already goes when it ends.
    */
-  const heldEnds = new Map<string, ((width: number, theme: Theme) => string)[]>()
+  const subagents = new Map<string, SubagentNode>()
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tickSubagents = () => {
-    if (subagents.size && !subagentTimer) subagentTimer = setInterval(() => renderer.requestRender(), 1000)
-    else if (!subagents.size && subagentTimer) {
+    const running = [...subagents.values()].some((n) => !n.end)
+    if (running && !subagentTimer) subagentTimer = setInterval(() => renderer.requestRender(), 1000)
+    else if (!running && subagentTimer) {
       clearInterval(subagentTimer)
       subagentTimer = undefined
     }
@@ -291,6 +310,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
   const settings = opts.settings ?? {}
+  /** What Enter does with a message while a turn runs; the queue key does the other. */
+  const enterDoes: WhileWorking = settings.submitWhileWorking === "queue" ? "queue" : "steer"
   const termStatus = new TerminalStatus(terminal, agent.cwd, {
     title: settings.title ?? true,
     progress: (settings.progress ?? true) && progressSupported(env),
@@ -369,6 +390,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const note = (level: NoticeLevel, text: string) => noticeLines(theme, level, text, terminal.columns)
 
   const bottom = new Stack([
+    // Sub-agents whose call is committed already (it returned at once): they run on here.
+    new View((width, ctx) => backgroundRows(width, ctx.theme)),
     // The activity line: what the turn is doing, how long it has run, the tokens it wrote.
     // Running tools carry their own spinner, so it is left out while they run.
     new View((width, ctx) => {
@@ -394,7 +417,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         : ""
       return [truncateToWidth(head + ctx.theme.muted(stats), width, glyphs.more), ""]
     }),
-    new View((width, ctx) => subagentLines([...subagents.values()], Date.now(), width, ctx.theme)),
     new View((width, ctx) => [
       ...pendingNoticeLines(ctx.theme).map((l) => truncateToWidth(l, width, "…")),
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
@@ -431,13 +453,60 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const rows: string[] = transcript.gapBefore("tool") ? [""] : []
     const now = Date.now()
     for (const c of live) {
-      for (const end of heldEnds.get(c.id) ?? []) rows.push(end(width, ctx.theme))
       const presenter = presenters?.get(c.name)
       if (c.end) rows.push(heldToolLine(ctx.theme, presenter, finished(c), width))
       else rows.push(...runningToolLines(ctx.theme, presenter, c, now, spinner.glyph, width))
+      for (const n of callTree(c.id)) rows.push(...nodeRows(n, now, width, ctx.theme))
     }
     return rows
   }
+
+  /** Sub-agents running on after their call was committed, under a small header. */
+  function backgroundRows(width: number, t: Theme): string[] {
+    const live = new Set(toolCalls.live.map((c) => c.id))
+    const underCall = (n: SubagentNode) =>
+      n.parent === agent.sessionId && n.toolCallId !== undefined && live.has(n.toolCallId)
+    const roots = [...subagents.values()].filter((n) => !subagents.has(n.parent) && !underCall(n))
+    if (!roots.length) return []
+    const now = Date.now()
+    const head = `${t.accent(glyphs.subagent)} ${t.muted("background")}`
+    return [head, ...roots.flatMap(subtree).flatMap((n) => nodeRows(n, now, width, t)), ""]
+  }
+
+  /** A sub-agent's rows: live ones while it runs, its end line once it ended. */
+  function nodeRows(n: SubagentNode, now: number, width: number, t: Theme): string[] {
+    return n.end ? [subagentEndLine(n, n.end, width, t)] : subagentRows(n, now, width, t)
+  }
+
+  /** The sub-agents `parent` started (through `callId`, when given), in start order. */
+  function childrenOf(parent: string, callId?: string): SubagentNode[] {
+    return [...subagents.values()].filter(
+      (n) => n.parent === parent && (callId === undefined || n.toolCallId === callId),
+    )
+  }
+
+  /** A sub-agent and the ones under it, depth first, each after its parent. */
+  function subtree(n: SubagentNode): SubagentNode[] {
+    return [n, ...childrenOf(n.id).flatMap(subtree)]
+  }
+
+  /** The sub-agents a call of this session started, and theirs, depth first. */
+  function callTree(callId: string): SubagentNode[] {
+    return childrenOf(agent.sessionId, callId).flatMap(subtree)
+  }
+
+  /** The call of this session a sub-agent hangs under: its top ancestor's, when that is known. */
+  function rootCall(n: SubagentNode): string | undefined {
+    let top = n
+    while (top.parent !== agent.sessionId) {
+      const up = subagents.get(top.parent)
+      if (!up) return undefined
+      top = up
+    }
+    return top.toolCallId
+  }
+
+  const isLiveCall = (id: string | undefined) => id !== undefined && toolCalls.live.some((c) => c.id === id)
 
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
   // before it in view. Its finished blocks, and rows past that, go to the scrollback as they
@@ -485,8 +554,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const submitKey = keys.label("submit")
     // The interrupt key is on the activity line while something runs.
     return [
-      submitKey && { text: `${submitKey} ${working ? "steer" : "send"}`, priority: 5 },
-      working && queueKey && { text: `${queueKey} queue`, priority: 3 },
+      submitKey && { text: `${submitKey} ${working ? enterDoes : "send"}`, priority: 5 },
+      working && queueKey && { text: `${queueKey} ${otherWay(enterDoes)}`, priority: 3 },
       newlineKey && { text: `${newlineKey} newline`, priority: 1 },
       keys.label("cancel") && { text: `${keys.label("cancel")} ${ctrlC}`, priority: working ? 2 : 4 },
     ]
@@ -628,65 +697,88 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
+  /**
+   * Commits finished calls, each with the end lines of the sub-agents it started right under
+   * its head. Sub-agents still running go on in the background rows.
+   */
   function commitCalls(calls: TrackedCall[]) {
     for (const c of calls) {
-      commitHeldEnds(c.id)
+      const tree = callTree(c.id)
+      const ends: string[] = []
+      const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
+      for (const n of tree) {
+        if (n.end) {
+          ends.push(subagentEndLine(n, n.end, terminal.columns, theme))
+          subagents.delete(n.id)
+        } else n.detached = cutShort ? "interrupted" : "background"
+      }
       const lines = finishedToolLines(theme, presenters?.get(c.name), finished(c), detail, terminal.columns)
+      lines.splice(1, 0, ...ends)
       commitBlock("tool", lines)
       turnShowedOutput = true
     }
   }
 
-  /** Commits the end lines held for a call (all of them without an id), each as its own block. */
-  function commitHeldEnds(callId?: string) {
-    const ids = callId === undefined ? [...heldEnds.keys()] : [callId]
-    for (const id of ids) {
-      for (const end of heldEnds.get(id) ?? []) commitBlock("tool", [end(terminal.columns, theme)])
-      heldEnds.delete(id)
+  /**
+   * Once calls were dropped without being committed (a turn ended or the session changed):
+   * ended sub-agents they held are committed on their own, running ones are cut loose.
+   */
+  function settleSubagents() {
+    for (const n of subagents.values()) {
+      if (isLiveCall(rootCall(n))) continue
+      if (n.end) {
+        if (endsAlone(n)) commitBlock("tool", [subagentEndLine(n, n.end, terminal.columns, theme)])
+        subagents.delete(n.id)
+      } else n.detached ??= "interrupted"
     }
   }
 
   /**
-   * The running call of this session that started a sub-agent: the only one running, or the one
-   * whose arguments hold the sub-agent's task. Events do not name the call, so it is a guess.
+   * Whether a sub-agent that ended away from its call gets its end line on its own: only one
+   * the tree stopped. One that finished its task after its call was cut short kept running in
+   * the background (the main session's agent calls survive an interrupt), and its notice
+   * reports it; a line here would say it twice.
    */
-  function spawningCall(prompt: string): string | undefined {
-    const running = toolCalls.live.filter((c) => !c.end)
-    if (running.length <= 1) return running[0]?.id
-    const task = JSON.stringify(prompt).slice(1, -1)
-    return running.find((c) => JSON.stringify(c.args).includes(task))?.id
+  function endsAlone(n: SubagentNode): boolean {
+    return n.detached !== "background" && n.end?.status === "aborted"
   }
 
-  /** Keeps the sub-agent lines current; true when the event was about a sub-agent. */
+  /** Keeps the sub-agent rows current; true when the event was about a sub-agent. */
   function trackSubagent(e: AnyEvent): boolean {
     const mine = e.sessionId === agent.sessionId || subagents.has(e.sessionId)
     switch (e.type) {
       case "subagent.start": {
         if (!mine) return false
-        const call =
-          e.sessionId === agent.sessionId ? spawningCall(e.data.prompt) : subagentCalls.get(e.sessionId)
-        if (call) subagentCalls.set(e.data.childSessionId, call)
-        subagents.set(e.data.childSessionId, {
+        const node: SubagentNode = {
+          id: e.data.childSessionId,
+          parent: e.sessionId,
+          ...(e.data.toolCallId ? { toolCallId: e.data.toolCallId } : {}),
+          title: e.data.title || fallbackTitle(e.data.prompt),
           role: e.data.role ?? "agent",
-          task: e.data.prompt,
           depth: e.data.depth,
           tokens: 0,
           ...(e.data.queued ? {} : { startedAt: e.ts }),
-        })
+        }
+        subagents.set(node.id, node)
+        // Started under a tree whose call is committed already: it runs in the background.
+        const parent = subagents.get(node.parent)
+        if (parent?.detached) node.detached = parent.detached
         break
       }
       case "subagent.end": {
-        const sub = subagents.get(e.data.childSessionId)
-        if (!sub) return false
-        subagents.delete(e.data.childSessionId)
-        const call = subagentCalls.get(e.data.childSessionId)
-        subagentCalls.delete(e.data.childSessionId)
-        const end = { ...e.data, tokens: sub.tokens }
-        const line = (width: number, t: Theme) => subagentEndLine(sub, end, width, t)
-        // Its call still running or held: the line waits for it. A background one's call is done.
-        if (call && toolCalls.live.some((c) => c.id === call)) {
-          heldEnds.set(call, [...(heldEnds.get(call) ?? []), line])
-        } else commitBlock("tool", [line(terminal.columns, theme)])
+        const node = subagents.get(e.data.childSessionId)
+        if (!node) return false
+        node.end = {
+          status: e.data.status,
+          ...(e.data.error !== undefined ? { error: e.data.error } : {}),
+          durationMs: e.data.durationMs,
+          tokens: node.tokens,
+        }
+        // Under a live call its rows become its end line, committed with the call. Otherwise it
+        // is done: a background one's notice reports it; one cut short gets its line on its own.
+        if (isLiveCall(rootCall(node))) break
+        subagents.delete(node.id)
+        if (endsAlone(node)) commitBlock("tool", [subagentEndLine(node, node.end, terminal.columns, theme)])
         break
       }
       case "budget.exceeded":
@@ -700,8 +792,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (!sub) return false
         if (e.type === "session.start") sub.startedAt ??= e.ts
         else if (e.type === "tool.execute.start") {
-          const summary = callSummary(presenters?.get(e.data.name), e.data.args)
-          sub.activity = summary ? `${e.data.name} ${summary}` : e.data.name
+          sub.activity = {
+            name: e.data.name,
+            summary: callSummary(presenters?.get(e.data.name), e.data.args),
+          }
         } else if (e.type === "message.end") {
           const u = e.data.message.usage
           if (u) sub.tokens += u.input + u.output + u.cacheRead + u.cacheWrite
@@ -800,8 +894,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       case "turn.end":
         commitCalls(toolCalls.flush())
-        // Lines held for calls that never ended.
-        commitHeldEnds()
+        // Sub-agents of calls that never ended.
+        settleSubagents()
+        tickSubagents()
         working = false
         preparing = undefined
         spinner.stop()
@@ -956,11 +1051,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   /**
-   * Enter: runs a slash command, sends, or while a turn runs steers it (D29). `parts` is the
-   * editor content as typed, folded pastes apart, for the prompt history; `display` shows the
-   * pastes as their placeholders in the transcript.
+   * Enter and the other send keys: runs a slash command at once, sends, or while a turn runs
+   * steers it (D29) or queues the message after it, as `how` says. `parts` is the editor
+   * content as typed, folded pastes apart, for the prompt history; `display` shows the pastes
+   * as their placeholders in the transcript.
    */
-  function submit(text: string, parts: EditorPart[] = [text], display?: string) {
+  function submit(text: string, parts: EditorPart[] = [text], display?: string, how = enterDoes) {
     const trimmed = text.trim()
     if (!trimmed) return
     editor.clear()
@@ -970,9 +1066,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     remember(message, parts)
     if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
     else if (commands?.skillLine(trimmed)) runSkill(trimmed)
-    else if (working) agent.steer(toPrompt(message))
+    else if (working && how === "steer") agent.steer(toPrompt(message))
+    else if (working) queued.push(message)
     else send(message)
     renderer.requestRender()
+  }
+
+  /** Sends what the editor holds, as a key other than Enter asks: steering or queued. */
+  function submitDraft(how: WhileWorking) {
+    submit(editor.getText(), editor.getParts(), editor.getDisplayText(), how)
   }
 
   /** Runs at once, even during a turn; commands that need an idle session say so. */
@@ -1013,10 +1115,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Follows the session a command switched to; a resumed one shows its history. */
   function followAgent(next: Agent) {
-    agent = next
     toolCalls.flush()
-    heldEnds.clear()
-    subagentCalls.clear()
+    settleSubagents()
+    agent = next
     pendingNotices.length = 0
     setRetry(undefined)
     termStatus.setFolder(next.cwd)
@@ -1029,20 +1130,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     detail = level
     const cycle = keys.label("tool-output")
     return `Tool output: ${level} (applies to tool results from now on${cycle ? `; ${cycle} cycles` : ""})`
-  }
-
-  /** Alt+Enter or Ctrl+Q: while a turn runs, queues the message to send after it. */
-  function queue() {
-    const trimmed = editor.getText().trim()
-    if (!trimmed) return
-    const parts = editor.getParts()
-    const message = outgoing(trimmed, editor.getDisplayText())
-    history.add(parts)
-    historyNav.reset()
-    remember(message, parts)
-    editor.clear()
-    if (working) queued.push(message)
-    else send(message)
   }
 
   /** Keeps the folded pastes of the last few messages sent, for a steer the turn drops. */
@@ -1147,7 +1234,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     ) {
       // The key walked the prompt history.
     } else if (keys.is(e, "queue")) {
-      queue()
+      // Alt+Enter or Ctrl+Q: the other of what Enter does while a turn runs.
+      submitDraft(otherWay(enterDoes))
+    } else if (keys.is(e, "submit.steer")) {
+      submitDraft("steer")
+    } else if (keys.is(e, "submit.queue")) {
+      submitDraft("queue")
     } else if (keys.is(e, "cancel")) {
       if (working) interrupt()
       else if (!editor.isEmpty) editor.clear()

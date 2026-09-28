@@ -1,7 +1,7 @@
 import { statSync } from "node:fs"
 import path from "node:path"
 import { emptyUsage, type Message, type ModelRef } from "@amira/ai"
-import type { SubagentInfo, SubagentState } from "@amira/api"
+import { fallbackTitle, type SubagentInfo, type SubagentState } from "@amira/api"
 import type { Agent } from "./agent.ts"
 import { SessionStore } from "./session-store.ts"
 import type { AgentTree } from "./subagents.ts"
@@ -25,7 +25,11 @@ export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
   const visit = (parentId: string, store: SessionStore | undefined, depth: number) => {
     // Only the current branch: sub-agents of a branch left behind are not part of this session.
     const stored = store
-      ? store.branch().flatMap((e) => (e.type === "subagent" ? [{ id: e.childSessionId, role: e.role }] : []))
+      ? store
+          .branch()
+          .flatMap((e) =>
+            e.type === "subagent" ? [{ id: e.childSessionId, role: e.role, title: e.title }] : [],
+          )
       : []
     const ids = [...stored.map((s) => s.id), ...(tree?.childrenOf(parentId) ?? [])]
     for (const id of ids) {
@@ -42,11 +46,12 @@ export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
         visit(id, own, depth + 1)
         continue
       }
-      const role = stored.find((s) => s.id === id)?.role || "agent"
+      const entry = stored.find((s) => s.id === id)
+      const role = entry?.role || "agent"
       const file = path.join(path.dirname(store!.file), "subagents", `${id}.jsonl`)
       const child = openStored(file)
       out.push({
-        info: storedInfo(id, parentId, depth, role, child),
+        info: storedInfo(id, parentId, depth, role, entry?.title, child),
         messages: () => (child ? [...child.restore().messages] : []),
       })
       if (child) visit(id, child, depth + 1)
@@ -109,10 +114,13 @@ function storedInfo(
   parentSessionId: string,
   depth: number,
   role: string,
+  title: string | undefined,
   store: SessionStore | undefined,
 ): SubagentInfo {
   const usage = emptyUsage()
-  if (!store) return { id, parentSessionId, depth, role, task: "", status: "aborted", usage }
+  if (!store) {
+    return { id, parentSessionId, depth, role, title: title || role, task: "", status: "aborted", usage }
+  }
   const messages = store.entries.flatMap((e) => (e.type === "message" ? [e.message] : []))
   let model: ModelRef | undefined
   let status: SubagentState = "aborted"
@@ -134,7 +142,8 @@ function storedInfo(
     if (m.usage.cost !== undefined) usage.cost = (usage.cost ?? 0) + m.usage.cost
   }
   // A child has one turn: its task is the last user message (a forked one follows the history).
-  const task = messages.findLast((m) => m.role === "user")
+  const asked = messages.findLast((m) => m.role === "user")
+  const task = asked ? asked.content.map((b) => (b.type === "text" ? b.text : "")).join("") : ""
   const startedAt = Date.parse(store.header.createdAt)
   const last = store.entries.at(-1)?.ts
   return {
@@ -142,7 +151,9 @@ function storedInfo(
     parentSessionId,
     depth,
     role,
-    task: task ? task.content.map((b) => (b.type === "text" ? b.text : "")).join("") : "",
+    // Sessions from before titles have none: the task's first words stand in.
+    title: title || fallbackTitle(task),
+    task,
     status,
     ...(model ? { model } : {}),
     ...(Number.isFinite(startedAt) ? { startedAt } : {}),

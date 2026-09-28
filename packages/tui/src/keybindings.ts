@@ -17,9 +17,22 @@ interface ActionInfo {
  * specs; docs/keybindings.md lists them with their defaults.
  */
 export const ACTIONS = {
-  submit: { scope: "input", description: "Send the message; while a turn runs, steer it" },
+  submit: {
+    scope: "input",
+    description:
+      'Send the message; while a turn runs, steer it (queue it with tui.submitWhileWorking "queue")',
+  },
   newline: { scope: "input", description: "Insert a line break" },
-  queue: { scope: "input", description: "While a turn runs, send the message after it" },
+  queue: {
+    scope: "input",
+    description:
+      'While a turn runs, send the message after it (steer it with tui.submitWhileWorking "queue")',
+  },
+  "submit.steer": { scope: "input", description: "Send the message; while a turn runs, always steer it" },
+  "submit.queue": {
+    scope: "input",
+    description: "Send the message; while a turn runs, always send it after the turn",
+  },
   interrupt: { scope: "input", description: "Stop the running turn" },
   cancel: { scope: "input", description: "Stop the running turn, else clear the input, else quit" },
   exit: { scope: "input", description: "Quit when the input is empty and nothing runs" },
@@ -63,6 +76,9 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     submit: ["enter"],
     newline: ["shift+enter", "ctrl+enter"],
     queue: ctrlQFirst ? ["ctrl+q", "alt+enter"] : ["alt+enter", "ctrl+q"],
+    // Unbound: submit and queue cover both; these are for a key that never depends on the setting.
+    "submit.steer": [],
+    "submit.queue": [],
     interrupt: ["escape"],
     cancel: ["ctrl+c"],
     exit: ["ctrl+d"],

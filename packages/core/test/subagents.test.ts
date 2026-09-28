@@ -255,6 +255,61 @@ test("a child's events include its own children's, and a finished child has none
   expect(after).toEqual([])
 })
 
+test("a sub-agent a tool spawns carries that call's id and its title, start to end", async () => {
+  const { root, tree, tools, events, bus } = await setup((req) =>
+    roleOf(req) === "root"
+      ? req.messages.at(-1)?.role === "toolResult"
+        ? { text: "done" }
+        : {
+            toolCalls: [
+              { name: "spawner", args: { n: 1 } },
+              { name: "spawner", args: { n: 2 } },
+            ],
+          }
+      : { text: "leaf" },
+  )
+  const kids = new Map<string, string>()
+  tools.register(
+    defineTool<{ n: number }>({
+      name: "spawner",
+      description: "",
+      parameters: { type: "object" },
+      concurrency: "parallel",
+      execute: async (p, ctx) => {
+        const kid = ctx.session!.spawn!({
+          title: `Task ${p.n}`,
+          prompt: `same task`,
+          systemPrompt: "ROLE leaf",
+        })
+        kids.set(kid.id, ctx.toolCallId)
+        await kid.result()
+        return textResult("ok")
+      },
+    }),
+    "t",
+  )
+  await root.prompt("go")
+  await bus.flush()
+  expect(kids.size).toBe(2)
+  for (const [id, call] of kids) {
+    const start = events.find((e) => e.type === "subagent.start" && e.data.childSessionId === id)
+    const end = events.find((e) => e.type === "subagent.end" && e.data.childSessionId === id)
+    expect(start?.type === "subagent.start" && start.data.toolCallId).toBe(call)
+    expect(end?.type === "subagent.end" && end.data.toolCallId).toBe(call)
+    expect(tree.subagent(id)?.info).toMatchObject({
+      toolCallId: call,
+      title: expect.stringMatching(/^Task \d$/),
+    })
+  }
+  // Spawned outside a tool call: no call, and a title from its task.
+  const loose = tree.spawn(root, { prompt: "look  around the repo", systemPrompt: "ROLE leaf" })
+  await loose.result()
+  await bus.flush()
+  const start = events.find((e) => e.type === "subagent.start" && e.data.childSessionId === loose.id)
+  expect(start?.type === "subagent.start" && start.data.toolCallId).toBeUndefined()
+  expect(tree.subagent(loose.id)?.info.title).toBe("look around the repo")
+})
+
 test("aborting a queued child settles it without running it", async () => {
   const { root, tree } = await setup(() => ({ text: "x", delayMs: 30 }), { maxConcurrent: 1 })
   const first = tree.spawn(root, { prompt: "a" })
