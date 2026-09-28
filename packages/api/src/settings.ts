@@ -8,6 +8,8 @@ export interface ProviderSettings {
   baseUrl?: string
   /** Environment variable holding the API key; auth.json is the fallback. */
   apiKeyEnv?: string
+  /** Variables tried in order when apiKeyEnv is unset. */
+  apiKeyEnvFallbacks?: string[]
   headers?: Record<string, string>
   compat?: ProviderCompat
   models?: ModelOverrides[]

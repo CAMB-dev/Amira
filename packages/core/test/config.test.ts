@@ -112,6 +112,38 @@ test("unknown keys warn but still load", () => {
   ])
 })
 
+test("unknown keys are left out of the result, so they are really ignored", () => {
+  const raw = {
+    colour: "red",
+    providers: {
+      mine: { dialect: "openai-chat", baseUrl: "http://m", apiKey: "inline", extra: 1 },
+    },
+  }
+  const v = validateSettings(raw, "f")
+  expect(v.settings).toEqual({ providers: { mine: { dialect: "openai-chat", baseUrl: "http://m" } } })
+  expect(v.warnings).toEqual([
+    'f: unknown setting "colour" (ignored)',
+    'f: "providers.mine.apiKey" is not read from settings files; put the key in auth.json or an environment variable (ignored)',
+    'f: unknown setting "providers.mine.extra" (ignored)',
+  ])
+  const [mine] = providersFromSettings(v.settings.providers)
+  expect(mine).toEqual({ id: "mine", dialect: "openai-chat", baseUrl: "http://m" })
+  expect(validateSettings({ providers: { m: { apiKeyEnvFallbacks: ["A", "B"] } } }, "f").settings).toEqual({
+    providers: { m: { apiKeyEnvFallbacks: ["A", "B"] } },
+  })
+})
+
+test("prototype keys are refused and never merged", () => {
+  const evil = JSON.parse('{"__proto__": {"shell": "zsh"}, "tools": {"constructor": {"x": 1}}}')
+  const merged = deepMerge<Record<string, unknown>>({ a: 1 }, evil)
+  expect(Object.getPrototypeOf(merged)).toBe(Object.prototype)
+  expect(merged.shell).toBeUndefined()
+  expect(() => validateSettings(evil, "f")).toThrow('"__proto__" is not allowed as a key')
+  expect(() => validateSettings(evil, "f")).toThrow('"tools.constructor" is not allowed as a key')
+  const nested = JSON.parse('{"providers": {"__proto__": {"baseUrl": "x"}}}')
+  expect(() => validateSettings(nested, "f")).toThrow('"providers.__proto__" is not allowed')
+})
+
 test("checks every documented key", () => {
   const ok = {
     model: "p/m",

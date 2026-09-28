@@ -1,5 +1,5 @@
 import type { Settings } from "@amira/api"
-import { isPlainObject } from "./merge.ts"
+import { isPlainObject, UNSAFE_KEYS } from "./merge.ts"
 
 /** A settings file that cannot be used; the message names the file and the key. */
 export class SettingsError extends Error {
@@ -21,7 +21,8 @@ interface Findings {
   warnings: string[]
 }
 
-type Check = (value: unknown, key: string, out: Findings) => void
+/** Checks a value and returns what may be used: unknown keys are left out. */
+type Check = (value: unknown, key: string, out: Findings) => unknown
 
 const show = (v: unknown) => {
   const s = JSON.stringify(v) ?? String(v)
@@ -30,6 +31,7 @@ const show = (v: unknown) => {
 const expect = (want: string, ok: (v: unknown) => boolean): Check => {
   return (v, key, out) => {
     if (!ok(v)) out.errors.push(`"${key}" must be ${want}, got ${show(v)}`)
+    return v
   }
 }
 
@@ -40,33 +42,56 @@ const integer = (min: number) =>
   expect(`a whole number of at least ${min}`, (v) => Number.isInteger(v) && (v as number) >= min)
 const oneOf = (...values: string[]) =>
   expect(`one of ${values.map((v) => `"${v}"`).join(", ")}`, (v) => values.includes(v as string))
-const anyObject = expect("an object", isPlainObject)
+
+/** Walks an object's own keys, reporting the ones that could change a prototype. */
+function entries(v: Record<string, unknown>, at: (k: string) => string, out: Findings) {
+  return Object.entries(v).filter(([k]) => {
+    if (UNSAFE_KEYS.has(k)) out.errors.push(`"${at(k)}" is not allowed as a key`)
+    return !UNSAFE_KEYS.has(k)
+  })
+}
+
+const anyObject: Check = (v, key, out) => {
+  if (!isPlainObject(v)) return void out.errors.push(`"${key}" must be an object, got ${show(v)}`)
+  return Object.fromEntries(entries(v, (k) => `${key}.${k}`, out))
+}
 
 function list(item: Check): Check {
   return (v, key, out) => {
     if (!Array.isArray(v)) return void out.errors.push(`"${key}" must be a list, got ${show(v)}`)
-    for (const [i, x] of v.entries()) item(x, `${key}[${i}]`, out)
+    return v.map((x, i) => item(x, `${key}[${i}]`, out))
   }
 }
 
 function record(item: Check): Check {
   return (v, key, out) => {
     if (!isPlainObject(v)) return void out.errors.push(`"${key}" must be an object, got ${show(v)}`)
-    for (const [k, x] of Object.entries(v)) item(x, key ? `${key}.${k}` : k, out)
+    const at = (k: string) => (key ? `${key}.${k}` : k)
+    return Object.fromEntries(entries(v, at, out).map(([k, x]) => [k, item(x, at(k), out)]))
   }
 }
 
-/** Known keys are checked; unknown keys only warn, so newer settings files still load. */
-function object(shape: Record<string, Check>, required: string[] = []): Check {
+/**
+ * Known keys are checked; unknown keys only warn, so newer settings files still load, and
+ * are left out of the result. `notes` replaces the warning for keys that are known mistakes.
+ */
+function object(
+  shape: Record<string, Check>,
+  required: string[] = [],
+  notes: Record<string, string> = {},
+): Check {
   return (v, key, out) => {
     if (!isPlainObject(v)) return void out.errors.push(`"${key}" must be an object, got ${show(v)}`)
     const at = (k: string) => (key ? `${key}.${k}` : k)
     for (const k of required) if (v[k] === undefined) out.errors.push(`"${at(k)}" is required`)
-    for (const [k, x] of Object.entries(v)) {
-      const check = shape[k]
-      if (check) check(x, at(k), out)
-      else out.warnings.push(`unknown setting "${at(k)}" (ignored)`)
+    const kept: [string, unknown][] = []
+    for (const [k, x] of entries(v, at, out)) {
+      const check = Object.hasOwn(shape, k) ? shape[k] : undefined
+      if (check) kept.push([k, check(x, at(k), out)])
+      else
+        out.warnings.push(`${notes[k] ? `"${at(k)}" ${notes[k]}` : `unknown setting "${at(k)}"`} (ignored)`)
     }
+    return Object.fromEntries(kept)
   }
 }
 
@@ -94,19 +119,24 @@ const modelOverrides = (required: string[]) =>
     required,
   )
 
-const provider = object({
-  dialect: string,
-  baseUrl: string,
-  apiKeyEnv: string,
-  headers: record(string),
-  compat: object({
-    maxTokensField: oneOf("max_tokens", "max_completion_tokens"),
-    streamUsage: boolean,
-    thinking: oneOf("adaptive", "budget"),
-  }),
-  models: list(modelOverrides(["id"])),
-  defaultModel: modelOverrides([]),
-})
+const provider = object(
+  {
+    dialect: string,
+    baseUrl: string,
+    apiKeyEnv: string,
+    apiKeyEnvFallbacks: list(string),
+    headers: record(string),
+    compat: object({
+      maxTokensField: oneOf("max_tokens", "max_completion_tokens"),
+      streamUsage: boolean,
+      thinking: oneOf("adaptive", "budget"),
+    }),
+    models: list(modelOverrides(["id"])),
+    defaultModel: modelOverrides([]),
+  },
+  [],
+  { apiKey: "is not read from settings files; put the key in auth.json or an environment variable" },
+)
 
 const settings = object({
   $schema: string,
@@ -126,7 +156,8 @@ const settings = object({
  * each bad key; unknown keys come back as warnings.
  */
 export function validateSettings(raw: unknown, file: string): { settings: Settings; warnings: string[] } {
-  return { settings: raw as Settings, warnings: run(settings, raw, file) }
+  const { value, warnings } = run(settings, raw, file)
+  return { settings: value as Settings, warnings }
 }
 
 const auth = record(object({ apiKey: string }, ["apiKey"]))
@@ -136,17 +167,17 @@ export function validateAuth(
   raw: unknown,
   file: string,
 ): { keys: Record<string, string>; warnings: string[] } {
-  const warnings = run(auth, raw, file)
+  const { value, warnings } = run(auth, raw, file)
   const keys = Object.fromEntries(
-    Object.entries(raw as Record<string, { apiKey: string }>).map(([k, v]) => [k, v.apiKey]),
+    Object.entries(value as Record<string, { apiKey: string }>).map(([k, v]) => [k, v.apiKey]),
   )
   return { keys, warnings }
 }
 
-function run(check: Check, raw: unknown, file: string): string[] {
+function run(check: Check, raw: unknown, file: string): { value: unknown; warnings: string[] } {
   if (!isPlainObject(raw)) throw new SettingsError(file, [`must hold a JSON object, got ${show(raw)}`])
   const out: Findings = { errors: [], warnings: [] }
-  check(raw, "", out)
+  const value = check(raw, "", out)
   if (out.errors.length) throw new SettingsError(file, out.errors)
-  return out.warnings.map((w) => `${file}: ${w}`)
+  return { value, warnings: out.warnings.map((w) => `${file}: ${w}`) }
 }
