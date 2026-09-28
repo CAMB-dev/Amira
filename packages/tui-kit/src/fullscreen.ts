@@ -3,14 +3,16 @@ import { type Component, CURSOR_MARKER, type RenderContext } from "./component.t
 import type { RendererOptions } from "./renderer.ts"
 import { defaultTheme, isColorEnabled, stripColors } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
-import { closeStyles, sanitize, truncateToWidth } from "./width.ts"
+import { closeStyles, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
 
 /**
  * Draws a component over the whole terminal on the alternate screen, for views that own the
  * screen for a while (a transcript viewer, a dashboard). The component gets `ctx.rows` and
  * should return that many lines; fewer are padded with blank rows and more are cut at the
  * bottom. Rows are addressed absolutely, so nothing ever scrolls, and only rows that changed
- * are rewritten; a resize redraws everything. The cursor stays hidden.
+ * are rewritten; a resize redraws everything. The cursor stays hidden, unless a line holds
+ * `CURSOR_MARKER` (a focused text input): then the terminal cursor is shown there, which is
+ * also where input methods (IME) put their composition window.
  *
  * Leaving the alternate screen gives the main screen back exactly as it was, cursor
  * included, so an inline `LiveRenderer` can be suspended while this one is open and resumed
@@ -27,6 +29,8 @@ export class FullScreenRenderer {
   private lastFrameAt = 0
   private offResize: (() => void) | undefined
   private opened = false
+  /** Where the cursor was shown by the last frame; undefined when hidden. */
+  private cursorAt: { row: number; col: number } | undefined
 
   constructor(
     private terminal: Terminal,
@@ -51,6 +55,7 @@ export class FullScreenRenderer {
     if (this.opened) return
     this.opened = true
     this.prev = undefined
+    this.cursorAt = undefined
     this.terminal.enterAltScreen()
     this.terminal.enableMode(modes.alternateScroll)
     this.offResize = this.terminal.onResize(() => {
@@ -95,11 +100,16 @@ export class FullScreenRenderer {
     this.context.rows = rows
     const drawn = this.root.render(columns, { ...this.context })
     const lines: string[] = []
+    let at: { row: number; col: number } | undefined
     for (let i = 0; i < rows; i++) {
-      const line = sanitize(drawn[i] ?? "")
-        .split("\n")[0]!
-        .replaceAll(CURSOR_MARKER, "")
-      lines.push(this.finish(truncateToWidth(line, columns)))
+      const raw = sanitize(drawn[i] ?? "").split("\n")[0]!
+      const marker = raw.indexOf(CURSOR_MARKER)
+      if (marker !== -1 && !at) {
+        // A caret past the last cell has nowhere to go; the cursor stays hidden then.
+        const col = visibleWidth(raw.slice(0, marker))
+        if (col < columns) at = { row: i, col }
+      }
+      lines.push(this.finish(truncateToWidth(raw.replaceAll(CURSOR_MARKER, ""), columns)))
     }
     const full = !this.prev || columns !== this.size.columns || rows !== this.size.rows
     let body = full ? erase.screen : ""
@@ -109,8 +119,10 @@ export class FullScreenRenderer {
     }
     this.prev = lines
     this.size = { columns, rows }
-    if (!body) return
-    const out = cursor.hide + body
+    const moved = at?.row !== this.cursorAt?.row || at?.col !== this.cursorAt?.col
+    if (!body && !moved) return
+    this.cursorAt = at
+    const out = cursor.hide + body + (at ? cursor.to(at.row, at.col) + cursor.show : "")
     this.terminal.write(this.synchronizedOutput ? syncOutput.begin + out + syncOutput.end : out)
   }
 

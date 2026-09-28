@@ -3,6 +3,17 @@ export { type Capabilities, type SetupResult, setupTerminalInput } from "./capab
 export { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 export { Box, type BoxOptions } from "./components/box.ts"
 export { Editor, type EditorOptions } from "./components/editor.ts"
+export {
+  Form,
+  type FormChoice,
+  type FormFieldKind,
+  type FormFieldView,
+  type FormInputValue,
+  type FormOptions,
+  type FormStatusTone,
+  LineInput,
+  type LineInputOptions,
+} from "./components/form.ts"
 export { type ScrollPosition, ScrollView } from "./components/scroll-view.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
