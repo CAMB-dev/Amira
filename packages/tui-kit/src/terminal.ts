@@ -1,3 +1,5 @@
+import { writeSync } from "node:fs"
+import { constants } from "node:os"
 import { cursor, modes, RESET, type TerminalMode } from "./ansi.ts"
 
 type Listener<T extends unknown[]> = (...args: T) => void
@@ -81,17 +83,22 @@ export abstract class BaseTerminal implements Terminal {
   }
 
   restore(): void {
+    this.write(this.takeRestoreSequence())
+    this.setRawMode(false)
+  }
+
+  /** The sequence that leaves every active mode; the modes count as left afterwards. */
+  protected takeRestoreSequence(): string {
     const offs = this.active.reverse().map((m) => m.off)
     this.active = []
-    this.write(offs.join("") + RESET + cursor.show)
-    this.setRawMode(false)
+    return offs.join("") + RESET + cursor.show
   }
 }
 
 type Stdin = NodeJS.ReadStream
 type Stdout = NodeJS.WriteStream
 
-/** A terminal on real stdin/stdout. Restores itself when the process exits. */
+/** A terminal on real stdin/stdout. Restores itself when the process exits, crashes or is signalled. */
 export class ProcessTerminal extends BaseTerminal {
   private cleanup: (() => void)[] = []
   private size: { columns: number; rows: number }
@@ -133,14 +140,12 @@ export class ProcessTerminal extends BaseTerminal {
     // Some platforms do not deliver resize events reliably; polling is cheap.
     const poll = setInterval(check, 250)
     poll.unref?.()
-    const onExit = () => this.restore()
-    process.on("exit", onExit)
     this.cleanup.push(
       () => this.stdin.off("data", onData),
       () => this.stdin.pause(),
       () => this.stdout.off("resize", check),
       () => clearInterval(poll),
-      () => process.off("exit", onExit),
+      this.restoreOnExit(),
     )
   }
 
@@ -153,6 +158,39 @@ export class ProcessTerminal extends BaseTerminal {
 
   protected applyRawMode(on: boolean): void {
     if (this.stdin.isTTY) this.stdin.setRawMode(on)
+  }
+
+  /**
+   * Restores the terminal when the process goes away without calling `stop()`: on exit, on an
+   * uncaught exception (before the error is printed), and on SIGINT, SIGTERM, SIGHUP and SIGBREAK.
+   * The restore is written synchronously, since the process may be about to die. A signal is
+   * only handled when nobody else listens for it: then we restore and exit with 128 + its number,
+   * like the default action would. When the app has its own handler, the signal is left to it.
+   * Returns a function that removes every handler.
+   */
+  private restoreOnExit(): () => void {
+    const restoreNow = () => {
+      try {
+        writeSync((this.stdout as { fd?: number }).fd ?? 1, this.takeRestoreSequence())
+      } catch {}
+      this.setRawMode(false)
+    }
+    const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]
+    if (process.platform === "win32") signals.push("SIGBREAK")
+    const onSignal = (signal: NodeJS.Signals) => {
+      if (process.listenerCount(signal) > 1) return
+      restoreNow()
+      this.stop()
+      process.exit(128 + (constants.signals[signal] ?? 0))
+    }
+    process.on("exit", restoreNow)
+    process.on("uncaughtExceptionMonitor", restoreNow)
+    for (const sig of signals) process.on(sig, onSignal)
+    return () => {
+      process.off("exit", restoreNow)
+      process.off("uncaughtExceptionMonitor", restoreNow)
+      for (const sig of signals) process.off(sig, onSignal)
+    }
   }
 
   private readSize() {
