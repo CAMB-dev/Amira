@@ -106,6 +106,11 @@ export class Agent {
     return this.#status
   }
 
+  /** Most tool calls this agent runs at once. */
+  get maxParallelTools(): number {
+    return this.#maxParallelTools
+  }
+
   /** Announces the session to subscribers. Frontends call this once they are listening. */
   start(
     reason: EventMap["session.start"]["reason"],

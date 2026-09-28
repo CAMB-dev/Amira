@@ -320,6 +320,7 @@ test("at most maxParallelTools calls run at once", async () => {
   ])
   const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
   const agent = new Agent({ ai, model: ai.model("mock/t"), cwd: ".", systemPrompt: "", maxParallelTools: 2 })
+  expect(agent.maxParallelTools).toBe(2)
   let running = 0
   let peak = 0
   agent.tools.register(

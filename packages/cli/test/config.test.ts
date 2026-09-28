@@ -99,6 +99,15 @@ test("settings reach the session: extensions, retry hook and model lookup", asyn
   expect(seen).toEqual({ dirs: ["s"] })
   expect(session.retryAttempts).toBe(4)
   expect(session.agent.model.provider).toBe("mine")
+  expect(session.agent.maxParallelTools).toBe(2)
+  const plain = await createSession({
+    model: "mine/m",
+    cwd,
+    extensions: [],
+    noBuiltins: true,
+    providers: [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }],
+  })
+  expect(plain.agent.maxParallelTools).toBe(8)
 })
 
 test("an unknown provider with a preset suggests adding it", async () => {
