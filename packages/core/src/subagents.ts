@@ -151,6 +151,8 @@ export class AgentTree {
   /** Parent session id of every child ever spawned, for telling descendants apart. */
   #parentOf = new Map<string, string>()
   #slots = new Map<string, Slot>()
+  /** The last approval question queued for each parent, by its session id. */
+  #asking = new Map<string, Promise<unknown>>()
 
   constructor(opts: AgentTreeOptions) {
     this.#opts = opts
@@ -407,10 +409,30 @@ export class AgentTree {
   }
 
   /**
+   * One question to a parent at a time: each is a call with the parent's whole context, and
+   * children asking together would otherwise start that many such calls at once.
+   */
+  async #askParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
+    const before = this.#asking.get(parent.sessionId) ?? Promise.resolve()
+    const mine = before.then(() =>
+      signal.aborted
+        ? { approved: false, reason: "aborted before the parent was asked" }
+        : this.#consultParent(parent, req, signal),
+    )
+    const tail = mine.catch(() => {})
+    this.#asking.set(parent.sessionId, tail)
+    try {
+      return await mine
+    } finally {
+      if (this.#asking.get(parent.sessionId) === tail) this.#asking.delete(parent.sessionId)
+    }
+  }
+
+  /**
    * D14: a child's approval request goes to its parent's model, not to the user. It gets the
    * parent's conversation and the request, without tools, and must answer APPROVE or DENY.
    */
-  async #askParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
+  async #consultParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
     const args = JSON.stringify(req.args, null, 2)
     const question = [
       `A sub-agent you started (session ${req.sessionId}) wants to call the tool "${req.name}" and needs your approval.`,

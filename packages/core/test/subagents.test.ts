@@ -319,6 +319,35 @@ test("a child's approval request goes to the parent's model (D14)", async () => 
   ).toBe(true)
 })
 
+test("approval questions to one parent are asked one at a time", async () => {
+  const asked: number[] = []
+  const { root, tree, interceptors, tools } = await setup((req) => {
+    const last = req.messages.at(-1)
+    const text = last?.content[0]?.type === "text" ? last.content[0].text : ""
+    if (text.includes("needs your approval")) {
+      asked.push(performance.now())
+      return { text: "APPROVE\nok", delayMs: 40 }
+    }
+    if (last?.role === "toolResult") return { text: "finished" }
+    return { toolCalls: [1, 2, 3].map((i) => ({ name: "p", args: { i } })) }
+  })
+  tools.register(
+    defineTool({
+      name: "p",
+      description: "p",
+      parameters: { type: "object" },
+      concurrency: "parallel",
+      execute: async () => textResult("ran"),
+    }),
+    "t",
+  )
+  interceptors.add("tool.call.before", () => ({ action: "ask", reason: "policy" }))
+  expect((await tree.spawn(root, { prompt: "p" }).result()).status).toBe("done")
+  expect(asked.length).toBe(3)
+  // Each question starts only after the previous answer (a reply takes at least 40 ms).
+  for (let i = 1; i < asked.length; i++) expect(asked[i]! - asked[i - 1]!).toBeGreaterThanOrEqual(35)
+})
+
 test("without an approver, a call an interceptor asks about is denied", async () => {
   const { root, interceptors, tools } = await setup((req) =>
     req.messages.at(-1)?.role === "toolResult" ? { text: "done" } : { toolCalls: [{ name: "t", args: {} }] },
