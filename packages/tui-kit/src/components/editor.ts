@@ -195,6 +195,15 @@ export class Editor implements Component {
     return { line: this.line, col: this.col }
   }
 
+  /**
+   * Moves the caret, clamped to the text; `col` should fall between graphemes (`Infinity` is
+   * the end of the line).
+   */
+  setCursor(pos: { line: number; col: number }): void {
+    const line = Math.min(Math.max(0, pos.line), this.lines.length - 1)
+    this.moveTo({ line, col: Math.min(Math.max(0, pos.col), this.lines[line]!.length) })
+  }
+
   /** The caret's line up to the caret; cheap, for completions that look at the word being typed. */
   textBeforeCaret(): string {
     return this.current.slice(0, this.col)

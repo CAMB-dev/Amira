@@ -11,6 +11,7 @@ import {
   type Component,
   defaultTheme,
   Editor,
+  type EditorPart,
   type InputEvent,
   InputReader,
   key,
@@ -38,7 +39,9 @@ import {
   toolLines,
   userLines,
 } from "./format.ts"
+import { HistorySearch } from "./history-search.ts"
 import { InputBox } from "./input-box.ts"
+import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { StatusBar } from "./status-bar.ts"
 
 export interface InteractiveOptions {
@@ -61,6 +64,11 @@ export interface InteractiveOptions {
   /** Terminal setup; injectable for tests. Defaults to probing the real terminal. */
   setup?: (terminal: Terminal) => Promise<SetupResult>
   theme?: Theme
+  /**
+   * Prompts sent before, for ↑/↓ and Ctrl+R; the CLI passes the project's persisted history.
+   * Default: one kept in memory for this run.
+   */
+  history?: PromptHistory
 }
 
 /** Bracketed pastes this big become one placeholder in the editor, expanded when sent. */
@@ -145,11 +153,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const editor = new Editor({
     prompt: theme.accent("› "),
     placeholder: "Message Amira",
-    onSubmit: (text) => submit(text),
+    onSubmit: (text, info) => submit(text, info.parts),
     foldPastes: FOLD_PASTES,
   })
   const commands = opts.commands
   const popup = commands ? new CommandPopup(commands, () => renderer.requestRender()) : undefined
+  const history = opts.history ?? new PromptHistory()
+  const historyNav = new HistoryNavigator(history, editor)
+  const search = new HistorySearch(history, editor)
   /**
    * Tells the command popup what the editor holds. Cheap on any text: it only looks at a single
    * line.
@@ -195,6 +206,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     ]),
     new View((width, ctx) => {
       if (dialogs[0]) return []
+      if (search.active) return search.render(width, ctx)
       // Synced on every frame, so text set any way (typing, Tab, a dropped steer) is completed.
       syncCompletions()
       if (popup?.visible) return popup.render(width, ctx)
@@ -204,7 +216,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     new StatusBar(() => opts.status.snapshot()),
     new View((width, ctx) => {
       if (dialogs[0]) return []
-      const fixed = popup?.visible ? "↑↓ select · Tab complete · Enter run · Esc close" : undefined
+      const fixed = search.active
+        ? "Enter accept · Ctrl+R older · Ctrl+S newer · Esc cancel"
+        : popup?.visible
+          ? "↑↓ select · Tab complete · Enter run · Esc close"
+          : undefined
       if (fixed) return [ctx.theme.muted(truncateToWidth(fixed, width, "…"))]
       const ctrlC = working ? "interrupt" : editor.isEmpty ? "quit" : "clear"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
@@ -424,12 +440,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   /**
-   * Enter: runs a slash command, sends, or while a turn runs steers it (D29).
+   * Enter: runs a slash command, sends, or while a turn runs steers it (D29). `parts` is the
+   * editor content as typed, folded pastes apart, for the prompt history.
    */
-  function submit(text: string) {
+  function submit(text: string, parts: EditorPart[] = [text]) {
     const trimmed = text.trim()
     if (!trimmed) return
     editor.clear()
+    history.add(parts)
+    historyNav.reset()
     if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
     else if (working) agent.steer(trimmed)
     else send(trimmed)
@@ -453,6 +472,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function queue() {
     const trimmed = editor.getText().trim()
     if (!trimmed) return
+    history.add(editor.getParts())
+    historyNav.reset()
     editor.clear()
     if (working) queued.push(trimmed)
     else send(trimmed)
@@ -488,12 +509,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const dialog = dialogs[0]
     // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
     // with candidates for text the editor no longer holds.
-    if (!dialog) syncCompletions()
+    if (!dialog && !search.active) syncCompletions()
     if (dialog) {
       // Ctrl+C closes the dialog like Esc.
       dialog.handleInput(matchesKey(e, "c", { ctrl: true }) ? key("escape") : e)
+    } else if (search.active) {
+      // Keys like the arrows end the search and then do what they do.
+      if (search.handleKey(e) === "accepted-pass") return onInput(e)
     } else if (popup?.open && handlePopupKey(e)) {
       // The popup took ↑↓, Tab, Enter or Esc.
+    } else if (matchesKey(e, "r", { ctrl: true })) {
+      search.start()
+    } else if (
+      (matchesKey(e, "up") || matchesKey(e, "down")) &&
+      historyNav.move(matchesKey(e, "up") ? -1 : 1)
+    ) {
+      // ↑↓ walked the prompt history.
     } else if (matchesKey(e, "enter", { alt: true }) || matchesKey(e, "q", { ctrl: true })) {
       queue()
     } else if (matchesKey(e, "c", { ctrl: true })) {
@@ -516,6 +547,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (!action) return false
     if (action.type === "replace") editor.setText(action.text)
     else if (action.type === "run") {
+      history.add([action.line])
+      historyNav.reset()
       editor.clear()
       runCommand(action.line)
     }

@@ -21,6 +21,7 @@ import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { subagentLines, summarizeArgs, toolLines } from "../src/format.ts"
+import { PromptHistory } from "../src/prompt-history.ts"
 
 const noProbe = async () => ({
   capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -53,6 +54,7 @@ interface SetupOptions {
   tree?: boolean
   /** Called after every write to the terminal, once the screen shows it. */
   onWrite?: (screen: VirtualScreen) => void
+  history?: PromptHistory
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -114,6 +116,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     terminal,
     setup: async () => ({ ...(await noProbe()), leftoverInput: o.leftoverInput ?? "" }),
     onReady: () => agent.start("startup"),
+    ...(o.history ? { history: o.history } : {}),
     ...(o.initialPrompt ? { initialPrompt: o.initialPrompt } : {}),
     ...(o.startupEvents ? { startupEvents: o.startupEvents } : {}),
   })
@@ -854,5 +857,62 @@ test("a big paste shows as one placeholder in the input box and is sent in full"
   await idle()
   expect(userTexts(agent)).toEqual([`see ${log} please`])
   terminal.send("\x03")
+  await exited
+})
+
+test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty", async () => {
+  const history = new PromptHistory()
+  const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "one" }, { text: "two" }], {
+    history,
+  })
+  terminal.send("first message\r")
+  await shows("one")
+  await idle()
+  expect(history.entries.map((e) => e.text)).toEqual(["first message"])
+  terminal.send("\x1b[A")
+  await waitFor(() => live().includes("› first message"), "recalled")
+  terminal.send("\x1b[B")
+  await waitFor(() => live().includes("Message Amira"), "empty again")
+  terminal.send("\x1b[A\r")
+  await shows("two")
+  await idle()
+  expect(userTexts(agent)).toEqual(["first message", "first message"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("Ctrl+R searches the history; Enter keeps the match in the editor to send or edit", async () => {
+  const history = new PromptHistory()
+  for (const t of ["deploy to staging", "run the tests", "deploy to prod"]) history.add([t])
+  const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "on it" }], { history })
+  terminal.send("\x12")
+  await waitFor(() => live().includes("search history"), "search line")
+  expect(live()).toContain("Esc cancel")
+  terminal.send("deploy")
+  await waitFor(() => live().includes("› deploy to prod"), "newest match")
+  expect(live()).toContain("1 of 2")
+  terminal.send("\x12")
+  await waitFor(() => live().includes("› deploy to staging"), "older match")
+  terminal.send("\r")
+  await waitFor(() => !live().includes("search history"), "search closed")
+  expect(live()).toContain("› deploy to staging")
+  terminal.send("\r")
+  await shows("on it")
+  await idle()
+  expect(userTexts(agent)).toEqual(["deploy to staging"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("Esc leaves the history search with the draft back", async () => {
+  const history = new PromptHistory()
+  history.add(["old prompt"])
+  const { terminal, live, exited } = await setup([], { history })
+  terminal.send("my draft\x12old")
+  await waitFor(() => live().includes("› old prompt"), "match")
+  terminal.send("\x1b")
+  await waitFor(() => live().includes("› my draft"), "draft back")
+  expect(live()).not.toContain("search history")
+  terminal.send("\x03\x03")
   await exited
 })
