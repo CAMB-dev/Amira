@@ -159,6 +159,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** When the running turn started, and the output tokens its finished replies used. */
   let turnStartedAt = 0
   let turnTokens = 0
+  /**
+   * send() started the clock for the turn it asked for: the prompt may wait for a compaction
+   * before turn.start comes, and the activity line must not show the last turn's numbers then.
+   */
+  let clockFromSend = false
   /** When a compaction outside a turn (/compact) started. */
   let compactStartedAt = 0
   /** Characters of the reply streaming now: its tokens until its usage arrives. */
@@ -430,8 +435,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         thinking = false
         interrupted = false
         turnShowedOutput = false
-        turnStartedAt = Date.now()
-        turnTokens = 0
+        if (!clockFromSend) startClock()
+        clockFromSend = false
         streamedChars = 0
         spinner.start(() => renderer.requestRender())
         break
@@ -581,13 +586,25 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     renderer.requestRender()
   }
 
+  /** The activity line counts the turn's time and tokens from here. */
+  function startClock() {
+    turnStartedAt = Date.now()
+    turnTokens = 0
+  }
+
   /** The user's message shows up in the transcript on turn.start. */
   function send(text: string) {
+    const clock = { turnStartedAt, turnTokens }
     working = true
+    startClock()
+    clockFromSend = true
     renderer.requestRender()
     agent.prompt(text).catch((err) => {
+      clockFromSend = false
       if (err instanceof AgentBusyError) {
-        // A turn we did not know about is running; send this one after it.
+        // A turn we did not know about is running; send this one after it, and keep its clock.
+        turnStartedAt = clock.turnStartedAt
+        turnTokens = clock.turnTokens
         queued.unshift(text)
       } else {
         working = false

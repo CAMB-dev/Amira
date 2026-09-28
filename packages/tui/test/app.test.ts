@@ -408,6 +408,41 @@ test("the activity line shows what the turn does, its time, output tokens and ho
   await exited
 })
 
+test("a message sent during /compact counts its own time and tokens, not the last turn's", async () => {
+  const said = (text: string): Message[] => [
+    { role: "user", content: [{ type: "text", text }] },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: `re ${text}` }],
+      model: { provider: "mock", model: "m1" },
+    },
+  ]
+  const { terminal, live, all, shows, idle, exited, agent } = await setup(
+    [
+      { text: "first answer", usage: { input: 10, output: 4321 } },
+      { text: "SUMMARY ".repeat(40), delayMs: 10 },
+      { text: "second answer" },
+    ],
+    { cols: 80, history: [...said("a"), ...said("b")] },
+  )
+  terminal.send("q1\r")
+  await shows("first answer")
+  await idle()
+  const compacted = agent.compact()
+  await waitFor(() => live().includes("compacting the conversation"), "compacting")
+  terminal.send("q2\r")
+  await waitFor(() => /› q2|Enter steer/.test(live()), "sent")
+  // The prompt waits for the compaction; its activity line starts from zero meanwhile.
+  expect(live()).toMatch(/compacting the conversation · 0s · Esc interrupt/)
+  expect(live()).not.toContain("↓")
+  expect(await compacted).toBe(true)
+  await shows("second answer")
+  await idle()
+  expect(all()).toContain("Compacted")
+  terminal.send("\x03")
+  await exited
+})
+
 test("Esc interrupts a running turn, keeps the partial text and sends queued messages after", async () => {
   const { terminal, all, shows, idle, agent, exited } = await setup([
     { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
