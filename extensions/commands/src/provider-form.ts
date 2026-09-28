@@ -8,7 +8,8 @@ import type {
   ProviderModelInfo,
 } from "@amira/api"
 
-const DIALECT_NOTES: Record<string, string> = {
+/** What each protocol is, next to its id wherever one is picked. */
+export const DIALECT_NOTES: Record<string, string> = {
   "openai-chat": "OpenAI-compatible chat completions (most providers, local servers)",
   "openai-responses": "OpenAI Responses API",
   "anthropic-messages": "Anthropic Messages API",
@@ -72,12 +73,16 @@ export function draftFromValues(values: FormValues, id?: string): ProviderDraft 
 }
 
 /**
- * The form of /provider add (custom) and /provider edit: where the provider is, how it gets
- * its key, which models it offers (fetched from it, or typed), defaults for models the
- * catalog does not know, and an opt-in connection test. Nothing is sent anywhere unless the
- * user presses Fetch models or Test connection.
+ * The form of /provider add and /provider edit: where the provider is, how it gets its key,
+ * which models it offers (fetched from it, or typed), defaults for models the catalog does
+ * not know, and an opt-in connection test. Nothing is sent anywhere unless the user presses
+ * Fetch models or Test connection. `dialect` preselects the protocol picked before the form.
  */
-export function providerFormSpec(admin: ProviderAdmin, existing?: ProviderDraft): FormSpec {
+export function providerFormSpec(
+  admin: ProviderAdmin,
+  existing?: ProviderDraft,
+  opts: { dialect?: string } = {},
+): FormSpec {
   const editing = existing !== undefined
   const stored = existing ? admin.storedKeyHint(existing.id) : undefined
   const dialects = admin.dialects().map((d) => ({
@@ -109,7 +114,7 @@ export function providerFormSpec(admin: ProviderAdmin, existing?: ProviderDraft)
               label: "Id",
               section: "Provider",
               required: true,
-              placeholder: "e.g. my-deepseek",
+              placeholder: "e.g. my-provider",
               pattern: "[a-z0-9][a-z0-9._-]*",
               patternMessage: "use lower-case letters, digits and . _ -",
               help: "Models are then chosen as <id>/<model>.",
@@ -120,10 +125,10 @@ export function providerFormSpec(admin: ProviderAdmin, existing?: ProviderDraft)
       {
         type: "select",
         id: "dialect",
-        label: "Dialect",
+        label: "Protocol",
         section: "Provider",
         options: dialects,
-        default: existing?.dialect ?? "openai-chat",
+        default: existing?.dialect ?? opts.dialect ?? "openai-chat",
       },
       {
         type: "text",
@@ -168,7 +173,7 @@ export function providerFormSpec(admin: ProviderAdmin, existing?: ProviderDraft)
         section: "API key",
         when: { field: "keySource", is: "env" },
         required: true,
-        placeholder: "e.g. DEEPSEEK_API_KEY",
+        placeholder: "e.g. MY_PROVIDER_API_KEY",
         pattern: "[A-Za-z_][A-Za-z0-9_]*",
         patternMessage: "letters, digits and _",
         ...(existing?.apiKeyEnv ? { default: existing.apiKeyEnv } : {}),

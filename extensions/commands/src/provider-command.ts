@@ -1,12 +1,12 @@
 import type { CommandCandidate, CommandContext, CommandDefinition, ProviderAdmin } from "@amira/api"
 import { table } from "./format.ts"
-import { draftFromValues, providerFormSpec } from "./provider-form.ts"
+import { DIALECT_NOTES, draftFromValues, providerFormSpec } from "./provider-form.ts"
 
-const CUSTOM = "Custom…"
-const USAGE = "usage: /provider [add [<preset>|custom] | edit <id> | remove <id> | key <id>]"
+const USAGE = "usage: /provider [add [<protocol>] | edit <id> | remove <id> | key <id>]"
+const NONE = "No providers configured — add one with /provider add"
 
 const SUBCOMMANDS: Record<string, string> = {
-  add: "add a preset, or a custom provider in a form",
+  add: "add a provider: pick its protocol, then fill in a form",
   edit: "change a provider in a form",
   remove: "remove a provider from settings.json",
   key: "store a new API key for a provider",
@@ -24,7 +24,13 @@ function admin(ctx: Ctx): ProviderAdmin {
   return a
 }
 
-/** /provider: list, add (a preset or a custom one in a form), edit, remove, and set a key. */
+/** "openai-chat — OpenAI-compatible chat completions (…)", as the protocol picker shows it. */
+const protocolLabel = (d: string) => (DIALECT_NOTES[d] ? `${d} — ${DIALECT_NOTES[d]}` : d)
+
+/**
+ * /provider: list the configured providers (Amira has none built in), add one (pick a protocol,
+ * then fill in a form), edit, remove, and set a key.
+ */
 export function providerCommand(): CommandDefinition {
   return {
     name: "provider",
@@ -35,12 +41,10 @@ export function providerCommand(): CommandDefinition {
         const m = /^(\S+)\s+/.exec(prefix)
         const sub = m?.[1]
         if (sub === "add") {
-          return [
-            ...ctx.session
-              .providerPresets()
-              .map((value) => ({ value: `add ${value}`, description: "preset" })),
-            { value: "add custom", description: "any provider, in a form" },
-          ]
+          return (ctx.session.providerAdmin?.dialects() ?? []).map((d) => ({
+            value: `add ${d}`,
+            description: DIALECT_NOTES[d] ?? "protocol",
+          }))
         }
         if (sub === "edit" || sub === "remove" || sub === "key") {
           return providerIds(ctx).map((c) => ({ ...c, value: `${sub} ${c.value}` }))
@@ -51,8 +55,9 @@ export function providerCommand(): CommandDefinition {
     async run(args, ctx) {
       const [sub, id, ...rest] = args.split(/\s+/).filter(Boolean)
       if (!sub) return list(ctx)
-      if (rest.length || !(sub in SUBCOMMANDS)) throw new Error(USAGE)
+      if (rest.length || !Object.hasOwn(SUBCOMMANDS, sub)) throw new Error(USAGE)
       if (sub === "add") return add(ctx, id)
+      if (ctx.session.providers().length === 0) throw new Error(NONE)
       if (!id) throw new Error(`usage: /provider ${sub} <id>; providers: ${ids(ctx)}`)
       if (!ctx.session.providers().some((p) => p.id === id))
         throw new Error(`no provider "${id}"; providers: ${ids(ctx)}`)
@@ -83,24 +88,31 @@ function list(ctx: CommandContext) {
   ctx.print(
     rows.length
       ? `Providers:\n${table(rows)}\nAdd one with /provider add; change one with /provider edit <id>.`
-      : `No providers configured. Add one with /provider add; presets: ${ctx.session.providerPresets().join(", ")}`,
+      : NONE,
   )
 }
 
-async function add(ctx: CommandContext, preset: string | undefined) {
-  let choice = preset
-  if (!choice) {
-    const presets = ctx.session.providerPresets()
-    const picked = await ctx.ui.select("Add which provider?", [...presets, CUSTOM], { signal: ctx.signal })
-    if (!picked) throw new Error(`${USAGE}; presets: ${presets.join(", ")}`)
-    choice = picked === CUSTOM ? "custom" : picked
-  }
-  if (choice !== "custom") {
-    ctx.print(await ctx.session.addProvider(choice))
-    return
-  }
+/** Picks the protocol (unless given), then opens the provider form with it preselected. */
+async function add(ctx: CommandContext, protocol: string | undefined) {
   const a = admin(ctx)
-  const values = await ctx.ui.form(providerFormSpec(a), { signal: ctx.signal })
+  const dialects = a.dialects()
+  let dialect = protocol
+  if (dialect !== undefined && !dialects.includes(dialect)) {
+    throw new Error(`unknown protocol "${dialect}"; protocols: ${dialects.join(", ")}`)
+  }
+  if (dialect === undefined) {
+    const labels = dialects.map(protocolLabel)
+    const picked = await ctx.ui.select("Which protocol does the provider speak?", labels, {
+      signal: ctx.signal,
+    })
+    if (picked === undefined) {
+      ctx.print("Cancelled; nothing was saved.")
+      return
+    }
+    dialect = dialects[labels.indexOf(picked)]
+    if (dialect === undefined) throw new Error(`${USAGE}; protocols: ${dialects.join(", ")}`)
+  }
+  const values = await ctx.ui.form(providerFormSpec(a, undefined, { dialect }), { signal: ctx.signal })
   if (!values) {
     ctx.print("Cancelled; nothing was saved.")
     return
