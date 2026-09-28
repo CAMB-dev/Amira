@@ -123,7 +123,7 @@ async function setup(over: Partial<SessionControl> = {}, answers: (string | unde
     const r = await host.run(line, { frontend: "tui" })
     return { ...r, text: r.output.join("\n") }
   }
-  return { host, run, calls, asked, bus }
+  return { host, run, calls, asked, bus, ext }
 }
 
 test("every built-in command is registered with a description", async () => {
@@ -151,6 +151,29 @@ test("/help lists every command with its argument hint", async () => {
   const { text } = await run("/help")
   expect(text).toContain("/model [provider/model]")
   expect(text).toMatch(/\/quit\s+Leave Amira/)
+})
+
+test("/help lists other extensions' commands in their own group, descriptions cut short", async () => {
+  const { run, ext } = await setup()
+  await ext.load((api) => {
+    api.registerCommand({ name: "deploy", description: `Skill: ${"very long ".repeat(20)}`, run: () => {} })
+  }, "builtin:skills")
+  const { text } = await run("/help")
+  expect(text.indexOf("Commands:")).toBeLessThan(text.indexOf("From builtin:skills:"))
+  expect(text).toMatch(/\/deploy\s+Skill: very long.*…\n?$/)
+  expect(text.split("\n").every((l) => l.length < 120)).toBe(true)
+})
+
+test("/status right at startup waits briefly for the git facts", async () => {
+  const { run, bus } = await setup()
+  const status = run("/status")
+  await Bun.sleep(20)
+  bus.emit(
+    "workspace.changed",
+    { cwd: "/work", repoRoot: "/work", branch: "dev", isWorktree: true },
+    { sessionId: "s1" },
+  )
+  expect((await status).text).toMatch(/Git\s+dev \(worktree\) in \/work/)
 })
 
 test("/model switches with an argument and asks without one", async () => {

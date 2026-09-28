@@ -63,7 +63,27 @@ function subcommandCandidates(
 export default defineExtension((api: ExtensionAPI) => {
   // Git facts per session, for /status; workspace.changed follows every session.start.
   const workspace = new Map<string, EventMap["workspace.changed"]>()
-  api.on("workspace.changed", (e) => void workspace.set(e.sessionId, e.data))
+  const waiting = new Set<() => void>()
+  api.on("workspace.changed", (e) => {
+    workspace.set(e.sessionId, e.data)
+    for (const wake of waiting) wake()
+  })
+  /** The git facts arrive in the background after session.start; right at startup, wait a little. */
+  const workspaceOf = async (sessionId: string, signal: AbortSignal) => {
+    const deadline = Date.now() + 2000
+    while (!workspace.has(sessionId) && Date.now() < deadline && !signal.aborted) {
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          waiting.delete(wake)
+          clearTimeout(timer)
+          resolve()
+        }
+        const timer = setTimeout(wake, deadline - Date.now())
+        waiting.add(wake)
+      })
+    }
+    return workspace.get(sessionId)
+  }
 
   const add = (c: CommandDefinition) => api.registerCommand(c)
 
@@ -71,8 +91,19 @@ export default defineExtension((api: ExtensionAPI) => {
     name: "help",
     description: "List the slash commands",
     run(_args, ctx) {
-      const rows = ctx.commands().map((c) => [`/${c.name}${c.hint ? ` ${c.hint}` : ""}`, c.description])
-      ctx.print(`Commands:\n${table(rows)}`)
+      // Grouped by where they come from, this extension's first; skills can be many and wordy.
+      const all = ctx.commands()
+      const own = all.find((c) => c.name === "help")?.source
+      const sources = [...new Set(all.map((c) => c.source))].sort(
+        (a, b) => Number(b === own) - Number(a === own),
+      )
+      const groups = sources.map((source) => {
+        const rows = all
+          .filter((c) => c.source === source)
+          .map((c) => [`/${c.name}${c.hint ? ` ${c.hint}` : ""}`, oneLine(c.description, 70)])
+        return `${source === own ? "Commands" : `From ${source}`}:\n${table(rows)}`
+      })
+      ctx.print(groups.join("\n\n"))
     },
   })
 
@@ -127,16 +158,18 @@ export default defineExtension((api: ExtensionAPI) => {
   add({
     name: "status",
     description: "Show the model, session, context use, cost and workspace",
-    run(_args, ctx) {
+    async run(_args, ctx) {
       const info = ctx.session.info()
+      const ws = await workspaceOf(info.id, ctx.signal)
       const rows = costByModel(ctx.session.replies())
       const priced = rows.filter((r) => r.cost !== undefined)
       const cost = priced.length ? formatCost(priced.reduce((n, r) => n + (r.cost ?? 0), 0)) : "unknown"
       const provider = ctx.session.providers().find((p) => p.id === info.model.provider)
-      const ws = workspace.get(info.id)
-      const git = ws?.repoRoot
-        ? `${ws.branch ?? (ws.head ? `detached at ${ws.head.slice(0, 7)}` : "no branch")}${ws.isWorktree ? " (worktree)" : ""} in ${ws.repoRoot}`
-        : "not a git repository"
+      const git = !ws
+        ? "unknown"
+        : ws.repoRoot
+          ? `${ws.branch ?? (ws.head ? `detached at ${ws.head.slice(0, 7)}` : "no branch")}${ws.isWorktree ? " (worktree)" : ""} in ${ws.repoRoot}`
+          : "not a git repository"
       const context =
         info.contextTokens !== undefined
           ? `${formatTokens(info.contextTokens)} of ${formatTokens(info.contextWindow)} tokens (${Math.round((info.contextTokens / info.contextWindow) * 100)}%)`
