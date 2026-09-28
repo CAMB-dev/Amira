@@ -17,13 +17,13 @@ export function powershellEdition(path: string): string {
  * The fixed script run for every PowerShell command. The command arrives as the gate line
  * (base64 UTF-8, sent once the process is in its Job Object), so it is not size-limited like
  * -EncodedCommand, and it is compiled here, after UTF-8 is set, so syntax errors are readable.
+ * Everything before the gate only prepares this process (a standby does it while it waits):
+ * it starts nothing and dry-runs the output pipeline so its first real use is already compiled.
  * Every stream is rendered as text on stdout: redirected error, progress and information
  * records would otherwise come out as CLIXML. Exits with $LASTEXITCODE, or 1 when the final
  * statement failed.
  */
 export const POWERSHELL_SCRIPT = [
-  "$__amira = [Console]::In.ReadLine()",
-  "if ($null -eq $__amira) { exit 125 }",
   "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
   "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
   "$ProgressPreference = 'SilentlyContinue'",
@@ -38,6 +38,10 @@ export const POWERSHELL_SCRIPT = [
   "}",
   "filter __amira_errors { if ($_ -is [System.Management.Automation.ErrorRecord]) { __amira_error $_ } else { $_ } }",
   "filter __amira_trim { $_.TrimEnd() }",
+  "$null = [scriptblock]::Create('$null')",
+  ". { $null } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim",
+  "$__amira = [Console]::In.ReadLine()",
+  "if ($null -eq $__amira) { exit 125 }",
   "try {",
   '  $__amira = [scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__amira)) + "`n`$__amira_ok = `$?")',
   "} catch {",
@@ -69,7 +73,7 @@ export function encodeCommand(command: string): string {
   return Buffer.from(command, "utf8").toString("base64")
 }
 
-/** Gated PowerShell: nothing runs, and no command text is even read, until the job holds it. */
+/** Gated PowerShell: the command is not run, or even read, until the job holds the process. */
 export function gatedPowerShell(path = findPowerShell(), label?: string): Shell {
   const argv = [
     path,
