@@ -1,0 +1,16 @@
+{
+  "name": "@amira/ext-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@amira/api": "workspace:*"
+  },
+  "devDependencies": {
+    "@amira/ai": "workspace:*",
+    "@amira/core": "workspace:*"
+  }
+}
