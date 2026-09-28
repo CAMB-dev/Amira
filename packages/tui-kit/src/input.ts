@@ -1,7 +1,6 @@
 import { type InputEvent, type KeyEvent, key, textKey } from "./keys.ts"
 
 const ESC = "\x1b"
-const PASTE_START = "\x1b[200~"
 const PASTE_END = "\x1b[201~"
 
 type Mods = { ctrl: boolean; shift: boolean; alt: boolean }
@@ -294,5 +293,3 @@ export class InputParser {
     out.push(e)
   }
 }
-
-export { PASTE_END, PASTE_START }
