@@ -84,46 +84,66 @@ export function replyRows(rows: string[]): string[] {
   return rows.map((r) => (r === "" ? "" : glyphs.assistant + r))
 }
 
-/** A sub-agent as the live area shows it while it is queued or running. */
+/** A sub-agent as the live area shows it, from its start until its line is committed. */
 export interface SubagentLine {
+  title: string
   role: string
-  task: string
   depth: number
   /** Unset while it waits for a slot. */
   startedAt?: number
   /** Tokens its replies used so far. */
   tokens: number
-  /** What it does right now, e.g. its latest tool call: "grep TODO". */
-  activity?: string
+  /** Its latest tool call, as its row shows it: `grep` and `"TODO" src`. */
+  activity?: { name: string; summary: string }
   /** The text of its latest reply, which becomes its result. */
   lastText?: string
 }
+
+/** Longest summary of a sub-agent's current tool on its row. */
+export const ACTIVITY_CHARS = 40
 
 export function compactTokens(n: number): string {
   if (n < 1000) return String(n)
   return n < 100_000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`
 }
 
-/**
- * One line per sub-agent, indented by depth: role, elapsed time and tokens first, so they
- * survive a narrow terminal, then what it is doing (its latest tool call) or its task.
- */
-export function subagentLines(subs: SubagentLine[], now: number, width: number, theme: Theme): string[] {
-  if (!subs.length) return []
-  const lines = subs.map((s) => {
-    const when =
-      s.startedAt === undefined ? "queued" : `${Math.max(0, Math.floor((now - s.startedAt) / 1000))}s`
-    const stats = `${when} · ${compactTokens(s.tokens)} tok`
-    const doing = s.activity
-      ? `${theme.accent(glyphs.toolRunning)} ${theme.muted(oneLine(s.activity))}`
-      : theme.muted(oneLine(s.task))
-    const line = `${"  ".repeat(Math.max(0, s.depth - 1))}${theme.accent(glyphs.subagent)} ${s.role} ${theme.muted(`· ${stats} ·`)} ${doing}`
-    return truncateToWidth(line, width, "…")
-  })
-  return [...lines, ""]
+/** A sub-agent's rows sit under its call like a result, one level deeper per nesting. */
+function subagentIndent(depth: number): string {
+  return "  ".repeat(Math.max(1, depth))
 }
 
-/** The line committed when a sub-agent ends: how it ended, its time and tokens, and its answer. */
+/**
+ * A queued or running sub-agent under its call: `⎿ ◆ title · role · 12s · 4.1k tok`
+ * ("queued" while it waits), and once it has called a tool, `│   ● grep "TODO"` below.
+ */
+export function subagentRows(sub: SubagentLine, now: number, width: number, theme: Theme): string[] {
+  const s = glyphs.separator
+  const indent = subagentIndent(sub.depth)
+  const stats =
+    sub.startedAt === undefined
+      ? "queued"
+      : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
+  const head = `${indent}${theme.muted(glyphs.result)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${theme.muted(`${s} ${sub.role} ${s} ${stats}`)}`
+  const rows = [truncateToWidth(head, width, glyphs.more)]
+  if (sub.startedAt !== undefined && sub.activity) {
+    const summary = cut(oneLine(sub.activity.summary), ACTIVITY_CHARS)
+    const tool = `${indent}${theme.muted(glyphs.output)}   ${theme.accent(glyphs.toolRunning)} ${theme.accent(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
+    rows.push(truncateToWidth(tool, width, glyphs.more))
+  }
+  return rows
+}
+
+/** Elapsed time on a running row: "4s", "1m 05s". */
+export function formatElapsed(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`
+}
+
+/**
+ * The line a sub-agent's rows become when it ends, committed under its call: how it ended,
+ * its time and tokens, and the start of its answer.
+ */
 export function subagentEndLine(
   sub: SubagentLine,
   end: { status: "done" | "error" | "aborted"; error?: string; durationMs: number; tokens: number },
@@ -136,13 +156,14 @@ export function subagentEndLine(
       : end.status === "error"
         ? theme.error(glyphs.subagentFailed)
         : theme.muted(glyphs.subagentAborted)
-  const stats = `${formatDuration(end.durationMs)} · ${compactTokens(end.tokens)} tok`
+  const s = glyphs.separator
+  const stats = `${sub.role} ${s} ${formatDuration(end.durationMs)} ${s} ${compactTokens(end.tokens)} tok`
   const said =
     end.status === "error"
       ? theme.error(oneLine(end.error ?? "failed"))
       : end.status === "aborted"
         ? theme.muted("stopped")
         : theme.muted(oneLine(sub.lastText ?? "") || "(no answer)")
-  const line = `${"  ".repeat(Math.max(0, sub.depth - 1))}${theme.accent(glyphs.subagent)} ${sub.role} ${mark} ${theme.muted(`${stats} ·`)} ${said}`
-  return truncateToWidth(line, width, "…")
+  const line = `${subagentIndent(sub.depth)}${theme.muted(glyphs.result)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${mark} ${theme.muted(`${stats} ${s}`)} ${said}`
+  return truncateToWidth(line, width, glyphs.more)
 }

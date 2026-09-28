@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { defaultTheme, stripAnsi } from "@amira/tui-kit"
-import { subagentEndLine, summarizeArgs, userLines } from "../src/format.ts"
+import { subagentEndLine, subagentRows, summarizeArgs, userLines } from "../src/format.ts"
 import { historyLines } from "../src/history.ts"
 
 const plain = (lines: string[]) => lines.map(stripAnsi)
@@ -114,7 +114,13 @@ test("a resumed reply renders as Markdown inside the assistant's gutter", () => 
 })
 
 test("a sub-agent's end line says how it ended, its time, tokens and the start of its answer", () => {
-  const sub = { role: "explorer", task: "t", depth: 1, tokens: 12_345, lastText: "Found it\nin a.ts" }
+  const sub = {
+    title: "US market trend",
+    role: "explorer",
+    depth: 1,
+    tokens: 12_345,
+    lastText: "Found it\nin a.ts",
+  }
   const line = (status: "done" | "error" | "aborted", error?: string) =>
     stripAnsi(
       subagentEndLine(
@@ -124,9 +130,33 @@ test("a sub-agent's end line says how it ended, its time, tokens and the start o
         defaultTheme,
       ),
     )
-  expect(line("done")).toBe("◆ explorer ✓ 41.0s · 12.3k tok · Found it in a.ts")
-  expect(line("error", "model failed")).toBe("◆ explorer ✗ 41.0s · 12.3k tok · model failed")
-  expect(line("aborted")).toBe("◆ explorer ⊘ 41.0s · 12.3k tok · stopped")
+  expect(line("done")).toBe("  ⎿ ◆ US market trend ✓ explorer · 41.0s · 12.3k tok · Found it in a.ts")
+  expect(line("error", "model failed")).toBe(
+    "  ⎿ ◆ US market trend ✗ explorer · 41.0s · 12.3k tok · model failed",
+  )
+  expect(line("aborted")).toBe("  ⎿ ◆ US market trend ⊘ explorer · 41.0s · 12.3k tok · stopped")
+})
+
+test("a sub-agent's live rows: title, role, time and tokens, then its current tool cut to 40 characters", () => {
+  const rows = (sub: Parameters<typeof subagentRows>[0], width = 80) =>
+    subagentRows(sub, 13_500, width, defaultTheme).map(stripAnsi)
+  const base = { title: "US market trend", role: "explorer", depth: 1, tokens: 4_100 }
+  // Queued: no time yet, and no tool.
+  expect(rows(base)).toEqual(["  ⎿ ◆ US market trend · explorer · queued"])
+  expect(rows({ ...base, startedAt: 1_000 })).toEqual(["  ⎿ ◆ US market trend · explorer · 12s · 4.1k tok"])
+  const busy = { ...base, startedAt: 1_000, activity: { name: "grep", summary: '"LiveRenderer"' } }
+  expect(rows(busy)).toEqual([
+    "  ⎿ ◆ US market trend · explorer · 12s · 4.1k tok",
+    '  │   ● grep "LiveRenderer"',
+  ])
+  // One level deeper per nesting; a long summary is cut to 40 characters.
+  const deep = { ...busy, depth: 2, activity: { name: "read", summary: "x".repeat(60) } }
+  expect(rows(deep)).toEqual([
+    "    ⎿ ◆ US market trend · explorer · 12s · 4.1k tok",
+    `    │   ● read ${"x".repeat(39)}…`,
+  ])
+  // Narrow: cut to the width.
+  for (const r of rows(deep, 30)) expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
 })
 
 test("a resumed message with a display shows it and its note, not its content", () => {

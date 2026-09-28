@@ -9,7 +9,7 @@ import {
 } from "@amira/api"
 import { stripAnsi, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { renderToolLines } from "./diff-view.ts"
-import { formatDuration, summarizeArgs } from "./format.ts"
+import { formatDuration, formatElapsed, summarizeArgs } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 
 /** Where the TUI finds the presenter of a tool; the core's ToolRendererRegistry is one. */
@@ -202,12 +202,7 @@ export function finishedToolLines(
   return out
 }
 
-/** Elapsed time on a running row: "4s", "1m 05s". */
-export function formatElapsed(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  if (s < 60) return `${s}s`
-  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
-}
+export { formatElapsed }
 
 /**
  * A running call in the live region: its head with a spinner and the elapsed time on the
