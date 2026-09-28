@@ -5,6 +5,7 @@ import type {
   CommandFrontend,
   CommandInfo,
   CommandOutputLevel,
+  FrontendView,
   SessionControl,
 } from "@amira/api"
 import type { Agent } from "./agent.ts"
@@ -133,6 +134,8 @@ export interface CommandRunOptions {
   /** What /quit does; frontends without one leave it out. */
   quit?: () => void
   signal?: AbortSignal
+  /** Shows a full-screen view; frontends without views leave it out. */
+  openView?: (view: FrontendView) => void
 }
 
 export interface CommandOutcome {
@@ -246,6 +249,7 @@ export class CommandHost {
       print,
       commands: () => this.list(),
       quit: opts.quit ?? (() => {}),
+      ...(opts.openView ? { openView: opts.openView } : {}),
     }
     try {
       await entry.def.run(parsed.args, ctx)

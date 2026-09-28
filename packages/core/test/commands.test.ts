@@ -104,6 +104,23 @@ function hostSetup(control: Partial<SessionControl> = {}) {
   return { bus, agent, ai, registry, host, outputs }
 }
 
+test("a frontend with full-screen views hands openView to commands; others leave it unset", async () => {
+  const { registry, host } = hostSetup()
+  const seen: (boolean | string)[] = []
+  registry.register(
+    cmd("look", {
+      run: (_args, ctx) => {
+        seen.push(ctx.openView !== undefined)
+        ctx.openView?.({ kind: "subagent", sessionId: "s_child" })
+      },
+    }),
+    "test",
+  )
+  await host.run("/look", { frontend: "rpc" })
+  await host.run("/look", { frontend: "tui", openView: (v) => void seen.push(v.sessionId) })
+  expect(seen).toEqual([false, true, "s_child"])
+})
+
 test("running a command hands it the arguments and a context, and reports what it prints", async () => {
   const { registry, host, outputs } = hostSetup()
   let seen: { args: string; frontend: string; cwd: string; names: string[] } | undefined

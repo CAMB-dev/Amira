@@ -15,6 +15,7 @@ import type {
   ChildSession,
   SpawnContext,
   SpawnOptions,
+  SubagentInfo,
   SubagentResult,
   SubagentStatus,
 } from "@amira/api"
@@ -99,11 +100,16 @@ class Child implements ChildSession {
   /** Given a place to run (it starts a microtask later). */
   admitted = false
   started = false
+  /** When its turn started, in ms since the epoch. */
+  startedAt: number | undefined
+  /** Set once it ended. */
+  ended: SubagentResult | undefined
   #result: Promise<SubagentResult>
   settle!: (r: SubagentResult) => void
 
   constructor(
     readonly agent: Agent,
+    readonly role: string | undefined,
     readonly prompt: string,
     readonly context: SpawnContext,
     /** Who its subagent.end is sent as: its parent, with the grandparent if there is one. */
@@ -150,6 +156,8 @@ export class AgentTree {
   /** Why the budget is spent, once it is. */
   #exceeded: string | undefined
   #live = new Map<string, Child>()
+  /** Every child this tree started, finished ones too, in spawn order. */
+  #spawned = new Map<string, Child>()
   /** Children waiting for a place to run, in spawn order. */
   #queue: Child[] = []
   /** Children whose turn is running (or about to start). */
@@ -174,6 +182,37 @@ export class AgentTree {
   /** Children that are queued or running, oldest first. */
   get children(): ChildSession[] {
     return [...this.#live.values()]
+  }
+
+  /** Ids of the sub-agents `parentSessionId` started in this process, finished ones too, in spawn order. */
+  childrenOf(parentSessionId: string): string[] {
+    return [...this.#spawned.values()].filter((c) => c.parentSessionId === parentSessionId).map((c) => c.id)
+  }
+
+  /**
+   * A sub-agent this tree started, running or finished: what it is doing and its
+   * conversation so far (the live array while it runs; copy it to keep a snapshot).
+   */
+  subagent(
+    id: string,
+  ): { info: SubagentInfo; messages: readonly Message[]; session?: SessionStore } | undefined {
+    const c = this.#spawned.get(id)
+    if (!c) return undefined
+    const r = c.ended
+    const info: SubagentInfo = {
+      id: c.id,
+      parentSessionId: c.parentSessionId,
+      depth: c.depth,
+      role: c.role ?? "agent",
+      task: c.prompt,
+      status: r ? r.status : c.started ? "running" : "queued",
+      model: c.model,
+      ...(c.startedAt !== undefined ? { startedAt: c.startedAt } : {}),
+      ...(r ? { durationMs: r.durationMs } : {}),
+      usage: { ...c.usage },
+      ...(r?.error !== undefined ? { error: r.error } : {}),
+    }
+    return { info, messages: c.agent.messages, ...(c.agent.session ? { session: c.agent.session } : {}) }
   }
 
   spawn(parent: Agent, opts: SpawnOptions): ChildSession {
@@ -225,8 +264,9 @@ export class AgentTree {
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
     })
     parent.recordSubagent(agent.sessionId, opts.role)
-    const child = new Child(agent, opts.prompt, context, parentMeta(parent), this)
+    const child = new Child(agent, opts.role, opts.prompt, context, parentMeta(parent), this)
     this.#live.set(child.id, child)
+    this.#spawned.set(child.id, child)
     this.#liveKids.set(parent.sessionId, (this.#liveKids.get(parent.sessionId) ?? 0) + 1)
     this.#queue.push(child)
     // A parent with children is waiting for them, so it stops counting against the limit.
@@ -372,6 +412,7 @@ export class AgentTree {
     try {
       if (!child.abortReason) {
         child.started = true
+        child.startedAt = Date.now()
         child.agent.start(child.context === "fork" ? "fork" : "startup")
         const r = await child.agent.prompt(child.prompt)
         steps = r.steps
@@ -420,6 +461,7 @@ export class AgentTree {
       },
       child.parentMeta,
     )
+    child.ended = result
     child.settle(result)
   }
 
