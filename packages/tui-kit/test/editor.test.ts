@@ -126,6 +126,24 @@ test("CJK and emoji: the caret moves by whole characters and sits at the right c
   expect(ed.getText()).toBe("ab")
 })
 
+test("a grapheme longer than the look-around window still moves and deletes whole", () => {
+  const cluster = `a${"́".repeat(200)}`
+  const ed = new Editor()
+  ed.setText(`${cluster}b`)
+  press(ed, "left")
+  press(ed, "left")
+  expect(ed.cursor).toEqual({ line: 0, col: 0 })
+  press(ed, "right")
+  expect(ed.cursor).toEqual({ line: 0, col: cluster.length })
+  press(ed, "backspace")
+  expect(ed.getText()).toBe("b")
+  ed.setText(`x${cluster}`)
+  press(ed, "home")
+  press(ed, "right")
+  press(ed, "delete")
+  expect(ed.getText()).toBe("x")
+})
+
 test("IME text from win32-input-mode is inserted", () => {
   const ed = new Editor()
   type(ed, "\x1b[0;0;20320;1;0;1_\x1b[0;0;22909;1;0;1_")

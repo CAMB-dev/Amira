@@ -582,9 +582,7 @@ export class Editor implements Component {
 
   private charRight(): { line: number; col: number } {
     if (this.col < this.current.length) {
-      const ahead = this.current.slice(this.col, this.col + 128)
-      const next = segmenter.segment(ahead)[Symbol.iterator]().next().value
-      return { line: this.line, col: this.col + (next?.segment.length ?? 1) }
+      return { line: this.line, col: this.col + graphemeLengthAt(this.current, this.col) }
     }
     if (this.line < this.lines.length - 1) return { line: this.line + 1, col: 0 }
     return { line: this.line, col: this.col }
@@ -631,9 +629,26 @@ function lastAtMost(xs: number[], x: number, hi = xs.length - 1): number {
   return lo
 }
 
-/** Start of the last grapheme of `s`. Looks at the end only: a grapheme is never that long. */
+/** UTF-16 units looked at around the caret to find a grapheme boundary; grown for longer clusters. */
+const BOUNDARY_WINDOW = 128
+
+/**
+ * Start of the last grapheme of `s`. Looks at the end only, widening the look while the whole
+ * window is one grapheme (a cluster of many combining marks), so a long cluster stays whole.
+ */
 function lastBoundary(s: string): number {
-  const tail = s.slice(-128)
-  const gs = graphemes(tail)
-  return s.length - (gs[gs.length - 1]?.length ?? 0)
+  for (let n = BOUNDARY_WINDOW; ; n *= 2) {
+    const gs = graphemes(s.slice(-n))
+    const last = gs[gs.length - 1]?.length ?? 0
+    if (last < n || n >= s.length) return s.length - last
+  }
+}
+
+/** Length of the grapheme of `s` starting at `from`, widening the look like `lastBoundary`. */
+function graphemeLengthAt(s: string, from: number): number {
+  for (let n = BOUNDARY_WINDOW; ; n *= 2) {
+    const ahead = s.slice(from, from + n)
+    const first = segmenter.segment(ahead)[Symbol.iterator]().next().value?.segment.length ?? 1
+    if (first < n || ahead.length < n) return first
+  }
 }
