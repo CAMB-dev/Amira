@@ -2,7 +2,8 @@ import { graphemes } from "../src/width.ts"
 
 /**
  * A tiny VT emulator, just enough to check what the renderer leaves on screen: printing with
- * autowrap, CR/LF with scrolling, CUU/CUD/CHA/CUP, EL 2, ED 0 and 2, and the alternate screen
+ * autowrap, CR/LF with scrolling, CUU/CUD/CHA/CUP, EL 2, ED 0 and 2 (on the main
+ * screen it scrolls the rows into the scrollback, as Windows Terminal does), the alternate screen
  * (1049: saves the cursor, and the main screen comes back as it was). Colors and other modes
  * are ignored. `resize` changes the size without re-wrapping, like a terminal that got wider.
  */
@@ -193,6 +194,13 @@ export class VirtualScreen {
           for (let x = this.x; x < this.cols; x++) row[x] = " "
           for (let y = this.y + 1; y < this.rows; y++) this.grid[y] = this.blank()
         } else if (params === "2") {
+          // Like Windows Terminal and conhost: the main screen's rows, up to the last one
+          // written, scroll into the scrollback rather than being erased in place.
+          if (!this.saved) {
+            const rows = this.grid.map((row) => row.join("").trimEnd())
+            while (rows.length && rows[rows.length - 1] === "") rows.pop()
+            this.scrollback.push(...rows)
+          }
           this.grid = Array.from({ length: this.rows }, () => this.blank())
         }
         break

@@ -287,7 +287,9 @@ export class LiveRenderer {
       shown.unshift(tail)
       break
     }
-    let out = `${cursor.to(0)}${erase.screen}`
+    // ED 0 from the top-left, not ED 2: Windows Terminal and conhost answer ED 2 by scrolling
+    // the screen into the scrollback, which would keep a copy of it and the live region there.
+    let out = `${cursor.to(0)}${erase.toScreenEnd}`
     for (const line of [...shown.flat(), ...committed]) out += `${this.finish(line)}\r\n`
     out += frame.lines.join("\r\n")
     this.row = Math.max(0, frame.lines.length - 1)
