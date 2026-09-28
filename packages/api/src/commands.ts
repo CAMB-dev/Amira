@@ -1,6 +1,7 @@
 import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef, Usage } from "@amira/ai"
 import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
+import type { SkillInfo } from "./skills.ts"
 import type { SubagentStatus } from "./subagents.ts"
 import type { ToolExposure } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
@@ -78,6 +79,8 @@ export interface CommandContext extends CommandCompleteContext {
   print(text: string, level?: CommandOutputLevel): void
   /** Every registered command, by name. */
   commands(): CommandInfo[]
+  /** Every registered skill (run as `$<name>`), by name. */
+  skills(): SkillInfo[]
   /** The user's command aliases from settings (`commandAliases`) that are in effect, by name. */
   aliases(): CommandAlias[]
   /** Leaves the interactive UI; frontends with nothing to leave ignore it. */

@@ -2,6 +2,7 @@ import type { CommandDefinition } from "./commands.ts"
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
+import type { SkillDefinition } from "./skills.ts"
 import type { ToolPresenter } from "./tool-renderers.ts"
 import type { ToolDefinition } from "./tools.ts"
 import type { StatusItem, UiApi } from "./ui.ts"
@@ -25,6 +26,11 @@ export interface ExtensionAPI {
    * taken over by a later command are reported as extension.error too, but the command is kept.
    */
   registerCommand(command: CommandDefinition): () => void
+  /**
+   * Adds a skill the user runs as `$<name>`. A name that is taken is reported as
+   * extension.error and skipped, unless the skill sets `override: true`.
+   */
+  registerSkill(skill: SkillDefinition): () => void
   /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */
   registerStatusItem(item: StatusItem): () => void
   /**

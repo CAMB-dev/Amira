@@ -197,6 +197,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
 
   const host = new CommandHost({
     registry: session.host.commands,
+    skills: session.host.skills,
     bus: session.agent.bus,
     ui: session.host.ui,
     control,

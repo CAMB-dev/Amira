@@ -32,8 +32,8 @@ export function skillsSection(skills: Skill[]): string {
 }
 
 /**
- * What a skill run as a slash command (or by the model) receives: its instructions, where its
- * files live, and any arguments the user gave.
+ * What a skill run as `$<name>` (or by the model) receives: its instructions, where its files
+ * live, and any arguments the user gave.
  */
 export function skillPrompt(skill: Skill, args = ""): string {
   const parts = [`Skill "${skill.name}" (base directory: ${skill.dir})`, readSkillBody(skill)]
@@ -41,10 +41,10 @@ export function skillPrompt(skill: Skill, args = ""): string {
   return parts.join("\n\n")
 }
 
-/** How a skill run as a slash command shows in the transcript: the command, then what it loaded. */
+/** How a skill run as `$<name>` shows in the transcript: the line as typed, then what it loaded. */
 export function skillDisplay(skill: Skill, args = ""): MessageDisplay {
   const lines = readSkillBody(skill).split("\n").length
-  const typed = `/${skill.name}${args.trim() ? ` ${args.trim()}` : ""}`
+  const typed = `$${skill.name}${args.trim() ? ` ${args.trim()}` : ""}`
   return { text: typed, note: `Loaded skill ${skill.name} (${lines} line${lines === 1 ? "" : "s"})` }
 }
 
@@ -55,8 +55,8 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
     const reported = new Set<string>()
     let skills: Skill[] = []
     let registered = false
-    /** Skills already offered as slash commands (or refused, e.g. for a taken name). */
-    const commands = new Set<string>()
+    /** Skills already registered to run as `$<name>` (or refused, e.g. for a taken name). */
+    const offered = new Set<string>()
     // Rescanned before every model call, so skills written during a session are listed (and
     // the tool appears) right away; the listing only changes when the skills do.
     const scan = () => {
@@ -71,23 +71,23 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
         registered = true
         api.registerTool(skillTool)
       }
-      for (const s of skills) addCommand(s.name)
+      for (const s of skills) offer(s)
       return skills
     }
 
-    // Every skill is also /<name>, user-only ones included: that is how the user runs them.
-    const addCommand = (name: string) => {
-      if (commands.has(name)) return
-      commands.add(name)
-      api.registerCommand({
+    // The user runs every skill as $<name>, user-only ones included.
+    const offer = (found: Skill) => {
+      const { name } = found
+      if (offered.has(name)) return
+      offered.add(name)
+      api.registerSkill({
         name,
-        description: `Skill: ${skills.find((s) => s.name === name)?.description ?? name}`,
-        args: { hint: "[arguments]" },
+        description: found.description,
         async run(args, ctx) {
           const skill = skills.find((s) => s.name === name) ?? scan().find((s) => s.name === name)
           if (!skill) throw new Error(`the skill "${name}" is gone`)
           const prompt = skillPrompt(skill, args)
-          // The transcript shows the command as typed, not the skill's whole text.
+          // The transcript shows the skill as typed, not its whole text.
           await ctx.session.send(prompt, { display: skillDisplay(skill, args) })
         },
       })
