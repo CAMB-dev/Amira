@@ -51,7 +51,7 @@ type Align = "left" | "center" | "right"
 interface Table {
   renderCol: number
   aligns: Align[]
-  /** Header first, then the body rows; not the delimiter row. */
+  /** Header first, then the body rows; not the delimiter row. Emptied once frozen. */
   rows: string[][]
   /** The source lines, delimiter row included, for when the table is too wide to lay out. */
   lines: string[]
@@ -197,6 +197,9 @@ export function commitOpenBlocks(s: BlockState, env: Env, sink: Sink): void {
   if (t && !t.frozen) {
     const { rows, widths } = layoutTable(t, env, true)
     t.frozen = widths ?? "raw"
+    // The rows were only kept for this layout: the later ones are committed as they come.
+    t.rows = []
+    t.lines = []
     emit(s, sink, rows)
   }
 }
@@ -424,12 +427,13 @@ function delimiterRow(line: string): Align[] | undefined {
 }
 
 function addTableRow(s: BlockState, t: Table, line: string, env: Env, sink: Sink) {
-  const cells = splitRow(line)
-  t.rows.push(cells)
-  t.lines.push(line)
   s.prevBlank = false
   if (t.frozen === "raw") emit(s, sink, rawRows(t, [line], env))
-  else if (t.frozen) emit(s, sink, tableRow(t, cells, t.frozen, env, false))
+  else if (t.frozen) emit(s, sink, tableRow(t, splitRow(line), t.frozen, env, false))
+  else {
+    t.rows.push(splitRow(line))
+    t.lines.push(line)
+  }
 }
 
 function flushTable(s: BlockState, env: Env, sink: Sink) {

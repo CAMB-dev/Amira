@@ -2,6 +2,9 @@ import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
 import type { RenderContext } from "../src/component.ts"
 import { MarkdownStream } from "../src/components/markdown-stream.ts"
+import { defaultGlyphs } from "../src/glyphs.ts"
+import { commitOpenBlocks, type Env, newState, step } from "../src/markdown/blocks.ts"
+import { markdownStyles } from "../src/markdown/inline.ts"
 import { defaultTheme } from "../src/style.ts"
 import { visibleWidth } from "../src/width.ts"
 import { plain } from "./context.ts"
@@ -226,6 +229,25 @@ test("a table taller than the live region is committed with the widths it has so
   m.render(40, ctx)
   // A cell wider than its column wraps within it.
   expect(committed.slice(4)).toEqual(["wider │ 5", "wider │ 6", "still │"])
+})
+
+test("a frozen table keeps no rows: the work per row stays the same however long it gets", () => {
+  const env: Env = {
+    width: 40,
+    styles: markdownStyles(defaultTheme),
+    glyphs: defaultGlyphs,
+    hyperlinks: false,
+    highlight: false,
+  }
+  const out: string[] = []
+  const sink = (rows: string[]) => out.push(...rows)
+  const s = newState()
+  for (const line of ["| a | b |", "|---|---|", "| 1 | 2 |"]) step(s, line, env, sink)
+  commitOpenBlocks(s, env, sink)
+  for (let i = 0; i < 50; i++) step(s, `| ${i} | x |`, env, sink)
+  expect(s.table!.rows).toEqual([])
+  expect(s.table!.lines).toEqual([])
+  expect(out.length).toBe(3 + 50)
 })
 
 test("a line longer than the live region commits its finished rows, carrying open spans over", () => {
