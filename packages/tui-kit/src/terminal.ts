@@ -163,9 +163,11 @@ export class ProcessTerminal extends BaseTerminal {
   /**
    * Restores the terminal when the process goes away without calling `stop()`: on exit, on an
    * uncaught exception (before the error is printed), and on SIGINT, SIGTERM, SIGHUP and SIGBREAK.
-   * The restore is written synchronously, since the process may be about to die. A signal is
-   * only handled when nobody else listens for it: then we restore and exit with 128 + its number,
-   * like the default action would. When the app has its own handler, the signal is left to it.
+   * The restore is written synchronously, since the process may be about to die. An uncaught
+   * exception only restores when the app has no `uncaughtException` handler: with one, the
+   * process keeps running and the terminal is left to the app. Likewise a signal is only handled
+   * when nobody else listens for it: then we restore and exit with 128 + its number, like the
+   * default action would. When the app has its own handler, the signal is left to it.
    * Returns a function that removes every handler.
    */
   private restoreOnExit(): () => void {
@@ -174,6 +176,10 @@ export class ProcessTerminal extends BaseTerminal {
         writeSync((this.stdout as { fd?: number }).fd ?? 1, this.takeRestoreSequence())
       } catch {}
       this.setRawMode(false)
+    }
+    const onUncaught = () => {
+      if (process.listenerCount("uncaughtException") > 0) return
+      restoreNow()
     }
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]
     if (process.platform === "win32") signals.push("SIGBREAK")
@@ -184,11 +190,11 @@ export class ProcessTerminal extends BaseTerminal {
       process.exit(128 + (constants.signals[signal] ?? 0))
     }
     process.on("exit", restoreNow)
-    process.on("uncaughtExceptionMonitor", restoreNow)
+    process.on("uncaughtExceptionMonitor", onUncaught)
     for (const sig of signals) process.on(sig, onSignal)
     return () => {
       process.off("exit", restoreNow)
-      process.off("uncaughtExceptionMonitor", restoreNow)
+      process.off("uncaughtExceptionMonitor", onUncaught)
       for (const sig of signals) process.off(sig, onSignal)
     }
   }
