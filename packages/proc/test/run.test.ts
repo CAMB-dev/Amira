@@ -1,5 +1,5 @@
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { runCommand } from "../src/index.ts"
+import { resetCommandWorker, runCommand } from "../src/index.ts"
 
 // Spawns can take seconds on Windows machines with antivirus scanning.
 setDefaultTimeout(60_000)
@@ -43,4 +43,26 @@ test("the main thread keeps running while a command runs", async () => {
   await runCommand([bun, "-e", "Bun.sleepSync(300)"], opts())
   clearInterval(id)
   expect(ticks).toBeGreaterThan(10)
+})
+
+test("a worker that fails to load falls back to running on this thread", async () => {
+  resetCommandWorker({ url: new URL("./does-not-exist.ts", import.meta.url).href })
+  try {
+    const first = await runCommand([bun, "-e", "console.log('one')"], opts())
+    const second = await runCommand([bun, "-e", "console.log('two')"], opts())
+    expect(first.output.trim()).toBe("one")
+    expect(second.output.trim()).toBe("two")
+  } finally {
+    resetCommandWorker()
+  }
+})
+
+test("a failing chunk callback does not break the run", async () => {
+  const run = await runCommand([bun, "-e", "console.log('x')"], {
+    ...opts(),
+    onChunk: () => {
+      throw new Error("boom")
+    },
+  })
+  expect(run.exitCode).toBe(0)
 })

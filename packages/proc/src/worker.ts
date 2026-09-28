@@ -11,7 +11,12 @@ const post = (m: FromWorker) => self.postMessage(m)
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
   const msg = e.data
-  if (msg.type === "warmup") return warmUpProcessTree()
+  if (msg.type === "warmup") {
+    try {
+      warmUpProcessTree()
+    } catch {}
+    return
+  }
   if (msg.type === "abort") return running.get(msg.id)?.abort()
   const { id, request } = msg
   const abort = new AbortController()
@@ -31,3 +36,5 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     )
     .finally(() => running.delete(id))
 }
+
+post({ type: "ready" })

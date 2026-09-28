@@ -17,6 +17,8 @@ export type ToWorker =
 
 /** Worker → main thread. */
 export type FromWorker =
+  /** Sent once the worker module has loaded, so load failures can be told apart from crashes. */
+  | { type: "ready" }
   | { type: "chunk"; id: number; chunk: string }
   | { type: "done"; id: number; result: RunResult }
   | { type: "failed"; id: number; error: string }
