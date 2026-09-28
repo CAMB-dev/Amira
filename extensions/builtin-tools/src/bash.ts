@@ -76,7 +76,6 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
       let run: RunResult
       try {
         const opts = {
-          cwd: ctx.cwd,
           timeoutMs,
           signal: ctx.signal,
           onChunk(chunk: string) {
@@ -87,7 +86,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
             ctx.update(textResult(output.slice(-UPDATE_TAIL_CHARS)))
           },
         }
-        const cmd = shell.command(command)
+        const cmd = shell.command(command, ctx.cwd)
         if (pool) run = await pool.run(cmd, opts)
         else {
           const { argv, ...spawn } = cmd

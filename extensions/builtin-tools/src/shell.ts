@@ -15,6 +15,11 @@ export interface ShellCommand {
   argv: string[]
   /** Built fresh from the current process environment. */
   env: Record<string, string | undefined>
+  /**
+   * The directory the process starts in: the working directory, except for PowerShell, which
+   * starts in a fixed one and enters the working directory itself once the gate opens.
+   */
+  cwd: string
   /** The command waits for a line on stdin before it runs, so the caller can contain it first. */
   gated: boolean
   gateLine?: string
@@ -26,7 +31,8 @@ export interface Shell {
   path: string
   /** Shown to the model in every result when the shell is not bash. */
   label?: string
-  command(command: string): ShellCommand
+  /** How to run `command` with `cwd` (absolute) as its working directory. */
+  command(command: string, cwd: string): ShellCommand
 }
 
 /** WSL's bash.exe (System32) and the Store alias (WindowsApps) are never Git Bash. */
@@ -167,9 +173,10 @@ export function windowsBashShell(found: string, exists: (p: string) => boolean =
     kind: "bash",
     path: bash,
     // Built per command, so variables set after the shell was resolved still reach commands.
-    command: (command) => ({
+    command: (command, cwd) => ({
       argv: [bash, "-c", GATE_SCRIPT, "bash"],
       env: { ...(root ? gitBashEnv(root) : process.env), [COMMAND_VAR]: command },
+      cwd,
       gated: true,
       // Bun stalls for seconds on some direct spawns of MSYS programs.
       viaCmd: true,
@@ -181,7 +188,7 @@ function posixBashShell(path: string): Shell {
   return {
     kind: "bash",
     path,
-    command: (command) => ({ argv: [path, "-c", command], env: { ...process.env }, gated: false }),
+    command: (command, cwd) => ({ argv: [path, "-c", command], env: { ...process.env }, cwd, gated: false }),
   }
 }
 
@@ -208,10 +215,9 @@ export function resolveShell(): Promise<Shell> {
  */
 export function warmUpShell(): void {
   const warm = (shell: Shell, command: string) => {
-    const { argv, ...spawn } = shell.command(command)
+    const { argv, ...spawn } = shell.command(command, process.cwd())
     return runCommand(argv, {
       ...spawn,
-      cwd: process.cwd(),
       timeoutMs: 60_000,
       signal: new AbortController().signal,
     }).catch(() => {})
@@ -224,7 +230,7 @@ export function warmUpShell(): void {
   // Where the powershell tool is offered: a started process waits for its first command.
   if (process.platform === "win32") {
     resolvePowerShell()
-      .then((shell) => powershellStandby.fill(shell.command(""), process.cwd()))
+      .then((shell) => powershellStandby.fill(shell.command("", process.cwd())))
       .catch(() => {})
   }
 }
