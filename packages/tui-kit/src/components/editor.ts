@@ -87,6 +87,7 @@ export class Editor implements Component {
       this.insert(e.text)
       return true
     }
+    if (e.type !== "key") return false
     if (isSubmitKey(e)) {
       const text = this.getText()
       if (text === "") return false
