@@ -24,7 +24,8 @@ export interface SkillDefinition {
 export interface SkillInfo {
   name: string
   description: string
-  hint?: string
+  /** The definition's hint, or "[arguments]". */
+  hint: string
   /** The extension that registered it. */
   source: string
 }

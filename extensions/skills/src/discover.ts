@@ -14,7 +14,7 @@ export interface Skill {
   root: string
   /** Every frontmatter field, including optional ones such as `allowed-tools`. */
   meta: Record<string, unknown>
-  /** `disable-model-invocation: true`: only the user can run it (as a slash command). */
+  /** `disable-model-invocation: true`: only the user can run it (as `$<name>`). */
   userOnly: boolean
 }
 

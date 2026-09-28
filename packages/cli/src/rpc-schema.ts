@@ -177,7 +177,7 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
       obj({
         name: str,
         description: str,
-        "hint?": { ...str, description: 'Shown after the name, e.g. "[arguments]".' },
+        hint: { ...str, description: 'Shown after the name, e.g. "[arguments]".' },
         source: str,
       }),
     ),

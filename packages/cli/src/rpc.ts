@@ -44,7 +44,8 @@ export interface RpcSession {
   ai: Ai
   ui: UiRequests
   /**
-   * Slash commands, for command.list, command.complete and command.run. When given, it owns
+   * Slash commands and skills, for command.list, command.complete, command.run, skill.list and
+   * skill.run. When given, it owns
    * the active agent: session.resume goes through it, and this frontend follows its switches.
    */
   commands?: CommandHost
@@ -279,7 +280,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   }
 
   const needCommands = (): CommandHost => {
-    if (!commands) throw new RpcError("not_supported", "this host has no slash commands")
+    if (!commands) throw new RpcError("not_supported", "this host has no slash commands or skills")
     return commands
   }
 

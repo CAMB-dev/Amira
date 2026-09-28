@@ -23,7 +23,10 @@ export interface PrintOptions {
   forceExit?: () => void
   /** Dialogs extensions open; print mode cannot answer them, so they are cancelled. */
   ui?: UiRequests
-  /** Slash commands: a prompt like "/status" runs the command instead of a turn. */
+  /**
+   * Slash commands and skills: a prompt like "/status" runs the command instead of a turn, and
+   * one like "$deploy now" the skill (other text starting with "$" is a prompt).
+   */
   commands?: CommandHost
 }
 
