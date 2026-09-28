@@ -28,7 +28,7 @@ export const grepTool = defineTool<GrepParams>({
   description: [
     "Search file contents with a JavaScript regular expression, line by line.",
     "- `pattern` uses JavaScript RegExp syntax (e.g. `function\\s+\\w+`, `log.*Error`). Escape regex metacharacters to match them literally.",
-    "- `path` is a file or directory (default: the working directory). `glob` filters files, e.g. `*.ts` or `src/**/*.{ts,tsx}`; a glob without `/` matches file names at any depth.",
+    "- `path` is a file or directory (default: the working directory). `glob` filters the files of a directory, e.g. `*.ts` or `src/**/*.{ts,tsx}`; a glob without `/` matches file names at any depth.",
     "- `output_mode`: `files_with_matches` (default) lists matching files; `content` shows `file:line:text` for each matching line; `count` shows `file:count`.",
     `- \`head_limit\` caps the number of output lines (default ${DEFAULT_HEAD_LIMIT}).`,
     "- Skips .git, node_modules, binary files and files over 5 MB, and only searches the first 10,000 characters of each line. Paths are relative to the working directory.",
@@ -77,7 +77,8 @@ export const grepTool = defineTool<GrepParams>({
     const files: AsyncIterable<WalkEntry> | WalkEntry[] = st.isDirectory()
       ? walkFiles(root, ctx.signal)
       : [{ abs: root, rel: basename(root) }]
-    const filter = glob ? globFilter(glob) : () => true
+    // A single file named by `path` is searched even if it does not match `glob`.
+    const filter = glob && st.isDirectory() ? globFilter(glob) : () => true
 
     const out: string[] = []
     let total = 0

@@ -99,3 +99,21 @@ test("honors an aborted signal", async () => {
   ac.abort()
   expect((await read({ path: "a.txt" }, ac.signal)).isError).toBe(true)
 })
+
+test("rejects offsets and limits that are not whole numbers of at least 1", async () => {
+  await writeFile(join(dir, "three.txt"), "1\n2\n3\n")
+  const bad: Record<string, unknown>[] = [
+    { offset: Number.NaN },
+    { offset: 1.5 },
+    { offset: 0 },
+    { offset: -2 },
+    { offset: "2" },
+    { limit: 0 },
+    { limit: 2.5 },
+  ]
+  for (const extra of bad) {
+    const r = await read({ path: "three.txt", ...extra } as Parameters<typeof readTool.execute>[0])
+    expect(r.isError).toBe(true)
+    expect(textOf(r)).toMatch(/^(offset|limit) must be a whole number of at least 1/)
+  }
+})

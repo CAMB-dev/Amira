@@ -85,3 +85,10 @@ test("a multi-line new_string follows the file's line endings when old_string ha
   ).toBeUndefined()
   expect(await readFile(join(dir, "crlf2.txt"), "utf8")).toBe("x = 1\r\ny = 2\r\nz = 3\r\n")
 })
+
+test("write says so when a parent path is a file", async () => {
+  await writeFile(join(dir, "plain.txt"), "x")
+  const r = await writeTool.execute({ path: "plain.txt/sub/f.txt", content: "y" }, makeCtx(dir))
+  expect(r.isError).toBe(true)
+  expect(textOf(r)).toContain(`${join(dir, "plain.txt")} is a file, not a directory`)
+})

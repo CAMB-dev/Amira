@@ -34,6 +34,10 @@ export const writeTool = defineTool<WriteParams>({
     const abs = resolvePath(ctx.cwd, path)
     const existing = await statOrNull(abs)
     if (existing?.isDirectory()) return textResult(`${abs} is a directory`, true)
+    const blocker = existing ? undefined : await fileAncestor(dirname(abs))
+    if (blocker) {
+      return textResult(`Cannot create ${abs}: ${blocker} is a file, not a directory`, true)
+    }
     try {
       await mkdir(dirname(abs), { recursive: true })
       await writeFile(abs, content, { signal: ctx.signal })
@@ -51,3 +55,12 @@ export const writeTool = defineTool<WriteParams>({
     }
   },
 })
+
+/** The nearest existing ancestor of `dir`, if it is not a directory. */
+async function fileAncestor(dir: string): Promise<string | undefined> {
+  for (let d = dir; ; d = dirname(d)) {
+    const st = await statOrNull(d)
+    if (st) return st.isDirectory() ? undefined : d
+    if (dirname(d) === d) return undefined
+  }
+}

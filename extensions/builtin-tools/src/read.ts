@@ -57,6 +57,14 @@ export const readTool = defineTool<ReadParams>({
   concurrency: "parallel",
   async execute({ path, offset, limit }, ctx) {
     if (typeof path !== "string" || path === "") return textResult("path is required", true)
+    for (const [name, value] of [
+      ["offset", offset],
+      ["limit", limit],
+    ] as const) {
+      if (value !== undefined && !(Number.isInteger(value) && value >= 1)) {
+        return textResult(`${name} must be a whole number of at least 1 (got ${String(value)})`, true)
+      }
+    }
     if (ctx.signal.aborted) return textResult("Aborted", true)
     const abs = resolvePath(ctx.cwd, path)
     const st = await statOrNull(abs)

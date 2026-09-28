@@ -67,3 +67,22 @@ test("only the first 10,000 characters of a line are searched", async () => {
   expect(textOf(await grep({ pattern: "NEAR", path: "long.txt" }))).toBe("long.txt")
   expect(textOf(await grep({ pattern: "FAR", path: "long.txt" }))).toContain("No matches")
 })
+
+test("a single-file path is searched even when glob would not match it", async () => {
+  const r = await grep({ pattern: "docs", path: "notes.md", glob: "src/**/*.ts", output_mode: "content" })
+  expect(textOf(r)).toBe("notes.md:1:TODO: write docs")
+})
+
+test("head_limit applies in every output mode", async () => {
+  const files = textOf(await grep({ pattern: "TODO", head_limit: 1 }))
+  expect(files).toStartWith("notes.md\n\n(Showing 1 of 3 results.")
+  const counts = textOf(await grep({ pattern: "TODO", output_mode: "count", head_limit: 2 }))
+  expect(counts).toStartWith("notes.md:1\nsrc/a.ts:1\n\n(Showing 2 of 3 results.")
+  const content = textOf(await grep({ pattern: "TODO", output_mode: "content", head_limit: 3 }))
+  expect(content.split("\n").slice(0, 3)).toEqual([
+    "notes.md:1:TODO: write docs",
+    "src/a.ts:1:const TODO = 1",
+    "src/deep/b.ts:1:// TODO one",
+  ])
+  expect(content).toContain("(Showing 3 of 4 results.")
+})
