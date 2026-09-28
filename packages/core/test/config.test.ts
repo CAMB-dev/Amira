@@ -386,3 +386,13 @@ test("sub-agent settings: role models, limits, budget and the merge review thres
   )
   expect(() => validateSettings({ budget: { costUsd: "1" } }, "f")).toThrow('"budget.costUsd"')
 })
+
+test("tui settings: bell, title, progress and reflow", () => {
+  const raw = { tui: { bell: false, title: true, progress: false, reflow: "off" } }
+  expect(validateSettings(raw, "f")).toEqual({ settings: raw, warnings: [] })
+  expect(() => validateSettings({ tui: { reflow: "maybe" } }, "f")).toThrow('"tui.reflow"')
+  expect(() => validateSettings({ tui: { bell: "no" } }, "f")).toThrow('"tui.bell"')
+  expect(validateSettings({ tui: { blink: true } }, "f").warnings).toEqual([
+    'f: unknown setting "tui.blink" (ignored)',
+  ])
+})

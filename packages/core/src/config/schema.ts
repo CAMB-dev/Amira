@@ -178,6 +178,7 @@ const settings = object({
   subagents: object({ maxDepth: integer(1), maxConcurrent: integer(1) }),
   budget: object({ tokens: integer(1), costUsd: number }),
   merge: object({ reviewThreshold: object({ lines: integer(0), files: integer(0) }) }),
+  tui: object({ bell: boolean, title: boolean, progress: boolean, reflow: oneOf("auto", "on", "off") }),
 })
 
 /**
