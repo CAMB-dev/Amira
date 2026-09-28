@@ -188,7 +188,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     new StatusBar(() => opts.status.snapshot()),
     new View((width, ctx) => {
       if (dialogs[0]) return []
-      if (popup?.open) {
+      if (popup?.visible) {
         return [
           ctx.theme.muted(truncateToWidth("↑↓ select · Tab complete · Enter run · Esc close", width, "…")),
         ]

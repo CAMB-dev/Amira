@@ -78,9 +78,19 @@ export class CommandPopup implements Component {
     )
   }
 
-  /** Whether the popup shows anything for the current text. */
+  /** Whether the popup shows anything for the current text, so it answers keys. */
   get open(): boolean {
-    return !this.#dismissed && this.#current !== undefined && this.#lines().length > 0
+    return !this.#dismissed && this.#current !== undefined && this.#lines(this.#current).length > 0
+  }
+
+  /**
+   * Whether the popup is drawn. While the candidates for newly typed text are on their way, the
+   * last list stays up: dropping it for that frame made the popup and everything below flicker
+   * on each key. Keys still wait for the fresh list (see `open`).
+   */
+  get visible(): boolean {
+    const r = this.#shown
+    return !this.#dismissed && r !== undefined && this.#lines(r).length > 0
   }
 
   /** Handles a key while open; undefined leaves it to the editor. */
@@ -123,7 +133,8 @@ export class CommandPopup implements Component {
   }
 
   render(width: number, ctx: RenderContext): string[] {
-    return this.open ? this.#lines(ctx, width) : []
+    const r = this.#shown
+    return r && this.visible ? this.#lines(r, ctx, width) : []
   }
 
   /** The result for the text in the editor, if it has arrived. */
@@ -131,9 +142,12 @@ export class CommandPopup implements Component {
     return isCommandInput(this.#text) && this.#result.text === this.#text ? this.#result : undefined
   }
 
-  #lines(ctx?: RenderContext, width = 80): string[] {
-    const r = this.#current
-    if (!r) return []
+  /** What to draw: the current result, or the last one while the next is pending. */
+  get #shown(): Result | undefined {
+    return isCommandInput(this.#text) && this.#result.text ? this.#result : undefined
+  }
+
+  #lines(r: Result, ctx?: RenderContext, width = 80): string[] {
     const theme = ctx?.theme
     const muted = (s: string) => (theme ? theme.muted(s) : s)
     const accent = (s: string) => (theme ? theme.accent(s) : s)

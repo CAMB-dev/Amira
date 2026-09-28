@@ -118,6 +118,22 @@ test("a late answer for older text is dropped", async () => {
   expect(popup.render(60, plain)).toEqual(["› /tools    List tools", "  /compact  Summarize"])
 })
 
+test("while the next answer is on its way the last list stays drawn, but keys wait for it", async () => {
+  const { popup, lines } = await popupFor("/c", source({ "/co": 40 }))
+  popup.update("/co")
+  // Dropping the list for this frame made the popup and the rows below it flicker on each key.
+  expect(popup.visible).toBe(true)
+  expect(lines()).toEqual(["› /clear    Start over", "  /compact  Summarize"])
+  expect(popup.open).toBe(false)
+  await Bun.sleep(60)
+  expect(popup.open).toBe(true)
+  expect(lines()[0]).toBe("› /compact  Summarize")
+  // Text that is no longer a command hides it at once.
+  popup.update("hello")
+  expect(popup.visible).toBe(false)
+  expect(lines()).toEqual([])
+})
+
 test("long lists scroll with the selection and show where it is", async () => {
   const many: CompletionSource = {
     list: () => [],
