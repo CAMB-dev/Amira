@@ -1,4 +1,4 @@
-import type { AssistantMessage, JSONSchema, Message, ModelRef } from "@amira/ai"
+import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef } from "@amira/ai"
 import type { ShellMode } from "./settings.ts"
 import type { ToolExposure } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
@@ -110,6 +110,11 @@ export interface ContextPreview {
   messages: Message[]
 }
 
+export interface SendOptions {
+  /** Stored with the message and shown by frontends in its place; never sent to the model. */
+  display?: MessageDisplay
+}
+
 /**
  * The session a command acts on, provided by the host. Methods that cannot run while a turn
  * is running (switching models or sessions, compacting) throw an Error saying so.
@@ -132,8 +137,12 @@ export interface SessionControl {
   resume(sessionId: string): Promise<void>
   /** Summarizes older history now; `instructions` steer the summary. Resolves false when nothing was compacted. */
   compact(instructions?: string): Promise<boolean>
-  /** Sends a user message, or steers the running turn; resolves when the turn it joined ends. */
-  send(text: string): Promise<void>
+  /**
+   * Sends a user message, or steers the running turn; resolves when the turn it joined ends.
+   * `display` is what frontends show instead of `text` (the model still gets all of `text`),
+   * e.g. the command as typed when a command sends a long prompt.
+   */
+  send(text: string, opts?: SendOptions): Promise<void>
   tools(): ToolInfo[]
   /** Enables or disables a tool for the rest of this session; throws for an unknown tool. */
   setToolEnabled(name: string, enabled: boolean): void

@@ -1,4 +1,4 @@
-import type { Message, ToolResult } from "@amira/api"
+import type { Message, ToolResult, UserMessage } from "@amira/api"
 import { type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 
 /** One-line summary of tool arguments, e.g. `read src/index.ts` or `bash bun test`. */
@@ -47,9 +47,24 @@ export function toolLines(
   return [truncateToWidth(head, width, "…"), `  ${theme.muted("⎿")} ${preview}${theme.muted(suffix)}`]
 }
 
-/** Committed lines for the user's message. */
-export function userLines(theme: Theme, text: string): string[] {
-  return text.split("\n").map((l, i) => `${theme.accent(i === 0 ? "›" : " ")} ${l}`)
+/**
+ * Committed lines for the user's message: its display text when it has one (a command shows
+ * as typed, its note on a line below), else its content.
+ */
+export function userLines(theme: Theme, message: UserMessage): string[] {
+  const text = message.display?.text.trim() || userText(message)
+  const lines = text
+    .trim()
+    .split("\n")
+    .map((l, i) => `${theme.accent(i === 0 ? "›" : " ")} ${l}`)
+  const note = message.display?.note
+  if (note) lines.push(`  ${theme.muted("⎿")} ${theme.muted(note)}`)
+  return lines
+}
+
+/** A user message's content as text, with images as placeholders. */
+export function userText(message: UserMessage): string {
+  return message.content.map((b) => (b.type === "text" ? b.text : `[image ${b.mimeType}]`)).join("\n\n")
 }
 
 /** A resumed conversation, shown compactly: user messages, replies and one line per tool call. */
@@ -57,8 +72,7 @@ export function historyLines(theme: Theme, messages: Message[]): string[] {
   const out: string[] = []
   for (const m of messages) {
     if (m.role === "user") {
-      const text = m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n")
-      out.push(...userLines(theme, text.trim()), "")
+      out.push(...userLines(theme, m), "")
     } else if (m.role === "assistant") {
       for (const b of m.content) {
         if (b.type === "text" && b.text.trim()) out.push(...b.text.trim().split("\n"), "")

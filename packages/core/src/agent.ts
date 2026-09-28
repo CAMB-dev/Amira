@@ -5,6 +5,7 @@ import {
   type Message,
   type ModelInfo,
   type ModelRef,
+  modelMessages,
   type ToolCallBlock,
   type ToolResultMessage,
   type ToolSpec,
@@ -279,7 +280,12 @@ export class Agent {
   }> {
     const built = await this.#buildContext(signal)
     if (built.blocked) throw new Error(`context.build blocked the request: ${built.reason}`)
-    return { ...built.value, tools: offeredTools(this.tools, this.#loadedTools) }
+    return {
+      systemPrompt: built.value.systemPrompt,
+      // As sent: the ai client drops what only frontends read.
+      messages: modelMessages(built.value.messages),
+      tools: offeredTools(this.tools, this.#loadedTools),
+    }
   }
 
   /** When and with which model this agent compacts. */
@@ -419,8 +425,7 @@ export class Agent {
       })
       this.#setStatus(turn, "idle")
       if (nextTurnId) {
-        const prompt: UserMessage = { role: "user", content: leftover.flatMap((m) => m.content) }
-        this.prompt(prompt, { turnId: nextTurnId }).catch(() => {})
+        this.prompt(joinMessages(leftover), { turnId: nextTurnId }).catch(() => {})
       }
     }
     return result
@@ -863,6 +868,21 @@ export class Agent {
     if (this.parentSessionId) meta.parentSessionId = this.parentSessionId
     this.bus.emit(type, data, meta)
   }
+}
+
+/**
+ * Steering messages that start a turn together, as one prompt. When any has a display, the
+ * prompt's display lists each message's display (or text) in order.
+ */
+function joinMessages(messages: UserMessage[]): UserMessage {
+  if (messages.length === 1 && messages[0]) return messages[0]
+  const joined: UserMessage = { role: "user", content: messages.flatMap((m) => m.content) }
+  if (!messages.some((m) => m.display)) return joined
+  const text = messages
+    .map((m) => m.display?.text ?? m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n"))
+    .join("\n")
+  const notes = messages.flatMap((m) => (m.display?.note ? [m.display.note] : []))
+  return { ...joined, display: { text, ...(notes.length ? { note: notes.join(" · ") } : {}) } }
 }
 
 function modelRef(model: ModelInfo): ModelRef {

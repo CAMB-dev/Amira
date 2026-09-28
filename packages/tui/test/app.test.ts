@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
+import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import {
   type AnyEvent,
   type CommandDefinition,
@@ -60,10 +60,8 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   const tools = new ToolRegistry()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools })
   await host.load(statusExtension, "builtin:status")
-  const ai = createAi({
-    dialects: [createMockDialect(steps)],
-    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
-  })
+  const mock = createMockDialect(steps)
+  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
   const tree = o.tree ? { tree: new AgentTree({ ai, sections: () => [] }) } : {}
   const agent = new Agent({
     ai,
@@ -126,7 +124,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     await Bun.sleep(30)
   }
   await shows("Amira")
-  return { agent, ai, bus, host, commands, terminal, screen, all, live, shows, idle, exited }
+  return { agent, ai, mock, bus, host, commands, terminal, screen, all, live, shows, idle, exited }
 }
 
 test("a conversation: user message, tool call and reply end up in the transcript", async () => {
@@ -703,6 +701,38 @@ test("unknown commands are reported and not sent to the model; slash paths are m
   expect(agent.messages.filter((m) => m.role === "user")).toHaveLength(1)
   terminal.send("\x03")
   await exited
+})
+
+test("a command that sends a long prompt shows as typed, with its note, while the model gets it all", async () => {
+  let agent!: Agent
+  const long = Array.from({ length: 40 }, (_, i) => `instruction line ${i}`).join("\n")
+  const skill: CommandDefinition = {
+    name: "review-pr",
+    description: "A skill",
+    run: (args, ctx) =>
+      ctx.session.send(long, {
+        display: { text: `/review-pr ${args}`, note: "Loaded skill review-pr (40 lines)" },
+      }),
+  }
+  const s = await setup([{ text: "Reviewing." }], {
+    commands: [skill],
+    control: {
+      send: async (text, opts) => {
+        await agent.prompt(userMessage(text, opts?.display))
+      },
+    },
+  })
+  agent = s.agent
+  s.terminal.send("/review-pr 123\r")
+  await s.shows("Reviewing.")
+  await s.idle()
+  const text = s.all()
+  expect(text).toContain("› /review-pr 123\n  ⎿ Loaded skill review-pr (40 lines)")
+  expect(text).not.toContain("instruction line")
+  const sent = s.mock.requests[0]!.messages[0]!
+  expect(sent).toEqual({ role: "user", content: [{ type: "text", text: long }] })
+  s.terminal.send("\x03")
+  await s.exited
 })
 
 test("a command typed during a turn runs at once instead of steering it", async () => {

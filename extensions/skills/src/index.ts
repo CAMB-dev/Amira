@@ -1,4 +1,11 @@
-import { defineExtension, defineTool, type ExtensionAPI, textResult, withSection } from "@amira/api"
+import {
+  defineExtension,
+  defineTool,
+  type ExtensionAPI,
+  type MessageDisplay,
+  textResult,
+  withSection,
+} from "@amira/api"
 import { type DiscoverOptions, discoverSkills, readSkillBody, type Skill } from "./discover.ts"
 
 export {
@@ -32,6 +39,13 @@ export function skillPrompt(skill: Skill, args = ""): string {
   const parts = [`Skill "${skill.name}" (base directory: ${skill.dir})`, readSkillBody(skill)]
   if (args.trim()) parts.push(`Arguments: ${args.trim()}`)
   return parts.join("\n\n")
+}
+
+/** How a skill run as a slash command shows in the transcript: the command, then what it loaded. */
+export function skillDisplay(skill: Skill, args = ""): MessageDisplay {
+  const lines = readSkillBody(skill).split("\n").length
+  const typed = `/${skill.name}${args.trim() ? ` ${args.trim()}` : ""}`
+  return { text: typed, note: `Loaded skill ${skill.name} (${lines} line${lines === 1 ? "" : "s"})` }
 }
 
 export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
@@ -72,7 +86,9 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
         async run(args, ctx) {
           const skill = skills.find((s) => s.name === name) ?? scan().find((s) => s.name === name)
           if (!skill) throw new Error(`the skill "${name}" is gone`)
-          await ctx.session.send(skillPrompt(skill, args))
+          const prompt = skillPrompt(skill, args)
+          // The transcript shows the command as typed, not the skill's whole text.
+          await ctx.session.send(prompt, { display: skillDisplay(skill, args) })
         },
       })
     }

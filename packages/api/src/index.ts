@@ -6,6 +6,7 @@ export type {
   ImageBlock,
   JSONSchema,
   Message,
+  MessageDisplay,
   ModelRef,
   TextBlock,
   ThinkingBlock,

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
+import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
@@ -75,6 +75,24 @@ test("every message is persisted as it is added and restores into a new agent", 
   ])
   // Resuming with the same model does not record a model change again.
   expect(reopened.entries.filter((e) => e.type === "model_change").length).toBe(1)
+})
+
+test("a prompt's display is stored and in turn.start, but the model gets only the full text", async () => {
+  const { agent, mock, session, events, bus } = await setup([{ text: "done" }])
+  const display = { text: "/review-pr 123", note: "Loaded skill review-pr (3 lines)" }
+  await agent.prompt(userMessage("the whole skill text", display))
+  await bus.flush()
+  expect(mock.requests[0]!.messages[0]).toEqual({
+    role: "user",
+    content: [{ type: "text", text: "the whole skill text" }],
+  })
+  const start = events.find((e) => e.type === "turn.start")
+  expect(start?.type === "turn.start" && start.data.prompt.display).toEqual(display)
+  const stored = SessionStore.open(session.file).restore().messages[0]
+  expect(stored?.role === "user" && stored.display).toEqual(display)
+  // The preview shows what the model gets, so no display either; the history keeps it.
+  expect((await agent.preview()).messages[0]).toEqual(mock.requests[0]!.messages[0]!)
+  expect(agent.messages[0]).toMatchObject({ display })
 })
 
 test("a session open in two agents: the second writer reports the conflict once", async () => {

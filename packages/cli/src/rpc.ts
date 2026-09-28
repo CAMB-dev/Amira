@@ -1,4 +1,11 @@
-import type { Ai, Message, UserContent, UserMessage } from "@amira/ai"
+import {
+  type Ai,
+  type Message,
+  type MessageDisplay,
+  type UserContent,
+  type UserMessage,
+  userMessage,
+} from "@amira/ai"
 import type { AnyEvent, TurnEndReason } from "@amira/api"
 import { type Agent, type CommandHost, newTurnId, type UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
@@ -136,14 +143,18 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   const handlers: Record<keyof typeof COMMAND_PARAMS, Handler> = {
     prompt: (p) => {
       const content: UserContent[] = [{ type: "text", text: text(p) }, ...attachments(p.attachments)]
+      const shown = display(p.display)
       if (agent.turnId) throw new RpcError("busy", "a turn is running; steer it or wait for turn.end")
       const turnId = newTurnId()
-      agent.prompt({ role: "user", content }, { turnId }).catch(() => {})
+      agent
+        .prompt({ role: "user", content, ...(shown ? { display: shown } : {}) }, { turnId })
+        .catch(() => {})
       return { turnId }
     },
     steer: (p) => {
+      const message = userMessage(text(p), display(p.display))
       const queued = agent.turnId !== undefined
-      agent.steer(text(p))
+      agent.steer(message)
       return { ...(agent.turnId ? { turnId: agent.turnId } : {}), queued }
     },
     abort: () => {
@@ -304,6 +315,15 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     offSwitch?.()
     io.close?.()
   }
+}
+
+function display(value: unknown): MessageDisplay | undefined {
+  if (value === undefined) return undefined
+  const d = value as { text?: unknown; note?: unknown } | null
+  if (typeof d?.text !== "string" || !d.text.trim() || (d.note !== undefined && typeof d.note !== "string")) {
+    throw new RpcError("invalid_params", '"display" must be {text, note?} with string values, text not blank')
+  }
+  return { text: d.text, ...(d.note !== undefined ? { note: d.note } : {}) }
 }
 
 function attachments(value: unknown): UserContent[] {
