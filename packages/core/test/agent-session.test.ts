@@ -395,6 +395,38 @@ test("a turn over the threshold with nothing to fold yet compacts once enough st
   expect(text(agent.messages[0]!)).toContain("SUMMARY")
 })
 
+test("splitHistory cuts whole older turns before folding the current one", () => {
+  const model = { provider: "p", model: "m" }
+  const u = (text: string) => ({ role: "user" as const, content: [{ type: "text" as const, text }] })
+  const call = (id: string) => ({
+    role: "assistant" as const,
+    model,
+    content: [{ type: "toolCall" as const, id, name: "t", args: {} }],
+  })
+  const result = (id: string) => ({
+    role: "toolResult" as const,
+    toolCallId: id,
+    toolName: "t",
+    content: [],
+    isError: false,
+  })
+  const h = [
+    u("1"),
+    call("a"),
+    result("a"),
+    u("2"),
+    call("b"),
+    result("b"),
+    call("c"),
+    result("c"),
+    call("d"),
+    result("d"),
+  ]
+  for (const keepTurns of [1, 2]) {
+    expect(splitHistory(h, keepTurns)).toEqual({ older: h.slice(0, 3), kept: h.slice(3) })
+  }
+})
+
 test("splitHistory never summarizes an earlier summary alone", () => {
   const model = { provider: "p", model: "m" }
   const [s, ack] = summaryMessages("old", model)

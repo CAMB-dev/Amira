@@ -61,7 +61,8 @@ export interface HistorySplit {
 /**
  * Splits history into older messages to summarize and recent messages to keep. Turns start at
  * user messages other than an earlier summary. Whole turns are cut first: the most recent
- * `keepTurns` stay. When only the last turn is left, its first model steps are summarized
+ * `keepTurns` stay, fewer when the history is short. When nothing but an earlier summary
+ * precedes the current turn, that turn's first model steps are summarized
  * too, keeping its user message and the last `keepSteps` steps (a step is a model reply and
  * its tool results, which always stay together), so one long turn can still be compacted.
  * Returns undefined when nothing but an earlier summary would be summarized.
@@ -69,12 +70,13 @@ export interface HistorySplit {
 export function splitHistory(messages: Message[], keepTurns = 2, keepSteps = 2): HistorySplit | undefined {
   const worthIt = (older: Message[]) => older.some((m) => !isSummaryMessage(m))
   const starts = messages.flatMap((m, i) => (m.role === "user" && !isSummaryMessage(m) ? [i] : []))
-  for (let keep = Math.max(1, keepTurns); keep >= 2; keep--) {
+  for (let keep = Math.max(1, keepTurns); keep >= 1; keep--) {
     const cut = starts.at(-keep)
     if (cut !== undefined && worthIt(messages.slice(0, cut))) {
       return { older: messages.slice(0, cut), kept: messages.slice(cut) }
     }
   }
+  // Nothing but an earlier summary precedes the current turn: fold its older steps.
   const turn = starts.at(-1)
   if (turn === undefined) return undefined
   const steps = messages.flatMap((m, i) => (i > turn && m.role === "assistant" ? [i] : []))
