@@ -61,6 +61,7 @@ export function textToolsPrompt(tools: ToolSpec[]): string {
     "</tool_call>",
     "",
     "The block holds a JSON object with the tool's arguments, following its parameter schema. " +
+      "Use exactly this format and no other tool-calling syntax. " +
       "You may call several tools in one reply. After your tool calls, end your reply: the results " +
       "come back in the next message as <tool_result> blocks. Never write <tool_result> blocks yourself.",
     "",
@@ -103,15 +104,27 @@ function formatCall(call: ToolCallBlock): string {
   return `<tool_call name="${call.name}">\n${JSON.stringify(call.args)}\n</tool_call>`
 }
 
-const OPEN = "<tool_call"
-const CLOSE = "</tool_call>"
+/**
+ * `<tool_call name="x">`, or `<invoke name="x">` as in XML tool formats, also with a prefix
+ * inside the tag like DeepSeek's `<｜｜DSML｜｜ invoke name="x">`.
+ */
+const OPEN = /<(?!\/)[^<>]*?\b(tool_call|invoke)(?=[\s>])[^<>]*>/
+const CLOSE: Record<string, RegExp> = {
+  tool_call: /<\/[^<>]*?\btool_call\s*>/,
+  invoke: /<\/[^<>]*?\binvoke\s*>/,
+}
+/** Tags that wrap a group of calls; they are dropped from the text. */
+const WRAPPER = /<\/?(?:[^<>]*\s)?(?:function_calls|tool_calls|calls)\s*>/g
+const FAKE_RESULT = /<(?:[^<>]*\s)?(?:tool_result|function_results)\b/
+/** An unfinished tag longer than this is taken to be text. */
+const MAX_TAG = 200
 
 /** Splits streamed reply text into plain text and tool calls. */
 export class TextToolParser {
   readonly calls: ToolCallBlock[] = []
   text = ""
   #buf = ""
-  #call: { name: string } | undefined
+  #call: { tag: string; name: string } | undefined
   #stopped = false
   #prefix = `text_call_${crypto.randomUUID().slice(0, 8)}_`
 
@@ -129,38 +142,33 @@ export class TextToolParser {
     this.#buf += chunk
     while (true) {
       if (this.#call) {
-        const end = this.#buf.indexOf(CLOSE)
-        if (end < 0) return
-        yield this.#emitCall(this.#call.name, this.#buf.slice(0, end))
-        this.#buf = this.#buf.slice(end + CLOSE.length)
+        const close = CLOSE[this.#call.tag]!.exec(this.#buf)
+        if (!close) return
+        yield this.#emitCall(this.#call.name, this.#buf.slice(0, close.index))
+        this.#buf = this.#buf.slice(close.index + close[0].length)
         this.#call = undefined
         continue
       }
+      const open = OPEN.exec(this.#buf)
       // A model that writes its own results after its calls is making them up.
-      const fake = this.calls.length ? this.#buf.indexOf("<tool_result") : -1
-      const open = findOpen(this.#buf)
-      if (fake >= 0 && (open.index < 0 || fake < open.index)) {
-        yield* this.#text(this.#buf.slice(0, fake))
+      const fake = this.calls.length ? FAKE_RESULT.exec(this.#buf) : null
+      if (fake && (!open || fake.index < open.index)) {
+        yield* this.#text(this.#buf.slice(0, fake.index))
         this.#buf = ""
         this.#stopped = true
         return
       }
-      if (open.index < 0) {
-        const hold = partialTagAt(this.#buf)
-        yield* this.#text(this.#buf.slice(0, hold))
-        this.#buf = this.#buf.slice(hold)
-        return
-      }
-      if (open.end < 0) {
+      if (open) {
         yield* this.#text(this.#buf.slice(0, open.index))
-        this.#buf = this.#buf.slice(open.index)
-        return
+        const name = /name\s*=\s*["']([^"']+)["']/.exec(open[0])?.[1] ?? ""
+        this.#call = { tag: open[1]!, name }
+        this.#buf = this.#buf.slice(open.index + open[0].length)
+        continue
       }
-      yield* this.#text(this.#buf.slice(0, open.index))
-      this.#call = {
-        name: /name\s*=\s*["']([^"']+)["']/.exec(this.#buf.slice(open.index, open.end))?.[1] ?? "",
-      }
-      this.#buf = this.#buf.slice(open.end + 1)
+      const hold = unfinishedTagAt(this.#buf)
+      yield* this.#text(this.#buf.slice(0, hold))
+      this.#buf = this.#buf.slice(hold)
+      return
     }
   }
 
@@ -174,9 +182,10 @@ export class TextToolParser {
   }
 
   *#text(t: string): Generator<StreamEvent> {
-    if (!t) return
-    this.text += t
-    yield { type: "text.delta", text: t }
+    const clean = t.replace(WRAPPER, "")
+    if (!clean) return
+    this.text += clean
+    yield { type: "text.delta", text: clean }
   }
 
   #emitCall(name: string, body: string): StreamEvent {
@@ -192,6 +201,8 @@ export class TextToolParser {
         }
       } catch {}
     }
+    const tagged = raw.startsWith("{") ? undefined : parameterTags(raw)
+    if (tagged) raw = JSON.stringify(tagged)
     const index = this.calls.length
     const id = `${this.#prefix}${index}`
     this.calls.push({ type: "toolCall", id, name, args: parseToolArgs(raw) })
@@ -199,23 +210,29 @@ export class TextToolParser {
   }
 }
 
-/** The next `<tool_call ...>` tag: its start, and its closing `>` or -1 while incomplete. */
-function findOpen(buf: string): { index: number; end: number } {
-  let from = 0
-  while (true) {
-    const index = buf.indexOf(OPEN, from)
-    if (index < 0) return { index: -1, end: -1 }
-    const next = buf[index + OPEN.length]
-    if (next === undefined) return { index, end: -1 }
-    if (next === ">" || /\s/.test(next)) return { index, end: buf.indexOf(">", index) }
-    from = index + 1
+const PARAMETER = /<([^<>]*?parameter\s+name\s*=\s*["']([^"']+)["'][^<>]*)>([\s\S]*?)<\/[^<>]*?parameter\s*>/g
+
+/**
+ * Arguments written as `<parameter name="path">a.txt</parameter>` tags, which models trained
+ * on XML tool formats tend to fall back to. Values that read as JSON (numbers, objects) are
+ * parsed, unless the tag says string="true".
+ */
+function parameterTags(body: string): Record<string, unknown> | undefined {
+  const args: Record<string, unknown> = {}
+  for (const [, tag, key, value] of body.matchAll(PARAMETER)) {
+    const v = value!.replace(/^\r?\n|\r?\n$/g, "")
+    try {
+      args[key!] = /string\s*=\s*["']true/.test(tag!) ? v : JSON.parse(v)
+    } catch {
+      args[key!] = v
+    }
   }
+  return Object.keys(args).length ? args : undefined
 }
 
-/** Where a trailing, possibly incomplete tag of the protocol starts, or the text's length. */
-function partialTagAt(buf: string): number {
+/** Where a trailing tag that is still being written starts, or the text's length. */
+function unfinishedTagAt(buf: string): number {
   const lt = buf.lastIndexOf("<")
-  if (lt < 0) return buf.length
-  const tail = buf.slice(lt)
-  return OPEN.startsWith(tail) || "<tool_result".startsWith(tail) ? lt : buf.length
+  if (lt < 0 || buf.includes(">", lt) || buf.length - lt > MAX_TAG) return buf.length
+  return lt
 }

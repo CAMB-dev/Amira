@@ -46,14 +46,42 @@ for (const size of [1, 3, 8, 1000]) {
 }
 
 test("text that only looks like a tag is kept", () => {
-  const { streamed, calls } = parse("a < b and <tool_calls> and <tool_c", 2)
-  expect(streamed).toBe("a < b and <tool_calls> and <tool_c")
+  const text = "a < b and <tool_caller> and </invoke> and <tool_c"
+  const { streamed, calls } = parse(text, 2)
+  expect(streamed).toBe(text)
   expect(calls).toEqual([])
 })
 
 test("reads calls that carry their name inside the JSON", () => {
   const { p } = parse('<tool_call>{"name": "read", "arguments": {"path": "x"}}</tool_call>')
   expect(p.calls.map((c) => [c.name, c.args])).toEqual([["read", { path: "x" }]])
+})
+
+test("reads arguments written as parameter tags", () => {
+  const { p } = parse(
+    '<tool_call name="read">\n<parameter name="path">\na.txt\n</parameter>' +
+      '<x parameter name="limit">20</x parameter><parameter name="id" string="true">7</parameter>\n</tool_call>',
+    5,
+  )
+  expect(p.calls[0]?.args).toEqual({ path: "a.txt", limit: 20, id: "7" })
+})
+
+// DeepSeek, told to use the text protocol, still writes its own format (seen live).
+const DSML =
+  'I\'ll read the file.\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name="read">\n' +
+  '<｜｜DSML｜｜ parameter name="path" string="true">package.json</｜｜DSML｜｜ parameter>\n' +
+  "</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>"
+
+test("reads XML invoke calls, with or without a prefix in the tags, and drops their wrappers", () => {
+  for (const size of [1, 7, 1000]) {
+    const { p, streamed } = parse(DSML, size)
+    expect(p.calls.map((c) => [c.name, c.args])).toEqual([["read", { path: "package.json" }]])
+    expect(streamed.trim()).toBe("I'll read the file.")
+  }
+  const { p } = parse(
+    '<function_calls>\n<invoke name="read">\n<parameter name="path">a</parameter>\n</invoke>\n</function_calls>',
+  )
+  expect(p.calls.map((c) => [c.name, c.args])).toEqual([["read", { path: "a" }]])
 })
 
 test("a call cut off at the end is still a call, and made-up results are dropped", () => {
