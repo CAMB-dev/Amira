@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import type { AnyEvent } from "@amira/api"
-import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import type { AnyEvent, SessionControl } from "@amira/api"
+import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import { createSkillsExtension, discoverSkills, parseFrontmatter, skillsSection } from "../src/index.ts"
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-skills-"))
@@ -210,4 +210,54 @@ test("settings skills.dirs adds directories, and the listing fills the prompt's 
   expect(prompt.startsWith("sys\n\n# Skills\n")).toBe(true)
   expect(prompt).toContain("- lint: Lint it")
   expect(prompt.endsWith("\n\n# Role")).toBe(true)
+})
+
+test("every skill is a slash command that sends its instructions, user-only ones too", async () => {
+  const d = layout()
+  const root = path.join(d.home, "skills")
+  skill(root, "deploy", "name: deploy\ndescription: Ship it", "# Deploy\nRun ./ship.sh")
+  skill(root, "secret", "name: secret\ndescription: Only for me\ndisable-model-invocation: true")
+  skill(root, "help", "name: help\ndescription: Clashes with a command")
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const host = new ExtensionHost({
+    bus,
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+    cwd: d.cwd,
+  })
+  await host.load((api) => {
+    api.registerCommand({ name: "help", description: "built-in", run: () => {} })
+  }, "builtin:commands")
+  await host.load(createSkillsExtension({ home: d.home, userHome: d.userHome }), "builtin:skills")
+  const ai = createAi({
+    dialects: [createMockDialect([])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const agent = new Agent({ ai, model: ai.model("mock/test"), cwd: d.cwd, bus })
+  const sent: string[] = []
+  const control = { send: async (text: string) => void sent.push(text) } as Partial<SessionControl>
+  const commands = new CommandHost({
+    registry: host.commands,
+    bus,
+    ui: host.ui,
+    control: control as SessionControl,
+    agent,
+  })
+  expect(commands.list().map((c) => [c.name, c.description, c.source])).toEqual([
+    ["deploy", "Skill: Ship it", "builtin:skills"],
+    ["help", "built-in", "builtin:commands"],
+    ["secret", "Skill: Only for me", "builtin:skills"],
+  ])
+  expect((await commands.run("/deploy to prod", { frontend: "tui" })).ok).toBe(true)
+  expect(sent[0]).toContain(`Skill "deploy" (base directory: ${path.join(root, "deploy")})`)
+  expect(sent[0]).toContain("# Deploy\nRun ./ship.sh")
+  expect(sent[0]).toContain("Arguments: to prod")
+  await commands.run("/secret", { frontend: "tui" })
+  expect(sent[1]).toContain('Skill "secret"')
+  await bus.flush()
+  expect(events.find((e) => e.type === "extension.error")?.data.error).toContain(
+    "command /help from builtin:skills conflicts",
+  )
 })
