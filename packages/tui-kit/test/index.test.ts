@@ -16,6 +16,8 @@ test("the package exports its public API and not its internals", () => {
     "graphemes",
     "stripColors",
     "TAB_WIDTH",
+    "FullScreenRenderer",
+    "ScrollView",
   ]) {
     expect(api).toHaveProperty(name)
   }
