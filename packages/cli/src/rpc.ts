@@ -65,6 +65,8 @@ type Handler = (p: Params) => Record<string, unknown> | Promise<Record<string, u
 interface LastTurn {
   turnId: string
   prompt: UserMessage
+  /** Where the prompt sat in the history when the turn started. */
+  start: number
   reason?: TurnEndReason
   error?: string
 }
@@ -95,7 +97,12 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       } else if (e.sessionId !== agent.sessionId) {
         return
       } else if (e.type === "turn.start") {
-        lastTurn = { turnId: e.turnId!, prompt: e.data.prompt }
+        const start = agent.messages.lastIndexOf(e.data.prompt)
+        lastTurn = {
+          turnId: e.turnId!,
+          prompt: e.data.prompt,
+          start: start === -1 ? agent.messages.length : start,
+        }
       } else if (e.type === "turn.end" && last && last.turnId === e.turnId) {
         last.reason = e.data.reason
         if (e.data.error !== undefined) last.error = e.data.error
@@ -144,8 +151,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       if (p.what !== "lastTurn")
         throw new RpcError("invalid_params", '"what" must be "lastTurn" or "messages"')
       if (!lastTurn) return { messages: [] }
-      const start = agent.messages.lastIndexOf(lastTurn.prompt)
-      const messages = start === -1 ? [] : agent.messages.slice(start)
+      const messages = agent.messages.slice(turnStart(agent.messages, lastTurn))
       return {
         turnId: lastTurn.turnId,
         ...(lastTurn.reason ? { reason: lastTurn.reason } : {}),
@@ -248,6 +254,16 @@ function attachments(value: unknown): UserContent[] {
       `attachments[${i}] must be {type:"text",text} or {type:"image",mimeType,data}`,
     )
   })
+}
+
+/**
+ * Index of the turn's prompt in the history. When entries were replaced (a reload or
+ * compaction), falls back to where it started, and to the whole history if that is gone.
+ */
+function turnStart(messages: Message[], turn: LastTurn): number {
+  const i = messages.lastIndexOf(turn.prompt)
+  if (i !== -1) return i
+  return turn.start < messages.length ? turn.start : 0
 }
 
 function lastAssistantText(messages: Message[]): string | undefined {

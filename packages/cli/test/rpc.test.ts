@@ -304,6 +304,44 @@ test("amira --rpc drops deltas when the client stops reading stdout", async () =
   expect(out.find((l) => l.id === 2)?.ok).toBe(true)
 }, 90_000)
 
+/** runRpc in process, with commands pushed and responses awaited by id. */
+function inProcess(s: Awaited<ReturnType<typeof session>>) {
+  const input = channel()
+  const out: Line[] = []
+  const done = runRpc(
+    { agent: s.agent, ai: s.ai, ui: s.host.ui },
+    { io: { lines: input.lines, write: (line) => void out.push(JSON.parse(line)) } },
+  )
+  const until = async (match: (l: Line) => boolean) => {
+    while (!out.some(match)) await Bun.sleep(5)
+    return out.find(match)!
+  }
+  const call = (cmd: Record<string, unknown>) => {
+    input.push(cmd)
+    return until((l) => l.id === cmd.id && "ok" in l)
+  }
+  return { out, until, call, end: () => (input.end(), done) }
+}
+
+test("session.read lastTurn survives history entries being replaced", async () => {
+  const s = await session([{ text: "one" }, { text: "two" }])
+  const rpc = inProcess(s)
+  await rpc.call({ id: 1, cmd: "prompt", text: "first" })
+  await rpc.until((l) => l.type === "turn.end")
+  await rpc.call({ id: 2, cmd: "prompt", text: "second" })
+  await rpc.until((l) => l.type === "turn.end" && l.turnId !== rpc.out.find((o) => o.id === 1)!.turnId)
+  // A reload or compaction hands back equal but new message objects.
+  s.agent.messages.splice(0, s.agent.messages.length, ...structuredClone(s.agent.messages))
+  const last = await rpc.call({ id: 3, cmd: "session.read", what: "lastTurn" })
+  expect(last).toMatchObject({ ok: true, reason: "done", text: "two" })
+  expect(last.messages.map((m: Line) => m.content[0].text)).toEqual(["second", "two"])
+  // A history shorter than the turn's start gives everything rather than nothing.
+  s.agent.messages.splice(1)
+  const short = await rpc.call({ id: 4, cmd: "session.read", what: "lastTurn" })
+  expect(short.messages.map((m: Line) => m.content[0].text)).toEqual(["first"])
+  expect(await rpc.end()).toBe(0)
+})
+
 test("closing stdin waits for the running turn and cancels dialogs nobody can answer", async () => {
   const s = await session(
     [{ toolCalls: [{ name: "ask", args: {} }] }, { text: "bye", delayMs: 5 }],
