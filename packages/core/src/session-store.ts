@@ -54,6 +54,8 @@ export class SessionStore {
   readonly header: SessionHeader
   readonly #entries: SessionEntry[] = []
   readonly #byId = new Map<string, SessionEntry>()
+  /** The tip each entry was appended under, in file order: the fallback for a missing parent. */
+  readonly #tipBefore = new Map<string, string | null>()
   #leaf: string | null = null
   #written: boolean
   /** The file ends in a torn line; the next write starts on a fresh line. */
@@ -123,8 +125,9 @@ export class SessionStore {
     if (entry.type === "checkout" && !this.#byId.has(entry.target)) {
       throw new Error(`unknown entry ${entry.target}`)
     }
-    this.#add(entry)
+    // Written first, so a failed write leaves no entry behind for later ones to point at.
     this.#write(JSON.stringify(entry), entry.type === "message")
+    this.#add(entry)
     return entry.id
   }
 
@@ -132,7 +135,10 @@ export class SessionStore {
     return this.append({ type: "message", message })
   }
 
-  /** Entries from the root to the tip of the current branch. */
+  /**
+   * Entries from the root to the tip of the current branch. A parent missing from the file
+   * (a damaged file) is bridged to whatever was the tip before that entry, in file order.
+   */
   branch(): SessionEntry[] {
     const out: SessionEntry[] = []
     const seen = new Set<string>()
@@ -141,7 +147,7 @@ export class SessionStore {
       const e = this.#byId.get(id)
       if (!e) break
       out.push(e)
-      id = e.parentId
+      id = e.parentId && !this.#byId.has(e.parentId) ? (this.#tipBefore.get(e.id) ?? null) : e.parentId
     }
     return out.reverse()
   }
@@ -174,24 +180,34 @@ export class SessionStore {
   }
 
   #add(e: SessionEntry) {
+    this.#tipBefore.set(e.id, this.#leaf)
     this.#entries.push(e)
     this.#byId.set(e.id, e)
-    this.#leaf = e.type === "checkout" ? e.target : e.id
+    if (e.type !== "checkout") this.#leaf = e.id
+    else if (this.#byId.has(e.target)) this.#leaf = e.target
   }
 
   /** Buffers until the first message, then writes the header and everything since. */
   #write(line: string, isMessage: boolean) {
     if (!this.#written) {
-      this.#pending.push(line)
-      if (!isMessage) return
+      if (!isMessage) {
+        this.#pending.push(line)
+        return
+      }
       mkdirSync(path.dirname(this.file), { recursive: true })
-      appendFileSync(this.file, `${[JSON.stringify(this.header), ...this.#pending].join("\n")}\n`)
+      appendFileSync(this.file, `${[JSON.stringify(this.header), ...this.#pending, line].join("\n")}\n`)
       this.#pending = []
       this.#written = true
       return
     }
-    appendFileSync(this.file, `${this.#needsNewline ? "\n" : ""}${line}\n`)
-    this.#needsNewline = false
+    try {
+      appendFileSync(this.file, `${this.#needsNewline ? "\n" : ""}${line}\n`)
+      this.#needsNewline = false
+    } catch (err) {
+      // Part of the line may have landed; the next one starts on a fresh line.
+      this.#needsNewline = true
+      throw err
+    }
   }
 }
 

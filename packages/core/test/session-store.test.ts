@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { appendFileSync, existsSync, readFileSync, utimesSync } from "node:fs"
+import { appendFileSync, chmodSync, existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -71,6 +71,61 @@ test("a torn last line is ignored and the next write starts a fresh line", async
   reopened.appendMessage(reply("b"))
   const final = SessionStore.open(s.file)
   expect(final.restore().messages).toEqual([userMessage("a"), reply("b")])
+})
+
+test("a failed write leaves no trace, so later entries still chain to the earlier ones", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  s.appendMessage(userMessage("one"))
+  s.appendMessage(reply("two"))
+  chmodSync(s.file, 0o444)
+  try {
+    expect(() => s.appendMessage(userMessage("three"))).toThrow()
+  } finally {
+    chmodSync(s.file, 0o644)
+  }
+  s.appendMessage(userMessage("four"))
+  const expected = [userMessage("one"), reply("two"), userMessage("four")]
+  expect(s.restore().messages).toEqual(expected)
+  expect(SessionStore.open(s.file).restore().messages).toEqual(expected)
+})
+
+test("the first write failing keeps buffered entries for the next attempt", async () => {
+  const dir = await tmp()
+  const blocker = path.join(dir, "blocked")
+  writeFileSync(blocker, "")
+  // The session directory cannot be created where a file already sits.
+  const s = SessionStore.create({ cwd: "/proj", dir: blocker })
+  s.append({ type: "model_change", model: { provider: "p", model: "m" } })
+  expect(() => s.appendMessage(userMessage("lost"))).toThrow()
+  expect(s.entries.length).toBe(1)
+  expect(s.branch().map((e) => e.type)).toEqual(["model_change"])
+})
+
+test("a parent missing from the file is bridged to the entry before it", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  s.appendMessage(userMessage("one"))
+  s.appendMessage(reply("two"))
+  appendFileSync(
+    s.file,
+    `${JSON.stringify({ type: "message", id: "e_orphan", parentId: "e_gone", ts: 0, message: userMessage("three") })}\n`,
+  )
+  const reopened = SessionStore.open(s.file)
+  expect(reopened.restore().messages).toEqual([userMessage("one"), reply("two"), userMessage("three")])
+  reopened.appendMessage(reply("four"))
+  expect(SessionStore.open(s.file).restore().messages.length).toBe(4)
+})
+
+test("a checkout to an entry missing from the file is ignored", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  s.appendMessage(userMessage("one"))
+  appendFileSync(
+    s.file,
+    `${JSON.stringify({ type: "checkout", id: "e_co", parentId: null, ts: 0, target: "e_gone" })}\n`,
+  )
+  expect(SessionStore.open(s.file).restore().messages).toEqual([userMessage("one")])
 })
 
 test("compaction entries replace messages with a summary pair on restore", async () => {
