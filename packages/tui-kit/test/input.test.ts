@@ -96,10 +96,31 @@ describe("escape timeout", () => {
     expect(p.feed("[A")).toEqual([key("up")])
   })
 
-  test("flushing an incomplete sequence yields Esc and the rest as text", () => {
+  test("a lone ESC [ or ESC O at the timeout is Alt+[ or Alt+Shift+O", () => {
     const p = new InputParser()
     expect(p.feed("\x1b[")).toEqual([])
-    expect(p.flush()).toEqual([key("escape"), textKey("[")])
+    expect(p.flush()).toEqual([key("[", { alt: true })])
+    expect(p.feed("\x1bO")).toEqual([])
+    expect(p.flush()).toEqual([key("o", { alt: true, shift: true })])
+    expect(parse("\x1bX")).toEqual([key("x", { alt: true, shift: true })])
+  })
+
+  test("ESC ESC is Esc twice, unless a sequence follows", () => {
+    const p = new InputParser()
+    expect(p.feed("\x1b\x1b")).toEqual([])
+    expect(p.flush()).toEqual([key("escape"), key("escape")])
+    expect([...p.feed("\x1b\x1b\x1b"), ...p.flush()]).toEqual([key("escape"), key("escape"), key("escape")])
+    expect(new InputParser().flush()).toEqual([])
+    expect(parse("\x1b\x1bx")).toEqual([key("escape"), key("x", { alt: true })])
+    expect(parse("\x1b\x1bOA")).toEqual([key("up", { alt: true })])
+    expectSplitSafe("\x1b\x1b[1;5A", [key("up", { ctrl: true, alt: true })])
+  })
+
+  test("long ESC runs do not recurse", () => {
+    const p = new InputParser()
+    const events = [...p.feed("\x1b".repeat(100_000)), ...p.flush()]
+    expect(events.length).toBe(100_000)
+    expect(events.every((e) => e.type === "key" && e.name === "escape")).toBe(true)
   })
 
   test("InputReader emits Esc after the timeout", async () => {

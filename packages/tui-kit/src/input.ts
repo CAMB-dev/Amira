@@ -214,39 +214,78 @@ function decodeCsi(params: string, final: string): Decoded {
   return { events: name ? [key(name, xtermMods(parts[1]))] : [] }
 }
 
-function parseEscape(s: string, force: boolean): Parsed | undefined {
-  if (s.length === 1) return force ? { len: 1, events: [key("escape")] } : undefined
-  const second = s[1]!
-  if (second === "[") {
-    let i = 2
-    while (i < s.length && s.charCodeAt(i) >= 0x20 && s.charCodeAt(i) <= 0x3f) i++
-    if (i >= s.length) return force ? { len: 1, events: [key("escape")] } : undefined
-    return { len: i + 1, ...decodeCsi(s.slice(2, i), s[i]!) }
-  }
-  if (second === "O") {
-    if (s.length < 3) return force ? { len: 1, events: [key("escape")] } : undefined
-    const name = LETTER_FINALS[s[2]!]
+/**
+ * What to do with input that may be the start of a longer sequence: wait for more, or resolve
+ * it as keys because nothing more came.
+ */
+type Flush = "wait" | "resolve"
+
+const escapeKey = (len = 1): Parsed => ({ len, events: [key("escape")] })
+
+/** A CSI or SS3 sequence starting at `s[at]`, or undefined when it is not complete yet. */
+function parseSequence(s: string, at: number): Parsed | undefined {
+  if (s[at + 1] === "O") {
+    if (s.length < at + 3) return undefined
+    const name = LETTER_FINALS[s[at + 2]!]
     return { len: 3, events: name ? [key(name)] : [] }
   }
-  // ESC followed by a key is Alt+key.
-  const inner = parseOne(s.slice(1), force)
-  if (!inner) return force ? { len: 1, events: [key("escape")] } : undefined
-  if (!inner.events) return { len: 1, events: [key("escape")] }
-  const events = inner.events.map((e) => {
-    const { text: _, ...rest } = e
-    return withMods(rest, { alt: true })
-  })
-  return { len: inner.len + 1, events }
+  let i = at + 2
+  while (i < s.length && s.charCodeAt(i) >= 0x20 && s.charCodeAt(i) <= 0x3f) i++
+  if (i >= s.length) return undefined
+  return { len: i + 1 - at, ...decodeCsi(s.slice(at + 2, i), s[i]!) }
 }
 
-function parseOne(s: string, force: boolean): Parsed | undefined {
-  const ch = s[0]!
-  if (ch === ESC) return parseEscape(s, force)
-  const control = controlKey(ch)
+function startsSequence(s: string, at: number): boolean {
+  return s[at] === ESC && (s[at + 1] === "[" || s[at + 1] === "O")
+}
+
+/** A key pressed with Alt carries no text; an upper-case letter means Shift was held. */
+function altKey(e: KeyEvent): KeyEvent {
+  const { text, ...rest } = e
+  return withMods(rest, { alt: true, shift: text !== undefined && text !== text.toLowerCase() })
+}
+
+function parseKey(s: string, at: number): Parsed {
+  const control = controlKey(s[at]!)
   if (control) return { len: 1, events: [control] }
-  const cp = s.codePointAt(0)!
-  const char = String.fromCodePoint(cp)
+  const char = String.fromCodePoint(s.codePointAt(at)!)
   return { len: char.length, events: [charKey(char, NO_MODS)] }
+}
+
+/** Parses the input at the start of `s`, which begins with ESC. Never recurses. */
+function parseEscape(s: string, flush: Flush): Parsed | undefined {
+  const second = s[1]
+  if (second === undefined) return flush === "wait" ? undefined : escapeKey()
+  if (second === "[" || second === "O") {
+    const seq = parseSequence(s, 0)
+    if (seq) return seq
+    if (flush === "wait") return undefined
+    // Alt+[ and Alt+Shift+O are indistinguishable from the start of a sequence until it times out.
+    if (s.length === 2)
+      return {
+        len: 2,
+        events: [second === "[" ? key("[", { alt: true }) : key("o", { alt: true, shift: true })],
+      }
+    return escapeKey()
+  }
+  if (second === ESC) {
+    // ESC ESC [A is Alt+Up; ESC ESC otherwise is Esc pressed twice.
+    if (startsSequence(s, 1)) {
+      const seq = parseSequence(s, 1)
+      if (seq?.events?.length) return { len: seq.len + 1, events: seq.events.map(altKey) }
+      if (!seq && flush === "wait") return undefined
+      return escapeKey()
+    }
+    if (s.length === 2 && flush === "wait") return undefined
+    return escapeKey()
+  }
+  // ESC followed by a key is Alt+key.
+  const inner = parseKey(s, 1)
+  return { len: inner.len + 1, events: inner.events!.map(altKey) }
+}
+
+function parseOne(s: string, flush: Flush): Parsed | undefined {
+  return s[0] === ESC ? parseEscape(s, flush) : parseKey(s, 0)
 }
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
@@ -286,7 +325,7 @@ export class InputParser {
 
   feed(data: string): InputEvent[] {
     this.buf += this.unwrapRawWin32(data)
-    return this.drain(false)
+    return this.drain("wait")
   }
 
   /** True when an ambiguous escape prefix is waiting; call `flush()` if nothing follows soon. */
@@ -297,7 +336,7 @@ export class InputParser {
   flush(): InputEvent[] {
     this.buf += this.held
     this.held = ""
-    return this.drain(true)
+    return this.drain("resolve")
   }
 
   /**
@@ -318,7 +357,7 @@ export class InputParser {
     })
   }
 
-  private drain(force: boolean): InputEvent[] {
+  private drain(flush: Flush): InputEvent[] {
     const out: InputEvent[] = []
     while (this.buf.length > 0) {
       if (this.paste !== undefined) {
@@ -335,7 +374,7 @@ export class InputParser {
         out.push({ type: "paste", text })
         continue
       }
-      const parsed = parseOne(this.buf, force)
+      const parsed = parseOne(this.buf, flush)
       if (!parsed) break
       this.buf = this.buf.slice(parsed.len)
       if (parsed.pasteStart) this.paste = ""
