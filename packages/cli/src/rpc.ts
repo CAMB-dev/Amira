@@ -141,6 +141,9 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     },
     "ui.respond": (p) => {
       const requestId = text(p, "requestId")
+      // A misspelt key must not cancel the dialog; only an explicit null does.
+      if (!Object.hasOwn(p, "value"))
+        throw new RpcError("invalid_params", '"value" is required (null cancels)')
       const problem = ui.respond(requestId, p.value)
       if (problem)
         throw new RpcError(problem.startsWith("no pending") ? "not_found" : "invalid_params", problem)
@@ -161,10 +164,12 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       }
     },
     "model.set": (p) => {
+      const ref = text(p, "model")
+      // The running turn's history may carry state only its model understands.
+      if (agent.turnId) throw new RpcError("busy", "a turn is running; set the model after turn.end")
       try {
-        agent.model = ai.model(text(p, "model"))
+        agent.model = ai.model(ref)
       } catch (err) {
-        if (err instanceof RpcError) throw err
         throw new RpcError("invalid_params", err instanceof Error ? err.message : String(err))
       }
       return { model: `${agent.model.provider}/${agent.model.id}` }

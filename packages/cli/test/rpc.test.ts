@@ -346,6 +346,32 @@ test("session.read lastTurn survives history entries being replaced", async () =
   expect(await rpc.end()).toBe(0)
 })
 
+test("ui.respond needs a value; model.set waits for the turn", async () => {
+  const s = await session([{ toolCalls: [{ name: "ask", args: {} }] }, { text: "bye" }], [rpcTools])
+  const rpc = inProcess(s)
+  await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+  const asked = await rpc.until((l) => l.type === "ui.request")
+  const { requestId } = asked.data
+
+  const busy = await rpc.call({ id: 2, cmd: "model.set", model: "mock/other" })
+  expect(busy.error.code).toBe("busy")
+  expect(s.agent.model.id).toBe("m")
+
+  // A misspelt key leaves the dialog open.
+  const typo = await rpc.call({ id: 3, cmd: "ui.respond", requestId, val: true })
+  expect(typo.error.code).toBe("invalid_params")
+  expect((await rpc.call({ id: 4, cmd: "state" })).uiRequests.length).toBe(1)
+  expect((await rpc.call({ id: 5, cmd: "ui.respond", requestId, value: null })).ok).toBe(true)
+  await rpc.until((l) => l.type === "turn.end")
+  expect(rpc.out.find((l) => l.type === "ui.resolved")?.data.cancelled).toBe(true)
+
+  expect(await rpc.call({ id: 6, cmd: "model.set", model: "mock/other" })).toMatchObject({
+    ok: true,
+    model: "mock/other",
+  })
+  expect(await rpc.end()).toBe(0)
+})
+
 test("closing stdin waits for the running turn and cancels dialogs nobody can answer", async () => {
   const s = await session(
     [{ toolCalls: [{ name: "ask", args: {} }] }, { text: "bye", delayMs: 5 }],

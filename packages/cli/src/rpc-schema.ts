@@ -43,14 +43,18 @@ export const COMMAND_PARAMS = {
   },
   abort: { description: "Aborts the running turn; it still ends with turn.end.", params: {} },
   "ui.respond": {
-    description: "Answers a ui.request. A null value cancels the dialog.",
+    description:
+      "Answers a ui.request. `value` is required; an explicit null cancels the dialog, and a missing value fails with `invalid_params`.",
     params: { requestId: str, value: { type: ["string", "boolean", "null"] } },
   },
   "session.read": {
     description: "Reads the conversation: the last turn, or every message.",
     params: { what: strings("lastTurn", "messages") },
   },
-  "model.set": { description: 'Switches the model, as "provider/model".', params: { model: str } },
+  "model.set": {
+    description: 'Switches the model, as "provider/model". Fails with `busy` while a turn runs.',
+    params: { model: str },
+  },
   state: { description: "A snapshot to resync from, e.g. after events.lost.", params: {} },
   "session.resume": {
     description: "Continues a stored session. Fails with `not_supported` until sessions are persisted.",
