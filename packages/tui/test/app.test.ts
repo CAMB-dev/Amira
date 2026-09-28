@@ -247,7 +247,38 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   terminal.send("go\r")
   await shows("● block")
   await idle()
+  // The running tool is drawn as its own line with a blinking bullet.
+  expect(seenWhileRunning).toContain("● block")
   expect(seenWhileRunning).toContain("running block")
+  terminal.send("\x03")
+  await exited
+})
+
+test("running tools show as lines with their arguments and are replaced by the result", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup([
+    { toolCalls: [{ name: "slow", args: { command: "bun test --watch" } }] },
+    { text: "ok" },
+  ])
+  let release!: () => void
+  agent.tools.register(
+    defineTool({
+      name: "slow",
+      description: "",
+      parameters: {},
+      execute: () =>
+        new Promise((r) => {
+          release = () => r(textResult("passed"))
+        }),
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => live().includes("● slow bun test --watch"), "running line")
+  release()
+  await shows("⎿ passed")
+  await idle()
+  // The live line was replaced by the committed one, not left behind as a duplicate.
+  expect(all().split("● slow bun test --watch").length - 1).toBe(1)
   terminal.send("\x03")
   await exited
 })

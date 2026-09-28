@@ -17,9 +17,10 @@ import {
   type Terminal,
   Text,
   type Theme,
+  truncateToWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { toolLines, userLines } from "./format.ts"
+import { summarizeArgs, toolLines, userLines } from "./format.ts"
 import { StatusBar } from "./status-bar.ts"
 
 export interface InteractiveOptions {
@@ -65,6 +66,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const running = new Map<string, string>()
   let working = false
   let thinking = false
+  /** Blink state of the bullet in front of running tools. */
+  let blinkOn = true
+  let blinkTimer: ReturnType<typeof setInterval> | undefined
+  const setBlinking = (on: boolean) => {
+    if (on && !blinkTimer) {
+      blinkOn = true
+      blinkTimer = setInterval(() => {
+        blinkOn = !blinkOn
+        renderer.requestRender()
+      }, 1000)
+    } else if (!on && blinkTimer) {
+      clearInterval(blinkTimer)
+      blinkTimer = undefined
+    }
+  }
   /** Tool the model is currently writing a call for, before it runs. */
   let preparing: string | undefined
   /** Whether this message already committed some of its lines early. */
@@ -78,14 +94,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     streaming,
     new View((width, ctx) => {
       if (!working) return []
-      const tools = [...new Set(running.values())]
-      spinner.label = tools.length
-        ? `running ${tools.join(", ")}`
-        : preparing
-          ? `preparing ${preparing}`
-          : thinking
-            ? "thinking"
-            : "working"
+      // A running tool shows as its own line with a blinking bullet, like the line it becomes.
+      if (running.size) {
+        const bullet = blinkOn ? ctx.theme.accent("●") : ctx.theme.muted("●")
+        const lines = [...running.entries()].map(([id, name]) => {
+          const summary = summarizeArgs(lastArgs.get(id) ?? {})
+          return truncateToWidth(
+            `${bullet} ${ctx.theme.accent(name)}${summary ? ` ${summary}` : ""}`,
+            width,
+            "…",
+          )
+        })
+        // Plus a spinner underneath, so it is obvious that work is going on.
+        spinner.label = `running ${[...new Set(running.values())].join(", ")}`
+        return [...lines, ...spinner.render(width, ctx), ""]
+      }
+      spinner.label = preparing ? `preparing ${preparing}` : thinking ? "thinking" : "working"
       return [...spinner.render(width, ctx), ""]
     }),
     new View((width, ctx) =>
@@ -168,11 +192,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         preparing = undefined
         running.set(e.data.toolCallId, e.data.name)
         lastArgs.set(e.data.toolCallId, e.data.args)
+        setBlinking(true)
         // Draw now: the tool may block the event loop before a scheduled frame would run.
         renderer.render()
         return
       case "tool.execute.end": {
         running.delete(e.data.toolCallId)
+        if (!running.size) setBlinking(false)
         const args = lastArgs.get(e.data.toolCallId) ?? {}
         renderer.commit(
           toolLines(theme, e.data.name, args, e.data.result, e.data.durationMs, terminal.columns),
@@ -184,6 +210,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         working = false
         preparing = undefined
         running.clear()
+        setBlinking(false)
         lastArgs.clear()
         spinner.stop()
         if (e.data.reason === "error") renderer.commit([theme.error(`✗ ${e.data.error ?? "error"}`), ""])
@@ -235,6 +262,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function quit(code = 0) {
     off()
     spinner.stop()
+    setBlinking(false)
     reader.stop()
     renderer.stop({ clear: true })
     if (terminal instanceof ProcessTerminal) terminal.stop()
