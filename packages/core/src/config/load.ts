@@ -58,11 +58,9 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
     settings = deepMerge(settings, v.settings)
     files.push(file)
   }
-  if (src.flags) {
-    const v = validateSettings(src.flags, "command line")
-    settings = deepMerge(settings, v.settings)
-    warnings.push(...v.warnings)
-  }
+  // Flags are typed by the argument parser and checked where they are used, so a bad one
+  // is reported as a usage error rather than a settings error.
+  if (src.flags) settings = deepMerge(settings, src.flags)
   return { settings, warnings, files }
 }
 

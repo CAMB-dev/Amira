@@ -201,7 +201,8 @@ test("the amira command: help, version and usage errors have the right exit code
     const p = Bun.spawn(["bun", main, ...args], {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, AMIRA_MODEL: "" },
+      // An empty home, so the user's own settings cannot pick a model.
+      env: { ...process.env, AMIRA_MODEL: "", AMIRA_HOME: path.join(here, "no-such-home") },
     })
     const [out, err, code] = await Promise.all([
       new Response(p.stdout).text(),
@@ -217,6 +218,9 @@ test("the amira command: help, version and usage errors have the right exit code
   expect([noModel.code, noModel.out]).toEqual([2, ""])
   expect(noModel.err).toContain("no model selected")
   expect((await run("-m", "nope/x", "-p", "hi")).code).toBe(2)
+  const badRef = await run("-m", "foo", "-p", "hi")
+  expect(badRef.code).toBe(2)
+  expect(badRef.err).toContain("Run amira --help for usage.")
 }, 60_000)
 
 test("json mode includes session.start when the session is announced on ready", async () => {
