@@ -97,6 +97,33 @@ test("plain print mode streams text to stdout and tool activity to stderr", asyn
   expect(io.err).toBe("● echo x\n")
 })
 
+test("plain print mode shows sub-agents' tool calls on stderr but only the commander's reply", async () => {
+  const { agent } = await mockSession([
+    { toolCalls: [{ name: "delegate", args: {} }] },
+    { toolCalls: [{ name: "echo", args: { text: "y" } }] },
+    { text: "child answer" },
+    { text: "all done" },
+  ])
+  agent.tools.register(
+    defineTool({
+      name: "delegate",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        const r = await ctx.session!.spawn!({ role: "explorer", prompt: "sub task" }).result()
+        return textResult(r.text)
+      },
+    }),
+    "test",
+  )
+  const io = capture()
+  expect(await runPrint(agent, "go", false, { io })).toBe(0)
+  expect(io.out).toBe("all done\n")
+  expect(io.err).toMatch(
+    /^● delegate \n◆ explorer started: sub task\n {2}↳ explorer ● echo y\n◆ explorer done \(\d+\.\ds\)\n$/,
+  )
+})
+
 test("a compaction blocked by an extension is reported as skipped, not failed", async () => {
   const { agent } = await mockSession([
     { text: "r1" },

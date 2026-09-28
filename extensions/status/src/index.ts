@@ -63,7 +63,22 @@ export default defineExtension((api) => {
   let tps: number | undefined
   let place = ""
 
+  /** Sub-agents that are queued or running, by session id. */
+  const subagents = new Set<string>()
+  // Sub-agents share the bus (their events carry parentSessionId). The bar describes the
+  // top-level session, except the cost, which is the whole tree's (D37).
+  const own = (e: { parentSessionId?: string }) => e.parentSessionId === undefined
+
+  api.on("subagent.start", (e) => {
+    subagents.add(e.data.childSessionId)
+    api.requestRender()
+  })
+  api.on("subagent.end", (e) => {
+    subagents.delete(e.data.childSessionId)
+    api.requestRender()
+  })
   api.on("session.start", (e) => {
+    if (!own(e)) return
     model = `${e.data.model.provider}/${e.data.model.model}`
     if (e.data.reason !== "resume") {
       context = 0
@@ -86,26 +101,29 @@ export default defineExtension((api) => {
     api.requestRender()
   })
   api.on("message.start", (e) => {
+    if (!own(e)) return
     model = `${e.data.model.provider}/${e.data.model.model}`
     if (e.data.contextWindow) contextWindow = e.data.contextWindow
     firstDeltaAt = undefined
   })
   api.on("message.delta", (e) => {
-    firstDeltaAt ??= e.ts
+    if (own(e)) firstDeltaAt ??= e.ts
   })
   api.on("message.end", (e) => {
     const u = e.data.message.usage
     if (!u) return
+    if (u.cost !== undefined) cost = (cost ?? 0) + u.cost
+    if (!own(e)) return api.requestRender()
     context = u.input + u.cacheRead + u.cacheWrite + u.output
     output += u.output
     promptInput += u.input
     promptCacheRead += u.cacheRead
     promptCacheWrite += u.cacheWrite
-    if (u.cost !== undefined) cost = (cost ?? 0) + u.cost
     if (firstDeltaAt !== undefined) tps = tokensPerSecond(u.output, firstDeltaAt, e.ts) ?? tps
     api.requestRender()
   })
   api.on("status.changed", (e) => {
+    if (!own(e)) return
     status = e.data.status
     statusReason = e.data.reason ?? ""
     api.requestRender()
@@ -124,6 +142,13 @@ export default defineExtension((api) => {
           : status === "working" && statusReason
             ? statusReason
             : status,
+  })
+  api.registerStatusItem({
+    id: "subagents",
+    align: "left",
+    order: 20,
+    tone: "accent",
+    text: () => (subagents.size ? `${subagents.size} sub-agent${subagents.size === 1 ? "" : "s"}` : ""),
   })
   api.registerStatusItem({
     id: "tokens",

@@ -230,3 +230,65 @@ test("the session cost adds up the replies that have one, and a retry shows as a
   await bus.flush()
   expect(item("activity")).toBe("retrying (2/3)")
 })
+
+test("sub-agents add to the cost and are counted, but do not change the rest of the bar", async () => {
+  const bus = new EventBus()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  await host.load(statusExtension, "builtin:status")
+  const root = { sessionId: "s" }
+  const child = { sessionId: "c", parentSessionId: "s" }
+  const item = (id: string) => host.status.snapshot().find((i) => i.id === id)?.text
+  const usage = (input: number, cost: number) => ({ input, output: 10, cacheRead: 0, cacheWrite: 0, cost })
+  bus.emit("message.start", { model: { provider: "p", model: "big" } }, root)
+  bus.emit(
+    "message.end",
+    {
+      message: {
+        role: "assistant",
+        content: [],
+        model: { provider: "p", model: "big" },
+        usage: usage(1000, 0.01),
+      },
+    },
+    root,
+  )
+  bus.emit(
+    "subagent.start",
+    {
+      childSessionId: "c",
+      prompt: "x",
+      model: { provider: "p", model: "small" },
+      depth: 1,
+      cwd: "/",
+      context: "fresh",
+      queued: false,
+    },
+    root,
+  )
+  bus.emit("status.changed", { status: "working" }, child)
+  bus.emit("message.start", { model: { provider: "p", model: "small" } }, child)
+  bus.emit(
+    "message.end",
+    {
+      message: {
+        role: "assistant",
+        content: [],
+        model: { provider: "p", model: "small" },
+        usage: usage(50, 0.001),
+      },
+    },
+    child,
+  )
+  await bus.flush()
+  expect(item("model")).toBe("p/big")
+  expect(item("activity")).toBeUndefined()
+  expect(item("subagents")).toBe("1 sub-agent")
+  expect(item("tokens")).toBe("ctx 1.0k · out 10 · $0.011")
+  bus.emit(
+    "subagent.end",
+    { childSessionId: "c", status: "done", usage: usage(50, 0.001), durationMs: 5 },
+    root,
+  )
+  await bus.flush()
+  expect(item("subagents")).toBeUndefined()
+})
