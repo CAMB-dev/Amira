@@ -61,7 +61,8 @@ export function subagentStats(theme: Theme, info: SubagentInfo, now: number): st
   const u = info.usage
   const tokens = `${compactTokens(u.input + u.output + u.cacheRead + u.cacheWrite)} tok`
   const cost = u.cost !== undefined ? ` · $${u.cost.toFixed(4)}` : ""
-  const when = info.status === "queued" ? "" : ` · ${elapsed(info, now)}`
+  const timed = info.durationMs !== undefined || info.startedAt !== undefined
+  const when = info.status === "queued" || !timed ? "" : ` · ${elapsed(info, now)}`
   return `${statusStyle(theme, info)(info.status)}${theme.muted(`${when} · ${tokens}${cost}`)}`
 }
 

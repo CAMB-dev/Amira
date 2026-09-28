@@ -316,9 +316,9 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   await s.idle()
   s.terminal.send("/agents\r")
   await waitFor(() => s.view().includes("? Sub-agents"), "the picker")
-  expect(s.view()).toContain("› Open the live view")
-  expect(s.view()).toMatch(/1\. explorer · s_\w+ · done/)
-  s.terminal.send("2")
+  expect(s.view()).toContain("  Open the live view 2")
+  expect(s.view()).toMatch(/› 1\. explorer · s_\w+ · done/)
+  s.terminal.send("1")
   await waitFor(() => s.screen.mainText.includes("● read b.ts"), "the transcript")
   const main = s.screen.mainText
   expect(main).toMatch(/◆ explorer · s_\w+ · done · \d+s · 0 tok/)
@@ -326,10 +326,10 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   expect(main).toContain("  ⎿ contents of b.ts (+2 lines)")
   expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("● read b.ts"))
   expect(s.screen.inAltScreen).toBe(false)
-  // The first entry opens the live view.
+  // The last entry opens the live view.
   s.terminal.send("/agents\r")
   await waitFor(() => s.view().includes("? Sub-agents"), "the picker again")
-  s.terminal.send("1")
+  s.terminal.send("2")
   await waitFor(() => s.screen.inAltScreen, "the viewer")
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "closed")
