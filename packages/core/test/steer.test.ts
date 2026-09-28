@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect, type Message, type MockStep } from "@amira/ai"
+import { createAi, createMockDialect, type Message, type MockStep, userMessage } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
@@ -94,6 +94,29 @@ test("messages queued when the turn ends become the next prompt, as one turn", a
     expect(e.turnId).toBe(starts[0]!.turnId!)
     expect(e.seq).toBeLessThan(starts[1]!.seq)
   }
+})
+
+test("promoted messages keep their display: one as it is, several joined in order", async () => {
+  const { agent } = setup([{ text: "first", delayMs: 5 }, { text: "second", delayMs: 5 }, { text: "third" }])
+  const done = agent.prompt("go")
+  await Bun.sleep(8)
+  const skill = userMessage("skill text", { text: "/s", note: "Loaded skill s (1 line)" })
+  agent.steer(skill)
+  await done
+  // The promoted turn has started, and is still waiting for its reply.
+  expect(agent.turnId).toBeDefined()
+  expect(agent.messages[2]).toBe(skill)
+  agent.steer("plain")
+  agent.steer(userMessage("more skill", { text: "/t", note: "Loaded skill t (2 lines)" }))
+  while (agent.messages.length < 6 || agent.turnId) await Bun.sleep(5)
+  expect(agent.messages[4]).toEqual({
+    role: "user",
+    content: [
+      { type: "text", text: "plain" },
+      { type: "text", text: "more skill" },
+    ],
+    display: { text: "plain\n/t", note: "Loaded skill t (2 lines)" },
+  })
 })
 
 test("steering with no turn running starts one", async () => {

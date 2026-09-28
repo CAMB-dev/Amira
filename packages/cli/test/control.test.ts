@@ -111,6 +111,21 @@ test("/clear and /resume switch the active agent and announce it; a running turn
   expect(session.agent).toBe(first)
 })
 
+test("send passes a display along, whether it starts a turn or steers the running one", async () => {
+  const { host } = await setup([{ text: "first", delayMs: 30 }, { text: "second" }])
+  const display = { text: "/x 1", note: "Loaded skill x (4 lines)" }
+  const first = host.control.send("long text", { display })
+  await Bun.sleep(5)
+  const steered = host.control.send("more long text", { display: { text: "/y" } })
+  await first
+  await steered
+  const users = host.agent.messages.filter((m) => m.role === "user")
+  expect(users.map((m) => m.role === "user" && [m.content, m.display])).toEqual([
+    [[{ type: "text", text: "long text" }], display],
+    [[{ type: "text", text: "more long text" }], { text: "/y" }],
+  ])
+})
+
 test("/clear and /resume keep the model chosen on the active agent", async () => {
   const { host, run, session } = await setup()
   const first = host.agent.sessionId
