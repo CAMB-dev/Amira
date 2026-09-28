@@ -150,7 +150,7 @@ function controlKey(ch: string): KeyEvent | undefined {
   if (ch === "\x7f" || ch === "\x08") return key("backspace")
   if (c === 0) return key("space", { ctrl: true })
   if (c >= 1 && c <= 26) return key(String.fromCharCode(c + 96), { ctrl: true })
-  if (c >= 28 && c <= 31) return key(String.fromCharCode(c + 64), { ctrl: true })
+  if (c >= 27 && c <= 31) return key(String.fromCharCode(c + 64), { ctrl: true })
   return undefined
 }
 
@@ -164,6 +164,8 @@ function win32Params(params: string): [vk: number, uc: number, kd: number, cs: n
 
 function decodeWin32(params: string): Decoded {
   const [vk, uc, kd, cs, rc] = win32Params(params)
+  // A character typed with Alt+numpad arrives on the key-up of Alt.
+  if (kd === 0 && vk === 18 && uc > 0) return { events: [textKey(String.fromCharCode(uc))] }
   if (kd !== 1) return {}
   const repeat = Math.max(1, rc)
   if (VK_MODIFIERS.has(vk)) return {}
@@ -180,6 +182,11 @@ function decodeWin32(params: string): Decoded {
   else if (uc >= 32) e = charKey(String.fromCharCode(uc), mods)
   else if (ctrl && ((vk >= 65 && vk <= 90) || (vk >= 48 && vk <= 57)))
     e = key(String.fromCharCode(vk).toLowerCase(), mods)
+  else if (ctrl && uc > 0 && uc < 32) {
+    // Ctrl+punctuation (Ctrl+[ is 27, Ctrl+] is 29, ...) only shows up as a control character.
+    const control = controlKey(String.fromCharCode(uc))
+    if (control) e = withMods(control, mods)
+  }
   return { events: e ? Array.from({ length: repeat }, () => e) : [] }
 }
 

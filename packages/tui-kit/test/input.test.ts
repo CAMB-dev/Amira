@@ -307,6 +307,19 @@ describe("win32-input-mode", () => {
     expect(parse(win32(16, 0, 0x10) + win32(17, 0, 0x08) + win32(18, 0, 0x02))).toEqual([])
   })
 
+  test("Alt+numpad characters arrive on the Alt key-up", () => {
+    const seq = win32(18, 0, 0x02) + win32(98, 0, 0x02) + win32(105, 0, 0x02) + win32(18, 233, 0, 0)
+    expect(parse(seq)).toEqual([textKey("é")])
+  })
+
+  test("Ctrl+punctuation maps through its control character", () => {
+    expect(parse(win32(0xdb, 27, 0x08))).toEqual([key("[", { ctrl: true })])
+    expect(parse(win32(0xdd, 29, 0x08))).toEqual([key("]", { ctrl: true })])
+    expect(parse(win32(0xdc, 28, 0x08))).toEqual([key("\\", { ctrl: true })])
+    expect(parse(win32(72, 8, 0x08))).toEqual([key("h", { ctrl: true })])
+    expect(parse(win32(13, 10, 0x28))).toEqual([key("enter", { ctrl: true })])
+  })
+
   test("repeat count", () => {
     expect(parse(win32(65, 97, 0, 1, 3))).toEqual([textKey("a"), textKey("a"), textKey("a")])
   })
