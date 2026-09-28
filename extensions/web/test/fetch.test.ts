@@ -72,7 +72,7 @@ test("redirects are followed, reported, and each hop is checked", async () => {
   )
   const blocked = await toPrivate.webFetch.execute({ url: "https://public.test/" }, ctx())
   expect(blocked.isError).toBe(true)
-  expect(text(blocked)).toContain("refusing to fetch 169.254.169.254")
+  expect(text(blocked)).toStartWith("refusing to fetch 169.254.169.254")
   expect(toPrivate.calls).toHaveLength(1)
 
   const toFile = tools(() => new Response(null, { status: 302, headers: { location: "file:///etc/passwd" } }))
@@ -94,7 +94,7 @@ test("private addresses are refused unless allowed", async () => {
   ]) {
     const r = await t.webFetch.execute({ url }, ctx())
     expect([url, r.isError]).toEqual([url, true])
-    expect(text(r)).toContain("web.fetch.allowPrivateNetwork")
+    expect(text(r)).toMatch(/^refusing to fetch .*web.fetch.allowPrivateNetwork/)
   }
   expect(t.calls).toHaveLength(0)
   const allowed = tools(() => html("<p>internal</p>"), { allowPrivateNetwork: true })

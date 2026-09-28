@@ -139,7 +139,11 @@ export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSi
   let res: Response
   try {
     for (let hop = 0; ; hop++) {
-      if (!opts.allowPrivateNetwork) await assertPublicHost(url, resolve)
+      if (!opts.allowPrivateNetwork) {
+        await assertPublicHost(url, resolve).catch((err: Error) => {
+          throw new FetchError(err.message)
+        })
+      }
       all.throwIfAborted()
       res = await doFetch(url.href, {
         redirect: "manual",
