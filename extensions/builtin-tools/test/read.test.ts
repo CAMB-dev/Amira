@@ -53,6 +53,30 @@ test("returns images as base64 image blocks", async () => {
   })
 })
 
+test("streams large files: a window deep in the file, and a huge single line", async () => {
+  const line = (i: number) => `${String(i).padStart(7, "0")} é ${"x".repeat(90)}`
+  const lines = Array.from({ length: 300_000 }, (_, i) => line(i + 1))
+  await writeFile(join(dir, "large.log"), `${lines.join("\n")}\n`)
+  const r = textOf(await read({ path: "large.log", offset: 299_998, limit: 2 }))
+  expect(r).toBe(
+    `299998\t${line(299_998)}\n299999\t${line(299_999)}\n\n(Showing lines 299998-299999. Use offset=300000 to read more.)`,
+  )
+  expect(textOf(await read({ path: "large.log", offset: 300_000 }))).toBe(`300000\t${line(300_000)}`)
+  expect(textOf(await read({ path: "large.log", offset: 300_001 }))).toContain("which has 300000 lines")
+
+  await writeFile(join(dir, "one-line.min.js"), "y".repeat(20_000_000))
+  const one = textOf(await read({ path: "one-line.min.js" }))
+  expect(one).toStartWith(`     1\t${"y".repeat(2000)}… [line truncated]`)
+  expect(one.length).toBeLessThan(2100)
+})
+
+test("reports the total line count for small files", async () => {
+  await writeFile(join(dir, "five.txt"), "1\n2\n3\n4\n5")
+  expect(textOf(await read({ path: "five.txt", limit: 2 }))).toContain(
+    "(Showing lines 1-2 of 5. Use offset=3",
+  )
+})
+
 test("refuses images over the size cap and says how big they are", async () => {
   await writeFile(join(dir, "huge.png"), Buffer.alloc(MAX_IMAGE_BYTES + 1024 * 1024, 1))
   const r = await read({ path: "huge.png" })

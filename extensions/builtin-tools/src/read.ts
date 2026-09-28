@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises"
 import { extname } from "node:path"
 import { defineTool, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
+import { type LineWindow, type ReadLinesResult, readLineWindow } from "./lines.ts"
 import { resolvePath } from "./paths.ts"
-import { decodeText, looksBinary } from "./text.ts"
 import { MAX_OUTPUT_CHARS } from "./truncate.ts"
 
 export const DEFAULT_READ_LIMIT = 2000
@@ -72,54 +72,59 @@ export const readTool = defineTool<ReadParams>({
       )
     }
 
-    let bytes: Buffer
-    try {
-      bytes = await readFile(abs, { signal: ctx.signal })
-    } catch (err) {
-      return textResult(`Failed to read ${abs}: ${(err as Error).message}`, true)
-    }
-
     if (mimeType) {
+      let bytes: Buffer
+      try {
+        bytes = await readFile(abs, { signal: ctx.signal })
+      } catch (err) {
+        return textResult(`Failed to read ${abs}: ${(err as Error).message}`, true)
+      }
       return {
         content: [{ type: "image", mimeType, data: bytes.toString("base64") }],
         details: { path: abs, mimeType, bytes: bytes.length },
       }
     }
-    const decoded = decodeText(bytes)
-    if (looksBinary(bytes, decoded))
-      return textResult(`${abs} appears to be a binary file and cannot be read as text.`, true)
 
-    let text = formatLines(abs, decoded.text, offset ?? 1, limit ?? DEFAULT_READ_LIMIT)
-    if (decoded.invalid) text += `\n\n${INVALID_UTF8_WARNING}`
+    const start = offset ?? 1
+    const count = limit ?? DEFAULT_READ_LIMIT
+    let window: ReadLinesResult
+    try {
+      window = await readLineWindow(abs, start, count, MAX_LINE_CHARS + 1, ctx.signal)
+    } catch (err) {
+      return textResult(`Failed to read ${abs}: ${(err as Error).message}`, true)
+    }
+    if (window === "aborted") return textResult("Aborted", true)
+    if (window === "binary") {
+      return textResult(`${abs} appears to be a binary file and cannot be read as text.`, true)
+    }
+    let text = formatWindow(abs, window, start)
+    if (window.invalidUtf8) text += `\n\n${INVALID_UTF8_WARNING}`
     return textResult(text)
   },
 })
 
-function formatLines(abs: string, text: string, offset: number, limit: number): string {
-  if (text === "") return `(${abs} is empty)`
-  const lines = text.split(/\r?\n/)
-  if (lines.at(-1) === "") lines.pop()
-  const start = Math.max(1, Math.floor(offset))
-  if (start > lines.length) {
-    return `(offset ${start} is past the end of ${abs}, which has ${lines.length} lines)`
+function formatWindow(abs: string, window: LineWindow, start: number): string {
+  const { lines, total } = window
+  if (total === 0) return `(${abs} is empty)`
+  if (total !== undefined && start > total) {
+    return `(offset ${start} is past the end of ${abs}, which has ${total} lines)`
   }
-  const end = Math.min(lines.length, start - 1 + Math.max(1, Math.floor(limit)))
 
   const out: string[] = []
   let size = 0
   let last = start - 1
-  for (let n = start; n <= end; n++) {
-    let line = lines[n - 1]!
-    if (line.length > MAX_LINE_CHARS) line = `${line.slice(0, MAX_LINE_CHARS)}… [line truncated]`
-    const row = `${String(n).padStart(6)}\t${line}`
+  for (const [i, raw] of lines.entries()) {
+    const line = raw.length > MAX_LINE_CHARS ? `${raw.slice(0, MAX_LINE_CHARS)}… [line truncated]` : raw
+    const row = `${String(start + i).padStart(6)}\t${line}`
     // Always return at least one line, even when it alone exceeds the budget.
     if (out.length > 0 && size + row.length + 1 > MAX_OUTPUT_CHARS) break
     out.push(row)
     size += row.length + 1
-    last = n
+    last = start + i
   }
-  if (last < lines.length) {
-    out.push("", `(Showing lines ${start}-${last} of ${lines.length}. Use offset=${last + 1} to read more.)`)
+  if (last < start - 1 + lines.length || window.more) {
+    const of = total === undefined ? "" : ` of ${total}`
+    out.push("", `(Showing lines ${start}-${last}${of}. Use offset=${last + 1} to read more.)`)
   }
   return out.join("\n")
 }
