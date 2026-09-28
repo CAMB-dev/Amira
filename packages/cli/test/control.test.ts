@@ -156,6 +156,29 @@ test("/reload unloads and loads the extensions again", async () => {
   expect(host.list().map((c) => c.name)).toContain("status")
 })
 
+test("a running turn or compaction blocks /reload, /clear and /model", async () => {
+  const loads: string[] = []
+  const { host, run } = await setup(
+    [{ text: "one", delayMs: 50 }, { text: "two" }, { text: "summary", delayMs: 50 }],
+    { loads },
+  )
+  const turn = host.agent.prompt("a")
+  await Bun.sleep(10)
+  expect(await run("/reload")).toContain("a turn is running")
+  expect(loads).toHaveLength(1)
+  await turn
+  await host.agent.prompt("b")
+  const compaction = host.control.compact()
+  await Bun.sleep(10)
+  expect(host.control.info().busy).toBe(true)
+  expect(await run("/clear")).toContain("a compaction is running")
+  expect(() => host.control.setModel("mock/other")).toThrow(/a compaction is running/)
+  expect(await run("/reload")).toContain("a compaction is running")
+  expect(await compaction).toBe(true)
+  expect(host.control.info().busy).toBe(false)
+  expect(await run("/reload")).toBe("Reloaded extensions.")
+})
+
 test("print mode runs a slash command instead of a turn", async () => {
   const { host, session } = await setup([{ text: "never" }])
   const out: string[] = []

@@ -41,7 +41,10 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
 
   const agent = () => host.agent
   const idle = (what: string) => {
-    if (agent().turnId) throw new Error(`a turn is running; ${what} after it ends (or press Esc to stop it)`)
+    const a = agent()
+    if (!a.busy) return
+    const running = a.turnId ? "a turn" : "a compaction"
+    throw new Error(`${running} is running; ${what} after it ends (or press Esc to stop it)`)
   }
   const switchTo = (next: Agent, reason: "resume" | "clear") => {
     host.switchTo(next)
@@ -59,7 +62,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         contextWindow: a.model.contextWindow,
         ...(a.contextTokens !== undefined ? { contextTokens: a.contextTokens } : {}),
         ...(file && existsSync(file) ? { file } : {}),
-        busy: a.turnId !== undefined,
+        busy: a.busy,
         shell,
       }
     },
@@ -159,7 +162,11 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       return lines.join("\n")
     },
     preview: () => agent().preview(),
-    reloadExtensions: () => session.reload(),
+    reloadExtensions: async () => {
+      // Unloading drops tools and MCP connections a running tool call may still be using.
+      idle("reload extensions")
+      await session.reload()
+    },
   }
 
   const host = new CommandHost({

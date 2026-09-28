@@ -245,6 +245,11 @@ export class Agent {
     return this.#maxParallelTools
   }
 
+  /** True while a turn or a manual compaction runs; a compaction has no turn id. */
+  get busy(): boolean {
+    return this.#abort !== undefined
+  }
+
   /** Id of the running turn, if any. */
   get turnId(): string | undefined {
     return this.#turn?.id
