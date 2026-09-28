@@ -145,8 +145,9 @@ interface InstallHow {
 
 async function install(source: PackageSource, how: InstallHow, opts: InstallOptions): Promise<InstallResult> {
   mkdirSync(opts.scope.dir, { recursive: true })
+  removeStaleWork(opts.scope.dir)
   // Inside the scope directory so the final rename stays on one volume.
-  const work = mkdtempSync(path.join(opts.scope.dir, ".work-"))
+  const work = mkdtempSync(path.join(opts.scope.dir, `.work-${process.pid}-`))
   try {
     const { root, pinned } = await fetchSource(source, how.pinned, work, opts)
     const manifest = readManifest(root)
@@ -158,10 +159,11 @@ async function install(source: PackageSource, how: InstallHow, opts: InstallOpti
     const mismatch = engineMismatch(manifest)
     if (mismatch) throw new PackageError(mismatch)
     const staged = path.join(work, "package")
-    cpSync(root, staged, {
-      recursive: true,
-      filter: (src) => src === root || !SKIPPED.has(path.basename(src)),
-    })
+    // The source may contain the scope itself (`amira ext install --project .` in a package's
+    // own repository), so the scope directory is skipped rather than copied into itself.
+    // Clones and npm downloads live in the work directory, inside the scope: never skip those.
+    const scopeInside = !isWithin(root, opts.scope.dir)
+    copyTree(root, staged, (src) => isWithin(src, staged) || (scopeInside && isWithin(src, opts.scope.dir)))
     if (manifest.hasDependencies) await installDependencies(staged, opts)
     const lock = readLock(opts.scope.lockFile)
     const previous = lock.packages[manifest.name]
@@ -181,8 +183,57 @@ async function install(source: PackageSource, how: InstallHow, opts: InstallOpti
   }
 }
 
-/** Version control data and dependencies are not copied; dependencies are installed afresh. */
-const SKIPPED = new Set([".git", "node_modules"])
+/**
+ * Version control data and dependencies are not copied (dependencies are installed afresh),
+ * nor a project's own `.amira` (sessions, local settings, packages).
+ */
+const SKIPPED = new Set([".git", "node_modules", ".amira"])
+
+/** Copies by hand: cpSync refuses a destination inside the source even when a filter skips it. */
+function copyTree(src: string, dest: string, skip: (src: string) => boolean) {
+  mkdirSync(dest, { recursive: true })
+  for (const e of readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, e.name)
+    if (SKIPPED.has(e.name) || skip(from)) continue
+    const to = path.join(dest, e.name)
+    if (e.isDirectory()) copyTree(from, to, skip)
+    else cpSync(from, to)
+  }
+}
+
+function isWithin(p: string, dir: string): boolean {
+  const rel = path.relative(dir, p)
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+}
+
+/**
+ * Work directories carry the installing process's pid, so ones left by an interrupted
+ * install (Ctrl+C during a long clone) can be told apart from a concurrent install.
+ */
+function removeStaleWork(scopeDir: string) {
+  let names: string[]
+  try {
+    names = readdirSync(scopeDir)
+  } catch {
+    return
+  }
+  for (const n of names) {
+    const pid = /^\.work-(\d+)-/.exec(n)?.[1]
+    if (pid && !isAlive(Number(pid)))
+      rmSync(path.join(scopeDir, n), { recursive: true, force: true, maxRetries: 3 })
+  }
+}
+
+function isAlive(pid: number): boolean {
+  if (pid === process.pid) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    // EPERM: it exists but belongs to someone else.
+    return (err as NodeJS.ErrnoException).code === "EPERM"
+  }
+}
 
 function swapIn(staged: string, dest: string, work: string) {
   mkdirSync(path.dirname(dest), { recursive: true })

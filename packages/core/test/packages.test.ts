@@ -154,6 +154,31 @@ test("installs a local directory into the user scope and records it in the lock 
   expect(removePackage("local-pkg", user())).toBe(false)
 })
 
+test("a package installs into its own repository's project scope without copying .amira", async () => {
+  makePackage(cwd, "self-pkg", "1.0.0")
+  mkdirSync(path.join(cwd, ".amira", "sessions"), { recursive: true })
+  writeFileSync(path.join(cwd, ".amira", "sessions", "s.jsonl"), "{}\n")
+  await installPackage(".", { scope: project(), cwd })
+  const installed = path.join(cwd, ".amira", "packages", "self-pkg")
+  expect(existsSync(path.join(installed, "index.ts"))).toBe(true)
+  expect(existsSync(path.join(installed, ".amira"))).toBe(false)
+  // Again, now that the scope holds a copy, and into the user scope from the same directory.
+  await installPackage(".", { scope: project(), cwd })
+  expect(existsSync(path.join(installed, ".amira"))).toBe(false)
+  await installPackage(cwd, { scope: user(), cwd })
+  expect(existsSync(path.join(home, "packages", "self-pkg", ".amira"))).toBe(false)
+})
+
+test("install clears work directories left by an interrupted install", async () => {
+  const stale = path.join(home, "packages", ".work-999999999-abc")
+  const live = path.join(home, "packages", `.work-${process.pid}-xyz`)
+  mkdirSync(path.join(stale, "clone"), { recursive: true })
+  mkdirSync(live, { recursive: true })
+  await installPackage(makePackage(path.join(dir, "src"), "p", "1.0.0"), { scope: user(), cwd })
+  expect(existsSync(stale)).toBe(false)
+  expect(existsSync(live)).toBe(true)
+})
+
 test("remove refuses names that would reach outside the packages directory", async () => {
   const src = makePackage(path.join(dir, "src"), "keep-me", "1.0.0")
   await installPackage(src, { scope: user(), cwd })
