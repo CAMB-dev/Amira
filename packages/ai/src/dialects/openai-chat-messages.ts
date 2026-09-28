@@ -1,4 +1,5 @@
 import type { AssistantMessage, ImageBlock, Message, ToolResultMessage, UserContent } from "../types.ts"
+import { indexResults, MISSING_RESULT, takeResult } from "./tool-results.ts"
 
 export type ChatMessage =
   | { role: "system"; content: string }
@@ -19,7 +20,7 @@ export interface ChatMessageOptions {
   images?: boolean
 }
 
-export const MISSING_RESULT = "[no result: the call did not complete]"
+export { MISSING_RESULT }
 
 /**
  * Translates history to Chat Completions messages. The wire format is strict: every
@@ -55,27 +56,6 @@ export function toChatMessages(
     }
   })
   return out
-}
-
-type ResultIndex = Map<string, { at: number; result: ToolResultMessage }[]>
-
-function indexResults(messages: Message[]): ResultIndex {
-  const index: ResultIndex = new Map()
-  messages.forEach((m, at) => {
-    if (m.role !== "toolResult") return
-    const list = index.get(m.toolCallId) ?? []
-    list.push({ at, result: m })
-    index.set(m.toolCallId, list)
-  })
-  return index
-}
-
-/** The first unused result for a call that comes after the call itself. */
-function takeResult(index: ResultIndex, id: string, callAt: number): ToolResultMessage | undefined {
-  const list = index.get(id)
-  const pos = list?.findIndex((r) => r.at > callAt) ?? -1
-  if (!list || pos === -1) return undefined
-  return list.splice(pos, 1)[0]?.result
 }
 
 function userContent(blocks: UserContent[]): string | ChatPart[] {
