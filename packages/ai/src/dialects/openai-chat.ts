@@ -4,6 +4,7 @@ import type { ModelRequest, StreamEvent } from "../types.ts"
 import { ChatAccumulator } from "./openai-chat-accumulate.ts"
 import { bodyError, isRetryableStatus } from "./openai-chat-errors.ts"
 import { toChatMessages } from "./openai-chat-messages.ts"
+import { withRetryAfter } from "./retry-after.ts"
 
 export { toChatMessages }
 
@@ -37,10 +38,11 @@ export const openaiChat: Dialect = {
     if (!res.ok) {
       const detail = await res.text().catch(() => "")
       const status = res.status
-      yield acc.fail(
+      const failed = acc.fail(
         { message: `HTTP ${status}: ${detail.slice(0, 500)}`, status },
         isRetryableStatus(status),
       )
+      yield withRetryAfter(failed, res.headers)
       return
     }
     if (!res.body) {

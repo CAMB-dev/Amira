@@ -1,19 +1,22 @@
+import { repairJsonObject } from "./json-repair.ts"
+
 /** Key under which unparseable tool arguments are kept, so the loop can report them to the model. */
 export const INVALID_ARGS_KEY = "__invalidJson"
 
 /**
- * Parses streamed tool-call arguments. Invalid JSON is kept under INVALID_ARGS_KEY
- * rather than thrown away; repairing it is a later concern of this layer.
+ * Parses streamed tool-call arguments. Common mistakes are repaired (D40); what cannot be
+ * repaired is kept under INVALID_ARGS_KEY rather than thrown away.
  */
 export function parseToolArgs(raw: string): Record<string, unknown> {
   if (raw.trim() === "") return {}
+  let v: unknown
   try {
-    const v = JSON.parse(raw)
-    if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>
-    return { [INVALID_ARGS_KEY]: raw }
-  } catch {
-    return { [INVALID_ARGS_KEY]: raw }
-  }
+    v = JSON.parse(raw)
+    // Some models encode the arguments twice.
+    if (typeof v === "string") v = JSON.parse(v)
+  } catch {}
+  if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>
+  return repairJsonObject(raw) ?? { [INVALID_ARGS_KEY]: raw }
 }
 
 export function invalidArgs(args: Record<string, unknown>): string | undefined {

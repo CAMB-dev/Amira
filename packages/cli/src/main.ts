@@ -89,7 +89,7 @@ async function run(argv: string[]): Promise<number> {
     ...(args.resume ? { resume: args.resume } : {}),
   })
   const { store, resumed } = choice
-  const { agent, host, startupEvents } = await createSession({
+  const { agent, host, startupEvents, catalogRefresh } = await createSession({
     model,
     cwd: args.cwd,
     extensions: args.extensions,
@@ -126,6 +126,8 @@ async function run(argv: string[]): Promise<number> {
     })
   } finally {
     stopWorkspace()
+    // Give a catalog download a moment to reach the cache, so short runs still fill it.
+    await Promise.race([catalogRefresh, Bun.sleep(5000)])
   }
 }
 

@@ -1,4 +1,4 @@
-import { type Ai, createAi, type ModelInfo, type ProviderConfig } from "@amira/ai"
+import { type Ai, createAi, type ModelInfo, type ProviderConfig, type RetryOptions } from "@amira/ai"
 import type { AnyEvent, Extension, Settings } from "@amira/api"
 import {
   Agent,
@@ -13,6 +13,7 @@ import {
   ToolRegistry,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
+import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
 import { withPresetHint } from "./provider-command.ts"
 
 export interface SessionOptions {
@@ -27,6 +28,8 @@ export interface SessionOptions {
   store?: SessionStore
   /** Compaction options; unset, they come from settings `compact`. */
   compaction?: CompactionOptions
+  /** Where the model catalog is cached and fetched from; false leaves it out. Unused with `ai`. */
+  catalog?: CatalogCacheOptions | false
   /** Receives failures of event subscribers (extensions or frontends). The core itself never prints. */
   onSubscriberError?: (error: unknown, event: AnyEvent) => void
   /** Loads the bundled extensions; injectable for tests. */
@@ -46,11 +49,8 @@ export interface Session {
   host: ExtensionHost
   /** Extension events emitted while loading, before any frontend subscribed. */
   startupEvents: AnyEvent[]
-  /**
-   * Retry hook: settings retry.attempts, for the retry support that is still to come. Pass it
-   * to the Agent once it takes a retry option.
-   */
-  retryAttempts?: number
+  /** Settles when a background catalog refresh is done (at once when none was due). */
+  catalogRefresh: Promise<void>
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -73,8 +73,18 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  const ai = opts.ai ?? createAi({ providers: opts.providers ?? [], apiKeys: opts.apiKeys ?? {} })
   const settings = opts.settings ?? {}
+  const catalogOpts = opts.ai || opts.catalog === false ? undefined : (opts.catalog ?? {})
+  const cached = catalogOpts ? await readCatalogCache(catalogOpts) : undefined
+  const retry = retryFromSettings(settings.retry)
+  const ai =
+    opts.ai ??
+    createAi({
+      providers: opts.providers ?? [],
+      apiKeys: opts.apiKeys ?? {},
+      ...(cached?.catalog ? { catalog: cached.catalog } : {}),
+      ...(retry ? { retry } : {}),
+    })
   const model = resolveModel(ai, opts.model)
   const compaction = opts.compaction ?? compactionFromSettings(ai, settings.compact)
   const bus = new EventBus(opts.onSubscriberError)
@@ -117,8 +127,29 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ...(compaction ? { compaction } : {}),
     ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
-  const retryAttempts = settings.retry?.attempts
-  return { agent, host, startupEvents, ...(retryAttempts !== undefined ? { retryAttempts } : {}) }
+  // A stale or missing catalog is refreshed in the background; startup never waits for it.
+  const catalogRefresh =
+    catalogOpts && cached?.stale
+      ? refreshCatalog(catalogOpts)
+          .then((catalog) => {
+            if (!catalog) return
+            ai.setCatalog?.(catalog)
+            // Only replace the model this session started with, not one chosen since.
+            if (agent.model === model) agent.model = ai.model(opts.model)
+          })
+          .catch(() => {})
+      : Promise.resolve()
+  return { agent, host, startupEvents, catalogRefresh }
+}
+
+/** Settings `retry` as ai retry options (D52); `attempts` counts the retries after the first try. */
+export function retryFromSettings(retry: Settings["retry"]): RetryOptions | undefined {
+  if (!retry) return undefined
+  const out: RetryOptions = {}
+  if (retry.attempts !== undefined) out.retries = retry.attempts
+  if (retry.baseDelayMs !== undefined) out.baseDelayMs = retry.baseDelayMs
+  if (retry.maxDelayMs !== undefined) out.maxDelayMs = retry.maxDelayMs
+  return Object.keys(out).length ? out : undefined
 }
 
 function resolveModel(ai: Ai, ref: string): ModelInfo {

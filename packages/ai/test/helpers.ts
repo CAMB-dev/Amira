@@ -34,6 +34,8 @@ export const delta = (d: unknown, finish: string | null = null) => ({
 export function testAi(fetchImpl: typeof fetch) {
   return createAi({
     fetch: fetchImpl,
+    // Dialect tests look at single attempts; retrying has its own tests.
+    retry: { retries: 0 },
     providers: [{ id: "test", dialect: "openai-chat", baseUrl: "http://test/v1" }],
   })
 }

@@ -5,6 +5,7 @@ import { MessagesAccumulator } from "./anthropic-accumulate.ts"
 import { anthropicError, isRetryableStatus } from "./anthropic-errors.ts"
 import { ANTHROPIC_DIALECT, toAnthropicMessages } from "./anthropic-messages.ts"
 import { requestBody } from "./anthropic-request.ts"
+import { withRetryAfter } from "./retry-after.ts"
 
 export { toAnthropicMessages }
 
@@ -40,7 +41,7 @@ export const anthropicMessages: Dialect = {
     }
     if (!res.ok) {
       const detail = await res.text().catch(() => "")
-      yield httpError(acc, res.status, detail)
+      yield withRetryAfter(httpError(acc, res.status, detail), res.headers)
       return
     }
     if (!res.body) {
