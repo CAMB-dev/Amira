@@ -77,6 +77,35 @@ test("every message is persisted as it is added and restores into a new agent", 
   expect(reopened.entries.filter((e) => e.type === "model_change").length).toBe(1)
 })
 
+test("a session open in two agents: the second writer reports the conflict once", async () => {
+  const { agent, ai, session } = await setup([{ text: "r1" }])
+  await agent.prompt("q1")
+  const mock2 = createMockDialect([{ text: "r2" }, { text: "other" }])
+  ai.registerDialect(mock2)
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const twin = new Agent({
+    ai,
+    model: ai.model("mock/m"),
+    cwd: "/proj",
+    bus,
+    session: SessionStore.open(session.file),
+  })
+  await agent.prompt("q2")
+  const r = await twin.prompt("from the twin")
+  await bus.flush()
+  expect(r.reason).toBe("done")
+  const errors = events.filter((e) => e.type === "extension.error")
+  expect(errors.length).toBe(1)
+  expect(errors[0]!.data).toMatchObject({
+    source: "session",
+    error: expect.stringContaining("another process"),
+  })
+  expect(twin.messages.length).toBe(4)
+  expect(SessionStore.open(session.file).restore().messages).toEqual(agent.messages)
+})
+
 test("setModel records a model_change and emits model.changed", async () => {
   const { agent, ai, session, bus, events, mock } = await setup([{ text: "x" }, { text: "y" }])
   await agent.prompt("hi")

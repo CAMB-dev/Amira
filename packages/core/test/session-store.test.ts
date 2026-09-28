@@ -5,7 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { type Message, userMessage } from "@amira/ai"
 import { findSession, listSessions } from "../src/session-list.ts"
-import { SessionStore, sessionsDir } from "../src/session-store.ts"
+import { SessionConflictError, SessionStore, sessionsDir } from "../src/session-store.ts"
 
 const tmp = () => mkdtemp(path.join(os.tmpdir(), "amira-sessions-"))
 
@@ -100,6 +100,23 @@ test("the first write failing keeps buffered entries for the next attempt", asyn
   expect(() => s.appendMessage(userMessage("lost"))).toThrow()
   expect(s.entries.length).toBe(1)
   expect(s.branch().map((e) => e.type)).toEqual(["model_change"])
+})
+
+test("a second writer to the same file is refused instead of interleaving chains", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  s.appendMessage(userMessage("one"))
+  const a = SessionStore.open(s.file)
+  const b = SessionStore.open(s.file)
+  a.appendMessage(userMessage("from a"))
+  expect(() => b.appendMessage(userMessage("from b"))).toThrow(SessionConflictError)
+  expect(() => b.appendMessage(userMessage("from b again"))).toThrow(SessionConflictError)
+  a.appendMessage(reply("still a"))
+  expect(SessionStore.open(s.file).restore().messages).toEqual([
+    userMessage("one"),
+    userMessage("from a"),
+    reply("still a"),
+  ])
 })
 
 test("a parent missing from the file is bridged to the entry before it", async () => {

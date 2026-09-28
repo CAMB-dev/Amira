@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import type { AssistantMessage, Message, ModelRef } from "@amira/ai"
 import { contextTokens } from "./compaction.ts"
@@ -64,6 +64,8 @@ export class SessionStore {
   /** The file ends in a torn line; the next write starts on a fresh line. */
   #needsNewline = false
   #pending: string[] = []
+  /** Bytes in the file as far as this store knows; any other size means another writer. */
+  #size = 0
 
   private constructor(file: string, header: SessionHeader, written: boolean) {
     this.file = file
@@ -87,7 +89,8 @@ export class SessionStore {
 
   /** Reads a session file. Lines that do not parse, such as a torn last line, are skipped. */
   static open(file: string): SessionStore {
-    const raw = readFileSync(file, "utf8")
+    const bytes = readFileSync(file)
+    const raw = bytes.toString("utf8")
     const lines = raw.split("\n")
     const header = parseLine(lines[0] ?? "")
     if (!isHeader(header)) throw new Error(`not an Amira session file: ${file}`)
@@ -97,6 +100,7 @@ export class SessionStore {
       if (isEntry(e)) store.#add(e)
     }
     store.#needsNewline = raw.length > 0 && !raw.endsWith("\n")
+    store.#size = bytes.length
     return store
   }
 
@@ -207,19 +211,42 @@ export class SessionStore {
         return
       }
       mkdirSync(path.dirname(this.file), { recursive: true })
-      appendFileSync(this.file, `${[JSON.stringify(this.header), ...this.#pending, line].join("\n")}\n`)
+      const text = `${[JSON.stringify(this.header), ...this.#pending, line].join("\n")}\n`
+      appendFileSync(this.file, text)
+      this.#size = Buffer.byteLength(text)
       this.#pending = []
       this.#written = true
       return
     }
+    // Two stores appending to one file would interleave two parent chains, and a resume
+    // would follow only one of them. The first to write wins; the other stops saving.
+    if (statSync(this.file).size !== this.#size) throw new SessionConflictError(this.file)
+    const text = `${this.#needsNewline ? "\n" : ""}${line}\n`
     try {
-      appendFileSync(this.file, `${this.#needsNewline ? "\n" : ""}${line}\n`)
+      appendFileSync(this.file, text)
+      this.#size += Buffer.byteLength(text)
       this.#needsNewline = false
     } catch (err) {
       // Part of the line may have landed; the next one starts on a fresh line.
       this.#needsNewline = true
+      this.#size = sizeOf(this.file) ?? this.#size
       throw err
     }
+  }
+}
+
+/** Another process appended to the session file since this store last read or wrote it. */
+export class SessionConflictError extends Error {
+  constructor(file: string) {
+    super(`${file} was changed by another process (is this session open twice?); this one is no longer saved`)
+  }
+}
+
+function sizeOf(file: string): number | undefined {
+  try {
+    return statSync(file).size
+  } catch {
+    return undefined
   }
 }
 
