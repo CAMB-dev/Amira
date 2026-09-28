@@ -213,6 +213,12 @@ export class MarkdownStream implements Component {
     } else {
       const p = partialRender(this.state, line, env)
       if (!p) return false
+      if (p.raw) {
+        // Shown differently from now on, as its source: a change even if no row can be committed.
+        this.cut = { render: p.render, carry: "" }
+        this.commitPartial(env, sink)
+        return true
+      }
       render = p.render
       state = p.state
     }

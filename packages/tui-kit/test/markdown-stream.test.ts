@@ -231,6 +231,32 @@ test("a table taller than the live region is committed with the widths it has so
   expect(committed.slice(4)).toEqual(["wider │ 5", "wider │ 6", "still │"])
 })
 
+test("a table row too tall for the live region is committed as its source; the table goes on", () => {
+  for (const frozenFirst of [true, false]) {
+    const { ctx, committed } = committing()
+    const m = new MarkdownStream()
+    m.maxRows = 3
+    const head = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n"
+    const long = `| ${"x".repeat(200)} | 5 |`
+    if (frozenFirst) {
+      m.append(head)
+      m.render(40, ctx)
+    } else m.append(`${head.split("\n").slice(0, 3).join("\n")}\n`)
+    const rest = `${long}\n| 6 | 7 |\n| 8 | 9 |\n`
+    for (let at = 0; at < rest.length; at += 5) {
+      m.append(rest.slice(at, at + 5))
+      expect(m.render(40, ctx).length).toBeLessThanOrEqual(3)
+    }
+    const rows = [...committed, ...m.take(40)].map(stripAnsi)
+    if (frozenFirst)
+      expect(rows.slice(0, 4)).toEqual(["a     │ b", "──────┼──────", "1     │ 2", "3     │ 4"])
+    const i = rows.indexOf("|")
+    // The long row wraps as text, in as many rows as that takes; the next rows are table rows.
+    expect(rows.slice(i).join("").replace(/ /g, "")).toBe(`|${"x".repeat(200)}|5|6│78│9`)
+    expect(rows.slice(-2)).toEqual(["6     │ 7", "8     │ 9"])
+  }
+})
+
 test("a frozen table keeps no rows: the work per row stays the same however long it gets", () => {
   const env: Env = {
     width: 40,

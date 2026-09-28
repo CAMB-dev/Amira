@@ -213,10 +213,14 @@ export function partialRender(
   s: BlockState,
   line: string,
   env: Env,
-): { state: BlockState; render: LineRender } | undefined {
+): { state: BlockState; render: LineRender; raw?: boolean } | undefined {
   if (hasOpenBlock(s) || line.trim() === "") return undefined
   if (s.fence)
     return FENCE_CLOSE_LIKE.test(line) ? undefined : { state: s, render: codeLine(s.fence, line, env) }
+  // A row of a table whose widths are frozen, too tall to wait for its end: its cells may still
+  // grow, so its rows cannot be committed as table rows. It is shown as its source instead (`raw`:
+  // not as it renders now), and the table goes on with the next row.
+  if (s.table && line.includes("|")) return { state: s, render: rawRender(s.table, line), raw: true }
   const next = cloneState(s)
   next.table = undefined
   const d = classify(next, line, env)
@@ -536,15 +540,13 @@ function tableRow(t: Table, cells: string[], widths: number[], env: Env, header:
   return out
 }
 
+/** How a table's source line renders when the table is shown raw. */
+function rawRender(t: Table, line: string): LineRender {
+  const start = line.length - line.trimStart().length
+  const col = pad(t.renderCol)
+  return { code: false, lang: "", prefix: col, rest: col, indent: t.renderCol, start, trim: 0 }
+}
+
 function rawRows(t: Table, lines: string[], env: Env): string[] {
-  const lr: LineRender = {
-    code: false,
-    lang: "",
-    prefix: pad(t.renderCol),
-    rest: pad(t.renderCol),
-    indent: t.renderCol,
-    start: 0,
-    trim: 0,
-  }
-  return lines.flatMap((l) => renderLine(lr, l, env).rows)
+  return lines.flatMap((l) => renderLine(rawRender(t, l), l, env).rows)
 }
