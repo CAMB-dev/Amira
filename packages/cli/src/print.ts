@@ -1,3 +1,4 @@
+import type { AnyEvent } from "@amira/api"
 import type { Agent, TurnResult } from "@amira/core"
 
 export interface PrintIO {
@@ -19,9 +20,15 @@ export function exitCode(r: TurnResult): number {
  * One non-interactive turn. Plain mode streams the reply to stdout and tool
  * activity to stderr; JSON mode writes every event as one JSON line.
  */
-export async function runPrint(agent: Agent, prompt: string, json: boolean, io = defaultIO): Promise<number> {
+export async function runPrint(
+  agent: Agent,
+  prompt: string,
+  json: boolean,
+  io = defaultIO,
+  pending: AnyEvent[] = [],
+): Promise<number> {
   let endedWithNewline = true
-  const off = agent.bus.subscribe((e) => {
+  const handle = (e: AnyEvent) => {
     if (json) {
       io.stdout(`${JSON.stringify(e)}\n`)
       return
@@ -48,7 +55,9 @@ export async function runPrint(agent: Agent, prompt: string, json: boolean, io =
         if (e.data.reason === "aborted") io.stderr("aborted\n")
         break
     }
-  })
+  }
+  for (const e of pending) handle(e)
+  const off = agent.bus.subscribe(handle)
 
   const onSigint = () => agent.abort()
   process.on("SIGINT", onSigint)

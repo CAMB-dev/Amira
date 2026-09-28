@@ -1,4 +1,5 @@
 import { type Ai, createAi } from "@amira/ai"
+import type { AnyEvent } from "@amira/api"
 import {
   Agent,
   defaultSections,
@@ -15,12 +16,20 @@ export interface SessionOptions {
   extensions: string[]
   noBuiltins: boolean
   ai?: Ai
-  /** Called for extension load failures. */
-  onExtensionError?: (source: string, error: string) => void
 }
 
-/** Wires the ai layer, core registries, extensions and the agent together. */
-export async function createSession(opts: SessionOptions): Promise<Agent> {
+export interface Session {
+  agent: Agent
+  host: ExtensionHost
+  /** Extension events emitted while loading, before any frontend subscribed. */
+  startupEvents: AnyEvent[]
+}
+
+/**
+ * Wires the ai layer, core registries, extensions and the agent together.
+ * Extension failures are reported as extension.error events on the agent's bus.
+ */
+export async function createSession(opts: SessionOptions): Promise<Session> {
   const ai = opts.ai ?? createAi()
   const model = ai.model(opts.model)
   const bus = new EventBus()
@@ -29,19 +38,21 @@ export async function createSession(opts: SessionOptions): Promise<Agent> {
       bus.emit("extension.error", { source, error: `${point}: ${error}` }, { sessionId: "host" }),
   })
   const tools = new ToolRegistry()
-  const onError = (source: string, error: string) => {
-    opts.onExtensionError?.(source, error)
-    bus.emit("extension.error", { source, error }, { sessionId: "host" })
-  }
-  const host = new ExtensionHost({ bus, interceptors, tools, onError })
+  const host = new ExtensionHost({ bus, interceptors, tools })
+  const startupEvents: AnyEvent[] = []
+  const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
+    types: ["extension.error", "extension.loaded"],
+  })
 
   if (!opts.noBuiltins) {
     const mod: { default?: unknown } = await import("@amira/builtin-tools")
     if (typeof mod.default === "function") await host.load(mod.default as never, "builtin:tools")
   }
   for (const file of opts.extensions) await host.loadFile(file)
+  await bus.flush()
+  stopCapture()
 
-  return new Agent({
+  const agent = new Agent({
     ai,
     model,
     cwd: opts.cwd,
@@ -50,4 +61,5 @@ export async function createSession(opts: SessionOptions): Promise<Agent> {
     interceptors,
     tools,
   })
+  return { agent, host, startupEvents }
 }

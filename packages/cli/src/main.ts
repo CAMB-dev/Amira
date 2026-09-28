@@ -26,14 +26,14 @@ async function main(argv: string[]): Promise<number> {
     return 2
   }
 
-  const agent = await createSession({
+  const { agent, startupEvents } = await createSession({
     model: args.model,
     cwd: args.cwd,
     extensions: args.extensions,
     noBuiltins: args.noBuiltins,
   })
 
-  if (args.print && args.prompt) return runPrint(agent, args.prompt, args.json)
+  if (args.print && args.prompt) return runPrint(agent, args.prompt, args.json, undefined, startupEvents)
 
   process.stderr.write("amira: the interactive UI is not available yet; use --print.\n")
   return 2

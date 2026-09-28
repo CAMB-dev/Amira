@@ -28,7 +28,7 @@ async function mockSession(steps: Parameters<typeof createMockDialect>[0]) {
     dialects: [createMockDialect(steps)],
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
   })
-  const agent = await createSession({
+  const { agent } = await createSession({
     model: "mock/m",
     cwd: process.cwd(),
     extensions: [],
@@ -74,4 +74,21 @@ test("model errors exit with code 1", async () => {
   const code = await runPrint(agent, "go", false, { stdout: () => {}, stderr: (s) => (err += s) })
   expect(code).toBe(1)
   expect(err).toContain("error: nope")
+})
+
+test("extension load failures during startup are reported", async () => {
+  const ai = createAi({
+    dialects: [createMockDialect([{ text: "hi" }])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const { agent, startupEvents } = await createSession({
+    model: "mock/m",
+    cwd: process.cwd(),
+    extensions: ["./does-not-exist.ts"],
+    noBuiltins: true,
+    ai,
+  })
+  let err = ""
+  await runPrint(agent, "go", false, { stdout: () => {}, stderr: (s) => (err += s) }, startupEvents)
+  expect(err).toContain("does-not-exist.ts")
 })
