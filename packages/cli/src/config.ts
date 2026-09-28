@@ -12,6 +12,8 @@ export interface Config {
   apiKeys: Record<string, string>
   /** Tools hidden from the model, from the shell mode and tools.disabled. */
   disabledTools: string[]
+  /** The names the user asked to disable, and where: reported if no tool has them. */
+  requestedDisabled: { names: string[]; from: string }
   warnings: string[]
 }
 
@@ -41,6 +43,10 @@ export function resolveConfig(
     providers: providersFromSettings(settings.providers),
     apiKeys: auth.keys,
     disabledTools: toolsToDisable(shell, settings.tools?.disabled ?? []),
+    requestedDisabled: {
+      names: settings.tools?.disabled ?? [],
+      from: args.disabledTools ? "--disable-tools" : "settings tools.disabled",
+    },
     warnings: [...warnings, ...auth.warnings],
   }
 }

@@ -56,6 +56,15 @@ test("shell and tools.disabled come from settings unless the flags are given", (
   expect(config(["--shell", "auto", "--disable-tools", ""]).disabledTools).toEqual([])
 })
 
+test("the names to check for unknown tools come from the flag or, without it, from settings", () => {
+  put(path.join(cwd, ".amira", "settings.json"), { shell: "bash", tools: { disabled: ["glob"] } })
+  expect(config([]).requestedDisabled).toEqual({ names: ["glob"], from: "settings tools.disabled" })
+  expect(config(["--disable-tools", "grep"]).requestedDisabled).toEqual({
+    names: ["grep"],
+    from: "--disable-tools",
+  })
+})
+
 test("a powershell shell from settings falls back to auto off Windows, with a warning", () => {
   put(path.join(home, "settings.json"), { shell: "powershell" })
   const c = config([], {}, "linux")

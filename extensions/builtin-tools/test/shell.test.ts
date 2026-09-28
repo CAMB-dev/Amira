@@ -3,14 +3,14 @@ import { existsSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { cmdArgv } from "@amira/proc"
+import { cmdArgv, runCommand } from "@amira/proc"
 import {
   bashFromGitExecPath,
+  fallbackPowerShell,
   findGitBash,
   gitBashEnv,
   gitBashLayout,
   isRejectedShellPath,
-  powershellShell,
   resolveShell,
 } from "../src/shell.ts"
 
@@ -128,16 +128,22 @@ test.if(gated)(
 )
 
 test.if(process.platform === "win32")(
-  "PowerShell fallback passes the command through intact",
+  "the PowerShell fallback is gated, labelled and passes the command through intact",
   async () => {
-    const ps = powershellShell()
+    const ps = fallbackPowerShell()
     // Embedded quotes, a trailing backslash before a quote, a literal $ and a PowerShell backtick escape.
     const command = "Write-Output 'a\"b' \"c d\" 'e\\f\\' '$x' \"g`\"h\""
-    const proc = Bun.spawn(ps.command(command).argv, { stdout: "pipe", stderr: "pipe" })
-    const out = await new Response(proc.stdout).text()
-    expect(await proc.exited).toBe(0)
-    expect(out.split(/\r?\n/).filter(Boolean)).toEqual(['a"b', "c d", "e\\f\\", "$x", 'g"h'])
-    expect(ps.label).toContain("PowerShell")
+    const { argv, ...spawn } = ps.command(command)
+    expect(spawn.gated).toBe(true)
+    const run = await runCommand(argv, {
+      ...spawn,
+      cwd: process.cwd(),
+      timeoutMs: 60_000,
+      signal: new AbortController().signal,
+    })
+    expect(run.exitCode).toBe(0)
+    expect(run.output.split(/\r?\n/).filter(Boolean)).toEqual(['a"b', "c d", "e\\f\\", "$x", 'g"h'])
+    expect(ps.label).toMatch(/PowerShell.*\(Git Bash not found\)/)
   },
   30_000,
 )
