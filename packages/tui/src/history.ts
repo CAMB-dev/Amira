@@ -1,6 +1,6 @@
 import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
-import { type Theme, wrapText } from "@amira/tui-kit"
-import { userLines } from "./format.ts"
+import { renderMarkdown, type Theme, visibleWidth } from "@amira/tui-kit"
+import { replyRows, userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
 import { Transcript } from "./transcript.ts"
@@ -41,13 +41,9 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     } else if (m.role === "assistant") {
       for (const b of m.content) {
         if (b.type === "text" && b.text.trim()) {
-          const rows = wrapText(b.text.trim(), Math.max(1, opts.width - gutter.length))
-          out.push(
-            ...t.block(
-              "assistant",
-              rows.map((r) => gutter + r),
-            ),
-          )
+          // Markdown, as the reply showed when it streamed in.
+          const rows = renderMarkdown(b.text, Math.max(1, opts.width - visibleWidth(gutter)), theme)
+          out.push(...t.block("assistant", replyRows(rows)))
         } else if (b.type === "toolCall") {
           const result = results.get(b.id) ?? { content: [], isError: true }
           const lines = finishedToolLines(

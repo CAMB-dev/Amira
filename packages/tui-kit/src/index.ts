@@ -1,14 +1,21 @@
 export { stripAnsi, type TerminalMode } from "./ansi.ts"
-export { type Capabilities, type SetupResult, setupTerminalInput } from "./capabilities.ts"
+export {
+  type Capabilities,
+  type SetupResult,
+  setupTerminalInput,
+  supportsHyperlinks,
+} from "./capabilities.ts"
 export { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 export { Box, type BoxOptions } from "./components/box.ts"
 export { Editor, type EditorOptions } from "./components/editor.ts"
+export { MarkdownStream, type MarkdownStreamOptions, renderMarkdown } from "./components/markdown-stream.ts"
 export { type ScrollPosition, ScrollView } from "./components/scroll-view.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
 export { StreamText } from "./components/stream-text.ts"
 export { Text } from "./components/text.ts"
 export { FullScreenRenderer } from "./fullscreen.ts"
+export { defaultGlyphs, type Glyphs } from "./glyphs.ts"
 export { InputParser } from "./input.ts"
 export {
   type InputEvent,
@@ -40,11 +47,14 @@ export {
   inverse,
   isColorEnabled,
   italic,
+  type MarkdownToken,
   magenta,
+  markdownTheme,
   red,
   rgb,
   type StyleFn,
   setColorEnabled,
+  strikethrough,
   stripColors,
   type Theme,
   underline,

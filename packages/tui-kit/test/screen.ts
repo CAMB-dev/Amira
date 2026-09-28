@@ -3,8 +3,9 @@ import { graphemes } from "../src/width.ts"
 /**
  * A tiny VT emulator, just enough to check what the renderer leaves on screen: printing with
  * autowrap, CR/LF with scrolling, CUU/CUD/CHA/CUP, EL 2, ED 0 and 2, and the alternate screen
- * (1049: saves the cursor, and the main screen comes back as it was). Colors and other modes
- * are ignored. `resize` changes the size without re-wrapping, like a terminal that got wider.
+ * (1049: saves the cursor, and the main screen comes back as it was). Colors, other modes and
+ * OSC strings (hyperlinks) are ignored. `resize` changes the size without re-wrapping, like a
+ * terminal that got wider.
  */
 export class VirtualScreen {
   grid: string[][]
@@ -140,7 +141,7 @@ export class VirtualScreen {
   }
 
   private escape(data: string, i: number): number {
-    if (data[i + 1] === "_") {
+    if (data[i + 1] === "_" || data[i + 1] === "]") {
       const end = data.indexOf("\x07", i)
       return end === -1 ? data.length : end + 1
     }

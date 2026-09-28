@@ -82,6 +82,37 @@ test("a resumed history uses the transcript's blocks, the tool presenters and a 
   ])
 })
 
+test("a resumed reply renders as Markdown inside the assistant's gutter", () => {
+  const lines = historyLines(
+    defaultTheme,
+    [
+      { role: "user", content: [{ type: "text", text: "fix it" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Looking at **it**:\n\n- one\n\n```ts\nconst a = 1\n```" },
+          { type: "toolCall", id: "c1", name: "read", args: { path: "a.ts" } },
+        ],
+        model: { provider: "p", model: "m" },
+      },
+      { role: "toolResult", toolCallId: "c1", toolName: "read", content: [], isError: false },
+    ],
+    { width: 30 },
+  )
+  const rows = plain(lines)
+  expect(rows.slice(0, 6)).toEqual(["› fix it", "", "  Looking at it:", "", "  • one", ""])
+  // The code block is framed within the width less the gutter, every row indented.
+  const code = rows.slice(6, rows.indexOf("", 6))
+  expect(code[0]).toStartWith("  ╭─ ts")
+  expect(code.some((r) => r.includes("const a = 1"))).toBe(true)
+  for (const r of code) {
+    expect(r).toStartWith("  ")
+    expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
+  }
+  expect(rows.at(-1)).toBe("── resumed ──")
+  expect(rows).toContain("● read a.ts")
+})
+
 test("a sub-agent's end line says how it ended, its time, tokens and the start of its answer", () => {
   const sub = { role: "explorer", task: "t", depth: 1, tokens: 12_345, lastText: "Found it\nin a.ts" }
   const line = (status: "done" | "error" | "aborted", error?: string) =>

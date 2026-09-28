@@ -1,0 +1,293 @@
+import { stripAnsi } from "../ansi.ts"
+import { supportsHyperlinks } from "../capabilities.ts"
+import type { Component, RenderContext } from "../component.ts"
+import { defaultGlyphs, type Glyphs } from "../glyphs.ts"
+import {
+  type BlockState,
+  cloneState,
+  commitOpenBlocks,
+  type Env,
+  endOpenBlocks,
+  finish,
+  hasOpenBlock,
+  type LineRender,
+  newState,
+  partialRender,
+  renderLine,
+  type Sink,
+  step,
+} from "../markdown/blocks.ts"
+import { codeCarry } from "../markdown/highlight.ts"
+import { type Lead, markdownStyles, type Run } from "../markdown/inline.ts"
+import { defaultTheme, type Theme } from "../style.ts"
+import { TAB_WIDTH } from "../width.ts"
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters
+const CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g
+/** An escape sequence or `\r\n` that a chunk may end in the middle of. */
+const UNFINISHED =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
+  /(?:\x1b(?:\[[0-?]*[ -/]*|[\]P_^X][^\x07\x1b]*\x1b?|[ -/]*)?|\r)$/
+
+export interface MarkdownStreamOptions {
+  glyphs?: Glyphs
+  /** Make links clickable with OSC 8. Defaults to what the terminal is known to support. */
+  hyperlinks?: boolean
+  /** Color keywords, strings and comments in code blocks of the languages it knows. */
+  highlight?: boolean
+}
+
+/** Renders a whole Markdown text to rows, as `MarkdownStream` shows it once it has streamed in. */
+export function renderMarkdown(
+  text: string,
+  width: number,
+  theme: Theme = defaultTheme,
+  opts: MarkdownStreamOptions = {},
+): string[] {
+  const m = new MarkdownStream(opts)
+  m.append(text)
+  m.render(width, { theme, color: true, rows: Number.POSITIVE_INFINITY })
+  return m.take(width)
+}
+
+/** The start of a partial line whose first rows were committed already. */
+interface Cut {
+  render: LineRender
+  /** Delimiters of the spans open at the cut, parsed again in front of the rest. */
+  carry: string
+  /** The rest of a run the cut went through. */
+  lead?: Lead
+}
+
+/**
+ * Markdown that streams in, such as a model's reply, rendered block by block so that nothing
+ * shown in the scrollback ever has to change.
+ *
+ * A block is committed to the scrollback as soon as it is complete: a paragraph line once the
+ * next line shows it is not a heading's text or a table's header, a heading, list item or quote
+ * line at its line break, a table when a line that is not a row follows, and each line of a code
+ * block as soon as it ends. Only the block still being written is drawn in the live region,
+ * re-rendered each frame, so the work per frame is bounded by that block and a width change
+ * re-wraps only it. When it grows past `maxRows`, its rows that can no longer change are
+ * committed too (like `StreamText`): a table then keeps the column widths it had.
+ *
+ * Source line breaks are kept. Committing needs the renderer's `ctx.commit`; without it every
+ * row is returned. Escape sequences and control characters in the text are dropped.
+ */
+export class MarkdownStream implements Component {
+  /** Rows the text may take in the live region; set by the parent before each render. */
+  maxRows = Number.POSITIVE_INFINITY
+  /** Rows committed to the scrollback since the text was last taken. */
+  committedRows = 0
+  private readonly glyphs: Glyphs
+  private readonly hyperlinks: boolean
+  private readonly highlight: boolean
+  private state = newState()
+  /** Text not processed yet: complete lines, then the partial line being written. */
+  private src = ""
+  /** Where the rest of the partial line starts, when its first rows were committed. */
+  private cut: Cut | undefined
+  /** Rows finished while no renderer could commit them. */
+  private done: string[] = []
+  /** The end of the last chunk when it may continue in the next: a split escape or `\r`. */
+  private pending = ""
+  private theme = defaultTheme
+
+  constructor(opts: MarkdownStreamOptions = {}) {
+    this.glyphs = opts.glyphs ?? defaultGlyphs
+    this.hyperlinks = opts.hyperlinks ?? supportsHyperlinks()
+    this.highlight = opts.highlight ?? true
+  }
+
+  /** Adds streamed text. */
+  append(chunk: string): void {
+    let s = this.pending + chunk
+    this.pending = s.match(UNFINISHED)?.[0] ?? ""
+    if (this.pending) s = s.slice(0, -this.pending.length)
+    s = stripAnsi(s).replace(/\r\n?/g, "\n").replace(CONTROLS, "")
+    if (!s.includes("\t")) {
+      this.src += s
+      return
+    }
+    for (const part of s.split(/(\t)/)) {
+      if (part !== "\t") {
+        this.src += part
+        continue
+      }
+      // Measured from the text, not summed per chunk: a chunk may end inside a grapheme.
+      const col = Bun.stringWidth(this.src.slice(this.src.lastIndexOf("\n") + 1))
+      this.src += " ".repeat(TAB_WIDTH - (col % TAB_WIDTH))
+    }
+  }
+
+  render(width: number, ctx: RenderContext): string[] {
+    this.theme = ctx.theme
+    const env = this.env(width)
+    const sink: Sink = ctx.commit
+      ? (rows) => {
+          ctx.commit!(rows)
+          this.committedRows += rows.length
+        }
+      : (rows) => this.done.push(...rows)
+    if (ctx.commit && this.done.length) sink(this.done.splice(0))
+    this.processLines(env, sink)
+    let live = this.live(env)
+    if (ctx.commit && live.length > this.maxRows) {
+      if (hasOpenBlock(this.state)) {
+        commitOpenBlocks(this.state, env, sink)
+        live = this.live(env)
+      }
+      if (live.length > this.maxRows && this.commitPartial(env, sink)) live = this.live(env)
+    }
+    return this.done.length ? [...this.done, ...live] : live
+  }
+
+  /**
+   * Returns the rows not committed yet, rendered to `width` as the end of the text (an unclosed
+   * code block is closed), without trailing blank rows, and starts over empty.
+   */
+  take(width: number): string[] {
+    const env = this.env(width)
+    const rows = this.done
+    const sink: Sink = (r) => rows.push(...r)
+    if (this.src !== "" && !this.src.endsWith("\n")) this.src += "\n"
+    this.processLines(env, sink)
+    finish(this.state, env, sink)
+    while (rows.length > 0 && rows[rows.length - 1]!.trim() === "") rows.pop()
+    this.state = newState()
+    this.src = ""
+    this.cut = undefined
+    this.done = []
+    this.pending = ""
+    this.committedRows = 0
+    return rows
+  }
+
+  private env(width: number): Env {
+    return {
+      width: Math.max(1, width),
+      styles: markdownStyles(this.theme),
+      glyphs: this.glyphs,
+      hyperlinks: this.hyperlinks,
+      highlight: this.highlight,
+    }
+  }
+
+  /** Processes the complete lines, leaving the partial one. */
+  private processLines(env: Env, sink: Sink) {
+    let from = 0
+    for (;;) {
+      const nl = this.src.indexOf("\n", from)
+      if (nl === -1) break
+      const line = this.src.slice(from, nl)
+      if (this.cut) {
+        sink(renderLine(this.cut.render, line, env, this.cut.carry, this.cut.lead).rows)
+        this.cut = undefined
+      } else step(this.state, line, env, sink)
+      from = nl + 1
+    }
+    if (from > 0) this.src = this.src.slice(from)
+  }
+
+  /** The rows of what is still open, as they would render if the text ended here. */
+  private live(env: Env): string[] {
+    const line = this.src
+    if (this.cut)
+      return line !== "" ? renderLine(this.cut.render, line, env, this.cut.carry, this.cut.lead).rows : []
+    const rows: string[] = []
+    const sink: Sink = (r) => rows.push(...r)
+    const s = cloneState(this.state)
+    if (line !== "") step(s, line, env, sink)
+    endOpenBlocks(s, env, sink)
+    return rows
+  }
+
+  /**
+   * Commits the rows of the partial line that can no longer change, keeping the last; returns
+   * whether it did. Spans open at the cut are carried over, so the rest renders as it would have.
+   *
+   * Rows are cut before a delimiter that may still open a span, and not inside a URL (whose link
+   * would then point at its start), unless the rows kept for that would not fit in `maxRows`.
+   */
+  private commitPartial(env: Env, sink: Sink): boolean {
+    const line = this.src
+    let render: LineRender
+    let state: BlockState | undefined
+    let carry: string | undefined
+    let lead: Lead | undefined
+    if (this.cut) {
+      render = this.cut.render
+      carry = this.cut.carry
+      lead = this.cut.lead
+    } else {
+      const p = partialRender(this.state, line, env)
+      if (!p) return false
+      if (p.raw) {
+        // Shown differently from now on, as its source: a change even if no row can be committed.
+        this.cut = { render: p.render, carry: "" }
+        this.commitPartial(env, sink)
+        return true
+      }
+      render = p.render
+      state = p.state
+    }
+    const r = renderLine(render, line, env, carry, lead)
+    const skip = carry?.length ?? 0
+    /** The cell rows `[0, n)` would be cut before, if they can be. */
+    const cutAt = (n: number) => {
+      const row = r.layout[n - 1]!
+      const cell = r.cells[row.next]
+      return row.stable && cell && cell.src >= skip ? cell : undefined
+    }
+    let n = r.layout.length - 1
+    for (; n > 0; n--) {
+      const cell = cutAt(n)
+      if (cell && r.runs[cell.run]!.cuttable && cell.src <= r.open) break
+    }
+    if (r.layout.length - n > this.maxRows) {
+      for (let m = r.layout.length - 1; m > n; m--) {
+        const cell = cutAt(m)
+        if (cell && (r.runs[cell.run]!.cuttable || r.runs[cell.run]!.rest)) {
+          n = m
+          break
+        }
+      }
+    }
+    if (n === 0) return false
+    const cell = r.cells[r.layout[n - 1]!.next]!
+    const run = r.runs[cell.run]!
+    if (state) {
+      // Committed rows follow a pending blank line like any others.
+      const blank = state.blankPending && state.emitted
+      state.blankPending = false
+      state.emitted = true
+      this.state = state
+      if (blank) sink([""])
+    }
+    sink(r.rows.slice(0, n))
+    this.cut = cutInside(render, run, cell.src, skip)
+    return true
+  }
+}
+
+/** Where the rest of a line starts after a cut before the cell at `src` of `run`. */
+function cutInside(render: LineRender, run: Run, src: number, skip: number): Cut {
+  const off = src - run.src
+  const at = (to: number) => ({ ...render, start: render.start + to - skip, prefix: render.rest })
+  if (run.cuttable) return { render: at(src), carry: render.code ? codeCarry(run, off) : run.carry }
+  const style = run.style ? { style: run.style } : {}
+  if (run.rest?.url) {
+    const lead: Lead = { url: true, head: run.rest.head + run.text.slice(0, off), ...style }
+    return { render: at(src), carry: run.carry, lead }
+  }
+  // Text of its own: it goes on from where the cut left it, the source where the run ends.
+  const resume = run.rest!.resume
+  const lead: Lead = {
+    url: false,
+    text: run.text.slice(off),
+    len: Math.max(0, resume - src),
+    ...style,
+    ...(run.link ? { link: run.link } : {}),
+  }
+  return { render: at(Math.min(src, resume)), carry: run.carry, lead }
+}

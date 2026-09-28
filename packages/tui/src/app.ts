@@ -17,13 +17,13 @@ import {
   InputReader,
   key,
   LiveRenderer,
+  MarkdownStream,
   matchesKey,
   ProcessTerminal,
   type RenderContext,
   type SetupResult,
   Spinner,
   Stack,
-  StreamText,
   setupTerminalInput,
   type Terminal,
   type Theme,
@@ -35,6 +35,7 @@ import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
 import {
   compactTokens,
+  replyRows,
   type SubagentLine,
   subagentEndLine,
   subagentLines,
@@ -140,7 +141,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const presenters = opts.toolRenderers
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal)
 
-  const streaming = new StreamText()
+  // The reply is Markdown: its finished blocks go to the scrollback as they close.
+  const streaming = new MarkdownStream()
   const spinner = new Spinner()
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
@@ -283,8 +285,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
-  // before it in view. Rows past that go to the scrollback as they are finished (StreamText),
-  // indented like the committed reply and spaced by the transcript's rule.
+  // before it in view. Its finished blocks, and rows past that, go to the scrollback as they
+  // are finished (MarkdownStream), indented like the committed reply and spaced by the
+  // transcript's rule.
   const gutter = glyphs.assistant
   const root = new View((width, ctx) => {
     // Lines committed since the last frame go out with this one: one redraw, not one each.
@@ -296,18 +299,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const replyCtx: RenderContext = commit
       ? {
           ...ctx,
-          commit: (rows) =>
-            commit(
-              transcript.continue(
-                "assistant",
-                rows.map((r) => gutter + r),
-              ),
-            ),
+          commit: (rows) => commit(transcript.continue("assistant", replyRows(rows))),
         }
       : ctx
     const reply = streaming.render(Math.max(1, width - visibleWidth(gutter)), replyCtx)
     const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
-    return [...lead, ...reply.map((r) => gutter + r), ...tools, "", ...rest]
+    return [...lead, ...replyRows(reply), ...tools, "", ...rest]
   })
   const renderer = new LiveRenderer(terminal, root, {
     synchronizedOutput: capabilities.synchronizedOutput,
@@ -504,13 +501,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // The rows still live are committed as they are shown; earlier ones already were.
         const early = streaming.committedRows > 0
         const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(gutter)))
-        if (rows.length)
-          commit(
-            transcript.continue(
-              "assistant",
-              rows.map((r) => gutter + r),
-            ),
-          )
+        if (rows.length) commit(transcript.continue("assistant", replyRows(rows)))
         if (rows.length || early) turnShowedOutput = true
         transcript.end()
         const { message } = e.data

@@ -599,6 +599,82 @@ test("a reply longer than the screen reaches the scrollback once, in order, neve
   await exited
 })
 
+test("a Markdown reply streams block by block: every row once, in order, never cut and reprinted", async () => {
+  const markers: string[] = []
+  const m = (kind: "L" | "P") => {
+    const id = `${kind}${markers.length + 1}`
+    markers.push(id)
+    return id
+  }
+  const parts = [
+    `# ${m("L")} heading`,
+    "",
+    `Some **bold ${m("L")}** and \`code ${m("L")}\` here.`,
+    Array.from({ length: 40 }, () => m("P")).join(" "),
+    "",
+    ...Array.from({ length: 6 }, () => `- item ${m("L")} with *emphasis*`),
+    `  - nested ${m("L")}`,
+    "",
+    "```ts",
+    ...Array.from({ length: 8 }, () => `const ${m("L")} = "x" // note`),
+    "```",
+    "",
+    `> quoted ${m("L")}`,
+    "",
+    "| col | other |",
+    "|-----|-------|",
+    ...Array.from({ length: 5 }, () => `| ${m("L")} | **v** |`),
+    "",
+    `Done ${m("L")}.`,
+  ]
+  const check = transcriptChecker(markers)
+  const { terminal, screen, shows, idle, all, exited } = await setup(
+    [{ text: parts.join("\n"), delayMs: 1 }],
+    {
+      cols: 40,
+      rows: 12,
+      onWrite: (s) => check.onWrite(s),
+    },
+  )
+  terminal.send("go\r")
+  await shows(`Done ${markers.at(-1)}.`)
+  await idle()
+  expect(check.problems).toEqual([])
+  check.final(screen)
+  const text = all()
+  expect(text).toContain(`${markers[0]} heading`)
+  expect(text).not.toContain("# L1")
+  expect(text).toContain("Some bold L2 and code L3 here.")
+  expect(text).toContain("• item")
+  expect(text).toContain("╭─ ts")
+  expect(text).toContain("▎ quoted")
+  expect(text).toMatch(/col +│ other/)
+  // In the assistant's gutter, one blank line from the prompt, blank rows between blocks blank.
+  expect(text).toContain(`› go\n\n  ${markers[0]} heading\n\n  Some bold`)
+  expect(text).toContain("\n  ╭─ ts\n  │ const")
+  expect(text).not.toMatch(/\n +\n/)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a URL longer than the screen is cut to fit it, never cut and reprinted", async () => {
+  // Four characters a marker, so that none is split where the URL wraps: 42 columns less the
+  // reply's gutter leave 40 for the text.
+  const markers = Array.from({ length: 80 }, (_, i) => `L${i + 10}`)
+  const check = transcriptChecker(markers)
+  const { terminal, screen, shows, idle, exited } = await setup(
+    [{ text: `See https://example.com/${markers.join("/")} for details`, delayMs: 1 }],
+    { cols: 42, rows: 12, onWrite: (s) => check.onWrite(s) },
+  )
+  terminal.send("go\r")
+  await shows("for details")
+  await idle()
+  expect(check.problems).toEqual([])
+  check.final(screen)
+  terminal.send("\x03")
+  await exited
+})
+
 test("a draft typed while a long reply streams does not cut the reply either", async () => {
   const lines = Array.from({ length: 40 }, (_, i) => `L${i + 1}`)
   const check = transcriptChecker(lines)
