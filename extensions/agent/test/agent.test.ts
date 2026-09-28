@@ -58,7 +58,9 @@ async function setup(
   bus.subscribe((e) => void events.push(e))
   const interceptors = new InterceptorRegistry()
   const tools = new ToolRegistry()
-  const host = new ExtensionHost({ bus, interceptors, tools, cwd, settings: opts.settings ?? {} })
+  // Calls wait for their sub-agents unless a test asks for the background default.
+  const settings = opts.settings ?? { subagents: { background: false } }
+  const host = new ExtensionHost({ bus, interceptors, tools, cwd, settings })
   expect(await host.load(createAgentExtension({ git: opts.git ?? git }), "builtin:agent")).toBe(true)
   tools.register(
     defineTool({
@@ -196,7 +198,7 @@ test("settings agents.<role>.model picks the child's model", async () => {
       who(req) === "commander" && req.messages.at(-1)?.role !== "toolResult"
         ? { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "look" }] } }] }
         : { text: "ok" },
-    { settings: { agents: { explorer: { model: "cheap/small" } } } },
+    { settings: { agents: { explorer: { model: "cheap/small" } }, subagents: { background: false } } },
   )
   await root.prompt("go")
   const req = mock.requests.find((q) => who(q) === "explorer")!
@@ -562,4 +564,258 @@ test("a sub-agent's own background sub-agents end with its turn", async () => {
   await bus.flush()
   const ends = events.flatMap((e) => (e.type === "subagent.end" ? [e.data.status] : []))
   expect(ends.sort()).toEqual(["aborted", "done"])
+})
+
+async function until(check: () => boolean, ms = 10_000) {
+  const end = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > end) throw new Error("timed out waiting")
+    await Bun.sleep(5)
+  }
+}
+
+/** The commander's messages that brought background results, as the model and the transcript see them. */
+function notices(root: Agent) {
+  return root.messages.flatMap((m) =>
+    m.role === "user" && m.display?.origin === "subagent"
+      ? [{ text: m.content.map((b) => (b.type === "text" ? b.text : "")).join(""), shown: m.display.text }]
+      : [],
+  )
+}
+
+const isNotice = (req: ModelRequest) =>
+  req.messages.at(-1)?.role === "user" && /reports? follows?/.test(lastText(req))
+
+const replied = (root: Agent, text: string) =>
+  root.messages.some(
+    (m) => m.role === "assistant" && m.content.some((b) => b.type === "text" && b.text === text),
+  )
+
+test("by default sub-agents run in the background and their result wakes the idle commander", async () => {
+  let childId = ""
+  const { root, bus, events } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "explorer") return { text: "found it in a.ts", delayMs: 50 }
+      if (isNotice(req)) return { toolCalls: [{ name: "agent_result", args: { ids: [childId] } }] }
+      if (last?.role === "toolResult" && last.toolName === "agent_result") return { text: "thanks, reacting" }
+      if (last?.role === "toolResult") {
+        childId = /(s_\w+) \(explorer\)/.exec(lastText(req))?.[1] ?? ""
+        return { text: "started it; ask me anything meanwhile" }
+      }
+      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "look" }] } }] }
+    },
+    { settings: {} },
+  )
+  expect((await root.prompt("go")).reason).toBe("done")
+  expect(agentResult(root)).toContain("Started in the background")
+  expect(agentResult(root)).toContain("come to you by themselves")
+  await until(() => replied(root, "thanks, reacting"))
+  await bus.flush()
+  const [notice] = notices(root)
+  expect(notice?.shown).toMatch(/^◆ explorer finished · \d+s · \d+ tok$/)
+  expect(notice?.text).toContain("the user did not write this message")
+  expect(notice?.text).toContain(`## explorer · ${childId} · done`)
+  expect(notice?.text).toContain("found it in a.ts")
+  // The woken turn is an ordinary turn whose prompt is the notice.
+  const starts = events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId)
+  expect(starts.length).toBe(2)
+  expect(starts[1]?.type === "turn.start" && starts[1].data.prompt.display?.origin).toBe("subagent")
+  // Handed out once: agent_result does not repeat it.
+  expect(agentResult(root, "agent_result")).toBe(
+    `${childId}: its result was already sent to you as a message.`,
+  )
+})
+
+test("settings subagents.background false makes calls wait again", async () => {
+  const { root, mock } = await setup(
+    (req) =>
+      who(req) === "explorer"
+        ? { text: "waited answer" }
+        : req.messages.at(-1)?.role === "toolResult"
+          ? { text: "ok" }
+          : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] },
+    { settings: { subagents: { background: false } } },
+  )
+  await root.prompt("go")
+  expect(agentResult(root)).toContain("waited answer")
+  expect(notices(root)).toEqual([])
+  expect(mock.requests[0]!.tools?.find((t) => t.name === "agent")?.description).toContain(
+    "The call waits for the sub-agents",
+  )
+})
+
+/** A tool that returns once `ready` resolves (or the call is aborted). */
+function waitTool(ready: () => Promise<unknown>) {
+  return defineTool({
+    name: "hold",
+    description: "hold",
+    parameters: { type: "object" },
+    concurrency: "parallel",
+    execute: async (_p, ctx) => {
+      await Promise.race([
+        ready(),
+        new Promise((resolve) => ctx.signal.addEventListener("abort", resolve, { once: true })),
+      ])
+      return textResult("held")
+    },
+  })
+}
+
+test("a result that arrives while the commander works joins its turn before the next model call", async () => {
+  const { root, bus, events, tools } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "explorer") return { text: "quick answer", delayMs: 10 }
+      if (isNotice(req)) return { text: "used the answer" }
+      if (last?.role === "toolResult" && last.toolName === "agent")
+        return { toolCalls: [{ name: "hold", args: {} }] }
+      if (last?.role === "toolResult") return { text: "no notice?" }
+      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "q" }] } }] }
+    },
+    { settings: {} },
+  )
+  // The commander keeps working until the result is queued for it.
+  tools.register(
+    waitTool(
+      () =>
+        new Promise<void>((resolve) => {
+          const off = bus.subscribe((e) => {
+            if (e.type === "turn.steer" && e.data.state === "queued") {
+              off()
+              resolve()
+            }
+          })
+        }),
+    ),
+    "test",
+  )
+  expect((await root.prompt("go")).reason).toBe("done")
+  await bus.flush()
+  expect(replied(root, "used the answer")).toBe(true)
+  expect(events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId).length).toBe(1)
+  const injected = events.filter((e) => e.type === "turn.steer" && e.data.state === "injected")
+  expect(injected.length).toBe(1)
+  expect(notices(root)[0]?.text).toContain("quick answer")
+})
+
+test("sub-agents finishing close together come back as one message", async () => {
+  const { root, bus, events } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "explorer") {
+        return lastText(req) === "a" ? { text: "answer A", delayMs: 20 } : { text: "answer B", delayMs: 80 }
+      }
+      if (isNotice(req)) return { text: "both in" }
+      if (last?.role === "toolResult") return { text: "started" }
+      return {
+        toolCalls: [
+          {
+            name: "agent",
+            args: {
+              tasks: [
+                { role: "explorer", prompt: "a" },
+                { role: "explorer", prompt: "b" },
+              ],
+            },
+          },
+        ],
+      }
+    },
+    { settings: {} },
+  )
+  await root.prompt("go")
+  await until(() => replied(root, "both in"))
+  await bus.flush()
+  const all = notices(root)
+  expect(all.length).toBe(1)
+  expect(all[0]?.text).toContain("2 sub-agents you started in the background have ended")
+  expect(all[0]?.text).toContain("answer A")
+  expect(all[0]?.text).toContain("answer B")
+  expect(all[0]?.shown.split("\n").length).toBe(2)
+  expect(events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId).length).toBe(2)
+})
+
+test("a result agent_result is waiting for is handed out there and not sent again", async () => {
+  const { root, bus, events } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "explorer") return { text: "awaited answer", delayMs: 30 }
+      if (isNotice(req)) return { text: "unexpected notice" }
+      if (last?.role === "toolResult" && last.toolName === "agent") {
+        return { toolCalls: [{ name: "agent_result", args: {} }] }
+      }
+      if (last?.role === "toolResult") return { text: "collected" }
+      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] }
+    },
+    { settings: {} },
+  )
+  await root.prompt("go")
+  expect(agentResult(root, "agent_result")).toContain("awaited answer")
+  await Bun.sleep(400)
+  await bus.flush()
+  expect(notices(root)).toEqual([])
+  expect(root.expectedNotices).toBe(0)
+  expect(events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId).length).toBe(1)
+})
+
+test("interrupting the commander leaves its background sub-agents running; their result still comes", async () => {
+  const { root, bus, events, tools } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "explorer") return { text: "survived", delayMs: 150 }
+      if (isNotice(req)) return { text: "got it after the interrupt" }
+      if (last?.role === "toolResult" && last.toolName === "agent")
+        return { toolCalls: [{ name: "hold", args: {} }] }
+      if (last?.role === "toolResult") return { text: "?" }
+      return { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] }
+    },
+    { settings: {} },
+  )
+  let holding!: () => void
+  const held = new Promise<void>((resolve) => {
+    holding = resolve
+  })
+  tools.register(
+    waitTool(() => {
+      holding()
+      return new Promise(() => {})
+    }),
+    "test",
+  )
+  const turn = root.prompt("go")
+  await held
+  root.abort()
+  expect((await turn).reason).toBe("aborted")
+  await until(() => replied(root, "got it after the interrupt"))
+  await bus.flush()
+  const end = events.find((e) => e.type === "subagent.end")
+  expect(end?.type === "subagent.end" && end.data.status).toBe("done")
+  expect(notices(root)[0]?.text).toContain("survived")
+})
+
+test("a new conversation stops the old one's background sub-agents", async () => {
+  const { root, bus, events } = await setup(
+    (req) =>
+      who(req) === "explorer"
+        ? { text: "slow", delayMs: 30_000 }
+        : req.messages.at(-1)?.role === "toolResult"
+          ? { text: "started" }
+          : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] },
+    { settings: {} },
+  )
+  await root.prompt("go")
+  expect(root.expectedNotices).toBe(1)
+  bus.emit(
+    "session.start",
+    { reason: "clear", cwd: root.cwd, model: { provider: "mock", model: "big" } },
+    { sessionId: "s_new" },
+  )
+  await until(() => events.some((e) => e.type === "subagent.end"))
+  await bus.flush()
+  expect(root.expectedNotices).toBe(0)
+  const end = events.find((e) => e.type === "subagent.end")
+  expect(end?.type === "subagent.end" && end.data.error).toBe("its commander's session was closed")
+  await Bun.sleep(400)
+  expect(notices(root)).toEqual([])
 })
