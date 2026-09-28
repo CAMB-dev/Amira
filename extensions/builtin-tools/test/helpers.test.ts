@@ -1,5 +1,6 @@
 import { afterAll, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join, resolve, sep } from "node:path"
 import { isBinary, walkFiles } from "../src/files.ts"
@@ -70,4 +71,33 @@ test.if(isWindows)("resolvePath maps MSYS drive and /tmp paths on Windows", () =
   expect(resolvePath(cwd, "//server/share/dir/f.txt")).toBe(
     ["", "", "server", "share", "dir", "f.txt"].join(sep),
   )
+})
+
+test("truncates without a file when the output directory is unwritable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "amira-trunc-"))
+  dirs.push(root)
+  const blocker = join(root, "not-a-dir")
+  await writeFile(blocker, "x")
+  const full = Array.from({ length: 2000 }, (_, i) => `line ${i}`).join("\n")
+  const r = await truncateOutput(full, "t", 1000, join(blocker, "out"))
+  expect(r.fullOutputPath).toBeUndefined()
+  expect(r.text).toStartWith("line 0\n")
+  expect(r.text).toEndWith("line 1999")
+  expect(r.text).toContain("The full output could not be saved")
+})
+
+test("deletes saved outputs older than a day the first time it saves", async () => {
+  const out = await mkdtemp(join(tmpdir(), "amira-sweep-"))
+  dirs.push(out)
+  const old = join(out, "old.txt")
+  const fresh = join(out, "fresh.txt")
+  await writeFile(old, "old")
+  await writeFile(fresh, "fresh")
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+  await utimes(old, twoDaysAgo, twoDaysAgo)
+  const r = await truncateOutput("x\n".repeat(1000), "t", 100, out)
+  expect(r.fullOutputPath).toBeDefined()
+  for (let i = 0; i < 50 && existsSync(old); i++) await Bun.sleep(20)
+  expect(existsSync(old)).toBe(false)
+  expect(existsSync(fresh)).toBe(true)
 })
