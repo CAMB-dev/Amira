@@ -42,7 +42,8 @@ function envValue(env: Record<string, string | undefined>, name: string): string
  * argv for starting argv[0] through cmd.exe, which first waits for the gate line when `gated`.
  * Must be spawned with `windowsVerbatimArguments`. Undefined when cmd cannot be used: a UNC
  * working directory (cmd would fall back to the Windows directory), a program that is missing
- * or not an .exe, or a line too long for cmd.
+ * or not an .exe, an argument with a line break (cmd ends the command line there and would
+ * silently drop the rest), or a line too long for cmd.
  */
 export function cmdArgv(
   argv: string[],
@@ -50,6 +51,7 @@ export function cmdArgv(
 ): string[] | undefined {
   const [program, ...args] = argv
   if (!program || /^[\\/]{2}/.test(opts.cwd)) return undefined
+  if (argv.some((a) => /[\r\n]/.test(a))) return undefined
   const resolved = isAbsolute(program)
     ? program
     : Bun.which(program, { PATH: envValue(opts.env, "PATH") ?? "", cwd: opts.cwd })

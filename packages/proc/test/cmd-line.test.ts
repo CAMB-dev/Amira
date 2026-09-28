@@ -56,6 +56,27 @@ test.if(onWindows)("a line too long for cmd falls back to a direct spawn", async
   expect(run.output.trim()).toBe("9000")
 })
 
+test.if(onWindows)(
+  "an argument with a line break falls back to a direct spawn and loses nothing",
+  async () => {
+    // cmd.exe ends its command line at CR or LF: everything after it would vanish, with exit 0.
+    const env = process.env
+    for (const broken of ["line1\nline2", "line1\rline2", "a\r\nb"]) {
+      expect(
+        cmdArgv([process.execPath, "-e", "1", broken], { cwd: process.cwd(), env, gated: false }),
+      ).toBeUndefined()
+      expect(
+        cmdArgv([process.execPath, "-e", "1", broken], { cwd: process.cwd(), env, gated: true }),
+      ).toBeUndefined()
+    }
+    const args = ["[%s]", "line1\nline2", "a\r\nb", "after"]
+    const script = "console.log(JSON.stringify(process.argv.slice(1)))"
+    const run = await runCommand([process.execPath, "-e", script, ...args], { ...opts(), viaCmd: true })
+    expect(run.exitCode).toBe(0)
+    expect(JSON.parse(run.output)).toEqual(args)
+  },
+)
+
 test.if(onWindows)("a program path containing = and spaces runs through cmd", async () => {
   const dir = await mkdtemp(join(tmpdir(), "amira a=b "))
   try {
