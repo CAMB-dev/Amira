@@ -5,6 +5,7 @@ export { Editor, type EditorOptions } from "./components/editor.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
 export { Text } from "./components/text.ts"
+export { InputParser } from "./input.ts"
 export {
   type InputEvent,
   isNewlineKey,
@@ -12,8 +13,10 @@ export {
   type KeyEvent,
   type KeyId,
   type KeyName,
+  key,
   matchesKey,
   type PasteEvent,
+  textKey,
 } from "./keys.ts"
 export { InputReader, type InputReaderOptions } from "./reader.ts"
 export { LiveRenderer, type RendererOptions } from "./renderer.ts"
@@ -38,10 +41,11 @@ export {
   rgb,
   type StyleFn,
   setColorEnabled,
+  stripColors,
   type Theme,
   underline,
   white,
   yellow,
 } from "./style.ts"
-export { FakeTerminal, ProcessTerminal, type Terminal } from "./terminal.ts"
-export { truncateToWidth, visibleWidth, wrapText } from "./width.ts"
+export { BaseTerminal, FakeTerminal, ProcessTerminal, type Terminal } from "./terminal.ts"
+export { graphemes, TAB_WIDTH, truncateToWidth, visibleWidth, wrapText } from "./width.ts"

@@ -1,6 +1,6 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { type InputEvent, isNewlineKey, isSubmitKey } from "../keys.ts"
-import { graphemes, visibleWidth } from "../width.ts"
+import { graphemes, TAB_WIDTH, visibleWidth } from "../width.ts"
 
 export interface EditorOptions {
   /** Shown before the first row; later rows are indented to line up with it. */
@@ -62,12 +62,17 @@ export class Editor implements Component {
     const after = this.current.slice(this.col)
     const last = parts.length - 1
     const inserted = parts.map((p, i) => (i === 0 ? before : "") + p + (i === last ? after : ""))
-    this.lines.splice(this.line, 1, ...inserted)
+    // Not splice(..., ...inserted): spreading a huge paste as arguments overflows the stack.
+    this.lines = this.lines.slice(0, this.line).concat(inserted, this.lines.slice(this.line + 1))
     this.line += last
     this.col = (last === 0 ? before.length : 0) + parts[last]!.length
     this.changed()
   }
 
+  /**
+   * Returns false for keys the editor does not use, including Enter on an empty editor, which
+   * submits nothing and is left to the app.
+   */
   handleInput(e: InputEvent): boolean {
     if (e.type === "paste") {
       this.insert(e.text)
@@ -75,7 +80,7 @@ export class Editor implements Component {
     }
     if (isSubmitKey(e)) {
       const text = this.getText()
-      if (text === "") return true
+      if (text === "") return false
       this.clear()
       this.opts.onSubmit?.(text)
       return true
@@ -137,8 +142,22 @@ export class Editor implements Component {
     return this.lines[this.line]!
   }
 
+  private get promptWidth(): number {
+    return visibleWidth(this.opts.prompt ?? "")
+  }
+
   private get contentWidth(): number {
-    return Math.max(2, this.width - visibleWidth(this.opts.prompt ?? ""))
+    return Math.max(2, this.width - this.promptWidth)
+  }
+
+  /**
+   * Cells grapheme `g` takes when `used` cells of its row are taken. A tab reaches the next tab
+   * stop of the terminal line, which starts `promptWidth` cells before the row (the prompt and the
+   * indent are as wide), matching how the width layer expands tabs when the row is drawn.
+   */
+  private cellWidth(g: string, used: number): number {
+    if (g === "\t") return TAB_WIDTH - ((this.promptWidth + used) % TAB_WIDTH)
+    return Bun.stringWidth(g)
   }
 
   private changed(): void {
@@ -155,11 +174,12 @@ export class Editor implements Component {
       let used = 0
       let pos = 0
       for (const g of graphemes(text)) {
-        const w = Bun.stringWidth(g)
+        let w = this.cellWidth(g, used)
         if (used + w > max) {
           rows.push({ line, start, end: pos, last: false })
           start = pos
           used = 0
+          w = this.cellWidth(g, used)
         }
         used += w
         pos += g.length
@@ -186,12 +206,12 @@ export class Editor implements Component {
     const to = rows[from + dir]
     if (!to) return false
     const row = rows[from]!
-    const goal = this.goalCol ?? visibleWidth(this.lines[row.line]!.slice(row.start, this.col))
+    const goal = this.goalCol ?? this.cells(this.lines[row.line]!.slice(row.start, this.col))
     const text = this.lines[to.line]!
     let col = to.start
     let used = 0
     for (const g of graphemes(text.slice(to.start, to.end))) {
-      const w = Bun.stringWidth(g)
+      const w = this.cellWidth(g, used)
       if (used + w > goal) break
       used += w
       col += g.length
@@ -202,6 +222,13 @@ export class Editor implements Component {
     this.col = col
     this.goalCol = goal
     return true
+  }
+
+  /** Cells taken by `s` drawn from the start of a row. */
+  private cells(s: string): number {
+    let used = 0
+    for (const g of graphemes(s)) used += this.cellWidth(g, used)
+    return used
   }
 
   private moveTo(pos: { line: number; col: number }): boolean {

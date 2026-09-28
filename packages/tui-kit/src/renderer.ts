@@ -27,7 +27,10 @@ interface Frame {
  */
 export class LiveRenderer {
   synchronizedOutput: boolean
-  /** The context handed to components; change it and render again to switch theme or colors. */
+  /**
+   * The context handed to components; change it and render again to switch theme or colors.
+   * `rows` is kept in step with the terminal on every frame.
+   */
   context: RenderContext
   private frameIntervalMs: number
   private prev: Frame | undefined
@@ -48,7 +51,11 @@ export class LiveRenderer {
   ) {
     this.synchronizedOutput = opts.synchronizedOutput ?? false
     this.frameIntervalMs = opts.frameIntervalMs ?? 16
-    this.context = { theme: opts.theme ?? defaultTheme, color: opts.color ?? isColorEnabled() }
+    this.context = {
+      theme: opts.theme ?? defaultTheme,
+      color: opts.color ?? isColorEnabled(),
+      rows: terminal.rows,
+    }
   }
 
   start(): void {
@@ -123,6 +130,7 @@ export class LiveRenderer {
   }
 
   private layout(width: number, height: number): Frame {
+    this.context.rows = height
     let lines = this.root.render(width, this.context)
     let pos: Frame["cursor"]
     let found = false

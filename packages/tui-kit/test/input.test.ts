@@ -147,6 +147,32 @@ describe("escape timeout", () => {
     reader.stop()
   })
 
+  test("a control character aborts a sequence cut short without being swallowed", () => {
+    expectSplitSafe("\x1b[1;5\x1b[A", [key("up")])
+    expectSplitSafe("\x1b[1;5\rb", [key("enter"), textKey("b")])
+    const p = new InputParser()
+    expect(p.feed("\x1b[1;5")).toEqual([])
+    expect(p.flush()).toEqual([])
+    expect(p.feed("\x1b[A")).toEqual([key("up")])
+    expect(p.pending).toBe(false)
+  })
+
+  test("InputReader keeps a sequence that follows one cut short", async () => {
+    const term = new FakeTerminal()
+    const events: InputEvent[] = []
+    const reader = new InputReader(term, (e) => events.push(e), {
+      escapeTimeoutMs: 5,
+      sequenceTimeoutMs: 500,
+    })
+    reader.start()
+    term.send("\x1b[1;5")
+    await Bun.sleep(40)
+    term.send("\x1b[A")
+    term.send("x")
+    expect(events).toEqual([key("up"), textKey("x")])
+    reader.stop()
+  })
+
   test("long ESC runs do not recurse", () => {
     const p = new InputParser()
     const events = [...p.feed("\x1b".repeat(100_000)), ...p.flush()]
@@ -197,6 +223,10 @@ describe("bracketed paste", () => {
     expect(first).toEqual([{ type: "paste", text: big }])
     expect(p.pasting).toBe(true)
     expect(p.feed("tail\r\x1b[201~a")).toEqual([{ type: "paste", text: "tail\n" }, textKey("a")])
+  })
+
+  test("an empty paste emits nothing", () => {
+    expectSplitSafe("\x1b[200~\x1b[201~a", [textKey("a")])
   })
 
   test("endPaste emits what an unterminated paste collected", () => {
@@ -348,6 +378,12 @@ describe("win32-input-mode", () => {
       win32(65, 97, 0) + win32(65, 97, 0, 0) + win32(16, 0, 0x10) + win32(13, 13, 0x20) + win32(66, 98, 0)
     expectSplitSafe(spell("\x1b[200~") + body + spell("\x1b[201~"), [{ type: "paste", text: "a\nb" }])
     expect(parse(spell("\x1b[200~a\rb\x1b[201~"))).toEqual([{ type: "paste", text: "a\nb" }])
+  })
+
+  test("an Enter event followed by a raw \\n in a paste is one line break", () => {
+    const spell = (t: string) => [...t].map((c) => win32(0, c.charCodeAt(0), 0)).join("")
+    const body = win32(65, 97, 0) + win32(13, 13, 0) + win32(13, 13, 0, 0) + spell("\n") + win32(66, 98, 0)
+    expectSplitSafe(spell("\x1b[200~") + body + spell("\x1b[201~"), [{ type: "paste", text: "a\nb" }])
   })
 
   test("vk=0 characters are re-parsed as raw input", () => {

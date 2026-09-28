@@ -44,11 +44,11 @@ test("Enter submits and clears; the newline key inserts a line break", () => {
   expect(ed.getText()).toBe("")
 })
 
-test("Enter on an empty editor does not submit; setText does not report a change", () => {
+test("Enter on an empty editor does not submit and is left unhandled; setText does not report a change", () => {
   const submitted: string[] = []
   const changes: string[] = []
   const ed = new Editor({ onSubmit: (t) => submitted.push(t), onChange: (t) => changes.push(t) })
-  expect(press(ed, "enter")).toBe(true)
+  expect(press(ed, "enter")).toBe(false)
   expect(submitted).toEqual([])
   ed.setText("draft")
   ed.clear()
@@ -71,6 +71,14 @@ test("paste inserts text with newlines at the caret", () => {
   ed.handleInput({ type: "paste", text: "one\ntwo" } satisfies InputEvent)
   expect(ed.getText()).toBe("[one\ntwo]")
   expect(ed.cursor).toEqual({ line: 1, col: 3 })
+})
+
+test("a paste of hundreds of thousands of lines does not overflow the stack", () => {
+  const ed = new Editor()
+  type(ed, "x")
+  ed.handleInput({ type: "paste", text: "a\n".repeat(700_000) })
+  expect(ed.cursor).toEqual({ line: 700_000, col: 0 })
+  expect(ed.getText().length).toBe(1 + 2 * 700_000)
 })
 
 test("left/right cross line boundaries; backspace at line start joins lines", () => {
@@ -159,6 +167,34 @@ test("up/down move between wrapped rows of one line", () => {
   press(ed, "down")
   press(ed, "down")
   expect(ed.cursor).toEqual({ line: 0, col: 10 })
+})
+
+test("tabs reach the next 4-column stop of the drawn line, prompt included", () => {
+  const ed = new Editor({ prompt: "> " })
+  ed.setText("a\tb")
+  const [row] = ed.render(40, plain)
+  // "> a" ends at column 3, so the tab takes one cell and "b" ends at column 5.
+  expect(visibleWidth(row!.slice(0, row!.indexOf(CURSOR_MARKER)))).toBe(5)
+  // With 6 content cells the tabs take 2 and 4, so "ab" wraps to the next row.
+  ed.setText("\t\tab")
+  expect(view(ed, 8)).toEqual(["> \t\t", "  ab|"])
+})
+
+test("up/down keep the display column across tabs", () => {
+  const ed = new Editor({ prompt: "> " })
+  ed.setText("\tx\nabcdefgh")
+  press(ed, "up")
+  press(ed, "end")
+  // The tab takes cells 2-3 of the line, so the caret after "x" is 3 cells into the row.
+  press(ed, "down")
+  expect(ed.cursor).toEqual({ line: 1, col: 3 })
+  press(ed, "right")
+  press(ed, "up")
+  expect(ed.cursor).toEqual({ line: 0, col: 2 })
+  press(ed, "home")
+  press(ed, "right")
+  press(ed, "down")
+  expect(ed.cursor).toEqual({ line: 1, col: 2 })
 })
 
 test("placeholder when empty, no caret marker when unfocused", () => {

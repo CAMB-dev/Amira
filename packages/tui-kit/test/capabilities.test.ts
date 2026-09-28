@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
+import { EventEmitter } from "node:events"
+import { PassThrough } from "node:stream"
 import { modes, queries } from "../src/ansi.ts"
 import { detectEnv, parseProbeReplies, probeTerminal, setupTerminalInput } from "../src/capabilities.ts"
 import { InputReader } from "../src/reader.ts"
-import { FakeTerminal } from "../src/terminal.ts"
+import { FakeTerminal, ProcessTerminal } from "../src/terminal.ts"
 
 test("detectEnv: Windows Terminal unless running inside VS Code", () => {
   expect(detectEnv({ WT_SESSION: "x" })).toEqual({ windowsTerminal: true, vscode: false })
@@ -102,4 +104,24 @@ test("setup enables raw mode and refuses to run under an active InputReader", as
   await expect(setupTerminalInput(term, {}, { timeoutMs: 5 })).rejects.toThrow("InputReader")
   reader.stop()
   await setupTerminalInput(term, {}, { timeoutMs: 5 })
+})
+
+test("setup starts a ProcessTerminal that was not started, so the replies reach it", async () => {
+  const stdin = new PassThrough()
+  const stdout = Object.assign(new EventEmitter(), {
+    columns: 80,
+    rows: 24,
+    write: (data: string) => {
+      if (data.includes(queries.primaryDeviceAttributes))
+        setTimeout(() => stdin.write("\x1b[?1u\x1b[?62c"), 1)
+      return true
+    },
+  })
+  const term = new ProcessTerminal(stdin as any, stdout as any)
+  try {
+    const { capabilities } = await setupTerminalInput(term, {}, { timeoutMs: 1000 })
+    expect(capabilities.kittyKeyboard).toBe(true)
+  } finally {
+    term.stop()
+  }
 })

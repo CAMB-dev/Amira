@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { bold, colorSupported, defaultTheme, red, stripColors } from "../src/style.ts"
+import { blue, bold, colorSupported, defaultTheme, red, stripColors, type Theme } from "../src/style.ts"
 
 test("styles wrap text and survive nesting", () => {
   expect(red("x")).toBe("\x1b[31mx\x1b[39m")
@@ -17,4 +17,10 @@ test("stripColors keeps text attributes", () => {
   expect(stripColors(bold("x"))).toBe("\x1b[1mx\x1b[22m")
   expect(stripColors("\x1b[1;38;5;196;48:2::1:2:3mx\x1b[0m")).toBe("\x1b[1mx\x1b[0m")
   expect(stripColors("\x1b[mx")).toBe("\x1b[0mx")
+})
+
+test("a theme can carry tokens of its own", () => {
+  const theme: Theme = { ...defaultTheme, link: blue }
+  expect(theme.link?.("x")).toBe(blue("x"))
+  expect(theme.accent("x")).toBe(defaultTheme.accent("x"))
 })

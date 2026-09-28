@@ -89,6 +89,19 @@ describe("ProcessTerminal restores itself when the process goes away", () => {
     expect(readFileSync(file, "utf8")).toBe(`${modes.bracketedPaste.off}\x1b[0m\x1b[?25h`)
   })
 
+  test("an uncaught exception the app handles leaves the terminal alone", () => {
+    term.start()
+    term.enableMode(modes.bracketedPaste)
+    const app = () => {}
+    process.on("uncaughtException", app)
+    try {
+      process.emit("uncaughtExceptionMonitor", new Error("x"), "uncaughtException")
+    } finally {
+      process.off("uncaughtException", app)
+    }
+    expect(readFileSync(file, "utf8")).toBe("")
+  })
+
   test("a signal with no other listener restores and exits; an app handler keeps it", () => {
     term.start()
     term.enableMode(modes.bracketedPaste)

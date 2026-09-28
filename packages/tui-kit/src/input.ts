@@ -239,6 +239,9 @@ function parseSequence(s: string, at: number): Parsed | undefined {
   let i = at + 2
   while (i < s.length && s.charCodeAt(i) >= 0x20 && s.charCodeAt(i) <= 0x3f) i++
   if (i >= s.length) return undefined
+  // A control character (ESC starting the next sequence, say) aborts a sequence cut short: the
+  // partial is dropped and the control character is left for the next parse.
+  if (s.charCodeAt(i) < 0x20) return { len: i - at, events: [] }
   return { len: i + 1 - at, ...decodeCsi(s.slice(at + 2, i), s[i]!) }
 }
 
@@ -412,7 +415,7 @@ export class InputParser {
         const text = this.paste + this.pasteText(this.buf.slice(0, end))
         this.buf = this.buf.slice(end + PASTE_END.length)
         this.paste = undefined
-        out.push(pasteEvent(text))
+        if (text !== "") out.push(pasteEvent(text))
         continue
       }
       const parsed = parseOne(this.buf, flush)
@@ -433,7 +436,8 @@ export class InputParser {
     return s.replace(WIN32_SEQ, (_, params: string) => {
       const [vk, uc, kd, , rc] = win32Params(params)
       if (kd !== 1 || uc === 0) return ""
-      return (vk === 13 ? "\n" : String.fromCharCode(uc)).repeat(Math.max(1, rc))
+      // Enter is "\r" so that Enter followed by a raw "\n" normalizes to a single line break.
+      return (vk === 13 ? "\r" : String.fromCharCode(uc)).repeat(Math.max(1, rc))
     })
   }
 

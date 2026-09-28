@@ -19,6 +19,10 @@ test("wraps at spaces and hard-breaks long words", () => {
   expect(wrapText("", 10)).toEqual([""])
 })
 
+test("wraps a paragraph into hundreds of thousands of rows without overflowing the stack", () => {
+  expect(wrapText("a".repeat(700_000), 1).length).toBe(700_000)
+})
+
 test("wraps CJK by display width without splitting characters", () => {
   const lines = wrapText("你好世界你好", 5)
   expect(lines).toEqual(["你好", "世界", "你好"])

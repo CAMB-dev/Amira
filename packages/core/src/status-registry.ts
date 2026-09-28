@@ -56,6 +56,7 @@ export class StatusRegistry {
         continue
       }
       if (typeof raw !== "string") continue
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
       const text = raw.replace(/[\x00-\x1f\x7f]+/g, " ").trim()
       if (!text) continue
       out.push({ id: item.id, align: item.align ?? "left", tone: item.tone ?? "default", text, order, seq })
