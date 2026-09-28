@@ -75,6 +75,8 @@ function mapFinish(reason: string | null | undefined): StopReason {
       return "toolUse"
     case "length":
       return "maxTokens"
+    case "content_filter":
+      return "error"
     default:
       return "end"
   }
@@ -203,7 +205,14 @@ export const openaiChat: Dialect = {
         args: parseToolArgs(c.args),
       }))
       message.content.push(...toolBlocks)
-      message.stopReason = toolBlocks.length ? "toolUse" : mapFinish(finish)
+      const stop = mapFinish(finish)
+      if (stop === "error") {
+        yield fail("the provider filtered the output (finish_reason: content_filter)", false, {
+          code: "content_filter",
+        })
+        return
+      }
+      message.stopReason = stop === "end" && toolBlocks.length ? "toolUse" : stop
       yield { type: "done", message }
     } finally {
       // Covers consumers that stop before the body is read to the end.
