@@ -196,3 +196,32 @@ test("escape sequences in content cannot move the cursor or erase committed line
     ].join("\n"),
   )
 })
+
+test("after stop, render, requestRender and commit do nothing until started again", async () => {
+  const { term, screen, root, r } = setup(["live1", "live2"], 20, 10, { frameIntervalMs: 0 })
+  r.render()
+  r.stop()
+  r.stop()
+  const writes = term.writes.length
+  root.lines = ["spin"]
+  r.render()
+  r.requestRender()
+  r.commit(["late"])
+  await Bun.sleep(5)
+  expect(term.writes.length).toBe(writes)
+  expect(screen.text).toBe("live1\nlive2")
+  r.start()
+  expect(screen.text).toBe("live1\nlive2\nspin")
+  r.stop()
+})
+
+test("stop cancels a scheduled frame", async () => {
+  const { term, root, r } = setup(["a"], 20, 10, { frameIntervalMs: 10 })
+  r.render()
+  root.lines = ["b"]
+  r.requestRender()
+  r.stop()
+  const writes = term.writes.length
+  await Bun.sleep(30)
+  expect(term.writes.length).toBe(writes)
+})

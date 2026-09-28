@@ -32,6 +32,7 @@ export class LiveRenderer {
   private timer: ReturnType<typeof setTimeout> | undefined
   private lastFrameAt = 0
   private offResize: (() => void) | undefined
+  private stopped = false
 
   constructor(
     private terminal: Terminal,
@@ -43,6 +44,7 @@ export class LiveRenderer {
   }
 
   start(): void {
+    this.stopped = false
     this.offResize ??= this.terminal.onResize(() => {
       this.forceFull = true
       this.requestRender()
@@ -52,7 +54,7 @@ export class LiveRenderer {
 
   /** Schedules a frame, coalescing calls to at most one per frame interval. */
   requestRender(): void {
-    if (this.timer) return
+    if (this.stopped || this.timer) return
     const wait = Math.max(0, this.lastFrameAt + this.frameIntervalMs - performance.now())
     this.timer = setTimeout(() => {
       this.timer = undefined
@@ -70,8 +72,13 @@ export class LiveRenderer {
     this.draw(lines.flatMap((l) => sanitize(l).split("\n")))
   }
 
-  /** Leaves the cursor below the live region (or clears it) and shows it. */
+  /**
+   * Leaves the cursor below the live region (or clears it) and shows it. Until `start()` is
+   * called again, rendering and committing do nothing.
+   */
   stop(opts: { clear?: boolean } = {}): void {
+    if (this.stopped) return
+    this.stopped = true
     clearTimeout(this.timer)
     this.timer = undefined
     this.offResize?.()
@@ -87,6 +94,7 @@ export class LiveRenderer {
   }
 
   private draw(committed: string[]): void {
+    if (this.stopped) return
     clearTimeout(this.timer)
     this.timer = undefined
     this.lastFrameAt = performance.now()
