@@ -710,10 +710,20 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     for (const n of subagents.values()) {
       if (isLiveCall(rootCall(n))) continue
       if (n.end) {
-        commitBlock("tool", [subagentEndLine(n, n.end, terminal.columns, theme)])
+        if (endsAlone(n)) commitBlock("tool", [subagentEndLine(n, n.end, terminal.columns, theme)])
         subagents.delete(n.id)
       } else n.detached ??= "interrupted"
     }
+  }
+
+  /**
+   * Whether a sub-agent that ended away from its call gets its end line on its own: only one
+   * the tree stopped. One that finished its task after its call was cut short kept running in
+   * the background (the main session's agent calls survive an interrupt), and its notice
+   * reports it; a line here would say it twice.
+   */
+  function endsAlone(n: SubagentNode): boolean {
+    return n.detached !== "background" && n.end?.status === "aborted"
   }
 
   /** Keeps the sub-agent rows current; true when the event was about a sub-agent. */
@@ -751,9 +761,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // is done: a background one's notice reports it; one cut short gets its line on its own.
         if (isLiveCall(rootCall(node))) break
         subagents.delete(node.id)
-        if (node.detached !== "background") {
-          commitBlock("tool", [subagentEndLine(node, node.end, terminal.columns, theme)])
-        }
+        if (endsAlone(node)) commitBlock("tool", [subagentEndLine(node, node.end, terminal.columns, theme)])
         break
       }
       case "budget.exceeded":

@@ -1581,6 +1581,54 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   await exited
 })
 
+test("after an interrupt, a sub-agent it stopped gets its end line; one that runs on and finishes does not", async () => {
+  // Replies go by who asks: the commander, or a child by its task.
+  const reply = (req: { messages: { role: string; content: unknown }[] }) => {
+    const task = JSON.stringify(req.messages[0]?.content)
+    if (task.includes("keep going")) return { text: "kept at it", delayMs: 300 }
+    if (task.includes("stop me")) return { text: "never", delayMs: 5000 }
+    return { toolCalls: [{ name: "pair", args: {} }] }
+  }
+  const { terminal, live, all, shows, idle, exited, agent, bus } = await setup([reply, reply, reply], {
+    cols: 90,
+    tree: true,
+  })
+  let survivor: ChildSession | undefined
+  agent.tools.register(
+    defineTool({
+      name: "pair",
+      description: "",
+      parameters: {},
+      // Like the main session's agent calls: an interrupt stops one child, the other runs on.
+      execute: (_p, ctx) => {
+        survivor = ctx.session!.spawn!({ role: "explorer", title: "Keep going", prompt: "keep going" })
+        const stopped = ctx.session!.spawn!({ role: "explorer", title: "Stop me", prompt: "stop me" })
+        return new Promise((r) =>
+          ctx.signal.addEventListener("abort", () => {
+            stopped.abort("interrupted")
+            r(textResult("Started in the background"))
+          }),
+        )
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => live().includes("◆ Stop me · explorer"), "both running")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  await survivor!.result()
+  await idle()
+  await bus.flush()
+  await waitFor(() => !live().includes("◆ background"), "the rows gone")
+  expect(all()).toMatch(/⎿ ◆ Stop me ⊘ explorer · [^\n]*stopped/)
+  expect(all().match(/◆ Stop me ⊘/g)).toHaveLength(1)
+  // The survivor's notice (the agent extension's) reports it; no line of its own here.
+  expect(all()).not.toContain("◆ Keep going ✓")
+  terminal.send("\x03")
+  await exited
+})
+
 test("sub-agents that outlive their call run on under a background header, with no end line", async () => {
   let finish!: () => void
   // The child and the commander ask in no fixed order: each reply goes by who asks.
