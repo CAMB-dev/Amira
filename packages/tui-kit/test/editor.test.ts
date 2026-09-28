@@ -210,3 +210,40 @@ test("unhandled keys return false", () => {
   expect(press(ed, "f5")).toBe(false)
   expect(press(ed, "c", { ctrl: true })).toBe(false)
 })
+
+test("past maxRows the text scrolls inside the editor, keeping the caret in view", () => {
+  const ed = new Editor({ prompt: "> " })
+  ed.maxRows = 3
+  ed.setText(["one", "two", "three", "four", "five"].join("\n"))
+  expect(view(ed)).toEqual(["  three", "  four", "  five|"])
+  expect(ed.hidden).toEqual({ above: 2, below: 0 })
+  // Moving inside the shown rows does not scroll; moving past them scrolls a row at a time.
+  press(ed, "up")
+  press(ed, "up")
+  expect(view(ed)).toEqual(["  thre|e", "  four", "  five"])
+  press(ed, "up")
+  expect(view(ed)).toEqual(["  two|", "  three", "  four"])
+  expect(ed.hidden).toEqual({ above: 1, below: 1 })
+  press(ed, "up")
+  expect(view(ed)).toEqual(["> one|", "  two", "  three"])
+  expect(ed.hidden).toEqual({ above: 0, below: 2 })
+  // Wrapped rows count as rows, the caret's own empty row included.
+  ed.setText("abcdefghijklmnop")
+  expect(view(ed, 6)).toEqual(["  ijkl", "  mnop", "  |"])
+  expect(ed.hidden).toEqual({ above: 2, below: 0 })
+})
+
+test("when the text gets shorter the shown rows stay full", () => {
+  const ed = new Editor()
+  ed.maxRows = 2
+  ed.setText("a\nb\nc\nd")
+  expect(view(ed)).toEqual(["c", "d|"])
+  press(ed, "up")
+  press(ed, "up")
+  expect(view(ed)).toEqual(["b|", "c"])
+  ed.setText("a\nb")
+  expect(view(ed)).toEqual(["a", "b|"])
+  ed.setText("a")
+  expect(view(ed)).toEqual(["a|"])
+  expect(ed.hidden).toEqual({ above: 0, below: 0 })
+})

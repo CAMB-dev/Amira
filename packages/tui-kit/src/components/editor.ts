@@ -26,6 +26,15 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" })
  */
 export class Editor implements Component {
   focused = true
+  /**
+   * Rows shown at most. Longer text scrolls inside them, keeping the caret in view, so the
+   * editor never grows past its share of the screen.
+   */
+  maxRows = Number.POSITIVE_INFINITY
+  /** Rows of text above and below the shown ones, as of the last render. */
+  hidden = { above: 0, below: 0 }
+  /** First shown row. */
+  private top = 0
   private lines = [""]
   private line = 0
   private col = 0
@@ -123,19 +132,30 @@ export class Editor implements Component {
     const indent = " ".repeat(visibleWidth(prompt))
     const caret = this.focused ? CURSOR_MARKER : ""
     if (this.getText() === "" && this.opts.placeholder) {
+      this.top = 0
+      this.hidden = { above: 0, below: 0 }
       return [theme.accent(prompt) + caret + theme.muted(this.opts.placeholder)]
     }
     const rows = this.layout()
-    const caretRow = this.caretRow(rows)
-    return rows.map((row, i) => {
+    const caretRow = Math.max(0, this.caretRow(rows))
+    const shown = Math.max(1, Math.min(Math.floor(this.maxRows), rows.length))
+    // Scroll only as far as the caret needs, so the view stays put while it moves inside it.
+    if (caretRow < this.top) this.top = caretRow
+    else if (caretRow >= this.top + shown) this.top = caretRow - shown + 1
+    this.top = Math.min(Math.max(0, this.top), rows.length - shown)
+    this.hidden = { above: this.top, below: rows.length - this.top - shown }
+    const out: string[] = []
+    for (let i = this.top; i < this.top + shown; i++) {
+      const row = rows[i]!
       const text = this.lines[row.line]!
       let body = text.slice(row.start, row.end)
       if (i === caretRow) {
         const at = this.col - row.start
         body = body.slice(0, at) + caret + body.slice(at)
       }
-      return (i === 0 ? theme.accent(prompt) : indent) + body
-    })
+      out.push((i === 0 ? theme.accent(prompt) : indent) + body)
+    }
+    return out
   }
 
   private get current(): string {
