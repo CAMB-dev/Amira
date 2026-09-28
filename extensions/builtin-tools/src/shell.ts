@@ -178,6 +178,56 @@ export function powershellShell(
 let cached: Promise<Shell> | undefined
 
 /** Git Bash on Windows (PowerShell if it is missing), /bin/bash elsewhere. Resolved once per process. */
+/**
+ * The script run for the powershell tool. It waits for the gate line (sent once the process
+ * is in its Job Object), switches output to UTF-8, runs the command, and exits with the last
+ * native exit code, or 1 when the last statement failed.
+ */
+export function powershellScript(command: string): string {
+  return [
+    "$null = [Console]::In.ReadLine()",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$global:LASTEXITCODE = 0",
+    command,
+    "if (-not $?) { if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } else { exit 1 } }",
+    "exit $global:LASTEXITCODE",
+  ].join("\n")
+}
+
+/** -EncodedCommand takes base64 of UTF-16LE, which sidesteps every argument-quoting quirk. */
+export function encodePowerShell(script: string): string {
+  return Buffer.from(script, "utf16le").toString("base64")
+}
+
+/** PowerShell for the powershell tool: gated like Git Bash, so nothing escapes the job. */
+export function gatedPowerShell(
+  path = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe",
+): Shell {
+  return {
+    kind: "powershell",
+    path,
+    get env() {
+      return { ...process.env }
+    },
+    gated: true,
+    args: (command) => [
+      path,
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      encodePowerShell(powershellScript(command)),
+    ],
+  }
+}
+
+let cachedPowerShell: Promise<Shell> | undefined
+export function resolvePowerShell(): Promise<Shell> {
+  cachedPowerShell ??= Promise.resolve(gatedPowerShell())
+  return cachedPowerShell
+}
+
 export function resolveShell(): Promise<Shell> {
   cached ??=
     process.platform === "win32"

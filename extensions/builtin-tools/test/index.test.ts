@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import type { ExtensionAPI, ToolDefinition } from "@amira/api"
 import extension from "../src/index.ts"
 
-test("registers the six built-in tools with the expected concurrency", async () => {
+test("registers the built-in tools (plus powershell on Windows) with the expected concurrency", async () => {
   const tools: ToolDefinition[] = []
   const api: ExtensionAPI = {
     apiVersion: "0.1.0",
@@ -22,6 +22,7 @@ test("registers the six built-in tools with the expected concurrency", async () 
     write: "serial",
     edit: "serial",
     bash: "serial",
+    ...(process.platform === "win32" ? { powershell: "serial" } : {}),
     grep: "parallel",
     glob: "parallel",
   })
