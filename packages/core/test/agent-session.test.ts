@@ -142,6 +142,45 @@ test("compacts before the next model call once the context passes the threshold"
   expect(reopened.restore().messages).toEqual(agent.messages)
 })
 
+test("resuming right after a compaction does not compact again", async () => {
+  const { agent, ai, session } = await setup([{ text: "r1" }, { text: "r2", ...big }, { text: "S" }])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  expect(await agent.compact()).toBe(true)
+
+  const mock2 = createMockDialect([{ text: "r3" }])
+  ai.registerDialect(mock2)
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const resumed = new Agent({
+    ai,
+    model: ai.model("mock/m"),
+    cwd: "/proj",
+    bus,
+    session: SessionStore.open(session.file),
+  })
+  await resumed.prompt("q3")
+  await bus.flush()
+  expect(mock2.requests.length).toBe(1)
+  expect(types(events).filter((t) => t.startsWith("compact."))).toEqual([])
+})
+
+test("only usage reported after the last compaction is restored", async () => {
+  const { agent, session } = await setup([
+    { text: "r1" },
+    { text: "r2", ...big },
+    { text: "S" },
+    { text: "r3", ...big },
+  ])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  expect(await agent.compact()).toBe(true)
+  expect(session.restore().contextTokens).toBeUndefined()
+  await agent.prompt("q3")
+  expect(SessionStore.open(session.file).restore().contextTokens).toBe(900)
+})
+
 test("compact.before can supply the summary; failures fall back and never break the turn", async () => {
   const { agent, mock, bus, events } = await setup([{ text: "r1" }, { text: "r2" }, { text: "r3" }])
   agent.interceptors.add("compact.before", () => {

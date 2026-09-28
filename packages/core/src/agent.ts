@@ -113,15 +113,16 @@ export class Agent {
 
     if (opts.messages || !opts.session) {
       this.messages = opts.messages ?? []
+      const last = this.messages.findLast((m) => m.role === "assistant" && m.usage) as
+        | AssistantMessage
+        | undefined
+      if (last?.usage) this.#contextTokens = contextTokens(last.usage)
     } else {
       const restored = opts.session.restore()
       this.messages = restored.messages
       this.#entryIds = restored.entryIds
+      this.#contextTokens = restored.contextTokens
     }
-    const last = this.messages.findLast((m) => m.role === "assistant" && m.usage) as
-      | AssistantMessage
-      | undefined
-    if (last?.usage) this.#contextTokens = contextTokens(last.usage)
     const stored = opts.session?.model()
     if (opts.session && (stored?.provider !== this.model.provider || stored.model !== this.model.id)) {
       this.#store({ type: "model_change", model: modelRef(this.model) })

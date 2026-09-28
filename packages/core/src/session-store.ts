@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import type { AssistantMessage, Message, ModelRef } from "@amira/ai"
+import { contextTokens } from "./compaction.ts"
 import { amiraPath } from "./home.ts"
 
 export interface SessionHeader {
@@ -31,6 +32,8 @@ export interface RestoredSession {
   messages: Message[]
   entryIds: Map<Message, string>
   model?: ModelRef
+  /** Context size from the last reply since the last compaction; older usage no longer applies. */
+  contextTokens?: number
 }
 
 /** Sessions for a working directory live in `~/.amira/sessions/<hash of cwd>/`. */
@@ -156,10 +159,14 @@ export class SessionStore {
   restore(): RestoredSession {
     let items: { id: string; message: Message }[] = []
     let model: ModelRef | undefined
+    let tokens: number | undefined
     for (const e of this.branch()) {
-      if (e.type === "message") items.push({ id: e.id, message: e.message })
-      else if (e.type === "model_change") model = e.model
+      if (e.type === "message") {
+        items.push({ id: e.id, message: e.message })
+        if (e.message.role === "assistant" && e.message.usage) tokens = contextTokens(e.message.usage)
+      } else if (e.type === "model_change") model = e.model
       else if (e.type === "compaction") {
+        tokens = undefined
         const gone = new Set(e.replaces)
         const at = items.findIndex((i) => gone.has(i.id))
         const kept = items.filter((i) => !gone.has(i.id))
@@ -169,7 +176,12 @@ export class SessionStore {
     }
     const entryIds = new Map<Message, string>()
     for (const i of items) entryIds.set(i.message, i.id)
-    return { messages: items.map((i) => i.message), entryIds, ...(model ? { model } : {}) }
+    return {
+      messages: items.map((i) => i.message),
+      entryIds,
+      ...(model ? { model } : {}),
+      ...(tokens !== undefined ? { contextTokens: tokens } : {}),
+    }
   }
 
   /** The model most recently recorded on the current branch. */
