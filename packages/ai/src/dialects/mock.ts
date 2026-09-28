@@ -40,7 +40,7 @@ export function createMockDialect(steps: MockStep[] = []) {
         usage: { ...emptyUsage(), ...reply.usage },
       }
       const wait = async () => {
-        if (reply.delayMs) await Bun.sleep(reply.delayMs)
+        if (reply.delayMs) await sleep(reply.delayMs, ctx.signal)
         if (ctx.signal.aborted) throw new DOMException("aborted", "AbortError")
       }
 
@@ -70,11 +70,11 @@ export function createMockDialect(steps: MockStep[] = []) {
             yield { type: "text.delta", text: chunk }
           }
         }
-        for (const tc of reply.toolCalls ?? []) {
+        for (const [index, tc] of (reply.toolCalls ?? []).entries()) {
           await wait()
           const id = tc.id ?? `mock_call_${++counter}`
           const raw = typeof tc.args === "string" ? tc.args : JSON.stringify(tc.args)
-          yield { type: "toolCall.delta", id, name: tc.name, argsDelta: raw }
+          yield { type: "toolCall.delta", index, id, name: tc.name, argsDelta: raw }
           message.content.push({ type: "toolCall", id, name: tc.name, args: parseToolArgs(raw) })
         }
         message.stopReason = reply.toolCalls?.length ? "toolUse" : "end"
@@ -87,4 +87,18 @@ export function createMockDialect(steps: MockStep[] = []) {
     },
   }
   return dialect
+}
+
+/** Sleeps, but wakes early when the signal aborts. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve()
+    const wake = () => {
+      clearTimeout(timer)
+      signal.removeEventListener("abort", wake)
+      resolve()
+    }
+    const timer = setTimeout(wake, ms)
+    signal.addEventListener("abort", wake, { once: true })
+  })
 }

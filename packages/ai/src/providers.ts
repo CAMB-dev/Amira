@@ -1,4 +1,8 @@
+import type { ProviderCompat } from "./dialect.ts"
 import type { ModelCaps, ModelInfo } from "./types.ts"
+
+/** Model settings a provider overrides; caps are merged key by key over the defaults. */
+export type ModelOverrides = Partial<Omit<ModelInfo, "caps">> & { caps?: Partial<ModelCaps> }
 
 /** A provider is configuration: where to connect and which dialect it speaks. */
 export interface ProviderConfig {
@@ -9,9 +13,10 @@ export interface ProviderConfig {
   apiKeyEnv?: string
   apiKey?: string
   headers?: Record<string, string>
+  compat?: ProviderCompat
   /** Known models. Unlisted models get defaultModel values. */
-  models?: Partial<ModelInfo>[]
-  defaultModel?: Partial<Omit<ModelInfo, "caps">> & { caps?: Partial<ModelCaps> }
+  models?: ModelOverrides[]
+  defaultModel?: ModelOverrides
 }
 
 export const DEFAULT_CAPS: ModelCaps = {
@@ -24,7 +29,14 @@ export const DEFAULT_CAPS: ModelCaps = {
 
 /** OpenAI-compatible services that work with the openai-chat dialect out of the box. */
 export const BUILTIN_PROVIDERS: ProviderConfig[] = [
-  { id: "openai", dialect: "openai-chat", baseUrl: "https://api.openai.com/v1", apiKeyEnv: "OPENAI_API_KEY" },
+  {
+    id: "openai",
+    dialect: "openai-chat",
+    baseUrl: "https://api.openai.com/v1",
+    apiKeyEnv: "OPENAI_API_KEY",
+    // o-series and gpt-5 models reject max_tokens.
+    compat: { maxTokensField: "max_completion_tokens" },
+  },
   {
     id: "deepseek",
     dialect: "openai-chat",
