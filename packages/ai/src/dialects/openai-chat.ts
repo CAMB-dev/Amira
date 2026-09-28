@@ -144,75 +144,81 @@ export const openaiChat: Dialect = {
       return
     }
 
-    yield { type: "start" }
-    let textBlock: { type: "text"; text: string } | undefined
-    let thinkingBlock: { type: "thinking"; text: string } | undefined
-    const calls = new Map<number, { id: string; name: string; args: string }>()
-    let finish: string | null | undefined
-
+    const resBody = res.body
     try {
-      for await (const sse of parseSSE(res.body)) {
-        if (sse.data === "[DONE]") break
-        let chunk: any
-        try {
-          chunk = JSON.parse(sse.data)
-        } catch {
-          continue
-        }
-        if (chunk.error) {
-          yield fail(chunk.error.message ?? "stream error", false)
-          return
-        }
-        if (chunk.usage) message.usage = mapUsage(chunk.usage)
-        const choice = chunk.choices?.[0]
-        if (!choice) continue
-        const delta = choice.delta ?? {}
-        const reasoning: unknown = delta.reasoning_content ?? delta.reasoning
-        if (typeof reasoning === "string" && reasoning) {
-          if (!thinkingBlock) {
-            thinkingBlock = { type: "thinking", text: "" }
-            message.content.push(thinkingBlock)
-          }
-          thinkingBlock.text += reasoning
-          yield { type: "thinking.delta", text: reasoning }
-        }
-        if (typeof delta.content === "string" && delta.content) {
-          if (!textBlock) {
-            textBlock = { type: "text", text: "" }
-            message.content.push(textBlock)
-          }
-          textBlock.text += delta.content
-          yield { type: "text.delta", text: delta.content }
-        }
-        for (const tc of delta.tool_calls ?? []) {
-          const idx: number = tc.index ?? 0
-          let call = calls.get(idx)
-          if (!call) {
-            call = { id: tc.id ?? `call_${idx}`, name: "", args: "" }
-            calls.set(idx, call)
-          }
-          if (tc.id) call.id = tc.id
-          if (tc.function?.name) call.name += tc.function.name
-          const argsDelta: string = tc.function?.arguments ?? ""
-          call.args += argsDelta
-          yield { type: "toolCall.delta", id: call.id, name: call.name || undefined, argsDelta }
-        }
-        if (choice.finish_reason) finish = choice.finish_reason
-      }
-    } catch (e) {
-      if (ctx.signal.aborted) yield fail("aborted", false, { code: "aborted" })
-      else yield fail(`stream failed: ${(e as Error).message}`, true)
-      return
-    }
+      yield { type: "start" }
+      let textBlock: { type: "text"; text: string } | undefined
+      let thinkingBlock: { type: "thinking"; text: string } | undefined
+      const calls = new Map<number, { id: string; name: string; args: string }>()
+      let finish: string | null | undefined
 
-    const toolBlocks: AssistantContent[] = [...calls.values()].map((c) => ({
-      type: "toolCall",
-      id: c.id,
-      name: c.name,
-      args: parseToolArgs(c.args),
-    }))
-    message.content.push(...toolBlocks)
-    message.stopReason = toolBlocks.length ? "toolUse" : mapFinish(finish)
-    yield { type: "done", message }
+      try {
+        for await (const sse of parseSSE(res.body)) {
+          if (sse.data === "[DONE]") break
+          let chunk: any
+          try {
+            chunk = JSON.parse(sse.data)
+          } catch {
+            continue
+          }
+          if (chunk.error) {
+            yield fail(chunk.error.message ?? "stream error", false)
+            return
+          }
+          if (chunk.usage) message.usage = mapUsage(chunk.usage)
+          const choice = chunk.choices?.[0]
+          if (!choice) continue
+          const delta = choice.delta ?? {}
+          const reasoning: unknown = delta.reasoning_content ?? delta.reasoning
+          if (typeof reasoning === "string" && reasoning) {
+            if (!thinkingBlock) {
+              thinkingBlock = { type: "thinking", text: "" }
+              message.content.push(thinkingBlock)
+            }
+            thinkingBlock.text += reasoning
+            yield { type: "thinking.delta", text: reasoning }
+          }
+          if (typeof delta.content === "string" && delta.content) {
+            if (!textBlock) {
+              textBlock = { type: "text", text: "" }
+              message.content.push(textBlock)
+            }
+            textBlock.text += delta.content
+            yield { type: "text.delta", text: delta.content }
+          }
+          for (const tc of delta.tool_calls ?? []) {
+            const idx: number = tc.index ?? 0
+            let call = calls.get(idx)
+            if (!call) {
+              call = { id: tc.id ?? `call_${idx}`, name: "", args: "" }
+              calls.set(idx, call)
+            }
+            if (tc.id) call.id = tc.id
+            if (tc.function?.name) call.name += tc.function.name
+            const argsDelta: string = tc.function?.arguments ?? ""
+            call.args += argsDelta
+            yield { type: "toolCall.delta", id: call.id, name: call.name || undefined, argsDelta }
+          }
+          if (choice.finish_reason) finish = choice.finish_reason
+        }
+      } catch (e) {
+        if (ctx.signal.aborted) yield fail("aborted", false, { code: "aborted" })
+        else yield fail(`stream failed: ${(e as Error).message}`, true)
+        return
+      }
+
+      const toolBlocks: AssistantContent[] = [...calls.values()].map((c) => ({
+        type: "toolCall",
+        id: c.id,
+        name: c.name,
+        args: parseToolArgs(c.args),
+      }))
+      message.content.push(...toolBlocks)
+      message.stopReason = toolBlocks.length ? "toolUse" : mapFinish(finish)
+      yield { type: "done", message }
+    } finally {
+      // Covers consumers that stop before the body is read to the end.
+      await resBody.cancel().catch(() => {})
+    }
   },
 }
