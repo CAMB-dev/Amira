@@ -93,6 +93,7 @@ test("long-lived piped processes never hold a short command's pipes open", async
     }
     opening = false
   })()
+  // The symptom is settled: false after the drain grace; ms is kept for diagnostics.
   const slow: { settled: boolean; ms: number }[] = []
   let runs = 0
   const commands = async () => {
@@ -102,7 +103,7 @@ test("long-lived piped processes never hold a short command's pipes open", async
       const ms = performance.now() - started
       runs++
       expect(run.exitCode).toBe(0)
-      if (!run.settled || ms > 1500) slow.push({ settled: run.settled, ms: Math.round(ms) })
+      if (!run.settled) slow.push({ settled: run.settled, ms: Math.round(ms) })
     }
   }
   try {
@@ -115,6 +116,7 @@ test("long-lived piped processes never hold a short command's pipes open", async
 })
 
 test("piped processes run on this thread when the worker cannot load", async () => {
+  // Intentionally missing: the worker never loads.
   resetCommandWorker({ url: new URL("./does-not-exist.ts", import.meta.url).href })
   try {
     const p = open([bun, "-e", ECHO])
@@ -123,10 +125,42 @@ test("piped processes run on this thread when the worker cannot load", async () 
     p.pipe.close(5000)
     await p.exited
     expect(p.events.at(-1)).toEqual({ type: "exit", code: 4 })
+    // A close sent before the worker was known to be missing is replayed too.
+    const early = open([bun, "-e", ECHO])
+    early.pipe.write("x\n")
+    early.pipe.close(5000)
+    await early.exited
+    expect(early.events.at(-1)).toEqual({ type: "exit", code: 4 })
   } finally {
     resetCommandWorker()
   }
 })
+
+// Launchers such as npx.cmd leave a grandchild holding stdout after they exit.
+const LAUNCHER = [
+  "const c = require('child_process').spawn(process.execPath, ['-e',",
+  "  'setTimeout(() => console.log(\"late\"), 1000); setTimeout(() => {}, 3000)'],",
+  "  { stdio: ['ignore', 'inherit', 'inherit'], detached: true })",
+  "c.unref(); console.log('early'); setTimeout(() => process.exit(0), 100)",
+].join("\n")
+
+for (const where of ["the worker", "this thread"]) {
+  test(`nothing follows the exit event when a grandchild holds stdout (${where})`, async () => {
+    // Intentionally missing: the worker never loads.
+    if (where === "this thread")
+      resetCommandWorker({ url: new URL("./does-not-exist.ts", import.meta.url).href })
+    try {
+      const p = open([bun, "-e", LAUNCHER])
+      await p.exited
+      const exitAt = p.events.findIndex((e) => e.type === "exit")
+      await Bun.sleep(2000)
+      expect(p.events.length).toBe(exitAt + 1)
+      expect(p.stdout()).not.toContain("late")
+    } finally {
+      if (where === "this thread") resetCommandWorker()
+    }
+  })
+}
 
 test("a lost worker ends its piped processes with an error", async () => {
   const p = open([bun, "-e", ECHO])

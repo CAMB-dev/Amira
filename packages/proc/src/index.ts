@@ -10,7 +10,7 @@ import {
 } from "./run-inline.ts"
 
 export { cmdArgv } from "./cmd-line.ts"
-export { openPipeInline, type PipeEvent, type PipeHandle, type PipeSpec } from "./pipe.ts"
+export type { PipeEvent, PipeSpec } from "./pipe.ts"
 export { type ProcessTree, trackProcessTree, warmUpProcessTree } from "./process-tree.ts"
 export {
   DRAIN_GRACE_MS,
@@ -99,7 +99,7 @@ function abandonWorker(neverLoaded: boolean) {
       if (p.closeGrace !== undefined) p.fallback.close(p.closeGrace)
     } else {
       // Its process may keep running; the caller should kill it by pid.
-      pipeEvent(p, { type: "exit", code: null, error: "the command worker stopped unexpectedly" })
+      pipeEvent(p.onEvent, { type: "exit", code: null, error: "the command worker stopped unexpectedly" })
     }
   }
   for (const [id, p] of pending) {
@@ -114,13 +114,18 @@ function abandonWorker(neverLoaded: boolean) {
 }
 
 function onMessage(m: FromWorker) {
-  if (!workerReady) for (const p of pipes.values()) p.early = []
+  if (!workerReady) {
+    for (const p of pipes.values()) {
+      p.early = []
+      delete p.closeGrace
+    }
+  }
   workerReady = true
   if (m.type === "ready") return
   if (m.type === "pipe") {
     const p = pipes.get(m.id)
     if (m.event.type === "exit") pipes.delete(m.id)
-    if (p) pipeEvent(p, m.event)
+    if (p) pipeEvent(p.onEvent, m.event)
     return
   }
   if (m.type === "gone") return standbys.get(m.id)?.()
@@ -276,9 +281,9 @@ export function openPipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void): PipeP
   }
 }
 
-function pipeEvent(p: Pick<OpenPipe, "onEvent">, e: PipeEvent) {
+function pipeEvent(onEvent: (e: PipeEvent) => void, e: PipeEvent) {
   try {
-    p.onEvent(e)
+    onEvent(e)
   } catch {
     // A failing callback must not break delivery of the rest.
   }
@@ -293,7 +298,7 @@ function inlinePipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void): PipeProces
   const queue: ((h: PipeHandle) => void)[] = []
   const run = (f: (h: PipeHandle) => void) => (handle ? f(handle) : queue.push(f))
   setTimeout(() => {
-    handle = openPipeInline(spec, (e) => pipeEvent({ onEvent }, e))
+    handle = openPipeInline(spec, (e) => pipeEvent(onEvent, e))
     for (const f of queue) f(handle)
   }, 0)
   return {

@@ -43,12 +43,20 @@ export function openPipeInline(spec: PipeSpec, emit: (e: PipeEvent) => void): Pi
   }
   emit({ type: "spawned", pid: proc.pid })
   let exited = false
-  const stdout = pump(proc.stdout, (data) => emit({ type: "stdout", data }))
-  const stderr = pump(proc.stderr, (data) => emit({ type: "stderr", data }))
+  // Set with the exit event: nothing follows it, even while a grandchild keeps a pipe open.
+  let done = false
+  const readers: { cancel(): Promise<void> }[] = []
+  const output = (type: "stdout" | "stderr") => (data: string) => {
+    if (!done) emit({ type, data })
+  }
+  const stdout = pump(proc.stdout, readers, output("stdout"))
+  const stderr = pump(proc.stderr, readers, output("stderr"))
   proc.exited.then(async (code) => {
     exited = true
     // Deliver the last output before the exit, but don't wait on pipes a grandchild holds open.
     await Promise.race([Promise.all([stdout, stderr]), Bun.sleep(500)])
+    done = true
+    for (const r of readers) r.cancel().catch(() => {})
     emit({ type: "exit", code })
   })
   return {
@@ -71,10 +79,20 @@ export function openPipeInline(spec: PipeSpec, emit: (e: PipeEvent) => void): Pi
   }
 }
 
-async function pump(stream: ReadableStream<Uint8Array>, onData: (s: string) => void): Promise<void> {
+async function pump(
+  stream: ReadableStream<Uint8Array>,
+  readers: { cancel(): Promise<void> }[],
+  onData: (s: string) => void,
+): Promise<void> {
   const decoder = new TextDecoder()
+  const reader = stream.getReader()
+  readers.push(reader)
   try {
-    for await (const chunk of stream) onData(decoder.decode(chunk, { stream: true }))
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      onData(decoder.decode(value, { stream: true }))
+    }
   } catch {}
   const rest = decoder.decode()
   if (rest) onData(rest)
