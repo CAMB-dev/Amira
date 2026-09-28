@@ -9,9 +9,12 @@ import {
   visibleWidth,
 } from "@amira/tui-kit"
 
+type Completion = { command?: string; candidates: CommandCandidate[] }
+
 /** Where the popup gets its candidates; the CommandHost in the app. */
 export interface CompletionSource {
-  complete(line: string): Promise<{ command?: string; candidates: CommandCandidate[] }>
+  /** Answers at once when it can (command names always), so the list shows with the key. */
+  complete(line: string): Completion | Promise<Completion>
   list(): CommandInfo[]
 }
 
@@ -37,9 +40,11 @@ interface Result {
 }
 
 /**
- * The completion list shown above the editor while the input starts with "/" (D55): command
- * names first, then the command's argument candidates. ↑↓ select, Tab completes, Enter runs,
- * Esc closes until the text changes. Candidates arrive asynchronously; a stale answer is dropped.
+ * The completion list shown below the editor while the input starts with "/" (D55): command
+ * names first (with their aliases, and settings aliases with what they run), then the command's
+ * argument candidates. ↑↓ select, Tab completes, Enter runs, Esc closes until the text changes.
+ * Candidates the source has at once apply at once; late ones call `onUpdate`, and a stale
+ * answer is dropped.
  */
 export class CommandPopup implements Component {
   #text = ""
@@ -49,33 +54,56 @@ export class CommandPopup implements Component {
   #navigated = false
   #dismissed = false
   #generation = 0
+  /** Settles when the candidates for `#text` arrive, while they are on their way. */
+  #pending: Promise<void> | undefined
 
   constructor(
     private source: CompletionSource,
     private onUpdate: () => void,
   ) {}
 
-  /** Call with the editor text whenever it may have changed. */
-  update(text: string): void {
-    if (text === this.#text) return
+  /**
+   * Call with the editor text whenever it changed; not while rendering, since a completer may
+   * take a while. Returns a promise while the candidates are on their way, so the caller can
+   * wait a moment for them before drawing.
+   */
+  update(text: string): Promise<void> | undefined {
+    if (text === this.#text) return this.#pending
     this.#text = text
     this.#dismissed = false
-    if (!isCommandInput(text)) {
-      this.#generation++
-      this.#result = { text: "", candidates: [] }
-      return
-    }
+    this.#pending = undefined
     const generation = ++this.#generation
-    this.source.complete(text).then(
+    if (!isCommandInput(text)) {
+      this.#result = { text: "", candidates: [] }
+      return undefined
+    }
+    const apply = (r: Completion) => {
+      this.#result = { text, ...r }
+      this.#selected = 0
+      this.#navigated = false
+    }
+    let answer: Completion | Promise<Completion>
+    try {
+      answer = this.source.complete(text)
+    } catch {
+      answer = { candidates: [] }
+    }
+    if (typeof (answer as { then?: unknown }).then !== "function") {
+      apply(answer as Completion)
+      return undefined
+    }
+    this.#pending = Promise.resolve(answer).then(
       (r) => {
         if (generation !== this.#generation) return
-        this.#result = { text, ...r }
-        this.#selected = 0
-        this.#navigated = false
+        this.#pending = undefined
+        apply(r)
         this.onUpdate()
       },
-      () => {},
+      () => {
+        if (generation === this.#generation) this.#pending = undefined
+      },
     )
+    return this.#pending
   }
 
   /** Whether the popup shows anything for the current text, so it answers keys. */
@@ -155,13 +183,15 @@ export class CommandPopup implements Component {
       // No candidates for the arguments: show how the command is used instead.
       const info = r.command ? this.source.list().find((c) => c.name === r.command) : undefined
       if (!info) return []
-      const usage = `/${info.name}${info.hint ? ` ${info.hint}` : ""}  ${info.description}`
+      const aliases = info.aliases.length ? ` (${info.aliases.join(", ")})` : ""
+      const usage = `/${info.name}${aliases}${info.hint ? ` ${info.hint}` : ""}  ${info.description}`
       return [muted(truncateToWidth(`  ${usage}`, width, "…"))]
     }
     const n = r.candidates.length
     const start = Math.min(Math.max(0, this.#selected - MAX_ROWS + 1), Math.max(0, n - MAX_ROWS))
     const shown = r.candidates.slice(start, start + MAX_ROWS)
-    const label = (c: CommandCandidate) => (r.command ? c.value : `/${c.value}`)
+    // A command row shows its aliases, a settings alias what it runs: "/quit (exit, q)".
+    const label = (c: CommandCandidate) => `${r.command ? "" : "/"}${c.label ?? c.value}`
     const col = Math.min(32, Math.max(...shown.map((c) => visibleWidth(label(c)))))
     const lines = shown.map((c, i) => {
       const selected = start + i === this.#selected

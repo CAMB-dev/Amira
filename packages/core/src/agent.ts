@@ -5,10 +5,12 @@ import {
   type Message,
   type ModelInfo,
   type ModelRef,
+  modelMessages,
   type ToolCallBlock,
   type ToolResultMessage,
   type ToolSpec,
   type UserMessage,
+  unansweredCalls,
   userMessage,
 } from "@amira/ai"
 import type {
@@ -22,12 +24,18 @@ import type {
   ToolSession,
   TurnEndReason,
 } from "@amira/api"
-import { type CompactionOptions, contextTokens, splitHistory, summarize } from "./compaction.ts"
+import {
+  type CompactionOptions,
+  contextTokens,
+  splitHistory,
+  summarize,
+  summaryMessages,
+} from "./compaction.ts"
 import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
-import { newSessionId, type SessionEntryData, type SessionStore, summaryMessages } from "./session-store.ts"
+import { newSessionId, type SessionEntryData, type SessionStore } from "./session-store.ts"
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
@@ -93,6 +101,9 @@ export interface PromptOptions {
 
 export class AgentBusyError extends Error {}
 
+/** A message sent during a manual compaction was dropped because the compaction was aborted. */
+export class AgentAbortedError extends Error {}
+
 export function newTurnId(): string {
   return `t_${crypto.randomUUID().slice(0, 8)}`
 }
@@ -101,10 +112,30 @@ export function newTurnId(): string {
 interface Turn {
   id: string
   signal: AbortSignal
-  /** Tool calls that emitted tool.execute.start. */
-  started: Set<string>
-  /** Tool calls whose result has been recorded; later updates from them are dropped. */
-  finished: Set<string>
+}
+
+/**
+ * One tool call of a batch. Tracked by the call itself, not its id: providers reuse ids across
+ * steps (and some even within one reply), and each call still needs its own events and result.
+ */
+interface CallRun {
+  call: ToolCallBlock
+  /** tool.execute.start has been emitted. */
+  started: boolean
+  /** The batch recorded this call's result; later updates and results from it are dropped. */
+  finished: boolean
+  result?: ToolResultMessage
+}
+
+/** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
+interface AfterCompaction {
+  /** In the order they were sent; `steered` ones came through steer(). */
+  messages: { message: UserMessage; steered: boolean }[]
+  /** The id a prompt() call asked for. */
+  turnId?: string
+  /** A prompt() call is waiting; a second one is refused as busy. */
+  prompted: boolean
+  waiters: { resolve: (r: TurnResult) => void; reject: (err: unknown) => void }[]
 }
 
 type ModelReply =
@@ -142,14 +173,27 @@ export class Agent {
   #entryIds = new Map<Message, string>()
   /** Context size reported with the last reply; unknown right after a compaction. */
   #contextTokens: number | undefined
+  /** The next reply's context size tells whether the last compaction shrank the context enough. */
+  #checkCompaction = false
+  /** Automatic compaction waits until the context passes this, after one that did not help. */
+  #compactFloor: number | undefined
   #storeFailed = false
   #maxParallelTools: number
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
+  /**
+   * Loaded tools restored from the session file, checked at the first model call: by then
+   * system.build has waited for tools that register late (MCP servers).
+   */
+  #restoredTools: string[] | undefined
   #toolSession: ToolSession
   #turn: Turn | undefined
   /** Steering messages waiting for the next model call of the running turn. */
   #steering: UserMessage[] = []
+  /** A manual compaction is running (busy, but no turn). */
+  #compacting = false
+  /** Messages sent during a manual compaction; they start one turn when it ends. */
+  #afterCompaction: AfterCompaction | undefined
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -182,6 +226,8 @@ export class Agent {
       this.messages = restored.messages
       this.#entryIds = restored.entryIds
       this.#contextTokens = restored.contextTokens
+      for (const name of restored.loadedTools) this.#loadedTools.add(name)
+      if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
     }
     const stored = opts.session?.model()
     if (opts.session && (stored?.provider !== this.model.provider || stored.model !== this.model.id)) {
@@ -189,8 +235,15 @@ export class Agent {
     }
     const agent = this
     const tree = opts.tree
+    const deferred = createToolSession(this.sessionId, this.tools, this.#loadedTools)
     this.#toolSession = {
-      ...createToolSession(this.sessionId, this.tools, this.#loadedTools),
+      ...deferred,
+      // Recorded in the session, so resuming it offers the same tools again.
+      loadTools: (names) => {
+        const added = deferred.loadTools(names)
+        if (added.length) this.#store({ type: "tools_loaded", names: added })
+        return added
+      },
       depth: this.depth,
       get maxDepth() {
         return tree?.maxDepth ?? 0
@@ -243,6 +296,8 @@ export class Agent {
     const from = modelRef(this.model)
     this.model = model
     if (from.provider === model.provider && from.model === model.id) return
+    // The floor was measured against the old model's window.
+    this.#compactFloor = undefined
     this.#store({ type: "model_change", model: modelRef(model) })
     this.#emit(undefined, "model.changed", { from, to: modelRef(model) })
   }
@@ -250,17 +305,62 @@ export class Agent {
   /**
    * Summarizes older history now, keeping recent turns verbatim; `instructions` steer the
    * summary. Resolves false when there was nothing to compact or compaction failed (see
-   * compact.failed).
+   * compact.failed). Messages sent meanwhile (prompt or steer) start a turn once it ends, also
+   * when it failed. An abort drops them, as it drops a turn's steering: each gets a turn.steer
+   * `dropped` and a waiting prompt() rejects with AgentAbortedError.
    */
   async compact(instructions?: string): Promise<boolean> {
-    if (this.#abort) throw new AgentBusyError("a turn is already running")
+    if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
     this.#abort = abort
+    this.#compacting = true
     try {
-      return await this.#compact("manual", abort.signal, undefined, instructions)
+      return (await this.#compact("manual", abort.signal, undefined, instructions)) === true
     } finally {
       this.#abort = undefined
+      this.#compacting = false
+      this.#startAfterCompaction(abort.signal.aborted)
     }
+  }
+
+  /** Holds a message sent during a manual compaction for the turn that follows it. */
+  #holdForCompaction(message: UserMessage, steered: boolean, turnId?: string): AfterCompaction {
+    this.#afterCompaction ??= { messages: [], prompted: false, waiters: [] }
+    const next = this.#afterCompaction
+    next.messages.push({ message, steered })
+    if (turnId !== undefined) next.turnId = turnId
+    return next
+  }
+
+  /** Starts the turn held during a manual compaction, if anything was sent meanwhile. */
+  #startAfterCompaction(aborted: boolean) {
+    const next = this.#afterCompaction
+    this.#afterCompaction = undefined
+    if (!next) return
+    if (aborted) {
+      for (const { message } of next.messages)
+        this.#emit(undefined, "turn.steer", { message, state: "dropped" })
+      const err = new AgentAbortedError("the compaction was aborted before the message was sent")
+      for (const w of next.waiters) w.reject(err)
+      return
+    }
+    const turnId = next.turnId ?? newTurnId()
+    for (const { message, steered } of next.messages) {
+      if (steered) this.#emit(undefined, "turn.steer", { message, state: "promoted", nextTurnId: turnId })
+    }
+    const [only, ...more] = next.messages
+    const prompt: UserMessage =
+      only && !more.length
+        ? only.message
+        : { role: "user", content: next.messages.flatMap((m) => m.message.content) }
+    this.prompt(prompt, { turnId }).then(
+      (r) => {
+        for (const w of next.waiters) w.resolve(r)
+      },
+      (err) => {
+        for (const w of next.waiters) w.reject(err)
+      },
+    )
   }
 
   /** Tokens the context held at the last reply; unknown before one and right after a compaction. */
@@ -279,7 +379,12 @@ export class Agent {
   }> {
     const built = await this.#buildContext(signal)
     if (built.blocked) throw new Error(`context.build blocked the request: ${built.reason}`)
-    return { ...built.value, tools: offeredTools(this.tools, this.#loadedTools) }
+    return {
+      systemPrompt: built.value.systemPrompt,
+      // As sent: the ai client drops what only frontends read.
+      messages: modelMessages(built.value.messages),
+      tools: offeredTools(this.tools, this.#loadedTools),
+    }
   }
 
   /** When and with which model this agent compacts. */
@@ -326,10 +431,17 @@ export class Agent {
    * Adds a message to the running turn without interrupting it (D29): it joins the history
    * before the next model call, and a running tool finishes first. Queued messages the turn
    * never reached become the next prompt; with no turn running, the message starts one.
+   * During a manual compaction it is queued (a turn.steer without a turn id) and promoted to
+   * the turn that starts when the compaction ends.
    */
   steer(input: string | UserMessage): void {
     const message = typeof input === "string" ? userMessage(input) : input
     const turn = this.#turn
+    if (!turn && this.#compacting) {
+      this.#holdForCompaction(message, true)
+      this.#emit(undefined, "turn.steer", { message, state: "queued" })
+      return
+    }
     if (!turn) {
       this.prompt(message).catch(() => {})
       return
@@ -340,17 +452,26 @@ export class Agent {
 
   /**
    * Runs one turn. Everything up to the turn.start event happens synchronously, so once this
-   * returns the turn is running and `turnId` is set.
+   * returns the turn is running and `turnId` is set. During a manual compaction the turn
+   * starts when the compaction ends, together with anything steered meanwhile.
    */
-  async prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
-    if (this.#abort) throw new AgentBusyError("a turn is already running")
+  prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
+    if (this.#compacting && !this.#afterCompaction?.prompted) {
+      const user = typeof input === "string" ? userMessage(input) : input
+      const next = this.#holdForCompaction(user, false, opts.turnId)
+      next.prompted = true
+      return new Promise((resolve, reject) => next.waiters.push({ resolve, reject }))
+    }
+    return this.#runTurn(input, opts)
+  }
+
+  async #runTurn(input: string | UserMessage, opts: PromptOptions): Promise<TurnResult> {
+    if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
     this.#abort = abort
     const turn: Turn = {
       id: opts.turnId ?? newTurnId(),
       signal: abort.signal,
-      started: new Set(),
-      finished: new Set(),
     }
     this.#turn = turn
     const user = typeof input === "string" ? userMessage(input) : input
@@ -364,7 +485,7 @@ export class Agent {
       let compactFailed = false
       while (true) {
         if (!compactFailed && this.#needsCompaction()) {
-          compactFailed = !(await this.#compact("threshold", abort.signal, turn))
+          compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
         }
         if (abort.signal.aborted) {
           result = { reason: "aborted", steps }
@@ -419,8 +540,7 @@ export class Agent {
       })
       this.#setStatus(turn, "idle")
       if (nextTurnId) {
-        const prompt: UserMessage = { role: "user", content: leftover.flatMap((m) => m.content) }
-        this.prompt(prompt, { turnId: nextTurnId }).catch(() => {})
+        this.prompt(joinMessages(leftover), { turnId: nextTurnId }).catch(() => {})
       }
     }
     return result
@@ -457,6 +577,7 @@ export class Agent {
 
   async #callModel(turn: Turn): Promise<ModelReply> {
     const ctx = await this.#buildContext(turn.signal)
+    this.#checkRestoredTools()
     if (turn.signal.aborted) return { kind: "aborted" }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
@@ -532,13 +653,30 @@ export class Agent {
     if (aborted || error) message.content = message.content.filter((b) => b.type !== "toolCall")
     else message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
     if (message.content.length) this.#push(message)
-    if (message.usage) this.#contextTokens = contextTokens(message.usage)
+    if (message.usage) this.#noteContext(contextTokens(message.usage))
     this.#emit(turn, "message.end", { message })
     if (message.usage) this.tree?.recordUsage(this, message.usage)
 
     if (aborted) return { kind: "aborted" }
     if (error) return { kind: "error", error }
     return { kind: "ok", message }
+  }
+
+  /** Drops restored tools that are gone (e.g. an MCP server removed since), with a note. */
+  #checkRestoredTools() {
+    const restored = this.#restoredTools
+    if (!restored) return
+    this.#restoredTools = undefined
+    // A disabled tool stays loaded for when it is turned back on; one that became active is
+    // offered anyway.
+    const unavailable = restored.filter((name) => !this.tools.has(name))
+    for (const name of restored) {
+      const tool = this.tools.get(name)
+      if (!this.tools.has(name) || (tool && tool.exposure !== "deferred")) this.#loadedTools.delete(name)
+    }
+    if (!unavailable.length) return
+    const error = `tools loaded earlier in this session are no longer available: ${unavailable.join(", ")}`
+    this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId })
   }
 
   /** Renames a call to a tool the model misspelled, so history, events and results agree. */
@@ -558,12 +696,13 @@ export class Agent {
    * exactly one result, even if a tool throws, misbehaves or ignores abort.
    */
   async #runTools(turn: Turn, calls: ToolCallBlock[]): Promise<void> {
-    const results = new Map<string, ToolResultMessage>()
+    const runs: CallRun[] = calls.map((call) => ({ call, started: false, finished: false }))
     try {
       const running = new Set<Promise<void>>()
       const started: Promise<void>[] = []
       const lastByKey = new Map<string, Promise<void>>()
-      for (const call of calls) {
+      for (const run of runs) {
+        const call = run.call
         if (turn.signal.aborted) break
         const tool = this.tools.get(call.name)
         const serial = tool !== undefined && (tool.concurrency ?? "serial") === "serial"
@@ -577,8 +716,8 @@ export class Agent {
         const before = key === undefined ? undefined : lastByKey.get(key)
         const task: Promise<void> = (async () => {
           if (before) await before
-          const r = await this.#runTool(turn, call)
-          if (!turn.finished.has(call.id)) results.set(call.id, r)
+          const r = await this.#runTool(turn, run)
+          if (!run.finished) run.result = r
         })().finally(() => running.delete(task))
         running.add(task)
         started.push(task)
@@ -587,16 +726,15 @@ export class Agent {
       }
       await this.#untilDoneOrAbandoned(turn.signal, Promise.all(started))
     } finally {
-      for (const c of calls) {
-        if (!results.has(c.id)) {
-          const r = toolError(c, "Aborted by the user before this tool finished.")
-          results.set(c.id, r)
-          this.#emitToolStart(turn, c, c.args)
-          this.#emitToolEnd(turn, c, { content: r.content, isError: true }, 0, "aborted")
+      for (const run of runs) {
+        if (!run.result) {
+          run.result = toolError(run.call, "Aborted by the user before this tool finished.")
+          this.#emitToolStart(turn, run, run.call.args)
+          this.#emitToolEnd(turn, run.call, { content: run.result.content, isError: true }, 0, "aborted")
         }
-        turn.finished.add(c.id)
+        run.finished = true
       }
-      this.#push(...calls.map((c) => results.get(c.id)!))
+      this.#push(...runs.map((run) => run.result!))
     }
   }
 
@@ -620,10 +758,11 @@ export class Agent {
   }
 
   /** Never rejects: every failure becomes an error result for the model. */
-  async #runTool(turn: Turn, call: ToolCallBlock): Promise<ToolResultMessage> {
+  async #runTool(turn: Turn, run: CallRun): Promise<ToolResultMessage> {
+    const call = run.call
     const started = performance.now()
     const reject = (rejected: ToolRejection, text: string) => {
-      this.#emitToolStart(turn, call, call.args)
+      this.#emitToolStart(turn, run, call.args)
       this.#emitToolEnd(turn, call, { content: [{ type: "text", text }], isError: true }, 0, rejected)
       return toolError(call, text)
     }
@@ -665,7 +804,7 @@ export class Agent {
       const problem = checkArgs(tool.parameters, args)
       if (problem) return reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`)
 
-      this.#emitToolStart(turn, call, args)
+      this.#emitToolStart(turn, run, args)
       // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
       // (spawning a process can stall for seconds on some Windows machines).
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -678,7 +817,7 @@ export class Agent {
             signal: turn.signal,
             session: this.#toolSession,
             update: (partial) => {
-              if (turn.finished.has(call.id)) return
+              if (run.finished) return
               this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })
             },
           }),
@@ -689,7 +828,7 @@ export class Agent {
           : `Tool failed: ${err instanceof Error ? err.message : String(err)}`
         result = { content: [{ type: "text", text: msg }], isError: true }
       }
-      if (!turn.finished.has(call.id)) {
+      if (!run.finished) {
         this.#emitToolEnd(turn, call, result, Math.round(performance.now() - started))
       }
       return {
@@ -733,10 +872,10 @@ export class Agent {
     }
   }
 
-  #emitToolStart(turn: Turn, call: ToolCallBlock, args: Record<string, unknown>) {
-    if (turn.started.has(call.id)) return
-    turn.started.add(call.id)
-    this.#emit(turn, "tool.execute.start", { toolCallId: call.id, name: call.name, args })
+  #emitToolStart(turn: Turn, run: CallRun, args: Record<string, unknown>) {
+    if (run.started) return
+    run.started = true
+    this.#emit(turn, "tool.execute.start", { toolCallId: run.call.id, name: run.call.name, args })
   }
 
   #emitToolEnd(
@@ -757,17 +896,8 @@ export class Agent {
 
   /** Guarantees every tool call in history has a result, so the next request is valid. */
   #repairHistory() {
-    const answered = new Set<string>()
-    for (const m of this.messages) if (m.role === "toolResult") answered.add(m.toolCallId)
-    const missing: ToolResultMessage[] = []
-    for (const m of this.messages) {
-      if (m.role !== "assistant") continue
-      for (const b of m.content) {
-        if (b.type === "toolCall" && !answered.has(b.id))
-          missing.push(toolError(b, "This tool call did not complete."))
-      }
-    }
-    this.#push(...missing)
+    const missing = [...unansweredCalls(this.messages)]
+    this.#push(...missing.map((b) => toolError(b, "This tool call did not complete.")))
   }
 
   /** Adds messages to the history and persists each one. */
@@ -794,25 +924,49 @@ export class Agent {
     }
   }
 
+  #overThreshold(tokens: number): boolean {
+    return tokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
+  }
+
   #needsCompaction(): boolean {
     if (this.#compaction.auto === false || this.#contextTokens === undefined) return false
-    return this.#contextTokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
+    if (this.#compactFloor !== undefined && this.#contextTokens <= this.#compactFloor) return false
+    return this.#overThreshold(this.#contextTokens)
+  }
+
+  /**
+   * Notes the context size of a reply. The first one after a compaction shows whether it
+   * worked: still over the threshold means summarizing again right away would not help
+   * either, so automatic compaction waits until the context has grown by a twentieth of the
+   * window, which gives the next summary new steps to fold in.
+   */
+  #noteContext(tokens: number) {
+    this.#contextTokens = tokens
+    if (!this.#checkCompaction) return
+    this.#checkCompaction = false
+    this.#compactFloor = this.#overThreshold(tokens) ? tokens + this.model.contextWindow / 20 : undefined
   }
 
   /**
    * Replaces older history with a summary (D19, D57). Never throws; failures emit compact.failed.
    * compact.before runs first, so a compaction it blocks never starts and is reported as blocked.
+   * Resolves true when it compacted, false when it failed or was blocked, and undefined when
+   * there was nothing to compact yet (a long turn may have enough a few steps later).
    */
   async #compact(
     reason: "threshold" | "manual",
     signal: AbortSignal,
     turn: Turn | undefined,
     instructions?: string,
-  ) {
-    const split = splitHistory(this.messages, this.#compaction.keepTurns ?? 2)
+  ): Promise<boolean | undefined> {
+    const split = splitHistory(
+      this.messages,
+      this.#compaction.keepTurns ?? 2,
+      this.#compaction.keepSteps ?? 2,
+    )
     if (!split) {
       if (reason === "manual") this.#emit(turn, "compact.failed", { error: "nothing to compact yet" })
-      return false
+      return undefined
     }
     try {
       const gate = await this.interceptors.run(
@@ -833,7 +987,14 @@ export class Agent {
       })
       const summary =
         gate.value.summary?.trim() ||
-        (await summarize(this.#ai, this.#compaction.model ?? this.model, split.older, signal, instructions))
+        (await summarize(
+          this.#ai,
+          this.#compaction.model ?? this.model,
+          split.older,
+          signal,
+          instructions,
+          split.prompt,
+        ))
       if (signal.aborted) throw new Error("aborted")
       const replaces = [
         ...new Set(split.older.flatMap((m) => (this.#entryIds.has(m) ? [this.#entryIds.get(m)!] : []))),
@@ -842,8 +1003,13 @@ export class Agent {
       const replacement = summaryMessages(summary, modelRef(this.model))
       for (const m of replacement) if (entryId) this.#entryIds.set(m, entryId)
       for (const m of split.older) this.#entryIds.delete(m)
-      this.messages.splice(0, split.older.length, ...replacement)
+      // The summary goes first; everything it does not replace keeps its order after it (in a
+      // long turn that is the turn's prompt and its latest steps).
+      const replaced = new Set(split.older)
+      const rest = this.messages.filter((m) => !replaced.has(m))
+      this.messages.splice(0, this.messages.length, ...replacement, ...rest)
       this.#contextTokens = undefined
+      this.#checkCompaction = true
       this.#emit(turn, "compact.end", { summary, replaced: split.older.length, kept: split.kept.length })
       return true
     } catch (err) {
@@ -863,6 +1029,21 @@ export class Agent {
     if (this.parentSessionId) meta.parentSessionId = this.parentSessionId
     this.bus.emit(type, data, meta)
   }
+}
+
+/**
+ * Steering messages that start a turn together, as one prompt. When any has a display, the
+ * prompt's display lists each message's display (or text) in order.
+ */
+function joinMessages(messages: UserMessage[]): UserMessage {
+  if (messages.length === 1 && messages[0]) return messages[0]
+  const joined: UserMessage = { role: "user", content: messages.flatMap((m) => m.content) }
+  if (!messages.some((m) => m.display)) return joined
+  const text = messages
+    .map((m) => m.display?.text ?? m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n"))
+    .join("\n")
+  const notes = messages.flatMap((m) => (m.display?.note ? [m.display.note] : []))
+  return { ...joined, display: { text, ...(notes.length ? { note: notes.join(" · ") } : {}) } }
 }
 
 function modelRef(model: ModelInfo): ModelRef {

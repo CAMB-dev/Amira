@@ -1,3 +1,4 @@
+import { openPipeInline, type PipeEvent, type PipeHandle, type PipeSpec } from "./pipe.ts"
 import type { FromWorker, RunRequest, SpawnRequest, ToWorker } from "./protocol.ts"
 import {
   type ReleaseOptions,
@@ -9,6 +10,7 @@ import {
 } from "./run-inline.ts"
 
 export { cmdArgv } from "./cmd-line.ts"
+export type { PipeEvent, PipeSpec } from "./pipe.ts"
 export { type ProcessTree, trackProcessTree, warmUpProcessTree } from "./process-tree.ts"
 export {
   DRAIN_GRACE_MS,
@@ -41,6 +43,18 @@ let nextId = 1
 const pending = new Map<number, Pending>()
 /** Prepared commands not yet released, by id; called when the worker reports them gone. */
 const standbys = new Map<number, () => void>()
+
+interface OpenPipe {
+  spec: PipeSpec
+  onEvent: (e: PipeEvent) => void
+  /** Writes and the close sent before the worker loaded, replayed if it never does. */
+  early: string[]
+  closeGrace?: number
+  /** Set when the worker never loaded and the process runs on this thread instead. */
+  fallback?: PipeHandle
+}
+/** Piped processes in the worker that have not reported their exit. */
+const pipes = new Map<number, OpenPipe>()
 
 function getWorker(): Worker | undefined {
   if (worker || workerBroken) return worker
@@ -77,6 +91,17 @@ function onWorkerGone(w: Worker) {
  */
 function abandonWorker(neverLoaded: boolean) {
   for (const gone of [...standbys.values()]) gone()
+  for (const [id, p] of pipes) {
+    pipes.delete(id)
+    if (neverLoaded) {
+      p.fallback = inlinePipe(p.spec, p.onEvent)
+      for (const data of p.early) p.fallback.write(data)
+      if (p.closeGrace !== undefined) p.fallback.close(p.closeGrace)
+    } else {
+      // Its process may keep running; the caller should kill it by pid.
+      pipeEvent(p.onEvent, { type: "exit", code: null, error: "the command worker stopped unexpectedly" })
+    }
+  }
   for (const [id, p] of pending) {
     pending.delete(id)
     p.opts.signal.removeEventListener("abort", p.onAbort)
@@ -89,8 +114,20 @@ function abandonWorker(neverLoaded: boolean) {
 }
 
 function onMessage(m: FromWorker) {
+  if (!workerReady) {
+    for (const p of pipes.values()) {
+      p.early = []
+      delete p.closeGrace
+    }
+  }
   workerReady = true
   if (m.type === "ready") return
+  if (m.type === "pipe") {
+    const p = pipes.get(m.id)
+    if (m.event.type === "exit") pipes.delete(m.id)
+    if (p) pipeEvent(p.onEvent, m.event)
+    return
+  }
   if (m.type === "gone") return standbys.get(m.id)?.()
   const p = pending.get(m.id)
   if (!p) return
@@ -199,6 +236,74 @@ export function prepareCommand(argv: string[], opts: Omit<SpawnOptions, "trackTr
       markGone()
       worker?.postMessage({ type: "dispose", id } satisfies ToWorker)
     },
+  }
+}
+
+/** A long-lived process with piped stdio, started by `openPipe`. */
+export interface PipeProcess {
+  write(data: string): void
+  /** Ends stdin, then kills the process tree if it has not exited after `graceMs`. */
+  close(graceMs: number): void
+}
+
+/**
+ * Starts a long-lived process with piped stdin, stdout and stderr (e.g. an MCP server) in the
+ * command worker. Events arrive asynchronously: first "spawned" (or "exit" with an error when it
+ * cannot start), then output, then one "exit". An open pipe does not keep this process alive.
+ *
+ * Why the command worker: on Windows, libuv makes a child's pipe ends inheritable for the
+ * duration of CreateProcess. A process started at that moment on another thread inherits them
+ * and holds the pipes open, so the first child's output never ends while it lives (a command
+ * would look unsettled). Spawning every piped process on one thread rules that race out; so no
+ * other thread of Amira may spawn with pipes. Without a worker this runs on the calling thread,
+ * where runCommand then runs too.
+ */
+export function openPipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void): PipeProcess {
+  const w = getWorker()
+  if (!w) return inlinePipe(spec, onEvent)
+  const id = nextId++
+  const p: OpenPipe = { spec, onEvent, early: [] }
+  pipes.set(id, p)
+  w.postMessage({ type: "pipe-open", id, spec } satisfies ToWorker)
+  return {
+    write(data) {
+      if (p.fallback) return p.fallback.write(data)
+      if (!pipes.has(id)) return
+      if (!workerReady) p.early.push(data)
+      w.postMessage({ type: "pipe-write", id, data } satisfies ToWorker)
+    },
+    close(graceMs) {
+      if (p.fallback) return p.fallback.close(graceMs)
+      if (!pipes.has(id)) return
+      if (!workerReady) p.closeGrace = graceMs
+      w.postMessage({ type: "pipe-close", id, graceMs } satisfies ToWorker)
+    },
+  }
+}
+
+function pipeEvent(onEvent: (e: PipeEvent) => void, e: PipeEvent) {
+  try {
+    onEvent(e)
+  } catch {
+    // A failing callback must not break delivery of the rest.
+  }
+}
+
+/**
+ * A piped process on this thread. Deferred, so callers see the same asynchronous events as
+ * with the worker; writes and a close before the spawn wait for it.
+ */
+function inlinePipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void): PipeProcess {
+  let handle: PipeHandle | undefined
+  const queue: ((h: PipeHandle) => void)[] = []
+  const run = (f: (h: PipeHandle) => void) => (handle ? f(handle) : queue.push(f))
+  setTimeout(() => {
+    handle = openPipeInline(spec, (e) => pipeEvent(onEvent, e))
+    for (const f of queue) f(handle)
+  }, 0)
+  return {
+    write: (data) => void run((h) => h.write(data)),
+    close: (graceMs) => void run((h) => h.close(graceMs)),
   }
 }
 

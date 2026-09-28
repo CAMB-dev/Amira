@@ -54,7 +54,9 @@ function summarize(file: string, updatedAt: number): SessionSummary {
   const store = SessionStore.open(file)
   const messages = store.branch().flatMap((e) => (e.type === "message" ? [e.message] : []))
   const first = messages.find((m) => m.role === "user")
-  const text = first?.content.find((b) => b.type === "text")?.text ?? ""
+  // A blank display names nothing; the message's own text does.
+  const shown = first?.role === "user" ? first.display?.text.trim() : undefined
+  const text = shown || (first?.content.find((b) => b.type === "text")?.text ?? "")
   return {
     id: store.id,
     file,

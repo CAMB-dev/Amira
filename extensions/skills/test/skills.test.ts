@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import type { AnyEvent, SessionControl } from "@amira/api"
+import type { AnyEvent, SendOptions, SessionControl } from "@amira/api"
 import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import { createSkillsExtension, discoverSkills, parseFrontmatter, skillsSection } from "../src/index.ts"
 
@@ -237,7 +237,13 @@ test("every skill is a slash command that sends its instructions, user-only ones
   })
   const agent = new Agent({ ai, model: ai.model("mock/test"), cwd: d.cwd, bus })
   const sent: string[] = []
-  const control = { send: async (text: string) => void sent.push(text) } as Partial<SessionControl>
+  const shown: (SendOptions | undefined)[] = []
+  const control = {
+    send: async (text: string, opts?: SendOptions) => {
+      sent.push(text)
+      shown.push(opts)
+    },
+  } as Partial<SessionControl>
   const commands = new CommandHost({
     registry: host.commands,
     bus,
@@ -254,8 +260,11 @@ test("every skill is a slash command that sends its instructions, user-only ones
   expect(sent[0]).toContain(`Skill "deploy" (base directory: ${path.join(root, "deploy")})`)
   expect(sent[0]).toContain("# Deploy\nRun ./ship.sh")
   expect(sent[0]).toContain("Arguments: to prod")
+  // Frontends show the command as typed and what it loaded, not the instructions.
+  expect(shown[0]).toEqual({ display: { text: "/deploy to prod", note: "Loaded skill deploy (2 lines)" } })
   await commands.run("/secret", { frontend: "tui" })
   expect(sent[1]).toContain('Skill "secret"')
+  expect(shown[1]).toEqual({ display: { text: "/secret", note: "Loaded skill secret (1 line)" } })
   await bus.flush()
   expect(events.find((e) => e.type === "extension.error")?.data.error).toContain(
     "command /help from builtin:skills conflicts",

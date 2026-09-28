@@ -46,6 +46,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@amira/api": "workspace:*",
+        "@amira/proc": "workspace:*",
       },
       "devDependencies": {
         "@amira/ai": "workspace:*",
@@ -144,6 +145,7 @@
       },
       "devDependencies": {
         "@amira/builtin-tools": "workspace:*",
+        "@amira/ext-agent": "workspace:*",
         "@amira/ext-status": "workspace:*",
       },
     },

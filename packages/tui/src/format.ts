@@ -1,3 +1,4 @@
+import type { UserMessage } from "@amira/api"
 import { type Theme, truncateToWidth, wrapText } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
@@ -41,12 +42,25 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
 }
 
-/** Committed lines for the user's message, wrapped to `width` under the prompt symbol. */
-export function userLines(theme: Theme, text: string, width = Number.POSITIVE_INFINITY): string[] {
+/**
+ * Committed lines for the user's message, wrapped to `width` under the prompt symbol: its
+ * display text when it has one (a command shows as typed, its note on a line below), else its
+ * content.
+ */
+export function userLines(theme: Theme, message: UserMessage, width = Number.POSITIVE_INFINITY): string[] {
+  const text = (message.display?.text.trim() || userText(message)).trim()
   const rows = Number.isFinite(width)
     ? text.split("\n").flatMap((l) => (l ? wrapText(l, Math.max(10, width - 2)) : [""]))
     : text.split("\n")
-  return rows.map((l, i) => `${theme.accent(i === 0 ? glyphs.user : " ")} ${l}`)
+  const lines = rows.map((l, i) => `${theme.accent(i === 0 ? glyphs.user : " ")} ${l}`)
+  const note = message.display?.note
+  if (note) lines.push(`  ${theme.muted(glyphs.result)} ${theme.muted(note)}`)
+  return lines
+}
+
+/** A user message's content as text, with images as placeholders. */
+export function userText(message: UserMessage): string {
+  return message.content.map((b) => (b.type === "text" ? b.text : `[image ${b.mimeType}]`)).join("\n\n")
 }
 
 /** A sub-agent as the live area shows it while it is queued or running. */

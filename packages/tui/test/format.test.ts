@@ -19,7 +19,11 @@ test("summarizeArgs leads with the argument that matters and labels the others",
 })
 
 test("the user's message wraps under its prompt symbol, not to the first column", () => {
-  expect(plain(userLines(defaultTheme, "one two three four five six\nseven", 16))).toEqual([
+  const message = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: "one two three four five six\nseven" }],
+  }
+  expect(plain(userLines(defaultTheme, message, 16))).toEqual([
     "› one two three",
     "  four five six",
     "  seven",
@@ -92,4 +96,31 @@ test("a sub-agent's end line says how it ended, its time, tokens and the start o
   expect(line("done")).toBe("◆ explorer ✓ 41.0s · 12.3k tok · Found it in a.ts")
   expect(line("error", "model failed")).toBe("◆ explorer ✗ 41.0s · 12.3k tok · model failed")
   expect(line("aborted")).toBe("◆ explorer ⊘ 41.0s · 12.3k tok · stopped")
+})
+
+test("a resumed message with a display shows it and its note, not its content", () => {
+  const lines = historyLines(
+    defaultTheme,
+    [
+      {
+        role: "user",
+        content: [{ type: "text", text: 'Skill "review-pr"\n\nMany lines of instructions' }],
+        display: { text: "/review-pr 123", note: "Loaded skill review-pr (120 lines)" },
+      },
+      { role: "user", content: [{ type: "text", text: "a" }], display: { text: "/plain" } },
+      { role: "user", content: [{ type: "text", text: "own text" }], display: { text: " " } },
+    ],
+    { width: 60 },
+  ).map(stripAnsi)
+  expect(lines).toEqual([
+    "› /review-pr 123",
+    "  ⎿ Loaded skill review-pr (120 lines)",
+    "",
+    "› /plain",
+    "",
+    // A blank display falls back to the content.
+    "› own text",
+    "",
+    "── resumed ──",
+  ])
 })

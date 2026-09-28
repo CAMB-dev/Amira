@@ -146,6 +146,29 @@ test("finishes normally when the body ends without [DONE]", async () => {
   expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "done"])
 })
 
+test("a stream cut off before any finish_reason or [DONE] is a retryable error", async () => {
+  const cut = [
+    delta({ content: "hal" }),
+    delta({ tool_calls: [{ index: 0, id: "a", function: { name: "read" } }] }),
+  ]
+  const evs = await run(() => sseResponse(cut, false))
+  const e = last(evs) as ErrorEvent
+  expect(e.type).toBe("error")
+  expect(e.retryable).toBe(true)
+  expect(e.error.message).toContain("ended before the reply was complete")
+  // The partial text survives for the caller; the unfinished call is not offered as done.
+  expect(e.message.content).toEqual([{ type: "text", text: "hal" }])
+})
+
+test("a finish_reason in the last chunk with usage in a later one is complete without [DONE]", async () => {
+  const chunks = [
+    delta({ content: "hi" }, "stop"),
+    { choices: [], usage: { prompt_tokens: 3, completion_tokens: 1 } },
+  ]
+  const evs = await run(() => sseResponse(chunks, false))
+  expect(last(evs).type).toBe("done")
+})
+
 test("keeps status and code of an error object inside the stream", async () => {
   const evs = await run(() =>
     sseResponse([delta({ content: "hi" }), { error: { message: "rate limited", code: 429 } }]),

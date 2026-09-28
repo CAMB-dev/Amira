@@ -6,6 +6,7 @@ import {
   AgentTree,
   type Approver,
   type CompactionOptions,
+  commandAliasWarnings,
   defaultSections,
   EventBus,
   ExtensionHost,
@@ -50,7 +51,10 @@ export interface SessionOptions {
   providers?: ProviderConfig[]
   /** Stored API keys by provider id (auth.json). Unused when `ai` is given. */
   apiKeys?: Record<string, string>
-  /** Settings warnings, reported as extension.error events from "settings" among the startup events. */
+  /**
+   * Settings warnings, reported as extension.error events from "settings" among the startup
+   * events. When given, command aliases the loaded commands shadow are reported too.
+   */
   warnings?: string[]
 }
 
@@ -156,6 +160,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     if (tools.has(name)) continue
     const error = `${from}: no tool named "${name}"`
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+  }
+  // Like the other settings warnings, only where the caller reports them (not in print mode).
+  if (opts.warnings) {
+    for (const error of commandAliasWarnings(settings.commandAliases, host.commands)) {
+      bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+    }
   }
   tools.setDisabled(opts.disabledTools ?? [])
   await bus.flush()

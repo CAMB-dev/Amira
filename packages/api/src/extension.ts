@@ -21,7 +21,8 @@ export interface ExtensionAPI {
   registerTool(tool: ToolDefinition): () => void
   /**
    * Adds a slash command (D55). A name that is taken is reported as extension.error and
-   * skipped, unless the command sets `override: true`.
+   * skipped, unless the command sets `override: true`. Aliases shadowed by a command's name or
+   * taken over by a later command are reported as extension.error too, but the command is kept.
    */
   registerCommand(command: CommandDefinition): () => void
   /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */

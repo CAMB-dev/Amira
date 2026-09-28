@@ -1,4 +1,11 @@
-import type { Ai, Message, UserContent, UserMessage } from "@amira/ai"
+import {
+  type Ai,
+  type Message,
+  type MessageDisplay,
+  type UserContent,
+  type UserMessage,
+  userMessage,
+} from "@amira/ai"
 import type { AnyEvent, TurnEndReason } from "@amira/api"
 import { type Agent, type CommandHost, newTurnId, type UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
@@ -136,18 +143,23 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   const handlers: Record<keyof typeof COMMAND_PARAMS, Handler> = {
     prompt: (p) => {
       const content: UserContent[] = [{ type: "text", text: text(p) }, ...attachments(p.attachments)]
+      const shown = display(p.display)
       if (agent.turnId) throw new RpcError("busy", "a turn is running; steer it or wait for turn.end")
+      if (agent.busy) throw new RpcError("busy", "a compaction is running; steer to queue the message")
       const turnId = newTurnId()
-      agent.prompt({ role: "user", content }, { turnId }).catch(() => {})
+      agent
+        .prompt({ role: "user", content, ...(shown ? { display: shown } : {}) }, { turnId })
+        .catch(() => {})
       return { turnId }
     },
     steer: (p) => {
-      const queued = agent.turnId !== undefined
-      agent.steer(text(p))
+      const message = userMessage(text(p), display(p.display))
+      const queued = agent.busy
+      agent.steer(message)
       return { ...(agent.turnId ? { turnId: agent.turnId } : {}), queued }
     },
     abort: () => {
-      const aborted = agent.turnId !== undefined
+      const aborted = agent.busy
       agent.abort()
       return { aborted }
     },
@@ -178,7 +190,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     "model.set": (p) => {
       const ref = text(p, "model")
       // The running turn's history may carry state only its model understands.
-      if (agent.turnId) throw new RpcError("busy", "a turn is running; set the model after turn.end")
+      if (agent.busy)
+        throw new RpcError("busy", "a turn or compaction is running; set the model after it ends")
       try {
         agent.setModel(ai.model(ref))
       } catch (err) {
@@ -195,12 +208,13 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         ...(agent.turnId ? { turnId: agent.turnId } : {}),
         messages: agent.messages.length,
         ...(last !== undefined ? { lastAssistantText: last } : {}),
+        busy: agent.busy,
         uiRequests: ui.pending,
       }
     },
     "session.resume": async (p) => {
       const sessionId = text(p, "sessionId")
-      if (agent.turnId) throw new RpcError("busy", "a turn is running")
+      if (agent.busy) throw new RpcError("busy", "a turn or compaction is running")
       if (commands) {
         if (sessionId === agent.sessionId) return { sessionId }
         try {
@@ -217,7 +231,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       lastTurn = undefined
       return { sessionId: agent.sessionId }
     },
-    "command.list": () => ({ commands: needCommands().list() }),
+    "command.list": () => ({ commands: needCommands().list(), aliases: needCommands().aliases() }),
     "command.complete": async (p) => await needCommands().complete(text(p)),
     "command.run": async (p) => {
       const r = await needCommands().run(text(p), { frontend: "rpc" })
@@ -293,7 +307,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     closed = true
     ui.cancelAll()
     await Promise.all(runningCommands)
-    while (agent.turnId) await Bun.sleep(10)
+    while (agent.busy) await Bun.sleep(10)
     await Promise.race([agent.bus.flush(), Bun.sleep(opts.flushTimeoutMs ?? 2000)])
     await io.flush?.()
     return 0
@@ -304,6 +318,15 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     offSwitch?.()
     io.close?.()
   }
+}
+
+function display(value: unknown): MessageDisplay | undefined {
+  if (value === undefined) return undefined
+  const d = value as { text?: unknown; note?: unknown } | null
+  if (typeof d?.text !== "string" || !d.text.trim() || (d.note !== undefined && typeof d.note !== "string")) {
+    throw new RpcError("invalid_params", '"display" must be {text, note?} with string values, text not blank')
+  }
+  return { text: d.text, ...(d.note !== undefined ? { note: d.note } : {}) }
 }
 
 function attachments(value: unknown): UserContent[] {
