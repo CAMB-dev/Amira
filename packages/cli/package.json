@@ -14,6 +14,7 @@
     "@amira/builtin-tools": "workspace:*",
     "@amira/ext-status": "workspace:*",
     "@amira/ext-skills": "workspace:*",
-    "@amira/ext-mcp": "workspace:*"
+    "@amira/ext-mcp": "workspace:*",
+    "@amira/ext-web": "workspace:*"
   }
 }
