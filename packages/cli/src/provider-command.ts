@@ -21,20 +21,9 @@ export function runProviderCommand(argv: string[], io: PrintIO, home = amiraHome
     return 0
   }
   if (sub === "add" && id && rest.length === 0) {
-    const p = preset(id)
-    const file = path.join(home, "settings.json")
-    if (addProviderToSettings(file, p.id, toSettings(p)) === "exists") {
-      io.stdout(`Provider "${p.id}" is already in ${file}; left it unchanged.\n`)
-      return 0
-    }
-    io.stdout(`Added provider "${p.id}" to ${file}.\n`)
-    if (p.apiKeyEnv) {
-      io.stdout(
-        `Set ${p.apiKeyEnv}, or store the key in ${path.join(home, "auth.json")} as ` +
-          `{"${p.id}": {"apiKey": "..."}}.\n`,
-      )
-    }
-    io.stdout(`Then run: amira -m ${p.id}/<model>\n`)
+    const { preset: p, added, lines } = addPreset(id, home)
+    if (added) lines.push(`Then run: amira -m ${p.id}/<model>`)
+    io.stdout(`${lines.join("\n")}\n`)
     return 0
   }
   if (sub === "help") {
@@ -43,6 +32,33 @@ export function runProviderCommand(argv: string[], io: PrintIO, home = amiraHome
   }
   const what = sub ? `unknown provider command "${argv.join(" ")}"` : "missing provider command"
   throw new UsageError(`${what}\n\n${USAGE}`)
+}
+
+/**
+ * Adds a preset to the user settings.json unless a provider of that id is there already;
+ * shared by `amira provider add` and /provider add. `lines` say what happened and what is next.
+ */
+export function addPreset(
+  id: string,
+  home = amiraHome(),
+): { preset: ProviderConfig; added: boolean; lines: string[] } {
+  const p = preset(id)
+  const file = path.join(home, "settings.json")
+  if (addProviderToSettings(file, p.id, toSettings(p)) === "exists") {
+    return {
+      preset: p,
+      added: false,
+      lines: [`Provider "${p.id}" is already in ${file}; left it unchanged.`],
+    }
+  }
+  const lines = [`Added provider "${p.id}" to ${file}.`]
+  if (p.apiKeyEnv) {
+    lines.push(
+      `Set ${p.apiKeyEnv}, or store the key in ${path.join(home, "auth.json")} as ` +
+        `{"${p.id}": {"apiKey": "..."}}.`,
+    )
+  }
+  return { preset: p, added: true, lines }
 }
 
 function preset(id: string): ProviderConfig {
