@@ -81,6 +81,11 @@ export interface TuiSettings {
    * (legacy conhost with wrap-on-resize off, some tmux setups). Default "auto" (assumes it does).
    */
   reflow?: "auto" | "on" | "off"
+  /**
+   * What plain Enter does while a turn runs: "steer" sends the message into the running turn,
+   * "queue" sends it after the turn. The queue key does the other. Default "steer".
+   */
+  submitWhileWorking?: "steer" | "queue"
 }
 
 export type WebSearchBackend = "exa" | "brave" | "tavily" | "searxng"

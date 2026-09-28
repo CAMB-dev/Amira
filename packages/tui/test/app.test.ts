@@ -882,6 +882,70 @@ test("Enter while working steers the turn; the message joins it before the next 
   await exited
 })
 
+test('with tui.submitWhileWorking "queue", Enter queues while working and the queue key steers', async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup(
+    [
+      { text: "looking", delayMs: 60, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+      (req) => ({ text: `saw ${lastUserText(req)}` }),
+      (req) => ({ text: `then ${lastUserText(req)}` }),
+    ],
+    { settings: { submitWhileWorking: "queue" }, cols: 80 },
+  )
+  // Idle, Enter just sends.
+  await waitFor(() => live().includes("Enter send"), "idle hint")
+  terminal.send("go\r")
+  await waitFor(() => live().includes(`Enter queue · ${QUEUE_HINT} steer`), "the swapped hint")
+  terminal.send("after it\r")
+  await shows("queued › after it")
+  terminal.send("now B\x11")
+  await shows("saw now B")
+  await shows("then after it")
+  await idle()
+  const users = agent.messages
+    .filter((m) => m.role === "user")
+    .map((m) => (m.content[0] as { text: string }).text)
+  // The steer joined the first turn; the queued one became the next.
+  expect(users).toEqual(["go", "now B", "after it"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("submit.steer and submit.queue keys do one thing whatever the setting; commands still run at once", async () => {
+  for (const mode of ["steer", "queue"] as const) {
+    const keys = new Keybindings({
+      ...defaultKeys({ vscode: false }),
+      "submit.steer": ["ctrl+t"],
+      "submit.queue": ["ctrl+g"],
+    })
+    const { terminal, agent, shows, idle, exited } = await setup(
+      [
+        { text: "looking", delayMs: 300, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+        (req) => ({ text: `saw ${lastUserText(req)}` }),
+        (req) => ({ text: `then ${lastUserText(req)}` }),
+      ],
+      { keybindings: keys, settings: { submitWhileWorking: mode }, commands: testCommands([]), cols: 80 },
+    )
+    terminal.send("go\r")
+    await waitFor(() => agent.status === "working", "working")
+    terminal.send("later\x07")
+    await shows("queued › later")
+    terminal.send("B\x14")
+    // A slash command sent with either key runs now, not after the turn.
+    terminal.send("/status\x07")
+    await shows("STATUS OK")
+    expect(agent.status).toBe("working")
+    await shows("saw B")
+    await shows("then later")
+    await idle()
+    const users = agent.messages
+      .filter((m) => m.role === "user")
+      .map((m) => (m.content[0] as { text: string }).text)
+    expect(users).toEqual(["go", "B", "later"])
+    terminal.send("\x03")
+    await exited
+  }
+})
+
 test("steering the final reply becomes the next turn, not editor text", async () => {
   const { terminal, live, agent, shows, idle, exited } = await setup([
     { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },

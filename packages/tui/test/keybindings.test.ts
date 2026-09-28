@@ -121,8 +121,11 @@ test("the file: missing means the defaults, broken JSON a warning", () => {
 })
 
 test("every action has a default and a description", () => {
+  // Enter and the queue key cover these two; they are there to be bound by hand.
+  const optIn = new Set(["submit.steer", "submit.queue"])
   for (const action of Object.keys(ACTIONS) as (keyof typeof ACTIONS)[]) {
-    expect(defaults[action].length).toBeGreaterThan(0)
+    if (optIn.has(action)) expect(defaults[action]).toEqual([])
+    else expect(defaults[action].length).toBeGreaterThan(0)
     expect(ACTIONS[action].description.length).toBeGreaterThan(0)
   }
 })
