@@ -215,10 +215,10 @@ function decodeCsi(params: string, final: string): Decoded {
 }
 
 /**
- * What to do with input that may be the start of a longer sequence: wait for more, or resolve
- * it as keys because nothing more came.
+ * What to do with input that may be the start of a longer sequence: wait for more, resolve it as
+ * keys because nothing more came, or also drop a sequence that was cut short.
  */
-type Flush = "wait" | "resolve"
+type Flush = "wait" | "resolve" | "drop"
 
 const escapeKey = (len = 1): Parsed => ({ len, events: [key("escape")] })
 
@@ -261,12 +261,14 @@ function parseEscape(s: string, flush: Flush): Parsed | undefined {
     if (seq) return seq
     if (flush === "wait") return undefined
     // Alt+[ and Alt+Shift+O are indistinguishable from the start of a sequence until it times out.
-    if (s.length === 2)
+    if (s.length === 2) {
       return {
         len: 2,
         events: [second === "[" ? key("[", { alt: true }) : key("o", { alt: true, shift: true })],
       }
-    return escapeKey()
+    }
+    // A sequence cut short (say, a late reply to a query) is never typed out as text.
+    return flush === "drop" ? { len: s.length, events: [] } : undefined
   }
   if (second === ESC) {
     // ESC ESC [A is Alt+Up; ESC ESC otherwise is Esc pressed twice.
@@ -333,10 +335,15 @@ export class InputParser {
     return this.paste === undefined && (this.buf.length > 0 || this.held.length > 0)
   }
 
-  flush(): InputEvent[] {
+  /**
+   * Resolves input that was waiting for more: a lone ESC is the Esc key, ESC [ is Alt+[, and so
+   * on. A sequence cut short (ESC [ with parameters) stays pending, since its end may still come;
+   * `flush(true)` drops it.
+   */
+  flush(drop = false): InputEvent[] {
     this.buf += this.held
     this.held = ""
-    return this.drain("resolve")
+    return this.drain(drop ? "drop" : "resolve")
   }
 
   /**

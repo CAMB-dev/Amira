@@ -116,6 +116,37 @@ describe("escape timeout", () => {
     expectSplitSafe("\x1b\x1b[1;5A", [key("up", { ctrl: true, alt: true })])
   })
 
+  test("a sequence cut short is never typed out as text", () => {
+    const p = new InputParser()
+    expect(p.feed("a\x1b[?62;")).toEqual([textKey("a")])
+    expect(p.flush()).toEqual([])
+    expect(p.pending).toBe(true)
+    expect(p.feed("22c")).toEqual([])
+    expect(p.pending).toBe(false)
+    expect(p.feed("\x1b[1;")).toEqual([])
+    expect(p.flush()).toEqual([])
+    expect(p.flush(true)).toEqual([])
+    expect(p.pending).toBe(false)
+    expect(p.feed("b")).toEqual([textKey("b")])
+  })
+
+  test("InputReader drops a sequence that never finishes, and keeps one that does", async () => {
+    const term = new FakeTerminal()
+    const events: InputEvent[] = []
+    const reader = new InputReader(term, (e) => events.push(e), { escapeTimeoutMs: 5, sequenceTimeoutMs: 30 })
+    reader.start()
+    term.send("\x1b[?62;")
+    await Bun.sleep(15)
+    term.send("22c")
+    term.send("\x1b[1;5")
+    await Bun.sleep(15)
+    expect(events).toEqual([])
+    await Bun.sleep(40)
+    term.send("x")
+    expect(events).toEqual([textKey("x")])
+    reader.stop()
+  })
+
   test("long ESC runs do not recurse", () => {
     const p = new InputParser()
     const events = [...p.feed("\x1b".repeat(100_000)), ...p.flush()]

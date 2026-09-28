@@ -36,6 +36,8 @@ const KITTY_REPLY = /\x1b\[\?\d+u/g
 const SYNC_REPLY = /\x1b\[\?2026;(\d+)\$y/g
 // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
 const DA1_REPLY = /\x1b\[\?[\d;]*c/g
+// biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
+const PARTIAL_SEQUENCE = /\x1b(?:\[[ -?]*)?$/
 
 /** Reads replies to the kitty keyboard, DECRQM 2026 and DA1 queries out of raw input. */
 export function parseProbeReplies(data: string): ProbeReplies {
@@ -51,26 +53,33 @@ export function parseProbeReplies(data: string): ProbeReplies {
 export interface ProbeOptions {
   kittyKeyboard?: boolean
   timeoutMs?: number
+  /** Extra time given to a reply that has started but not finished when `timeoutMs` is up. */
+  lateReplyMs?: number
 }
 
 /**
  * Asks the terminal what it supports. A DA1 query goes last: almost every terminal answers it,
- * so its reply means the others are in. Otherwise we give up after `timeoutMs`.
+ * so its reply means the others are in. Otherwise we give up after `timeoutMs`, unless a reply
+ * is half in: then it gets `lateReplyMs` more. A reply cut short is never returned in `rest`.
  */
 export function probeTerminal(term: Terminal, opts: ProbeOptions = {}): Promise<ProbeReplies> {
-  const { kittyKeyboard = true, timeoutMs = 300 } = opts
+  const { kittyKeyboard = true, timeoutMs = 300, lateReplyMs = 500 } = opts
   return new Promise((resolve) => {
     let data = ""
     const finish = () => {
       clearTimeout(timer)
       off()
-      resolve(parseProbeReplies(data))
+      const replies = parseProbeReplies(data)
+      resolve({ ...replies, rest: replies.rest.replace(PARTIAL_SEQUENCE, "") })
     }
     const off = term.onInput((chunk) => {
       data += chunk
       if (parseProbeReplies(data).complete) finish()
     })
-    const timer = setTimeout(finish, timeoutMs)
+    let timer = setTimeout(() => {
+      if (PARTIAL_SEQUENCE.test(data)) timer = setTimeout(finish, lateReplyMs)
+      else finish()
+    }, timeoutMs)
     term.write(
       (kittyKeyboard ? queries.kittyKeyboard : "") + queries.syncOutput + queries.primaryDeviceAttributes,
     )

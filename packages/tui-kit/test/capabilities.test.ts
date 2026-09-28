@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { modes, queries } from "../src/ansi.ts"
-import { detectEnv, parseProbeReplies, setupTerminalInput } from "../src/capabilities.ts"
+import { detectEnv, parseProbeReplies, probeTerminal, setupTerminalInput } from "../src/capabilities.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 
 test("detectEnv: Windows Terminal unless running inside VS Code", () => {
@@ -70,4 +70,17 @@ test("falls back to legacy mode after the timeout when nothing replies", async (
     synchronizedOutput: false,
     shiftEnter: false,
   })
+})
+
+test("a reply cut short at the timeout gets more time and never leaks into the input", async () => {
+  const term = new FakeTerminal()
+  const pending = probeTerminal(term, { timeoutMs: 10, lateReplyMs: 40 })
+  term.send("a\x1b[?62;")
+  await Bun.sleep(20)
+  term.send("22c")
+  expect(await pending).toMatchObject({ complete: true, rest: "a" })
+
+  const cut = probeTerminal(term, { timeoutMs: 10, lateReplyMs: 10 })
+  term.send("b\x1b[?2026;")
+  expect(await cut).toMatchObject({ complete: false, rest: "b" })
 })
