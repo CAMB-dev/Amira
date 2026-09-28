@@ -68,3 +68,8 @@ test("tabs expand to the next tab stop", () => {
   expect(wrapText("a\tb", 10)).toEqual(["a   b"])
   expect(truncateToWidth("\t\tx", 6)).toBe("      ")
 })
+
+test("styled text starting with a space never wraps into a style-only blank line", () => {
+  const lines = wrapText("\x1b[31m abcdefgh\x1b[0m", 4)
+  expect(lines.map(stripAnsi)).toEqual([" abc", "defg", "h"])
+})
