@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
 import { defineTool, textResult } from "@amira/api"
-import { isBinary, statOrNull, type WalkEntry, walkFiles } from "./files.ts"
+import { statOrNull, type WalkEntry, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
+import { decodeText, looksBinary } from "./text.ts"
 import { truncateOutput } from "./truncate.ts"
 
 export const DEFAULT_HEAD_LIMIT = 250
@@ -132,7 +133,9 @@ async function readText(abs: string): Promise<string | undefined> {
   } catch {
     return undefined
   }
-  return isBinary(bytes) ? undefined : bytes.toString("utf8")
+  // Invalid UTF-8 is searched lossily rather than skipped.
+  const decoded = decodeText(bytes)
+  return looksBinary(bytes, decoded) ? undefined : decoded.text
 }
 
 function clip(line: string): string {

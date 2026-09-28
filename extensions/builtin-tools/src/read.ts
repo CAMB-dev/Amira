@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises"
 import { extname } from "node:path"
 import { defineTool, textResult } from "@amira/api"
-import { isBinary, statOrNull } from "./files.ts"
+import { statOrNull } from "./files.ts"
 import { resolvePath } from "./paths.ts"
+import { decodeText, looksBinary } from "./text.ts"
 import { MAX_OUTPUT_CHARS } from "./truncate.ts"
 
 export const DEFAULT_READ_LIMIT = 2000
@@ -15,6 +16,9 @@ const IMAGE_TYPES: Record<string, string> = {
   ".gif": "image/gif",
   ".webp": "image/webp",
 }
+
+const INVALID_UTF8_WARNING =
+  "(Warning: this file is not valid UTF-8, so invalid bytes are shown as U+FFFD. The edit tool will refuse to change it.)"
 
 export interface ReadParams {
   path: string
@@ -30,6 +34,7 @@ export const readTool = defineTool<ReadParams>({
     `- By default returns up to ${DEFAULT_READ_LIMIT} lines from the start. For long files, pass \`offset\` (1-based line number to start at) and \`limit\` (number of lines) to read a specific range.`,
     "- Output is numbered like `cat -n`: each line is prefixed with its line number and a tab. The prefix is not part of the file; never include it in `old_string` for the edit tool.",
     `- Lines longer than ${MAX_LINE_CHARS} characters are truncated.`,
+    "- UTF-8 and UTF-16 (with BOM) text is supported.",
     "- PNG, JPEG, GIF and WebP images are returned as images you can see.",
     "- Binary files and directories cannot be read; use glob or bash `ls` to list a directory.",
     "- Read a file before editing it. It is fine to read several files in parallel.",
@@ -72,15 +77,17 @@ export const readTool = defineTool<ReadParams>({
         details: { path: abs, mimeType, bytes: bytes.length },
       }
     }
-    if (isBinary(bytes))
+    const decoded = decodeText(bytes)
+    if (looksBinary(bytes, decoded))
       return textResult(`${abs} appears to be a binary file and cannot be read as text.`, true)
 
-    return textResult(formatLines(abs, bytes.toString("utf8"), offset ?? 1, limit ?? DEFAULT_READ_LIMIT))
+    let text = formatLines(abs, decoded.text, offset ?? 1, limit ?? DEFAULT_READ_LIMIT)
+    if (decoded.invalid) text += `\n\n${INVALID_UTF8_WARNING}`
+    return textResult(text)
   },
 })
 
 function formatLines(abs: string, text: string, offset: number, limit: number): string {
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
   if (text === "") return `(${abs} is empty)`
   const lines = text.split(/\r?\n/)
   if (lines.at(-1) === "") lines.pop()

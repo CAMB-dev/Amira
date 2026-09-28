@@ -1,7 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { defineTool, textResult } from "@amira/api"
-import { isBinary, statOrNull } from "./files.ts"
+import { statOrNull } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
+import { decodeText, encodeText, looksBinary } from "./text.ts"
 
 export interface EditParams {
   path: string
@@ -19,6 +20,7 @@ export const editTool = defineTool<EditParams>({
     "- `old_string` must occur exactly once. If it occurs more than once, include more surrounding lines to make it unique, or set `replace_all` to replace every occurrence (useful for renaming).",
     "- `new_string` must differ from `old_string`. Use the write tool to create new files.",
     "- Files with CRLF line endings keep them; write `\\n` in both strings as usual.",
+    "- UTF-8 and UTF-16 files keep their encoding and BOM. Files that are not valid UTF-8 are refused rather than corrupted.",
   ].join("\n"),
   parameters: {
     type: "object",
@@ -54,8 +56,15 @@ export const editTool = defineTool<EditParams>({
     } catch (err) {
       return textResult(`Failed to read ${abs}: ${(err as Error).message}`, true)
     }
-    if (isBinary(bytes)) return textResult(`${abs} appears to be a binary file`, true)
-    const text = bytes.toString("utf8")
+    const decoded = decodeText(bytes)
+    if (looksBinary(bytes, decoded)) return textResult(`${abs} appears to be a binary file`, true)
+    if (decoded.invalid) {
+      return textResult(
+        `${abs}: file is not valid UTF-8 (invalid byte at offset ${decoded.invalid.offset}; it may use a legacy encoding such as Windows-1252); edit refused to avoid corrupting it. Use bash with a tool that preserves the encoding instead.`,
+        true,
+      )
+    }
+    const { text } = decoded
 
     const crlf = text.includes("\r\n")
     const oldStr = crlf ? toCrlf(old_string) : old_string
@@ -77,7 +86,7 @@ export const editTool = defineTool<EditParams>({
 
     const updated = replace_all ? text.split(oldStr).join(newStr) : spliceFirst(text, oldStr, newStr)
     try {
-      await writeFile(abs, updated, { signal: ctx.signal })
+      await writeFile(abs, encodeText(updated, decoded), { signal: ctx.signal })
     } catch (err) {
       return textResult(`Failed to write ${abs}: ${(err as Error).message}`, true)
     }
