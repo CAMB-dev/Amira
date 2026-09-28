@@ -27,6 +27,7 @@ export class MessagesAccumulator {
   readonly #blocks = new Map<number, Open>()
   #tools = 0
   #stop: string | undefined
+  #stopDetails: unknown
   #finished = false
 
   constructor(model: ModelRef) {
@@ -56,6 +57,7 @@ export class MessagesAccumulator {
       case "message_delta":
         this.#usage(ev.usage)
         if (typeof ev.delta?.stop_reason === "string") this.#stop = ev.delta.stop_reason
+        this.#stopDetails = ev.delta?.stop_details ?? this.#stopDetails
         return
       case "message_stop":
         this.#finished = true
@@ -168,16 +170,20 @@ export class MessagesAccumulator {
   end(): StreamEvent {
     this.#closeAll()
     if (this.#stop === "refusal") {
-      return this.fail(
-        { message: "the model refused to answer (stop_reason: refusal)", code: "refusal" },
-        false,
-      )
+      const message = `the model refused to answer (stop_reason: refusal)${refusalDetails(this.#stopDetails)}`
+      return this.fail({ message, code: "refusal" }, false)
     }
     const stop = mapStop(this.#stop)
     const hasCalls = this.message.content.some((b) => b.type === "toolCall")
     this.message.stopReason = stop === "end" && hasCalls ? "toolUse" : stop
     return { type: "done", message: this.message }
   }
+}
+
+/** `stop_details` of a refusal, as ": category: explanation", or nothing. */
+function refusalDetails(details: any): string {
+  const parts = [details?.category, details?.explanation].filter((p) => typeof p === "string" && p)
+  return parts.length ? `: ${parts.join(": ")}` : ""
 }
 
 function mapStop(reason: string | undefined): StopReason {

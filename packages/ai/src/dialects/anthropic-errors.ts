@@ -1,7 +1,8 @@
 import type { ModelError } from "../types.ts"
-import { isRetryableStatus } from "./openai-chat-errors.ts"
 
-export { isRetryableStatus }
+/** Timeouts (408), lock conflicts (409), rate limits and server errors are worth a retry. */
+export const isRetryableStatus = (status: number) =>
+  status === 408 || status === 409 || status === 429 || status >= 500
 
 /** HTTP status behind each documented error type, so in-stream errors retry like HTTP ones. */
 const STATUS_BY_TYPE: Record<string, number> = {

@@ -191,6 +191,25 @@ test("a refusal is a non-retryable error that keeps the partial message", async 
   expect(e.retryable).toBe(false)
   expect(e.message.stopReason).toBe("error")
   expect(e.message.content).toEqual([{ type: "text", text: "I can" }])
+  expect(e.error.message).toBe("the model refused to answer (stop_reason: refusal)")
+})
+
+test("a refusal's stop_details go into the error message", async () => {
+  const reply = textReply("no", "refusal")
+  reply[4] = {
+    type: "message_delta",
+    delta: {
+      stop_reason: "refusal",
+      stop_sequence: null,
+      stop_details: { type: "refusal", category: "cyber", explanation: "Looks like malware." },
+    },
+    usage: { output_tokens: 1 },
+  } as any
+  const e = last(await run(() => anthropicResponse(reply))) as ErrorEvent
+  expect(e.error).toEqual({
+    message: "the model refused to answer (stop_reason: refusal): cyber: Looks like malware.",
+    code: "refusal",
+  })
 })
 
 test("an in-stream overloaded error is retryable and keeps the partial message", async () => {
@@ -242,6 +261,9 @@ test("HTTP errors keep status and code; 429 and 5xx retry", async () => {
   expect(rate.retryable).toBe(true)
   expect((await httpErr(529, "overloaded_error")).retryable).toBe(true)
   expect((await httpErr(500, "api_error")).retryable).toBe(true)
+  expect((await httpErr(408, "timeout_error")).retryable).toBe(true)
+  expect((await httpErr(409, "conflict_error")).retryable).toBe(true)
+  expect((await httpErr(401, "authentication_error")).retryable).toBe(false)
   const bad = await httpErr(400, "invalid_request_error")
   expect(bad.retryable).toBe(false)
   expect(bad.message.stopReason).toBe("error")

@@ -141,6 +141,10 @@ function* replayMessage(msg: any): Generator<unknown> {
     }
     yield { type: "content_block_stop", index }
   }
-  yield { type: "message_delta", delta: { stop_reason: msg.stop_reason }, usage: msg.usage }
+  yield {
+    type: "message_delta",
+    delta: { stop_reason: msg.stop_reason, stop_details: msg.stop_details },
+    usage: msg.usage,
+  }
   yield { type: "message_stop" }
 }
