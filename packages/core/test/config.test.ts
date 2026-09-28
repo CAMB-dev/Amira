@@ -333,3 +333,20 @@ test("an extension cannot change the settings another extension reads", async ()
   expect(seen).toEqual(["bash"])
   expect(settings.tools.disabled).toEqual(["bash"])
 })
+
+test("sub-agent settings: role models, limits, budget and the merge review threshold", () => {
+  const raw = {
+    agents: { explorer: { model: "cheap/small" } },
+    subagents: { maxDepth: 1, maxConcurrent: 2 },
+    budget: { tokens: 100_000, costUsd: 0.5 },
+    merge: { reviewThreshold: { lines: 200, files: 5 } },
+  }
+  expect(validateSettings(raw, "f")).toEqual({ settings: raw, warnings: [] })
+  expect(() => validateSettings({ agents: { coder: { model: "nope" } } }, "f")).toThrow(
+    '"agents.coder.model"',
+  )
+  expect(() => validateSettings({ subagents: { maxConcurrent: 0 } }, "f")).toThrow(
+    '"subagents.maxConcurrent"',
+  )
+  expect(() => validateSettings({ budget: { costUsd: "1" } }, "f")).toThrow('"budget.costUsd"')
+})
