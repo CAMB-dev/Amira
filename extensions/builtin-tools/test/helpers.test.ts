@@ -1,9 +1,9 @@
 import { afterAll, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { homedir, tmpdir } from "node:os"
+import { join, resolve, sep } from "node:path"
 import { isBinary, walkFiles } from "../src/files.ts"
-import { displayPath } from "../src/paths.ts"
+import { displayPath, resolvePath } from "../src/paths.ts"
 import { truncateOutput } from "../src/truncate.ts"
 
 const dirs: string[] = []
@@ -50,4 +50,24 @@ test("displayPath is relative inside cwd and absolute outside", () => {
   expect(displayPath(cwd, join(cwd, "src", "a.ts"))).toBe("src/a.ts")
   const outside = join(tmpdir(), "other", "b.ts")
   expect(displayPath(cwd, outside)).toBe(outside.replaceAll("\\", "/"))
+})
+
+const isWindows = process.platform === "win32"
+
+test("resolvePath expands ~ to the home directory", () => {
+  expect(resolvePath(tmpdir(), "~")).toBe(homedir())
+  expect(resolvePath(tmpdir(), "~/x/y")).toBe(join(homedir(), "x", "y"))
+  expect(resolvePath(tmpdir(), "~x")).toBe(join(tmpdir(), "~x"))
+})
+
+test.if(isWindows)("resolvePath maps MSYS drive and /tmp paths on Windows", () => {
+  const cwd = "E:/work"
+  expect(resolvePath(cwd, "/d/dev/x")).toBe(join("D:/", "dev", "x"))
+  expect(resolvePath(cwd, "/c")).toBe("C:/".replaceAll("/", sep))
+  expect(resolvePath(cwd, "/tmp/x")).toBe(join(tmpdir(), "x"))
+  expect(resolvePath(cwd, "/tmpfile")).toBe(resolve("/tmpfile"))
+  expect(resolvePath(cwd, "D:/dev/x")).toBe(join("D:/", "dev", "x"))
+  expect(resolvePath(cwd, "//server/share/dir/f.txt")).toBe(
+    ["", "", "server", "share", "dir", "f.txt"].join(sep),
+  )
 })
