@@ -53,10 +53,13 @@ export function takeResult(index: ResultIndex, id: string, callAt: number): Tool
 }
 
 /**
- * Tool calls in `messages` left without a result. Each result answers the earliest open call
- * with its id before it, so an id reused across steps counts once per call, and appending a
- * result for every call returned here makes the history complete (calling this again then
- * returns nothing).
+ * Tool calls in `messages` left without a result, for repairing history. Each result answers
+ * the earliest open call with its id before it, so an id reused across steps counts once per
+ * call, and after appending a result for every call returned here this returns nothing: repair
+ * never grows the history turn after turn. takeResult pairs differently on purpose (a result
+ * belongs to the latest call with its id before it), so in a malformed history such as
+ * [call x, call x, result x] the wire still sends MISSING_RESULT for the first call and drops
+ * the appended result; the request stays valid either way.
  */
 export function unansweredCalls(messages: readonly Message[]): Set<ToolCallBlock> {
   const open = new Map<string, ToolCallBlock[]>()
