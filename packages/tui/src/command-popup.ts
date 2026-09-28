@@ -88,11 +88,11 @@ export class CommandPopup implements Component {
     } catch {
       answer = { candidates: [] }
     }
-    if (!(answer instanceof Promise)) {
-      apply(answer)
+    if (typeof (answer as { then?: unknown }).then !== "function") {
+      apply(answer as Completion)
       return undefined
     }
-    this.#pending = answer.then(
+    this.#pending = Promise.resolve(answer).then(
       (r) => {
         if (generation !== this.#generation) return
         this.#pending = undefined
