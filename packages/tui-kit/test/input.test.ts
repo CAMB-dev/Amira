@@ -160,6 +160,36 @@ describe("kitty keyboard protocol", () => {
     expect(parse("\x1b[97;5u")).toEqual([key("a", { ctrl: true })])
     expect(parse("\x1b[97;5:3u")).toEqual([])
   })
+
+  test("functional keys in the private-use area are named keys, never text", () => {
+    expect(parse("\x1b[57358u")).toEqual([key("capslock")])
+    expect(parse("\x1b[57428u\x1b[57440u")).toEqual([key("media_play"), key("volume_mute")])
+    expect(parse("\x1b[57414u\x1b[57417;5u")).toEqual([key("enter"), key("left", { ctrl: true })])
+    expect(parse("\x1b[57376u\x1b[57398u")).toEqual([key("f13"), key("f35")])
+    expect(parse("\x1b[57441;2u\x1b[57999u\x1b[1114112u\x1b[1u")).toEqual([])
+  })
+
+  test("keypad digits and operators type their characters", () => {
+    expect(parse("\x1b[57399u\x1b[57408u\x1b[57409u\x1b[57413u")).toEqual([
+      textKey("0"),
+      textKey("9"),
+      textKey("."),
+      textKey("+"),
+    ])
+    expect(parse("\x1b[57400;5u")).toEqual([key("1", { ctrl: true })])
+  })
+
+  test("VS Code: measured bytes", () => {
+    const [enter] = parse("\r")
+    const [shiftEnter] = parse("\x1b[13;2u")
+    const [ctrlEnter] = parse("\x1b[13;5u")
+    expect(isSubmitKey(enter!)).toBe(true)
+    expect(isNewlineKey(shiftEnter!)).toBe(true)
+    expect(isNewlineKey(ctrlEnter!)).toBe(true)
+    expect(isSubmitKey(shiftEnter!) || isSubmitKey(ctrlEnter!)).toBe(false)
+    expect(parse("\x1b[13;3u")).toEqual([key("enter", { alt: true })])
+    expect(parse("\x1b[27u")).toEqual([key("escape")])
+  })
 })
 
 describe("win32-input-mode", () => {

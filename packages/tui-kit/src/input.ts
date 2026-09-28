@@ -48,7 +48,61 @@ const TILDE_CODES: Record<number, string> = {
   24: "f12",
 }
 
-const KITTY_CODES: Record<number, string> = { 9: "tab", 13: "enter", 27: "escape", 127: "backspace" }
+const KITTY_CODES: Record<number, string> = {
+  9: "tab",
+  13: "enter",
+  27: "escape",
+  127: "backspace",
+  57358: "capslock",
+  57359: "scrolllock",
+  57360: "numlock",
+  57361: "printscreen",
+  57362: "pause",
+  57363: "menu",
+  57414: "enter",
+  57417: "left",
+  57418: "right",
+  57419: "up",
+  57420: "down",
+  57421: "pageup",
+  57422: "pagedown",
+  57423: "home",
+  57424: "end",
+  57425: "insert",
+  57426: "delete",
+  57427: "begin",
+  57428: "media_play",
+  57429: "media_pause",
+  57430: "media_play_pause",
+  57431: "media_reverse",
+  57432: "media_stop",
+  57433: "media_fast_forward",
+  57434: "media_rewind",
+  57435: "media_track_next",
+  57436: "media_track_previous",
+  57437: "media_record",
+  57438: "volume_down",
+  57439: "volume_up",
+  57440: "volume_mute",
+}
+for (let i = 0; i < 23; i++) KITTY_CODES[57376 + i] = `f${i + 13}`
+
+/** Keypad keys that type a character. */
+const KITTY_KEYPAD_TEXT: Record<number, string> = {
+  57409: ".",
+  57410: "/",
+  57411: "*",
+  57412: "-",
+  57413: "+",
+  57415: "=",
+  57416: ",",
+}
+for (let i = 0; i < 10; i++) KITTY_KEYPAD_TEXT[57399 + i] = String(i)
+
+/** Kitty reports functional keys (keypad, media, modifiers, ...) as private-use code points. */
+function isPrivateUse(code: number): boolean {
+  return code >= 0xe000 && code <= 0xf8ff
+}
 
 const VK_NAMES: Record<number, string> = {
   8: "backspace",
@@ -137,6 +191,10 @@ function decodeKitty(params: string): KeyEvent[] {
   const mods = xtermMods(modStr)
   const named = KITTY_CODES[code]
   if (named) return [key(named, mods)]
+  const keypad = KITTY_KEYPAD_TEXT[code]
+  if (keypad) return [charKey(keypad, mods)]
+  // Unknown functional keys (modifier keys on their own, ...) and invalid code points.
+  if (isPrivateUse(code) || code < 32 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return []
   return [charKey(String.fromCodePoint(code), mods)]
 }
 
