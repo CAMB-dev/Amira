@@ -321,6 +321,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
+        // A turn woken by notices carries every one that was waiting.
+        if (e.data.prompt.display?.origin) pendingNotices.length = 0
         commit([...userLines(theme, e.data.prompt), ""])
         working = true
         thinking = false

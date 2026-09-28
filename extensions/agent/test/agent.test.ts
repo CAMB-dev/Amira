@@ -794,6 +794,41 @@ test("interrupting the commander leaves its background sub-agents running; their
   expect(notices(root)[0]?.text).toContain("survived")
 })
 
+test("agent_result called after an interrupt returns at once and leaves the result to the notice", async () => {
+  const { root, bus, tools } = await setup(
+    (req) =>
+      who(req) === "explorer"
+        ? { text: "late answer", delayMs: 100 }
+        : isNotice(req)
+          ? { text: "got it" }
+          : req.messages.at(-1)?.role === "toolResult"
+            ? { text: "started" }
+            : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "x" }] } }] },
+    { settings: {} },
+  )
+  await root.prompt("go")
+  const abort = new AbortController()
+  abort.abort()
+  const r = await tools.get("agent_result")!.execute(
+    {},
+    {
+      cwd: root.cwd,
+      toolCallId: "c1",
+      signal: abort.signal,
+      update: () => {},
+      session: { sessionId: root.sessionId } as never,
+    },
+  )
+  expect(r.content[0]).toEqual({
+    type: "text",
+    text: "Interrupted; finished results come to you as a message.",
+  })
+  await until(() => replied(root, "got it"))
+  await bus.flush()
+  expect(notices(root)[0]?.text).toContain("late answer")
+  expect(root.expectedNotices).toBe(0)
+})
+
 test("a new conversation stops the old one's background sub-agents", async () => {
   const { root, bus, events } = await setup(
     (req) =>

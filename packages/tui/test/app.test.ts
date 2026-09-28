@@ -604,6 +604,26 @@ test("a background result an interrupt kept waiting shows as pending and joins t
   await exited
 })
 
+test("a held background result woken by a later one leaves no pending line behind", async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    { text: "both seen" },
+  ])
+  terminal.send("go\r")
+  await shows("01234567")
+  agent.expectNotice().deliver(subagentNotice("first"))
+  await waitFor(() => live().includes("· pending"), "pending line")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  await idle()
+  agent.expectNotice().deliver(subagentNotice("second"))
+  await shows("both seen")
+  await idle()
+  expect(live()).not.toContain("· pending")
+  terminal.send("\x03")
+  await exited
+})
+
 test("extension dialogs are answered inline: confirm, select and input", async () => {
   const { host, terminal, live, all, shows, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "ask", args: {} }] },

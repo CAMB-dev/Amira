@@ -525,19 +525,25 @@ ${list.join("\n")}`
         const ids = p.ids?.length ? p.ids : [...(mine?.keys() ?? [])]
         if (!ids.length) return textResult("There are no background sub-agents to collect.")
         const parts: string[] = []
+        const batched = (id: string) =>
+          [...batches.values()].some((b) => b.jobs.some((j) => j.child.id === id))
         const gone = (id: string) =>
-          delivered.has(id)
-            ? `${id}: its result was already sent to you as a message.`
-            : `${id}: no such background sub-agent (or its result was already collected).`
+          batched(id)
+            ? `${id}: it has ended; its result is on its way to you as a message.`
+            : delivered.has(id)
+              ? `${id}: its result was already sent to you as a message.`
+              : `${id}: no such background sub-agent (or its result was already collected).`
         const found = ids.flatMap((id) => {
           const job = mine?.get(id)
           if (!job) parts.push(gone(id))
           return job ? [job] : []
         })
         if (p.wait !== false) {
-          const aborted = new Promise<void>((resolve) =>
-            ctx.signal.addEventListener("abort", () => resolve(), { once: true }),
-          )
+          // The turn may have been interrupted before this tool even started.
+          const aborted = new Promise<void>((resolve) => {
+            if (ctx.signal.aborted) resolve()
+            else ctx.signal.addEventListener("abort", () => resolve(), { once: true })
+          })
           // While this call waits for a job, its report is handed out here, not sent.
           for (const j of found) j.waiters++
           try {
@@ -545,6 +551,13 @@ ${list.join("\n")}`
           } finally {
             for (const j of found) j.waiters--
           }
+        }
+        const commander = ctx.session?.sessionId
+        if (ctx.signal.aborted && commander) {
+          // This result may never reach the model: reports that ended meanwhile go as a notice.
+          for (const job of found)
+            if (job.done !== undefined && mine?.has(job.child.id)) finished(commander, job)
+          return textResult("Interrupted; finished results come to you as a message.", true)
         }
         for (const job of found) {
           if (!mine?.has(job.child.id)) {
