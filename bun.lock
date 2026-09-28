@@ -15,6 +15,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@amira/api": "workspace:*",
+        "@amira/proc": "workspace:*",
       },
     },
     "extensions/status": {
@@ -61,7 +62,12 @@
       "dependencies": {
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
+        "@amira/proc": "workspace:*",
       },
+    },
+    "packages/proc": {
+      "name": "@amira/proc",
+      "version": "0.0.0",
     },
     "packages/tui": {
       "name": "@amira/tui",
@@ -91,6 +97,8 @@
     "@amira/core": ["@amira/core@workspace:packages/core"],
 
     "@amira/ext-status": ["@amira/ext-status@workspace:extensions/status"],
+
+    "@amira/proc": ["@amira/proc@workspace:packages/proc"],
 
     "@amira/tui": ["@amira/tui@workspace:packages/tui"],
 

@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { bashTool, runCommand } from "../src/bash.ts"
-import { type ProcessTree, trackProcessTree } from "../src/process-tree.ts"
+import { type ProcessTree, runCommand, trackProcessTree } from "@amira/proc"
+import { bashTool } from "../src/bash.ts"
 import { resolveShell } from "../src/shell.ts"
 import { makeCtx, tempDirs, textOf } from "./util.ts"
 
@@ -69,7 +69,7 @@ test.if(hasBash)(
           gated: shell.gated,
           timeoutMs: 1000,
           signal: new AbortController().signal,
-          onOutput: () => void calls++,
+          onChunk: () => void calls++,
           // Contain the tree but leave it running, as if a pipe holder had escaped.
           trackTree(proc) {
             real = trackProcessTree(proc)

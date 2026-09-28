@@ -1,9 +1,9 @@
 import { defineExtension } from "@amira/api"
+import { warmUpCommands } from "@amira/proc"
 import { bashTool } from "./bash.ts"
 import { editTool } from "./edit.ts"
 import { globTool } from "./glob.ts"
 import { grepTool } from "./grep.ts"
-import { warmUpProcessTree } from "./process-tree.ts"
 import { readTool } from "./read.ts"
 import { warmUpShell } from "./shell.ts"
 import { writeTool } from "./write.ts"
@@ -17,8 +17,6 @@ export default defineExtension((api) => {
   // Not awaited: loading must not wait for shell discovery or the Win32 bindings.
   setTimeout(() => {
     warmUpShell()
-    try {
-      warmUpProcessTree()
-    } catch {}
+    warmUpCommands()
   }, 0)
 })
