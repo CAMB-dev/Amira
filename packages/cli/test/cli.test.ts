@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
+import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import { defineExtension, defineTool, type Extension, textResult } from "@amira/api"
 import { EventBus, UiRequests } from "@amira/core"
 import { parseCliArgs, UsageError } from "../src/args.ts"
@@ -123,6 +123,55 @@ test("plain print mode shows sub-agents' tool calls on stderr but only the comma
   expect(io.err).toMatch(
     /^● delegate \n◆ explorer started: sub task\n {2}↳ explorer ● echo y\n◆ explorer done \(\d+\.\ds\)\n$/,
   )
+})
+
+/** A tool standing in for a background sub-agent: its result comes as a notice `ms` later. */
+function laterTool(ms: number) {
+  return defineTool({
+    name: "later",
+    description: "",
+    parameters: {},
+    execute: async (_p, ctx) => {
+      const notice = ctx.session!.expectNotice!()
+      if (ms >= 0) {
+        setTimeout(
+          () => notice.deliver(userMessage("the late result", { text: "◆ bg finished", origin: "subagent" })),
+          ms,
+        )
+      }
+      return textResult("started")
+    },
+  })
+}
+
+test("print mode waits for background results and lets the commander react before exiting", async () => {
+  const { agent } = await mockSession([
+    { toolCalls: [{ name: "later", args: {} }] },
+    { text: "started it" },
+    (req) => {
+      const last = req.messages.at(-1)
+      const text = last?.content.map((b) => (b.type === "text" ? b.text : "")).join("")
+      return { text: `reacted to ${text}` }
+    },
+  ])
+  agent.tools.register(laterTool(60), "test")
+  const io = capture()
+  expect(await runPrint(agent, "go", false, { io })).toBe(0)
+  expect(io.out).toBe("started it\nreacted to the late result\n")
+  expect(agent.expectedNotices).toBe(0)
+  expect(agent.busy).toBe(false)
+})
+
+test("print mode stops waiting for background results on Ctrl+C", async () => {
+  const { agent } = await mockSession([{ toolCalls: [{ name: "later", args: {} }] }, { text: "started it" }])
+  agent.tools.register(laterTool(-1), "test")
+  const io = capture()
+  const p = runPrint(agent, "go", false, { io, forceExit: () => {} })
+  await Bun.sleep(80)
+  expect(agent.expectedNotices).toBe(1)
+  process.emit("SIGINT")
+  expect(await p).toBe(130)
+  expect(io.out).toBe("started it\n")
 })
 
 test("a compaction blocked by an extension is reported as skipped, not failed", async () => {

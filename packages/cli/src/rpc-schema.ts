@@ -27,7 +27,7 @@ function obj(props: Record<string, Schema>, description?: string): Schema {
 export const COMMAND_PARAMS = {
   prompt: {
     description:
-      "Starts a turn. Answered at once with the new turnId, before the turn runs; fails with `busy` while a turn runs.",
+      "Starts a turn. Answered at once with the new turnId, before the turn runs; fails with `busy` while a turn runs (also one that background sub-agents' results started: steer it instead).",
     params: {
       text: str,
       "attachments?": {
@@ -284,6 +284,11 @@ export function rpcSchema(): Schema {
           "note?": {
             ...str,
             description: 'A line to show under text, e.g. "Loaded skill review-pr (120 lines)".',
+          },
+          "origin?": {
+            ...str,
+            description:
+              'Set when the user did not write the message: "subagent" for background sub-agents\' results sent to the session. Show it as a notice; a turn it starts is otherwise an ordinary turn.',
           },
         },
         "How to show a user message instead of its content, which the model still gets in full. Never sent to the model.",

@@ -63,7 +63,16 @@ export async function runPrint(
   let endedWithNewline = true
   /** Role and line indent of each sub-agent, by session id. */
   const subagents = new Map<string, { role: string; indent: string }>()
+  /** How the main session's latest turn ended. */
+  let lastEnd: TurnResult | undefined
   const handle = (e: AnyEvent) => {
+    if (e.type === "turn.end" && e.sessionId === agent.sessionId) {
+      lastEnd = {
+        reason: e.data.reason,
+        steps: e.data.steps,
+        ...(e.data.error ? { error: e.data.error } : {}),
+      }
+    }
     if (e.type === "ui.request") {
       io.stderr(`amira: cancelled "${e.data.title}": print mode cannot answer questions\n`)
       opts.ui?.cancel(e.data.requestId)
@@ -172,6 +181,12 @@ export async function runPrint(
     } else {
       code = exitCode(await agent.prompt(prompt))
     }
+    // Sub-agents still running in the background: wait for their results and the turns they
+    // start, as long as those turns succeed. Ctrl+C stops waiting.
+    if (code === 0 && (await backgroundTurns(agent, () => interrupted))) {
+      await agent.bus.flush()
+      code = interrupted ? 130 : lastEnd ? exitCode(lastEnd) : code
+    }
     const flushed = await Promise.race([
       agent.bus.flush().then(() => true),
       Bun.sleep(opts.flushTimeoutMs ?? 2000).then(() => false),
@@ -180,6 +195,27 @@ export async function runPrint(
     return code
   } finally {
     process.off("SIGINT", onSigint)
+    off()
+  }
+}
+
+/**
+ * Waits while the agent is busy or expects notices (background sub-agents' results), until a
+ * turn that ran meanwhile fails or `stop()` says so. True when it waited for anything.
+ */
+export async function backgroundTurns(agent: Agent, stop: () => boolean): Promise<boolean> {
+  let waited = false
+  let failed = false
+  const off = agent.bus.subscribe((e) => {
+    if (e.type === "turn.end" && e.sessionId === agent.sessionId && e.data.reason !== "done") failed = true
+  })
+  try {
+    while (!stop() && !failed && (agent.busy || agent.expectedNotices > 0)) {
+      waited = true
+      await Bun.sleep(20)
+    }
+    return waited
+  } finally {
     off()
   }
 }

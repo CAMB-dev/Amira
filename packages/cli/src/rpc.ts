@@ -304,7 +304,9 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     closed = true
     ui.cancelAll()
     await Promise.all(runningCommands)
-    while (agent.turnId) await Bun.sleep(10)
+    // The running turn, background sub-agents still expected to report, and the turns their
+    // results start; Ctrl+C stops waiting.
+    while (agent.turnId || (!interrupted && (agent.busy || agent.expectedNotices > 0))) await Bun.sleep(10)
     await Promise.race([agent.bus.flush(), Bun.sleep(opts.flushTimeoutMs ?? 2000)])
     await io.flush?.()
     return 0

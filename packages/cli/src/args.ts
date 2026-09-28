@@ -59,6 +59,12 @@ Options:
 
 Use -- before a prompt that starts with a dash: amira -p -- "-v means verbose?"
 
+Sub-agents run in the background, and their results start a turn of their own.
+--print (and --rpc once stdin closes) waits for the ones still running and the
+turns their results start before exiting, however long they take (the budget
+in settings.json limits them); Ctrl+C stops waiting. Sub-agents still running
+at exit are stopped and given up to 5 s to wrap up.
+
 Commands:
   amira provider presets [id]   Print settings.json entries for known providers
   amira provider add <id>       Add a preset to ~/.amira/settings.json
