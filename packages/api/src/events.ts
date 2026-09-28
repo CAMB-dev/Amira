@@ -85,6 +85,22 @@ export interface EventMap {
   "extension.error": { source: string; error: string }
   /** A slow subscriber's queue overflowed and events were dropped for it. */
   "events.lost": { dropped: number }
+  /** The session switched models; later turns use `to`. */
+  "model.changed": { from: ModelRef; to: ModelRef }
+  /**
+   * Older history is being summarized. `messages` will be replaced, `kept` stay verbatim;
+   * `tokens` is the context size that triggered it, when known.
+   */
+  "compact.start": { reason: "threshold" | "manual"; messages: number; kept: number; tokens?: number }
+  "compact.end": { summary: string; replaced: number; kept: number }
+  /** Compaction did not happen; the conversation continues uncompacted. */
+  "compact.failed": { error: string }
+}
+
+/** A named part of the system prompt (D43). */
+export interface SystemSection {
+  name: string
+  text: string
 }
 
 export type Intercept<T> =
@@ -98,6 +114,18 @@ export interface InterceptorMap {
   "context.build": { systemPrompt: string; messages: Message[] }
   /** Runs before a tool executes. Only `args` may be modified; block returns an error result to the model. */
   "tool.call.before": { readonly toolCallId: string; readonly name: string; args: Record<string, unknown> }
+  /**
+   * Runs before every model call, ahead of context.build, with the system prompt's sections
+   * in order ("identity", "environment", "project", "skills", "deferred-tools", "role").
+   * modify may edit, add or remove sections. Failures pass.
+   */
+  "system.build": { sections: SystemSection[] }
+  /**
+   * Runs before compaction summarizes `messages` (the older history; `kept` stays verbatim).
+   * modify may supply `summary` to skip the default model summary; block cancels this
+   * compaction. Failures pass, and the default summary is used.
+   */
+  "compact.before": { readonly messages: Message[]; readonly kept: Message[]; summary?: string }
 }
 
 export interface InterceptorOptions {
