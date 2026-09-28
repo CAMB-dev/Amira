@@ -4,6 +4,7 @@ export { type Component, CURSOR_MARKER, type RenderContext } from "./component.t
 export { Editor, type EditorOptions } from "./components/editor.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
+export { StreamText } from "./components/stream-text.ts"
 export { Text } from "./components/text.ts"
 export { InputParser } from "./input.ts"
 export {

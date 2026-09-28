@@ -332,4 +332,3 @@ test("a component can commit lines while rendering; they print above the frame i
   r.render()
   expect(screen.text).not.toContain("late")
 })
-
