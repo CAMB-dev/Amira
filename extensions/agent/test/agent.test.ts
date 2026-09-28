@@ -7,7 +7,7 @@ import { createAi, createMockDialect, type MockReply, type ModelRequest } from "
 import { type AnyEvent, defineTool, type Settings, textResult } from "@amira/api"
 import { Agent, AgentTree, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import { runCommand } from "@amira/proc"
-import { createAgentExtension, hostGit } from "../src/index.ts"
+import { createAgentExtension, hostGit, type RunGit } from "../src/index.ts"
 
 setDefaultTimeout(60_000)
 
@@ -38,7 +38,7 @@ const lastText = (req: ModelRequest) => {
 
 async function setup(
   reply: (req: ModelRequest) => MockReply,
-  opts: { cwd?: string; settings?: Settings; budget?: { tokens: number } } = {},
+  opts: { cwd?: string; settings?: Settings; budget?: { tokens: number }; git?: RunGit } = {},
 ) {
   const home = await tempDir("amira-agent-home-")
   process.env.AMIRA_HOME = home
@@ -59,7 +59,7 @@ async function setup(
   const interceptors = new InterceptorRegistry()
   const tools = new ToolRegistry()
   const host = new ExtensionHost({ bus, interceptors, tools, cwd, settings: opts.settings ?? {} })
-  expect(await host.load(createAgentExtension({ git }), "builtin:agent")).toBe(true)
+  expect(await host.load(createAgentExtension({ git: opts.git ?? git }), "builtin:agent")).toBe(true)
   tools.register(
     defineTool({
       name: "read",
@@ -96,6 +96,8 @@ async function setup(
     interceptors,
     tools,
     tree,
+    // git is slow on Windows; an interrupted agent tool still gets to report its children.
+    abortGraceMs: 30_000,
   })
   return { root, mock, bus, events, cwd, home, tools }
 }
@@ -262,7 +264,8 @@ test("background sub-agents return ids at once; agent_result collects each resul
   expect(childId).toMatch(/^s_/)
 })
 
-test("a coder in a worktree has its change merged into the commander's checkout", async () => {
+/** A repository with one commit holding f.txt ("one"). */
+async function gitRepo(): Promise<string> {
   const repo = await tempDir("amira-agent-repo-")
   const g = async (...args: string[]) => {
     const r = await git(args, repo)
@@ -271,19 +274,15 @@ test("a coder in a worktree has its change merged into the commander's checkout"
   await g("init", "-q")
   writeFileSync(path.join(repo, "f.txt"), "one\n")
   await g("add", ".")
-  await g(
-    "-c",
-    "user.name=t",
-    "-c",
-    "user.email=t@t",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-q",
-    "-m",
-    "init",
-  )
+  const id = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+  await g(...id, "commit", "-q", "-m", "init")
+  return repo
+}
 
+const readText = (file: string) => readFileSync(file, "utf8").replace(/\r\n/g, "\n")
+
+test("a coder in a worktree has its change merged into the commander's checkout", async () => {
+  const repo = await gitRepo()
   let childCwd = ""
   const { root } = await setup(
     (req) => {
@@ -313,7 +312,133 @@ test("a coder in a worktree has its change merged into the commander's checkout"
   expect(text).toContain("edited f.txt")
   expect(text).toContain("Worktree: merged into the working tree, 1 file, +1 -1 (f.txt).")
   expect(childCwd).not.toBe(repo)
-  expect(readFileSync(path.join(repo, "f.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("two\n")
+  expect(readText(path.join(repo, "f.txt"))).toBe("two\n")
+})
+
+/** A worktree coder that writes f.txt, then thinks for a long time; the commander waits for it. */
+function slowCoder(opts: { background?: boolean } = {}) {
+  return (req: ModelRequest): MockReply => {
+    const last = req.messages.at(-1)
+    if (who(req) === "coder") {
+      return last?.role === "toolResult"
+        ? { text: "finished editing", delayMs: 30_000 }
+        : { toolCalls: [{ name: "write", args: { path: "f.txt", content: "half\n" } }] }
+    }
+    return last?.role === "toolResult"
+      ? { text: "ok" }
+      : {
+          toolCalls: [
+            {
+              name: "agent",
+              args: {
+                tasks: [{ role: "coder", prompt: "change f", isolation: "worktree" }],
+                ...(opts.background ? { background: true } : {}),
+              },
+            },
+          ],
+        }
+  }
+}
+
+/** Resolves once a sub-agent's write has run. */
+function afterChildWrite(bus: EventBus): Promise<void> {
+  return new Promise((resolve) => {
+    const off = bus.subscribe((e) => {
+      if (e.type === "tool.execute.end" && e.data.name === "write" && e.parentSessionId) {
+        off()
+        resolve()
+      }
+    })
+  })
+}
+
+test("interrupting the commander aborts its sub-agents and keeps their half-done work unmerged", async () => {
+  const repo = await gitRepo()
+  const { root, bus, events } = await setup(slowCoder(), { cwd: repo })
+  const turn = root.prompt("go")
+  await afterChildWrite(bus)
+  root.abort()
+  expect((await turn).reason).toBe("aborted")
+  await bus.flush()
+  const end = events.find((e) => e.type === "subagent.end")
+  expect(end?.type === "subagent.end" && end.data.status).toBe("aborted")
+  // Nothing was applied to the commander's checkout; the change waits in the worktree.
+  expect(readText(path.join(repo, "f.txt"))).toBe("one\n")
+  const text = agentResult(root)
+  expect(text).toContain("Worktree: NOT merged because the sub-agent was stopped along with its commander")
+  const dir = /stay in (\S+); the patch/.exec(text)?.[1] ?? ""
+  expect(readText(path.join(dir, "f.txt"))).toBe("half\n")
+})
+
+test("a sub-agent that fails keeps its worktree changes unmerged", async () => {
+  const repo = await gitRepo()
+  const { root } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "coder") {
+        return last?.role === "toolResult"
+          ? { error: { message: "provider exploded" } }
+          : { toolCalls: [{ name: "write", args: { path: "f.txt", content: "half\n" } }] }
+      }
+      return last?.role === "toolResult"
+        ? { text: "ok" }
+        : {
+            toolCalls: [
+              { name: "agent", args: { tasks: [{ role: "coder", prompt: "x", isolation: "worktree" }] } },
+            ],
+          }
+    },
+    { cwd: repo },
+  )
+  await root.prompt("go")
+  expect(agentResult(root)).toContain("Worktree: NOT merged because the sub-agent ended with status error")
+  expect(readText(path.join(repo, "f.txt"))).toBe("one\n")
+})
+
+test("an interrupt while worktrees are being made starts nothing further", async () => {
+  const repo = await gitRepo()
+  let makingSecond: () => void = () => {}
+  const second = new Promise<void>((resolve) => {
+    makingSecond = resolve
+  })
+  let adds = 0
+  const slowGit: typeof git = async (args, cwd, stdoutOnly) => {
+    if (args[0] === "worktree" && args[1] === "add" && ++adds === 2) {
+      makingSecond()
+      await Bun.sleep(300)
+    }
+    return git(args, cwd, stdoutOnly)
+  }
+  const { root, bus, events } = await setup(
+    (req) =>
+      who(req) === "coder"
+        ? { text: "coding", delayMs: 30_000 }
+        : req.messages.at(-1)?.role === "toolResult"
+          ? { text: "ok" }
+          : {
+              toolCalls: [
+                {
+                  name: "agent",
+                  args: {
+                    tasks: [
+                      { role: "coder", prompt: "a", isolation: "worktree" },
+                      { role: "coder", prompt: "b", isolation: "worktree" },
+                    ],
+                  },
+                },
+              ],
+            },
+    { cwd: repo, git: slowGit },
+  )
+  const turn = root.prompt("go")
+  await second
+  root.abort()
+  await turn
+  await bus.flush()
+  const starts = events.filter((e) => e.type === "subagent.start")
+  const ends = events.filter((e) => e.type === "subagent.end")
+  expect(starts.length).toBe(1)
+  expect(ends.map((e) => e.type === "subagent.end" && e.data.status)).toEqual(["aborted"])
 })
 
 test("worktree isolation outside a repository falls back to the shared directory", async () => {

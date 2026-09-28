@@ -188,6 +188,17 @@ function readPatch(file: string): string {
   }
 }
 
+/**
+ * Collects the changes of a child that did not finish (aborted, failed, or its commander was
+ * interrupted) without merging them: half-done work stays in the worktree to be looked at.
+ */
+export async function keepChanges(git: RunGit, wt: Worktree, rm?: Remove): Promise<MergeResult> {
+  const stat = await collectChanges(git, wt)
+  if (stat.files.length) return { outcome: "kept", stat }
+  const problem = await removeWorktree(git, wt, rm)
+  return { outcome: "empty", stat, ...(problem ? { cleanup: problem } : {}) }
+}
+
 /** Deletes a file or directory tree; replaceable in tests. */
 export type Remove = (target: string, opts: { recursive?: boolean; force?: boolean }) => void
 

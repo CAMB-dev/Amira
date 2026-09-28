@@ -12,6 +12,7 @@ import { type Isolation, loadRoles, type Role, roleModel } from "./roles.ts"
 import {
   createWorktree,
   formatStat,
+  keepChanges,
   type MergeResult,
   mergeWorktree,
   type RunGit,
@@ -53,6 +54,17 @@ interface Job {
   /** Settles with the report for the commander; never rejects. */
   report: Promise<string>
   done?: string
+  /** Stopped by its commander: its worktree changes are kept for review, never merged. */
+  cancelled?: boolean
+  /** Nobody will read its report any more, so what it leaves behind is reported as an error. */
+  orphaned?: boolean
+}
+
+/** Stops a job whose commander no longer wants it. */
+function cancel(job: Job, reason: string, orphan: boolean): void {
+  job.cancelled = true
+  if (orphan) job.orphaned = true
+  job.child.abort(reason)
 }
 
 const WRITE_TOOLS = new Set(["write", "edit"])
@@ -128,15 +140,18 @@ function changesLine(activity: Activity): string {
   return parts.length ? `Changes: ${parts.join("; ")}.` : "Changes: none."
 }
 
-function mergeLine(m: MergeResult, wt: Worktree): string {
-  const line = outcomeLine(m, wt)
+function mergeLine(m: MergeResult, wt: Worktree, unfinished?: string): string {
+  const line = outcomeLine(m, wt, unfinished)
   return m.cleanup
     ? `${line} The worktree could not be removed (${shorten(m.cleanup, 200)}); it stays at ${wt.dir} and is deleted later.`
     : line
 }
 
-function outcomeLine(m: MergeResult, wt: Worktree): string {
+function outcomeLine(m: MergeResult, wt: Worktree, unfinished?: string): string {
   const files = m.stat.files.length ? ` (${m.stat.files.join(", ")})` : ""
+  if (unfinished && m.outcome === "kept") {
+    return `Worktree: NOT merged because the sub-agent ${unfinished}; its work may be incomplete. Its changes, ${formatStat(m.stat)}${files}, stay in ${wt.dir}; the patch is ${wt.patch}. Check them before using any (e.g. read the patch and apply what is right), then remove the worktree with git worktree remove.`
+  }
   switch (m.outcome) {
     case "empty":
       return "Worktree: no changes."
@@ -210,6 +225,11 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
         if ("error" in made) note = `No worktree (${made.error}); it worked in the shared directory.`
         else wt = made
       }
+      // Making the worktree takes a while; the commander may have been interrupted meanwhile.
+      if (ctx.signal.aborted) {
+        if (wt) await removeWorktree(git, wt)
+        throw new Error("the commander's turn was interrupted")
+      }
       // A child that could not spawn further hides the tools that would try (D15).
       const deep = session.depth + 1 >= session.maxDepth
       const model = roleModel(role, task.model, api.settings.agents)
@@ -242,27 +262,58 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
         const r = await child.result()
         await watching
         let changes = changesLine(activity)
+        let leftBehind = false
         if (wt) {
           const tree = wt
+          // Only a child that finished its task is merged; half-done work is kept for review.
+          const unfinished = job.cancelled
+            ? "was stopped along with its commander"
+            : r.status !== "done"
+              ? `ended with status ${r.status}`
+              : undefined
           try {
             const merged = await serialized(() =>
-              mergeWorktree(git, tree, {
-                ...(api.settings.merge?.reviewThreshold
-                  ? { threshold: api.settings.merge.reviewThreshold }
-                  : {}),
-                review: (title, diff, options) => api.ui.reviewDiff(title, diff, options),
-              }),
+              unfinished
+                ? keepChanges(git, tree)
+                : mergeWorktree(git, tree, {
+                    ...(api.settings.merge?.reviewThreshold
+                      ? { threshold: api.settings.merge.reviewThreshold }
+                      : {}),
+                    review: (title, diff, options) => api.ui.reviewDiff(title, diff, options),
+                  }),
             )
-            changes = mergeLine(merged, tree)
+            changes = mergeLine(merged, tree, unfinished)
+            leftBehind = merged.outcome === "kept" || merged.outcome === "partial"
           } catch (err) {
             changes = `Worktree: merging failed (${err instanceof Error ? err.message : String(err)}); its changes stay in ${tree.dir}.`
+            leftBehind = true
           }
         }
         const text = reportOf(job, r, changes, note)
         job.done = text
+        if (job.orphaned && leftBehind) {
+          api.reportError(`sub-agent ${child.id} (${job.role}) ended after its commander stopped: ${changes}`)
+        }
         return text
       })()
       return job
+    }
+
+    /** Files background jobs under their commander and tells it their ids. */
+    const startedInBackground = (commander: string, jobs: Job[], failed: string[]) => {
+      const mine = background.get(commander) ?? new Map<string, Job>()
+      background.set(commander, mine)
+      for (const j of jobs) mine.set(j.child.id, j)
+      const started = jobs.map((j) => `${j.child.id} (${j.role})`).join(", ")
+      const text = [
+        ...(jobs.length
+          ? [
+              `Started in the background: ${started}. Call ${AGENT_RESULT_TOOL} with these ids to get their results; it waits for them unless wait is false.`,
+            ]
+          : []),
+        ...failed,
+      ].join("\n")
+      return textResult(text, jobs.length === 0)
     }
 
     const agentTool = defineTool<AgentParams>({
@@ -332,35 +383,25 @@ ${list.join("\n")}`
         }
         const jobs: Job[] = []
         const failed: string[] = []
-        for (const [i, task] of tasks.entries()) {
-          try {
-            jobs.push(await start(task, session, ctx))
-          } catch (err) {
-            failed.push(
-              `Task ${i + 1} (${task.role ?? "agent"}) did not start: ${err instanceof Error ? err.message : String(err)}`,
-            )
-          }
-        }
-        if (params.background) {
-          const mine = background.get(session.sessionId) ?? new Map<string, Job>()
-          background.set(session.sessionId, mine)
-          for (const j of jobs) mine.set(j.child.id, j)
-          const started = jobs.map((j) => `${j.child.id} (${j.role})`).join(", ")
-          const text = [
-            ...(jobs.length
-              ? [
-                  `Started in the background: ${started}. Call ${AGENT_RESULT_TOOL} with these ids to get their results; it waits for them unless wait is false.`,
-                ]
-              : []),
-            ...failed,
-          ].join("\n")
-          return textResult(text, jobs.length === 0)
-        }
+        // Listening before anything starts: starting (making worktrees) can take seconds.
         const stop = () => {
-          for (const j of jobs) j.child.abort("the commander's turn was interrupted")
+          for (const j of jobs) cancel(j, "the commander's turn was interrupted", !params.background)
         }
         ctx.signal.addEventListener("abort", stop, { once: true })
         try {
+          for (const [i, task] of tasks.entries()) {
+            if (ctx.signal.aborted) break
+            try {
+              const job = await start(task, session, ctx)
+              jobs.push(job)
+              if (ctx.signal.aborted) stop()
+            } catch (err) {
+              failed.push(
+                `Task ${i + 1} (${task.role ?? "agent"}) did not start: ${err instanceof Error ? err.message : String(err)}`,
+              )
+            }
+          }
+          if (params.background) return startedInBackground(session.sessionId, jobs, failed)
           const reports = await Promise.all(jobs.map((j) => j.report))
           return textResult([...failed, ...reports].join("\n\n"), jobs.length === 0)
         } finally {
