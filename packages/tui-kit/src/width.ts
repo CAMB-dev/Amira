@@ -1,10 +1,22 @@
 import { ANSI_PATTERN, RESET, stripAnsi } from "./ansi.ts"
+import { CURSOR_MARKER } from "./component.ts"
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
+/** Tabs are expanded to spaces up to the next multiple of this many columns. */
+export const TAB_WIDTH = 4
+
+/** Escape sequences that are safe to send to the terminal: SGR styles and OSC 8 hyperlinks. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
+const SAFE_SEQUENCE = /^(?:\x1b\[[0-9;:]*m|\x1b\]8;[^\x07\x1b]*(?:\x07|\x1b\\))$/
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters
+const CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g
+// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters
+const UNSAFE = /[\x00-\x09\x0b-\x1f\x7f-\x9f]/
+
 /** Display width in terminal cells, ignoring escape sequences. CJK and emoji count as 2. */
 export function visibleWidth(s: string): number {
-  return Bun.stringWidth(stripAnsi(s))
+  return Bun.stringWidth(stripAnsi(sanitize(s)))
 }
 
 export function graphemes(s: string): string[] {
@@ -17,31 +29,68 @@ export interface Token {
   ansi: boolean
 }
 
-/** Splits a string into escape sequences and graphemes, keeping sequences intact. */
+/**
+ * Splits a string into escape sequences and graphemes, and makes it safe to print: only SGR,
+ * OSC 8 and the cursor marker survive, other escapes and control characters (except `\n`) are
+ * dropped, and tabs become spaces, so that content can never move the cursor or erase anything.
+ */
 export function tokenize(s: string): Token[] {
   const out: Token[] = []
+  let col = 0
   const pushText = (t: string) => {
-    for (const g of graphemes(t)) out.push({ text: g, width: Bun.stringWidth(g), ansi: false })
+    for (const g of graphemes(t)) {
+      if (g === "\t") {
+        const n = TAB_WIDTH - (col % TAB_WIDTH)
+        for (let i = 0; i < n; i++) out.push({ text: " ", width: 1, ansi: false })
+        col += n
+        continue
+      }
+      const text = g.replace(CONTROLS, "")
+      if (text === "") continue
+      const width = Bun.stringWidth(text)
+      out.push({ text, width, ansi: false })
+      col = text === "\n" ? 0 : col + width
+    }
   }
   let last = 0
   for (const m of s.matchAll(ANSI_PATTERN)) {
     if (m.index > last) pushText(s.slice(last, m.index))
-    out.push({ text: m[0], width: 0, ansi: true })
+    if (isSafeSequence(m[0])) out.push({ text: m[0], width: 0, ansi: true })
     last = m.index + m[0].length
   }
   if (last < s.length) pushText(s.slice(last))
   return out
 }
 
+/** Drops everything `tokenize` drops and expands tabs; returns `s` itself when it is already safe. */
+export function sanitize(s: string): string {
+  if (isSafe(s)) return s
+  return tokenize(s)
+    .map((t) => t.text)
+    .join("")
+}
+
+function isSafeSequence(seq: string): boolean {
+  return SAFE_SEQUENCE.test(seq) || seq === CURSOR_MARKER
+}
+
+function isSafe(s: string): boolean {
+  if (!UNSAFE.test(s)) return true
+  if (!s.includes("\x1b")) return false
+  for (const m of s.matchAll(ANSI_PATTERN)) if (!isSafeSequence(m[0])) return false
+  return !UNSAFE.test(s.replace(ANSI_PATTERN, ""))
+}
+
 /** Cuts a line to at most `width` cells without splitting graphemes or escape sequences. */
 export function truncateToWidth(s: string, width: number, ellipsis = ""): string {
-  if (visibleWidth(s) <= width) return s
+  const line = sanitize(s).replaceAll("\n", "")
+  if (visibleWidth(line) <= width) return line
   const ellWidth = visibleWidth(ellipsis)
   const limit = Math.max(0, width - ellWidth)
   let out = ""
   let used = 0
   let styled = false
-  for (const t of tokenize(s)) {
+  for (const t of tokenize(line)) {
     if (t.ansi) {
       out += t.text
       styled = true
@@ -85,10 +134,6 @@ function wrapParagraph(tokens: Token[], width: number): Token[][] {
     if (t.ansi) {
       line.push(t)
       continue
-    }
-    if (t.text === "\t") {
-      t.text = " "
-      t.width = 1
     }
     const isSpace = t.text === " "
     if (used + t.width > width) {

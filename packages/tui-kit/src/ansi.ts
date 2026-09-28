@@ -41,10 +41,10 @@ export const queries = {
   primaryDeviceAttributes: "\x1b[c",
 }
 
-/** Matches CSI, OSC, DCS/APC/PM/SOS strings and two-byte escapes. */
+/** Matches CSI, OSC, DCS/APC/PM/SOS strings and other escapes (`ESC 7`, `ESC c`, `ESC ( B`, ...). */
 export const ANSI_PATTERN =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences are the point
-  /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g
+  /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]*[0-~]/g
 
 export function stripAnsi(s: string): string {
   return s.includes(ESC) ? s.replace(ANSI_PATTERN, "") : s

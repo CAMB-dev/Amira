@@ -1,7 +1,7 @@
 import { cursor, erase, RESET, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER } from "./component.ts"
 import type { Terminal } from "./terminal.ts"
-import { truncateToWidth, visibleWidth } from "./width.ts"
+import { sanitize, truncateToWidth, visibleWidth } from "./width.ts"
 
 export interface RendererOptions {
   /** Wrap frames in synchronized-output sequences (mode 2026). */
@@ -67,7 +67,7 @@ export class LiveRenderer {
 
   /** Prints lines permanently above the live region, then redraws the live region below them. */
   commit(lines: string[]): void {
-    this.draw(lines.flatMap((l) => l.split("\n")))
+    this.draw(lines.flatMap((l) => sanitize(l).split("\n")))
   }
 
   /** Leaves the cursor below the live region (or clears it) and shows it. */

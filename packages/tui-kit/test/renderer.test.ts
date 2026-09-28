@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
 import { cursor, syncOutput } from "../src/ansi.ts"
 import { type Component, CURSOR_MARKER } from "../src/component.ts"
+import { Text } from "../src/components/text.ts"
 import { LiveRenderer } from "../src/renderer.ts"
 import { FakeTerminal } from "../src/terminal.ts"
+import { truncateToWidth } from "../src/width.ts"
 import { VirtualScreen } from "./screen.ts"
 
 class Lines implements Component {
@@ -171,4 +173,26 @@ test("stop leaves the cursor on a fresh line below the live region", () => {
   r.stop()
   expect(screen.cursorVisible).toBe(true)
   expect([screen.x, screen.y]).toEqual([0, 2])
+})
+
+test("escape sequences in content cannot move the cursor or erase committed lines", () => {
+  const hostile = "out: \x1b[3A\x1b[2Kwrecked\x1b[J\r\x08!"
+  const { screen, root, r } = setup(["live"], 30, 8)
+  r.render()
+  r.commit(["committed 1", "committed 2", "committed 3"])
+  r.commit([hostile, `x\x1b[1G\x1b[2Ky`])
+  root.lines = [...new Text(hostile).render(30), truncateToWidth(hostile, 30)]
+  r.render()
+  expect(screen.text).toBe(
+    [
+      "committed 1",
+      "committed 2",
+      "committed 3",
+      "out: wrecked!",
+      "xy",
+      "out: wrecked",
+      "!",
+      "out: wrecked!",
+    ].join("\n"),
+  )
 })

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
-import { truncateToWidth, visibleWidth, wrapText } from "../src/width.ts"
+import { sanitize, tokenize, truncateToWidth, visibleWidth, wrapText } from "../src/width.ts"
 
 test("visibleWidth counts CJK and emoji as two cells and ignores escapes", () => {
   expect(visibleWidth("abc")).toBe(3)
@@ -48,4 +48,23 @@ test("truncateToWidth respects wide characters and styles", () => {
   const t = truncateToWidth("\x1b[31mabcdef\x1b[0m", 3)
   expect(stripAnsi(t)).toBe("abc")
   expect(t.endsWith("\x1b[0m")).toBe(true)
+})
+
+test("only SGR and OSC 8 escapes survive; other escapes and control characters are dropped", () => {
+  const link = "\x1b]8;;http://x\x07link\x1b]8;;\x07"
+  expect(sanitize(`\x1b[31ma\x1b[0m${link}`)).toBe(`\x1b[31ma\x1b[0m${link}`)
+  expect(sanitize("a\x1b[3A\x1b[2Kb\x1b[J\x1b7\x1bc\x1b]0;title\x07c")).toBe("abc")
+  expect(sanitize("a\rb\x08c\x07d\x00e\x9bf\x7f")).toBe("abcdef")
+  expect(sanitize("x\x1b")).toBe("x")
+  expect(tokenize("\x1b[2Jab").map((t) => t.text)).toEqual(["a", "b"])
+  expect(visibleWidth("a\x1b[5Cb")).toBe(2)
+})
+
+test("tabs expand to the next tab stop", () => {
+  expect(sanitize("a\tb")).toBe("a   b")
+  expect(sanitize("abcd\tb")).toBe("abcd    b")
+  expect(sanitize("a\nb\tc")).toBe("a\nb   c")
+  expect(visibleWidth("\t你")).toBe(6)
+  expect(wrapText("a\tb", 10)).toEqual(["a   b"])
+  expect(truncateToWidth("\t\tx", 6)).toBe("      ")
 })
