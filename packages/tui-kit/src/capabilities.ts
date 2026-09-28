@@ -1,4 +1,5 @@
 import { modes, queries } from "./ansi.ts"
+import { hasInputReader } from "./reader.ts"
 import type { Terminal } from "./terminal.ts"
 
 type Env = Record<string, string | undefined>
@@ -8,9 +9,14 @@ export interface TerminalEnv {
   vscode: boolean
 }
 
+/**
+ * Windows Terminal is recognized by WT_SESSION, which is also inherited by whatever runs inside
+ * it: VS Code, tmux and WSL each get their own terminal handling, so they do not count.
+ */
 export function detectEnv(env: Env = process.env): TerminalEnv {
   const vscode = env.TERM_PROGRAM === "vscode"
-  return { vscode, windowsTerminal: !!env.WT_SESSION && !vscode }
+  const nested = vscode || !!env.TMUX || !!env.WSL_DISTRO_NAME
+  return { vscode, windowsTerminal: !!env.WT_SESSION && !nested }
 }
 
 export interface Capabilities {
@@ -95,13 +101,17 @@ export interface SetupResult {
 /**
  * Probes the terminal and enables the best keyboard input mode it has, plus bracketed paste.
  * win32-input-mode is used only in Windows Terminal: VS Code also speaks it but drops every
- * modifier bit. Everything enabled here is undone by `terminal.restore()`.
+ * modifier bit. Switches the terminal to raw mode first, since the replies cannot be read
+ * otherwise. Everything enabled here, raw mode included, is undone by `terminal.restore()`.
+ * Must run before an `InputReader` is started, or keys typed while probing would arrive twice.
  */
 export async function setupTerminalInput(
   term: Terminal,
   env: Env = process.env,
   opts: { timeoutMs?: number } = {},
 ): Promise<SetupResult> {
+  if (hasInputReader(term)) throw new Error("setupTerminalInput must run before an InputReader is started")
+  term.setRawMode(true)
   const info = detectEnv(env)
   const win32InputMode = info.windowsTerminal
   const probe = await probeTerminal(term, { kittyKeyboard: !win32InputMode, timeoutMs: opts.timeoutMs })

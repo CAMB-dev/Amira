@@ -24,7 +24,6 @@ const REPLY =
   "above and scrolls into the scrollback like normal output."
 
 const terminal = new ProcessTerminal()
-terminal.setRawMode(true)
 terminal.start()
 const { capabilities, leftoverInput } = await setupTerminalInput(terminal)
 

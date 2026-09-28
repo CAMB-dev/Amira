@@ -11,6 +11,13 @@ export interface InputReaderOptions {
   pasteTimeoutMs?: number
 }
 
+const attached = new WeakSet<Terminal>()
+
+/** True while an `InputReader` is reading from `term`. */
+export function hasInputReader(term: Terminal): boolean {
+  return attached.has(term)
+}
+
 /**
  * Feeds terminal input through an `InputParser`. Resolves a lone ESC after a short timeout, drops
  * a sequence that was cut short, and ends a paste whose end marker never comes.
@@ -36,11 +43,14 @@ export class InputReader {
 
   start(): void {
     this.stopped = false
-    this.off ??= this.terminal.onInput((data) => this.feed(data))
+    if (this.off) return
+    attached.add(this.terminal)
+    this.off = this.terminal.onInput((data) => this.feed(data))
   }
 
   stop(): void {
     this.stopped = true
+    if (this.off) attached.delete(this.terminal)
     this.off?.()
     this.off = undefined
     clearTimeout(this.timer)

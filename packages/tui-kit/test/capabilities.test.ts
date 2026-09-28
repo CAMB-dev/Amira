@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { modes, queries } from "../src/ansi.ts"
 import { detectEnv, parseProbeReplies, probeTerminal, setupTerminalInput } from "../src/capabilities.ts"
+import { InputReader } from "../src/reader.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 
 test("detectEnv: Windows Terminal unless running inside VS Code", () => {
@@ -83,4 +84,22 @@ test("a reply cut short at the timeout gets more time and never leaks into the i
   const cut = probeTerminal(term, { timeoutMs: 10, lateReplyMs: 10 })
   term.send("b\x1b[?2026;")
   expect(await cut).toMatchObject({ complete: false, rest: "b" })
+})
+
+test("WT_SESSION inherited by tmux or WSL is not Windows Terminal", () => {
+  expect(detectEnv({ WT_SESSION: "x", TMUX: "/tmp/tmux-1000/default,1,0" }).windowsTerminal).toBe(false)
+  expect(detectEnv({ WT_SESSION: "x", WSL_DISTRO_NAME: "Ubuntu" }).windowsTerminal).toBe(false)
+})
+
+test("setup enables raw mode and refuses to run under an active InputReader", async () => {
+  const term = new FakeTerminal()
+  await setupTerminalInput(term, {}, { timeoutMs: 5 })
+  expect(term.isRaw).toBe(true)
+  term.restore()
+  expect(term.isRaw).toBe(false)
+  const reader = new InputReader(term, () => {})
+  reader.start()
+  await expect(setupTerminalInput(term, {}, { timeoutMs: 5 })).rejects.toThrow("InputReader")
+  reader.stop()
+  await setupTerminalInput(term, {}, { timeoutMs: 5 })
 })
