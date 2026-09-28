@@ -222,7 +222,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         break
       case "extension.error":
-        renderer.commit([theme.warning(`[extension ${e.data.source}] ${e.data.error}`), ""])
+        // Settings warnings travel as extension.error from "settings" but are not extension failures.
+        renderer.commit([
+          theme.warning(
+            e.data.source === "settings"
+              ? `warning: ${e.data.error}`
+              : `[extension ${e.data.source}] ${e.data.error}`,
+          ),
+          "",
+        ])
         break
     }
     renderer.requestRender()
