@@ -23,8 +23,16 @@ export interface ToolDefinition<P = any> {
   parameters: JSONSchema
   /** Default "active": the model sees it on every call. */
   exposure?: ToolExposure
-  /** Read-only tools declare "parallel" and may run concurrently. Default "serial". */
+  /**
+   * "parallel" calls may run at the same time as other calls; "serial" (the default) waits for
+   * earlier calls and runs alone.
+   */
   concurrency?: "parallel" | "serial"
+  /**
+   * For parallel tools: calls returning the same key run one after another, in call order
+   * (e.g. edits to the same file). Undefined means no ordering constraint.
+   */
+  concurrencyKey?(params: P, ctx: { cwd: string }): string | undefined
   /** Must be true to replace a tool of the same name registered earlier. */
   override?: boolean
   execute(params: P, ctx: ToolContext): Promise<ToolResult>

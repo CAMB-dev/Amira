@@ -276,3 +276,69 @@ test("extensions can run commands through the host", async () => {
   }, "runner")
   expect(output).toBe("from ext")
 }, 60_000)
+
+test("parallel calls sharing a key run in order while other keys run alongside", async () => {
+  const { agent } = setup([
+    {
+      toolCalls: [
+        { name: "w", args: { path: "a", n: 1 }, id: "1" },
+        { name: "w", args: { path: "b", n: 2 }, id: "2" },
+        { name: "w", args: { path: "a", n: 3 }, id: "3" },
+      ],
+    },
+    { text: "" },
+  ])
+  const log: string[] = []
+  agent.tools.register(
+    defineTool<{ path: string; n: number }>({
+      name: "w",
+      description: "",
+      parameters: {},
+      concurrency: "parallel",
+      concurrencyKey: (p) => p.path,
+      execute: async (p) => {
+        log.push(`start ${p.n}`)
+        await Bun.sleep(p.n === 1 ? 40 : 10)
+        log.push(`end ${p.n}`)
+        return textResult(String(p.n))
+      },
+    }),
+    "t",
+  )
+  await agent.prompt("go")
+  // 1 and 2 overlap; 3 (same file as 1) waits for 1.
+  expect(log.indexOf("start 2")).toBeLessThan(log.indexOf("end 1"))
+  expect(log.indexOf("start 3")).toBeGreaterThan(log.indexOf("end 1"))
+  const ids = agent.messages.filter((m) => m.role === "toolResult").map((m) => m.toolCallId)
+  expect(ids).toEqual(["1", "2", "3"])
+})
+
+test("at most maxParallelTools calls run at once", async () => {
+  const mock = createMockDialect([
+    { toolCalls: Array.from({ length: 6 }, (_, i) => ({ name: "p", args: {}, id: `c${i}` })) },
+    { text: "" },
+  ])
+  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
+  const agent = new Agent({ ai, model: ai.model("mock/t"), cwd: ".", systemPrompt: "", maxParallelTools: 2 })
+  let running = 0
+  let peak = 0
+  agent.tools.register(
+    defineTool({
+      name: "p",
+      description: "",
+      parameters: {},
+      concurrency: "parallel",
+      execute: async () => {
+        running++
+        peak = Math.max(peak, running)
+        await Bun.sleep(15)
+        running--
+        return textResult("ok")
+      },
+    }),
+    "t",
+  )
+  await agent.prompt("go")
+  expect(peak).toBe(2)
+  expect(agent.messages.filter((m) => m.role === "toolResult")).toHaveLength(6)
+})
