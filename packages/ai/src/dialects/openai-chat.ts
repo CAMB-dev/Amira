@@ -13,6 +13,10 @@ export const openaiChat: Dialect = {
     const acc = new ChatAccumulator({ provider: req.model.provider, model: req.model.id })
     const aborted = () => acc.fail({ message: "aborted", code: "aborted" }, false)
 
+    if (ctx.signal.aborted) {
+      yield aborted()
+      return
+    }
     let res: Response
     try {
       res = await ctx.fetch(`${ctx.endpoint.baseUrl.replace(/\/$/, "")}/chat/completions`, {
