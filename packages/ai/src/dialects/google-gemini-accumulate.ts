@@ -13,7 +13,19 @@ import { GEMINI_DIALECT, SYNTHETIC_ID } from "./google-gemini-contents.ts"
 import type { ErrorEvent } from "./http-stream.ts"
 
 /** Finish reasons that mean the output was withheld. */
-const FILTERED = new Set(["SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"])
+const FILTERED = new Set([
+  "SAFETY",
+  "RECITATION",
+  "BLOCKLIST",
+  "PROHIBITED_CONTENT",
+  "SPII",
+  "IMAGE_SAFETY",
+  "IMAGE_PROHIBITED_CONTENT",
+  "IMAGE_RECITATION",
+])
+
+/** Finish reasons where the same request may well succeed on a retry. */
+const RETRYABLE = new Set(["MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL"])
 
 /**
  * Builds the assistant message from GenerateContentResponse chunks. Each chunk carries
@@ -58,21 +70,19 @@ export class GeminiAccumulator {
     }
     const finish = this.#finish
     if (!finish) return this.fail({ message: "the stream ended without a finish reason" }, true)
-    if (FILTERED.has(finish)) {
-      return this.fail(
-        { message: `the provider filtered the output (finishReason: ${finish})`, code: "content_filter" },
-        false,
-      )
+    if (finish === "MAX_TOKENS") {
+      this.message.stopReason = "maxTokens"
+      return { type: "done", message: this.message }
     }
-    if (finish === "MALFORMED_FUNCTION_CALL" || finish === "UNEXPECTED_TOOL_CALL") {
-      return this.fail(
-        { message: `the model produced an invalid tool call (${finish})`, code: finish.toLowerCase() },
-        true,
-      )
+    if (finish === "STOP") {
+      this.message.stopReason = this.#calls ? "toolUse" : "end"
+      return { type: "done", message: this.message }
     }
-    if (finish === "MAX_TOKENS") this.message.stopReason = "maxTokens"
-    else this.message.stopReason = this.#calls ? "toolUse" : "end"
-    return { type: "done", message: this.message }
+    // Anything else, such as SAFETY or MISSING_THOUGHT_SIGNATURE, did not end cleanly.
+    const message = FILTERED.has(finish)
+      ? `the provider filtered the output (finishReason: ${finish})`
+      : `generation stopped early (finishReason: ${finish})`
+    return this.fail({ message, code: finish.toLowerCase() }, RETRYABLE.has(finish))
   }
 
   *#part(part: any): Generator<StreamEvent> {

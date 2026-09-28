@@ -144,15 +144,25 @@ test("MAX_TOKENS reports maxTokens", async () => {
   expect(done(evs).message.stopReason).toBe("maxTokens")
 })
 
-test("SAFETY and other filtered finishes are errors with the partial message", async () => {
-  for (const reason of ["SAFETY", "RECITATION", "PROHIBITED_CONTENT"]) {
+test("finishes other than STOP and MAX_TOKENS are non-retryable errors with the partial message", async () => {
+  for (const reason of [
+    "SAFETY",
+    "RECITATION",
+    "PROHIBITED_CONTENT",
+    "MISSING_THOUGHT_SIGNATURE",
+    "OTHER",
+    "LANGUAGE",
+    "FINISH_REASON_UNSPECIFIED",
+    "SOMETHING_NEW",
+  ]) {
     const { evs } = await go([chunk([{ text: "par" }]), chunk([], reason)])
     expect(terminal(evs)).toHaveLength(1)
     const e = lastError(evs)
     expect(e.type).toBe("error")
-    expect(e.error.code).toBe("content_filter")
+    expect(e.error.code).toBe(reason.toLowerCase())
     expect(e.error.message).toContain(reason)
     expect(e.retryable).toBe(false)
+    expect(e.message.stopReason).toBe("error")
     expect(e.message.content).toEqual([{ type: "text", text: "par" }])
   }
 })
@@ -168,10 +178,12 @@ test("a blocked prompt is an error", async () => {
   expect(e.message.usage).toEqual({ input: 5, output: 0, cacheRead: 0, cacheWrite: 0 })
 })
 
-test("a malformed function call is a retryable error", async () => {
-  const e = lastError((await go([chunk([], "MALFORMED_FUNCTION_CALL")])).evs)
-  expect(e.error.code).toBe("malformed_function_call")
-  expect(e.retryable).toBe(true)
+test("a malformed or unexpected tool call is a retryable error", async () => {
+  for (const reason of ["MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL"]) {
+    const e = lastError((await go([chunk([], reason)])).evs)
+    expect(e.error.code).toBe(reason.toLowerCase())
+    expect(e.retryable).toBe(true)
+  }
 })
 
 test("an error inside the stream keeps status and code and is retryable when overloaded", async () => {
