@@ -40,6 +40,7 @@ export interface ExtensionHostOptions {
 export class ExtensionHost {
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
+  #renderPending = false
   readonly status: StatusRegistry
 
   constructor(opts: ExtensionHostOptions) {
@@ -58,6 +59,7 @@ export class ExtensionHost {
       await ext(this.#apiFor(source, disposers))
     } catch (err) {
       for (const d of disposers.reverse()) d()
+      this.#requestRender()
       return this.#fail(source, err instanceof Error ? err.message : String(err))
     }
     this.#disposers.set(source, disposers)
@@ -84,11 +86,18 @@ export class ExtensionHost {
     if (!disposers) return false
     for (const d of disposers.reverse()) d()
     this.#disposers.delete(source)
+    this.#requestRender()
     return true
   }
 
+  /** Coalesces render requests into one ui.render per macrotask. */
   #requestRender() {
-    this.#opts.bus.emit("ui.render", {}, this.#meta())
+    if (this.#renderPending) return
+    this.#renderPending = true
+    setTimeout(() => {
+      this.#renderPending = false
+      this.#opts.bus.emit("ui.render", {}, this.#meta())
+    }, 0)
   }
 
   #fail(source: string, error: string): false {
@@ -120,12 +129,12 @@ export class ExtensionHost {
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
       registerStatusItem: (item) => {
-        const off = track(this.status.register(item))
+        const off = this.status.register(item)
         this.#requestRender()
-        return () => {
+        return track(() => {
           off()
           this.#requestRender()
-        }
+        })
       },
       requestRender: () => this.#requestRender(),
     }

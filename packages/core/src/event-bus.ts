@@ -1,6 +1,8 @@
 import type { AnyEvent, EventEnvelope, EventMap } from "@amira/api"
 
-const isStreaming = (type: string) => type === "message.delta" || type === "tool.execute.update"
+/** Events a lagging subscriber can lose without harm; later events supersede them. */
+const isStreaming = (type: string) =>
+  type === "message.delta" || type === "tool.execute.update" || type === "ui.render"
 
 export type Subscriber = (event: AnyEvent) => void | Promise<void>
 
