@@ -99,6 +99,7 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
       listSubagents(agent, tree)
         .find((e) => e.info.id === id)
         ?.messages(),
+    stopSubagent: (id: string) => tree.stop(id, "stopped by the user"),
   } as Partial<SessionControl> as SessionControl
   const commands = new CommandHost({ registry: host.commands, bus, ui: host.ui, control, agent })
   const cols = o.cols ?? 60
@@ -210,6 +211,44 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   expect(s.view()).toContain("Enter send")
   expect(s.view()).toContain("│ › Message Amira")
   expect(s.screen.altSwitches).toEqual([true, false])
+  s.terminal.send("\x03")
+  await s.exited
+})
+
+test("x in the viewer stops the running sub-agent after y confirms; another key keeps it", async () => {
+  const s = await setup(
+    [
+      { toolCalls: [{ name: "delegate", args: { roles: ["explorer"] } }] },
+      { text: "Now waiting.", toolCalls: [{ name: "wait", args: {} }] },
+      { text: "all done" },
+    ],
+    { cols: 90 },
+  )
+  s.terminal.send("go\r")
+  await waitFor(s.isWaiting, "the child to block")
+  s.terminal.send("/agents view\r")
+  await waitFor(() => s.view().includes("● wait"), "the viewer")
+  expect(s.screen.lines.at(-1)).toContain("←→ switch · x stop · Esc back")
+  s.terminal.send("x")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop explorer s_"), "the question")
+  expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")
+  s.terminal.send("n")
+  await waitFor(() => s.screen.lines.at(-1)!.includes("x stop"), "kept")
+  expect(s.control.subagents()[0]?.status).toBe("running")
+  s.terminal.send("x")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop explorer"), "asked again")
+  s.terminal.send("y")
+  s.release()
+  await waitFor(() => s.view().includes("✗ stopped by the user"), "stopped")
+  expect(s.control.subagents()[0]?.status).toBe("aborted")
+  expect(s.screen.lines.at(-1)).not.toContain("x stop")
+  // x on one that ended does nothing.
+  s.terminal.send("x")
+  await Bun.sleep(40)
+  expect(s.screen.lines.at(-1)).not.toContain("Stop explorer")
+  s.terminal.send(ESC)
+  await waitFor(() => !s.screen.inAltScreen, "closed")
+  await s.idle()
   s.terminal.send("\x03")
   await s.exited
 })

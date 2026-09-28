@@ -147,6 +147,32 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const queued: string[] = []
   /** Messages steering the running turn that have not reached the model yet. */
   const steering: string[] = []
+  /** Lines of notices (background results) waiting to reach the model. */
+  const pendingNotices: string[] = []
+  /** When held notices are sent again after a failed turn (notice.retry); redrawn each second. */
+  let noticeRetryAt: number | undefined
+  let retryTimer: ReturnType<typeof setInterval> | undefined
+  const setRetry = (at: number | undefined) => {
+    noticeRetryAt = at
+    if (at !== undefined && !retryTimer) retryTimer = setInterval(() => renderer.requestRender(), 1000)
+    else if (at === undefined && retryTimer) {
+      clearInterval(retryTimer)
+      retryTimer = undefined
+    }
+  }
+  /** Pending notice lines, with the time to the next resend when one is due. */
+  const pendingNoticeLines = (t: Theme): string[] => {
+    const retry =
+      noticeRetryAt === undefined
+        ? ""
+        : ` · retry in ${Math.max(0, Math.ceil((noticeRetryAt - Date.now()) / 1000))}s`
+    const lines = pendingNotices.length
+      ? pendingNotices
+      : noticeRetryAt !== undefined
+        ? [`${t.accent("◆")}${t.muted(" sub-agents' results")}`]
+        : []
+    return lines.map((l) => `${l}${t.muted(` · pending${retry}`)}`)
+  }
   /** Open extension dialogs; the first one has the keyboard. */
   const dialogs: Dialog[] = []
   let working = false
@@ -241,6 +267,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }),
     new View((width, ctx) => subagentLines([...subagents.values()], Date.now(), width, ctx.theme)),
     new View((width, ctx) => [
+      ...pendingNoticeLines(ctx.theme).map((l) => truncateToWidth(l, width, "…")),
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
       ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
     ]),
@@ -469,6 +496,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
+        // A turn woken by notices carries every one that was waiting.
+        if (e.data.prompt.display?.origin) pendingNotices.length = 0
+        // A turn takes held notices along, so no resend is due any more.
+        setRetry(undefined)
         commitBlock("user", userLines(theme, e.data.prompt, terminal.columns))
         working = true
         thinking = false
@@ -552,6 +583,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           queueMicrotask(() => send(next))
         }
         break
+      case "notice.retry":
+        setRetry(e.ts + e.data.delayMs)
+        break
       case "compact.start":
         compacting = true
         compactStartedAt = Date.now()
@@ -586,6 +620,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "turn.steer": {
         const text = messageText(e.data.message)
+        // A notice (background sub-agents' results) is not the user's steering. It waits in the
+        // live area until it joins the conversation (all waiting ones join together), also
+        // through an interrupt, after which it goes with the next message.
+        if (e.data.message.display?.origin) {
+          if (e.data.state === "queued") pendingNotices.push(...userLines(theme, e.data.message))
+          else pendingNotices.length = 0
+          if (e.data.state === "injected") commit([...userLines(theme, e.data.message), ""])
+          break
+        }
         if (e.data.state === "queued") {
           steering.push(text)
           break
@@ -698,6 +741,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     toolCalls.flush()
     heldEnds.clear()
     subagentCalls.clear()
+    pendingNotices.length = 0
+    setRetry(undefined)
     if (next.messages.length) showHistory(next)
     renderer.requestRender()
   }
@@ -744,6 +789,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     spinner.stop()
     subagents.clear()
     tickSubagents()
+    setRetry(undefined)
     reader.stop()
     // What was committed but not drawn yet still belongs in the scrollback.
     if (pendingCommits.length) renderer.render()

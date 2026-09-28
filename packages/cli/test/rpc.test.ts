@@ -3,7 +3,7 @@ import { spawn } from "node:child_process"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockReply, type MockStep } from "@amira/ai"
+import { createAi, createMockDialect, type MockReply, type MockStep, userMessage } from "@amira/ai"
 import type { Extension } from "@amira/api"
 import { type PrintIO, runPrint } from "../src/print.ts"
 import { runRpc } from "../src/rpc.ts"
@@ -494,7 +494,7 @@ test("the rpc schema describes a user message's display and lets prompt and stee
   expect(defs.UserMessage.properties.display).toEqual({ $ref: "#/$defs/MessageDisplay" })
   expect(defs.UserMessage.required).not.toContain("display")
   expect(defs.MessageDisplay.required).toEqual(["text"])
-  expect(Object.keys(defs.MessageDisplay.properties)).toEqual(["text", "note"])
+  expect(Object.keys(defs.MessageDisplay.properties)).toEqual(["text", "note", "origin"])
   expect(COMMAND_PARAMS.prompt.params).toHaveProperty("display?")
   expect(COMMAND_PARAMS.steer.params).toHaveProperty("display?")
 })
@@ -545,6 +545,46 @@ test("ui.respond needs a value; model.set waits for the turn", async () => {
     model: "mock/other",
   })
   expect(await rpc.end()).toBe(0)
+})
+
+test("a background result starts an ordinary turn over rpc; closing stdin waits for it", async () => {
+  const later: Extension = (api) =>
+    void api.registerTool({
+      name: "later",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        const notice = ctx.session!.expectNotice!()
+        setTimeout(
+          () => notice.deliver(userMessage("late result", { text: "◆ bg finished", origin: "subagent" })),
+          60,
+        )
+        return { content: [{ type: "text", text: "started" }] }
+      },
+    })
+  const s = await session(
+    [{ toolCalls: [{ name: "later", args: {} }] }, { text: "started it" }, { text: "reacted" }],
+    [later],
+  )
+  const input = channel()
+  const out: Line[] = []
+  const done = runRpc(
+    { agent: s.agent, ai: s.ai, ui: s.host.ui },
+    { io: { lines: input.lines, write: (line) => void out.push(JSON.parse(line)) } },
+  )
+  input.push({ id: 1, cmd: "prompt", text: "go" })
+  input.end()
+  expect(await done).toBe(0)
+  const starts = out.filter((l) => l.type === "turn.start")
+  const ends = out.filter((l) => l.type === "turn.end")
+  expect(starts.length).toBe(2)
+  expect(ends.map((l) => l.data.reason)).toEqual(["done", "done"])
+  expect(starts[1]?.data.prompt.display).toEqual({ text: "◆ bg finished", origin: "subagent" })
+  expect(ends[1]?.turnId).toBe(starts[1]?.turnId)
+  expect(s.agent.messages.at(-1)).toMatchObject({
+    role: "assistant",
+    content: [{ type: "text", text: "reacted" }],
+  })
 })
 
 test("closing stdin waits for the running turn and cancels dialogs nobody can answer", async () => {

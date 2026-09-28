@@ -166,17 +166,43 @@ function openView(ctx: CommandContext, s: SubagentInfo) {
   ctx.openView({ kind: "subagent", sessionId: s.id })
 }
 
+const live = (s: SubagentInfo) => s.status === "running" || s.status === "queued"
+
+/** Stops one sub-agent, or every live one with "all"; says what it did. */
+function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
+  if (!ref) throw new Error("say which: /agents stop <n|id>, or /agents stop all")
+  if (ref === "all") {
+    const running = list.filter(live)
+    if (!running.length) return ctx.print("No sub-agent is running.")
+    const stopped = running.filter((s) => ctx.session.stopSubagent(s.id))
+    ctx.print(
+      stopped.length
+        ? `Stopped ${stopped.length} sub-agent${stopped.length === 1 ? "" : "s"}: ${stopped.map((s) => `${s.role} ${s.id}`).join(", ")}.`
+        : "No sub-agent is running.",
+    )
+    return
+  }
+  const target = findSubagent(list, ref)
+  if (!target) throw new Error(`no sub-agent "${ref}"; /agents lists them`)
+  if (!live(target) || !ctx.session.stopSubagent(target.id)) {
+    ctx.print(`${target.role} ${target.id} has already ended (${target.status}).`)
+    return
+  }
+  ctx.print(`Stopped ${target.role} ${target.id}.`)
+}
+
 /**
  * /agents: this session's sub-agents. Without arguments a picker: choosing one prints its
  * transcript, and the first entry opens the live view where the frontend has one.
- * `/agents <n|id>` prints one; `/agents view [<n|id>]` opens the live view on it.
+ * `/agents <n|id>` prints one; `/agents view [<n|id>]` opens the live view on it;
+ * `/agents stop <n|id|all>` stops one or every running one.
  */
 export function agentsCommand(): CommandDefinition {
   return {
     name: "agents",
     description: "Show the sub-agents of this session and what they did",
     args: {
-      hint: "[<n>|<id>|view [<n>|<id>]]",
+      hint: "[<n>|<id>|view [<n>|<id>]|stop <n>|<id>|all]",
       complete(prefix, ctx) {
         const list = ctx.session.subagents()
         const now = Date.now()
@@ -189,12 +215,23 @@ export function agentsCommand(): CommandDefinition {
           if (!view[1]) return []
           return list.map((s, i) => ({ value: `view ${ref(s, i, view[1]!)}`, description: label(s, i, now) }))
         }
+        const stopping = /^stop\s+(.*)$/.exec(prefix)
+        if (stopping) {
+          const typed = stopping[1]!
+          const running = list.flatMap((s, i) =>
+            live(s) ? [{ value: `stop ${ref(s, i, typed)}`, description: label(s, i, now) }] : [],
+          )
+          return running.length
+            ? [...running, { value: "stop all", description: "Stop every running one" }]
+            : []
+        }
         const out: CommandCandidate[] = list.map((s, i) => ({
           value: ref(s, i, prefix),
           description: label(s, i, now),
         }))
         if (/^\d+$/.test(prefix)) return out
         if (list.length) out.push({ value: "view", description: "Open the live view" })
+        if (list.some(live)) out.push({ value: "stop", description: "Stop a running sub-agent" })
         return out
       },
     },
@@ -204,6 +241,8 @@ export function agentsCommand(): CommandDefinition {
         ctx.print("No sub-agents in this session yet.")
         return
       }
+      const stopping = /^stop(?:\s+(.*))?$/.exec(args)
+      if (stopping) return stop(ctx, list, stopping[1]?.trim() ?? "")
       const view = /^view(?:\s+(.*))?$/.exec(args)
       if (view) {
         const target = view[1] ? findSubagent(list, view[1]) : defaultView(list)

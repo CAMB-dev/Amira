@@ -20,6 +20,8 @@ export interface SubagentSource {
   subagents(): SubagentInfo[]
   /** A snapshot of one's conversation. */
   subagentMessages(id: string): readonly Message[] | undefined
+  /** Stops a running one; the viewer offers x (with a confirmation) when given. */
+  stopSubagent?(id: string): boolean
 }
 
 export interface SubagentViewerOptions {
@@ -155,7 +157,7 @@ interface Streaming {
  * The full-screen view of sub-agents (M5): one sub-agent's transcript at a time, updated
  * live as its events arrive, scrollable and following the tail by default, with a header
  * (role, id, status, time, tokens) and ←/→ (or Tab) to switch between sub-agents. Esc, q or
- * Ctrl+C asks to close it. Dialogs of the main session waiting for an answer show as a
+ * Ctrl+C asks to close it; x stops the one shown while it runs, after y confirms. Dialogs of the main session waiting for an answer show as a
  * banner under the header, since only the main UI can answer them.
  *
  * It only renders and routes keys; the frontend opens it on a FullScreenRenderer and feeds
@@ -175,6 +177,8 @@ export class SubagentViewer implements Component {
   #cache: { key: string; lines: string[] } | undefined
   /** The sub-agent shown and its state, as of the last render. */
   #shown: { info: SubagentInfo | undefined; list: SubagentInfo[] } = { info: undefined, list: [] }
+  /** The sub-agent x asked to stop, until the next key answers. */
+  #confirming: string | undefined
 
   constructor(sessionId: string, opts: SubagentViewerOptions) {
     this.#current = sessionId
@@ -228,8 +232,19 @@ export class SubagentViewer implements Component {
     return e.parentSessionId !== undefined
   }
 
-  /** Handles a key; Esc, q and Ctrl+C call `onClose`. */
+  /** Handles a key; Esc, q and Ctrl+C call `onClose`; x asks to stop the one shown, y confirms. */
   handleInput(e: InputEvent): boolean {
+    const confirming = this.#confirming
+    if (confirming !== undefined) {
+      // Any other key keeps it running.
+      this.#confirming = undefined
+      if (matchesKey(e, "y")) this.#source.stopSubagent?.(confirming)
+      return true
+    }
+    if (matchesKey(e, "x") && this.#canStop()) {
+      this.#confirming = this.#current
+      return true
+    }
     if (matchesKey(e, "escape") || matchesKey(e, "q") || matchesKey(e, "c", { ctrl: true })) {
       this.#onClose()
       return true
@@ -298,12 +313,28 @@ export class SubagentViewer implements Component {
   }
 
   #footer(theme: Theme, view: ScrollView, width: number): string {
+    const info = this.#shown.info
+    if (this.#confirming !== undefined && info?.id === this.#confirming) {
+      const ask = `Stop ${info.role} ${info.id}? y stops it · any other key keeps it running`
+      return theme.warning(truncateToWidth(ask, width, "…"))
+    }
     const p = view.position
     const where = p.following
       ? "following"
       : `${Math.min(p.total, p.top + 1)}–${Math.min(p.total, p.top + p.height)} of ${p.total}`
-    const keys = "↑↓ PgUp PgDn Home End scroll · ←→ switch · Esc back"
+    const stop = this.#canStop() ? " · x stop" : ""
+    const keys = `↑↓ PgUp PgDn Home End scroll · ←→ switch${stop} · Esc back`
     return theme.muted(truncateToWidth(`${where} · ${keys}`, width, "…"))
+  }
+
+  /** The one shown is running or queued and can be stopped from here. */
+  #canStop(): boolean {
+    const s = this.#shown.info
+    return (
+      !!this.#source.stopSubagent &&
+      s?.id === this.#current &&
+      (s.status === "running" || s.status === "queued")
+    )
   }
 
   #view(id: string): ScrollView {

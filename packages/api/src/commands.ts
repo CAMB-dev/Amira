@@ -185,6 +185,11 @@ export interface SessionControl {
   subagents(): SubagentInfo[]
   /** A sub-agent's conversation so far (a snapshot while it runs); undefined for an unknown id. */
   subagentMessages(id: string): readonly Message[] | undefined
+  /**
+   * Stops a queued or running sub-agent of this session (its own sub-agents end with it); its
+   * result says it was stopped by the user. False when it is unknown or already ended.
+   */
+  stopSubagent(id: string): boolean
   /** "provider/model" refs to offer, from providers that have a key. */
   models(): string[]
   /** Switches the model for later turns; throws for an unknown one. */

@@ -816,6 +816,110 @@ test("a steering message an interrupt drops goes back into the editor", async ()
   await exited
 })
 
+const subagentNotice = (text: string) =>
+  userMessage(`report: ${text}`, { text: `◆ explorer finished · 41s · 12.3k tok`, origin: "subagent" })
+
+test("a background result wakes the idle session as a notice line; a draft in the editor stays", async () => {
+  const { terminal, live, all, agent, shows, idle, exited } = await setup([
+    (req) => ({ text: `reacting to ${lastUserText(req)}` }),
+  ])
+  terminal.send("half-typed")
+  await waitFor(() => live().includes("half-typed"), "the draft")
+  agent.expectNotice().deliver(subagentNotice("found it"))
+  await shows("reacting to report: found it")
+  await idle()
+  const text = all()
+  expect(text).toContain("◆ explorer finished · 41s · 12.3k tok")
+  expect(text).not.toContain("› ◆")
+  expect(text).not.toContain("› report")
+  expect(live()).toContain("half-typed")
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a background result during a turn shows as a notice where it joins, not as steering", async () => {
+  const { terminal, live, all, agent, shows, idle, exited } = await setup([
+    { text: "looking", delayMs: 60, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+    (req) => ({ text: `then saw ${lastUserText(req)}` }),
+  ])
+  terminal.send("go\r")
+  await waitFor(() => live().includes(`Enter steer · ${QUEUE_HINT} queue`), "working")
+  agent.expectNotice().deliver(subagentNotice("B"))
+  await Bun.sleep(20)
+  expect(live()).not.toContain("steering ›")
+  await shows("then saw report: B")
+  await idle()
+  const text = all()
+  expect(text.indexOf("● read")).toBeLessThan(text.indexOf("◆ explorer finished"))
+  expect(text.indexOf("◆ explorer finished")).toBeLessThan(text.indexOf("then saw report: B"))
+  terminal.send("\x03")
+  await exited
+})
+
+test("a background result an interrupt kept waiting shows as pending and joins the next message", async () => {
+  const { terminal, live, all, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    (req) => ({ text: `now saw ${req.messages.length} messages` }),
+  ])
+  terminal.send("go\r")
+  await shows("01234567")
+  agent.expectNotice().deliver(subagentNotice("C"))
+  await waitFor(() => live().includes("◆ explorer finished · 41s · 12.3k tok · pending"), "pending line")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  await idle()
+  expect(live()).toContain("· pending")
+  terminal.send("next\r")
+  await shows("now saw")
+  await idle()
+  expect(live()).not.toContain("· pending")
+  const text = all()
+  expect(text.indexOf("› next")).toBeLessThan(text.indexOf("◆ explorer finished"))
+  expect(agent.waitingNotices).toBe(0)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a failed woken turn shows the countdown to the resend; a message sent first clears it", async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup([
+    { error: { message: "provider down" } },
+    { text: "answered you" },
+  ])
+  agent.expectNotice().deliver(subagentNotice("R"))
+  await shows("provider down")
+  await idle()
+  await waitFor(() => /◆ sub-agents' results · pending · retry in (10|9)s/.test(live()), "the countdown")
+  expect(agent.noticeRetry?.attempt).toBe(1)
+  terminal.send("hello\r")
+  await shows("answered you")
+  await idle()
+  expect(live()).not.toContain("retry in")
+  expect(agent.noticeRetry).toBeUndefined()
+  terminal.send("\x03")
+  await exited
+})
+
+test("a held background result woken by a later one leaves no pending line behind", async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    { text: "both seen" },
+  ])
+  terminal.send("go\r")
+  await shows("01234567")
+  agent.expectNotice().deliver(subagentNotice("first"))
+  await waitFor(() => live().includes("· pending"), "pending line")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  await idle()
+  agent.expectNotice().deliver(subagentNotice("second"))
+  await shows("both seen")
+  await idle()
+  expect(live()).not.toContain("· pending")
+  terminal.send("\x03")
+  await exited
+})
+
 test("extension dialogs are answered inline: confirm, select and input", async () => {
   const { host, terminal, live, all, shows, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "ask", args: {} }] },

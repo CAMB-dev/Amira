@@ -44,7 +44,9 @@ async function setup(reply: (req: ModelRequest) => MockReply | Promise<MockReply
   const events: AnyEvent[] = []
   bus.subscribe((e) => void events.push(e))
   const tools = new ToolRegistry()
-  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools, cwd: home })
+  // The commander waits for its sub-agents, so a finished prompt means finished sub-agents.
+  const settings = { subagents: { background: false } }
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools, cwd: home, settings })
   expect(
     await host.load(createAgentExtension({ git: async () => ({ output: "", ok: false }) }), "builtin:agent"),
   ).toBe(true)
@@ -74,6 +76,8 @@ async function setup(reply: (req: ModelRequest) => MockReply | Promise<MockReply
       listSubagents(root, tree)
         .find((e) => e.info.id === id)
         ?.messages(),
+    stopSubagent: (id: string) =>
+      listSubagents(root, tree).some((e) => e.info.id === id) && tree.stop(id, "stopped by the user"),
   } as Partial<SessionControl> as SessionControl
   const commands = new CommandHost({ registry: host.commands, bus, ui: host.ui, control, agent: root })
   const views: FrontendView[] = []
@@ -246,6 +250,48 @@ test("the argument completes to ids, numbers as themselves, and to view <ref> af
     `view ${explorer!.id}`,
   ])
   expect((await commands.complete("/agents view 1")).candidates.map((c) => c.value)).toEqual(["view 1"])
+})
+
+test("/agents stop stops one running sub-agent, or all of them, and completes to running ones", async () => {
+  const { root, run, commands, control, events, bus } = await setup((req) => {
+    if (who(req) === "commander") {
+      // Anything after the first message (the tool result, the stopped ones' reports) is answered.
+      return req.messages.length > 1
+        ? { text: "noted" }
+        : {
+            toolCalls: [
+              {
+                name: "agent",
+                args: {
+                  tasks: [{ prompt: "one" }, { prompt: "two" }, { prompt: "three" }],
+                  background: true,
+                },
+              },
+            ],
+          }
+    }
+    return { text: "slow", delayMs: 30_000 }
+  })
+  await root.prompt("go")
+  const [a, b, c] = control.subagents()
+  expect((await commands.complete("/agents stop ")).candidates.map((x) => x.value)).toEqual([
+    `stop ${a!.id}`,
+    `stop ${b!.id}`,
+    `stop ${c!.id}`,
+    "stop all",
+  ])
+  expect((await run("/agents stop 2")).text).toBe(`Stopped agent ${b!.id}.`)
+  const ended = async (n: number) => {
+    while (events.filter((e) => e.type === "subagent.end").length < n) await Bun.sleep(5)
+  }
+  await ended(1)
+  expect(control.subagents()[1]).toMatchObject({ status: "aborted", error: "stopped by the user" })
+  expect((await run("/agents stop 2")).text).toBe(`agent ${b!.id} has already ended (aborted).`)
+  expect((await run("/agents stop")).ok).toBe(false)
+  expect((await run("/agents stop all")).text).toBe(`Stopped 2 sub-agents: agent ${a!.id}, agent ${c!.id}.`)
+  await ended(3)
+  await bus.flush()
+  expect((await run("/agents stop all")).text).toBe("No sub-agent is running.")
 })
 
 test("findSubagent takes a number, an id or a unique start of one", () => {
