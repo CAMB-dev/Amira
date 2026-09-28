@@ -217,3 +217,8 @@ describe("runFormDialogs", () => {
     expect(await runFormDialogs(spec(), cancelled.ui)).toBeUndefined()
   })
 })
+
+test("patterns ignore the spaces a pasted line brings", () => {
+  const s: FormSpec = { title: "t", fields: [{ type: "text", id: "v", label: "v", pattern: "[A-Z_]+" }] }
+  expect(checkForm(s, { v: "DEEPSEEK_API_KEY " }).errors).toEqual({})
+})

@@ -104,14 +104,14 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     const known = (cid: string) => ids.filter((m) => catalog.find(cid, m)).length
     if (own && (known(own) > 0 || !ids.length)) return { catalogId: own, catalog }
     const where = host(d.baseUrl).toLowerCase()
-    let best: { id: string; n: number; near: boolean } | undefined
-    for (const cid of catalog.providers?.() ?? []) {
-      const n = known(cid)
-      if (!n) continue
-      const near = where.includes(cid.toLowerCase())
-      if (!best || n > best.n || (n === best.n && near && !best.near)) best = { id: cid, n, near }
-    }
-    return best ? { catalogId: best.id, catalog } : own ? { catalogId: own, catalog } : {}
+    const hits = (catalog.providers?.() ?? [])
+      .map((cid) => ({ id: cid, n: known(cid), near: where.includes(cid.toLowerCase()) }))
+      .filter((h) => h.n > 0)
+      .sort((x, y) => y.n - x.n || Number(y.near) - Number(x.near))
+    const [best, next] = hits
+    // Several vendors list the same ids (openai, azure, ...): only an unambiguous match counts.
+    const clear = best && (!next || next.n < best.n || (best.near && !next.near))
+    return clear ? { catalogId: best.id, catalog } : own ? { catalogId: own, catalog } : {}
   }
 
   const describe = (
@@ -150,6 +150,11 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     }
     if (url.protocol !== "http:" && url.protocol !== "https:")
       throw new Error("the base URL must be http or https")
+    const builtinEnv = BUILTIN_PROVIDERS.find((b) => b.id === d.id)?.apiKeyEnv
+    if (d.keySource === "none" && builtinEnv) {
+      // Settings merge over the built-in provider and cannot take its variable away.
+      throw new Error(`"${d.id}" is built in and always needs a key ($${builtinEnv} or auth.json)`)
+    }
     if (d.keySource === "env" && !ENV.test(d.apiKeyEnv ?? "")) {
       throw new Error("the environment variable name must be letters, digits and _")
     }
@@ -246,6 +251,15 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       }
       const [live] = providersFromSettings({ [d.id]: after ?? {} })
       if (live) ai.registerProvider(key ? { ...live, apiKey: key } : live)
+      // A provider switched away from auth.json must not keep using the stored key meanwhile.
+      if (d.keySource !== "auth") ai.setStoredKey?.(d.id, undefined)
+      if (live && d.keySource !== "env" && live.apiKeyEnv) {
+        lines.push(
+          `Note: "${d.id}" is built in with $${live.apiKeyEnv}; when that is set, it wins over auth.json at startup.`,
+        )
+      }
+      if (opts.currentProvider?.() === d.id)
+        lines.push("It is in use: run /model again to pick up the changes.")
       const infos = describe(
         d,
         d.models.map((id) => ({ id })),
@@ -269,7 +283,13 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       }
       const lines = before ? [`Removed provider "${id}" from ${settingsFile}.`] : []
       if (builtin && before) lines.push(`"${id}" is built in, so its built-in settings apply again.`)
-      if (removeKey && setAuthKey(keysFile, id, undefined)) lines.push(`Deleted its key from ${keysFile}.`)
+      if (removeKey && setAuthKey(keysFile, id, undefined)) {
+        lines.push(`Deleted its key from ${keysFile}.`)
+        ai.setStoredKey?.(id, undefined)
+        // A rewrite makes a new file, which gets the folder's ACL again.
+        const warning = await restrict(keysFile)
+        if (warning) lines.push(`Warning: ${warning}.`)
+      }
       if (before) ai.removeProvider?.(id)
       else {
         // Only the key went away: the provider stays, without it.
@@ -285,6 +305,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       setAuthKey(keysFile, id, apiKey.trim())
       const warning = await restrict(keysFile)
       ai.registerProvider({ ...p, apiKey: apiKey.trim() })
+      ai.setStoredKey?.(id, apiKey.trim())
       const lines = [`Stored a key for "${id}" in ${keysFile} (${keyHint(apiKey.trim())}); in use now.`]
       if (p.apiKeyEnv && env[p.apiKeyEnv]) {
         lines.push(`Note: $${p.apiKeyEnv} is set too; at startup it wins over auth.json.`)

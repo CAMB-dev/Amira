@@ -196,3 +196,20 @@ test("a new key replaces the stored one and is used at once", async () => {
   expect(seen.at(-1)?.auth).toBe("Bearer sk-new-key-99998888")
   await expect(admin.setKey("nope", "k")).rejects.toThrow("unknown provider")
 })
+
+test("a deleted or replaced stored key stops being used at once, and auth.json is made private again", async () => {
+  const { admin, ai, restricted, setCurrent } = setup()
+  setCurrent("ds-test")
+  await admin.setKey("anthropic", "sk-ant-stored-11112222")
+  expect(ai.hasKey("anthropic")).toBe(true)
+  restricted.length = 0
+  // Built in: nothing in settings, but its stored key can go.
+  await admin.remove("anthropic", { removeKey: true })
+  expect(restricted).toEqual([path.join(home, "auth.json")])
+  expect(ai.hasKey("anthropic")).toBe(false)
+  await expect(admin.save(draft({ id: "openai", keySource: "none" }))).rejects.toThrow("always needs a key")
+  // Switching a provider to an unset variable does not fall back to its old stored key.
+  await admin.save(draft())
+  await admin.save(draft({ keySource: "env", apiKeyEnv: "UNSET_VAR", apiKey: "" }))
+  expect(ai.hasKey("ds-test")).toBe(false)
+})

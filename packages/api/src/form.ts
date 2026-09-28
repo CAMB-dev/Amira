@@ -363,7 +363,7 @@ function builtinCheck(
       if ("maxLength" in f && f.maxLength !== undefined && s.length > f.maxLength) {
         return `is longer than ${f.maxLength} characters`
       }
-      if (f.type === "text" && f.pattern && s && !new RegExp(`^(?:${f.pattern})$`).test(s)) {
+      if (f.type === "text" && f.pattern && s.trim() && !new RegExp(`^(?:${f.pattern})$`).test(s.trim())) {
         return f.patternMessage ?? "has the wrong format"
       }
       return undefined

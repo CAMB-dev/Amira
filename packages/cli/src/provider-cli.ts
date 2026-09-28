@@ -181,6 +181,9 @@ export function lineDialogs(io: PrintIO, readLine: ReadLine): FormDialogs {
     async input(title, o) {
       const hint = o?.initial ? ` [${o.initial}]` : o?.placeholder ? ` (${o.placeholder})` : ""
       io.stderr(`\n${title}${hint}\n`)
+      // Line mode cannot mask; say so rather than echo a key unannounced.
+      if (o?.secret && process.stdin.isTTY)
+        io.stderr("(what you type is shown; use a terminal for the masked form)\n")
       const a = await readLine("> ")
       if (a === undefined) return undefined
       return a === "" && o?.initial ? o.initial : a
