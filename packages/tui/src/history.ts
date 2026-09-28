@@ -38,7 +38,7 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
   for (const m of messages) {
     if (m.role === "user") {
       const text = m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n")
-      out.push(...t.block("user", userLines(theme, text.trim())))
+      out.push(...t.block("user", userLines(theme, text.trim(), opts.width)))
     } else if (m.role === "assistant") {
       for (const b of m.content) {
         if (b.type === "text" && b.text.trim()) {

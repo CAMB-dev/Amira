@@ -152,6 +152,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let detail: ToolDetailLevel = "summary"
   /** A short note shown in place of the key hints, such as the new tool output level. */
   let hintNote: { text: string; until: number } | undefined
+  let hintTimer: ReturnType<typeof setTimeout> | undefined
   /** This session's sub-agents (and theirs) that are queued or running, in start order. */
   const subagents = new Map<string, SubagentLine>()
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
@@ -286,7 +287,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       result: c.end!.result,
       durationMs: c.end!.durationMs,
       ...(c.end!.rejected ? { rejected: c.end!.rejected } : {}),
-      interrupted,
+      interrupted: c.end!.interrupted ?? false,
     }
   }
 
@@ -355,7 +356,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
-        commitBlock("user", userLines(theme, messageText(e.data.prompt)))
+        commitBlock("user", userLines(theme, messageText(e.data.prompt), terminal.columns))
         working = true
         thinking = false
         interrupted = false
@@ -416,9 +417,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "tool.execute.end": {
         const { result, durationMs, rejected } = e.data
-        commitCalls(
-          toolCalls.end(e.data.toolCallId, { result, durationMs, ...(rejected ? { rejected } : {}) }),
-        )
+        // Whether the user had interrupted is fixed when the call ends, not when it is committed.
+        const end = { result, durationMs, interrupted, ...(rejected ? { rejected } : {}) }
+        commitCalls(toolCalls.end(e.data.toolCallId, end))
         break
       }
       case "turn.end":
@@ -472,7 +473,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        if (e.data.state === "injected") commitBlock("user", userLines(theme, text))
+        if (e.data.state === "injected") commitBlock("user", userLines(theme, text, terminal.columns))
         // Put a message the turn dropped back into the editor rather than losing it.
         else if (e.data.state === "dropped")
           editor.setText(editor.getText() ? `${editor.getText()}\n${text}` : text)
@@ -599,6 +600,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     off()
     offSwitch?.()
     offCommand?.()
+    clearTimeout(hintTimer)
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
     subagents.clear()
@@ -630,7 +632,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return quit()
     } else if (matchesKey(e, "o", { ctrl: true })) {
       hintNote = { text: setDetail(nextDetail(detail)), until: Date.now() + HINT_NOTE_MS }
-      setTimeout(() => renderer.requestRender(), HINT_NOTE_MS + 10)
+      clearTimeout(hintTimer)
+      hintTimer = setTimeout(() => renderer.requestRender(), HINT_NOTE_MS + 10)
     } else if (matchesKey(e, "escape")) {
       if (working) interrupt()
     } else {

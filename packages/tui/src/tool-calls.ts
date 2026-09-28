@@ -9,7 +9,13 @@ export interface TrackedCall {
   /** The latest tool.execute.update. */
   partial?: ToolResult
   /** Set once it finished. */
-  end?: { result: ToolResult; durationMs: number; rejected?: ToolRejection }
+  end?: {
+    result: ToolResult
+    durationMs: number
+    rejected?: ToolRejection
+    /** The user had interrupted the turn when it ended. */
+    interrupted?: boolean
+  }
 }
 
 /**

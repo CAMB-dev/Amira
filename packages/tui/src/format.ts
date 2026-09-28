@@ -1,4 +1,4 @@
-import { type Theme, truncateToWidth } from "@amira/tui-kit"
+import { type Theme, truncateToWidth, wrapText } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
 /** Arguments that say what a call is about; the first one present leads the summary. */
@@ -41,9 +41,12 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
 }
 
-/** Committed lines for the user's message. */
-export function userLines(theme: Theme, text: string): string[] {
-  return text.split("\n").map((l, i) => `${theme.accent(i === 0 ? glyphs.user : " ")} ${l}`)
+/** Committed lines for the user's message, wrapped to `width` under the prompt symbol. */
+export function userLines(theme: Theme, text: string, width = Number.POSITIVE_INFINITY): string[] {
+  const rows = Number.isFinite(width)
+    ? text.split("\n").flatMap((l) => (l ? wrapText(l, Math.max(10, width - 2)) : [""]))
+    : text.split("\n")
+  return rows.map((l, i) => `${theme.accent(i === 0 ? glyphs.user : " ")} ${l}`)
 }
 
 /** A sub-agent as the live area shows it while it is queued or running. */

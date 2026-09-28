@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { defaultTheme, stripAnsi } from "@amira/tui-kit"
-import { subagentEndLine, summarizeArgs } from "../src/format.ts"
+import { subagentEndLine, summarizeArgs, userLines } from "../src/format.ts"
 import { historyLines } from "../src/history.ts"
 
 const plain = (lines: string[]) => lines.map(stripAnsi)
@@ -16,6 +16,14 @@ test("summarizeArgs leads with the argument that matters and labels the others",
   expect(summarizeArgs({ x: "a".repeat(200) }, 10)).toBe(`${"a".repeat(9)}…`)
   expect(summarizeArgs({ n: 3 })).toBe("n=3")
   expect(summarizeArgs({})).toBe("")
+})
+
+test("the user's message wraps under its prompt symbol, not to the first column", () => {
+  expect(plain(userLines(defaultTheme, "one two three four five six\nseven", 16))).toEqual([
+    "› one two three",
+    "  four five six",
+    "  seven",
+  ])
 })
 
 test("a resumed history uses the transcript's blocks, the tool presenters and a named separator", () => {
