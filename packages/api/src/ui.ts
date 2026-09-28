@@ -42,10 +42,14 @@ export interface UiRequestOptions {
   timeoutMs?: number
 }
 
-/** Dialogs for extensions. Every method resolves; a cancelled dialog gives undefined (false for confirm). */
+/**
+ * Dialogs for extensions. Every method resolves; a dialog nobody answered (dismissed, timed
+ * out, aborted, or no frontend can ask, as in print mode) gives undefined. For confirm that
+ * keeps "the user said no" (false) apart from "nobody answered" (undefined).
+ */
 export interface UiApi {
   select(title: string, options: string[], opts?: UiRequestOptions): Promise<string | undefined>
-  confirm(title: string, message?: string, opts?: UiRequestOptions): Promise<boolean>
+  confirm(title: string, message?: string, opts?: UiRequestOptions): Promise<boolean | undefined>
   input(
     title: string,
     opts?: UiRequestOptions & { placeholder?: string; initial?: string },

@@ -91,11 +91,8 @@ export class UiRequests {
     const o = (opts?: UiRequestOptions) => ({ ...opts, ...(source ? { source } : {}) })
     return {
       select: (title, options, opts) => this.ask({ kind: "select", title, options: [...options] }, o(opts)),
-      confirm: async (title, message, opts) =>
-        (await this.ask(
-          { kind: "confirm", title, ...(message !== undefined ? { message } : {}) },
-          o(opts),
-        )) ?? false,
+      confirm: (title, message, opts) =>
+        this.ask({ kind: "confirm", title, ...(message !== undefined ? { message } : {}) }, o(opts)),
       input: (title, opts = {}) => {
         const { placeholder, initial, ...rest } = opts
         return this.ask(

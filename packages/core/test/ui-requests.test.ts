@@ -50,7 +50,11 @@ test("null cancels; timeouts and abort signals cancel too", async () => {
   const api = ui.api()
   const a = api.confirm("Sure?")
   ui.respond((await next()).data.requestId, null)
-  expect(await a).toBe(false)
+  // Cancelled is not the same as a no.
+  expect(await a).toBeUndefined()
+  const no = api.confirm("Sure?")
+  ui.respond((await next()).data.requestId, false)
+  expect(await no).toBe(false)
 
   expect(await api.input("slow", { timeoutMs: 10 })).toBeUndefined()
 
@@ -62,7 +66,7 @@ test("null cancels; timeouts and abort signals cancel too", async () => {
 
   await bus.flush()
   const resolved = events.flatMap((e) => (e.type === "ui.resolved" ? [e.data.cancelled] : []))
-  expect(resolved).toEqual([true, true, true])
+  expect(resolved).toEqual([true, false, true, true])
   expect(ui.pending).toEqual([])
 })
 

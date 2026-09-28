@@ -18,7 +18,10 @@ export default defineExtension((api) => {
       name: "ask",
       description: "Asks",
       parameters: { type: "object", properties: {} },
-      execute: async () => textResult(`answer: ${await api.ui.confirm("Deploy?", "to production")}`),
+      execute: async () => {
+        const answer = await api.ui.confirm("Deploy?", "to production")
+        return textResult(`answer: ${answer ?? "nobody answered"}`)
+      },
     }),
   )
 })

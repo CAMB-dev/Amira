@@ -372,5 +372,5 @@ test("print mode cancels dialogs with a note on stderr", async () => {
   expect(await runPrint(s.agent, "go", false, { io, ui: s.host.ui })).toBe(0)
   expect(errors.join("")).toContain('cancelled "Deploy?"')
   const result = s.agent.messages.find((m) => m.role === "toolResult")
-  expect(result?.content[0]).toEqual({ type: "text", text: "answer: false" })
+  expect(result?.content[0]).toEqual({ type: "text", text: "answer: nobody answered" })
 })
