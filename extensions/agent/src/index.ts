@@ -3,6 +3,7 @@ import {
   defineExtension,
   defineTool,
   type ExtensionAPI,
+  MAX_TITLE_CHARS,
   type PendingNotice,
   type SubagentResult,
   type ToolContext,
@@ -34,6 +35,8 @@ export const AGENT_RESULT_TOOL = "agent_result"
 
 export interface AgentTask {
   role?: string
+  /** A few words naming the task, shown to the user: "US market trend". */
+  title: string
   prompt: string
   model?: string
   context?: "fresh" | "fork"
@@ -55,6 +58,7 @@ interface Activity {
 interface Job {
   child: ChildSession
   role: string
+  title: string
   prompt: string
   startedAt: number
   /** Settles with the report for the commander; never rejects. */
@@ -178,7 +182,7 @@ function outcomeLine(m: MergeResult, wt: Worktree, unfinished?: string): string 
 function reportOf(job: Job, r: SubagentResult, changes: string, note?: string): string {
   const seconds = (r.durationMs / 1000).toFixed(1)
   const tokens = formatTokens(r.usage.input + r.usage.output + r.usage.cacheRead + r.usage.cacheWrite)
-  const head = `## ${job.role} · ${r.sessionId} · ${r.status} (${seconds}s, ${tokens} tokens)`
+  const head = `## ${job.title} · ${job.role} · ${r.sessionId} · ${r.status} (${seconds}s, ${tokens} tokens)`
   const lines = [head]
   if (note) lines.push(note)
   if (r.status !== "done" && r.error) lines.push(`Error: ${r.error}`)
@@ -198,15 +202,15 @@ const ENDED: Record<SubagentResult["status"], string> = {
 
 /**
  * The message that brings background reports to their commander: the reports for the model,
- * one short line each for the transcript ("◆ explorer finished · 41s · 12.3k tok").
+ * one short line each for the transcript ("◆ US market trend finished · explorer · 41s · 12.3k tok").
  */
-function noticeMessage(jobs: Pick<Job, "role" | "done" | "result">[]): UserMessage {
+function noticeMessage(jobs: Pick<Job, "role" | "title" | "done" | "result">[]): UserMessage {
   const lines = jobs.map((j) => {
     const r = j.result
-    if (!r) return `◆ ${j.role} finished`
+    if (!r) return `◆ ${j.title} finished · ${j.role}`
     const u = r.usage
     const tokens = formatTokens(u.input + u.output + u.cacheRead + u.cacheWrite)
-    return `◆ ${j.role} ${ENDED[r.status]} · ${Math.round(r.durationMs / 1000)}s · ${tokens} tok`
+    return `◆ ${j.title} ${ENDED[r.status]} · ${j.role} · ${Math.round(r.durationMs / 1000)}s · ${tokens} tok`
   })
   const head =
     jobs.length === 1
@@ -225,6 +229,21 @@ function taskList(params: unknown): AgentTask[] {
   if (Array.isArray(p.tasks)) return p.tasks
   // Tolerates a single task given at the top level.
   return typeof p.prompt === "string" ? [p as AgentTask] : []
+}
+
+/** A task's title on one line; empty when it has none. */
+function titleOf(task: AgentTask): string {
+  return typeof task.title === "string" ? task.title.replace(/\s+/g, " ").trim() : ""
+}
+
+/** What is wrong with a task's title, if anything. */
+function titleProblem(task: AgentTask, i: number): string | undefined {
+  const title = titleOf(task)
+  if (!title)
+    return `Task ${i + 1} has no "title": give each task a title of 3–6 words naming it for the user, e.g. "US market trend".`
+  if (title.length > MAX_TITLE_CHARS)
+    return `Task ${i + 1}'s "title" is ${title.length} characters long; keep it to 3–6 words (at most ${MAX_TITLE_CHARS} characters) and put the details in "prompt".`
+  return undefined
 }
 
 export interface AgentExtensionOptions {
@@ -291,6 +310,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
       try {
         child = session.spawn!({
           ...(task.role ? { role: task.role } : {}),
+          title: titleOf(task),
           prompt: task.prompt,
           ...(model ? { model } : {}),
           ...(task.context ? { context: task.context } : {}),
@@ -308,6 +328,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
       const job: Job = {
         child,
         role: task.role ?? "agent",
+        title: titleOf(task),
         prompt: task.prompt,
         startedAt: Date.now(),
         report: Promise.resolve(""),
@@ -395,7 +416,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
 
     /** Tells the commander the ids of the jobs it started in the background. */
     const startedInBackground = (jobs: Job[], failed: string[], auto: boolean) => {
-      const started = jobs.map((j) => `${j.child.id} (${j.role})`).join(", ")
+      const started = jobs.map((j) => `${j.child.id} (${j.role}: ${j.title})`).join(", ")
       const next = auto
         ? `Their results come to you by themselves, as a message, when they finish: do not wait or poll for them. Go on with other work, or end your turn if there is nothing else to do now. Call ${AGENT_RESULT_TOOL} only when you cannot go on without a result.`
         : `Call ${AGENT_RESULT_TOOL} with these ids to get their results before you finish; it waits for them unless wait is false.`
@@ -433,6 +454,12 @@ ${list.join("\n")}`
             items: {
               type: "object",
               properties: {
+                title: {
+                  type: "string",
+                  maxLength: MAX_TITLE_CHARS,
+                  description:
+                    'A title of 3–6 words naming the task for the user, e.g. "US market trend" or "Add status bar test".',
+                },
                 role: { type: "string", description: "Role name (see the list above)." },
                 prompt: { type: "string", description: "The complete task for the sub-agent." },
                 model: {
@@ -451,7 +478,7 @@ ${list.join("\n")}`
                     "worktree: work in a separate git worktree and merge back. Default: the role's, else none.",
                 },
               },
-              required: ["prompt"],
+              required: ["title", "prompt"],
             },
           },
           background: {
@@ -467,7 +494,11 @@ ${list.join("\n")}`
         const session = ctx.session
         if (!session?.spawn) return textResult("Sub-agents are not available in this session.", true)
         const tasks = taskList(params)
-        if (!tasks.length) return textResult('Give at least one task in "tasks", each with a "prompt".', true)
+        if (!tasks.length) {
+          return textResult('Give at least one task in "tasks", each with a "title" and a "prompt".', true)
+        }
+        const untitled = tasks.flatMap((t, i) => titleProblem(t, i) ?? [])
+        if (untitled.length) return textResult(untitled.join("\n"), true)
         const known = roles()
         const unknown = tasks.filter((t) => t.role && !known.has(t.role)).map((t) => t.role)
         if (unknown.length) {
@@ -499,7 +530,7 @@ ${list.join("\n")}`
               if (ctx.signal.aborted) stop()
             } catch (err) {
               failed.push(
-                `Task ${i + 1} (${task.role ?? "agent"}) did not start: ${err instanceof Error ? err.message : String(err)}`,
+                `Task ${i + 1} (${task.role ?? "agent"}: ${titleOf(task)}) did not start: ${err instanceof Error ? err.message : String(err)}`,
               )
             }
           }
@@ -579,7 +610,7 @@ ${list.join("\n")}`
           } else {
             const seconds = Math.round((Date.now() - job.startedAt) / 1000)
             parts.push(
-              `## ${job.role} · ${job.child.id} · still running (${seconds}s): ${shorten(job.prompt, 80)}`,
+              `## ${job.title} · ${job.role} · ${job.child.id} · still running (${seconds}s): ${shorten(job.prompt, 80)}`,
             )
           }
         }
@@ -630,19 +661,17 @@ ${list.join("\n")}`
 }
 
 /**
- * Shows an agent call by its tasks; each child's own line (role, time, tokens, answer) is
- * committed by the frontend when it ends, so the result line only counts the reports.
+ * Shows an agent call by how many sub-agents it starts; frontends show each one under the
+ * call (title, role, time, tokens, what it does), so the result line only sums them up.
  */
 export const agentPresenter: ToolPresenter<AgentParams> = {
   summary(args) {
-    const tasks = taskList(args)
-    const bg = args.background ? " · background" : ""
-    if (tasks.length === 1)
-      return `${tasks[0]!.role ?? "agent"}: ${shorten(tasks[0]!.prompt ?? "", 200)}${bg}`
-    return `${tasks.length} tasks · ${tasks.map((t) => t.role ?? "agent").join(", ")}${bg}`
+    const n = taskList(args).length
+    return `· ${n} sub-agent${n === 1 ? "" : "s"}${args.background ? ` · background` : ""}`
   },
   result(call) {
     if (call.result.isError) return undefined
+    if (call.text.startsWith("Started in the background")) return "started in the background"
     const reports = call.text.split("\n").filter((l) => l.startsWith("## ")).length
     if (reports > 1) return `${reports} reports`
     return call.text.split("\n")[0]?.replace(/^#+\s*/, "") || undefined

@@ -34,9 +34,9 @@ export function usageText(info: SubagentInfo): string {
   return u.cost !== undefined ? `${tokens} · $${u.cost.toFixed(4)}` : tokens
 }
 
-/** One line about a sub-agent: role, id, state, time and usage, then the task. */
+/** One line about a sub-agent: title, role, id, state, time and usage, then the task. */
 export function subagentSummary(info: SubagentInfo, now: number, taskChars = 60): string {
-  return `${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)} · ${oneLine(info.task, taskChars)}`
+  return `${info.title} · ${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)} · ${oneLine(info.task, taskChars)}`
 }
 
 /** Its status and how long it ran; just the status when that is not known (it never started). */
@@ -53,6 +53,17 @@ function blockText(content: Message["content"]): string {
 function spawnCount(call: ToolCallBlock): number {
   const tasks = (call.args as { tasks?: unknown }).tasks
   return Array.isArray(tasks) ? tasks.length : 1
+}
+
+/**
+ * Takes the sub-agents an agent call started out of `rest`: those naming the call, or, for
+ * sub-agents from before calls were recorded, as many as it had tasks, in order.
+ */
+function callKids(rest: SubagentInfo[], call: ToolCallBlock): SubagentInfo[] {
+  if (!rest.some((k) => k.toolCallId !== undefined)) return rest.splice(0, spawnCount(call))
+  const mine = rest.filter((k) => k.toolCallId === call.id)
+  for (const k of mine) rest.splice(rest.indexOf(k), 1)
+  return mine
 }
 
 function toolHead(call: ToolCallBlock, failed: boolean): string {
@@ -77,7 +88,7 @@ export function transcriptText(
   all: SubagentInfo[],
   now = Date.now(),
 ): string {
-  const out = [`◆ ${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)}`]
+  const out = [`◆ ${info.title} · ${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)}`]
   // A forked child starts with its parent's history; its own part starts at its task.
   const from = Math.max(
     0,
@@ -114,7 +125,7 @@ export function transcriptText(
           out.push(`  ⎿ ${oneLine(lines[0] || "(no output)", 100)}${more}`)
         }
         if (b.name === "agent") {
-          for (const kid of kids.splice(0, spawnCount(b))) out.push(`  ◆ ${subagentSummary(kid, now)}`)
+          for (const kid of callKids(kids, b)) out.push(`  ◆ ${subagentSummary(kid, now)}`)
         }
         out.push("")
       }
@@ -177,7 +188,7 @@ function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
     const stopped = running.filter((s) => ctx.session.stopSubagent(s.id))
     ctx.print(
       stopped.length
-        ? `Stopped ${stopped.length} sub-agent${stopped.length === 1 ? "" : "s"}: ${stopped.map((s) => `${s.role} ${s.id}`).join(", ")}.`
+        ? `Stopped ${stopped.length} sub-agent${stopped.length === 1 ? "" : "s"}: ${stopped.map((s) => `${s.title} (${s.role} ${s.id})`).join(", ")}.`
         : "No sub-agent is running.",
     )
     return
@@ -185,10 +196,10 @@ function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
   const target = findSubagent(list, ref)
   if (!target) throw new Error(`no sub-agent "${ref}"; /agents lists them`)
   if (!live(target) || !ctx.session.stopSubagent(target.id)) {
-    ctx.print(`${target.role} ${target.id} has already ended (${target.status}).`)
+    ctx.print(`${target.title} (${target.role} ${target.id}) has already ended (${target.status}).`)
     return
   }
-  ctx.print(`Stopped ${target.role} ${target.id}.`)
+  ctx.print(`Stopped ${target.title} (${target.role} ${target.id}).`)
 }
 
 /**

@@ -82,6 +82,17 @@ function spawnCount(call: ToolCallBlock): number {
 }
 
 /**
+ * Takes the sub-agents an agent call started out of `rest`: those naming the call, or, for
+ * sub-agents from before calls were recorded, as many as it had tasks, in order.
+ */
+export function callKids(rest: SubagentInfo[], call: ToolCallBlock): SubagentInfo[] {
+  if (!rest.some((k) => k.toolCallId !== undefined)) return rest.splice(0, spawnCount(call))
+  const mine = rest.filter((k) => k.toolCallId === call.id)
+  for (const k of mine) rest.splice(rest.indexOf(k), 1)
+  return mine
+}
+
+/**
  * A sub-agent's whole transcript for the full-screen viewer: the task, what it said, each
  * tool call with a one-line result preview (running ones marked, the sub-agents an agent
  * call started under it), and how it ended. Text is wrapped to `width`, nothing is cut.
@@ -113,7 +124,7 @@ export function transcriptLines(
   const finished = info.status !== "running" && info.status !== "queued"
   const kidLine = (k: SubagentInfo, indent: string) =>
     truncateToWidth(
-      `${indent}${theme.accent("◆")} ${k.role} ${theme.muted(k.id)} ${subagentStats(theme, k, now)} ${theme.muted(`· ${k.task.replace(/\s+/g, " ").trim()}`)}`,
+      `${indent}${theme.accent("◆")} ${k.title} ${theme.muted(`· ${k.role} · ${k.id}`)} ${subagentStats(theme, k, now)} ${theme.muted(`· ${k.task.replace(/\s+/g, " ").trim()}`)}`,
       width,
       "…",
     )
@@ -137,7 +148,7 @@ export function transcriptLines(
             `  ${theme.muted(`⎿ ${finished ? "(no result)" : "running…"}`)}`,
           )
         }
-        if (b.name === "agent") for (const k of rest.splice(0, spawnCount(b))) out.push(kidLine(k, "  "))
+        if (b.name === "agent") for (const k of callKids(rest, b)) out.push(kidLine(k, "  "))
         out.push("")
       }
     }
@@ -264,7 +275,8 @@ export class SubagentViewer implements Component {
     const head: string[] = []
     if (info) {
       const pos = theme.muted(` ${index + 1}/${list.length}`)
-      const title = `${theme.accent("◆")} ${theme.text(info.role)} ${theme.muted(info.id)} ${subagentStats(theme, info, now)}`
+      // What it is and how it goes first; its role and id are cut first on a narrow screen.
+      const title = `${theme.accent("◆")} ${theme.text(info.title)} ${subagentStats(theme, info, now)}${theme.muted(` · ${info.role} · ${info.id}`)}`
       const room = width - visibleWidth(pos)
       const fitted = truncateToWidth(title, Math.max(1, room), "…")
       head.push(fitted + " ".repeat(Math.max(0, room - visibleWidth(fitted))) + pos)
@@ -315,7 +327,7 @@ export class SubagentViewer implements Component {
   #footer(theme: Theme, view: ScrollView, width: number): string {
     const info = this.#shown.info
     if (this.#confirming !== undefined && info?.id === this.#confirming) {
-      const ask = `Stop ${info.role} ${info.id}? y stops it · any other key keeps it running`
+      const ask = `Stop ${info.title} (${info.role} ${info.id})? y stops it · any other key keeps it running`
       return theme.warning(truncateToWidth(ask, width, "…"))
     }
     const p = view.position

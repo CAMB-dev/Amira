@@ -85,7 +85,11 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
       execute: async (p, ctx) => {
         const answers: string[] = []
         for (const role of p.roles) {
-          const r = await ctx.session!.spawn!({ role, prompt: `task for the ${role}` }).result()
+          const r = await ctx.session!.spawn!({
+            role,
+            title: `Check ${role}`,
+            prompt: `task for the ${role}`,
+          }).result()
           answers.push(r.text)
         }
         return textResult(answers.join("\n"))
@@ -172,7 +176,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   await waitFor(() => s.screen.inAltScreen, "the viewer")
   await waitFor(() => s.view().includes("● wait"), "the transcript")
   const lines = s.screen.lines
-  expect(lines[0]).toMatch(/^◆ explorer s_\w+ running · \d+s · 1\.5k tok +1\/1$/)
+  expect(lines[0]).toMatch(/^◆ Check explorer running · \d+s · 1\.5k tok · explorer · \S+ +1\/1$/)
   expect(lines[1]).toBe("task: task for the explorer")
   expect(lines.slice(3, 11)).toEqual([
     "› task for the explorer",
@@ -206,7 +210,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   expect(order.every((i) => i >= 0)).toBe(true)
   expect([...order].sort((a, b) => a - b)).toEqual(order)
   expect(main.split("all done").length).toBe(2)
-  expect(main).not.toContain("◆ explorer s_")
+  expect(main).not.toContain("◆ Check explorer running")
   // The live region is back: the editor box and the hint line.
   expect(s.view()).toContain("Enter send")
   expect(s.view()).toContain("│ › Message Amira")
@@ -230,13 +234,13 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   await waitFor(() => s.view().includes("● wait"), "the viewer")
   expect(s.screen.lines.at(-1)).toContain("←→ switch · x stop · Esc back")
   s.terminal.send("x")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop explorer s_"), "the question")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer (explorer s_"), "the question")
   expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")
   s.terminal.send("n")
   await waitFor(() => s.screen.lines.at(-1)!.includes("x stop"), "kept")
   expect(s.control.subagents()[0]?.status).toBe("running")
   s.terminal.send("x")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop explorer"), "asked again")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer"), "asked again")
   s.terminal.send("y")
   s.release()
   await waitFor(() => s.view().includes("✗ stopped by the user"), "stopped")
@@ -245,7 +249,7 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   // x on one that ended does nothing.
   s.terminal.send("x")
   await Bun.sleep(40)
-  expect(s.screen.lines.at(-1)).not.toContain("Stop explorer")
+  expect(s.screen.lines.at(-1)).not.toContain("Stop Check explorer")
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "closed")
   await s.idle()
@@ -311,7 +315,7 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   s.resize(70, 12)
   await waitFor(() => s.screen.lines.at(-1)!.includes("following") && s.screen.lines.length === 12, "resized")
   await Bun.sleep(60)
-  expect(s.screen.lines[0]).toMatch(/^◆ explorer/)
+  expect(s.screen.lines[0]).toMatch(/^◆ Check explorer/)
   expect(s.screen.lines.at(-2)).toBe("── done ──")
   expect(s.screen.lines.at(-3)).toBe("")
   expect(s.screen.lines.at(-4)).toBe("answer line 40")
@@ -331,15 +335,15 @@ test("←/→ and Tab switch between sub-agents; Ctrl+C closes the viewer instea
   s.terminal.send("go\r")
   await s.idle()
   s.terminal.send("/agents view\r")
-  await waitFor(() => /^◆ coder .* 2\/2$/.test(s.screen.lines[0]!), "the latest sub-agent")
+  await waitFor(() => /^◆ Check coder .* 2\/2$/.test(s.screen.lines[0]!), "the latest sub-agent")
   expect(s.view()).toContain("coded")
   s.terminal.send("\x1b[D") // ←
-  await waitFor(() => /^◆ explorer .* 1\/2$/.test(s.screen.lines[0]!), "the previous one")
+  await waitFor(() => /^◆ Check explorer .* 1\/2$/.test(s.screen.lines[0]!), "the previous one")
   expect(s.view()).toContain("explored")
   s.terminal.send("\x1b[C") // →
-  await waitFor(() => s.screen.lines[0]!.startsWith("◆ coder"), "the next one")
+  await waitFor(() => s.screen.lines[0]!.startsWith("◆ Check coder"), "the next one")
   s.terminal.send("\t")
-  await waitFor(() => s.screen.lines[0]!.startsWith("◆ explorer"), "Tab wraps around")
+  await waitFor(() => s.screen.lines[0]!.startsWith("◆ Check explorer"), "Tab wraps around")
   s.terminal.send("\x03")
   await waitFor(() => !s.screen.inAltScreen, "closed by Ctrl+C")
   expect(s.view()).toContain("Enter send")
@@ -388,11 +392,11 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   await waitFor(() => s.view().includes("? Sub-agents"), "the picker")
   // The digit in front is the option's own number, shown once.
   expect(s.view()).toContain("  2 Open the live view")
-  expect(s.view()).toMatch(/› 1 explorer · s_\w+ · done/)
+  expect(s.view()).toMatch(/› 1 Check explorer · explorer · s_\w+ · done/)
   s.terminal.send("1")
   await waitFor(() => s.screen.mainText.includes("● read b.ts"), "the transcript")
   const main = s.screen.mainText
-  expect(main).toMatch(/◆ explorer · s_\w+ · done · \d+s · 0 tok/)
+  expect(main).toMatch(/◆ Check explorer · explorer · s_\w+ · done · \d+s/)
   expect(main).toContain("› task for the explorer")
   expect(main).toContain("  ⎿ contents of b.ts (+2 lines)")
   expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("● read b.ts"))

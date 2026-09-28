@@ -101,7 +101,10 @@ function nested(req: ModelRequest): MockReply {
       ? { text: "all done" }
       : {
           toolCalls: [
-            { name: "agent", args: { tasks: [{ role: "coder", prompt: "fix the bug\nin a.ts" }] } },
+            {
+              name: "agent",
+              args: { tasks: [{ role: "coder", title: "Fix the bug", prompt: "fix the bug\nin a.ts" }] },
+            },
           ],
         }
   }
@@ -110,7 +113,12 @@ function nested(req: ModelRequest): MockReply {
     if (answered === 1) {
       return {
         text: "Let me ask an explorer.\nIt knows more.",
-        toolCalls: [{ name: "agent", args: { tasks: [{ role: "explorer", prompt: "where is it used" }] } }],
+        toolCalls: [
+          {
+            name: "agent",
+            args: { tasks: [{ role: "explorer", title: "Find its uses", prompt: "where is it used" }] },
+          },
+        ],
         usage: { input: 1200, output: 34, cost: 0.0021 },
       }
     }
@@ -129,15 +137,15 @@ test("/agents lists the sub-agents and prints a finished one's transcript compac
   const options = request.kind === "select" ? request.options : []
   // Numbered like /agents <n>, and in that position, so a digit in the dialog picks the same one.
   expect(options[0]).toMatch(
-    /^1\. coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021 · fix the bug in a\.ts$/,
+    /^1\. Fix the bug · coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021 · fix the bug in a\.ts$/,
   )
-  expect(options[1]).toMatch(/^2\. {3}explorer · s_\w+ · done · /)
+  expect(options[1]).toMatch(/^2\. {3}Find its uses · explorer · s_\w+ · done · /)
   expect(options[2]).toBe("Open the live view")
   host.ui.respond(request.requestId, options[0]!)
   const { text, ok } = await picking
   expect(ok).toBe(true)
   const lines = text.split("\n")
-  expect(lines[0]).toMatch(/^◆ coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021$/)
+  expect(lines[0]).toMatch(/^◆ Fix the bug · coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021$/)
   expect(lines.slice(1)).toEqual([
     "› fix the bug",
     "  in a.ts",
@@ -148,8 +156,10 @@ test("/agents lists the sub-agents and prints a finished one's transcript compac
     "Let me ask an explorer.…",
     "",
     "● agent",
-    expect.stringMatching(/^ {2}⎿ ## explorer · s_\w+ · done/),
-    expect.stringMatching(/^ {2}◆ explorer · s_\w+ · done · \d+s · 0 tok · where is it used$/),
+    expect.stringMatching(/^ {2}⎿ ## Find its uses · explorer · s_\w+ · done/),
+    expect.stringMatching(
+      /^ {2}◆ Find its uses · explorer · s_\w+ · done · \d+s · 0 tok · where is it used$/,
+    ),
     "",
     "Fixed the bug.",
     "All tests pass.",
@@ -180,7 +190,7 @@ test("a running sub-agent shows its transcript so far", async () => {
     if (role === "commander") {
       return last?.role === "toolResult"
         ? { text: "ok" }
-        : { toolCalls: [{ name: "agent", args: { tasks: [{ prompt: "look" }] } }] }
+        : { toolCalls: [{ name: "agent", args: { tasks: [{ title: "Do look", prompt: "look" }] } }] }
     }
     return last?.role === "toolResult"
       ? { text: "looked" }
@@ -203,7 +213,7 @@ test("a running sub-agent shows its transcript so far", async () => {
   }
   const { text } = await run("/agents 1")
   expect(text.split("\n")).toEqual([
-    expect.stringMatching(/^◆ agent · s_\w+ · running · \d+s · 0 tok$/),
+    expect.stringMatching(/^◆ Do look · agent · s_\w+ · running · \d+s · 0 tok$/),
     "› look",
     "",
     "Checking.",
@@ -240,7 +250,7 @@ test("the argument completes to ids, numbers as themselves, and to view <ref> af
   const [coder, explorer] = control.subagents()
   const all = await commands.complete("/agents ")
   expect(all.candidates.map((c) => c.value)).toEqual([coder!.id, explorer!.id, "view"])
-  expect(all.candidates[0]!.description).toMatch(/^1\. coder · /)
+  expect(all.candidates[0]!.description).toMatch(/^1\. Fix the bug · coder · /)
   // A typed number stays a number (the popup keeps an exact match), rather than an id with that digit.
   expect((await commands.complete("/agents 2")).candidates.map((c) => c.value)).toEqual(["2"])
   // Nothing after view yet: no candidates, so Enter runs /agents view on the default one.
@@ -263,7 +273,11 @@ test("/agents stop stops one running sub-agent, or all of them, and completes to
               {
                 name: "agent",
                 args: {
-                  tasks: [{ prompt: "one" }, { prompt: "two" }, { prompt: "three" }],
+                  tasks: [
+                    { title: "Do one", prompt: "one" },
+                    { title: "Do two", prompt: "two" },
+                    { title: "Do three", prompt: "three" },
+                  ],
                   background: true,
                 },
               },
@@ -280,15 +294,17 @@ test("/agents stop stops one running sub-agent, or all of them, and completes to
     `stop ${c!.id}`,
     "stop all",
   ])
-  expect((await run("/agents stop 2")).text).toBe(`Stopped agent ${b!.id}.`)
+  expect((await run("/agents stop 2")).text).toBe(`Stopped Do two (agent ${b!.id}).`)
   const ended = async (n: number) => {
     while (events.filter((e) => e.type === "subagent.end").length < n) await Bun.sleep(5)
   }
   await ended(1)
   expect(control.subagents()[1]).toMatchObject({ status: "aborted", error: "stopped by the user" })
-  expect((await run("/agents stop 2")).text).toBe(`agent ${b!.id} has already ended (aborted).`)
+  expect((await run("/agents stop 2")).text).toBe(`Do two (agent ${b!.id}) has already ended (aborted).`)
   expect((await run("/agents stop")).ok).toBe(false)
-  expect((await run("/agents stop all")).text).toBe(`Stopped 2 sub-agents: agent ${a!.id}, agent ${c!.id}.`)
+  expect((await run("/agents stop all")).text).toBe(
+    `Stopped 2 sub-agents: Do one (agent ${a!.id}), Do three (agent ${c!.id}).`,
+  )
   await ended(3)
   await bus.flush()
   expect((await run("/agents stop all")).text).toBe("No sub-agent is running.")
@@ -300,6 +316,7 @@ test("findSubagent takes a number, an id or a unique start of one", () => {
     parentSessionId: "p",
     depth: 1,
     role: "agent",
+    title: "Look around",
     task: "",
     status: "done" as const,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -311,5 +328,7 @@ test("findSubagent takes a number, an id or a unique start of one", () => {
   expect(findSubagent(list, "s_ab")?.id).toBe("s_ab22")
   expect(transcriptText({ ...list[0]!, status: "error", error: "boom" }, [], list)).toContain("✗ boom")
   // One that never started has no time to show.
-  expect(subagentSummary({ ...list[0]!, status: "aborted" }, 0)).toBe("agent · s_aa11 · aborted · 0 tok · ")
+  expect(subagentSummary({ ...list[0]!, status: "aborted" }, 0)).toBe(
+    "Look around · agent · s_aa11 · aborted · 0 tok · ",
+  )
 })
