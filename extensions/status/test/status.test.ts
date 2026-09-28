@@ -291,4 +291,8 @@ test("sub-agents add to the cost and are counted, but do not change the rest of 
   )
   await bus.flush()
   expect(item("subagents")).toBeUndefined()
+  // The tree's total also has what was spent outside any reply, e.g. asking the commander to approve.
+  bus.emit("budget.update", { tokens: 2000, costUsd: 0.02 }, root)
+  await bus.flush()
+  expect(item("tokens")).toBe("ctx 1.0k · out 10 · $0.020")
 })

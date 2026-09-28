@@ -59,6 +59,8 @@ export default defineExtension((api) => {
   let promptCacheRead = 0
   let promptCacheWrite = 0
   let cost: number | undefined
+  /** The agent tree's own total, which also counts calls made outside a turn (approvals). */
+  let treeCost: number | undefined
   let firstDeltaAt: number | undefined
   let tps: number | undefined
   let place = ""
@@ -87,6 +89,7 @@ export default defineExtension((api) => {
       promptCacheRead = 0
       promptCacheWrite = 0
       cost = undefined
+      treeCost = undefined
       tps = undefined
       status = "idle"
       statusReason = ""
@@ -122,6 +125,11 @@ export default defineExtension((api) => {
     if (firstDeltaAt !== undefined) tps = tokensPerSecond(u.output, firstDeltaAt, e.ts) ?? tps
     api.requestRender()
   })
+  api.on("budget.update", (e) => {
+    if (e.data.costUsd === undefined) return
+    treeCost = e.data.costUsd
+    api.requestRender()
+  })
   api.on("status.changed", (e) => {
     if (!own(e)) return
     status = e.data.status
@@ -155,10 +163,12 @@ export default defineExtension((api) => {
     align: "right",
     order: 0,
     tone: "muted",
-    text: () =>
-      context || output
-        ? `ctx ${formatContext(context, contextWindow)} · out ${formatTokens(output)}${cost === undefined ? "" : ` · ${formatCost(cost)}`}`
-        : "",
+    text: () => {
+      const total = treeCost ?? cost
+      return context || output
+        ? `ctx ${formatContext(context, contextWindow)} · out ${formatTokens(output)}${total === undefined ? "" : ` · ${formatCost(total)}`}`
+        : ""
+    },
   })
   api.registerStatusItem({
     id: "cache",
