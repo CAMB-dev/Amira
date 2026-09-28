@@ -30,7 +30,7 @@ export const anthropicMessages: Dialect = {
           ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
           ...ctx.endpoint.headers,
         },
-        body: JSON.stringify(requestBody(req)),
+        body: JSON.stringify(requestBody(req, ctx.compat)),
         signal: ctx.signal,
       })
     } catch (e) {

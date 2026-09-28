@@ -1,20 +1,23 @@
 import { expect, test } from "bun:test"
 import { collect } from "../src/dialect.ts"
 import { messagesUrl } from "../src/dialects/anthropic.ts"
+import type { AnthropicMessage } from "../src/dialects/anthropic-messages.ts"
+import { unsignedToolLoop } from "../src/dialects/anthropic-request.ts"
+import type { ProviderConfig } from "../src/providers.ts"
 import type { Message, ModelRequest } from "../src/types.ts"
 import { anthropicAi, anthropicRequest, anthropicResponse, textReply } from "./anthropic-helpers.ts"
 import { fakeFetch, type Seen } from "./helpers.ts"
 
-async function sent(extra: Partial<ModelRequest> = {}, providerHeaders?: Record<string, string>) {
+async function sent(extra: Partial<ModelRequest> = {}, provider: Partial<ProviderConfig> = {}) {
   const seen: Seen = {}
   const ai = anthropicAi(fakeFetch(() => anthropicResponse(textReply("ok")), seen))
-  if (providerHeaders) {
-    const p = ai.providers().find((x) => x.id === "anth")!
-    ai.registerProvider({ ...p, headers: providerHeaders })
-  }
+  const p = ai.providers().find((x) => x.id === "anth")!
+  ai.registerProvider({ ...p, ...provider })
   await collect(ai.stream(anthropicRequest(ai, extra)))
   return seen
 }
+
+const budgetMode: Partial<ProviderConfig> = { compat: { thinking: "budget" } }
 
 const tool = (name: string) => ({ name, description: `${name} it`, parameters: { type: "object" } })
 const user = (text: string): Message => ({ role: "user", content: [{ type: "text", text }] })
@@ -34,7 +37,7 @@ const toolTurn = (thinking: boolean): Message[] => [
 ]
 
 test("posts to /v1/messages with the api key, version and provider headers", async () => {
-  const seen = await sent({}, { "anthropic-beta": "x", "anthropic-version": "2099-01-01" })
+  const seen = await sent({}, { headers: { "anthropic-beta": "x", "anthropic-version": "2099-01-01" } })
   expect(seen.url).toBe("http://anth/v1/messages")
   expect(seen.headers).toEqual({
     "content-type": "application/json",
@@ -64,8 +67,25 @@ test("sends the system prompt, tools and max_tokens", async () => {
   expect((await sent({ maxTokens: 10_000_000 })).body.max_tokens).toBe(32_000)
 })
 
-test("maps reasoning effort to a thinking budget below max_tokens and drops temperature", async () => {
-  const budget = async (extra: Partial<ModelRequest>) => (await sent(extra)).body.thinking?.budget_tokens
+test("adaptive mode, the default, sends an effort and never a budget, disabled or temperature", async () => {
+  for (const effort of ["low", "medium", "high", "max"] as const) {
+    const { body } = await sent({ reasoning: { effort }, temperature: 0.2 })
+    expect(body.thinking).toEqual({ type: "adaptive" })
+    expect(body.output_config).toEqual({ effort })
+    expect(body.temperature).toBeUndefined()
+  }
+  const plain = (await sent({ temperature: 0.2 })).body
+  expect(plain.thinking).toBeUndefined()
+  expect(plain.output_config).toBeUndefined()
+  expect(plain.temperature).toBeUndefined()
+  const reasoning = { effort: "low" as const }
+  const loop = (await sent({ reasoning, messages: toolTurn(false) })).body
+  expect(loop.thinking).toEqual({ type: "adaptive" })
+})
+
+test("budget mode maps effort to a thinking budget below max_tokens and drops temperature", async () => {
+  const budget = async (extra: Partial<ModelRequest>) =>
+    (await sent(extra, budgetMode)).body.thinking?.budget_tokens
   expect(await budget({ reasoning: { effort: "low" } })).toBe(2_048)
   expect(await budget({ reasoning: { effort: "medium" } })).toBe(8_192)
   expect(await budget({ reasoning: { effort: "high" } })).toBe(24_576)
@@ -73,10 +93,11 @@ test("maps reasoning effort to a thinking budget below max_tokens and drops temp
   expect(await budget({ reasoning: { effort: "high" }, maxTokens: 4_000 })).toBe(4_000 - 1_024)
   expect(await budget({ reasoning: { effort: "high" }, maxTokens: 1_500 })).toBeUndefined()
   expect(await budget({})).toBeUndefined()
-  const withThinking = await sent({ reasoning: { effort: "low" }, temperature: 0.2 })
+  const withThinking = await sent({ reasoning: { effort: "low" }, temperature: 0.2 }, budgetMode)
   expect(withThinking.body.thinking).toEqual({ type: "enabled", budget_tokens: 2_048 })
+  expect(withThinking.body.output_config).toBeUndefined()
   expect(withThinking.body.temperature).toBeUndefined()
-  expect((await sent({ temperature: 0.2 })).body.temperature).toBe(0.2)
+  expect((await sent({ temperature: 0.2 }, budgetMode)).body.temperature).toBe(0.2)
 })
 
 test("sends no thinking when the model lacks the capability", async () => {
@@ -88,16 +109,38 @@ test("sends no thinking when the model lacks the capability", async () => {
   expect(seen.body.thinking).toBeUndefined()
 })
 
-test("turns thinking off mid tool loop when the assistant turn has no signed thinking", async () => {
+test("budget mode turns thinking off mid tool loop when the loop has no signed thinking", async () => {
   const reasoning = { effort: "low" as const }
   const off = { type: "disabled" }
-  expect((await sent({ reasoning, messages: toolTurn(false) })).body.thinking).toEqual(off)
-  expect((await sent({ messages: toolTurn(false) })).body.thinking).toEqual(off)
-  expect((await sent({ reasoning, messages: toolTurn(true) })).body.thinking).toEqual({
+  const thinkingOf = async (extra: Partial<ModelRequest>) => (await sent(extra, budgetMode)).body.thinking
+  expect(await thinkingOf({ reasoning, messages: toolTurn(false) })).toEqual(off)
+  expect(await thinkingOf({ messages: toolTurn(false) })).toBeUndefined()
+  expect(await thinkingOf({ reasoning, messages: toolTurn(true) })).toEqual({
     type: "enabled",
     budget_tokens: 2_048,
   })
-  expect((await sent({ messages: toolTurn(true) })).body.thinking).toBeUndefined()
+  expect(await thinkingOf({ messages: toolTurn(true) })).toBeUndefined()
+})
+
+test("the tool-loop check looks at the loop's first assistant turn", () => {
+  const signed = { type: "thinking" as const, thinking: "t", signature: "s" }
+  const use = (id: string) => ({ type: "tool_use" as const, id, name: "r", input: {} })
+  const res = (id: string) => ({ type: "tool_result" as const, tool_use_id: id })
+  const text = { type: "text" as const, text: "q" }
+  const loop = (first: AnthropicMessage["content"]): AnthropicMessage[] => [
+    { role: "user", content: [text] },
+    { role: "assistant", content: first },
+    { role: "user", content: [res("a")] },
+    { role: "assistant", content: [use("b")] },
+    { role: "user", content: [res("b")] },
+  ]
+  expect(unsignedToolLoop(loop([signed, use("a")]))).toBe(false)
+  expect(unsignedToolLoop(loop([use("a")]))).toBe(true)
+  expect(unsignedToolLoop(loop([use("a")]).slice(0, 4))).toBe(false)
+  const newTurn = loop([use("a")])
+  newTurn[2] = { role: "user", content: [res("a"), text] }
+  newTurn[3] = { role: "assistant", content: [signed, use("b")] }
+  expect(unsignedToolLoop(newTurn)).toBe(false)
 })
 
 const history: Message[] = [

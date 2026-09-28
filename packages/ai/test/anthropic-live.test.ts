@@ -14,6 +14,7 @@ const ai = createAi({
       dialect: "anthropic-messages",
       baseUrl: "https://api.deepseek.com/anthropic",
       apiKeyEnv: KEY_ENV,
+      compat: { thinking: "budget" },
       models: [{ id: "deepseek-flash", maxOutput: 8_192, caps: { thinking: true } }],
     },
   ],

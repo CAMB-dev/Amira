@@ -1,3 +1,4 @@
+import type { ProviderCompat } from "../dialect.ts"
 import type { ModelRequest, ReasoningEffort } from "../types.ts"
 import {
   type AnthropicMessage,
@@ -20,7 +21,7 @@ export const THINKING_BUDGET: Record<ReasoningEffort, number> = {
 
 const EPHEMERAL: CacheControl = { type: "ephemeral" }
 
-export function requestBody(req: ModelRequest): Record<string, unknown> {
+export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<string, unknown> {
   const messages = toAnthropicMessages(req.messages)
   const maxTokens = Math.max(
     1,
@@ -49,16 +50,34 @@ export function requestBody(req: ModelRequest): Record<string, unknown> {
   if (cache) markCacheBreakpoints(messages, MAX_BREAKPOINTS - breakpoints)
   body.messages = messages
 
-  // With thinking on, the API rejects a tool loop whose assistant turn does not start with
-  // thinking, as when the turn came from another provider. Servers that think by default
-  // (DeepSeek) need thinking switched off explicitly then.
-  const unsigned = unsignedToolTurn(messages)
+  if (compat.thinking === "budget") budgetThinking(body, req, maxTokens, messages)
+  else adaptiveThinking(body, req)
+  return body
+}
+
+/** Current Claude models: an effort level, and no temperature, budget or `disabled` at all. */
+function adaptiveThinking(body: Record<string, unknown>, req: ModelRequest) {
+  if (!req.reasoning || !req.model.caps.thinking) return
+  body.thinking = { type: "adaptive" }
+  body.output_config = { effort: req.reasoning.effort }
+}
+
+/** Claude 4.5 and older, and DeepSeek: a token budget below max_tokens. */
+function budgetThinking(
+  body: Record<string, unknown>,
+  req: ModelRequest,
+  maxTokens: number,
+  messages: AnthropicMessage[],
+) {
+  // With thinking on, these servers reject a tool loop whose assistant turn does not start
+  // with thinking, as when the turn came from another provider. DeepSeek thinks unless
+  // told otherwise, so thinking is switched off explicitly then.
+  const unsigned = req.reasoning !== undefined && unsignedToolLoop(messages)
   const budget = unsigned ? undefined : thinkingBudget(req, maxTokens)
   if (budget) body.thinking = { type: "enabled", budget_tokens: budget }
   else if (unsigned) body.thinking = { type: "disabled" }
   // Extended thinking rejects any temperature other than the default.
   if (!budget && req.temperature !== undefined) body.temperature = req.temperature
-  return body
 }
 
 /** The budget to think with, or undefined when thinking is off or cannot fit. */
@@ -69,10 +88,21 @@ function thinkingBudget(req: ModelRequest, maxTokens: number): number | undefine
   return budget < MIN_THINKING_BUDGET ? undefined : budget
 }
 
-/** The request continues a tool loop whose assistant turn carries no signed thinking. */
-function unsignedToolTurn(messages: AnthropicMessage[]): boolean {
+/**
+ * The request continues a tool loop, and the loop's first assistant turn (the one after the
+ * last user turn that is not only tool results) does not start with signed thinking.
+ */
+export function unsignedToolLoop(messages: AnthropicMessage[]): boolean {
   const last = messages.at(-1)
   if (last?.role !== "user" || !last.content.some((b) => b.type === "tool_result")) return false
-  const first = messages.at(-2)?.content[0]
+  let start = 0
+  for (let i = messages.length - 2; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role === "user" && m.content.some((b) => b.type !== "tool_result")) {
+      start = i + 1
+      break
+    }
+  }
+  const first = messages.slice(start).find((m) => m.role === "assistant")?.content[0]
   return first?.type !== "thinking" && first?.type !== "redacted_thinking"
 }
