@@ -11,6 +11,11 @@ export { mcpToolName, toToolResult } from "./tools.ts"
 export interface McpExtensionOptions extends Partial<ServerOptions> {
   /** Use these servers instead of reading the settings files. */
   config?: McpConfig
+  /**
+   * How long after loading a model call may wait for servers still connecting, so a prompt
+   * sent right at startup (e.g. with --print) can already use their tools. Default 8000 ms.
+   */
+  startupWaitMs?: number
 }
 
 export interface ServerStatus {
@@ -34,7 +39,7 @@ export function pendingSection(names: string[]): string {
 }
 
 /**
- * Connects to the configured MCP servers in the background (startup never waits) and
+ * Connects to the configured MCP servers in the background (loading never waits) and
  * registers their tools as deferred `mcp__<server>__<tool>` tools. A failing server is
  * reported as extension.error and leaves the others alone.
  */
@@ -54,13 +59,23 @@ export function createMcpExtension(opts: McpExtensionOptions = {}): McpExtension
       setTimeout(() => resolve(Promise.all(connections.map((c) => c.start()))), 0)
     })
     api.on("session.end", () => void Promise.all(connections.map((c) => c.close())))
+    const waitMs = opts.startupWaitMs ?? 8000
+    const waitUntil = Date.now() + waitMs
+    const pending = () => connections.filter((c) => c.state === "idle" || c.state === "connecting")
     // Until named prompt sections land, the note is appended as its own block here.
-    api.intercept("context.build", (ctx) => {
-      const pending = connections.filter((c) => c.state === "idle" || c.state === "connecting")
-      const note = pendingSection(pending.map((c) => c.config.name))
-      if (!note) return { action: "pass" }
-      return { action: "modify", value: { ...ctx, systemPrompt: `${ctx.systemPrompt.trimEnd()}\n\n${note}` } }
-    })
+    api.intercept(
+      "context.build",
+      async (ctx, { signal }) => {
+        if (pending().length) await settledWithin(started, waitUntil - Date.now(), signal)
+        const note = pendingSection(pending().map((c) => c.config.name))
+        if (!note) return { action: "pass" }
+        return {
+          action: "modify",
+          value: { ...ctx, systemPrompt: `${ctx.systemPrompt.trimEnd()}\n\n${note}` },
+        }
+      },
+      { timeoutMs: waitMs + 2000 },
+    )
   })
   return Object.assign(ext, {
     settled: async () => {
@@ -77,6 +92,23 @@ export function createMcpExtension(opts: McpExtensionOptions = {}): McpExtension
       await Promise.all(connections.map((c) => c.close()))
     },
   })
+}
+
+/** Waits for `work` at most `ms`, or until aborted, without keeping the process alive after. */
+async function settledWithin(work: Promise<unknown>, ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal.aborted) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  await Promise.race([
+    work,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms)
+      onAbort = () => resolve()
+      signal.addEventListener("abort", onAbort, { once: true })
+    }),
+  ])
+  clearTimeout(timer)
+  if (onAbort) signal.removeEventListener("abort", onAbort)
 }
 
 export default createMcpExtension()

@@ -203,10 +203,7 @@ export class Agent {
   async #callModel(turn: Turn): Promise<ModelReply> {
     const ctx = await this.interceptors.run(
       "context.build",
-      {
-        systemPrompt: appendSection(this.systemPrompt, deferredToolsSection(this.tools.deferred())),
-        messages: [...this.messages],
-      },
+      { systemPrompt: this.systemPrompt, messages: [...this.messages] },
       { sessionId: this.sessionId, signal: turn.signal },
     )
     if (turn.signal.aborted) return { kind: "aborted" }
@@ -222,7 +219,8 @@ export class Agent {
       const stream = this.#ai.stream(
         {
           model: this.model,
-          systemPrompt: ctx.value.systemPrompt,
+          // Listed after the interceptors ran, so tools registered while they waited are included.
+          systemPrompt: appendSection(ctx.value.systemPrompt, deferredToolsSection(this.tools.deferred())),
           messages: ctx.value.messages,
           tools: offeredTools(this.tools, this.#loadedTools),
           ...(this.#maxTokens ? { maxTokens: this.#maxTokens } : {}),

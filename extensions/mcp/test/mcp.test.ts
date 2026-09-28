@@ -323,17 +323,34 @@ test("an HTTP request is abortable", async () => {
   await client.close()
 })
 
-test("the model is told while servers are still connecting", async () => {
-  const { agent, mock, mcp } = await harness([stdioServer("fx")], [{ text: "a" }])
-  // Before the background connect has even started.
-  await agent.prompt("go")
-  expect(mock.requests[0]!.systemPrompt).toContain("# MCP servers\nStill connecting: fx.")
-  await mcp.settled()
-  mock.push({ text: "b" })
-  await agent.prompt("again")
-  expect(mock.requests[1]!.systemPrompt).not.toContain("Still connecting")
-  await mcp.close()
-})
+test(
+  "a model call right after startup waits briefly for connecting servers",
+  async () => {
+    const { agent, mock, mcp } = await harness([stdioServer("fx")], [{ text: "a" }])
+    // No settled(): the background connect has not even started yet.
+    await agent.prompt("go")
+    expect(mock.requests[0]!.systemPrompt).toContain("- mcp__fx__echo:")
+    expect(mock.requests[0]!.systemPrompt).not.toContain("Still connecting")
+    expect(mock.requests[0]!.tools.map((t) => t.name)).toEqual([TOOL_SEARCH])
+    await mcp.close()
+  },
+  SLOW,
+)
+
+test(
+  "past the startup wait, the model is told which servers are still connecting",
+  async () => {
+    const { agent, mock, mcp } = await harness([stdioServer("fx")], [{ text: "a" }], { startupWaitMs: 0 })
+    await agent.prompt("go")
+    expect(mock.requests[0]!.systemPrompt).toContain("# MCP servers\nStill connecting: fx.")
+    await mcp.settled()
+    mock.push({ text: "b" })
+    await agent.prompt("again")
+    expect(mock.requests[1]!.systemPrompt).not.toContain("Still connecting")
+    await mcp.close()
+  },
+  SLOW,
+)
 
 test(
   "falls back to spawning on the main thread when the pipe worker cannot load",

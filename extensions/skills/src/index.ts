@@ -19,7 +19,7 @@ export function skillsSection(skills: Skill[]): string {
   if (!usable.length) return ""
   return [
     "# Skills",
-    `Skills are packaged instructions for particular tasks. When a task matches a skill's description, call the ${SKILL_TOOL} tool with its name before starting, then follow the instructions it returns.`,
+    `Skills are packaged instructions for particular tasks, written by the user or their team. Whenever a request matches a skill's description, call the ${SKILL_TOOL} tool with its name before doing anything else, then follow the instructions it returns over your own defaults.`,
     ...usable.map((s) => `- ${s.name}: ${s.description} (${s.path})`),
   ].join("\n")
 }
