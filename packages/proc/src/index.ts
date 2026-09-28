@@ -65,16 +65,23 @@ function onWorkerGone(w: Worker) {
   if (worker !== w) return
   worker = undefined
   w.terminate()
-  // Prepared commands lived in that worker.
-  for (const gone of [...standbys.values()]) gone()
-  const neverLoaded = !workerReady
   // It never loaded: stop trying and run what was waiting on this thread instead.
-  if (neverLoaded) workerBroken = true
+  if (!workerReady) workerBroken = true
+  abandonWorker(!workerReady)
+}
+
+/**
+ * Settles everything that lived in a worker that is gone. Only a worker that never loaded is
+ * known not to have released anything; after that a released standby may already have run
+ * its command, so it must not look gone (its caller would run it a second time).
+ */
+function abandonWorker(neverLoaded: boolean) {
+  for (const gone of [...standbys.values()]) gone()
   for (const [id, p] of pending) {
     pending.delete(id)
     p.opts.signal.removeEventListener("abort", p.onAbort)
     if (neverLoaded && p.inline) p.inline().then(p.resolve, p.reject)
-    else if (!p.inline) p.reject(new StandbyGoneError("the command worker stopped"))
+    else if (neverLoaded) p.reject(new StandbyGoneError("the command worker did not load"))
     // It crashed after working; fail what was running and start a fresh worker next time.
     // Processes it started lose their job handles and may keep running.
     else p.reject(new Error("the command worker stopped unexpectedly"))
@@ -204,7 +211,7 @@ export function warmUpCommands(): void {
 export function resetCommandWorker(opts: { url?: string } = {}): void {
   worker?.terminate()
   worker = undefined
-  for (const gone of [...standbys.values()]) gone()
+  abandonWorker(false)
   workerReady = false
   workerBroken = false
   workerUrl = opts.url ?? new URL("./worker.ts", import.meta.url).href

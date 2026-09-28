@@ -2,7 +2,7 @@ import { afterAll, expect, setDefaultTimeout, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { prepareCommand, prepareCommandInline, StandbyGoneError } from "../src/index.ts"
+import { prepareCommand, prepareCommandInline, resetCommandWorker, StandbyGoneError } from "../src/index.ts"
 
 // Spawns can take seconds on Windows machines with antivirus scanning.
 setDefaultTimeout(60_000)
@@ -124,6 +124,23 @@ test("abort during a released standby kills it", async () => {
   const p = standby.run({ gateLine: "x", timeoutMs: 60_000, signal: abort.signal })
   setTimeout(() => abort.abort(), 500)
   expect((await p).aborted).toBe(true)
+})
+
+test("losing the worker after a release is a failure, not a gone standby that may be rerun", async () => {
+  // Its tree is no longer contained once the worker is gone, so it must end on its own.
+  const standby = prepareCommand(gated("await Bun.sleep(3000)"), { cwd, gated: true })
+  const idle = prepareCommand(gated(), { cwd, gated: true })
+  const run = standby.run(release("x"))
+  await Bun.sleep(500)
+  resetCommandWorker()
+  const err = await run.then(
+    () => undefined,
+    (e: unknown) => e,
+  )
+  expect(err).toBeInstanceOf(Error)
+  expect(err).not.toBeInstanceOf(StandbyGoneError)
+  expect(idle.alive).toBe(false)
+  await expect(idle.run(release("x"))).rejects.toBeInstanceOf(StandbyGoneError)
 })
 
 test("an idle standby does not keep the process alive, and dies with it", async () => {
