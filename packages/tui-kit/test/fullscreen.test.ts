@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { cursor, modes, RESET } from "../src/ansi.ts"
-import type { Component } from "../src/component.ts"
+import { type Component, CURSOR_MARKER } from "../src/component.ts"
 import { ScrollView } from "../src/components/scroll-view.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
 import { key } from "../src/keys.ts"
@@ -103,9 +103,11 @@ test("the live region is suspended while a full-screen view is open and comes ba
   const inline = new LiveRenderer(term, live)
   inline.start()
   inline.commit(["first"])
-  const before = screen.mainText
   const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
   inline.suspend()
+  // Suspending clears the live region: the hidden main screen holds only committed lines.
+  const before = screen.mainText
+  expect(before).toBe("first")
   full.open()
   expect(inline.isSuspended).toBe(true)
   // Commits and frames while suspended write nothing; the lines are held in order.
@@ -140,21 +142,44 @@ test("a resize while suspended is handled when resuming", () => {
   expect(screen.mainText).toBe("kept\nlive one\nlive two")
 })
 
-test("after a width change while suspended the live region is drawn from the cursor, over nothing older", () => {
-  const { term, screen, resize } = setup(20, 6)
-  const inline = new LiveRenderer(term, new Lines(["live one", "live two"]))
+test("after a width change while suspended the live region is drawn once, with no stale copy above", () => {
+  const { term, screen, resize } = setup(20, 8)
+  // The caret sits above the last row, as in an input box with a status bar below it.
+  const inline = new LiveRenderer(term, new Lines(["● tool", `│ › draft${CURSOR_MARKER}`, "status"]))
   inline.start()
   inline.commit(["history 1", "history 2"])
   const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
   inline.suspend()
   full.open()
   inline.commit(["while away"])
-  resize(30, 6)
+  resize(30, 8)
   full.close()
   inline.resume()
-  const text = screen.mainText
-  expect(text.startsWith("history 1\nhistory 2\n")).toBe(true)
-  expect(text.endsWith("while away\nlive one\nlive two")).toBe(true)
+  expect(screen.mainText).toBe("history 1\nhistory 2\nwhile away\n● tool\n│ › draft\nstatus")
+  // And it goes on drawing in place.
+  inline.render()
+  inline.commit(["later"])
+  expect(screen.mainText).toBe("history 1\nhistory 2\nwhile away\nlater\n● tool\n│ › draft\nstatus")
+})
+
+test("opening a view twice, with a resize each time, leaves the transcript intact", () => {
+  const { term, screen, resize } = setup(20, 8)
+  const inline = new LiveRenderer(term, new Lines(["● tool", `› draft${CURSOR_MARKER}`, "status"]))
+  inline.start()
+  inline.commit(["history"])
+  const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
+  for (const [cols, echo] of [
+    [26, "› /agents view 1"],
+    [22, "› /agents view 2"],
+  ] as const) {
+    inline.commit([echo])
+    inline.suspend()
+    full.open()
+    resize(cols, 8)
+    full.close()
+    inline.resume()
+  }
+  expect(screen.mainText).toBe("history\n› /agents view 1\n› /agents view 2\n● tool\n› draft\nstatus")
 })
 
 test("stop resumes a suspended renderer, so held lines are not lost", () => {
