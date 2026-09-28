@@ -211,7 +211,7 @@ function noticeMessage(jobs: Pick<Job, "role" | "done" | "result">[]): UserMessa
     jobs.length === 1
       ? "A sub-agent you started in the background has ended. Its report follows."
       : `${jobs.length} sub-agents you started in the background have ended. Their reports follow.`
-  const text = `${head} (Sent automatically when it ended; the user did not write this message.)\n\n${jobs.map((j) => j.done ?? "").join("\n\n")}`
+  const text = `${head} (Sent automatically; the user did not write this message.)\n\n${jobs.map((j) => j.done ?? "").join("\n\n")}`
   return {
     role: "user",
     content: [{ type: "text", text }],
