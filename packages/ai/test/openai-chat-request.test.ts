@@ -20,8 +20,16 @@ async function sentBody(ref: string, providers: ProviderConfig[] = []) {
   return seen.body
 }
 
-test("the openai-chat provider sends max_completion_tokens", async () => {
-  const body = await sentBody("openai-chat/gpt-5")
+test("a provider with compat.maxTokensField sends max_completion_tokens", async () => {
+  const body = await sentBody("oa/gpt-5", [
+    {
+      id: "oa",
+      dialect: "openai-chat",
+      baseUrl: "http://oa",
+      apiKeyEnv: "OPENAI_API_KEY",
+      compat: { maxTokensField: "max_completion_tokens" },
+    },
+  ])
   expect(body.max_completion_tokens).toBe(100)
   expect(body.max_tokens).toBeUndefined()
 })

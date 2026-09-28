@@ -2,7 +2,7 @@ import { catalogProviderId, type ModelCatalog } from "./catalog.ts"
 import { withCost } from "./cost.ts"
 import type { Dialect } from "./dialect.ts"
 import { BUILTIN_DIALECTS } from "./dialects/index.ts"
-import { BUILTIN_PROVIDERS, type ProviderConfig, resolveModelInfo } from "./providers.ts"
+import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import { type RetryOptions, withRetry } from "./retry.ts"
 import { withTextTools } from "./text-tools.ts"
 import { type ModelInfo, type ModelRequest, type StreamEvent, withoutDisplay } from "./types.ts"
@@ -38,7 +38,7 @@ export interface Ai {
   setCatalog?(catalog: ModelCatalog | undefined): void
   /** The catalog in use, if any. */
   catalog?(): ModelCatalog | undefined
-  /** Forgets a provider; a built-in one comes back as it was built in. */
+  /** Forgets a provider. */
   removeProvider?(id: string): void
   /** Sets or (undefined) forgets the stored key (auth.json) used for a provider when its variables are unset. */
   setStoredKey?(id: string, apiKey: string | undefined): void
@@ -47,7 +47,8 @@ export interface Ai {
 export function createAi(opts: AiOptions = {}): Ai {
   const providers = new Map<string, ProviderConfig>()
   const dialects = new Map<string, Dialect>()
-  for (const p of [...BUILTIN_PROVIDERS, ...(opts.providers ?? [])]) providers.set(p.id, p)
+  // Only the providers given exist: Amira has none built in, just the dialects to speak to them.
+  for (const p of opts.providers ?? []) providers.set(p.id, p)
   for (const d of [...BUILTIN_DIALECTS, ...(opts.dialects ?? [])]) dialects.set(d.id, d)
   const env = opts.env ?? process.env
   const doFetch = opts.fetch ?? fetch
@@ -58,9 +59,15 @@ export function createAi(opts: AiOptions = {}): Ai {
   const hasKey = (p: ProviderConfig) =>
     !p.apiKeyEnv || Boolean(p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id])
 
+  const unknownProvider = (id: string) => {
+    const ids = [...providers.keys()]
+    const known = ids.length > 0 ? `configured: ${ids.join(", ")}` : "no providers are configured"
+    return `unknown provider "${id}" (${known})`
+  }
+
   const provider = (id: string) => {
     const p = providers.get(id)
-    if (!p) throw new Error(`unknown provider "${id}" (known: ${[...providers.keys()].join(", ")})`)
+    if (!p) throw new Error(unknownProvider(id))
     return p
   }
 
@@ -78,8 +85,15 @@ export function createAi(opts: AiOptions = {}): Ai {
     stream(full, signal) {
       // A message's display is for frontends; the model only ever sees its content.
       const req = withoutDisplay(full)
+      if (isNoModel(req.model)) {
+        const message =
+          providers.size === 0
+            ? "no providers configured; add one with /provider add, then pick a model with /model"
+            : "no model selected; pick one with /model"
+        return failed(req, message, "no_model")
+      }
       const p = providers.get(req.model.provider)
-      if (!p) return failed(req, `unknown provider "${req.model.provider}"`, "unknown_provider")
+      if (!p) return failed(req, unknownProvider(req.model.provider), "unknown_provider")
       const dialect = dialects.get(req.model.dialect)
       if (!dialect) return failed(req, `unknown dialect "${req.model.dialect}"`, "unknown_dialect")
       const apiKey = p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id]
@@ -126,11 +140,7 @@ export function createAi(opts: AiOptions = {}): Ai {
       if (key === undefined) delete storedKeys[id]
       else storedKeys[id] = key
     },
-    removeProvider: (id) => {
-      const builtin = BUILTIN_PROVIDERS.find((p) => p.id === id)
-      if (builtin) providers.set(id, builtin)
-      else providers.delete(id)
-    },
+    removeProvider: (id) => void providers.delete(id),
   }
 }
 
