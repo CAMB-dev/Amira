@@ -213,6 +213,14 @@ describe("win32-input-mode", () => {
     expectSplitSafe(win32(13, 13, 0x30), [key("enter", { shift: true })])
   })
 
+  test("paste with vk=0 markers and a body of real key events", () => {
+    const spell = (t: string) => [...t].map((c) => win32(0, c.charCodeAt(0), 0)).join("")
+    const body =
+      win32(65, 97, 0) + win32(65, 97, 0, 0) + win32(16, 0, 0x10) + win32(13, 13, 0x20) + win32(66, 98, 0)
+    expectSplitSafe(spell("\x1b[200~") + body + spell("\x1b[201~"), [{ type: "paste", text: "a\nb" }])
+    expect(parse(spell("\x1b[200~a\rb\x1b[201~"))).toEqual([{ type: "paste", text: "a\nb" }])
+  })
+
   test("vk=0 characters are re-parsed as raw input", () => {
     const seq = [..."\x1b[A"].map((c) => win32(0, c.charCodeAt(0), 0)).join("")
     expect(parse(seq)).toEqual([key("up")])

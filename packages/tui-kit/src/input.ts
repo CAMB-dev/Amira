@@ -102,8 +102,14 @@ function controlKey(ch: string): KeyEvent | undefined {
 
 type Decoded = Omit<Parsed, "len">
 
-function decodeWin32(params: string): Decoded {
+/** win32-input-mode parameters: Vk, Sc, Uc, Kd, Cs, Rc. */
+function win32Params(params: string): [vk: number, uc: number, kd: number, cs: number, rc: number] {
   const [vk = 0, , uc = 0, kd = 0, cs = 0, rc = 1] = params.split(";").map((p) => Number.parseInt(p, 10) || 0)
+  return [vk, uc, kd, cs, rc]
+}
+
+function decodeWin32(params: string): Decoded {
+  const [vk, uc, kd, cs, rc] = win32Params(params)
   if (kd !== 1) return {}
   const repeat = Math.max(1, rc)
   if (VK_MODIFIERS.has(vk)) return {}
@@ -218,6 +224,7 @@ export class InputParser {
   private held = ""
   private paste: string | undefined
   private high = ""
+  private win32 = false
 
   feed(data: string): InputEvent[] {
     this.buf += this.unwrapRawWin32(data)
@@ -246,7 +253,8 @@ export class InputParser {
     this.held = tail ? tail[0] : ""
     if (tail) s = s.slice(0, s.length - this.held.length)
     return s.replace(WIN32_SEQ, (seq, params: string) => {
-      const [vk = 0, , uc = 0, kd = 0, , rc = 1] = params.split(";").map((p) => Number.parseInt(p, 10) || 0)
+      this.win32 = true
+      const [vk, uc, kd, , rc] = win32Params(params)
       if (vk !== 0) return seq
       return kd === 1 && uc > 0 ? String.fromCharCode(uc).repeat(Math.max(1, rc)) : ""
     })
@@ -259,11 +267,11 @@ export class InputParser {
         const end = this.buf.indexOf(PASTE_END)
         if (end === -1) {
           const keep = partialSuffix(this.buf, PASTE_END)
-          this.paste += this.buf.slice(0, this.buf.length - keep)
+          this.paste += this.pasteText(this.buf.slice(0, this.buf.length - keep))
           this.buf = this.buf.slice(this.buf.length - keep)
           break
         }
-        const text = (this.paste + this.buf.slice(0, end)).replace(/\r\n?/g, "\n")
+        const text = (this.paste + this.pasteText(this.buf.slice(0, end))).replace(/\r\n?/g, "\n")
         this.buf = this.buf.slice(end + PASTE_END.length)
         this.paste = undefined
         out.push({ type: "paste", text })
@@ -276,6 +284,19 @@ export class InputParser {
       for (const e of parsed.events ?? []) this.emit(e, out)
     }
     return out
+  }
+
+  /**
+   * In win32-input-mode the paste body can arrive as real key events (vk != 0) between markers
+   * sent as vk=0 characters. Those events are turned back into the characters they typed.
+   */
+  private pasteText(s: string): string {
+    if (!this.win32) return s
+    return s.replace(WIN32_SEQ, (_, params: string) => {
+      const [vk, uc, kd, , rc] = win32Params(params)
+      if (kd !== 1 || uc === 0) return ""
+      return (vk === 13 ? "\n" : String.fromCharCode(uc)).repeat(Math.max(1, rc))
+    })
   }
 
   /** Joins surrogate halves that arrive as separate events (win32-input-mode sends UTF-16 units). */
