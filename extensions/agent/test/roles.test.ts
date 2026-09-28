@@ -20,7 +20,15 @@ test("built-in roles: explorer and reviewer are read-only, coder gets every tool
   const { roles } = loadRoles({ home: path.join(tmp, "none"), cwd: path.join(tmp, "none") })
   expect([...roles.keys()]).toEqual(["explorer", "coder", "reviewer"])
   for (const name of ["explorer", "reviewer"]) {
-    expect(roles.get(name)?.tools).toEqual(["read", "grep", "glob", "bash", "powershell"])
+    expect(roles.get(name)?.tools).toEqual([
+      "read",
+      "grep",
+      "glob",
+      "bash",
+      "powershell",
+      "web_search",
+      "web_fetch",
+    ])
     expect(roles.get(name)?.prompt).toContain("Do not change anything")
   }
   expect(roles.get("coder")?.tools).toBeUndefined()

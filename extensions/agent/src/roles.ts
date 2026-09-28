@@ -18,7 +18,7 @@ export interface Role {
 }
 
 /** Read-only work may still inspect with the shell; the prompt keeps it to commands that change nothing. */
-const READ_ONLY_TOOLS = ["read", "grep", "glob", "bash", "powershell"]
+const READ_ONLY_TOOLS = ["read", "grep", "glob", "bash", "powershell", "web_search", "web_fetch"]
 
 const READ_ONLY_RULE =
   "Do not change anything: no file edits, and only shell commands that read (listing files, git status/log/diff/show, printing versions). Never run commands that write, install, delete or commit."

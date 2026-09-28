@@ -736,12 +736,12 @@ test("sub-agents finishing close together come back as one message", async () =>
   expect(events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId).length).toBe(2)
 })
 
-test("a result agent_result is waiting for is handed out there and not sent again", async () => {
+test("in the main session agent_result does not wait: the result still comes once, as a notice", async () => {
   const { root, bus, events } = await setup(
     (req) => {
       const last = req.messages.at(-1)
       if (who(req) === "explorer") return { text: "awaited answer", delayMs: 30 }
-      if (isNotice(req)) return { text: "unexpected notice" }
+      if (isNotice(req)) return { text: "got the notice" }
       if (last?.role === "toolResult" && last.toolName === "agent") {
         return { toolCalls: [{ name: "agent_result", args: {} }] }
       }
@@ -751,12 +751,43 @@ test("a result agent_result is waiting for is handed out there and not sent agai
     { settings: {} },
   )
   await root.prompt("go")
-  expect(agentResult(root, "agent_result")).toContain("awaited answer")
+  // The call came back at once, while the sub-agent was still running.
+  expect(agentResult(root, "agent_result")).not.toContain("awaited answer")
   await Bun.sleep(400)
   await bus.flush()
-  expect(notices(root)).toEqual([])
+  expect(
+    notices(root)
+      .map((n) => n.text)
+      .join("\n"),
+  ).toContain("awaited answer")
   expect(root.expectedNotices).toBe(0)
-  expect(events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId).length).toBe(1)
+  expect(events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId).length).toBe(2)
+})
+
+test("the main session runs sub-agents in the background even when the model asks to wait", async () => {
+  const { root, bus } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "explorer") return { text: "late answer", delayMs: 30 }
+      if (isNotice(req)) return { text: "summarized" }
+      if (last?.role === "toolResult") return { text: "started" }
+      return {
+        toolCalls: [
+          { name: "agent", args: { background: false, tasks: [{ role: "explorer", prompt: "x" }] } },
+        ],
+      }
+    },
+    { settings: {} },
+  )
+  await root.prompt("go")
+  expect(agentResult(root, "agent")).toContain("Started in the background")
+  await Bun.sleep(400)
+  await bus.flush()
+  expect(
+    notices(root)
+      .map((n) => n.text)
+      .join("\n"),
+  ).toContain("late answer")
 })
 
 test("interrupting the commander leaves its background sub-agents running; their result still comes", async () => {
