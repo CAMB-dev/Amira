@@ -1,4 +1,5 @@
 import type { EventMap } from "@amira/api"
+import { rankMatches } from "@amira/core"
 import {
   type Component,
   Editor,
@@ -14,12 +15,17 @@ export type DialogRequest = EventMap["ui.request"]
 /** undefined cancels the dialog. */
 export type DialogAnswer = string | boolean | undefined
 
+/** Options of a select shown at once; longer lists scroll with the selection. */
+const MAX_OPTIONS = 10
+
 /**
  * An inline prompt for one ui.request: y/n for confirm, a list for select and a one-line
- * editor for input. Esc cancels. Calls `onDone` once.
+ * editor for input. Esc cancels. Calls `onDone` once. Typing in a select filters its options,
+ * which matters for long lists such as every model of the catalog.
  */
 export class Dialog implements Component {
   #selected = 0
+  #filter = ""
   #editor: Editor | undefined
   #done = false
 
@@ -47,12 +53,18 @@ export class Dialog implements Component {
       return false
     }
     if (r.kind === "select") {
-      const n = r.options.length
-      if (matchesKey(e, "up")) this.#selected = (this.#selected - 1 + n) % n
-      else if (matchesKey(e, "down") || matchesKey(e, "tab")) this.#selected = (this.#selected + 1) % n
-      else if (matchesKey(e, "enter") && n) return this.#finish(r.options[this.#selected]!)
-      else if (e.type === "key" && e.text && /^[1-9]$/.test(e.text) && Number(e.text) <= n) {
-        return this.#finish(r.options[Number(e.text) - 1]!)
+      const options = this.#options()
+      const n = options.length
+      if (matchesKey(e, "up")) this.#selected = n ? (this.#selected - 1 + n) % n : 0
+      else if (matchesKey(e, "down") || matchesKey(e, "tab"))
+        this.#selected = n ? (this.#selected + 1) % n : 0
+      else if (matchesKey(e, "enter")) return n ? this.#finish(options[this.#selected]!) : true
+      else if (!this.#filter && e.type === "key" && e.text && /^[1-9]$/.test(e.text) && Number(e.text) <= n) {
+        return this.#finish(options[Number(e.text) - 1]!)
+      } else if (e.type === "key" && e.name === "backspace" && this.#filter) {
+        this.#setFilter(this.#filter.slice(0, -1))
+      } else if (e.type === "key" && e.text && !e.ctrl && !e.alt) {
+        this.#setFilter(this.#filter + e.text)
       } else return false
       return true
     }
@@ -71,16 +83,37 @@ export class Dialog implements Component {
       if (r.message) lines.push(...wrapText(theme.muted(r.message), width))
       lines.push(theme.muted("y yes · n no · Esc cancel"))
     } else if (r.kind === "select") {
-      r.options.forEach((o, i) => {
+      const options = this.#options()
+      if (this.#filter) lines.push(`${theme.muted("filter ›")} ${this.#filter}`)
+      const start = Math.min(
+        Math.max(0, this.#selected - MAX_OPTIONS + 1),
+        Math.max(0, options.length - MAX_OPTIONS),
+      )
+      options.slice(start, start + MAX_OPTIONS).forEach((o, j) => {
+        const i = start + j
         const line = i === this.#selected ? `${theme.accent("›")} ${theme.accent(o)}` : `  ${o}`
-        lines.push(truncateToWidth(`${line}${i < 9 ? theme.muted(` ${i + 1}`) : ""}`, width, "…"))
+        const digit = i < 9 && !this.#filter ? theme.muted(` ${i + 1}`) : ""
+        lines.push(truncateToWidth(`${line}${digit}`, width, "…"))
       })
-      lines.push(theme.muted("↑↓ move · Enter choose · Esc cancel"))
+      if (!options.length) lines.push(theme.muted("  no match"))
+      else if (options.length > MAX_OPTIONS)
+        lines.push(theme.muted(`  ${this.#selected + 1}/${options.length}`))
+      lines.push(theme.muted("↑↓ move · type to filter · Enter choose · Esc cancel"))
     } else {
       lines.push(...this.#editor!.render(width, ctx))
       lines.push(theme.muted("Enter submit · Esc cancel"))
     }
     return lines
+  }
+
+  /** The select's options that match the filter, best first. */
+  #options(): string[] {
+    return this.request.kind === "select" ? rankMatches(this.#filter, this.request.options, (o) => o) : []
+  }
+
+  #setFilter(filter: string) {
+    this.#filter = filter
+    this.#selected = 0
   }
 
   #finish(answer: DialogAnswer): true {
