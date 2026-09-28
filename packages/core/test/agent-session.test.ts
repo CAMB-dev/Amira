@@ -379,6 +379,20 @@ test("a compaction that leaves the context over the threshold is not repeated ev
   expect(text(agent.messages[0]!)).toContain("S2")
 })
 
+test("a turn over the threshold with nothing to fold yet compacts once enough steps exist", async () => {
+  const { agent, mock } = await setup([
+    step(1, big),
+    step(2, big),
+    step(3, big),
+    { text: "SUMMARY" },
+    { text: "done" },
+  ])
+  agent.tools.register(noop, "t")
+  expect((await agent.prompt("q1")).reason).toBe("done")
+  expect(summaryCalls(mock)).toHaveLength(1)
+  expect(text(agent.messages[0]!)).toContain("SUMMARY")
+})
+
 test("splitHistory never summarizes an earlier summary alone", () => {
   const model = { provider: "p", model: "m" }
   const [s, ack] = summaryMessages("old", model)

@@ -308,7 +308,7 @@ export class Agent {
     this.#abort = abort
     this.#compacting = true
     try {
-      return await this.#compact("manual", abort.signal, undefined, instructions)
+      return (await this.#compact("manual", abort.signal, undefined, instructions)) === true
     } finally {
       this.#abort = undefined
       this.#compacting = false
@@ -466,7 +466,7 @@ export class Agent {
       let compactFailed = false
       while (true) {
         if (!compactFailed && this.#needsCompaction()) {
-          compactFailed = !(await this.#compact("threshold", abort.signal, turn))
+          compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
         }
         if (abort.signal.aborted) {
           result = { reason: "aborted", steps }
@@ -932,13 +932,15 @@ export class Agent {
   /**
    * Replaces older history with a summary (D19, D57). Never throws; failures emit compact.failed.
    * compact.before runs first, so a compaction it blocks never starts and is reported as blocked.
+   * Resolves true when it compacted, false when it failed or was blocked, and undefined when
+   * there was nothing to compact yet (a long turn may have enough a few steps later).
    */
   async #compact(
     reason: "threshold" | "manual",
     signal: AbortSignal,
     turn: Turn | undefined,
     instructions?: string,
-  ) {
+  ): Promise<boolean | undefined> {
     const split = splitHistory(
       this.messages,
       this.#compaction.keepTurns ?? 2,
@@ -946,7 +948,7 @@ export class Agent {
     )
     if (!split) {
       if (reason === "manual") this.#emit(turn, "compact.failed", { error: "nothing to compact yet" })
-      return false
+      return undefined
     }
     try {
       const gate = await this.interceptors.run(
