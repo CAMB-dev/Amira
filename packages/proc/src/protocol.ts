@@ -1,3 +1,4 @@
+import type { PipeEvent, PipeSpec } from "./pipe.ts"
 import type { RunResult } from "./run-inline.ts"
 
 export interface SpawnRequest {
@@ -24,6 +25,9 @@ export type ToWorker =
   | { type: "dispose"; id: number }
   | { type: "abort"; id: number }
   | { type: "warmup" }
+  | { type: "pipe-open"; id: number; spec: PipeSpec }
+  | { type: "pipe-write"; id: number; data: string }
+  | { type: "pipe-close"; id: number; graceMs: number }
 
 /** Worker → main thread. */
 export type FromWorker =
@@ -35,3 +39,5 @@ export type FromWorker =
   | { type: "failed"; id: number; error: string; gone?: boolean }
   /** A prepared command failed to start or exited before it was released. */
   | { type: "gone"; id: number }
+  /** An event of a piped process; `exit` is its last. */
+  | { type: "pipe"; id: number; event: PipeEvent }

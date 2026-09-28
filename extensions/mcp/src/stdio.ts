@@ -1,4 +1,4 @@
-import { type FromPipeWorker, openPipe, type PipeEvent, type PipeHandle, type PipeSpec } from "./pipe.ts"
+import { openPipe, type PipeEvent, type PipeProcess, type PipeSpec } from "@amira/proc"
 import type { JsonRpcMessage, Transport } from "./transport.ts"
 
 /**
@@ -10,8 +10,8 @@ let exitHookInstalled = false
 
 /**
  * Kills the trees of servers still running when Amira exits. Workers are gone by then, so
- * this is the one spawn on the main thread: taskkill /T, because killing only a launcher
- * (cmd.exe, npx.cmd) leaves the real server running on Windows.
+ * this is the one spawn on the main thread (without pipes, see `openPipe`): taskkill /T,
+ * because killing only a launcher (cmd.exe, npx.cmd) leaves the real server running on Windows.
  */
 export function killLiveServers(): void {
   if (!livePids.size) return
@@ -40,17 +40,6 @@ function track(pid: number) {
   process.once("exit", killLiveServers)
 }
 
-// A compiled binary needs pipe-worker.ts as an extra entrypoint at this same relative path.
-let workerUrl = new URL("./pipe-worker.ts", import.meta.url).href
-/** Workers could not be loaded once; later servers spawn on the main thread. */
-let workersBroken = false
-
-/** Test hook: load the pipe worker from elsewhere (e.g. a missing file, to test the fallback). */
-export function setPipeWorkerUrl(url?: string): void {
-  workerUrl = url ?? new URL("./pipe-worker.ts", import.meta.url).href
-  workersBroken = false
-}
-
 export interface StdioOptions {
   /** How long the server gets to exit after stdin closes before it is killed. Default 2000 ms. */
   closeGraceMs?: number
@@ -59,7 +48,7 @@ export interface StdioOptions {
 
 /**
  * Speaks newline-delimited JSON-RPC over a server's stdin/stdout. The process is spawned and
- * owned by a dedicated worker thread, so a slow spawn never stalls the main thread.
+ * owned by the command worker of @amira/proc, so a slow spawn never stalls the main thread.
  */
 export class StdioTransport implements Transport {
   onmessage?: (message: JsonRpcMessage) => void
@@ -70,7 +59,7 @@ export class StdioTransport implements Transport {
 
   #spec: PipeSpec
   #opts: StdioOptions
-  #pipe: { write(data: string): void; close(graceMs: number): void; dispose(): void } | undefined
+  #pipe: PipeProcess | undefined
   #buffer = ""
   #stderrTail = ""
   #closed = false
@@ -101,7 +90,6 @@ export class StdioTransport implements Transport {
           if (this.pid !== undefined && !e.error) livePids.delete(this.pid)
           const reason =
             e.error ?? `exited with code ${e.code}${this.stderrTail ? `: ${this.stderrTail}` : ""}`
-          this.#pipe?.dispose()
           if (!started) reject(new Error(`could not start ${this.#spec.argv[0]}: ${reason}`))
           else if (!this.#closed) {
             this.#closed = true
@@ -109,7 +97,7 @@ export class StdioTransport implements Transport {
           }
         }
       }
-      this.#pipe = workersBroken ? inlinePipe(this.#spec, onEvent) : workerPipe(this.#spec, onEvent)
+      this.#pipe = openPipe(this.#spec, onEvent)
     })
   }
 
@@ -147,80 +135,5 @@ export class StdioTransport implements Transport {
   #onStderr(data: string) {
     this.#stderrTail = (this.#stderrTail + data).slice(-2000)
     this.#opts.onStderr?.(data)
-  }
-}
-
-function workerPipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void) {
-  let worker: Worker
-  try {
-    worker = new Worker(workerUrl)
-  } catch {
-    workersBroken = true
-    return inlinePipe(spec, onEvent)
-  }
-  worker.unref()
-  let ready = false
-  let fallback: ReturnType<typeof inlinePipe> | undefined
-  const pending: string[] = []
-  let closeGrace: number | undefined
-  let disposed = false
-  const gone = () => {
-    if (disposed || fallback) return
-    if (ready) {
-      disposed = true
-      onEvent({ type: "exit", code: null, error: "the pipe worker stopped unexpectedly" })
-      return
-    }
-    // The worker module never loaded: spawn here instead.
-    workersBroken = true
-    worker.terminate()
-    fallback = inlinePipe(spec, onEvent)
-    for (const d of pending) fallback.write(d)
-    if (closeGrace !== undefined) fallback.close(closeGrace)
-  }
-  worker.addEventListener("error", gone)
-  worker.addEventListener("close", gone)
-  worker.onmessage = (e: MessageEvent<FromPipeWorker>) => {
-    if (e.data.type === "ready") {
-      ready = true
-      pending.length = 0
-      return
-    }
-    onEvent(e.data)
-  }
-  worker.postMessage({ type: "open", spec })
-  return {
-    write(data: string) {
-      if (fallback) return fallback.write(data)
-      if (!ready) pending.push(data)
-      worker.postMessage({ type: "write", data })
-    },
-    close(graceMs: number) {
-      if (fallback) return fallback.close(graceMs)
-      closeGrace = graceMs
-      worker.postMessage({ type: "close", graceMs })
-    },
-    dispose() {
-      if (fallback || disposed) return
-      disposed = true
-      // Let the worker finish posting, then free the thread.
-      setTimeout(() => worker.terminate(), 0)
-    },
-  }
-}
-
-function inlinePipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void) {
-  let handle: PipeHandle | undefined
-  // Deferred so start() callers see the same asynchronous shape as with a worker.
-  const queue: ((h: PipeHandle) => void)[] = []
-  setTimeout(() => {
-    handle = openPipe(spec, onEvent)
-    for (const q of queue) q(handle)
-  }, 0)
-  const run = (f: (h: PipeHandle) => void) => (handle ? f(handle) : queue.push(f))
-  return {
-    write: (data: string) => void run((h) => h.write(data)),
-    close: (graceMs: number) => void run((h) => h.close(graceMs)),
-    dispose() {},
   }
 }
