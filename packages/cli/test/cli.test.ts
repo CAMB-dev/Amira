@@ -227,3 +227,18 @@ test("json mode includes session.start when the session is announced on ready", 
   expect(first.type).toBe("session.start")
   expect(first.data.cwd).toBe(here)
 })
+
+test("a tool call after unterminated reply text starts on a new line", async () => {
+  const { agent } = await mockSession([
+    { text: "Fixing:", toolCalls: [{ name: "echo", args: { text: "x" } }] },
+    { text: "done" },
+  ])
+  const lines: string[] = []
+  const io: PrintIO = {
+    stdout: (s) => void lines.push(`out:${s}`),
+    stderr: (s) => void lines.push(`err:${s}`),
+  }
+  await runPrint(agent, "go", false, { io })
+  const i = lines.indexOf("err:● echo x\n")
+  expect(lines[i - 1]).toBe("out:\n")
+})

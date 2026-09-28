@@ -70,6 +70,11 @@ export async function runPrint(
         }
         break
       case "tool.execute.start":
+        // Finish an unterminated line of reply text so the tool line starts on its own row.
+        if (!endedWithNewline) {
+          io.stdout("\n")
+          endedWithNewline = true
+        }
         io.stderr(`● ${e.data.name} ${summarizeArgs(e.data.args)}\n`)
         break
       case "tool.execute.end":
