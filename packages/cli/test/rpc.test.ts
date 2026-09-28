@@ -320,7 +320,11 @@ function inProcess(s: Awaited<ReturnType<typeof session>>) {
     input.push(cmd)
     return until((l) => l.id === cmd.id && "ok" in l)
   }
-  return { out, until, call, end: () => (input.end(), done) }
+  const end = () => {
+    input.end()
+    return done
+  }
+  return { out, until, call, end }
 }
 
 test("session.read lastTurn survives history entries being replaced", async () => {
