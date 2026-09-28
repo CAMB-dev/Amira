@@ -33,9 +33,17 @@ export function mcpConfigFiles(cwd: string, home: string): string[] {
   ]
 }
 
+/** The user settings key listing project directories whose own MCP servers may run. */
+export const TRUST_KEY = "mcpTrustedProjects"
+
 /**
  * A deliberately tiny reader for the `mcpServers` of these files; a full settings loader can
  * replace it by handing parsed entries to `parseServers`.
+ *
+ * Project files come with whatever repository was cloned, so unless the project (or a parent
+ * directory) is listed under `mcpTrustedProjects` in the user settings, their stdio servers are
+ * not started and their HTTP entries get no environment variables; each skipped server is
+ * reported as a problem saying how to trust the project.
  */
 export function readMcpConfig(
   cwd: string,
@@ -44,31 +52,70 @@ export function readMcpConfig(
 ): McpConfig {
   const byName = new Map<string, ServerConfig>()
   const problems: string[] = []
+  const userFile = path.join(home, "settings.json")
+  let trusted: boolean | undefined
   for (const file of mcpConfigFiles(cwd, home)) {
-    let text: string
-    try {
-      text = readFileSync(file, "utf8")
-    } catch {
-      continue
-    }
-    let json: unknown
-    try {
-      json = JSON.parse(text)
-    } catch (err) {
-      problems.push(`${file}: invalid JSON: ${err instanceof Error ? err.message : String(err)}`)
-      continue
-    }
-    const servers = (json as { mcpServers?: unknown } | null)?.mcpServers
+    const json = readJson(file, problems)
+    const servers = (json as { mcpServers?: unknown } | undefined)?.mcpServers
     if (servers === undefined) continue
-    const parsed = parseServers(servers, file, env)
+    const fromProject = !samePath(file, userFile)
+    trusted ??= !fromProject || isTrusted(cwd, readJson(userFile, [])?.[TRUST_KEY])
+    const open = !fromProject || trusted
+    const parsed = parseServers(servers, file, open ? env : {})
     problems.push(...parsed.problems)
     for (const name of parsed.disabled ?? []) byName.delete(name)
     for (const s of parsed.servers) {
+      if (!open && s.type === "stdio") {
+        problems.push(
+          `${file}: not starting MCP server "${s.name}" (${[s.command, ...s.args].join(" ")}): this project is not trusted. To allow it, add ${JSON.stringify(path.resolve(cwd))} to "${TRUST_KEY}" in ${userFile}`,
+        )
+        continue
+      }
+      // An untrusted project cannot redirect a server the user configured.
+      if (!open && byName.get(s.name)?.source === userFile) continue
       byName.delete(s.name)
       byName.set(s.name, s)
     }
   }
   return { servers: [...byName.values()], problems }
+}
+
+function readJson(file: string, problems: string[]): Record<string, unknown> | undefined {
+  let text: string
+  try {
+    text = readFileSync(file, "utf8")
+  } catch {
+    return undefined
+  }
+  try {
+    const json: unknown = JSON.parse(text)
+    return json && typeof json === "object" && !Array.isArray(json)
+      ? (json as Record<string, unknown>)
+      : undefined
+  } catch (err) {
+    problems.push(`${file}: invalid JSON: ${err instanceof Error ? err.message : String(err)}`)
+    return undefined
+  }
+}
+
+/** Whether `cwd` is one of the trusted directories or inside one. */
+export function isTrusted(cwd: string, list: unknown): boolean {
+  if (!Array.isArray(list)) return false
+  const dir = norm(cwd)
+  return list.some((entry) => {
+    if (typeof entry !== "string" || !entry) return false
+    const root = norm(entry)
+    return dir === root || dir.startsWith(root.endsWith(path.sep) ? root : root + path.sep)
+  })
+}
+
+function samePath(a: string, b: string): boolean {
+  return norm(a) === norm(b)
+}
+
+function norm(p: string): string {
+  const r = path.resolve(p)
+  return process.platform === "win32" ? r.toLowerCase() : r
 }
 
 export function parseServers(

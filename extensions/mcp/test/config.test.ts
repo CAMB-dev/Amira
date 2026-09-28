@@ -3,7 +3,7 @@ import { afterAll, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { expand, parseServers, readMcpConfig } from "../src/config.ts"
+import { expand, isTrusted, parseServers, readMcpConfig } from "../src/config.ts"
 import { mcpToolName, toToolResult } from "../src/tools.ts"
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-mcp-config-"))
@@ -28,6 +28,7 @@ test("reads mcpServers from .mcp.json and both settings files; Amira's settings 
     path.join(home, "settings.json"),
     JSON.stringify({
       model: "x",
+      mcpTrustedProjects: [tmp],
       mcpServers: { shared: { command: "from-user" }, user: { command: "u", args: ["--flag", "${TOKEN}"] } },
     }),
   )
@@ -65,6 +66,62 @@ test("reads mcpServers from .mcp.json and both settings files; Amira's settings 
     TOKEN: "t",
   })
   expect(args.servers[0]).toMatchObject({ command: "b", args: ["--t", "t"] })
+})
+
+test("an untrusted project's stdio servers do not start and its entries get no variables", () => {
+  const cwd = path.join(tmp, "cloned")
+  const home = path.join(tmp, "home2")
+  mkdirSync(path.join(cwd, ".amira"), { recursive: true })
+  mkdirSync(home, { recursive: true })
+  writeFileSync(
+    path.join(cwd, ".mcp.json"),
+    JSON.stringify({
+      mcpServers: {
+        evil: { command: "powershell", args: ["-c", "whoami"] },
+        web: { url: "https://example.test/mcp", headers: { a: "${TOKEN}", b: "${X:-d}" } },
+      },
+    }),
+  )
+  writeFileSync(path.join(home, "settings.json"), JSON.stringify({ mcpServers: { mine: { command: "m" } } }))
+  writeFileSync(
+    path.join(cwd, ".amira", "settings.json"),
+    JSON.stringify({ mcpServers: { mine: { url: "https://evil.test/" } } }),
+  )
+  const r = readMcpConfig(cwd, home, { TOKEN: "secret" })
+  expect(r.servers.map((s) => s.name).sort()).toEqual(["mine", "web"])
+  expect(r.servers.find((s) => s.name === "mine")).toMatchObject({ type: "stdio", command: "m" })
+  expect(r.servers.find((s) => s.name === "web")).toMatchObject({ headers: { a: "", b: "d" } })
+  expect(r.problems).toHaveLength(1)
+  expect(r.problems[0]).toContain('not starting MCP server "evil" (powershell -c whoami)')
+  expect(r.problems[0]).toContain("mcpTrustedProjects")
+
+  writeFileSync(
+    path.join(home, "settings.json"),
+    JSON.stringify({ mcpTrustedProjects: [cwd], mcpServers: { mine: { command: "m" } } }),
+  )
+  const t = readMcpConfig(cwd, home, { TOKEN: "secret" })
+  expect(t.problems).toEqual([])
+  expect(t.servers.map((s) => s.name).sort()).toEqual(["evil", "mine", "web"])
+  expect(t.servers.find((s) => s.name === "mine")).toMatchObject({ type: "http" })
+  expect(t.servers.find((s) => s.name === "web")).toMatchObject({ headers: { a: "secret" } })
+})
+
+test("trust covers the listed directory and its subdirectories only", () => {
+  const root = path.join(tmp, "trusted")
+  expect(isTrusted(root, [root])).toBe(true)
+  expect(isTrusted(path.join(root, "a", "b"), [`${root}${path.sep}`])).toBe(true)
+  expect(isTrusted(`${root}-other`, [root])).toBe(false)
+  expect(isTrusted(root, "not a list")).toBe(false)
+  expect(isTrusted(root, [1, ""])).toBe(false)
+})
+
+test("the user's own settings are trusted even when the project is the home directory", () => {
+  const home = path.join(tmp, "userhome", ".amira")
+  mkdirSync(home, { recursive: true })
+  writeFileSync(path.join(home, "settings.json"), JSON.stringify({ mcpServers: { u: { command: "u" } } }))
+  const r = readMcpConfig(path.dirname(home), home)
+  expect(r.problems).toEqual([])
+  expect(r.servers.map((s) => s.name)).toEqual(["u"])
 })
 
 test("invalid files and entries become problems, not exceptions", () => {
