@@ -237,7 +237,7 @@ function transcriptChecker(markers: string[]) {
     },
     /** Every marker reached the transcript exactly once, in order. */
     final(screen: VirtualScreen) {
-      expect(found(screen)).toEqual(markers)
+      expect([...found(screen)]).toEqual(markers)
     },
   }
 }
@@ -303,6 +303,7 @@ test("tool lines fit the terminal width", () => {
     error: (s: string) => s,
     success: (s: string) => s,
     warning: (s: string) => s,
+    border: (s: string) => s,
   }
   const lines = toolLines(plain, "bash", { command: "x".repeat(300) }, textResult("y".repeat(300)), 0, 40)
   expect(lines.every((l) => l.length <= 40)).toBe(true)
