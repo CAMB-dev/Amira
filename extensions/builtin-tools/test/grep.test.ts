@@ -1,0 +1,63 @@
+import { afterAll, beforeAll, expect, test } from "bun:test"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { type GrepParams, grepTool } from "../src/grep.ts"
+import { makeCtx, tempDirs, textOf } from "./util.ts"
+
+const tmp = tempDirs()
+let dir: string
+beforeAll(async () => {
+  dir = await tmp.make()
+  for (const d of ["src/deep", "node_modules/p", ".git"]) await mkdir(join(dir, d), { recursive: true })
+  await writeFile(join(dir, "src/a.ts"), "const TODO = 1\n// todo later\nexport {}\n")
+  await writeFile(join(dir, "src/deep/b.ts"), "// TODO one\r\n// TODO two\r\n")
+  await writeFile(join(dir, "notes.md"), "TODO: write docs\n")
+  await writeFile(join(dir, "node_modules/p/i.ts"), "TODO")
+  await writeFile(join(dir, ".git/config"), "TODO")
+  await writeFile(join(dir, "bin.dat"), new Uint8Array([84, 79, 68, 79, 0]))
+})
+afterAll(() => tmp.cleanup())
+
+const grep = (params: GrepParams) => grepTool.execute(params, makeCtx(dir))
+
+test("lists matching files by default, skipping binary and ignored dirs", async () => {
+  expect(textOf(await grep({ pattern: "TODO" })).split("\n")).toEqual([
+    "notes.md",
+    "src/a.ts",
+    "src/deep/b.ts",
+  ])
+})
+
+test("content mode shows file:line:text", async () => {
+  const r = await grep({ pattern: "todo", ignore_case: true, output_mode: "content", path: "src" })
+  expect(textOf(r).split("\n")).toEqual([
+    "src/a.ts:1:const TODO = 1",
+    "src/a.ts:2:// todo later",
+    "src/deep/b.ts:1:// TODO one",
+    "src/deep/b.ts:2:// TODO two",
+  ])
+})
+
+test("count mode, glob filter and single-file path", async () => {
+  expect(textOf(await grep({ pattern: "TODO", output_mode: "count", glob: "*.ts" })).split("\n")).toEqual([
+    "src/a.ts:1",
+    "src/deep/b.ts:2",
+  ])
+  expect(textOf(await grep({ pattern: "TODO", glob: "src/deep/**" }))).toBe("src/deep/b.ts")
+  expect(textOf(await grep({ pattern: "docs", path: "notes.md", output_mode: "content" }))).toBe(
+    "notes.md:1:TODO: write docs",
+  )
+})
+
+test("head_limit caps output and says so", async () => {
+  const r = textOf(await grep({ pattern: "TODO", output_mode: "content", head_limit: 2 }))
+  expect(r).toStartWith("notes.md:1:TODO: write docs\nsrc/a.ts:1:const TODO = 1\n\n(Showing 2 of 4")
+})
+
+test("errors on invalid regex and missing path; no matches is not an error", async () => {
+  expect((await grep({ pattern: "(" })).isError).toBe(true)
+  expect((await grep({ pattern: "x", path: "missing" })).isError).toBe(true)
+  const none = await grep({ pattern: "zzz_nothing" })
+  expect(none.isError).toBeUndefined()
+  expect(textOf(none)).toContain("No matches")
+})
