@@ -1,4 +1,4 @@
-import type { AnyEvent, UserMessage } from "@amira/api"
+import type { AnyEvent, TuiSettings, UserMessage } from "@amira/api"
 import {
   type Agent,
   AgentBusyError,
@@ -10,13 +10,13 @@ import {
 import {
   type Component,
   defaultTheme,
+  detectEnv,
   Editor,
   type InputEvent,
   InputReader,
-  key,
   LiveRenderer,
-  matchesKey,
   ProcessTerminal,
+  progressSupported,
   type RenderContext,
   type SetupResult,
   Spinner,
@@ -38,8 +38,11 @@ import {
   toolLines,
   userLines,
 } from "./format.ts"
+import { fitHint } from "./hint.ts"
 import { InputBox } from "./input-box.ts"
+import { defaultKeys, Keybindings } from "./keybindings.ts"
 import { StatusBar } from "./status-bar.ts"
+import { TerminalStatus } from "./terminal-status.ts"
 
 export interface InteractiveOptions {
   agent: Agent
@@ -61,6 +64,12 @@ export interface InteractiveOptions {
   /** Terminal setup; injectable for tests. Defaults to probing the real terminal. */
   setup?: (terminal: Terminal) => Promise<SetupResult>
   theme?: Theme
+  /** The keys of every action; defaults to the defaults for this terminal. See loadKeybindings. */
+  keybindings?: Keybindings
+  /** The `tui` settings: bell, title, progress indicator, reflow. */
+  settings?: TuiSettings
+  /** Tells the terminal apart (Windows Terminal, VS Code); injectable for tests. */
+  env?: Record<string, string | undefined>
 }
 
 /** A component that draws a function's lines; handy for small pieces of view state. */
@@ -100,6 +109,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const streaming = new StreamText()
   const spinner = new Spinner()
   const queued: string[] = []
+  /** Queued messages sent together as the next prompt, so it can show them one by one. */
+  let mergedQueue: string[] | undefined
   /** Messages steering the running turn that have not reached the model yet. */
   const steering: string[] = []
   /** Open extension dialogs; the first one has the keyboard. */
@@ -139,13 +150,29 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
-  const editor = new Editor({ prompt: theme.accent("› "), placeholder: "Message Amira", onSubmit: submit })
+  const env = opts.env ?? process.env
+  const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
+  const settings = opts.settings ?? {}
+  const termStatus = new TerminalStatus(terminal, agent.cwd, {
+    title: settings.title ?? true,
+    progress: (settings.progress ?? true) && progressSupported(env),
+    bell: settings.bell ?? true,
+  })
+  const editor = new Editor({
+    prompt: theme.accent("› "),
+    placeholder: "Message Amira",
+    onSubmit: submit,
+    isSubmit: (e) => keys.is(e, "submit"),
+    isNewline: (e) => keys.is(e, "newline"),
+  })
   const commands = opts.commands
-  const popup = commands ? new CommandPopup(commands, () => renderer.requestRender()) : undefined
-  const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
-  // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
-  const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
+  const popup = commands ? new CommandPopup(commands, () => renderer.requestRender(), keys) : undefined
+  // Shift+Enter is no use where the terminal sends it as plain Enter.
+  const newlineKey = keys.label("newline", (s) => capabilities.shiftEnter || !(s.shift && s.name === "enter"))
+  const queueKey = keys.label("queue")
   const inputBox = new InputBox(editor)
+  /** Rows the last frame's dialog took, to size it against the rest of the live region. */
+  let dialogRows = 0
   const bottom = new Stack([
     new View((width, ctx) => {
       if (!working) return []
@@ -184,33 +211,65 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       popup.update(editor.getText())
       return popup.render(width, ctx)
     }),
-    new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : inputBox.render(width, ctx))),
+    new View((width, ctx) => {
+      if (!dialogs[0]) return inputBox.render(width, ctx)
+      const lines = dialogs[0].render(width, ctx)
+      dialogRows = lines.length
+      return lines
+    }),
     new StatusBar(() => opts.status.snapshot()),
     new View((width, ctx) => {
       if (dialogs[0]) return []
-      if (popup?.visible) {
-        return [
-          ctx.theme.muted(truncateToWidth("↑↓ select · Tab complete · Enter run · Esc close", width, "…")),
-        ]
-      }
-      const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
-      const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
-      const esc = working ? "Esc interrupt · " : ""
-      const hint = `${send} · ${newlineKey} newline · ${esc}Ctrl+C ${ctrlC}`
-      return [ctx.theme.muted(truncateToWidth(hint, width, "…"))]
+      return [ctx.theme.muted(fitHint(popup?.visible ? popupHint() : inputHint(), width))]
     }),
   ])
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
   // before it in view. Rows past that go to the scrollback as they are finished (StreamText).
+  // A dialog gets what the rest leaves, so its title is never cut off the top.
   const root = new View((width, ctx) => {
-    const rest = bottom.render(width, ctx)
+    const dialog = dialogs[0]
+    if (dialog) dialog.maxRows = Math.max(1, ctx.rows - 1)
+    let rest = bottom.render(width, ctx)
+    if (dialog && rest.length > ctx.rows - 1) {
+      dialog.maxRows = Math.max(1, ctx.rows - 1 - (rest.length - dialogRows))
+      rest = bottom.render(width, ctx)
+    }
     streaming.maxRows = Math.max(1, ctx.rows - rest.length - 1)
     return [...streaming.render(width, ctx), ...rest]
   })
+  const reflow = settings.reflow ?? "auto"
   const renderer = new LiveRenderer(terminal, root, {
     synchronizedOutput: capabilities.synchronizedOutput,
     theme,
+    // "auto" assumes a re-wrapping terminal, as Windows Terminal, VS Code and most others are.
+    reflow: reflow !== "off",
   })
+
+  /** What the keys do now, the most useful first to stay as the line narrows. */
+  function inputHint() {
+    const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
+    const submitKey = keys.label("submit")
+    return [
+      submitKey && { text: `${submitKey} ${working ? "steer" : "send"}`, priority: 5 },
+      working && queueKey && { text: `${queueKey} queue`, priority: 3 },
+      newlineKey && { text: `${newlineKey} newline`, priority: 1 },
+      working && keys.label("interrupt") && { text: `${keys.label("interrupt")} interrupt`, priority: 6 },
+      keys.label("cancel") && { text: `${keys.label("cancel")} ${ctrlC}`, priority: working ? 2 : 4 },
+    ]
+  }
+
+  function popupHint() {
+    const move = keys.pairLabel("popup.up", "popup.down")
+    const complete = keys.label("popup.complete")
+    const accept = keys.label("popup.accept")
+    const close = keys.label("popup.close")
+    return [
+      move && { text: `${move} select`, priority: 3 },
+      complete && { text: `${complete} complete`, priority: 2 },
+      accept && { text: `${accept} run`, priority: 5 },
+      close && { text: `${close} close`, priority: 4 },
+    ]
+  }
 
   let resolveExit!: (code: number) => void
   const exited = new Promise<number>((r) => {
@@ -260,13 +319,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
-      case "turn.start":
-        renderer.commit([...userLines(theme, messageText(e.data.prompt)), ""])
+      case "turn.start": {
+        // Messages queued together go as one prompt but read as what they were: one each.
+        const text = messageText(e.data.prompt)
+        const parts = mergedQueue && text === mergedQueue.join("\n\n") ? mergedQueue : [text]
+        mergedQueue = undefined
+        renderer.commit(parts.flatMap((p) => [...userLines(theme, p), ""]))
+        termStatus.turnStarted()
         working = true
         thinking = false
         turnShowedOutput = false
         spinner.start(() => renderer.requestRender())
         break
+      }
       case "message.start":
         thinking = false
         preparing = undefined
@@ -322,10 +387,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (e.data.reason === "error") renderer.commit([theme.error(`✗ ${e.data.error ?? "error"}`), ""])
         else if (e.data.reason === "aborted") renderer.commit([theme.muted("Interrupted."), ""])
         else if (!turnShowedOutput) renderer.commit([theme.muted("(no reply)"), ""])
+        termStatus.turnEnded(e.data.reason)
         if (queued.length) {
-          const next = queued.splice(0, queued.length).join("\n\n")
-          queueMicrotask(() => send(next))
+          const parts = queued.splice(0, queued.length)
+          mergedQueue = parts.length > 1 ? parts : undefined
+          queueMicrotask(() => send(parts.join("\n\n")))
         }
+        break
+      case "workspace.changed":
+        termStatus.setBranch(e.data.branch)
         break
       case "compact.start":
         compacting = true
@@ -372,13 +442,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "ui.request": {
         const ui = opts.ui
         if (!ui) break
-        const dialog = new Dialog(e.data, (answer) => answerDialog(ui, dialog, answer))
+        const dialog = new Dialog(e.data, (answer) => answerDialog(ui, dialog, answer), keys)
         dialogs.push(dialog)
+        termStatus.setWaiting(true)
         break
       }
       case "ui.resolved": {
         const i = dialogs.findIndex((d) => d.request.requestId === e.data.requestId)
         if (i !== -1) dialogs.splice(i, 1)
+        termStatus.setWaiting(dialogs.length > 0)
         break
       }
       case "command.output": {
@@ -430,6 +502,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Follows the session a command switched to; a resumed one shows its history. */
   function followAgent(next: Agent) {
     agent = next
+    termStatus.setFolder(next.cwd)
     if (next.messages.length) renderer.commit(historyLines(theme, next.messages))
     renderer.requestRender()
   }
@@ -446,6 +519,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
     const i = dialogs.indexOf(dialog)
     if (i !== -1) dialogs.splice(i, 1)
+    termStatus.setWaiting(dialogs.length > 0)
     const { requestId, title } = dialog.request
     if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
     const shown =
@@ -464,30 +538,35 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     tickSubagents()
     reader.stop()
     renderer.stop({ clear: true })
+    termStatus.stop()
     if (terminal instanceof ProcessTerminal) terminal.stop()
     else terminal.restore()
     resolveExit(code)
   }
 
   function onInput(e: InputEvent) {
+    if (e.type === "focus") return termStatus.focus(e.focused)
     const dialog = dialogs[0]
     // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
     // with candidates for text the editor no longer holds.
     if (!dialog) popup?.update(editor.getText())
+    if (keys.is(e, "redraw")) {
+      // Also over a dialog: it is part of the live region.
+      return renderer.redraw()
+    }
     if (dialog) {
-      // Ctrl+C closes the dialog like Esc.
-      dialog.handleInput(matchesKey(e, "c", { ctrl: true }) ? key("escape") : e)
+      dialog.handleInput(e)
     } else if (popup?.open && handlePopupKey(e)) {
       // The popup took ↑↓, Tab, Enter or Esc.
-    } else if (matchesKey(e, "enter", { alt: true }) || matchesKey(e, "q", { ctrl: true })) {
+    } else if (keys.is(e, "queue")) {
       queue()
-    } else if (matchesKey(e, "c", { ctrl: true })) {
+    } else if (keys.is(e, "cancel")) {
       if (working) agent.abort()
       else if (editor.getText()) editor.clear()
       else return quit()
-    } else if (matchesKey(e, "d", { ctrl: true }) && !working && !editor.getText()) {
+    } else if (keys.is(e, "exit") && !working && !editor.getText()) {
       return quit()
-    } else if (matchesKey(e, "escape")) {
+    } else if (keys.is(e, "interrupt")) {
       if (working) agent.abort()
     } else {
       editor.handleInput(e)
@@ -512,6 +591,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
+  termStatus.start()
   renderer.start()
   renderer.commit([
     `${theme.accent("Amira")} ${theme.muted(`· ${agent.model.provider}/${agent.model.id} · ${agent.cwd}`)}`,

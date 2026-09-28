@@ -268,7 +268,10 @@ export function parseKeybindings(
 }
 
 /** Reads keybindings.json; a missing file means the defaults, a broken one a warning. */
-export function loadKeybindings(file: string, defaults: Record<Action, string[]>): LoadedKeybindings {
+export function loadKeybindings(
+  file: string,
+  defaults: Record<Action, string[]> = defaultKeys(detectEnv()),
+): LoadedKeybindings {
   let text: string
   try {
     text = readFileSync(file, "utf8")
