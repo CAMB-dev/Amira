@@ -15,22 +15,6 @@ export interface ServerOptions {
   toolTimeoutMs: number
 }
 
-/** Live stdio server processes, killed if Amira exits without closing them. */
-const livePids = new Set<number>()
-let exitHookInstalled = false
-
-function installExitHook() {
-  if (exitHookInstalled) return
-  exitHookInstalled = true
-  process.once("exit", () => {
-    for (const pid of livePids) {
-      try {
-        process.kill(pid)
-      } catch {}
-    }
-  })
-}
-
 /** One configured MCP server: its connection and the deferred tools it registered. */
 export class ServerConnection {
   readonly config: ServerConfig
@@ -74,10 +58,6 @@ export class ServerConnection {
           ),
         ),
       ])
-      if (transport instanceof StdioTransport && transport.pid !== undefined) {
-        livePids.add(transport.pid)
-        installExitHook()
-      }
       const tools = await client.listTools({ timeoutMs: this.#opts.connectTimeoutMs })
       // close() or a lost connection may have happened meanwhile.
       if (!this.#is("connecting")) return
@@ -101,8 +81,6 @@ export class ServerConnection {
     if (this.state === "closed") return
     this.state = "closed"
     this.#unregisterAll()
-    const t = this.#client?.transport
-    if (t instanceof StdioTransport && t.pid !== undefined) livePids.delete(t.pid)
     await this.#client?.close()
   }
 
@@ -189,8 +167,6 @@ export class ServerConnection {
 
   #lost(reason: string) {
     if (this.state === "closed" || this.state === "failed") return
-    const t = this.#client?.transport
-    if (t instanceof StdioTransport && t.pid !== undefined) livePids.delete(t.pid)
     this.#failed(this.state === "ready" ? `disconnected: ${reason}` : reason)
   }
 

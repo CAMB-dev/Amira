@@ -1,6 +1,7 @@
 // A tiny MCP server for tests. `bun server.ts stdio`, or `bun server.ts http|http-sse`, which
-// prints the listening URL on its first stdout line.
-import { writeSync } from "node:fs"
+// prints the listening URL on its first stdout line. `stdio-stubborn` keeps running after
+// stdin ends, so only a kill stops it. FIXTURE_PID_FILE receives the server's pid.
+import { writeFileSync, writeSync } from "node:fs"
 
 type Msg = { jsonrpc: "2.0"; id?: string | number; method?: string; params?: any; result?: any; error?: any }
 type Send = (m: Msg) => void
@@ -252,7 +253,8 @@ export function startHttpServer(sse: boolean): { url: string; stop(): void } {
 
 if (import.meta.main) {
   const mode = process.argv[2] ?? "stdio"
-  if (mode === "stdio") {
+  if (process.env.FIXTURE_PID_FILE) writeFileSync(process.env.FIXTURE_PID_FILE, String(process.pid))
+  if (mode === "stdio" || mode === "stdio-stubborn") {
     const handle = createHandler()
     const out: Send = (m) => writeSync(1, `${JSON.stringify(m)}\n`)
     writeSync(1, "this line is not JSON-RPC and must be ignored\n")
@@ -268,7 +270,8 @@ if (import.meta.main) {
         nl = buf.indexOf("\n")
       }
     }
-    process.exit(0)
+    if (mode === "stdio-stubborn") setInterval(() => {}, 1000)
+    else process.exit(0)
   } else {
     process.stdout.write(`${startHttpServer(mode === "http-sse").url}\n`)
   }
