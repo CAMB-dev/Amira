@@ -47,7 +47,10 @@ export function compose(...fns: StyleFn[]): StyleFn {
   return (text) => fns.reduceRight((acc, fn) => fn(acc), text)
 }
 
-/** Semantic color tokens, so components never hardcode colors. */
+/**
+ * Semantic color tokens, so components never hardcode colors. The built-in components use the
+ * named ones; an app can add tokens of its own (`{ ...defaultTheme, link: blue }`).
+ */
 export interface Theme {
   text: StyleFn
   accent: StyleFn
@@ -55,6 +58,7 @@ export interface Theme {
   error: StyleFn
   success: StyleFn
   warning: StyleFn
+  [token: string]: StyleFn
 }
 
 export const defaultTheme: Theme = {
