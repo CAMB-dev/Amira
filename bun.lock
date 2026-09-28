@@ -51,6 +51,7 @@
         "@amira/api": "workspace:*",
         "@amira/builtin-tools": "workspace:*",
         "@amira/core": "workspace:*",
+        "@amira/ext-status": "workspace:*",
         "@amira/tui": "workspace:*",
       },
     },
@@ -66,8 +67,13 @@
       "name": "@amira/tui",
       "version": "0.0.0",
       "dependencies": {
+        "@amira/ai": "workspace:*",
+        "@amira/api": "workspace:*",
         "@amira/core": "workspace:*",
         "@amira/tui-kit": "workspace:*",
+      },
+      "devDependencies": {
+        "@amira/ext-status": "workspace:*",
       },
     },
     "packages/tui-kit": {

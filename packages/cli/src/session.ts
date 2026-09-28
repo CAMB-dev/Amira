@@ -30,10 +30,19 @@ export interface Session {
   startupEvents: AnyEvent[]
 }
 
+/** Extensions bundled with Amira and loaded by default (D50). */
 async function defaultBuiltins(): Promise<{ source: string; extension: Extension }[]> {
-  const tools: { default?: unknown } = await import("@amira/builtin-tools")
-  if (typeof tools.default !== "function") throw new Error("@amira/builtin-tools has no default export")
-  return [{ source: "builtin:tools", extension: tools.default as Extension }]
+  const bundled: [string, () => Promise<{ default?: unknown }>][] = [
+    ["builtin:tools", () => import("@amira/builtin-tools")],
+    ["builtin:status", () => import("@amira/ext-status")],
+  ]
+  const out: { source: string; extension: Extension }[] = []
+  for (const [source, load] of bundled) {
+    const mod = await load()
+    if (typeof mod.default !== "function") throw new Error(`${source} has no default export`)
+    out.push({ source, extension: mod.default as Extension })
+  }
+  return out
 }
 
 /**

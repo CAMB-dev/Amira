@@ -218,3 +218,12 @@ test("the amira command: help, version and usage errors have the right exit code
   expect(noModel.err).toContain("no model selected")
   expect((await run("-m", "nope/x", "-p", "hi")).code).toBe(2)
 }, 60_000)
+
+test("json mode includes session.start when the session is announced on ready", async () => {
+  const { agent } = await mockSession([{ text: "hi" }])
+  const io = capture()
+  await runPrint(agent, "go", true, { io, onReady: () => agent.start("startup") })
+  const first = JSON.parse(io.out.split("\n")[0]!)
+  expect(first.type).toBe("session.start")
+  expect(first.data.cwd).toBe(here)
+})
