@@ -169,6 +169,34 @@ test("up/down move between wrapped rows of one line", () => {
   expect(ed.cursor).toEqual({ line: 0, col: 10 })
 })
 
+test("tabs reach the next 4-column stop of the drawn line, prompt included", () => {
+  const ed = new Editor({ prompt: "> " })
+  ed.setText("a\tb")
+  const [row] = ed.render(40, plain)
+  // "> a" ends at column 3, so the tab takes one cell and "b" ends at column 5.
+  expect(visibleWidth(row!.slice(0, row!.indexOf(CURSOR_MARKER)))).toBe(5)
+  // With 6 content cells the tabs take 2 and 4, so "ab" wraps to the next row.
+  ed.setText("\t\tab")
+  expect(view(ed, 8)).toEqual(["> \t\t", "  ab|"])
+})
+
+test("up/down keep the display column across tabs", () => {
+  const ed = new Editor({ prompt: "> " })
+  ed.setText("\tx\nabcdefgh")
+  press(ed, "up")
+  press(ed, "end")
+  // The tab takes cells 2-3 of the line, so the caret after "x" is 3 cells into the row.
+  press(ed, "down")
+  expect(ed.cursor).toEqual({ line: 1, col: 3 })
+  press(ed, "right")
+  press(ed, "up")
+  expect(ed.cursor).toEqual({ line: 0, col: 2 })
+  press(ed, "home")
+  press(ed, "right")
+  press(ed, "down")
+  expect(ed.cursor).toEqual({ line: 1, col: 2 })
+})
+
 test("placeholder when empty, no caret marker when unfocused", () => {
   const ed = new Editor({ prompt: "> ", placeholder: "Ask anything" })
   expect(view(ed)).toEqual(["> |Ask anything"])
