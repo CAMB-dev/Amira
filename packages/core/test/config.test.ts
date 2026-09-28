@@ -388,7 +388,7 @@ test("sub-agent settings: role models, limits, budget and the merge review thres
 })
 
 test("tui settings: bell, title, progress and reflow", () => {
-  const raw = { tui: { bell: false, title: true, progress: false, reflow: "off" } }
+  const raw = { tui: { bell: false, title: true, progress: false, reflow: "off" as const } }
   expect(validateSettings(raw, "f")).toEqual({ settings: raw, warnings: [] })
   expect(() => validateSettings({ tui: { reflow: "maybe" } }, "f")).toThrow('"tui.reflow"')
   expect(() => validateSettings({ tui: { bell: "no" } }, "f")).toThrow('"tui.bell"')
