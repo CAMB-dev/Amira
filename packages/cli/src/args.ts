@@ -10,6 +10,10 @@ export interface CliArgs {
   cwd: string
   extensions: string[]
   noBuiltins: boolean
+  /** Resume the most recent session in cwd. */
+  continue: boolean
+  /** Resume this session id; "" means list the sessions to pick from. */
+  resume?: string
   help: boolean
   version: boolean
 }
@@ -27,6 +31,8 @@ Options:
   -e, --extension <f>   Load an extension file (repeatable; relative to where
                         amira is run, not to --cwd)
       --no-builtins     Do not load the built-in tools
+  -c, --continue        Resume the most recent session in this directory
+  -r, --resume [id]     Resume a session; without an id, list them to pick one
   -C, --cwd <dir>       Working directory (default: current directory)
   -h, --help            Show this help
   -v, --version         Show the version
@@ -43,7 +49,7 @@ export function parseCliArgs(
 ): CliArgs {
   let parsed: ReturnType<typeof parse>
   try {
-    parsed = parse(argv)
+    parsed = parse(optionalResumeValue(argv))
   } catch (err) {
     throw new UsageError(err instanceof Error ? err.message : String(err))
   }
@@ -54,14 +60,18 @@ export function parseCliArgs(
     cwd: path.resolve(cwd, values.cwd ?? "."),
     extensions: (values.extension ?? []).map((e) => path.resolve(cwd, e)),
     noBuiltins: values["no-builtins"] ?? false,
+    continue: values.continue ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
   }
   if (positionals.length) args.prompt = positionals.join(" ")
+  if (values.resume !== undefined) args.resume = values.resume
+  if (args.continue && args.resume !== undefined) throw new UsageError("use either --continue or --resume")
   const model = values.model ?? env.AMIRA_MODEL
   if (model) args.model = model
   if (args.json && !args.print) throw new UsageError("--json requires --print")
-  if (args.print && !args.prompt && !args.help && !args.version)
+  const listing = args.resume === ""
+  if (args.print && !args.prompt && !args.help && !args.version && !listing)
     throw new UsageError("--print needs a prompt")
   if (values.cwd !== undefined && !isDirectory(args.cwd)) {
     throw new UsageError(`--cwd is not a directory: ${args.cwd}`)
@@ -77,6 +87,25 @@ function isDirectory(p: string): boolean {
   }
 }
 
+/** --resume takes an optional id: a bare flag becomes `--resume=` so parseArgs sees an empty value. */
+function optionalResumeValue(argv: string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!
+    if (a === "--") {
+      out.push(...argv.slice(i))
+      break
+    }
+    const next = argv[i + 1]
+    if ((a === "-r" || a === "--resume") && (next === undefined || !SESSION_ID.test(next)))
+      out.push("--resume=")
+    else out.push(a)
+  }
+  return out
+}
+
+const SESSION_ID = /^s_[\w-]+$/
+
 function parse(argv: string[]) {
   return parseArgs({
     args: argv,
@@ -88,6 +117,8 @@ function parse(argv: string[]) {
       extension: { type: "string", short: "e", multiple: true },
       "no-builtins": { type: "boolean" },
       cwd: { type: "string", short: "C" },
+      continue: { type: "boolean", short: "c" },
+      resume: { type: "string", short: "r" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },

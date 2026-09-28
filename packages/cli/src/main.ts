@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
-import { type Agent, trackWorkspace } from "@amira/core"
+import { type Agent, listSessions, SessionStore, trackWorkspace } from "@amira/core"
 import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { runPrint } from "./print.ts"
+import { chooseStore, formatSessionList, pickSession } from "./resume.ts"
 import { createSession } from "./session.ts"
 
 async function main(argv: string[]): Promise<number> {
@@ -27,8 +28,27 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${pkg.version}\n`)
     return 0
   }
-  if (!args.model) throw new UsageError("no model selected. Pass --model provider/model or set AMIRA_MODEL.")
   const interactive = !args.print
+  let choice: { store: SessionStore; resumed: boolean } | undefined
+  if (args.resume === "") {
+    const sessions = listSessions(args.cwd)
+    if (!sessions.length) {
+      process.stderr.write(`amira: no sessions in ${args.cwd}
+`)
+      return 1
+    }
+    if (!interactive || !(process.stdin.isTTY && process.stdout.isTTY)) {
+      process.stdout.write(`${formatSessionList(sessions)}
+`)
+      return 0
+    }
+    if (!args.model)
+      throw new UsageError("no model selected. Pass --model provider/model or set AMIRA_MODEL.")
+    const picked = await pickSession(sessions)
+    if (!picked) return 0
+    choice = { store: SessionStore.open(picked.file), resumed: true }
+  }
+  if (!args.model) throw new UsageError("no model selected. Pass --model provider/model or set AMIRA_MODEL.")
   if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
   }
@@ -44,11 +64,18 @@ async function run(argv: string[]): Promise<number> {
     }
   }
 
+  choice ??= chooseStore({
+    cwd: args.cwd,
+    continue: args.continue,
+    ...(args.resume ? { resume: args.resume } : {}),
+  })
+  const { store, resumed } = choice
   const { agent, host, startupEvents } = await createSession({
     model: args.model,
     cwd: args.cwd,
     extensions: args.extensions,
     noBuiltins: args.noBuiltins,
+    store,
     onSubscriberError,
   })
   agentRef = agent
@@ -56,7 +83,10 @@ async function run(argv: string[]): Promise<number> {
   // Announce the session once the frontend listens, then fill in git facts in the background.
   let stopWorkspace = () => {}
   const onReady = () => {
-    agent.start("startup")
+    agent.start(resumed ? "resume" : "startup", {
+      sessionFile: store.file,
+      resume: ["amira", "--resume", store.id],
+    })
     stopWorkspace = trackWorkspace(agent.bus, agent.sessionId, agent.cwd)
   }
   try {

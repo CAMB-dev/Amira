@@ -2,11 +2,14 @@ import { type Ai, createAi, type ModelInfo } from "@amira/ai"
 import type { AnyEvent, Extension } from "@amira/api"
 import {
   Agent,
+  type CompactionOptions,
   defaultSections,
   EventBus,
   ExtensionHost,
   InterceptorRegistry,
-  renderPrompt,
+  instructionsSection,
+  loadInstructions,
+  type SessionStore,
   ToolRegistry,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
@@ -17,6 +20,9 @@ export interface SessionOptions {
   extensions: string[]
   noBuiltins: boolean
   ai?: Ai
+  /** Where the conversation is persisted; a stored one is resumed. Omit to keep nothing. */
+  store?: SessionStore
+  compaction?: CompactionOptions
   /** Receives failures of event subscribers (extensions or frontends). The core itself never prints. */
   onSubscriberError?: (error: unknown, event: AnyEvent) => void
   /** Loads the bundled extensions; injectable for tests. */
@@ -85,10 +91,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ai,
     model,
     cwd: opts.cwd,
-    systemPrompt: renderPrompt(defaultSections({ cwd: opts.cwd })),
+    sections: defaultSections({ cwd: opts.cwd, project: instructionsSection(loadInstructions(opts.cwd)) }),
     bus,
     interceptors,
     tools,
+    ...(opts.store ? { session: opts.store } : {}),
+    ...(opts.compaction ? { compaction: opts.compaction } : {}),
   })
   return { agent, host, startupEvents }
 }
