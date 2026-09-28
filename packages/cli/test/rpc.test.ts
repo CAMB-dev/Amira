@@ -438,6 +438,33 @@ test("session.read lastTurn survives history entries being replaced", async () =
   expect(await rpc.end()).toBe(0)
 })
 
+test("prompt and steer take a display, which their events and session.read carry", async () => {
+  const s = await session([{ text: "one", delayMs: 20 }, { text: "two" }])
+  const rpc = inProcess(s)
+  const bad = await rpc.call({ id: 0, cmd: "prompt", text: "x", display: { note: "no text" } })
+  expect(bad.error.code).toBe("invalid_params")
+  const display = { text: "/review-pr 1", note: "Loaded skill review-pr (9 lines)" }
+  await rpc.call({ id: 1, cmd: "prompt", text: "long skill text", display })
+  expect((await rpc.call({ id: 2, cmd: "steer", text: "more", display: { text: "/more" } })).ok).toBe(true)
+  expect((await rpc.until((l) => l.type === "turn.start")).data.prompt.display).toEqual(display)
+  expect((await rpc.until((l) => l.type === "turn.steer")).data.message.display).toEqual({ text: "/more" })
+  await rpc.until((l) => l.type === "turn.end")
+  const read = await rpc.call({ id: 3, cmd: "session.read", what: "messages" })
+  const users = read.messages.filter((m: Line) => m.role === "user")
+  expect(users.map((m: Line) => m.display)).toEqual([display, { text: "/more" }])
+  expect(await rpc.end()).toBe(0)
+})
+
+test("the rpc schema describes a user message's display and lets prompt and steer send one", () => {
+  const defs = (rpcSchema() as any).$defs
+  expect(defs.UserMessage.properties.display).toEqual({ $ref: "#/$defs/MessageDisplay" })
+  expect(defs.UserMessage.required).not.toContain("display")
+  expect(defs.MessageDisplay.required).toEqual(["text"])
+  expect(Object.keys(defs.MessageDisplay.properties)).toEqual(["text", "note"])
+  expect(COMMAND_PARAMS.prompt.params).toHaveProperty("display?")
+  expect(COMMAND_PARAMS.steer.params).toHaveProperty("display?")
+})
+
 test("ui.respond needs a value; model.set waits for the turn", async () => {
   const s = await session([{ toolCalls: [{ name: "ask", args: {} }] }, { text: "bye" }], [rpcTools])
   const rpc = inProcess(s)

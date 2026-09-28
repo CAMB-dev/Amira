@@ -34,12 +34,13 @@ export const COMMAND_PARAMS = {
         ...arrayOf(oneOf(ref("TextBlock"), ref("ImageBlock"))),
         description: "Sent after text.",
       },
+      "display?": ref("MessageDisplay"),
     },
   },
   steer: {
     description:
       "Adds a message to the running turn before its next model call, without interrupting a tool. With no turn running it starts one.",
-    params: { text: str },
+    params: { text: str, "display?": ref("MessageDisplay") },
   },
   abort: { description: "Aborts the running turn; it still ends with turn.end.", params: {} },
   "ui.respond": {
@@ -250,7 +251,21 @@ export function rpcSchema(): Schema {
       UserMessage: obj({
         role: strings("user"),
         content: arrayOf(oneOf(ref("TextBlock"), ref("ImageBlock"))),
+        "display?": ref("MessageDisplay"),
       }),
+      MessageDisplay: obj(
+        {
+          text: {
+            ...str,
+            description: 'Shown in place of the content, e.g. the command as typed: "/review-pr 123".',
+          },
+          "note?": {
+            ...str,
+            description: 'A line to show under text, e.g. "Loaded skill review-pr (120 lines)".',
+          },
+        },
+        "How to show a user message instead of its content, which the model still gets in full. Never sent to the model.",
+      ),
       AssistantMessage: obj({
         role: strings("assistant"),
         content: arrayOf(
