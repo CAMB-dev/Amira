@@ -142,6 +142,8 @@ const provider = object(
   { apiKey: "is not read from settings files; put the key in auth.json or an environment variable" },
 )
 
+const webBackend = oneOf("exa", "brave", "tavily", "searxng")
+
 const settings = object({
   $schema: string,
   model: modelRef,
@@ -154,6 +156,24 @@ const settings = object({
   mcpServers: record(anyObject),
   mcpTrustedProjects: list(string),
   skills: object({ dirs: list(string) }),
+  web: object({
+    search: object({
+      backend: webBackend,
+      fallback: list(webBackend),
+      maxResults: integer(1),
+      timeoutMs: integer(1),
+      exa: object({ url: string, apiKeyEnv: string }),
+      brave: object({ apiKeyEnv: string }),
+      tavily: object({ apiKeyEnv: string, searchDepth: oneOf("basic", "advanced") }),
+      searxng: object({ url: string }),
+    }),
+    fetch: object({
+      maxChars: integer(1),
+      maxBytes: integer(1),
+      timeoutMs: integer(1),
+      allowPrivateNetwork: boolean,
+    }),
+  }),
 })
 
 /**
