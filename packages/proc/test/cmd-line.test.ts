@@ -1,5 +1,9 @@
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { cmdCommandLine, quoteArg } from "../src/cmd-line.ts"
+import { existsSync } from "node:fs"
+import { copyFile, mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { cmdArgv, cmdCommandLine, quoteArg } from "../src/cmd-line.ts"
 import { runCommand } from "../src/index.ts"
 
 setDefaultTimeout(60_000)
@@ -37,8 +41,63 @@ test("quotes only when needed, doubling backslashes only before a quote", () => 
 })
 
 test("escapes every cmd metacharacter, quotes included", () => {
-  expect(cmdCommandLine(["C:\\x y\\p.exe", "a&b", "%v%"])).toBe('^"C:\\x^ y\\p.exe^" a^&b ^%v^%')
+  expect(cmdCommandLine(["C:\\x y\\p.exe", "a&b", "%v%", "k=v"])).toBe('^"C:\\x^ y\\p.exe^" a^&b ^%v^% k^=v')
 })
+
+test.if(onWindows)("a line too long for cmd falls back to a direct spawn", async () => {
+  const long = "x".repeat(9000)
+  expect(
+    cmdArgv([process.execPath, "-e", "1", long], { cwd: process.cwd(), env: process.env, gated: false }),
+  ).toBeUndefined()
+  const run = await runCommand([process.execPath, "-e", "console.log(process.argv[1].length)", long], {
+    ...opts(),
+    viaCmd: true,
+  })
+  expect(run.output.trim()).toBe("9000")
+})
+
+test.if(onWindows)("a program path containing = and spaces runs through cmd", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "amira a=b "))
+  try {
+    const exe = join(dir, "hostname.exe")
+    await copyFile(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "hostname.exe"), exe)
+    const direct = await runCommand([exe], opts())
+    const run = await runCommand([exe], { ...opts(), viaCmd: true })
+    expect(run.exitCode).toBe(0)
+    expect(run.output.trim()).toBe(direct.output.trim())
+    expect(run.output.trim()).not.toBe("")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test.if(onWindows)(
+  "the gate holds even when command extensions are turned off before our flags",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "amira-gate-"))
+    try {
+      const marker = join(dir, "ran")
+      const script = `require("fs").writeFileSync(${JSON.stringify(marker)}, "x")`
+      const argv = cmdArgv([process.execPath, "-e", script], { cwd: dir, env: process.env, gated: true })!
+      // As if the registry disabled extensions: /e:off comes first, our /e:on must win.
+      const proc = Bun.spawn([argv[0]!, "/e:off", ...argv.slice(1)], {
+        cwd: dir,
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "ignore",
+        windowsVerbatimArguments: true,
+      })
+      await Bun.sleep(1500)
+      expect(existsSync(marker)).toBe(false)
+      proc.stdin.write("go\n")
+      await proc.stdin.end()
+      expect(await proc.exited).toBe(0)
+      expect(existsSync(marker)).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  },
+)
 
 test.if(onWindows)("arguments reach the program intact through cmd", async () => {
   const script = "console.log(JSON.stringify(process.argv.slice(1)))"
