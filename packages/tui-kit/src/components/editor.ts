@@ -69,6 +69,10 @@ export class Editor implements Component {
     this.changed()
   }
 
+  /**
+   * Returns false for keys the editor does not use, including Enter on an empty editor, which
+   * submits nothing and is left to the app.
+   */
   handleInput(e: InputEvent): boolean {
     if (e.type === "paste") {
       this.insert(e.text)
@@ -76,7 +80,7 @@ export class Editor implements Component {
     }
     if (isSubmitKey(e)) {
       const text = this.getText()
-      if (text === "") return true
+      if (text === "") return false
       this.clear()
       this.opts.onSubmit?.(text)
       return true

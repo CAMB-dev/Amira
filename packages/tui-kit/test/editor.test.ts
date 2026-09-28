@@ -44,11 +44,11 @@ test("Enter submits and clears; the newline key inserts a line break", () => {
   expect(ed.getText()).toBe("")
 })
 
-test("Enter on an empty editor does not submit; setText does not report a change", () => {
+test("Enter on an empty editor does not submit and is left unhandled; setText does not report a change", () => {
   const submitted: string[] = []
   const changes: string[] = []
   const ed = new Editor({ onSubmit: (t) => submitted.push(t), onChange: (t) => changes.push(t) })
-  expect(press(ed, "enter")).toBe(true)
+  expect(press(ed, "enter")).toBe(false)
   expect(submitted).toEqual([])
   ed.setText("draft")
   ed.clear()
