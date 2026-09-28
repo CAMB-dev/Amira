@@ -77,6 +77,8 @@ export type Handler = (m: Msg, send: Send) => Promise<void>
 
 /** A server's message handler, with its own state. */
 export function createHandler(): Handler {
+  // Answers the last tools/list page, then at once adds a tool and announces it.
+  let lateTool = process.env.FIXTURE_LATE_TOOL === "1"
   const cancelled: (string | number)[] = []
   let extraTool = false
   let pinged = false
@@ -171,7 +173,13 @@ export function createHandler(): Handler {
         const start = Number(m.params?.cursor ?? 0)
         const all = tools()
         const next = start + 5 < all.length ? String(start + 5) : undefined
-        return reply({ tools: all.slice(start, start + 5), ...(next ? { nextCursor: next } : {}) })
+        reply({ tools: all.slice(start, start + 5), ...(next ? { nextCursor: next } : {}) })
+        if (lateTool && !next) {
+          lateTool = false
+          extraTool = true
+          send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })
+        }
+        return
       }
       case "tools/call":
         try {

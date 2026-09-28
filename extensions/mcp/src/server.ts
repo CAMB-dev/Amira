@@ -43,6 +43,8 @@ export class ServerConnection {
   #client: McpClient | undefined
   #unregister: (() => void)[] = []
   #refreshing: Promise<void> = Promise.resolve()
+  /** The tool list changed while connecting; list it again once ready. */
+  #stale = false
 
   constructor(config: ServerConfig, api: ExtensionAPI, opts: ServerOptions) {
     this.config = config
@@ -59,7 +61,8 @@ export class ServerConnection {
     this.#client = client
     client.onClose((reason) => this.#lost(reason))
     client.onToolsChanged(() => {
-      this.#refreshing = this.#refreshing.then(() => this.#refresh())
+      if (this.#is("connecting")) this.#stale = true
+      else this.#queueRefresh()
     })
     const deadline = AbortSignal.timeout(this.#opts.connectTimeoutMs)
     try {
@@ -80,6 +83,7 @@ export class ServerConnection {
       if (!this.#is("connecting")) return
       this.#register(tools)
       this.state = "ready"
+      if (this.#stale) this.#queueRefresh()
     } catch (err) {
       if (!this.#is("connecting")) return void client.close()
       const tail = transport instanceof StdioTransport ? transport.stderrTail : ""
@@ -164,6 +168,11 @@ export class ServerConnection {
         true,
       )
     }
+  }
+
+  #queueRefresh() {
+    this.#stale = false
+    this.#refreshing = this.#refreshing.then(() => this.#refresh())
   }
 
   async #refresh() {

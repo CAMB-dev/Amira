@@ -285,6 +285,18 @@ test(
   SLOW,
 )
 
+test(
+  "a tools/list_changed that arrives while connecting is not lost",
+  async () => {
+    const { tools, mcp } = await harness([stdioServer("fx", { env: { FIXTURE_LATE_TOOL: "1" } })])
+    await mcp.settled()
+    for (let i = 0; i < 100 && !tools.get("mcp__fx__extra"); i++) await Bun.sleep(20)
+    expect(tools.get("mcp__fx__extra")?.exposure).toBe("deferred")
+    await mcp.close()
+  },
+  SLOW,
+)
+
 test("streamable HTTP with JSON and with SSE replies, including notifications in the stream", async () => {
   const { agent, tools, mcp, errors } = await harness(
     [httpServer("plain", http.url), httpServer("sse", httpSse.url)],
