@@ -132,6 +132,17 @@ test("tables are aligned by column, and shown raw when wider than the screen", (
     "| kiwi | 12 | ok",
     "|",
   ])
+  // Wider than the screen, the widest column wraps its cells when the others can stay readable.
+  expect(
+    md("| Lang | Use |\n|--|--|\n| Go | cloud services and networked tools |\n| C | kernels |", 24),
+  ).toEqual([
+    "Lang │ Use",
+    `${"─".repeat(5)}┼${"─".repeat(18)}`,
+    "Go   │ cloud services",
+    "     │ and networked",
+    "     │ tools",
+    "C    │ kernels",
+  ])
   // Without a delimiter row it is a paragraph.
   expect(md("a | b\nc | d")).toEqual(["a | b", "c | d"])
 })

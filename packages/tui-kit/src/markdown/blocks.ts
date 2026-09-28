@@ -94,6 +94,8 @@ const ITEM = /^([-*+]|\d{1,9}[.)])([ \t]+|$)/
 const TASK = /^\[([ xX])\][ \t]+/
 const SETEXT = /^ {0,3}(=+|-+)[ \t]*$/
 const DELIMITER_CELL = /^:?-+:?$/
+/** A table column is not narrowed below this many cells to fit the screen. */
+const MIN_COLUMN = 8
 
 function emit(s: BlockState, sink: Sink, rows: string[]) {
   if (rows.length === 0) return
@@ -448,7 +450,8 @@ function inlineText(text: string, env: Env, base?: StyleFn): string {
 }
 
 /**
- * The table laid out in aligned columns, or its raw lines when that is wider than the screen.
+ * The table laid out in aligned columns, narrowed to the screen by wrapping the cells of the widest
+ * columns, or its raw lines when that would leave the columns too narrow.
  * With `slack`, for widths frozen before the rows still to come are known, each column gets some
  * of the spare room (up to its own width again), so that fewer later cells have to wrap.
  */
@@ -462,8 +465,28 @@ function layoutTable(t: Table, env: Env, slack = false): { rows: string[]; width
     }
   }
   const sep = visibleWidth(env.glyphs.tableColumn) + 2
-  const total = t.renderCol + widths.reduce((a, b) => a + b, 0) + sep * (n - 1)
-  if (total > env.width) return { rows: rawRows(t, t.lines, env) }
+  const room = env.width - t.renderCol - sep * (n - 1)
+  const sum = () => widths.reduce((a, b) => a + b, 0)
+  if (sum() > room) {
+    // Too wide: the widest columns give up room and their cells wrap, unless every column would
+    // get too narrow to read; then the table is shown as its source lines.
+    const least = widths.map((w) => Math.min(w, MIN_COLUMN))
+    if (least.reduce((a, b) => a + b, 0) > room) return { rows: rawRows(t, t.lines, env) }
+    let over = sum() - room
+    while (over > 0) {
+      const widest = Math.max(...widths)
+      const next = Math.max(...widths.map((w) => (w < widest ? w : 0)), MIN_COLUMN)
+      const cols = widths.flatMap((w, i) => (w === widest ? [i] : []))
+      const cut = Math.min(widest - next, Math.ceil(over / cols.length))
+      for (const i of cols) {
+        if (over <= 0) break
+        const by = Math.min(cut, over)
+        widths[i] = widest - by
+        over -= by
+      }
+    }
+  }
+  const total = t.renderCol + sum() + sep * (n - 1)
   if (slack) {
     const share = Math.floor((env.width - total) / n)
     for (let c = 0; c < n; c++) widths[c]! += Math.min(share, Math.max(4, widths[c]!))
