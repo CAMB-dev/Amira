@@ -99,11 +99,33 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
   },
   "session.resume": { sessionId: str },
   "command.list": {
-    commands: arrayOf(obj({ name: str, description: str, "hint?": str, source: str })),
+    commands: arrayOf(
+      obj({
+        name: str,
+        aliases: { ...arrayOf(str), description: "Other names that run the command, e.g. q for quit." },
+        description: str,
+        "hint?": str,
+        source: str,
+      }),
+    ),
+    aliases: {
+      ...arrayOf(obj({ name: str, expansion: str })),
+      description:
+        "The user's aliases from settings (commandAliases): /<name> runs /<expansion> with what follows appended.",
+    },
   },
   "command.complete": {
-    "command?": { ...str, description: "The command whose arguments are being completed." },
-    candidates: arrayOf(obj({ value: str, "description?": str })),
+    "command?": {
+      ...str,
+      description: "The command whose arguments are being completed (the one an alias runs).",
+    },
+    candidates: arrayOf(
+      obj({
+        value: str,
+        "description?": str,
+        "label?": { ...str, description: 'Shown in place of value, e.g. "quit (exit, q)".' },
+      }),
+    ),
   },
   "command.run": {
     command: str,

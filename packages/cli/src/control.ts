@@ -16,6 +16,8 @@ export interface ControlOptions {
   /** Amira's user directory, for /provider add. Default: $AMIRA_HOME or ~/.amira. */
   home?: string
   platform?: string
+  /** The user's command aliases (settings commandAliases). */
+  aliases?: Record<string, string>
   /** Announces a session the commands switched to, e.g. agent.start() plus git tracking. */
   announce?: (agent: Agent, reason: "resume" | "clear") => void
 }
@@ -176,6 +178,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     ui: session.host.ui,
     control,
     agent: session.agent,
+    ...(opts.aliases ? { aliases: opts.aliases } : {}),
   })
   return host
 }

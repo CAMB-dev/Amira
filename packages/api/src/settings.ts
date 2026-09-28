@@ -32,6 +32,12 @@ export interface Settings {
   /** Which shell tools the model gets on Windows (D68). */
   shell?: ShellMode
   tools?: { disabled?: string[] }
+  /**
+   * Slash command aliases: `{"ds": "model deepseek/deepseek-flash"}` makes `/ds` run that line,
+   * with anything typed after `/ds` appended. The value names a command, not another alias.
+   * Commands and the aliases they declare win over these.
+   */
+  commandAliases?: Record<string, string>
   /** Most tool calls running at once (D71). */
   maxParallelTools?: number
   compact?: { threshold?: number; model?: string }

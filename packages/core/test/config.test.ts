@@ -141,6 +141,21 @@ test("web settings are checked", () => {
   expect(() => validateSettings({ web: { fetch: { maxChars: 0 } } }, "f")).toThrow("web.fetch.maxChars")
 })
 
+test("command aliases are checked: alias names like command names, values command lines", () => {
+  const ok = { commandAliases: { ds: "model deepseek/deepseek-flash", "?": "help", m: " model " } }
+  expect(validateSettings(ok, "f").settings).toEqual(ok)
+  expect(() => validateSettings({ commandAliases: { ds: "/model x" } }, "f")).toThrow(
+    '"commandAliases.ds" must be a command line without the slash',
+  )
+  expect(() => validateSettings({ commandAliases: { ds: 3 } }, "f")).toThrow('"commandAliases.ds" must be')
+  expect(() => validateSettings({ commandAliases: { "my alias": "model" } }, "f")).toThrow(
+    '"commandAliases.my alias" is not a valid alias name',
+  )
+  expect(() => validateSettings({ commandAliases: ["model"] }, "f")).toThrow(
+    '"commandAliases" must be an object',
+  )
+})
+
 test("missing files leave the defaults", () => {
   const r = loadSettings({ cwd, home })
   expect(r.files).toEqual([])

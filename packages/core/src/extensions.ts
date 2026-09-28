@@ -157,7 +157,7 @@ export class ExtensionHost {
       // A taken name skips only this command, not the whole extension (e.g. a skill named "help").
       registerCommand: (command) => {
         try {
-          return track(this.commands.register(command, source))
+          return track(this.commands.register(command, source, (w) => void this.#fail(source, w)))
         } catch (err) {
           this.#fail(source, err instanceof Error ? err.message : String(err))
           return () => {}
