@@ -225,6 +225,10 @@ describe("bracketed paste", () => {
     expect(p.feed("tail\r\x1b[201~a")).toEqual([{ type: "paste", text: "tail\n" }, textKey("a")])
   })
 
+  test("an empty paste emits nothing", () => {
+    expectSplitSafe("\x1b[200~\x1b[201~a", [textKey("a")])
+  })
+
   test("endPaste emits what an unterminated paste collected", () => {
     const p = new InputParser()
     expect(p.feed("\x1b[200~abc\x1b[20")).toEqual([])
@@ -374,6 +378,12 @@ describe("win32-input-mode", () => {
       win32(65, 97, 0) + win32(65, 97, 0, 0) + win32(16, 0, 0x10) + win32(13, 13, 0x20) + win32(66, 98, 0)
     expectSplitSafe(spell("\x1b[200~") + body + spell("\x1b[201~"), [{ type: "paste", text: "a\nb" }])
     expect(parse(spell("\x1b[200~a\rb\x1b[201~"))).toEqual([{ type: "paste", text: "a\nb" }])
+  })
+
+  test("an Enter event followed by a raw \\n in a paste is one line break", () => {
+    const spell = (t: string) => [...t].map((c) => win32(0, c.charCodeAt(0), 0)).join("")
+    const body = win32(65, 97, 0) + win32(13, 13, 0) + win32(13, 13, 0, 0) + spell("\n") + win32(66, 98, 0)
+    expectSplitSafe(spell("\x1b[200~") + body + spell("\x1b[201~"), [{ type: "paste", text: "a\nb" }])
   })
 
   test("vk=0 characters are re-parsed as raw input", () => {
