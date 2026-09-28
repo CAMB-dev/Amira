@@ -1,5 +1,5 @@
 import path from "node:path"
-import { focusReporting, osc, type ProgressState, type Terminal } from "@amira/tui-kit"
+import { focusReporting, osc, type ProgressState, type Terminal, type TerminalMode } from "@amira/tui-kit"
 import { Glyphs } from "./glyphs.ts"
 
 export interface TerminalStatusOptions {
@@ -34,6 +34,8 @@ export class TerminalStatus {
   #shownTitle: string | undefined
   #shownProgress: ProgressState = "none"
   #started = false
+  /** Pushes the title on start, and hands it and the indicator back when left. */
+  #restore: TerminalMode | undefined
   readonly #title: boolean
   readonly #progress: boolean
   readonly #bell: boolean
@@ -63,7 +65,13 @@ export class TerminalStatus {
   start(): void {
     if (this.#started) return
     this.#started = true
-    if (this.#title) this.terminal.write(osc.pushTitle)
+    // Kept as a terminal mode, so the terminal's own restore on a crash or a signal hands the
+    // title and the indicator back too, not only `stop()`. An empty title makes the terminal
+    // show its own (Windows Terminal: the tab's starting title); the pop restores a saved one.
+    const off =
+      (this.#progress ? osc.progress("none") : "") + (this.#title ? osc.title("") + osc.popTitle : "")
+    this.#restore = off ? { on: this.#title ? osc.pushTitle : "", off } : undefined
+    if (this.#restore) this.terminal.enableMode(this.#restore)
     // Focus reports only serve the bell.
     if (this.#bell) this.terminal.enableMode(focusReporting)
     this.#sync()
@@ -73,10 +81,8 @@ export class TerminalStatus {
   stop(): void {
     if (!this.#started) return
     this.#started = false
-    let out = ""
-    if (this.#progress && this.#shownProgress !== "none") out += osc.progress("none")
-    if (this.#title) out += osc.title("") + osc.popTitle
-    if (out) this.terminal.write(out)
+    if (this.#restore) this.terminal.disableMode(this.#restore)
+    this.#restore = undefined
     if (this.#bell) this.terminal.disableMode(focusReporting)
     this.#shownProgress = "none"
     this.#shownTitle = undefined

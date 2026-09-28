@@ -52,6 +52,34 @@ test("progress: busy while working, paused while a dialog waits, cleared when id
   expect(progress()).toEqual(["3;0", "4;100", "3;0", "0;0", "3;0", "0;0"])
 })
 
+test("the terminal's own restore (a crash, a signal) hands the title and the indicator back too", () => {
+  const { terminal, status, titles, progress } = setup()
+  status.start()
+  status.turnStarted()
+  // What ProcessTerminal writes on exit when stop() never ran.
+  terminal.restore()
+  expect(progress().at(-1)).toBe("0;0")
+  expect(titles().at(-1)).toBe("")
+  expect(terminal.output).toContain("\x1b]0;\x07\x1b[23;0t")
+  // Handed back once: a later stop() finds nothing left to undo.
+  const writes = terminal.output.length
+  status.stop()
+  expect(terminal.output.length).toBe(writes)
+})
+
+test("a hidden dialog rings even with the terminal in front", () => {
+  const { status, screen } = setup()
+  status.start()
+  status.focus(true)
+  status.setWaiting(true, true)
+  expect(screen.bells).toBe(1)
+  // Another one while the first still waits rings again.
+  status.setWaiting(true, true)
+  expect(screen.bells).toBe(2)
+  status.setWaiting(true)
+  expect(screen.bells).toBe(2)
+})
+
 test("settings turn each part off", () => {
   const { terminal, status, screen } = setup({ title: false, progress: false, bell: false })
   status.start()
