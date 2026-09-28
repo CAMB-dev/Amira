@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { spawn } from "node:child_process"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep } from "@amira/ai"
 import type { Extension } from "@amira/api"
@@ -261,6 +262,47 @@ test("a slow client loses deltas, gets events.lost, and can resync with state", 
   expect(await done).toBe(0)
   expect(out.find((l) => l.id === 2)).toMatchObject({ status: "idle", lastAssistantText: "x".repeat(4000) })
 })
+
+test("amira --rpc drops deltas when the client stops reading stdout", async () => {
+  const total = 100_000
+  // Bun.spawn reads a child's pipe eagerly, so only node's paused stream leaves it full.
+  const p = spawn("bun", [main, "--rpc", "-m", "mock/m", "--no-builtins"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, AMIRA_TEST_MOCK: JSON.stringify([{ text: "x".repeat(total * 8) }]) },
+  })
+  p.stdout.pause()
+  let err = ""
+  p.stderr.on("data", (c: Buffer) => {
+    err += c.toString()
+  })
+  p.stdin.write(`${JSON.stringify({ id: 1, cmd: "prompt", text: "go" })}\n`)
+  await Bun.sleep(4000)
+  // While the client ignores stdout, the process still answers (its main thread is free).
+  p.stdin.write(`${JSON.stringify({ id: 2, cmd: "state" })}\n`)
+  const out: Line[] = []
+  let buffer = ""
+  const exited = new Promise<number | null>((r) => p.on("close", r))
+  p.stdout.on("data", (c: Buffer) => {
+    buffer += c.toString()
+    let nl = buffer.indexOf("\n")
+    while (nl !== -1) {
+      out.push(JSON.parse(buffer.slice(0, nl)))
+      buffer = buffer.slice(nl + 1)
+      nl = buffer.indexOf("\n")
+    }
+    if (out.some((l) => l.type === "turn.end") && out.some((l) => l.id === 2)) p.stdin.end()
+  })
+  p.stdout.resume()
+  expect(await exited).toBe(0)
+  expect(err).toBe("")
+  const deltas = out.filter((l) => l.type === "message.delta").length
+  const lost = out.filter((l) => l.type === "events.lost")
+  expect(lost.length).toBeGreaterThan(0)
+  expect(lost.reduce((n, l) => n + l.data.dropped, 0)).toBeGreaterThan(0)
+  expect(deltas).toBeLessThan(total)
+  expect(out.find((l) => l.type === "turn.end")?.data.reason).toBe("done")
+  expect(out.find((l) => l.id === 2)?.ok).toBe(true)
+}, 90_000)
 
 test("closing stdin waits for the running turn and cancels dialogs nobody can answer", async () => {
   const s = await session(

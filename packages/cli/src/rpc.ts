@@ -3,12 +3,16 @@ import type { AnyEvent, TurnEndReason } from "@amira/api"
 import { type Agent, newTurnId, type UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
 import type { COMMAND_PARAMS } from "./rpc-schema.ts"
+import { stdoutWriter } from "./stdout-writer.ts"
 
 export interface RpcIO {
   /** Command lines from the client; ends when the client closes stdin. */
   lines: AsyncIterable<string>
   /** Writes one line. Resolves once the output can take more, which paces event delivery. */
   write(line: string): void | Promise<void>
+  /** Resolves once everything written has left the process. */
+  flush?(): Promise<void>
+  close?(): void
 }
 
 export interface RpcOptions {
@@ -221,11 +225,13 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     ui.cancelAll()
     while (agent.turnId) await Bun.sleep(10)
     await Promise.race([agent.bus.flush(), Bun.sleep(opts.flushTimeoutMs ?? 2000)])
+    await io.flush?.()
     return 0
   } finally {
     process.off("SIGINT", onSigint)
     offEvents()
     offTurns()
+    io.close?.()
   }
 }
 
@@ -256,14 +262,13 @@ function lastAssistantText(messages: Message[]): string | undefined {
 
 /** stdin split into lines, and stdout with backpressure. */
 function stdio(): RpcIO {
-  process.stdout.on("error", () => process.exit(0))
+  // The client went away; nobody is left to report to.
+  const out = stdoutWriter({ onClosed: () => process.exit(0) })
   return {
     lines: readLines(process.stdin),
-    write: (line) =>
-      new Promise<void>((resolve) => {
-        if (process.stdout.write(line)) resolve()
-        else process.stdout.once("drain", () => resolve())
-      }),
+    write: (line) => out.write(line),
+    flush: () => out.flush(),
+    close: () => out.close(),
   }
 }
 
