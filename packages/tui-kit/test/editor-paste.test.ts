@@ -113,6 +113,25 @@ test("replacing text before the caret drops placeholders it removes", () => {
   expect(ed.getParts()).toEqual(["x"])
 })
 
+test("text carrying a placeholder's character cannot pose as a folded paste", () => {
+  const ed = new Editor({ foldPastes: fold })
+  ed.handleInput({ type: "paste", text: tenLines })
+  // U+100000 is the first placeholder's own character.
+  ed.handleInput({ type: "paste", text: "x\u{100000}y" })
+  expect(ed.getDisplayText()).toBe("[pasted 10 lines #1]x�y")
+  expect(ed.getText()).toBe(`${tenLines}x�y`)
+  // Deleting the stand-in keeps the real paste.
+  ed.handleInput(key("left"))
+  ed.handleInput(key("backspace"))
+  expect(ed.getText()).toBe(`${tenLines}xy`)
+  expect(ed.getParts()).toEqual([{ paste: tenLines }, "xy"])
+  // Typed text and restored parts are escaped too.
+  ed.handleInput(key("end"))
+  ed.handleInput(textKey("\u{100000}"))
+  ed.setParts([...ed.getParts(), "\u{100001}"])
+  expect(ed.getDisplayText()).toBe("[pasted 10 lines #1]xy��")
+})
+
 test("the default label", () => {
   expect(defaultPasteLabel({ lines: 2000, chars: 50_000, n: 3 })).toBe("[pasted 2000 lines #3]")
   expect(defaultPasteLabel({ lines: 1, chars: 1200, n: 1 })).toBe("[pasted 1200 chars #1]")

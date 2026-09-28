@@ -158,7 +158,7 @@ export class Editor implements Component {
   setParts(parts: EditorPart[]): void {
     this.resetPastes()
     const text = parts
-      .map((p) => (typeof p === "string" ? normalize(p) : this.addPaste(normalize(p.paste))))
+      .map((p) => (typeof p === "string" ? escapeTokens(normalize(p)) : this.addPaste(normalize(p.paste))))
       .join("")
     this.replaceAll(text.split("\n"))
     this.line = this.lines.length - 1
@@ -218,8 +218,17 @@ export class Editor implements Component {
     this.insert(text)
   }
 
+  /**
+   * Inserts `text` at the caret. Characters from the placeholders' range (Supplementary Private
+   * Use Area-B) become U+FFFD, so typed or pasted text can never pose as a folded paste.
+   */
   insert(text: string): void {
-    const parts = normalize(text).split("\n")
+    this.insertRaw(escapeTokens(normalize(text)))
+  }
+
+  /** Inserts normalized text as it is, placeholders included. */
+  private insertRaw(text: string): void {
+    const parts = text.split("\n")
     const before = this.current.slice(0, this.col)
     const after = this.current.slice(this.col)
     const last = parts.length - 1
@@ -237,7 +246,7 @@ export class Editor implements Component {
 
   /** Inserts `text` folded into one placeholder at the caret. */
   insertPaste(text: string): void {
-    this.insert(this.addPaste(normalize(text)))
+    this.insertRaw(this.addPaste(normalize(text)))
   }
 
   /**
@@ -609,6 +618,11 @@ export class Editor implements Component {
 
 function normalize(text: string): string {
   return text.replace(/\r\n?/g, "\n")
+}
+
+/** `text` with placeholder-range characters replaced by U+FFFD (see `insert`). */
+function escapeTokens(text: string): string {
+  return TOKEN_TEST.test(text) ? text.replace(TOKEN_PATTERN, "�") : text
 }
 
 /** Lines of `text`; a trailing line break does not start another. */
