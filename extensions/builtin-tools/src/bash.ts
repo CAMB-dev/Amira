@@ -1,7 +1,8 @@
 import { defineTool, textResult } from "@amira/api"
 import { type RunResult, runCommand } from "@amira/proc"
 import { statOrNull } from "./files.ts"
-import { resolvePowerShell, resolveShell, type Shell } from "./shell.ts"
+import { findPowerShell, gatedPowerShell, powershellEdition, resolvePowerShell } from "./powershell.ts"
+import { resolveShell, type Shell } from "./shell.ts"
 import { truncateOutput } from "./truncate.ts"
 
 export const DEFAULT_TIMEOUT_MS = 120_000
@@ -14,15 +15,18 @@ export interface BashParams {
   timeout?: number
 }
 
-const SHARED_NOTES = [
-  "- Starts in the working directory. Each call is a fresh shell: `cd`, variables and functions do not persist between calls. Prefer absolute paths or `cd dir && cmd`.",
-  `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed.`,
-  "- Background processes are killed when the command finishes; do not use this tool to start long-running servers.",
-  "- Several calls issued together run at the same time. Put commands that depend on each other in one call (`a && b`) or in separate turns.",
-  "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
-  "- Very long output is cut in the middle; the full output is saved to a file you can read.",
-  "- Prefer the read, write, edit, grep and glob tools over shell commands for reading, editing and searching files.",
-]
+/** Notes for every shell tool; `cd` and `chain` show how that shell sequences commands. */
+function sharedNotes(cd: string, chain: string): string[] {
+  return [
+    `- Starts in the working directory. Each call is a fresh shell: \`cd\`, variables and functions do not persist between calls. Prefer absolute paths or \`${cd}\`.`,
+    `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed.`,
+    "- Background processes are killed when the command finishes; do not use this tool to start long-running servers.",
+    `- Several calls issued together run at the same time. Put commands that depend on each other in one call (${chain}) or in separate turns.`,
+    "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
+    "- Very long output is cut in the middle; the full output is saved to a file you can read.",
+    "- Prefer the read, write, edit, grep and glob tools over shell commands for reading, editing and searching files.",
+  ]
+}
 
 const PARAMETERS = {
   type: "object",
@@ -43,7 +47,7 @@ const PARAMETERS = {
 function shellTool(name: string, description: string[], resolve: () => Promise<Shell>) {
   return defineTool<BashParams>({
     name,
-    description: [...description, ...SHARED_NOTES].join("\n"),
+    description: description.join("\n"),
     parameters: PARAMETERS,
     // Commands issued together run at the same time (D71); the model orders dependent ones.
     concurrency: "parallel",
@@ -113,22 +117,35 @@ export const bashTool = shellTool(
   "bash",
   [
     "Run a shell command and return its combined stdout and stderr plus the exit code.",
-    "- Runs in bash (Git Bash on Windows, so use POSIX syntax and forward slashes). If Git Bash is not installed, Windows falls back to PowerShell: every result then starts with a `Shell: PowerShell` line and you must use PowerShell syntax.",
+    "- Runs in bash (Git Bash on Windows, so use POSIX syntax and forward slashes). If Git Bash is not installed, Windows falls back to PowerShell: every result then starts with a `Shell:` line naming the PowerShell edition, and you must use PowerShell syntax.",
     "- Output is decoded as UTF-8. Windows programs that print in a legacy console code page may show garbled non-ASCII text.",
+    ...sharedNotes("cd dir && cmd", "`a && b`"),
   ],
   resolveShell,
 )
 
-/** Windows only: PowerShell next to bash, for Windows-specific work. */
-export const powershellTool = shellTool(
-  "powershell",
-  [
-    "Run a PowerShell command (pwsh if installed, otherwise Windows PowerShell 5.1) and return its output plus the exit code.",
+/** The powershell tool's description, for the edition at `path`. */
+export function powershellDescription(path: string): string[] {
+  const edition = powershellEdition(path)
+  const legacy = edition.startsWith("Windows")
+  return [
+    `Run a command in ${edition} and return its output plus the exit code.`,
     "- Use it for Windows-specific work: the registry, services, processes, Windows paths and APIs, .ps1 scripts, or tools that only behave well from PowerShell. For general work (git, package managers, POSIX tools) prefer the bash tool when it is available.",
-    "- Use PowerShell syntax (`;` or newlines between statements, `$env:NAME` for variables). Output is UTF-8; the exit code of the last native command is returned.",
-  ],
-  resolvePowerShell,
-)
+    `- Use PowerShell syntax: \`;\` or newlines between statements, \`$env:NAME\` for environment variables.${legacy ? " `&&` and `||` do not exist in this edition; test `$LASTEXITCODE` after native commands instead." : ""}`,
+    "- All output streams (output, errors, warnings, Write-Host) are combined as plain text. Output is UTF-8.",
+    `- The exit code is \`$LASTEXITCODE\` of the last native command, or 1 if the final statement failed; an earlier failing cmdlet only prints its error. For fail-fast scripts start with \`$ErrorActionPreference = 'Stop'\`${legacy ? " (in this edition a native command writing to stderr then also stops the script)" : ""}.`,
+    ...sharedNotes("cd dir; cmd", legacy ? "`a; if ($LASTEXITCODE -eq 0) { b }`" : "`a && b`"),
+  ]
+}
+
+/** A powershell tool bound to one PowerShell executable. */
+export function createPowershellTool(path = findPowerShell()) {
+  const shell = path === findPowerShell() ? resolvePowerShell : () => Promise.resolve(gatedPowerShell(path))
+  return shellTool("powershell", powershellDescription(path), shell)
+}
+
+/** Windows only: PowerShell next to bash, for Windows-specific work. */
+export const powershellTool = createPowershellTool()
 
 function statusLine(run: RunResult, timeoutMs: number): string {
   if (run.timedOut) return `Command timed out after ${timeoutMs} ms and was killed.`
