@@ -15,8 +15,15 @@ export type GeminiPart = {
   thoughtSignature?: string
   inlineData?: { mimeType: string; data: string }
   functionCall?: { id?: string; name: string; args: Record<string, unknown> }
-  functionResponse?: { id?: string; name: string; response: Record<string, unknown> }
+  functionResponse?: {
+    id?: string
+    name: string
+    response: Record<string, unknown>
+    parts?: FunctionResponsePart[]
+  }
 }
+
+type FunctionResponsePart = { inlineData: { mimeType: string; data: string; displayName: string } }
 
 export interface GeminiContent {
   role: "user" | "model"
@@ -24,7 +31,7 @@ export interface GeminiContent {
 }
 
 export interface GeminiContentOptions {
-  /** Whether the model accepts images; tool-result images then follow the responses. */
+  /** Whether the model accepts images; tool-result images then go inside the function responses. */
   images?: boolean
 }
 
@@ -35,6 +42,7 @@ export interface GeminiContentOptions {
 export function toGeminiContents(messages: Message[], opts: GeminiContentOptions = {}): GeminiContent[] {
   const out: GeminiContent[] = []
   const results = new ToolResults(messages)
+  const images = { count: 0 }
   messages.forEach((m, i) => {
     if (m.role === "user") {
       out.push({
@@ -49,17 +57,7 @@ export function toGeminiContents(messages: Message[], opts: GeminiContentOptions
     out.push({ role: "model", parts })
     const calls = m.content.filter((b) => b.type === "toolCall")
     if (!calls.length) return
-    const responses: GeminiPart[] = []
-    const images: GeminiPart[] = []
-    for (const call of calls) {
-      const result = results.take(call.id, i)
-      responses.push(responsePart(call, result, opts))
-      const shots = result?.content.filter((b) => b.type === "image") ?? []
-      if (opts.images && result && shots.length) {
-        images.push({ text: `Images from the ${result.toolName} result:` }, ...shots.map(imagePart))
-      }
-    }
-    out.push({ role: "user", parts: [...responses, ...images] })
+    out.push({ role: "user", parts: calls.map((c) => responsePart(c, results.take(c.id, i), opts, images)) })
   })
   return out
 }
@@ -91,15 +89,32 @@ function modelParts(m: AssistantMessage): GeminiPart[] {
   return parts
 }
 
+/**
+ * Answers a call. Result images are nested in the response's own parts and referenced
+ * from `response` by a display name unique to the request.
+ */
 function responsePart(
   call: ToolCallBlock,
   result: ToolResultMessage | undefined,
   opts: GeminiContentOptions,
-) {
-  const text = result ? resultText(result, opts.images ? ", sent after the responses" : "") : MISSING_RESULT
-  const response = result && !result.isError ? { output: text } : { error: text }
+  images: { count: number },
+): GeminiPart {
+  const text = result ? resultText(result, opts.images ? ", attached" : "") : MISSING_RESULT
+  const response: Record<string, unknown> = result && !result.isError ? { output: text } : { error: text }
+  const parts: FunctionResponsePart[] = []
+  for (const b of opts.images ? (result?.content ?? []) : []) {
+    if (b.type !== "image") continue
+    const displayName = `image_${++images.count}`
+    response[displayName] = { $ref: displayName }
+    parts.push({ inlineData: { mimeType: b.mimeType, data: b.data, displayName } })
+  }
   return {
-    functionResponse: { ...(isSynthetic(call.id) ? {} : { id: call.id }), name: call.name, response },
+    functionResponse: {
+      ...(isSynthetic(call.id) ? {} : { id: call.id }),
+      name: call.name,
+      response,
+      ...(parts.length ? { parts } : {}),
+    },
   }
 }
 

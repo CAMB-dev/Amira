@@ -276,12 +276,16 @@ test("turns foreign thinking into text and places a lone signature on an empty p
   ])
 })
 
-test("sends tool-result images after the responses when the model takes images", async () => {
+// Multimodal function responses: https://ai.google.dev/gemini-api/docs/function-calling#multimodal
+test("nests tool-result images in the function response when the model takes images", async () => {
   const messages: Message[] = [
     {
       role: "assistant",
       model,
-      content: [{ type: "toolCall", id: "gemini_call_0", name: "shot", args: {} }],
+      content: [
+        { type: "toolCall", id: "gemini_call_0", name: "shot", args: {} },
+        { type: "toolCall", id: "gemini_call_1", name: "shot", args: {} },
+      ],
     },
     {
       role: "toolResult",
@@ -293,20 +297,34 @@ test("sends tool-result images after the responses when the model takes images",
         { type: "image", mimeType: "image/png", data: "IMG" },
       ],
     },
+    {
+      role: "toolResult",
+      toolCallId: "gemini_call_1",
+      toolName: "shot",
+      isError: false,
+      content: [{ type: "image", mimeType: "image/jpeg", data: "JPG" }],
+    },
   ]
   const withImages = (await sent({ messages }, { images: true })).body.contents[1]
   expect(withImages.parts).toEqual([
     {
       functionResponse: {
         name: "shot",
-        response: { output: "ok\n[image: image/png, sent after the responses]" },
+        response: { output: "ok\n[image: image/png, attached]", image_1: { $ref: "image_1" } },
+        parts: [{ inlineData: { mimeType: "image/png", data: "IMG", displayName: "image_1" } }],
       },
     },
-    { text: "Images from the shot result:" },
-    { inlineData: { mimeType: "image/png", data: "IMG" } },
+    {
+      functionResponse: {
+        name: "shot",
+        response: { output: "[image: image/jpeg, attached]", image_2: { $ref: "image_2" } },
+        parts: [{ inlineData: { mimeType: "image/jpeg", data: "JPG", displayName: "image_2" } }],
+      },
+    },
   ])
   const without = (await sent({ messages })).body.contents[1]
   expect(without.parts).toEqual([
     { functionResponse: { name: "shot", response: { output: "ok\n[image: image/png]" } } },
+    { functionResponse: { name: "shot", response: { output: "[image: image/jpeg]" } } },
   ])
 })
