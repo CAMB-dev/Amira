@@ -147,6 +147,32 @@ describe("escape timeout", () => {
     reader.stop()
   })
 
+  test("a control character aborts a sequence cut short without being swallowed", () => {
+    expectSplitSafe("\x1b[1;5\x1b[A", [key("up")])
+    expectSplitSafe("\x1b[1;5\rb", [key("enter"), textKey("b")])
+    const p = new InputParser()
+    expect(p.feed("\x1b[1;5")).toEqual([])
+    expect(p.flush()).toEqual([])
+    expect(p.feed("\x1b[A")).toEqual([key("up")])
+    expect(p.pending).toBe(false)
+  })
+
+  test("InputReader keeps a sequence that follows one cut short", async () => {
+    const term = new FakeTerminal()
+    const events: InputEvent[] = []
+    const reader = new InputReader(term, (e) => events.push(e), {
+      escapeTimeoutMs: 5,
+      sequenceTimeoutMs: 500,
+    })
+    reader.start()
+    term.send("\x1b[1;5")
+    await Bun.sleep(40)
+    term.send("\x1b[A")
+    term.send("x")
+    expect(events).toEqual([key("up"), textKey("x")])
+    reader.stop()
+  })
+
   test("long ESC runs do not recurse", () => {
     const p = new InputParser()
     const events = [...p.feed("\x1b".repeat(100_000)), ...p.flush()]

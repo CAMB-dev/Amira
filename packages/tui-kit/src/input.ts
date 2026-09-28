@@ -239,6 +239,9 @@ function parseSequence(s: string, at: number): Parsed | undefined {
   let i = at + 2
   while (i < s.length && s.charCodeAt(i) >= 0x20 && s.charCodeAt(i) <= 0x3f) i++
   if (i >= s.length) return undefined
+  // A control character (ESC starting the next sequence, say) aborts a sequence cut short: the
+  // partial is dropped and the control character is left for the next parse.
+  if (s.charCodeAt(i) < 0x20) return { len: i - at, events: [] }
   return { len: i + 1 - at, ...decodeCsi(s.slice(at + 2, i), s[i]!) }
 }
 
