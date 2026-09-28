@@ -2,7 +2,7 @@ import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOpt
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
 import type { ToolDefinition } from "./tools.ts"
-import type { StatusItem } from "./ui.ts"
+import type { StatusItem, UiApi } from "./ui.ts"
 
 export interface InterceptContext {
   sessionId: string
@@ -30,6 +30,8 @@ export interface ExtensionAPI {
   runCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult>
   /** Reports a failure that happened after loading (e.g. in background work) as extension.error. */
   reportError(error: string): void
+  /** Asks the user through whichever frontend is attached (select, confirm, input). */
+  readonly ui: UiApi
   on<K extends keyof EventMap>(type: K, handler: (event: EventEnvelope<K>) => void): () => void
   intercept<K extends keyof InterceptorMap>(
     point: K,

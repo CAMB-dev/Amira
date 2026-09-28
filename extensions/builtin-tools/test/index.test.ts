@@ -19,6 +19,11 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     on: () => () => {},
     intercept: () => () => {},
     runCommand: () => Promise.reject(new Error("not used")),
+    ui: {
+      select: async () => undefined,
+      confirm: async () => false,
+      input: async () => undefined,
+    },
   }
   await extension(api)
   expect(Object.fromEntries(tools.map((t) => [t.name, t.concurrency]))).toEqual({

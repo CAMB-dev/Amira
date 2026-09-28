@@ -16,6 +16,7 @@ import {
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
 import { withPresetHint } from "./provider-command.ts"
+import { testAiOptions } from "./test-hooks.ts"
 
 export interface SessionOptions {
   model: string
@@ -52,6 +53,12 @@ export interface Session {
   startupEvents: AnyEvent[]
   /** Settles when a background catalog refresh is done (at once when none was due). */
   catalogRefresh: Promise<void>
+  ai: Ai
+  /**
+   * A new agent on this session's bus, registries and settings, for another stored session
+   * (rpc session.resume). It starts with `model`, by default the current model.
+   */
+  resume(store: SessionStore, model?: ModelInfo): Agent
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -78,13 +85,18 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
   const settings = opts.settings ?? {}
-  const catalogOpts = opts.ai || opts.catalog === false ? undefined : (opts.catalog ?? {})
+  // AMIRA_TEST_MOCK (end-to-end tests only) adds a scripted "mock" provider and keeps the
+  // catalog download out of the test run.
+  const mock = testAiOptions()
+  const noCatalog = opts.ai || opts.catalog === false || mock.providers
+  const catalogOpts = noCatalog ? undefined : (opts.catalog ?? {})
   const cached = catalogOpts ? await readCatalogCache(catalogOpts) : undefined
   const retry = retryFromSettings(settings.retry)
   const ai =
     opts.ai ??
     createAi({
-      providers: opts.providers ?? [],
+      providers: [...(opts.providers ?? []), ...(mock.providers ?? [])],
+      ...(mock.dialects ? { dialects: mock.dialects } : {}),
       apiKeys: opts.apiKeys ?? {},
       ...(cached?.catalog ? { catalog: cached.catalog } : {}),
       ...(retry ? { retry } : {}),
@@ -119,18 +131,20 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   await bus.flush()
   stopCapture()
 
-  const agent = new Agent({
-    ai,
-    model,
-    cwd: opts.cwd,
-    sections: defaultSections({ cwd: opts.cwd, project: instructionsSection(loadInstructions(opts.cwd)) }),
-    bus,
-    interceptors,
-    tools,
-    ...(opts.store ? { session: opts.store } : {}),
-    ...(compaction ? { compaction } : {}),
-    ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
-  })
+  const newAgent = (m: ModelInfo, store: SessionStore | undefined) =>
+    new Agent({
+      ai,
+      model: m,
+      cwd: opts.cwd,
+      sections: defaultSections({ cwd: opts.cwd, project: instructionsSection(loadInstructions(opts.cwd)) }),
+      bus,
+      interceptors,
+      tools,
+      ...(store ? { session: store } : {}),
+      ...(compaction ? { compaction } : {}),
+      ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
+    })
+  const agent = newAgent(model, opts.store)
   // A stale or missing catalog is refreshed in the background; startup never waits for it.
   const catalogRefresh =
     catalogOpts && cached?.stale
@@ -143,7 +157,14 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
           })
           .catch(() => {})
       : Promise.resolve()
-  return { agent, host, startupEvents, catalogRefresh }
+  return {
+    agent,
+    host,
+    startupEvents,
+    catalogRefresh,
+    ai,
+    resume: (store, m) => newAgent(m ?? agent.model, store),
+  }
 }
 
 /** Settings `retry` as ai retry options (D52); `attempts` counts the retries after the first try. */

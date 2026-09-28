@@ -1,11 +1,12 @@
-import type { AnyEvent } from "@amira/api"
-import { type Agent, AgentBusyError, type StatusRegistry } from "@amira/core"
+import type { AnyEvent, UserMessage } from "@amira/api"
+import { type Agent, AgentBusyError, type StatusRegistry, type UiRequests } from "@amira/core"
 import {
   type Component,
   defaultTheme,
   Editor,
   type InputEvent,
   InputReader,
+  key,
   LiveRenderer,
   matchesKey,
   ProcessTerminal,
@@ -20,12 +21,15 @@ import {
   truncateToWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { Dialog, type DialogAnswer } from "./dialog.ts"
 import { historyLines, summarizeArgs, toolLines, userLines } from "./format.ts"
 import { StatusBar } from "./status-bar.ts"
 
 export interface InteractiveOptions {
   agent: Agent
   status: StatusRegistry
+  /** Extension dialogs, answered inline. Without it they are left to other frontends. */
+  ui?: UiRequests
   /** Events emitted before the UI subscribed, such as extension load errors. */
   startupEvents?: AnyEvent[]
   /** Sent as the first message once the UI is up. */
@@ -47,7 +51,18 @@ class View implements Component {
 }
 
 /** Events without a turn that the UI shows whatever session emitted them. */
-const HOST_EVENTS = new Set<string>(["extension.error", "ui.render", "extension.loaded"])
+const HOST_EVENTS = new Set<string>([
+  "extension.error",
+  "ui.render",
+  "extension.loaded",
+  "ui.request",
+  "ui.resolved",
+])
+
+/** How a user message reads in the transcript. */
+function messageText(m: UserMessage): string {
+  return m.content.map((b) => (b.type === "text" ? b.text : `[image ${b.mimeType}]`)).join("\n\n")
+}
 
 /**
  * The interactive terminal UI. Finished messages and tool calls are committed to the
@@ -63,6 +78,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const streaming = new Text()
   const spinner = new Spinner()
   const queued: string[] = []
+  /** Messages steering the running turn that have not reached the model yet. */
+  const steering: string[] = []
+  /** Open extension dialogs; the first one has the keyboard. */
+  const dialogs: Dialog[] = []
   const running = new Map<string, string>()
   let working = false
   let thinking = false
@@ -91,6 +110,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const editor = new Editor({ prompt: theme.accent("› "), placeholder: "Message Amira", onSubmit: submit })
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
+  // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
+  const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
   const root = new Stack([
     streaming,
     new View((width, ctx) => {
@@ -119,15 +140,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             : "working"
       return [...spinner.render(width, ctx), ""]
     }),
-    new View((width, ctx) =>
-      queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
-    ),
-    editor,
+    new View((width, ctx) => [
+      ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
+      ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
+    ]),
+    new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : editor.render(width, ctx))),
     new StatusBar(() => opts.status.snapshot()),
-    new View((_width, ctx) => {
+    new View((width, ctx) => {
+      if (dialogs[0]) return []
       const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
+      const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
       const esc = working ? "Esc interrupt · " : ""
-      return [ctx.theme.muted(`Enter send · ${newlineKey} newline · ${esc}Ctrl+C ${ctrlC}`)]
+      const hint = `${send} · ${newlineKey} newline · ${esc}Ctrl+C ${ctrlC}`
+      return [ctx.theme.muted(truncateToWidth(hint, width, "…"))]
     }),
   ])
   const renderer = new LiveRenderer(terminal, root, {
@@ -162,6 +187,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
+        renderer.commit([...userLines(theme, messageText(e.data.prompt)), ""])
         working = true
         thinking = false
         turnShowedOutput = false
@@ -220,6 +246,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         setBlinking(false)
         lastArgs.clear()
         spinner.stop()
+        // Steering the turn never reached becomes the next turn, which shows it again.
+        steering.length = 0
         if (e.data.reason === "error") renderer.commit([theme.error(`✗ ${e.data.error ?? "error"}`), ""])
         else if (e.data.reason === "aborted") renderer.commit([theme.muted("Interrupted."), ""])
         else if (!turnShowedOutput) renderer.commit([theme.muted("(no reply)"), ""])
@@ -247,14 +275,41 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "extension.error":
         renderer.commit([theme.warning(`[extension ${e.data.source}] ${e.data.error}`), ""])
         break
+      case "turn.steer": {
+        const text = messageText(e.data.message)
+        if (e.data.state === "queued") {
+          steering.push(text)
+          break
+        }
+        const i = steering.indexOf(text)
+        if (i !== -1) steering.splice(i, 1)
+        if (e.data.state === "injected") renderer.commit([...userLines(theme, text), ""])
+        // Put a message the turn dropped back into the editor rather than losing it.
+        else if (e.data.state === "dropped")
+          editor.setText(editor.getText() ? `${editor.getText()}\n${text}` : text)
+        // A promoted one shows up again as the next turn's prompt.
+        break
+      }
+      case "ui.request": {
+        const ui = opts.ui
+        if (!ui) break
+        const dialog = new Dialog(e.data, (answer) => answerDialog(ui, dialog, answer))
+        dialogs.push(dialog)
+        break
+      }
+      case "ui.resolved": {
+        const i = dialogs.findIndex((d) => d.request.requestId === e.data.requestId)
+        if (i !== -1) dialogs.splice(i, 1)
+        break
+      }
     }
     renderer.requestRender()
   }
   // tool.execute.end does not repeat the arguments; remember them from the start event.
   const lastArgs = new Map<string, Record<string, unknown>>()
 
+  /** The user's message shows up in the transcript on turn.start. */
   function send(text: string) {
-    renderer.commit([...userLines(theme, text), ""])
     working = true
     renderer.requestRender()
     agent.prompt(text).catch((err) => {
@@ -270,20 +325,39 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     })
   }
 
+  /** Enter: sends, or while a turn runs steers it (D29). */
   function submit(text: string) {
     const trimmed = text.trim()
     if (!trimmed) return
     editor.clear()
-    if (working) {
-      queued.push(trimmed)
-      renderer.requestRender()
-      return
-    }
-    send(trimmed)
+    if (working) agent.steer(trimmed)
+    else send(trimmed)
+    renderer.requestRender()
+  }
+
+  /** Alt+Enter or Ctrl+Q: while a turn runs, queues the message to send after it. */
+  function queue() {
+    const trimmed = editor.getText().trim()
+    if (!trimmed) return
+    editor.clear()
+    if (working) queued.push(trimmed)
+    else send(trimmed)
+  }
+
+  function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
+    const i = dialogs.indexOf(dialog)
+    if (i !== -1) dialogs.splice(i, 1)
+    const { requestId, title } = dialog.request
+    if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
+    const shown =
+      answer === undefined ? "cancelled" : answer === true ? "yes" : answer === false ? "no" : answer
+    renderer.commit([`${theme.accent("?")} ${title} ${theme.muted(`› ${shown}`)}`, ""])
+    renderer.requestRender()
   }
 
   function quit(code = 0) {
     off()
+    for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
     setBlinking(false)
     reader.stop()
@@ -294,7 +368,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   function onInput(e: InputEvent) {
-    if (matchesKey(e, "c", { ctrl: true })) {
+    const dialog = dialogs[0]
+    if (dialog) {
+      // Ctrl+C closes the dialog like Esc.
+      dialog.handleInput(matchesKey(e, "c", { ctrl: true }) ? key("escape") : e)
+    } else if (matchesKey(e, "enter", { alt: true }) || matchesKey(e, "q", { ctrl: true })) {
+      queue()
+    } else if (matchesKey(e, "c", { ctrl: true })) {
       if (working) agent.abort()
       else if (editor.getText()) editor.clear()
       else return quit()

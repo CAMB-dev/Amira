@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
-import { type Agent, listSessions, SessionStore, trackWorkspace } from "@amira/core"
+import { type Agent, findSession, listSessions, SessionStore, trackWorkspace } from "@amira/core"
 import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
@@ -8,6 +8,8 @@ import { resolveConfig } from "./config.ts"
 import { runPrint } from "./print.ts"
 import { runProviderCommand } from "./provider-command.ts"
 import { chooseStore, formatSessionList, pickSession } from "./resume.ts"
+import { runRpc } from "./rpc.ts"
+import { rpcSchema } from "./rpc-schema.ts"
 import { createSession } from "./session.ts"
 
 async function main(argv: string[]): Promise<number> {
@@ -37,6 +39,10 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${pkg.version}\n`)
     return 0
   }
+  if (args.rpcSchema) {
+    process.stdout.write(`${JSON.stringify(rpcSchema(), null, 2)}\n`)
+    return 0
+  }
   if (args.shell === "powershell" && process.platform !== "win32") {
     throw new UsageError("--shell powershell is only available on Windows")
   }
@@ -50,7 +56,7 @@ async function run(argv: string[]): Promise<number> {
       'no model selected. Pass --model provider/model, set AMIRA_MODEL or set "model" in settings.json.',
     )
   }
-  const interactive = !args.print
+  const interactive = !args.print && !args.rpc
   let choice: { store: SessionStore; resumed: boolean } | undefined
   if (args.resume === "") {
     const sessions = listSessions(args.cwd)
@@ -89,7 +95,7 @@ async function run(argv: string[]): Promise<number> {
     ...(args.resume ? { resume: args.resume } : {}),
   })
   const { store, resumed } = choice
-  const { agent, host, startupEvents, catalogRefresh } = await createSession({
+  const session = await createSession({
     model,
     cwd: args.cwd,
     extensions: args.extensions,
@@ -102,24 +108,42 @@ async function run(argv: string[]): Promise<number> {
     ...(args.print ? {} : { warnings: config.warnings }),
     onSubscriberError,
   })
+  const { agent, host, startupEvents, catalogRefresh, ai } = session
   agentRef = agent
 
   // Announce the session once the frontend listens, then fill in git facts in the background.
   let stopWorkspace = () => {}
-  const onReady = () => {
-    agent.start(resumed ? "resume" : "startup", {
-      sessionFile: store.file,
-      resume: ["amira", "--resume", store.id],
-    })
-    stopWorkspace = trackWorkspace(agent.bus, agent.sessionId, agent.cwd)
+  const announce = (a: Agent, s: SessionStore, reason: "startup" | "resume") => {
+    a.start(reason, { sessionFile: s.file, resume: ["amira", "--resume", s.id] })
+    stopWorkspace()
+    stopWorkspace = trackWorkspace(a.bus, a.sessionId, a.cwd)
   }
+  const onReady = () => announce(agent, store, resumed ? "resume" : "startup")
   try {
+    if (args.rpc) {
+      // session.resume switches to another stored session of this directory, on the same bus.
+      const resume = async (id: string) => {
+        const file = findSession(args.cwd, id)
+        if (!file) return undefined
+        const stored = SessionStore.open(file)
+        const next = session.resume(stored)
+        agentRef = next
+        announce(next, stored, "resume")
+        return next
+      }
+      return await runRpc({ agent, ai, ui: host.ui }, { pending: startupEvents, onReady, resume })
+    }
     if (!interactive) {
-      return await runPrint(agent, args.prompt ?? "", args.json, { pending: startupEvents, onReady })
+      return await runPrint(agent, args.prompt ?? "", args.json, {
+        pending: startupEvents,
+        onReady,
+        ui: host.ui,
+      })
     }
     return await runInteractive({
       agent,
       status: host.status,
+      ui: host.ui,
       startupEvents,
       onReady,
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
