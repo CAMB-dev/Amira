@@ -351,6 +351,9 @@ export class Agent {
       if (problem) return reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`)
 
       this.#emitToolStart(turn, call, args)
+      // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
+      // (spawning a process can stall for seconds on some Windows machines).
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
       let result: ToolResult
       try {
         result = normalizeResult(

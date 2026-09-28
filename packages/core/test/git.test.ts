@@ -124,3 +124,60 @@ test("Agent.start cannot be tricked into overriding cwd and carries no turn id",
   expect(ev.turnId).toBeUndefined()
   expect(ev.sessionId).toBe(agent.sessionId)
 })
+
+async function nextWorkspace(bus: EventBus, seen: AnyEvent[], n: number) {
+  bus.emit("turn.end", { reason: "done", steps: 0 }, { sessionId: "s" })
+  const deadline = performance.now() + 30_000
+  while (seen.length < n && performance.now() < deadline) await Bun.sleep(20)
+}
+
+test("trackWorkspace notices commits made in a linked worktree", async () => {
+  const d = await repo()
+  const wt = path.join(await tempDir(), "wt")
+  await run(d, "worktree", "add", "-q", "-b", "side", wt)
+  const bus = new EventBus()
+  const seen: AnyEvent[] = []
+  bus.subscribe((e) => void seen.push(e), { types: ["workspace.changed"] })
+  const stop = trackWorkspace(bus, "s", wt, { initialDelayMs: 0 })
+  while (seen.length === 0) await Bun.sleep(20)
+  await Bun.sleep(20)
+  await run(
+    wt,
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "y",
+  )
+  await nextWorkspace(bus, seen, 2)
+  stop()
+  expect(seen).toHaveLength(2)
+  const [a, b] = seen as Extract<AnyEvent, { type: "workspace.changed" }>[]
+  expect(b!.data.head).not.toBe(a!.data.head)
+  expect(b!.data.isWorktree).toBe(true)
+})
+
+test("trackWorkspace picks up a repository created after startup", async () => {
+  const d = await tempDir()
+  process.env.GIT_CEILING_DIRECTORIES = path.dirname(d)
+  try {
+    const bus = new EventBus()
+    const seen: AnyEvent[] = []
+    bus.subscribe((e) => void seen.push(e), { types: ["workspace.changed"] })
+    const stop = trackWorkspace(bus, "s", d, { initialDelayMs: 0 })
+    while (seen.length === 0) await Bun.sleep(20)
+    expect((seen[0] as Extract<AnyEvent, { type: "workspace.changed" }>).data.branch).toBeUndefined()
+    await run(d, "init", "-q", "-b", "later")
+    await nextWorkspace(bus, seen, 2)
+    stop()
+    expect((seen[1] as Extract<AnyEvent, { type: "workspace.changed" }>).data.branch).toBe("later")
+  } finally {
+    delete process.env.GIT_CEILING_DIRECTORIES
+  }
+})

@@ -65,6 +65,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const running = new Map<string, string>()
   let working = false
   let thinking = false
+  /** Tool the model is currently writing a call for, before it runs. */
+  let preparing: string | undefined
   /** Whether this message already committed some of its lines early. */
   let streamedEarly = false
   /** Whether the current turn showed anything besides the user's message. */
@@ -77,7 +79,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     new View((width, ctx) => {
       if (!working) return []
       const tools = [...new Set(running.values())]
-      spinner.label = tools.length ? `running ${tools.join(", ")}` : thinking ? "thinking" : "working"
+      spinner.label = tools.length
+        ? `running ${tools.join(", ")}`
+        : preparing
+          ? `preparing ${preparing}`
+          : thinking
+            ? "thinking"
+            : "working"
       return [...spinner.render(width, ctx), ""]
     }),
     new View((width, ctx) =>
@@ -130,6 +138,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "message.start":
         thinking = false
+        preparing = undefined
         streamedEarly = false
         break
       case "message.delta":
@@ -139,6 +148,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           commitStreamedLines()
         } else if (e.data.kind === "thinking") {
           thinking = true
+        } else if (e.data.name) {
+          thinking = false
+          preparing = e.data.name
         }
         break
       case "message.end": {
@@ -153,9 +165,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       }
       case "tool.execute.start":
+        preparing = undefined
         running.set(e.data.toolCallId, e.data.name)
         lastArgs.set(e.data.toolCallId, e.data.args)
-        break
+        // Draw now: the tool may block the event loop before a scheduled frame would run.
+        renderer.render()
+        return
       case "tool.execute.end": {
         running.delete(e.data.toolCallId)
         const args = lastArgs.get(e.data.toolCallId) ?? {}
@@ -167,6 +182,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       case "turn.end":
         working = false
+        preparing = undefined
         running.clear()
         lastArgs.clear()
         spinner.stop()
