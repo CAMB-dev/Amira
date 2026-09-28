@@ -5,13 +5,12 @@ import { type ProcessTree, trackProcessTree } from "./process-tree.ts"
 /** How long to wait for pipes to close after the command exits (and leftovers are killed). */
 export const DRAIN_GRACE_MS = 2000
 
-export interface RunOptions {
+/** How to start a command; fixed once the process exists. */
+export interface SpawnOptions {
   cwd: string
   env?: Record<string, string | undefined>
   /** The command waits for a line on stdin, which is sent once the process tree is contained. */
   gated?: boolean
-  /** The line that releases a gated command, without its newline (default empty). */
-  gateLine?: string
   /**
    * Windows: start the program through cmd.exe. Bun stalls about 4 s on some spawns of MSYS and
    * Git programs, but not on cmd. When gated, cmd waits for the gate and only then starts the
@@ -20,15 +19,24 @@ export interface RunOptions {
    * the gate line itself unless that variable is set. Cannot be combined with gateLine.
    */
   viaCmd?: boolean
-  timeoutMs: number
-  signal: AbortSignal
-  /** Called with each new piece of output, in order. */
-  onChunk?: (chunk: string) => void
   /** Keep stderr out of `output` (it is discarded). Default false: both streams are interleaved. */
   stdoutOnly?: boolean
   /** Test seam: how the process tree is tracked and killed. */
   trackTree?: (proc: Subprocess) => ProcessTree
 }
+
+/** How to let a started command run and collect it. */
+export interface ReleaseOptions {
+  /** The line that releases a gated command, without its newline (default empty). */
+  gateLine?: string
+  /** Counted from the release, not from the spawn. */
+  timeoutMs: number
+  signal: AbortSignal
+  /** Called with each new piece of output, in order; output from before the release comes first. */
+  onChunk?: (chunk: string) => void
+}
+
+export type RunOptions = SpawnOptions & ReleaseOptions
 
 export interface RunResult {
   output: string
@@ -43,13 +51,49 @@ export interface RunResult {
   contained: boolean
 }
 
+/** A prepared command can no longer run: it exited, was disposed, already ran, or never started. */
+export class StandbyGoneError extends Error {
+  override name = "StandbyGoneError"
+}
+
+/** A started, contained command that runs once released; see `prepareCommandInline`. */
+export interface PreparedCommand {
+  /** False once the process exited, was disposed or was released. */
+  readonly alive: boolean
+  /** Releases the gate and collects the command. Rejects with StandbyGoneError if it cannot run. */
+  run(opts: ReleaseOptions): Promise<RunResult>
+  /** Kills the process tree unless it was already released. */
+  dispose(): void
+}
+
 /**
  * Runs argv on the current thread, killing the whole process tree on abort, timeout and exit.
  * Spawning can block this thread for seconds on some Windows machines; frontends should use
  * `runCommand`, which runs this in a worker.
  */
-export async function runCommandInline(argv: string[], opts: RunOptions): Promise<RunResult> {
-  if (opts.viaCmd && opts.gateLine !== undefined) throw new Error("gateLine cannot be combined with viaCmd")
+export function runCommandInline(argv: string[], opts: RunOptions): Promise<RunResult> {
+  if (opts.viaCmd && opts.gateLine !== undefined) {
+    return Promise.reject(new Error("gateLine cannot be combined with viaCmd"))
+  }
+  let prepared: PreparedCommand
+  try {
+    prepared = prepareCommandInline(argv, opts)
+  } catch (err) {
+    return Promise.reject(err)
+  }
+  return prepared.run(opts)
+}
+
+/**
+ * Spawns argv and contains its tree now; `run` releases it later. A gated command does nothing
+ * until then, so the process start (slow on Windows) can be paid ahead of time. Output before
+ * the release is kept. `onIdleExit` is called if the process exits before it is released.
+ */
+export function prepareCommandInline(
+  argv: string[],
+  opts: SpawnOptions,
+  onIdleExit?: () => void,
+): PreparedCommand {
   const gated = !!opts.gated
   const env = withoutGateVar(opts.env ?? process.env)
   const wrapped =
@@ -74,11 +118,14 @@ export async function runCommandInline(argv: string[], opts: RunOptions): Promis
     proc.kill()
     throw err
   }
-  // cmd's `set /p` fails on an empty line, which would end the command with 125.
-  if (gated) releaseGate(proc.stdin, wrapped ? "go" : (opts.gateLine ?? ""))
 
   let output = ""
+  let onChunk: ((chunk: string) => void) | undefined
   let finished = false
+  const emit = (chunk: string) => {
+    output += chunk
+    if (chunk) onChunk?.(chunk)
+  }
   const readers: { cancel(): Promise<void> }[] = []
   const pump = async (stream: ReadableStream<Uint8Array>) => {
     const reader = stream.getReader()
@@ -87,19 +134,65 @@ export async function runCommandInline(argv: string[], opts: RunOptions): Promis
     for (;;) {
       const { value, done } = await reader.read()
       if (done || finished) break
-      const chunk = decoder.decode(value, { stream: true })
-      output += chunk
-      if (chunk) opts.onChunk?.(chunk)
+      emit(decoder.decode(value, { stream: true }))
     }
-    if (!finished) {
-      const tail = decoder.decode()
-      output += tail
-      if (tail) opts.onChunk?.(tail)
-    }
+    if (!finished) emit(decoder.decode())
   }
   const streams = opts.stdoutOnly ? [proc.stdout] : [proc.stdout, proc.stderr as ReadableStream<Uint8Array>]
   const drained = Promise.all(streams.map(pump)).catch(() => {})
 
+  let state: "idle" | "released" | "closed" = "idle"
+  const exited = () => proc.exitCode !== null || proc.signalCode !== null
+  // Nothing reaches `output` or onChunk after this point, even if a pipe holder survived.
+  const close = () => {
+    finished = true
+    for (const r of readers) r.cancel().catch(() => {})
+    tree.dispose()
+  }
+  const closeIdle = () => {
+    if (state !== "idle") return false
+    state = "closed"
+    tree.kill()
+    close()
+    return true
+  }
+  proc.exited.then(
+    () => closeIdle() && onIdleExit?.(),
+    () => {},
+  )
+
+  return {
+    get alive() {
+      return state === "idle" && !exited()
+    },
+    async run(release) {
+      if (state !== "idle" || exited()) {
+        closeIdle()
+        throw new StandbyGoneError("the prepared command is no longer available")
+      }
+      if (wrapped && release.gateLine !== undefined)
+        throw new Error("gateLine cannot be combined with viaCmd")
+      state = "released"
+      onChunk = release.onChunk
+      if (output) onChunk?.(output)
+      // cmd's `set /p` fails on an empty line, which would end the command with 125.
+      if (gated) releaseGate(proc.stdin, wrapped ? "go" : (release.gateLine ?? ""))
+      return collect(proc, tree, drained, release, () => output, close)
+    },
+    dispose() {
+      closeIdle()
+    },
+  }
+}
+
+async function collect(
+  proc: Subprocess,
+  tree: ProcessTree,
+  drained: Promise<unknown>,
+  opts: ReleaseOptions,
+  output: () => string,
+  close: () => void,
+): Promise<RunResult> {
   let reason: "timeout" | "abort" | undefined
   const stop = (why: "timeout" | "abort") => {
     reason ??= why
@@ -130,7 +223,7 @@ export async function runCommandInline(argv: string[], opts: RunOptions): Promis
     })
     const settled = await Promise.race([drained.then(() => true), grace])
     return {
-      output,
+      output: output(),
       exitCode,
       signalCode: proc.signalCode,
       timedOut: cause === "timeout",
@@ -139,14 +232,11 @@ export async function runCommandInline(argv: string[], opts: RunOptions): Promis
       contained: tree.contained,
     }
   } finally {
-    // Nothing reaches `output` or onChunk after this point, even if a pipe holder survived.
-    finished = true
     clearTimeout(timer)
     clearTimeout(graceTimer)
     endGrace()
     opts.signal.removeEventListener("abort", onAbort)
-    for (const r of readers) r.cancel().catch(() => {})
-    tree.dispose()
+    close()
   }
 }
 
