@@ -9,3 +9,10 @@ export {
   loadKeybindings,
 } from "./keybindings.ts"
 export { StatusBar } from "./status-bar.ts"
+export {
+  type SubagentSource,
+  SubagentViewer,
+  type SubagentViewerOptions,
+  subagentStats,
+  transcriptLines,
+} from "./subagent-view.ts"

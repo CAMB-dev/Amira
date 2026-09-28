@@ -27,7 +27,13 @@ export interface TerminalMode {
 }
 
 export const modes = {
+  /** The alternate screen; entering saves the cursor and leaving restores it and the main screen. */
   altScreen: { on: "\x1b[?1049h", off: "\x1b[?1049l" },
+  /**
+   * Alternate scroll: on the alternate screen the mouse wheel sends ↑/↓ instead of scrolling
+   * a scrollback that is not there. Unlike mouse reporting, it leaves text selection alone.
+   */
+  alternateScroll: { on: "\x1b[?1007h", off: "\x1b[?1007l" },
   bracketedPaste: { on: "\x1b[?2004h", off: "\x1b[?2004l" },
   win32Input: { on: "\x1b[?9001h", off: "\x1b[?9001l" },
   kittyKeyboard: { on: "\x1b[>1u", off: "\x1b[<u" },

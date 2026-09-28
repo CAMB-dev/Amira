@@ -107,14 +107,20 @@ export class TerminalStatus {
     if (reason !== "aborted") this.#ring(long)
   }
 
-  /** Whether a dialog waits for an answer. Opening one may ring. */
-  setWaiting(waiting: boolean): void {
-    if (waiting === this.#waiting) return
+  /**
+   * Whether a dialog waits for an answer. Opening one may ring; `hidden` rings in any case,
+   * for a dialog the user cannot see (a full-screen view covers it).
+   */
+  setWaiting(waiting: boolean, hidden = false): void {
+    if (waiting === this.#waiting) {
+      if (waiting && hidden) this.#ring(true, true)
+      return
+    }
     this.#waiting = waiting
     this.#sync()
     if (waiting) {
       const long = this.#turnStartedAt !== undefined && this.#now() - this.#turnStartedAt >= this.#longTurnMs
-      this.#ring(long)
+      this.#ring(long, hidden)
     }
   }
 
@@ -123,9 +129,9 @@ export class TerminalStatus {
   }
 
   /** Rings when the terminal is known to be in the background, else only after a long wait. */
-  #ring(long: boolean): void {
+  #ring(long: boolean, always = false): void {
     if (!this.#bell || !this.#started) return
-    if (this.#focused === undefined ? long : !this.#focused) this.terminal.write(osc.bell)
+    if (always || (this.#focused === undefined ? long : !this.#focused)) this.terminal.write(osc.bell)
   }
 
   #sync(): void {

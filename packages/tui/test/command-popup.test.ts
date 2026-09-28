@@ -1,15 +1,16 @@
 import { expect, test } from "bun:test"
-import type { CommandCandidate, CommandInfo } from "@amira/api"
-import { rankMatches } from "@amira/core"
+import { createAi, createMockDialect } from "@amira/ai"
+import type { CommandCandidate, CommandInfo, SessionControl } from "@amira/api"
+import { Agent, CommandHost, CommandRegistry, EventBus, rankMatches, UiRequests } from "@amira/core"
 import { key } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { CommandPopup, type CompletionSource } from "../src/command-popup.ts"
 
 const COMMANDS: CommandInfo[] = [
-  { name: "clear", description: "Start over", source: "b" },
-  { name: "compact", description: "Summarize", hint: "[instructions]", source: "b" },
-  { name: "model", description: "Switch the model", hint: "[provider/model]", source: "b" },
-  { name: "tools", description: "List tools", source: "b" },
+  { name: "clear", aliases: [], description: "Start over", source: "b" },
+  { name: "compact", aliases: [], description: "Summarize", hint: "[instructions]", source: "b" },
+  { name: "model", aliases: [], description: "Switch the model", hint: "[provider/model]", source: "b" },
+  { name: "tools", aliases: [], description: "List tools", source: "b" },
 ]
 const MODELS = ["deepseek/deepseek-flash", "deepseek/deepseek-pro", "openai/gpt-5"]
 
@@ -146,4 +147,48 @@ test("long lists scroll with the selection and show where it is", async () => {
   expect(lines()).toContain("› /c10")
   expect(lines()).not.toContain("  /c0")
   expect(lines().at(-1)).toBe("  11/20")
+})
+
+/** A real CommandHost with /quit (exit, q) and /model, plus a settings alias. */
+function hostSource(): CompletionSource {
+  const bus = new EventBus()
+  const ai = createAi({
+    dialects: [createMockDialect([])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const registry = new CommandRegistry()
+  const run = () => {}
+  registry.register({ name: "quit", aliases: ["exit", "q"], description: "Leave Amira", run }, "b")
+  registry.register({ name: "model", description: "Switch the model", args: { hint: "[ref]" }, run }, "b")
+  return new CommandHost({
+    registry,
+    bus,
+    ui: new UiRequests(bus),
+    control: {} as SessionControl,
+    agent: new Agent({ ai, model: ai.model("mock/m"), cwd: "/w", bus }),
+    aliases: { ds: "model deepseek/deepseek-flash" },
+  })
+}
+
+test("a command row shows its aliases; typing an alias finds it and Tab completes the name", async () => {
+  const all = await popupFor("/", hostSource())
+  expect(all.lines()).toEqual([
+    "› /ds → /model deepseek/deepseek-flash  Switch the model",
+    // The name column stops at 32 characters; a longer row pushes only its own description.
+    "  /model                            Switch the model",
+    "  /quit (exit, q)                   Leave Amira",
+  ])
+  const { popup, lines } = await popupFor("/ex", hostSource())
+  expect(lines()).toEqual(["› /quit (exit, q)  Leave Amira"])
+  expect(popup.handleKey(key("tab"))).toEqual({ type: "replace", text: "/quit " })
+  expect(popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/quit" })
+  // An alias with arguments shows how the command it runs is used.
+  expect((await popupFor("/q now", hostSource())).lines()).toEqual(["  /quit (exit, q)  Leave Amira"])
+})
+
+test("a settings alias row completes to the alias itself", async () => {
+  const { popup, lines } = await popupFor("/d", hostSource())
+  expect(lines()[0]).toStartWith("› /ds → /model deepseek/deepseek-flash")
+  expect(popup.handleKey(key("tab"))).toEqual({ type: "replace", text: "/ds " })
+  expect(popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/ds" })
 })

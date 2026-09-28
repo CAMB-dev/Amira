@@ -22,6 +22,20 @@ function lines(file: string) {
     .map((l) => JSON.parse(l))
 }
 
+test("a user message's display round-trips through the file and names the session in lists", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  const display = { text: "/review-pr 123", note: "Loaded skill review-pr (120 lines)" }
+  s.appendMessage(userMessage("Skill review-pr\n\nlong instructions", display))
+  s.appendMessage(reply("ok"))
+  expect(SessionStore.open(s.file).restore().messages[0]).toEqual({
+    role: "user",
+    content: [{ type: "text", text: "Skill review-pr\n\nlong instructions" }],
+    display,
+  })
+  expect(listSessions("/proj", dir)[0]?.firstUserText).toBe("/review-pr 123")
+})
+
 test("nothing is written until the first message", async () => {
   const dir = await tmp()
   const s = SessionStore.create({ cwd: "/proj", dir })

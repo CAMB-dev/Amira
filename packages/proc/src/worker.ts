@@ -1,5 +1,7 @@
 // Runs commands off the main thread: spawning can block its thread for seconds on
 // some Windows machines (antivirus scanning), which would freeze the UI.
+// Every spawn with pipes happens on this one thread: see `openPipe` in index.ts.
+import { openPipeInline, type PipeHandle } from "./pipe.ts"
 import { warmUpProcessTree } from "./process-tree.ts"
 import type { FromWorker, ReleaseRequest, SpawnRequest, ToWorker } from "./protocol.ts"
 import {
@@ -16,6 +18,8 @@ declare const self: Worker
 const running = new Map<number, AbortController>()
 /** Prepared commands waiting for their release. */
 const prepared = new Map<number, PreparedCommand>()
+/** Piped processes that have not exited yet. */
+const pipes = new Map<number, PipeHandle>()
 const post = (m: FromWorker) => self.postMessage(m)
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
@@ -30,6 +34,24 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       return running.get(msg.id)?.abort()
     case "prepare":
       return prepare(msg.id, msg.request)
+    case "pipe-open": {
+      const { id } = msg
+      let exited = false
+      const handle = openPipeInline(msg.spec, (event) => {
+        if (event.type === "exit") {
+          exited = true
+          pipes.delete(id)
+        }
+        post({ type: "pipe", id, event })
+      })
+      // A failed spawn has reported its exit already.
+      if (!exited) pipes.set(id, handle)
+      return
+    }
+    case "pipe-write":
+      return pipes.get(msg.id)?.write(msg.data)
+    case "pipe-close":
+      return pipes.get(msg.id)?.close(msg.graceMs)
     case "dispose":
       prepared.get(msg.id)?.dispose()
       prepared.delete(msg.id)

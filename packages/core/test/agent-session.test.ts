@@ -2,9 +2,10 @@ import { expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
+import { createAi, createMockDialect, type Message, type MockStep, userMessage } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
+import { splitHistory, summaryMessages } from "../src/compaction.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { SessionStore } from "../src/session-store.ts"
 
@@ -75,6 +76,24 @@ test("every message is persisted as it is added and restores into a new agent", 
   ])
   // Resuming with the same model does not record a model change again.
   expect(reopened.entries.filter((e) => e.type === "model_change").length).toBe(1)
+})
+
+test("a prompt's display is stored and in turn.start, but the model gets only the full text", async () => {
+  const { agent, mock, session, events, bus } = await setup([{ text: "done" }])
+  const display = { text: "/review-pr 123", note: "Loaded skill review-pr (3 lines)" }
+  await agent.prompt(userMessage("the whole skill text", display))
+  await bus.flush()
+  expect(mock.requests[0]!.messages[0]).toEqual({
+    role: "user",
+    content: [{ type: "text", text: "the whole skill text" }],
+  })
+  const start = events.find((e) => e.type === "turn.start")
+  expect(start?.type === "turn.start" && start.data.prompt.display).toEqual(display)
+  const stored = SessionStore.open(session.file).restore().messages[0]
+  expect(stored?.role === "user" && stored.display).toEqual(display)
+  // The preview shows what the model gets, so no display either; the history keeps it.
+  expect((await agent.preview()).messages[0]).toEqual(mock.requests[0]!.messages[0]!)
+  expect(agent.messages[0]).toMatchObject({ display })
 })
 
 test("a session open in two agents: the second writer reports the conflict once", async () => {
@@ -308,4 +327,146 @@ test("preview shows what the next model call would send, after the interceptors"
   expect(p.tools.map((t) => t.name)).toEqual(["noop"])
   agent.interceptors.add("context.build", () => ({ action: "block", reason: "no" }))
   await expect(agent.preview()).rejects.toThrow("context.build blocked the request: no")
+})
+
+const noop = defineTool({
+  name: "noop",
+  description: "",
+  parameters: {},
+  execute: async () => textResult("ok"),
+})
+const step = (n: number, extra: object = {}) => ({
+  toolCalls: [{ name: "noop", args: { n }, id: `c${n}` }],
+  ...extra,
+})
+const text = (m: Message) => m.content.map((b) => (b.type === "text" ? b.text : "")).join("")
+/** Summary calls go out without tools; the agent's own calls offer the noop tool. */
+const summaryCalls = (mock: ReturnType<typeof createMockDialect>) =>
+  mock.requests.filter((r) => !r.tools.length)
+
+test("a long single turn compacts its older steps, keeping the prompt and the latest steps", async () => {
+  const { agent, mock, session } = await setup([
+    step(1),
+    step(2),
+    step(3, big),
+    { text: "SUMMARY" },
+    { text: "done" },
+  ])
+  agent.tools.register(noop, "t")
+  expect((await agent.prompt("q1")).reason).toBe("done")
+  expect(summaryCalls(mock)).toHaveLength(1)
+  const transcript = text(summaryCalls(mock)[0]!.messages[0]!)
+  expect(transcript).toContain('{"n":1}')
+  expect(transcript).not.toContain('{"n":2}')
+  // The turn's prompt is given as context, outside the transcript that gets replaced.
+  expect(transcript.split("<transcript>")[0]).toContain("q1")
+  expect(transcript.split("<transcript>")[1]).not.toContain("q1")
+  const next = mock.requests.at(-1)!.messages
+  expect(next.map((m) => m.role)).toEqual([
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "toolResult",
+    "assistant",
+    "toolResult",
+  ])
+  expect(text(next[0]!)).toContain("SUMMARY")
+  expect(text(next[2]!)).toBe("q1")
+  expect(SessionStore.open(session.file).restore().messages).toEqual(agent.messages)
+})
+
+test("a compaction that leaves the context over the threshold is not repeated every step", async () => {
+  const { agent, mock } = await setup([
+    step(1),
+    step(2),
+    step(3, big),
+    { text: "S1" },
+    step(4, big),
+    step(5, big),
+    step(6, { usage: { input: 960 } }),
+    { text: "S2" },
+    { text: "done" },
+  ])
+  agent.tools.register(noop, "t")
+  expect((await agent.prompt("q1")).reason).toBe("done")
+  // S1 did not help (the next reply is still at 900), so the next summary waits for growth.
+  const summaries = summaryCalls(mock).map((r) => text(r.messages[0]!))
+  expect(summaries).toHaveLength(2)
+  // The second summary folds the first one together with the steps since, never it alone.
+  expect(summaries[1]).toContain("S1")
+  expect(summaries[1]).toContain('{"n":4}')
+  expect(text(agent.messages[0]!)).toContain("S2")
+})
+
+test("a turn over the threshold with nothing to fold yet compacts once enough steps exist", async () => {
+  const { agent, mock } = await setup([
+    step(1, big),
+    step(2, big),
+    step(3, big),
+    { text: "SUMMARY" },
+    { text: "done" },
+  ])
+  agent.tools.register(noop, "t")
+  expect((await agent.prompt("q1")).reason).toBe("done")
+  expect(summaryCalls(mock)).toHaveLength(1)
+  expect(text(agent.messages[0]!)).toContain("SUMMARY")
+})
+
+test("splitHistory cuts whole older turns before folding the current one", () => {
+  const model = { provider: "p", model: "m" }
+  const u = (text: string) => ({ role: "user" as const, content: [{ type: "text" as const, text }] })
+  const call = (id: string) => ({
+    role: "assistant" as const,
+    model,
+    content: [{ type: "toolCall" as const, id, name: "t", args: {} }],
+  })
+  const result = (id: string) => ({
+    role: "toolResult" as const,
+    toolCallId: id,
+    toolName: "t",
+    content: [],
+    isError: false,
+  })
+  const h = [
+    u("1"),
+    call("a"),
+    result("a"),
+    u("2"),
+    call("b"),
+    result("b"),
+    call("c"),
+    result("c"),
+    call("d"),
+    result("d"),
+  ]
+  for (const keepTurns of [1, 2]) {
+    expect(splitHistory(h, keepTurns)).toEqual({ older: h.slice(0, 3), kept: h.slice(3) })
+  }
+})
+
+test("splitHistory never summarizes an earlier summary alone", () => {
+  const model = { provider: "p", model: "m" }
+  const [s, ack] = summaryMessages("old", model)
+  const user = { role: "user" as const, content: [{ type: "text" as const, text: "q" }] }
+  const call = (id: string) => ({
+    role: "assistant" as const,
+    model,
+    content: [{ type: "toolCall" as const, id, name: "t", args: {} }],
+  })
+  const result = (id: string) => ({
+    role: "toolResult" as const,
+    toolCallId: id,
+    toolName: "t",
+    content: [],
+    isError: false,
+  })
+  expect(splitHistory([s!, ack!, user, call("a"), result("a")])).toBeUndefined()
+  expect(splitHistory([s!, ack!, user, call("a"), result("a"), call("b"), result("b")])).toBeUndefined()
+  const long = [s!, ack!, user, call("a"), result("a"), call("b"), result("b"), call("c"), result("c")]
+  expect(splitHistory(long)).toEqual({
+    older: long.slice(0, 2).concat(long.slice(3, 5)),
+    kept: [user, ...long.slice(5)],
+    prompt: user,
+  })
 })

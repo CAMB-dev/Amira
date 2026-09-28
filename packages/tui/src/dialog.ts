@@ -177,9 +177,16 @@ export class Dialog implements Component {
     const rows = options.slice(start, start + shown).map((o, j) => {
       const i = start + j
       const selected = i === this.#selected
-      const digit = i < 9 && this.#digitsPick ? `${theme.muted(String(i + 1))} ` : ""
+      const digits = i < 9 && this.#digitsPick
+      const digit = digits ? `${theme.muted(String(i + 1))} ` : ""
+      // An option numbered as its digit ("1. explorer", for frontends without digits) shows once.
+      const text = digits && o.startsWith(`${i + 1}. `) ? o.slice(`${i + 1}. `.length) : o
       const marker = selected ? theme.accent(Glyphs.pointer) : " "
-      return truncateToWidth(`${marker} ${digit}${selected ? theme.accent(o) : o}`, width, Glyphs.ellipsis)
+      return truncateToWidth(
+        `${marker} ${digit}${selected ? theme.accent(text) : text}`,
+        width,
+        Glyphs.ellipsis,
+      )
     })
     if (!options.length) rows.push(theme.muted("  no match"))
     else if (shown < options.length) rows.push(theme.muted(`  ${this.#selected + 1}/${options.length}`))

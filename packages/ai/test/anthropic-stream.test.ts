@@ -343,6 +343,13 @@ test("an empty event stream is a retryable error", async () => {
   expect((last(evs) as ErrorEvent).retryable).toBe(true)
 })
 
+test("a stream cut off before message_delta and message_stop is a retryable error", async () => {
+  const evs = await run(() => anthropicResponse(textReply("hi").slice(0, -2)))
+  const e = last(evs) as ErrorEvent
+  expect(e.type).toBe("error")
+  expect(e.retryable).toBe(true)
+})
+
 test("accepts a stream that ends after message_delta without message_stop", async () => {
   const evs = await run(() => anthropicResponse(textReply("hi").slice(0, -1)))
   expect(last(evs).type).toBe("done")

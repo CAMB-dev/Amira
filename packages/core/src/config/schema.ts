@@ -1,4 +1,5 @@
 import type { Settings } from "@amira/api"
+import { isCommandAliasName } from "../commands.ts"
 import { isPlainObject, UNSAFE_KEYS } from "./merge.ts"
 
 /** A settings file that cannot be used; the message names the file and the key. */
@@ -144,12 +145,28 @@ const provider = object(
 
 const webBackend = oneOf("exa", "brave", "tavily", "searxng")
 
+/** `{"ds": "model deepseek/deepseek-flash"}`: alias names to command lines without the slash. */
+const commandAliases: Check = (v, key, out) => {
+  const kept = record(
+    expect('a command line without the slash, e.g. "model deepseek/deepseek-flash"', (x) =>
+      typeof x === "string" ? /^[A-Za-z0-9][\w:.-]*(?:\s|$)/.test(x.trim()) : false,
+    ),
+  )(v, key, out) as Record<string, unknown> | undefined
+  for (const name of Object.keys(kept ?? {})) {
+    if (!isCommandAliasName(name)) {
+      out.errors.push(`"${key}.${name}" is not a valid alias name: use letters, digits and - _ : . or "?"`)
+    }
+  }
+  return kept
+}
+
 const settings = object({
   $schema: string,
   model: modelRef,
   providers: record(provider),
   shell: oneOf("auto", "bash", "powershell"),
   tools: object({ disabled: list(string) }),
+  commandAliases,
   maxParallelTools: integer(1),
   compact: object({ threshold: number, model: modelRef }),
   retry: object({ attempts: integer(0), baseDelayMs: integer(0), maxDelayMs: integer(0) }),

@@ -89,6 +89,7 @@ export default defineExtension((api: ExtensionAPI) => {
 
   add({
     name: "help",
+    aliases: ["?", "h"],
     description: "List the slash commands",
     run(_args, ctx) {
       // Grouped by where they come from, this extension's first; skills can be many and wordy.
@@ -100,15 +101,24 @@ export default defineExtension((api: ExtensionAPI) => {
       const groups = sources.map((source) => {
         const rows = all
           .filter((c) => c.source === source)
-          .map((c) => [`/${c.name}${c.hint ? ` ${c.hint}` : ""}`, oneLine(c.description, 70)])
+          .map((c) => [
+            `/${c.name}${c.aliases.length ? ` (${c.aliases.map((a) => `/${a}`).join(", ")})` : ""}${c.hint ? ` ${c.hint}` : ""}`,
+            oneLine(c.description, 70),
+          ])
         return `${source === own ? "Commands" : `From ${source}`}:\n${table(rows)}`
       })
+      const aliases = ctx.aliases()
+      if (aliases.length) {
+        const rows = aliases.map((a) => [`/${a.name}`, `→ /${oneLine(a.expansion, 70)}`])
+        groups.push(`Aliases from settings (commandAliases):\n${table(rows)}`)
+      }
       ctx.print(groups.join("\n\n"))
     },
   })
 
   add({
     name: "quit",
+    aliases: ["exit", "q"],
     description: "Leave Amira",
     run(_args, ctx) {
       ctx.quit()
@@ -117,6 +127,7 @@ export default defineExtension((api: ExtensionAPI) => {
 
   add({
     name: "clear",
+    aliases: ["new", "reset"],
     description: "Start a new session with an empty conversation",
     async run(_args, ctx) {
       await ctx.session.newSession()
@@ -205,6 +216,7 @@ export default defineExtension((api: ExtensionAPI) => {
 
   add({
     name: "resume",
+    aliases: ["continue"],
     description: "Switch to another session of this directory",
     args: {
       hint: "[session id]",
@@ -355,6 +367,7 @@ export default defineExtension((api: ExtensionAPI) => {
 
   add({
     name: "cost",
+    aliases: ["usage"],
     description: "Show this session's cost by model",
     run(_args, ctx) {
       ctx.print(costReport(ctx.session.replies()))
