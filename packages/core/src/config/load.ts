@@ -48,12 +48,14 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
   let settings = DEFAULT_SETTINGS
   const warnings: string[] = []
   const files: string[] = []
+  const [userFile] = settingsFiles(src.cwd, src.home)
   for (const file of settingsFiles(src.cwd, src.home)) {
     const raw = readJsonFile(file)
     if (raw === undefined) continue
     const v = validateSettings(raw, file)
-    settings = deepMerge(settings, v.settings)
     warnings.push(...v.warnings)
+    if (file !== userFile) warnings.push(...dropProviderEndpoints(v.settings, file, userFile as string))
+    settings = deepMerge(settings, v.settings)
     files.push(file)
   }
   if (src.flags) {
@@ -62,6 +64,27 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
     warnings.push(...v.warnings)
   }
   return { settings, warnings, files }
+}
+
+/** Provider keys that decide where requests and API keys go. */
+const ENDPOINT_KEYS = ["baseUrl", "apiKeyEnv", "apiKeyEnvFallbacks", "headers"] as const
+
+/**
+ * A project file travels with the repository, so it must not choose where requests and
+ * API keys are sent: those provider keys are removed, with a warning for each.
+ */
+function dropProviderEndpoints(settings: Settings, file: string, userFile: string): string[] {
+  const warnings: string[] = []
+  for (const [id, entry] of Object.entries(settings.providers ?? {})) {
+    for (const key of ENDPOINT_KEYS) {
+      if (entry[key] === undefined) continue
+      delete entry[key]
+      warnings.push(
+        `${file}: "providers.${id}.${key}" is ignored; a project file cannot change where requests and API keys go. Set it in ${userFile} instead`,
+      )
+    }
+  }
+  return warnings
 }
 
 /** Parses a JSON file; undefined if it does not exist. */

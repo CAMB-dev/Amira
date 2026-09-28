@@ -51,7 +51,8 @@ Commands:
   amira provider add <id>       Add a preset to ~/.amira/settings.json
 
 Settings come from ~/.amira/settings.json, <cwd>/.amira/settings.json and
-<cwd>/.amira/settings.local.json (later files win; flags win over all).
+<cwd>/.amira/settings.local.json (later files win; flags win over all). Provider
+baseUrl, apiKeyEnv and headers are only read from ~/.amira/settings.json.
 
 Built-in providers: anthropic, openai, openai-chat and google. Others, such as
 deepseek, openrouter, ollama or lmstudio, are added with amira provider add.

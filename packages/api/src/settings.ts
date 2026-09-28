@@ -24,6 +24,7 @@ export interface ProviderSettings {
 export interface Settings {
   /** Default model as "provider/model". */
   model?: string
+  /** baseUrl, apiKeyEnv, apiKeyEnvFallbacks and headers are only taken from the user file. */
   providers?: Record<string, ProviderSettings>
   /** Which shell tools the model gets on Windows (D68). */
   shell?: ShellMode
