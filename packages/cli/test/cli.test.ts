@@ -50,8 +50,12 @@ function capture(): PrintIO & { out: string; err: string } {
   const c = {
     out: "",
     err: "",
-    stdout: (s: string) => void (c.out += s),
-    stderr: (s: string) => void (c.err += s),
+    stdout: (s: string) => {
+      c.out += s
+    },
+    stderr: (s: string) => {
+      c.err += s
+    },
   }
   return c
 }
