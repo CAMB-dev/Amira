@@ -9,6 +9,7 @@ import {
   type ToolResultMessage,
   type ToolSpec,
   type UserMessage,
+  unansweredCalls,
   userMessage,
 } from "@amira/ai"
 import type {
@@ -101,10 +102,19 @@ export function newTurnId(): string {
 interface Turn {
   id: string
   signal: AbortSignal
-  /** Tool calls that emitted tool.execute.start. */
-  started: Set<string>
-  /** Tool calls whose result has been recorded; later updates from them are dropped. */
-  finished: Set<string>
+}
+
+/**
+ * One tool call of a batch. Tracked by the call itself, not its id: providers reuse ids across
+ * steps (and some even within one reply), and each call still needs its own events and result.
+ */
+interface CallRun {
+  call: ToolCallBlock
+  /** tool.execute.start has been emitted. */
+  started: boolean
+  /** The batch recorded this call's result; later updates and results from it are dropped. */
+  finished: boolean
+  result?: ToolResultMessage
 }
 
 type ModelReply =
@@ -349,8 +359,6 @@ export class Agent {
     const turn: Turn = {
       id: opts.turnId ?? newTurnId(),
       signal: abort.signal,
-      started: new Set(),
-      finished: new Set(),
     }
     this.#turn = turn
     const user = typeof input === "string" ? userMessage(input) : input
@@ -558,12 +566,13 @@ export class Agent {
    * exactly one result, even if a tool throws, misbehaves or ignores abort.
    */
   async #runTools(turn: Turn, calls: ToolCallBlock[]): Promise<void> {
-    const results = new Map<string, ToolResultMessage>()
+    const runs: CallRun[] = calls.map((call) => ({ call, started: false, finished: false }))
     try {
       const running = new Set<Promise<void>>()
       const started: Promise<void>[] = []
       const lastByKey = new Map<string, Promise<void>>()
-      for (const call of calls) {
+      for (const run of runs) {
+        const call = run.call
         if (turn.signal.aborted) break
         const tool = this.tools.get(call.name)
         const serial = tool !== undefined && (tool.concurrency ?? "serial") === "serial"
@@ -577,8 +586,8 @@ export class Agent {
         const before = key === undefined ? undefined : lastByKey.get(key)
         const task: Promise<void> = (async () => {
           if (before) await before
-          const r = await this.#runTool(turn, call)
-          if (!turn.finished.has(call.id)) results.set(call.id, r)
+          const r = await this.#runTool(turn, run)
+          if (!run.finished) run.result = r
         })().finally(() => running.delete(task))
         running.add(task)
         started.push(task)
@@ -587,16 +596,15 @@ export class Agent {
       }
       await this.#untilDoneOrAbandoned(turn.signal, Promise.all(started))
     } finally {
-      for (const c of calls) {
-        if (!results.has(c.id)) {
-          const r = toolError(c, "Aborted by the user before this tool finished.")
-          results.set(c.id, r)
-          this.#emitToolStart(turn, c, c.args)
-          this.#emitToolEnd(turn, c, { content: r.content, isError: true }, 0, "aborted")
+      for (const run of runs) {
+        if (!run.result) {
+          run.result = toolError(run.call, "Aborted by the user before this tool finished.")
+          this.#emitToolStart(turn, run, run.call.args)
+          this.#emitToolEnd(turn, run.call, { content: run.result.content, isError: true }, 0, "aborted")
         }
-        turn.finished.add(c.id)
+        run.finished = true
       }
-      this.#push(...calls.map((c) => results.get(c.id)!))
+      this.#push(...runs.map((run) => run.result!))
     }
   }
 
@@ -620,10 +628,11 @@ export class Agent {
   }
 
   /** Never rejects: every failure becomes an error result for the model. */
-  async #runTool(turn: Turn, call: ToolCallBlock): Promise<ToolResultMessage> {
+  async #runTool(turn: Turn, run: CallRun): Promise<ToolResultMessage> {
+    const call = run.call
     const started = performance.now()
     const reject = (rejected: ToolRejection, text: string) => {
-      this.#emitToolStart(turn, call, call.args)
+      this.#emitToolStart(turn, run, call.args)
       this.#emitToolEnd(turn, call, { content: [{ type: "text", text }], isError: true }, 0, rejected)
       return toolError(call, text)
     }
@@ -665,7 +674,7 @@ export class Agent {
       const problem = checkArgs(tool.parameters, args)
       if (problem) return reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`)
 
-      this.#emitToolStart(turn, call, args)
+      this.#emitToolStart(turn, run, args)
       // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
       // (spawning a process can stall for seconds on some Windows machines).
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -678,7 +687,7 @@ export class Agent {
             signal: turn.signal,
             session: this.#toolSession,
             update: (partial) => {
-              if (turn.finished.has(call.id)) return
+              if (run.finished) return
               this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })
             },
           }),
@@ -689,7 +698,7 @@ export class Agent {
           : `Tool failed: ${err instanceof Error ? err.message : String(err)}`
         result = { content: [{ type: "text", text: msg }], isError: true }
       }
-      if (!turn.finished.has(call.id)) {
+      if (!run.finished) {
         this.#emitToolEnd(turn, call, result, Math.round(performance.now() - started))
       }
       return {
@@ -733,10 +742,10 @@ export class Agent {
     }
   }
 
-  #emitToolStart(turn: Turn, call: ToolCallBlock, args: Record<string, unknown>) {
-    if (turn.started.has(call.id)) return
-    turn.started.add(call.id)
-    this.#emit(turn, "tool.execute.start", { toolCallId: call.id, name: call.name, args })
+  #emitToolStart(turn: Turn, run: CallRun, args: Record<string, unknown>) {
+    if (run.started) return
+    run.started = true
+    this.#emit(turn, "tool.execute.start", { toolCallId: run.call.id, name: run.call.name, args })
   }
 
   #emitToolEnd(
@@ -757,17 +766,8 @@ export class Agent {
 
   /** Guarantees every tool call in history has a result, so the next request is valid. */
   #repairHistory() {
-    const answered = new Set<string>()
-    for (const m of this.messages) if (m.role === "toolResult") answered.add(m.toolCallId)
-    const missing: ToolResultMessage[] = []
-    for (const m of this.messages) {
-      if (m.role !== "assistant") continue
-      for (const b of m.content) {
-        if (b.type === "toolCall" && !answered.has(b.id))
-          missing.push(toolError(b, "This tool call did not complete."))
-      }
-    }
-    this.#push(...missing)
+    const missing = [...unansweredCalls(this.messages)]
+    this.#push(...missing.map((b) => toolError(b, "This tool call did not complete.")))
   }
 
   /** Adds messages to the history and persists each one. */
