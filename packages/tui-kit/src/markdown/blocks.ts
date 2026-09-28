@@ -193,7 +193,7 @@ export function commitOpenBlocks(s: BlockState, env: Env, sink: Sink): void {
   flushHeld(s, env, sink)
   const t = s.table
   if (t && !t.frozen) {
-    const { rows, widths } = layoutTable(t, env)
+    const { rows, widths } = layoutTable(t, env, true)
     t.frozen = widths ?? "raw"
     emit(s, sink, rows)
   }
@@ -447,8 +447,12 @@ function inlineText(text: string, env: Env, base?: StyleFn): string {
   return cellText(cells, runs, 0, cells.length)
 }
 
-/** The table laid out in aligned columns, or its raw lines when that is wider than the screen. */
-function layoutTable(t: Table, env: Env): { rows: string[]; widths?: number[] } {
+/**
+ * The table laid out in aligned columns, or its raw lines when that is wider than the screen.
+ * With `slack`, for widths frozen before the rows still to come are known, each column gets some
+ * of the spare room (up to its own width again), so that fewer later cells have to wrap.
+ */
+function layoutTable(t: Table, env: Env, slack = false): { rows: string[]; widths?: number[] } {
   const n = t.aligns.length
   const widths = Array.from({ length: n }, () => 1)
   for (const [r, row] of t.rows.entries()) {
@@ -460,6 +464,10 @@ function layoutTable(t: Table, env: Env): { rows: string[]; widths?: number[] } 
   const sep = visibleWidth(env.glyphs.tableColumn) + 2
   const total = t.renderCol + widths.reduce((a, b) => a + b, 0) + sep * (n - 1)
   if (total > env.width) return { rows: rawRows(t, t.lines, env) }
+  if (slack) {
+    const share = Math.floor((env.width - total) / n)
+    for (let c = 0; c < n; c++) widths[c]! += Math.min(share, Math.max(4, widths[c]!))
+  }
   const { styles, glyphs } = env
   const rule = widths
     .map((w) => glyphs.tableRule.repeat(w))
@@ -472,18 +480,33 @@ function layoutTable(t: Table, env: Env): { rows: string[]; widths?: number[] } 
   return { rows, widths }
 }
 
+/**
+ * One table row in columns of `widths`. A cell wider than its column (a row that came after the
+ * widths were frozen) wraps within it, making the row taller.
+ */
 function tableRow(t: Table, cells: string[], widths: number[], env: Env, header: boolean): string[] {
-  const parts = widths.map((w, c) => {
+  const texts = widths.map((w, c) => {
     const text = inlineText(cells[c] ?? "", env, header ? env.styles.tableHeader : undefined)
-    const gap = Math.max(0, w - visibleWidth(text))
-    const align = t.aligns[c]
-    if (align === "right") return pad(gap) + text
-    if (align === "center") return pad(Math.floor(gap / 2)) + text + pad(gap - Math.floor(gap / 2))
-    return text + (c === widths.length - 1 ? "" : pad(gap))
+    return visibleWidth(text) > w ? wrapText(text, w) : [text]
   })
-  const line = pad(t.renderCol) + parts.join(` ${env.styles.tableBorder(env.glyphs.tableColumn)} `)
-  // Frozen widths can be too narrow for a later row; it then wraps rather than overflowing.
-  return visibleWidth(line) > env.width ? wrapText(line, env.width) : [line.trimEnd()]
+  const height = Math.max(...texts.map((l) => l.length))
+  const sep = ` ${env.styles.tableBorder(env.glyphs.tableColumn)} `
+  const out: string[] = []
+  for (let i = 0; i < height; i++) {
+    const parts = widths.map((w, c) => {
+      const text = texts[c]![i] ?? ""
+      const gap = Math.max(0, w - visibleWidth(text))
+      const align = t.aligns[c]
+      if (align === "right") return pad(gap) + text
+      if (align === "center") return pad(Math.floor(gap / 2)) + text + pad(gap - Math.floor(gap / 2))
+      return text + (c === widths.length - 1 ? "" : pad(gap))
+    })
+    const line = pad(t.renderCol) + parts.join(sep)
+    // After the screen got narrower than the frozen widths, the row wraps rather than overflowing.
+    if (visibleWidth(line) > env.width) out.push(...wrapText(line, env.width))
+    else out.push(line.trimEnd())
+  }
+  return out
 }
 
 function rawRows(t: Table, lines: string[], env: Env): string[] {

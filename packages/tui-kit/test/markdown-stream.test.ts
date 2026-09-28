@@ -198,10 +198,12 @@ test("a table taller than the live region is committed with the widths it has so
   m.maxRows = 3
   m.append("| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n")
   m.render(40, ctx)
-  expect(committed).toEqual(["a │ b", "──┼──", "1 │ 2", "3 │ 4"])
-  m.append("| wider | 5 |\n")
+  // The columns get some room to spare for the rows still to come.
+  expect(committed).toEqual(["a     │ b", "──────┼──────", "1     │ 2", "3     │ 4"])
+  m.append("| wider | 5 |\n| wider still | 6 |\n")
   m.render(40, ctx)
-  expect(committed.at(-1)).toBe("wider │ 5")
+  // A cell wider than its column wraps within it.
+  expect(committed.slice(4)).toEqual(["wider │ 5", "wider │ 6", "still │"])
 })
 
 test("a line longer than the live region commits its finished rows, carrying open spans over", () => {
