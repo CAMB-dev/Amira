@@ -223,3 +223,31 @@ test("tool lines fit the terminal width", () => {
   const lines = toolLines(plain, "bash", { command: "x".repeat(300) }, textResult("y".repeat(300)), 0, 40)
   expect(lines.every((l) => l.length <= 40)).toBe(true)
 })
+
+test("the running tool is on screen before the tool starts, even if it blocks the event loop", async () => {
+  const { terminal, screen, shows, idle, exited, agent } = await setup([
+    { toolCalls: [{ name: "block", args: {} }] },
+    { text: "ok" },
+  ])
+  let seenWhileRunning = ""
+  agent.tools.register(
+    defineTool({
+      name: "block",
+      description: "",
+      parameters: {},
+      execute: async () => {
+        seenWhileRunning = screen.lines.join("\n")
+        const until = performance.now() + 200
+        while (performance.now() < until) {}
+        return textResult("done")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("● block")
+  await idle()
+  expect(seenWhileRunning).toContain("running block")
+  terminal.send("\x03")
+  await exited
+})
