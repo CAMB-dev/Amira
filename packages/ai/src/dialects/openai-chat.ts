@@ -1,126 +1,16 @@
 import type { Dialect, DialectContext } from "../dialect.ts"
 import { parseSSE } from "../sse.ts"
-import { parseToolArgs } from "../tool-args.ts"
-import type {
-  AssistantContent,
-  AssistantMessage,
-  Message,
-  ModelRequest,
-  StopReason,
-  StreamEvent,
-  Usage,
-} from "../types.ts"
-import { emptyUsage } from "../types.ts"
-import { ToolCallAssembler } from "./openai-chat-tool-calls.ts"
+import type { ModelRequest, StreamEvent } from "../types.ts"
+import { ChatAccumulator } from "./openai-chat-accumulate.ts"
+import { toChatMessages } from "./openai-chat-messages.ts"
 
-type ChatMessage =
-  | { role: "system"; content: string }
-  | { role: "user"; content: string | ChatPart[] }
-  | { role: "assistant"; content: string | null; tool_calls?: ChatToolCall[] }
-  | { role: "tool"; tool_call_id: string; content: string }
-
-type ChatPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }
-
-interface ChatToolCall {
-  id: string
-  type: "function"
-  function: { name: string; arguments: string }
-}
-
-export function toChatMessages(systemPrompt: string, messages: Message[]): ChatMessage[] {
-  const out: ChatMessage[] = []
-  if (systemPrompt) out.push({ role: "system", content: systemPrompt })
-  for (const m of messages) {
-    if (m.role === "user") {
-      const onlyText = m.content.every((b) => b.type === "text")
-      out.push({
-        role: "user",
-        content: onlyText
-          ? m.content.map((b) => (b.type === "text" ? b.text : "")).join("")
-          : m.content.map(
-              (b): ChatPart =>
-                b.type === "text"
-                  ? { type: "text", text: b.text }
-                  : { type: "image_url", image_url: { url: `data:${b.mimeType};base64,${b.data}` } },
-            ),
-      })
-    } else if (m.role === "assistant") {
-      // Chat Completions has no way to send thinking back, so it is dropped here.
-      const textOut = m.content
-        .filter((b) => b.type === "text")
-        .map((b) => b.text)
-        .join("")
-      const calls = m.content
-        .filter((b) => b.type === "toolCall")
-        .map((b) => ({
-          id: b.id,
-          type: "function" as const,
-          function: { name: b.name, arguments: JSON.stringify(b.args) },
-        }))
-      const msg: ChatMessage = { role: "assistant", content: textOut || null }
-      if (calls.length) msg.tool_calls = calls
-      out.push(msg)
-    } else {
-      const body = m.content.map((b) => (b.type === "text" ? b.text : `[image: ${b.mimeType}]`)).join("\n")
-      out.push({ role: "tool", tool_call_id: m.toolCallId, content: body })
-    }
-  }
-  return out
-}
-
-function mapFinish(reason: string | null | undefined): StopReason {
-  switch (reason) {
-    case "tool_calls":
-    case "function_call":
-      return "toolUse"
-    case "length":
-      return "maxTokens"
-    case "content_filter":
-      return "error"
-    default:
-      return "end"
-  }
-}
-
-function mapUsage(u: any): Usage {
-  if (!u) return emptyUsage()
-  const cached = u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0
-  return {
-    input: Math.max(0, (u.prompt_tokens ?? 0) - cached),
-    output: u.completion_tokens ?? 0,
-    cacheRead: cached,
-    cacheWrite: 0,
-  }
-}
+export { toChatMessages }
 
 export const openaiChat: Dialect = {
   id: "openai-chat",
   async *stream(req: ModelRequest, ctx: DialectContext): AsyncGenerator<StreamEvent> {
-    const message: AssistantMessage = {
-      role: "assistant",
-      content: [],
-      model: { provider: req.model.provider, model: req.model.id },
-      usage: emptyUsage(),
-    }
-    const fail = (msg: string, retryable: boolean, extra: { status?: number; code?: string } = {}) => {
-      message.stopReason = extra.code === "aborted" ? "aborted" : "error"
-      return { type: "error" as const, error: { message: msg, ...extra }, retryable, message }
-    }
-
-    const body: Record<string, unknown> = {
-      model: req.model.id,
-      messages: toChatMessages(req.systemPrompt, req.messages),
-      stream: true,
-      stream_options: { include_usage: true },
-    }
-    if (req.tools.length && req.model.caps.tools === "native") {
-      body.tools = req.tools.map((t) => ({
-        type: "function",
-        function: { name: t.name, description: t.description, parameters: t.parameters },
-      }))
-    }
-    if (req.maxTokens) body.max_tokens = req.maxTokens
-    if (req.temperature !== undefined) body.temperature = req.temperature
+    const acc = new ChatAccumulator({ provider: req.model.provider, model: req.model.id })
+    const aborted = () => acc.fail({ message: "aborted", code: "aborted" }, false)
 
     let res: Response
     try {
@@ -131,92 +21,111 @@ export const openaiChat: Dialect = {
           ...(ctx.endpoint.apiKey ? { authorization: `Bearer ${ctx.endpoint.apiKey}` } : {}),
           ...ctx.endpoint.headers,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(requestBody(req)),
         signal: ctx.signal,
       })
     } catch (e) {
-      if (ctx.signal.aborted) yield fail("aborted", false, { code: "aborted" })
-      else yield fail(`request failed: ${(e as Error).message}`, true)
+      if (ctx.signal.aborted) yield aborted()
+      else yield acc.fail({ message: `request failed: ${(e as Error).message}` }, true)
       return
     }
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
       const detail = await res.text().catch(() => "")
-      yield fail(`HTTP ${res.status}: ${detail.slice(0, 500)}`, res.status === 429 || res.status >= 500, {
-        status: res.status,
-      })
+      const status = res.status
+      yield acc.fail(
+        { message: `HTTP ${status}: ${detail.slice(0, 500)}`, status },
+        isRetryableStatus(status),
+      )
+      return
+    }
+    if (!res.body) {
+      yield acc.fail({ message: `HTTP ${res.status} with an empty body`, status: res.status }, true)
       return
     }
 
-    const resBody = res.body
+    const body = res.body
     try {
+      if (!(res.headers.get("content-type") ?? "").includes("text/event-stream")) {
+        yield* readPlain(res, acc)
+        return
+      }
       yield { type: "start" }
-      let textBlock: { type: "text"; text: string } | undefined
-      let thinkingBlock: { type: "thinking"; text: string } | undefined
-      const calls = new ToolCallAssembler()
-      let finish: string | null | undefined
-
-      try {
-        for await (const sse of parseSSE(res.body)) {
-          if (sse.data === "[DONE]") break
-          let chunk: any
-          try {
-            chunk = JSON.parse(sse.data)
-          } catch {
-            continue
-          }
-          if (chunk.error) {
-            yield fail(chunk.error.message ?? "stream error", false)
-            return
-          }
-          if (chunk.usage) message.usage = mapUsage(chunk.usage)
-          const choice = chunk.choices?.[0]
-          if (!choice) continue
-          const delta = choice.delta ?? {}
-          const reasoning: unknown = delta.reasoning_content ?? delta.reasoning
-          if (typeof reasoning === "string" && reasoning) {
-            if (!thinkingBlock) {
-              thinkingBlock = { type: "thinking", text: "" }
-              message.content.push(thinkingBlock)
-            }
-            thinkingBlock.text += reasoning
-            yield { type: "thinking.delta", text: reasoning }
-          }
-          if (typeof delta.content === "string" && delta.content) {
-            if (!textBlock) {
-              textBlock = { type: "text", text: "" }
-              message.content.push(textBlock)
-            }
-            textBlock.text += delta.content
-            yield { type: "text.delta", text: delta.content }
-          }
-          yield* calls.apply(delta.tool_calls)
-          if (choice.finish_reason) finish = choice.finish_reason
+      let parsed = 0
+      let sawDone = false
+      for await (const sse of parseSSE(body)) {
+        if (sse.data === "[DONE]") {
+          sawDone = true
+          break
         }
-      } catch (e) {
-        if (ctx.signal.aborted) yield fail("aborted", false, { code: "aborted" })
-        else yield fail(`stream failed: ${(e as Error).message}`, true)
+        let chunk: any
+        try {
+          chunk = JSON.parse(sse.data)
+        } catch {
+          continue
+        }
+        parsed++
+        if (chunk.error) {
+          yield acc.fail({ message: chunk.error.message ?? "stream error" }, false)
+          return
+        }
+        yield* acc.apply(chunk)
+      }
+      if (parsed === 0 && !sawDone) {
+        yield acc.fail({ message: "the event stream ended without any events" }, true)
         return
       }
-
-      const toolBlocks: AssistantContent[] = calls.calls.map((c) => ({
-        type: "toolCall",
-        id: c.id,
-        name: c.name,
-        args: parseToolArgs(c.args),
-      }))
-      message.content.push(...toolBlocks)
-      const stop = mapFinish(finish)
-      if (stop === "error") {
-        yield fail("the provider filtered the output (finish_reason: content_filter)", false, {
-          code: "content_filter",
-        })
-        return
-      }
-      message.stopReason = stop === "end" && toolBlocks.length ? "toolUse" : stop
-      yield { type: "done", message }
+      yield acc.end()
+    } catch (e) {
+      if (ctx.signal.aborted) yield aborted()
+      else yield acc.fail({ message: `stream failed: ${(e as Error).message}` }, true)
     } finally {
       // Covers consumers that stop before the body is read to the end.
-      await resBody.cancel().catch(() => {})
+      await body.cancel().catch(() => {})
     }
   },
 }
+
+function requestBody(req: ModelRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: req.model.id,
+    messages: toChatMessages(req.systemPrompt, req.messages),
+    stream: true,
+    stream_options: { include_usage: true },
+  }
+  if (req.tools.length && req.model.caps.tools === "native") {
+    body.tools = req.tools.map((t) => ({
+      type: "function",
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    }))
+  }
+  if (req.maxTokens) body.max_tokens = req.maxTokens
+  if (req.temperature !== undefined) body.temperature = req.temperature
+  return body
+}
+
+/** A 200 response that is not an event stream: an error body, a whole completion, or junk. */
+async function* readPlain(res: Response, acc: ChatAccumulator): AsyncGenerator<StreamEvent> {
+  const text = await res.text()
+  let json: any
+  try {
+    json = JSON.parse(text)
+  } catch {}
+  if (json?.error) {
+    yield acc.fail({ message: json.error.message ?? String(json.error) }, false)
+    return
+  }
+  const choice = json?.choices?.[0]
+  if (!choice?.message) {
+    const type = res.headers.get("content-type") || "no content-type"
+    yield acc.fail({ message: `expected an event stream, got ${type}: ${text.slice(0, 500)}` }, false)
+    return
+  }
+  yield { type: "start" }
+  yield* acc.apply({
+    usage: json.usage,
+    choices: [{ delta: choice.message, finish_reason: choice.finish_reason }],
+  })
+  yield acc.end()
+}
+
+const isRetryableStatus = (status: number) => status === 429 || status >= 500

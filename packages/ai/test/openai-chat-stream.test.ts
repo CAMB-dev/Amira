@@ -62,3 +62,77 @@ test("reports content_filter as an error that keeps the partial message", async 
   expect(e.message.stopReason).toBe("error")
   expect(e.message.content).toEqual([{ type: "text", text: "par" }])
 })
+
+const json = (v: unknown, type = "application/json") =>
+  new Response(JSON.stringify(v), { headers: { "content-type": type } })
+
+test("reports a JSON error body sent with status 200", async () => {
+  const evs = await run(json({ error: { message: "model not found", code: 404 } }))
+  expect(evs).toHaveLength(1)
+  const e = evs[0] as ErrorEvent
+  expect(e.type).toBe("error")
+  expect(e.error.message).toBe("model not found")
+})
+
+test("translates a whole non-streamed completion into a done message", async () => {
+  const evs = await run(
+    json({
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "hi",
+            tool_calls: [{ id: "a", type: "function", function: { name: "read", arguments: '{"p":1}' } }],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 3 },
+    }),
+  )
+  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "toolCall.delta", "done"])
+  const e = last(evs)
+  if (e.type !== "done") throw new Error("expected done")
+  expect(e.message.content).toEqual([
+    { type: "text", text: "hi" },
+    { type: "toolCall", id: "a", name: "read", args: { p: 1 } },
+  ])
+  expect(e.message.stopReason).toBe("toolUse")
+  expect(e.message.usage).toEqual({ input: 10, output: 3, cacheRead: 0, cacheWrite: 0 })
+})
+
+test("reports an unexpected non-stream body with its first 500 characters", async () => {
+  const evs = await run(new Response(`<p>${"x".repeat(1000)}`, { headers: { "content-type": "text/html" } }))
+  expect(evs).toHaveLength(1)
+  const e = evs[0] as ErrorEvent
+  expect(e.type).toBe("error")
+  expect(e.error.message).toContain("text/html")
+  expect(e.error.message).toContain("<p>xxx")
+  expect(e.error.message.length).toBeLessThan(600)
+})
+
+test("reports an event stream without any events as an error", async () => {
+  for (const body of ["", ": keep-alive\n\n", "data: not json\n\n"]) {
+    const evs = await run(new Response(body, { headers: { "content-type": "text/event-stream" } }))
+    expect(terminal(evs)).toHaveLength(1)
+    const e = last(evs) as ErrorEvent
+    expect(e.type).toBe("error")
+    expect(e.retryable).toBe(true)
+  }
+})
+
+test("accepts a bare [DONE] stream as an empty reply", async () => {
+  const evs = await run(() => sseResponse([]))
+  expect(evs.map((e) => e.type)).toEqual(["start", "done"])
+})
+
+test("finishes normally when the body ends without [DONE]", async () => {
+  const evs = await run(() => sseResponse([delta({ content: "hi" }, "stop")], false))
+  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "done"])
+})
+
+test("reports a 200 response without a body", async () => {
+  const evs = await run(new Response(null, { status: 200 }))
+  expect(evs).toHaveLength(1)
+  expect(evs[0]?.type).toBe("error")
+})
