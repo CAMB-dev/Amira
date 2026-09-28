@@ -62,10 +62,13 @@ export function createToolSession(
         parameters: t.parameters,
         loaded: loaded.has(t.name),
       })),
+    // Names not registered yet are remembered too: MCP tools register in the background, so a
+    // restored session may load them before they exist. offeredTools() filters at call time.
     loadTools: (names) => {
       const added: string[] = []
       for (const name of names) {
-        if (loaded.has(name) || registry.get(name)?.exposure !== "deferred") continue
+        const exposure = registry.get(name)?.exposure
+        if (loaded.has(name) || (exposure && exposure !== "deferred")) continue
         loaded.add(name)
         added.push(name)
       }

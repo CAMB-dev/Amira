@@ -111,13 +111,26 @@ test("unregistered tools drop out of the loaded set's offer", async () => {
   const tools = new ToolRegistry()
   const off = tools.register(deferredTool("gone", "temporary"), "test")
   const { agent, mock } = setup([{ text: "a" }, { text: "b" }], tools)
-  expect(agent.loadTools(["gone", "missing", "gone"])).toEqual(["gone"])
+  expect(agent.loadTools(["gone", "missing", "gone"])).toEqual(["gone", "missing"])
   await agent.prompt("one")
   off()
   await agent.prompt("two")
   expect(mock.requests[0]!.tools.map((t) => t.name)).toEqual(["gone"])
   expect(mock.requests[1]!.tools).toEqual([])
   expect(mock.requests[1]!.systemPrompt).toBe("sys")
+})
+
+test("tools loaded before they register are offered once they do", async () => {
+  const tools = new ToolRegistry()
+  tools.register({ ...deferredTool("active_one", "x"), exposure: "active" }, "test")
+  const { agent, mock } = setup([{ text: "a" }, { text: "b" }], tools)
+  expect(agent.loadTools(["mcp__fx__add", "active_one"])).toEqual(["mcp__fx__add"])
+  await agent.prompt("one")
+  tools.register(deferredTool("mcp__fx__add", "adds"), "mcp")
+  await agent.prompt("two")
+  expect(mock.requests[0]!.tools.map((t) => t.name)).toEqual(["active_one"])
+  expect(mock.requests[1]!.tools.map((t) => t.name)).toEqual(["active_one", "mcp__fx__add"])
+  expect(agent.loadedTools).toEqual(["mcp__fx__add"])
 })
 
 test("tool_search reports misses with the available names", async () => {

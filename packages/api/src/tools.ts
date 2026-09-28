@@ -29,7 +29,10 @@ export interface ToolSession {
   readonly sessionId: string
   /** Deferred tools registered right now, in registration order. */
   deferredTools(): DeferredToolInfo[]
-  /** Offers these deferred tools to the model from its next call on. Returns the names newly loaded. */
+  /**
+   * Offers these deferred tools to the model from its next call on. Names not registered yet are
+   * kept and offered once they register as deferred. Returns the names newly loaded.
+   */
   loadTools(names: string[]): string[]
 }
 
