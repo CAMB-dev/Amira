@@ -23,6 +23,7 @@ import {
 } from "@amira/tui-kit"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
 import { historyLines, summarizeArgs, toolLines, userLines } from "./format.ts"
+import { InputBox } from "./input-box.ts"
 import { StatusBar } from "./status-bar.ts"
 
 export interface InteractiveOptions {
@@ -110,6 +111,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
   // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
   const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
+  const inputBox = new InputBox(editor)
   const bottom = new Stack([
     new View((width, ctx) => {
       if (!working) return []
@@ -141,7 +143,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
       ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
     ]),
-    new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : editor.render(width, ctx))),
+    new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : inputBox.render(width, ctx))),
     new StatusBar(() => opts.status.snapshot()),
     new View((width, ctx) => {
       if (dialogs[0]) return []

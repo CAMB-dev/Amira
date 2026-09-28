@@ -262,6 +262,76 @@ test("a reply longer than the screen reaches the scrollback once, in order, neve
   await exited
 })
 
+test("a draft typed while a long reply streams does not cut the reply either", async () => {
+  const lines = Array.from({ length: 40 }, (_, i) => `L${i + 1}`)
+  const check = transcriptChecker(lines)
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: lines.join("\n"), delayMs: 2 }], {
+    cols: 40,
+    rows: 12,
+    onWrite: (s) => check.onWrite(s),
+  })
+  terminal.send("go\r")
+  await shows("L8")
+  terminal.send(`\x1b[200~${Array.from({ length: 30 }, (_, i) => `draft ${i}`).join("\n")}\x1b[201~`)
+  await shows("L40")
+  await idle()
+  expect(check.problems).toEqual([])
+  check.final(screen)
+  // The first Ctrl+C clears the draft.
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("the editor sits in a rounded box above the status bar, with the caret inside", async () => {
+  const { terminal, screen, live, exited } = await setup([], { cols: 30, rows: 12 })
+  await waitFor(() => live().includes("Message Amira"), "input box")
+  terminal.send("héllo 你好")
+  await waitFor(() => live().includes("héllo 你好"), "typed text")
+  const rows = screen.lines
+  const top = rows.findIndex((l) => l.startsWith("╭"))
+  expect(rows.slice(top, top + 3)).toEqual([
+    `╭${"─".repeat(28)}╮`,
+    "│ › héllo 你好               │",
+    `╰${"─".repeat(28)}╯`,
+  ])
+  expect(rows[top + 3]).toContain("mock/m1")
+  // Border, space, prompt, "héllo " and two wide characters.
+  expect({ x: screen.x, y: screen.y }).toEqual({ x: 2 + 2 + 6 + 4, y: top + 1 })
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a long draft scrolls inside the input box instead of growing past the screen", async () => {
+  const { terminal, screen, live, exited } = await setup([], { cols: 30, rows: 12 })
+  await waitFor(() => live().includes("Message Amira"), "input box")
+  terminal.send(`\x1b[200~${Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join("\n")}\x1b[201~`)
+  await waitFor(() => live().includes("row 20"), "draft")
+  const rows = screen.lines
+  const top = rows.findIndex((l) => l.startsWith("╭"))
+  // A third of 12 rows shows; the border counts the rest.
+  expect(rows[top]).toContain("↑ 16 more")
+  expect(rows.slice(top + 1, top + 5).map((l) => l.slice(1, -1).trim())).toEqual([
+    "row 17",
+    "row 18",
+    "row 19",
+    "row 20",
+  ])
+  expect(rows[top + 5]!.startsWith("╰")).toBe(true)
+  expect(rows[top + 6]).toContain("mock/m1")
+  // The start of the transcript is still in view: the box did not push it off.
+  expect(rows[0]).toContain("Amira")
+  // Moving up past the shown rows scrolls, and the border says what is below.
+  for (let i = 0; i < 6; i++) terminal.send("\x1b[A")
+  await waitFor(() => live().includes("↓ 3 more"), "scrolled up")
+  expect(live()).toContain("↑ 13 more")
+  expect(screen.y).toBe(top + 1)
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
 test("a reply with only thinking says so instead of showing nothing", async () => {
   const { terminal, shows, exited } = await setup([{ thinking: "hmm" }])
   terminal.send("go\r")
