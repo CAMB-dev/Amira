@@ -22,6 +22,8 @@ export interface SessionOptions {
   noBuiltins: boolean
   /** Tools hidden from the model. */
   disabledTools?: string[]
+  /** Names the user asked to disable and where they came from; ones no tool has are reported. */
+  requestedDisabled?: { names: string[]; from: string }
   ai?: Ai
   /** Where the conversation is persisted; a stored one is resumed. Omit to keep nothing. */
   store?: SessionStore
@@ -101,6 +103,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     }
   }
   for (const file of opts.extensions) await host.loadFile(file)
+  const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
+  for (const name of requested) {
+    if (tools.has(name)) continue
+    const error = `${from}: no tool named "${name}"`
+    bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+  }
   tools.setDisabled(opts.disabledTools ?? [])
   await bus.flush()
   stopCapture()

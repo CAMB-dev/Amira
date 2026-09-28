@@ -109,6 +109,12 @@ test("errors when already aborted or when command is missing", async () => {
   expect((await bashTool.execute({ command: "" }, makeCtx(dir))).isError).toBe(true)
 })
 
+test("a command containing NUL is rejected clearly", async () => {
+  const r = await bashTool.execute({ command: "echo a\0b" }, makeCtx(dir))
+  expect(r.isError).toBe(true)
+  expect(textOf(r)).toBe("command must not contain NUL characters")
+})
+
 test.if(hasBash)("large output is truncated with the full text saved to a file", async () => {
   const r = await bashTool.execute({ command: "seq 1 20000" }, makeCtx(dir))
   const text = textOf(r)

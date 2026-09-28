@@ -57,6 +57,22 @@ test("a worker that fails to load falls back to running on this thread", async (
   }
 })
 
+test("a process that only awaits a command stays alive until it finishes", async () => {
+  const index = new URL("../src/index.ts", import.meta.url).href
+  // Like the CLI: no top-level await (which alone keeps Bun running), so only the command can.
+  const script = [
+    `import(${JSON.stringify(index)}).then(async ({ runCommand }) => {`,
+    `  const run = await runCommand([process.execPath, "-e", "await Bun.sleep(500); console.log('late')"], {`,
+    "    cwd: process.cwd(), timeoutMs: 30_000, signal: new AbortController().signal })",
+    "  console.log('result:' + run.output.trim())",
+    "})",
+  ].join("\n")
+  const child = Bun.spawn([bun, "-e", script], { stdout: "pipe", stderr: "pipe" })
+  const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+  expect(code).toBe(0)
+  expect(out.trim()).toBe("result:late")
+})
+
 test("a failing chunk callback does not break the run", async () => {
   const run = await runCommand([bun, "-e", "console.log('x')"], {
     ...opts(),

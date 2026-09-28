@@ -96,6 +96,7 @@ async function run(argv: string[]): Promise<number> {
     noBuiltins: args.noBuiltins,
     store,
     disabledTools: config.disabledTools,
+    requestedDisabled: config.requestedDisabled,
     settings: config.settings,
     providers: config.providers,
     apiKeys: config.apiKeys,

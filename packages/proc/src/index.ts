@@ -27,7 +27,7 @@ function getWorker(): Worker | undefined {
   try {
     // A compiled binary needs worker.ts as an extra entrypoint at this same relative path.
     const w = new Worker(workerUrl)
-    // Idle commands must not keep the process alive.
+    // An idle worker must not keep the process alive; runCommand refs it while commands run.
     w.unref()
     w.onmessage = (e: MessageEvent<FromWorker>) => onMessage(e.data)
     // A load failure arrives asynchronously, as error and then close; handle both once.
@@ -78,6 +78,7 @@ function onMessage(m: FromWorker) {
     return
   }
   pending.delete(m.id)
+  if (pending.size === 0) worker?.unref()
   p.opts.signal.removeEventListener("abort", p.onAbort)
   if (m.type === "done") p.resolve(m.result)
   else p.reject(new Error(m.error))
@@ -105,6 +106,8 @@ export function runCommand(argv: string[], opts: RunOptions): Promise<RunResult>
   return new Promise<RunResult>((resolve, reject) => {
     const onAbort = () => worker?.postMessage({ type: "abort", id } satisfies ToWorker)
     pending.set(id, { argv, opts, resolve, reject, onAbort })
+    // A running command keeps the process alive, or a caller awaiting it could see Bun exit.
+    w.ref()
     opts.signal.addEventListener("abort", onAbort, { once: true })
     w.postMessage({ type: "run", id, request } satisfies ToWorker)
     if (opts.signal.aborted) onAbort()

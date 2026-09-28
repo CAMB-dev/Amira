@@ -2,6 +2,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
 import { runCommand } from "@amira/proc"
+import { findPowerShell, gatedPowerShell, powershellEdition, resolvePowerShell } from "./powershell.ts"
 
 /** How to run one command: argv plus the matching runCommand options. */
 export interface ShellCommand {
@@ -178,83 +179,22 @@ function posixBashShell(path: string): Shell {
   }
 }
 
-export function powershellShell(
-  path = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe",
-): Shell {
-  return {
-    kind: "powershell",
-    path,
-    label: "PowerShell (Git Bash not found)",
-    command: (command) => ({
-      argv: [path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
-      env: { ...process.env },
-      gated: false,
-    }),
-  }
+/** The bash tool's shell when Git Bash is missing: gated PowerShell, labelled so the model knows. */
+export function fallbackPowerShell(path = findPowerShell()): Shell {
+  return gatedPowerShell(path, `${powershellEdition(path)} (Git Bash not found)`)
 }
 
 let cached: Promise<Shell> | undefined
 
 /** Git Bash on Windows (PowerShell if it is missing), /bin/bash elsewhere. Resolved once per process. */
-/**
- * The script run for the powershell tool. It waits for the gate line (sent once the process
- * is in its Job Object), switches output to UTF-8, runs the command, and exits with the last
- * native exit code, or 1 when the last statement failed.
- */
-export function powershellScript(command: string): string {
-  return [
-    "$null = [Console]::In.ReadLine()",
-    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
-    "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
-    "$global:LASTEXITCODE = 0",
-    command,
-    "if (-not $?) { if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } else { exit 1 } }",
-    "exit $global:LASTEXITCODE",
-  ].join("\n")
-}
-
-/** -EncodedCommand takes base64 of UTF-16LE, which sidesteps every argument-quoting quirk. */
-export function encodePowerShell(script: string): string {
-  return Buffer.from(script, "utf16le").toString("base64")
-}
-
-/** PowerShell for the powershell tool: gated like Git Bash, so nothing escapes the job. */
-export function gatedPowerShell(
-  path = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe",
-): Shell {
-  return {
-    kind: "powershell",
-    path,
-    command: (command) => ({
-      argv: [
-        path,
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-EncodedCommand",
-        encodePowerShell(powershellScript(command)),
-      ],
-      env: { ...process.env },
-      gated: true,
-    }),
-  }
-}
-
-let cachedPowerShell: Promise<Shell> | undefined
-export function resolvePowerShell(): Promise<Shell> {
-  cachedPowerShell ??= Promise.resolve(gatedPowerShell())
-  return cachedPowerShell
-}
-
 export function resolveShell(): Promise<Shell> {
   cached ??=
     process.platform === "win32"
-      ? findGitBash().then((bash) => (bash ? windowsBashShell(bash) : powershellShell()))
+      ? findGitBash().then((bash) => (bash ? windowsBashShell(bash) : fallbackPowerShell()))
       : Promise.resolve(posixBashShell("/bin/bash"))
   return cached
 }
 
-/** Starts shell discovery in the background so the first bash call does not wait for it. */
 /**
  * Finds the shells and runs an empty command in each, in the background. On machines where
  * antivirus scans each new program, the first start of bash or PowerShell takes seconds;
