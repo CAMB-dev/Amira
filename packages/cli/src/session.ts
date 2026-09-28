@@ -10,6 +10,7 @@ import {
   ToolRegistry,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
+import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
 
 export interface SessionOptions {
   model: string
@@ -17,6 +18,8 @@ export interface SessionOptions {
   extensions: string[]
   noBuiltins: boolean
   ai?: Ai
+  /** Where the model catalog is cached and fetched from; false leaves it out. Unused with `ai`. */
+  catalog?: CatalogCacheOptions | false
   /** Receives failures of event subscribers (extensions or frontends). The core itself never prints. */
   onSubscriberError?: (error: unknown, event: AnyEvent) => void
   /** Loads the bundled extensions; injectable for tests. */
@@ -28,6 +31,8 @@ export interface Session {
   host: ExtensionHost
   /** Extension events emitted while loading, before any frontend subscribed. */
   startupEvents: AnyEvent[]
+  /** Settles when a background catalog refresh is done (at once when none was due). */
+  catalogRefresh: Promise<void>
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -50,7 +55,9 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  const ai = opts.ai ?? createAi()
+  const catalogOpts = opts.ai || opts.catalog === false ? undefined : (opts.catalog ?? {})
+  const cached = catalogOpts ? await readCatalogCache(catalogOpts) : undefined
+  const ai = opts.ai ?? createAi(cached?.catalog ? { catalog: cached.catalog } : {})
   let model: ModelInfo
   try {
     model = ai.model(opts.model)
@@ -90,5 +97,17 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     interceptors,
     tools,
   })
-  return { agent, host, startupEvents }
+  // A stale or missing catalog is refreshed in the background; startup never waits for it.
+  const catalogRefresh =
+    catalogOpts && cached?.stale
+      ? refreshCatalog(catalogOpts)
+          .then((catalog) => {
+            if (!catalog) return
+            ai.setCatalog?.(catalog)
+            // Only replace the model this session started with, not one chosen since.
+            if (agent.model === model) agent.model = ai.model(opts.model)
+          })
+          .catch(() => {})
+      : Promise.resolve()
+  return { agent, host, startupEvents, catalogRefresh }
 }
