@@ -36,12 +36,13 @@ export function powershellStartDir(): string {
  * the command is not size-limited like -EncodedCommand, neither is ever spliced into script
  * text, and the command is compiled here, after UTF-8 is set, so syntax errors are readable.
  * Everything before the gate only prepares this process (a standby does it while it waits):
- * it starts nothing and dry-runs the output pipeline so its first real use is already compiled.
- * After the gate it enters the working directory, for cmdlets (Set-Location) and for .NET
- * methods and native programs (the process directory); a directory it cannot enter fails the
- * command with exit code 1 before anything runs. Every stream is rendered as text on stdout:
- * redirected error, progress and information records would otherwise come out as CLIXML.
- * Exits with $LASTEXITCODE, or 1 when the final statement failed.
+ * it starts nothing and dry-runs the output pipeline and the directory change (on the start
+ * directory), so their first real use is already compiled. After the gate it enters the working
+ * directory, for cmdlets (Set-Location) and for .NET methods and native programs (the process
+ * directory); a directory it cannot enter fails the command with exit code 1 before it runs.
+ * Every stream is rendered as text on stdout: redirected error, progress and information
+ * records would otherwise come out as CLIXML. Exits with $LASTEXITCODE, or 1 when the final
+ * statement failed.
  */
 export const POWERSHELL_SCRIPT = [
   "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
@@ -58,32 +59,45 @@ export const POWERSHELL_SCRIPT = [
   "}",
   "filter __amira_errors { if ($_ -is [System.Management.Automation.ErrorRecord]) { __amira_error $_ } else { $_ } }",
   "filter __amira_trim { $_.TrimEnd() }",
+  // Reads the gate line, `<base64 directory> <base64 command>`, and enters the directory for
+  // cmdlets (Set-Location) and for .NET methods and native programs (the process directory).
+  // Returns the compiled command, or the message to fail with. Warnings go straight out.
+  "function __amira_open($line) {",
+  "  try {",
+  // Ordinal: IndexOf(string) compares by culture, and loading culture data costs ~25 ms.
+  "    $at = $line.IndexOf([char]' ')",
+  "    $dir = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Substring(0, $at)))",
+  '    $command = [scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Substring($at + 1))) + "`n`$__amira_ok = `$?")',
+  "  } catch {",
+  "    $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
+  "    return $e.Message",
+  "  }",
+  "  if (-not $dir) { return 'No working directory was given' }",
+  "  try { Set-Location -LiteralPath $dir -ErrorAction Stop } catch {",
+  "    $found = $false",
+  "    try { $found = Test-Path -LiteralPath $dir -PathType Container } catch {}",
+  '    if ($found -or $dir.Length -gt 258) { return "Cannot enter the working directory $($dir): $($_.Exception.Message)" }',
+  '    return "Working directory does not exist: $dir"',
+  "  }",
+  "  $here = (Get-Location).ProviderPath",
+  // pwsh 7 refuses a directory past MAX_PATH even with long paths enabled; cmdlets still work.
+  "  try { [Environment]::CurrentDirectory = $here } catch {",
+  "    $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
+  '    [Console]::Out.WriteLine("Warning: .NET methods cannot use this working directory ($($e.Message)); they resolve relative paths against $([Environment]::CurrentDirectory).")',
+  "  }",
+  "  if ($here.Length -gt 258) {",
+  "    [Console]::Out.WriteLine('Warning: native programs cannot start in a working directory longer than 258 characters.')",
+  "  }",
+  "  $command",
+  "}",
   "$null = [scriptblock]::Create('$null')",
   ". { $null } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim",
+  // A dry run on the start directory, so the real one reuses the compiled function.
+  "$null = __amira_open ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PWD.ProviderPath)) + ' JG51bGw=')",
   "$__amira = [Console]::In.ReadLine()",
   "if ($null -eq $__amira) { exit 125 }",
-  // The gate line is `<base64 directory> <base64 command>`.
-  "$__amira_at = $__amira.IndexOf(' ')",
-  "$__amira_dir = $null",
-  "try {",
-  "  $__amira_dir = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__amira.Substring(0, $__amira_at)))",
-  '  $__amira = [scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__amira.Substring($__amira_at + 1))) + "`n`$__amira_ok = `$?")',
-  "} catch {",
-  "  $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
-  "  [Console]::Out.WriteLine($e.Message); exit 1",
-  "}",
-  "try { Set-Location -LiteralPath $__amira_dir -ErrorAction Stop } catch {",
-  "  if (Test-Path -LiteralPath $__amira_dir -PathType Container) {",
-  '    [Console]::Out.WriteLine("Cannot enter the working directory $($__amira_dir): $($_.Exception.Message)")',
-  '  } else { [Console]::Out.WriteLine("Working directory does not exist: $__amira_dir") }',
-  "  exit 1",
-  "}",
-  // Relative paths in .NET methods and native programs' working directory follow this one.
-  // pwsh 7 refuses a directory past MAX_PATH even with long paths enabled; cmdlets still work.
-  "try { [Environment]::CurrentDirectory = (Get-Location).ProviderPath } catch {",
-  "  $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
-  '  [Console]::Out.WriteLine("Warning: cmdlets run in $($__amira_dir), but .NET methods and native programs cannot (they resolve relative paths against $([Environment]::CurrentDirectory)): $($e.Message)")',
-  "}",
+  "$__amira = __amira_open $__amira",
+  "if ($__amira -isnot [scriptblock]) { [Console]::Out.WriteLine($__amira); exit 1 }",
   "$__amira_ok = $null",
   "$__amira_threw = $false",
   "$__amira_errs = $Error.Count",
