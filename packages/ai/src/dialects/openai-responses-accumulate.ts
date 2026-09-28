@@ -279,10 +279,11 @@ function itemKey(ev: any): string {
 
 function mapUsage(u: any): Usage {
   const cached = u.input_tokens_details?.cached_tokens ?? 0
+  const written = u.input_tokens_details?.cache_write_tokens ?? 0
   return {
-    input: Math.max(0, (u.input_tokens ?? 0) - cached),
+    input: Math.max(0, (u.input_tokens ?? 0) - cached - written),
     output: u.output_tokens ?? 0,
     cacheRead: cached,
-    cacheWrite: 0,
+    cacheWrite: written,
   }
 }

@@ -33,7 +33,7 @@ test("sends tools as flat function definitions", async () => {
   const parameters = { type: "object", properties: { path: { type: "string" } } }
   const seen = await sent({ tools: [{ name: "read", description: "Read a file", parameters }] })
   expect(seen.body.tools).toEqual([
-    { type: "function", name: "read", description: "Read a file", parameters },
+    { type: "function", name: "read", description: "Read a file", parameters, strict: false },
   ])
 })
 

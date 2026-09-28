@@ -106,6 +106,18 @@ test("streams text and maps usage with cached tokens", async () => {
   expect(message.usage).toEqual({ input: 60, output: 12, cacheRead: 40, cacheWrite: 0 })
 })
 
+test("maps cache_write_tokens to cacheWrite and out of input", async () => {
+  const { evs } = await go([
+    created,
+    completed({
+      input_tokens: 100,
+      input_tokens_details: { cached_tokens: 40, cache_write_tokens: 25 },
+      output_tokens: 1,
+    }),
+  ])
+  expect(done(evs).message.usage).toEqual({ input: 35, output: 1, cacheRead: 40, cacheWrite: 25 })
+})
+
 test("streams tool calls with stable indexes and reports toolUse", async () => {
   const { evs } = await go([
     created,

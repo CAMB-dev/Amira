@@ -42,6 +42,8 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
       name: t.name,
       description: t.description,
       parameters: t.parameters,
+      // Responses makes function schemas strict unless told otherwise, which rejects most real schemas.
+      strict: false,
     }))
   }
   if (req.maxTokens) body.max_output_tokens = req.maxTokens
