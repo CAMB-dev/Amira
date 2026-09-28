@@ -14,6 +14,12 @@ export interface RenderContext {
    * top ones are cut), so a tall component can use it to decide what to leave out.
    */
   rows: number
+  /**
+   * Moves lines into the scrollback from within a frame: they are printed above the live region
+   * in the frame being drawn, before it. For content that no longer fits but will never change,
+   * such as the finished rows of a streaming reply. Only the renderer's own frames provide it.
+   */
+  commit?: (lines: string[]) => void
 }
 
 /** Anything that can draw itself as lines for a given width. */
