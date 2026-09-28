@@ -1,4 +1,4 @@
-import { type InputEvent, type KeyEvent, key, textKey } from "./keys.ts"
+import { type InputEvent, type KeyEvent, key, type PasteEvent, textKey } from "./keys.ts"
 
 const ESC = "\x1b"
 const PASTE_END = "\x1b[201~"
@@ -295,6 +295,13 @@ const WIN32_SEQ = /\x1b\[([\d;]*)_/g
 // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
 const WIN32_PREFIX = /\x1b(?:\[[\d;]*)?$/
 
+/** Pastes are handed over in pieces of at most about this many characters (4 MiB). */
+const MAX_PASTE = 4 * 1024 * 1024
+
+function pasteEvent(text: string): PasteEvent {
+  return { type: "paste", text: text.replace(/\r\n?/g, "\n") }
+}
+
 function partialSuffix(s: string, marker: string): number {
   for (let n = Math.min(marker.length - 1, s.length); n > 0; n--) {
     if (marker.startsWith(s.slice(s.length - n))) return n
@@ -335,6 +342,21 @@ export class InputParser {
     return this.paste === undefined && (this.buf.length > 0 || this.held.length > 0)
   }
 
+  /** True inside a bracketed paste; call `endPaste()` if its end marker never comes. */
+  get pasting(): boolean {
+    return this.paste !== undefined
+  }
+
+  /** Ends a paste whose end marker never came, emitting what was collected. */
+  endPaste(): InputEvent[] {
+    if (this.paste === undefined) return []
+    const text = this.paste
+    this.paste = undefined
+    this.buf = ""
+    this.held = ""
+    return text === "" ? [] : [pasteEvent(text)]
+  }
+
   /**
    * Resolves input that was waiting for more: a lone ESC is the Esc key, ESC [ is Alt+[, and so
    * on. A sequence cut short (ESC [ with parameters) stays pending, since its end may still come;
@@ -373,12 +395,17 @@ export class InputParser {
           const keep = partialSuffix(this.buf, PASTE_END)
           this.paste += this.pasteText(this.buf.slice(0, this.buf.length - keep))
           this.buf = this.buf.slice(this.buf.length - keep)
+          // Hand over a huge paste in pieces rather than holding it all.
+          if (this.paste.length >= MAX_PASTE) {
+            out.push(pasteEvent(this.paste))
+            this.paste = ""
+          }
           break
         }
-        const text = (this.paste + this.pasteText(this.buf.slice(0, end))).replace(/\r\n?/g, "\n")
+        const text = this.paste + this.pasteText(this.buf.slice(0, end))
         this.buf = this.buf.slice(end + PASTE_END.length)
         this.paste = undefined
-        out.push({ type: "paste", text })
+        out.push(pasteEvent(text))
         continue
       }
       const parsed = parseOne(this.buf, flush)

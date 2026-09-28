@@ -190,6 +190,40 @@ describe("bracketed paste", () => {
     expectSplitSafe("\x1b[200~hi 你好\x1b[201~", [{ type: "paste", text: "hi 你好" }])
   })
 
+  test("a huge paste is handed over in 4 MiB pieces", () => {
+    const p = new InputParser()
+    const big = "x".repeat(4 * 1024 * 1024)
+    const first = p.feed(`\x1b[200~${big}`)
+    expect(first).toEqual([{ type: "paste", text: big }])
+    expect(p.pasting).toBe(true)
+    expect(p.feed("tail\r\x1b[201~a")).toEqual([{ type: "paste", text: "tail\n" }, textKey("a")])
+  })
+
+  test("endPaste emits what an unterminated paste collected", () => {
+    const p = new InputParser()
+    expect(p.feed("\x1b[200~abc\x1b[20")).toEqual([])
+    expect(p.endPaste()).toEqual([{ type: "paste", text: "abc" }])
+    expect(p.pasting).toBe(false)
+    expect(p.feed("d")).toEqual([textKey("d")])
+    expect(p.endPaste()).toEqual([])
+  })
+
+  test("InputReader ends a paste after a pause without its end marker", async () => {
+    const term = new FakeTerminal()
+    const events: InputEvent[] = []
+    const reader = new InputReader(term, (e) => events.push(e), { pasteTimeoutMs: 20 })
+    reader.start()
+    term.send("\x1b[200~abc")
+    await Bun.sleep(10)
+    term.send("def")
+    await Bun.sleep(10)
+    expect(events).toEqual([])
+    await Bun.sleep(25)
+    term.send("g")
+    expect(events).toEqual([{ type: "paste", text: "abcdef" }, textKey("g")])
+    reader.stop()
+  })
+
   test("an unfinished paste is not pending for the Esc timeout", () => {
     const p = new InputParser()
     p.feed("\x1b[200~abc")

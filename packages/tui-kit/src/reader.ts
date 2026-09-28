@@ -7,9 +7,14 @@ export interface InputReaderOptions {
   escapeTimeoutMs?: number
   /** How long a sequence cut short (ESC [ with parameters) may wait for its end before it is dropped. */
   sequenceTimeoutMs?: number
+  /** A paste whose end marker never comes ends after this long without input. */
+  pasteTimeoutMs?: number
 }
 
-/** Feeds terminal input through an `InputParser` and resolves a lone ESC after a timeout. */
+/**
+ * Feeds terminal input through an `InputParser`. Resolves a lone ESC after a short timeout, drops
+ * a sequence that was cut short, and ends a paste whose end marker never comes.
+ */
 export class InputReader {
   private parser = new InputParser()
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -17,6 +22,7 @@ export class InputReader {
   private stopped = false
   private readonly escapeTimeoutMs: number
   private readonly sequenceTimeoutMs: number
+  private readonly pasteTimeoutMs: number
 
   constructor(
     private terminal: Terminal,
@@ -25,6 +31,7 @@ export class InputReader {
   ) {
     this.escapeTimeoutMs = opts.escapeTimeoutMs ?? 40
     this.sequenceTimeoutMs = Math.max(this.escapeTimeoutMs, opts.sequenceTimeoutMs ?? 500)
+    this.pasteTimeoutMs = opts.pasteTimeoutMs ?? 1500
   }
 
   start(): void {
@@ -47,7 +54,12 @@ export class InputReader {
   }
 
   private schedule(): void {
-    if (this.stopped || !this.parser.pending) return
+    if (this.stopped) return
+    if (this.parser.pasting) {
+      this.timer = setTimeout(() => this.dispatch(this.parser.endPaste()), this.pasteTimeoutMs)
+      return
+    }
+    if (!this.parser.pending) return
     this.timer = setTimeout(() => {
       this.dispatch(this.parser.flush())
       if (this.stopped || !this.parser.pending) return
