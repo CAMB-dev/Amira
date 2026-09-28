@@ -58,6 +58,8 @@ export interface Theme {
   error: StyleFn
   success: StyleFn
   warning: StyleFn
+  /** Borders and rules, such as the frame around the input box. */
+  border: StyleFn
   [token: string]: StyleFn
 }
 
@@ -68,6 +70,7 @@ export const defaultTheme: Theme = {
   error: red,
   success: green,
   warning: yellow,
+  border: gray,
 }
 
 /**

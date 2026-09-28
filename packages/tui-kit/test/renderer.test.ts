@@ -268,7 +268,7 @@ test("components get the renderer's theme, and colors are stripped when off", ()
   const term = new FakeTerminal(20, 5)
   const r = new LiveRenderer(term, root, { theme, color: false })
   r.render()
-  expect(seen[0]).toEqual({ theme, color: false, rows: 5 })
+  expect(seen[0]).toMatchObject({ theme, color: false, rows: 5 })
   expect(term.output).not.toContain("\x1b[31m")
   expect(term.output).toContain("a\x1b[1mb\x1b[22m")
   r.commit([red("c")])
@@ -293,4 +293,42 @@ test("the render context carries the terminal height", () => {
   term.setSize(20, 9)
   r.render()
   expect(rows).toEqual([5, 9])
+})
+
+test("a component can commit lines while rendering; they print above the frame in the same write", () => {
+  const term = new FakeTerminal(20, 4)
+  const screen = new VirtualScreen(20, 4)
+  const write = term.write.bind(term)
+  term.write = (d: string) => {
+    write(d)
+    screen.write(d)
+  }
+  let pending: string[] = []
+  let kept: RenderContext | undefined
+  const root: Component = {
+    render: (_w, ctx) => {
+      kept = ctx
+      ctx.commit?.(pending)
+      pending = []
+      return ["live"]
+    },
+  }
+  const r = new LiveRenderer(term, root)
+  r.render()
+  r.commit(["explicit"])
+  const writes = term.writes.length
+  pending = ["row 1", "row 2\nrow 3"]
+  r.render()
+  expect(term.writes.length).toBe(writes + 1)
+  expect(screen.text).toBe(["explicit", "row 1", "row 2", "row 3", "live"].join("\n"))
+  // Explicit commits go first: the frame's own lines were below them, in the live region.
+  pending = ["from frame"]
+  r.commit(["from app"])
+  expect(screen.text).toBe(
+    ["explicit", "row 1", "row 2", "row 3", "from app", "from frame", "live"].join("\n"),
+  )
+  // A context kept past its frame cannot commit.
+  kept!.commit!(["late"])
+  r.render()
+  expect(screen.text).not.toContain("late")
 })

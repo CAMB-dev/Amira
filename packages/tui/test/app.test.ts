@@ -51,6 +51,8 @@ interface SetupOptions {
   control?: Partial<SessionControl>
   /** Give the agent a tree, so tools can start sub-agents. */
   tree?: boolean
+  /** Called after every write to the terminal, once the screen shows it. */
+  onWrite?: (screen: VirtualScreen) => void
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -89,6 +91,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   terminal.write = (d: string) => {
     write(d)
     screen.write(d)
+    o.onWrite?.(screen)
   }
   let commands: CommandHost | undefined
   if (o.commands) {
@@ -253,6 +256,124 @@ test("a long streaming reply is committed progressively so its start stays visib
   await exited
 })
 
+/**
+ * Follows markers (L1, P2, ...) through a transcript. After every write, the markers on screen or
+ * in the scrollback must have no hole: a hole means a line was drawn and then lost off the top of
+ * the live region, to be printed again later — the view jumps back up when that happens.
+ */
+function transcriptChecker(markers: string[]) {
+  const index = new Map(markers.map((m, i) => [m, i]))
+  const problems: string[] = []
+  const found = (screen: VirtualScreen) =>
+    [...screen.scrollback, ...screen.lines].join("\n").match(/\b[LP]\d+\b/g) ?? []
+  return {
+    problems,
+    onWrite(screen: VirtualScreen) {
+      const seen = new Set(found(screen).map((m) => index.get(m) ?? -1))
+      const max = Math.max(-1, ...seen)
+      for (let i = 0; i <= max; i++) {
+        if (seen.has(i)) continue
+        if (problems.length < 5) problems.push(`${markers[i]} is gone while ${markers[max]} is shown`)
+        break
+      }
+    },
+    /** Every marker reached the transcript exactly once, in order. */
+    final(screen: VirtualScreen) {
+      expect([...found(screen)]).toEqual(markers)
+    },
+  }
+}
+
+test("a reply longer than the screen reaches the scrollback once, in order, never cut and reprinted", async () => {
+  const lines = Array.from({ length: 30 }, (_, i) => `L${i + 1} some text`)
+  const para = Array.from({ length: 90 }, (_, i) => `P${i + 1}`)
+  const tail = Array.from({ length: 10 }, (_, i) => `L${i + 31}`)
+  const reply = [...lines, para.join(" "), ...tail].join("\n")
+  const check = transcriptChecker([...lines.map((l) => l.split(" ")[0]!), ...para, ...tail])
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: reply, delayMs: 1 }], {
+    cols: 40,
+    rows: 12,
+    onWrite: (s) => check.onWrite(s),
+  })
+  terminal.send("go\r")
+  await shows("L40")
+  await idle()
+  expect(check.problems).toEqual([])
+  check.final(screen)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a draft typed while a long reply streams does not cut the reply either", async () => {
+  const lines = Array.from({ length: 40 }, (_, i) => `L${i + 1}`)
+  const check = transcriptChecker(lines)
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: lines.join("\n"), delayMs: 2 }], {
+    cols: 40,
+    rows: 12,
+    onWrite: (s) => check.onWrite(s),
+  })
+  terminal.send("go\r")
+  await shows("L8")
+  terminal.send(`\x1b[200~${Array.from({ length: 30 }, (_, i) => `draft ${i}`).join("\n")}\x1b[201~`)
+  await shows("L40")
+  await idle()
+  expect(check.problems).toEqual([])
+  check.final(screen)
+  // The first Ctrl+C clears the draft.
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("the editor sits in a rounded box above the status bar, with the caret inside", async () => {
+  const { terminal, screen, live, exited } = await setup([], { cols: 30, rows: 12 })
+  await waitFor(() => live().includes("Message Amira"), "input box")
+  terminal.send("héllo 你好")
+  await waitFor(() => live().includes("héllo 你好"), "typed text")
+  const rows = screen.lines
+  const top = rows.findIndex((l) => l.startsWith("╭"))
+  expect(rows.slice(top, top + 3)).toEqual([
+    `╭${"─".repeat(28)}╮`,
+    "│ › héllo 你好               │",
+    `╰${"─".repeat(28)}╯`,
+  ])
+  expect(rows[top + 3]).toContain("mock/m1")
+  // Border, space, prompt, "héllo " and two wide characters.
+  expect({ x: screen.x, y: screen.y }).toEqual({ x: 2 + 2 + 6 + 4, y: top + 1 })
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a long draft scrolls inside the input box instead of growing past the screen", async () => {
+  const { terminal, screen, live, exited } = await setup([], { cols: 30, rows: 12 })
+  await waitFor(() => live().includes("Message Amira"), "input box")
+  terminal.send(`\x1b[200~${Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join("\n")}\x1b[201~`)
+  await waitFor(() => live().includes("row 20"), "draft")
+  const rows = screen.lines
+  const top = rows.findIndex((l) => l.startsWith("╭"))
+  // A third of 12 rows shows; the border counts the rest.
+  expect(rows[top]).toContain("↑ 16 more")
+  expect(rows.slice(top + 1, top + 5).map((l) => l.slice(1, -1).trim())).toEqual([
+    "row 17",
+    "row 18",
+    "row 19",
+    "row 20",
+  ])
+  expect(rows[top + 5]!.startsWith("╰")).toBe(true)
+  expect(rows[top + 6]).toContain("mock/m1")
+  // The start of the transcript is still in view: the box did not push it off.
+  expect(rows[0]).toContain("Amira")
+  // Moving up past the shown rows scrolls, and the border says what is below.
+  for (let i = 0; i < 6; i++) terminal.send("\x1b[A")
+  await waitFor(() => live().includes("↓ 3 more"), "scrolled up")
+  expect(live()).toContain("↑ 13 more")
+  expect(screen.y).toBe(top + 1)
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
 test("a reply with only thinking says so instead of showing nothing", async () => {
   const { terminal, shows, exited } = await setup([{ thinking: "hmm" }])
   terminal.send("go\r")
@@ -294,6 +415,7 @@ test("tool lines fit the terminal width", () => {
     error: (s: string) => s,
     success: (s: string) => s,
     warning: (s: string) => s,
+    border: (s: string) => s,
   }
   const lines = toolLines(plain, "bash", { command: "x".repeat(300) }, textResult("y".repeat(300)), 0, 40)
   expect(lines.every((l) => l.length <= 40)).toBe(true)
@@ -490,7 +612,8 @@ test("typing a slash opens the command list above the editor; Tab and Enter comp
   await waitFor(() => live().includes("/status"), "popup")
   const rows = live().split("\n")
   const popupRow = rows.findIndex((l) => l.includes("/clear"))
-  const editorRow = rows.findIndex((l) => l.trimEnd() === "› /")
+  // The editor sits in the input box: "│ › /     │".
+  const editorRow = rows.findIndex((l) => /^│ › \/ *│$/.test(l.trimEnd()))
   expect(popupRow).toBeGreaterThan(-1)
   expect(popupRow).toBeLessThan(editorRow)
   expect(live()).toContain("↑↓ select · Tab complete · Enter run · Esc close")

@@ -114,7 +114,7 @@ export class LiveRenderer {
     this.timer = undefined
     this.lastFrameAt = performance.now()
     const width = this.terminal.columns
-    const frame = this.layout(width, this.terminal.rows)
+    const frame = this.layout(width, this.terminal.rows, committed)
     const full = !this.prev || committed.length > 0 || this.forceFull || width !== this.width
     let body = full ? this.fullBody(frame, committed, width) : this.diffBody(frame)
     if (body === undefined) {
@@ -129,9 +129,21 @@ export class LiveRenderer {
     this.forceFull = false
   }
 
-  private layout(width: number, height: number): Frame {
+  /** Renders the root. Lines components commit while rendering are added to `committed`. */
+  private layout(width: number, height: number, committed: string[]): Frame {
     this.context.rows = height
-    let lines = this.root.render(width, this.context)
+    let open = true
+    const commit = (lines: string[]) => {
+      // A component that kept the context cannot commit outside the frame it was given for.
+      if (!open) return
+      for (const l of lines) for (const part of sanitize(l).split("\n")) committed.push(part)
+    }
+    let lines: string[]
+    try {
+      lines = this.root.render(width, { ...this.context, commit })
+    } finally {
+      open = false
+    }
     let pos: Frame["cursor"]
     let found = false
     lines = lines.map((line, row) => {

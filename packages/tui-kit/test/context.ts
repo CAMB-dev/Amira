@@ -5,7 +5,15 @@ const same = (s: string) => s
 
 /** A render context whose theme adds no styling, so rendered lines are plain text. */
 export const plain: RenderContext = {
-  theme: { text: same, accent: same, muted: same, error: same, success: same, warning: same } satisfies Theme,
+  theme: {
+    text: same,
+    accent: same,
+    muted: same,
+    error: same,
+    success: same,
+    warning: same,
+    border: same,
+  } satisfies Theme,
   color: false,
   rows: 24,
 }
