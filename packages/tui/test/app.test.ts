@@ -1404,15 +1404,17 @@ test("the / list has no skills, and /<skill> points at $ instead of running it",
 })
 
 test("text that starts with $ but names no skill is sent as a message", async () => {
-  const { terminal, agent, all, shows, idle, exited } = await skillSetup([
-    { text: "Noted." },
-    { text: "Sure." },
-  ])
+  const { terminal, agent, all, live, shows, idle, exited } = await skillSetup(
+    [{ text: "Noted." }, { text: "Sure." }],
+    { skills: [testSkill("home-assistant", "Smart home")] },
+  )
   terminal.send("$100 is the price\r")
   await shows("Noted.")
   await idle()
-  // "$HOME" matches no skill by prefix; Enter sends it even if a fuzzy match is listed.
-  terminal.send("$HOME\r")
+  // "$HOME" lists home-assistant, but only its case-exact start would run it: Enter sends it.
+  terminal.send("$HOME")
+  await waitFor(() => live().includes("› $home-assistant"), "listed")
+  terminal.send("\r")
   await shows("Sure.")
   await idle()
   const users = agent.messages.filter((m) => m.role === "user")

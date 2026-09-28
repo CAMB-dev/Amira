@@ -405,7 +405,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       dialogRows = lines.length
       return lines
     }),
-    // The command list, file list or history search opens below the input box, in place of the
+    // The command or skill list, file list or history search opens below the input box, in place of the
     // status bar and the hint, so the box stays where it is while the list changes with each key.
     new View((width, ctx) => {
       const list = dialogs[0] ? undefined : inputList()

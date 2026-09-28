@@ -262,4 +262,14 @@ test("$ text that names no skill leaves Enter to the editor, even beside a fuzzy
   expect(fuzzy.popup.handleKey(key("enter"))).toBeUndefined()
   fuzzy.popup.handleKey(key("down"))
   expect(fuzzy.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "$home-assistant" })
+  // "$HOME" is listed by its prefix, but the case says it is the variable, not the skill.
+  const home = await skillPopupFor("$HOME")
+  expect(home.lines()).toEqual(["› $home-assistant  Smart home"])
+  expect(home.popup.handleKey(key("enter"))).toBeUndefined()
+  home.popup.handleKey(key("down"))
+  expect(home.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "$home-assistant" })
+  expect((await skillPopupFor("$home")).popup.handleKey(key("enter"))).toEqual({
+    type: "run",
+    line: "$home-assistant",
+  })
 })

@@ -158,9 +158,9 @@ export class CommandPopup implements Component {
     if (!r.command) {
       // A bare "/" names nothing yet; Enter only runs a command once one is picked or typed.
       if (r.text === sigil && !this.#navigated) return { type: "handled" }
-      // "$HOME" only fuzzily like a skill is prose: the editor sends it.
-      const name = r.text.slice(1).toLowerCase()
-      if (sigil === "$" && !this.#navigated && !chosen.toLowerCase().startsWith(name)) return undefined
+      // Text that is not the start of the skill's name, case included, is prose ("$HOME" next
+      // to home-assistant): the editor sends it. The list still ranks without case.
+      if (sigil === "$" && !this.#navigated && !chosen.startsWith(r.text.slice(1))) return undefined
       return { type: "run", line: `${sigil}${chosen}` }
     }
     const typed = r.text
