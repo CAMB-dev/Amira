@@ -1,6 +1,5 @@
-import { BUILTIN_PROVIDERS, findPreset, type ProviderConfig } from "@amira/ai"
+import type { ProviderConfig } from "@amira/ai"
 import type { ProviderSettings } from "@amira/api"
-import { deepMerge } from "./merge.ts"
 
 export class ProviderSettingsError extends Error {
   constructor(
@@ -12,29 +11,35 @@ export class ProviderSettingsError extends Error {
 }
 
 /**
- * Providers from settings (D54). An entry for a built-in id is merged over it; any other
- * entry must name its dialect and baseUrl.
+ * Where the providers Amira used to have built in connected. Only for settings written back
+ * then: an entry with one of these ids that lacks its dialect or baseUrl (because it only
+ * tweaked the built-in one) keeps working. Not offered anywhere; new providers name both.
  */
-export function providersFromSettings(
-  entries: Record<string, ProviderSettings> = {},
-  builtins: ProviderConfig[] = BUILTIN_PROVIDERS,
-): ProviderConfig[] {
+const FORMER_BUILTINS: Record<string, Pick<ProviderConfig, "dialect" | "baseUrl">> = {
+  anthropic: { dialect: "anthropic-messages", baseUrl: "https://api.anthropic.com" },
+  openai: { dialect: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+  "openai-chat": { dialect: "openai-chat", baseUrl: "https://api.openai.com/v1" },
+  google: { dialect: "google-gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta" },
+}
+
+/**
+ * Providers from settings (D54). Amira has none built in: each entry names its dialect (the
+ * protocol it speaks) and baseUrl.
+ */
+export function providersFromSettings(entries: Record<string, ProviderSettings> = {}): ProviderConfig[] {
   return Object.entries(entries).map(([id, entry]) => {
-    const merged = deepMerge<ProviderConfig>(
-      builtins.find((b) => b.id === id) ?? ({ id } as ProviderConfig),
-      entry,
-    )
-    merged.id = id
-    const missing = (["dialect", "baseUrl"] as const).filter((k) => !merged[k])
+    const former = Object.hasOwn(FORMER_BUILTINS, id) ? FORMER_BUILTINS[id] : undefined
+    const p = { ...entry, id } as ProviderConfig
+    if (!p.dialect && former) p.dialect = former.dialect
+    if (!p.baseUrl && former) p.baseUrl = former.baseUrl
+    const missing = (["dialect", "baseUrl"] as const).filter((k) => !p[k])
     if (missing.length) {
-      const hint = findPreset(id)
-        ? `; run "amira provider add ${id}" for a ready-made entry`
-        : '; see "amira provider presets" for examples'
       throw new ProviderSettingsError(
         id,
-        `provider "${id}" in settings needs ${missing.map((k) => `"${k}"`).join(" and ")}${hint}`,
+        `provider "${id}" in settings.json needs ${missing.map((k) => `"${k}"`).join(" and ")}; ` +
+          'fix the entry, or remove it and run "amira provider add"',
       )
     }
-    return merged
+    return p
   })
 }

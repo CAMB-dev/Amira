@@ -101,8 +101,7 @@ test("project files cannot change where requests and API keys go", () => {
   expect(r.warnings.join("\n")).toContain('"providers.mine.apiKeyEnvFallbacks" is ignored')
   expect(r.warnings[4]).toContain(`${localFile()}: "providers.anthropic.baseUrl" is ignored`)
   const anthropic = providersFromSettings(r.settings.providers).find((p) => p.id === "anthropic")
-  expect(anthropic).toMatchObject({ baseUrl: "https://api.anthropic.com", apiKeyEnv: "ANTHROPIC_API_KEY" })
-  expect(anthropic?.headers).toBeUndefined()
+  expect(anthropic).toEqual({ id: "anthropic", dialect: "anthropic-messages", baseUrl: "https://api.anthropic.com" })
 })
 
 test("project files cannot choose web backends' endpoints or open the private network", () => {
@@ -271,24 +270,63 @@ test("checks every documented key", () => {
   )
 })
 
-test("providers from settings merge over built-ins and need a dialect and baseUrl otherwise", () => {
-  const [anthropic, custom] = providersFromSettings({
-    anthropic: { baseUrl: "http://proxy", headers: { a: "1" } },
-    custom: { dialect: "openai-chat", baseUrl: "http://c" },
-  })
-  expect(anthropic).toMatchObject({
-    id: "anthropic",
-    dialect: "anthropic-messages",
-    baseUrl: "http://proxy",
-    apiKeyEnv: "ANTHROPIC_API_KEY",
-    headers: { a: "1" },
-    defaultModel: { caps: { promptCache: true, thinking: true } },
-  })
+test("providers come only from settings, and each needs a dialect and baseUrl", () => {
+  expect(providersFromSettings()).toEqual([])
+  expect(providersFromSettings({})).toEqual([])
+  const [custom] = providersFromSettings({ custom: { dialect: "openai-chat", baseUrl: "http://c" } })
   expect(custom).toEqual({ id: "custom", dialect: "openai-chat", baseUrl: "http://c" })
   expect(() => providersFromSettings({ deepseek: { baseUrl: "x" } })).toThrow(
-    'provider "deepseek" in settings needs "dialect"; run "amira provider add deepseek"',
+    'provider "deepseek" in settings.json needs "dialect"; fix the entry, or remove it and run "amira provider add"',
   )
+  expect(() => providersFromSettings({ mine: {} })).toThrow('needs "dialect" and "baseUrl"')
   expect(() => providersFromSettings({ mine: {} })).toThrow(ProviderSettingsError)
+  // Inherited object keys are not provider ids.
+  expect(() => providersFromSettings({ toString: {} })).toThrow(ProviderSettingsError)
+})
+
+test("an old entry for a formerly built-in provider keeps its dialect and baseUrl", () => {
+  const [anthropic, openai, google] = providersFromSettings({
+    anthropic: { headers: { a: "1" }, models: [{ id: "claude-x" }] },
+    openai: { baseUrl: "http://proxy" },
+    google: { apiKeyEnv: "MY_GEMINI_KEY" },
+  })
+  // Only the dialect and baseUrl come back; no key variable or other defaults.
+  expect(anthropic).toEqual({
+    id: "anthropic",
+    dialect: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    headers: { a: "1" },
+    models: [{ id: "claude-x" }],
+  })
+  expect(openai).toEqual({ id: "openai", dialect: "openai-responses", baseUrl: "http://proxy" })
+  expect(google).toMatchObject({ dialect: "google-gemini", apiKeyEnv: "MY_GEMINI_KEY" })
+  // A full entry is taken as it is.
+  const [own] = providersFromSettings({ anthropic: { dialect: "openai-chat", baseUrl: "http://own" } })
+  expect(own).toEqual({ id: "anthropic", dialect: "openai-chat", baseUrl: "http://own" })
+})
+
+test("fully defined entries such as deepseek and deepseek-anthropic load unchanged", () => {
+  const entries = {
+    deepseek: {
+      dialect: "openai-chat",
+      baseUrl: "https://api.deepseek.com",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      catalogId: "deepseek",
+      models: [{ id: "deepseek-flash" }],
+    },
+    "deepseek-anthropic": {
+      dialect: "anthropic-messages",
+      baseUrl: "https://api.deepseek.com/anthropic",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      catalogId: "deepseek",
+      compat: { thinking: "budget" as const },
+      defaultModel: { caps: { thinking: true, promptCache: true } },
+    },
+  }
+  expect(providersFromSettings(entries)).toEqual([
+    { id: "deepseek", ...entries.deepseek },
+    { id: "deepseek-anthropic", ...entries["deepseek-anthropic"] },
+  ])
 })
 
 test("auth.json keys load, and bad entries are errors", () => {
