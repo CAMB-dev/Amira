@@ -1,5 +1,6 @@
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
+import type { Settings } from "./settings.ts"
 import type { ToolDefinition } from "./tools.ts"
 import type { StatusItem } from "./ui.ts"
 
@@ -10,6 +11,8 @@ export interface InterceptContext {
 
 export interface ExtensionAPI {
   readonly apiVersion: string
+  /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */
+  readonly settings: Readonly<Settings>
   /** Returns a function that removes this registration. */
   registerTool(tool: ToolDefinition): () => void
   /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */

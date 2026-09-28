@@ -6,6 +6,7 @@ test("registers the six built-in tools with the expected concurrency", async () 
   const tools: ToolDefinition[] = []
   const api: ExtensionAPI = {
     apiVersion: "0.1.0",
+    settings: {},
     registerTool: (t) => {
       tools.push(t)
       return () => {}

@@ -17,5 +17,6 @@ export type {
 export * from "./events.ts"
 export * from "./extension.ts"
 export * from "./process.ts"
+export * from "./settings.ts"
 export * from "./tools.ts"
 export * from "./ui.ts"

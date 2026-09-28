@@ -1,7 +1,7 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
-import { API_VERSION, type Extension, type ExtensionAPI } from "@amira/api"
+import { API_VERSION, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
 import { runCommand } from "@amira/proc"
 import type { EventBus } from "./event-bus.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
@@ -30,6 +30,8 @@ export interface ExtensionHostOptions {
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
+  /** Merged settings handed to extensions. Default {}. */
+  settings?: Settings
   /** Session id used on extension.* and ui.* events. Default "host". */
   sessionId?: string
 }
@@ -118,6 +120,7 @@ export class ExtensionHost {
     }
     return {
       apiVersion: API_VERSION,
+      settings: this.#opts.settings ?? {},
       registerTool: (tool) => track(tools.register(tool, source)),
       on: (type, handler) =>
         track(
