@@ -58,7 +58,8 @@ export function createMcpExtension(opts: McpExtensionOptions = {}): McpExtension
     started = new Promise((resolve) => {
       setTimeout(() => resolve(Promise.all(connections.map((c) => c.start()))), 0)
     })
-    api.on("session.end", () => void Promise.all(connections.map((c) => c.close())))
+    // Servers belong to the host, not to a session: they live until close() or process exit
+    // (stdio servers are killed by the exit hook), so later sessions keep their tools.
     const waitMs = opts.startupWaitMs ?? 8000
     const waitUntil = Date.now() + waitMs
     const pending = () => connections.filter((c) => c.state === "idle" || c.state === "connecting")

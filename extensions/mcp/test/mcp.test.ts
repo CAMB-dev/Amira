@@ -178,6 +178,21 @@ test(
 )
 
 test(
+  "servers outlive a session's end, so later sessions keep their tools",
+  async () => {
+    const { agent, tools, mcp } = await harness([stdioServer("fx")])
+    await mcp.settled()
+    agent.bus.emit("session.end", { reason: "exit" }, { sessionId: agent.sessionId })
+    await agent.bus.flush()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(mcp.servers()[0]).toMatchObject({ state: "ready" })
+    expect(tools.get("mcp__fx__echo")).toBeDefined()
+    await mcp.close()
+  },
+  SLOW,
+)
+
+test(
   "a tool call that times out is cancelled on the server",
   async () => {
     const { agent, mcp } = await harness(
