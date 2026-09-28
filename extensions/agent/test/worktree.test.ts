@@ -1,5 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -14,6 +14,7 @@ import {
   mergeWorktree,
   parseNumstat,
   projectKey,
+  type RunGit,
   type Worktree,
 } from "../src/worktree.ts"
 
@@ -77,6 +78,36 @@ test("a clean change merges back on its own and the worktree is removed", async 
   expect(read(path.join(root, "f.txt"))).toBe("a\nB\nc\nd\ne\n")
   expect(read(path.join(root, "new.txt"))).toBe("new\n")
   expect(existsSync(wt.dir)).toBe(false)
+  expect(existsSync(wt.patch)).toBe(false)
+})
+
+test("a worktree that cannot be removed still counts as merged, with a note", async () => {
+  const { root, home } = await setup()
+  const wt = await worktree(root, home)
+  writeFileSync(path.join(wt.cwd, "f.txt"), "a\nB\nc\nd\ne\n")
+  // As on Windows when a process still has the worktree as its working directory.
+  const busy: RunGit = (args, cwd, stdoutOnly) =>
+    args[0] === "worktree" && args[1] === "remove"
+      ? Promise.resolve({ output: "error: failed to delete: Device or resource busy", ok: false })
+      : git(args, cwd, stdoutOnly)
+  const pruned: string[][] = []
+  const r = await mergeWorktree(
+    (args, cwd, stdoutOnly) => {
+      if (args[1] === "prune") pruned.push(args)
+      return busy(args, cwd, stdoutOnly)
+    },
+    wt,
+    {
+      rm: (target, opts) => {
+        if (target === wt.dir) throw new Error("EBUSY: resource busy or locked")
+        rmSync(target, opts)
+      },
+    },
+  )
+  expect(r.outcome).toBe("merged")
+  expect(r.cleanup).toBe("EBUSY: resource busy or locked")
+  expect(read(path.join(root, "f.txt"))).toBe("a\nB\nc\nd\ne\n")
+  expect(pruned.length).toBe(1)
   expect(existsSync(wt.patch)).toBe(false)
 })
 

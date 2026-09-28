@@ -129,6 +129,13 @@ function changesLine(activity: Activity): string {
 }
 
 function mergeLine(m: MergeResult, wt: Worktree): string {
+  const line = outcomeLine(m, wt)
+  return m.cleanup
+    ? `${line} The worktree could not be removed (${shorten(m.cleanup, 200)}); it stays at ${wt.dir} and is deleted later.`
+    : line
+}
+
+function outcomeLine(m: MergeResult, wt: Worktree): string {
   const files = m.stat.files.length ? ` (${m.stat.files.join(", ")})` : ""
   switch (m.outcome) {
     case "empty":

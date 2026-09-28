@@ -38,6 +38,8 @@ export interface MergeResult {
   conflict?: string
   /** Files git could not patch; their hunks are in `<file>.rej` (outcome "partial"). */
   rejected?: string[]
+  /** Why the worktree could not be removed after its changes were merged or discarded. */
+  cleanup?: string
 }
 
 /** Clean merges past either size are reviewed too (D38). */
@@ -129,23 +131,22 @@ export const DISCARD = "discard"
 export async function mergeWorktree(
   git: RunGit,
   wt: Worktree,
-  opts: { threshold?: ReviewThreshold; review?: Review } = {},
+  opts: { threshold?: ReviewThreshold; review?: Review; rm?: Remove } = {},
 ): Promise<MergeResult> {
   const stat = await collectChanges(git, wt)
-  if (!stat.files.length) {
-    await removeWorktree(git, wt)
-    return { outcome: "empty", stat }
+  // The merge alone decides the outcome; a worktree that cannot be removed is only noted.
+  const cleanup = async (): Promise<Partial<MergeResult>> => {
+    const problem = await removeWorktree(git, wt, opts.rm)
+    return problem ? { cleanup: problem } : {}
   }
+  if (!stat.files.length) return { outcome: "empty", stat, ...(await cleanup()) }
   const apply = (extra: string[] = []) =>
     git(["apply", "--binary", "--whitespace=nowarn", ...extra, wt.patch], wt.root)
   const check = await apply(["--check"])
   const conflict = check.ok ? undefined : check.output.trim() || "the patch does not apply"
   if (!conflict && !overThreshold(stat, opts.threshold)) {
     const done = await apply()
-    if (done.ok) {
-      await removeWorktree(git, wt)
-      return { outcome: "merged", stat }
-    }
+    if (done.ok) return { outcome: "merged", stat, ...(await cleanup()) }
   }
   const title = conflict
     ? `Sub-agent changes conflict with the working tree (${formatStat(stat)})`
@@ -158,16 +159,10 @@ export async function mergeWorktree(
     ...(conflict ? { conflict } : {}),
     ...extra,
   })
-  if (choice === DISCARD) {
-    await removeWorktree(git, wt)
-    return result("discarded")
-  }
+  if (choice === DISCARD) return result("discarded", await cleanup())
   if (choice === MERGE) {
     const done = await apply()
-    if (done.ok) {
-      await removeWorktree(git, wt)
-      return result("merged")
-    }
+    if (done.ok) return result("merged", await cleanup())
     return result("kept", { conflict: done.output.trim() })
   }
   if (choice === APPLY_PARTIAL) {
@@ -193,12 +188,31 @@ function readPatch(file: string): string {
   }
 }
 
-/** Removes the worktree and its patch; a stubborn directory is deleted and pruned instead. */
-export async function removeWorktree(git: RunGit, wt: Worktree): Promise<void> {
+/** Deletes a file or directory tree; replaceable in tests. */
+export type Remove = (target: string, opts: { recursive?: boolean; force?: boolean }) => void
+
+/**
+ * Removes the worktree and its patch as far as it can: on Windows a directory that is some
+ * process's working directory cannot be deleted. Returns why the worktree stayed, if it did.
+ */
+export async function removeWorktree(
+  git: RunGit,
+  wt: Worktree,
+  rm: Remove = rmSync,
+): Promise<string | undefined> {
   const removed = await git(["worktree", "remove", "--force", wt.dir], wt.root)
+  let problem: string | undefined
   if (!removed.ok) {
-    rmSync(wt.dir, { recursive: true, force: true })
+    try {
+      rm(wt.dir, { recursive: true, force: true })
+    } catch (err) {
+      problem = err instanceof Error ? err.message : String(err)
+    }
+    // Forgets the worktree once its directory, or at least the .git file in it, is gone.
     await git(["worktree", "prune"], wt.root)
   }
-  rmSync(wt.patch, { force: true })
+  try {
+    rm(wt.patch, { force: true })
+  } catch {}
+  return problem
 }
