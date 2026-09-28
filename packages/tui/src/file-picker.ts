@@ -70,21 +70,83 @@ export function fuzzyScore(query: string, path: string): number | undefined {
 }
 
 const lowered = new WeakMap<string[], string[]>()
+const shallowest = new WeakMap<string[], { limit: number; result: string[] }>()
 
-/** The best `limit` matches of `query` among `paths`; without a query the shallowest paths, in order. */
+const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
+/** Slashes in `p`, a directory's trailing one not counted. */
+function depthOf(p: string): number {
+  let n = 0
+  for (let i = p.indexOf("/"); i !== -1 && i < p.length - 1; i = p.indexOf("/", i + 1)) n++
+  return n
+}
+
+/**
+ * The `limit` shallowest paths, by depth then name, in one pass: every path above the cutoff
+ * depth is taken, and at the cutoff only the first names are kept. Cached per list, since it is
+ * asked for each time a bare "@" is typed.
+ */
+function shallowestPaths(paths: string[], limit: number): string[] {
+  const cached = shallowest.get(paths)
+  if (cached && cached.limit === limit) return cached.result
+  const depths = new Uint32Array(paths.length)
+  const counts: number[] = []
+  for (let i = 0; i < paths.length; i++) {
+    const d = depthOf(paths[i]!)
+    depths[i] = d
+    counts[d] = (counts[d] ?? 0) + 1
+  }
+  let cutoff = 0
+  for (let taken = 0; cutoff < counts.length; cutoff++) {
+    taken += counts[cutoff] ?? 0
+    if (taken >= limit) break
+  }
+  const above: string[][] = []
+  const atCutoff: string[] = []
+  const room = limit - counts.slice(0, cutoff).reduce((a, n) => a + (n ?? 0), 0)
+  for (let i = 0; i < paths.length; i++) {
+    const d = depths[i]!
+    const p = paths[i]!
+    if (d < cutoff) {
+      const level = above[d]
+      if (level) level.push(p)
+      else above[d] = [p]
+    } else if (d === cutoff && room > 0) {
+      // Keep the `room` first names, sorted, inserting only what beats the last kept one.
+      if (atCutoff.length === room && byName(p, atCutoff[room - 1]!) >= 0) continue
+      let lo = 0
+      let hi = atCutoff.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (byName(atCutoff[mid]!, p) <= 0) lo = mid + 1
+        else hi = mid
+      }
+      atCutoff.splice(lo, 0, p)
+      if (atCutoff.length > room) atCutoff.pop()
+    }
+  }
+  const result = above.flatMap((level) => (level ? level.sort(byName) : [])).concat(atCutoff)
+  shallowest.set(paths, { limit, result })
+  return result
+}
+
+/**
+ * The best `limit` matches of `query` among `paths`; without a query the shallowest paths, in
+ * order. A directory equal to the query (just inserted, "@src/") is left out, so the list shows
+ * its contents.
+ */
 export function rankFiles(query: string, paths: string[], limit = MAX_RESULTS): string[] {
   const q = query.toLowerCase()
-  if (!q) {
-    const depth = (p: string) => p.replace(/\/$/, "").split("/").length
-    return [...paths].sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, limit)
-  }
+  if (!q) return shallowestPaths(paths, limit).slice()
   let lower = lowered.get(paths)
   if (!lower) {
     lower = paths.map((p) => p.toLowerCase())
     lowered.set(paths, lower)
   }
   const scored: { path: string; score: number }[] = []
+  const skip = q.endsWith("/") ? q : undefined
   for (let i = 0; i < paths.length; i++) {
+    if (lower[i] === skip) continue
     const score = fuzzyScore(q, lower[i]!)
     if (score !== undefined) scored.push({ path: paths[i]!, score })
   }

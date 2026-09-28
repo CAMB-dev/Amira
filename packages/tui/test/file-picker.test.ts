@@ -64,6 +64,31 @@ test("an empty query lists the shallowest entries first", () => {
   ])
 })
 
+test("the empty-query list matches a full sort by depth then name, and is cheap in a big repo", () => {
+  const big: string[] = []
+  for (let i = 0; i < 30_000; i++) big.push(`pkg${i % 37}/src/m${(i * 7919) % 30_000}/f${i}.ts`)
+  for (let i = 0; i < 20; i++) big.push(`top${(i * 13) % 20}.md`)
+  const all = withDirectories(big)
+  const depth = (p: string) => p.replace(/\/$/, "").split("/").length
+  const naive = (limit: number) =>
+    [...all].sort((a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, limit)
+  for (const limit of [5, 20, 50, 57, 60, 100]) expect(rankFiles("", all, limit)).toEqual(naive(limit))
+  // Every bare "@" asks again: answered from the cache, not by sorting the list.
+  const start = performance.now()
+  for (let i = 0; i < 100; i++) rankFiles("", all, 100)
+  expect(performance.now() - start).toBeLessThan(50)
+  expect(rankFiles("", ["a/b.ts", "c.ts"], 10)).toEqual(["c.ts", "a/b.ts"])
+})
+
+test("after a directory is inserted its contents come first, not the directory again", () => {
+  const list = withDirectories(["src/app.ts", "src/format.ts", "src/deep/x.ts", "README.md"])
+  const ranked = rankFiles("src/", list)
+  expect(ranked).not.toContain("src/")
+  expect(ranked.slice(0, 3)).toEqual(["src/deep/", "src/app.ts", "src/format.ts"])
+  // A file named exactly as typed is still offered.
+  expect(rankFiles("readme.md", list)).toEqual(["README.md"])
+})
+
 test("fuzzyScore favours exact names and short paths", () => {
   expect(fuzzyScore("app.ts", "src/app.ts")!).toBeGreaterThan(fuzzyScore("app.ts", "src/deep/app.ts")!)
   expect(fuzzyScore("app", "app.ts")!).toBeGreaterThan(fuzzyScore("app", "happy.ts")!)
