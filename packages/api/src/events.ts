@@ -146,6 +146,13 @@ export interface EventMap {
   "budget.update": { tokens: number; costUsd?: number; limit?: Budget }
   /** The tree went over its budget: running sub-agents are aborted and no new ones start. */
   "budget.exceeded": { tokens: number; costUsd?: number; limit: Budget }
+  /**
+   * A turn carrying notices (background sub-agents' results) failed: in `delayMs` they are
+   * sent again, starting turn number `attempt` of at most `attempts` retries (after the last
+   * failing one they wait for the user's next message). A turn starting first (the user sent a
+   * message) takes them along and cancels the retry. No retry follows an interrupt.
+   */
+  "notice.retry": { attempt: number; attempts: number; delayMs: number; error?: string }
 }
 
 /** A named part of the system prompt (D43). */

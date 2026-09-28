@@ -57,6 +57,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     throw new Error(`${running} is running; ${what} after it ends (or press Esc to stop it)`)
   }
   const switchTo = (next: Agent, reason: "resume" | "clear") => {
+    // Nobody reads the old conversation any more: no resend of its held notices.
+    agent().cancelNoticeRetry()
     host.switchTo(next)
     opts.announce?.(next, reason)
   }

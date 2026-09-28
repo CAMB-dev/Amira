@@ -604,6 +604,25 @@ test("a background result an interrupt kept waiting shows as pending and joins t
   await exited
 })
 
+test("a failed woken turn shows the countdown to the resend; a message sent first clears it", async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup([
+    { error: { message: "provider down" } },
+    { text: "answered you" },
+  ])
+  agent.expectNotice().deliver(subagentNotice("R"))
+  await shows("provider down")
+  await idle()
+  await waitFor(() => /◆ sub-agents' results · pending · retry in (10|9)s/.test(live()), "the countdown")
+  expect(agent.noticeRetry?.attempt).toBe(1)
+  terminal.send("hello\r")
+  await shows("answered you")
+  await idle()
+  expect(live()).not.toContain("retry in")
+  expect(agent.noticeRetry).toBeUndefined()
+  terminal.send("\x03")
+  await exited
+})
+
 test("a held background result woken by a later one leaves no pending line behind", async () => {
   const { terminal, live, agent, shows, idle, exited } = await setup([
     { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },

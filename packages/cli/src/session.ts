@@ -56,6 +56,8 @@ export interface SessionOptions {
    * events. When given, command aliases the loaded commands shadow are reported too.
    */
   warnings?: string[]
+  /** Delays before notices of a failed turn are sent again; for tests. Default 10, 30 and 90 s. */
+  noticeRetryMs?: number[]
 }
 
 export interface Session {
@@ -194,6 +196,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...(store ? { session: store } : {}),
       ...(compaction ? { compaction } : {}),
       ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
+      ...(opts.noticeRetryMs ? { noticeRetryMs: opts.noticeRetryMs } : {}),
     })
   const agent = newAgent(model, opts.store)
   // A stale or missing catalog is refreshed in the background; startup never waits for it.

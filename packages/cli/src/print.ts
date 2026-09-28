@@ -156,6 +156,8 @@ export async function runPrint(
         break
       case "turn.end":
         if (!endedWithNewline) io.stdout("\n")
+        // Later turns (woken by background results) start on a line of their own, once.
+        endedWithNewline = true
         if (e.data.reason === "error") io.stderr(`error: ${e.data.error}\n`)
         if (e.data.reason === "aborted") io.stderr("aborted\n")
         break
@@ -200,17 +202,24 @@ export async function runPrint(
 }
 
 /**
- * Waits while the agent is busy or expects notices (background sub-agents' results), until a
- * turn that ran meanwhile fails or `stop()` says so. True when it waited for anything.
+ * Waits while the agent is busy, expects notices (background sub-agents' results) or will send
+ * held ones again after a failed turn, until a turn fails for good or `stop()` says so. True when it waited for anything.
  */
 export async function backgroundTurns(agent: Agent, stop: () => boolean): Promise<boolean> {
   let waited = false
   let failed = false
   const off = agent.bus.subscribe((e) => {
-    if (e.type === "turn.end" && e.sessionId === agent.sessionId && e.data.reason !== "done") failed = true
+    // A failed turn ends the wait unless its notices are due to be sent again (at most 3 times).
+    if (
+      e.type === "turn.end" &&
+      e.sessionId === agent.sessionId &&
+      e.data.reason !== "done" &&
+      !agent.noticeRetry
+    )
+      failed = true
   })
   try {
-    while (!stop() && !failed && (agent.busy || agent.expectedNotices > 0)) {
+    while (!stop() && !failed && (agent.busy || agent.expectedNotices > 0 || agent.noticeRetry)) {
       waited = true
       await Bun.sleep(20)
     }

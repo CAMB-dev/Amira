@@ -113,6 +113,30 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const steering: string[] = []
   /** Lines of notices (background results) waiting to reach the model. */
   const pendingNotices: string[] = []
+  /** When held notices are sent again after a failed turn (notice.retry); redrawn each second. */
+  let noticeRetryAt: number | undefined
+  let retryTimer: ReturnType<typeof setInterval> | undefined
+  const setRetry = (at: number | undefined) => {
+    noticeRetryAt = at
+    if (at !== undefined && !retryTimer) retryTimer = setInterval(() => renderer.requestRender(), 1000)
+    else if (at === undefined && retryTimer) {
+      clearInterval(retryTimer)
+      retryTimer = undefined
+    }
+  }
+  /** Pending notice lines, with the time to the next resend when one is due. */
+  const noticeLines = (t: Theme): string[] => {
+    const retry =
+      noticeRetryAt === undefined
+        ? ""
+        : ` · retry in ${Math.max(0, Math.ceil((noticeRetryAt - Date.now()) / 1000))}s`
+    const lines = pendingNotices.length
+      ? pendingNotices
+      : noticeRetryAt !== undefined
+        ? [`${t.accent("◆")}${t.muted(" sub-agents' results")}`]
+        : []
+    return lines.map((l) => `${l}${t.muted(` · pending${retry}`)}`)
+  }
   /** Open extension dialogs; the first one has the keyboard. */
   const dialogs: Dialog[] = []
   const running = new Map<string, string>()
@@ -196,7 +220,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }),
     new View((width, ctx) => subagentLines([...subagents.values()], Date.now(), width, ctx.theme)),
     new View((width, ctx) => [
-      ...pendingNotices.map((l) => truncateToWidth(`${l}${ctx.theme.muted(" · pending")}`, width, "…")),
+      ...noticeLines(ctx.theme).map((l) => truncateToWidth(l, width, "…")),
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
       ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
     ]),
@@ -323,6 +347,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "turn.start":
         // A turn woken by notices carries every one that was waiting.
         if (e.data.prompt.display?.origin) pendingNotices.length = 0
+        // A turn takes held notices along, so no resend is due any more.
+        setRetry(undefined)
         commit([...userLines(theme, e.data.prompt), ""])
         working = true
         thinking = false
@@ -386,6 +412,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           const next = queued.splice(0, queued.length).join("\n\n")
           queueMicrotask(() => send(next))
         }
+        break
+      case "notice.retry":
+        setRetry(e.ts + e.data.delayMs)
         break
       case "compact.start":
         compacting = true
@@ -504,6 +533,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function followAgent(next: Agent) {
     agent = next
     pendingNotices.length = 0
+    setRetry(undefined)
     if (next.messages.length) commit(historyLines(theme, next.messages))
     renderer.requestRender()
   }
@@ -537,6 +567,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     setBlinking(false)
     subagents.clear()
     tickSubagents()
+    setRetry(undefined)
     reader.stop()
     // What was committed but not drawn yet still belongs in the scrollback.
     if (pendingCommits.length) renderer.render()

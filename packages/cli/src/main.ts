@@ -162,6 +162,7 @@ async function run(argv: string[]): Promise<number> {
   } finally {
     stopWorkspace()
     const last = agentRef ?? agent
+    last.cancelNoticeRetry()
     last.bus.emit("session.end", { reason: "exit" }, { sessionId: last.sessionId })
     // Sub-agents still running (in the background) end with the session; give them a moment
     // to stop cleanly. Give a catalog download a moment to reach the cache, so short runs still fill it.

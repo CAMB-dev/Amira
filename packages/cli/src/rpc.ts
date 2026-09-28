@@ -309,7 +309,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     await Promise.all(runningCommands)
     // The running turn or /compact, background sub-agents still expected to report, and the
     // turns their results start; Ctrl+C stops waiting for the sub-agents.
-    while (agent.busy || (!interrupted && agent.expectedNotices > 0)) await Bun.sleep(10)
+    while (agent.busy || (!interrupted && (agent.expectedNotices > 0 || agent.noticeRetry)))
+      await Bun.sleep(10)
     await Promise.race([agent.bus.flush(), Bun.sleep(opts.flushTimeoutMs ?? 2000)])
     await io.flush?.()
     return 0

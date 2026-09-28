@@ -231,6 +231,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   }),
   "budget.update": obj({ tokens: num, "costUsd?": num, "limit?": budget }),
   "budget.exceeded": obj({ tokens: num, "costUsd?": num, limit: budget }),
+  "notice.retry": obj(
+    { attempt: num, attempts: num, delayMs: num, "error?": str },
+    "A turn carrying background sub-agents' results failed: they are sent again in delayMs, starting a turn (attempt of attempts). Sending a message first takes them along instead.",
+  ),
 }
 
 const envelope = (type: Schema, data: Schema): Schema =>

@@ -77,6 +77,11 @@ export interface AgentOptions {
   abortGraceMs?: number
   /** Most tool calls running at once (D71). Default 8. */
   maxParallelTools?: number
+  /**
+   * After a turn carrying notices fails, they are sent again after each of these delays in
+   * turn while the resends keep failing. Default 10 s, 30 s, 90 s.
+   */
+  noticeRetryMs?: number[]
   messages?: Message[]
   /** Sub-agent nesting depth; 0 (the default) for a top-level session. */
   depth?: number
@@ -113,7 +118,12 @@ export function newTurnId(): string {
 interface Turn {
   id: string
   signal: AbortSignal
+  /** Notices joined this turn and no model reply has come since. */
+  unanswered?: boolean
 }
+
+/** Default delays before held notices are sent again after failed turns. */
+export const NOTICE_RETRY_MS = [10_000, 30_000, 90_000]
 
 /**
  * One tool call of a batch. Tracked by the call itself, not its id: providers reuse ids across
@@ -198,6 +208,12 @@ export class Agent {
   #notices: UserMessage[] = []
   /** Notices announced and not yet delivered or cancelled. */
   #expected = 0
+  /** Delays between resends of notices after failed turns. */
+  #noticeRetryMs: number[]
+  /** The scheduled resend, if any. */
+  #retry: { timer: ReturnType<typeof setTimeout>; attempt: number; at: number } | undefined
+  /** Resends in a row whose turn failed. */
+  #retries = 0
   /** A notice arrived during a manual compaction: it is sent once that ends. */
   #noticedDuringCompaction = false
   /** A manual compaction is running (busy, but no turn). */
@@ -220,6 +236,7 @@ export class Agent {
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
     this.#abortGraceMs = opts.abortGraceMs ?? 2000
+    this.#noticeRetryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
     this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
     this.depth = opts.depth ?? 0
     this.tree = opts.tree
@@ -310,6 +327,68 @@ export class Agent {
       this.#noticedDuringCompaction = true
       this.#emit(undefined, "turn.steer", { message, state: "queued" })
     } else this.#wake()
+  }
+
+  /** When held notices are sent again after a failed turn, if they will be. */
+  get noticeRetry(): { attempt: number; at: number } | undefined {
+    return this.#retry && { attempt: this.#retry.attempt, at: this.#retry.at }
+  }
+
+  /** Stops a scheduled resend of held notices, e.g. when the session is left (/clear, quit). */
+  cancelNoticeRetry(): void {
+    this.#cancelRetry()
+  }
+
+  #cancelRetry() {
+    if (!this.#retry) return
+    clearTimeout(this.#retry.timer)
+    this.#retry = undefined
+  }
+
+  /**
+   * A turn carrying notices failed before the model answered them (or left some unsent): send
+   * them again later, starting a turn, with growing delays. After the last retry fails they
+   * wait for the user's next message.
+   */
+  #scheduleRetry(error: string | undefined) {
+    this.#cancelRetry()
+    const delays = this.#noticeRetryMs
+    if (this.#retries >= delays.length) return
+    const delayMs = delays[this.#retries]!
+    const attempt = this.#retries + 1
+    const timer = setTimeout(() => this.#redeliver(), delayMs)
+    // Never what keeps a process alive: print and rpc wait for it on their own terms.
+    ;(timer as { unref?: () => void }).unref?.()
+    this.#retry = { timer, attempt, at: Date.now() + delayMs }
+    this.#emit(undefined, "notice.retry", {
+      attempt,
+      attempts: delays.length,
+      delayMs,
+      ...(error !== undefined ? { error } : {}),
+    })
+  }
+
+  #redeliver() {
+    this.#retry = undefined
+    this.#retries++
+    const message = this.#notices.length
+      ? joinMessages(this.#notices.splice(0))
+      : userMessage(
+          "The previous turn failed before you handled the results of your background sub-agents above. Handle them now. (Sent automatically; the user did not write this message.)",
+          {
+            text: `◆ sending the sub-agents' results again (retry ${this.#retries} of ${this.#noticeRetryMs.length})`,
+            origin: "subagent",
+          },
+        )
+    // A turn cancels the timer, so only a manual compaction can be running: the message then
+    // waits for it like any notice arriving meanwhile.
+    if (this.#compacting) {
+      this.#notices.push(message)
+      this.#noticedDuringCompaction = true
+      this.#emit(undefined, "turn.steer", { message, state: "queued" })
+      return
+    }
+    this.prompt(message).catch(() => {})
   }
 
   /** Starts a turn with the waiting notices. */
@@ -544,6 +623,9 @@ export class Agent {
     }
     this.#turn = turn
     const user = typeof input === "string" ? userMessage(input) : input
+    // Whatever starts now takes the held notices along: no retry is needed any more.
+    this.#cancelRetry()
+    if (user.display?.origin) turn.unanswered = true
 
     let steps = 0
     let result: TurnResult = { reason: "done", steps: 0 }
@@ -575,6 +657,7 @@ export class Agent {
           result = { reason: "error", steps, error: reply.error }
           break
         }
+        turn.unanswered = false
         const calls = reply.message.content.filter((b): b is ToolCallBlock => b.type === "toolCall")
         if (calls.length === 0) {
           result = { reason: "done", steps }
@@ -616,6 +699,9 @@ export class Agent {
         ...(result.error !== undefined ? { error: result.error } : {}),
       })
       this.#setStatus(turn, "idle")
+      // A success resets the notice retries; after an interrupt the user decides when to go on.
+      if (result.reason !== "error") this.#retries = 0
+      else if (turn.unanswered || this.#notices.length) this.#scheduleRetry(result.error)
       if (nextTurnId) {
         this.prompt(joinMessages(leftover), { turnId: nextTurnId }).catch(() => {})
       }
@@ -625,6 +711,7 @@ export class Agent {
 
   #injectSteering(turn: Turn) {
     const notices = this.#notices.splice(0)
+    if (notices.length) turn.unanswered = true
     for (const message of [...this.#steering.splice(0), ...(notices.length ? [joinMessages(notices)] : [])]) {
       this.#push(message)
       this.#emit(turn, "turn.steer", { message, state: "injected" })
