@@ -1,9 +1,12 @@
 import path from "node:path"
 import { defineExtension, type SessionStatus } from "@amira/api"
 
+/** Compact token counts: 999, 1.2k, 46k, 2.5M. Rounds before picking the unit. */
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n)
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`
+  const k = n / 1000
+  if (Number(k.toFixed(1)) < 10) return `${k.toFixed(1)}k`
+  if (Math.round(k) < 1000) return `${Math.round(k)}k`
   return `${(n / 1_000_000).toFixed(1)}M`
 }
 
@@ -18,8 +21,19 @@ export default defineExtension((api) => {
 
   api.on("session.start", (e) => {
     model = `${e.data.model.provider}/${e.data.model.model}`
+    if (e.data.reason !== "resume") {
+      context = 0
+      output = 0
+      status = "idle"
+      statusReason = ""
+    }
+    place ||= path.basename(e.data.cwd)
+    api.requestRender()
+  })
+  api.on("workspace.changed", (e) => {
     const folder = path.basename(e.data.repoRoot ?? e.data.cwd)
-    place = e.data.branch ? `${folder} ⎇ ${e.data.branch}${e.data.isWorktree ? " (worktree)" : ""}` : folder
+    const ref = e.data.branch ?? (e.data.head ? `@${e.data.head}` : "")
+    place = ref ? `${folder} ⎇ ${ref}${e.data.isWorktree ? " (worktree)" : ""}` : folder
     api.requestRender()
   })
   api.on("message.start", (e) => {
