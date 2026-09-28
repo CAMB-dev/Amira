@@ -39,7 +39,16 @@ export interface TurnResult {
   error?: string
 }
 
+export interface PromptOptions {
+  /** Id for the new turn, so a caller can report it before the turn runs. Default: a fresh one. */
+  turnId?: string
+}
+
 export class AgentBusyError extends Error {}
+
+export function newTurnId(): string {
+  return `t_${crypto.randomUUID().slice(0, 8)}`
+}
 
 /** State that belongs to one turn, so late callbacks never leak into the next turn. */
 interface Turn {
@@ -74,6 +83,9 @@ export class Agent {
   #maxSteps: number
   #maxTokens: number | undefined
   #abortGraceMs: number
+  #turn: Turn | undefined
+  /** Steering messages waiting for the next model call of the running turn. */
+  #steering: UserMessage[] = []
 
   constructor(opts: AgentOptions) {
     this.sessionId = opts.sessionId ?? `s_${crypto.randomUUID().slice(0, 8)}`
@@ -93,6 +105,11 @@ export class Agent {
 
   get status(): SessionStatus {
     return this.#status
+  }
+
+  /** Id of the running turn, if any. */
+  get turnId(): string | undefined {
+    return this.#turn?.id
   }
 
   /** Announces the session to subscribers. Frontends call this once they are listening. */
@@ -115,16 +132,37 @@ export class Agent {
     this.#abort?.abort()
   }
 
-  async prompt(input: string | UserMessage): Promise<TurnResult> {
+  /**
+   * Adds a message to the running turn without interrupting it (D29): it joins the history
+   * before the next model call, and a running tool finishes first. Queued messages the turn
+   * never reached become the next prompt; with no turn running, the message starts one.
+   */
+  steer(input: string | UserMessage): void {
+    const message = typeof input === "string" ? userMessage(input) : input
+    const turn = this.#turn
+    if (!turn) {
+      this.prompt(message).catch(() => {})
+      return
+    }
+    this.#steering.push(message)
+    this.#emit(turn, "turn.steer", { message, state: "queued" })
+  }
+
+  /**
+   * Runs one turn. Everything up to the turn.start event happens synchronously, so once this
+   * returns the turn is running and `turnId` is set.
+   */
+  async prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
     if (this.#abort) throw new AgentBusyError("a turn is already running")
     const abort = new AbortController()
     this.#abort = abort
     const turn: Turn = {
-      id: `t_${crypto.randomUUID().slice(0, 8)}`,
+      id: opts.turnId ?? newTurnId(),
       signal: abort.signal,
       started: new Set(),
       finished: new Set(),
     }
+    this.#turn = turn
     const user = typeof input === "string" ? userMessage(input) : input
 
     let steps = 0
@@ -143,6 +181,7 @@ export class Agent {
           break
         }
         steps++
+        this.#injectSteering(turn)
         const reply = await this.#callModel(turn)
         if (reply.kind === "aborted") {
           result = { reason: "aborted", steps }
@@ -168,6 +207,11 @@ export class Agent {
     } finally {
       this.#repairHistory()
       this.#abort = undefined
+      this.#turn = undefined
+      const leftover = this.#steering.splice(0)
+      if (result.reason !== "done") {
+        for (const message of leftover) this.#emit(turn, "turn.steer", { message, state: "dropped" })
+      }
       if (result.reason === "error") this.#setStatus(turn, "error", result.error)
       this.#emit(turn, "turn.end", {
         reason: result.reason,
@@ -175,8 +219,18 @@ export class Agent {
         ...(result.error !== undefined ? { error: result.error } : {}),
       })
       this.#setStatus(turn, "idle")
+      if (result.reason === "done" && leftover.length) {
+        this.prompt({ role: "user", content: leftover.flatMap((m) => m.content) }).catch(() => {})
+      }
     }
     return result
+  }
+
+  #injectSteering(turn: Turn) {
+    for (const message of this.#steering.splice(0)) {
+      this.messages.push(message)
+      this.#emit(turn, "turn.steer", { message, state: "injected" })
+    }
   }
 
   async #callModel(turn: Turn): Promise<ModelReply> {
