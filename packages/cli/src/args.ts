@@ -18,6 +18,8 @@ export class UsageError extends Error {}
 
 export const USAGE = `Usage: amira [options] [prompt]
 
+Without --print, opens the interactive UI; a prompt becomes the first message.
+
 Options:
   -p, --print           Run one turn non-interactively and print the reply
       --json            With --print, write every event as a JSON line to stdout

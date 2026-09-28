@@ -1,4 +1,7 @@
 #!/usr/bin/env bun
+import type { AnyEvent } from "@amira/api"
+import { type Agent, trackWorkspace } from "@amira/core"
+import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { runPrint } from "./print.ts"
@@ -25,22 +28,44 @@ async function run(argv: string[]): Promise<number> {
     return 0
   }
   if (!args.model) throw new UsageError("no model selected. Pass --model provider/model or set AMIRA_MODEL.")
+  const interactive = !args.print
+  if (interactive && !process.stdin.isTTY) {
+    throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
+  }
 
-  const { agent, startupEvents } = await createSession({
+  // Where failures of event subscribers go: stderr in print mode, the UI in interactive mode.
+  let agentRef: Agent | undefined
+  const onSubscriberError = (err: unknown, ev: AnyEvent) => {
+    const error = `handler for ${ev.type} failed: ${err instanceof Error ? err.message : String(err)}`
+    if (interactive && agentRef && ev.type !== "extension.error") {
+      agentRef.bus.emit("extension.error", { source: "event subscriber", error }, { sessionId: "host" })
+    } else if (!interactive) {
+      process.stderr.write(`amira: ${error}\n`)
+    }
+  }
+
+  const { agent, host, startupEvents } = await createSession({
     model: args.model,
     cwd: args.cwd,
     extensions: args.extensions,
     noBuiltins: args.noBuiltins,
-    onSubscriberError: (err, ev) =>
-      process.stderr.write(
-        `amira: an event handler failed on ${ev.type}: ${err instanceof Error ? err.message : String(err)}\n`,
-      ),
+    onSubscriberError,
   })
+  agentRef = agent
 
-  if (args.print && args.prompt) return runPrint(agent, args.prompt, args.json, { pending: startupEvents })
-
-  process.stderr.write("amira: the interactive UI is not available yet; use --print.\n")
-  return 2
+  agent.start("startup")
+  const stopWorkspace = trackWorkspace(agent.bus, agent.sessionId, agent.cwd)
+  try {
+    if (!interactive) return await runPrint(agent, args.prompt ?? "", args.json, { pending: startupEvents })
+    return await runInteractive({
+      agent,
+      status: host.status,
+      startupEvents,
+      ...(args.prompt ? { initialPrompt: args.prompt } : {}),
+    })
+  } finally {
+    stopWorkspace()
+  }
 }
 
 main(process.argv.slice(2)).then(

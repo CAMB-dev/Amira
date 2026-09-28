@@ -11,6 +11,7 @@
     "@amira/core": "workspace:*",
     "@amira/api": "workspace:*",
     "@amira/tui": "workspace:*",
-    "@amira/builtin-tools": "workspace:*"
+    "@amira/builtin-tools": "workspace:*",
+    "@amira/ext-status": "workspace:*"
   }
 }
