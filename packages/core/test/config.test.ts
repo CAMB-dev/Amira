@@ -299,3 +299,22 @@ test("extensions see the merged settings", async () => {
   }, "t")
   expect(seen).toEqual({ fs: { command: "x" } })
 })
+
+test("an extension cannot change the settings another extension reads", async () => {
+  const settings = { tools: { disabled: ["bash"] } }
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+    settings,
+  })
+  await host.load((api) => {
+    ;(api.settings.tools?.disabled as string[]).push("grep")
+  }, "a")
+  let seen: unknown
+  await host.load((api) => {
+    seen = api.settings.tools?.disabled
+  }, "b")
+  expect(seen).toEqual(["bash"])
+  expect(settings.tools.disabled).toEqual(["bash"])
+})
