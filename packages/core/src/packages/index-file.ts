@@ -7,6 +7,14 @@ import { isValidPackageName, PackageError } from "./manifest.ts"
 
 /** The official extensions index (D49): index.json on the default branch of amira-extensions. */
 export const DEFAULT_INDEX_URL = "https://raw.githubusercontent.com/CAMB-dev/amira-extensions/HEAD/index.json"
+/**
+ * Where the default index is also served, tried in order when raw.githubusercontent.com cannot be
+ * reached (its DNS is blocked in some regions). jsDelivr may lag behind the branch by some hours.
+ */
+export const DEFAULT_INDEX_MIRRORS = [
+  DEFAULT_INDEX_URL,
+  "https://cdn.jsdelivr.net/gh/CAMB-dev/amira-extensions@main/index.json",
+]
 const HOUR_MS = 60 * 60 * 1000
 
 /**
@@ -88,10 +96,9 @@ export async function loadIndex(opts: IndexOptions = {}): Promise<LoadedIndex> {
   }
   let data: unknown
   try {
-    const res = await (opts.fetch ?? fetch)(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000) })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    data = parseJson(await res.text(), url)
-    parseIndex(data)
+    // Only the built-in default has mirrors; a URL the user chose is used as given.
+    const sources = url === DEFAULT_INDEX_URL ? DEFAULT_INDEX_MIRRORS : [url]
+    data = await downloadFirst(sources, opts)
   } catch (err) {
     if (!cached) throw new PackageError(`cannot download the extensions index ${url}: ${message(err)}`)
     const parsed = parseIndex(cached.data)
@@ -103,6 +110,23 @@ export async function loadIndex(opts: IndexOptions = {}): Promise<LoadedIndex> {
   }
   await writeCache(cacheFile, { fetchedAt: now, url, data }).catch(() => {})
   return { url, ...parseIndex(data) }
+}
+
+/** The first of `urls` that downloads and parses as an index; the error lists every failure. */
+async function downloadFirst(urls: string[], opts: IndexOptions): Promise<unknown> {
+  const failures: string[] = []
+  for (const u of urls) {
+    try {
+      const res = await (opts.fetch ?? fetch)(u, { signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000) })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = parseJson(await res.text(), u)
+      parseIndex(data)
+      return data
+    } catch (err) {
+      failures.push(urls.length > 1 ? `${u}: ${message(err)}` : message(err))
+    }
+  }
+  throw new Error(failures.join("; "))
 }
 
 /** Validates index.json; entries that do not fit are left out and reported. */

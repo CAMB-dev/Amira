@@ -44,7 +44,6 @@ export class LiveRenderer {
   private offResize: (() => void) | undefined
   private stopped = false
   private suspended = false
-  private suspendedWidth = 0
   /** Lines committed while suspended, printed in order on `resume()`. */
   private held: string[] = []
 
@@ -97,34 +96,34 @@ export class LiveRenderer {
 
   /**
    * Stops drawing while something else has the screen, such as a full-screen view on the
-   * alternate screen. Committed lines are held back meanwhile, and nothing is written.
+   * alternate screen. The live region is cleared first, leaving the cursor where it started,
+   * so the main screen holds only committed lines while hidden. Committed lines are held
+   * back meanwhile, and nothing more is written.
    */
   suspend(): void {
     if (this.stopped || this.suspended) return
-    this.suspended = true
-    this.suspendedWidth = this.terminal.columns
     clearTimeout(this.timer)
     this.timer = undefined
+    if (this.prev) {
+      const out = this.toTop(this.terminal.columns) + erase.toScreenEnd
+      this.terminal.write(this.synchronizedOutput ? syncOutput.begin + out + syncOutput.end : out)
+    }
+    this.prev = undefined
+    this.row = 0
+    this.suspended = true
   }
 
   /**
    * Draws again after `suspend()`, once the screen is back as it was (the alternate screen
-   * restores the main one and its cursor): the live region is redrawn in full, below the
-   * lines committed meanwhile, in the order they came. A terminal resized in between is
-   * handled like any resize.
+   * restores the main one and its cursor): the live region is drawn from the cursor, below
+   * the lines committed meanwhile, in the order they came. Nothing of the old live region is
+   * left to replace, so a terminal resized in between (which may have re-wrapped the main
+   * screen, or not moved the cursor it saved along with it) leaves no stale copy behind.
    */
   resume(): void {
     if (!this.suspended) return
     this.suspended = false
     this.forceFull = true
-    if (this.terminal.columns !== this.suspendedWidth) {
-      // The main screen may have been re-wrapped while hidden, but the cursor it saved was
-      // not moved with it (xterm.js), so where the live region starts is not known. Draw
-      // from the cursor instead of moving up: an old copy may stay above, but nothing is
-      // drawn over the scrollback.
-      this.prev = undefined
-      this.row = 0
-    }
     const held = this.held
     this.held = []
     this.draw(held)
