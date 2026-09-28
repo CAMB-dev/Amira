@@ -12,6 +12,25 @@ import {
 
 export type DialogRequest = EventMap["ui.request"]
 
+/** Most diff lines a review dialog shows inline; the full-screen review comes later (D8). */
+const DIFF_LINES = 30
+
+/** A unified diff, colored by line kind and cut to DIFF_LINES. */
+function diffLines(diff: string, width: number, ctx: RenderContext): string[] {
+  const { theme } = ctx
+  const all = diff.replace(/\n$/, "").split("\n")
+  const shown = all.slice(0, DIFF_LINES).map((line) => {
+    const cut = truncateToWidth(line.replace(/\t/g, "  "), width, "…")
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) return theme.muted(cut)
+    if (line.startsWith("+")) return theme.success(cut)
+    if (line.startsWith("-")) return theme.error(cut)
+    if (line.startsWith("@@")) return theme.accent(cut)
+    return cut
+  })
+  if (all.length > DIFF_LINES) shown.push(theme.muted(`… ${all.length - DIFF_LINES} more lines`))
+  return shown
+}
+
 /** undefined cancels the dialog. */
 export type DialogAnswer = string | boolean | undefined
 
@@ -52,7 +71,7 @@ export class Dialog implements Component {
       if (matchesKey(e, "n")) return this.#finish(false)
       return false
     }
-    if (r.kind === "select") {
+    if (r.kind === "select" || r.kind === "diff-review") {
       const options = this.#options()
       const n = options.length
       if (matchesKey(e, "up")) this.#selected = n ? (this.#selected - 1 + n) % n : 0
@@ -67,9 +86,9 @@ export class Dialog implements Component {
         Number(e.text) <= n
       ) {
         return this.#finish(options[Number(e.text) - 1]!)
-      } else if (e.type === "key" && e.name === "backspace" && this.#filter) {
+      } else if (r.kind === "select" && e.type === "key" && e.name === "backspace" && this.#filter) {
         this.#setFilter(this.#filter.slice(0, -1))
-      } else if (e.type === "key" && e.text && !e.ctrl && !e.alt) {
+      } else if (r.kind === "select" && e.type === "key" && e.text && !e.ctrl && !e.alt) {
         this.#setFilter(this.#filter + e.text)
       } else return false
       return true
@@ -88,7 +107,8 @@ export class Dialog implements Component {
     if (r.kind === "confirm") {
       if (r.message) lines.push(...wrapText(theme.muted(r.message), width))
       lines.push(theme.muted("y yes · n no · Esc cancel"))
-    } else if (r.kind === "select") {
+    } else if (r.kind === "select" || r.kind === "diff-review") {
+      if (r.kind === "diff-review") lines.push(...diffLines(r.diff, width, ctx))
       const options = this.#options()
       if (this.#filter) lines.push(`${theme.muted("filter ›")} ${this.#filter}`)
       const start = Math.min(
@@ -114,7 +134,9 @@ export class Dialog implements Component {
 
   /** The select's options that match the filter, best first. */
   #options(): string[] {
-    return this.request.kind === "select" ? rankMatches(this.#filter, this.request.options, (o) => o) : []
+    const r = this.request
+    if (r.kind === "diff-review") return r.options
+    return r.kind === "select" ? rankMatches(this.#filter, r.options, (o) => o) : []
   }
 
   /**
@@ -122,7 +144,8 @@ export class Dialog implements Component {
    * filter: model ids like gpt-4o start with or turn on a digit.
    */
   get #digitsPick(): boolean {
-    return this.request.kind === "select" && this.request.options.length <= 9 && !this.#filter
+    const r = this.request
+    return (r.kind === "select" || r.kind === "diff-review") && r.options.length <= 9 && !this.#filter
   }
 
   #setFilter(filter: string) {

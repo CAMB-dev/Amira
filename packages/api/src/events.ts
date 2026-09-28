@@ -1,5 +1,6 @@
-import type { AssistantMessage, Message, ModelRef, UserMessage } from "@amira/ai"
+import type { AssistantMessage, Message, ModelRef, Usage, UserMessage } from "@amira/ai"
 import type { CommandOutputLevel } from "./commands.ts"
+import type { Budget, SpawnContext, SubagentStatus } from "./subagents.ts"
 import type { ToolResult } from "./tools.ts"
 import type { UiRequest } from "./ui.ts"
 
@@ -116,6 +117,32 @@ export interface EventMap {
   "ui.resolved": { requestId: string; cancelled: boolean; value?: string | boolean }
   /** Text a slash command shows the user; `command` is its name, without the slash. */
   "command.output": { command: string; text: string; level: CommandOutputLevel }
+  /**
+   * A session started a sub-agent (D12). Sent with the parent's session id; the child's own
+   * events carry `parentSessionId`. A `queued` child waits for a free slot (D63).
+   */
+  "subagent.start": {
+    childSessionId: string
+    role?: string
+    prompt: string
+    model: ModelRef
+    depth: number
+    cwd: string
+    context: SpawnContext
+    queued: boolean
+  }
+  /** A sub-agent finished; sent with the parent's session id. `usage` is the child's alone. */
+  "subagent.end": {
+    childSessionId: string
+    status: SubagentStatus
+    error?: string
+    usage: Usage
+    durationMs: number
+  }
+  /** What the whole agent tree has used so far, sent after each model reply. */
+  "budget.update": { tokens: number; costUsd?: number; limit?: Budget }
+  /** The tree went over its budget: running sub-agents are aborted and no new ones start. */
+  "budget.exceeded": { tokens: number; costUsd?: number; limit: Budget }
 }
 
 /** A named part of the system prompt (D43). */
@@ -137,10 +164,16 @@ export function withSection(sections: SystemSection[], name: string, text: strin
   return out
 }
 
+/**
+ * `ask` (tool.call.before only; elsewhere it counts as pass) wants the call approved first:
+ * by the user for a top-level session, by the parent's model for a sub-agent (D14). Later
+ * handlers still run, and a block from one of them wins.
+ */
 export type Intercept<T> =
   | { action: "pass" }
   | { action: "modify"; value: T }
   | { action: "block"; reason: string }
+  | { action: "ask"; reason: string }
 
 /** Decision points where the core awaits an ordered pipeline of handlers. */
 export interface InterceptorMap {

@@ -23,7 +23,10 @@ export const FAILURE_POLICY: Record<keyof InterceptorMap, FailurePolicy> = {
   "compact.before": "pass",
 }
 
-export type InterceptOutcome<T> = { blocked: false; value: T } | { blocked: true; reason: string; value: T }
+/** `ask` holds the reasons of handlers that want the call approved (tool.call.before only). */
+export type InterceptOutcome<T> =
+  | { blocked: false; value: T; ask?: string[] }
+  | { blocked: true; reason: string; value: T }
 
 export class InterceptorRegistry {
   #entries = new Map<string, Entry[]>()
@@ -79,6 +82,7 @@ export class InterceptorRegistry {
   ): Promise<InterceptOutcome<InterceptorMap[K]>> {
     const blocksOnFailure = FAILURE_POLICY[point] === "block"
     let current = value
+    const ask: string[] = []
     for (const entry of this.#entries.get(point) ?? []) {
       if (ctx.signal.aborted) {
         return blocksOnFailure
@@ -98,8 +102,9 @@ export class InterceptorRegistry {
       }
       if (result.action === "block") return { blocked: true, reason: result.reason, value: current }
       if (result.action === "modify") current = result.value
+      if (result.action === "ask" && point === "tool.call.before") ask.push(result.reason)
     }
-    return { blocked: false, value: current }
+    return ask.length ? { blocked: false, value: current, ask } : { blocked: false, value: current }
   }
 }
 

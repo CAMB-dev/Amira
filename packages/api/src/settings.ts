@@ -1,4 +1,5 @@
 import type { ModelOverrides, ProviderCompat } from "@amira/ai"
+import type { Budget } from "./subagents.ts"
 
 export type ShellMode = "auto" | "bash" | "powershell"
 
@@ -43,6 +44,14 @@ export interface Settings {
   skills?: { dirs?: string[] }
   /** The web_search and web_fetch tools. Hide them with tools.disabled. */
   web?: WebSettings
+  /** Per sub-agent role (D61): the model it runs on, ahead of the role file's. */
+  agents?: Record<string, { model?: string }>
+  /** Nesting depth (D15, default 2) and children running at once per parent (D63, default 4). */
+  subagents?: { maxDepth?: number; maxConcurrent?: number }
+  /** A limit for the whole agent tree (D37); unlimited by default. */
+  budget?: Budget
+  /** Worktree merges (D38): clean merges past either size are reviewed too. Default: only conflicts. */
+  merge?: { reviewThreshold?: { lines?: number; files?: number } }
 }
 
 export type WebSearchBackend = "exa" | "brave" | "tavily" | "searxng"

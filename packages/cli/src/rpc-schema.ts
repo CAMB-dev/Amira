@@ -117,6 +117,9 @@ const toolResult = obj({
   "details?": {},
 })
 
+const usage = obj({ input: num, output: num, cacheRead: num, cacheWrite: num, "cost?": num })
+const budget = obj({ "tokens?": num, "costUsd?": num })
+
 const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "session.start": obj({
     reason: strings("startup", "resume", "fork", "clear"),
@@ -173,6 +176,25 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "compact.end": obj({ summary: str, replaced: num, kept: num }),
   "compact.failed": obj({ error: str, "blocked?": bool }),
   "command.output": obj({ command: str, text: str, level: strings("info", "warning", "error") }),
+  "subagent.start": obj({
+    childSessionId: str,
+    "role?": str,
+    prompt: str,
+    model: modelRef,
+    depth: num,
+    cwd: str,
+    context: strings("fresh", "fork"),
+    queued: bool,
+  }),
+  "subagent.end": obj({
+    childSessionId: str,
+    status: strings("done", "error", "aborted"),
+    "error?": str,
+    usage: usage,
+    durationMs: num,
+  }),
+  "budget.update": obj({ tokens: num, "costUsd?": num, "limit?": budget }),
+  "budget.exceeded": obj({ tokens: num, "costUsd?": num, limit: budget }),
 }
 
 const envelope = (type: Schema, data: Schema): Schema =>
@@ -253,6 +275,10 @@ export function rpcSchema(): Schema {
         obj({ kind: strings("select"), title: str, options: arrayOf(str) }),
         obj({ kind: strings("confirm"), title: str, "message?": str }),
         obj({ kind: strings("input"), title: str, "placeholder?": str, "initial?": str }),
+        obj(
+          { kind: strings("diff-review"), title: str, diff: str, options: arrayOf(str) },
+          "A unified diff to review; answer with one of the options.",
+        ),
       ),
     },
     oneOf: [ref("Command"), ref("Response"), ref("Event")],

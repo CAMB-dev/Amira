@@ -1,4 +1,5 @@
-import type { ImageBlock, JSONSchema, TextBlock } from "@amira/ai"
+import type { ImageBlock, JSONSchema, ModelRef, TextBlock } from "@amira/ai"
+import type { ChildSession, SpawnOptions } from "./subagents.ts"
 
 export interface ToolResult {
   content: (TextBlock | ImageBlock)[]
@@ -34,6 +35,17 @@ export interface ToolSession {
    * kept and offered once they register as deferred. Returns the names newly loaded.
    */
   loadTools(names: string[]): string[]
+  /** 0 for a top-level session, 1 for its sub-agents, and so on. */
+  readonly depth: number
+  /** The deepest a sub-agent may be (D15); spawn fails beyond it. */
+  readonly maxDepth: number
+  /** The model this session uses right now. */
+  readonly model: ModelRef
+  /**
+   * Starts a sub-agent under this session (D12). Throws when it would nest too deep, the
+   * tree's budget is spent or the model is unknown. Absent when the host has no agent tree.
+   */
+  spawn?(opts: SpawnOptions): ChildSession
 }
 
 export type ToolExposure = "active" | "inactive" | "deferred"

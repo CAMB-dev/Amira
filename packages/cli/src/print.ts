@@ -61,6 +61,8 @@ export async function runPrint(
 ): Promise<number> {
   const io = opts.io ?? defaultIO
   let endedWithNewline = true
+  /** Role and line indent of each sub-agent, by session id. */
+  const subagents = new Map<string, { role: string; indent: string }>()
   const handle = (e: AnyEvent) => {
     if (e.type === "ui.request") {
       io.stderr(`amira: cancelled "${e.data.title}": print mode cannot answer questions\n`)
@@ -68,6 +70,37 @@ export async function runPrint(
     }
     if (json) {
       io.stdout(`${safeJson(e)}\n`)
+      return
+    }
+    if (e.type === "subagent.start") {
+      const indent = "  ".repeat(e.data.depth - 1)
+      subagents.set(e.data.childSessionId, { role: e.data.role ?? "agent", indent: `${indent}  ` })
+      const when = e.data.queued ? "queued" : "started"
+      io.stderr(`${indent}◆ ${e.data.role ?? "agent"} ${when}: ${oneLine(e.data.prompt, 80)}\n`)
+      return
+    }
+    if (e.type === "subagent.end") {
+      const sub = subagents.get(e.data.childSessionId)
+      const secs = (e.data.durationMs / 1000).toFixed(1)
+      const error = e.data.error ? `: ${oneLine(e.data.error, 120)}` : ""
+      io.stderr(
+        `${sub?.indent.slice(2) ?? ""}◆ ${sub?.role ?? "agent"} ${e.data.status} (${secs}s)${error}\n`,
+      )
+      return
+    }
+    if (e.type === "budget.exceeded") {
+      io.stderr(`amira: the agent tree's budget is spent (${e.data.tokens} tokens); sub-agents stopped\n`)
+      return
+    }
+    // A sub-agent's reply goes to its commander, not to stdout; only its tool calls are shown.
+    if (e.sessionId !== agent.sessionId && e.parentSessionId !== undefined) {
+      const sub = subagents.get(e.sessionId)
+      const prefix = `${sub?.indent ?? "  "}↳ ${sub?.role ?? "agent"}`
+      if (e.type === "tool.execute.start")
+        io.stderr(`${prefix} ● ${e.data.name} ${summarizeArgs(e.data.args)}\n`)
+      if (e.type === "tool.execute.end" && e.data.result.isError) {
+        io.stderr(`${prefix}   ✗ ${firstLine(e.data.result.content)}\n`)
+      }
       return
     }
     switch (e.type) {
@@ -157,6 +190,11 @@ function summarizeArgs(args: Record<string, unknown>): string {
     .join(" ")
     .replace(/\s+/g, " ")
   return s.length > 100 ? `${s.slice(0, 97)}...` : s
+}
+
+function oneLine(text: string, max: number): string {
+  const s = text.replace(/\s+/g, " ").trim()
+  return s.length > max ? `${s.slice(0, max - 3)}...` : s
 }
 
 function firstLine(content: { type: string; text?: string }[]): string {

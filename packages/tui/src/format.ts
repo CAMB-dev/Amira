@@ -71,3 +71,36 @@ export function historyLines(theme: Theme, messages: Message[]): string[] {
   }
   return [...out, theme.muted("── resumed ──"), ""]
 }
+
+/** A sub-agent as the live area shows it while it is queued or running. */
+export interface SubagentLine {
+  role: string
+  task: string
+  depth: number
+  /** Unset while it waits for a slot. */
+  startedAt?: number
+  /** Tokens its replies used so far. */
+  tokens: number
+}
+
+function compactTokens(n: number): string {
+  if (n < 1000) return String(n)
+  return n < 100_000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`
+}
+
+/**
+ * One line per sub-agent, indented by depth: role, elapsed time and tokens first, so they
+ * survive a narrow terminal, then the task cut to fit.
+ */
+export function subagentLines(subs: SubagentLine[], now: number, width: number, theme: Theme): string[] {
+  if (!subs.length) return []
+  const lines = subs.map((s) => {
+    const when =
+      s.startedAt === undefined ? "queued" : `${Math.max(0, Math.floor((now - s.startedAt) / 1000))}s`
+    const stats = `${when} · ${compactTokens(s.tokens)} tok`
+    const task = s.task.replace(/\s+/g, " ").trim()
+    const line = `${"  ".repeat(Math.max(0, s.depth - 1))}${theme.accent("◆")} ${s.role} ${theme.muted(`· ${stats} · ${task}`)}`
+    return truncateToWidth(line, width, "…")
+  })
+  return [...lines, ""]
+}

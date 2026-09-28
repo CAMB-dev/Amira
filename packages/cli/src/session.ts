@@ -3,6 +3,8 @@ import type { AnyEvent, Extension, Settings } from "@amira/api"
 import {
   type ActivePackages,
   Agent,
+  AgentTree,
+  type Approver,
   type CompactionOptions,
   defaultSections,
   EventBus,
@@ -13,6 +15,7 @@ import {
   type SessionStore,
   ToolRegistry,
   toolSearchExtension,
+  type UiRequests,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
@@ -59,6 +62,8 @@ export interface Session {
   /** Settles when a background catalog refresh is done (at once when none was due). */
   catalogRefresh: Promise<void>
   ai: Ai
+  /** Sub-agents and the budget they share with the top-level agent. */
+  tree: AgentTree
   /**
    * A new agent on this session's bus, registries and settings, for another stored session
    * (rpc session.resume). It starts with `model`, by default the current model.
@@ -78,6 +83,7 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
     ["builtin:skills", () => import("@amira/ext-skills")],
     ["builtin:mcp", () => import("@amira/ext-mcp")],
     ["builtin:web", () => import("@amira/ext-web")],
+    ["builtin:agent", () => import("@amira/ext-agent")],
   ]
   const out: { source: string; extension: Extension }[] = []
   for (const [source, load] of bundled) {
@@ -155,8 +161,19 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   await bus.flush()
   stopCapture()
 
+  const tree = new AgentTree({
+    ai,
+    ...(settings.subagents?.maxDepth !== undefined ? { maxDepth: settings.subagents.maxDepth } : {}),
+    ...(settings.subagents?.maxConcurrent ? { maxConcurrent: settings.subagents.maxConcurrent } : {}),
+    ...(settings.budget ? { budget: settings.budget } : {}),
+    ...(compaction ? { compaction } : {}),
+    ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
+  })
+  const approve = userApprover(host.ui)
   const newAgent = (m: ModelInfo, store: SessionStore | undefined) =>
     new Agent({
+      tree,
+      approve,
       ai,
       model: m,
       cwd: opts.cwd,
@@ -187,6 +204,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     startupEvents,
     catalogRefresh,
     ai,
+    tree,
     resume: (store, m) => newAgent(m ?? agent.model, store),
     reload: async () => {
       host.unloadAll()
@@ -200,6 +218,21 @@ function withPackageSkills(settings: Settings, packages: ActivePackages | undefi
   const dirs = packages?.packages.flatMap((p) => p.manifest.skills) ?? []
   if (!dirs.length) return settings
   return { ...settings, skills: { ...settings.skills, dirs: [...(settings.skills?.dirs ?? []), ...dirs] } }
+}
+
+/**
+ * The top-level session's approvals go to the user (D13). Print mode cannot ask, so there a
+ * call an interceptor asked about is denied.
+ */
+export function userApprover(ui: UiRequests): Approver {
+  const dialogs = ui.api("approval")
+  return async (request, signal) => {
+    const args = JSON.stringify(request.args)
+    const detail = `${request.reason}\n${args.length > 300 ? `${args.slice(0, 297)}...` : args}`
+    const answer = await dialogs.confirm(`Allow ${request.name}?`, detail, { signal })
+    if (answer) return { approved: true }
+    return { approved: false, reason: answer === false ? "the user said no" : "nobody answered" }
+  }
 }
 
 /** Settings `retry` as ai retry options (D52); `attempts` counts the retries after the first try. */
