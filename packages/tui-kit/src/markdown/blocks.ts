@@ -1,6 +1,6 @@
 import type { Glyphs } from "../glyphs.ts"
 import type { StyleFn } from "../style.ts"
-import { visibleWidth, wrapText } from "../width.ts"
+import { truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import { highlightLine } from "./highlight.ts"
 import { type MarkdownStyles, parseInline, type Run } from "./inline.ts"
 import { type Cell, cellText, type Row, toCells, wrapCells } from "./layout.ts"
@@ -105,6 +105,11 @@ function emit(s: BlockState, sink: Sink, rows: string[]) {
 
 const pad = (n: number) => " ".repeat(Math.max(0, n))
 
+/** A row of a code block's frame at `col`, cut to the width. */
+function frameRow(col: number, text: string, env: Env): string {
+  return truncateToWidth(pad(col) + env.styles.codeFrame(text), env.width, "…")
+}
+
 /** Processes one complete source line (without its `\n`). */
 export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
   if (s.fence) {
@@ -112,7 +117,7 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     const m = line.match(FENCE_CLOSE_LIKE)
     if (m && m[1]![0] === f.char && m[1]!.length >= f.len) {
       s.fence = undefined
-      emit(s, sink, [pad(f.renderCol) + env.styles.codeFrame(env.glyphs.codeBottom)])
+      emit(s, sink, [frameRow(f.renderCol, env.glyphs.codeBottom, env)])
       return
     }
     emit(s, sink, renderLine(codeLine(f, line, env), line, env).rows)
@@ -170,7 +175,7 @@ export function endOpenBlocks(s: BlockState, env: Env, sink: Sink): void {
 export function finish(s: BlockState, env: Env, sink: Sink): void {
   endOpenBlocks(s, env, sink)
   if (s.fence) {
-    emit(s, sink, [pad(s.fence.renderCol) + env.styles.codeFrame(env.glyphs.codeBottom)])
+    emit(s, sink, [frameRow(s.fence.renderCol, env.glyphs.codeBottom, env)])
     s.fence = undefined
   }
 }
@@ -239,9 +244,13 @@ function classify(s: BlockState, line: string, env: Env): Classified {
     const lang = fence[2]!.trim().split(/\s+/)[0] ?? ""
     s.fence = { char: fence[1]![0]!, len: fence[1]!.length, indent, lang, renderCol: col }
     const label = lang ? ` ${lang}` : ""
-    return { rows: [pad(col) + styles.codeFrame(glyphs.codeTop + label)] }
+    return { rows: [frameRow(col, glyphs.codeTop + label, env)] }
   }
-  if (rule) return { rows: [pad(col) + styles.rule(glyphs.rule.repeat(Math.max(1, env.width - col)))] }
+  if (rule) {
+    const at = col < env.width ? col : 0
+    const n = Math.max(1, Math.floor((env.width - at) / Math.max(1, visibleWidth(glyphs.rule))))
+    return { rows: [pad(at) + styles.rule(glyphs.rule.repeat(n))] }
+  }
   if (heading) {
     const level = heading[1]!.length
     const lr = headingRender(level, col, env)

@@ -248,6 +248,7 @@ const LINES = [
   "> quoted *line* here",
   "> > nested quote",
   "```ts",
+  "```averyveryverylonglanguagename",
   "const x = 'y' // comment",
   "  indented code line that is long",
   "```",
@@ -292,7 +293,13 @@ function stream(
   return { rows: [...committed, ...m.take(width)], lives, widths }
 }
 
-const letters = (rows: string[]) => stripAnsi(rows.join("")).replace(/[^\p{L}\p{N}]/gu, "")
+/** The letters and digits shown, but not the code blocks' labels, which are cut to the width. */
+const letters = (rows: string[]) =>
+  rows
+    .map(stripAnsi)
+    .filter((r) => !r.trimStart().startsWith("╭─"))
+    .join("")
+    .replace(/[^\p{L}\p{N}]/gu, "")
 
 test("streamed in any chunks, the rows are those of the whole text at once", () => {
   for (let seed = 1; seed <= 150; seed++) {
