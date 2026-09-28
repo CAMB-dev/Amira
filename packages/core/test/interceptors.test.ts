@@ -92,6 +92,8 @@ test("disabled tools are hidden from the model and cannot be called", () => {
   reg.setDisabled(["powershell"])
   expect(reg.specs().map((s) => s.name)).toEqual(["bash"])
   expect(reg.get("powershell")).toBeUndefined()
+  expect(reg.all().map((r) => r.tool.name)).toEqual(["bash"])
+  expect(reg.has("powershell")).toBe(true)
   reg.setDisabled([])
   expect(reg.get("powershell")).toBeDefined()
 })

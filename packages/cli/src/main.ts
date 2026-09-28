@@ -5,7 +5,7 @@ import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { runPrint } from "./print.ts"
-import { createSession, toolsToDisable } from "./session.ts"
+import { createSession } from "./session.ts"
 
 async function main(argv: string[]): Promise<number> {
   try {
@@ -52,7 +52,8 @@ async function run(argv: string[]): Promise<number> {
     cwd: args.cwd,
     extensions: args.extensions,
     noBuiltins: args.noBuiltins,
-    disabledTools: toolsToDisable(args.shell, args.disabledTools),
+    disabledTools: args.disabledTools,
+    shell: args.shell,
     onSubscriberError,
   })
   agentRef = agent

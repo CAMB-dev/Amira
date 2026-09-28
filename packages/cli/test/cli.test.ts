@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import { defineTool, type Extension, textResult } from "@amira/api"
+import { defineExtension, defineTool, type Extension, textResult } from "@amira/api"
 import { parseCliArgs, UsageError } from "../src/args.ts"
 import { type PrintIO, runPrint, safeJson } from "../src/print.ts"
 import { createSession } from "../src/session.ts"
@@ -256,4 +256,35 @@ test("--shell and --disable-tools decide which tools are hidden", async () => {
   expect(toolsToDisable("auto", [])).toEqual([])
   expect(toolsToDisable("bash", ["glob"]).sort()).toEqual(["glob", "powershell"])
   expect(toolsToDisable("powershell", [])).toEqual(["bash"])
+})
+
+test("unknown --disable-tools names are reported at startup", async () => {
+  const builtins = async () => [
+    {
+      source: "builtin:test",
+      extension: defineExtension((api) => {
+        for (const name of ["bash", "glob"])
+          api.registerTool(
+            defineTool({ name, description: "", parameters: {}, execute: async () => textResult("") }),
+          )
+      }),
+    },
+  ]
+  const { agent, startupEvents } = await createSession({
+    model: "mock/m",
+    cwd: here,
+    extensions: [],
+    noBuiltins: false,
+    builtins,
+    disabledTools: ["glob", "nope"],
+    shell: "bash",
+    ai: createAi({
+      dialects: [createMockDialect([])],
+      providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    }),
+  })
+  const errors = startupEvents.flatMap((e) => (e.type === "extension.error" ? [e.data.error] : []))
+  expect(errors).toHaveLength(1)
+  expect(errors[0]).toBe(`--disable-tools: no tool named "nope"`)
+  expect(agent.tools.specs().map((s) => s.name)).toEqual(["bash"])
 })

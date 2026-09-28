@@ -69,7 +69,13 @@ export class ToolRegistry {
     return this.active().map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))
   }
 
+  /** Every usable tool, deferred ones included, with where it came from. Disabled tools are left out. */
   all(): { tool: ToolDefinition; source: string }[] {
-    return this.#current()
+    return this.#current().filter((r) => !this.#disabled.has(r.tool.name))
+  }
+
+  /** Whether a tool with this name is registered, disabled or not. */
+  has(name: string): boolean {
+    return this.#tools.has(name)
   }
 }
