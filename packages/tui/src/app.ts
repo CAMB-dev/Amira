@@ -411,6 +411,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "turn.steer": {
         const text = messageText(e.data.message)
+        // A notice (background sub-agents' results) is not the user's steering; it shows once it joins.
+        if (e.data.message.display?.origin) {
+          if (e.data.state === "injected") commit([...userLines(theme, e.data.message), ""])
+          break
+        }
         if (e.data.state === "queued") {
           steering.push(text)
           break

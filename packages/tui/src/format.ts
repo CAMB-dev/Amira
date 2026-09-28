@@ -52,6 +52,8 @@ export function toolLines(
  * as typed, its note on a line below), else its content.
  */
 export function userLines(theme: Theme, message: UserMessage): string[] {
+  // A notice (e.g. background sub-agents' results) shows as its short lines, not as typed text.
+  if (message.display?.origin && message.display.text.trim()) return noticeLines(theme, message.display.text)
   const text = message.display?.text.trim() || userText(message)
   const lines = text
     .trim()
@@ -60,6 +62,17 @@ export function userLines(theme: Theme, message: UserMessage): string[] {
   const note = message.display?.note
   if (note) lines.push(`  ${theme.muted("⎿")} ${theme.muted(note)}`)
   return lines
+}
+
+/** A notice's lines, e.g. "◆ explorer finished · 41s · 12.3k tok": the marker accented, the rest muted. */
+function noticeLines(theme: Theme, text: string): string[] {
+  return text
+    .trim()
+    .split("\n")
+    .map((l) => {
+      const m = /^(\s*◆)(.*)$/.exec(l)
+      return m ? `${theme.accent(m[1]!)}${theme.muted(m[2]!)}` : theme.muted(l)
+    })
 }
 
 /** A user message's content as text, with images as placeholders. */
