@@ -2,6 +2,7 @@ import type { Dialect, DialectContext } from "../dialect.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
 import { ChatAccumulator } from "./openai-chat-accumulate.ts"
+import { bodyError, isRetryableStatus } from "./openai-chat-errors.ts"
 import { toChatMessages } from "./openai-chat-messages.ts"
 
 export { toChatMessages }
@@ -65,7 +66,8 @@ export const openaiChat: Dialect = {
         }
         parsed++
         if (chunk.error) {
-          yield acc.fail({ message: chunk.error.message ?? "stream error" }, false)
+          const { error, retryable } = bodyError(chunk.error)
+          yield acc.fail(error, retryable)
           return
         }
         yield* acc.apply(chunk)
@@ -111,7 +113,8 @@ async function* readPlain(res: Response, acc: ChatAccumulator): AsyncGenerator<S
     json = JSON.parse(text)
   } catch {}
   if (json?.error) {
-    yield acc.fail({ message: json.error.message ?? String(json.error) }, false)
+    const { error, retryable } = bodyError(json.error)
+    yield acc.fail(error, retryable)
     return
   }
   const choice = json?.choices?.[0]
@@ -127,5 +130,3 @@ async function* readPlain(res: Response, acc: ChatAccumulator): AsyncGenerator<S
   })
   yield acc.end()
 }
-
-const isRetryableStatus = (status: number) => status === 429 || status >= 500

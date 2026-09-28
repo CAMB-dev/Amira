@@ -131,6 +131,46 @@ test("finishes normally when the body ends without [DONE]", async () => {
   expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "done"])
 })
 
+test("keeps status and code of an error object inside the stream", async () => {
+  const evs = await run(() =>
+    sseResponse([delta({ content: "hi" }), { error: { message: "rate limited", code: 429 } }]),
+  )
+  expect(terminal(evs)).toHaveLength(1)
+  const e = last(evs) as ErrorEvent
+  expect(e.type).toBe("error")
+  expect(e.error).toEqual({ message: "rate limited", status: 429, code: "429" })
+  expect(e.retryable).toBe(true)
+  expect(e.message.content).toEqual([{ type: "text", text: "hi" }])
+  expect(e.message.stopReason).toBe("error")
+})
+
+test("derives status from a string code or status field", async () => {
+  const errorOf = async (error: unknown) => last(await run(() => sseResponse([{ error }]))) as ErrorEvent
+  const upstream = await errorOf({ message: "upstream", status: 502, type: "server_error" })
+  expect(upstream.error).toEqual({ message: "upstream", status: 502, code: "server_error" })
+  expect(upstream.retryable).toBe(true)
+  const bad = await errorOf({ message: "bad", code: "400" })
+  expect(bad.error.status).toBe(400)
+  expect(bad.retryable).toBe(false)
+  const named = await errorOf({ message: "nope", code: "invalid_api_key" })
+  expect(named.error).toEqual({ message: "nope", code: "invalid_api_key" })
+  expect(named.retryable).toBe(false)
+})
+
+test("accepts an error that is a plain string", async () => {
+  const e = last(await run(() => sseResponse([{ error: "Internal failure" }]))) as ErrorEvent
+  expect(e.type).toBe("error")
+  expect(e.error.message).toBe("Internal failure")
+  expect(e.retryable).toBe(false)
+})
+
+test("marks a 5xx error body sent with status 200 as retryable", async () => {
+  const evs = await run(json({ error: { message: "overloaded", code: 503 } }))
+  const e = evs[0] as ErrorEvent
+  expect(e.error.status).toBe(503)
+  expect(e.retryable).toBe(true)
+})
+
 test("reports a 200 response without a body", async () => {
   const evs = await run(new Response(null, { status: 200 }))
   expect(evs).toHaveLength(1)
