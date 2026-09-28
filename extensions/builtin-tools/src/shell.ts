@@ -3,16 +3,23 @@ import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
 import { runCommand } from "@amira/proc"
 
+/** How to run one command: argv plus the matching runCommand options. */
+export interface ShellCommand {
+  argv: string[]
+  /** Built fresh from the current process environment. */
+  env: Record<string, string | undefined>
+  /** The command waits for a line on stdin before it runs, so the caller can contain it first. */
+  gated: boolean
+  gateLine?: string
+  viaCmd?: boolean
+}
+
 export interface Shell {
   kind: "bash" | "powershell"
   path: string
   /** Shown to the model in every result when the shell is not bash. */
   label?: string
-  args(command: string): string[]
-  /** Built fresh on each read from the current process environment. */
-  readonly env: Record<string, string | undefined>
-  /** The command waits for a line on stdin before it runs, so the caller can contain it first. */
-  gated: boolean
+  command(command: string): ShellCommand
 }
 
 /** WSL's bash.exe (System32) and the Store alias (WindowsApps) are never Git Bash. */
@@ -51,6 +58,7 @@ async function gitExecPath(): Promise<string | undefined> {
       timeoutMs: 30_000,
       signal: new AbortController().signal,
       stdoutOnly: true,
+      viaCmd: true,
     })
     return run.exitCode === 0 ? run.output.trim() : undefined
   } catch {
@@ -62,6 +70,8 @@ export interface FindGitBashDeps {
   env?: Record<string, string | undefined>
   exists?: (p: string) => boolean
   gitExecPath?: () => Promise<string | undefined>
+  /** Looks a program up on PATH. Defaults to Bun.which. */
+  which?: (name: string) => string | null
 }
 
 export async function findGitBash(deps: FindGitBashDeps = {}): Promise<string | undefined> {
@@ -70,9 +80,12 @@ export async function findGitBash(deps: FindGitBashDeps = {}): Promise<string | 
   const override = env.AMIRA_BASH
   if (override && exists(override) && !isRejectedShellPath(override)) return override
 
-  const execPath = await (deps.gitExecPath ?? gitExecPath)()
-  const derived = execPath ? bashFromGitExecPath(execPath, exists) : undefined
-  if (derived) return derived
+  // Cheapest first: git.exe on PATH points at the Git root without spawning anything.
+  // Spawning git can take seconds on machines where antivirus scans new processes.
+  const gitOnPath = (deps.which ?? Bun.which)("git")
+  const fromPath =
+    gitOnPath && !isRejectedShellPath(gitOnPath) ? bashFromGitExecPath(gitOnPath, exists) : undefined
+  if (fromPath) return fromPath
 
   const roots = [
     env.ProgramFiles && join(env.ProgramFiles, "Git"),
@@ -85,7 +98,10 @@ export async function findGitBash(deps: FindGitBashDeps = {}): Promise<string | 
     const found = root && bashIn(root, exists)
     if (found) return found
   }
-  return undefined
+
+  // Last resort: ask git where it lives.
+  const execPath = await (deps.gitExecPath ?? gitExecPath)()
+  return execPath ? bashFromGitExecPath(execPath, exists) : undefined
 }
 
 /** Maps Git's bin/bash.exe launcher to the real usr/bin/bash.exe and finds the Git root when it can. */
@@ -127,24 +143,30 @@ export function gitBashEnv(
   return env
 }
 
+/** Carries the command to GATE_SCRIPT, so it never appears on cmd's command line. */
+export const COMMAND_VAR = "AMIRA_COMMAND"
+
 /**
- * Runs the command ($1) only after a line arrives on stdin (see runCommand). The trailing `exit $?` keeps
- * bash from exec-ing the inner shell: a Windows process killed by an MSYS signal exits 0, while the outer
+ * Runs $AMIRA_COMMAND once the gate is open: cmd.exe held it (AMIRA_GATE is set, stdin is at its
+ * end) or a line arrives on stdin (see RunOptions.viaCmd). The trailing `exit $?` keeps bash from
+ * exec-ing the inner shell: a Windows process killed by an MSYS signal exits 0, while the outer
  * shell reports it as 128+n.
  */
-export const GATE_SCRIPT = 'read -r _ || exit 125; "$BASH" -c "$1" bash; exit $?'
+export const GATE_SCRIPT = `read -r _ || [ -n "$AMIRA_GATE" ] || exit 125; c=$${COMMAND_VAR}; unset AMIRA_GATE ${COMMAND_VAR}; "$BASH" -c "$c" bash; exit $?`
 
 export function windowsBashShell(found: string, exists: (p: string) => boolean = existsSync): Shell {
   const { bash, root } = gitBashLayout(found, exists)
   return {
     kind: "bash",
     path: bash,
-    // A getter, so variables set after the shell was resolved still reach commands.
-    get env() {
-      return root ? gitBashEnv(root) : { ...process.env }
-    },
-    gated: true,
-    args: (command) => [bash, "-c", GATE_SCRIPT, "bash", command],
+    // Built per command, so variables set after the shell was resolved still reach commands.
+    command: (command) => ({
+      argv: [bash, "-c", GATE_SCRIPT, "bash"],
+      env: { ...(root ? gitBashEnv(root) : process.env), [COMMAND_VAR]: command },
+      gated: true,
+      // Bun stalls for seconds on some direct spawns of MSYS programs.
+      viaCmd: true,
+    }),
   }
 }
 
@@ -152,11 +174,7 @@ function posixBashShell(path: string): Shell {
   return {
     kind: "bash",
     path,
-    get env() {
-      return { ...process.env }
-    },
-    gated: false,
-    args: (command) => [path, "-c", command],
+    command: (command) => ({ argv: [path, "-c", command], env: { ...process.env }, gated: false }),
   }
 }
 
@@ -167,17 +185,67 @@ export function powershellShell(
     kind: "powershell",
     path,
     label: "PowerShell (Git Bash not found)",
-    get env() {
-      return { ...process.env }
-    },
-    gated: false,
-    args: (command) => [path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+    command: (command) => ({
+      argv: [path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+      env: { ...process.env },
+      gated: false,
+    }),
   }
 }
 
 let cached: Promise<Shell> | undefined
 
 /** Git Bash on Windows (PowerShell if it is missing), /bin/bash elsewhere. Resolved once per process. */
+/**
+ * The script run for the powershell tool. It waits for the gate line (sent once the process
+ * is in its Job Object), switches output to UTF-8, runs the command, and exits with the last
+ * native exit code, or 1 when the last statement failed.
+ */
+export function powershellScript(command: string): string {
+  return [
+    "$null = [Console]::In.ReadLine()",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$global:LASTEXITCODE = 0",
+    command,
+    "if (-not $?) { if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } else { exit 1 } }",
+    "exit $global:LASTEXITCODE",
+  ].join("\n")
+}
+
+/** -EncodedCommand takes base64 of UTF-16LE, which sidesteps every argument-quoting quirk. */
+export function encodePowerShell(script: string): string {
+  return Buffer.from(script, "utf16le").toString("base64")
+}
+
+/** PowerShell for the powershell tool: gated like Git Bash, so nothing escapes the job. */
+export function gatedPowerShell(
+  path = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe",
+): Shell {
+  return {
+    kind: "powershell",
+    path,
+    command: (command) => ({
+      argv: [
+        path,
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        encodePowerShell(powershellScript(command)),
+      ],
+      env: { ...process.env },
+      gated: true,
+    }),
+  }
+}
+
+let cachedPowerShell: Promise<Shell> | undefined
+export function resolvePowerShell(): Promise<Shell> {
+  cachedPowerShell ??= Promise.resolve(gatedPowerShell())
+  return cachedPowerShell
+}
+
 export function resolveShell(): Promise<Shell> {
   cached ??=
     process.platform === "win32"
@@ -187,6 +255,29 @@ export function resolveShell(): Promise<Shell> {
 }
 
 /** Starts shell discovery in the background so the first bash call does not wait for it. */
+/**
+ * Finds the shells and runs an empty command in each, in the background. On machines where
+ * antivirus scans each new program, the first start of bash or PowerShell takes seconds;
+ * paying that at startup keeps the model's first command fast.
+ */
 export function warmUpShell(): void {
-  resolveShell().catch(() => {})
+  const warm = (shell: Shell, command: string) => {
+    const { argv, ...spawn } = shell.command(command)
+    return runCommand(argv, {
+      ...spawn,
+      cwd: process.cwd(),
+      timeoutMs: 60_000,
+      signal: new AbortController().signal,
+    }).catch(() => {})
+  }
+  resolveShell()
+    .then((shell) =>
+      process.platform === "win32" ? warm(shell, shell.kind === "bash" ? ":" : "$null") : undefined,
+    )
+    .catch(() => {})
+  if (process.platform === "win32") {
+    resolvePowerShell()
+      .then((shell) => warm(shell, "$null"))
+      .catch(() => {})
+  }
 }

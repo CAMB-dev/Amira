@@ -24,3 +24,10 @@ export function displayPath(cwd: string, abs: string): string {
   const shown = rel === "" ? "." : rel.startsWith("..") || isAbsolute(rel) ? abs : rel
   return shown.replaceAll("\\", "/")
 }
+
+/** Key for ordering writes to the same file: the resolved path, case-folded where paths are case-insensitive. */
+export function fileKey(cwd: string, path: unknown): string | undefined {
+  if (typeof path !== "string" || path === "") return undefined
+  const abs = resolvePath(cwd, path)
+  return process.platform === "win32" || process.platform === "darwin" ? abs.toLowerCase() : abs
+}

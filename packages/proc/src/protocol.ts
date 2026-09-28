@@ -5,6 +5,8 @@ export interface RunRequest {
   cwd: string
   env?: Record<string, string | undefined>
   gated?: boolean
+  gateLine?: string
+  viaCmd?: boolean
   timeoutMs: number
   stdoutOnly?: boolean
 }

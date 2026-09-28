@@ -2,8 +2,20 @@ import { expect, test } from "bun:test"
 import { createAi } from "../src/client.ts"
 import { collect } from "../src/dialect.ts"
 import { toChatMessages } from "../src/dialects/openai-chat.ts"
+import type { ProviderConfig } from "../src/providers.ts"
 import { INVALID_ARGS_KEY } from "../src/tool-args.ts"
 import type { StreamEvent } from "../src/types.ts"
+
+const providers: ProviderConfig[] = [
+  {
+    id: "deepseek",
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+  },
+  { id: "ollama", dialect: "openai-chat", baseUrl: "http://localhost:11434/v1" },
+  { id: "openrouter", dialect: "openai-chat", baseUrl: "https://openrouter.ai/api/v1" },
+]
 
 function sseResponse(chunks: unknown[]): Response {
   const body = `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("")}data: [DONE]\n\n`
@@ -27,6 +39,7 @@ test("streams text, reasoning and usage", async () => {
   const seen: any = {}
   const ai = createAi({
     env: { DEEPSEEK_API_KEY: "k" },
+    providers,
     fetch: fakeFetch(
       sseResponse([
         delta({ reasoning_content: "think " }),
@@ -61,6 +74,7 @@ test("streams text, reasoning and usage", async () => {
 
 test("assembles streamed tool calls and keeps invalid JSON arguments", async () => {
   const ai = createAi({
+    providers,
     fetch: fakeFetch(
       sseResponse([
         delta({ tool_calls: [{ index: 0, id: "c1", function: { name: "read", arguments: '{"pa' } }] }),
@@ -91,7 +105,12 @@ test("reports HTTP errors and marks 429 as retryable", async () => {
     fetch: fakeFetch(new Response("slow down", { status: 429 })),
   })
   const events: StreamEvent[] = []
-  for await (const e of ai.stream({ model: ai.model("openai/x"), systemPrompt: "", messages: [], tools: [] }))
+  for await (const e of ai.stream({
+    model: ai.model("openai-chat/x"),
+    systemPrompt: "",
+    messages: [],
+    tools: [],
+  }))
     events.push(e)
   expect(events).toHaveLength(1)
   const err = events[0] as Extract<StreamEvent, { type: "error" }>
@@ -133,7 +152,7 @@ test("maps assistant tool calls and tool results to the chat format", () => {
 })
 
 test("rejects malformed model references", () => {
-  const ai = createAi()
+  const ai = createAi({ providers })
   expect(() => ai.model("gpt")).toThrow(/provider\/model/)
   expect(() => ai.model("nope/x")).toThrow(/unknown provider/)
   expect(ai.model("openrouter/anthropic/claude").id).toBe("anthropic/claude")

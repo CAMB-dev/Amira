@@ -1,7 +1,7 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
-import { API_VERSION, type Extension, type ExtensionAPI } from "@amira/api"
+import { API_VERSION, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
 import { runCommand } from "@amira/proc"
 import type { EventBus } from "./event-bus.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
@@ -27,6 +27,8 @@ export function installVirtualApi(): void {
 
 export interface ExtensionHostOptions {
   bus: EventBus
+  /** Merged settings handed to extensions. Default {}. */
+  settings?: Settings
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
@@ -129,6 +131,7 @@ export class ExtensionHost {
           ),
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
+      settings: this.#opts.settings ?? {},
       registerStatusItem: (item) => {
         const off = this.status.register(item)
         this.#requestRender()
