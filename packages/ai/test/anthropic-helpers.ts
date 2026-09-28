@@ -68,7 +68,9 @@ export function anthropicAi(fetchImpl?: typeof fetch, baseUrl = "http://anth") {
         dialect: "anthropic-messages",
         baseUrl,
         apiKey: "sk-test",
-        models: [{ id: "claude", maxOutput: 32_000, caps: { thinking: true, images: true } }],
+        models: [
+          { id: "claude", maxOutput: 32_000, caps: { thinking: true, images: true, promptCache: true } },
+        ],
       },
     ],
   })

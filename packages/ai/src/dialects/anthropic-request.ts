@@ -29,7 +29,8 @@ export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Rec
     Math.min(req.maxTokens ?? req.model.maxOutput, req.model.maxOutput, MAX_TOKENS_CAP),
   )
   const body: Record<string, unknown> = { model: req.model.id, max_tokens: maxTokens, stream: true }
-  const cache = req.promptCache !== false
+  // Caps default to promptCache: false, so an Anthropic provider turns it on in its model caps.
+  const cache = req.promptCache !== false && req.model.caps.promptCache
   let breakpoints = 0
 
   if (req.systemPrompt) {

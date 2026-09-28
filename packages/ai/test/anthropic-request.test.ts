@@ -172,6 +172,14 @@ test("never places more than four breakpoints and none when caching is off", asy
   expect(breakpoints((await sent({ ...many, promptCache: false })).body)).toBe(0)
 })
 
+test("places no breakpoints when the model does not support prompt caching", async () => {
+  const noCache: Partial<ProviderConfig> = {
+    models: [{ id: "claude", maxOutput: 32_000, caps: { promptCache: false } }],
+  }
+  const req = { systemPrompt: "sys", tools: [tool("a")], messages: history }
+  expect(breakpoints((await sent(req, noCache)).body)).toBe(0)
+})
+
 test("caches the tool results of an agent loop", async () => {
   const { body } = await sent({ messages: toolTurn(false), tools: [tool("read")] })
   expect(body.messages[2].content.at(-1)).toEqual({
