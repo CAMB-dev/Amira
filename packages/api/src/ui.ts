@@ -11,6 +11,8 @@ export interface StatusItem {
   /** Lower comes first within its side. Default 0. */
   order?: number
   tone?: StatusTone
+  /** Must be true to replace an item with the same id registered earlier (e.g. a built-in one). */
+  override?: boolean
   /** Returning undefined or "" hides the item. */
   text(): string | undefined
 }

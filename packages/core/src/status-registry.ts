@@ -9,31 +9,54 @@ export interface ResolvedStatusItem {
   text: string
 }
 
-/** Status bar items registered by extensions; frontends call snapshot() when they redraw. */
+interface Entry {
+  item: StatusItem
+  order: number
+  seq: number
+}
+
+/**
+ * Status bar items registered by extensions; frontends call snapshot() when they redraw.
+ * Like tools, an id holds a stack: `override: true` replaces the current item and
+ * removing it restores the one below.
+ */
 export class StatusRegistry {
-  #items = new Map<string, { item: StatusItem; order: number; seq: number }>()
+  #items = new Map<string, Entry[]>()
   #seq = 0
 
   register(item: StatusItem): () => void {
-    if (this.#items.has(item.id))
-      throw new StatusConflictError(`status item "${item.id}" is already registered`)
+    const stack = this.#items.get(item.id) ?? []
+    if (stack.length && !item.override) {
+      throw new StatusConflictError(
+        `status item "${item.id}" is already registered; set override: true to replace it`,
+      )
+    }
     const entry = { item, order: item.order ?? 0, seq: this.#seq++ }
-    this.#items.set(item.id, entry)
+    stack.push(entry)
+    this.#items.set(item.id, stack)
     return () => {
-      if (this.#items.get(item.id) === entry) this.#items.delete(item.id)
+      const rest = (this.#items.get(item.id) ?? []).filter((e) => e !== entry)
+      if (rest.length) this.#items.set(item.id, rest)
+      else this.#items.delete(item.id)
     }
   }
 
-  /** Visible items in display order. A throwing item is skipped rather than breaking the bar. */
+  /**
+   * Visible items in display order. Items that throw or return non-strings are skipped,
+   * and control characters are stripped, so one bad item cannot break a frontend.
+   */
   snapshot(): ResolvedStatusItem[] {
     const out: (ResolvedStatusItem & { order: number; seq: number })[] = []
-    for (const { item, order, seq } of this.#items.values()) {
-      let text: string | undefined
+    for (const stack of this.#items.values()) {
+      const { item, order, seq } = stack.at(-1)!
+      let raw: unknown
       try {
-        text = item.text()
+        raw = item.text()
       } catch {
         continue
       }
+      if (typeof raw !== "string") continue
+      const text = raw.replace(/[\x00-\x1f\x7f]+/g, " ").trim()
       if (!text) continue
       out.push({ id: item.id, align: item.align ?? "left", tone: item.tone ?? "default", text, order, seq })
     }

@@ -11,7 +11,7 @@ export interface ExtensionAPI {
   readonly apiVersion: string
   /** Returns a function that removes this registration. */
   registerTool(tool: ToolDefinition): () => void
-  /** Adds an item to the status bar. Replacing an existing id requires removing it first. */
+  /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */
   registerStatusItem(item: StatusItem): () => void
   /** Asks frontends to redraw, e.g. after a status item's state changed. */
   requestRender(): void
