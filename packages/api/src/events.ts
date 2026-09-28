@@ -19,6 +19,9 @@ export type SessionStatus = "idle" | "working" | "blocked" | "error"
 
 export type TurnEndReason = "done" | "error" | "aborted"
 
+/** Why a tool call produced an error result without its tool running to completion. */
+export type ToolRejection = "blocked" | "unknownTool" | "invalidArgs" | "aborted"
+
 /** Read-only events. Emitting never waits for subscribers. New events are only ever added. */
 export interface EventMap {
   "session.start": {
@@ -44,7 +47,17 @@ export interface EventMap {
   "message.end": { message: AssistantMessage }
   "tool.execute.start": { toolCallId: string; name: string; args: Record<string, unknown> }
   "tool.execute.update": { toolCallId: string; name: string; partial: ToolResult }
-  "tool.execute.end": { toolCallId: string; name: string; result: ToolResult; durationMs: number }
+  /**
+   * Emitted for every tool call, including ones that never ran; `rejected` says why.
+   * Always paired with a preceding tool.execute.start.
+   */
+  "tool.execute.end": {
+    toolCallId: string
+    name: string
+    result: ToolResult
+    durationMs: number
+    rejected?: ToolRejection
+  }
   "extension.loaded": { source: string }
   "extension.error": { source: string; error: string }
   /** A slow subscriber's queue overflowed and events were dropped for it. */
@@ -58,8 +71,10 @@ export type Intercept<T> =
 
 /** Decision points where the core awaits an ordered pipeline of handlers. */
 export interface InterceptorMap {
+  /** Runs before every model call. block ends the turn with an error. */
   "context.build": { systemPrompt: string; messages: Message[] }
-  "tool.call.before": { toolCallId: string; name: string; args: Record<string, unknown> }
+  /** Runs before a tool executes. Only `args` may be modified; block returns an error result to the model. */
+  "tool.call.before": { readonly toolCallId: string; readonly name: string; args: Record<string, unknown> }
 }
 
 export interface InterceptorOptions {

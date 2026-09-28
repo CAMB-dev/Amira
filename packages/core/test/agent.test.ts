@@ -204,15 +204,16 @@ export default function (api: any) {
   )
   const tools = new ToolRegistry()
   const errors: string[] = []
-  const host = new ExtensionHost({
-    bus: new EventBus(),
-    interceptors: new InterceptorRegistry(),
-    tools,
-    onError: (s, e) => errors.push(`${s}: ${e}`),
+  const bus = new EventBus()
+  bus.subscribe((e) => {
+    if (e.type === "extension.error") errors.push(`${e.data.source}: ${e.data.error}`)
   })
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools })
   expect(await host.loadFile(file)).toBe(true)
+  await bus.flush()
   expect(errors).toEqual([])
   expect(tools.get("hello")?.description).toMatch(/^v\d/)
   expect(await host.loadFile(path.join(dir, "missing.ts"))).toBe(false)
+  await bus.flush()
   expect(errors).toHaveLength(1)
 })

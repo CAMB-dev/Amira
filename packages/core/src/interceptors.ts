@@ -66,21 +66,30 @@ export class InterceptorRegistry {
     }
   }
 
-  /** Runs handlers in order. modify feeds the next handler; block stops the pipeline. */
+  /**
+   * Runs handlers in order. modify feeds the next handler; block stops the pipeline.
+   * Each handler gets a signal that fires on turn abort or on its own timeout.
+   */
   async run<K extends keyof InterceptorMap>(
     point: K,
     value: InterceptorMap[K],
     ctx: InterceptContext,
   ): Promise<InterceptOutcome<InterceptorMap[K]>> {
+    const blocksOnFailure = FAILURE_POLICY[point] === "block"
     let current = value
     for (const entry of this.#entries.get(point) ?? []) {
+      if (ctx.signal.aborted) {
+        return blocksOnFailure
+          ? { blocked: true, reason: "aborted", value: current }
+          : { blocked: false, value: current }
+      }
       let result: Intercept<InterceptorMap[K]>
       try {
-        result = await withTimeout(Promise.resolve(entry.handler(current, ctx)), entry.timeoutMs)
+        result = await runHandler(entry, current, ctx)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         this.#onError(point, entry.source, msg)
-        if (FAILURE_POLICY[point] === "block") {
+        if (blocksOnFailure) {
           return { blocked: true, reason: `interceptor from ${entry.source} failed: ${msg}`, value: current }
         }
         continue
@@ -92,12 +101,24 @@ export class InterceptorRegistry {
   }
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>
-  return Promise.race([
-    p,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), ms)
-    }),
-  ]).finally(() => clearTimeout(timer))
+/** Races the handler against its timeout and the turn's abort signal. */
+async function runHandler<T>(entry: Entry, value: T, ctx: InterceptContext): Promise<Intercept<T>> {
+  const own = new AbortController()
+  const signal = AbortSignal.any([ctx.signal, own.signal])
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  const stop = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      own.abort()
+      reject(new Error(`timed out after ${entry.timeoutMs} ms`))
+    }, entry.timeoutMs)
+    onAbort = () => reject(new Error("aborted"))
+    ctx.signal.addEventListener("abort", onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([Promise.resolve(entry.handler(value, { ...ctx, signal })), stop])
+  } finally {
+    clearTimeout(timer)
+    if (onAbort) ctx.signal.removeEventListener("abort", onAbort)
+  }
 }
