@@ -265,3 +265,18 @@ test("when the text gets shorter the shown rows stay full", () => {
   expect(view(ed)).toEqual(["a|"])
   expect(ed.hidden).toEqual({ above: 0, below: 0 })
 })
+
+test("the submit and newline keys can be replaced", () => {
+  const sent: string[] = []
+  const ed = new Editor({
+    onSubmit: (t) => sent.push(t),
+    isSubmit: (e) => e.type === "key" && e.name === "s" && e.ctrl,
+    isNewline: (e) => e.type === "key" && e.name === "enter" && !e.ctrl && !e.alt && !e.shift,
+  })
+  type(ed, "a\rb")
+  expect(ed.getText()).toBe("a\nb")
+  // Shift+Enter is no longer a newline key, and inserts nothing.
+  expect(press(ed, "enter", { shift: true })).toBe(false)
+  press(ed, "s", { ctrl: true })
+  expect(sent).toEqual(["a\nb"])
+})

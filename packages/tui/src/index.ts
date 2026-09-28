@@ -1,6 +1,14 @@
 export { type InteractiveOptions, runInteractive } from "./app.ts"
 export { summarizeArgs, userLines } from "./format.ts"
 export { type Glyphs, glyphs } from "./glyphs.ts"
+export {
+  ACTIONS,
+  type Action,
+  defaultKeys,
+  Keybindings,
+  type LoadedKeybindings,
+  loadKeybindings,
+} from "./keybindings.ts"
 export { HISTORY_LIMIT, PromptHistory } from "./prompt-history.ts"
 export { StatusBar } from "./status-bar.ts"
 export {

@@ -8,7 +8,8 @@ import {
   type RenderContext,
   truncateToWidth,
 } from "@amira/tui-kit"
-import { inputGlyphs } from "./input-glyphs.ts"
+import { glyphs } from "./glyphs.ts"
+import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import type { PromptHistory } from "./prompt-history.ts"
 
 /** What a key did to the search. */
@@ -26,7 +27,7 @@ export type SearchAction =
  * the editor previews the newest entry containing the query (case-insensitive); Ctrl+R steps to
  * older matches and Ctrl+S back to newer ones. Enter keeps the match in the editor for editing
  * (it does not send it), Esc or Ctrl+C put the draft back, and other keys such as the arrows
- * keep the match and act on it.
+ * keep the match and act on it. Those are the default keys of the search.* actions.
  */
 export class HistorySearch implements Component {
   #active = false
@@ -38,6 +39,7 @@ export class HistorySearch implements Component {
   constructor(
     private history: PromptHistory,
     private editor: Editor,
+    private keys: Keybindings = defaultKeybindings(),
   ) {}
 
   get active(): boolean {
@@ -60,16 +62,17 @@ export class HistorySearch implements Component {
       this.#setQuery(this.#query + e.text.split("\n")[0])
       return "handled"
     }
-    if (matchesKey(e, "escape") || matchesKey(e, "c", { ctrl: true }) || matchesKey(e, "g", { ctrl: true })) {
+    const keys = this.keys
+    if (keys.is(e, "search.cancel")) {
       this.#active = false
       this.editor.setParts(this.#draft)
       return "cancelled"
     }
-    if (matchesKey(e, "r", { ctrl: true })) {
+    if (keys.is(e, "search.older")) {
       this.#find(this.#match === -1 ? this.history.entries.length - 1 : this.#match - 1, -1)
       return "handled"
     }
-    if (matchesKey(e, "s", { ctrl: true })) {
+    if (keys.is(e, "search.newer")) {
       if (this.#match !== -1) this.#find(this.#match + 1, 1)
       return "handled"
     }
@@ -83,7 +86,7 @@ export class HistorySearch implements Component {
       return "handled"
     }
     this.#active = false
-    return matchesKey(e, "enter") ? "accepted" : "accepted-pass"
+    return keys.is(e, "search.accept") ? "accepted" : "accepted-pass"
   }
 
   render(width: number, { theme }: RenderContext): string[] {
@@ -95,7 +98,7 @@ export class HistorySearch implements Component {
         : this.#query
           ? "no match"
           : "type to search"
-    const line = `${theme.accent(inputGlyphs.search)} ${theme.muted("search history")} ${theme.accent(inputGlyphs.searchPrompt)} ${this.#query}  ${theme.muted(status)}`
+    const line = `${theme.accent(glyphs.search)} ${theme.muted("search history")} ${theme.accent(glyphs.searchPrompt)} ${this.#query}  ${theme.muted(status)}`
     return [truncateToWidth(line, width, "…")]
   }
 

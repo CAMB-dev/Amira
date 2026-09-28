@@ -6,6 +6,7 @@ import {
   defineTool,
   type Message,
   type SessionControl,
+  type TuiSettings,
   textResult,
 } from "@amira/api"
 import { builtinPresenters } from "@amira/builtin-tools"
@@ -22,7 +23,9 @@ import statusExtension from "@amira/ext-status"
 import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
+
 import { subagentLines } from "../src/format.ts"
+import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
 
 const noProbe = async () => ({
@@ -66,6 +69,10 @@ interface SetupOptions {
   promptHistory?: PromptHistory
   /** The files the @ picker offers. */
   files?: string[]
+  /** The environment the UI tells the terminal apart by; empty by default. */
+  env?: Record<string, string | undefined>
+  keybindings?: Keybindings
+  settings?: TuiSettings
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -133,6 +140,9 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     onReady: () => agent.start("startup"),
     files: { files: async () => o.files ?? [] },
     ...(o.promptHistory ? { history: o.promptHistory } : {}),
+    env: o.env ?? {},
+    ...(o.keybindings ? { keybindings: o.keybindings } : {}),
+    ...(o.settings ? { settings: o.settings } : {}),
     ...(o.initialPrompt ? { initialPrompt: o.initialPrompt } : {}),
     ...(o.startupEvents ? { startupEvents: o.startupEvents } : {}),
   })
@@ -1329,7 +1339,7 @@ test("a command typed during a turn runs at once instead of steering it", async 
   await shows("STATUS OK")
   await idle()
   expect(agent.messages.filter((m) => m.role === "user")).toHaveLength(1)
-  terminal.send("")
+  terminal.send("\x03")
   await exited
 })
 
@@ -1519,7 +1529,7 @@ test("a diff review shows the diff above its options", async () => {
   await waitFor(() => live().includes("? Merge?"), "review dialog")
   expect(live()).toContain("-old")
   expect(live()).toContain("+new")
-  expect(live()).toContain("› merge")
+  expect(live()).toContain("› 1 merge")
   terminal.send("2")
   await idle()
   expect(agent.messages.find((m) => m.role === "toolResult")?.content[0]).toEqual({
@@ -1551,6 +1561,44 @@ test("a big paste shows as one placeholder, in the input box and the transcript,
   await exited
 })
 
+/** A tool that asks for a review of a diff `lines` long. */
+function reviewTool(lines: number) {
+  const diff = Array.from({ length: lines }, (_, i) => `+line ${i + 1}`).join("\n")
+  return (api: Parameters<Parameters<ExtensionHost["load"]>[0]>[0]) => {
+    api.registerTool(
+      defineTool({
+        name: "review",
+        description: "",
+        parameters: {},
+        execute: async () =>
+          textResult(String(await api.ui.reviewDiff("Merge the worktree?", diff, ["merge", "keep"]))),
+      }),
+    )
+  }
+}
+
+test("a diff review taller than the terminal keeps its title, options and keys in view", async () => {
+  const { host, terminal, live, idle, exited } = await setup(
+    [{ toolCalls: [{ name: "review", args: {} }] }, { text: "reviewed" }],
+    { rows: 14 },
+  )
+  await host.load(reviewTool(54), "reviewer")
+  terminal.send("go\r")
+  await waitFor(() => live().includes("? Merge the worktree?"), "review dialog")
+  const rows = live().split("\n")
+  expect(rows.some((l) => /… \d+ more lines …/.test(l))).toBe(true)
+  expect(live()).toContain("+line 1")
+  expect(live()).toContain("+line 54")
+  expect(live()).toContain("› 1 merge")
+  expect(live()).toContain("  2 keep")
+  expect(live()).toContain("↑↓ move · Enter choose · Esc cancel")
+  expect(live()).not.toContain("type to filter")
+  terminal.send("1")
+  await idle()
+  terminal.send("\x03")
+  await exited
+})
+
 test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty", async () => {
   const history = new PromptHistory()
   const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "one" }, { text: "two" }], {
@@ -1568,6 +1616,26 @@ test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty",
   await shows("two")
   await idle()
   expect(userTexts(agent)).toEqual(["first message", "first message"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("messages queued together are sent as one turn but shown one by one", async () => {
+  const { terminal, all, shows, idle, agent, exited } = await setup([
+    { text: "first answer", delayMs: 40 },
+    { text: "second answer" },
+  ])
+  terminal.send("start\r")
+  await waitFor(() => agent.status === "working", "working")
+  terminal.send(`one${ALT_ENTER}`)
+  terminal.send(`two${ALT_ENTER}`)
+  await shows("queued › two")
+  await shows("second answer")
+  await idle()
+  expect(all()).toContain("› one\n\n› two")
+  expect(all()).not.toContain("  two")
+  const prompts = agent.messages.filter((m) => m.role === "user")
+  expect(prompts.length).toBe(2)
   terminal.send("\x03")
   await exited
 })
@@ -1610,6 +1678,25 @@ test("Esc leaves the history search with the draft back", async () => {
   await exited
 })
 
+test("Ctrl+L clears the screen and draws the latest transcript and the live region again", async () => {
+  const { terminal, screen, live, shows, idle, exited } = await setup([{ text: "the answer" }])
+  terminal.send("hello\r")
+  await shows("the answer")
+  await idle()
+  terminal.send("draft")
+  await waitFor(() => live().includes("draft"), "draft")
+  // Some other program wrote over the screen.
+  screen.write("\x1b[1;1HGARBAGE GARBAGE\r\nMORE GARBAGE")
+  terminal.send("\x0c")
+  await waitFor(() => !live().includes("GARBAGE"), "redrawn")
+  expect(live()).toContain("› hello")
+  expect(live()).toContain("the answer")
+  expect(live()).toContain("› draft")
+  expect(screen.lines[0]).toContain("Amira")
+  terminal.send("\x03\x03")
+  await exited
+})
+
 test("typing @ offers project files; Tab inserts the path and the message keeps it", async () => {
   const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "read it" }], {
     files: ["src/app.ts", "src/format.ts", "README.md"],
@@ -1631,4 +1718,158 @@ test("typing @ offers project files; Tab inserts the path and the message keeps 
   expect(userTexts(agent)).toEqual(["look at @src/format.ts please"])
   terminal.send("\x03")
   await exited
+})
+test("the terminal title names the folder and branch, and the progress indicator follows the turn", async () => {
+  const { terminal, screen, bus, agent, shows, idle, exited } = await setup([{ text: "done", delayMs: 20 }], {
+    env: { WT_SESSION: "1" },
+  })
+  bus.emit("workspace.changed", { cwd: "/work/proj", branch: "main" }, { sessionId: agent.sessionId })
+  await waitFor(() => screen.oscs.includes("0;Amira · proj ⎇ main"), "branch in the title")
+  terminal.send("go\r")
+  await shows("done")
+  await idle()
+  const oscs = screen.oscs
+  expect(oscs).toContain("0;● Amira · proj ⎇ main")
+  expect(oscs).toContain("9;4;3;0")
+  expect(oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;0;0")
+  expect(oscs.filter((o) => o.startsWith("0;")).at(-1)).toBe("0;Amira · proj ⎇ main")
+  terminal.send("\x03")
+  await exited
+  // The title is handed back: the terminal's own, or the one saved on the title stack.
+  expect(screen.oscs.at(-1)).toBe("0;")
+  expect(terminal.output).toContain("\x1b]0;\x07\x1b[23;0t")
+})
+
+test("outside Windows Terminal and friends no progress is sent; settings turn title and bell off", async () => {
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: "done" }], {
+    env: { TERM_PROGRAM: "iTerm.app" },
+    settings: { title: false, bell: false },
+  })
+  terminal.send("\x1b[Ogo\r")
+  await shows("done")
+  await idle()
+  terminal.send("\x03")
+  await exited
+  expect(screen.oscs).toEqual([])
+  expect(screen.bells).toBe(0)
+  expect(terminal.output).not.toContain("\x1b[?1004h")
+})
+
+test("the bell rings when a turn ends in the background; focus reports never reach the editor", async () => {
+  const { terminal, screen, live, shows, idle, exited } = await setup([{ text: "one" }, { text: "two" }])
+  expect(terminal.output).toContain("\x1b[?1004h")
+  terminal.send("\x1b[Ifirst\r")
+  await shows("one")
+  await idle()
+  expect(screen.bells).toBe(0)
+  terminal.send("\x1b[Osecond\r")
+  await shows("two")
+  await idle()
+  expect(screen.bells).toBe(1)
+  expect(live()).not.toContain("[O")
+  expect(live()).not.toContain("[I")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a narrow hint drops whole items instead of cutting one", async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup([{ text: "slow answer", delayMs: 40 }], {
+    cols: 40,
+  })
+  terminal.send("go\r")
+  await waitFor(() => agent.status === "working", "working")
+  // Esc interrupt is on the activity line; the hint keeps its most useful items whole.
+  await waitFor(() => live().includes(`Enter steer · ${QUEUE_HINT} queue`), "working hint")
+  expect(live()).toContain("· Esc interrupt")
+  expect(live()).not.toContain("interr…")
+  expect(live()).not.toContain("newl")
+  await shows("slow answer")
+  await idle()
+  await waitFor(() => live().includes("Enter send · Ctrl+C quit"), "idle hint")
+  terminal.send("\x03")
+  await exited
+})
+
+test("keybindings replace the default keys, and the hints name them", async () => {
+  const keys = new Keybindings({
+    ...defaultKeys({ vscode: false }),
+    queue: ["ctrl+t"],
+    cancel: ["ctrl+x"],
+    newline: ["ctrl+j"],
+  })
+  const { terminal, live, agent, shows, idle, exited } = await setup(
+    [{ text: "first", delayMs: 40 }, { text: "later" }],
+    { keybindings: keys, cols: 100 },
+  )
+  await waitFor(() => live().includes("Enter send · Ctrl+J newline · Ctrl+X quit"), "idle hint")
+  terminal.send("go\r")
+  await waitFor(() => agent.status === "working", "working")
+  await waitFor(() => live().includes("Ctrl+T queue"), "queue hint")
+  terminal.send("next\x14")
+  await shows("queued › next")
+  await shows("later")
+  await idle()
+  // Ctrl+C is not bound any more; Ctrl+X quits.
+  terminal.send("\x03")
+  await Bun.sleep(30)
+  terminal.send("\x18")
+  expect(await exited).toBe(0)
+})
+
+test("history, the history search, the file list and Ctrl+O take their keys from the keybindings too", async () => {
+  const keys = new Keybindings({
+    ...defaultKeys({ vscode: false }),
+    "history.search": ["ctrl+f"],
+    "search.cancel": ["ctrl+x"],
+    "popup.close": ["ctrl+x"],
+    "tool-output": ["ctrl+t"],
+    "history.prev": ["ctrl+p"],
+  })
+  const promptHistory = new PromptHistory()
+  promptHistory.add(["old prompt"])
+  const { terminal, live, exited } = await setup([], {
+    keybindings: keys,
+    promptHistory,
+    files: ["src/app.ts"],
+    tuiCommands: true,
+    cols: 80,
+  })
+  // The default Ctrl+R and ↑ are not bound any more.
+  terminal.send("\x12\x1b[A")
+  await Bun.sleep(30)
+  expect(live()).not.toContain("search history")
+  expect(live()).not.toContain("› old prompt")
+  terminal.send("\x06")
+  await waitFor(() => live().includes("search history"), "search line")
+  expect(live()).toContain("Enter accept · Ctrl+R older · Ctrl+S newer · Ctrl+X cancel")
+  terminal.send("\x18")
+  await waitFor(() => !live().includes("search history"), "search closed")
+  terminal.send("\x10")
+  await waitFor(() => live().includes("› old prompt"), "recalled with Ctrl+P")
+  terminal.send("\x03")
+  terminal.send("@src")
+  await waitFor(() => live().includes("› src/app.ts"), "file list")
+  expect(live()).toContain("↑↓ select · Tab/Enter insert · Ctrl+X close")
+  terminal.send("\x18")
+  await waitFor(() => !live().includes("› src/app.ts"), "file list closed")
+  terminal.send("\x03\x14")
+  await waitFor(() => live().includes("Tool output: full"), "tool output note")
+  expect(live()).toContain("Ctrl+T cycles")
+  terminal.send("\x03")
+  await exited
+})
+
+test("with tui.reflow off, a narrower terminal does not move up past the live region", async () => {
+  for (const reflow of ["on", "off"] as const) {
+    const { terminal, all, exited } = await setup([], { settings: { reflow }, cols: 60, rows: 20 })
+    await waitFor(() => all().includes("Message Amira"), "input box")
+    terminal.clearWrites()
+    terminal.setSize(40, 20)
+    await waitFor(() => terminal.writes.length > 0, "a frame")
+    // The caret is on the editor row, below the box's full-width top border and the blank row
+    // above the box: a re-wrapping terminal made that border two rows, one that does not left it one.
+    expect(terminal.writes[0]!).toContain(`\r\x1b[${reflow === "on" ? 3 : 2}A\x1b[J`)
+    terminal.send("\x03")
+    await exited
+  }
 })

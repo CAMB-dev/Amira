@@ -1,5 +1,6 @@
-import { type Component, type InputEvent, isSubmitKey, matchesKey, type RenderContext } from "@amira/tui-kit"
+import type { Component, InputEvent, RenderContext } from "@amira/tui-kit"
 import type { FileSource } from "./file-index.ts"
+import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import { AsyncList } from "./picker.ts"
 
 /** Candidates the picker ranks and keeps. */
@@ -172,7 +173,11 @@ export type FilePickerAction =
 export class FilePicker implements Component {
   #list: AsyncList<string>
 
-  constructor(source: FileSource, onUpdate: () => void) {
+  constructor(
+    source: FileSource,
+    onUpdate: () => void,
+    private keys: Keybindings = defaultKeybindings(),
+  ) {
     this.#list = new AsyncList((query) => {
       const files = source.files()
       return Array.isArray(files) ? rankFiles(query, files) : files.then((f) => rankFiles(query, f))
@@ -198,16 +203,19 @@ export class FilePicker implements Component {
   /** Handles a key while open; undefined leaves it to the editor. */
   handleKey(e: InputEvent): FilePickerAction | undefined {
     if (!this.open) return undefined
-    if (matchesKey(e, "escape")) {
+    // The completion lists share their keys: the popup.* actions.
+    const keys = this.keys
+    if (keys.is(e, "popup.close")) {
       this.#list.dismiss()
       return { type: "handled" }
     }
-    if (matchesKey(e, "up") || matchesKey(e, "down")) {
-      this.#list.move(matchesKey(e, "up") ? -1 : 1)
+    if (keys.is(e, "popup.up") || keys.is(e, "popup.down")) {
+      this.#list.move(keys.is(e, "popup.up") ? -1 : 1)
       return { type: "handled" }
     }
     const chosen = this.#list.selected
-    if (chosen === undefined || !(matchesKey(e, "tab") || isSubmitKey(e))) return undefined
+    if (chosen === undefined || !(keys.is(e, "popup.complete") || keys.is(e, "popup.accept")))
+      return undefined
     const quoted = /\s/.test(chosen) ? `"${chosen}"` : chosen
     const text = `@${quoted}${chosen.endsWith("/") ? "" : " "}`
     return { type: "insert", replace: 1 + (this.#list.key ?? "").length, text }

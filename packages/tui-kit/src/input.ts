@@ -10,6 +10,8 @@ interface Parsed {
   len: number
   events?: KeyEvent[]
   pasteStart?: boolean
+  /** A focus report: CSI I (gained) or CSI O (lost). */
+  focus?: boolean
 }
 
 const LETTER_FINALS: Record<string, KeyName> = {
@@ -217,6 +219,7 @@ function decodeCsi(params: string, final: string): Decoded {
     return { events: name ? [key(name, xtermMods(parts[1]))] : [] }
   }
   if (final === "Z") return { events: [key("tab", { shift: true })] }
+  if (params === "" && (final === "I" || final === "O")) return { focus: final === "I" }
   const name = LETTER_FINALS[final]
   return { events: name ? [key(name, xtermMods(parts[1]))] : [] }
 }
@@ -422,6 +425,7 @@ export class InputParser {
       if (!parsed) break
       this.buf = this.buf.slice(parsed.len)
       if (parsed.pasteStart) this.paste = ""
+      if (parsed.focus !== undefined) out.push({ type: "focus", focused: parsed.focus })
       for (const e of parsed.events ?? []) this.emit(e, out)
     }
     return out

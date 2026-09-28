@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Editor } from "../src/components/editor.ts"
 import { InputParser } from "../src/input.ts"
 import { type InputEvent, isNewlineKey, isSubmitKey, key, textKey } from "../src/keys.ts"
 import { InputReader } from "../src/reader.ts"
@@ -405,5 +406,26 @@ describe("key helpers", () => {
   test("legacy ctrl+enter is the newline key", () => {
     expect(isNewlineKey(parse("\n")[0]!)).toBe(true)
     expect(isSubmitKey(parse("\r")[0]!)).toBe(true)
+  })
+})
+
+describe("focus reports", () => {
+  test("CSI I and CSI O are focus events, split anywhere, between keys", () => {
+    expectSplitSafe("a\x1b[Ob\x1b[I", [
+      textKey("a"),
+      { type: "focus", focused: false },
+      textKey("b"),
+      { type: "focus", focused: true },
+    ])
+  })
+
+  test("in win32-input-mode they still arrive as plain sequences", () => {
+    expect(parse(`${win32(65, 97, 0)}\x1b[O`)).toEqual([textKey("a"), { type: "focus", focused: false }])
+  })
+
+  test("the editor leaves them alone", () => {
+    const editor = new Editor()
+    expect(editor.handleInput({ type: "focus", focused: true })).toBe(false)
+    expect(editor.getText()).toBe("")
   })
 })

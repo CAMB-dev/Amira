@@ -1,5 +1,12 @@
 import { statSync } from "node:fs"
-import type { AnyEvent, CommandDefinition, FrontendView, ToolDetailLevel, UserMessage } from "@amira/api"
+import type {
+  AnyEvent,
+  CommandDefinition,
+  FrontendView,
+  ToolDetailLevel,
+  TuiSettings,
+  UserMessage,
+} from "@amira/api"
 import {
   type Agent,
   AgentBusyError,
@@ -11,16 +18,16 @@ import {
 import {
   type Component,
   defaultTheme,
+  detectEnv,
   Editor,
   type EditorPart,
   FullScreenRenderer,
   type InputEvent,
   InputReader,
-  key,
   LiveRenderer,
   MarkdownStream,
-  matchesKey,
   ProcessTerminal,
+  progressSupported,
   type RenderContext,
   type SetupResult,
   Spinner,
@@ -46,12 +53,15 @@ import {
   userText,
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { fitHint } from "./hint.ts"
 import { historyLines } from "./history.ts"
 import { HistorySearch } from "./history-search.ts"
 import { InputBox } from "./input-box.ts"
+import { defaultKeys, Keybindings } from "./keybindings.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { StatusBar } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
+import { TerminalStatus } from "./terminal-status.ts"
 import { ToolCalls, type TrackedCall } from "./tool-calls.ts"
 import {
   callSummary,
@@ -104,10 +114,19 @@ export interface InteractiveOptions {
   history?: PromptHistory
   /** The files the @ picker offers. Default: the working directory's, from git or a walk. */
   files?: FileSource
+  /** The keys of every action; defaults to the defaults for this terminal. See loadKeybindings. */
+  keybindings?: Keybindings
+  /** The `tui` settings: bell, title, progress indicator, reflow. */
+  settings?: TuiSettings
+  /** Tells the terminal apart (Windows Terminal, VS Code); injectable for tests. */
+  env?: Record<string, string | undefined>
 }
 
 /** The renderer's shortest time between frames, and how long a key waits for async candidates. */
 const FRAME_MS = 16
+
+/** The items of a hint line, most useful ones with the highest priority. */
+type HintItems = Parameters<typeof fitHint>[0]
 
 /** Bracketed pastes this big become one placeholder in the editor, expanded when sent. */
 const FOLD_PASTES = { lines: 8, chars: 1000 }
@@ -182,6 +201,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const queued: Outgoing[] = []
   /** Content of recent messages with folded pastes, by their text, so a dropped steer comes back folded. */
   const sentParts = new Map<string, EditorPart[]>()
+  /**
+   * Queued messages sent together as the next prompt, as the transcript shows each (its display
+   * text, else its text), so it can show them one by one.
+   */
+  let mergedQueue: string[] | undefined
   /** Messages steering the running turn that have not reached the model yet. */
   const steering: string[] = []
   /** Lines of notices (background results) waiting to reach the model. */
@@ -257,18 +281,32 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
+  const env = opts.env ?? process.env
+  const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
+  const settings = opts.settings ?? {}
+  const termStatus = new TerminalStatus(terminal, agent.cwd, {
+    title: settings.title ?? true,
+    progress: (settings.progress ?? true) && progressSupported(env),
+    bell: settings.bell ?? true,
+  })
   const editor = new Editor({
     prompt: theme.accent("› "),
     placeholder: "Message Amira",
     onSubmit: (text, info) => submit(text, info.parts, info.display),
     foldPastes: FOLD_PASTES,
+    isSubmit: (e) => keys.is(e, "submit"),
+    isNewline: (e) => keys.is(e, "newline"),
   })
   const commands = opts.commands
-  const popup = commands ? new CommandPopup(commands, () => renderer.requestRender()) : undefined
+  const popup = commands ? new CommandPopup(commands, () => renderer.requestRender(), keys) : undefined
   const history = opts.history ?? new PromptHistory()
   const historyNav = new HistoryNavigator(history, editor)
-  const search = new HistorySearch(history, editor)
-  const filePicker = new FilePicker(opts.files ?? new FileIndex(agent.cwd), () => renderer.requestRender())
+  const search = new HistorySearch(history, editor, keys)
+  const filePicker = new FilePicker(
+    opts.files ?? new FileIndex(agent.cwd),
+    () => renderer.requestRender(),
+    keys,
+  )
   /**
    * Tells the completion lists what the editor holds; a promise while candidates are on their
    * way. Cheap on any text: the command popup only looks at a single line, the file picker at
@@ -281,32 +319,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
   /** The list shown below the input box, if any, with its key hint. */
   const inputList = ():
-    | { lines: (width: number, ctx: RenderContext) => string[]; hint: string }
+    | { lines: (width: number, ctx: RenderContext) => string[]; hint: () => HintItems }
     | undefined => {
-    if (search.active) {
-      return {
-        lines: (w, ctx) => search.render(w, ctx),
-        hint: "Enter accept · Ctrl+R older · Ctrl+S newer · Esc cancel",
-      }
-    }
-    if (popup?.visible) {
-      return {
-        lines: (w, ctx) => popup.render(w, ctx),
-        hint: "↑↓ select · Tab complete · Enter run · Esc close",
-      }
-    }
-    if (filePicker.visible) {
-      return {
-        lines: (w, ctx) => filePicker.render(w, ctx),
-        hint: "↑↓ select · Tab/Enter insert · Esc close",
-      }
-    }
+    if (search.active) return { lines: (w, ctx) => search.render(w, ctx), hint: searchHint }
+    if (popup?.visible) return { lines: (w, ctx) => popup.render(w, ctx), hint: popupHint }
+    if (filePicker.visible) return { lines: (w, ctx) => filePicker.render(w, ctx), hint: fileHint }
     return undefined
   }
-  const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
-  // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
-  const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
+  // Shift+Enter is no use where the terminal sends it as plain Enter.
+  const newlineKey = keys.label("newline", (s) => capabilities.shiftEnter || !(s.shift && s.name === "enter"))
+  const queueKey = keys.label("queue")
   const inputBox = new InputBox(editor)
+  /** Rows the last frame's dialog took, to size it against the rest of the live region. */
+  let dialogRows = 0
   const statusBar = new StatusBar(() => opts.status.snapshot())
   /**
    * Lines to print above the live region, sent with the next frame: running a command commits
@@ -337,11 +362,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
               ? ""
               : "working"
       const tokens = turnTokens + estimateTokens(streamedChars)
+      const interruptKey = keys.label("interrupt")
       const stats = [
         formatElapsed(Date.now() - (working ? turnStartedAt : compactStartedAt)),
         ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
-        "Esc interrupt",
-      ].join(" · ")
+        ...(interruptKey ? [`${interruptKey} interrupt`] : []),
+      ].join(` ${glyphs.separator} `)
       const head = label ? `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} · `)}` : ""
       return [truncateToWidth(head + ctx.theme.muted(stats), width, glyphs.more), ""]
     }),
@@ -353,24 +379,25 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         wrapText(ctx.theme.muted(`queued › ${(q.display ?? q.text).replace(/\s+/g, " ")}`), width),
       ),
     ]),
-    new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : inputBox.render(width, ctx))),
+    new View((width, ctx) => {
+      if (!dialogs[0]) return inputBox.render(width, ctx)
+      const lines = dialogs[0].render(width, ctx)
+      dialogRows = lines.length
+      return lines
+    }),
     // The command list, file list or history search opens below the input box, in place of the
     // status bar and the hint, so the box stays where it is while the list changes with each key.
     new View((width, ctx) => {
       const list = dialogs[0] ? undefined : inputList()
       if (!list) return statusBar.render(width, ctx)
-      return [...list.lines(width, ctx), ctx.theme.muted(truncateToWidth(list.hint, width, "…"))]
+      return [...list.lines(width, ctx), ctx.theme.muted(fitHint(list.hint(), width))]
     }),
     new View((width, ctx) => {
       if (dialogs[0] || inputList()) return []
       if (hintNote && Date.now() < hintNote.until) {
-        return [ctx.theme.muted(truncateToWidth(hintNote.text, width, "…"))]
+        return [ctx.theme.muted(truncateToWidth(hintNote.text, width, glyphs.more))]
       }
-      const ctrlC = working ? "interrupt" : editor.isEmpty ? "quit" : "clear"
-      const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
-      // Esc to interrupt is on the activity line while working.
-      const hint = `${send} · ${newlineKey} newline · Ctrl+C ${ctrlC}`
-      return [ctx.theme.muted(truncateToWidth(hint, width, "…"))]
+      return [ctx.theme.muted(fitHint(inputHint(), width))]
     }),
   ])
 
@@ -392,12 +419,18 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
   // before it in view. Its finished blocks, and rows past that, go to the scrollback as they
   // are finished (MarkdownStream), indented like the committed reply and spaced by the
-  // transcript's rule.
+  // transcript's rule. A dialog gets what the rest leaves, so its title is never cut off the top.
   const gutter = glyphs.assistant
   const root = new View((width, ctx) => {
     // Lines committed since the last frame go out with this one: one redraw, not one each.
     if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
-    const rest = bottom.render(width, ctx)
+    const dialog = dialogs[0]
+    if (dialog) dialog.maxRows = Math.max(1, ctx.rows - 1)
+    let rest = bottom.render(width, ctx)
+    if (dialog && rest.length > ctx.rows - 1) {
+      dialog.maxRows = Math.max(1, ctx.rows - 1 - (rest.length - dialogRows))
+      rest = bottom.render(width, ctx)
+    }
     const tools = liveToolRows(width, ctx)
     streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - 3)
     const commit = ctx.commit
@@ -411,11 +444,65 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
     return [...lead, ...replyRows(reply), ...tools, "", ...rest]
   })
+  const reflow = settings.reflow ?? "auto"
   const renderer = new LiveRenderer(terminal, root, {
     synchronizedOutput: capabilities.synchronizedOutput,
     frameIntervalMs: FRAME_MS,
     theme,
+    // "auto" assumes a re-wrapping terminal, as Windows Terminal, VS Code and most others are.
+    reflow: reflow !== "off",
   })
+
+  /** What the keys do now, the most useful first to stay as the line narrows. */
+  function inputHint(): HintItems {
+    const ctrlC = working ? "interrupt" : editor.isEmpty ? "quit" : "clear"
+    const submitKey = keys.label("submit")
+    // The interrupt key is on the activity line while something runs.
+    return [
+      submitKey && { text: `${submitKey} ${working ? "steer" : "send"}`, priority: 5 },
+      working && queueKey && { text: `${queueKey} queue`, priority: 3 },
+      newlineKey && { text: `${newlineKey} newline`, priority: 1 },
+      keys.label("cancel") && { text: `${keys.label("cancel")} ${ctrlC}`, priority: working ? 2 : 4 },
+    ]
+  }
+
+  function searchHint(): HintItems {
+    const accept = keys.label("search.accept")
+    const older = keys.label("search.older")
+    const newer = keys.label("search.newer")
+    const cancel = keys.label("search.cancel")
+    return [
+      accept && { text: `${accept} accept`, priority: 5 },
+      older && { text: `${older} older`, priority: 3 },
+      newer && { text: `${newer} newer`, priority: 2 },
+      cancel && { text: `${cancel} cancel`, priority: 4 },
+    ]
+  }
+
+  /** The file list takes the command popup's keys; Tab and Enter both insert. */
+  function fileHint(): HintItems {
+    const move = keys.pairLabel("popup.up", "popup.down")
+    const insert = [keys.label("popup.complete"), keys.label("popup.accept")].filter(Boolean).join("/")
+    const close = keys.label("popup.close")
+    return [
+      move && { text: `${move} select`, priority: 3 },
+      insert && { text: `${insert} insert`, priority: 5 },
+      close && { text: `${close} close`, priority: 4 },
+    ]
+  }
+
+  function popupHint(): HintItems {
+    const move = keys.pairLabel("popup.up", "popup.down")
+    const complete = keys.label("popup.complete")
+    const accept = keys.label("popup.accept")
+    const close = keys.label("popup.close")
+    return [
+      move && { text: `${move} select`, priority: 3 },
+      complete && { text: `${complete} complete`, priority: 2 },
+      accept && { text: `${accept} run`, priority: 5 },
+      close && { text: `${close} close`, priority: 4 },
+    ]
+  }
 
   /**
    * The full-screen sub-agent viewer, on the alternate screen while open. The inline UI is
@@ -565,17 +652,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const onEvent = (e: AnyEvent) => {
     if (trackSubagent(e)) renderer.requestRender()
     if (viewer?.handleEvent(e)) fullScreen.requestRender()
-    // A dialog of the main session shows as a banner in the viewer; ring once so it is noticed.
-    if (viewer && e.type === "ui.request" && opts.ui) terminal.write("\x07")
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
-      case "turn.start":
+      case "turn.start": {
+        const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting.
-        if (e.data.prompt.display?.origin) pendingNotices.length = 0
+        if (prompt.display?.origin) pendingNotices.length = 0
         // A turn takes held notices along, so no resend is due any more.
         setRetry(undefined)
-        commitBlock("user", userLines(theme, e.data.prompt, terminal.columns))
+        // Messages queued together go as one prompt but read as what they were: one each.
+        const merged =
+          mergedQueue && messageText(prompt) === mergedQueue.join("\n\n") ? mergedQueue : undefined
+        mergedQueue = undefined
+        const shown = merged ? merged.map((text) => ({ ...prompt, display: { text } })) : [prompt]
+        for (const m of shown) commitBlock("user", userLines(theme, m, terminal.columns))
+        termStatus.turnStarted()
         working = true
         thinking = false
         interrupted = false
@@ -585,6 +677,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         streamedChars = 0
         spinner.start(() => renderer.requestRender())
         break
+      }
       case "message.start":
         thinking = false
         preparing = undefined
@@ -647,17 +740,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (e.data.reason === "error") commitBlock("notice", note("error", e.data.error ?? "error"))
         else if (e.data.reason === "aborted") commitBlock("notice", note("interrupted", "Interrupted."))
         else if (!turnShowedOutput) commitBlock("notice", note("info", "(no reply)"))
+        termStatus.turnEnded(e.data.reason)
         if (queued.length) {
           const next = queued.splice(0, queued.length)
           const text = next.map((q) => q.text).join("\n\n")
-          const display = next.some((q) => q.display)
-            ? next.map((q) => q.display ?? q.text).join("\n\n")
-            : undefined
+          const shown = next.map((q) => q.display ?? q.text)
+          const display = next.some((q) => q.display) ? shown.join("\n\n") : undefined
+          mergedQueue = next.length > 1 ? shown : undefined
           queueMicrotask(() => send(outgoing(text, display)))
         }
         break
       case "notice.retry":
         setRetry(e.ts + e.data.delayMs)
+        break
+      case "workspace.changed":
+        termStatus.setBranch(e.data.branch)
         break
       case "compact.start":
         compacting = true
@@ -724,13 +821,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "ui.request": {
         const ui = opts.ui
         if (!ui) break
-        const dialog = new Dialog(e.data, (answer) => answerDialog(ui, dialog, answer))
+        const dialog = new Dialog(e.data, (answer) => answerDialog(ui, dialog, answer), keys)
         dialogs.push(dialog)
+        // Over the viewer it shows only as a banner; the bell rings so it is noticed.
+        termStatus.setWaiting(true, viewer !== undefined)
         break
       }
       case "ui.resolved": {
         const i = dialogs.findIndex((d) => d.request.requestId === e.data.requestId)
         if (i !== -1) dialogs.splice(i, 1)
+        termStatus.setWaiting(dialogs.length > 0)
         break
       }
       case "command.output": {
@@ -827,6 +927,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     subagentCalls.clear()
     pendingNotices.length = 0
     setRetry(undefined)
+    termStatus.setFolder(next.cwd)
     if (next.messages.length) showHistory(next)
     renderer.requestRender()
   }
@@ -834,7 +935,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Sets how much of later tool results is committed; what is in the scrollback stays. */
   function setDetail(level: ToolDetailLevel): string {
     detail = level
-    return `Tool output: ${level} (applies to tool results from now on; Ctrl+O cycles)`
+    const cycle = keys.label("tool-output")
+    return `Tool output: ${level} (applies to tool results from now on${cycle ? `; ${cycle} cycles` : ""})`
   }
 
   /** Alt+Enter or Ctrl+Q: while a turn runs, queues the message to send after it. */
@@ -870,6 +972,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
     const i = dialogs.indexOf(dialog)
     if (i !== -1) dialogs.splice(i, 1)
+    termStatus.setWaiting(dialogs.length > 0)
     const { requestId, title } = dialog.request
     if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
     const shown =
@@ -893,13 +996,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // What was committed but not drawn yet still belongs in the scrollback.
     if (pendingCommits.length) renderer.render()
     renderer.stop({ clear: true })
+    termStatus.stop()
     if (terminal instanceof ProcessTerminal) terminal.stop()
     else terminal.restore()
     resolveExit(code)
   }
 
   function onInput(e: InputEvent) {
-    // The viewer owns the keyboard while it is open.
+    // Focus is the terminal's, not a key: it goes to the title and bell even over the viewer.
+    if (e.type === "focus") return termStatus.focus(e.focused)
+    // The viewer owns the keyboard while it is open, Ctrl+L included: the inline UI is hidden.
     if (viewer) {
       viewer.handleInput(e)
       fullScreen.requestRender()
@@ -909,37 +1015,41 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
     // with candidates for text the editor no longer holds.
     if (!dialog && !search.active) syncCompletions()
+    if (keys.is(e, "redraw")) {
+      // Also over a dialog or the search: they are part of the live region.
+      return renderer.redraw()
+    }
     if (dialog) {
-      // Ctrl+C closes the dialog like Esc.
-      dialog.handleInput(matchesKey(e, "c", { ctrl: true }) ? key("escape") : e)
+      // Ctrl+C closes the dialog like Esc (dialog.cancel).
+      dialog.handleInput(e)
     } else if (search.active) {
       // Keys like the arrows end the search and then do what they do.
       if (search.handleKey(e) === "accepted-pass") return onInput(e)
     } else if (popup?.open && handlePopupKey(e)) {
-      // The popup took ↑↓, Tab, Enter or Esc.
+      // The popup took one of its keys (popup.*).
     } else if (filePicker.open && handleFileKey(e)) {
-      // The file picker took ↑↓, Tab, Enter or Esc.
-    } else if (matchesKey(e, "r", { ctrl: true })) {
+      // The file picker took one of its keys (popup.*).
+    } else if (keys.is(e, "history.search")) {
       search.start()
     } else if (
-      (matchesKey(e, "up") || matchesKey(e, "down")) &&
-      historyNav.move(matchesKey(e, "up") ? -1 : 1)
+      (keys.is(e, "history.prev") || keys.is(e, "history.next")) &&
+      historyNav.move(keys.is(e, "history.prev") ? -1 : 1)
     ) {
-      // ↑↓ walked the prompt history.
-    } else if (matchesKey(e, "enter", { alt: true }) || matchesKey(e, "q", { ctrl: true })) {
+      // The key walked the prompt history.
+    } else if (keys.is(e, "queue")) {
       queue()
-    } else if (matchesKey(e, "c", { ctrl: true })) {
+    } else if (keys.is(e, "cancel")) {
       if (working) interrupt()
       else if (!editor.isEmpty) editor.clear()
       else return quit()
-    } else if (matchesKey(e, "d", { ctrl: true }) && !working && editor.isEmpty) {
+    } else if (keys.is(e, "exit") && !working && editor.isEmpty) {
       return quit()
-    } else if (matchesKey(e, "o", { ctrl: true })) {
+    } else if (keys.is(e, "tool-output")) {
       hintNote = { text: setDetail(nextDetail(detail)), until: Date.now() + HINT_NOTE_MS }
       clearTimeout(hintTimer)
       hintTimer = setTimeout(() => renderer.requestRender(), HINT_NOTE_MS + 10)
-    } else if (matchesKey(e, "escape")) {
-      // A /compact runs without a turn; Esc stops it too.
+    } else if (keys.is(e, "interrupt")) {
+      // A /compact runs without a turn; interrupt stops it too.
       if (working || compacting) interrupt()
     } else {
       editor.handleInput(e)
@@ -992,6 +1102,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
+  termStatus.start()
   commitBlock("banner", [
     `${theme.accent("Amira")} ${theme.muted(`· ${agent.model.provider}/${agent.model.id} · ${agent.cwd}`)}`,
   ])

@@ -1,7 +1,14 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
-import { type Agent, activePackages, listSessions, SessionStore, trackWorkspace } from "@amira/core"
-import { PromptHistory, runInteractive } from "@amira/tui"
+import {
+  type Agent,
+  activePackages,
+  amiraPath,
+  listSessions,
+  SessionStore,
+  trackWorkspace,
+} from "@amira/core"
+import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { resolveConfig } from "./config.ts"
@@ -81,6 +88,9 @@ async function run(argv: string[]): Promise<number> {
   if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
   }
+  // Problems with keybindings.json show with the settings warnings.
+  const keybindings = interactive ? loadKeybindings(amiraPath("keybindings.json")) : undefined
+  if (keybindings) config.warnings.push(...keybindings.warnings)
 
   // Where failures of event subscribers go: stderr in print mode, the UI in interactive mode.
   let agentRef: Agent | undefined
@@ -161,6 +171,8 @@ async function run(argv: string[]): Promise<number> {
       onReady,
       history: PromptHistory.forProject(args.cwd),
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
+      ...(keybindings ? { keybindings: keybindings.keys } : {}),
+      ...(config.settings.tui ? { settings: config.settings.tui } : {}),
     })
   } finally {
     stopWorkspace()

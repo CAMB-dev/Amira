@@ -95,7 +95,13 @@ export interface PasteEvent {
   text: string
 }
 
-export type InputEvent = KeyEvent | PasteEvent
+/** The terminal window gained or lost focus; only sent while focus reporting (mode 1004) is on. */
+export interface FocusEvent {
+  type: "focus"
+  focused: boolean
+}
+
+export type InputEvent = KeyEvent | PasteEvent | FocusEvent
 
 export function key(name: KeyId, mods: Partial<Pick<KeyEvent, "ctrl" | "shift" | "alt">> = {}): KeyEvent {
   return { type: "key", name, ctrl: !!mods.ctrl, shift: !!mods.shift, alt: !!mods.alt }

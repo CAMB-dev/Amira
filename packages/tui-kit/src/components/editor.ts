@@ -39,6 +39,10 @@ export interface EditorOptions {
    */
   foldPastes?: { lines: number; chars: number }
   pasteLabel?: (info: PasteInfo) => string
+  /** The submit key; default plain Enter. */
+  isSubmit?: (e: InputEvent) => boolean
+  /** The newline key; default Shift+Enter or Ctrl+Enter. */
+  isNewline?: (e: InputEvent) => boolean
 }
 
 /** A visual row: part of logical line `line` from `start` to `end` (UTF-16 indices). */
@@ -259,7 +263,8 @@ export class Editor implements Component {
       else this.insert(e.text)
       return true
     }
-    if (isSubmitKey(e)) {
+    if (e.type !== "key") return false
+    if ((this.opts.isSubmit ?? isSubmitKey)(e)) {
       if (this.isEmpty) return false
       const text = this.getText()
       const info: SubmitInfo = { display: this.getDisplayText(), parts: this.getParts() }
@@ -267,7 +272,7 @@ export class Editor implements Component {
       this.opts.onSubmit?.(text, info)
       return true
     }
-    if (isNewlineKey(e)) {
+    if ((this.opts.isNewline ?? isNewlineKey)(e)) {
       this.insert("\n")
       return true
     }

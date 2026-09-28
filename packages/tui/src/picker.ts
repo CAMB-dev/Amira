@@ -1,5 +1,5 @@
 import { type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
-import { inputGlyphs } from "./input-glyphs.ts"
+import { glyphs } from "./glyphs.ts"
 
 /** Rows of items shown at once; the list scrolls to keep the selection visible. */
 export const PICKER_ROWS = 8
@@ -141,7 +141,7 @@ export function pickerRows(rows: PickerRow[], selected: number, width: number, t
     const desc = r.description ? `  ${theme.muted(r.description)}` : ""
     const line =
       start + i === selected
-        ? `${theme.accent(inputGlyphs.pointer)} ${theme.accent(r.label)}${pad}${desc}`
+        ? `${theme.accent(glyphs.pointer)} ${theme.accent(r.label)}${pad}${desc}`
         : `  ${r.label}${pad}${desc}`
     return truncateToWidth(line, width, "…")
   })
