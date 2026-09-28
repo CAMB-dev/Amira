@@ -86,7 +86,10 @@ test("assembles streamed tool calls and keeps invalid JSON arguments", async () 
 })
 
 test("reports HTTP errors and marks 429 as retryable", async () => {
-  const ai = createAi({ fetch: fakeFetch(new Response("slow down", { status: 429 })) })
+  const ai = createAi({
+    env: { OPENAI_API_KEY: "k" },
+    fetch: fakeFetch(new Response("slow down", { status: 429 })),
+  })
   const events: StreamEvent[] = []
   for await (const e of ai.stream({ model: ai.model("openai/x"), systemPrompt: "", messages: [], tools: [] }))
     events.push(e)

@@ -42,10 +42,14 @@ export function createAi(opts: AiOptions = {}): Ai {
       return resolveModelInfo(provider(ref.slice(0, slash)), ref.slice(slash + 1))
     },
     stream(req, signal) {
-      const p = provider(req.model.provider)
+      const p = providers.get(req.model.provider)
+      if (!p) return failed(req, `unknown provider "${req.model.provider}"`, "unknown_provider")
       const dialect = dialects.get(req.model.dialect)
-      if (!dialect) throw new Error(`unknown dialect "${req.model.dialect}"`)
+      if (!dialect) return failed(req, `unknown dialect "${req.model.dialect}"`, "unknown_dialect")
       const apiKey = p.apiKey ?? (p.apiKeyEnv ? env[p.apiKeyEnv] : undefined)
+      if (p.apiKeyEnv && !apiKey) {
+        return failed(req, `${p.apiKeyEnv} is not set; export it to use provider ${p.id}`, "missing_api_key")
+      }
       return dialect.stream(req, {
         endpoint: {
           baseUrl: p.baseUrl,
@@ -60,5 +64,20 @@ export function createAi(opts: AiOptions = {}): Ai {
     registerProvider: (p) => void providers.set(p.id, p),
     registerDialect: (d) => void dialects.set(d.id, d),
     providers: () => [...providers.values()],
+  }
+}
+
+/** A stream that ends at once with an error, so callers see one failure path. */
+async function* failed(req: ModelRequest, message: string, code: string): AsyncGenerator<StreamEvent> {
+  yield {
+    type: "error",
+    error: { message, code },
+    retryable: false,
+    message: {
+      role: "assistant",
+      content: [],
+      model: { provider: req.model.provider, model: req.model.id },
+      stopReason: "error",
+    },
   }
 }
