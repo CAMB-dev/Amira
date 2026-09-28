@@ -13,6 +13,9 @@ const noProbe = async () => ({
   leftoverInput: "",
 })
 
+/** Alt+Enter in the kitty keyboard protocol. */
+const ALT_ENTER = "\x1b[13;3u"
+
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
   while (!check()) {
@@ -60,6 +63,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   const exited = runInteractive({
     agent,
     status: host.status,
+    ui: host.ui,
     terminal,
     setup: async () => ({ ...(await noProbe()), leftoverInput: o.leftoverInput ?? "" }),
     onReady: () => agent.start("startup"),
@@ -75,7 +79,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     await Bun.sleep(30)
   }
   await shows("Amira")
-  return { agent, bus, terminal, screen, all, live, shows, idle, exited }
+  return { agent, bus, host, terminal, screen, all, live, shows, idle, exited }
 }
 
 test("a conversation: user message, tool call and reply end up in the transcript", async () => {
@@ -105,7 +109,7 @@ test("Esc interrupts a running turn, keeps the partial text and sends queued mes
   terminal.send("first\r")
   await waitFor(() => agent.status === "working", "working")
   await shows("01234567")
-  terminal.send("follow up\r")
+  terminal.send(`follow up${ALT_ENTER}`)
   await shows("queued › follow up")
   terminal.send("\x1b[27u")
   await shows("Interrupted.")
@@ -163,7 +167,7 @@ test("turn events from other sessions on the bus do not affect the UI", async ()
   terminal.send("go\r")
   await waitFor(() => agent.status === "working", "working")
   bus.emit("turn.end", { reason: "done", steps: 1 }, { sessionId: "sub_agent" })
-  terminal.send("second\r")
+  terminal.send(`second${ALT_ENTER}`)
   await shows("queued › second")
   await idle()
   terminal.send("\x03")
@@ -279,6 +283,90 @@ test("running tools show as lines with their arguments and are replaced by the r
   await idle()
   // The live line was replaced by the committed one, not left behind as a duplicate.
   expect(all().split("● slow bun test --watch").length - 1).toBe(1)
+  terminal.send("\x03")
+  await exited
+})
+
+const lastUserText = (req: { messages: { role: string; content: unknown }[] }) => {
+  const m = req.messages.at(-1)!
+  return m.role === "user" ? (m.content as { text: string }[])[0]!.text : m.role
+}
+
+test("Enter while working steers the turn; the message joins it before the next model call", async () => {
+  const { terminal, live, all, shows, idle, exited } = await setup([
+    { text: "looking", delayMs: 40, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+    (req) => ({ text: `saw ${lastUserText(req)}` }),
+  ])
+  terminal.send("go\r")
+  await waitFor(() => live().includes("Enter steer · Alt+Enter queue"), "steer hint")
+  terminal.send("also B\r")
+  await shows("saw also B")
+  await idle()
+  const text = all()
+  expect(text.indexOf("● read")).toBeLessThan(text.indexOf("› also B"))
+  expect(text.indexOf("› also B")).toBeLessThan(text.indexOf("saw also B"))
+  expect(live()).not.toContain("steering ›")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a steering message an interrupt drops goes back into the editor", async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+  ])
+  terminal.send("go\r")
+  await shows("01234567")
+  terminal.send("keep this\r")
+  await waitFor(() => live().includes("steering › keep this"), "steering line")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  await idle()
+  expect(live()).toContain("› keep this")
+  expect(live()).not.toContain("steering ›")
+  expect(agent.messages.filter((m) => m.role === "user").length).toBe(1)
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("extension dialogs are answered inline: confirm, select and input", async () => {
+  const { host, terminal, live, all, shows, idle, exited, agent } = await setup([
+    { toolCalls: [{ name: "ask", args: {} }] },
+    { text: "thanks" },
+  ])
+  await host.load((api) => {
+    api.registerTool(
+      defineTool({
+        name: "ask",
+        description: "",
+        parameters: {},
+        execute: async () => {
+          const ok = await api.ui.confirm("Proceed?", "It is safe")
+          const pick = await api.ui.select("Pick one", ["red", "green", "blue"])
+          const name = await api.ui.input("Name", { placeholder: "your name" })
+          const cancelled = await api.ui.input("Skip me")
+          return textResult(`${ok} ${pick} ${name} ${cancelled}`)
+        },
+      }),
+    )
+  }, "asker")
+  terminal.send("go\r")
+  await waitFor(() => live().includes("? Proceed? (asker)"), "confirm")
+  expect(live()).toContain("It is safe")
+  terminal.send("y")
+  await waitFor(() => live().includes("? Pick one"), "select")
+  terminal.send("\x1b[B\r")
+  await waitFor(() => live().includes("? Name"), "input")
+  terminal.send("Ada\r")
+  await waitFor(() => live().includes("? Skip me"), "second input")
+  terminal.send("\x1b[27u")
+  await shows("thanks")
+  await idle()
+  const result = agent.messages.find((m) => m.role === "toolResult")
+  expect(result?.content[0]).toEqual({ type: "text", text: "true green Ada undefined" })
+  expect(all()).toContain("? Pick one › green")
+  expect(all()).toContain("? Skip me › cancelled")
+  expect(host.ui.pending).toEqual([])
   terminal.send("\x03")
   await exited
 })
