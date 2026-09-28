@@ -9,27 +9,12 @@ import {
   truncateToWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { DiffView, parseUnifiedDiff } from "./diff-view.ts"
 
 export type DialogRequest = EventMap["ui.request"]
 
 /** Most diff lines a review dialog shows inline; the full-screen review comes later (D8). */
 const DIFF_LINES = 30
-
-/** A unified diff, colored by line kind and cut to DIFF_LINES. */
-function diffLines(diff: string, width: number, ctx: RenderContext): string[] {
-  const { theme } = ctx
-  const all = diff.replace(/\n$/, "").split("\n")
-  const shown = all.slice(0, DIFF_LINES).map((line) => {
-    const cut = truncateToWidth(line.replace(/\t/g, "  "), width, "…")
-    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) return theme.muted(cut)
-    if (line.startsWith("+")) return theme.success(cut)
-    if (line.startsWith("-")) return theme.error(cut)
-    if (line.startsWith("@@")) return theme.accent(cut)
-    return cut
-  })
-  if (all.length > DIFF_LINES) shown.push(theme.muted(`… ${all.length - DIFF_LINES} more lines`))
-  return shown
-}
 
 /** undefined cancels the dialog. */
 export type DialogAnswer = string | boolean | undefined
@@ -108,7 +93,8 @@ export class Dialog implements Component {
       if (r.message) lines.push(...wrapText(theme.muted(r.message), width))
       lines.push(theme.muted("y yes · n no · Esc cancel"))
     } else if (r.kind === "select" || r.kind === "diff-review") {
-      if (r.kind === "diff-review") lines.push(...diffLines(r.diff, width, ctx))
+      if (r.kind === "diff-review")
+        lines.push(...new DiffView(parseUnifiedDiff(r.diff), DIFF_LINES).render(width, ctx))
       const options = this.#options()
       if (this.#filter) lines.push(`${theme.muted("filter ›")} ${this.#filter}`)
       const start = Math.min(

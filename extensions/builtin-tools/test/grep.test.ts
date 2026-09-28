@@ -36,6 +36,10 @@ test("content mode shows file:line:text", async () => {
     "src/deep/b.ts:1:// TODO one",
     "src/deep/b.ts:2:// TODO two",
   ])
+  expect(r.details).toMatchObject({ mode: "content", matchedFiles: 2, matches: 4, total: 4 })
+  const files = await grep({ pattern: "TODO" })
+  expect(files.details).toMatchObject({ mode: "files_with_matches", matchedFiles: 3, total: 3 })
+  expect((files.details as { matches?: number }).matches).toBeUndefined()
 })
 
 test("count mode, glob filter and single-file path", async () => {

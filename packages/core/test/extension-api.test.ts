@@ -29,3 +29,21 @@ test("extensions get the cwd, the user directory and a way to report later failu
     data: { source: "ext:test", error: "server x failed" },
   })
 })
+
+test("tool renderers: the last one registered for a tool wins, and unloading restores the one before", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  const first = { summary: () => "first" }
+  const second = { summary: () => "second" }
+  await host.load((api) => void api.registerToolRenderer("read", first), "ext:a")
+  expect(host.renderers.get("read")).toBe(first)
+  await host.load((api) => void api.registerToolRenderer("read", second), "ext:b")
+  expect(host.renderers.get("read")).toBe(second)
+  host.unload("ext:b")
+  expect(host.renderers.get("read")).toBe(first)
+  host.unload("ext:a")
+  expect(host.renderers.get("read")).toBeUndefined()
+})

@@ -11,7 +11,8 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { summarizeArgs, toolLines, userLines } from "./format.ts"
+import { summarizeArgs, userLines } from "./format.ts"
+import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
 
 /** What the viewer reads its sub-agents from. */
 export interface SubagentSource {
@@ -28,6 +29,8 @@ export interface SubagentViewerOptions {
   now?: () => number
   /** Called when the user asks to leave the viewer (Esc, q, Ctrl+C). */
   onClose?: () => void
+  /** Presents tool calls like the main transcript does. */
+  presenters?: PresenterSource
 }
 
 function compactTokens(n: number): string {
@@ -88,6 +91,7 @@ export function transcriptLines(
   kids: SubagentInfo[],
   width: number,
   now: number,
+  presenters?: PresenterSource,
 ): string[] {
   const out: string[] = []
   // A forked child starts with its parent's history; its own part starts at its task.
@@ -117,8 +121,10 @@ export function transcriptLines(
       if (b.type === "text" && b.text.trim()) out.push(...wrapText(b.text.trim(), width), "")
       else if (b.type === "toolCall") {
         const r = results.get(b.id)
-        if (r) out.push(...toolLines(theme, b.name, b.args, r, 0, width))
-        else {
+        if (r) {
+          const call = { name: b.name, args: b.args, result: { content: r.content, isError: r.isError } }
+          out.push(...finishedToolLines(theme, presenters?.get(b.name), call, "summary", width))
+        } else {
           const summary = summarizeArgs(b.args)
           out.push(
             truncateToWidth(
@@ -161,6 +167,7 @@ export class SubagentViewer implements Component {
   #waiting: () => string[]
   #now: () => number
   #onClose: () => void
+  #presenters: PresenterSource | undefined
   #current: string
   #views = new Map<string, ScrollView>()
   #streams = new Map<string, Streaming>()
@@ -175,6 +182,7 @@ export class SubagentViewer implements Component {
     this.#waiting = opts.waiting ?? (() => [])
     this.#now = opts.now ?? Date.now
     this.#onClose = opts.onClose ?? (() => {})
+    this.#presenters = opts.presenters
   }
 
   /** The sub-agent shown. */
@@ -275,7 +283,7 @@ export class SubagentViewer implements Component {
       kids.some((k) => k.status === "running") ? Math.floor(now / 1000) : 0,
     ].join("|")
     if (this.#cache?.key !== key) {
-      this.#cache = { key, lines: transcriptLines(theme, info, messages, kids, width, now) }
+      this.#cache = { key, lines: transcriptLines(theme, info, messages, kids, width, now, this.#presenters) }
     }
     const out = [...this.#cache.lines]
     const s = this.#streams.get(info.id)

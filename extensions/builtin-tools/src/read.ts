@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { extname } from "node:path"
-import { defineTool, textResult } from "@amira/api"
+import { defineTool, type ReadDetails, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
 import { type LineWindow, type ReadLinesResult, readLineWindow } from "./lines.ts"
 import { resolvePath } from "./paths.ts"
@@ -89,7 +89,7 @@ export const readTool = defineTool<ReadParams>({
       }
       return {
         content: [{ type: "image", mimeType, data: bytes.toString("base64") }],
-        details: { path: abs, mimeType, bytes: bytes.length },
+        details: { path: abs, mimeType, bytes: bytes.length } satisfies ReadDetails,
       }
     }
 
@@ -105,17 +105,25 @@ export const readTool = defineTool<ReadParams>({
     if (window === "binary") {
       return textResult(`${abs} appears to be a binary file and cannot be read as text.`, true)
     }
-    let text = formatWindow(abs, window, start)
+    const shown = formatWindow(abs, window, start)
+    let text = shown.text
     if (window.invalidUtf8) text += `\n\n${INVALID_UTF8_WARNING}`
-    return textResult(text)
+    const details: ReadDetails = {
+      path: abs,
+      startLine: start,
+      lines: shown.lines,
+      ...(window.total !== undefined ? { totalLines: window.total } : {}),
+    }
+    return { content: [{ type: "text", text }], details }
   },
 })
 
-function formatWindow(abs: string, window: LineWindow, start: number): string {
+/** The numbered lines of a window, and how many lines of the file they show. */
+function formatWindow(abs: string, window: LineWindow, start: number): { text: string; lines: number } {
   const { lines, total } = window
-  if (total === 0) return `(${abs} is empty)`
+  if (total === 0) return { text: `(${abs} is empty)`, lines: 0 }
   if (total !== undefined && start > total) {
-    return `(offset ${start} is past the end of ${abs}, which has ${total} lines)`
+    return { text: `(offset ${start} is past the end of ${abs}, which has ${total} lines)`, lines: 0 }
   }
 
   const out: string[] = []
@@ -134,7 +142,7 @@ function formatWindow(abs: string, window: LineWindow, start: number): string {
     const of = total === undefined ? "" : ` of ${total}`
     out.push("", `(Showing lines ${start}-${last}${of}. Use offset=${last + 1} to read more.)`)
   }
-  return out.join("\n")
+  return { text: out.join("\n"), lines: last - start + 1 }
 }
 
 function formatMb(bytes: number): string {

@@ -9,6 +9,7 @@ import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
+import { ToolRendererRegistry } from "./tool-renderers.ts"
 import { UiRequests } from "./ui-requests.ts"
 
 let virtualApiInstalled = false
@@ -35,6 +36,8 @@ export interface ExtensionHostOptions {
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
+  /** Where tool presenters go. Default: a new registry. */
+  renderers?: ToolRendererRegistry
   /** Where slash commands go. Default: a new registry. */
   commands?: CommandRegistry
   /** Where extension dialogs go. Default: a new one on `bus`. */
@@ -56,12 +59,14 @@ export class ExtensionHost {
   /** Extension files imported before, which a reload must import anew. */
   #imported = new Set<string>()
   readonly status: StatusRegistry
+  readonly renderers: ToolRendererRegistry
   readonly commands: CommandRegistry
   readonly ui: UiRequests
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
     this.status = opts.status ?? new StatusRegistry()
+    this.renderers = opts.renderers ?? new ToolRendererRegistry()
     this.commands = opts.commands ?? new CommandRegistry()
     this.ui = opts.ui ?? new UiRequests(opts.bus, opts.sessionId ? { sessionId: opts.sessionId } : {})
   }
@@ -183,6 +188,7 @@ export class ExtensionHost {
           this.#requestRender()
         })
       },
+      registerToolRenderer: (toolName, presenter) => track(this.renderers.register(toolName, presenter)),
       requestRender: () => this.#requestRender(),
       runCommand: (argv, options) => runCommand(argv, options),
       ui: this.#uiFor(source, track),

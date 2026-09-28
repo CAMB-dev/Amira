@@ -40,6 +40,11 @@ export class Spinner implements Component {
     this.frame = (this.frame + 1) % this.frames.length
   }
 
+  /** The current frame, for drawing the spinner inside another line. */
+  get glyph(): string {
+    return this.frames[this.frame] ?? ""
+  }
+
   render(width: number, { theme }: RenderContext): string[] {
     const glyph = theme.accent(this.frames[this.frame] ?? "")
     const text = this.label ? `${glyph} ${theme.muted(this.label)}` : glyph

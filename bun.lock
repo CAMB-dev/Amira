@@ -144,6 +144,7 @@
         "@amira/tui-kit": "workspace:*",
       },
       "devDependencies": {
+        "@amira/builtin-tools": "workspace:*",
         "@amira/ext-agent": "workspace:*",
         "@amira/ext-status": "workspace:*",
       },

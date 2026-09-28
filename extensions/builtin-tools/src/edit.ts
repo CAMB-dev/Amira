@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises"
-import { defineTool, textResult } from "@amira/api"
+import { defineTool, type EditDetails, textResult } from "@amira/api"
+import { fileDiff } from "./diff.ts"
 import { statOrNull } from "./files.ts"
 import { displayPath, fileKey, resolvePath } from "./paths.ts"
 import { decodeText, encodeText, looksBinary } from "./text.ts"
@@ -97,7 +98,8 @@ export const editTool = defineTool<EditParams>({
           text: `Edited ${displayPath(ctx.cwd, abs)}: replaced ${n} occurrence${n === 1 ? "" : "s"}`,
         },
       ],
-      details: { path: abs, replacements: n },
+      // The diff is for frontends: details never reach the model, which knows what it changed.
+      details: { path: abs, replacements: n, ...fileDiff(text, updated) } satisfies EditDetails,
     }
   },
 })

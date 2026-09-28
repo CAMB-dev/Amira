@@ -1,11 +1,13 @@
 import { defineExtension, defineTool, type ExtensionAPI, textResult, type WebSettings } from "@amira/api"
 import type { Resolver } from "./address.ts"
 import { FetchError, fetchPage, PageCache, parseUrl, renderPage } from "./fetch.ts"
+import { webFetchPresenter, webSearchPresenter } from "./presenters.ts"
 import { normalizeDomain, renderResults, SearchError, search } from "./search.ts"
 
 export { isPrivateAddress } from "./address.ts"
 export { htmlToMarkdown } from "./html.ts"
 export { BACKENDS, parseExaText } from "./search.ts"
+export { webFetchPresenter, webSearchPresenter }
 
 export const WEB_SEARCH_TOOL = "web_search"
 export const WEB_FETCH_TOOL = "web_fetch"
@@ -180,6 +182,8 @@ export function createWebExtension(opts: WebExtensionOptions = {}) {
     const { webSearch, webFetch } = webTools(api.settings.web ?? {}, opts)
     api.registerTool(webSearch)
     api.registerTool(webFetch)
+    api.registerToolRenderer(WEB_SEARCH_TOOL, webSearchPresenter)
+    api.registerToolRenderer(WEB_FETCH_TOOL, webFetchPresenter)
   })
 }
 

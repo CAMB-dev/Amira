@@ -1,4 +1,4 @@
-import { defineTool, textResult } from "@amira/api"
+import { type BashDetails, defineTool, textResult } from "@amira/api"
 import { type RunResult, runCommand } from "@amira/proc"
 import { statOrNull } from "./files.ts"
 import {
@@ -9,6 +9,7 @@ import {
   resolvePowerShell,
 } from "./powershell.ts"
 import { resolveShell, type Shell } from "./shell.ts"
+import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE } from "./shell-notes.ts"
 import { StandbyPool } from "./standby.ts"
 import { truncateOutput } from "./truncate.ts"
 
@@ -71,6 +72,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
       const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1, Math.floor(timeout ?? DEFAULT_TIMEOUT_MS)))
       const shell = await resolve()
 
+      const started = performance.now()
       let lastUpdate = 0
       let output = ""
       let run: RunResult
@@ -96,19 +98,17 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
         return textResult(`Failed to start ${shell.path}: ${(err as Error).message}`, true)
       }
 
-      const out = await truncateOutput(run.output.trimEnd(), name)
+      const durationMs = Math.round(performance.now() - started)
+      const printed = run.output.trimEnd()
+      const out = await truncateOutput(printed, name)
       const parts = [out.text || "(no output)"]
       if (shell.label) parts.unshift(`Shell: ${shell.label}`)
       parts.push(statusLine(run, timeoutMs))
       if (!run.contained) {
-        parts.push(
-          "Warning: the command could not be placed in a job object, so processes it started may still be running.",
-        )
+        parts.push(NOT_CONTAINED_WARNING)
       } else if (!run.settled && !run.aborted) {
         // After an abort the job was terminated, so open pipes are not a sign of survivors.
-        parts.push(
-          "Note: output was still open after the command ended; some processes may still be running.",
-        )
+        parts.push(OUTPUT_OPEN_NOTE)
       }
       return {
         content: [{ type: "text", text: parts.join("\n\n") }],
@@ -120,8 +120,10 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
           settled: run.settled,
           shell: shell.path,
           shellKind: shell.kind,
-          fullOutputPath: out.fullOutputPath,
-        },
+          ...(out.fullOutputPath ? { fullOutputPath: out.fullOutputPath } : {}),
+          durationMs,
+          outputLines: printed === "" ? 0 : printed.split("\n").length,
+        } satisfies BashDetails,
       }
     },
   })

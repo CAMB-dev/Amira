@@ -4,9 +4,11 @@ import {
   type AnyEvent,
   type CommandDefinition,
   defineTool,
+  type Message,
   type SessionControl,
   textResult,
 } from "@amira/api"
+import { builtinPresenters } from "@amira/builtin-tools"
 import {
   Agent,
   AgentTree,
@@ -20,7 +22,7 @@ import statusExtension from "@amira/ext-status"
 import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
-import { subagentLines, summarizeArgs, toolLines } from "../src/format.ts"
+import { subagentLines } from "../src/format.ts"
 
 const noProbe = async () => ({
   capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -53,6 +55,12 @@ interface SetupOptions {
   tree?: boolean
   /** Called after every write to the terminal, once the screen shows it. */
   onWrite?: (screen: VirtualScreen) => void
+  /** Present tool calls with the built-in tools' presenters. */
+  presenters?: boolean
+  /** Let the UI add its own commands (/verbose). */
+  tuiCommands?: boolean
+  /** A conversation the session starts with, as if resumed. */
+  history?: Message[]
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -104,11 +112,17 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
       agent,
     })
   }
+  if (o.presenters) {
+    for (const [name, p] of Object.entries(builtinPresenters)) host.renderers.register(name, p)
+  }
+  if (o.history) agent.messages.push(...o.history)
   const exited = runInteractive({
     agent,
     status: host.status,
     ui: host.ui,
     ...(commands ? { commands } : {}),
+    ...(o.tuiCommands ? { registerCommand: (c) => host.commands.register(c, "builtin:tui") } : {}),
+    ...(o.presenters ? { toolRenderers: host.renderers } : {}),
     terminal,
     setup: async () => ({ ...(await noProbe()), leftoverInput: o.leftoverInput ?? "" }),
     onReady: () => agent.start("startup"),
@@ -141,9 +155,292 @@ test("a conversation: user message, tool call and reply end up in the transcript
   expect(text).toContain("● read a.ts")
   expect(text).toContain("⎿ contents of a.ts (+2 lines)")
   expect(text.indexOf("● read")).toBeLessThan(text.indexOf("The file has three lines."))
+  // One blank line between blocks, and the reply indented so it reads apart from the rest.
+  expect(text).toContain(
+    [
+      "Amira · mock/m1 · /work/proj",
+      "",
+      "› what is in a.ts?",
+      "",
+      "● read a.ts",
+      "  ⎿ contents of a.ts (+2 lines)",
+      "",
+      "  The file has three lines.",
+      "",
+      "╭",
+    ].join("\n"),
+  )
   terminal.send("\x03")
   expect(await exited).toBe(0)
   expect(terminal.isRaw).toBe(false)
+})
+
+const parallel = { description: "", parameters: {}, concurrency: "parallel" as const }
+
+test("parallel tool calls reach the transcript in call order, whichever finishes first", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup([
+    {
+      toolCalls: [
+        { name: "slow", args: { path: "a.ts" } },
+        { name: "fast", args: { path: "b.ts" } },
+      ],
+    },
+    { text: "done" },
+  ])
+  let release!: () => void
+  let fastDone = false
+  agent.tools.register(
+    defineTool({
+      name: "slow",
+      ...parallel,
+      execute: () =>
+        new Promise((r) => {
+          release = () => r(textResult("slow result"))
+        }),
+    }),
+    "test",
+  )
+  agent.tools.register(
+    defineTool({
+      name: "fast",
+      ...parallel,
+      execute: async () => {
+        fastDone = true
+        return textResult("fast result")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  // fast finished first: it waits below slow in the live region, not in the transcript yet.
+  await waitFor(() => fastDone && /● slow a\.ts .*\n● fast b\.ts$/m.test(live()), "fast held under slow")
+  await Bun.sleep(30)
+  expect(all()).not.toContain("fast result")
+  release()
+  await shows("done")
+  await idle()
+  expect(all()).toContain(
+    ["● slow a.ts", "  ⎿ slow result", "● fast b.ts", "  ⎿ fast result", "", "  done"].join("\n"),
+  )
+  terminal.send("\x03")
+  await exited
+})
+
+test("a running tool shows the last lines of its output live, and only its result once done", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup([
+    { toolCalls: [{ name: "stream", args: { command: "make" } }] },
+    { text: "built" },
+  ])
+  let release!: () => void
+  agent.tools.register(
+    defineTool({
+      name: "stream",
+      ...parallel,
+      execute: async (_p, ctx) => {
+        ctx.update(textResult("l1\nl2\nl3\nl4\nl5\n"))
+        await new Promise<void>((r) => {
+          release = r
+        })
+        return textResult("ok")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => live().includes("│ l5"), "live output")
+  expect(live()).toContain("  │ l3\n  │ l4\n  │ l5")
+  expect(live()).not.toContain("│ l2")
+  release()
+  await shows("built")
+  await idle()
+  expect(all()).toContain("● stream make\n  ⎿ ok")
+  expect(all()).not.toContain("│ l5")
+  terminal.send("\x03")
+  await exited
+})
+
+test("Esc interrupting a running tool marks it interrupted, muted, not failed", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup([
+    { toolCalls: [{ name: "hang", args: { command: "sleep 100" } }] },
+  ])
+  agent.tools.register(
+    defineTool({
+      name: "hang",
+      ...parallel,
+      execute: (_p, ctx) =>
+        new Promise((r) =>
+          ctx.signal.addEventListener("abort", () => r(textResult("Command was aborted.", true))),
+        ),
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => live().includes("● hang sleep 100"), "running")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  await idle()
+  expect(all()).toContain("⊘ hang sleep 100\n  ⎿ interrupted\n\n⊘ Interrupted.")
+  expect(all()).not.toContain("✗")
+  terminal.send("\x03")
+  await exited
+})
+
+test("failures show their output cut to 8 lines; Ctrl+O shows all of later ones and says so", async () => {
+  const out = Array.from({ length: 20 }, (_, i) => `out ${i + 1}`).join("\n")
+  const { terminal, live, all, shows, idle, exited, agent } = await setup([
+    { toolCalls: [{ name: "fail", args: {} }] },
+    { text: "one" },
+    { toolCalls: [{ name: "fail", args: {} }] },
+    { text: "two" },
+  ])
+  agent.tools.register(
+    defineTool({ name: "fail", ...parallel, execute: async () => textResult(`bad\n${out}`, true) }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("one")
+  await idle()
+  expect(all()).toContain("✗ fail\n  ⎿ bad (+20 lines)\n    out 1\n")
+  expect(all()).toContain("    … 13 more lines\n")
+  expect(all()).not.toContain("out 10")
+  terminal.send("\x0f")
+  await waitFor(() => live().includes("Tool output: full (applies to tool results from now on"), "hint")
+  terminal.send("again\r")
+  await shows("two")
+  await idle()
+  // The first result stays as it was committed; the second one is complete.
+  expect(all().split("    out 10\n").length - 1).toBe(1)
+  expect(all().split("… 13 more lines").length - 1).toBe(1)
+  terminal.send("\x03")
+  await exited
+})
+
+test("/verbose sets the tool output level, printed under the command", async () => {
+  const { terminal, all, shows, exited } = await setup([], { commands: testCommands([]), tuiCommands: true })
+  terminal.send("/verbose collapsed\r")
+  await shows("Tool output: collapsed")
+  // Wrapped to the width, hanging under the result mark.
+  expect(all()).toContain(
+    "› /verbose collapsed\n  ⎿ Tool output: collapsed (applies to tool results from now\n    on; Ctrl+O cycles)",
+  )
+  terminal.send("/verbose loud\r")
+  await shows('Unknown level "loud"')
+  terminal.send("\x03")
+  await exited
+})
+
+test("the built-in presenters: an edit shows its diff with line numbers", async () => {
+  const { terminal, all, shows, idle, exited, agent } = await setup(
+    [
+      { toolCalls: [{ name: "edit", args: { path: "src/a.ts", old_string: "old", new_string: "new" } }] },
+      { text: "ok" },
+    ],
+    { presenters: true },
+  )
+  agent.tools.register(
+    defineTool({
+      name: "edit",
+      ...parallel,
+      execute: async () => ({
+        content: [{ type: "text", text: "Edited src/a.ts: replaced 1 occurrence" }],
+        details: {
+          path: "/work/proj/src/a.ts",
+          replacements: 1,
+          added: 1,
+          removed: 1,
+          hunks: [{ oldStart: 11, oldLines: 2, newStart: 11, newLines: 2, lines: [" keep", "-old", "+new"] }],
+        },
+      }),
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("ok")
+  await idle()
+  expect(all()).toContain(
+    ["● edit src/a.ts", "  ⎿ +1 −1", "    11  keep", "    12 -old", "    12 +new", "", "  ok"].join("\n"),
+  )
+  terminal.send("\x03")
+  await exited
+})
+
+test("a resumed session shows its history like the live transcript, then a separator with its id", async () => {
+  const { terminal, all, agent, exited } = await setup([], {
+    presenters: true,
+    history: [
+      { role: "user", content: [{ type: "text", text: "count" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c1", name: "glob", args: { pattern: "*.ts" } }],
+        model: { provider: "mock", model: "m1" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "glob",
+        content: [{ type: "text", text: "a.ts\nb.ts" }],
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Two." }],
+        model: { provider: "mock", model: "m1" },
+      },
+    ],
+  })
+  await waitFor(() => all().includes("── resumed"), "history")
+  expect(all()).toContain(
+    ["› count", "", "● glob *.ts", "  ⎿ 2 files", "", "  Two.", "", `── resumed ${agent.sessionId} ──`].join(
+      "\n",
+    ),
+  )
+  terminal.send("\x03")
+  await exited
+})
+
+test("the activity line shows what the turn does, its time, output tokens and how to interrupt", async () => {
+  const { terminal, live, idle, exited } = await setup([{ text: "x".repeat(200), delayMs: 20 }])
+  terminal.send("go\r")
+  await waitFor(() => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working · 0s · ↓ \d+ tokens · Esc interrupt/.test(live()), "activity")
+  await idle()
+  expect(live()).not.toContain("Esc interrupt")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a message sent during /compact counts its own time and tokens, not the last turn's", async () => {
+  const said = (text: string): Message[] => [
+    { role: "user", content: [{ type: "text", text }] },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: `re ${text}` }],
+      model: { provider: "mock", model: "m1" },
+    },
+  ]
+  const { terminal, live, all, shows, idle, exited, agent } = await setup(
+    [
+      { text: "first answer", usage: { input: 10, output: 4321 } },
+      { text: "SUMMARY ".repeat(40), delayMs: 10 },
+      { text: "second answer" },
+    ],
+    { cols: 80, history: [...said("a"), ...said("b")] },
+  )
+  terminal.send("q1\r")
+  await shows("first answer")
+  await idle()
+  const compacted = agent.compact()
+  await waitFor(() => live().includes("compacting the conversation"), "compacting")
+  terminal.send("q2\r")
+  await waitFor(() => /› q2|Enter steer/.test(live()), "sent")
+  // The prompt waits for the compaction; its activity line starts from zero meanwhile.
+  expect(live()).toMatch(/compacting the conversation · 0s · Esc interrupt/)
+  expect(live()).not.toContain("↓")
+  expect(await compacted).toBe(true)
+  await shows("second answer")
+  await idle()
+  expect(all()).toContain("Compacted")
+  terminal.send("\x03")
+  await exited
 })
 
 test("Esc interrupts a running turn, keeps the partial text and sends queued messages after", async () => {
@@ -398,27 +695,6 @@ test("startup extension errors are shown in the transcript", async () => {
   await exited
 })
 
-test("summarizeArgs keeps short scalar arguments on one line", () => {
-  expect(summarizeArgs({ command: "bun  test\n--watch", timeout: 5, obj: { a: 1 } })).toBe(
-    "bun test --watch 5",
-  )
-  expect(summarizeArgs({ x: "a".repeat(200) }, 10)).toBe(`${"a".repeat(9)}…`)
-})
-
-test("tool lines fit the terminal width", () => {
-  const plain = {
-    text: (s: string) => s,
-    accent: (s: string) => s,
-    muted: (s: string) => s,
-    error: (s: string) => s,
-    success: (s: string) => s,
-    warning: (s: string) => s,
-    border: (s: string) => s,
-  }
-  const lines = toolLines(plain, "bash", { command: "x".repeat(300) }, textResult("y".repeat(300)), 0, 40)
-  expect(lines.every((l) => l.length <= 40)).toBe(true)
-})
-
 test("the running tool is on screen before the tool starts, even if it blocks the event loop", async () => {
   const { terminal, screen, shows, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "block", args: {} }] },
@@ -442,9 +718,10 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   terminal.send("go\r")
   await shows("● block")
   await idle()
-  // The running tool is drawn as its own line with a blinking bullet.
-  expect(seenWhileRunning).toContain("● block")
-  expect(seenWhileRunning).toContain("running block")
+  // The running tool is drawn as its own line with a spinner and its time on the right, and the
+  // activity line under it has the turn's time and how to interrupt.
+  expect(seenWhileRunning).toMatch(/● block +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 0s/)
+  expect(seenWhileRunning).toMatch(/^0s · (↓ \d+ tokens · )?Esc interrupt$/m)
   terminal.send("\x03")
   await exited
 })
@@ -891,10 +1168,92 @@ test("running sub-agents show with role, elapsed time, tokens and task, and go a
   await waitFor(() => live().includes("◆ explorer · 0s · 0 tok · find the config file"), "sub-agent line")
   await shows("all done")
   await idle()
-  expect(live()).not.toContain("◆ explorer")
+  // The running line is gone; a one-line summary of how it ended is in the transcript instead.
+  expect(live()).not.toContain("◆ explorer ·")
+  expect(all()).toMatch(/◆ explorer ✓ \d+\.\ds · 1\.5k tok · child says hi\n● delegate/)
   // The child's reply only shows as its commander's tool result, not as a reply of its own.
   expect(all()).toContain("⎿ child says hi")
   expect(all()).not.toMatch(/^child says hi$/m)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a sub-agent's end line stays with its call when that call is held behind a slower one", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup(
+    [
+      {
+        toolCalls: [
+          { name: "slow", args: { path: "big.log" } },
+          { name: "delegate", args: { task: "look around" } },
+        ],
+      },
+      { text: "child answer" },
+      { text: "all done" },
+    ],
+    { cols: 80, tree: true },
+  )
+  let release!: () => void
+  agent.tools.register(
+    defineTool({
+      name: "slow",
+      ...parallel,
+      execute: () =>
+        new Promise((r) => {
+          release = () => r(textResult("slow result"))
+        }),
+    }),
+    "test",
+  )
+  agent.tools.register(
+    defineTool<{ task: string }>({
+      name: "delegate",
+      ...parallel,
+      execute: async (p, ctx) => {
+        const r = await ctx.session!.spawn!({ role: "explorer", prompt: p.task }).result()
+        return textResult(r.text)
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  // The child is done and so is its call, but both wait below the running slow call.
+  await waitFor(() => /● slow big\.log .*\n◆ explorer ✓ .*child answer\n● delegate/m.test(live()), "held")
+  release()
+  await shows("all done")
+  await idle()
+  const text = all()
+  expect(text).toMatch(/● slow big\.log\n {2}⎿ slow result\n◆ explorer ✓ [^\n]*child answer\n● delegate/)
+  expect(text.match(/◆ explorer ✓/g)).toHaveLength(1)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a sub-agent's line shows its latest tool call while it works", async () => {
+  const { terminal, live, shows, idle, exited, agent } = await setup(
+    [
+      { toolCalls: [{ name: "delegate", args: {} }] },
+      { toolCalls: [{ name: "read", args: { path: "config.ts" } }] },
+      { text: "found it", delayMs: 150 },
+      { text: "all done" },
+    ],
+    { cols: 80, tree: true },
+  )
+  agent.tools.register(
+    defineTool({
+      name: "delegate",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        const r = await ctx.session!.spawn!({ role: "explorer", prompt: "find the config" }).result()
+        return textResult(r.text)
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => /◆ explorer · \d+s · \d+ tok · ● read config\.ts/.test(live()), "activity")
+  await shows("all done")
+  await idle()
   terminal.send("\x03")
   await exited
 })

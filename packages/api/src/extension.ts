@@ -2,6 +2,7 @@ import type { CommandDefinition } from "./commands.ts"
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
+import type { ToolPresenter } from "./tool-renderers.ts"
 import type { ToolDefinition } from "./tools.ts"
 import type { StatusItem, UiApi } from "./ui.ts"
 
@@ -26,6 +27,11 @@ export interface ExtensionAPI {
   registerCommand(command: CommandDefinition): () => void
   /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */
   registerStatusItem(item: StatusItem): () => void
+  /**
+   * Experimental (D1): sets how frontends show calls of the tool `toolName`, whoever registered
+   * the tool. The last presenter registered for a name wins; removing it restores the one before.
+   */
+  registerToolRenderer(toolName: string, presenter: ToolPresenter<any, any>): () => void
   /** Asks frontends to redraw, e.g. after a status item's state changed. */
   requestRender(): void
   /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */

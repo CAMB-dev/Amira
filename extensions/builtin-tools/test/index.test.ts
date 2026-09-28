@@ -4,6 +4,7 @@ import extension from "../src/index.ts"
 
 test("registers the built-in tools (plus powershell on Windows) with the expected concurrency", async () => {
   const tools: ToolDefinition[] = []
+  const renderers: string[] = []
   const api: ExtensionAPI = {
     apiVersion: "0.1.0",
     cwd: process.cwd(),
@@ -15,6 +16,10 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     },
     registerCommand: () => () => {},
     registerStatusItem: () => () => {},
+    registerToolRenderer: (name) => {
+      renderers.push(name)
+      return () => {}
+    },
     requestRender: () => {},
     settings: {},
     on: () => () => {},
@@ -41,4 +46,6 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     expect(t.description.length).toBeGreaterThan(50)
     expect(t.parameters.type).toBe("object")
   }
+  // Every built-in tool is presented through the public renderer API (D1, D27).
+  for (const t of tools) expect(renderers).toContain(t.name)
 })
