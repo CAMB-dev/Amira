@@ -332,3 +332,97 @@ test("a component can commit lines while rendering; they print above the frame i
   r.render()
   expect(screen.text).not.toContain("late")
 })
+
+test("with reflow off, a narrowing resize moves up the rows as they were drawn", () => {
+  for (const reflow of [true, false]) {
+    const { term, screen, root, r } = setup(["xxxxxxxxx", "y", "z"], 10, 10, { reflow })
+    r.commit(["kept"])
+    // The screen does not re-wrap: with reflow on, the renderer goes up one row too many.
+    root.lines = ["x", "y", "z"]
+    term.setSize(5, 10)
+    r.render()
+    expect(term.writes.at(-1)!.startsWith(`${cursor.hide}\r${cursor.up(reflow ? 3 : 2)}\x1b[J`)).toBe(true)
+    expect(screen.lines[0]).toBe(reflow ? "x" : "kept")
+  }
+})
+
+test("redraw clears the screen and prints the newest committed blocks that fit, then the live region", () => {
+  const { screen, r } = setup(["live"], 20, 4)
+  r.start()
+  r.commit(["one"])
+  r.commit(["two", "three"])
+  r.commit(["four"])
+  // Something else wrote over the screen.
+  screen.write("\x1b[1;1Hgarbage\r\nmore garbage")
+  r.redraw()
+  expect(screen.lines).toEqual(["two", "three", "four", "live"])
+  // Printed again, so the older copies stay in the scrollback.
+  expect(screen.scrollback).toContain("one")
+})
+
+test("redraw shows the end of a block too tall for the screen, and lines committed while rendering", () => {
+  let commitNow: string[] = []
+  const root: Component = {
+    render: (_w, ctx) => {
+      if (commitNow.length) ctx.commit?.(commitNow.splice(0))
+      return ["live"]
+    },
+  }
+  const term = new FakeTerminal(20, 4)
+  const screen = new VirtualScreen(20, 4)
+  const write = term.write.bind(term)
+  term.write = (d: string) => {
+    write(d)
+    screen.write(d)
+  }
+  const r = new LiveRenderer(term, root)
+  r.start()
+  r.commit(["a", "b", "c", "d", "e"])
+  r.redraw()
+  expect(screen.lines).toEqual(["c", "d", "e", "live"])
+  commitNow = ["streamed"]
+  r.redraw()
+  expect(screen.lines).toEqual(["d", "e", "streamed", "live"])
+  // The next redraw has it in the history.
+  r.redraw()
+  expect(screen.lines).toEqual(["d", "e", "streamed", "live"])
+})
+
+test("redraw erases the screen in place, so nothing on it is pushed into the scrollback", () => {
+  // The screen scrolls into the scrollback on ED 2 as Windows Terminal and conhost do.
+  const { screen, r } = setup(["input", "status"], 20, 6)
+  r.start()
+  r.commit(["one", "two"])
+  r.redraw()
+  r.redraw()
+  expect(screen.lines).toEqual(["one", "two", "input", "status", "", ""])
+  expect(screen.scrollback).toEqual([])
+})
+
+test("redraw does nothing while suspended, and resuming does not clear the screen", () => {
+  const { term, screen, r } = setup(["live"], 20, 4)
+  r.start()
+  r.commit(["one"])
+  r.suspend()
+  const writes: string[] = []
+  const write = term.write
+  term.write = (d: string) => {
+    writes.push(d)
+    write(d)
+  }
+  r.redraw()
+  expect(writes).toEqual([])
+  r.resume()
+  expect(writes.join("")).not.toContain(cursor.to(0))
+  expect(screen.lines.slice(0, 2)).toEqual(["one", "live"])
+})
+
+test("history keeps at most historyLines lines, dropping the oldest blocks", () => {
+  const { screen, r } = setup(["live"], 20, 10, { historyLines: 3 })
+  r.start()
+  r.commit(["1"])
+  r.commit(["2", "3"])
+  r.commit(["4"])
+  r.redraw()
+  expect(screen.lines.slice(0, 4)).toEqual(["2", "3", "4", "live"])
+})

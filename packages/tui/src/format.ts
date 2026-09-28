@@ -76,6 +76,14 @@ export function userText(message: UserMessage): string {
   return message.content.map((b) => (b.type === "text" ? b.text : `[image ${b.mimeType}]`)).join("\n\n")
 }
 
+/**
+ * Rows of an assistant reply, rendered at the width less the gutter, as the transcript shows
+ * them: indented by the gutter, blank rows left blank.
+ */
+export function replyRows(rows: string[]): string[] {
+  return rows.map((r) => (r === "" ? "" : glyphs.assistant + r))
+}
+
 /** A sub-agent as the live area shows it while it is queued or running. */
 export interface SubagentLine {
   role: string

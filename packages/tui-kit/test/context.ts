@@ -1,5 +1,5 @@
 import type { RenderContext } from "../src/component.ts"
-import type { Theme } from "../src/style.ts"
+import { markdownTheme, type Theme } from "../src/style.ts"
 
 const same = (s: string) => s
 
@@ -13,6 +13,7 @@ export const plain: RenderContext = {
     success: same,
     warning: same,
     border: same,
+    ...Object.fromEntries(Object.keys(markdownTheme).map((k) => [k, same])),
   } satisfies Theme,
   color: false,
   rows: 24,

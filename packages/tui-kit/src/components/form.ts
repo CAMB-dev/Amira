@@ -57,6 +57,7 @@ export class LineInput {
 
   /** Returns false for keys it does not use. */
   handleInput(e: InputEvent): boolean {
+    if (e.type === "focus") return false
     if (e.type === "paste") {
       this.insert(e.text)
       return true
@@ -686,6 +687,7 @@ export class Form implements Component {
 
   /** Typing into a list's filter; false for keys that are not typing. */
   private filterInput(f: FieldState, e: InputEvent): boolean {
+    if (e.type === "focus") return false
     if (e.type === "paste") f.filter += e.text.replace(/\s+/g, "").replace(CONTROL, "")
     else if (e.name === "backspace" && !e.ctrl && !e.alt) {
       if (!f.filter) return false

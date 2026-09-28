@@ -62,6 +62,25 @@ export interface Settings {
   budget?: Budget
   /** Worktree merges (D38): clean merges past either size are reviewed too. Default: only conflicts. */
   merge?: { reviewThreshold?: { lines?: number; files?: number } }
+  /** The interactive terminal UI. */
+  tui?: TuiSettings
+}
+
+export interface TuiSettings {
+  /**
+   * Ring the bell when a turn ends or a dialog opens while the terminal is in the background
+   * (or, where the terminal does not report focus, after a long turn). Default true.
+   */
+  bell?: boolean
+  /** Set the terminal title to the folder and branch, marked while working. Default true. */
+  title?: boolean
+  /** Show work on the tab and taskbar progress indicator (OSC 9;4). Default true. */
+  progress?: boolean
+  /**
+   * Whether the terminal re-wraps lines when it gets narrower. "off" for terminals that do not
+   * (legacy conhost with wrap-on-resize off, some tmux setups). Default "auto" (assumes it does).
+   */
+  reflow?: "auto" | "on" | "off"
 }
 
 export type WebSearchBackend = "exa" | "brave" | "tavily" | "searxng"

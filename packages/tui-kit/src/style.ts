@@ -28,6 +28,7 @@ export const dim = sgr(2, 22)
 export const italic = sgr(3, 23)
 export const underline = sgr(4, 24)
 export const inverse = sgr(7, 27)
+export const strikethrough = sgr(9, 29)
 
 export const black = sgr(30, 39)
 export const red = sgr(31, 39)
@@ -63,6 +64,39 @@ export interface Theme {
   [token: string]: StyleFn
 }
 
+/**
+ * Tokens for rendered Markdown (`MarkdownStream`), part of `defaultTheme`. A theme that leaves
+ * one out gets the value from here.
+ */
+export const markdownTheme = {
+  heading: compose(bold, cyan),
+  /** Headings of level 3 and deeper. */
+  subheading: bold,
+  strong: bold,
+  emphasis: italic,
+  strike: strikethrough,
+  /** Inline `code`. */
+  code: magenta,
+  link: compose(underline, blue),
+  /** The URL shown after a link's text when the terminal cannot make it clickable. */
+  linkUrl: gray,
+  quote: italic,
+  quoteBar: gray,
+  listMarker: cyan,
+  rule: gray,
+  /** The frame and language label of a code block. */
+  codeFrame: gray,
+  tableBorder: gray,
+  tableHeader: bold,
+  /** Syntax highlighting inside code blocks. */
+  keyword: blue,
+  string: green,
+  number: yellow,
+  comment: gray,
+} satisfies Record<string, StyleFn>
+
+export type MarkdownToken = keyof typeof markdownTheme
+
 export const defaultTheme: Theme = {
   text: (s) => s,
   accent: cyan,
@@ -71,6 +105,7 @@ export const defaultTheme: Theme = {
   success: green,
   warning: yellow,
   border: gray,
+  ...markdownTheme,
 }
 
 /**

@@ -1,6 +1,7 @@
 /**
- * Every symbol the transcript draws, in one place, so a styling pass can swap them without
- * touching the layout code. Colors come from the theme (tokens such as accent and muted).
+ * Every symbol the TUI draws, in one place, so a styling pass can swap them without touching
+ * the layout code. Colors come from the theme (tokens such as accent and muted). Each must be
+ * one cell wide in the terminals Amira supports (Windows Terminal, VS Code, and common Unix ones).
  */
 export const glyphs = {
   /** In front of the user's messages and echoed commands. */
@@ -36,6 +37,17 @@ export const glyphs = {
   more: "…",
   /** The rule of separators such as the one after a resumed history. */
   rule: "─",
+  /** Before the selected row of a list (dialogs, completion lists), and a dialog's echo. */
+  pointer: "›",
+  /** Starts the history search line, and sits between its label and the query. */
+  search: "⌕",
+  searchPrompt: "›",
+  /** Marks the terminal title while a turn runs. */
+  working: "●",
+  /** Before the branch in the terminal title. */
+  branch: "⎇",
+  /** Between items of a hint or the title. */
+  separator: "·",
 } as const
 
 export type Glyphs = typeof glyphs

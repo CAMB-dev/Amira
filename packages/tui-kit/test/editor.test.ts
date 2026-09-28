@@ -126,6 +126,24 @@ test("CJK and emoji: the caret moves by whole characters and sits at the right c
   expect(ed.getText()).toBe("ab")
 })
 
+test("a grapheme longer than the look-around window still moves and deletes whole", () => {
+  const cluster = `a${"́".repeat(200)}`
+  const ed = new Editor()
+  ed.setText(`${cluster}b`)
+  press(ed, "left")
+  press(ed, "left")
+  expect(ed.cursor).toEqual({ line: 0, col: 0 })
+  press(ed, "right")
+  expect(ed.cursor).toEqual({ line: 0, col: cluster.length })
+  press(ed, "backspace")
+  expect(ed.getText()).toBe("b")
+  ed.setText(`x${cluster}`)
+  press(ed, "home")
+  press(ed, "right")
+  press(ed, "delete")
+  expect(ed.getText()).toBe("x")
+})
+
 test("IME text from win32-input-mode is inserted", () => {
   const ed = new Editor()
   type(ed, "\x1b[0;0;20320;1;0;1_\x1b[0;0;22909;1;0;1_")
@@ -246,4 +264,19 @@ test("when the text gets shorter the shown rows stay full", () => {
   ed.setText("a")
   expect(view(ed)).toEqual(["a|"])
   expect(ed.hidden).toEqual({ above: 0, below: 0 })
+})
+
+test("the submit and newline keys can be replaced", () => {
+  const sent: string[] = []
+  const ed = new Editor({
+    onSubmit: (t) => sent.push(t),
+    isSubmit: (e) => e.type === "key" && e.name === "s" && e.ctrl,
+    isNewline: (e) => e.type === "key" && e.name === "enter" && !e.ctrl && !e.alt && !e.shift,
+  })
+  type(ed, "a\rb")
+  expect(ed.getText()).toBe("a\nb")
+  // Shift+Enter is no longer a newline key, and inserts nothing.
+  expect(press(ed, "enter", { shift: true })).toBe(false)
+  press(ed, "s", { ctrl: true })
+  expect(sent).toEqual(["a\nb"])
 })
