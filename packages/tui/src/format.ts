@@ -1,5 +1,5 @@
 import type { Message, ToolResult } from "@amira/api"
-import { type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { renderMarkdown, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 
 /** One-line summary of tool arguments, e.g. `read src/index.ts` or `bash bun test`. */
 export function summarizeArgs(args: Record<string, unknown>, max = 80): string {
@@ -53,7 +53,7 @@ export function userLines(theme: Theme, text: string): string[] {
 }
 
 /** A resumed conversation, shown compactly: user messages, replies and one line per tool call. */
-export function historyLines(theme: Theme, messages: Message[]): string[] {
+export function historyLines(theme: Theme, messages: Message[], width = 80): string[] {
   const out: string[] = []
   for (const m of messages) {
     if (m.role === "user") {
@@ -61,7 +61,7 @@ export function historyLines(theme: Theme, messages: Message[]): string[] {
       out.push(...userLines(theme, text.trim()), "")
     } else if (m.role === "assistant") {
       for (const b of m.content) {
-        if (b.type === "text" && b.text.trim()) out.push(...b.text.trim().split("\n"), "")
+        if (b.type === "text" && b.text.trim()) out.push(...renderMarkdown(b.text, width, theme), "")
         else if (b.type === "toolCall") {
           const summary = summarizeArgs(b.args)
           out.push(theme.muted(`● ${b.name}${summary ? ` ${summary}` : ""}`), "")

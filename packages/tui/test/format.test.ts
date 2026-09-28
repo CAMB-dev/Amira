@@ -8,12 +8,23 @@ test("a resumed history shows prompts, replies and one line per tool call", () =
     {
       role: "assistant",
       content: [
-        { type: "text", text: "Looking." },
+        { type: "text", text: "Looking at **it**:\n\n- one" },
         { type: "toolCall", id: "c1", name: "read", args: { path: "a.ts" } },
       ],
       model: { provider: "p", model: "m" },
     },
     { role: "toolResult", toolCallId: "c1", toolName: "read", content: [], isError: false },
   ]).map(stripAnsi)
-  expect(lines).toEqual(["› fix it", "", "Looking.", "", "● read a.ts", "", "── resumed ──", ""])
+  expect(lines).toEqual([
+    "› fix it",
+    "",
+    "Looking at it:",
+    "",
+    "• one",
+    "",
+    "● read a.ts",
+    "",
+    "── resumed ──",
+    "",
+  ])
 })

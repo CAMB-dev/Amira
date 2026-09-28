@@ -15,13 +15,13 @@ import {
   InputReader,
   key,
   LiveRenderer,
+  MarkdownStream,
   matchesKey,
   ProcessTerminal,
   type RenderContext,
   type SetupResult,
   Spinner,
   Stack,
-  StreamText,
   setupTerminalInput,
   type Terminal,
   type Theme,
@@ -97,7 +97,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const terminal = opts.terminal ?? new ProcessTerminal()
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal)
 
-  const streaming = new StreamText()
+  // The reply is Markdown: its finished blocks go to the scrollback as they close.
+  const streaming = new MarkdownStream()
   const spinner = new Spinner()
   const queued: string[] = []
   /** Messages steering the running turn that have not reached the model yet. */
@@ -201,7 +202,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }),
   ])
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
-  // before it in view. Rows past that go to the scrollback as they are finished (StreamText).
+  // before it in view. Rows past that go to the scrollback as they are finished (MarkdownStream).
   const root = new View((width, ctx) => {
     const rest = bottom.render(width, ctx)
     streaming.maxRows = Math.max(1, ctx.rows - rest.length - 1)
@@ -430,7 +431,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Follows the session a command switched to; a resumed one shows its history. */
   function followAgent(next: Agent) {
     agent = next
-    if (next.messages.length) renderer.commit(historyLines(theme, next.messages))
+    if (next.messages.length) renderer.commit(historyLines(theme, next.messages, terminal.columns))
     renderer.requestRender()
   }
 
@@ -517,7 +518,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     `${theme.accent("Amira")} ${theme.muted(`· ${agent.model.provider}/${agent.model.id} · ${agent.cwd}`)}`,
     "",
   ])
-  if (agent.messages.length) renderer.commit(historyLines(theme, agent.messages))
+  if (agent.messages.length) renderer.commit(historyLines(theme, agent.messages, terminal.columns))
   for (const e of opts.startupEvents ?? []) onEvent(e)
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)

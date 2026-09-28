@@ -8,7 +8,7 @@ export {
 export { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 export { Box, type BoxOptions } from "./components/box.ts"
 export { Editor, type EditorOptions } from "./components/editor.ts"
-export { MarkdownStream, type MarkdownStreamOptions } from "./components/markdown-stream.ts"
+export { MarkdownStream, type MarkdownStreamOptions, renderMarkdown } from "./components/markdown-stream.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
 export { StreamText } from "./components/stream-text.ts"

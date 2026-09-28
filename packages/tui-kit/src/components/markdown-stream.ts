@@ -18,7 +18,7 @@ import {
   step,
 } from "../markdown/blocks.ts"
 import { markdownStyles } from "../markdown/inline.ts"
-import { defaultTheme } from "../style.ts"
+import { defaultTheme, type Theme } from "../style.ts"
 import { TAB_WIDTH } from "../width.ts"
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters
@@ -34,6 +34,19 @@ export interface MarkdownStreamOptions {
   hyperlinks?: boolean
   /** Color keywords, strings and comments in code blocks of the languages it knows. */
   highlight?: boolean
+}
+
+/** Renders a whole Markdown text to rows, as `MarkdownStream` shows it once it has streamed in. */
+export function renderMarkdown(
+  text: string,
+  width: number,
+  theme: Theme = defaultTheme,
+  opts: MarkdownStreamOptions = {},
+): string[] {
+  const m = new MarkdownStream(opts)
+  m.append(text)
+  m.render(width, { theme, color: true, rows: Number.POSITIVE_INFINITY })
+  return m.take(width)
 }
 
 /** The start of a partial line whose first rows were committed already. */
