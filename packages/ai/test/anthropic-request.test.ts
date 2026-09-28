@@ -88,10 +88,16 @@ test("sends no thinking when the model lacks the capability", async () => {
   expect(seen.body.thinking).toBeUndefined()
 })
 
-test("skips thinking mid tool loop when the assistant turn has no signed thinking", async () => {
+test("turns thinking off mid tool loop when the assistant turn has no signed thinking", async () => {
   const reasoning = { effort: "low" as const }
-  expect((await sent({ reasoning, messages: toolTurn(false) })).body.thinking).toBeUndefined()
-  expect((await sent({ reasoning, messages: toolTurn(true) })).body.thinking).toBeDefined()
+  const off = { type: "disabled" }
+  expect((await sent({ reasoning, messages: toolTurn(false) })).body.thinking).toEqual(off)
+  expect((await sent({ messages: toolTurn(false) })).body.thinking).toEqual(off)
+  expect((await sent({ reasoning, messages: toolTurn(true) })).body.thinking).toEqual({
+    type: "enabled",
+    budget_tokens: 2_048,
+  })
+  expect((await sent({ messages: toolTurn(true) })).body.thinking).toBeUndefined()
 })
 
 const history: Message[] = [

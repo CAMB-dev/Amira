@@ -49,31 +49,27 @@ export function requestBody(req: ModelRequest): Record<string, unknown> {
   if (cache) markCacheBreakpoints(messages, MAX_BREAKPOINTS - breakpoints)
   body.messages = messages
 
-  const budget = thinkingBudget(req, maxTokens, messages)
+  // With thinking on, the API rejects a tool loop whose assistant turn does not start with
+  // thinking, as when the turn came from another provider. Servers that think by default
+  // (DeepSeek) need thinking switched off explicitly then.
+  const unsigned = unsignedToolTurn(messages)
+  const budget = unsigned ? undefined : thinkingBudget(req, maxTokens)
   if (budget) body.thinking = { type: "enabled", budget_tokens: budget }
+  else if (unsigned) body.thinking = { type: "disabled" }
   // Extended thinking rejects any temperature other than the default.
-  else if (req.temperature !== undefined) body.temperature = req.temperature
+  if (!budget && req.temperature !== undefined) body.temperature = req.temperature
   return body
 }
 
 /** The budget to think with, or undefined when thinking is off or cannot fit. */
-function thinkingBudget(
-  req: ModelRequest,
-  maxTokens: number,
-  messages: AnthropicMessage[],
-): number | undefined {
+function thinkingBudget(req: ModelRequest, maxTokens: number): number | undefined {
   if (!req.reasoning || !req.model.caps.thinking) return undefined
   // Leave room for the answer below max_tokens.
   const budget = Math.min(THINKING_BUDGET[req.reasoning.effort], maxTokens - MIN_THINKING_BUDGET)
-  if (budget < MIN_THINKING_BUDGET) return undefined
-  if (unsignedToolTurn(messages)) return undefined
-  return budget
+  return budget < MIN_THINKING_BUDGET ? undefined : budget
 }
 
-/**
- * With thinking on, the API rejects a tool loop whose assistant turn does not start with
- * thinking, as happens when the turn came from another provider or ran with thinking off.
- */
+/** The request continues a tool loop whose assistant turn carries no signed thinking. */
 function unsignedToolTurn(messages: AnthropicMessage[]): boolean {
   const last = messages.at(-1)
   if (last?.role !== "user" || !last.content.some((b) => b.type === "tool_result")) return false
