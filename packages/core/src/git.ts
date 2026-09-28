@@ -1,5 +1,6 @@
 import { statSync } from "node:fs"
 import path from "node:path"
+import { runCommand } from "@amira/proc"
 import type { EventBus } from "./event-bus.ts"
 
 export interface GitInfo {
@@ -9,16 +10,16 @@ export interface GitInfo {
   isWorktree?: boolean
 }
 
+/** Runs git off the main thread; a slow spawn must not freeze the UI. */
 async function git(cwd: string, args: string[], timeoutMs: number): Promise<string | undefined> {
   try {
-    const p = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" })
-    const timer = setTimeout(() => p.kill(), timeoutMs)
-    try {
-      const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited])
-      return code === 0 ? out.trim() : undefined
-    } finally {
-      clearTimeout(timer)
-    }
+    const run = await runCommand(["git", ...args], {
+      cwd,
+      timeoutMs,
+      signal: new AbortController().signal,
+      stdoutOnly: true,
+    })
+    return run.exitCode === 0 ? run.output.trim() : undefined
   } catch {
     return undefined
   }

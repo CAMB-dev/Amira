@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@amira/ai": "workspace:*",
-    "@amira/api": "workspace:*"
+    "@amira/api": "workspace:*",
+    "@amira/proc": "workspace:*"
   }
 }
