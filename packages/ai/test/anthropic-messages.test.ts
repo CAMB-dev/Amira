@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { toAnthropicMessages } from "../src/dialects/anthropic-messages.ts"
+import { toAnthropicMessages, wireToolId } from "../src/dialects/anthropic-messages.ts"
 import { MISSING_RESULT } from "../src/dialects/tool-results.ts"
 import type { AssistantContent, AssistantMessage, Message, ToolResultMessage } from "../src/types.ts"
 
@@ -135,6 +135,20 @@ test("turns foreign and unsigned thinking into text and drops foreign redacted t
     txt("<thinking>\nempty sig\n</thinking>"),
     txt("a"),
   ])
+})
+
+test("maps foreign tool ids to valid ones, the same way for the call and its result", () => {
+  expect(wireToolId("toolu_01-Ab")).toBe("toolu_01-Ab")
+  const a = wireToolId("call:1.x")
+  const b = wireToolId("call_1_x")
+  const c = wireToolId("call.1:x")
+  expect(a).toMatch(/^[a-zA-Z0-9_-]+$/)
+  expect(a).toBe(wireToolId("call:1.x"))
+  expect(new Set([a, b, c]).size).toBe(3)
+  expect(wireToolId("")).toMatch(/^[a-zA-Z0-9_-]+$/)
+  const out = toAnthropicMessages([user("go"), assistant(call("call:1.x")), result("call:1.x")])
+  expect(out[1]!.content[0]).toEqual({ type: "tool_use", id: a, name: "read", input: {} })
+  expect(out[2]!.content[0]).toEqual({ type: "tool_result", tool_use_id: a, content: [txt("out call:1.x")] })
 })
 
 test("turns tool blocks into text when the request sends no tools", () => {

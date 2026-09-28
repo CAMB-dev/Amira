@@ -99,7 +99,7 @@ function assistantBlocks(m: AssistantMessage, tools: boolean): AnthropicBlock[] 
     } else if (b.type === "text") {
       if (b.text.trim()) out.push({ type: "text", text: b.text })
     } else if (tools) {
-      out.push({ type: "tool_use", id: b.id, name: b.name, input: b.args })
+      out.push({ type: "tool_use", id: wireToolId(b.id), name: b.name, input: b.args })
     } else {
       out.push({ type: "text", text: `[tool call ${b.name}(${JSON.stringify(b.args)})]` })
     }
@@ -115,7 +115,21 @@ function toolResultText(call: ToolCallBlock, result: ToolResultMessage | undefin
   return [{ type: "text", text: [label, ...texts].join("\n") }, ...images]
 }
 
-function toolResult(id: string, result: ToolResultMessage | undefined): AnthropicBlock {
+const WIRE_ID = /^[a-zA-Z0-9_-]+$/
+
+/**
+ * Tool ids from other providers may hold characters the API rejects. They are mapped the
+ * same way for a call and its result; the hash keeps distinct ids distinct.
+ */
+export function wireToolId(id: string): string {
+  if (WIRE_ID.test(id)) return id
+  let h = 0x811c9dc5
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193)
+  return `${id.replace(/[^a-zA-Z0-9_-]/g, "_")}_${(h >>> 0).toString(36)}`
+}
+
+function toolResult(callId: string, result: ToolResultMessage | undefined): AnthropicBlock {
+  const id = wireToolId(callId)
   if (!result) {
     return {
       type: "tool_result",
