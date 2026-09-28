@@ -63,6 +63,32 @@ test("drops leading whitespace, escape sequences and control characters; expands
   expect(t.getText()).toBe("red\nx   y")
 })
 
+test("an escape sequence or CRLF split across chunks is still dropped whole; a lone CR breaks the line", () => {
+  const t = new StreamText()
+  t.append("red: \x1b[3")
+  t.append("1mtext\x1b[0m a\x1b")
+  t.append("[31mb \x1b]8;;http://x\x1b")
+  t.append("\\link\x1b]8;;\x07\r")
+  t.append("\nnext\rover")
+  expect(t.getText()).toBe("red: text ab link\nnext\nover")
+})
+
+test("tabs keep their stops when a chunk ends inside a grapheme or a row was committed", () => {
+  const split = new StreamText()
+  split.append("👍".slice(0, 1))
+  split.append(`${"👍".slice(1)}\tx`)
+  expect(split.getText()).toBe("👍  x")
+  const { ctx } = committing()
+  const t = new StreamText()
+  t.maxRows = 1
+  t.append("abcdef gh")
+  t.render(6, ctx)
+  expect(t.getText()).toBe("gh")
+  t.append("\tx")
+  // "abcdef gh" is 9 cells, so the tab reaches column 12.
+  expect(t.getText()).toBe("gh   x")
+})
+
 test("rows that no longer fit are committed as shown; the row being written stays", () => {
   const { ctx, committed } = committing()
   const t = new StreamText()

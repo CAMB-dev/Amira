@@ -13,6 +13,10 @@ interface Row {
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters
 const CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g
+/** An escape sequence or `\r\n` that a chunk may end in the middle of. */
+const UNFINISHED =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
+  /(?:\x1b(?:\[[0-?]*[ -/]*|[\]P_^X][^\x07\x1b]*\x1b?|[ -/]*)?|\r)$/
 
 /**
  * Plain text that streams in, such as a model's reply, word-wrapped like `wrapText`.
@@ -31,8 +35,10 @@ export class StreamText implements Component {
   /** Rows committed to the scrollback since the text was last taken. */
   committedRows = 0
   private text = ""
-  /** Cells taken by the current paragraph, for expanding tabs. */
-  private col = 0
+  /** Cells of the current paragraph committed already, so tabs keep their stops. */
+  private cut = 0
+  /** The end of the last chunk when it may continue in the next: a split escape or `\r`. */
+  private pending = ""
 
   /** The text not committed yet. */
   getText(): string {
@@ -41,25 +47,26 @@ export class StreamText implements Component {
 
   /** Adds streamed text. Whitespace before the first visible character is dropped. */
   append(chunk: string): void {
-    let s = stripAnsi(chunk).replaceAll("\r", "").replace(CONTROLS, "")
+    let s = this.pending + chunk
+    this.pending = s.match(UNFINISHED)?.[0] ?? ""
+    if (this.pending) s = s.slice(0, -this.pending.length)
+    s = stripAnsi(s).replace(/\r\n?/g, "\n").replace(CONTROLS, "")
     if (this.text === "" && this.committedRows === 0) s = s.replace(/^\s+/, "")
-    let out = ""
-    for (const part of s.split(/(\t|\n)/)) {
-      if (part === "\n") {
-        out += part
-        this.col = 0
-      } else if (part === "\t") {
-        const n = TAB_WIDTH - (this.col % TAB_WIDTH)
-        out += " ".repeat(n)
-        this.col += n
-      } else if (part) {
-        out += part
-        this.col += Bun.stringWidth(part)
-      }
+    if (!s.includes("\t")) {
+      this.text += s
+      return
     }
-    this.text += out
+    for (const part of s.split(/(\t)/)) {
+      if (part !== "\t") {
+        this.text += part
+        continue
+      }
+      // Measured from the text, not summed per chunk: a chunk may end inside a grapheme.
+      const nl = this.text.lastIndexOf("\n")
+      const col = (nl === -1 ? this.cut : 0) + Bun.stringWidth(this.text.slice(nl + 1))
+      this.text += " ".repeat(TAB_WIDTH - (col % TAB_WIDTH))
+    }
   }
-
   /**
    * Returns the rows not committed yet, wrapped to `width`, without trailing blank rows, and
    * starts over empty.
@@ -68,7 +75,8 @@ export class StreamText implements Component {
     const rows = this.layout(width).map((r) => this.text.slice(r.start, r.end))
     while (rows.length > 0 && rows[rows.length - 1]!.trim() === "") rows.pop()
     this.text = ""
-    this.col = 0
+    this.cut = 0
+    this.pending = ""
     this.committedRows = 0
     return rows
   }
@@ -85,6 +93,8 @@ export class StreamText implements Component {
         this.committedRows += n
         // Rows depend only on where they start, so the rest lays out the same on its own.
         const from = rows[n]!.start
+        const nl = this.text.lastIndexOf("\n", from - 1)
+        this.cut = (nl === -1 ? this.cut : 0) + Bun.stringWidth(this.text.slice(nl + 1, from))
         this.text = this.text.slice(from)
         rows = rows
           .slice(n)
