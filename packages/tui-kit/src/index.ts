@@ -1,6 +1,7 @@
 export { stripAnsi, type TerminalMode } from "./ansi.ts"
 export { type Capabilities, type SetupResult, setupTerminalInput } from "./capabilities.ts"
 export { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
+export { Box, type BoxOptions } from "./components/box.ts"
 export { Editor, type EditorOptions } from "./components/editor.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
