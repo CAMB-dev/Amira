@@ -23,6 +23,7 @@ export const CATALOG_PROVIDER_IDS: Record<string, string | false> = {
   together: "togetherai",
   fireworks: "fireworks-ai",
   bedrock: "amazon-bedrock",
+  "deepseek-anthropic": "deepseek",
   ollama: false,
   lmstudio: false,
 }

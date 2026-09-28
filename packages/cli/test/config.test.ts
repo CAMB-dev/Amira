@@ -5,7 +5,7 @@ import path from "node:path"
 import { parseCliArgs, UsageError } from "../src/args.ts"
 import { resolveConfig } from "../src/config.ts"
 import { runProviderCommand } from "../src/provider-command.ts"
-import { createSession } from "../src/session.ts"
+import { createSession, retryFromSettings } from "../src/session.ts"
 
 let dir: string
 let home: string
@@ -85,6 +85,7 @@ test("settings reach the session: extensions, retry hook and model lookup", asyn
     cwd,
     extensions: [],
     noBuiltins: false,
+    catalog: false,
     builtins: async () => [
       {
         source: "t",
@@ -97,7 +98,6 @@ test("settings reach the session: extensions, retry hook and model lookup", asyn
     providers: [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }],
   })
   expect(seen).toEqual({ dirs: ["s"] })
-  expect(session.retryAttempts).toBe(4)
   expect(session.agent.model.provider).toBe("mine")
   expect(session.agent.maxParallelTools).toBe(2)
   const plain = await createSession({
@@ -105,9 +105,21 @@ test("settings reach the session: extensions, retry hook and model lookup", asyn
     cwd,
     extensions: [],
     noBuiltins: true,
+    catalog: false,
     providers: [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }],
   })
   expect(plain.agent.maxParallelTools).toBe(8)
+})
+
+test("settings retry becomes the ai layer's retry options", () => {
+  expect(retryFromSettings(undefined)).toBeUndefined()
+  expect(retryFromSettings({})).toBeUndefined()
+  expect(retryFromSettings({ attempts: 0 })).toEqual({ retries: 0 })
+  expect(retryFromSettings({ attempts: 5, baseDelayMs: 200, maxDelayMs: 10_000 })).toEqual({
+    retries: 5,
+    baseDelayMs: 200,
+    maxDelayMs: 10_000,
+  })
 })
 
 test("settings compact sets the agent's threshold and summary model", async () => {
@@ -119,7 +131,7 @@ test("settings compact sets the agent's threshold and summary model", async () =
       models: [{ id: "m" }, { id: "small" }],
     },
   ]
-  const base = { cwd, extensions: [], noBuiltins: true, providers }
+  const base = { cwd, extensions: [], noBuiltins: true, catalog: false as const, providers }
   const session = await createSession({
     ...base,
     model: "mine/m",
@@ -143,6 +155,7 @@ test("settings warnings become startup events for the interactive UI", async () 
     cwd,
     extensions: [],
     noBuiltins: true,
+    catalog: false,
     providers: [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }],
     warnings: ['f: unknown setting "colour" (ignored)'],
   })
@@ -152,7 +165,8 @@ test("settings warnings become startup events for the interactive UI", async () 
 })
 
 test("an unknown provider with a preset suggests adding it", async () => {
-  const create = (model: string) => createSession({ model, cwd, extensions: [], noBuiltins: true })
+  const create = (model: string) =>
+    createSession({ model, cwd, extensions: [], noBuiltins: true, catalog: false })
   const err = await create("deepseek/deepseek-chat").catch((e) => e)
   expect(err).toBeInstanceOf(UsageError)
   expect(err.message).toContain('unknown provider "deepseek" (known: anthropic, openai, openai-chat, google)')

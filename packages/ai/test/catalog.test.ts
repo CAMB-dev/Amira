@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { catalogProviderId, createCatalog, trimModelsDev } from "../src/catalog.ts"
 import { createAi } from "../src/client.ts"
+import { findPreset } from "../src/presets.ts"
 import fixture from "./fixtures/models-dev.json" with { type: "json" }
 
 test("maps a models.dev entry to limits, caps and prices", () => {
@@ -60,6 +61,7 @@ test("provider ids map through config, then the table, then themselves", () => {
   expect(catalogProviderId({ id: "deepseek" })).toBe("deepseek")
   expect(catalogProviderId({ id: "gemini" })).toBe("google")
   expect(catalogProviderId({ id: "ollama" })).toBeUndefined()
+  expect(catalogProviderId({ id: "deepseek-anthropic" })).toBe("deepseek")
   expect(catalogProviderId({ id: "ds-anthropic", catalogId: "deepseek" })).toBe("deepseek")
   expect(catalogProviderId({ id: "openai", catalogId: false })).toBeUndefined()
 })
@@ -100,7 +102,8 @@ test("provider config wins over the catalog, which wins over defaults", () => {
 })
 
 test("without a catalog, or after replacing it, models resolve as before", () => {
-  const ai = createAi()
+  // DeepSeek is a preset now, not built in; settings add it as a provider.
+  const ai = createAi({ providers: [findPreset("deepseek")!, findPreset("ollama")!] })
   expect(ai.model("deepseek/deepseek-flash").contextWindow).toBe(128_000)
   ai.setCatalog?.(createCatalog(fixture))
   expect(ai.model("deepseek/deepseek-flash").contextWindow).toBe(1_000_000)

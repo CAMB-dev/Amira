@@ -12,6 +12,8 @@ export interface ProviderSettings {
   apiKeyEnvFallbacks?: string[]
   headers?: Record<string, string>
   compat?: ProviderCompat
+  /** The model catalog's (models.dev) id for this provider, or false to not use the catalog (D51). */
+  catalogId?: string | false
   models?: ModelOverrides[]
   defaultModel?: ModelOverrides
 }
@@ -32,7 +34,8 @@ export interface Settings {
   /** Most tool calls running at once (D71). */
   maxParallelTools?: number
   compact?: { threshold?: number; model?: string }
-  retry?: { attempts?: number }
+  /** Retrying failed model requests (D52): retries after the first try, first backoff, longest Retry-After waited. */
+  retry?: { attempts?: number; baseDelayMs?: number; maxDelayMs?: number }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */
   mcpServers?: Record<string, Record<string, unknown>>
   skills?: { dirs?: string[] }
