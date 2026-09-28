@@ -30,6 +30,8 @@ export interface SessionOptions {
   providers?: ProviderConfig[]
   /** Stored API keys by provider id (auth.json). Unused when `ai` is given. */
   apiKeys?: Record<string, string>
+  /** Settings warnings, reported as extension.error events from "settings" among the startup events. */
+  warnings?: string[]
 }
 
 export interface Session {
@@ -83,6 +85,9 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
     types: ["extension.error", "extension.loaded"],
   })
+  for (const error of opts.warnings ?? []) {
+    bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+  }
 
   if (!opts.noBuiltins) {
     try {

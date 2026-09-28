@@ -110,6 +110,20 @@ test("settings reach the session: extensions, retry hook and model lookup", asyn
   expect(plain.agent.maxParallelTools).toBe(8)
 })
 
+test("settings warnings become startup events for the interactive UI", async () => {
+  const session = await createSession({
+    model: "mine/m",
+    cwd,
+    extensions: [],
+    noBuiltins: true,
+    providers: [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }],
+    warnings: ['f: unknown setting "colour" (ignored)'],
+  })
+  expect(session.startupEvents.map((e) => [e.type, e.data])).toEqual([
+    ["extension.error", { source: "settings", error: 'f: unknown setting "colour" (ignored)' }],
+  ])
+})
+
 test("an unknown provider with a preset suggests adding it", async () => {
   const create = (model: string) => createSession({ model, cwd, extensions: [], noBuiltins: true })
   const err = await create("deepseek/deepseek-chat").catch((e) => e)

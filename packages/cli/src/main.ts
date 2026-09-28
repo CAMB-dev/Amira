@@ -40,9 +40,8 @@ async function run(argv: string[]): Promise<number> {
     throw new UsageError("--shell powershell is only available on Windows")
   }
   const config = resolveConfig(args)
-  for (const w of config.warnings)
-    process.stderr.write(`amira: warning: ${w}
-`)
+  // The interactive UI covers stderr, so there the warnings are shown as startup events.
+  if (args.print) for (const w of config.warnings) process.stderr.write(`amira: warning: ${w}\n`)
   const modelRef = config.settings.model
   if (!modelRef) {
     throw new UsageError(
@@ -74,6 +73,7 @@ async function run(argv: string[]): Promise<number> {
     settings: config.settings,
     providers: config.providers,
     apiKeys: config.apiKeys,
+    ...(args.print ? {} : { warnings: config.warnings }),
     onSubscriberError,
   })
   agentRef = agent
