@@ -90,6 +90,9 @@ test("a prompt's display is stored and in turn.start, but the model gets only th
   expect(start?.type === "turn.start" && start.data.prompt.display).toEqual(display)
   const stored = SessionStore.open(session.file).restore().messages[0]
   expect(stored?.role === "user" && stored.display).toEqual(display)
+  // The preview shows what the model gets, so no display either; the history keeps it.
+  expect((await agent.preview()).messages[0]).toEqual(mock.requests[0]!.messages[0]!)
+  expect(agent.messages[0]).toMatchObject({ display })
 })
 
 test("a session open in two agents: the second writer reports the conflict once", async () => {

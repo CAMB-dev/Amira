@@ -82,9 +82,12 @@ const HOST_EVENTS = new Set<string>([
   "command.output",
 ])
 
-/** How a user message reads while queued, or back in the editor: its display text, if any. */
+/**
+ * How a user message reads while queued, or back in the editor once dropped: its display text,
+ * if any. That is what the user typed (e.g. "/review-pr 123"), so sending it again re-runs it.
+ */
 function messageText(m: UserMessage): string {
-  return m.display?.text ?? userText(m)
+  return m.display?.text.trim() || userText(m)
 }
 
 /**

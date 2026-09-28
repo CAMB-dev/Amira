@@ -185,13 +185,18 @@ export function userMessage(t: string, display?: MessageDisplay): UserMessage {
   return { role: "user", content: [text(t)], ...(display ? { display } : {}) }
 }
 
-/** The request without what only frontends read, such as user messages' `display`. */
-export function withoutDisplay(req: ModelRequest): ModelRequest {
-  if (!req.messages.some((m) => m.role === "user" && m.display)) return req
-  const messages = req.messages.map((m): Message => {
+/** The messages as the model sees them: without user messages' `display`. Unchanged ones are kept. */
+export function modelMessages(messages: Message[]): Message[] {
+  if (!messages.some((m) => m.role === "user" && m.display)) return messages
+  return messages.map((m): Message => {
     if (m.role !== "user" || !m.display) return m
     const { display: _, ...rest } = m
     return rest
   })
-  return { ...req, messages }
+}
+
+/** The request without what only frontends read, such as user messages' `display`. */
+export function withoutDisplay(req: ModelRequest): ModelRequest {
+  const messages = modelMessages(req.messages)
+  return messages === req.messages ? req : { ...req, messages }
 }

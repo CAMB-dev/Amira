@@ -320,8 +320,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
 function display(value: unknown): MessageDisplay | undefined {
   if (value === undefined) return undefined
   const d = value as { text?: unknown; note?: unknown } | null
-  if (typeof d?.text !== "string" || (d.note !== undefined && typeof d.note !== "string")) {
-    throw new RpcError("invalid_params", '"display" must be {text, note?} with string values')
+  if (typeof d?.text !== "string" || !d.text.trim() || (d.note !== undefined && typeof d.note !== "string")) {
+    throw new RpcError("invalid_params", '"display" must be {text, note?} with string values, text not blank')
   }
   return { text: d.text, ...(d.note !== undefined ? { note: d.note } : {}) }
 }

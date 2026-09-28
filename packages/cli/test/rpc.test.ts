@@ -443,6 +443,8 @@ test("prompt and steer take a display, which their events and session.read carry
   const rpc = inProcess(s)
   const bad = await rpc.call({ id: 0, cmd: "prompt", text: "x", display: { note: "no text" } })
   expect(bad.error.code).toBe("invalid_params")
+  const blank = await rpc.call({ id: 0.5, cmd: "prompt", text: "x", display: { text: "  " } })
+  expect(blank.error.code).toBe("invalid_params")
   const display = { text: "/review-pr 1", note: "Loaded skill review-pr (9 lines)" }
   await rpc.call({ id: 1, cmd: "prompt", text: "long skill text", display })
   expect((await rpc.call({ id: 2, cmd: "steer", text: "more", display: { text: "/more" } })).ok).toBe(true)

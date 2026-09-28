@@ -5,6 +5,7 @@ import {
   type Message,
   type ModelInfo,
   type ModelRef,
+  modelMessages,
   type ToolCallBlock,
   type ToolResultMessage,
   type ToolSpec,
@@ -279,7 +280,12 @@ export class Agent {
   }> {
     const built = await this.#buildContext(signal)
     if (built.blocked) throw new Error(`context.build blocked the request: ${built.reason}`)
-    return { ...built.value, tools: offeredTools(this.tools, this.#loadedTools) }
+    return {
+      systemPrompt: built.value.systemPrompt,
+      // As sent: the ai client drops what only frontends read.
+      messages: modelMessages(built.value.messages),
+      tools: offeredTools(this.tools, this.#loadedTools),
+    }
   }
 
   /** When and with which model this agent compacts. */

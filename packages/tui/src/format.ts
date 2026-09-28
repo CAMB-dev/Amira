@@ -52,7 +52,7 @@ export function toolLines(
  * as typed, its note on a line below), else its content.
  */
 export function userLines(theme: Theme, message: UserMessage): string[] {
-  const text = message.display?.text ?? userText(message)
+  const text = message.display?.text.trim() || userText(message)
   const lines = text
     .trim()
     .split("\n")
