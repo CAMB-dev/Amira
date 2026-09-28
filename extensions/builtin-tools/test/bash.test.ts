@@ -61,22 +61,21 @@ test.if(hasBash)(
     let real: ProcessTree | undefined
     let calls = 0
     try {
-      const run = await runCommand(
-        shell.args("(sleep 0.3; while true; do echo tick; sleep 0.1; done) & echo done"),
-        {
-          cwd: dir,
-          env: shell.env,
-          gated: shell.gated,
-          timeoutMs: 1000,
-          signal: new AbortController().signal,
-          onChunk: () => void calls++,
-          // Contain the tree but leave it running, as if a pipe holder had escaped.
-          trackTree(proc) {
-            real = trackProcessTree(proc)
-            return { contained: true, kill() {}, dispose() {} }
-          },
-        },
+      const { argv, ...spawn } = shell.command(
+        "(sleep 0.3; while true; do echo tick; sleep 0.1; done) & echo done",
       )
+      const run = await runCommand(argv, {
+        ...spawn,
+        cwd: dir,
+        timeoutMs: 1000,
+        signal: new AbortController().signal,
+        onChunk: () => void calls++,
+        // Contain the tree but leave it running, as if a pipe holder had escaped.
+        trackTree(proc) {
+          real = trackProcessTree(proc)
+          return { contained: true, kill() {}, dispose() {} }
+        },
+      })
       expect(run).toMatchObject({ exitCode: 0, timedOut: false, aborted: false, settled: false })
       expect(run.output).toContain("done")
       expect(run.output).toContain("tick")

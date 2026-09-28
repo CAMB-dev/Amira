@@ -18,6 +18,8 @@ async function git(cwd: string, args: string[], timeoutMs: number): Promise<stri
       timeoutMs,
       signal: new AbortController().signal,
       stdoutOnly: true,
+      // Windows: Bun stalls for seconds on some direct spawns of git.
+      viaCmd: true,
     })
     return run.exitCode === 0 ? run.output.trim() : undefined
   } catch {
