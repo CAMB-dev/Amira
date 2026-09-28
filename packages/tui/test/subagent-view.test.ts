@@ -214,6 +214,37 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   await s.exited
 })
 
+test("Ctrl+L and focus reports in the viewer leave the main screen alone", async () => {
+  const s = await setup([
+    { toolCalls: [{ name: "delegate", args: { roles: ["explorer"] } }] },
+    { text: "child answer" },
+    { text: "done" },
+  ])
+  s.terminal.send("go\r")
+  await s.idle()
+  s.terminal.send("/agents view\r")
+  await waitFor(() => s.screen.inAltScreen, "the viewer")
+  await waitFor(() => s.view().includes("child answer"), "the transcript")
+  const atOpen = s.screen.mainText
+  // Ctrl+L, focus out and in.
+  s.terminal.send("\x1b[108;5u\x1b[O\x1b[I")
+  await Bun.sleep(40)
+  expect(s.screen.inAltScreen).toBe(true)
+  expect(s.screen.mainText).toBe(atOpen)
+  const from = s.terminal.output.length
+  s.terminal.send(ESC)
+  await waitFor(() => !s.screen.inAltScreen, "the inline UI")
+  // The inline UI comes back where it was, not redrawn from the top of the screen.
+  const back = s.terminal.output.slice(from)
+  expect(back.slice(back.indexOf("\x1b[?1049l"))).not.toContain("\x1b[1;1H")
+  const main = s.screen.mainText
+  expect(main.split("› go").length).toBe(2)
+  expect(s.screen.scrollback.join("\n")).not.toContain("Message Amira")
+  expect(s.view()).toContain("│ › Message Amira")
+  s.terminal.send("\x03")
+  await s.exited
+})
+
 test("the viewer scrolls, follows the tail again at the end, and redraws on resize", async () => {
   const long = Array.from({ length: 40 }, (_, i) => `answer line ${i + 1}`).join("\n")
   const s = await setup([

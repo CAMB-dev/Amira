@@ -388,6 +388,35 @@ test("redraw shows the end of a block too tall for the screen, and lines committ
   expect(screen.lines).toEqual(["d", "e", "streamed", "live"])
 })
 
+test("redraw erases the screen in place, so nothing on it is pushed into the scrollback", () => {
+  // The screen scrolls into the scrollback on ED 2 as Windows Terminal and conhost do.
+  const { screen, r } = setup(["input", "status"], 20, 6)
+  r.start()
+  r.commit(["one", "two"])
+  r.redraw()
+  r.redraw()
+  expect(screen.lines).toEqual(["one", "two", "input", "status", "", ""])
+  expect(screen.scrollback).toEqual([])
+})
+
+test("redraw does nothing while suspended, and resuming does not clear the screen", () => {
+  const { term, screen, r } = setup(["live"], 20, 4)
+  r.start()
+  r.commit(["one"])
+  r.suspend()
+  const writes: string[] = []
+  const write = term.write
+  term.write = (d: string) => {
+    writes.push(d)
+    write(d)
+  }
+  r.redraw()
+  expect(writes).toEqual([])
+  r.resume()
+  expect(writes.join("")).not.toContain(cursor.to(0))
+  expect(screen.lines.slice(0, 2)).toEqual(["one", "live"])
+})
+
 test("history keeps at most historyLines lines, dropping the oldest blocks", () => {
   const { screen, r } = setup(["live"], 20, 10, { historyLines: 3 })
   r.start()
