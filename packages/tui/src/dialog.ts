@@ -59,7 +59,13 @@ export class Dialog implements Component {
       else if (matchesKey(e, "down") || matchesKey(e, "tab"))
         this.#selected = n ? (this.#selected + 1) % n : 0
       else if (matchesKey(e, "enter")) return n ? this.#finish(options[this.#selected]!) : true
-      else if (this.#digitsPick && e.type === "key" && e.text && /^[1-9]$/.test(e.text) && Number(e.text) <= n) {
+      else if (
+        this.#digitsPick &&
+        e.type === "key" &&
+        e.text &&
+        /^[1-9]$/.test(e.text) &&
+        Number(e.text) <= n
+      ) {
         return this.#finish(options[Number(e.text) - 1]!)
       } else if (e.type === "key" && e.name === "backspace" && this.#filter) {
         this.#setFilter(this.#filter.slice(0, -1))
