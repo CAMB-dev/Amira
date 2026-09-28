@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.exe
+*.tsbuildinfo
+.amira/settings.local.json
+coverage/
+.DS_Store
