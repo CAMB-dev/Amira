@@ -5,6 +5,7 @@ import {
   type ExtensionAPI,
   type SubagentResult,
   type ToolContext,
+  type ToolPresenter,
   type ToolSession,
   textResult,
 } from "@amira/api"
@@ -483,7 +484,28 @@ ${list.join("\n")}`
 
     api.registerTool(agentTool)
     api.registerTool(resultTool)
+    api.registerToolRenderer(AGENT_TOOL, agentPresenter)
   })
+}
+
+/**
+ * Shows an agent call by its tasks; each child's own line (role, time, tokens, answer) is
+ * committed by the frontend when it ends, so the result line only counts the reports.
+ */
+export const agentPresenter: ToolPresenter<AgentParams> = {
+  summary(args) {
+    const tasks = taskList(args)
+    const bg = args.background ? " · background" : ""
+    if (tasks.length === 1)
+      return `${tasks[0]!.role ?? "agent"}: ${shorten(tasks[0]!.prompt ?? "", 200)}${bg}`
+    return `${tasks.length} tasks · ${tasks.map((t) => t.role ?? "agent").join(", ")}${bg}`
+  },
+  result(call) {
+    if (call.result.isError) return undefined
+    const reports = call.text.split("\n").filter((l) => l.startsWith("## ")).length
+    if (reports > 1) return `${reports} reports`
+    return call.text.split("\n")[0]?.replace(/^#+\s*/, "") || undefined
+  },
 }
 
 /** The built-in `agent` tool (D12, D27): loaded like any other extension. */

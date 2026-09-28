@@ -154,6 +154,8 @@ async function run(argv: string[]): Promise<number> {
       status: host.status,
       ui: host.ui,
       commands,
+      registerCommand: (c) => host.commands.register(c, "builtin:tui"),
+      toolRenderers: host.renderers,
       startupEvents,
       onReady,
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
