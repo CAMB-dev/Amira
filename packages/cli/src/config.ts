@@ -67,7 +67,7 @@ export function resolveConfig(
  */
 function settingsProviders(settings: Settings, warnings: string[]): ProviderConfig[] {
   try {
-    return providersFromSettings(settings.providers)
+    return providersFromSettings(settings.providers, warnings)
   } catch (err) {
     if (!(err instanceof ProviderSettingsError)) throw err
     const related = warnings.filter((w) => w.includes(`"providers.${err.provider}.`))

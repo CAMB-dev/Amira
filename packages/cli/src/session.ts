@@ -1,6 +1,7 @@
 import {
   type Ai,
   createAi,
+  isNoModel,
   type ModelInfo,
   NO_MODEL,
   type ProviderConfig,
@@ -137,7 +138,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...(cached?.catalog ? { catalog: cached.catalog } : {}),
       ...(retry ? { retry } : {}),
     })
-  const modelRef = opts.model ?? onlyProviderModel(ai)
+  const modelRef = opts.model ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
   const model = modelRef ? resolveModel(ai, modelRef) : NO_MODEL
   const modelNotice = modelRef ? undefined : noModelNotice(ai)
   if (modelNotice && opts.requireModel) throw new UsageError(noModelError(ai))
@@ -200,8 +201,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
   const approve = userApprover(host.ui)
-  const newAgent = (m: ModelInfo, store: SessionStore | undefined) =>
-    new Agent({
+  const newAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
+    // A session resumed while no model is selected continues on the one it ran on.
+    const stored = isNoModel(picked) ? storedModel(ai, store) : undefined
+    const m = stored ? ai.model(stored) : picked
+    return new Agent({
       tree,
       approve,
       ai,
@@ -216,6 +220,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
       ...(opts.noticeRetryMs ? { noticeRetryMs: opts.noticeRetryMs } : {}),
     })
+  }
   const agent = newAgent(model, opts.store)
   // A stale or missing catalog is refreshed in the background; startup never waits for it.
   const catalogRefresh =
@@ -281,7 +286,20 @@ function resolveModel(ai: Ai, ref: string): ModelInfo {
   try {
     return ai.model(ref)
   } catch (err) {
-    throw new UsageError(withProviderHint(err instanceof Error ? err.message : String(err)))
+    throw new UsageError(withProviderHint(err instanceof Error ? err.message : String(err), "startup"))
+  }
+}
+
+/** The model a stored session last ran on, when a configured provider still has it. */
+function storedModel(ai: Ai, store: SessionStore | undefined): string | undefined {
+  const m = store?.model()
+  if (!m) return undefined
+  const ref = `${m.provider}/${m.model}`
+  try {
+    ai.model(ref)
+    return ref
+  } catch {
+    return undefined
   }
 }
 

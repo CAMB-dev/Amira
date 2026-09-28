@@ -174,6 +174,8 @@ test("provider add <protocol> with every flag saves without asking anything", as
       "deepseek-flash",
       "--model",
       "deepseek-pro",
+      "--model",
+      "deepseek-flash",
     ],
     { io: out, home, cwd, env: {}, interactive: false, readLine: noInput },
   )

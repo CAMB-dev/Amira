@@ -164,7 +164,7 @@ export default defineExtension((api: ExtensionAPI) => {
         if (!models.length) {
           throw new Error(
             ctx.session.providers().length
-              ? "No models to pick from; list some with /provider edit <id>, or pass one: /model provider/model"
+              ? "No models to pick from: list some with /provider edit <id>, store a key with /provider key <id>, or pass one: /model provider/model"
               : "No providers configured — add one with /provider add",
           )
         }
@@ -206,11 +206,13 @@ export default defineExtension((api: ExtensionAPI) => {
           ["Model", modelRef(info.model)],
           [
             "Provider",
-            provider ? `${provider.id} (${provider.dialect}, ${provider.baseUrl})` : info.model.provider,
+            provider
+              ? `${provider.id} (${provider.dialect}, ${provider.baseUrl})`
+              : info.model.provider || "(none; add one with /provider add, pick a model with /model)",
           ],
           ["Session", `${info.id}${info.busy ? " (turn running)" : ""}`],
           ...(info.file ? [["Session file", info.file]] : []),
-          ["Context", context],
+          ["Context", info.model.provider ? context : "no model yet"],
           ["Cost", cost],
           ["Shell", info.shell],
           ["Directory", info.cwd],

@@ -25,8 +25,13 @@ export function runProviderCommand(argv: string[], io: PrintIO): number {
   throw new UsageError(`${what}\n\n${PROVIDER_USAGE}`)
 }
 
-/** Says how to add a provider after an unknown-provider error. */
-export function withProviderHint(message: string): string {
+/**
+ * Says how to add a provider after an unknown-provider error: at startup (no session to run
+ * /provider in) with `amira provider add`, in a session with /provider add.
+ */
+export function withProviderHint(message: string, where: "session" | "startup" = "session"): string {
   if (!message.startsWith("unknown provider")) return message
-  return `${message}; add it with /provider add (or amira provider add)`
+  return where === "startup"
+    ? `${message}; add it with amira provider add, or pick another with --model`
+    : `${message}; add it with /provider add (or amira provider add)`
 }

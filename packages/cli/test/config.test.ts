@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { SessionStore } from "@amira/core"
 import { parseCliArgs, UsageError } from "../src/args.ts"
 import { resolveConfig } from "../src/config.ts"
 import { runProviderCommand } from "../src/provider-command.ts"
@@ -180,14 +181,14 @@ test("an unknown provider names the configured ones and says how to add one", as
     const err = await create(ref).catch((e) => e)
     expect(err).toBeInstanceOf(UsageError)
     expect(err.message).toBe(
-      `unknown provider "${ref.split("/")[0]}" (no providers are configured); add it with /provider add (or amira provider add)`,
+      `unknown provider "${ref.split("/")[0]}" (no providers are configured); add it with amira provider add, or pick another with --model`,
     )
   }
   const err = await create("zzz/m", [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }]).catch(
     (e) => e,
   )
   expect(err.message).toBe(
-    'unknown provider "zzz" (configured: mine); add it with /provider add (or amira provider add)',
+    'unknown provider "zzz" (configured: mine); add it with amira provider add, or pick another with --model',
   )
 })
 
@@ -214,6 +215,40 @@ test("without a model the only provider's first model is used, else none until o
   ])
   expect(two.agent.model.provider).toBe("")
   expect(two.modelNotice).toContain("No model selected")
+})
+
+test("a resumed session without a model given continues on the one it ran on", async () => {
+  const providers = [
+    { id: "a", dialect: "openai-chat", baseUrl: "http://a", models: [{ id: "m" }] },
+    { id: "b", dialect: "openai-chat", baseUrl: "http://b" },
+  ]
+  const store = SessionStore.create({ cwd, dir: path.join(dir, "sessions") })
+  store.append({ type: "model_change", model: { provider: "b", model: "big" } })
+  const create = (s: SessionStore) =>
+    createSession({ cwd, extensions: [], noBuiltins: true, catalog: false, providers, store: s })
+  const resumed = await create(store)
+  expect(`${resumed.agent.model.provider}/${resumed.agent.model.id}`).toBe("b/big")
+  expect(resumed.modelNotice).toBeUndefined()
+  // A new session has no model to go on; switching to the stored one picks its model up.
+  const fresh = await create(SessionStore.create({ cwd, dir: path.join(dir, "sessions") }))
+  expect(fresh.agent.model.provider).toBe("")
+  expect(fresh.resume(store).model.id).toBe("big")
+})
+
+test("an old entry for a former built-in id works with a warning that it lost its key variable", () => {
+  put(path.join(home, "settings.json"), { providers: { anthropic: { models: [{ id: "claude-x" }] } } })
+  const c = config([])
+  expect(c.providers).toEqual([
+    {
+      id: "anthropic",
+      dialect: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      models: [{ id: "claude-x" }],
+    },
+  ])
+  expect(c.warnings.join("\n")).toContain(
+    'it has no "apiKeyEnv" any more. Complete it with "amira provider edit anthropic"',
+  )
 })
 
 test("print mode needs a model: without one it is a usage error", async () => {

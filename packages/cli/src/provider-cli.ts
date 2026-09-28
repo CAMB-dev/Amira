@@ -76,8 +76,9 @@ function parseAdd(args: string[]): { protocol?: string; flags: AddFlags } {
     const value = eq > 0 ? arg.slice(eq + 1) : args[++i]
     if (value === undefined || value === "" || (eq < 0 && value.startsWith("--")))
       throw new UsageError(`${name} needs a value\n\n${USAGE}`)
-    if (key === "model") flags.models.push(value)
-    else if (flags[key] !== undefined) throw new UsageError(`${name} is given twice\n\n${USAGE}`)
+    if (key === "model") {
+      if (!flags.models.includes(value)) flags.models.push(value)
+    } else if (flags[key] !== undefined) throw new UsageError(`${name} is given twice\n\n${USAGE}`)
     else flags[key] = value
   }
   if (positional.length > 1) throw new UsageError(`unexpected "${positional.slice(1).join(" ")}"\n\n${USAGE}`)
@@ -168,6 +169,10 @@ export async function runProviderAdminCommand(
         }
         let apiKey: string | undefined
         if (added.flags.keyStdin) {
+          // Typed at a terminal the key would show; the masked form is for that.
+          if (!opts.readLine && process.stdin.isTTY) {
+            throw new UsageError("--key-stdin reads a piped key; to type it masked, leave out the key flags")
+          }
           apiKey = (await readLine(""))?.trim()
           if (!apiKey) throw new UsageError("--key-stdin: no key on stdin")
         }
