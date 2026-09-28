@@ -11,11 +11,12 @@ import {
   ToolRegistry,
   toolSearchExtension,
 } from "@amira/core"
+import { resetCommandWorker } from "@amira/proc"
 import { McpClient } from "../src/client.ts"
 import type { ServerConfig } from "../src/config.ts"
 import { HttpTransport } from "../src/http.ts"
 import { createMcpExtension, type McpExtensionOptions } from "../src/index.ts"
-import { StdioTransport, setPipeWorkerUrl } from "../src/stdio.ts"
+import { StdioTransport } from "../src/stdio.ts"
 import { startHttpServer } from "./fixtures/server.ts"
 
 const FIXTURE = path.join(import.meta.dir, "fixtures", "server.ts")
@@ -75,7 +76,7 @@ async function harness(servers: ServerConfig[], steps: MockStep[] = [], opts: Mc
 
 /**
  * The rejection message. `expect(p).rejects` is avoided on purpose: while it waits, bun test
- * does not deliver worker messages, so replies from the pipe worker arrive only afterwards.
+ * does not deliver worker messages, so replies from the command worker arrive only afterwards.
  */
 function failure(p: Promise<unknown>): Promise<string> {
   return p.then(
@@ -110,7 +111,7 @@ test(
     const client = new McpClient(t)
     await client.connect({ timeoutMs: SLOW })
     clearInterval(ticker)
-    // The spawn happened in the pipe worker; the main thread kept ticking.
+    // The spawn happened in the command worker; the main thread kept ticking.
     expect(maxGap).toBeLessThan(1000)
     expect(client.serverInfo).toEqual({ name: "fixture", version: "1.0.0" })
     const tools = await client.listTools({ timeoutMs: 5000 })
@@ -380,9 +381,9 @@ test(
 )
 
 test(
-  "falls back to spawning on the main thread when the pipe worker cannot load",
+  "falls back to spawning on the main thread when the command worker cannot load",
   async () => {
-    setPipeWorkerUrl(new URL("./fixtures/missing-worker.ts", import.meta.url).href)
+    resetCommandWorker({ url: new URL("./fixtures/missing-worker.ts", import.meta.url).href })
     try {
       const client = new McpClient(
         new StdioTransport({ argv: [process.execPath, FIXTURE, "stdio"], cwd: import.meta.dir, env: {} }),
@@ -393,7 +394,7 @@ test(
       })
       await client.close()
     } finally {
-      setPipeWorkerUrl()
+      resetCommandWorker()
     }
   },
   SLOW,

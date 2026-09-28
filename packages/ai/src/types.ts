@@ -51,9 +51,23 @@ export interface ModelRef {
   model: string
 }
 
+/**
+ * How frontends show a user message instead of its content: a slash command that sends a long
+ * prompt shows the command as typed. It is stored with the message and seen in events, but
+ * never sent to the model.
+ */
+export interface MessageDisplay {
+  /** Shown in place of the message's content, e.g. "/review-pr 123". */
+  text: string
+  /** A short line frontends may show under `text`, e.g. "Loaded skill review-pr (120 lines)". */
+  note?: string
+}
+
 export interface UserMessage {
   role: "user"
   content: UserContent[]
+  /** For frontends only; the model never sees it (see MessageDisplay). */
+  display?: MessageDisplay
 }
 
 export interface AssistantMessage {
@@ -167,6 +181,22 @@ export function text(t: string): TextBlock {
   return { type: "text", text: t }
 }
 
-export function userMessage(t: string): UserMessage {
-  return { role: "user", content: [text(t)] }
+export function userMessage(t: string, display?: MessageDisplay): UserMessage {
+  return { role: "user", content: [text(t)], ...(display ? { display } : {}) }
+}
+
+/** The messages as the model sees them: without user messages' `display`. Unchanged ones are kept. */
+export function modelMessages(messages: Message[]): Message[] {
+  if (!messages.some((m) => m.role === "user" && m.display)) return messages
+  return messages.map((m): Message => {
+    if (m.role !== "user" || !m.display) return m
+    const { display: _, ...rest } = m
+    return rest
+  })
+}
+
+/** The request without what only frontends read, such as user messages' `display`. */
+export function withoutDisplay(req: ModelRequest): ModelRequest {
+  const messages = modelMessages(req.messages)
+  return messages === req.messages ? req : { ...req, messages }
 }

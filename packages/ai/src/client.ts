@@ -5,7 +5,7 @@ import { BUILTIN_DIALECTS } from "./dialects/index.ts"
 import { BUILTIN_PROVIDERS, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import { type RetryOptions, withRetry } from "./retry.ts"
 import { withTextTools } from "./text-tools.ts"
-import type { ModelInfo, ModelRequest, StreamEvent } from "./types.ts"
+import { type ModelInfo, type ModelRequest, type StreamEvent, withoutDisplay } from "./types.ts"
 
 export interface AiOptions {
   providers?: ProviderConfig[]
@@ -67,7 +67,9 @@ export function createAi(opts: AiOptions = {}): Ai {
       const catalogId = catalogProviderId(p)
       return resolveModelInfo(p, id, catalogId ? catalog?.find(catalogId, id) : undefined)
     },
-    stream(req, signal) {
+    stream(full, signal) {
+      // A message's display is for frontends; the model only ever sees its content.
+      const req = withoutDisplay(full)
       const p = providers.get(req.model.provider)
       if (!p) return failed(req, `unknown provider "${req.model.provider}"`, "unknown_provider")
       const dialect = dialects.get(req.model.dialect)

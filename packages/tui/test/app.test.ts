@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
+import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import {
   type AnyEvent,
   type CommandDefinition,
@@ -60,10 +60,8 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   const tools = new ToolRegistry()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools })
   await host.load(statusExtension, "builtin:status")
-  const ai = createAi({
-    dialects: [createMockDialect(steps)],
-    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
-  })
+  const mock = createMockDialect(steps)
+  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
   const tree = o.tree ? { tree: new AgentTree({ ai, sections: () => [] }) } : {}
   const agent = new Agent({
     ai,
@@ -126,7 +124,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     await Bun.sleep(30)
   }
   await shows("Amira")
-  return { agent, ai, bus, host, commands, terminal, screen, all, live, shows, idle, exited }
+  return { agent, ai, mock, bus, host, commands, terminal, screen, all, live, shows, idle, exited }
 }
 
 test("a conversation: user message, tool call and reply end up in the transcript", async () => {
@@ -676,7 +674,7 @@ function testCommands(log: string[]): CommandDefinition[] {
   ]
 }
 
-test("typing a slash opens the command list above the editor; Tab and Enter complete and run", async () => {
+test("typing a slash opens the command list below the editor; Tab and Enter complete and run", async () => {
   const log: string[] = []
   const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
   terminal.send("/")
@@ -685,9 +683,12 @@ test("typing a slash opens the command list above the editor; Tab and Enter comp
   const popupRow = rows.findIndex((l) => l.includes("/clear"))
   // The editor sits in the input box: "│ › /     │".
   const editorRow = rows.findIndex((l) => /^│ › \/ *│$/.test(l.trimEnd()))
-  expect(popupRow).toBeGreaterThan(-1)
-  expect(popupRow).toBeLessThan(editorRow)
-  expect(live()).toContain("↑↓ select · Tab complete · Enter run · Esc close")
+  expect(editorRow).toBeGreaterThan(-1)
+  expect(popupRow).toBeGreaterThan(editorRow)
+  // The list takes the place of the status bar and the hint, and ends with its own hint.
+  expect(rows.filter((l) => l.trim()).at(-1)).toContain("↑↓ select · Tab complete · Enter run · Esc close")
+  expect(rows.slice(editorRow).join("\n")).not.toContain("mock/m1")
+  expect(live()).not.toContain("Enter send")
   // Prefix first: "/he" puts help on top; Tab completes it, Enter runs it.
   terminal.send("he")
   await waitFor(() => live().includes("› /help"), "help selected")
@@ -696,6 +697,117 @@ test("typing a slash opens the command list above the editor; Tab and Enter comp
   terminal.send("\r")
   await shows("HELP TEXT")
   expect(live()).toContain("› Message Amira")
+  terminal.send("\x03")
+  await exited
+})
+
+test("typing a command: the input box stays put and each key draws one frame with its list", async () => {
+  const frames: string[][] = []
+  const { terminal, live, exited } = await setup([], {
+    commands: testCommands([]),
+    onWrite: (screen) => void frames.push([...screen.lines]),
+  })
+  await waitFor(() => live().includes("Enter send"), "first frame")
+  await Bun.sleep(40)
+  const boxTop = (lines: string[]) => lines.findIndex((l) => l.startsWith("╭"))
+  const top = boxTop(frames.at(-1)!)
+  expect(top).toBeGreaterThan(-1)
+  /** The rows between the box's bottom edge and the popup's hint. */
+  const list = (lines: string[]) => {
+    const start = lines.findIndex((l) => l.startsWith("╰")) + 1
+    const end = lines.findIndex((l) => l.startsWith("↑↓ select"))
+    return end === -1 ? [] : lines.slice(start, end).map((l) => l.trimEnd())
+  }
+  const steps: [string, string[]][] = [
+    [
+      "/",
+      [
+        "› /clear   Start a new session",
+        "  /help    List the slash commands",
+        "  /model   Switch the model",
+        "  /quit    Leave Amira",
+        "  /status  Show the status",
+      ],
+    ],
+    ["m", ["› /model  Switch the model"]],
+    ["o", ["› /model  Switch the model"]],
+    ["d", ["› /model  Switch the model"]],
+    ["e", ["› /model  Switch the model"]],
+    ["l", ["› /model  Switch the model"]],
+    [" ", ["› deepseek/deepseek-flash", "  deepseek/deepseek-pro", "  openai/gpt-5"]],
+    ["d", ["› deepseek/deepseek-flash", "  deepseek/deepseek-pro"]],
+  ]
+  for (const [k, expected] of steps) {
+    const before = frames.length
+    terminal.send(k)
+    await Bun.sleep(60)
+    const drawn = frames.slice(before)
+    expect({ key: k, frames: drawn.length }).toEqual({ key: k, frames: 1 })
+    expect(boxTop(drawn[0]!)).toBe(top)
+    expect(list(drawn[0]!)).toEqual(expected)
+  }
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("async argument candidates get a frame to arrive, so the key still draws once", async () => {
+  const frames: string[][] = []
+  const { terminal, live, exited } = await setup([], {
+    commands: [
+      {
+        name: "pick",
+        description: "Pick",
+        args: {
+          complete: async () => {
+            await Bun.sleep(3)
+            return [{ value: "alpha" }, { value: "beta" }]
+          },
+        },
+        run: () => {},
+      },
+    ],
+    onWrite: (screen) => void frames.push([...screen.lines]),
+  })
+  terminal.send("/pick")
+  await waitFor(() => live().includes("› /pick"), "popup")
+  await Bun.sleep(40)
+  const before = frames.length
+  terminal.send(" ")
+  await Bun.sleep(80)
+  const drawn = frames.slice(before)
+  expect(drawn).toHaveLength(1)
+  expect(drawn[0]!.join("\n")).toContain("› alpha")
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a command's echo and everything it prints reach the screen in one frame", async () => {
+  const writes: string[] = []
+  const { terminal, live, shows, exited } = await setup([], {
+    commands: [
+      {
+        name: "chatty",
+        description: "Prints twice",
+        run: (_a, ctx) => {
+          ctx.print("first line")
+          ctx.print("second line")
+        },
+      },
+    ],
+    onWrite: (screen) => void writes.push(screen.lines.join("\n")),
+  })
+  terminal.send("/chatty")
+  await waitFor(() => live().includes("› /chatty"), "popup")
+  await Bun.sleep(40)
+  const before = writes.length
+  terminal.send("\r")
+  await shows("second line")
+  await Bun.sleep(60)
+  const drawn = writes.slice(before)
+  expect(drawn).toHaveLength(1)
+  expect(drawn[0]).toContain("first line")
   terminal.send("\x03")
   await exited
 })
@@ -774,6 +886,38 @@ test("unknown commands are reported and not sent to the model; slash paths are m
   expect(agent.messages.filter((m) => m.role === "user")).toHaveLength(1)
   terminal.send("\x03")
   await exited
+})
+
+test("a command that sends a long prompt shows as typed, with its note, while the model gets it all", async () => {
+  let agent!: Agent
+  const long = Array.from({ length: 40 }, (_, i) => `instruction line ${i}`).join("\n")
+  const skill: CommandDefinition = {
+    name: "review-pr",
+    description: "A skill",
+    run: (args, ctx) =>
+      ctx.session.send(long, {
+        display: { text: `/review-pr ${args}`, note: "Loaded skill review-pr (40 lines)" },
+      }),
+  }
+  const s = await setup([{ text: "Reviewing." }], {
+    commands: [skill],
+    control: {
+      send: async (text, opts) => {
+        await agent.prompt(userMessage(text, opts?.display))
+      },
+    },
+  })
+  agent = s.agent
+  s.terminal.send("/review-pr 123\r")
+  await s.shows("Reviewing.")
+  await s.idle()
+  const text = s.all()
+  expect(text).toContain("› /review-pr 123\n  ⎿ Loaded skill review-pr (40 lines)")
+  expect(text).not.toContain("instruction line")
+  const sent = s.mock.requests[0]!.messages[0]!
+  expect(sent).toEqual({ role: "user", content: [{ type: "text", text: long }] })
+  s.terminal.send("\x03")
+  await s.exited
 })
 
 test("a command typed during a turn runs at once instead of steering it", async () => {

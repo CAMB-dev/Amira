@@ -13,6 +13,7 @@ import type {
 import { emptyUsage } from "../types.ts"
 import { anthropicError } from "./anthropic-errors.ts"
 import { ANTHROPIC_DIALECT } from "./anthropic-messages.ts"
+import { madeUpIdPrefix } from "./tool-results.ts"
 
 type ErrorEvent = Extract<StreamEvent, { type: "error" }>
 
@@ -26,6 +27,7 @@ export class MessagesAccumulator {
   readonly message: AssistantMessage
   readonly #blocks = new Map<number, Open>()
   #tools = 0
+  readonly #idPrefix = madeUpIdPrefix()
   #stop: string | undefined
   #stopDetails: unknown
   #finished = false
@@ -92,7 +94,7 @@ export class MessagesAccumulator {
         name: String(cb.name ?? ""),
         args: {},
       }
-      if (!block.id) block.id = `call_${this.#tools}`
+      if (!block.id) block.id = `${this.#idPrefix}${this.#tools}`
       const open = {
         kind: "tool" as const,
         block,

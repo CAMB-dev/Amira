@@ -5,6 +5,8 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import {
   activePackages,
+  DEFAULT_INDEX_MIRRORS,
+  DEFAULT_INDEX_URL,
   installPackage,
   listInstalled,
   loadIndex,
@@ -351,6 +353,34 @@ test("the index is cached with a TTL and the cache is used offline", async () =>
   expect(stale.warnings[0]).toMatch(/using the copy from/)
   rmSync(cacheFile)
   await expect(loadIndex(opts)).rejects.toThrow(/cannot download the extensions index/)
+})
+
+test("the default index falls back to its mirror when raw.githubusercontent.com is unreachable", async () => {
+  const cacheFile = path.join(home, "cache", "extensions-index.json")
+  const body = JSON.stringify(fixtureIndex("https://example.invalid/x.git"))
+  const asked: string[] = []
+  const fakeFetch = (async (url: string) => {
+    asked.push(url)
+    if (url === DEFAULT_INDEX_URL) throw new Error("getaddrinfo ENOTFOUND raw.githubusercontent.com")
+    return new Response(body)
+  }) as unknown as typeof fetch
+  const loaded = await loadIndex({ url: DEFAULT_INDEX_URL, cacheFile, fetch: fakeFetch })
+  expect(loaded.index.extensions.length).toBe(2)
+  expect(asked).toEqual(DEFAULT_INDEX_MIRRORS)
+  // Every source failing names each one.
+  rmSync(cacheFile)
+  const down = (async () => {
+    throw new Error("offline")
+  }) as unknown as typeof fetch
+  await expect(loadIndex({ url: DEFAULT_INDEX_URL, cacheFile, fetch: down })).rejects.toThrow(
+    /jsdelivr.*offline/,
+  )
+  // A URL the user chose has no mirrors.
+  asked.length = 0
+  await expect(
+    loadIndex({ url: "https://example.invalid/index.json", cacheFile, fetch: fakeFetch, refresh: true }),
+  ).resolves.toBeDefined()
+  expect(asked).toEqual(["https://example.invalid/index.json"])
 })
 
 test("parseIndex rejects a file that is not an index", () => {

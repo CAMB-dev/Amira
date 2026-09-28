@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawn } from "node:child_process"
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep } from "@amira/ai"
@@ -241,6 +241,8 @@ test("amira --rpc: slash commands list, complete and run, and may ask questions"
 
   rpc.send({ id: 7, cmd: "command.run", text: "/nope" })
   expect((await rpc.response(7)).error.code).toBe("not_found")
+  rpc.send({ id: 71, cmd: "command.run", text: "/usage" })
+  expect(await rpc.response(71)).toMatchObject({ ok: true, command: "cost" })
   rpc.send({ id: 8, cmd: "command.run", text: "/tools enable nope" })
   expect((await rpc.response(8)).error).toEqual({ code: "command_failed", message: 'no tool named "nope"' })
 
@@ -251,6 +253,36 @@ test("amira --rpc: slash commands list, complete and run, and may ask questions"
   expect(cleared.sessionId).not.toBe(started.sessionId)
   rpc.send({ id: 10, cmd: "state" })
   expect(await rpc.response(10)).toMatchObject({ sessionId: cleared.sessionId, messages: 0 })
+  expect((await rpc.close()).code).toBe(0)
+}, 60_000)
+
+test("amira --rpc: settings aliases are listed, completed and run", async () => {
+  const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
+  const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
+  writeFileSync(
+    path.join(home, "settings.json"),
+    JSON.stringify({ commandAliases: { mm: "model mock/m", q: "status", ghost: "nope" } }),
+  )
+  const rpc = spawnRpc([], home, ["-e", commandsExt])
+  const warning = await rpc.event("extension.error")
+  expect(warning.data.error).toContain("commandAliases: /q is already an alias of /quit")
+
+  rpc.send({ id: 1, cmd: "command.list" })
+  const list = await rpc.response(1)
+  expect(list.commands.find((c: Line) => c.name === "quit").aliases).toEqual(["exit", "q"])
+  expect(list.aliases).toEqual([
+    { name: "ghost", expansion: "nope" },
+    { name: "mm", expansion: "model mock/m" },
+  ])
+  rpc.send({ id: 2, cmd: "command.complete", text: "/mm" })
+  expect((await rpc.response(2)).candidates[0]).toMatchObject({ value: "mm", label: "mm → /model mock/m" })
+  rpc.send({ id: 3, cmd: "command.run", text: "/mm" })
+  expect(await rpc.response(3)).toMatchObject({ ok: true, command: "model", output: ["Model: mock/m"] })
+  rpc.send({ id: 4, cmd: "command.run", text: "/ghost" })
+  expect((await rpc.response(4)).error).toMatchObject({
+    code: "not_found",
+    message: expect.stringContaining("The alias /ghost runs /nope, which is not a command"),
+  })
   expect((await rpc.close()).code).toBe(0)
 }, 60_000)
 
@@ -435,6 +467,57 @@ test("session.read lastTurn survives history entries being replaced", async () =
   s.agent.messages.splice(1)
   const short = await rpc.call({ id: 4, cmd: "session.read", what: "lastTurn" })
   expect(short.messages.map((m: Line) => m.content[0].text)).toEqual(["first"])
+  expect(await rpc.end()).toBe(0)
+})
+
+test("prompt and steer take a display, which their events and session.read carry", async () => {
+  const s = await session([{ text: "one", delayMs: 20 }, { text: "two" }])
+  const rpc = inProcess(s)
+  const bad = await rpc.call({ id: 0, cmd: "prompt", text: "x", display: { note: "no text" } })
+  expect(bad.error.code).toBe("invalid_params")
+  const blank = await rpc.call({ id: 0.5, cmd: "prompt", text: "x", display: { text: "  " } })
+  expect(blank.error.code).toBe("invalid_params")
+  const display = { text: "/review-pr 1", note: "Loaded skill review-pr (9 lines)" }
+  await rpc.call({ id: 1, cmd: "prompt", text: "long skill text", display })
+  expect((await rpc.call({ id: 2, cmd: "steer", text: "more", display: { text: "/more" } })).ok).toBe(true)
+  expect((await rpc.until((l) => l.type === "turn.start")).data.prompt.display).toEqual(display)
+  expect((await rpc.until((l) => l.type === "turn.steer")).data.message.display).toEqual({ text: "/more" })
+  await rpc.until((l) => l.type === "turn.end")
+  const read = await rpc.call({ id: 3, cmd: "session.read", what: "messages" })
+  const users = read.messages.filter((m: Line) => m.role === "user")
+  expect(users.map((m: Line) => m.display)).toEqual([display, { text: "/more" }])
+  expect(await rpc.end()).toBe(0)
+})
+
+test("the rpc schema describes a user message's display and lets prompt and steer send one", () => {
+  const defs = (rpcSchema() as any).$defs
+  expect(defs.UserMessage.properties.display).toEqual({ $ref: "#/$defs/MessageDisplay" })
+  expect(defs.UserMessage.required).not.toContain("display")
+  expect(defs.MessageDisplay.required).toEqual(["text"])
+  expect(Object.keys(defs.MessageDisplay.properties)).toEqual(["text", "note"])
+  expect(COMMAND_PARAMS.prompt.params).toHaveProperty("display?")
+  expect(COMMAND_PARAMS.steer.params).toHaveProperty("display?")
+})
+
+test("during a /compact, prompt and model.set are busy and steer queues the message", async () => {
+  const s = await session([{ text: "one" }, { text: "two" }, { text: "S", delayMs: 100 }, { text: "three" }])
+  const rpc = inProcess(s)
+  await rpc.call({ id: 1, cmd: "prompt", text: "first" })
+  await rpc.until((l) => l.type === "turn.end")
+  await rpc.call({ id: 2, cmd: "prompt", text: "second" })
+  await rpc.until((l) => l.type === "turn.end" && l.turnId !== rpc.out.find((o) => o.id === 1)!.turnId)
+  const compacted = s.agent.compact()
+  expect((await rpc.call({ id: 3, cmd: "model.set", model: "mock/other" })).error.code).toBe("busy")
+  expect((await rpc.call({ id: 4, cmd: "prompt", text: "no" })).error.code).toBe("busy")
+  expect(await rpc.call({ id: 6, cmd: "state" })).toMatchObject({ busy: true, status: "idle" })
+  expect(await rpc.call({ id: 5, cmd: "steer", text: "later" })).toMatchObject({ ok: true, queued: true })
+  expect(await compacted).toBe(true)
+  const start = await rpc.until((l) => l.type === "turn.start" && l.data.prompt.content[0].text === "later")
+  await rpc.until((l) => l.type === "turn.end" && l.turnId === start.turnId)
+  expect(s.agent.messages.at(-1)).toMatchObject({
+    role: "assistant",
+    content: [{ type: "text", text: "three" }],
+  })
   expect(await rpc.end()).toBe(0)
 })
 

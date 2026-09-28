@@ -43,6 +43,9 @@ export class LiveRenderer {
   private lastFrameAt = 0
   private offResize: (() => void) | undefined
   private stopped = false
+  private suspended = false
+  /** Lines committed while suspended, printed in order on `resume()`. */
+  private held: string[] = []
 
   constructor(
     private terminal: Terminal,
@@ -69,7 +72,7 @@ export class LiveRenderer {
 
   /** Schedules a frame, coalescing calls to at most one per frame interval. */
   requestRender(): void {
-    if (this.stopped || this.timer) return
+    if (this.stopped || this.suspended || this.timer) return
     const wait = Math.max(0, this.lastFrameAt + this.frameIntervalMs - performance.now())
     this.timer = setTimeout(() => {
       this.timer = undefined
@@ -87,12 +90,53 @@ export class LiveRenderer {
     this.draw(lines.flatMap((l) => sanitize(l).split("\n")))
   }
 
+  get isSuspended(): boolean {
+    return this.suspended
+  }
+
+  /**
+   * Stops drawing while something else has the screen, such as a full-screen view on the
+   * alternate screen. The live region is cleared first, leaving the cursor where it started,
+   * so the main screen holds only committed lines while hidden. Committed lines are held
+   * back meanwhile, and nothing more is written.
+   */
+  suspend(): void {
+    if (this.stopped || this.suspended) return
+    clearTimeout(this.timer)
+    this.timer = undefined
+    if (this.prev) {
+      const out = this.toTop(this.terminal.columns) + erase.toScreenEnd
+      this.terminal.write(this.synchronizedOutput ? syncOutput.begin + out + syncOutput.end : out)
+    }
+    this.prev = undefined
+    this.row = 0
+    this.suspended = true
+  }
+
+  /**
+   * Draws again after `suspend()`, once the screen is back as it was (the alternate screen
+   * restores the main one and its cursor): the live region is drawn from the cursor, below
+   * the lines committed meanwhile, in the order they came. Nothing of the old live region is
+   * left to replace, so a terminal resized in between (which may have re-wrapped the main
+   * screen, or not moved the cursor it saved along with it) leaves no stale copy behind.
+   */
+  resume(): void {
+    if (!this.suspended) return
+    this.suspended = false
+    this.forceFull = true
+    const held = this.held
+    this.held = []
+    this.draw(held)
+  }
+
   /**
    * Leaves the cursor below the live region (or clears it) and shows it. Until `start()` is
-   * called again, rendering and committing do nothing.
+   * called again, rendering and committing do nothing. A suspended renderer resumes first,
+   * so lines it held back are not lost; leave any full-screen view before.
    */
   stop(opts: { clear?: boolean } = {}): void {
     if (this.stopped) return
+    this.resume()
     this.stopped = true
     clearTimeout(this.timer)
     this.timer = undefined
@@ -110,6 +154,10 @@ export class LiveRenderer {
 
   private draw(committed: string[]): void {
     if (this.stopped) return
+    if (this.suspended) {
+      for (const line of committed) this.held.push(line)
+      return
+    }
     clearTimeout(this.timer)
     this.timer = undefined
     this.lastFrameAt = performance.now()

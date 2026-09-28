@@ -93,8 +93,9 @@ test("reports a stable index while the id moves from placeholder to real", async
     delta({}, "tool_calls"),
   ])
   const deltas = evs.filter((e): e is ToolDelta => e.type === "toolCall.delta")
+  expect(deltas[0]?.id).toMatch(/^call_[0-9a-f]{8}_0$/)
   expect(deltas.map((d) => [d.index, d.id])).toEqual([
-    [0, "call_0"],
+    [0, deltas[0]!.id],
     [0, "real"],
     [0, "real"],
     [1, "b"],

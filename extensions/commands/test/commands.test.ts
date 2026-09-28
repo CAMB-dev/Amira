@@ -40,6 +40,8 @@ function fakeControl(over: Partial<SessionControl> = {}) {
     info: () => info,
     messages: () => [],
     replies: () => [],
+    subagents: () => [],
+    subagentMessages: () => undefined,
     models: () => ["deepseek/deepseek-flash", "deepseek/deepseek-pro", "openai/gpt-5"],
     setModel: (ref) => {
       if (!ref.includes("/")) throw new Error(`unknown model "${ref}"`)
@@ -96,7 +98,11 @@ function fakeControl(over: Partial<SessionControl> = {}) {
   return { control, calls }
 }
 
-async function setup(over: Partial<SessionControl> = {}, answers: (string | undefined)[] = []) {
+async function setup(
+  over: Partial<SessionControl> = {},
+  answers: (string | undefined)[] = [],
+  aliases?: Record<string, string>,
+) {
   const bus = new EventBus()
   const ext = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
   await ext.load(commandsExtension, "builtin:commands")
@@ -106,7 +112,14 @@ async function setup(over: Partial<SessionControl> = {}, answers: (string | unde
   })
   const agent = new Agent({ ai, model: ai.model("mock/m"), cwd: "/work", bus })
   const { control, calls } = fakeControl(over)
-  const host = new CommandHost({ registry: ext.commands, bus, ui: ext.ui, control, agent })
+  const host = new CommandHost({
+    registry: ext.commands,
+    bus,
+    ui: ext.ui,
+    control,
+    agent,
+    ...(aliases ? { aliases } : {}),
+  })
   // Dialogs answer from the list, in order; undefined is "cancelled".
   const asked: string[] = []
   bus.subscribe(
@@ -150,7 +163,41 @@ test("/help lists every command with its argument hint", async () => {
   const { run } = await setup()
   const { text } = await run("/help")
   expect(text).toContain("/model [provider/model]")
-  expect(text).toMatch(/\/quit\s+Leave Amira/)
+  expect(text).toMatch(/\/quit \(\/exit, \/q\)\s+Leave Amira/)
+  expect(text).toMatch(/\/resume \(\/continue\) \[session id\]\s+Switch/)
+  expect(text).not.toContain("Aliases from settings")
+})
+
+test("the built-in aliases run their commands", async () => {
+  const { host, run } = await setup()
+  expect(host.list().flatMap((c) => c.aliases.map((a) => `${a}→${c.name}`))).toEqual([
+    "new→clear",
+    "reset→clear",
+    "usage→cost",
+    "?→help",
+    "h→help",
+    "exit→quit",
+    "q→quit",
+    "continue→resume",
+  ])
+  expect(await run("/usage")).toMatchObject({ ok: true, command: "cost" })
+  expect(await run("/?")).toMatchObject({ ok: true, command: "help" })
+  expect((await run("/h")).text).toContain("Commands:")
+  let quit = false
+  expect(await host.run("/exit", { frontend: "tui", quit: () => (quit = true) })).toMatchObject({
+    command: "quit",
+  })
+  expect(quit).toBe(true)
+})
+
+test("/help lists the settings aliases with what they run", async () => {
+  const { run } = await setup({}, [], { ds: "model deepseek/deepseek-flash", m: "model", q: "status" })
+  const { text } = await run("/help")
+  // /q is a built-in alias, so the settings one is left out.
+  expect(text).toMatch(
+    /Aliases from settings \(commandAliases\):\n\/ds\s+→ \/model deepseek\/deepseek-flash\n\/m\s+→ \/model$/,
+  )
+  expect((await run("/ds")).text).toBe("Model: deepseek/deepseek-flash")
 })
 
 test("/help lists other extensions' commands in their own group, descriptions cut short", async () => {

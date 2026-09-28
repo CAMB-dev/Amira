@@ -82,6 +82,12 @@ export const openaiChat: Dialect = {
         yield acc.fail({ message: "the event stream ended without any events" }, true)
         return
       }
+      // Some servers never send [DONE] but do send a finish_reason; with neither, the
+      // connection dropped mid-reply.
+      if (!sawDone && !acc.finished) {
+        yield acc.fail({ message: "the event stream ended before the reply was complete" }, true)
+        return
+      }
       yield acc.end()
     } catch (e) {
       if (ctx.signal.aborted) yield aborted()

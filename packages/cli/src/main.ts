@@ -131,6 +131,7 @@ async function run(argv: string[]): Promise<number> {
     cwd: args.cwd,
     shell: config.shell,
     disabled: config.requestedDisabled.names,
+    ...(config.settings.commandAliases ? { aliases: config.settings.commandAliases } : {}),
     announce: (next, reason) => {
       agentRef = next
       announce(next, reason)
