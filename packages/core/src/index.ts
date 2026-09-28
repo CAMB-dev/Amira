@@ -1,6 +1,7 @@
 export * from "./agent.ts"
 export * from "./compaction.ts"
 export * from "./config/index.ts"
+export * from "./deferred-tools.ts"
 export * from "./event-bus.ts"
 export * from "./extensions.ts"
 export * from "./git.ts"

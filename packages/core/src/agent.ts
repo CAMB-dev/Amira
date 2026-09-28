@@ -16,9 +16,11 @@ import type {
   ToolDefinition,
   ToolRejection,
   ToolResult,
+  ToolSession,
   TurnEndReason,
 } from "@amira/api"
 import { type CompactionOptions, contextTokens, splitHistory, summarize } from "./compaction.ts"
+import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
@@ -105,6 +107,9 @@ export class Agent {
   #contextTokens: number | undefined
   #storeFailed = false
   #maxParallelTools: number
+  /** Deferred tools this session loaded (via tool_search), in load order. */
+  #loadedTools = new Set<string>()
+  #toolSession: ToolSession
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -139,6 +144,16 @@ export class Agent {
     if (opts.session && (stored?.provider !== this.model.provider || stored.model !== this.model.id)) {
       this.#store({ type: "model_change", model: modelRef(this.model) })
     }
+    this.#toolSession = createToolSession(this.sessionId, this.tools, this.#loadedTools)
+  }
+
+  /** Offers deferred tools to the model from its next call on, e.g. when restoring a session. */
+  loadTools(names: string[]): string[] {
+    return this.#toolSession.loadTools(names)
+  }
+
+  get loadedTools(): string[] {
+    return [...this.#loadedTools]
   }
 
   get status(): SessionStatus {
@@ -286,15 +301,23 @@ export class Agent {
   }
 
   async #callModel(turn: Turn): Promise<ModelReply> {
+    // The core owns the "deferred-tools" section: interceptors see it filled in, and it is
+    // listed again afterwards so tools registered while they waited (e.g. MCP servers that
+    // were still connecting) are included, unless an interceptor rewrote the section.
+    const listed = deferredToolsSection(this.tools.deferred())
     const built = await this.interceptors.run(
       "system.build",
-      { sections: this.#sections.map((s) => ({ ...s })) },
+      { sections: setSection(this.#sections, "deferred-tools", listed).map((s) => ({ ...s })) },
       { sessionId: this.sessionId, signal: turn.signal },
     )
     if (turn.signal.aborted) return { kind: "aborted" }
+    let sections = built.value.sections
+    if (sections.find((s) => s.name === "deferred-tools")?.text === listed) {
+      sections = setSection(sections, "deferred-tools", deferredToolsSection(this.tools.deferred()))
+    }
     const ctx = await this.interceptors.run(
       "context.build",
-      { systemPrompt: renderPrompt(built.value.sections), messages: [...this.messages] },
+      { systemPrompt: renderPrompt(sections), messages: [...this.messages] },
       { sessionId: this.sessionId, signal: turn.signal },
     )
     if (turn.signal.aborted) return { kind: "aborted" }
@@ -313,7 +336,7 @@ export class Agent {
           model: this.model,
           systemPrompt: ctx.value.systemPrompt,
           messages: ctx.value.messages,
-          tools: this.tools.specs(),
+          tools: offeredTools(this.tools, this.#loadedTools),
           ...(this.#maxTokens ? { maxTokens: this.#maxTokens } : {}),
         },
         turn.signal,
@@ -507,6 +530,7 @@ export class Agent {
             cwd: this.cwd,
             toolCallId: call.id,
             signal: turn.signal,
+            session: this.#toolSession,
             update: (partial) => {
               if (turn.finished.has(call.id)) return
               this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })

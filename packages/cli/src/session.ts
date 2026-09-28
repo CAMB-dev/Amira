@@ -11,6 +11,7 @@ import {
   loadInstructions,
   type SessionStore,
   ToolRegistry,
+  toolSearchExtension,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
@@ -58,6 +59,9 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
   const bundled: [string, () => Promise<{ default?: unknown }>][] = [
     ["builtin:tools", () => import("@amira/builtin-tools")],
     ["builtin:status", () => import("@amira/ext-status")],
+    ["builtin:tool-search", async () => ({ default: toolSearchExtension })],
+    ["builtin:skills", () => import("@amira/ext-skills")],
+    ["builtin:mcp", () => import("@amira/ext-mcp")],
   ]
   const out: { source: string; extension: Extension }[] = []
   for (const [source, load] of bundled) {
@@ -93,7 +97,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       bus.emit("extension.error", { source, error: `${point}: ${error}` }, { sessionId: "host" }),
   })
   const tools = new ToolRegistry()
-  const host = new ExtensionHost({ bus, interceptors, tools, settings })
+  const host = new ExtensionHost({ bus, interceptors, tools, settings, cwd: opts.cwd })
   const startupEvents: AnyEvent[] = []
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
     types: ["extension.error", "extension.loaded"],
