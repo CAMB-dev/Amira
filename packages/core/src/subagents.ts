@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs"
 import path from "node:path"
 import {
   type Ai,
@@ -26,6 +27,19 @@ import { instructionsSection, loadInstructions } from "./instructions.ts"
 import { defaultSections, type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { SessionStore } from "./session-store.ts"
 import { ToolRegistry } from "./tool-registry.ts"
+
+/**
+ * A sub-agent a tree started, as `AgentTree.subagent` gives it. A running one comes with its
+ * live conversation and session; a finished one keeps its session's file, or, without one,
+ * a copy of its conversation.
+ */
+export interface SpawnedSubagent {
+  info: SubagentInfo
+  /** The live array while it runs; copy it to keep a snapshot. */
+  messages?: readonly Message[]
+  session?: SessionStore
+  file?: string
+}
 
 /** spawn refused: too deep, budget spent or an unknown model. */
 export class SpawnError extends Error {}
@@ -157,7 +171,7 @@ export class AgentTree {
   #exceeded: string | undefined
   #live = new Map<string, Child>()
   /** Every child this tree started, finished ones too, in spawn order. */
-  #spawned = new Map<string, Child>()
+  #spawned = new Map<string, Child | SpawnedSubagent>()
   /** Children waiting for a place to run, in spawn order. */
   #queue: Child[] = []
   /** Children whose turn is running (or about to start). */
@@ -186,18 +200,21 @@ export class AgentTree {
 
   /** Ids of the sub-agents `parentSessionId` started in this process, finished ones too, in spawn order. */
   childrenOf(parentSessionId: string): string[] {
-    return [...this.#spawned.values()].filter((c) => c.parentSessionId === parentSessionId).map((c) => c.id)
+    return [...this.#spawned.entries()]
+      .filter(
+        ([, c]) => (c instanceof Child ? c.parentSessionId : c.info.parentSessionId) === parentSessionId,
+      )
+      .map(([id]) => id)
   }
 
   /**
    * A sub-agent this tree started, running or finished: what it is doing and its
    * conversation so far (the live array while it runs; copy it to keep a snapshot).
    */
-  subagent(
-    id: string,
-  ): { info: SubagentInfo; messages: readonly Message[]; session?: SessionStore } | undefined {
+  subagent(id: string): SpawnedSubagent | undefined {
     const c = this.#spawned.get(id)
     if (!c) return undefined
+    if (!(c instanceof Child)) return { ...c }
     const r = c.ended
     const info: SubagentInfo = {
       id: c.id,
@@ -462,6 +479,14 @@ export class AgentTree {
       child.parentMeta,
     )
     child.ended = result
+    // Keep what it did, not the session: one with a file is read back from it when asked for.
+    const done = this.subagent(child.id) as SpawnedSubagent
+    const stored = child.agent.session?.file
+    const file = stored && existsSync(stored) ? stored : undefined
+    this.#spawned.set(child.id, {
+      info: done.info,
+      ...(file ? { file } : { messages: [...child.agent.messages] }),
+    })
     child.settle(result)
   }
 

@@ -7,7 +7,7 @@ import { defineTool, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { SessionStore } from "../src/session-store.ts"
-import { listSubagents } from "../src/subagent-list.ts"
+import { listSubagents, subagentMessages } from "../src/subagent-list.ts"
 import { AgentTree } from "../src/subagents.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
 
@@ -84,6 +84,10 @@ test("running, queued and finished sub-agents are listed with their state and co
   })
   expect(first!.info.durationMs).toBeGreaterThanOrEqual(0)
   expect(first!.messages().map((m) => m.role)).toEqual(["user", "assistant"])
+  // A finished child is read back from its file; the tree no longer holds its session.
+  expect(tree.subagent(a.id)).toMatchObject({ file: expect.stringContaining(a.id) })
+  expect(tree.subagent(a.id)?.messages).toBeUndefined()
+  expect(subagentMessages(root, tree, a.id)?.map((m) => m.role)).toEqual(["user", "assistant"])
   expect(second!.info).toMatchObject({ id: b.id, role: "agent", task: "slow task", status: "running" })
   expect(second!.info.startedAt).toBeGreaterThan(0)
   expect(second!.info.durationMs).toBeUndefined()

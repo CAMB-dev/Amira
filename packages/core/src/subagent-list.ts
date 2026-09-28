@@ -23,17 +23,23 @@ export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
   const out: SubagentEntry[] = []
   const seen = new Set<string>()
   const visit = (parentId: string, store: SessionStore | undefined, depth: number) => {
+    // Only the current branch: sub-agents of a branch left behind are not part of this session.
     const stored = store
-      ? store.entries.flatMap((e) => (e.type === "subagent" ? [{ id: e.childSessionId, role: e.role }] : []))
+      ? store.branch().flatMap((e) => (e.type === "subagent" ? [{ id: e.childSessionId, role: e.role }] : []))
       : []
     const ids = [...stored.map((s) => s.id), ...(tree?.childrenOf(parentId) ?? [])]
     for (const id of ids) {
       if (seen.has(id)) continue
       seen.add(id)
-      const live = tree?.subagent(id)
-      if (live) {
-        out.push({ info: { ...live.info, depth }, messages: () => [...live.messages] })
-        visit(id, live.session, depth + 1)
+      const known = tree?.subagent(id)
+      if (known) {
+        const own = known.session ?? (known.file ? openStored(known.file) : undefined)
+        const kept = known.messages
+        out.push({
+          info: { ...known.info, depth },
+          messages: () => (kept ? [...kept] : own ? [...own.restore().messages] : []),
+        })
+        visit(id, own, depth + 1)
         continue
       }
       const role = stored.find((s) => s.id === id)?.role || "agent"
@@ -50,8 +56,28 @@ export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
   return out
 }
 
-/** Stores read from disk, by file, kept while the file does not change. */
+/**
+ * A sub-agent's conversation by id; like finding it in `listSubagents`, but one this process
+ * started is looked up directly.
+ */
+export function subagentMessages(
+  agent: Agent,
+  tree: AgentTree | undefined,
+  id: string,
+): Message[] | undefined {
+  const known = tree?.subagent(id)
+  if (known?.messages) return [...known.messages]
+  if (known?.session) return [...known.session.restore().messages]
+  const file = known?.file
+  if (file) return [...(openStored(file)?.restore().messages ?? [])]
+  return listSubagents(agent, tree)
+    .find((e) => e.info.id === id)
+    ?.messages()
+}
+
+/** Stores read from disk, by file, kept while the file does not change; the most recent few. */
 const cache = new Map<string, { size: number; mtimeMs: number; store: SessionStore }>()
+const CACHED_FILES = 32
 
 function openStored(file: string): SessionStore | undefined {
   let stat: { size: number; mtimeMs: number }
@@ -62,10 +88,15 @@ function openStored(file: string): SessionStore | undefined {
     return undefined
   }
   const hit = cache.get(file)
-  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) return hit.store
+  cache.delete(file)
+  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) {
+    cache.set(file, hit)
+    return hit.store
+  }
   try {
     const store = SessionStore.open(file)
     cache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, store })
+    if (cache.size > CACHED_FILES) cache.delete(cache.keys().next().value!)
     return store
   } catch {
     return undefined
