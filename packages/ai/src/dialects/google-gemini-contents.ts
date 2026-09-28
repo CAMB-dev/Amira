@@ -6,6 +6,9 @@ export const GEMINI_DIALECT = "google-gemini"
 /** Prefix of the ids made up for calls, since Gemini's calls have none. */
 export const SYNTHETIC_ID = "gemini_call_"
 
+/** The documented stand-in for a call whose real signature is unknown. */
+export const SKIP_SIGNATURE = "skip_thought_signature_validator"
+
 export type GeminiPart = {
   text?: string
   thought?: boolean
@@ -81,6 +84,10 @@ function modelParts(m: AssistantMessage): GeminiPart[] {
       else parts.push({ text: "", thoughtSignature: sig })
     }
   }
+  // Gemini 3 rejects a step whose first call has no signature, as with history from another
+  // dialect. Gemini itself signs only the first of parallel calls, so only that one is marked.
+  const first = parts.find((p) => p.functionCall)
+  if (first && !first.thoughtSignature) first.thoughtSignature = SKIP_SIGNATURE
   return parts
 }
 

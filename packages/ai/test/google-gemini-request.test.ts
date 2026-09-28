@@ -196,6 +196,29 @@ test("translates every block type into contents", async () => {
   ])
 })
 
+test("marks the first unsigned call of a step with the skip signature, as Gemini 3 requires", async () => {
+  const messages: Message[] = [
+    {
+      role: "assistant",
+      model,
+      content: [
+        { type: "text", text: "Two reads." },
+        { type: "toolCall", id: "call_a", name: "read", args: {} },
+        { type: "toolCall", id: "call_b", name: "read", args: {} },
+      ],
+    },
+  ]
+  const { body } = await sent({ messages })
+  expect(body.contents[0].parts).toEqual([
+    { text: "Two reads." },
+    {
+      functionCall: { id: "call_a", name: "read", args: {} },
+      thoughtSignature: "skip_thought_signature_validator",
+    },
+    { functionCall: { id: "call_b", name: "read", args: {} } },
+  ])
+})
+
 test("keeps real call ids, answers missing results and drops stray ones", async () => {
   const messages: Message[] = [
     { role: "assistant", model, content: [{ type: "toolCall", id: "abc", name: "r", args: {} }] },
@@ -203,7 +226,15 @@ test("keeps real call ids, answers missing results and drops stray ones", async 
   ]
   const { body } = await sent({ messages })
   expect(body.contents).toEqual([
-    { role: "model", parts: [{ functionCall: { id: "abc", name: "r", args: {} } }] },
+    {
+      role: "model",
+      parts: [
+        {
+          functionCall: { id: "abc", name: "r", args: {} },
+          thoughtSignature: "skip_thought_signature_validator",
+        },
+      ],
+    },
     {
       role: "user",
       parts: [
