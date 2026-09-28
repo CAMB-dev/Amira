@@ -101,7 +101,7 @@ export const COMMAND_PARAMS = {
   },
   "skill.run": {
     description:
-      "Runs a skill as if the user typed $<name> <args>: usually it sends its instructions as a user message, which starts or steers a turn and is shown as the line typed. What it prints arrives as command.output events (command \"$<name>\"). Fails with `not_found` for an unknown skill and `command_failed` when it throws.",
+      'Runs a skill as if the user typed $<name> <args>: usually it sends its instructions as a user message, which starts or steers a turn and is shown as the line typed. What it prints arrives as command.output events (command "$<name>"). Fails with `not_found` for an unknown skill and `command_failed` when it throws.',
     params: { name: str, "args?": str },
   },
 } satisfies Record<string, { description: string; params: Record<string, Schema> }>
