@@ -26,10 +26,10 @@ export interface RpcOptions {
   /** How long to wait for queued events at exit. Default 2000 ms. */
   flushTimeoutMs?: number
   /**
-   * Loads a stored session into a new agent on the same bus. Absent until session
-   * persistence exists, and session.resume then answers not_supported.
+   * Loads a stored session into a new agent on the same bus; undefined when there is no such
+   * session. Without it, session.resume answers not_supported.
    */
-  resume?: (sessionId: string) => Promise<Agent>
+  resume?: (sessionId: string) => Promise<Agent | undefined>
 }
 
 export interface RpcSession {
@@ -168,7 +168,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       // The running turn's history may carry state only its model understands.
       if (agent.turnId) throw new RpcError("busy", "a turn is running; set the model after turn.end")
       try {
-        agent.model = ai.model(ref)
+        agent.setModel(ai.model(ref))
       } catch (err) {
         throw new RpcError("invalid_params", err instanceof Error ? err.message : String(err))
       }
@@ -188,9 +188,11 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     },
     "session.resume": async (p) => {
       const sessionId = text(p, "sessionId")
-      if (!opts.resume) throw new RpcError("not_supported", "session persistence is not supported yet")
+      if (!opts.resume) throw new RpcError("not_supported", "this host cannot resume sessions")
       if (agent.turnId) throw new RpcError("busy", "a turn is running")
-      agent = await opts.resume(sessionId)
+      const next = await opts.resume(sessionId)
+      if (!next) throw new RpcError("not_found", `no session ${sessionId}`)
+      agent = next
       lastTurn = undefined
       return { sessionId: agent.sessionId }
     },

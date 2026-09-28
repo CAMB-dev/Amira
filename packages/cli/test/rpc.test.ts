@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test"
 import { spawn } from "node:child_process"
+import { mkdtempSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep } from "@amira/ai"
 import type { Extension } from "@amira/api"
@@ -14,8 +16,8 @@ const main = path.join(here, "..", "src", "main.ts")
 
 type Line = Record<string, any>
 
-/** Drives `amira --rpc` as a child process, the way a real client would. */
-function spawnRpc(replies: MockReply[]) {
+/** Drives `amira --rpc` as a child process, the way a real client would. Sessions go to `home`. */
+function spawnRpc(replies: MockReply[], home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))) {
   const p = Bun.spawn(
     [
       "bun",
@@ -31,7 +33,7 @@ function spawnRpc(replies: MockReply[]) {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, AMIRA_TEST_MOCK: JSON.stringify(replies) },
+      env: { ...process.env, AMIRA_TEST_MOCK: JSON.stringify(replies), AMIRA_HOME: home },
     },
   )
   const lines: Line[] = []
@@ -157,7 +159,7 @@ test("amira --rpc: prompt, steer, ui.respond, reads and errors, end to end", asy
   rpc.send({ id: 12, cmd: "model.set", model: "nope" })
   expect((await rpc.response(12)).error.code).toBe("invalid_params")
   rpc.send({ id: 13, cmd: "session.resume", sessionId: "s_1" })
-  expect((await rpc.response(13)).error.code).toBe("not_supported")
+  expect((await rpc.response(13)).error.code).toBe("not_found")
   rpc.send({ id: 14, cmd: "session.read", what: "messages" })
   expect((await rpc.response(14)).messages.length).toBe(9)
 
@@ -172,6 +174,37 @@ test("amira --rpc: prompt, steer, ui.respond, reads and errors, end to end", asy
     if ("ok" in l) expect(typeof l.ok).toBe("boolean")
     else expect(known.has(l.type)).toBe(true)
   }
+}, 60_000)
+
+test("amira --rpc: session.resume continues a stored session on the same connection", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
+  const first = spawnRpc([{ text: "first answer" }], home)
+  const started = await first.event("session.start")
+  first.send({ id: 1, cmd: "prompt", text: "remember me" })
+  await first.response(1)
+  await first.event("turn.end")
+  expect((await first.close()).code).toBe(0)
+  const storedId = started.sessionId
+
+  const second = spawnRpc([{ text: "second answer" }], home)
+  const fresh = await second.event("session.start")
+  expect(fresh.sessionId).not.toBe(storedId)
+  second.send({ id: 1, cmd: "session.resume", sessionId: storedId })
+  expect(await second.response(1)).toMatchObject({ ok: true, sessionId: storedId })
+  const resumed = await second.waitFor(
+    (l) => l.type === "session.start" && l.data.reason === "resume",
+    "resumed session.start",
+  )
+  expect(resumed.sessionId).toBe(storedId)
+  second.send({ id: 2, cmd: "state" })
+  expect(await second.response(2)).toMatchObject({ sessionId: storedId, messages: 2 })
+  second.send({ id: 3, cmd: "prompt", text: "and now?" })
+  await second.response(3)
+  await second.waitFor((l) => l.type === "turn.end" && l.sessionId === storedId, "turn.end")
+  second.send({ id: 4, cmd: "session.read", what: "messages" })
+  const texts = (await second.response(4)).messages.map((m: Line) => m.content[0].text)
+  expect(texts).toEqual(["remember me", "first answer", "and now?", "second answer"])
+  expect((await second.close()).code).toBe(0)
 }, 60_000)
 
 test("amira --rpc-schema prints a JSON Schema covering every command", async () => {

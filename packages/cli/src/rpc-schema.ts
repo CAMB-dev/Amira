@@ -57,7 +57,8 @@ export const COMMAND_PARAMS = {
   },
   state: { description: "A snapshot to resync from, e.g. after events.lost.", params: {} },
   "session.resume": {
-    description: "Continues a stored session. Fails with `not_supported` until sessions are persisted.",
+    description:
+      "Switches to a stored session of this directory (its id from session.start or `amira -r`), keeping the current model; a session.start with reason resume follows. Fails with `not_found` for an unknown id and `busy` while a turn runs.",
     params: { sessionId: str },
   },
 } satisfies Record<string, { description: string; params: Record<string, Schema> }>
@@ -140,6 +141,15 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "events.lost": obj({ dropped: num }),
   "ui.request": { allOf: [ref("UiRequest"), obj({ requestId: str, "source?": str })] },
   "ui.resolved": obj({ requestId: str, cancelled: bool, "value?": { type: ["string", "boolean"] } }),
+  "model.changed": obj({ from: modelRef, to: modelRef }),
+  "compact.start": obj({
+    reason: strings("threshold", "manual"),
+    replacing: num,
+    kept: num,
+    "tokens?": num,
+  }),
+  "compact.end": obj({ summary: str, replaced: num, kept: num }),
+  "compact.failed": obj({ error: str, "blocked?": bool }),
 }
 
 const envelope = (type: Schema, data: Schema): Schema =>
