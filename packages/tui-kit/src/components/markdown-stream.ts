@@ -17,7 +17,8 @@ import {
   type Sink,
   step,
 } from "../markdown/blocks.ts"
-import { markdownStyles } from "../markdown/inline.ts"
+import { codeCarry } from "../markdown/highlight.ts"
+import { type Lead, markdownStyles, type Run } from "../markdown/inline.ts"
 import { defaultTheme, type Theme } from "../style.ts"
 import { TAB_WIDTH } from "../width.ts"
 
@@ -54,6 +55,8 @@ interface Cut {
   render: LineRender
   /** Delimiters of the spans open at the cut, parsed again in front of the rest. */
   carry: string
+  /** The rest of a run the cut went through. */
+  lead?: Lead
 }
 
 /**
@@ -178,7 +181,7 @@ export class MarkdownStream implements Component {
       if (nl === -1) break
       const line = this.src.slice(from, nl)
       if (this.cut) {
-        sink(renderLine(this.cut.render, line, env, this.cut.carry).rows)
+        sink(renderLine(this.cut.render, line, env, this.cut.carry, this.cut.lead).rows)
         this.cut = undefined
       } else step(this.state, line, env, sink)
       from = nl + 1
@@ -189,7 +192,8 @@ export class MarkdownStream implements Component {
   /** The rows of what is still open, as they would render if the text ended here. */
   private live(env: Env): string[] {
     const line = this.src
-    if (this.cut) return line !== "" ? renderLine(this.cut.render, line, env, this.cut.carry).rows : []
+    if (this.cut)
+      return line !== "" ? renderLine(this.cut.render, line, env, this.cut.carry, this.cut.lead).rows : []
     const rows: string[] = []
     const sink: Sink = (r) => rows.push(...r)
     const s = cloneState(this.state)
@@ -201,15 +205,20 @@ export class MarkdownStream implements Component {
   /**
    * Commits the rows of the partial line that can no longer change, keeping the last; returns
    * whether it did. Spans open at the cut are carried over, so the rest renders as it would have.
+   *
+   * Rows are cut before a delimiter that may still open a span, and not inside a URL (whose link
+   * would then point at its start), unless the rows kept for that would not fit in `maxRows`.
    */
   private commitPartial(env: Env, sink: Sink): boolean {
     const line = this.src
     let render: LineRender
     let state: BlockState | undefined
     let carry: string | undefined
+    let lead: Lead | undefined
     if (this.cut) {
       render = this.cut.render
       carry = this.cut.carry
+      lead = this.cut.lead
     } else {
       const p = partialRender(this.state, line, env)
       if (!p) return false
@@ -222,18 +231,31 @@ export class MarkdownStream implements Component {
       render = p.render
       state = p.state
     }
-    const r = renderLine(render, line, env, carry)
+    const r = renderLine(render, line, env, carry, lead)
     const skip = carry?.length ?? 0
-    let n = r.layout.length - 1
-    for (; n > 0; n--) {
+    /** The cell rows `[0, n)` would be cut before, if they can be. */
+    const cutAt = (n: number) => {
       const row = r.layout[n - 1]!
       const cell = r.cells[row.next]
-      if (!row.stable || !cell) continue
-      const run = r.runs[cell.run]!
-      if (run.cuttable && cell.src >= skip) break
+      return row.stable && cell && cell.src >= skip ? cell : undefined
+    }
+    let n = r.layout.length - 1
+    for (; n > 0; n--) {
+      const cell = cutAt(n)
+      if (cell && r.runs[cell.run]!.cuttable && cell.src <= r.open) break
+    }
+    if (r.layout.length - n > this.maxRows) {
+      for (let m = r.layout.length - 1; m > n; m--) {
+        const cell = cutAt(m)
+        if (cell && (r.runs[cell.run]!.cuttable || r.runs[cell.run]!.rest)) {
+          n = m
+          break
+        }
+      }
     }
     if (n === 0) return false
     const cell = r.cells[r.layout[n - 1]!.next]!
+    const run = r.runs[cell.run]!
     if (state) {
       // Committed rows follow a pending blank line like any others.
       const blank = state.blankPending && state.emitted
@@ -243,10 +265,29 @@ export class MarkdownStream implements Component {
       if (blank) sink([""])
     }
     sink(r.rows.slice(0, n))
-    this.cut = {
-      render: { ...render, start: render.start + cell.src - skip, prefix: render.rest, trim: 0 },
-      carry: r.runs[cell.run]!.carry,
-    }
+    this.cut = cutInside(render, run, cell.src, skip)
     return true
   }
+}
+
+/** Where the rest of a line starts after a cut before the cell at `src` of `run`. */
+function cutInside(render: LineRender, run: Run, src: number, skip: number): Cut {
+  const off = src - run.src
+  const at = (to: number) => ({ ...render, start: render.start + to - skip, prefix: render.rest })
+  if (run.cuttable) return { render: at(src), carry: render.code ? codeCarry(run, off) : run.carry }
+  const style = run.style ? { style: run.style } : {}
+  if (run.rest?.url) {
+    const lead: Lead = { url: true, head: run.rest.head + run.text.slice(0, off), ...style }
+    return { render: at(src), carry: run.carry, lead }
+  }
+  // Text of its own: it goes on from where the cut left it, the source where the run ends.
+  const resume = run.rest!.resume
+  const lead: Lead = {
+    url: false,
+    text: run.text.slice(off),
+    len: Math.max(0, resume - src),
+    ...style,
+    ...(run.link ? { link: run.link } : {}),
+  }
+  return { render: at(Math.min(src, resume)), carry: run.carry, lead }
 }

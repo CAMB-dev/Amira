@@ -106,30 +106,34 @@ const TOKEN = /[A-Za-z_$][\w$]*|\d[\w.]*|\s+|./gy
  * Colors one line of code: keywords, literals, numbers, strings and line comments. It knows a
  * handful of languages and nothing that spans lines (a string or comment is closed at the end
  * of the line); an unknown language gets plain text.
+ *
+ * The first `skip` characters are not shown: they are the `carry` of a run an earlier part of the
+ * line was cut in (an open quote, a comment's start), so the rest is colored as it was.
  */
-export function highlightLine(lang: string, line: string, styles: MarkdownStyles): Run[] {
+export function highlightLine(lang: string, line: string, styles: MarkdownStyles, skip = 0): Run[] {
   const name = ALIASES[lang.toLowerCase()]
   const language = name ? LANGUAGES[name] : undefined
-  if (!language || line === "") return line === "" ? [] : [plain(line, 0)]
+  if (!language || line.length <= skip) return line.length <= skip ? [] : [plain(line.slice(skip), skip)]
   const out: Run[] = []
   let textStart = 0
-  const push = (from: number, to: number, style: (typeof styles)[keyof typeof styles]) => {
+  const push = (from: number, to: number, style: (typeof styles)[keyof typeof styles], carry = "") => {
     if (from > textStart) out.push(plain(line.slice(textStart, from), textStart))
-    out.push({ text: line.slice(from, to), src: from, style, carry: "", cuttable: true })
+    out.push({ text: line.slice(from, to), src: from, style, carry, cuttable: true })
     textStart = to
   }
   let i = 0
   while (i < line.length) {
     const c = line[i]!
-    if (language.lineComment.some((p) => line.startsWith(p, i))) {
-      push(i, line.length, styles.comment)
+    const comment = language.lineComment.find((p) => line.startsWith(p, i))
+    if (comment) {
+      push(i, line.length, styles.comment, comment)
       break
     }
     if (language.quotes.includes(c)) {
       let j = i + 1
       while (j < line.length && line[j] !== c) j += line[j] === "\\" ? 2 : 1
       const end = Math.min(line.length, j + 1)
-      push(i, end, styles.string)
+      push(i, end, styles.string, c)
       i = end
       continue
     }
@@ -141,7 +145,24 @@ export function highlightLine(lang: string, line: string, styles: MarkdownStyles
     i += tok.length
   }
   if (textStart < line.length) out.push(plain(line.slice(textStart), textStart))
-  return out
+  if (skip === 0) return out
+  return out.flatMap((r) => {
+    const end = r.src + r.text.length
+    if (end <= skip) return []
+    return r.src >= skip ? [r] : [{ ...r, text: r.text.slice(skip - r.src), src: skip }]
+  })
+}
+
+/**
+ * What a cut `off` characters into a run of highlighted code carries: the run's quote or comment
+ * start, and a backslash the cut separated from the character it escapes.
+ */
+export function codeCarry(run: Run, off: number): string {
+  // At its start the rest begins with the quote or comment start itself.
+  if (off === 0) return ""
+  if (run.carry.length !== 1) return run.carry
+  const slashes = run.text.slice(1, off).match(/\\*$/)![0].length
+  return slashes % 2 ? `${run.carry}\\` : run.carry
 }
 
 function plain(text: string, src: number): Run {

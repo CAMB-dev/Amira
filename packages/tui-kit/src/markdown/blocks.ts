@@ -2,7 +2,7 @@ import type { Glyphs } from "../glyphs.ts"
 import type { StyleFn } from "../style.ts"
 import { truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import { highlightLine } from "./highlight.ts"
-import { type MarkdownStyles, parseInline, type Run } from "./inline.ts"
+import { type Lead, type MarkdownStyles, parseInline, parseLine, type Run } from "./inline.ts"
 import { type Cell, cellText, type Row, toCells, wrapCells } from "./layout.ts"
 
 /** What rendering needs besides the text. */
@@ -27,8 +27,11 @@ export interface LineRender {
   rest: string
   indent: number
   start: number
-  /** Characters dropped from the end of the line, such as a heading's closing `#`s. */
-  trim: number
+  /**
+   * Where a heading's text starts in the line: its closing `#`s and trailing blanks are not shown.
+   * Kept when `start` moves past the first rows, since the line may still grow.
+   */
+  heading?: number
 }
 
 interface ListEntry {
@@ -264,8 +267,7 @@ function classify(s: BlockState, line: string, env: Env): Classified {
     const level = heading[1]!.length
     const lr = headingRender(level, col, env)
     lr.start = indent + heading[0].length
-    const closing = line.slice(lr.start).match(/(?:^|[ \t]+)#+[ \t]*$|[ \t]+$/)
-    if (closing) lr.trim = closing[0].length
+    lr.heading = lr.start
     return { hold: false, render: lr }
   }
   if (quote) {
@@ -290,7 +292,6 @@ function classify(s: BlockState, line: string, env: Env): Classified {
         rest: prefix,
         indent: col + depth * barWidth,
         start: at,
-        trim: 0,
       },
     }
   }
@@ -314,18 +315,18 @@ function classify(s: BlockState, line: string, env: Env): Classified {
     const prefix = `${pad(col)}${head} `
     return {
       hold: false,
-      render: { code: false, lang: "", prefix, rest: pad(col + width), indent: col + width, start, trim: 0 },
+      render: { code: false, lang: "", prefix, rest: pad(col + width), indent: col + width, start },
     }
   }
   return {
     hold: true,
-    render: { code: false, lang: "", prefix: pad(col), rest: pad(col), indent: col, start: indent, trim: 0 },
+    render: { code: false, lang: "", prefix: pad(col), rest: pad(col), indent: col, start: indent },
   }
 }
 
 function headingRender(level: number, col: number, env: Env): LineRender {
   const base = level <= 2 ? env.styles.heading : env.styles.subheading
-  return { code: false, lang: "", base, prefix: pad(col), rest: pad(col), indent: col, start: 0, trim: 0 }
+  return { code: false, lang: "", base, prefix: pad(col), rest: pad(col), indent: col, start: 0 }
 }
 
 function codeLine(f: Fence, line: string, env: Env): LineRender {
@@ -333,7 +334,7 @@ function codeLine(f: Fence, line: string, env: Env): LineRender {
   while (start < f.indent && line[start] === " ") start++
   const side = `${pad(f.renderCol)}${env.styles.codeFrame(env.glyphs.codeSide)} `
   const indent = f.renderCol + visibleWidth(env.glyphs.codeSide) + 1
-  return { code: true, lang: f.lang, prefix: side, rest: side, indent, start, trim: 0 }
+  return { code: true, lang: f.lang, prefix: side, rest: side, indent, start }
 }
 
 function flushHeld(s: BlockState, env: Env, sink: Sink) {
@@ -347,7 +348,6 @@ function flushHeld(s: BlockState, env: Env, sink: Sink) {
     rest: pad(h.renderCol),
     indent: h.renderCol,
     start: 0,
-    trim: 0,
   }
   emit(s, sink, renderLine(lr, h.text, env).rows)
 }
@@ -359,25 +359,45 @@ export interface Rendered {
   layout: Row[]
   /** The parsed text: `carry` followed by the line from `start`. */
   carry: string
+  /** Offset in the parsed text from which the rows may still change as the line goes on. */
+  open: number
 }
+
+/** A heading's closing `#`s, or the blanks at its end. */
+const HEADING_CLOSE = /(?:^|[ \t]+)#+[ \t]*$|[ \t]+$/
 
 /**
  * Renders a line as `lr` says. With `carry` (the delimiters of spans open where an earlier part
- * of the line was cut off) the text continues from `lr.start` and every row gets `lr.rest`.
+ * of the line was cut off, or the state of the code highlighter there) the text continues from
+ * `lr.start` and every row gets `lr.rest`; `lead` is the rest of a run the cut went through.
  */
-export function renderLine(lr: LineRender, line: string, env: Env, carry?: string): Rendered {
-  const text = (carry ?? "") + line.slice(lr.start, line.length - lr.trim)
-  const runs = lr.code
-    ? env.highlight
-      ? highlightLine(lr.lang, text, env.styles)
-      : text
-        ? [{ text, src: 0, carry: "", cuttable: true }]
+export function renderLine(lr: LineRender, line: string, env: Env, carry?: string, lead?: Lead): Rendered {
+  let end = line.length
+  if (lr.heading !== undefined) {
+    const closing = line.slice(lr.heading).match(HEADING_CLOSE)
+    if (closing) end = Math.max(lr.start, end - closing[0].length)
+  }
+  const skip = carry?.length ?? 0
+  const text = (carry ?? "") + line.slice(lr.start, end)
+  let runs: Run[]
+  let open = Number.POSITIVE_INFINITY
+  if (lr.code) {
+    const code = text.slice(skip)
+    runs = env.highlight
+      ? highlightLine(lr.lang, text, env.styles, skip)
+      : code
+        ? [{ text: code, src: skip, carry: "", cuttable: true }]
         : []
-    : parseInline(text, {
-        styles: env.styles,
-        hyperlinks: env.hyperlinks,
-        ...(lr.base ? { base: lr.base } : {}),
-      })
+  } else {
+    const parsed = parseLine(text, {
+      styles: env.styles,
+      hyperlinks: env.hyperlinks,
+      ...(lr.base ? { base: lr.base } : {}),
+      ...(lead ? { lead, leadAt: skip } : {}),
+    })
+    runs = parsed.runs
+    open = parsed.open
+  }
   const cells = toCells(runs)
   let prefix = carry === undefined ? lr.prefix : lr.rest
   let rest = lr.rest
@@ -393,7 +413,7 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
     const head = i === 0 ? prefix : rest
     return r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
   })
-  return { rows, cells, runs, layout, carry: carry ?? "" }
+  return { rows, cells, runs, layout, carry: carry ?? "", open }
 }
 
 // Tables
@@ -544,7 +564,7 @@ function tableRow(t: Table, cells: string[], widths: number[], env: Env, header:
 function rawRender(t: Table, line: string): LineRender {
   const start = line.length - line.trimStart().length
   const col = pad(t.renderCol)
-  return { code: false, lang: "", prefix: col, rest: col, indent: t.renderCol, start, trim: 0 }
+  return { code: false, lang: "", prefix: col, rest: col, indent: t.renderCol, start }
 }
 
 function rawRows(t: Table, lines: string[], env: Env): string[] {

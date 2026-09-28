@@ -24,7 +24,21 @@ export interface Run {
   carry: string
   /** False when parsing from inside the run would not render the rest the same (URLs, added text). */
   cuttable: boolean
+  /**
+   * How the rest of a run that is not cuttable goes on after a cut inside it, as a `Lead`: the
+   * rest of a bare URL (`head`: the URL before the run) is found in the source again; other text
+   * is shown as it is, the source going on at offset `resume`.
+   */
+  rest?: { url: true; head: string } | { url: false; resume: number }
 }
+
+/**
+ * The rest of a run that a cut went through (a URL too long for the live region), placed right
+ * after the carried delimiters and drawn as the run was.
+ */
+export type Lead =
+  | { url: true; head: string; style?: StyleFn }
+  | { url: false; text: string; len: number; style?: StyleFn; link?: string }
 
 export interface InlineOptions {
   styles: MarkdownStyles
@@ -32,6 +46,26 @@ export interface InlineOptions {
   hyperlinks: boolean
   /** Style of the text around the spans, e.g. a heading's. */
   base?: StyleFn
+  /** A run's rest at offset `leadAt`: for a bare URL, the source there; otherwise `len` source characters. */
+  lead?: Lead
+  leadAt?: number
+}
+
+/** Runs, and where the first delimiter that may still open a span once more text comes is. */
+export interface Parsed {
+  runs: Run[]
+  /** Offset of that delimiter, or Infinity: rows after it may still change. */
+  open: number
+}
+
+interface Context {
+  opts: InlineOptions
+  out: Run[]
+  lead?: Lead
+  leadAt: number
+  open: number
+  /** The whole text's length: only a delimiter scanned to it may still match. */
+  length: number
 }
 
 const PUNCT = /[!-/:-@[-`{-~]/
@@ -40,6 +74,8 @@ const WORD = /[\p{L}\p{N}]/u
 /** Characters a bare URL does not end with, since they usually belong to the sentence. */
 const URL_TAIL = /[.,;:!?'")\]}*_]+$/
 const BARE_URL = /https?:\/\/[^\s<>`]+/y
+/** What goes on with a bare URL after its start. */
+const URL_REST = /[^\s<>`]*/y
 const AUTOLINK = /<(https?:\/\/[^\s<>]+)>/y
 
 interface Scope {
@@ -54,9 +90,21 @@ interface Scope {
  * still streaming renders as plain until its span closes.
  */
 export function parseInline(s: string, opts: InlineOptions): Run[] {
-  const out: Run[] = []
-  parse(s, 0, s.length, { styles: opts.base ? [opts.base] : [], carry: "" }, opts, out)
-  return out
+  return parseLine(s, opts).runs
+}
+
+/** `parseInline`, and where the text may still change as more of it streams in. */
+export function parseLine(s: string, opts: InlineOptions): Parsed {
+  const ctx: Context = {
+    opts,
+    out: [],
+    leadAt: opts.leadAt ?? 0,
+    open: Number.POSITIVE_INFINITY,
+    length: s.length,
+  }
+  if (opts.lead) ctx.lead = opts.lead
+  parse(s, 0, s.length, { styles: opts.base ? [opts.base] : [], carry: "" }, ctx)
+  return { runs: ctx.out, open: ctx.open }
 }
 
 function styleOf(styles: StyleFn[]): StyleFn | undefined {
@@ -65,14 +113,29 @@ function styleOf(styles: StyleFn[]): StyleFn | undefined {
   return compose(...styles)
 }
 
-function parse(s: string, start: number, end: number, scope: Scope, opts: InlineOptions, out: Run[]) {
+function parse(s: string, start: number, end: number, scope: Scope, ctx: Context) {
+  const { opts, out } = ctx
   const style = styleOf(scope.styles)
   let textStart = start
   const flush = (to: number) => {
     if (to > textStart) out.push(run(s.slice(textStart, to), textStart, style, scope, true))
   }
+  /** A delimiter at `at` has no match yet; one may come if the text goes on. */
+  const mayOpen = (at: number) => {
+    if (end === ctx.length) ctx.open = Math.min(ctx.open, at)
+  }
   let i = start
   while (i < end) {
+    if (ctx.lead && i >= ctx.leadAt) {
+      // Past it inside a span that cannot hold it: the rest is parsed as it is.
+      if (i > ctx.leadAt) ctx.lead = undefined
+      else {
+        flush(i)
+        i = pushLead(s, i, end, scope, ctx)
+        textStart = i
+        continue
+      }
+    }
     const c = s[i]!
     if (c === "\\" && i + 1 < end && PUNCT.test(s[i + 1]!)) {
       flush(i)
@@ -85,6 +148,7 @@ function parse(s: string, start: number, end: number, scope: Scope, opts: Inline
       const n = runLength(s, i, end, "`")
       const close = findTicks(s, i + n, end, n)
       if (close === -1) {
+        mayOpen(i)
         i += n
         continue
       }
@@ -106,16 +170,19 @@ function parse(s: string, start: number, end: number, scope: Scope, opts: Inline
     }
     if (c === "[" && !scope.link) {
       const link = matchLink(s, i, end)
-      if (link) {
+      if (link === "open") mayOpen(i)
+      else if (link) {
         flush(i)
         const linkStyles = [...scope.styles, opts.styles.link]
         const inner: Scope = { styles: linkStyles, carry: `${scope.carry}[` }
         if (opts.hyperlinks) inner.link = link.url
-        if (link.textEnd > i + 1) parse(s, i + 1, link.textEnd, inner, opts, out)
+        if (link.textEnd > i + 1) parse(s, i + 1, link.textEnd, inner, ctx)
         const text = s.slice(i + 1, link.textEnd)
         if (!opts.hyperlinks && text !== link.url) {
           const url = styleOf([...scope.styles, opts.styles.linkUrl])
-          out.push(run(` (${link.url})`, link.end, url, scope, false))
+          const r = run(` (${link.url})`, link.end, url, scope, false)
+          r.rest = { url: false, resume: link.end }
+          out.push(r)
         }
         i = link.end
         textStart = i
@@ -127,11 +194,12 @@ function parse(s: string, start: number, end: number, scope: Scope, opts: Inline
       const m = AUTOLINK.exec(s)
       if (m && i + m[0].length <= end) {
         flush(i)
-        pushUrl(m[1]!, i + 1, scope, opts, out)
+        pushUrl(m[1]!, i + 1, scope, opts, out).rest = { url: false, resume: i + m[0].length }
         i += m[0].length
         textStart = i
         continue
       }
+      if (/^<[^\s<>]*$/.test(s.slice(i, end))) mayOpen(i)
     }
     if (c === "h" && !scope.link && (i === 0 || !WORD.test(s[i - 1]!))) {
       BARE_URL.lastIndex = i
@@ -140,7 +208,7 @@ function parse(s: string, start: number, end: number, scope: Scope, opts: Inline
         const url = m[0].slice(0, Math.min(m[0].length, end - i)).replace(URL_TAIL, "")
         if (url.length > "https://".length) {
           flush(i)
-          pushUrl(url, i, scope, opts, out)
+          pushUrl(url, i, scope, opts, out).rest = { url: true, head: "" }
           i += url.length
           textStart = i
           continue
@@ -150,11 +218,12 @@ function parse(s: string, start: number, end: number, scope: Scope, opts: Inline
     if (c === "*" || c === "_" || (c === "~" && s[i + 1] === "~")) {
       const n = runLength(s, i, end, c)
       const span = matchEmphasis(s, i, n, end, c)
-      if (span) {
+      if (span === "open") mayOpen(i)
+      else if (span) {
         flush(i)
         const styles = [...scope.styles, ...spanStyles(c, span.len, opts)]
         const delim = c.repeat(span.len)
-        parse(s, i + span.len, span.close, { ...scope, styles, carry: scope.carry + delim }, opts, out)
+        parse(s, i + span.len, span.close, { ...scope, styles, carry: scope.carry + delim }, ctx)
         i = span.close + span.len
         textStart = i
         continue
@@ -174,10 +243,36 @@ function run(text: string, src: number, style: StyleFn | undefined, scope: Scope
   return r
 }
 
-function pushUrl(url: string, src: number, scope: Scope, opts: InlineOptions, out: Run[]) {
+function pushUrl(url: string, src: number, scope: Scope, opts: InlineOptions, out: Run[]): Run {
   const r = run(url, src, styleOf([...scope.styles, opts.styles.link]), scope, false)
   if (opts.hyperlinks) r.link = url
   out.push(r)
+  return r
+}
+
+/** Draws the lead at `i`, in the spans open there, and returns where the source goes on. */
+function pushLead(s: string, i: number, end: number, scope: Scope, ctx: Context): number {
+  const lead = ctx.lead!
+  ctx.lead = undefined
+  let r: Run
+  let next: number
+  if (lead.url) {
+    URL_REST.lastIndex = i
+    const text = URL_REST.exec(s)![0]
+      .slice(0, end - i)
+      .replace(URL_TAIL, "")
+    if (text === "") return i
+    r = { text, src: i, carry: scope.carry, cuttable: false, rest: { url: true, head: lead.head } }
+    if (ctx.opts.hyperlinks) r.link = lead.head + text
+    next = i + text.length
+  } else {
+    next = Math.min(end, i + lead.len)
+    r = { text: lead.text, src: i, carry: scope.carry, cuttable: false, rest: { url: false, resume: next } }
+    if (lead.link) r.link = lead.link
+  }
+  if (lead.style) r.style = lead.style
+  if (r.text) ctx.out.push(r)
+  return next
 }
 
 function spanStyles(c: string, len: number, opts: InlineOptions): StyleFn[] {
@@ -209,6 +304,7 @@ function findTicks(s: string, from: number, end: number, n: number): number {
  * An emphasis span opening at `s[i]` with a run of `n` delimiters `c`: its delimiter length and
  * where its closing run starts. The opener must be followed by a non-space and the closer preceded
  * by one; `_` must also not touch a letter on the outside (`snake_case_name` stays as it is).
+ * `"open"` when it may still open a span that closes after `end`.
  */
 function matchEmphasis(
   s: string,
@@ -216,11 +312,13 @@ function matchEmphasis(
   n: number,
   end: number,
   c: string,
-): { len: number; close: number } | undefined {
-  const after = s[i + n]
-  if (after === undefined || i + n >= end || SPACE.test(after)) return undefined
+): { len: number; close: number } | "open" | undefined {
   if (c === "_" && i > 0 && WORD.test(s[i - 1]!)) return undefined
   const lens = c === "~" ? (n === 2 ? [2] : []) : n >= 3 ? [3, 2, 1] : n === 2 ? [2, 1] : [1]
+  if (lens.length === 0) return undefined
+  const after = s[i + n]
+  if (after === undefined || i + n >= end) return "open"
+  if (SPACE.test(after)) return undefined
   for (const len of lens) {
     let j = i + len
     while (j < end) {
@@ -241,15 +339,18 @@ function matchEmphasis(
       j = k + runLen
     }
   }
-  return undefined
+  return "open"
 }
 
-/** `[text](url)` or `[text](url "title")` at `s[i]`: where its text ends, its URL, and its end. */
+/**
+ * `[text](url)` or `[text](url "title")` at `s[i]`: where its text ends, its URL, and its end.
+ * `"open"` when it may still be one once the text goes on after `end`.
+ */
 function matchLink(
   s: string,
   i: number,
   end: number,
-): { textEnd: number; url: string; end: number } | undefined {
+): { textEnd: number; url: string; end: number } | "open" | undefined {
   let depth = 0
   let j = i
   for (; j < end; j++) {
@@ -258,9 +359,10 @@ function matchLink(
     else if (ch === "[") depth++
     else if (ch === "]" && --depth === 0) break
   }
-  if (j >= end || s[j + 1] !== "(") return undefined
+  if (j + 1 >= end) return "open"
+  if (s[j + 1] !== "(") return undefined
   const close = s.indexOf(")", j + 2)
-  if (close === -1 || close >= end) return undefined
+  if (close === -1 || close >= end) return "open"
   const target = s.slice(j + 2, close).trim()
   const url = target.split(/\s+/)[0] ?? ""
   if (url === "" || /[<>]/.test(url)) return undefined

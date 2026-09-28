@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
 import type { RenderContext } from "../src/component.ts"
-import { MarkdownStream } from "../src/components/markdown-stream.ts"
+import { MarkdownStream, renderMarkdown } from "../src/components/markdown-stream.ts"
 import { defaultGlyphs } from "../src/glyphs.ts"
 import { commitOpenBlocks, type Env, newState, step } from "../src/markdown/blocks.ts"
 import { markdownStyles } from "../src/markdown/inline.ts"
@@ -293,6 +293,62 @@ test("a line longer than the live region commits its finished rows, carrying ope
   // The rest is still bold: the delimiters were carried over.
   expect(t.render(10, { ...ctx2, theme: defaultTheme })[0]).toBe(`  ${defaultTheme.strong!("five")} six`)
   expect(t.take(10).map(stripAnsi)).toEqual(["  five six"])
+})
+
+/**
+ * Streams `text` in chunks of `n`, checking each frame fits `maxRows` (and one more row while the
+ * last character, which may still take a combining mark, is what wrapped it); committed plus final rows.
+ */
+function streamed(
+  text: string,
+  width: number,
+  maxRows: number,
+  opts: { n?: number; theme?: boolean; hyperlinks?: boolean } = {},
+): string[] {
+  const { ctx, committed } = committing()
+  const c = opts.theme ? { ...ctx, theme: defaultTheme } : ctx
+  const m = new MarkdownStream({ hyperlinks: opts.hyperlinks ?? false })
+  m.maxRows = maxRows
+  const n = opts.n ?? 3
+  for (let at = 0; at < text.length; at += n) {
+    m.append(text.slice(at, at + n))
+    expect({ at, rows: m.render(width, c).length <= maxRows + 1 }).toEqual({ at, rows: true })
+  }
+  return [...committed, ...m.take(width)]
+}
+
+test("a URL longer than the live region is cut inside, and the rest still shows as the URL", () => {
+  const url = `https://example.com/${Array.from({ length: 80 }, (_, i) => `L${i + 1}`).join("/")}`
+  const text = `See ${url} for details.\nNext`
+  expect(streamed(text, 40, 3)).toEqual(md(text, 40))
+  // Complete links and autolinks cut inside their shown URL go on with the rest of it.
+  for (const line of [`A [link](${url}) and more.`, `An <${url}> and more.`, `**Bold ${url}** too`]) {
+    expect(streamed(line, 40, 2, { n: 400 })).toEqual(md(line, 40))
+    // Still open when its rows had to be committed, it keeps the delimiters it had then.
+    expect(letters(streamed(line, 40, 2))).toBe(letters(md(line, 40)))
+  }
+  // A clickable URL's rest links to the whole URL.
+  const rows = streamed(text, 40, 3, { hyperlinks: true })
+  expect(rows.at(-2)).toContain(`\x1b]8;;${url}\x07`)
+})
+
+test("rows are not cut after a delimiter that may still open a span, unless they do not fit", () => {
+  const text = "more **bold text that goes on and on closes** and *italic text here* too"
+  expect(streamed(text, 15, 4, { theme: true })).toEqual(
+    renderMarkdown(text, 15, defaultTheme, { hyperlinks: false }),
+  )
+  // A delimiter that is never closed is shown as it is.
+  const open = "an **opener that is never closed while the line goes on and on and on"
+  expect(streamed(open, 15, 2).map(stripAnsi)).toEqual(md(open, 15))
+})
+
+test("a code line cut inside a string or comment goes on colored as it was; headings keep their close", () => {
+  const code = `\`\`\`ts\nconst s = "${"a".repeat(40)} \\" bbbb" // return if\n\`\`\`\n`
+  expect(streamed(code, 30, 1, { theme: true, n: 2 })).toEqual(
+    renderMarkdown(code, 30, defaultTheme, { hyperlinks: false }),
+  )
+  const heading = `# ${Array.from({ length: 30 }, (_, i) => `h${i}`).join(" ")} ##\nafter`
+  expect(streamed(heading, 20, 1)).toEqual(md(heading, 20))
 })
 
 // Streaming properties

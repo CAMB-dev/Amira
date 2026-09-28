@@ -358,6 +358,23 @@ test("a Markdown reply streams block by block: every row once, in order, never c
   await exited
 })
 
+test("a URL longer than the screen is cut to fit it, never cut and reprinted", async () => {
+  // Four characters a marker, so that none is split where the URL wraps.
+  const markers = Array.from({ length: 80 }, (_, i) => `L${i + 10}`)
+  const check = transcriptChecker(markers)
+  const { terminal, screen, shows, idle, exited } = await setup(
+    [{ text: `See https://example.com/${markers.join("/")} for details`, delayMs: 1 }],
+    { cols: 40, rows: 12, onWrite: (s) => check.onWrite(s) },
+  )
+  terminal.send("go\r")
+  await shows("for details")
+  await idle()
+  expect(check.problems).toEqual([])
+  check.final(screen)
+  terminal.send("\x03")
+  await exited
+})
+
 test("a draft typed while a long reply streams does not cut the reply either", async () => {
   const lines = Array.from({ length: 40 }, (_, i) => `L${i + 1}`)
   const check = transcriptChecker(lines)
