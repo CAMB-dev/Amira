@@ -23,12 +23,18 @@ import type {
   ToolSession,
   TurnEndReason,
 } from "@amira/api"
-import { type CompactionOptions, contextTokens, splitHistory, summarize } from "./compaction.ts"
+import {
+  type CompactionOptions,
+  contextTokens,
+  splitHistory,
+  summarize,
+  summaryMessages,
+} from "./compaction.ts"
 import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
-import { newSessionId, type SessionEntryData, type SessionStore, summaryMessages } from "./session-store.ts"
+import { newSessionId, type SessionEntryData, type SessionStore } from "./session-store.ts"
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
@@ -152,6 +158,10 @@ export class Agent {
   #entryIds = new Map<Message, string>()
   /** Context size reported with the last reply; unknown right after a compaction. */
   #contextTokens: number | undefined
+  /** The next reply's context size tells whether the last compaction shrank the context enough. */
+  #checkCompaction = false
+  /** Automatic compaction waits until the context passes this, after one that did not help. */
+  #compactFloor: number | undefined
   #storeFailed = false
   #maxParallelTools: number
   /** Deferred tools this session loaded (via tool_search), in load order. */
@@ -540,7 +550,7 @@ export class Agent {
     if (aborted || error) message.content = message.content.filter((b) => b.type !== "toolCall")
     else message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
     if (message.content.length) this.#push(message)
-    if (message.usage) this.#contextTokens = contextTokens(message.usage)
+    if (message.usage) this.#noteContext(contextTokens(message.usage))
     this.#emit(turn, "message.end", { message })
     if (message.usage) this.tree?.recordUsage(this, message.usage)
 
@@ -794,9 +804,27 @@ export class Agent {
     }
   }
 
+  #overThreshold(tokens: number): boolean {
+    return tokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
+  }
+
   #needsCompaction(): boolean {
     if (this.#compaction.auto === false || this.#contextTokens === undefined) return false
-    return this.#contextTokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
+    if (this.#compactFloor !== undefined && this.#contextTokens <= this.#compactFloor) return false
+    return this.#overThreshold(this.#contextTokens)
+  }
+
+  /**
+   * Notes the context size of a reply. The first one after a compaction shows whether it
+   * worked: still over the threshold means summarizing again right away would not help
+   * either, so automatic compaction waits until the context has grown by a twentieth of the
+   * window, which gives the next summary new steps to fold in.
+   */
+  #noteContext(tokens: number) {
+    this.#contextTokens = tokens
+    if (!this.#checkCompaction) return
+    this.#checkCompaction = false
+    this.#compactFloor = this.#overThreshold(tokens) ? tokens + this.model.contextWindow / 20 : undefined
   }
 
   /**
@@ -809,7 +837,11 @@ export class Agent {
     turn: Turn | undefined,
     instructions?: string,
   ) {
-    const split = splitHistory(this.messages, this.#compaction.keepTurns ?? 2)
+    const split = splitHistory(
+      this.messages,
+      this.#compaction.keepTurns ?? 2,
+      this.#compaction.keepSteps ?? 2,
+    )
     if (!split) {
       if (reason === "manual") this.#emit(turn, "compact.failed", { error: "nothing to compact yet" })
       return false
@@ -842,8 +874,13 @@ export class Agent {
       const replacement = summaryMessages(summary, modelRef(this.model))
       for (const m of replacement) if (entryId) this.#entryIds.set(m, entryId)
       for (const m of split.older) this.#entryIds.delete(m)
-      this.messages.splice(0, split.older.length, ...replacement)
+      // The summary goes first; everything it does not replace keeps its order after it (in a
+      // long turn that is the turn's prompt and its latest steps).
+      const replaced = new Set(split.older)
+      const rest = this.messages.filter((m) => !replaced.has(m))
+      this.messages.splice(0, this.messages.length, ...replacement, ...rest)
       this.#contextTokens = undefined
+      this.#checkCompaction = true
       this.#emit(turn, "compact.end", { summary, replaced: split.older.length, kept: split.kept.length })
       return true
     } catch (err) {

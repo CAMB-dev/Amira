@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
-import type { AssistantMessage, Message, ModelRef } from "@amira/ai"
-import { contextTokens } from "./compaction.ts"
+import type { Message, ModelRef } from "@amira/ai"
+import { contextTokens, summaryMessages } from "./compaction.ts"
 import { amiraPath } from "./home.ts"
 
 export interface SessionHeader {
@@ -171,11 +171,11 @@ export class SessionStore {
       } else if (e.type === "model_change") model = e.model
       else if (e.type === "compaction") {
         tokens = undefined
+        // As in the agent, the summary goes first and what it does not replace follows in
+        // order: in a long turn that is the turn's prompt and its latest steps.
         const gone = new Set(e.replaces)
-        const at = items.findIndex((i) => gone.has(i.id))
-        const kept = items.filter((i) => !gone.has(i.id))
         const summary = summaryMessages(e.summary, model).map((message) => ({ id: e.id, message }))
-        items = [...kept.slice(0, Math.max(0, at)), ...summary, ...kept.slice(Math.max(0, at))]
+        items = [...summary, ...items.filter((i) => !gone.has(i.id))]
       }
     }
     const entryIds = new Map<Message, string>()
@@ -248,22 +248,6 @@ function sizeOf(file: string): number | undefined {
   } catch {
     return undefined
   }
-}
-
-const SUMMARY_PREFIX = "The earlier part of this conversation was compacted. Summary:"
-
-/**
- * How a compaction summary appears in the conversation: a user message with the summary
- * and a short assistant acknowledgement, so roles keep alternating for every provider.
- */
-export function summaryMessages(summary: string, model?: ModelRef): Message[] {
-  const ack: AssistantMessage = {
-    role: "assistant",
-    content: [{ type: "text", text: "Understood. I will continue from this summary." }],
-    model: model ?? { provider: "amira", model: "compaction" },
-    stopReason: "end",
-  }
-  return [{ role: "user", content: [{ type: "text", text: `${SUMMARY_PREFIX}\n\n${summary.trim()}` }] }, ack]
 }
 
 function parseLine(line: string): unknown {

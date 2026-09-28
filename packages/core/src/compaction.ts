@@ -1,10 +1,15 @@
-import type { Ai, Message, ModelInfo, Usage } from "@amira/ai"
+import type { Ai, AssistantMessage, Message, ModelInfo, ModelRef, Usage } from "@amira/ai"
 
 export interface CompactionOptions {
   /** Compact once the context passes this fraction of the model's window. Default 0.8. */
   threshold?: number
   /** User turns kept verbatim. Default 2; fewer when the history is short. */
   keepTurns?: number
+  /**
+   * Model steps of the current turn kept verbatim when only that turn is left to compact
+   * (a long single turn). Default 2.
+   */
+  keepSteps?: number
   /** Model that writes the summary. Default: the session's model. */
   model?: ModelInfo
   /** Set false to never compact automatically. agent.compact() still works. */
@@ -16,21 +21,62 @@ export function contextTokens(u: Usage): number {
   return u.input + u.cacheRead + u.cacheWrite + u.output
 }
 
+const SUMMARY_PREFIX = "The earlier part of this conversation was compacted. Summary:"
+
 /**
- * Splits history into older messages to summarize and recent turns to keep. The cut is
- * always at a user message, so tool calls and their results stay together. Returns
- * undefined when there is nothing older than the most recent turn.
+ * How a compaction summary appears in the conversation: a user message with the summary
+ * and a short assistant acknowledgement, so roles keep alternating for every provider.
  */
-export function splitHistory(
-  messages: Message[],
-  keepTurns = 2,
-): { older: Message[]; kept: Message[] } | undefined {
-  const starts = messages.flatMap((m, i) => (m.role === "user" ? [i] : []))
-  for (let keep = Math.max(1, keepTurns); keep >= 1; keep--) {
-    const cut = starts.at(-keep)
-    if (cut !== undefined && cut > 0) return { older: messages.slice(0, cut), kept: messages.slice(cut) }
+export function summaryMessages(summary: string, model?: ModelRef): Message[] {
+  const ack: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: SUMMARY_ACK }],
+    model: model ?? { provider: "amira", model: "compaction" },
+    stopReason: "end",
   }
-  return undefined
+  return [{ role: "user", content: [{ type: "text", text: `${SUMMARY_PREFIX}\n\n${summary.trim()}` }] }, ack]
+}
+
+const SUMMARY_ACK = "Understood. I will continue from this summary."
+
+/** Whether a message is one of the pair `summaryMessages` makes. */
+export function isSummaryMessage(m: Message): boolean {
+  const first = m.content[0]
+  if (m.content.length !== 1 || first?.type !== "text") return false
+  return m.role === "user" ? first.text.startsWith(`${SUMMARY_PREFIX}\n\n`) : first.text === SUMMARY_ACK
+}
+
+export interface HistorySplit {
+  /** Messages the summary replaces, in history order. */
+  older: Message[]
+  /** Messages kept verbatim, in history order; the summary goes before them. */
+  kept: Message[]
+}
+
+/**
+ * Splits history into older messages to summarize and recent messages to keep. Turns start at
+ * user messages other than an earlier summary. Whole turns are cut first: the most recent
+ * `keepTurns` stay. When only the last turn is left, its first model steps are summarized
+ * too, keeping its user message and the last `keepSteps` steps (a step is a model reply and
+ * its tool results, which always stay together), so one long turn can still be compacted.
+ * Returns undefined when nothing but an earlier summary would be summarized.
+ */
+export function splitHistory(messages: Message[], keepTurns = 2, keepSteps = 2): HistorySplit | undefined {
+  const worthIt = (older: Message[]) => older.some((m) => !isSummaryMessage(m))
+  const starts = messages.flatMap((m, i) => (m.role === "user" && !isSummaryMessage(m) ? [i] : []))
+  for (let keep = Math.max(1, keepTurns); keep >= 2; keep--) {
+    const cut = starts.at(-keep)
+    if (cut !== undefined && worthIt(messages.slice(0, cut))) {
+      return { older: messages.slice(0, cut), kept: messages.slice(cut) }
+    }
+  }
+  const turn = starts.at(-1)
+  if (turn === undefined) return undefined
+  const steps = messages.flatMap((m, i) => (i > turn && m.role === "assistant" ? [i] : []))
+  const cut = steps.length > Math.max(1, keepSteps) ? steps.at(-Math.max(1, keepSteps))! : turn + 1
+  const older = [...messages.slice(0, turn), ...messages.slice(turn + 1, cut)]
+  if (!worthIt(older)) return undefined
+  return { older, kept: [messages[turn]!, ...messages.slice(cut)] }
 }
 
 const SUMMARY_PROMPT = `You summarize a coding session between a user and Amira, a coding agent, so that the work can continue without the full history.
