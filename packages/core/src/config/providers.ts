@@ -26,12 +26,24 @@ const FORMER_BUILTINS: Record<string, Pick<ProviderConfig, "dialect" | "baseUrl"
  * Providers from settings (D54). Amira has none built in: each entry names its dialect (the
  * protocol it speaks) and baseUrl.
  */
-export function providersFromSettings(entries: Record<string, ProviderSettings> = {}): ProviderConfig[] {
+export function providersFromSettings(
+  entries: Record<string, ProviderSettings> = {},
+  /** Receives a note for each entry completed from FORMER_BUILTINS. */
+  warnings?: string[],
+): ProviderConfig[] {
   return Object.entries(entries).map(([id, entry]) => {
     const former = Object.hasOwn(FORMER_BUILTINS, id) ? FORMER_BUILTINS[id] : undefined
     const p = { ...entry, id } as ProviderConfig
-    if (!p.dialect && former) p.dialect = former.dialect
-    if (!p.baseUrl && former) p.baseUrl = former.baseUrl
+    if (former && (!p.dialect || !p.baseUrl)) {
+      p.dialect ||= former.dialect
+      p.baseUrl ||= former.baseUrl
+      // The key variable and other defaults it had are gone; without a key requests fail.
+      warnings?.push(
+        `provider "${id}" in settings.json lacks "dialect" or "baseUrl", so the former built-in ` +
+          `ones (${p.dialect}, ${p.baseUrl}) are used${p.apiKeyEnv ? "" : '; it has no "apiKeyEnv" any more'}. ` +
+          `Complete it with "amira provider edit ${id}"`,
+      )
+    }
     const missing = (["dialect", "baseUrl"] as const).filter((k) => !p[k])
     if (missing.length) {
       throw new ProviderSettingsError(

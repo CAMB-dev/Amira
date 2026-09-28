@@ -104,6 +104,16 @@ test("no provider is built in: only the configured ones exist", () => {
   expect(() => ai.model("openai/gpt-5")).toThrow('unknown provider "openai" (configured: a, b)')
 })
 
+test("ids that are Object members find no stored key or catalog alias", async () => {
+  const ai = createAi({
+    env: {},
+    providers: [{ id: "constructor", dialect: "openai-chat", baseUrl: "http://c", apiKeyEnv: "C_KEY" }],
+  })
+  expect(ai.hasKey("constructor")).toBe(false)
+  const evs = await events(ai.stream({ ...req("constructor"), model: ai.model("constructor/m") }))
+  expect((evs[0] as ErrorEvent).error.code).toBe("missing_api_key")
+})
+
 test("removing a provider forgets it", () => {
   const ai = createAi({
     providers: [{ id: "anthropic", dialect: "anthropic-messages", baseUrl: "http://a" }],

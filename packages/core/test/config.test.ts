@@ -289,11 +289,22 @@ test("providers come only from settings, and each needs a dialect and baseUrl", 
 })
 
 test("an old entry for a formerly built-in provider keeps its dialect and baseUrl", () => {
-  const [anthropic, openai, google] = providersFromSettings({
-    anthropic: { headers: { a: "1" }, models: [{ id: "claude-x" }] },
-    openai: { baseUrl: "http://proxy" },
-    google: { apiKeyEnv: "MY_GEMINI_KEY" },
-  })
+  const warnings: string[] = []
+  const [anthropic, openai, google] = providersFromSettings(
+    {
+      anthropic: { headers: { a: "1" }, models: [{ id: "claude-x" }] },
+      openai: { baseUrl: "http://proxy" },
+      google: { apiKeyEnv: "MY_GEMINI_KEY" },
+    },
+    warnings,
+  )
+  expect(warnings).toHaveLength(3)
+  expect(warnings[0]).toBe(
+    'provider "anthropic" in settings.json lacks "dialect" or "baseUrl", so the former built-in ones ' +
+      '(anthropic-messages, https://api.anthropic.com) are used; it has no "apiKeyEnv" any more. ' +
+      'Complete it with "amira provider edit anthropic"',
+  )
+  expect(warnings[2]).not.toContain("apiKeyEnv")
   // Only the dialect and baseUrl come back; no key variable or other defaults.
   expect(anthropic).toEqual({
     id: "anthropic",

@@ -54,7 +54,8 @@ export function createAi(opts: AiOptions = {}): Ai {
   const doFetch = opts.fetch ?? fetch
   let catalog = opts.catalog
   // A copy, so keys stored or deleted later (/provider) change what requests use.
-  const storedKeys: Record<string, string> = { ...opts.apiKeys }
+  // Null-prototype, so ids such as "constructor" never find Object's members.
+  const storedKeys: Record<string, string> = Object.assign(Object.create(null), opts.apiKeys)
 
   const hasKey = (p: ProviderConfig) =>
     !p.apiKeyEnv || Boolean(p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id])

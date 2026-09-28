@@ -34,7 +34,8 @@ export const CATALOG_PROVIDER_IDS: Record<string, string | false> = {
 
 /** The catalog provider for an Amira provider: its own `catalogId`, the table above, or its id. */
 export function catalogProviderId(p: { id: string; catalogId?: string | false }): string | undefined {
-  const id = p.catalogId ?? CATALOG_PROVIDER_IDS[p.id] ?? p.id
+  const mapped = Object.hasOwn(CATALOG_PROVIDER_IDS, p.id) ? CATALOG_PROVIDER_IDS[p.id] : undefined
+  const id = p.catalogId ?? mapped ?? p.id
   return id === false ? undefined : id
 }
 

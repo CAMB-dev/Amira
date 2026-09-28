@@ -72,6 +72,7 @@ test("provider ids map through config, then the table, then themselves", () => {
   expect(catalogProviderId({ id: "deepseek-anthropic" })).toBe("deepseek")
   expect(catalogProviderId({ id: "ds-anthropic", catalogId: "deepseek" })).toBe("deepseek")
   expect(catalogProviderId({ id: "openai", catalogId: false })).toBeUndefined()
+  expect(catalogProviderId({ id: "constructor" })).toBe("constructor")
 })
 
 test("provider config wins over the catalog, which wins over defaults", () => {
