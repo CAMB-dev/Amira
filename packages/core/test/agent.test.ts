@@ -217,3 +217,12 @@ export default function (api: any) {
   await bus.flush()
   expect(errors).toHaveLength(1)
 })
+
+test("tool call deltas carry the stable index from the dialect", async () => {
+  const { agent, bus, events } = setup([{ toolCalls: [{ name: "echo", args: { text: "a" } }] }, { text: "" }])
+  agent.tools.register(echo, "test")
+  await agent.prompt("go")
+  await bus.flush()
+  const delta = events.find((e) => e.type === "message.delta" && e.data.kind === "toolCall")
+  expect(delta?.type === "message.delta" && delta.data.kind === "toolCall" ? delta.data.index : -1).toBe(0)
+})
