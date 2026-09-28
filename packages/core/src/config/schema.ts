@@ -114,7 +114,10 @@ const modelOverrides = (required: string[]) =>
         promptCache: boolean,
         parallelToolCalls: boolean,
       }),
-      cost: object({ input: number, output: number, cacheRead: number, cacheWrite: number }),
+      cost: object({ input: number, output: number, cacheRead: number, cacheWrite: number }, [
+        "input",
+        "output",
+      ]),
     },
     required,
   )

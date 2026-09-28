@@ -201,6 +201,9 @@ test("checks every documented key", () => {
   expect(bad({ tools: { disabled: "bash" } })).toThrow('"tools.disabled" must be a list')
   expect(bad({ mcpServers: { a: 1 } })).toThrow('"mcpServers.a" must be an object')
   expect(bad({ providers: { p: { headers: { a: 1 } } } })).toThrow('"providers.p.headers.a" must be a string')
+  expect(bad({ providers: { p: { models: [{ id: "m", cost: { input: 1 } }] } } })).toThrow(
+    '"providers.p.models[0].cost.output" is required',
+  )
 })
 
 test("providers from settings merge over built-ins and need a dialect and baseUrl otherwise", () => {
