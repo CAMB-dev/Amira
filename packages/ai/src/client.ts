@@ -36,6 +36,12 @@ export interface Ai {
   knownModels(): string[]
   /** Replaces the catalog, e.g. after a refresh; affects models resolved from now on. */
   setCatalog?(catalog: ModelCatalog | undefined): void
+  /** The catalog in use, if any. */
+  catalog?(): ModelCatalog | undefined
+  /** Forgets a provider; a built-in one comes back as it was built in. */
+  removeProvider?(id: string): void
+  /** Sets or (undefined) forgets the stored key (auth.json) used for a provider when its variables are unset. */
+  setStoredKey?(id: string, apiKey: string | undefined): void
 }
 
 export function createAi(opts: AiOptions = {}): Ai {
@@ -46,9 +52,11 @@ export function createAi(opts: AiOptions = {}): Ai {
   const env = opts.env ?? process.env
   const doFetch = opts.fetch ?? fetch
   let catalog = opts.catalog
+  // A copy, so keys stored or deleted later (/provider) change what requests use.
+  const storedKeys: Record<string, string> = { ...opts.apiKeys }
 
   const hasKey = (p: ProviderConfig) =>
-    !p.apiKeyEnv || Boolean(p.apiKey ?? keyFromEnv(p, env) ?? opts.apiKeys?.[p.id])
+    !p.apiKeyEnv || Boolean(p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id])
 
   const provider = (id: string) => {
     const p = providers.get(id)
@@ -74,7 +82,7 @@ export function createAi(opts: AiOptions = {}): Ai {
       if (!p) return failed(req, `unknown provider "${req.model.provider}"`, "unknown_provider")
       const dialect = dialects.get(req.model.dialect)
       if (!dialect) return failed(req, `unknown dialect "${req.model.dialect}"`, "unknown_dialect")
-      const apiKey = p.apiKey ?? keyFromEnv(p, env) ?? opts.apiKeys?.[p.id]
+      const apiKey = p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id]
       if (p.apiKeyEnv && !apiKey) {
         const names = [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])].join(" or ")
         return failed(req, `${names} is not set; export it to use provider ${p.id}`, "missing_api_key")
@@ -112,6 +120,16 @@ export function createAi(opts: AiOptions = {}): Ai {
     },
     setCatalog: (c) => {
       catalog = c
+    },
+    catalog: () => catalog,
+    setStoredKey: (id, key) => {
+      if (key === undefined) delete storedKeys[id]
+      else storedKeys[id] = key
+    },
+    removeProvider: (id) => {
+      const builtin = BUILTIN_PROVIDERS.find((p) => p.id === id)
+      if (builtin) providers.set(id, builtin)
+      else providers.delete(id)
     },
   }
 }

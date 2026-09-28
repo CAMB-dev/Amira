@@ -9,6 +9,7 @@ import { createCommandHost } from "./control.ts"
 import { runExtCommand } from "./ext-command.ts"
 import { runPackageCommand } from "./package-command.ts"
 import { runPrint } from "./print.ts"
+import { runProviderAdminCommand } from "./provider-cli.ts"
 import { runProviderCommand } from "./provider-command.ts"
 import { chooseStore, formatSessionList, pickSession } from "./resume.ts"
 import { runRpc } from "./rpc.ts"
@@ -30,7 +31,10 @@ async function run(argv: string[]): Promise<number> {
     stdout: (s: string) => void process.stdout.write(s),
     stderr: (s: string) => void process.stderr.write(s),
   }
-  if (argv[0] === "provider") return runProviderCommand(argv.slice(1), io)
+  if (argv[0] === "provider") {
+    const managed = await runProviderAdminCommand(argv.slice(1), { io })
+    return managed ?? runProviderCommand(argv.slice(1), io)
+  }
   if (argv[0] === "ext") return runExtCommand(argv.slice(1), io)
   const fromPackage = await runPackageCommand(argv, io)
   if (fromPackage !== undefined) return fromPackage

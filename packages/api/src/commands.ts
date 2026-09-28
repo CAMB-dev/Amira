@@ -1,4 +1,5 @@
 import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef, Usage } from "@amira/ai"
+import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
 import type { SubagentStatus } from "./subagents.ts"
 import type { ToolExposure } from "./tools.ts"
@@ -217,6 +218,8 @@ export interface SessionControl {
   providerPresets(): string[]
   /** Adds a preset to the user settings and makes it usable at once; resolves with what was done. */
   addProvider(presetId: string): Promise<string>
+  /** Adding, editing and removing providers and their keys; unset where the host cannot. */
+  readonly providerAdmin?: ProviderAdmin
   preview(): Promise<ContextPreview>
   /** Unloads every extension and loads them again. */
   reloadExtensions(): Promise<void>

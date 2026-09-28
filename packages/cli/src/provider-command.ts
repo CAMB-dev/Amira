@@ -8,6 +8,11 @@ import type { PrintIO } from "./print.ts"
 const USAGE = `Usage:
   amira provider presets [id]   Print settings.json entries for known providers
   amira provider add <id>       Add a preset to the user settings.json
+  amira provider add custom     Add any provider in a form (fetch models, test it)
+  amira provider edit <id>      Change a provider in a form
+  amira provider remove <id> [--yes] [--keep-key]
+                                Remove a provider from settings.json (and its key)
+  amira provider key <id>       Store a new API key (masked; or piped on stdin)
 
 Presets: ${PROVIDER_PRESETS.map((p) => p.id).join(", ")}`
 

@@ -1,3 +1,5 @@
+import type { FormSchema, FormSpec, FormValues } from "./form.ts"
+
 /** Semantic color for status text; frontends map it to their theme. */
 export type StatusTone = "default" | "muted" | "accent" | "success" | "warning" | "error"
 
@@ -24,9 +26,15 @@ export interface StatusItem {
 export type UiRequest =
   | { kind: "select"; title: string; options: string[] }
   | { kind: "confirm"; title: string; message?: string }
-  | { kind: "input"; title: string; placeholder?: string; initial?: string }
+  /** `secret` masks what is typed; the answer is never echoed, persisted or sent in ui.resolved. */
+  | { kind: "input"; title: string; placeholder?: string; initial?: string; secret?: boolean }
   /** A unified diff to look over, answered with one of `options` (D16, D38). */
   | { kind: "diff-review"; title: string; diff: string; options: string[] }
+  /**
+   * A whole form (see FormSpec), answered with the values by field id. Actions run on the
+   * host (rpc: ui.action); the answer is checked there and refused with the problems.
+   */
+  | ({ kind: "form" } & FormSchema)
 
 export type UiRequestKind = UiRequest["kind"]
 
@@ -36,6 +44,7 @@ export interface UiAnswer {
   confirm: boolean
   input: string
   "diff-review": string
+  form: FormValues
 }
 
 export interface UiRequestOptions {
@@ -55,7 +64,7 @@ export interface UiApi {
   confirm(title: string, message?: string, opts?: UiRequestOptions): Promise<boolean | undefined>
   input(
     title: string,
-    opts?: UiRequestOptions & { placeholder?: string; initial?: string },
+    opts?: UiRequestOptions & { placeholder?: string; initial?: string; secret?: boolean },
   ): Promise<string | undefined>
   /** Shows a diff and asks what to do with it; resolves with the chosen option. */
   reviewDiff(
@@ -64,4 +73,10 @@ export interface UiApi {
     options: string[],
     opts?: UiRequestOptions,
   ): Promise<string | undefined>
+  /**
+   * Shows a form and resolves with its values (hidden fields left out), or undefined when
+   * cancelled. The TUI shows it full screen; rpc clients get its schema; where forms are not
+   * available it is asked one field at a time (runFormDialogs).
+   */
+  form(spec: FormSpec, opts?: UiRequestOptions): Promise<FormValues | undefined>
 }

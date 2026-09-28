@@ -9,6 +9,7 @@ import {
   type StoredSessionInfo,
 } from "@amira/api"
 import { contextReport, costByModel, costReport, formatCost, formatTokens, table } from "./format.ts"
+import { providerCommand } from "./provider-command.ts"
 
 export {
   contextReport,
@@ -19,6 +20,7 @@ export {
   formatTokens,
   table,
 } from "./format.ts"
+export { draftFromValues, modelDescription, providerFormSpec } from "./provider-form.ts"
 
 const SHELLS: ShellMode[] = ["auto", "bash", "powershell"]
 
@@ -317,53 +319,7 @@ export default defineExtension((api: ExtensionAPI) => {
     },
   })
 
-  add({
-    name: "provider",
-    description: "List providers, or add a ready-made one",
-    args: {
-      hint: "[add <preset>]",
-      complete: (prefix, ctx) =>
-        subcommandCandidates(prefix, {
-          add: {
-            description: "add a preset to settings.json",
-            values: () => ctx.session.providerPresets().map((value) => ({ value })),
-          },
-        }),
-    },
-    async run(args, ctx) {
-      const [sub, id, ...rest] = args.split(/\s+/).filter(Boolean)
-      if (sub) {
-        if (sub !== "add" || rest.length) throw new Error("usage: /provider [add <preset>]")
-        let preset = id
-        if (!preset) {
-          preset = await ctx.ui.select("Add which provider?", ctx.session.providerPresets(), {
-            signal: ctx.signal,
-          })
-          if (!preset)
-            throw new Error(
-              `usage: /provider add <preset>; presets: ${ctx.session.providerPresets().join(", ")}`,
-            )
-        }
-        ctx.print(await ctx.session.addProvider(preset))
-        return
-      }
-      const current = ctx.session.info().model.provider
-      const rows = ctx.session
-        .providers()
-        .map((p) => [
-          p.id === current ? "*" : " ",
-          p.id,
-          p.dialect,
-          p.baseUrl,
-          p.hasKey ? "key set" : `no key (${p.apiKeyEnv})`,
-        ])
-      ctx.print(
-        rows.length
-          ? `Providers:\n${table(rows)}`
-          : `No providers configured. Add one with /provider add <preset>; presets: ${ctx.session.providerPresets().join(", ")}`,
-      )
-    },
-  })
+  add(providerCommand())
 
   add({
     name: "cost",

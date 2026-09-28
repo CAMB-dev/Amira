@@ -13,6 +13,8 @@ export interface ModelCatalog {
   find(catalogProvider: string, modelId: string): CatalogModel | undefined
   /** Every model id the catalog lists for a provider, e.g. to offer them for completion. */
   list?(catalogProvider: string): string[]
+  /** Every catalog provider id. */
+  providers?(): string[]
 }
 
 /**
@@ -54,6 +56,7 @@ export function createCatalog(data: unknown): ModelCatalog {
       const models = providers[provider]?.models
       return isObject(models) ? Object.keys(models) : []
     },
+    providers: () => Object.keys(providers).filter((p) => isObject(providers[p]?.models)),
   }
 }
 

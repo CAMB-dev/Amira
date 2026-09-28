@@ -30,6 +30,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
       confirm: async () => false,
       input: async () => undefined,
       reviewDiff: async () => undefined,
+      form: async () => undefined,
     },
   }
   await extension(api)

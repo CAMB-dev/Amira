@@ -33,6 +33,7 @@ import {
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
+import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
 import {
   compactTokens,
   type SubagentLine,
@@ -348,19 +349,32 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   let viewer: SubagentViewer | undefined
   let viewerTimer: ReturnType<typeof setInterval> | undefined
+  /**
+   * Forms (ui.form) waiting to be shown full screen, oldest first; the first one is open while
+   * `form` is set. A form waits while an inline dialog or the viewer is up, and inline dialogs
+   * that arrive while a form is open wait behind it.
+   */
+  const forms: FormRequest[] = []
+  let form: FormView | undefined
+  /** Titles of everything waiting for an answer, for the banners of full-screen views. */
+  const waitingTitles = () => [
+    ...dialogs.map((d) => d.request.title),
+    ...forms.slice(form ? 1 : 0).map((f) => f.title),
+  ]
   const fullScreen = new FullScreenRenderer(
     terminal,
-    new View((width, ctx) => viewer?.render(width, ctx) ?? []),
+    new View((width, ctx) => (form ? form.render(width, ctx) : (viewer?.render(width, ctx) ?? []))),
     { synchronizedOutput: capabilities.synchronizedOutput, theme, frameIntervalMs: 33 },
   )
 
   function openView(view: FrontendView) {
-    if (view.kind !== "subagent" || !commands) return
+    // A form owns the screen until it is answered.
+    if (view.kind !== "subagent" || !commands || form) return
     if (viewer) viewer.show(view.sessionId)
     else {
       viewer = new SubagentViewer(view.sessionId, {
         source: commands.control,
-        waiting: () => dialogs.map((d) => d.request.title),
+        waiting: waitingTitles,
         onClose: closeView,
         ...(presenters ? { presenters } : {}),
       })
@@ -379,6 +393,33 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     viewerTimer = undefined
     fullScreen.close()
     renderer.resume()
+    openNextForm()
+  }
+
+  /** Shows the first waiting form, unless a dialog, the viewer or another form is up. */
+  function openNextForm() {
+    const ui = opts.ui
+    const next = forms[0]
+    if (!ui || !next || form || viewer || dialogs.length) return
+    form = new FormView(uiFormBackend(ui, next), {
+      requestRender: () => fullScreen.requestRender(),
+      waiting: waitingTitles,
+      onClose: () => closeForm(next),
+    })
+    renderer.suspend()
+    fullScreen.open()
+    fullScreen.render()
+  }
+
+  /** The open form was answered, cancelled, or resolved elsewhere: back to the inline UI. */
+  function closeForm(request: FormRequest) {
+    const i = forms.indexOf(request)
+    if (i !== -1) forms.splice(i, 1)
+    if (!form) return
+    form = undefined
+    fullScreen.close()
+    renderer.resume()
+    openNextForm()
   }
 
   let resolveExit!: (code: number) => void
@@ -491,7 +532,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (trackSubagent(e)) renderer.requestRender()
     if (viewer?.handleEvent(e)) fullScreen.requestRender()
     // A dialog of the main session shows as a banner in the viewer; ring once so it is noticed.
-    if (viewer && e.type === "ui.request" && opts.ui) terminal.write("\x07")
+    if ((viewer || form) && e.type === "ui.request" && opts.ui) terminal.write("\x07")
+    if (form && (e.type === "ui.request" || e.type === "ui.resolved")) fullScreen.requestRender()
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
@@ -648,6 +690,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "ui.request": {
         const ui = opts.ui
         if (!ui) break
+        if (e.data.kind === "form") {
+          forms.push(e.data)
+          openNextForm()
+          break
+        }
         const dialog = new Dialog(e.data, (answer) => answerDialog(ui, dialog, answer))
         dialogs.push(dialog)
         break
@@ -655,6 +702,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "ui.resolved": {
         const i = dialogs.findIndex((d) => d.request.requestId === e.data.requestId)
         if (i !== -1) dialogs.splice(i, 1)
+        const f = forms.find((r) => r.requestId === e.data.requestId)
+        // Answered or cancelled elsewhere (another client, a timeout): close it without answering.
+        if (f && form && forms[0] === f) form.close()
+        else if (f) forms.splice(forms.indexOf(f), 1)
+        openNextForm()
         break
       }
       case "command.output": {
@@ -773,13 +825,25 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (i !== -1) dialogs.splice(i, 1)
     const { requestId, title } = dialog.request
     if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
+    const secret = dialog.request.kind === "input" && dialog.request.secret
     const shown =
-      answer === undefined ? "cancelled" : answer === true ? "yes" : answer === false ? "no" : answer
+      answer === undefined
+        ? "cancelled"
+        : secret
+          ? "(hidden)"
+          : answer === true
+            ? "yes"
+            : answer === false
+              ? "no"
+              : answer
     commitBlock("dialog", [`${theme.accent(glyphs.question)} ${title} ${theme.muted(`› ${shown}`)}`])
     renderer.requestRender()
+    openNextForm()
   }
 
   function quit(code = 0) {
+    for (const f of forms.splice(0)) opts.ui?.cancel(f.requestId)
+    form?.close()
     closeView()
     off()
     offSwitch?.()
@@ -801,6 +865,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   function onInput(e: InputEvent) {
     // The viewer owns the keyboard while it is open.
+    // A form owns the keyboard while it is open.
+    if (form) {
+      form.handleInput(e)
+      fullScreen.requestRender()
+      return
+    }
     if (viewer) {
       viewer.handleInput(e)
       fullScreen.requestRender()

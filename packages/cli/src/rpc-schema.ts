@@ -49,8 +49,25 @@ export const COMMAND_PARAMS = {
   },
   "ui.respond": {
     description:
-      "Answers a ui.request. `value` is required; an explicit null cancels the dialog, and a missing value fails with `invalid_params`.",
-    params: { requestId: str, value: { type: ["string", "boolean", "null"] } },
+      "Answers a ui.request. `value` is required; an explicit null cancels the dialog, and a missing value fails with `invalid_params`. A form is answered with an object of values by field id (missing fields take their defaults, hidden ones are ignored); values that do not pass its checks fail with `invalid_params` naming each problem, and the form stays open.",
+    params: {
+      requestId: str,
+      value: {
+        type: ["string", "boolean", "object", "null"],
+        description:
+          "The answer: a string for select, input and diff-review, a boolean for confirm, an object for form.",
+      },
+    },
+  },
+  "ui.action": {
+    description:
+      'Runs an action (a button such as "Fetch models") of an open form with the values so far, on the host, where its callback lives. Answered when it finishes, with what to show under the button and fields to update; its progress arrives meanwhile as ui.progress. Other lines are handled while it runs; cancelling the form aborts it. Fails with `not_found` for an unknown request.',
+    params: { requestId: str, action: str, "values?": { type: "object" } },
+  },
+  "ui.configure": {
+    description:
+      'How this client wants forms: "native" (default) sends each as one ui.request of kind form; "dialogs" asks them one field at a time with select and input requests, for clients that only know those.',
+    params: { forms: strings("native", "dialogs") },
   },
   "session.read": {
     description: "Reads the conversation: the last turn, or every message.",
@@ -92,6 +109,8 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
   },
   abort: { aborted: bool },
   "ui.respond": {},
+  "ui.action": { result: ref("FormActionResult") },
+  "ui.configure": {},
   "session.read": {
     "messages?": arrayOf(ref("Message")),
     "turnId?": str,
@@ -201,7 +220,12 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "ui.render": obj({}),
   "events.lost": obj({ dropped: num }),
   "ui.request": { allOf: [ref("UiRequest"), obj({ requestId: str, "source?": str })] },
-  "ui.resolved": obj({ requestId: str, cancelled: bool, "value?": { type: ["string", "boolean"] } }),
+  "ui.resolved": obj({
+    requestId: str,
+    cancelled: bool,
+    "value?": { type: ["string", "boolean"], description: "Left out for forms and secret inputs." },
+  }),
+  "ui.progress": obj({ requestId: str, action: str, text: str }),
   "model.changed": obj({ from: modelRef, to: modelRef }),
   "compact.start": obj({
     reason: strings("threshold", "manual"),
@@ -235,6 +259,57 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     { attempt: num, attempts: num, delayMs: num, "error?": str },
     "A turn carrying background sub-agents' results failed: they are sent again in delayMs, starting a turn (attempt of attempts). Sending a message first takes them along instead.",
   ),
+}
+
+/** The field kinds of a form, as ui.request carries them. */
+function formFields(): Schema[] {
+  const base = {
+    id: str,
+    label: str,
+    "help?": str,
+    "section?": str,
+    "when?": {
+      ...obj({ field: str, is: {} }),
+      description: "Shown (and returned) only while that field has this value or one of these values.",
+    },
+  }
+  const text = { "placeholder?": str, "required?": bool }
+  return [
+    obj({
+      type: strings("text"),
+      ...base,
+      ...text,
+      "default?": str,
+      "pattern?": { ...str, description: "A JavaScript regular expression the whole value must match." },
+      "patternMessage?": str,
+      "maxLength?": num,
+    }),
+    obj({ type: strings("secret"), ...base, ...text }, "Masked; the value is never shown, echoed or stored."),
+    obj({
+      type: strings("number"),
+      ...base,
+      ...text,
+      "default?": num,
+      "min?": num,
+      "max?": num,
+      "integer?": bool,
+    }),
+    obj({ type: strings("select"), ...base, options: arrayOf(ref("FormOption")), "default?": str }),
+    obj({
+      type: strings("multiselect"),
+      ...base,
+      options: arrayOf(ref("FormOption")),
+      "default?": arrayOf(str),
+      "required?": bool,
+      "allowCustom?": { ...bool, description: "Values that are not options are allowed." },
+    }),
+    obj({ type: strings("checkbox"), ...base, "default?": bool }),
+    obj({ type: strings("textarea"), ...base, ...text, "default?": str, "rows?": num, "maxLength?": num }),
+    obj(
+      { type: strings("action"), ...base, "recommended?": bool },
+      "A button; run it with ui.action. It has no value.",
+    ),
+  ]
 }
 
 const envelope = (type: Schema, data: Schema): Schema =>
@@ -333,12 +408,41 @@ export function rpcSchema(): Schema {
       UiRequest: oneOf(
         obj({ kind: strings("select"), title: str, options: arrayOf(str) }),
         obj({ kind: strings("confirm"), title: str, "message?": str }),
-        obj({ kind: strings("input"), title: str, "placeholder?": str, "initial?": str }),
+        obj({
+          kind: strings("input"),
+          title: str,
+          "placeholder?": str,
+          "initial?": str,
+          "secret?": { ...bool, description: "Mask what is typed; never echo or store the answer." },
+        }),
         obj(
           { kind: strings("diff-review"), title: str, diff: str, options: arrayOf(str) },
           "A unified diff to review; answer with one of the options.",
         ),
+        obj(
+          {
+            kind: strings("form"),
+            title: str,
+            "description?": str,
+            fields: arrayOf(ref("FormField")),
+            "sections?": arrayOf(obj({ title: str, "help?": str, "optional?": bool })),
+            "submitLabel?": str,
+          },
+          "A form; answer with an object of values by field id. Run its action fields with ui.action.",
+        ),
       ),
+      FormOption: obj({ value: str, "label?": str, "description?": str }),
+      FormField: oneOf(...formFields()),
+      FormActionResult: obj({
+        "message?": str,
+        "tone?": strings("info", "success", "warning", "error"),
+        "values?": { type: "object", description: "New values for fields, by id." },
+        "options?": {
+          type: "object",
+          additionalProperties: arrayOf(ref("FormOption")),
+          description: "New options for select and multiselect fields, by id.",
+        },
+      }),
     },
     oneOf: [ref("Command"), ref("Response"), ref("Event")],
   }
