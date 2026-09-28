@@ -2,6 +2,7 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
 import { API_VERSION, type Extension, type ExtensionAPI } from "@amira/api"
+import { runCommand } from "@amira/proc"
 import type { EventBus } from "./event-bus.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { StatusRegistry } from "./status-registry.ts"
@@ -137,6 +138,7 @@ export class ExtensionHost {
         })
       },
       requestRender: () => this.#requestRender(),
+      runCommand: (argv, options) => runCommand(argv, options),
     }
   }
 }

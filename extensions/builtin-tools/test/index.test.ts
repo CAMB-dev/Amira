@@ -14,6 +14,7 @@ test("registers the six built-in tools with the expected concurrency", async () 
     requestRender: () => {},
     on: () => () => {},
     intercept: () => () => {},
+    runCommand: () => Promise.reject(new Error("not used")),
   }
   await extension(api)
   expect(Object.fromEntries(tools.map((t) => [t.name, t.concurrency]))).toEqual({
