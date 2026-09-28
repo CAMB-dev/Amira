@@ -271,3 +271,41 @@ test("a blocking compact.before cancels compaction", async () => {
   expect(events.at(-1)?.data).toEqual({ error: "not now", blocked: true })
   expect(types(events)).not.toContain("compact.start")
 })
+
+test("manual compaction passes the user's instructions to the summary request", async () => {
+  const { agent, mock } = await setup([{ text: "r1" }, { text: "r2" }, { text: "S" }])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  expect(await agent.compact("keep the API notes")).toBe(true)
+  const request = (mock.requests[2]!.messages[0]!.content[0] as { text: string }).text
+  expect(request).toContain("<transcript>")
+  expect(request).toContain("The user asked for this summary: keep the API notes")
+})
+
+test("preview shows what the next model call would send, after the interceptors", async () => {
+  const { agent } = await setup([
+    { text: "r1", usage: { input: 40, output: 2, cacheRead: 0, cacheWrite: 0 } },
+  ])
+  agent.tools.register(
+    defineTool({
+      name: "noop",
+      description: "does nothing",
+      parameters: {},
+      execute: async () => textResult(""),
+    }),
+    "t",
+  )
+  agent.interceptors.add("system.build", (v) => ({
+    action: "modify",
+    value: { sections: [...v.sections, { name: "extra", text: "EXTRA" }] },
+  }))
+  expect(agent.contextTokens).toBeUndefined()
+  await agent.prompt("q1")
+  expect(agent.contextTokens).toBe(42)
+  const p = await agent.preview()
+  expect(p.systemPrompt).toBe("sys\n\nEXTRA")
+  expect(p.messages).toEqual(agent.messages)
+  expect(p.tools.map((t) => t.name)).toEqual(["noop"])
+  agent.interceptors.add("context.build", () => ({ action: "block", reason: "no" }))
+  await expect(agent.preview()).rejects.toThrow("context.build blocked the request: no")
+})
