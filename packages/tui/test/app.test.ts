@@ -580,6 +580,30 @@ test("a background result during a turn shows as a notice where it joins, not as
   await exited
 })
 
+test("a background result an interrupt kept waiting shows as pending and joins the next message", async () => {
+  const { terminal, live, all, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    (req) => ({ text: `now saw ${req.messages.length} messages` }),
+  ])
+  terminal.send("go\r")
+  await shows("01234567")
+  agent.expectNotice().deliver(subagentNotice("C"))
+  await waitFor(() => live().includes("◆ explorer finished · 41s · 12.3k tok · pending"), "pending line")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  await idle()
+  expect(live()).toContain("· pending")
+  terminal.send("next\r")
+  await shows("now saw")
+  await idle()
+  expect(live()).not.toContain("· pending")
+  const text = all()
+  expect(text.indexOf("› next")).toBeLessThan(text.indexOf("◆ explorer finished"))
+  expect(agent.waitingNotices).toBe(0)
+  terminal.send("\x03")
+  await exited
+})
+
 test("extension dialogs are answered inline: confirm, select and input", async () => {
   const { host, terminal, live, all, shows, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "ask", args: {} }] },

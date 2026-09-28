@@ -111,6 +111,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const queued: string[] = []
   /** Messages steering the running turn that have not reached the model yet. */
   const steering: string[] = []
+  /** Lines of notices (background results) waiting to reach the model. */
+  const pendingNotices: string[] = []
   /** Open extension dialogs; the first one has the keyboard. */
   const dialogs: Dialog[] = []
   const running = new Map<string, string>()
@@ -194,6 +196,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }),
     new View((width, ctx) => subagentLines([...subagents.values()], Date.now(), width, ctx.theme)),
     new View((width, ctx) => [
+      ...pendingNotices.map((l) => truncateToWidth(`${l}${ctx.theme.muted(" · pending")}`, width, "…")),
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
       ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
     ]),
@@ -411,8 +414,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "turn.steer": {
         const text = messageText(e.data.message)
-        // A notice (background sub-agents' results) is not the user's steering; it shows once it joins.
+        // A notice (background sub-agents' results) is not the user's steering. It waits in the
+        // live area until it joins the conversation (all waiting ones join together), also
+        // through an interrupt, after which it goes with the next message.
         if (e.data.message.display?.origin) {
+          if (e.data.state === "queued") pendingNotices.push(...userLines(theme, e.data.message))
+          else pendingNotices.length = 0
           if (e.data.state === "injected") commit([...userLines(theme, e.data.message), ""])
           break
         }
@@ -494,6 +501,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Follows the session a command switched to; a resumed one shows its history. */
   function followAgent(next: Agent) {
     agent = next
+    pendingNotices.length = 0
     if (next.messages.length) commit(historyLines(theme, next.messages))
     renderer.requestRender()
   }
