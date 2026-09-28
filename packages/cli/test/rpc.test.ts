@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawn } from "node:child_process"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep, userMessage } from "@amira/ai"
@@ -256,6 +256,52 @@ test("amira --rpc: slash commands list, complete and run, and may ask questions"
   expect((await rpc.close()).code).toBe(0)
 }, 60_000)
 
+test("amira --rpc: skills are listed and run apart from the slash commands", async () => {
+  const ext = (name: string) => path.join(here, "..", "..", "..", "extensions", name, "src", "index.ts")
+  const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
+  mkdirSync(path.join(home, "skills", "rpc-deploy"), { recursive: true })
+  writeFileSync(
+    path.join(home, "skills", "rpc-deploy", "SKILL.md"),
+    "---\nname: rpc-deploy\ndescription: Ship it\n---\nRun ./ship.sh\n",
+  )
+  const rpc = spawnRpc([{ text: "shipping" }], home, ["-e", ext("commands"), "-e", ext("skills")])
+  await rpc.event("session.start")
+
+  rpc.send({ id: 1, cmd: "skill.list" })
+  const { skills } = await rpc.response(1)
+  expect(skills.find((s: Line) => s.name === "rpc-deploy")).toEqual({
+    name: "rpc-deploy",
+    description: "Ship it",
+    hint: "[arguments]",
+    source: ext("skills"),
+  })
+  rpc.send({ id: 2, cmd: "command.list" })
+  expect((await rpc.response(2)).commands.map((c: Line) => c.name)).not.toContain("rpc-deploy")
+  rpc.send({ id: 3, cmd: "command.run", text: "/rpc-deploy" })
+  expect((await rpc.response(3)).error).toEqual({
+    code: "not_found",
+    message: "Unknown command /rpc-deploy — skills now start with $: $rpc-deploy",
+  })
+
+  rpc.send({ id: 4, cmd: "skill.run", name: "rpc-deploy", args: "to prod" })
+  expect(await rpc.response(4)).toMatchObject({ ok: true, skill: "rpc-deploy", output: [] })
+  await rpc.event("turn.end")
+  rpc.send({ id: 5, cmd: "session.read", what: "messages" })
+  const [prompt] = (await rpc.response(5)).messages
+  expect(prompt.display).toEqual({ text: "$rpc-deploy to prod", note: "Loaded skill rpc-deploy (1 line)" })
+  expect(prompt.content[0].text).toContain("Run ./ship.sh")
+  expect(prompt.content[0].text).toContain("Arguments: to prod")
+
+  rpc.send({ id: 6, cmd: "skill.run", name: "nope" })
+  expect((await rpc.response(6)).error).toEqual({
+    code: "not_found",
+    message: "Unknown skill $nope. Type $ to list the skills.",
+  })
+  rpc.send({ id: 7, cmd: "skill.run", name: "two words" })
+  expect((await rpc.response(7)).error.code).toBe("invalid_params")
+  expect((await rpc.close()).code).toBe(0)
+}, 60_000)
+
 test("amira --rpc: settings aliases are listed, completed and run", async () => {
   const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
   const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
@@ -303,6 +349,8 @@ test("amira --rpc-schema prints a JSON Schema covering every command", async () 
       "prompt",
       "session.read",
       "session.resume",
+      "skill.list",
+      "skill.run",
       "state",
       "steer",
       "ui.action",

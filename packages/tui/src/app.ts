@@ -302,7 +302,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     isNewline: (e) => keys.is(e, "newline"),
   })
   const commands = opts.commands
-  const popup = commands ? new CommandPopup(commands, () => renderer.requestRender(), keys) : undefined
+  // The "/" popup lists commands, the "$" one skills; at most one is open, by the first character.
+  const popups = commands
+    ? [
+        new CommandPopup(commands, () => renderer.requestRender(), keys),
+        new CommandPopup(
+          { complete: (line) => commands.completeSkill(line), list: () => commands.skills() },
+          () => renderer.requestRender(),
+          keys,
+          "$",
+        ),
+      ]
+    : []
+  const openPopup = () => popups.find((p) => p.open)
   const history = opts.history ?? new PromptHistory()
   const historyNav = new HistoryNavigator(history, editor)
   const search = new HistorySearch(history, editor, keys)
@@ -317,7 +329,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * the caret's line up to the caret.
    */
   const syncCompletions = (): Promise<void> | undefined => {
-    const commandsPending = popup?.update(editor.lineCount === 1 ? editor.getText() : "")
+    const line = editor.lineCount === 1 ? editor.getText() : ""
+    const commandsPending = popups.map((p) => p.update(line)).find(Boolean)
     const filesPending = filePicker.update(editor.textBeforeCaret())
     return commandsPending ?? filesPending
   }
@@ -326,7 +339,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     | { lines: (width: number, ctx: RenderContext) => string[]; hint: () => HintItems }
     | undefined => {
     if (search.active) return { lines: (w, ctx) => search.render(w, ctx), hint: searchHint }
-    if (popup?.visible) return { lines: (w, ctx) => popup.render(w, ctx), hint: popupHint }
+    const popup = popups.find((p) => p.visible)
+    if (popup) return { lines: (w, ctx) => popup.render(w, ctx), hint: popupHint }
     if (filePicker.visible) return { lines: (w, ctx) => filePicker.render(w, ctx), hint: fileHint }
     return undefined
   }
@@ -391,7 +405,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       dialogRows = lines.length
       return lines
     }),
-    // The command list, file list or history search opens below the input box, in place of the
+    // The command or skill list, file list or history search opens below the input box, in place of the
     // status bar and the hint, so the box stays where it is while the list changes with each key.
     new View((width, ctx) => {
       const list = dialogs[0] ? undefined : inputList()
@@ -952,6 +966,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const message = outgoing(trimmed, display)
     remember(message, parts)
     if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
+    else if (commands?.skillLine(trimmed)) runSkill(trimmed)
     else if (working) agent.steer(toPrompt(message))
     else send(message)
     renderer.requestRender()
@@ -962,6 +977,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     commitBlock("command", [theme.muted(`${glyphs.user} ${line}`)])
     void commands!
       .run(line, { frontend: "tui", quit: () => quit(), openView })
+      .then(() => renderer.requestRender())
+  }
+
+  /**
+   * Runs a "$skill" line. No echo: the message the skill sends shows as typed, with a note of
+   * what it loaded; a failure shows on its own.
+   */
+  function runSkill(line: string) {
+    void commands!
+      .runSkill(line, { frontend: "tui", quit: () => quit(), openView })
       .then(() => renderer.requestRender())
   }
 
@@ -1107,7 +1132,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (search.active) {
       // Keys like the arrows end the search and then do what they do.
       if (search.handleKey(e) === "accepted-pass") return onInput(e)
-    } else if (popup?.open && handlePopupKey(e)) {
+    } else if (openPopup() && handlePopupKey(e)) {
       // The popup took one of its keys (popup.*).
     } else if (filePicker.open && handleFileKey(e)) {
       // The file picker took one of its keys (popup.*).
@@ -1153,14 +1178,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Applies what the popup did with a key; false when it left the key to the editor. */
   function handlePopupKey(e: InputEvent): boolean {
-    const action = popup!.handleKey(e)
+    const action = openPopup()!.handleKey(e)
     if (!action) return false
     if (action.type === "replace") editor.setText(action.text)
     else if (action.type === "run") {
       history.add([action.line])
       historyNav.reset()
       editor.clear()
-      runCommand(action.line)
+      if (action.line.startsWith("$")) runSkill(action.line)
+      else runCommand(action.line)
     }
     return true
   }

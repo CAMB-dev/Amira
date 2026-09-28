@@ -212,12 +212,12 @@ test("settings skills.dirs adds directories, and the listing fills the prompt's 
   expect(prompt.endsWith("\n\n# Role")).toBe(true)
 })
 
-test("every skill is a slash command that sends its instructions, user-only ones too", async () => {
+test("every skill runs as $<name> and sends its instructions, user-only ones too", async () => {
   const d = layout()
   const root = path.join(d.home, "skills")
   skill(root, "deploy", "name: deploy\ndescription: Ship it", "# Deploy\nRun ./ship.sh")
   skill(root, "secret", "name: secret\ndescription: Only for me\ndisable-model-invocation: true")
-  skill(root, "help", "name: help\ndescription: Clashes with a command")
+  skill(root, "help", "name: help\ndescription: Named like a command")
   const bus = new EventBus()
   const events: AnyEvent[] = []
   bus.subscribe((e) => void events.push(e))
@@ -246,27 +246,33 @@ test("every skill is a slash command that sends its instructions, user-only ones
   } as Partial<SessionControl>
   const commands = new CommandHost({
     registry: host.commands,
+    skills: host.skills,
     bus,
     ui: host.ui,
     control: control as SessionControl,
     agent,
   })
-  expect(commands.list().map((c) => [c.name, c.description, c.source])).toEqual([
-    ["deploy", "Skill: Ship it", "builtin:skills"],
-    ["help", "built-in", "builtin:commands"],
-    ["secret", "Skill: Only for me", "builtin:skills"],
+  // Skills are not slash commands, so one may share a command's name.
+  expect(commands.list().map((c) => c.name)).toEqual(["help"])
+  expect(commands.skills().map((s) => [s.name, s.description, s.source])).toEqual([
+    ["deploy", "Ship it", "builtin:skills"],
+    ["help", "Named like a command", "builtin:skills"],
+    ["secret", "Only for me", "builtin:skills"],
   ])
-  expect((await commands.run("/deploy to prod", { frontend: "tui" })).ok).toBe(true)
+  expect((await commands.runSkill("$deploy to prod", { frontend: "tui" })).ok).toBe(true)
   expect(sent[0]).toContain(`Skill "deploy" (base directory: ${path.join(root, "deploy")})`)
   expect(sent[0]).toContain("# Deploy\nRun ./ship.sh")
   expect(sent[0]).toContain("Arguments: to prod")
-  // Frontends show the command as typed and what it loaded, not the instructions.
-  expect(shown[0]).toEqual({ display: { text: "/deploy to prod", note: "Loaded skill deploy (2 lines)" } })
-  await commands.run("/secret", { frontend: "tui" })
+  // Frontends show the skill as typed and what it loaded, not the instructions.
+  expect(shown[0]).toEqual({ display: { text: "$deploy to prod", note: "Loaded skill deploy (2 lines)" } })
+  await commands.runSkill("$secret", { frontend: "tui" })
   expect(sent[1]).toContain('Skill "secret"')
-  expect(shown[1]).toEqual({ display: { text: "/secret", note: "Loaded skill secret (1 line)" } })
+  expect(shown[1]).toEqual({ display: { text: "$secret", note: "Loaded skill secret (1 line)" } })
+  // The slash no longer runs a skill; it says how.
+  const slash = await commands.run("/deploy now", { frontend: "tui" })
+  expect(slash.ok).toBe(false)
+  expect(slash.error).toBe("Unknown command /deploy — skills now start with $: $deploy")
+  expect(sent).toHaveLength(2)
   await bus.flush()
-  expect(events.find((e) => e.type === "extension.error")?.data.error).toContain(
-    "command /help from builtin:skills conflicts",
-  )
+  expect(events.filter((e) => e.type === "extension.error")).toEqual([])
 })

@@ -57,15 +57,18 @@ from `terminal.integrated.commandsToSkipShell`.
 
 ### Completion lists
 
-The command popup, shown while the input starts with `/`, and the file list, shown while an
-`@word` is typed. Their keys come before the input's.
+The command popup, shown while the input starts with `/`; the skill popup, shown while it
+starts with `$`; and the file list, shown while an `@word` is typed. Their keys come before
+the input's. In the skill popup, Enter runs the highlighted skill only when it was picked or
+the typed name is the start of it; other text after a `$` (`$100 is the price`) is sent as a
+message.
 
 | Action | Default | What it does |
 | --- | --- | --- |
-| `popup.up` | `up` | Select the previous command, argument or file |
-| `popup.down` | `down` | Select the next command, argument or file |
-| `popup.complete` | `tab` | Complete the selected command or argument; insert the file |
-| `popup.accept` | `enter` | Run the command; insert the file |
+| `popup.up` | `up` | Select the previous command, skill, argument or file |
+| `popup.down` | `down` | Select the next command, skill, argument or file |
+| `popup.complete` | `tab` | Complete the selected command, skill or argument; insert the file |
+| `popup.accept` | `enter` | Run the command or skill; insert the file |
 | `popup.close` | `escape` | Close the list until the text changes |
 
 ### History search

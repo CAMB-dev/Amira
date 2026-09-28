@@ -8,9 +8,11 @@ import type {
   CommandOutputLevel,
   FrontendView,
   SessionControl,
+  SkillInfo,
 } from "@amira/api"
 import type { Agent } from "./agent.ts"
 import type { EventBus } from "./event-bus.ts"
+import { parseSkillLine, type SkillRegistry } from "./skills.ts"
 import type { UiRequests } from "./ui-requests.ts"
 
 export class CommandConflictError extends Error {}
@@ -258,6 +260,8 @@ export interface CommandHostOptions {
    * Commands and their own aliases win over them; see commandAliasWarnings.
    */
   aliases?: Record<string, string>
+  /** The `$` skills; without it no line runs a skill. */
+  skills?: SkillRegistry
 }
 
 /** Candidates for a command line; `command` is set once the arguments are being completed. */
@@ -307,6 +311,35 @@ export class CommandHost {
 
   list(): CommandInfo[] {
     return this.#opts.registry.list()
+  }
+
+  /** The `$` skills, by name. */
+  skills(): SkillInfo[] {
+    return this.#opts.skills?.list() ?? []
+  }
+
+  /**
+   * The skill a line runs, when it is "$name [args]" and names a registered skill. Other text
+   * that starts with "$" ("$100 is the price") runs nothing and is sent as a message.
+   */
+  skillLine(text: string): { name: string; args: string } | undefined {
+    const parsed = parseSkillLine(text)
+    return parsed && this.#opts.skills?.get(parsed.name) ? parsed : undefined
+  }
+
+  /**
+   * Candidates for a skill line typed so far: skill names, ranked against the text after the
+   * "$", while the name is typed; once arguments follow, `command` names the skill (skills
+   * offer no argument candidates).
+   */
+  completeSkill(line: string): CompletionResult {
+    const nameOnly = /^\$(\S*)$/.exec(line)
+    if (nameOnly) {
+      const items = this.skills().map((s) => ({ value: s.name, description: s.description }))
+      return { candidates: rankMatches(nameOnly[1]!, items, (c) => c.value) }
+    }
+    const parsed = /^\$\S+\s/.test(line) ? this.skillLine(line) : undefined
+    return parsed ? { command: parsed.name, candidates: [] } : { candidates: [] }
   }
 
   /** The settings aliases in effect (commands win over them), by name. */
@@ -411,28 +444,69 @@ export class CommandHost {
     const entry = resolved && "entry" in resolved ? resolved.entry : undefined
     // Output is attributed to the command that runs, also when an alias named it.
     const name = entry?.def.name ?? parsed?.name ?? line.trim()
-    const print = (text: string, level: CommandOutputLevel = "info") => {
-      const s = String(text)
-      output.push(s)
-      this.#opts.bus.emit(
-        "command.output",
-        { command: name, text: s, level },
-        { sessionId: this.#agent.sessionId },
-      )
-    }
+    const print = this.#printer(name, output)
     if (!parsed || !resolved || "error" in resolved) {
       const problem = resolved && "error" in resolved ? resolved.error : undefined
       const error = !parsed
         ? `Not a command: ${line.trim()}`
         : problem
           ? `${problem[0]!.toUpperCase()}${problem.slice(1)}.`
-          : `Unknown command /${parsed.name}. Type /help to list the commands.`
+          : this.#opts.skills?.get(parsed.name)
+            ? `Unknown command /${parsed.name} — skills now start with $: $${parsed.name}`
+            : `Unknown command /${parsed.name}. Type /help to list the commands.`
       print(error, "error")
       return { ok: false, ...(parsed ? { command: parsed.name } : {}), output, error }
     }
     const { entry: command, prepend } = resolved
     const args = [prepend, parsed.args].filter(Boolean).join(" ")
-    const ctx: CommandContext = {
+    try {
+      await command.def.run(args, this.#context(opts, print))
+      return { ok: true, command: name, output }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      print(error, "error")
+      return { ok: false, command: name, output, error }
+    }
+  }
+
+  /**
+   * Runs one skill line, "$name [args]"; `command` in the outcome is the skill's name. Never
+   * throws. Frontends check `skillLine` first, since text that names no skill is a message.
+   */
+  async runSkill(line: string, opts: CommandRunOptions): Promise<CommandOutcome> {
+    const output: string[] = []
+    const parsed = parseSkillLine(line)
+    const name = parsed?.name ?? line.trim()
+    const print = this.#printer(`$${name}`, output)
+    const skill = parsed && this.#opts.skills?.get(parsed.name)
+    if (!parsed || !skill) {
+      const error = parsed
+        ? `Unknown skill $${parsed.name}. Type $ to list the skills.`
+        : `Not a skill: ${name}`
+      print(error, "error")
+      return { ok: false, ...(parsed ? { command: parsed.name } : {}), output, error }
+    }
+    try {
+      await skill.def.run(parsed.args, this.#context(opts, print))
+      return { ok: true, command: parsed.name, output }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      print(error, "error")
+      return { ok: false, command: parsed.name, output, error }
+    }
+  }
+
+  /** What a command (or `$skill`) prints: collected, and sent out as command.output. */
+  #printer(command: string, output: string[]) {
+    return (text: string, level: CommandOutputLevel = "info") => {
+      const s = String(text)
+      output.push(s)
+      this.#opts.bus.emit("command.output", { command, text: s, level }, { sessionId: this.#agent.sessionId })
+    }
+  }
+
+  #context(opts: CommandRunOptions, print: CommandContext["print"]): CommandContext {
+    return {
       cwd: this.#agent.cwd,
       session: this.#opts.control,
       frontend: opts.frontend,
@@ -440,17 +514,10 @@ export class CommandHost {
       ui: this.#opts.ui.api(),
       print,
       commands: () => this.list(),
+      skills: () => this.skills(),
       aliases: () => this.aliases(),
       quit: opts.quit ?? (() => {}),
       ...(opts.openView ? { openView: opts.openView } : {}),
-    }
-    try {
-      await command.def.run(args, ctx)
-      return { ok: true, command: name, output }
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
-      print(error, "error")
-      return { ok: false, command: name, output, error }
     }
   }
 }

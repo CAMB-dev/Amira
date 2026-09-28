@@ -7,6 +7,7 @@ import { CommandRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
+import { SkillRegistry } from "./skills.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
 import { ToolRendererRegistry } from "./tool-renderers.ts"
@@ -40,6 +41,8 @@ export interface ExtensionHostOptions {
   renderers?: ToolRendererRegistry
   /** Where slash commands go. Default: a new registry. */
   commands?: CommandRegistry
+  /** Where `$` skills go. Default: a new registry. */
+  skills?: SkillRegistry
   /** Where extension dialogs go. Default: a new one on `bus`. */
   ui?: UiRequests
   /** Session id used on extension.* and ui.* events. Default "host". */
@@ -61,6 +64,7 @@ export class ExtensionHost {
   readonly status: StatusRegistry
   readonly renderers: ToolRendererRegistry
   readonly commands: CommandRegistry
+  readonly skills: SkillRegistry
   readonly ui: UiRequests
 
   constructor(opts: ExtensionHostOptions) {
@@ -68,6 +72,7 @@ export class ExtensionHost {
     this.status = opts.status ?? new StatusRegistry()
     this.renderers = opts.renderers ?? new ToolRendererRegistry()
     this.commands = opts.commands ?? new CommandRegistry()
+    this.skills = opts.skills ?? new SkillRegistry()
     this.ui = opts.ui ?? new UiRequests(opts.bus, opts.sessionId ? { sessionId: opts.sessionId } : {})
   }
 
@@ -159,10 +164,19 @@ export class ExtensionHost {
       home: amiraHome(),
       reportError: (error) => void this.#fail(source, error),
       registerTool: (tool) => track(tools.register(tool, source)),
-      // A taken name skips only this command, not the whole extension (e.g. a skill named "help").
+      // A taken name skips only this command, not the whole extension.
       registerCommand: (command) => {
         try {
           return track(this.commands.register(command, source, (w) => void this.#fail(source, w)))
+        } catch (err) {
+          this.#fail(source, err instanceof Error ? err.message : String(err))
+          return () => {}
+        }
+      },
+      // Likewise a taken skill name skips only that skill.
+      registerSkill: (skill) => {
+        try {
+          return track(this.skills.register(skill, source))
         } catch (err) {
           this.#fail(source, err instanceof Error ? err.message : String(err))
           return () => {}

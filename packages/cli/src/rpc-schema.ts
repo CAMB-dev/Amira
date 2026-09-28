@@ -84,7 +84,7 @@ export const COMMAND_PARAMS = {
       "Switches to a stored session of this directory (its id from session.start or `amira -r`), keeping the current model; a session.start with reason resume follows. Fails with `not_found` for an unknown id and `busy` while a turn or a /compact runs.",
     params: { sessionId: str },
   },
-  "command.list": { description: "Lists the slash commands.", params: {} },
+  "command.list": { description: "Lists the slash commands; skills are listed by skill.list.", params: {} },
   "command.complete": {
     description:
       'Candidates for a command line typed so far, e.g. "/mo" or "/model deep": command names while the name is typed, then the command\'s argument candidates. Prefix matches come first, then fuzzy ones.',
@@ -94,6 +94,15 @@ export const COMMAND_PARAMS = {
     description:
       'Runs a slash command line such as "/status" or "/model deepseek/deepseek-flash". What it prints also arrives as command.output events, and its dialogs as ui.request, which later lines may answer while it runs. Fails with `not_found` for an unknown command and `command_failed` when it throws.',
     params: { text: str },
+  },
+  "skill.list": {
+    description: "Lists the skills, which a user runs by typing $<name> [arguments].",
+    params: {},
+  },
+  "skill.run": {
+    description:
+      'Runs a skill as if the user typed $<name> <args>: usually it sends its instructions as a user message, which starts or steers a turn and is shown as the line typed. What it prints arrives as command.output events (command "$<name>"). Fails with `not_found` for an unknown skill and `command_failed` when it throws.',
+    params: { name: str, "args?": str },
   },
 } satisfies Record<string, { description: string; params: Record<string, Schema> }>
 
@@ -162,6 +171,20 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
   "command.run": {
     command: str,
     output: { ...arrayOf(str), description: "Everything the command printed, in order." },
+  },
+  "skill.list": {
+    skills: arrayOf(
+      obj({
+        name: str,
+        description: str,
+        hint: { ...str, description: 'Shown after the name, e.g. "[arguments]".' },
+        source: str,
+      }),
+    ),
+  },
+  "skill.run": {
+    skill: str,
+    output: { ...arrayOf(str), description: "Everything the skill printed, in order." },
   },
 }
 
@@ -235,7 +258,11 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   }),
   "compact.end": obj({ summary: str, replaced: num, kept: num }),
   "compact.failed": obj({ error: str, "blocked?": bool }),
-  "command.output": obj({ command: str, text: str, level: strings("info", "warning", "error") }),
+  "command.output": obj({
+    command: { ...str, description: 'The command that printed it, or "$<name>" for a skill.' },
+    text: str,
+    level: strings("info", "warning", "error"),
+  }),
   "subagent.start": obj({
     childSessionId: str,
     "role?": str,

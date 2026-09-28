@@ -31,6 +31,15 @@ const shellTools: Extension = (api) => {
   }
 }
 
+/** A skill, run as $echo, that sends its arguments shown as the line typed. */
+const echoSkill: Extension = (api) => {
+  api.registerSkill({
+    name: "echo",
+    description: "Echo",
+    run: (args, ctx) => ctx.session.send(`ECHO ${args}`, { display: { text: `$echo ${args}` } }),
+  })
+}
+
 async function setup(
   steps: MockStep[] = [],
   opts: { platform?: string; loads?: string[]; aliases?: Record<string, string> } = {},
@@ -52,6 +61,7 @@ async function setup(
       { source: "builtin:commands", extension: commandsExtension },
       { source: "tools", extension: shellTools },
       { source: "counter", extension: counter },
+      { source: "skills", extension: echoSkill },
     ],
   })
   const announced: [string, string][] = []
@@ -209,6 +219,21 @@ test("print mode runs a slash command instead of a turn", async () => {
   expect(session.agent.messages).toEqual([])
   expect(await runPrint(session.agent, "/nope", false, { io, commands: host })).toBe(1)
   expect(err.join("")).toContain("error: Unknown command /nope")
+})
+
+test("print mode runs a $skill; other text that starts with $ is a prompt", async () => {
+  const { host, session } = await setup([{ text: "echoed" }, { text: "cheap" }])
+  const out: string[] = []
+  const io = { stdout: (s: string) => void out.push(s), stderr: () => {} }
+  expect(await runPrint(session.agent, "$echo hi there", false, { io, commands: host })).toBe(0)
+  expect(await runPrint(session.agent, "$100 is the price", false, { io, commands: host })).toBe(0)
+  expect(out.join("")).toContain("echoed")
+  expect(out.join("")).toContain("cheap")
+  const users = session.agent.messages.filter((m) => m.role === "user")
+  expect(users.map((m) => [(m.content[0] as { text: string }).text, m.display?.text])).toEqual([
+    ["ECHO hi there", "$echo hi there"],
+    ["$100 is the price", undefined],
+  ])
 })
 
 test("print mode runs built-in and settings aliases; shadowed settings aliases warn at startup", async () => {

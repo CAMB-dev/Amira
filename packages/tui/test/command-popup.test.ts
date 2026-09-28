@@ -1,7 +1,15 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { CommandCandidate, CommandInfo, SessionControl } from "@amira/api"
-import { Agent, CommandHost, CommandRegistry, EventBus, rankMatches, UiRequests } from "@amira/core"
+import {
+  Agent,
+  CommandHost,
+  CommandRegistry,
+  EventBus,
+  rankMatches,
+  SkillRegistry,
+  UiRequests,
+} from "@amira/core"
 import { key } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { CommandPopup, type CompletionSource } from "../src/command-popup.ts"
@@ -191,4 +199,77 @@ test("a settings alias row completes to the alias itself", async () => {
   expect(lines()[0]).toStartWith("› /ds → /model deepseek/deepseek-flash")
   expect(popup.handleKey(key("tab"))).toEqual({ type: "replace", text: "/ds " })
   expect(popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/ds" })
+})
+
+/** The skills of a real CommandHost, as the app hands them to the "$" popup. */
+function skillSource(): CompletionSource {
+  const bus = new EventBus()
+  const ai = createAi({
+    dialects: [createMockDialect([])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const skills = new SkillRegistry()
+  const run = () => {}
+  skills.register({ name: "deploy", description: "Ship it", run }, "s")
+  skills.register({ name: "home-assistant", description: "Smart home", run }, "s")
+  skills.register({ name: "review-pr", description: "Review a pull request", run }, "s")
+  const host = new CommandHost({
+    registry: new CommandRegistry(),
+    skills,
+    bus,
+    ui: new UiRequests(bus),
+    control: {} as SessionControl,
+    agent: new Agent({ ai, model: ai.model("mock/m"), cwd: "/w", bus }),
+  })
+  return { complete: (line) => host.completeSkill(line), list: () => host.skills() }
+}
+
+async function skillPopupFor(text: string) {
+  const popup = new CommandPopup(skillSource(), () => {}, undefined, "$")
+  popup.update(text)
+  await Bun.sleep(5)
+  return { popup, lines: () => popup.render(60, plain) }
+}
+
+test("the $ popup lists skills; Tab and Enter complete and run them with a $", async () => {
+  expect((await skillPopupFor("/d")).popup.open).toBe(false)
+  const all = await skillPopupFor("$")
+  expect(all.lines()).toEqual([
+    "› $deploy          Ship it",
+    "  $home-assistant  Smart home",
+    "  $review-pr       Review a pull request",
+  ])
+  expect(all.popup.handleKey(key("enter"))).toEqual({ type: "handled" })
+  all.popup.handleKey(key("down"))
+  expect(all.popup.handleKey(key("tab"))).toEqual({ type: "replace", text: "$home-assistant " })
+  expect(all.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "$home-assistant" })
+  expect((await skillPopupFor("$rev")).popup.handleKey(key("enter"))).toEqual({
+    type: "run",
+    line: "$review-pr",
+  })
+  // With arguments it shows how the skill is used and leaves Enter to the editor.
+  const args = await skillPopupFor("$deploy to prod")
+  expect(args.lines()).toEqual(["  $deploy [arguments]  Ship it"])
+  expect(args.popup.handleKey(key("enter"))).toBeUndefined()
+})
+
+test("$ text that names no skill leaves Enter to the editor, even beside a fuzzy match", async () => {
+  expect((await skillPopupFor("$100 is the price")).popup.open).toBe(false)
+  expect((await skillPopupFor("$100")).popup.open).toBe(false)
+  // "$hmst" fuzzily matches home-assistant: listed, but Enter sends the text unless picked.
+  const fuzzy = await skillPopupFor("$hmst")
+  expect(fuzzy.lines()).toEqual(["› $home-assistant  Smart home"])
+  expect(fuzzy.popup.handleKey(key("enter"))).toBeUndefined()
+  fuzzy.popup.handleKey(key("down"))
+  expect(fuzzy.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "$home-assistant" })
+  // "$HOME" is listed by its prefix, but the case says it is the variable, not the skill.
+  const home = await skillPopupFor("$HOME")
+  expect(home.lines()).toEqual(["› $home-assistant  Smart home"])
+  expect(home.popup.handleKey(key("enter"))).toBeUndefined()
+  home.popup.handleKey(key("down"))
+  expect(home.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "$home-assistant" })
+  expect((await skillPopupFor("$home")).popup.handleKey(key("enter"))).toEqual({
+    type: "run",
+    line: "$home-assistant",
+  })
 })

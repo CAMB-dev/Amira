@@ -44,7 +44,8 @@ export interface RpcSession {
   ai: Ai
   ui: UiRequests
   /**
-   * Slash commands, for command.list, command.complete and command.run. When given, it owns
+   * Slash commands and skills, for command.list, command.complete, command.run, skill.list and
+   * skill.run. When given, it owns
    * the active agent: session.resume goes through it, and this frontend follows its switches.
    */
   commands?: CommandHost
@@ -264,10 +265,22 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       }
       return { command: r.command, output: r.output }
     },
+    "skill.list": () => ({ skills: needCommands().skills() }),
+    "skill.run": async (p) => {
+      const name = typeof p.name === "string" ? p.name.trim() : ""
+      if (!name || /[\s$]/.test(name)) throw new RpcError("invalid_params", '"name" must be a skill name')
+      const args = p.args === undefined ? "" : p.args
+      if (typeof args !== "string") throw new RpcError("invalid_params", '"args" must be a string')
+      const line = `$${name}${args.trim() ? ` ${args.trim()}` : ""}`
+      const known = needCommands().skillLine(line) !== undefined
+      const r = await needCommands().runSkill(line, { frontend: "rpc" })
+      if (!r.ok) throw new RpcError(known ? "command_failed" : "not_found", r.error ?? "skill failed")
+      return { skill: name, output: r.output }
+    },
   }
 
   const needCommands = (): CommandHost => {
-    if (!commands) throw new RpcError("not_supported", "this host has no slash commands")
+    if (!commands) throw new RpcError("not_supported", "this host has no slash commands or skills")
     return commands
   }
 
@@ -291,7 +304,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       if (err instanceof RpcError) fail(id, err.code, err.message)
       else fail(id, "internal", err instanceof Error ? err.message : String(err))
     }
-    if (p.cmd === "command.run" || p.cmd === "ui.action") {
+    if (p.cmd === "command.run" || p.cmd === "skill.run" || p.cmd === "ui.action") {
       // Not awaited: a command may ask a question that a later line (ui.respond) answers, and
       // an action may take a while; later lines must still be handled meanwhile.
       const run = (async () => {
