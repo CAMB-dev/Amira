@@ -10,8 +10,18 @@ import { parseJSON, postStream } from "./http-stream.ts"
 
 export { toGeminiContents, toGeminiSchema }
 
-/** Thinking budgets in tokens for each effort. */
-const BUDGET: Record<ReasoningEffort, number> = { low: 1024, medium: 8192, high: 24576, max: 32768 }
+/** Thinking budgets in tokens; 24576 is the most every 2.5 model accepts, only Pro goes higher. */
+const BUDGET: Record<ReasoningEffort, number> = { low: 1024, medium: 8192, high: 24576, max: 24576 }
+const PRO_MAX_BUDGET = 32768
+
+const LEVEL: Record<ReasoningEffort, string> = { low: "LOW", medium: "MEDIUM", high: "HIGH", max: "HIGH" }
+
+/** Gemini 3 takes a thinking level and rejects budgets as a way to set it; older models take a budget. */
+export function thinkingConfig(modelId: string, effort: ReasoningEffort): Record<string, unknown> {
+  if (/gemini-3/.test(modelId)) return { thinkingLevel: LEVEL[effort], includeThoughts: true }
+  const budget = effort === "max" && /2\.5-pro/.test(modelId) ? PRO_MAX_BUDGET : BUDGET[effort]
+  return { thinkingBudget: budget, includeThoughts: true }
+}
 
 /** Google's Gemini API (generativelanguage.googleapis.com/v1beta), streamed as SSE. */
 export const googleGemini: Dialect = {
@@ -54,8 +64,7 @@ export function geminiBody(req: ModelRequest): Record<string, unknown> {
   const config: Record<string, unknown> = {}
   if (req.maxTokens) config.maxOutputTokens = req.maxTokens
   if (req.temperature !== undefined) config.temperature = req.temperature
-  if (req.reasoning)
-    config.thinkingConfig = { thinkingBudget: BUDGET[req.reasoning.effort], includeThoughts: true }
+  if (req.reasoning) config.thinkingConfig = thinkingConfig(req.model.id, req.reasoning.effort)
   if (Object.keys(config).length) body.generationConfig = config
   return body
 }

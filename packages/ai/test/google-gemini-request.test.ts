@@ -4,7 +4,7 @@
 // https://ai.google.dev/gemini-api/docs/function-calling
 // https://ai.google.dev/gemini-api/docs/thinking (thinkingConfig, thought signatures)
 import { expect, test } from "bun:test"
-import { googleGemini } from "../src/dialects/google-gemini.ts"
+import { googleGemini, thinkingConfig } from "../src/dialects/google-gemini.ts"
 import { toGeminiSchema } from "../src/dialects/google-gemini-schema.ts"
 import type { Message, ModelRequest } from "../src/types.ts"
 import { dataSSE, req, run, sse } from "./dialect-helpers.ts"
@@ -37,7 +37,28 @@ test("asks for thoughts with a budget per effort", async () => {
   expect(await config("low")).toEqual({ thinkingBudget: 1024, includeThoughts: true })
   expect(await config("medium")).toEqual({ thinkingBudget: 8192, includeThoughts: true })
   expect(await config("high")).toEqual({ thinkingBudget: 24576, includeThoughts: true })
-  expect(await config("max")).toEqual({ thinkingBudget: 32768, includeThoughts: true })
+  expect(await config("max")).toEqual({ thinkingBudget: 24576, includeThoughts: true })
+})
+
+test("only 2.5 Pro gets the larger max budget; Gemini 3 gets a thinking level instead", () => {
+  expect(thinkingConfig("gemini-2.5-pro", "max")).toEqual({ thinkingBudget: 32768, includeThoughts: true })
+  expect(thinkingConfig("gemini-2.5-flash-lite", "max")).toEqual({
+    thinkingBudget: 24576,
+    includeThoughts: true,
+  })
+  expect(thinkingConfig("gemini-3-pro-preview", "low")).toEqual({
+    thinkingLevel: "LOW",
+    includeThoughts: true,
+  })
+  expect(thinkingConfig("gemini-3.1-flash", "medium")).toEqual({
+    thinkingLevel: "MEDIUM",
+    includeThoughts: true,
+  })
+  expect(thinkingConfig("models/gemini-3-pro", "high")).toEqual({
+    thinkingLevel: "HIGH",
+    includeThoughts: true,
+  })
+  expect(thinkingConfig("gemini-3-pro", "max")).toEqual({ thinkingLevel: "HIGH", includeThoughts: true })
 })
 
 test("sends tools as function declarations with a cleaned schema", async () => {
