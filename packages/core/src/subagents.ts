@@ -7,6 +7,7 @@ import {
   type Message,
   type ModelInfo,
   type Usage,
+  unansweredCalls,
   userMessage,
 } from "@amira/ai"
 import type {
@@ -80,10 +81,10 @@ function addUsage(to: Usage, u: Usage) {
  * without content gets a placeholder so roles keep alternating for every provider.
  */
 export function forkHistory(messages: readonly Message[]): Message[] {
-  const answered = new Set(messages.flatMap((m) => (m.role === "toolResult" ? [m.toolCallId] : [])))
+  const unanswered = unansweredCalls(messages)
   return messages.map((m) => {
     if (m.role !== "assistant") return m
-    const content = m.content.filter((b) => b.type !== "toolCall" || answered.has(b.id))
+    const content = m.content.filter((b) => b.type !== "toolCall" || !unanswered.has(b))
     if (content.length === m.content.length) return m
     const kept = content.some((b) => b.type === "text" && b.text.trim())
     return {

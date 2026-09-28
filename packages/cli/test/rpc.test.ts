@@ -499,6 +499,28 @@ test("the rpc schema describes a user message's display and lets prompt and stee
   expect(COMMAND_PARAMS.steer.params).toHaveProperty("display?")
 })
 
+test("during a /compact, prompt and model.set are busy and steer queues the message", async () => {
+  const s = await session([{ text: "one" }, { text: "two" }, { text: "S", delayMs: 100 }, { text: "three" }])
+  const rpc = inProcess(s)
+  await rpc.call({ id: 1, cmd: "prompt", text: "first" })
+  await rpc.until((l) => l.type === "turn.end")
+  await rpc.call({ id: 2, cmd: "prompt", text: "second" })
+  await rpc.until((l) => l.type === "turn.end" && l.turnId !== rpc.out.find((o) => o.id === 1)!.turnId)
+  const compacted = s.agent.compact()
+  expect((await rpc.call({ id: 3, cmd: "model.set", model: "mock/other" })).error.code).toBe("busy")
+  expect((await rpc.call({ id: 4, cmd: "prompt", text: "no" })).error.code).toBe("busy")
+  expect(await rpc.call({ id: 6, cmd: "state" })).toMatchObject({ busy: true, status: "idle" })
+  expect(await rpc.call({ id: 5, cmd: "steer", text: "later" })).toMatchObject({ ok: true, queued: true })
+  expect(await compacted).toBe(true)
+  const start = await rpc.until((l) => l.type === "turn.start" && l.data.prompt.content[0].text === "later")
+  await rpc.until((l) => l.type === "turn.end" && l.turnId === start.turnId)
+  expect(s.agent.messages.at(-1)).toMatchObject({
+    role: "assistant",
+    content: [{ type: "text", text: "three" }],
+  })
+  expect(await rpc.end()).toBe(0)
+})
+
 test("ui.respond needs a value; model.set waits for the turn", async () => {
   const s = await session([{ toolCalls: [{ name: "ask", args: {} }] }, { text: "bye" }], [rpcTools])
   const rpc = inProcess(s)

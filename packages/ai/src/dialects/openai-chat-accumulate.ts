@@ -25,6 +25,11 @@ export class ChatAccumulator {
     this.message = { role: "assistant", content: [], model, usage: emptyUsage() }
   }
 
+  /** True once a chunk said why the reply ended. */
+  get finished(): boolean {
+    return this.#finish !== undefined
+  }
+
   *apply(chunk: any): Generator<StreamEvent> {
     if (chunk.usage) this.message.usage = mapUsage(chunk.usage)
     const choice = chunk.choices?.[0]

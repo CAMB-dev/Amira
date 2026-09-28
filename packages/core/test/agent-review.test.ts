@@ -343,3 +343,81 @@ test("at most maxParallelTools calls run at once", async () => {
   expect(peak).toBe(2)
   expect(agent.messages.filter((m) => m.role === "toolResult")).toHaveLength(6)
 })
+
+const counter = (concurrency: "parallel" | "serial") => {
+  const state = { runs: 0 }
+  const tool = defineTool({
+    name: "count",
+    description: "",
+    parameters: {},
+    concurrency,
+    execute: async () => textResult(`run ${++state.runs}`),
+  })
+  return { state, tool }
+}
+
+test("a tool call id reused in a later step still runs, reports and keeps its own result", async () => {
+  const { agent, bus, events } = setup([
+    { toolCalls: [call("count", {}, "call_0")] },
+    { toolCalls: [call("count", {}, "call_0")] },
+    { text: "done" },
+  ])
+  const { state, tool } = counter("serial")
+  agent.tools.register(tool, "t")
+  expect((await agent.prompt("go")).reason).toBe("done")
+  await bus.flush()
+  expect(state.runs).toBe(2)
+  const results = agent.messages.filter((m) => m.role === "toolResult")
+  expect(results.map((r) => [r.isError, r.content])).toEqual([
+    [false, [{ type: "text", text: "run 1" }]],
+    [false, [{ type: "text", text: "run 2" }]],
+  ])
+  const tools = events.filter((e) => e.type.startsWith("tool.execute."))
+  expect(tools.map((e) => e.type)).toEqual([
+    "tool.execute.start",
+    "tool.execute.end",
+    "tool.execute.start",
+    "tool.execute.end",
+  ])
+  expect(tools.some((e) => e.type === "tool.execute.end" && e.data.rejected)).toBe(false)
+})
+
+test("two calls with the same id in one batch each get their own result", async () => {
+  const { agent } = setup([
+    { toolCalls: [call("count", {}, "dup"), call("count", {}, "dup")] },
+    { text: "ok" },
+  ])
+  const { state, tool } = counter("parallel")
+  agent.tools.register(tool, "t")
+  expect((await agent.prompt("go")).reason).toBe("done")
+  expect(state.runs).toBe(2)
+  const results = agent.messages.filter((m) => m.role === "toolResult")
+  expect(results.map((r) => r.isError)).toEqual([false, false])
+  expect(results.map((r) => (r.content[0] as { text: string }).text).sort()).toEqual(["run 1", "run 2"])
+})
+
+test("history repair answers a later call whose id an earlier, answered call used", async () => {
+  const mock = createMockDialect([{ text: "ok" }])
+  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
+  const model = { provider: "mock", model: "t" }
+  const agent = new Agent({
+    ai,
+    model: ai.model("mock/t"),
+    cwd: ".",
+    systemPrompt: "",
+    messages: [
+      { role: "user", content: [{ type: "text", text: "go" }] },
+      { role: "assistant", content: [{ type: "toolCall", id: "same", name: "x", args: {} }], model },
+      {
+        role: "toolResult",
+        toolCallId: "same",
+        toolName: "x",
+        content: [{ type: "text", text: "1" }],
+        isError: false,
+      },
+      { role: "assistant", content: [{ type: "toolCall", id: "same", name: "x", args: {} }], model },
+    ],
+  })
+  await agent.prompt("next")
+  expect(agent.messages.filter((m) => m.role === "toolResult")).toHaveLength(2)
+})

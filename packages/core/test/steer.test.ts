@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type Message, type MockStep, userMessage } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
-import { Agent } from "../src/agent.ts"
+import { Agent, AgentAbortedError } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 
 function setup(steps: MockStep[]) {
@@ -153,4 +153,76 @@ test("prompt takes a caller-chosen turn id and exposes it synchronously", async 
   await bus.flush()
   expect(agent.turnId).toBeUndefined()
   expect(events.filter((e) => e.type === "turn.start")[0]!.turnId).toBe("t_mine")
+})
+
+test("messages sent during a manual compaction start one turn when it ends", async () => {
+  const { agent, mock, bus, events } = setup([
+    { text: "r1" },
+    { text: "r2" },
+    { text: "SUMMARY", delayMs: 50 },
+    { text: "after" },
+  ])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  const compacted = agent.compact()
+  expect(agent.busy).toBe(true)
+  const result = agent.prompt("sent while compacting", { turnId: "t_later" })
+  agent.steer("and this too")
+  // A second prompt is refused, as it is while a turn runs.
+  await expect(agent.prompt("third")).rejects.toThrow("already running")
+  expect(agent.turnId).toBeUndefined()
+  expect(await compacted).toBe(true)
+  // The turn is running by the time compact() resolves.
+  expect(agent.turnId).toBe("t_later")
+  expect(await result).toEqual({ reason: "done", steps: 1 })
+  await bus.flush()
+  expect(mock.requests).toHaveLength(4)
+  const last = mock.requests[3]!.messages.at(-1)!
+  expect(texts([last])).toEqual(["user:sent while compacting|and this too"])
+  const steers = events.filter((e) => e.type === "turn.steer")
+  expect(steers.map((e) => [e.data.state, e.turnId])).toEqual([
+    ["queued", undefined],
+    ["promoted", undefined],
+  ])
+  expect(steers[1]!.data).toMatchObject({ nextTurnId: "t_later" })
+})
+
+test("aborting a manual compaction drops what was sent meanwhile, like aborting a turn", async () => {
+  const { agent, mock, bus, events } = setup([{ text: "r1" }, { text: "r2" }, { text: "S", delayMs: 200 }])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  const compacted = agent.compact()
+  const held = agent.prompt("held")
+  agent.steer("steered")
+  agent.abort()
+  expect(await compacted).toBe(false)
+  await expect(held).rejects.toBeInstanceOf(AgentAbortedError)
+  await bus.flush()
+  expect(agent.busy).toBe(false)
+  expect(JSON.stringify(mock.requests)).not.toContain("held")
+  expect(events.filter((e) => e.type === "turn.start")).toHaveLength(2)
+  const steers = events
+    .filter((e) => e.type === "turn.steer")
+    .map((e) => [e.data.state, texts([e.data.message])[0]])
+  expect(steers).toEqual([
+    ["queued", "user:steered"],
+    ["dropped", "user:held"],
+    ["dropped", "user:steered"],
+  ])
+})
+
+test("a steer during a manual compaction is not lost when the compaction fails", async () => {
+  const { agent, mock } = setup([
+    { text: "r1" },
+    { text: "r2" },
+    { error: { message: "no" } },
+    { text: "after" },
+  ])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  const compacted = agent.compact()
+  agent.steer("keep me")
+  expect(await compacted).toBe(false)
+  while (agent.busy) await Bun.sleep(5)
+  expect(texts([mock.requests.at(-1)!.messages.at(-1)!])).toEqual(["user:keep me"])
 })
