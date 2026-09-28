@@ -70,6 +70,8 @@ export class FullScreenRenderer {
     this.offResize = undefined
     this.prev = undefined
     this.terminal.disableMode(modes.alternateScroll)
+    // The alternate screen does not save whether the cursor was shown; it was before we hid it.
+    this.terminal.write(cursor.show)
     this.terminal.exitAltScreen()
   }
 

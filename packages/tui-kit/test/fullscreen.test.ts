@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { modes, RESET } from "../src/ansi.ts"
+import { cursor, modes, RESET } from "../src/ansi.ts"
 import type { Component } from "../src/component.ts"
 import { ScrollView } from "../src/components/scroll-view.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
@@ -43,13 +43,15 @@ test("open enters the alternate screen with alternate scroll; close leaves both"
   expect(screen.cursorVisible).toBe(false)
   term.clearWrites()
   full.close()
-  expect(term.output).toBe(modes.alternateScroll.off + modes.altScreen.off)
+  const closing = modes.alternateScroll.off + cursor.show + modes.altScreen.off
+  expect(term.output).toBe(closing)
   expect(screen.inAltScreen).toBe(false)
+  expect(screen.cursorVisible).toBe(true)
   expect(full.isOpen).toBe(false)
   // Closing twice writes nothing more; rendering while closed does nothing.
   full.close()
   full.render()
-  expect(term.output).toBe(modes.alternateScroll.off + modes.altScreen.off)
+  expect(term.output).toBe(closing)
 })
 
 test("a crash while open restores the main screen: the terminal tracks the modes", () => {
@@ -131,10 +133,28 @@ test("a resize while suspended is handled when resuming", () => {
   const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
   inline.suspend()
   full.open()
-  resize(30, 8)
+  resize(20, 9)
   full.close()
   inline.resume()
+  // Only the height changed: nothing was re-wrapped, so the live region is redrawn in place.
   expect(screen.mainText).toBe("kept\nlive one\nlive two")
+})
+
+test("after a width change while suspended the live region is drawn from the cursor, over nothing older", () => {
+  const { term, screen, resize } = setup(20, 6)
+  const inline = new LiveRenderer(term, new Lines(["live one", "live two"]))
+  inline.start()
+  inline.commit(["history 1", "history 2"])
+  const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
+  inline.suspend()
+  full.open()
+  inline.commit(["while away"])
+  resize(30, 6)
+  full.close()
+  inline.resume()
+  const text = screen.mainText
+  expect(text.startsWith("history 1\nhistory 2\n")).toBe(true)
+  expect(text.endsWith("while away\nlive one\nlive two")).toBe(true)
 })
 
 test("stop resumes a suspended renderer, so held lines are not lost", () => {

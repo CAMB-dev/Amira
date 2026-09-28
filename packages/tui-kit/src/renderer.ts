@@ -44,6 +44,7 @@ export class LiveRenderer {
   private offResize: (() => void) | undefined
   private stopped = false
   private suspended = false
+  private suspendedWidth = 0
   /** Lines committed while suspended, printed in order on `resume()`. */
   private held: string[] = []
 
@@ -101,6 +102,7 @@ export class LiveRenderer {
   suspend(): void {
     if (this.stopped || this.suspended) return
     this.suspended = true
+    this.suspendedWidth = this.terminal.columns
     clearTimeout(this.timer)
     this.timer = undefined
   }
@@ -115,6 +117,14 @@ export class LiveRenderer {
     if (!this.suspended) return
     this.suspended = false
     this.forceFull = true
+    if (this.terminal.columns !== this.suspendedWidth) {
+      // The main screen may have been re-wrapped while hidden, but the cursor it saved was
+      // not moved with it (xterm.js), so where the live region starts is not known. Draw
+      // from the cursor instead of moving up: an old copy may stay above, but nothing is
+      // drawn over the scrollback.
+      this.prev = undefined
+      this.row = 0
+    }
     const held = this.held
     this.held = []
     this.draw(held)
