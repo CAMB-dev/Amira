@@ -10,6 +10,7 @@ import {
   SessionStore,
   subagentMessages,
 } from "@amira/core"
+import { createProviderAdmin } from "./provider-admin.ts"
 import { addPreset, withPresetHint } from "./provider-command.ts"
 import type { Session } from "./session.ts"
 import { toolsToDisable } from "./session.ts"
@@ -175,6 +176,12 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       if (added) lines.push(`Switch to it with /model ${preset.id}/<model>.`)
       return lines.join("\n")
     },
+    providerAdmin: createProviderAdmin({
+      ai,
+      ...(opts.home ? { home: opts.home } : {}),
+      platform,
+      currentProvider: () => agent().model.provider,
+    }),
     preview: () => agent().preview(),
     reloadExtensions: async () => {
       // Unloading drops tools and MCP connections a running tool call may still be using.
