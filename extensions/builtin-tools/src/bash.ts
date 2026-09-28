@@ -1,8 +1,15 @@
 import { defineTool, textResult } from "@amira/api"
 import { type RunResult, runCommand } from "@amira/proc"
 import { statOrNull } from "./files.ts"
-import { findPowerShell, gatedPowerShell, powershellEdition, resolvePowerShell } from "./powershell.ts"
+import {
+  findPowerShell,
+  gatedPowerShell,
+  powershellEdition,
+  powershellStandby,
+  resolvePowerShell,
+} from "./powershell.ts"
 import { resolveShell, type Shell } from "./shell.ts"
+import { StandbyPool } from "./standby.ts"
 import { truncateOutput } from "./truncate.ts"
 
 export const DEFAULT_TIMEOUT_MS = 120_000
@@ -43,8 +50,11 @@ const PARAMETERS = {
   additionalProperties: false,
 }
 
-/** A tool that runs commands in the shell `resolve()` returns; bash and powershell share it. */
-function shellTool(name: string, description: string[], resolve: () => Promise<Shell>) {
+/**
+ * A tool that runs commands in the shell `resolve()` returns; bash and powershell share it.
+ * With a pool, commands run on a process started ahead of time when one matches.
+ */
+function shellTool(name: string, description: string[], resolve: () => Promise<Shell>, pool?: StandbyPool) {
   return defineTool<BashParams>({
     name,
     description: description.join("\n"),
@@ -65,20 +75,24 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
       let output = ""
       let run: RunResult
       try {
-        const { argv, ...spawn } = shell.command(command)
-        run = await runCommand(argv, {
-          ...spawn,
+        const opts = {
           cwd: ctx.cwd,
           timeoutMs,
           signal: ctx.signal,
-          onChunk(chunk) {
+          onChunk(chunk: string) {
             output += chunk
             const now = Date.now()
             if (now - lastUpdate < UPDATE_INTERVAL_MS) return
             lastUpdate = now
             ctx.update(textResult(output.slice(-UPDATE_TAIL_CHARS)))
           },
-        })
+        }
+        const cmd = shell.command(command)
+        if (pool) run = await pool.run(cmd, opts)
+        else {
+          const { argv, ...spawn } = cmd
+          run = await runCommand(argv, { ...spawn, ...opts })
+        }
       } catch (err) {
         return textResult(`Failed to start ${shell.path}: ${(err as Error).message}`, true)
       }
@@ -141,8 +155,14 @@ export function powershellDescription(path: string): string[] {
 
 /** A powershell tool bound to one PowerShell executable. */
 export function createPowershellTool(path = findPowerShell()) {
-  const shell = path === findPowerShell() ? resolvePowerShell : () => Promise.resolve(gatedPowerShell(path))
-  return shellTool("powershell", powershellDescription(path), shell)
+  const own = path === findPowerShell()
+  const shell = own ? resolvePowerShell : () => Promise.resolve(gatedPowerShell(path))
+  return shellTool(
+    "powershell",
+    powershellDescription(path),
+    shell,
+    own ? powershellStandby : new StandbyPool(),
+  )
 }
 
 /** Windows only: PowerShell next to bash, for Windows-specific work. */

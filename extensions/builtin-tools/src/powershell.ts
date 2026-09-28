@@ -1,5 +1,6 @@
 import { win32 } from "node:path"
 import type { Shell } from "./shell.ts"
+import { StandbyPool } from "./standby.ts"
 
 /** pwsh when installed, else Windows PowerShell. AMIRA_POWERSHELL picks one explicitly. */
 export function findPowerShell(env: Record<string, string | undefined> = process.env): string {
@@ -93,3 +94,6 @@ export function resolvePowerShell(): Promise<Shell> {
   cached ??= Promise.resolve(gatedPowerShell())
   return cached
 }
+
+/** A PowerShell process kept waiting for the powershell tool's next command. */
+export const powershellStandby = new StandbyPool()
