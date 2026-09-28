@@ -6,6 +6,7 @@ import {
   defineTool,
   type Message,
   type SessionControl,
+  type SkillDefinition,
   type TuiSettings,
   textResult,
 } from "@amira/api"
@@ -54,6 +55,8 @@ interface SetupOptions {
   startupEvents?: AnyEvent[]
   /** Slash commands to offer; the UI gets a CommandHost when given. */
   commands?: CommandDefinition[]
+  /** `$` skills to offer, next to `commands`. */
+  skills?: SkillDefinition[]
   control?: Partial<SessionControl>
   /** Give the agent a tree, so tools can start sub-agents. */
   tree?: boolean
@@ -115,9 +118,11 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   if (o.commands) {
     await host.load((api) => {
       for (const c of o.commands!) api.registerCommand(c)
+      for (const s of o.skills ?? []) api.registerSkill(s)
     }, "test-commands")
     commands = new CommandHost({
       registry: host.commands,
+      skills: host.skills,
       bus,
       ui: host.ui,
       control: (o.control ?? {}) as SessionControl,
@@ -1324,6 +1329,127 @@ test("a command that sends a long prompt shows as typed, with its note, while th
   expect(sent).toEqual({ role: "user", content: [{ type: "text", text: long }] })
   s.terminal.send("\x03")
   await s.exited
+})
+
+/** A skill like the skills extension's: it sends its text, shown as the line typed. */
+function testSkill(name: string, description: string): SkillDefinition {
+  return {
+    name,
+    description,
+    run: (args, ctx) =>
+      ctx.session.send(`SKILL ${name} BODY ${args}`, {
+        display: { text: `$${name}${args ? ` ${args}` : ""}`, note: `Loaded skill ${name} (3 lines)` },
+      }),
+  }
+}
+
+async function skillSetup(steps: MockStep[], o: SetupOptions = {}) {
+  let agent!: Agent
+  const s = await setup(steps, {
+    commands: testCommands([]),
+    skills: [testSkill("review-pr", "Review a pull request"), testSkill("deploy", "Ship it")],
+    control: {
+      send: async (text, opts) => {
+        await agent.prompt(userMessage(text, opts?.display))
+      },
+    },
+    ...o,
+  })
+  agent = s.agent
+  return s
+}
+
+test("typing $ opens the skill list; Enter runs the skill, shown as typed with its note", async () => {
+  const { terminal, live, all, mock, shows, idle, exited } = await skillSetup([{ text: "Reviewing." }])
+  terminal.send("$")
+  await waitFor(() => live().includes("$review-pr"), "skill popup")
+  expect(live()).toContain("$deploy")
+  expect(live()).toContain("Review a pull request")
+  // Skills are not commands: the "/" list leaves them out.
+  expect(live()).not.toContain("/help")
+  expect(live()).toContain("↑↓ select · Tab complete · Enter run · Esc close")
+  terminal.send("rev")
+  await waitFor(() => live().includes("› $review-pr"), "review-pr selected")
+  terminal.send("\t")
+  await waitFor(() => live().includes("$review-pr [arguments]"), "usage")
+  terminal.send("123\r")
+  await shows("Reviewing.")
+  await idle()
+  expect(all()).toContain("› $review-pr 123\n  ⎿ Loaded skill review-pr (3 lines)")
+  expect(all()).not.toContain("SKILL review-pr BODY")
+  expect(mock.requests[0]!.messages[0]).toEqual({
+    role: "user",
+    content: [{ type: "text", text: "SKILL review-pr BODY 123" }],
+  })
+  terminal.send("\x03")
+  await exited
+})
+
+test("the / list has no skills, and /<skill> points at $ instead of running it", async () => {
+  const { terminal, live, agent, shows, exited } = await skillSetup([], { cols: 100 })
+  terminal.send("/")
+  await waitFor(() => live().includes("/status"), "command popup")
+  expect(live()).not.toContain("review-pr")
+  terminal.send("de")
+  await Bun.sleep(30)
+  expect(live()).not.toContain("deploy")
+  // Ctrl+C clears the input.
+  terminal.send("\x03")
+  await waitFor(() => live().includes("Message Amira"), "cleared")
+  terminal.send("/deploy now\r")
+  await shows("Unknown command /deploy — skills now start with $: $deploy")
+  expect(agent.messages).toEqual([])
+  terminal.send("\x03")
+  await exited
+})
+
+test("text that starts with $ but names no skill is sent as a message", async () => {
+  const { terminal, agent, all, shows, idle, exited } = await skillSetup([
+    { text: "Noted." },
+    { text: "Sure." },
+  ])
+  terminal.send("$100 is the price\r")
+  await shows("Noted.")
+  await idle()
+  // "$HOME" matches no skill by prefix; Enter sends it even if a fuzzy match is listed.
+  terminal.send("$HOME\r")
+  await shows("Sure.")
+  await idle()
+  const users = agent.messages.filter((m) => m.role === "user")
+  expect(users.map((m) => (m.content[0] as { text: string }).text)).toEqual(["$100 is the price", "$HOME"])
+  expect(all()).not.toContain("Unknown")
+  terminal.send("\x03")
+  await exited
+})
+
+test("the $ list takes its keys from the keybindings like the / list", async () => {
+  const keys = new Keybindings({
+    ...defaultKeys({ vscode: false }),
+    "popup.down": ["ctrl+n"],
+    "popup.accept": ["ctrl+y"],
+    "popup.close": ["ctrl+g"],
+  })
+  const { terminal, live, all, shows, idle, exited } = await skillSetup([{ text: "Deployed." }], {
+    keybindings: keys,
+    cols: 100,
+  })
+  terminal.send("$")
+  await waitFor(() => live().includes("› $deploy"), "skill popup")
+  expect(live()).toContain("Ctrl+Y run · Ctrl+G close")
+  terminal.send("\x0e")
+  await waitFor(() => live().includes("› $review-pr"), "moved down")
+  terminal.send("\x0e")
+  await waitFor(() => live().includes("› $deploy"), "wrapped")
+  terminal.send("\x07")
+  await waitFor(() => !live().includes("Ship it"), "closed")
+  terminal.send("d")
+  await waitFor(() => live().includes("› $deploy"), "open again")
+  terminal.send("\x19")
+  await shows("Deployed.")
+  await idle()
+  expect(all()).toContain("› $deploy\n  ⎿ Loaded skill deploy (3 lines)")
+  terminal.send("\x03")
+  await exited
 })
 
 test("a command typed during a turn runs at once instead of steering it", async () => {

@@ -10,26 +10,37 @@ import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 
 type Completion = { command?: string; candidates: CommandCandidate[] }
 
-/** Where the popup gets its candidates; the CommandHost in the app. */
+/** A command or skill, for the usage line shown once its arguments are typed. */
+type Usage = Pick<CommandInfo, "name" | "description" | "hint"> & { aliases?: string[] }
+
+/** Where the popup gets its candidates; the CommandHost in the app (commands or skills). */
 export interface CompletionSource {
   /** Answers at once when it can (command names always), so the list shows with the key. */
   complete(line: string): Completion | Promise<Completion>
-  list(): CommandInfo[]
+  list(): Usage[]
 }
+
+/**
+ * What the popup opens for: "/" commands, or "$" skills. Text after a "$" is often prose
+ * ("$HOME is empty"), so Enter there runs a skill only when the typed name is the start of
+ * the highlighted one, or it was picked; otherwise the editor sends the text as typed.
+ */
+export type PopupSigil = "/" | "$"
 
 /** What a key did to the popup. */
 export type PopupAction =
   | { type: "handled" }
   /** Put this text in the editor (Tab). */
   | { type: "replace"; text: string }
-  /** Run this command line (Enter). */
+  /** Run this command (or skill) line (Enter). */
   | { type: "run"; line: string }
 
 /** Rows of candidates shown at once; the list scrolls to keep the selection visible. */
 const MAX_ROWS = 8
 
-/** One line of text that starts with a slash: the only input the popup opens for. */
-const isCommandInput = (text: string) => /^\/\S*(?:[ \t][^\n]*)?$/.test(text)
+/** One line of text that starts with the sigil: the only input the popup opens for. */
+const isInputFor = (sigil: PopupSigil, text: string) =>
+  text.startsWith(sigil) && /^.\S*(?:[ \t][^\n]*)?$/.test(text)
 
 interface Result {
   /** The editor text these candidates are for. */
@@ -43,7 +54,7 @@ interface Result {
  * names first (with their aliases, and settings aliases with what they run), then the command's
  * argument candidates. ↑↓ select, Tab completes, Enter runs, Esc closes until the text changes.
  * Candidates the source has at once apply at once; late ones call `onUpdate`, and a stale
- * answer is dropped.
+ * answer is dropped. With the sigil "$" it is the same list for skills.
  */
 export class CommandPopup implements Component {
   #text = ""
@@ -60,6 +71,7 @@ export class CommandPopup implements Component {
     private source: CompletionSource,
     private onUpdate: () => void,
     private keys: Keybindings = defaultKeybindings(),
+    private sigil: PopupSigil = "/",
   ) {}
 
   /**
@@ -73,7 +85,7 @@ export class CommandPopup implements Component {
     this.#dismissed = false
     this.#pending = undefined
     const generation = ++this.#generation
-    if (!isCommandInput(text)) {
+    if (!isInputFor(this.sigil, text)) {
       this.#result = { text: "", candidates: [] }
       return undefined
     }
@@ -138,17 +150,21 @@ export class CommandPopup implements Component {
       return { type: "handled" }
     }
     const chosen = r.candidates[this.#selected]!.value
+    const sigil = this.sigil
     if (this.keys.is(e, "popup.complete")) {
-      return { type: "replace", text: r.command ? `/${r.command} ${chosen}` : `/${chosen} ` }
+      return { type: "replace", text: r.command ? `${sigil}${r.command} ${chosen}` : `${sigil}${chosen} ` }
     }
     if (!this.keys.is(e, "popup.accept")) return undefined
     if (!r.command) {
       // A bare "/" names nothing yet; Enter only runs a command once one is picked or typed.
-      if (r.text === "/" && !this.#navigated) return { type: "handled" }
-      return { type: "run", line: `/${chosen}` }
+      if (r.text === sigil && !this.#navigated) return { type: "handled" }
+      // "$HOME" only fuzzily like a skill is prose: the editor sends it.
+      const name = r.text.slice(1).toLowerCase()
+      if (sigil === "$" && !this.#navigated && !chosen.toLowerCase().startsWith(name)) return undefined
+      return { type: "run", line: `${sigil}${chosen}` }
     }
     const typed = r.text
-      .replace(/^\/\S+\s+/, "")
+      .replace(/^.\S+\s+/, "")
       .trim()
       .toLowerCase()
     // What was typed stands unless the user picked a candidate or typed a piece of the
@@ -156,7 +172,7 @@ export class CommandPopup implements Component {
     // not in the list, like "llama3.3" next to "llama3.1", must not be swapped for it.
     const exact = r.candidates.some((c) => c.value.toLowerCase() === typed)
     const partOf = typed && !exact && chosen.toLowerCase().includes(typed)
-    if (this.#navigated || partOf) return { type: "run", line: `/${r.command} ${chosen}` }
+    if (this.#navigated || partOf) return { type: "run", line: `${sigil}${r.command} ${chosen}` }
     return { type: "run", line: r.text.trim() }
   }
 
@@ -167,12 +183,12 @@ export class CommandPopup implements Component {
 
   /** The result for the text in the editor, if it has arrived. */
   get #current(): Result | undefined {
-    return isCommandInput(this.#text) && this.#result.text === this.#text ? this.#result : undefined
+    return isInputFor(this.sigil, this.#text) && this.#result.text === this.#text ? this.#result : undefined
   }
 
   /** What to draw: the current result, or the last one while the next is pending. */
   get #shown(): Result | undefined {
-    return isCommandInput(this.#text) && this.#result.text ? this.#result : undefined
+    return isInputFor(this.sigil, this.#text) && this.#result.text ? this.#result : undefined
   }
 
   #lines(r: Result, ctx?: RenderContext, width = 80): string[] {
@@ -183,15 +199,15 @@ export class CommandPopup implements Component {
       // No candidates for the arguments: show how the command is used instead.
       const info = r.command ? this.source.list().find((c) => c.name === r.command) : undefined
       if (!info) return []
-      const aliases = info.aliases.length ? ` (${info.aliases.join(", ")})` : ""
-      const usage = `/${info.name}${aliases}${info.hint ? ` ${info.hint}` : ""}  ${info.description}`
+      const aliases = info.aliases?.length ? ` (${info.aliases.join(", ")})` : ""
+      const usage = `${this.sigil}${info.name}${aliases}${info.hint ? ` ${info.hint}` : ""}  ${info.description}`
       return [muted(truncateToWidth(`  ${usage}`, width, "…"))]
     }
     const n = r.candidates.length
     const start = Math.min(Math.max(0, this.#selected - MAX_ROWS + 1), Math.max(0, n - MAX_ROWS))
     const shown = r.candidates.slice(start, start + MAX_ROWS)
     // A command row shows its aliases, a settings alias what it runs: "/quit (exit, q)".
-    const label = (c: CommandCandidate) => `${r.command ? "" : "/"}${c.label ?? c.value}`
+    const label = (c: CommandCandidate) => `${r.command ? "" : this.sigil}${c.label ?? c.value}`
     const col = Math.min(32, Math.max(...shown.map((c) => visibleWidth(label(c)))))
     const lines = shown.map((c, i) => {
       const selected = start + i === this.#selected
