@@ -102,7 +102,7 @@ export class Agent {
   ): void {
     this.bus.emit(
       "session.start",
-      { reason, cwd: this.cwd, model: { provider: this.model.provider, model: this.model.id }, ...extra },
+      { ...extra, reason, cwd: this.cwd, model: { provider: this.model.provider, model: this.model.id } },
       {
         sessionId: this.sessionId,
         ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),

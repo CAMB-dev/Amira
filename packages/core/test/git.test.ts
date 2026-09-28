@@ -1,13 +1,123 @@
-import { expect, test } from "bun:test"
+import { afterAll, expect, test } from "bun:test"
+import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
-import { gitInfo } from "../src/git.ts"
+import path from "node:path"
+import { createAi, createMockDialect } from "@amira/ai"
+import type { AnyEvent } from "@amira/api"
+import { Agent } from "../src/agent.ts"
+import { EventBus } from "../src/event-bus.ts"
+import { gitInfo, trackWorkspace } from "../src/git.ts"
 
-test("reports repo root and branch inside a repository", async () => {
-  const info = await gitInfo(import.meta.dir)
-  expect(info.repoRoot).toBeTruthy()
-  expect(typeof info.isWorktree).toBe("boolean")
+const dirs: string[] = []
+async function tempDir() {
+  const d = await mkdtemp(path.join(os.tmpdir(), "amira-git-"))
+  dirs.push(d)
+  return d
+}
+afterAll(async () => {
+  for (const d of dirs) await rm(d, { recursive: true, force: true })
 })
 
-test("returns nothing outside a repository", async () => {
-  expect(await gitInfo(os.tmpdir())).toEqual({})
+async function run(cwd: string, ...args: string[]) {
+  const p = Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "ignore" })
+  expect(await p.exited).toBe(0)
+}
+
+async function repo(): Promise<string> {
+  const d = await tempDir()
+  await run(d, "init", "-q", "-b", "trunk")
+  await run(
+    d,
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "x",
+  )
+  return d
+}
+
+test("a repository with commits reports root, branch and head with native separators", async () => {
+  const d = await repo()
+  const info = await gitInfo(d)
+  expect(info.repoRoot).toBe(path.normalize(await import("node:fs/promises").then((fs) => fs.realpath(d))))
+  expect(info.branch).toBe("trunk")
+  expect(info.head).toMatch(/^[0-9a-f]{4,}$/)
+  expect(info.isWorktree).toBe(false)
+})
+
+test("a repository without commits still reports root and branch", async () => {
+  const d = await tempDir()
+  await run(d, "init", "-q", "-b", "fresh")
+  const info = await gitInfo(d)
+  expect(info.repoRoot).toBeTruthy()
+  expect(info.branch).toBe("fresh")
+  expect(info.head).toBeUndefined()
+})
+
+test("detached HEAD omits branch but keeps head; linked worktrees are detected", async () => {
+  const d = await repo()
+  await run(d, "checkout", "-q", "--detach")
+  const detached = await gitInfo(d)
+  expect(detached.branch).toBeUndefined()
+  expect(detached.head).toBeTruthy()
+
+  const wt = path.join(await tempDir(), "wt")
+  await run(d, "worktree", "add", "-q", "-b", "side", wt)
+  const info = await gitInfo(wt)
+  expect(info.isWorktree).toBe(true)
+  expect(info.branch).toBe("side")
+})
+
+test("a directory outside any repository reports nothing", async () => {
+  const d = await tempDir()
+  // GIT_CEILING_DIRECTORIES keeps git from finding a repository above the temp dir.
+  process.env.GIT_CEILING_DIRECTORIES = path.dirname(d)
+  try {
+    expect(await gitInfo(d)).toEqual({})
+  } finally {
+    delete process.env.GIT_CEILING_DIRECTORIES
+  }
+})
+
+test("trackWorkspace emits once in the background and again only on change", async () => {
+  const d = await repo()
+  const bus = new EventBus()
+  const seen: AnyEvent[] = []
+  bus.subscribe((e) => void seen.push(e), { types: ["workspace.changed"] })
+  const stop = trackWorkspace(bus, "s", d)
+  while (seen.length === 0) await Bun.sleep(20)
+  bus.emit("turn.end", { reason: "done", steps: 0 }, { sessionId: "s" })
+  await Bun.sleep(1500)
+  expect(seen).toHaveLength(1)
+  await run(d, "checkout", "-q", "-b", "next")
+  bus.emit("turn.end", { reason: "done", steps: 0 }, { sessionId: "s" })
+  while (seen.length < 2) await Bun.sleep(20)
+  stop()
+  expect((seen[1] as Extract<AnyEvent, { type: "workspace.changed" }>).data.branch).toBe("next")
+}, 20_000)
+
+test("Agent.start cannot be tricked into overriding cwd and carries no turn id", async () => {
+  const ai = createAi({
+    dialects: [createMockDialect()],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const bus = new EventBus()
+  const seen: AnyEvent[] = []
+  bus.subscribe((e) => void seen.push(e))
+  const agent = new Agent({ ai, model: ai.model("mock/m"), cwd: "/real", systemPrompt: "", bus })
+  const extra = { cwd: "/fake", resume: ["amira", "--resume", agent.sessionId] }
+  agent.start("startup", extra as never)
+  await bus.flush()
+  const ev = seen[0] as Extract<AnyEvent, { type: "session.start" }>
+  expect(ev.data.cwd).toBe("/real")
+  expect(ev.data.resume).toEqual(["amira", "--resume", agent.sessionId])
+  expect(ev.turnId).toBeUndefined()
+  expect(ev.sessionId).toBe(agent.sessionId)
 })

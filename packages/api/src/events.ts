@@ -24,14 +24,26 @@ export type ToolRejection = "blocked" | "unknownTool" | "invalidArgs" | "aborted
 
 /** Read-only events. Emitting never waits for subscribers. New events are only ever added. */
 export interface EventMap {
+  /**
+   * Announces a session. `startup` is a new session, `resume` continues a stored one,
+   * `fork` branches from another, and `clear` starts over with an empty history.
+   */
   "session.start": {
     reason: "startup" | "resume" | "fork" | "clear"
     cwd: string
     model: ModelRef
+    /** Where the session is stored, once sessions are persisted. */
     sessionFile?: string
+    /** Command line that resumes this session, e.g. ["amira", "--resume", "s_01"]. */
     resume?: string[]
+  }
+  /** Facts about the working directory. Sent after session.start and again whenever they change. */
+  "workspace.changed": {
+    cwd: string
     repoRoot?: string
     branch?: string
+    /** Short commit hash, useful when HEAD is detached. */
+    head?: string
     isWorktree?: boolean
   }
   "session.end": { reason: "exit" | "error" }
