@@ -81,7 +81,7 @@ export async function findGitBash(deps: FindGitBashDeps = {}): Promise<string | 
   return undefined
 }
 
-/** Maps Git's bin/bash.exe launcher to the real usr/bin/bash.exe and finds the Git root, when recognizable. */
+/** Maps Git's bin/bash.exe launcher to the real usr/bin/bash.exe and finds the Git root when it can. */
 export function gitBashLayout(path: string, exists: (p: string) => boolean = existsSync) {
   const p = win32.normalize(path)
   const lower = p.toLowerCase()

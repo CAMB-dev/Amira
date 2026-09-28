@@ -10,7 +10,7 @@ export interface Sniffed {
   bomLength: number
 }
 
-/** Detects a byte order mark. Files without one are treated as UTF-8. The BOM is stripped by the caller, so decoders keep any further U+FEFF. */
+/** Detects a byte order mark. Files without one are treated as UTF-8. */
 export function sniffEncoding(head: Uint8Array): Sniffed {
   if (head[0] === 0xff && head[1] === 0xfe) return { encoding: "utf-16le", bomLength: 2 }
   if (head[0] === 0xfe && head[1] === 0xff) return { encoding: "utf-16be", bomLength: 2 }
@@ -32,6 +32,7 @@ export interface Decoded extends Sniffed {
 
 export function decodeText(bytes: Uint8Array): Decoded {
   const sniffed = sniffEncoding(bytes)
+  // The BOM is cut here; ignoreBOM keeps any further U+FEFF so edits round-trip exactly.
   const body = bytes.subarray(sniffed.bomLength)
   if (sniffed.encoding !== "utf-8") {
     return { ...sniffed, text: new TextDecoder(sniffed.encoding, { ignoreBOM: true }).decode(body) }
