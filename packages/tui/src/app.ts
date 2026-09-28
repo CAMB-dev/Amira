@@ -63,6 +63,9 @@ export interface InteractiveOptions {
   theme?: Theme
 }
 
+/** The renderer's shortest time between frames, and how long a key waits for async candidates. */
+const FRAME_MS = 16
+
 /** A component that draws a function's lines; handy for small pieces of view state. */
 class View implements Component {
   constructor(private draw: (width: number, ctx: RenderContext) => string[]) {}
@@ -146,6 +149,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
   const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
   const inputBox = new InputBox(editor)
+  const statusBar = new StatusBar(() => opts.status.snapshot())
+  /**
+   * Lines to print above the live region, sent with the next frame: running a command commits
+   * its echo and then each thing it prints, and a redraw for each of those flickered.
+   */
+  const pendingCommits: string[] = []
+  const commit = (lines: string[]) => {
+    pendingCommits.push(...lines)
+    renderer.requestRender()
+  }
   const bottom = new Stack([
     new View((width, ctx) => {
       if (!working) return []
@@ -178,21 +191,18 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
       ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
     ]),
-    new View((width, ctx) => {
-      if (dialogs[0] || !popup) return []
-      // Synced on every frame, so text set any way (typing, Tab, a dropped steer) is completed.
-      popup.update(editor.getText())
-      return popup.render(width, ctx)
-    }),
     new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : inputBox.render(width, ctx))),
-    new StatusBar(() => opts.status.snapshot()),
+    // The command list opens below the input box, in place of the status bar and the hint, so
+    // the box stays where it is while the list changes with each key.
     new View((width, ctx) => {
-      if (dialogs[0]) return []
-      if (popup?.visible) {
-        return [
-          ctx.theme.muted(truncateToWidth("↑↓ select · Tab complete · Enter run · Esc close", width, "…")),
-        ]
-      }
+      if (dialogs[0] || !popup?.visible) return statusBar.render(width, ctx)
+      return [
+        ...popup.render(width, ctx),
+        ctx.theme.muted(truncateToWidth("↑↓ select · Tab complete · Enter run · Esc close", width, "…")),
+      ]
+    }),
+    new View((width, ctx) => {
+      if (dialogs[0] || popup?.visible) return []
       const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
       const esc = working ? "Esc interrupt · " : ""
@@ -203,12 +213,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
   // before it in view. Rows past that go to the scrollback as they are finished (StreamText).
   const root = new View((width, ctx) => {
+    // Lines committed since the last frame go out with this one: one redraw, not one each.
+    if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
     const rest = bottom.render(width, ctx)
     streaming.maxRows = Math.max(1, ctx.rows - rest.length - 1)
     return [...streaming.render(width, ctx), ...rest]
   })
   const renderer = new LiveRenderer(terminal, root, {
     synchronizedOutput: capabilities.synchronizedOutput,
+    frameIntervalMs: FRAME_MS,
     theme,
   })
 
@@ -235,10 +248,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (!subagents.delete(e.data.childSessionId)) return false
         break
       case "budget.exceeded":
-        renderer.commit([
-          theme.warning(`Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`),
-          "",
-        ])
+        commit([theme.warning(`Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`), ""])
         return true
       default: {
         const sub = subagents.get(e.sessionId)
@@ -261,7 +271,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
-        renderer.commit([...userLines(theme, messageText(e.data.prompt)), ""])
+        commit([...userLines(theme, messageText(e.data.prompt)), ""])
         working = true
         thinking = false
         turnShowedOutput = false
@@ -287,7 +297,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         const early = streaming.committedRows > 0
         const rows = streaming.take(terminal.columns)
         if (rows.length || early) {
-          renderer.commit([...rows, ""])
+          commit([...rows, ""])
           turnShowedOutput = true
         }
         break
@@ -304,9 +314,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         running.delete(e.data.toolCallId)
         if (!running.size) setBlinking(false)
         const args = lastArgs.get(e.data.toolCallId) ?? {}
-        renderer.commit(
-          toolLines(theme, e.data.name, args, e.data.result, e.data.durationMs, terminal.columns),
-        )
+        commit(toolLines(theme, e.data.name, args, e.data.result, e.data.durationMs, terminal.columns))
         turnShowedOutput = true
         break
       }
@@ -319,9 +327,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
-        if (e.data.reason === "error") renderer.commit([theme.error(`✗ ${e.data.error ?? "error"}`), ""])
-        else if (e.data.reason === "aborted") renderer.commit([theme.muted("Interrupted."), ""])
-        else if (!turnShowedOutput) renderer.commit([theme.muted("(no reply)"), ""])
+        if (e.data.reason === "error") commit([theme.error(`✗ ${e.data.error ?? "error"}`), ""])
+        else if (e.data.reason === "aborted") commit([theme.muted("Interrupted."), ""])
+        else if (!turnShowedOutput) commit([theme.muted("(no reply)"), ""])
         if (queued.length) {
           const next = queued.splice(0, queued.length).join("\n\n")
           queueMicrotask(() => send(next))
@@ -332,11 +340,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "compact.end":
         compacting = false
-        renderer.commit([theme.muted(`Compacted ${e.data.replaced} older messages into a summary.`), ""])
+        commit([theme.muted(`Compacted ${e.data.replaced} older messages into a summary.`), ""])
         break
       case "compact.failed":
         compacting = false
-        renderer.commit([
+        commit([
           e.data.blocked
             ? theme.muted(`Compaction skipped: ${e.data.error}`)
             : theme.warning(`Compaction failed: ${e.data.error}`),
@@ -345,7 +353,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "extension.error":
         // Settings warnings travel as extension.error from "settings" but are not extension failures.
-        renderer.commit([
+        commit([
           theme.warning(
             e.data.source === "settings"
               ? `warning: ${e.data.error}`
@@ -362,10 +370,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        if (e.data.state === "injected") renderer.commit([...userLines(theme, text), ""])
+        if (e.data.state === "injected") commit([...userLines(theme, text), ""])
         // Put a message the turn dropped back into the editor rather than losing it.
-        else if (e.data.state === "dropped")
+        else if (e.data.state === "dropped") {
           editor.setText(editor.getText() ? `${editor.getText()}\n${text}` : text)
+          return redraw()
+        }
         // A promoted one shows up again as the next turn's prompt.
         break
       }
@@ -384,7 +394,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "command.output": {
         const style =
           e.data.level === "error" ? theme.error : e.data.level === "warning" ? theme.warning : theme.text
-        renderer.commit([...e.data.text.split("\n").map((l) => style(l)), ""])
+        commit([...e.data.text.split("\n").map((l) => style(l)), ""])
         break
       }
     }
@@ -404,7 +414,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       } else {
         working = false
         spinner.stop()
-        renderer.commit([theme.error(`✗ ${err instanceof Error ? err.message : String(err)}`), ""])
+        commit([theme.error(`✗ ${err instanceof Error ? err.message : String(err)}`), ""])
       }
       renderer.requestRender()
     })
@@ -423,14 +433,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Runs at once, even during a turn; commands that need an idle session say so. */
   function runCommand(line: string) {
-    renderer.commit([theme.muted(`› ${line}`), ""])
+    commit([theme.muted(`› ${line}`), ""])
     void commands!.run(line, { frontend: "tui", quit: () => quit() }).then(() => renderer.requestRender())
   }
 
   /** Follows the session a command switched to; a resumed one shows its history. */
   function followAgent(next: Agent) {
     agent = next
-    if (next.messages.length) renderer.commit(historyLines(theme, next.messages))
+    if (next.messages.length) commit(historyLines(theme, next.messages))
     renderer.requestRender()
   }
 
@@ -450,7 +460,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
     const shown =
       answer === undefined ? "cancelled" : answer === true ? "yes" : answer === false ? "no" : answer
-    renderer.commit([`${theme.accent("?")} ${title} ${theme.muted(`› ${shown}`)}`, ""])
+    commit([`${theme.accent("?")} ${title} ${theme.muted(`› ${shown}`)}`, ""])
     renderer.requestRender()
   }
 
@@ -463,6 +473,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     subagents.clear()
     tickSubagents()
     reader.stop()
+    // What was committed but not drawn yet still belongs in the scrollback.
+    if (pendingCommits.length) renderer.render()
     renderer.stop({ clear: true })
     if (terminal instanceof ProcessTerminal) terminal.stop()
     else terminal.restore()
@@ -492,7 +504,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else {
       editor.handleInput(e)
     }
-    renderer.requestRender()
+    redraw()
+  }
+
+  /**
+   * Brings the popup up to the editor text, then asks for a frame. Candidates the host has at
+   * once (command names, sync completers) show in the same frame as the key; async ones get
+   * up to a frame to arrive (the popup redraws when they do), so a key paints once, not twice.
+   * Completion runs here, on input, never while rendering.
+   */
+  function redraw() {
+    const pending = popup?.update(editor.getText())
+    if (pending) setTimeout(() => renderer.requestRender(), FRAME_MS)
+    else renderer.requestRender()
   }
 
   /** Applies what the popup did with a key; false when it left the key to the editor. */
@@ -512,13 +536,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
-  renderer.start()
-  renderer.commit([
+  commit([
     `${theme.accent("Amira")} ${theme.muted(`· ${agent.model.provider}/${agent.model.id} · ${agent.cwd}`)}`,
     "",
   ])
-  if (agent.messages.length) renderer.commit(historyLines(theme, agent.messages))
+  if (agent.messages.length) commit(historyLines(theme, agent.messages))
   for (const e of opts.startupEvents ?? []) onEvent(e)
+  // The first frame carries the banner, history and startup messages.
+  renderer.start()
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)
 
