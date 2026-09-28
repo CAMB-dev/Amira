@@ -41,12 +41,12 @@ export class Editor implements Component {
     return this.lines.join("\n")
   }
 
+  /** Replaces the text and puts the caret at the end. Does not call `onChange`. */
   setText(text: string): void {
     this.lines = text.replace(/\r\n?/g, "\n").split("\n")
     this.line = this.lines.length - 1
     this.col = this.current.length
     this.goalCol = undefined
-    this.opts.onChange?.(this.getText())
   }
 
   clear(): void {
@@ -77,6 +77,7 @@ export class Editor implements Component {
     }
     if (isSubmitKey(e)) {
       const text = this.getText()
+      if (text === "") return true
       this.clear()
       this.opts.onSubmit?.(text)
       return true
