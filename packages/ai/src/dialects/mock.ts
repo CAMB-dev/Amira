@@ -40,7 +40,7 @@ export function createMockDialect(steps: MockStep[] = []) {
         usage: { ...emptyUsage(), ...reply.usage },
       }
       const wait = async () => {
-        if (reply.delayMs) await Bun.sleep(reply.delayMs)
+        if (reply.delayMs) await sleep(reply.delayMs, ctx.signal)
         if (ctx.signal.aborted) throw new DOMException("aborted", "AbortError")
       }
 
@@ -87,4 +87,18 @@ export function createMockDialect(steps: MockStep[] = []) {
     },
   }
   return dialect
+}
+
+/** Sleeps, but wakes early when the signal aborts. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve()
+    const wake = () => {
+      clearTimeout(timer)
+      signal.removeEventListener("abort", wake)
+      resolve()
+    }
+    const timer = setTimeout(wake, ms)
+    signal.addEventListener("abort", wake, { once: true })
+  })
 }
