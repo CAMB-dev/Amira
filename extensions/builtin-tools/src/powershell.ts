@@ -87,7 +87,13 @@ export function gatedPowerShell(path = findPowerShell(), label?: string): Shell 
     kind: "powershell",
     path,
     ...(label ? { label } : {}),
-    command: (command) => ({ argv, env: { ...process.env }, gated: true, gateLine: encodeCommand(command) }),
+    command: (command, cwd) => ({
+      argv,
+      env: { ...process.env },
+      cwd,
+      gated: true,
+      gateLine: encodeCommand(command),
+    }),
   }
 }
 

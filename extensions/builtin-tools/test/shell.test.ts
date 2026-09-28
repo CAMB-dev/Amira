@@ -77,14 +77,14 @@ test("gives bash the environment Git's launcher would", () => {
 })
 
 const shell = await resolveShell()
-const gated = shell.kind === "bash" && shell.command(":").gated
+const gated = shell.kind === "bash" && shell.command(":", process.cwd()).gated
 
 /** Starts a gated bash command directly or through cmd, and checks it waits for the gate line. */
 async function checkGate(throughCmd: boolean, line: string | undefined, expectRan: boolean) {
   const dir = await mkdtemp(join(tmpdir(), "amira-gate-"))
   try {
     const marker = join(dir, "ran").replaceAll("\\", "/")
-    const { argv, env } = shell.command(`echo > "${marker}"; exit 4`)
+    const { argv, env } = shell.command(`echo > "${marker}"; exit 4`, dir)
     const wrapped = throughCmd ? cmdArgv(argv, { cwd: dir, env, gated: true }) : argv
     expect(wrapped).toBeDefined()
     const proc = Bun.spawn(wrapped!, {
@@ -133,11 +133,10 @@ test.if(process.platform === "win32")(
     const ps = fallbackPowerShell()
     // Embedded quotes, a trailing backslash before a quote, a literal $ and a PowerShell backtick escape.
     const command = "Write-Output 'a\"b' \"c d\" 'e\\f\\' '$x' \"g`\"h\""
-    const { argv, ...spawn } = ps.command(command)
+    const { argv, ...spawn } = ps.command(command, process.cwd())
     expect(spawn.gated).toBe(true)
     const run = await runCommand(argv, {
       ...spawn,
-      cwd: process.cwd(),
       timeoutMs: 60_000,
       signal: new AbortController().signal,
     })

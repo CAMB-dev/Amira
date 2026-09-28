@@ -63,10 +63,10 @@ test.if(hasBash)(
     try {
       const { argv, ...spawn } = shell.command(
         "(sleep 0.3; while true; do echo tick; sleep 0.1; done) & echo done",
+        dir,
       )
       const run = await runCommand(argv, {
         ...spawn,
-        cwd: dir,
         timeoutMs: 1000,
         signal: new AbortController().signal,
         onChunk: () => void calls++,

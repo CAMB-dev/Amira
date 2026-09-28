@@ -51,20 +51,25 @@ function fakePool(opts: { gone?: boolean } = {}) {
   return { pool, log, standbys }
 }
 
-const command = (gateLine: string, env: Record<string, string> = { A: "1" }): ShellCommand => ({
+const command = (
+  gateLine: string,
+  env: Record<string, string> = { A: "1" },
+  cwd = "C:\\home",
+): ShellCommand => ({
   argv: ["pwsh"],
   env,
+  cwd,
   gated: true,
   gateLine,
 })
-const opts = (cwd = "C:\\work") => ({ cwd, timeoutMs: 5000, signal: new AbortController().signal })
+const opts = () => ({ timeoutMs: 5000, signal: new AbortController().signal })
 
 test("a matching standby runs the command and a replacement is started", async () => {
   const { pool, log } = fakePool()
-  pool.fill(command(""), "C:\\work")
+  pool.fill(command(""))
   const r = await pool.run(command("Y21k"), opts())
   expect(r.output).toBe("standby 1")
-  expect(log).toEqual(["prepare 1 pwsh C:\\work", "release 1 Y21k 5000", "prepare 2 pwsh C:\\work"])
+  expect(log).toEqual(["prepare 1 pwsh C:\\home", "release 1 Y21k 5000", "prepare 2 pwsh C:\\home"])
 })
 
 test("with no standby the command runs cold and the pool is filled", async () => {
@@ -72,20 +77,20 @@ test("with no standby the command runs cold and the pool is filled", async () =>
   expect((await pool.run(command("a"), opts())).output).toBe("cold")
   expect((await pool.run(command("b"), opts())).output).toBe("standby 1")
   expect(log).toEqual([
-    "cold pwsh C:\\work a",
-    "prepare 1 pwsh C:\\work",
+    "cold pwsh C:\\home a",
+    "prepare 1 pwsh C:\\home",
     "release 1 b 5000",
-    "prepare 2 pwsh C:\\work",
+    "prepare 2 pwsh C:\\home",
   ])
 })
 
-test("a standby for another working directory or environment is replaced, not used", async () => {
+test("a standby for another start directory or environment is replaced, not used", async () => {
   const { pool, log } = fakePool()
-  pool.fill(command(""), "C:\\work")
-  expect((await pool.run(command("a"), opts("D:\\other"))).output).toBe("cold")
-  expect((await pool.run(command("b", { A: "2" }), opts("D:\\other"))).output).toBe("cold")
+  pool.fill(command(""))
+  expect((await pool.run(command("a", { A: "1" }, "D:\\other"), opts())).output).toBe("cold")
+  expect((await pool.run(command("b", { A: "2" }, "D:\\other"), opts())).output).toBe("cold")
   expect(log).toEqual([
-    "prepare 1 pwsh C:\\work",
+    "prepare 1 pwsh C:\\home",
     "cold pwsh D:\\other a",
     "dispose 1",
     "prepare 2 pwsh D:\\other",
@@ -97,30 +102,30 @@ test("a standby for another working directory or environment is replaced, not us
 
 test("the environment's key order does not matter", async () => {
   const { pool } = fakePool()
-  pool.fill(command("", { A: "1", B: "2" }), "C:\\work")
+  pool.fill(command("", { A: "1", B: "2" }))
   expect((await pool.run(command("x", { B: "2", A: "1" }), opts())).output).toBe("standby 1")
 })
 
 test("a dead standby is skipped, and a gone one falls back to a cold run", async () => {
   const dead = fakePool()
-  dead.pool.fill(command(""), "C:\\work")
+  dead.pool.fill(command(""))
   dead.standbys[0]?.dispose()
   expect((await dead.pool.run(command("a"), opts())).output).toBe("cold")
 
   const gone = fakePool({ gone: true })
-  gone.pool.fill(command(""), "C:\\work")
+  gone.pool.fill(command(""))
   expect((await gone.pool.run(command("b"), opts())).output).toBe("cold")
   expect(gone.log).toEqual([
-    "prepare 1 pwsh C:\\work",
+    "prepare 1 pwsh C:\\home",
     "release 1 b 5000",
-    "prepare 2 pwsh C:\\work",
-    "cold pwsh C:\\work b",
+    "prepare 2 pwsh C:\\home",
+    "cold pwsh C:\\home b",
   ])
 })
 
 test("parallel calls each take the replacement the call before started", async () => {
   const { pool, log } = fakePool()
-  pool.fill(command(""), "C:\\work")
+  pool.fill(command(""))
   const runs = await Promise.all([
     pool.run(command("a"), opts()),
     pool.run(command("b"), opts()),
@@ -133,14 +138,14 @@ test("parallel calls each take the replacement the call before started", async (
 
 test("commands that are not gated never use the pool", async () => {
   const { pool, log } = fakePool()
-  await pool.run({ argv: ["bash"], env: {}, gated: false }, opts())
-  await pool.run({ argv: ["bash"], env: {}, gated: true, viaCmd: true }, opts())
+  await pool.run({ argv: ["bash"], env: {}, cwd: "C:\\work", gated: false }, opts())
+  await pool.run({ argv: ["bash"], env: {}, cwd: "C:\\work", gated: true, viaCmd: true }, opts())
   expect(log).toEqual(["cold bash C:\\work undefined", "cold bash C:\\work undefined"])
 })
 
 test("dispose kills the waiting standby", () => {
   const { pool, standbys } = fakePool()
-  pool.fill(command(""), "C:\\work")
+  pool.fill(command(""))
   pool.dispose()
   expect(standbys[0]?.disposed).toBe(true)
 })
