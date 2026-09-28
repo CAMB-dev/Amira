@@ -46,6 +46,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@amira/api": "workspace:*",
+        "@amira/proc": "workspace:*",
       },
       "devDependencies": {
         "@amira/ai": "workspace:*",
