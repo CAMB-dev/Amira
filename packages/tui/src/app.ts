@@ -425,6 +425,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   function onInput(e: InputEvent) {
     const dialog = dialogs[0]
+    // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
+    // with candidates for text the editor no longer holds.
+    if (!dialog) popup?.update(editor.getText())
     if (dialog) {
       // Ctrl+C closes the dialog like Esc.
       dialog.handleInput(matchesKey(e, "c", { ctrl: true }) ? key("escape") : e)

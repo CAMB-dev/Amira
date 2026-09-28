@@ -506,6 +506,18 @@ test("arguments complete after the name, ↑↓ pick one and Enter runs with it"
   await exited
 })
 
+test("keys arriving in one chunk are not answered by the popup of the previous frame", async () => {
+  const log: string[] = []
+  const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
+  terminal.send("/model deep")
+  await waitFor(() => live().includes("› deepseek/deepseek-flash"), "candidates for deep")
+  terminal.send("seek/deepseek-pro\r")
+  await shows("Model: deepseek/deepseek-pro")
+  expect(log).toEqual(["model deepseek/deepseek-pro"])
+  terminal.send("\x03")
+  await exited
+})
+
 test("a command's picker is a select dialog that filters as you type", async () => {
   const log: string[] = []
   const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
