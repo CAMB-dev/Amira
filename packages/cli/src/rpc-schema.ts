@@ -61,6 +61,17 @@ export const COMMAND_PARAMS = {
       "Switches to a stored session of this directory (its id from session.start or `amira -r`), keeping the current model; a session.start with reason resume follows. Fails with `not_found` for an unknown id and `busy` while a turn runs.",
     params: { sessionId: str },
   },
+  "command.list": { description: "Lists the slash commands.", params: {} },
+  "command.complete": {
+    description:
+      'Candidates for a command line typed so far, e.g. "/mo" or "/model deep": command names while the name is typed, then the command\'s argument candidates. Prefix matches come first, then fuzzy ones.',
+    params: { text: str },
+  },
+  "command.run": {
+    description:
+      'Runs a slash command line such as "/status" or "/model deepseek/deepseek-flash". What it prints also arrives as command.output events, and its dialogs as ui.request, which later lines may answer while it runs. Fails with `not_found` for an unknown command and `command_failed` when it throws.',
+    params: { text: str },
+  },
 } satisfies Record<string, { description: string; params: Record<string, Schema> }>
 
 const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
@@ -86,6 +97,17 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
     uiRequests: { ...arrayOf(ref("UiRequest")), description: "Dialogs still waiting for ui.respond." },
   },
   "session.resume": { sessionId: str },
+  "command.list": {
+    commands: arrayOf(obj({ name: str, description: str, "hint?": str, source: str })),
+  },
+  "command.complete": {
+    "command?": { ...str, description: "The command whose arguments are being completed." },
+    candidates: arrayOf(obj({ value: str, "description?": str })),
+  },
+  "command.run": {
+    command: str,
+    output: { ...arrayOf(str), description: "Everything the command printed, in order." },
+  },
 }
 
 const modelRef = obj({ provider: str, model: str })
@@ -150,6 +172,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   }),
   "compact.end": obj({ summary: str, replaced: num, kept: num }),
   "compact.failed": obj({ error: str, "blocked?": bool }),
+  "command.output": obj({ command: str, text: str, level: strings("info", "warning", "error") }),
 }
 
 const envelope = (type: Schema, data: Schema): Schema =>
@@ -189,6 +212,7 @@ export function rpcSchema(): Schema {
               "busy",
               "not_found",
               "not_supported",
+              "command_failed",
               "internal",
             ),
             message: str,

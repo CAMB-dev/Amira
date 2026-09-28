@@ -1,6 +1,6 @@
 import type { Ai, Message, UserContent, UserMessage } from "@amira/ai"
 import type { AnyEvent, TurnEndReason } from "@amira/api"
-import { type Agent, newTurnId, type UiRequests } from "@amira/core"
+import { type Agent, type CommandHost, newTurnId, type UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
 import type { COMMAND_PARAMS } from "./rpc-schema.ts"
 import { stdoutWriter } from "./stdout-writer.ts"
@@ -36,6 +36,11 @@ export interface RpcSession {
   agent: Agent
   ai: Ai
   ui: UiRequests
+  /**
+   * Slash commands, for command.list, command.complete and command.run. When given, it owns
+   * the active agent: session.resume goes through it, and this frontend follows its switches.
+   */
+  commands?: CommandHost
 }
 
 type ErrorCode =
@@ -46,6 +51,7 @@ type ErrorCode =
   | "busy"
   | "not_found"
   | "not_supported"
+  | "command_failed"
   | "internal"
 
 class RpcError extends Error {
@@ -77,10 +83,16 @@ interface LastTurn {
  */
 export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promise<number> {
   const io = opts.io ?? stdio()
-  const { ai, ui } = session
+  const { ai, ui, commands } = session
   let agent = session.agent
   let closed = false
   let lastTurn: LastTurn | undefined
+  const offSwitch = commands?.onSwitch((next) => {
+    agent = next
+    lastTurn = undefined
+  })
+  /** command.run calls still going; they may wait on dialogs answered by later lines. */
+  const runningCommands = new Set<Promise<void>>()
 
   const send = (value: unknown) => io.write(`${safeJson(value)}\n`)
   const reply = (id: Id, result: Record<string, unknown>) => void send({ id, ok: true, ...result })
@@ -188,14 +200,42 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     },
     "session.resume": async (p) => {
       const sessionId = text(p, "sessionId")
-      if (!opts.resume) throw new RpcError("not_supported", "this host cannot resume sessions")
       if (agent.turnId) throw new RpcError("busy", "a turn is running")
+      if (commands) {
+        if (sessionId === agent.sessionId) return { sessionId }
+        try {
+          await commands.control.resume(sessionId)
+        } catch (err) {
+          throw new RpcError("not_found", err instanceof Error ? err.message : String(err))
+        }
+        return { sessionId: agent.sessionId }
+      }
+      if (!opts.resume) throw new RpcError("not_supported", "this host cannot resume sessions")
       const next = await opts.resume(sessionId)
       if (!next) throw new RpcError("not_found", `no session ${sessionId}`)
       agent = next
       lastTurn = undefined
       return { sessionId: agent.sessionId }
     },
+    "command.list": () => ({ commands: needCommands().list() }),
+    "command.complete": async (p) => await needCommands().complete(text(p)),
+    "command.run": async (p) => {
+      const r = await needCommands().run(text(p), { frontend: "rpc" })
+      if (!r.ok) {
+        const unknown =
+          !r.command ||
+          !needCommands()
+            .list()
+            .some((c) => c.name === r.command)
+        throw new RpcError(unknown ? "not_found" : "command_failed", r.error ?? "command failed")
+      }
+      return { command: r.command, output: r.output }
+    },
+  }
+
+  const needCommands = (): CommandHost => {
+    if (!commands) throw new RpcError("not_supported", "this host has no slash commands")
+    return commands
   }
 
   const handle = async (line: string) => {
@@ -214,13 +254,29 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     if (typeof p.cmd !== "string") return fail(id, "invalid_request", 'missing "cmd"')
     const handler = Object.hasOwn(handlers, p.cmd) ? handlers[p.cmd as keyof typeof handlers] : undefined
     if (!handler) return fail(id, "unknown_command", `unknown command "${p.cmd}"`)
+    const report = (err: unknown) => {
+      if (err instanceof RpcError) fail(id, err.code, err.message)
+      else fail(id, "internal", err instanceof Error ? err.message : String(err))
+    }
+    if (p.cmd === "command.run") {
+      // Not awaited: a command may ask a question that a later line (ui.respond) answers.
+      const run = (async () => {
+        try {
+          reply(id, await handler(p))
+        } catch (err) {
+          report(err)
+        }
+      })()
+      runningCommands.add(run)
+      void run.finally(() => runningCommands.delete(run))
+      return
+    }
     try {
       // Synchronous answers go out before any event the command caused (prompt's turn.start).
       const result = handler(p)
       reply(id, result instanceof Promise ? await result : result)
     } catch (err) {
-      if (err instanceof RpcError) fail(id, err.code, err.message)
-      else fail(id, "internal", err instanceof Error ? err.message : String(err))
+      report(err)
     }
   }
 
@@ -236,6 +292,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     for await (const line of io.lines) await handle(line)
     closed = true
     ui.cancelAll()
+    await Promise.all(runningCommands)
     while (agent.turnId) await Bun.sleep(10)
     await Promise.race([agent.bus.flush(), Bun.sleep(opts.flushTimeoutMs ?? 2000)])
     await io.flush?.()
@@ -244,6 +301,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     process.off("SIGINT", onSigint)
     offEvents()
     offTurns()
+    offSwitch?.()
     io.close?.()
   }
 }

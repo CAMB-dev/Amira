@@ -1,5 +1,5 @@
 import type { AnyEvent } from "@amira/api"
-import type { Agent, TurnResult, UiRequests } from "@amira/core"
+import { type Agent, type CommandHost, parseCommandLine, type TurnResult, type UiRequests } from "@amira/core"
 
 export interface PrintIO {
   stdout: (s: string) => void
@@ -23,6 +23,8 @@ export interface PrintOptions {
   forceExit?: () => void
   /** Dialogs extensions open; print mode cannot answer them, so they are cancelled. */
   ui?: UiRequests
+  /** Slash commands: a prompt like "/status" runs the command instead of a turn. */
+  commands?: CommandHost
 }
 
 /** Exit codes: 0 done, 1 error, 130 aborted. */
@@ -103,6 +105,10 @@ export async function runPrint(
       case "extension.error":
         io.stderr(`[extension ${e.data.source}] ${e.data.error}\n`)
         break
+      case "command.output":
+        if (e.data.level === "info") io.stdout(`${e.data.text}\n`)
+        else io.stderr(`${e.data.level}: ${e.data.text}\n`)
+        break
       case "turn.end":
         if (!endedWithNewline) io.stdout("\n")
         if (e.data.reason === "error") io.stderr(`error: ${e.data.error}\n`)
@@ -124,13 +130,18 @@ export async function runPrint(
   }
   process.on("SIGINT", onSigint)
   try {
-    const result = await agent.prompt(prompt)
+    let code: number
+    if (opts.commands && parseCommandLine(prompt)) {
+      code = (await opts.commands.run(prompt, { frontend: "print" })).ok ? 0 : 1
+    } else {
+      code = exitCode(await agent.prompt(prompt))
+    }
     const flushed = await Promise.race([
       agent.bus.flush().then(() => true),
       Bun.sleep(opts.flushTimeoutMs ?? 2000).then(() => false),
     ])
     if (!flushed) io.stderr("amira: some event handlers did not finish; exiting anyway\n")
-    return exitCode(result)
+    return code
   } finally {
     process.off("SIGINT", onSigint)
     off()

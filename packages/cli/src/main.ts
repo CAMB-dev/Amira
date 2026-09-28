@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
-import { type Agent, findSession, listSessions, SessionStore, trackWorkspace } from "@amira/core"
+import { type Agent, listSessions, SessionStore, trackWorkspace } from "@amira/core"
 import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { resolveConfig } from "./config.ts"
+import { createCommandHost } from "./control.ts"
 import { runPrint } from "./print.ts"
 import { runProviderCommand } from "./provider-command.ts"
 import { chooseStore, formatSessionList, pickSession } from "./resume.ts"
@@ -114,37 +115,41 @@ async function run(argv: string[]): Promise<number> {
 
   // Announce the session once the frontend listens, then fill in git facts in the background.
   let stopWorkspace = () => {}
-  const announce = (a: Agent, s: SessionStore, reason: "startup" | "resume") => {
-    a.start(reason, { sessionFile: s.file, resume: ["amira", "--resume", s.id] })
+  const announce = (a: Agent, reason: "startup" | "resume" | "clear") => {
+    const s = a.session
+    a.start(reason, s ? { sessionFile: s.file, resume: ["amira", "--resume", s.id] } : {})
     stopWorkspace()
     stopWorkspace = trackWorkspace(a.bus, a.sessionId, a.cwd)
   }
-  const onReady = () => announce(agent, store, resumed ? "resume" : "startup")
+  // Slash commands own which agent is active: /clear and /resume (and rpc session.resume) switch it.
+  const commands = createCommandHost({
+    session,
+    cwd: args.cwd,
+    shell: config.shell,
+    disabled: config.requestedDisabled.names,
+    announce: (next, reason) => {
+      agentRef = next
+      announce(next, reason)
+    },
+  })
+  const onReady = () => announce(agent, resumed ? "resume" : "startup")
   try {
     if (args.rpc) {
-      // session.resume switches to another stored session of this directory, on the same bus.
-      const resume = async (id: string) => {
-        const file = findSession(args.cwd, id)
-        if (!file) return undefined
-        const stored = SessionStore.open(file)
-        const next = session.resume(stored)
-        agentRef = next
-        announce(next, stored, "resume")
-        return next
-      }
-      return await runRpc({ agent, ai, ui: host.ui }, { pending: startupEvents, onReady, resume })
+      return await runRpc({ agent, ai, ui: host.ui, commands }, { pending: startupEvents, onReady })
     }
     if (!interactive) {
       return await runPrint(agent, args.prompt ?? "", args.json, {
         pending: startupEvents,
         onReady,
         ui: host.ui,
+        commands,
       })
     }
     return await runInteractive({
       agent,
       status: host.status,
       ui: host.ui,
+      commands,
       startupEvents,
       onReady,
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
