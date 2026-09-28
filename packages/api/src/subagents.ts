@@ -17,6 +17,8 @@ export interface SpawnOptions {
   cwd?: string
   /** Names of the tools the child may use. Default: every tool the parent has. */
   tools?: string[]
+  /** Tools the child may not use, e.g. the one that spawns sub-agents once it is deep enough. */
+  excludeTools?: string[]
   /** Instructions for the child, placed in its system prompt's "role" section. */
   systemPrompt?: string
 }

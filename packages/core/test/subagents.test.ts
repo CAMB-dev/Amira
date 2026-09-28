@@ -270,6 +270,10 @@ test("a child sees only the tools it was given, and a different model", async ()
   expect(mock.requests.at(-1)!.tools?.map((t) => t.name)).toEqual(["read"])
   expect(mock.requests.at(-1)!.model.id).toBe("small")
   expect(() => tree.spawn(root, { prompt: "p", model: "nope/x" })).toThrow(SpawnError)
+  await tree.spawn(root, { prompt: "p", excludeTools: ["bash"] }).result()
+  expect(mock.requests.at(-1)!.tools?.map((t) => t.name)).toEqual(["read", "write"])
+  await tree.spawn(root, { prompt: "p", tools: ["read", "bash"], excludeTools: ["bash"] }).result()
+  expect(mock.requests.at(-1)!.tools?.map((t) => t.name)).toEqual(["read"])
 })
 
 test("a child's approval request goes to the parent's model (D14)", async () => {

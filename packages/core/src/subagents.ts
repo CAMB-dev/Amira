@@ -196,6 +196,8 @@ export class AgentTree {
     const context = opts.context ?? "fresh"
     const base = context === "fork" ? [...parent.sections] : (this.#opts.sections ?? standardSections)(cwd)
     const allow = opts.tools ? new Set(opts.tools) : undefined
+    const deny = new Set(opts.excludeTools ?? [])
+    const scoped = allow !== undefined || deny.size > 0
     const store = parent.session
       ? SessionStore.create({
           cwd,
@@ -211,7 +213,9 @@ export class AgentTree {
       messages: context === "fork" ? forkHistory(parent.messages) : [],
       bus: parent.bus,
       interceptors: parent.interceptors,
-      tools: allow ? ToolRegistry.view(parent.tools, (n) => allow.has(n)) : parent.tools,
+      tools: scoped
+        ? ToolRegistry.view(parent.tools, (n) => (allow?.has(n) ?? true) && !deny.has(n))
+        : parent.tools,
       ...(store ? { session: store } : {}),
       parentSessionId: parent.sessionId,
       depth,
