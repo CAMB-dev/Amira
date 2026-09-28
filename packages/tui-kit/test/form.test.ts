@@ -103,7 +103,7 @@ function makeForm(over: Partial<FormOptions> = {}) {
     fields: fields(),
     values: { name: "", mode: "a", tags: [] },
     visible: (f, v) => f.id !== "more" || v.extra === true,
-    validate: (v) => (v.name ? {} : { name: "is required" }),
+    validate: (v): Record<string, string> => (v.name ? {} : { name: "is required" }),
     onSubmit: (v) => {
       submitted = v
       log.push("submit")

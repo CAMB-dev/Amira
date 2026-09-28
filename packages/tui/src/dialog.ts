@@ -4,6 +4,7 @@ import {
   type Component,
   Editor,
   type InputEvent,
+  LineInput,
   matchesKey,
   type RenderContext,
   truncateToWidth,
@@ -46,13 +47,17 @@ export class Dialog implements Component {
   #selected = 0
   #filter = ""
   #editor: Editor | undefined
+  /** A secret input: masked, one line, never shown. */
+  #secret: LineInput | undefined
   #done = false
 
   constructor(
     readonly request: DialogRequest,
     private onDone: (answer: DialogAnswer) => void,
   ) {
-    if (request.kind === "input") {
+    if (request.kind === "input" && request.secret) {
+      this.#secret = new LineInput({ mask: "*", accept: (g) => !/\s/.test(g) })
+    } else if (request.kind === "input") {
       this.#editor = new Editor({
         prompt: "› ",
         placeholder: request.placeholder ?? "",
@@ -93,6 +98,10 @@ export class Dialog implements Component {
       } else return false
       return true
     }
+    if (this.#secret) {
+      if (matchesKey(e, "enter")) return this.#finish(this.#secret.value)
+      return this.#secret.handleInput(e)
+    }
     // An empty input is still an answer; the editor leaves Enter on empty text to us.
     if (this.#editor!.handleInput(e)) return true
     if (matchesKey(e, "enter")) return this.#finish("")
@@ -125,6 +134,10 @@ export class Dialog implements Component {
       else if (options.length > MAX_OPTIONS)
         lines.push(theme.muted(`  ${this.#selected + 1}/${options.length}`))
       lines.push(theme.muted("↑↓ move · type to filter · Enter choose · Esc cancel"))
+    } else if (this.#secret) {
+      lines.push(
+        `› ${this.#secret.render(Math.max(4, width - 2), theme, { focused: true, placeholder: r.kind === "input" ? (r.placeholder ?? "") : "" })}`,
+      )
     } else {
       lines.push(...this.#editor!.render(width, ctx))
       lines.push(theme.muted("Enter submit · Esc cancel"))
