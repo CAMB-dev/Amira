@@ -7,7 +7,12 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@amira/ai": "workspace:*",
+    "@amira/api": "workspace:*",
     "@amira/core": "workspace:*",
     "@amira/tui-kit": "workspace:*"
+  },
+  "devDependencies": {
+    "@amira/ext-status": "workspace:*"
   }
 }
