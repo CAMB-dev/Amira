@@ -258,3 +258,21 @@ test("tool registry: removing a middle override keeps the top one", () => {
   offC()
   expect(reg.get("x")?.description).toBe("a")
 })
+
+test("extensions can run commands through the host", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let output = ""
+  await host.load(async (api) => {
+    const run = await api.runCommand([process.execPath, "-e", "console.log('from ext')"], {
+      cwd: process.cwd(),
+      timeoutMs: 60_000,
+      signal: new AbortController().signal,
+    })
+    output = run.output.trim()
+  }, "runner")
+  expect(output).toBe("from ext")
+}, 60_000)

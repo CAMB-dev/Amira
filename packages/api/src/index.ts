@@ -16,5 +16,6 @@ export type {
 } from "@amira/ai"
 export * from "./events.ts"
 export * from "./extension.ts"
+export * from "./process.ts"
 export * from "./tools.ts"
 export * from "./ui.ts"
