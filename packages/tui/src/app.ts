@@ -75,7 +75,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       blinkTimer = setInterval(() => {
         blinkOn = !blinkOn
         renderer.requestRender()
-      }, 500)
+      }, 1000)
     } else if (!on && blinkTimer) {
       clearInterval(blinkTimer)
       blinkTimer = undefined
