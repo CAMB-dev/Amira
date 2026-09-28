@@ -1,5 +1,11 @@
 export { stripAnsi, type TerminalMode } from "./ansi.ts"
-export { type Capabilities, type SetupResult, setupTerminalInput } from "./capabilities.ts"
+export {
+  type Capabilities,
+  detectEnv,
+  type SetupResult,
+  setupTerminalInput,
+  type TerminalEnv,
+} from "./capabilities.ts"
 export { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 export { Box, type BoxOptions } from "./components/box.ts"
 export { Editor, type EditorOptions } from "./components/editor.ts"
@@ -9,6 +15,7 @@ export { StreamText } from "./components/stream-text.ts"
 export { Text } from "./components/text.ts"
 export { InputParser } from "./input.ts"
 export {
+  type FocusEvent,
   type InputEvent,
   isNewlineKey,
   isSubmitKey,
@@ -20,6 +27,7 @@ export {
   type PasteEvent,
   textKey,
 } from "./keys.ts"
+export { focusReporting, osc, type ProgressState, progressSupported } from "./osc.ts"
 export { InputReader, type InputReaderOptions } from "./reader.ts"
 export { LiveRenderer, type RendererOptions } from "./renderer.ts"
 export {
