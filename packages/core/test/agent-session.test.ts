@@ -340,7 +340,9 @@ test("a long single turn compacts its older steps, keeping the prompt and the la
   const transcript = text(summaryCalls(mock)[0]!.messages[0]!)
   expect(transcript).toContain('{"n":1}')
   expect(transcript).not.toContain('{"n":2}')
-  expect(transcript).not.toContain("q1")
+  // The turn's prompt is given as context, outside the transcript that gets replaced.
+  expect(transcript.split("<transcript>")[0]).toContain("q1")
+  expect(transcript.split("<transcript>")[1]).not.toContain("q1")
   const next = mock.requests.at(-1)!.messages
   expect(next.map((m) => m.role)).toEqual([
     "user",
@@ -415,5 +417,6 @@ test("splitHistory never summarizes an earlier summary alone", () => {
   expect(splitHistory(long)).toEqual({
     older: long.slice(0, 2).concat(long.slice(3, 5)),
     kept: [user, ...long.slice(5)],
+    prompt: user,
   })
 })

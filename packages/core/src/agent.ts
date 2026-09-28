@@ -969,7 +969,14 @@ export class Agent {
       })
       const summary =
         gate.value.summary?.trim() ||
-        (await summarize(this.#ai, this.#compaction.model ?? this.model, split.older, signal, instructions))
+        (await summarize(
+          this.#ai,
+          this.#compaction.model ?? this.model,
+          split.older,
+          signal,
+          instructions,
+          split.prompt,
+        ))
       if (signal.aborted) throw new Error("aborted")
       const replaces = [
         ...new Set(split.older.flatMap((m) => (this.#entryIds.has(m) ? [this.#entryIds.get(m)!] : []))),

@@ -51,6 +51,11 @@ export interface HistorySplit {
   older: Message[]
   /** Messages kept verbatim, in history order; the summary goes before them. */
   kept: Message[]
+  /**
+   * When the current turn's earlier steps are summarized: its prompt, which is kept, so the
+   * summary can say what those steps did for it.
+   */
+  prompt?: Message
 }
 
 /**
@@ -76,7 +81,8 @@ export function splitHistory(messages: Message[], keepTurns = 2, keepSteps = 2):
   const cut = steps.length > Math.max(1, keepSteps) ? steps.at(-Math.max(1, keepSteps))! : turn + 1
   const older = [...messages.slice(0, turn), ...messages.slice(turn + 1, cut)]
   if (!worthIt(older)) return undefined
-  return { older, kept: [messages[turn]!, ...messages.slice(cut)] }
+  const prompt = messages[turn]!
+  return { older, kept: [prompt, ...messages.slice(cut)], ...(cut > turn + 1 ? { prompt } : {}) }
 }
 
 const SUMMARY_PROMPT = `You summarize a coding session between a user and Amira, a coding agent, so that the work can continue without the full history.
@@ -112,16 +118,24 @@ export function renderTranscript(messages: Message[], maxBlock = 2000): string {
   return out.join("\n\n")
 }
 
-/** Asks the model for a summary of `messages`; `instructions` from the user steer it. Throws when the model fails. */
+/**
+ * Asks the model for a summary of `messages`; `instructions` from the user steer it. `prompt`
+ * is the request the transcript's last steps work on (see HistorySplit.prompt). Throws when
+ * the model fails.
+ */
 export async function summarize(
   ai: Ai,
   model: ModelInfo,
   messages: Message[],
   signal: AbortSignal,
   instructions?: string,
+  prompt?: Message,
 ): Promise<string> {
   const extra = instructions?.trim() ? `\n\nThe user asked for this summary: ${instructions.trim()}` : ""
-  const request = `Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>${extra}`
+  const current = prompt
+    ? `The transcript ends with steps taken for the user's current request, which stays in the conversation after the summary; say what has been done for it so far:\n\n<current_request>\n${renderTranscript([prompt])}\n</current_request>\n\n`
+    : ""
+  const request = `${current}Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>${extra}`
   let text = ""
   for await (const ev of ai.stream(
     {
