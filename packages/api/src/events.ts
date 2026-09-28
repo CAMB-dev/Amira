@@ -1,4 +1,5 @@
 import type { AssistantMessage, Message, ModelRef, UserMessage } from "@amira/ai"
+import type { CommandOutputLevel } from "./commands.ts"
 import type { ToolResult } from "./tools.ts"
 import type { UiRequest } from "./ui.ts"
 
@@ -113,6 +114,8 @@ export interface EventMap {
   "ui.request": UiRequest & { requestId: string; source?: string }
   /** A dialog was answered or cancelled; frontends showing it should close it. */
   "ui.resolved": { requestId: string; cancelled: boolean; value?: string | boolean }
+  /** Text a slash command shows the user; `command` is its name, without the slash. */
+  "command.output": { command: string; text: string; level: CommandOutputLevel }
 }
 
 /** A named part of the system prompt (D43). */

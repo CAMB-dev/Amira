@@ -14,6 +14,7 @@ export type {
   Usage,
   UserMessage,
 } from "@amira/ai"
+export * from "./commands.ts"
 export * from "./events.ts"
 export * from "./extension.ts"
 export * from "./process.ts"

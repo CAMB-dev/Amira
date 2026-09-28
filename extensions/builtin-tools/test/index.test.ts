@@ -13,6 +13,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
       tools.push(t)
       return () => {}
     },
+    registerCommand: () => () => {},
     registerStatusItem: () => () => {},
     requestRender: () => {},
     settings: {},
