@@ -7,6 +7,7 @@ import type { EventBus } from "./event-bus.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
+import { UiRequests } from "./ui-requests.ts"
 
 let virtualApiInstalled = false
 
@@ -30,6 +31,8 @@ export interface ExtensionHostOptions {
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
+  /** Where extension dialogs go. Default: a new one on `bus`. */
+  ui?: UiRequests
   /** Session id used on extension.* and ui.* events. Default "host". */
   sessionId?: string
 }
@@ -43,10 +46,12 @@ export class ExtensionHost {
   #disposers = new Map<string, (() => void)[]>()
   #renderPending = false
   readonly status: StatusRegistry
+  readonly ui: UiRequests
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
     this.status = opts.status ?? new StatusRegistry()
+    this.ui = opts.ui ?? new UiRequests(opts.bus, opts.sessionId ? { sessionId: opts.sessionId } : {})
   }
 
   get loaded(): string[] {
@@ -110,6 +115,12 @@ export class ExtensionHost {
     return { sessionId: this.#opts.sessionId ?? "host" }
   }
 
+  /** Dialogs an extension leaves open are cancelled when it unloads. */
+  #uiFor(source: string, track: (d: () => void) => void) {
+    track(() => this.ui.cancelAll(source))
+    return this.ui.api(source)
+  }
+
   #apiFor(source: string, disposers: (() => void)[]): ExtensionAPI {
     const { bus, interceptors, tools } = this.#opts
     const track = (d: () => void) => {
@@ -139,6 +150,7 @@ export class ExtensionHost {
       },
       requestRender: () => this.#requestRender(),
       runCommand: (argv, options) => runCommand(argv, options),
+      ui: this.#uiFor(source, track),
     }
   }
 }

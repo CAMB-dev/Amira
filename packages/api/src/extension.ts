@@ -1,7 +1,7 @@
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { ToolDefinition } from "./tools.ts"
-import type { StatusItem } from "./ui.ts"
+import type { StatusItem, UiApi } from "./ui.ts"
 
 export interface InterceptContext {
   sessionId: string
@@ -21,6 +21,8 @@ export interface ExtensionAPI {
    * whole process tree on abort, timeout and exit.
    */
   runCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult>
+  /** Asks the user through whichever frontend is attached (select, confirm, input). */
+  readonly ui: UiApi
   on<K extends keyof EventMap>(type: K, handler: (event: EventEnvelope<K>) => void): () => void
   intercept<K extends keyof InterceptorMap>(
     point: K,

@@ -1,5 +1,6 @@
 import type { AssistantMessage, Message, ModelRef, UserMessage } from "@amira/ai"
 import type { ToolResult } from "./tools.ts"
+import type { UiRequest } from "./ui.ts"
 
 /** Envelope shared by every event, whether seen by the TUI, headless clients or extensions. */
 export interface EventEnvelope<K extends keyof EventMap = keyof EventMap> {
@@ -85,6 +86,16 @@ export interface EventMap {
   "extension.error": { source: string; error: string }
   /** A slow subscriber's queue overflowed and events were dropped for it. */
   "events.lost": { dropped: number }
+  /**
+   * A message sent while a turn runs (D29): `queued` when accepted, `injected` when added to
+   * the history before the next model call, `dropped` when the turn failed or was aborted
+   * first. Messages still queued when a turn finishes normally become the next turn's prompt.
+   */
+  "turn.steer": { message: UserMessage; state: "queued" | "injected" | "dropped" }
+  /** A dialog waiting for an answer (D42); `source` is the extension that asked. */
+  "ui.request": UiRequest & { requestId: string; source?: string }
+  /** A dialog was answered or cancelled; frontends showing it should close it. */
+  "ui.resolved": { requestId: string; cancelled: boolean; value?: string | boolean }
 }
 
 export type Intercept<T> =
