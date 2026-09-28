@@ -1,4 +1,4 @@
-import type { StyleFn, Theme } from "@amira/tui-kit"
+import { type StyleFn, type Theme, wrapText } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
 /** What a block of the transcript is; the spacing rule depends on it. */
@@ -73,13 +73,18 @@ export type NoticeLevel = "info" | "success" | "warning" | "error" | "interrupte
  * A system notice (interrupted, compacted, an extension error, ...): a symbol by level, then
  * the text; later lines are indented under the first.
  */
-export function noticeLines(theme: Theme, level: NoticeLevel, text: string): string[] {
+export function noticeLines(theme: Theme, level: NoticeLevel, text: string, width = 80): string[] {
   const style: StyleFn = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.muted
   const glyph = level === "success" ? theme.success(glyphs.success) : style(glyphs[level])
-  return text.split("\n").map((l, i) => (i === 0 ? `${glyph} ${style(l)}` : `  ${style(l)}`))
+  return hanging(text, width - 2).map((l, i) => (i === 0 ? `${glyph} ${style(l)}` : `  ${style(l)}`))
 }
 
 /** Output of a command, hanging under its echo like a tool's result. */
-export function commandOutputLines(style: StyleFn, muted: StyleFn, text: string): string[] {
-  return text.split("\n").map((l, i) => `  ${i === 0 ? muted(glyphs.result) : " "} ${style(l)}`)
+export function commandOutputLines(style: StyleFn, muted: StyleFn, text: string, width = 80): string[] {
+  return hanging(text, width - 4).map((l, i) => `  ${i === 0 ? muted(glyphs.result) : " "} ${style(l)}`)
+}
+
+/** Text wrapped to `width`, so that its rows can hang under a symbol instead of wrapping to column 0. */
+function hanging(text: string, width: number): string[] {
+  return text.split("\n").flatMap((l) => (l ? wrapText(l, Math.max(10, width)) : [""]))
 }

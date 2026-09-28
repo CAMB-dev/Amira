@@ -46,7 +46,13 @@ import {
   type PresenterSource,
   runningToolLines,
 } from "./tool-view.ts"
-import { type BlockKind, commandOutputLines, noticeLines, Transcript } from "./transcript.ts"
+import {
+  type BlockKind,
+  commandOutputLines,
+  type NoticeLevel,
+  noticeLines,
+  Transcript,
+} from "./transcript.ts"
 import { detailCommand, nextDetail } from "./verbose.ts"
 
 export interface InteractiveOptions {
@@ -158,6 +164,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
+  /** A system notice fitted to the terminal. */
+  const note = (level: NoticeLevel, text: string) => noticeLines(theme, level, text, terminal.columns)
   /** Commits a whole block, spaced by the transcript's rule. */
   const commitBlock = (kind: BlockKind, lines: string[]) => renderer.commit(transcript.block(kind, lines))
 
@@ -315,7 +323,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "budget.exceeded":
         commitBlock(
           "notice",
-          noticeLines(theme, "warning", `Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`),
+          note("warning", `Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`),
         )
         return true
       default: {
@@ -420,11 +428,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
-        if (e.data.reason === "error")
-          commitBlock("notice", noticeLines(theme, "error", e.data.error ?? "error"))
-        else if (e.data.reason === "aborted")
-          commitBlock("notice", noticeLines(theme, "interrupted", "Interrupted."))
-        else if (!turnShowedOutput) commitBlock("notice", noticeLines(theme, "info", "(no reply)"))
+        if (e.data.reason === "error") commitBlock("notice", note("error", e.data.error ?? "error"))
+        else if (e.data.reason === "aborted") commitBlock("notice", note("interrupted", "Interrupted."))
+        else if (!turnShowedOutput) commitBlock("notice", note("info", "(no reply)"))
         if (queued.length) {
           const next = queued.splice(0, queued.length).join("\n\n")
           queueMicrotask(() => send(next))
@@ -435,26 +441,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "compact.end":
         compacting = false
-        commitBlock(
-          "notice",
-          noticeLines(theme, "success", `Compacted ${e.data.replaced} older messages into a summary.`),
-        )
+        commitBlock("notice", note("success", `Compacted ${e.data.replaced} older messages into a summary.`))
         break
       case "compact.failed":
         compacting = false
         commitBlock(
           "notice",
           e.data.blocked
-            ? noticeLines(theme, "info", `Compaction skipped: ${e.data.error}`)
-            : noticeLines(theme, "warning", `Compaction failed: ${e.data.error}`),
+            ? note("info", `Compaction skipped: ${e.data.error}`)
+            : note("warning", `Compaction failed: ${e.data.error}`),
         )
         break
       case "extension.error":
         // Settings warnings travel as extension.error from "settings" but are not extension failures.
         commitBlock(
           "notice",
-          noticeLines(
-            theme,
+          note(
             "warning",
             e.data.source === "settings"
               ? `warning: ${e.data.error}`
@@ -494,8 +496,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // Right after its command it hangs under the echo; on its own it is a notice.
         if (transcript.last === "command" || transcript.last === "command-output") {
           const style = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.text
-          commitBlock("command-output", commandOutputLines(style, theme.muted, text))
-        } else commitBlock("notice", noticeLines(theme, level, text))
+          commitBlock("command-output", commandOutputLines(style, theme.muted, text, terminal.columns))
+        } else commitBlock("notice", note(level, text))
         break
       }
     }
@@ -513,7 +515,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       } else {
         working = false
         spinner.stop()
-        commitBlock("notice", noticeLines(theme, "error", err instanceof Error ? err.message : String(err)))
+        commitBlock("notice", note("error", err instanceof Error ? err.message : String(err)))
       }
       renderer.requestRender()
     })
