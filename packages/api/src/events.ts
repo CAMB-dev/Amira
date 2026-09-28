@@ -59,6 +59,8 @@ export interface EventMap {
     rejected?: ToolRejection
   }
   "extension.loaded": { source: string }
+  /** Something visible changed outside the event stream (e.g. status bar state); frontends should redraw. */
+  "ui.render": Record<string, never>
   "extension.error": { source: string; error: string }
   /** A slow subscriber's queue overflowed and events were dropped for it. */
   "events.lost": { dropped: number }
