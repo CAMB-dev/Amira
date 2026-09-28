@@ -8,6 +8,7 @@ import {
   InterceptorRegistry,
   renderPrompt,
   ToolRegistry,
+  toolSearchExtension,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
 
@@ -35,6 +36,7 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
   const bundled: [string, () => Promise<{ default?: unknown }>][] = [
     ["builtin:tools", () => import("@amira/builtin-tools")],
     ["builtin:status", () => import("@amira/ext-status")],
+    ["builtin:tool-search", async () => ({ default: toolSearchExtension })],
   ]
   const out: { source: string; extension: Extension }[] = []
   for (const [source, load] of bundled) {
@@ -63,7 +65,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       bus.emit("extension.error", { source, error: `${point}: ${error}` }, { sessionId: "host" }),
   })
   const tools = new ToolRegistry()
-  const host = new ExtensionHost({ bus, interceptors, tools })
+  const host = new ExtensionHost({ bus, interceptors, tools, cwd: opts.cwd })
   const startupEvents: AnyEvent[] = []
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
     types: ["extension.error", "extension.loaded"],

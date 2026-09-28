@@ -9,7 +9,15 @@ import {
   type UserMessage,
   userMessage,
 } from "@amira/ai"
-import type { EventMap, SessionStatus, ToolRejection, ToolResult, TurnEndReason } from "@amira/api"
+import type {
+  EventMap,
+  SessionStatus,
+  ToolRejection,
+  ToolResult,
+  ToolSession,
+  TurnEndReason,
+} from "@amira/api"
+import { appendSection, createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { ToolRegistry } from "./tool-registry.ts"
@@ -74,6 +82,9 @@ export class Agent {
   #maxSteps: number
   #maxTokens: number | undefined
   #abortGraceMs: number
+  /** Deferred tools this session loaded (via tool_search), in load order. */
+  #loadedTools = new Set<string>()
+  #toolSession: ToolSession
 
   constructor(opts: AgentOptions) {
     this.sessionId = opts.sessionId ?? `s_${crypto.randomUUID().slice(0, 8)}`
@@ -89,6 +100,16 @@ export class Agent {
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
     this.#abortGraceMs = opts.abortGraceMs ?? 2000
+    this.#toolSession = createToolSession(this.sessionId, this.tools, this.#loadedTools)
+  }
+
+  /** Offers deferred tools to the model from its next call on, e.g. when restoring a session. */
+  loadTools(names: string[]): string[] {
+    return this.#toolSession.loadTools(names)
+  }
+
+  get loadedTools(): string[] {
+    return [...this.#loadedTools]
   }
 
   get status(): SessionStatus {
@@ -182,7 +203,10 @@ export class Agent {
   async #callModel(turn: Turn): Promise<ModelReply> {
     const ctx = await this.interceptors.run(
       "context.build",
-      { systemPrompt: this.systemPrompt, messages: [...this.messages] },
+      {
+        systemPrompt: appendSection(this.systemPrompt, deferredToolsSection(this.tools.deferred())),
+        messages: [...this.messages],
+      },
       { sessionId: this.sessionId, signal: turn.signal },
     )
     if (turn.signal.aborted) return { kind: "aborted" }
@@ -200,7 +224,7 @@ export class Agent {
           model: this.model,
           systemPrompt: ctx.value.systemPrompt,
           messages: ctx.value.messages,
-          tools: this.tools.specs(),
+          tools: offeredTools(this.tools, this.#loadedTools),
           ...(this.#maxTokens ? { maxTokens: this.#maxTokens } : {}),
         },
         turn.signal,
@@ -361,6 +385,7 @@ export class Agent {
             cwd: this.cwd,
             toolCallId: call.id,
             signal: turn.signal,
+            session: this.#toolSession,
             update: (partial) => {
               if (turn.finished.has(call.id)) return
               this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })

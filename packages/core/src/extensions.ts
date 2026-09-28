@@ -4,6 +4,7 @@ import * as publicApi from "@amira/api"
 import { API_VERSION, type Extension, type ExtensionAPI } from "@amira/api"
 import { runCommand } from "@amira/proc"
 import type { EventBus } from "./event-bus.ts"
+import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
@@ -32,6 +33,8 @@ export interface ExtensionHostOptions {
   status?: StatusRegistry
   /** Session id used on extension.* and ui.* events. Default "host". */
   sessionId?: string
+  /** Working directory handed to extensions. Default: the process's. */
+  cwd?: string
 }
 
 /**
@@ -118,6 +121,9 @@ export class ExtensionHost {
     }
     return {
       apiVersion: API_VERSION,
+      cwd: this.#opts.cwd ?? process.cwd(),
+      home: amiraHome(),
+      reportError: (error) => void this.#fail(source, error),
       registerTool: (tool) => track(tools.register(tool, source)),
       on: (type, handler) =>
         track(
