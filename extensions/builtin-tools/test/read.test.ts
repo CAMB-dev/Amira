@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { readTool } from "../src/read.ts"
+import { MAX_IMAGE_BYTES, readTool } from "../src/read.ts"
 import { makeCtx, tempDirs, textOf } from "./util.ts"
 
 const tmp = tempDirs()
@@ -51,6 +51,13 @@ test("returns images as base64 image blocks", async () => {
     mimeType: "image/png",
     data: Buffer.from(png).toString("base64"),
   })
+})
+
+test("refuses images over the size cap and says how big they are", async () => {
+  await writeFile(join(dir, "huge.png"), Buffer.alloc(MAX_IMAGE_BYTES + 1024 * 1024, 1))
+  const r = await read({ path: "huge.png" })
+  expect(r.isError).toBe(true)
+  expect(textOf(r)).toContain("image of 6 MB, over the 5 MB limit")
 })
 
 test("errors on missing files, directories and binary files", async () => {

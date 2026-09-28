@@ -8,6 +8,7 @@ import { MAX_OUTPUT_CHARS } from "./truncate.ts"
 
 export const DEFAULT_READ_LIMIT = 2000
 export const MAX_LINE_CHARS = 2000
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -35,7 +36,7 @@ export const readTool = defineTool<ReadParams>({
     "- Output is numbered like `cat -n`: each line is prefixed with its line number and a tab. The prefix is not part of the file; never include it in `old_string` for the edit tool.",
     `- Lines longer than ${MAX_LINE_CHARS} characters are truncated.`,
     "- UTF-8 and UTF-16 (with BOM) text is supported.",
-    "- PNG, JPEG, GIF and WebP images are returned as images you can see.",
+    "- PNG, JPEG, GIF and WebP images up to 5 MB are returned as images you can see.",
     "- Binary files and directories cannot be read; use glob or bash `ls` to list a directory.",
     "- Read a file before editing it. It is fine to read several files in parallel.",
   ].join("\n"),
@@ -63,6 +64,14 @@ export const readTool = defineTool<ReadParams>({
     if (st.isDirectory())
       return textResult(`${abs} is a directory, not a file. Use glob or bash to list it.`, true)
 
+    const mimeType = IMAGE_TYPES[extname(abs).toLowerCase()]
+    if (mimeType && st.size > MAX_IMAGE_BYTES) {
+      return textResult(
+        `${abs} is an image of ${formatMb(st.size)}, over the ${formatMb(MAX_IMAGE_BYTES)} limit for images. Resize or compress it first (e.g. with bash).`,
+        true,
+      )
+    }
+
     let bytes: Buffer
     try {
       bytes = await readFile(abs, { signal: ctx.signal })
@@ -70,7 +79,6 @@ export const readTool = defineTool<ReadParams>({
       return textResult(`Failed to read ${abs}: ${(err as Error).message}`, true)
     }
 
-    const mimeType = IMAGE_TYPES[extname(abs).toLowerCase()]
     if (mimeType) {
       return {
         content: [{ type: "image", mimeType, data: bytes.toString("base64") }],
@@ -114,4 +122,8 @@ function formatLines(abs: string, text: string, offset: number, limit: number): 
     out.push("", `(Showing lines ${start}-${last} of ${lines.length}. Use offset=${last + 1} to read more.)`)
   }
   return out.join("\n")
+}
+
+function formatMb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`
 }
