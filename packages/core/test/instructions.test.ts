@@ -1,0 +1,54 @@
+import { expect, test } from "bun:test"
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { instructionsSection, loadInstructions } from "../src/instructions.ts"
+import { defaultSections, renderPrompt, setSection } from "../src/prompt.ts"
+
+test("loads user, repo and nested instructions parent to child, with fallbacks", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "amira-instr-"))
+  const home = path.join(root, "home")
+  const repo = path.join(root, "repo")
+  const sub = path.join(repo, "pkg", "deep")
+  await mkdir(home, { recursive: true })
+  await mkdir(path.join(repo, ".git"), { recursive: true })
+  await mkdir(sub, { recursive: true })
+  await writeFile(path.join(root, "AGENTS.md"), "outside the repo")
+  await writeFile(path.join(home, "AGENTS.md"), "user")
+  await writeFile(path.join(repo, "AGENTS.md"), "repo")
+  await writeFile(path.join(repo, "CLAUDE.md"), "ignored: AGENTS.md wins")
+  await writeFile(path.join(repo, "pkg", "GEMINI.md"), "pkg")
+  await writeFile(path.join(sub, "CLAUDE.md"), "deep")
+  const files = loadInstructions(sub, home)
+  expect(files.map((f) => f.text)).toEqual(["user", "repo", "pkg", "deep"])
+  const section = instructionsSection(files)
+  expect(section.indexOf("\n\nrepo")).toBeGreaterThan(0)
+  expect(section.indexOf("\n\nrepo")).toBeLessThan(section.indexOf("\n\ndeep"))
+  expect(instructionsSection([])).toBe("")
+})
+
+test("sections keep a stable order; setSection replaces or inserts in place", () => {
+  const s = defaultSections({ cwd: "/x", project: "P", date: new Date("2026-01-02") })
+  expect(s.map((x) => x.name)).toEqual([
+    "identity",
+    "environment",
+    "project",
+    "skills",
+    "deferred-tools",
+    "role",
+  ])
+  const withSkills = setSection(s, "skills", "SK")
+  expect(withSkills.find((x) => x.name === "skills")?.text).toBe("SK")
+  expect(withSkills[0]).toBe(s[0]!)
+  const inserted = setSection(
+    [
+      { name: "identity", text: "I" },
+      { name: "role", text: "R" },
+    ],
+    "project",
+    "P",
+  )
+  expect(inserted.map((x) => x.name)).toEqual(["identity", "project", "role"])
+  expect(setSection(inserted, "extra", "E").at(-1)?.name).toBe("extra")
+  expect(renderPrompt(inserted)).toBe("I\n\nP\n\nR")
+})
