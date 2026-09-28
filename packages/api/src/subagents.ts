@@ -46,8 +46,9 @@ export interface ChildSession {
   readonly model: ModelRef
   readonly cwd: string
   /**
-   * The events of this child and its descendants, ending with its subagent.end. Subscribes
-   * when read, so read it right after spawn to miss nothing.
+   * The events of this child and its descendants, ending with its subagent.end. Each
+   * iteration subscribes when it starts, so start iterating right after spawn to miss nothing;
+   * iterating a child that already ended yields nothing.
    */
   readonly events: AsyncIterable<AnyEvent>
   /** Settles once the child's turn ended, however it ended. Never rejects. */

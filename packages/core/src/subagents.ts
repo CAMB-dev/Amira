@@ -33,7 +33,10 @@ export interface AgentTreeOptions {
   ai: Ai
   /** Deepest a sub-agent may be (D15). Default 2: children and grandchildren. */
   maxDepth?: number
-  /** Children of one parent running at once; the rest wait in order (D63). Default 4. */
+  /**
+   * Sub-agents of the whole tree working at once, not counting those waiting for children of
+   * their own; the rest wait in order (D63). Default 4.
+   */
   maxConcurrent?: number
   /** Shared by every session of the tree (D37). Default: unlimited. */
   budget?: Budget
@@ -85,11 +88,6 @@ function finalText(messages: readonly Message[]): string {
     .trim()
 }
 
-interface Slot {
-  running: number
-  queue: Child[]
-}
-
 class Child implements ChildSession {
   readonly id: string
   readonly parentSessionId: string
@@ -98,6 +96,8 @@ class Child implements ChildSession {
   readonly usage = emptyUsage()
   /** Set once aborted: why. */
   abortReason: string | undefined
+  /** Given a place to run (it starts a microtask later). */
+  admitted = false
   started = false
   #result: Promise<SubagentResult>
   settle!: (r: SubagentResult) => void
@@ -106,6 +106,8 @@ class Child implements ChildSession {
     readonly agent: Agent,
     readonly prompt: string,
     readonly context: SpawnContext,
+    /** Who its subagent.end is sent as: its parent, with the grandparent if there is one. */
+    readonly parentMeta: EmitMeta,
     private tree: AgentTree,
   ) {
     this.id = agent.sessionId
@@ -148,9 +150,12 @@ export class AgentTree {
   /** Why the budget is spent, once it is. */
   #exceeded: string | undefined
   #live = new Map<string, Child>()
-  /** Parent session id of every child ever spawned, for telling descendants apart. */
-  #parentOf = new Map<string, string>()
-  #slots = new Map<string, Slot>()
+  /** Children waiting for a place to run, in spawn order. */
+  #queue: Child[] = []
+  /** Children whose turn is running (or about to start). */
+  #running = new Set<Child>()
+  /** How many queued or running children each session has; sessions without any are left out. */
+  #liveKids = new Map<string, number>()
   /** The last approval question queued for each parent, by its session id. */
   #asking = new Map<string, Promise<unknown>>()
 
@@ -169,13 +174,6 @@ export class AgentTree {
   /** Children that are queued or running, oldest first. */
   get children(): ChildSession[] {
     return [...this.#live.values()]
-  }
-
-  /** Whether `sessionId` is `ancestor` or one of its descendants. */
-  isWithin(sessionId: string, ancestor: string): boolean {
-    for (let id: string | undefined = sessionId; id; id = this.#parentOf.get(id))
-      if (id === ancestor) return true
-    return false
   }
 
   spawn(parent: Agent, opts: SpawnOptions): ChildSession {
@@ -227,13 +225,13 @@ export class AgentTree {
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
     })
     parent.recordSubagent(agent.sessionId, opts.role)
-    const child = new Child(agent, opts.prompt, context, this)
+    const child = new Child(agent, opts.prompt, context, parentMeta(parent), this)
     this.#live.set(child.id, child)
-    this.#parentOf.set(child.id, parent.sessionId)
-
-    const slot = this.#slots.get(parent.sessionId) ?? { running: 0, queue: [] }
-    this.#slots.set(parent.sessionId, slot)
-    const queued = slot.running >= this.maxConcurrent
+    this.#liveKids.set(parent.sessionId, (this.#liveKids.get(parent.sessionId) ?? 0) + 1)
+    this.#queue.push(child)
+    // A parent with children is waiting for them, so it stops counting against the limit.
+    this.#admit()
+    const queued = !child.admitted
     parent.bus.emit(
       "subagent.start",
       {
@@ -248,13 +246,25 @@ export class AgentTree {
       },
       metaOf(parent),
     )
-    if (queued) slot.queue.push(child)
-    else {
-      slot.running++
-      // Started a microtask later, so the caller can subscribe to child.events first.
-      queueMicrotask(() => void this.#run(parent.sessionId, child))
-    }
     return child
+  }
+
+  /**
+   * Starts queued children, oldest first, while fewer than maxConcurrent are busy tree-wide
+   * (D63). A running child that has children of its own is not busy: it waits for them, and
+   * counting it could leave its children queued forever behind it.
+   */
+  #admit() {
+    let busy = 0
+    for (const c of this.#running) if (!this.#liveKids.has(c.id)) busy++
+    while (busy < this.maxConcurrent && this.#queue.length) {
+      const child = this.#queue.shift()!
+      child.admitted = true
+      this.#running.add(child)
+      busy++
+      // Started a microtask later, so the caller can subscribe to child.events first.
+      queueMicrotask(() => void this.#run(child))
+    }
   }
 
   /** Adds a reply's usage to the tree, reports it, and stops the children once over budget. */
@@ -299,50 +309,62 @@ export class AgentTree {
       child.agent.abort()
       return
     }
-    const slot = this.#slots.get(child.parentSessionId)
-    if (slot) slot.queue = slot.queue.filter((c) => c !== child)
+    this.#queue = this.#queue.filter((c) => c !== child)
     this.#finish(child, { status: "aborted", error: reason, steps: 0, durationMs: 0 })
   }
 
-  /** Events of the child and its descendants, ending with the child's subagent.end. */
+  /**
+   * Events of the child and its descendants, ending with the child's subagent.end. Subscribes
+   * when iteration starts; a child that already ended yields nothing.
+   */
   eventsOf(child: Child): AsyncIterable<AnyEvent> {
+    return { [Symbol.asyncIterator]: () => this.#follow(child) }
+  }
+
+  #follow(child: Child): AsyncIterator<AnyEvent> {
     const queue: AnyEvent[] = []
-    let ended = false
+    // Descendants join as their subagent.start comes by, which is before any of their events.
+    const members = new Set([child.id])
+    let ended = !this.#live.has(child.id)
     let wake: (() => void) | undefined
-    const off = child.agent.bus.subscribe((e) => {
-      const end = e.type === "subagent.end" && e.data.childSessionId === child.id
-      if (!end && !this.isWithin(e.sessionId, child.id)) return
-      queue.push(e)
-      if (end) {
-        ended = true
-        off()
-      }
-      wake?.()
-    })
-    return {
-      async *[Symbol.asyncIterator]() {
-        try {
-          while (true) {
-            const e = queue.shift()
-            if (e) {
-              yield e
-              continue
-            }
-            if (ended) return
-            await new Promise<void>((resolve) => {
-              wake = resolve
-            })
-            wake = undefined
+    const off = ended
+      ? () => {}
+      : child.agent.bus.subscribe((e) => {
+          if (ended) return
+          const end = e.type === "subagent.end" && e.data.childSessionId === child.id
+          if (!end && !members.has(e.sessionId)) return
+          if (e.type === "subagent.start") members.add(e.data.childSessionId)
+          queue.push(e)
+          if (end) {
+            ended = true
+            off()
           }
-        } finally {
-          off()
+          wake?.()
+        })
+    return {
+      async next() {
+        while (true) {
+          const e = queue.shift()
+          if (e) return { value: e, done: false }
+          if (ended) return { value: undefined, done: true }
+          await new Promise<void>((resolve) => {
+            wake = resolve
+          })
+          wake = undefined
         }
+      },
+      async return() {
+        ended = true
+        queue.length = 0
+        off()
+        wake?.()
+        return { value: undefined, done: true }
       },
     }
   }
 
-  /** Runs one child's turn in its parent's slot, then starts the next queued sibling. */
-  async #run(parentId: string, child: Child) {
+  /** Runs one child's turn, then lets the next queued child start. */
+  async #run(child: Child) {
     const startedAt = performance.now()
     let steps = 0
     let status: SubagentStatus = "error"
@@ -368,20 +390,16 @@ export class AgentTree {
         steps,
         durationMs: Math.round(performance.now() - startedAt),
       })
-      const slot = this.#slots.get(parentId)
-      if (slot) {
-        slot.running--
-        const next = slot.queue.shift()
-        if (next) {
-          slot.running++
-          void this.#run(parentId, next)
-        }
-      }
+      this.#running.delete(child)
+      this.#admit()
     }
   }
 
   #finish(child: Child, r: Pick<SubagentResult, "status" | "error" | "steps" | "durationMs">) {
     if (!this.#live.delete(child.id)) return
+    const kids = (this.#liveKids.get(child.parentSessionId) ?? 1) - 1
+    if (kids > 0) this.#liveKids.set(child.parentSessionId, kids)
+    else this.#liveKids.delete(child.parentSessionId)
     const result: SubagentResult = {
       sessionId: child.id,
       status: r.status,
@@ -391,9 +409,6 @@ export class AgentTree {
       steps: r.steps,
       durationMs: r.durationMs,
     }
-    const meta: EmitMeta = { sessionId: child.parentSessionId }
-    const grand = this.#parentOf.get(child.parentSessionId)
-    if (grand) meta.parentSessionId = grand
     child.agent.bus.emit(
       "subagent.end",
       {
@@ -403,7 +418,7 @@ export class AgentTree {
         usage: result.usage,
         durationMs: result.durationMs,
       },
-      meta,
+      child.parentMeta,
     )
     child.settle(result)
   }
@@ -467,6 +482,13 @@ export class AgentTree {
 
 function standardSections(cwd: string): PromptSection[] {
   return defaultSections({ cwd, project: instructionsSection(loadInstructions(cwd)) })
+}
+
+/** A parent's ids without its turn: a child can end after the turn that started it. */
+function parentMeta(parent: Agent): EmitMeta {
+  const meta: EmitMeta = { sessionId: parent.sessionId }
+  if (parent.parentSessionId) meta.parentSessionId = parent.parentSessionId
+  return meta
 }
 
 function metaOf(agent: Agent): EmitMeta {

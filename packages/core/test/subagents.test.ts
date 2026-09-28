@@ -155,7 +155,7 @@ test("spawning deeper than maxDepth fails, and a tool can spawn through its sess
   expect(text).toContain("refused: sub-agents can nest at most 2 levels deep")
 })
 
-test("at most maxConcurrent children of one parent run at once; the rest queue in order", async () => {
+test("at most maxConcurrent children run at once; the rest queue in order", async () => {
   const { root, tree, bus, events } = await setup(() => ({ text: "x", delayMs: 20 }), { maxConcurrent: 2 })
   let running = 0
   let peak = 0
@@ -178,6 +178,81 @@ test("at most maxConcurrent children of one parent run at once; the rest queue i
     e.type === "turn.start" && e.sessionId !== root.sessionId ? [e.sessionId] : [],
   )
   expect(order).toEqual(kids.map((k) => k.id))
+})
+
+test("the limit holds across the tree; a parent waiting for its children does not count", async () => {
+  const { root, tree, tools, bus } = await setup(
+    (req) => {
+      const role = roleOf(req)
+      if (req.messages.at(-1)?.role === "toolResult") return { text: `${role} done` }
+      return role === "mid" ? { toolCalls: [{ name: "fan", args: {} }] } : { text: "leaf", delayMs: 30 }
+    },
+    { maxConcurrent: 2 },
+  )
+  tools.register(
+    defineTool({
+      name: "fan",
+      description: "fan",
+      parameters: { type: "object" },
+      execute: async (_p, ctx) => {
+        const kids = [1, 2].map(() => ctx.session!.spawn!({ prompt: "leaf", systemPrompt: "ROLE leaf" }))
+        await Promise.all(kids.map((k) => k.result()))
+        return textResult("fanned")
+      },
+    }),
+    "t",
+  )
+  let streaming = 0
+  let peak = 0
+  bus.subscribe(
+    (e) => {
+      if (e.sessionId === root.sessionId) return
+      if (e.type === "message.start") peak = Math.max(peak, ++streaming)
+      if (e.type === "message.end") streaming--
+    },
+    { types: ["message.start", "message.end"] },
+  )
+  const mids = [1, 2].map(() => tree.spawn(root, { prompt: "fan out", systemPrompt: "ROLE mid" }))
+  const results = await Promise.all(mids.map((m) => m.result()))
+  await bus.flush()
+  expect(results.map((r) => r.text)).toEqual(["mid done", "mid done"])
+  // Two parents with two children each: never more than two sessions talking to the model.
+  expect(peak).toBe(2)
+  expect(tree.children).toEqual([])
+})
+
+test("a child's events include its own children's, and a finished child has none to give", async () => {
+  const { root, tree, tools } = await setup((req) =>
+    req.messages.at(-1)?.role === "toolResult"
+      ? { text: "done" }
+      : roleOf(req) === "mid"
+        ? { toolCalls: [{ name: "sub", args: {} }] }
+        : { text: "leaf" },
+  )
+  let grandchild = ""
+  tools.register(
+    defineTool({
+      name: "sub",
+      description: "sub",
+      parameters: { type: "object" },
+      execute: async (_p, ctx) => {
+        const kid = ctx.session!.spawn!({ prompt: "leaf", systemPrompt: "ROLE leaf" })
+        grandchild = kid.id
+        await kid.result()
+        return textResult("ok")
+      },
+    }),
+    "t",
+  )
+  const child = tree.spawn(root, { prompt: "go", systemPrompt: "ROLE mid" })
+  const seen: AnyEvent[] = []
+  for await (const e of child.events) seen.push(e)
+  expect(seen.some((e) => e.sessionId === grandchild && e.type === "turn.end")).toBe(true)
+  expect(seen.some((e) => e.type === "subagent.end" && e.data.childSessionId === grandchild)).toBe(true)
+  expect(seen.at(-1)?.type === "subagent.end" && seen.at(-1)?.sessionId).toBe(root.sessionId)
+  const after: AnyEvent[] = []
+  for await (const e of child.events) after.push(e)
+  expect(after).toEqual([])
 })
 
 test("aborting a queued child settles it without running it", async () => {
