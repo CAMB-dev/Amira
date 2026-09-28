@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { PROVIDER_PRESETS } from "@amira/ai"
+import { PROVIDER_PRESETS, userMessage } from "@amira/ai"
 import type { AssistantMessage, SessionControl, ShellMode } from "@amira/api"
 import { type Agent, CommandHost, findSession, listSessions, SessionStore } from "@amira/core"
 import { addPreset, withPresetHint } from "./provider-command.ts"
@@ -16,6 +16,8 @@ export interface ControlOptions {
   /** Amira's user directory, for /provider add. Default: $AMIRA_HOME or ~/.amira. */
   home?: string
   platform?: string
+  /** The user's command aliases (settings commandAliases). */
+  aliases?: Record<string, string>
   /** Announces a session the commands switched to, e.g. agent.start() plus git tracking. */
   announce?: (agent: Agent, reason: "resume" | "clear") => void
 }
@@ -109,10 +111,11 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       idle("compact")
       return agent().compact(instructions)
     },
-    send: async (text) => {
+    send: async (text, sendOpts) => {
       const a = agent()
-      if (a.turnId) a.steer(text)
-      else await a.prompt(text)
+      const message = userMessage(text, sendOpts?.display)
+      if (a.turnId) a.steer(message)
+      else await a.prompt(message)
     },
     tools: () =>
       tools
@@ -175,6 +178,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     ui: session.host.ui,
     control,
     agent: session.agent,
+    ...(opts.aliases ? { aliases: opts.aliases } : {}),
   })
   return host
 }

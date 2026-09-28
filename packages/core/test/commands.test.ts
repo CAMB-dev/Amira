@@ -6,6 +6,7 @@ import {
   CommandConflictError,
   CommandHost,
   CommandRegistry,
+  commandAliasWarnings,
   fuzzyScore,
   parseCommandLine,
   rankMatches,
@@ -40,12 +41,88 @@ test("the registry lists commands by name with their argument hint", () => {
   r.register(cmd("model", { args: { hint: "[provider/model]" } }), "builtin")
   r.register(cmd("clear"), "builtin")
   expect(r.list()).toEqual([
-    { name: "clear", description: "the clear command", source: "builtin" },
-    { name: "model", description: "the model command", hint: "[provider/model]", source: "builtin" },
+    { name: "clear", aliases: [], description: "the clear command", source: "builtin" },
+    {
+      name: "model",
+      aliases: [],
+      description: "the model command",
+      hint: "[provider/model]",
+      source: "builtin",
+    },
   ])
 })
 
+test("aliases resolve to their command and are listed with it", () => {
+  const r = new CommandRegistry()
+  r.register(cmd("quit", { aliases: ["exit", "q"] }), "builtin")
+  r.register(cmd("help", { aliases: ["?", "h"] }), "builtin")
+  expect(r.get("q")?.def.name).toBe("quit")
+  expect(r.get("exit")?.def.name).toBe("quit")
+  expect(r.get("?")?.def.name).toBe("help")
+  expect(r.has("q")).toBe(false)
+  expect(r.has("quit")).toBe(true)
+  expect(r.list().map((c) => [c.name, c.aliases])).toEqual([
+    ["help", ["?", "h"]],
+    ["quit", ["exit", "q"]],
+  ])
+  expect(() => r.register(cmd("x", { aliases: ["bad alias"] }), "ext")).toThrow(/invalid alias "bad alias"/)
+  expect(() => r.register(cmd("x", { aliases: ["x"] }), "ext")).toThrow(/invalid alias/)
+  expect(() => r.register(cmd("x", { aliases: ["??"] }), "ext")).toThrow(/invalid alias/)
+  expect(r.get("x")).toBeUndefined()
+})
+
+test("a command name wins over an alias, and the last claim on an alias wins; both warn", () => {
+  const r = new CommandRegistry()
+  const warnings: string[] = []
+  const warn = (w: string) => void warnings.push(w)
+  r.register(cmd("quit", { aliases: ["exit", "q"] }), "builtin", warn)
+  // A later command named like an alias takes the name.
+  const offQ = r.register(cmd("q"), "ext", warn)
+  expect(r.get("q")?.def.name).toBe("q")
+  expect(r.list().find((c) => c.name === "quit")?.aliases).toEqual(["exit"])
+  // An alias naming an existing command stays shadowed.
+  r.register(cmd("leave", { aliases: ["quit"] }), "ext", warn)
+  expect(r.get("quit")?.def.name).toBe("quit")
+  // Two commands claiming one alias: the later has it until it is removed.
+  const offBye = r.register(cmd("bye", { aliases: ["exit"] }), "other", warn)
+  expect(r.get("exit")?.def.name).toBe("bye")
+  expect(warnings).toEqual([
+    "command /q from ext shadows the alias /q of /quit from builtin",
+    "alias /quit of /leave is shadowed by the command /quit from builtin",
+    "alias /exit now runs /bye from other instead of /quit from builtin",
+  ])
+  offBye()
+  offQ()
+  expect(r.get("exit")?.def.name).toBe("quit")
+  expect(r.get("q")?.def.name).toBe("quit")
+})
+
+test("aliases follow an override of their command's name", () => {
+  const r = new CommandRegistry()
+  const warnings: string[] = []
+  r.register(cmd("quit", { aliases: ["q"] }), "builtin")
+  r.register(cmd("quit", { description: "custom quit", override: true, aliases: ["bye"] }), "ext", (w) =>
+    warnings.push(w),
+  )
+  expect(r.get("q")?.def.description).toBe("custom quit")
+  expect(r.list()[0]!.aliases).toEqual(["q", "bye"])
+  expect(warnings).toEqual([])
+})
+
+test("settings aliases that are taken by commands or their aliases are reported", () => {
+  const r = new CommandRegistry()
+  r.register(cmd("quit", { aliases: ["q"] }), "builtin")
+  expect(commandAliasWarnings({ q: "model", quit: "status", m: "model" }, r)).toEqual([
+    "commandAliases: /q is already an alias of /quit (from builtin); the setting is ignored",
+    "commandAliases: /quit is already a command (from builtin); the setting is ignored",
+  ])
+  expect(commandAliasWarnings(undefined, r)).toEqual([])
+})
+
 test("parses command lines but leaves paths and plain text alone", () => {
+  expect(parseCommandLine("/?")).toEqual({ name: "?", args: "" })
+  expect(parseCommandLine("/? model")).toEqual({ name: "?", args: "model" })
+  expect(parseCommandLine("/?x")).toBeUndefined()
   expect(parseCommandLine("/help")).toEqual({ name: "help", args: "" })
   expect(parseCommandLine("  /model  deepseek/deepseek-flash ")).toEqual({
     name: "model",
@@ -70,6 +147,14 @@ test("ranking puts prefix matches first, exact on top, then fuzzy matches best f
   expect(rankMatches("zz", names, (n) => n)).toEqual([])
   expect(rankMatches("", names, (n) => n)).toEqual(names)
   expect(rankMatches("DEEP", ["deepseek/deepseek-flash"], (n) => n)).toEqual(["deepseek/deepseek-flash"])
+  // Several keys per item rank by the best one.
+  const cmds = [
+    { name: "clear", keys: ["clear", "new", "reset"] },
+    { name: "quit", keys: ["quit", "exit", "q"] },
+  ]
+  expect(rankMatches("ex", cmds, (c) => c.keys).map((c) => c.name)).toEqual(["quit"])
+  expect(rankMatches("q", cmds, (c) => c.keys).map((c) => c.name)).toEqual(["quit"])
+  expect(rankMatches("rst", cmds, (c) => c.keys).map((c) => c.name)).toEqual(["clear"])
 })
 
 test("fuzzy scores prefer contiguous runs and word starts", () => {
@@ -80,7 +165,7 @@ test("fuzzy scores prefer contiguous runs and word starts", () => {
   expect(fuzzyScore("x", "abc")).toBeUndefined()
 })
 
-function hostSetup(control: Partial<SessionControl> = {}) {
+function hostSetup(control: Partial<SessionControl> = {}, aliases?: Record<string, string>) {
   const bus = new EventBus()
   const events: AnyEvent[] = []
   bus.subscribe((e) => void events.push(e))
@@ -96,6 +181,7 @@ function hostSetup(control: Partial<SessionControl> = {}) {
     ui: new UiRequests(bus),
     control: control as SessionControl,
     agent,
+    ...(aliases ? { aliases } : {}),
   })
   const outputs = async () => {
     await bus.flush()
@@ -168,6 +254,13 @@ test("completion ranks command names, then the command's own argument candidates
     "test",
   )
   expect((await host.complete("/mo")).candidates.map((c) => c.value)).toEqual(["mode", "model"])
+  // Names and sync completers answer at once, so the popup draws them with the key.
+  expect(host.complete("/mo")).not.toBeInstanceOf(Promise)
+  expect(host.complete("/model flash")).not.toBeInstanceOf(Promise)
+  registry.register(cmd("later", { args: { complete: async () => [{ value: "x" }] } }), "test")
+  const later = host.complete("/later ")
+  expect(later).toBeInstanceOf(Promise)
+  expect(await later).toEqual({ command: "later", candidates: [{ value: "x" }] })
   expect(await host.complete("/model flash")).toEqual({
     command: "model",
     candidates: [{ value: "deepseek/deepseek-flash" }],
@@ -176,6 +269,103 @@ test("completion ranks command names, then the command's own argument candidates
   expect(await host.complete("/mode x")).toEqual({ command: "mode", candidates: [] })
   expect(await host.complete("/broken x")).toEqual({ command: "broken", candidates: [] })
   expect(await host.complete("/unknown x")).toEqual({ candidates: [] })
+})
+
+test("a command's alias runs the command, which the outcome and output name", async () => {
+  const { registry, host, outputs } = hostSetup()
+  const seen: string[] = []
+  registry.register(
+    cmd("quit", {
+      aliases: ["exit", "q"],
+      run: (args, ctx) => {
+        seen.push(args)
+        ctx.print("bye")
+      },
+    }),
+    "test",
+  )
+  expect(await host.run("/exit now please", { frontend: "print" })).toEqual({
+    ok: true,
+    command: "quit",
+    output: ["bye"],
+  })
+  expect(seen).toEqual(["now please"])
+  expect((await outputs())[0]).toMatchObject({ command: "quit", text: "bye" })
+})
+
+test("settings aliases expand one level, appending what was typed after them", async () => {
+  const { registry, host } = hostSetup(
+    {},
+    {
+      m: "model",
+      ds: "model deepseek/deepseek-flash",
+      q: "status",
+      typo: "modle x",
+      twice: "ds",
+      viaq: "q",
+    },
+  )
+  const seen: string[] = []
+  registry.register(cmd("model", { run: (args) => void seen.push(args) }), "test")
+  registry.register(cmd("quit", { aliases: ["q"], run: () => void seen.push("quit") }), "test")
+  expect(await host.run("/ds", { frontend: "rpc" })).toMatchObject({ ok: true, command: "model" })
+  expect(await host.run("/m flash", { frontend: "rpc" })).toMatchObject({ ok: true, command: "model" })
+  expect(await host.run("/ds  --fast", { frontend: "rpc" })).toMatchObject({ ok: true })
+  // The command's own alias wins over the settings one.
+  expect(await host.run("/q", { frontend: "rpc" })).toMatchObject({ ok: true, command: "quit" })
+  expect(seen).toEqual(["deepseek/deepseek-flash", "flash", "deepseek/deepseek-flash --fast", "quit"])
+
+  const typo = await host.run("/typo", { frontend: "rpc" })
+  expect(typo).toMatchObject({ ok: false, command: "typo" })
+  expect(typo.error).toBe(
+    'The alias /typo runs /modle, which is not a command; fix "commandAliases" in settings.json or type /help to list the commands.',
+  )
+  expect((await host.run("/twice", { frontend: "rpc" })).error).toContain(
+    "runs /ds, which is an alias itself; aliases resolve one level only, so point it at a command",
+  )
+  expect((await host.run("/viaq", { frontend: "rpc" })).error).toContain("so point it at /quit")
+  expect(host.aliases()).toEqual([
+    { name: "ds", expansion: "model deepseek/deepseek-flash" },
+    { name: "m", expansion: "model" },
+    { name: "twice", expansion: "ds" },
+    { name: "typo", expansion: "modle x" },
+    { name: "viaq", expansion: "q" },
+  ])
+})
+
+test("completion matches aliases and offers settings aliases with what they run", async () => {
+  const { registry, host } = hostSetup(
+    { models: () => ["deepseek/deepseek-flash", "mock/a"] },
+    { ds: "model deepseek/deepseek-flash", m: "model", zz: "nothing" },
+  )
+  registry.register(cmd("quit", { aliases: ["exit", "q"], description: "Leave" }), "test")
+  registry.register(
+    cmd("model", {
+      description: "Switch",
+      args: { complete: (_p, ctx) => ctx.session.models().map((value) => ({ value })) },
+    }),
+    "test",
+  )
+  expect((await host.complete("/ex")).candidates).toEqual([
+    { value: "quit", description: "Leave", label: "quit (exit, q)" },
+  ])
+  expect((await host.complete("/")).candidates.map((c) => c.label ?? c.value)).toEqual([
+    "ds → /model deepseek/deepseek-flash",
+    "m → /model",
+    "model",
+    "quit (exit, q)",
+    "zz → /nothing",
+  ])
+  expect((await host.complete("/zz")).candidates).toEqual([
+    { value: "zz", label: "zz → /nothing", description: "not a command" },
+  ])
+  // Arguments complete for the command an alias runs, unless the alias fixes them.
+  expect(await host.complete("/m flash")).toEqual({
+    command: "model",
+    candidates: [{ value: "deepseek/deepseek-flash" }],
+  })
+  expect(await host.complete("/ds x")).toEqual({ command: "model", candidates: [] })
+  expect(await host.complete("/exit x")).toEqual({ command: "quit", candidates: [] })
 })
 
 test("switching the active agent tells listeners", () => {

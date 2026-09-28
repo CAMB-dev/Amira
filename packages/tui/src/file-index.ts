@@ -3,9 +3,9 @@ import { readdir } from "node:fs/promises"
 import path from "node:path"
 import { runCommand } from "@amira/proc"
 
-/** Where the file picker gets the project's files; relative forward-slash paths. */
+/** Where the file picker gets the project's files; relative forward-slash paths, at once when known. */
 export interface FileSource {
-  files(): Promise<string[]>
+  files(): string[] | Promise<string[]>
 }
 
 export interface ListOptions {
@@ -89,11 +89,12 @@ export class FileIndex implements FileSource {
     private opts: { ttlMs?: number; list?: (cwd: string) => Promise<string[]> } = {},
   ) {}
 
-  files(): Promise<string[]> {
+  /** The list at once once loaded (refreshing it in the background when stale), else a promise of it. */
+  files(): string[] | Promise<string[]> {
     const stale = performance.now() - this.#loadedAt > (this.opts.ttlMs ?? 30_000)
-    if (this.#list && !stale) return Promise.resolve(this.#list)
+    if (this.#list && !stale) return this.#list
     const loading = this.#load()
-    return this.#list ? Promise.resolve(this.#list) : loading
+    return this.#list ?? loading
   }
 
   #load(): Promise<string[]> {

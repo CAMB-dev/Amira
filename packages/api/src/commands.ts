@@ -1,4 +1,4 @@
-import type { AssistantMessage, JSONSchema, Message, ModelRef } from "@amira/ai"
+import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef } from "@amira/ai"
 import type { ShellMode } from "./settings.ts"
 import type { ToolExposure } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
@@ -8,12 +8,21 @@ export interface CommandCandidate {
   /** Replaces the whole argument text when chosen. */
   value: string
   description?: string
+  /** Shown in lists in place of `value`, e.g. a command name with its aliases. */
+  label?: string
 }
 
 /** A slash command (D55). Built-in commands are registered the same way (D27). */
 export interface CommandDefinition {
   /** Typed after the slash: letters, digits and `- _ : .`, starting with a letter or digit. */
   name: string
+  /**
+   * Other names that run this command, e.g. ["exit", "q"] for "quit". Same characters as
+   * `name`; "?" is allowed too. A command's name always wins over another command's alias;
+   * when two commands claim an alias, the one registered last has it (with a warning).
+   * Aliases stay with the name, so an `override` of "quit" still answers to /exit and /q.
+   */
+  aliases?: string[]
   description: string
   args?: {
     /** Shown after the name in lists, e.g. "[provider/model]". */
@@ -33,10 +42,19 @@ export interface CommandDefinition {
 /** A registered command, as frontends list it. */
 export interface CommandInfo {
   name: string
+  /** The aliases that run it; ones another command's name shadows are left out. */
+  aliases: string[]
   description: string
   hint?: string
   /** The extension that registered it. */
   source: string
+}
+
+/** A command alias from settings: typing `/<name> more` runs `/<expansion> more`. */
+export interface CommandAlias {
+  name: string
+  /** The command line it stands for, without the slash, e.g. "model deepseek/deepseek-flash". */
+  expansion: string
 }
 
 export type CommandFrontend = "tui" | "rpc" | "print"
@@ -58,6 +76,8 @@ export interface CommandContext extends CommandCompleteContext {
   print(text: string, level?: CommandOutputLevel): void
   /** Every registered command, by name. */
   commands(): CommandInfo[]
+  /** The user's command aliases from settings (`commandAliases`) that are in effect, by name. */
+  aliases(): CommandAlias[]
   /** Leaves the interactive UI; frontends with nothing to leave ignore it. */
   quit(): void
 }
@@ -110,6 +130,11 @@ export interface ContextPreview {
   messages: Message[]
 }
 
+export interface SendOptions {
+  /** Stored with the message and shown by frontends in its place; never sent to the model. */
+  display?: MessageDisplay
+}
+
 /**
  * The session a command acts on, provided by the host. Methods that cannot run while a turn
  * is running (switching models or sessions, compacting) throw an Error saying so.
@@ -132,8 +157,12 @@ export interface SessionControl {
   resume(sessionId: string): Promise<void>
   /** Summarizes older history now; `instructions` steer the summary. Resolves false when nothing was compacted. */
   compact(instructions?: string): Promise<boolean>
-  /** Sends a user message, or steers the running turn; resolves when the turn it joined ends. */
-  send(text: string): Promise<void>
+  /**
+   * Sends a user message, or steers the running turn; resolves when the turn it joined ends.
+   * `display` is what frontends show instead of `text` (the model still gets all of `text`),
+   * e.g. the command as typed when a command sends a long prompt.
+   */
+  send(text: string, opts?: SendOptions): Promise<void>
   tools(): ToolInfo[]
   /** Enables or disables a tool for the rest of this session; throws for an unknown tool. */
   setToolEnabled(name: string, enabled: boolean): void

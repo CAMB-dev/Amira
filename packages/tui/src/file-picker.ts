@@ -111,12 +111,18 @@ export class FilePicker implements Component {
   #list: AsyncList<string>
 
   constructor(source: FileSource, onUpdate: () => void) {
-    this.#list = new AsyncList(async (query) => rankFiles(query, await source.files()), onUpdate)
+    this.#list = new AsyncList((query) => {
+      const files = source.files()
+      return Array.isArray(files) ? rankFiles(query, files) : files.then((f) => rankFiles(query, f))
+    }, onUpdate)
   }
 
-  /** Call with the editor's text before the caret whenever it may have changed. */
-  update(beforeCaret: string): void {
-    this.#list.update(atReference(beforeCaret)?.query)
+  /**
+   * Call with the editor's text before the caret whenever it changed; a promise while the file
+   * list is still loading (see AsyncList.update).
+   */
+  update(beforeCaret: string): Promise<void> | undefined {
+    return this.#list.update(atReference(beforeCaret)?.query)
   }
 
   get open(): boolean {

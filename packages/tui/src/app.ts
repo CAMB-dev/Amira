@@ -40,6 +40,7 @@ import {
   summarizeArgs,
   toolLines,
   userLines,
+  userText,
 } from "./format.ts"
 import { HistorySearch } from "./history-search.ts"
 import { InputBox } from "./input-box.ts"
@@ -75,8 +76,29 @@ export interface InteractiveOptions {
   files?: FileSource
 }
 
+/** The renderer's shortest time between frames, and how long a key waits for async candidates. */
+const FRAME_MS = 16
+
 /** Bracketed pastes this big become one placeholder in the editor, expanded when sent. */
 const FOLD_PASTES = { lines: 8, chars: 1000 }
+
+/** A message on its way: the text the model gets, and what the transcript shows when that differs. */
+interface Outgoing {
+  text: string
+  /** The text with folded pastes as their placeholders. */
+  display?: string
+}
+
+function outgoing(text: string, display: string | undefined): Outgoing {
+  const shown = display?.trim()
+  return shown && shown !== text ? { text, display: shown } : { text }
+}
+
+/** What to hand the agent: the text, or a message that shows its placeholders (MessageDisplay). */
+function toPrompt(o: Outgoing): string | UserMessage {
+  if (!o.display) return o.text
+  return { role: "user", content: [{ type: "text", text: o.text }], display: { text: o.display } }
+}
 
 /** A component that draws a function's lines; handy for small pieces of view state. */
 class View implements Component {
@@ -96,9 +118,12 @@ const HOST_EVENTS = new Set<string>([
   "command.output",
 ])
 
-/** How a user message reads in the transcript. */
+/**
+ * How a user message reads while queued, or back in the editor once dropped: its display text,
+ * if any. That is what the user typed (e.g. "/review-pr 123"), so sending it again re-runs it.
+ */
 function messageText(m: UserMessage): string {
-  return m.content.map((b) => (b.type === "text" ? b.text : `[image ${b.mimeType}]`)).join("\n\n")
+  return m.display?.text.trim() || userText(m)
 }
 
 /**
@@ -114,7 +139,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const streaming = new StreamText()
   const spinner = new Spinner()
-  const queued: string[] = []
+  const queued: Outgoing[] = []
+  /** Content of recent messages with folded pastes, by their text, so a dropped steer comes back folded. */
+  const sentParts = new Map<string, EditorPart[]>()
   /** Messages steering the running turn that have not reached the model yet. */
   const steering: string[] = []
   /** Open extension dialogs; the first one has the keyboard. */
@@ -157,7 +184,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const editor = new Editor({
     prompt: theme.accent("› "),
     placeholder: "Message Amira",
-    onSubmit: (text, info) => submit(text, info.parts),
+    onSubmit: (text, info) => submit(text, info.parts, info.display),
     foldPastes: FOLD_PASTES,
   })
   const commands = opts.commands
@@ -167,17 +194,53 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const search = new HistorySearch(history, editor)
   const filePicker = new FilePicker(opts.files ?? new FileIndex(agent.cwd), () => renderer.requestRender())
   /**
-   * Tells the completion lists what the editor holds. Cheap on any text: the command popup only
-   * looks at a single line, the file picker at the caret's line up to the caret.
+   * Tells the completion lists what the editor holds; a promise while candidates are on their
+   * way. Cheap on any text: the command popup only looks at a single line, the file picker at
+   * the caret's line up to the caret.
    */
-  const syncCompletions = () => {
-    popup?.update(editor.lineCount === 1 ? editor.getText() : "")
-    filePicker.update(editor.textBeforeCaret())
+  const syncCompletions = (): Promise<void> | undefined => {
+    const commandsPending = popup?.update(editor.lineCount === 1 ? editor.getText() : "")
+    const filesPending = filePicker.update(editor.textBeforeCaret())
+    return commandsPending ?? filesPending
+  }
+  /** The list shown below the input box, if any, with its key hint. */
+  const inputList = ():
+    | { lines: (width: number, ctx: RenderContext) => string[]; hint: string }
+    | undefined => {
+    if (search.active) {
+      return {
+        lines: (w, ctx) => search.render(w, ctx),
+        hint: "Enter accept · Ctrl+R older · Ctrl+S newer · Esc cancel",
+      }
+    }
+    if (popup?.visible) {
+      return {
+        lines: (w, ctx) => popup.render(w, ctx),
+        hint: "↑↓ select · Tab complete · Enter run · Esc close",
+      }
+    }
+    if (filePicker.visible) {
+      return {
+        lines: (w, ctx) => filePicker.render(w, ctx),
+        hint: "↑↓ select · Tab/Enter insert · Esc close",
+      }
+    }
+    return undefined
   }
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
   // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
   const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
   const inputBox = new InputBox(editor)
+  const statusBar = new StatusBar(() => opts.status.snapshot())
+  /**
+   * Lines to print above the live region, sent with the next frame: running a command commits
+   * its echo and then each thing it prints, and a redraw for each of those flickered.
+   */
+  const pendingCommits: string[] = []
+  const commit = (lines: string[]) => {
+    pendingCommits.push(...lines)
+    renderer.requestRender()
+  }
   const bottom = new Stack([
     new View((width, ctx) => {
       if (!working) return []
@@ -208,28 +271,20 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     new View((width, ctx) => subagentLines([...subagents.values()], Date.now(), width, ctx.theme)),
     new View((width, ctx) => [
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
-      ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
+      ...queued.flatMap((q) =>
+        wrapText(ctx.theme.muted(`queued › ${(q.display ?? q.text).replace(/\s+/g, " ")}`), width),
+      ),
     ]),
-    new View((width, ctx) => {
-      if (dialogs[0]) return []
-      if (search.active) return search.render(width, ctx)
-      // Synced on every frame, so text set any way (typing, Tab, a dropped steer) is completed.
-      syncCompletions()
-      if (popup?.visible) return popup.render(width, ctx)
-      return filePicker.render(width, ctx)
-    }),
     new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : inputBox.render(width, ctx))),
-    new StatusBar(() => opts.status.snapshot()),
+    // The command list, file list or history search opens below the input box, in place of the
+    // status bar and the hint, so the box stays where it is while the list changes with each key.
     new View((width, ctx) => {
-      if (dialogs[0]) return []
-      const fixed = search.active
-        ? "Enter accept · Ctrl+R older · Ctrl+S newer · Esc cancel"
-        : popup?.visible
-          ? "↑↓ select · Tab complete · Enter run · Esc close"
-          : filePicker.visible
-            ? "↑↓ select · Tab/Enter insert · Esc close"
-            : undefined
-      if (fixed) return [ctx.theme.muted(truncateToWidth(fixed, width, "…"))]
+      const list = dialogs[0] ? undefined : inputList()
+      if (!list) return statusBar.render(width, ctx)
+      return [...list.lines(width, ctx), ctx.theme.muted(truncateToWidth(list.hint, width, "…"))]
+    }),
+    new View((width, ctx) => {
+      if (dialogs[0] || inputList()) return []
       const ctrlC = working ? "interrupt" : editor.isEmpty ? "quit" : "clear"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
       const esc = working ? "Esc interrupt · " : ""
@@ -240,12 +295,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
   // before it in view. Rows past that go to the scrollback as they are finished (StreamText).
   const root = new View((width, ctx) => {
+    // Lines committed since the last frame go out with this one: one redraw, not one each.
+    if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
     const rest = bottom.render(width, ctx)
     streaming.maxRows = Math.max(1, ctx.rows - rest.length - 1)
     return [...streaming.render(width, ctx), ...rest]
   })
   const renderer = new LiveRenderer(terminal, root, {
     synchronizedOutput: capabilities.synchronizedOutput,
+    frameIntervalMs: FRAME_MS,
     theme,
   })
 
@@ -272,10 +330,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (!subagents.delete(e.data.childSessionId)) return false
         break
       case "budget.exceeded":
-        renderer.commit([
-          theme.warning(`Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`),
-          "",
-        ])
+        commit([theme.warning(`Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`), ""])
         return true
       default: {
         const sub = subagents.get(e.sessionId)
@@ -298,7 +353,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
-        renderer.commit([...userLines(theme, messageText(e.data.prompt)), ""])
+        commit([...userLines(theme, e.data.prompt), ""])
         working = true
         thinking = false
         turnShowedOutput = false
@@ -324,7 +379,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         const early = streaming.committedRows > 0
         const rows = streaming.take(terminal.columns)
         if (rows.length || early) {
-          renderer.commit([...rows, ""])
+          commit([...rows, ""])
           turnShowedOutput = true
         }
         break
@@ -341,9 +396,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         running.delete(e.data.toolCallId)
         if (!running.size) setBlinking(false)
         const args = lastArgs.get(e.data.toolCallId) ?? {}
-        renderer.commit(
-          toolLines(theme, e.data.name, args, e.data.result, e.data.durationMs, terminal.columns),
-        )
+        commit(toolLines(theme, e.data.name, args, e.data.result, e.data.durationMs, terminal.columns))
         turnShowedOutput = true
         break
       }
@@ -356,12 +409,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
-        if (e.data.reason === "error") renderer.commit([theme.error(`✗ ${e.data.error ?? "error"}`), ""])
-        else if (e.data.reason === "aborted") renderer.commit([theme.muted("Interrupted."), ""])
-        else if (!turnShowedOutput) renderer.commit([theme.muted("(no reply)"), ""])
+        if (e.data.reason === "error") commit([theme.error(`✗ ${e.data.error ?? "error"}`), ""])
+        else if (e.data.reason === "aborted") commit([theme.muted("Interrupted."), ""])
+        else if (!turnShowedOutput) commit([theme.muted("(no reply)"), ""])
         if (queued.length) {
-          const next = queued.splice(0, queued.length).join("\n\n")
-          queueMicrotask(() => send(next))
+          const next = queued.splice(0, queued.length)
+          const text = next.map((q) => q.text).join("\n\n")
+          const display = next.some((q) => q.display)
+            ? next.map((q) => q.display ?? q.text).join("\n\n")
+            : undefined
+          queueMicrotask(() => send(outgoing(text, display)))
         }
         break
       case "compact.start":
@@ -369,11 +426,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "compact.end":
         compacting = false
-        renderer.commit([theme.muted(`Compacted ${e.data.replaced} older messages into a summary.`), ""])
+        commit([theme.muted(`Compacted ${e.data.replaced} older messages into a summary.`), ""])
         break
       case "compact.failed":
         compacting = false
-        renderer.commit([
+        commit([
           e.data.blocked
             ? theme.muted(`Compaction skipped: ${e.data.error}`)
             : theme.warning(`Compaction failed: ${e.data.error}`),
@@ -382,7 +439,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "extension.error":
         // Settings warnings travel as extension.error from "settings" but are not extension failures.
-        renderer.commit([
+        commit([
           theme.warning(
             e.data.source === "settings"
               ? `warning: ${e.data.error}`
@@ -399,10 +456,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        if (e.data.state === "injected") renderer.commit([...userLines(theme, text), ""])
+        if (e.data.state === "injected") commit([...userLines(theme, e.data.message), ""])
         // Put a message the turn dropped back into the editor rather than losing it.
-        else if (e.data.state === "dropped")
-          editor.setParts(editor.isEmpty ? [text] : [...editor.getParts(), `\n${text}`])
+        else if (e.data.state === "dropped") {
+          // A message with folded pastes comes back folded.
+          const back = sentParts.get(userText(e.data.message)) ?? [text]
+          editor.setParts(editor.isEmpty ? back : [...editor.getParts(), "\n", ...back])
+          return redraw()
+        }
         // A promoted one shows up again as the next turn's prompt.
         break
       }
@@ -421,7 +482,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "command.output": {
         const style =
           e.data.level === "error" ? theme.error : e.data.level === "warning" ? theme.warning : theme.text
-        renderer.commit([...e.data.text.split("\n").map((l) => style(l)), ""])
+        commit([...e.data.text.split("\n").map((l) => style(l)), ""])
         break
       }
     }
@@ -431,17 +492,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const lastArgs = new Map<string, Record<string, unknown>>()
 
   /** The user's message shows up in the transcript on turn.start. */
-  function send(text: string) {
+  function send(message: Outgoing) {
     working = true
     renderer.requestRender()
-    agent.prompt(text).catch((err) => {
+    agent.prompt(toPrompt(message)).catch((err) => {
       if (err instanceof AgentBusyError) {
         // A turn we did not know about is running; send this one after it.
-        queued.unshift(text)
+        queued.unshift(message)
       } else {
         working = false
         spinner.stop()
-        renderer.commit([theme.error(`✗ ${err instanceof Error ? err.message : String(err)}`), ""])
+        commit([theme.error(`✗ ${err instanceof Error ? err.message : String(err)}`), ""])
       }
       renderer.requestRender()
     })
@@ -449,30 +510,33 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /**
    * Enter: runs a slash command, sends, or while a turn runs steers it (D29). `parts` is the
-   * editor content as typed, folded pastes apart, for the prompt history.
+   * editor content as typed, folded pastes apart, for the prompt history; `display` shows the
+   * pastes as their placeholders in the transcript.
    */
-  function submit(text: string, parts: EditorPart[] = [text]) {
+  function submit(text: string, parts: EditorPart[] = [text], display?: string) {
     const trimmed = text.trim()
     if (!trimmed) return
     editor.clear()
     history.add(parts)
     historyNav.reset()
+    const message = outgoing(trimmed, display)
+    remember(message, parts)
     if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
-    else if (working) agent.steer(trimmed)
-    else send(trimmed)
+    else if (working) agent.steer(toPrompt(message))
+    else send(message)
     renderer.requestRender()
   }
 
   /** Runs at once, even during a turn; commands that need an idle session say so. */
   function runCommand(line: string) {
-    renderer.commit([theme.muted(`› ${line}`), ""])
+    commit([theme.muted(`› ${line}`), ""])
     void commands!.run(line, { frontend: "tui", quit: () => quit() }).then(() => renderer.requestRender())
   }
 
   /** Follows the session a command switched to; a resumed one shows its history. */
   function followAgent(next: Agent) {
     agent = next
-    if (next.messages.length) renderer.commit(historyLines(theme, next.messages))
+    if (next.messages.length) commit(historyLines(theme, next.messages))
     renderer.requestRender()
   }
 
@@ -480,11 +544,24 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function queue() {
     const trimmed = editor.getText().trim()
     if (!trimmed) return
-    history.add(editor.getParts())
+    const parts = editor.getParts()
+    const message = outgoing(trimmed, editor.getDisplayText())
+    history.add(parts)
     historyNav.reset()
+    remember(message, parts)
     editor.clear()
-    if (working) queued.push(trimmed)
-    else send(trimmed)
+    if (working) queued.push(message)
+    else send(message)
+  }
+
+  /** Keeps the folded pastes of the last few messages sent, for a steer the turn drops. */
+  function remember(message: Outgoing, parts: EditorPart[]) {
+    if (!message.display) return
+    sentParts.set(message.text, parts)
+    for (const k of sentParts.keys()) {
+      if (sentParts.size <= 8) break
+      sentParts.delete(k)
+    }
   }
 
   function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
@@ -494,7 +571,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
     const shown =
       answer === undefined ? "cancelled" : answer === true ? "yes" : answer === false ? "no" : answer
-    renderer.commit([`${theme.accent("?")} ${title} ${theme.muted(`› ${shown}`)}`, ""])
+    commit([`${theme.accent("?")} ${title} ${theme.muted(`› ${shown}`)}`, ""])
     renderer.requestRender()
   }
 
@@ -507,6 +584,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     subagents.clear()
     tickSubagents()
     reader.stop()
+    // What was committed but not drawn yet still belongs in the scrollback.
+    if (pendingCommits.length) renderer.render()
     renderer.stop({ clear: true })
     if (terminal instanceof ProcessTerminal) terminal.stop()
     else terminal.restore()
@@ -548,7 +627,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else {
       editor.handleInput(e)
     }
-    renderer.requestRender()
+    redraw()
+  }
+
+  /**
+   * Brings the popup up to the editor text, then asks for a frame. Candidates the host has at
+   * once (command names, sync completers) show in the same frame as the key; async ones get
+   * up to a frame to arrive (the popup redraws when they do), so a key paints once, not twice.
+   * Completion runs here, on input, never while rendering.
+   */
+  function redraw() {
+    const pending = syncCompletions()
+    if (pending) setTimeout(() => renderer.requestRender(), FRAME_MS)
+    else renderer.requestRender()
   }
 
   /** Applies what the popup did with a key; false when it left the key to the editor. */
@@ -578,13 +669,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
-  renderer.start()
-  renderer.commit([
+  commit([
     `${theme.accent("Amira")} ${theme.muted(`· ${agent.model.provider}/${agent.model.id} · ${agent.cwd}`)}`,
     "",
   ])
-  if (agent.messages.length) renderer.commit(historyLines(theme, agent.messages))
+  if (agent.messages.length) commit(historyLines(theme, agent.messages))
   for (const e of opts.startupEvents ?? []) onEvent(e)
+  // The first frame carries the banner, history and startup messages.
+  renderer.start()
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)
 

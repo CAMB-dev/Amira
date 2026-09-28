@@ -11,9 +11,9 @@ export interface PickerRow {
 }
 
 /**
- * The state of a completion list whose items arrive asynchronously for a key (the text being
- * completed), the part the command popup and the file picker share. A stale answer is dropped.
- * While the items for a new key are on their way, the last list stays drawn (`visible`) so it
+ * The state of a completion list whose items are found for a key (the text being completed),
+ * at once or asynchronously; the part the command popup and the file picker share. A stale
+ * answer is dropped. While the items for a new key are on their way, the last list stays drawn (`visible`) so it
  * does not flicker on each key, but keys wait for the fresh list (`open`). Esc dismisses the
  * list until the key changes. It draws nothing about where it sits, so it can live above or
  * below the editor.
@@ -25,32 +25,56 @@ export class AsyncList<T> {
   #navigated = false
   #dismissed = false
   #generation = 0
+  #pending: Promise<void> | undefined
 
   constructor(
-    private fetch: (key: string) => Promise<T[]>,
+    private fetch: (key: string) => T[] | Promise<T[]>,
     private onUpdate: () => void,
   ) {}
 
-  /** The text to complete, or undefined when the input is not for this list. */
-  update(key: string | undefined): void {
-    if (key === this.#key) return
+  /**
+   * The text to complete, or undefined when the input is not for this list. Items found at once
+   * apply at once; otherwise it returns a promise that settles when they arrive (and calls
+   * `onUpdate`), so the caller can wait a moment before drawing. Call it on input, not while
+   * rendering.
+   */
+  update(key: string | undefined): Promise<void> | undefined {
+    if (key === this.#key) return this.#pending
     this.#key = key
     this.#dismissed = false
+    this.#pending = undefined
     const generation = ++this.#generation
     if (key === undefined) {
       this.#result = undefined
-      return
+      return undefined
     }
-    this.fetch(key).then(
+    const apply = (items: T[]) => {
+      this.#result = { key, items }
+      this.#selected = 0
+      this.#navigated = false
+    }
+    let answer: T[] | Promise<T[]>
+    try {
+      answer = this.fetch(key)
+    } catch {
+      answer = []
+    }
+    if (Array.isArray(answer)) {
+      apply(answer)
+      return undefined
+    }
+    this.#pending = Promise.resolve(answer).then(
       (items) => {
         if (generation !== this.#generation) return
-        this.#result = { key, items }
-        this.#selected = 0
-        this.#navigated = false
+        this.#pending = undefined
+        apply(items)
         this.onUpdate()
       },
-      () => {},
+      () => {
+        if (generation === this.#generation) this.#pending = undefined
+      },
     )
+    return this.#pending
   }
 
   get key(): string | undefined {
