@@ -8,11 +8,14 @@ export const cursor = {
   down: (n: number) => (n > 0 ? `\x1b[${n}B` : ""),
   /** Moves to a zero-based column on the current row. */
   column: (col: number) => `\x1b[${col + 1}G`,
+  /** Moves to a zero-based row and column of the screen. */
+  to: (row: number, col = 0) => `\x1b[${row + 1};${col + 1}H`,
 }
 
 export const erase = {
   line: "\x1b[2K",
   toScreenEnd: "\x1b[J",
+  screen: "\x1b[2J",
 }
 
 export const RESET = "\x1b[0m"

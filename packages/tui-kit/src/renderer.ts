@@ -13,6 +13,13 @@ export interface RendererOptions {
   theme?: Theme
   /** Whether colors reach the terminal. Defaults to `isColorEnabled()`, which follows NO_COLOR. */
   color?: boolean
+  /**
+   * Whether the terminal re-wraps its lines when it gets narrower (default true). Off, moving
+   * back to the top of the live region after a resize counts rows as they were drawn.
+   */
+  reflow?: boolean
+  /** Committed lines kept for `redraw()` to print again (default 1000). */
+  historyLines?: number
 }
 
 interface Frame {
@@ -43,6 +50,14 @@ export class LiveRenderer {
   private lastFrameAt = 0
   private offResize: (() => void) | undefined
   private stopped = false
+  /** See `RendererOptions.reflow`. */
+  reflow: boolean
+  /** Committed blocks, one per frame that committed lines, oldest first; see `redraw()`. */
+  private history: string[][] = []
+  private historyCount = 0
+  private historyLimit: number
+  /** The next frame clears the screen and prints recent history first. */
+  private clearScreen = false
 
   constructor(
     private terminal: Terminal,
@@ -51,6 +66,8 @@ export class LiveRenderer {
   ) {
     this.synchronizedOutput = opts.synchronizedOutput ?? false
     this.frameIntervalMs = opts.frameIntervalMs ?? 16
+    this.reflow = opts.reflow ?? true
+    this.historyLimit = Math.max(0, opts.historyLines ?? 1000)
     this.context = {
       theme: opts.theme ?? defaultTheme,
       color: opts.color ?? isColorEnabled(),
@@ -88,6 +105,16 @@ export class LiveRenderer {
   }
 
   /**
+   * Clears the screen and draws it again: the most recent committed blocks that fit, then the
+   * live region. For a screen that something else wrote over, or one a resize left in pieces.
+   * The scrollback is left alone, so what was printed before stays there too.
+   */
+  redraw(): void {
+    this.clearScreen = true
+    this.draw([])
+  }
+
+  /**
    * Leaves the cursor below the live region (or clears it) and shows it. Until `start()` is
    * called again, rendering and committing do nothing.
    */
@@ -115,8 +142,14 @@ export class LiveRenderer {
     this.lastFrameAt = performance.now()
     const width = this.terminal.columns
     const frame = this.layout(width, this.terminal.rows, committed)
-    const full = !this.prev || committed.length > 0 || this.forceFull || width !== this.width
-    let body = full ? this.fullBody(frame, committed, width) : this.diffBody(frame)
+    const full =
+      !this.prev || committed.length > 0 || this.forceFull || this.clearScreen || width !== this.width
+    let body = this.clearScreen
+      ? this.clearBody(frame, committed, width)
+      : full
+        ? this.fullBody(frame, committed, width)
+        : this.diffBody(frame)
+    this.remember(committed)
     if (body === undefined) {
       if (sameCursor(frame.cursor, this.prev?.cursor)) return
       body = ""
@@ -175,6 +208,50 @@ export class LiveRenderer {
     return out
   }
 
+  /**
+   * The screen from the top: the end of the history, as many rows as the live region and the
+   * new lines leave, then the new lines and the frame.
+   */
+  private clearBody(frame: Frame, committed: string[], width: number): string {
+    this.clearScreen = false
+    const rows = (lines: string[]) => lines.reduce((n, l) => n + rowsFor(visibleWidth(l), width), 0)
+    let room = this.terminal.rows - frame.lines.length - rows(committed)
+    const shown: string[][] = []
+    for (let i = this.history.length - 1; i >= 0 && room > 0; i--) {
+      const block = this.history[i]!
+      const need = rows(block)
+      if (need <= room) {
+        shown.unshift(block)
+        room -= need
+        continue
+      }
+      // The first block that does not fit fills what is left with its end.
+      const tail: string[] = []
+      for (let j = block.length - 1; j >= 0; j--) {
+        const n = rowsFor(visibleWidth(block[j]!), width)
+        if (n > room) break
+        tail.unshift(block[j]!)
+        room -= n
+      }
+      shown.unshift(tail)
+      break
+    }
+    let out = `${cursor.to(0)}${erase.screen}`
+    for (const line of [...shown.flat(), ...committed]) out += `${this.finish(line)}\r\n`
+    out += frame.lines.join("\r\n")
+    this.row = Math.max(0, frame.lines.length - 1)
+    return out
+  }
+
+  /** Keeps committed lines for `redraw()`, dropping the oldest blocks past the limit. */
+  private remember(committed: string[]): void {
+    if (!committed.length || !this.historyLimit) return
+    const block = committed.slice(-this.historyLimit)
+    this.history.push(block)
+    this.historyCount += block.length
+    while (this.historyCount > this.historyLimit) this.historyCount -= this.history.shift()!.length
+  }
+
   private diffBody(frame: Frame): string | undefined {
     const prev = this.prev!.lines
     const next = frame.lines
@@ -217,11 +294,12 @@ export class LiveRenderer {
 
   /**
    * Moves to the top-left of the live region. When the terminal got narrower it may have
-   * re-wrapped our lines, so count the rows they take up at the new width.
+   * re-wrapped our lines, so count the rows they take up at the new width, unless it is known
+   * not to re-wrap (`reflow` off).
    */
   private toTop(width = this.width): string {
     let up = this.row
-    if (this.prev && width < this.width) {
+    if (this.reflow && this.prev && width < this.width) {
       up = 0
       for (let i = 0; i < this.row; i++) up += rowsFor(visibleWidth(this.prev.lines[i] ?? ""), width)
       up += Math.floor(this.col / width)
