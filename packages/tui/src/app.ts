@@ -195,7 +195,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
-      const esc = working ? "Esc interrupt · " : ""
+      const esc = working || compacting ? "Esc interrupt · " : ""
       const hint = `${send} · ${newlineKey} newline · ${esc}Ctrl+C ${ctrlC}`
       return [ctx.theme.muted(truncateToWidth(hint, width, "…"))]
     }),
@@ -488,7 +488,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (matchesKey(e, "d", { ctrl: true }) && !working && !editor.getText()) {
       return quit()
     } else if (matchesKey(e, "escape")) {
-      if (working) agent.abort()
+      // A /compact runs without a turn; Esc stops it too.
+      if (working || compacting) agent.abort()
     } else {
       editor.handleInput(e)
     }

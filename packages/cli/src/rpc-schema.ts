@@ -43,7 +43,7 @@ export const COMMAND_PARAMS = {
   },
   abort: {
     description:
-      "Aborts the running turn (it still ends with turn.end) or /compact (messages queued meanwhile still start a turn).",
+      "Aborts the running turn (it still ends with turn.end) or /compact (messages queued meanwhile are dropped: turn.steer dropped).",
     params: {},
   },
   "ui.respond": {
@@ -104,6 +104,7 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
     model: str,
     sessionId: str,
     "turnId?": str,
+    busy: { ...bool, description: "A turn or a /compact is running: prompt and model.set fail with busy." },
     messages: { ...num, description: "Number of messages in the history." },
     "lastAssistantText?": str,
     uiRequests: { ...arrayOf(ref("UiRequest")), description: "Dialogs still waiting for ui.respond." },

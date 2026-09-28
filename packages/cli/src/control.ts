@@ -111,7 +111,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     },
     send: async (text) => {
       const a = agent()
-      if (a.turnId) a.steer(text)
+      // steer() queues during a turn or a /compact; prompt() only runs when idle.
+      if (a.busy) a.steer(text)
       else await a.prompt(text)
     },
     tools: () =>

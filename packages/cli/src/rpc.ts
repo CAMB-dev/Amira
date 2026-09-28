@@ -197,6 +197,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         ...(agent.turnId ? { turnId: agent.turnId } : {}),
         messages: agent.messages.length,
         ...(last !== undefined ? { lastAssistantText: last } : {}),
+        busy: agent.busy,
         uiRequests: ui.pending,
       }
     },

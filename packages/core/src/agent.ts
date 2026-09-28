@@ -100,6 +100,9 @@ export interface PromptOptions {
 
 export class AgentBusyError extends Error {}
 
+/** A message sent during a manual compaction was dropped because the compaction was aborted. */
+export class AgentAbortedError extends Error {}
+
 export function newTurnId(): string {
   return `t_${crypto.randomUUID().slice(0, 8)}`
 }
@@ -292,6 +295,8 @@ export class Agent {
     const from = modelRef(this.model)
     this.model = model
     if (from.provider === model.provider && from.model === model.id) return
+    // The floor was measured against the old model's window.
+    this.#compactFloor = undefined
     this.#store({ type: "model_change", model: modelRef(model) })
     this.#emit(undefined, "model.changed", { from, to: modelRef(model) })
   }
@@ -299,11 +304,12 @@ export class Agent {
   /**
    * Summarizes older history now, keeping recent turns verbatim; `instructions` steer the
    * summary. Resolves false when there was nothing to compact or compaction failed (see
-   * compact.failed). Messages sent meanwhile (prompt or steer) start a turn once it ends,
-   * even when it failed or was aborted.
+   * compact.failed). Messages sent meanwhile (prompt or steer) start a turn once it ends, also
+   * when it failed. An abort drops them, as it drops a turn's steering: each gets a turn.steer
+   * `dropped` and a waiting prompt() rejects with AgentAbortedError.
    */
   async compact(instructions?: string): Promise<boolean> {
-    if (this.#abort) throw new AgentBusyError("a turn is already running")
+    if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
     this.#abort = abort
     this.#compacting = true
@@ -312,7 +318,7 @@ export class Agent {
     } finally {
       this.#abort = undefined
       this.#compacting = false
-      this.#startAfterCompaction()
+      this.#startAfterCompaction(abort.signal.aborted)
     }
   }
 
@@ -326,10 +332,17 @@ export class Agent {
   }
 
   /** Starts the turn held during a manual compaction, if anything was sent meanwhile. */
-  #startAfterCompaction() {
+  #startAfterCompaction(aborted: boolean) {
     const next = this.#afterCompaction
     this.#afterCompaction = undefined
     if (!next) return
+    if (aborted) {
+      for (const { message } of next.messages)
+        this.#emit(undefined, "turn.steer", { message, state: "dropped" })
+      const err = new AgentAbortedError("the compaction was aborted before the message was sent")
+      for (const w of next.waiters) w.reject(err)
+      return
+    }
     const turnId = next.turnId ?? newTurnId()
     for (const { message, steered } of next.messages) {
       if (steered) this.#emit(undefined, "turn.steer", { message, state: "promoted", nextTurnId: turnId })
@@ -447,7 +460,7 @@ export class Agent {
   }
 
   async #runTurn(input: string | UserMessage, opts: PromptOptions): Promise<TurnResult> {
-    if (this.#abort) throw new AgentBusyError("a turn is already running")
+    if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
     this.#abort = abort
     const turn: Turn = {

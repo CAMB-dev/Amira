@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type Message, type MockStep } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
-import { Agent } from "../src/agent.ts"
+import { Agent, AgentAbortedError } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 
 function setup(steps: MockStep[]) {
@@ -162,6 +162,30 @@ test("messages sent during a manual compaction start one turn when it ends", asy
     ["promoted", undefined],
   ])
   expect(steers[1]!.data).toMatchObject({ nextTurnId: "t_later" })
+})
+
+test("aborting a manual compaction drops what was sent meanwhile, like aborting a turn", async () => {
+  const { agent, mock, bus, events } = setup([{ text: "r1" }, { text: "r2" }, { text: "S", delayMs: 200 }])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  const compacted = agent.compact()
+  const held = agent.prompt("held")
+  agent.steer("steered")
+  agent.abort()
+  expect(await compacted).toBe(false)
+  await expect(held).rejects.toBeInstanceOf(AgentAbortedError)
+  await bus.flush()
+  expect(agent.busy).toBe(false)
+  expect(JSON.stringify(mock.requests)).not.toContain("held")
+  expect(events.filter((e) => e.type === "turn.start")).toHaveLength(2)
+  const steers = events
+    .filter((e) => e.type === "turn.steer")
+    .map((e) => [e.data.state, texts([e.data.message])[0]])
+  expect(steers).toEqual([
+    ["queued", "user:steered"],
+    ["dropped", "user:held"],
+    ["dropped", "user:steered"],
+  ])
 })
 
 test("a steer during a manual compaction is not lost when the compaction fails", async () => {

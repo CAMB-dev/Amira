@@ -448,6 +448,7 @@ test("during a /compact, prompt and model.set are busy and steer queues the mess
   const compacted = s.agent.compact()
   expect((await rpc.call({ id: 3, cmd: "model.set", model: "mock/other" })).error.code).toBe("busy")
   expect((await rpc.call({ id: 4, cmd: "prompt", text: "no" })).error.code).toBe("busy")
+  expect(await rpc.call({ id: 6, cmd: "state" })).toMatchObject({ busy: true, status: "idle" })
   expect(await rpc.call({ id: 5, cmd: "steer", text: "later" })).toMatchObject({ ok: true, queued: true })
   expect(await compacted).toBe(true)
   const start = await rpc.until((l) => l.type === "turn.start" && l.data.prompt.content[0].text === "later")
