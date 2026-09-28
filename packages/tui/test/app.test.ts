@@ -826,7 +826,7 @@ test("a diff review shows the diff above its options", async () => {
   await waitFor(() => live().includes("? Merge?"), "review dialog")
   expect(live()).toContain("-old")
   expect(live()).toContain("+new")
-  expect(live()).toContain("› merge")
+  expect(live()).toContain("› 1 merge")
   terminal.send("2")
   await idle()
   expect(agent.messages.find((m) => m.role === "toolResult")?.content[0]).toEqual({

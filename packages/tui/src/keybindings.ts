@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import type { InputEvent, TerminalEnv } from "@amira/tui-kit"
+import { detectEnv, type InputEvent, type TerminalEnv } from "@amira/tui-kit"
 
 /** Where an action applies: the input box, the command popup while open, or a dialog. */
 export type KeyScope = "input" | "popup" | "dialog"
@@ -193,6 +193,19 @@ export class Keybindings {
     const spec = specs.find(usable) ?? specs[0]
     return spec ? keyLabel(spec) : undefined
   }
+
+  /** A pair of moves in one label: "↑↓" for the arrows, else "Ctrl+P/Ctrl+N". */
+  pairLabel(up: Action, down: Action): string | undefined {
+    const a = this.label(up)
+    const b = this.label(down)
+    if (!a || !b) return a ?? b
+    return a.length === 1 && b.length === 1 ? `${a}${b}` : `${a}/${b}`
+  }
+}
+
+/** The default keys for this terminal, for components not handed any. */
+export function defaultKeybindings(env: Pick<TerminalEnv, "vscode"> = detectEnv()): Keybindings {
+  return new Keybindings(defaultKeys(env))
 }
 
 export interface LoadedKeybindings {
