@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -260,6 +260,18 @@ test("adding a provider keeps the rest of the file and never replaces an entry",
   put(file, "{ broken")
   expect(() => addProviderToSettings(file, "c", {})).toThrow(SettingsError)
   expect(readFileSync(file, "utf8")).toBe("{ broken")
+})
+
+test("adding a provider refuses to run beside another writer and always releases its lock", () => {
+  const file = path.join(home, "settings.json")
+  put(`${file}.lock`, "")
+  expect(() => addProviderToSettings(file, "a", { dialect: "openai-chat" })).toThrow(
+    "is being changed by another amira process",
+  )
+  rmSync(`${file}.lock`)
+  mkdirSync(file)
+  expect(() => addProviderToSettings(file, "a", { dialect: "openai-chat" })).toThrow(SettingsError)
+  expect(readdirSync(home).sort()).toEqual(["settings.json"])
 })
 
 test("extensions see the merged settings", async () => {
