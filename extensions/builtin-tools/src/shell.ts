@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
+import { runCommand } from "@amira/proc"
 
 export interface Shell {
   kind: "bash" | "powershell"
@@ -44,9 +45,14 @@ export function bashFromGitExecPath(execPath: string, exists: (p: string) => boo
 
 async function gitExecPath(): Promise<string | undefined> {
   try {
-    const p = Bun.spawn(["git", "--exec-path"], { stdout: "pipe", stderr: "ignore", windowsHide: true })
-    const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited])
-    return code === 0 ? out.trim() : undefined
+    // Off the main thread: a slow spawn must not freeze the UI.
+    const run = await runCommand(["git", "--exec-path"], {
+      cwd: process.cwd(),
+      timeoutMs: 30_000,
+      signal: new AbortController().signal,
+      stdoutOnly: true,
+    })
+    return run.exitCode === 0 ? run.output.trim() : undefined
   } catch {
     return undefined
   }
