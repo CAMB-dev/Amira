@@ -2,7 +2,14 @@ export { stripAnsi, type TerminalMode } from "./ansi.ts"
 export { type Capabilities, type SetupResult, setupTerminalInput } from "./capabilities.ts"
 export { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 export { Box, type BoxOptions } from "./components/box.ts"
-export { Editor, type EditorOptions } from "./components/editor.ts"
+export {
+  defaultPasteLabel,
+  Editor,
+  type EditorOptions,
+  type EditorPart,
+  type PasteInfo,
+  type SubmitInfo,
+} from "./components/editor.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
 export { StreamText } from "./components/stream-text.ts"
