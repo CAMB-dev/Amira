@@ -27,6 +27,13 @@ export interface Ai {
   registerProvider(p: ProviderConfig): void
   registerDialect(d: Dialect): void
   providers(): ProviderConfig[]
+  /** Whether a request to this provider would have an API key, or needs none (e.g. a local server). */
+  hasKey(providerId: string): boolean
+  /**
+   * "provider/model" refs worth offering, e.g. for completion: the models each provider lists
+   * and the catalog's models for it, from providers that have a key or need none.
+   */
+  knownModels(): string[]
   /** Replaces the catalog, e.g. after a refresh; affects models resolved from now on. */
   setCatalog?(catalog: ModelCatalog | undefined): void
 }
@@ -39,6 +46,9 @@ export function createAi(opts: AiOptions = {}): Ai {
   const env = opts.env ?? process.env
   const doFetch = opts.fetch ?? fetch
   let catalog = opts.catalog
+
+  const hasKey = (p: ProviderConfig) =>
+    !p.apiKeyEnv || Boolean(p.apiKey ?? keyFromEnv(p, env) ?? opts.apiKeys?.[p.id])
 
   const provider = (id: string) => {
     const p = providers.get(id)
@@ -84,6 +94,20 @@ export function createAi(opts: AiOptions = {}): Ai {
     registerProvider: (p) => void providers.set(p.id, p),
     registerDialect: (d) => void dialects.set(d.id, d),
     providers: () => [...providers.values()],
+    hasKey: (id) => {
+      const p = providers.get(id)
+      return p !== undefined && hasKey(p)
+    },
+    knownModels() {
+      const out = new Set<string>()
+      for (const p of providers.values()) {
+        if (!hasKey(p)) continue
+        for (const m of p.models ?? []) if (m.id) out.add(`${p.id}/${m.id}`)
+        const catalogId = catalogProviderId(p)
+        for (const id of catalogId ? (catalog?.list?.(catalogId) ?? []) : []) out.add(`${p.id}/${id}`)
+      }
+      return [...out]
+    },
     setCatalog: (c) => {
       catalog = c
     },

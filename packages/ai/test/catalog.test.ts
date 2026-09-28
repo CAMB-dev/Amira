@@ -109,3 +109,26 @@ test("without a catalog, or after replacing it, models resolve as before", () =>
   expect(ai.model("deepseek/deepseek-flash").contextWindow).toBe(1_000_000)
   expect(ai.model("ollama/deepseek-flash").contextWindow).toBe(128_000)
 })
+
+test("lists a provider's models, and the ai offers them only for providers with a key", () => {
+  const catalog = createCatalog(fixture)
+  expect(catalog.list?.("deepseek")).toContain("deepseek-flash")
+  expect(catalog.list?.("nope")).toEqual([])
+  const ai = createAi({
+    catalog,
+    env: { DEEPSEEK_API_KEY: "k" },
+    providers: [
+      findPreset("deepseek")!,
+      { id: "local", dialect: "openai-chat", baseUrl: "http://x", models: [{ id: "tiny" }] },
+    ],
+  })
+  const known = ai.knownModels()
+  expect(known).toContain("deepseek/deepseek-flash")
+  expect(known).toContain("local/tiny")
+  // No ANTHROPIC_API_KEY here, so its models are not offered.
+  expect(known.some((m) => m.startsWith("anthropic/"))).toBe(false)
+  expect(ai.hasKey("deepseek")).toBe(true)
+  expect(ai.hasKey("anthropic")).toBe(false)
+  expect(ai.hasKey("local")).toBe(true)
+  expect(ai.hasKey("missing")).toBe(false)
+})
