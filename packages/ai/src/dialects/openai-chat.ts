@@ -90,7 +90,7 @@ export const openaiChat: Dialect = {
 function requestBody(req: ModelRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model.id,
-    messages: toChatMessages(req.systemPrompt, req.messages),
+    messages: toChatMessages(req.systemPrompt, req.messages, { images: req.model.caps.images }),
     stream: true,
     stream_options: { include_usage: true },
   }
