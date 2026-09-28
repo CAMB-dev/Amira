@@ -117,11 +117,6 @@ export class MarkdownStream implements Component {
     }
   }
 
-  /** Whether nothing was added since the text was last taken. */
-  isEmpty(): boolean {
-    return this.src === "" && !this.state.emitted && this.done.length === 0
-  }
-
   render(width: number, ctx: RenderContext): string[] {
     this.theme = ctx.theme
     const env = this.env(width)
@@ -131,6 +126,7 @@ export class MarkdownStream implements Component {
           this.committedRows += rows.length
         }
       : (rows) => this.done.push(...rows)
+    if (ctx.commit && this.done.length) sink(this.done.splice(0))
     this.processLines(env, sink)
     let live = this.live(env)
     if (ctx.commit && live.length > this.maxRows) {

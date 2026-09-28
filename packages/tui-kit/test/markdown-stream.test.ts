@@ -166,6 +166,17 @@ test("a closed block is committed at once; the open one stays live", () => {
   expect(m.committedRows).toBe(0)
 })
 
+test("rows finished while nothing could commit them are committed by the first frame that can", () => {
+  const m = new MarkdownStream()
+  m.append("# Head\n\nbody")
+  expect(m.render(40, plain)).toEqual(["Head", "", "body"])
+  const { ctx, committed } = committing()
+  expect(m.render(40, ctx)).toEqual(["", "body"])
+  expect(committed).toEqual(["Head"])
+  m.render(40, ctx)
+  expect(committed).toEqual(["Head"])
+})
+
 test("each finished line of a code block is committed as soon as it ends", () => {
   const { ctx, committed } = committing()
   const m = new MarkdownStream({ highlight: false })
