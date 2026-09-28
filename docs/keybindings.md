@@ -13,7 +13,8 @@ a key or a list of keys:
 ```
 
 - A key replaces all of the action's default keys. An empty list unbinds the action.
-- The first key of an action is the one the hint line shows.
+- The first key of an action is the one the hint line shows (for `newline`, the first one the
+  terminal can report).
 - The file is read at startup. Unknown actions, keys that cannot be read and a key bound to two
   actions in the same place are reported as warnings when Amira starts; the rest of the file
   still applies. If the file is not valid JSON, the default keys are used.
@@ -44,7 +45,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | --- | --- | --- |
 | `submit` | `enter` | Send the message; while a turn runs, steer it |
 | `newline` | `shift+enter`, `ctrl+enter` | Insert a line break |
-| `queue` | `alt+enter`, `ctrl+q` (Windows Terminal: `ctrl+q` first) | While a turn runs, send the message after it |
+| `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it |
 | `interrupt` | `escape` | Stop the running turn |
 | `cancel` | `ctrl+c` | Stop the running turn, else clear the input, else quit |
 | `exit` | `ctrl+d` | Quit when the input is empty and nothing runs |
@@ -93,8 +94,9 @@ In a list of up to nine options, the digit in front of an option chooses it.
 | `dialog.yes` | `y` | Answer yes to a confirmation |
 | `dialog.no` | `n` | Answer no to a confirmation |
 
-Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) are
-fixed for now.
+Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
+the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for
+now.
 
 ## Terminal settings
 

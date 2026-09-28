@@ -371,7 +371,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
         ...(interruptKey ? [`${interruptKey} interrupt`] : []),
       ].join(` ${glyphs.separator} `)
-      const head = label ? `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} · `)}` : ""
+      const head = label
+        ? `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
+        : ""
       return [truncateToWidth(head + ctx.theme.muted(stats), width, glyphs.more), ""]
     }),
     new View((width, ctx) => subagentLines([...subagents.values()], Date.now(), width, ctx.theme)),
@@ -427,14 +429,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const root = new View((width, ctx) => {
     // Lines committed since the last frame go out with this one: one redraw, not one each.
     if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
+    // Live tool rows sit above the dialog (often the call that asked it), with the blank row
+    // before the rest; the dialog fits in what they leave. No reply streams while tools are live.
+    const tools = liveToolRows(width, ctx)
+    const budget = ctx.rows - 1 - (tools.length ? tools.length + 1 : 0)
     const dialog = dialogs[0]
-    if (dialog) dialog.maxRows = Math.max(1, ctx.rows - 1)
+    if (dialog) dialog.maxRows = Math.max(1, budget)
     let rest = bottom.render(width, ctx)
-    if (dialog && rest.length > ctx.rows - 1) {
-      dialog.maxRows = Math.max(1, ctx.rows - 1 - (rest.length - dialogRows))
+    if (dialog && rest.length > budget) {
+      dialog.maxRows = Math.max(1, budget - (rest.length - dialogRows))
       rest = bottom.render(width, ctx)
     }
-    const tools = liveToolRows(width, ctx)
     streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - 3)
     const commit = ctx.commit
     const replyCtx: RenderContext = commit

@@ -1593,6 +1593,9 @@ test("a diff review taller than the terminal keeps its title, options and keys i
   expect(live()).toContain("  2 keep")
   expect(live()).toContain("↑↓ move · Enter choose · Esc cancel")
   expect(live()).not.toContain("type to filter")
+  // The running call that asked stays in view above it, and the frame fits the screen.
+  expect(rows.some((l) => l.startsWith("● review"))).toBe(true)
+  expect(rows[0]).not.toContain("line")
   terminal.send("1")
   await idle()
   terminal.send("\x03")
