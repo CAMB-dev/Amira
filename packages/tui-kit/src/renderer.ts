@@ -24,7 +24,7 @@ export class LiveRenderer {
   synchronizedOutput: boolean
   private frameIntervalMs: number
   private prev: Frame | undefined
-  /** Row of the terminal cursor, relative to the top of the live region. */
+  /** Row and column of the terminal cursor, relative to the top of the live region. */
   private row = 0
   private col = 0
   private width = 0
@@ -117,10 +117,16 @@ export class LiveRenderer {
   private layout(width: number, height: number): Frame {
     let lines = this.root.render(width)
     let pos: Frame["cursor"]
+    let found = false
     lines = lines.map((line, row) => {
       const at = line.indexOf(CURSOR_MARKER)
       if (at === -1) return fit(line, width)
-      pos ??= { row, col: Math.min(visibleWidth(line.slice(0, at)), width - 1) }
+      if (!found) {
+        found = true
+        // A caret past the last visible cell has nowhere to go; hide the cursor instead.
+        const col = visibleWidth(line.slice(0, at))
+        if (col < width) pos = { row, col }
+      }
       return fit(line.replaceAll(CURSOR_MARKER, ""), width)
     })
     // Rows that scrolled off the top cannot be redrawn, so never draw more than fits.
@@ -162,9 +168,9 @@ export class LiveRenderer {
       this.col = col
       return this.moveTo(row) + cursor.column(col)
     }
-    const last = Math.max(0, frame.lines.length - 1)
-    this.col = visibleWidth(frame.lines[last] ?? "")
-    return this.moveTo(last)
+    // Without a caret, park at the start of the last row so the column is always known.
+    this.col = 0
+    return `${this.moveTo(Math.max(0, frame.lines.length - 1))}\r`
   }
 
   /** Moves between rows of the live region. Moving down uses newlines so missing rows get created. */
@@ -185,7 +191,7 @@ export class LiveRenderer {
     if (this.prev && width < this.width) {
       up = 0
       for (let i = 0; i < this.row; i++) up += rowsFor(visibleWidth(this.prev.lines[i] ?? ""), width)
-      up += Math.floor(Math.min(this.col, this.width - 1) / width)
+      up += Math.floor(this.col / width)
     }
     this.row = 0
     return `\r${cursor.up(up)}`

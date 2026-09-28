@@ -225,3 +225,32 @@ test("stop cancels a scheduled frame", async () => {
   await Bun.sleep(30)
   expect(term.writes.length).toBe(writes)
 })
+
+test("after a narrowing resize, only the live region's own rows are erased", () => {
+  const { term, screen, root, r } = setup(["x", "y", "zzzzzzzzz"], 10, 10)
+  r.commit(["kept"])
+  root.lines = ["X", "y", "zzzzzzzzz"]
+  r.render()
+  // The terminal re-wraps "zzzzzzzzz" onto two rows; the cursor is on the first of them.
+  term.columns = 5
+  root.lines = ["X", "y", "zz"]
+  term.setSize(5, 10)
+  r.render()
+  const frame = term.writes.at(-1)!
+  expect(frame.startsWith(`${cursor.hide}\r${cursor.up(2)}\x1b[J`)).toBe(true)
+  screen.cols = 5
+  expect(screen.lines[0]).toBe("kept")
+})
+
+test("a caret beyond the visible width hides the cursor", () => {
+  const { screen, root, r } = setup([`0123456789abc${CURSOR_MARKER}`], 10, 5)
+  r.render()
+  expect(screen.cursorVisible).toBe(false)
+  root.lines = [`0123456789${CURSOR_MARKER}`]
+  r.render()
+  expect(screen.cursorVisible).toBe(false)
+  root.lines = [`012345678${CURSOR_MARKER}9`]
+  r.render()
+  expect(screen.cursorVisible).toBe(true)
+  expect(screen.x).toBe(9)
+})
