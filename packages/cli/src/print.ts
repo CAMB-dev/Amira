@@ -180,6 +180,8 @@ export async function runPrint(
     let code: number
     if (opts.commands && parseCommandLine(prompt)) {
       code = (await opts.commands.run(prompt, { frontend: "print" })).ok ? 0 : 1
+    } else if (opts.commands?.skillLine(prompt)) {
+      code = (await opts.commands.runSkill(prompt, { frontend: "print" })).ok ? 0 : 1
     } else {
       code = exitCode(await agent.prompt(prompt))
     }
