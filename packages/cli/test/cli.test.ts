@@ -97,6 +97,20 @@ test("plain print mode streams text to stdout and tool activity to stderr", asyn
   expect(io.err).toBe("● echo x\n")
 })
 
+test("a compaction blocked by an extension is reported as skipped, not failed", async () => {
+  const { agent } = await mockSession([
+    { text: "r1" },
+    { text: "r2", usage: { input: 100_000_000 } },
+    { text: "r3" },
+  ])
+  agent.interceptors.add("compact.before", () => ({ action: "block", reason: "not now" }))
+  await runPrint(agent, "q1", false, { io: capture() })
+  await runPrint(agent, "q2", false, { io: capture() })
+  const io = capture()
+  expect(await runPrint(agent, "q3", false, { io })).toBe(0)
+  expect(io.err).toBe("● compaction skipped: not now\n")
+})
+
 test("json print mode writes one parseable event per line, ending with turn.end", async () => {
   const { agent } = await mockSession([{ text: "hi" }])
   const io = capture()
@@ -201,7 +215,8 @@ test("the amira command: help, version and usage errors have the right exit code
     const p = Bun.spawn(["bun", main, ...args], {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, AMIRA_MODEL: "" },
+      // An empty home, so the user's own settings cannot pick a model.
+      env: { ...process.env, AMIRA_MODEL: "", AMIRA_HOME: path.join(here, "no-such-home") },
     })
     const [out, err, code] = await Promise.all([
       new Response(p.stdout).text(),
@@ -217,6 +232,9 @@ test("the amira command: help, version and usage errors have the right exit code
   expect([noModel.code, noModel.out]).toEqual([2, ""])
   expect(noModel.err).toContain("no model selected")
   expect((await run("-m", "nope/x", "-p", "hi")).code).toBe(2)
+  const badRef = await run("-m", "foo", "-p", "hi")
+  expect(badRef.code).toBe(2)
+  expect(badRef.err).toContain("Run amira --help for usage.")
 }, 60_000)
 
 test("json mode includes session.start when the session is announced on ready", async () => {
@@ -258,7 +276,7 @@ test("--shell and --disable-tools decide which tools are hidden", async () => {
   expect(toolsToDisable("powershell", [])).toEqual(["bash"])
 })
 
-test("unknown --disable-tools names are reported at startup", async () => {
+test("unknown names to disable are reported at startup, with where they came from", async () => {
   const builtins = async () => [
     {
       source: "builtin:test",
@@ -276,8 +294,8 @@ test("unknown --disable-tools names are reported at startup", async () => {
     extensions: [],
     noBuiltins: false,
     builtins,
-    disabledTools: ["glob", "nope"],
-    shell: "bash",
+    disabledTools: ["glob", "nope", "powershell"],
+    requestedDisabled: { names: ["glob", "nope"], from: "settings tools.disabled" },
     ai: createAi({
       dialects: [createMockDialect([])],
       providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
@@ -285,6 +303,6 @@ test("unknown --disable-tools names are reported at startup", async () => {
   })
   const errors = startupEvents.flatMap((e) => (e.type === "extension.error" ? [e.data.error] : []))
   expect(errors).toHaveLength(1)
-  expect(errors[0]).toBe(`--disable-tools: no tool named "nope"`)
+  expect(errors[0]).toBe(`settings tools.disabled: no tool named "nope"`)
   expect(agent.tools.specs().map((s) => s.name)).toEqual(["bash"])
 })

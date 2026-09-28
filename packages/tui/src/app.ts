@@ -20,7 +20,7 @@ import {
   truncateToWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { summarizeArgs, toolLines, userLines } from "./format.ts"
+import { historyLines, summarizeArgs, toolLines, userLines } from "./format.ts"
 import { StatusBar } from "./status-bar.ts"
 
 export interface InteractiveOptions {
@@ -66,6 +66,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const running = new Map<string, string>()
   let working = false
   let thinking = false
+  let compacting = false
   /** Blink state of the bullet in front of running tools. */
   let blinkOn = true
   let blinkTimer: ReturnType<typeof setInterval> | undefined
@@ -109,7 +110,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         spinner.label = `running ${[...new Set(running.values())].join(", ")}`
         return [...lines, ...spinner.render(width, ctx), ""]
       }
-      spinner.label = preparing ? `preparing ${preparing}` : thinking ? "thinking" : "working"
+      spinner.label = compacting
+        ? "compacting the conversation"
+        : preparing
+          ? `preparing ${preparing}`
+          : thinking
+            ? "thinking"
+            : "working"
       return [...spinner.render(width, ctx), ""]
     }),
     new View((width, ctx) =>
@@ -221,6 +228,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           queueMicrotask(() => send(next))
         }
         break
+      case "compact.start":
+        compacting = true
+        break
+      case "compact.end":
+        compacting = false
+        renderer.commit([theme.muted(`Compacted ${e.data.replaced} older messages into a summary.`), ""])
+        break
+      case "compact.failed":
+        compacting = false
+        renderer.commit([
+          e.data.blocked
+            ? theme.muted(`Compaction skipped: ${e.data.error}`)
+            : theme.warning(`Compaction failed: ${e.data.error}`),
+          "",
+        ])
+        break
       case "extension.error":
         renderer.commit([theme.warning(`[extension ${e.data.source}] ${e.data.error}`), ""])
         break
@@ -294,6 +317,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     `${theme.accent("Amira")} ${theme.muted(`· ${agent.model.provider}/${agent.model.id} · ${agent.cwd}`)}`,
     "",
   ])
+  if (agent.messages.length) renderer.commit(historyLines(theme, agent.messages))
   for (const e of opts.startupEvents ?? []) onEvent(e)
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)

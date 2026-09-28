@@ -13,6 +13,12 @@ export interface ProviderCompat {
   maxTokensField?: "max_tokens" | "max_completion_tokens"
   /** Whether to ask for usage in the stream. Defaults to true. */
   streamUsage?: boolean
+  /**
+   * How anthropic-messages asks for thinking. "adaptive" (the default) sends an effort, as
+   * current Claude models require; "budget" sends budget_tokens, for Claude 4.5 and older
+   * and for compatible servers such as DeepSeek.
+   */
+  thinking?: "adaptive" | "budget"
 }
 
 export interface DialectContext {

@@ -12,6 +12,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     },
     registerStatusItem: () => () => {},
     requestRender: () => {},
+    settings: {},
     on: () => () => {},
     intercept: () => () => {},
     runCommand: () => Promise.reject(new Error("not used")),

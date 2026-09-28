@@ -31,6 +31,12 @@ export function tokensPerSecond(
   return outputTokens / seconds
 }
 
+/** Share of prompt tokens served from the provider's cache; undefined before any prompt tokens. */
+export function cacheHitRate(input: number, cacheRead: number, cacheWrite: number): number | undefined {
+  const prompt = input + cacheRead + cacheWrite
+  return prompt > 0 ? cacheRead / prompt : undefined
+}
+
 /**
  * The default status bar: model, activity, context use against the model's window,
  * output tokens, the speed of the last reply, and the git branch or folder.
@@ -42,6 +48,9 @@ export default defineExtension((api) => {
   let context = 0
   let contextWindow: number | undefined
   let output = 0
+  let promptInput = 0
+  let promptCacheRead = 0
+  let promptCacheWrite = 0
   let firstDeltaAt: number | undefined
   let tps: number | undefined
   let place = ""
@@ -51,6 +60,9 @@ export default defineExtension((api) => {
     if (e.data.reason !== "resume") {
       context = 0
       output = 0
+      promptInput = 0
+      promptCacheRead = 0
+      promptCacheWrite = 0
       tps = undefined
       status = "idle"
       statusReason = ""
@@ -77,6 +89,9 @@ export default defineExtension((api) => {
     if (!u) return
     context = u.input + u.cacheRead + u.cacheWrite + u.output
     output += u.output
+    promptInput += u.input
+    promptCacheRead += u.cacheRead
+    promptCacheWrite += u.cacheWrite
     if (firstDeltaAt !== undefined) tps = tokensPerSecond(u.output, firstDeltaAt, e.ts) ?? tps
     api.requestRender()
   })
@@ -101,6 +116,16 @@ export default defineExtension((api) => {
     tone: "muted",
     text: () =>
       context || output ? `ctx ${formatContext(context, contextWindow)} · out ${formatTokens(output)}` : "",
+  })
+  api.registerStatusItem({
+    id: "cache",
+    align: "right",
+    order: 3,
+    tone: "muted",
+    text: () => {
+      const rate = cacheHitRate(promptInput, promptCacheRead, promptCacheWrite)
+      return rate === undefined ? "" : `cache ${Math.round(rate * 100)}%`
+    },
   })
   api.registerStatusItem({
     id: "speed",

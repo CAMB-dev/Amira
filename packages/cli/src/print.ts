@@ -80,6 +80,20 @@ export async function runPrint(
       case "tool.execute.end":
         if (e.data.result.isError) io.stderr(`  ✗ ${firstLine(e.data.result.content)}\n`)
         break
+      case "compact.start":
+        if (!endedWithNewline) {
+          io.stdout("\n")
+          endedWithNewline = true
+        }
+        io.stderr(`● compacting ${e.data.replacing} older messages\n`)
+        break
+      case "compact.failed":
+        io.stderr(
+          e.data.blocked
+            ? `● compaction skipped: ${e.data.error}\n`
+            : `  ✗ compaction failed: ${e.data.error}\n`,
+        )
+        break
       case "extension.error":
         io.stderr(`[extension ${e.data.source}] ${e.data.error}\n`)
         break

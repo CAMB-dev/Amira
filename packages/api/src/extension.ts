@@ -1,5 +1,6 @@
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
+import type { Settings } from "./settings.ts"
 import type { ToolDefinition } from "./tools.ts"
 import type { StatusItem } from "./ui.ts"
 
@@ -16,6 +17,8 @@ export interface ExtensionAPI {
   registerStatusItem(item: StatusItem): () => void
   /** Asks frontends to redraw, e.g. after a status item's state changed. */
   requestRender(): void
+  /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */
+  readonly settings: Readonly<Settings>
   /**
    * Runs a command off the main thread (a slow spawn cannot freeze the UI), killing the
    * whole process tree on abort, timeout and exit.

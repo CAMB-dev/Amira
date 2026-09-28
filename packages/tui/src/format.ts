@@ -1,4 +1,4 @@
-import type { ToolResult } from "@amira/api"
+import type { Message, ToolResult } from "@amira/api"
 import { type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 
 /** One-line summary of tool arguments, e.g. `read src/index.ts` or `bash bun test`. */
@@ -50,4 +50,24 @@ export function toolLines(
 /** Committed lines for the user's message. */
 export function userLines(theme: Theme, text: string): string[] {
   return text.split("\n").map((l, i) => `${theme.accent(i === 0 ? "›" : " ")} ${l}`)
+}
+
+/** A resumed conversation, shown compactly: user messages, replies and one line per tool call. */
+export function historyLines(theme: Theme, messages: Message[]): string[] {
+  const out: string[] = []
+  for (const m of messages) {
+    if (m.role === "user") {
+      const text = m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n")
+      out.push(...userLines(theme, text.trim()), "")
+    } else if (m.role === "assistant") {
+      for (const b of m.content) {
+        if (b.type === "text" && b.text.trim()) out.push(...b.text.trim().split("\n"), "")
+        else if (b.type === "toolCall") {
+          const summary = summarizeArgs(b.args)
+          out.push(theme.muted(`● ${b.name}${summary ? ` ${summary}` : ""}`), "")
+        }
+      }
+    }
+  }
+  return [...out, theme.muted("── resumed ──"), ""]
 }
