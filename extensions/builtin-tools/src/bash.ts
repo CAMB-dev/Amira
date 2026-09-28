@@ -9,6 +9,7 @@ import {
   resolvePowerShell,
 } from "./powershell.ts"
 import { resolveShell, type Shell } from "./shell.ts"
+import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE } from "./shell-notes.ts"
 import { StandbyPool } from "./standby.ts"
 import { truncateOutput } from "./truncate.ts"
 
@@ -104,14 +105,10 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
       if (shell.label) parts.unshift(`Shell: ${shell.label}`)
       parts.push(statusLine(run, timeoutMs))
       if (!run.contained) {
-        parts.push(
-          "Warning: the command could not be placed in a job object, so processes it started may still be running.",
-        )
+        parts.push(NOT_CONTAINED_WARNING)
       } else if (!run.settled && !run.aborted) {
         // After an abort the job was terminated, so open pipes are not a sign of survivors.
-        parts.push(
-          "Note: output was still open after the command ended; some processes may still be running.",
-        )
+        parts.push(OUTPUT_OPEN_NOTE)
       }
       return {
         content: [{ type: "text", text: parts.join("\n\n") }],

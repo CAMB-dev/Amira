@@ -16,6 +16,7 @@ import type { EditParams } from "./edit.ts"
 import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
 import type { ReadParams } from "./read.ts"
+import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE, STATUS_LINE } from "./shell-notes.ts"
 import type { WriteParams } from "./write.ts"
 
 /** How the built-in tools are shown (D1, D27): through the same API as any extension's. */
@@ -124,11 +125,9 @@ export const writePresenter: ToolPresenter<WriteParams, WriteDetails> = {
 function shellOutput(text: string): string {
   const parts = text.split("\n\n")
   if (parts[0]?.startsWith("Shell: ")) parts.shift()
-  while (
-    parts.length &&
-    /^(Exit code: |Command (timed out|was aborted|was killed)|Warning: |Note: )/.test(parts.at(-1)!)
-  )
-    parts.pop()
+  // Only the tool's own paragraphs: output whose last paragraph starts with "Warning:" stays.
+  while (parts.at(-1) === NOT_CONTAINED_WARNING || parts.at(-1) === OUTPUT_OPEN_NOTE) parts.pop()
+  if (parts.length && STATUS_LINE.test(parts.at(-1)!)) parts.pop()
   const out = parts.join("\n\n")
   return out === "(no output)" ? "" : out
 }

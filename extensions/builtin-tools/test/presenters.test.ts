@@ -14,6 +14,7 @@ import {
   writePresenter,
 } from "../src/presenters.ts"
 import { readTool } from "../src/read.ts"
+import { OUTPUT_OPEN_NOTE } from "../src/shell-notes.ts"
 import { writeTool } from "../src/write.ts"
 import { makeCtx, tempDirs } from "./util.ts"
 
@@ -103,6 +104,29 @@ test("shell: the command alone as head, exit code and output lines as result, ou
   expect(shellPresenter.body!(view({ command: "x" }, failed), opts)).toEqual([{ kind: "code", text: "boom" }])
   const timedOut = { ...failed, details: { ...failed.details, exitCode: null, timedOut: true } }
   expect(shellPresenter.result!(view({ command: "x" }, timedOut))).toBe("timed out · 1 line")
+  // The tool's own notes are dropped from the body; a paragraph the command printed is not,
+  // even when it starts like one of them.
+  const warned = {
+    content: [
+      {
+        type: "text" as const,
+        text: `step 1\n\nWarning: disk almost full\n\nExit code: 1\n\n${OUTPUT_OPEN_NOTE}`,
+      },
+    ],
+    isError: true,
+    details: { exitCode: 1, timedOut: false, aborted: false, outputLines: 3 },
+  }
+  expect(shellPresenter.result!(view({ command: "x" }, warned))).toBe("exit 1 · 3 lines")
+  expect(shellPresenter.body!(view({ command: "x" }, warned), opts)).toEqual([
+    { kind: "code", text: "step 1" },
+    { kind: "code", text: "" },
+    { kind: "code", text: "Warning: disk almost full" },
+  ])
+  // Output ending in what looks like a status line keeps it; only the tool's last one goes.
+  const echoed = textResult("Exit code: 5\n\nExit code: 0", true)
+  expect(shellPresenter.body!(view({ command: "x" }, echoed), opts)).toEqual([
+    { kind: "code", text: "Exit code: 5" },
+  ])
   // Without details the exit code is read from the text.
   expect(shellPresenter.result!(view({ command: "x" }, textResult("x\n\nExit code: 3", true)))).toBe(
     "exit 3 · 1 line",
