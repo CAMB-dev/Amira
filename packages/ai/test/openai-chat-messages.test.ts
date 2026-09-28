@@ -177,3 +177,27 @@ test("the dialect sends tool-result images when the model supports images", asyn
   )
   expect(seen.body.messages.at(-1).role).toBe("user")
 })
+
+test("an id reused by a later call: the earlier call never takes the later call's result", () => {
+  const out = toChatMessages("", [
+    user("go"),
+    assistant(call("x")),
+    assistant(call("x")),
+    result("x", "second"),
+  ])
+  expect(out.filter((m) => m.role === "tool")).toEqual([
+    { role: "tool", tool_call_id: "x", content: MISSING_RESULT },
+    { role: "tool", tool_call_id: "x", content: "second" },
+  ])
+})
+
+test("an id reused across steps pairs each call with its own result", () => {
+  const out = toChatMessages("", [
+    user("go"),
+    assistant(call("x")),
+    result("x", "first"),
+    assistant(call("x")),
+    result("x", "second"),
+  ])
+  expect(out.filter((m) => m.role === "tool").map((m) => m.content)).toEqual(["first", "second"])
+})

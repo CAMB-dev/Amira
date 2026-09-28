@@ -17,6 +17,7 @@ import {
   type MessageSignature,
   RESPONSES_DIALECT,
 } from "./openai-responses-input.ts"
+import { madeUpIdPrefix } from "./tool-results.ts"
 
 interface Call {
   index: number
@@ -39,6 +40,7 @@ interface Reasoning {
 export class ResponsesAccumulator {
   readonly message: AssistantMessage
   readonly #calls = new Map<string, Call>()
+  readonly #idPrefix = madeUpIdPrefix()
   readonly #reasoning = new Map<string, Reasoning>()
   readonly #texts = new Map<string, TextBlock>()
   readonly #messages = new Map<string, MessageSignature>()
@@ -227,7 +229,8 @@ export class ResponsesAccumulator {
     }
     const fresh = !call.id && !call.name
     if (typeof item?.call_id === "string" && item.call_id) call.id = item.call_id
-    else if (!call.id) call.id = typeof item?.id === "string" && item.id ? item.id : `call_${call.index}`
+    else if (!call.id)
+      call.id = typeof item?.id === "string" && item.id ? item.id : `${this.#idPrefix}${call.index}`
     if (typeof item?.name === "string" && item.name) call.name = item.name
     if (fresh) {
       yield {

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
-import type { AssistantMessage, Message, ModelRef } from "@amira/ai"
-import { contextTokens } from "./compaction.ts"
+import type { Message, ModelRef } from "@amira/ai"
+import { contextTokens, summaryMessages } from "./compaction.ts"
 import { amiraPath } from "./home.ts"
 
 export interface SessionHeader {
@@ -23,6 +23,8 @@ export type SessionEntryData =
   /** Makes `target` the tip of the current branch. */
   | { type: "checkout"; target: string }
   | { type: "subagent"; childSessionId: string; role: string }
+  /** Deferred tools the session loaded (via tool_search), offered to the model from then on. */
+  | { type: "tools_loaded"; names: string[] }
   | { type: "custom"; ext: string; data: unknown }
 
 export type SessionEntry = SessionEntryData & { id: string; parentId: string | null; ts: number }
@@ -34,6 +36,8 @@ export interface RestoredSession {
   model?: ModelRef
   /** Context size from the last reply since the last compaction; older usage no longer applies. */
   contextTokens?: number
+  /** Deferred tools loaded on this branch, in load order. */
+  loadedTools: string[]
 }
 
 /**
@@ -172,18 +176,23 @@ export class SessionStore {
     let items: { id: string; message: Message }[] = []
     let model: ModelRef | undefined
     let tokens: number | undefined
+    const loadedTools = new Set<string>()
     for (const e of this.branch()) {
-      if (e.type === "message") {
+      if (e.type === "tools_loaded") {
+        for (const name of Array.isArray(e.names) ? e.names : []) {
+          if (typeof name === "string") loadedTools.add(name)
+        }
+      } else if (e.type === "message") {
         items.push({ id: e.id, message: e.message })
         if (e.message.role === "assistant" && e.message.usage) tokens = contextTokens(e.message.usage)
       } else if (e.type === "model_change") model = e.model
       else if (e.type === "compaction") {
         tokens = undefined
+        // As in the agent, the summary goes first and what it does not replace follows in
+        // order: in a long turn that is the turn's prompt and its latest steps.
         const gone = new Set(e.replaces)
-        const at = items.findIndex((i) => gone.has(i.id))
-        const kept = items.filter((i) => !gone.has(i.id))
         const summary = summaryMessages(e.summary, model).map((message) => ({ id: e.id, message }))
-        items = [...kept.slice(0, Math.max(0, at)), ...summary, ...kept.slice(Math.max(0, at))]
+        items = [...summary, ...items.filter((i) => !gone.has(i.id))]
       }
     }
     const entryIds = new Map<Message, string>()
@@ -193,6 +202,7 @@ export class SessionStore {
       entryIds,
       ...(model ? { model } : {}),
       ...(tokens !== undefined ? { contextTokens: tokens } : {}),
+      loadedTools: [...loadedTools],
     }
   }
 
@@ -258,22 +268,6 @@ function sizeOf(file: string): number | undefined {
   }
 }
 
-const SUMMARY_PREFIX = "The earlier part of this conversation was compacted. Summary:"
-
-/**
- * How a compaction summary appears in the conversation: a user message with the summary
- * and a short assistant acknowledgement, so roles keep alternating for every provider.
- */
-export function summaryMessages(summary: string, model?: ModelRef): Message[] {
-  const ack: AssistantMessage = {
-    role: "assistant",
-    content: [{ type: "text", text: "Understood. I will continue from this summary." }],
-    model: model ?? { provider: "amira", model: "compaction" },
-    stopReason: "end",
-  }
-  return [{ role: "user", content: [{ type: "text", text: `${SUMMARY_PREFIX}\n\n${summary.trim()}` }] }, ack]
-}
-
 function parseLine(line: string): unknown {
   if (!line.trim()) return undefined
   try {
@@ -294,6 +288,7 @@ const ENTRY_TYPES = new Set<unknown>([
   "compaction",
   "checkout",
   "subagent",
+  "tools_loaded",
   "custom",
 ])
 

@@ -1,4 +1,4 @@
-import type { AnyEvent, UserMessage } from "@amira/api"
+import type { AnyEvent, FrontendView, UserMessage } from "@amira/api"
 import {
   type Agent,
   AgentBusyError,
@@ -12,6 +12,7 @@ import {
   defaultTheme,
   Editor,
   type EditorPart,
+  FullScreenRenderer,
   type InputEvent,
   InputReader,
   key,
@@ -46,6 +47,7 @@ import { HistorySearch } from "./history-search.ts"
 import { InputBox } from "./input-box.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { StatusBar } from "./status-bar.ts"
+import { SubagentViewer } from "./subagent-view.ts"
 
 export interface InteractiveOptions {
   agent: Agent
@@ -287,7 +289,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (dialogs[0] || inputList()) return []
       const ctrlC = working ? "interrupt" : editor.isEmpty ? "quit" : "clear"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
-      const esc = working ? "Esc interrupt · " : ""
+      const esc = working || compacting ? "Esc interrupt · " : ""
       const hint = `${send} · ${newlineKey} newline · ${esc}Ctrl+C ${ctrlC}`
       return [ctx.theme.muted(truncateToWidth(hint, width, "…"))]
     }),
@@ -306,6 +308,44 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     frameIntervalMs: FRAME_MS,
     theme,
   })
+
+  /**
+   * The full-screen sub-agent viewer, on the alternate screen while open. The inline UI is
+   * suspended meanwhile: what the main session commits is held and printed when it closes.
+   */
+  let viewer: SubagentViewer | undefined
+  let viewerTimer: ReturnType<typeof setInterval> | undefined
+  const fullScreen = new FullScreenRenderer(
+    terminal,
+    new View((width, ctx) => viewer?.render(width, ctx) ?? []),
+    { synchronizedOutput: capabilities.synchronizedOutput, theme, frameIntervalMs: 33 },
+  )
+
+  function openView(view: FrontendView) {
+    if (view.kind !== "subagent" || !commands) return
+    if (viewer) viewer.show(view.sessionId)
+    else {
+      viewer = new SubagentViewer(view.sessionId, {
+        source: commands.control,
+        waiting: () => dialogs.map((d) => d.request.title),
+        onClose: closeView,
+      })
+      renderer.suspend()
+      fullScreen.open()
+      // Elapsed times move even when no event comes.
+      viewerTimer = setInterval(() => fullScreen.requestRender(), 1000)
+    }
+    fullScreen.render()
+  }
+
+  function closeView() {
+    if (!viewer) return
+    viewer = undefined
+    clearInterval(viewerTimer)
+    viewerTimer = undefined
+    fullScreen.close()
+    renderer.resume()
+  }
 
   let resolveExit!: (code: number) => void
   const exited = new Promise<number>((r) => {
@@ -349,6 +389,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const onEvent = (e: AnyEvent) => {
     if (trackSubagent(e)) renderer.requestRender()
+    if (viewer?.handleEvent(e)) fullScreen.requestRender()
+    // A dialog of the main session shows as a banner in the viewer; ring once so it is noticed.
+    if (viewer && e.type === "ui.request" && opts.ui) terminal.write("\x07")
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
@@ -530,7 +573,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Runs at once, even during a turn; commands that need an idle session say so. */
   function runCommand(line: string) {
     commit([theme.muted(`› ${line}`), ""])
-    void commands!.run(line, { frontend: "tui", quit: () => quit() }).then(() => renderer.requestRender())
+    void commands!
+      .run(line, { frontend: "tui", quit: () => quit(), openView })
+      .then(() => renderer.requestRender())
   }
 
   /** Follows the session a command switched to; a resumed one shows its history. */
@@ -576,6 +621,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   function quit(code = 0) {
+    closeView()
     off()
     offSwitch?.()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
@@ -593,6 +639,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   function onInput(e: InputEvent) {
+    // The viewer owns the keyboard while it is open.
+    if (viewer) {
+      viewer.handleInput(e)
+      fullScreen.requestRender()
+      return
+    }
     const dialog = dialogs[0]
     // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
     // with candidates for text the editor no longer holds.
@@ -623,7 +675,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (matchesKey(e, "d", { ctrl: true }) && !working && editor.isEmpty) {
       return quit()
     } else if (matchesKey(e, "escape")) {
-      if (working) agent.abort()
+      // A /compact runs without a turn; Esc stops it too.
+      if (working || compacting) agent.abort()
     } else {
       editor.handleInput(e)
     }

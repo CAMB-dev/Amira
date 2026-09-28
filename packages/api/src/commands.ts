@@ -1,5 +1,6 @@
-import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef } from "@amira/ai"
+import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef, Usage } from "@amira/ai"
 import type { ShellMode } from "./settings.ts"
+import type { SubagentStatus } from "./subagents.ts"
 import type { ToolExposure } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
 
@@ -80,6 +81,38 @@ export interface CommandContext extends CommandCompleteContext {
   aliases(): CommandAlias[]
   /** Leaves the interactive UI; frontends with nothing to leave ignore it. */
   quit(): void
+  /**
+   * Shows a full-screen view, on frontends that have them (the TUI does); unset elsewhere.
+   * Returns once the view is shown; the user leaves it when done.
+   */
+  readonly openView?: (view: FrontendView) => void
+}
+
+/** A full-screen view a frontend can show: for now the live transcript of a sub-agent. */
+export type FrontendView = { kind: "subagent"; sessionId: string }
+
+/** Where a sub-agent is: waiting for a slot, working, or how it ended. */
+export type SubagentState = "queued" | "running" | SubagentStatus
+
+/** A sub-agent of the session, running or finished, as commands list it. */
+export interface SubagentInfo {
+  id: string
+  parentSessionId: string
+  /** 1 for the session's own sub-agents, 2 for theirs. */
+  depth: number
+  /** "agent" when it was started without a role. */
+  role: string
+  /** The prompt it was given. */
+  task: string
+  status: SubagentState
+  model?: ModelRef
+  /** When it started working, in ms since the epoch; unset while queued. */
+  startedAt?: number
+  /** How long it ran, once it ended. */
+  durationMs?: number
+  /** Tokens and cost of its own replies so far, its sub-agents excluded. */
+  usage: Usage
+  error?: string
 }
 
 export interface SessionInfo {
@@ -145,6 +178,13 @@ export interface SessionControl {
   messages(): readonly Message[]
   /** Every model reply of this session, including ones a compaction has since replaced. */
   replies(): readonly AssistantMessage[]
+  /**
+   * This session's sub-agents and theirs, each followed by its own: the ones running or
+   * queued now and the finished ones, also from earlier runs of a resumed session.
+   */
+  subagents(): SubagentInfo[]
+  /** A sub-agent's conversation so far (a snapshot while it runs); undefined for an unknown id. */
+  subagentMessages(id: string): readonly Message[] | undefined
   /** "provider/model" refs to offer, from providers that have a key. */
   models(): string[]
   /** Switches the model for later turns; throws for an unknown one. */
