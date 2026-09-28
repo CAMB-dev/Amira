@@ -10,7 +10,7 @@ import {
 } from "@amira/tui-kit"
 import { Glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
-import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
+import { type Action, defaultKeybindings, type Keybindings } from "./keybindings.ts"
 
 export type DialogRequest = EventMap["ui.request"]
 
@@ -125,24 +125,19 @@ export class Dialog implements Component {
     const from = r.source ? theme.muted(` (${r.source})`) : ""
     const title = wrapText(`${theme.accent(Glyphs.question)} ${r.title}${from}`, width)
     const muted = (items: Parameters<typeof fitHint>[0]) => theme.muted(fitHint(items, width))
-    const k = this.keys
-    const cancel = { text: `${k.label("dialog.cancel") ?? "Esc"} cancel`, priority: 3 }
+    const cancel = this.#hint("dialog.cancel", "cancel", 3)
     let body: string[]
     let footer: string[]
     if (r.kind === "confirm") {
       body = r.message ? wrapText(theme.muted(r.message), width) : []
-      footer = [
-        muted([
-          { text: `${k.label("dialog.yes")} yes`, priority: 5 },
-          { text: `${k.label("dialog.no")} no`, priority: 5 },
-          cancel,
-        ]),
-      ]
+      // Choosing answers yes too, which is the key to show when yes has none of its own.
+      const yes = this.#hint("dialog.yes", "yes", 5) ?? this.#hint("dialog.choose", "yes", 5)
+      footer = [muted([yes, this.#hint("dialog.no", "no", 5), cancel])]
     } else if (r.kind === "select" || r.kind === "diff-review") {
       return this.#renderList(title, width, ctx)
     } else {
       body = this.#editor!.render(width, ctx)
-      footer = [muted([{ text: `${k.label("dialog.choose")} submit`, priority: 5 }, cancel])]
+      footer = [muted([this.#hint("dialog.choose", "submit", 5), cancel])]
     }
     // The title gives way last, and never all of it.
     const room = Math.max(1, this.maxRows - footer.length)
@@ -153,17 +148,17 @@ export class Dialog implements Component {
   #renderList(title: string[], width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const r = this.request as Extract<DialogRequest, { kind: "select" | "diff-review" }>
-    const k = this.keys
+    const move = this.keys.pairLabel("dialog.up", "dialog.down")
     const options = this.#options()
     const filter = this.#filter ? [`${theme.muted(`filter ${Glyphs.pointer}`)} ${this.#filter}`] : []
     const help = theme.muted(
       fitHint(
         [
-          { text: `${k.pairLabel("dialog.up", "dialog.down")} move`, priority: 2 },
+          move && { text: `${move} move`, priority: 2 },
           // Only a select filters; a diff review's options are few and fixed.
           r.kind === "select" && { text: "type to filter", priority: 1 },
-          { text: `${k.label("dialog.choose")} choose`, priority: 4 },
-          { text: `${k.label("dialog.cancel") ?? "Esc"} cancel`, priority: 3 },
+          this.#hint("dialog.choose", "choose", 4),
+          this.#hint("dialog.cancel", "cancel", 3),
         ],
         width,
       ),
@@ -208,6 +203,12 @@ export class Dialog implements Component {
    * Digits choose an option in a short unfiltered list. A longer list needs them for its
    * filter: model ids like gpt-4o start with or turn on a digit.
    */
+  /** A footer item for an action's key; none when the action has no key bound. */
+  #hint(action: Action, what: string, priority: number) {
+    const key = this.keys.label(action)
+    return key ? { text: `${key} ${what}`, priority } : undefined
+  }
+
   get #digitsPick(): boolean {
     const r = this.request
     return (r.kind === "select" || r.kind === "diff-review") && r.options.length <= 9 && !this.#filter

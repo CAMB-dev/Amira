@@ -117,3 +117,19 @@ test("dialog keys come from the keybindings", () => {
   other.dialog.handleInput(key("c", { ctrl: true }))
   expect(other.answers).toEqual([undefined])
 })
+
+test("an unbound action has no footer item", () => {
+  const keys = new Keybindings({
+    ...defaultKeys({ vscode: false }),
+    "dialog.yes": [],
+    "dialog.no": [],
+    "dialog.cancel": [],
+    "dialog.up": [],
+  })
+  const confirm = open({ kind: "confirm", requestId: "r5", title: "Go?" }, keys)
+  expect(confirm.dialog.render(40, plain).at(-1)).toBe("Enter yes")
+  const list = open({ kind: "select", requestId: "r6", title: "Pick", options: ["a"] }, keys)
+  expect(list.dialog.render(60, plain).at(-1)).toBe("↓ move · type to filter · Enter choose")
+  const input = open({ kind: "input", requestId: "r7", title: "Name" }, keys)
+  expect(input.dialog.render(40, plain).at(-1)).toBe("Enter submit")
+})
