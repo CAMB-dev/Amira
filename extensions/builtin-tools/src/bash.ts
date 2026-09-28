@@ -53,6 +53,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
     concurrency: "parallel",
     async execute({ command, timeout }, ctx) {
       if (typeof command !== "string" || command.trim() === "") return textResult("command is required", true)
+      if (command.includes("\0")) return textResult("command must not contain NUL characters", true)
       if (ctx.signal.aborted) return textResult("Aborted before the command started", true)
       if (!(await statOrNull(ctx.cwd))?.isDirectory()) {
         return textResult(`Working directory does not exist: ${ctx.cwd}`, true)
@@ -133,7 +134,7 @@ export function powershellDescription(path: string): string[] {
     "- Use it for Windows-specific work: the registry, services, processes, Windows paths and APIs, .ps1 scripts, or tools that only behave well from PowerShell. For general work (git, package managers, POSIX tools) prefer the bash tool when it is available.",
     `- Use PowerShell syntax: \`;\` or newlines between statements, \`$env:NAME\` for environment variables.${legacy ? " `&&` and `||` do not exist in this edition; test `$LASTEXITCODE` after native commands instead." : ""}`,
     "- All output streams (output, errors, warnings, Write-Host) are combined as plain text. Output is UTF-8.",
-    `- The exit code is \`$LASTEXITCODE\` of the last native command, or 1 if the final statement failed; an earlier failing cmdlet only prints its error. For fail-fast scripts start with \`$ErrorActionPreference = 'Stop'\`${legacy ? " (in this edition a native command writing to stderr then also stops the script)" : ""}.`,
+    `- The exit code is \`$LASTEXITCODE\` of the last native command, or 1 if the final statement failed; an earlier failing cmdlet only prints its error. Exit codes are reported mod 256 (\`exit 300\` shows 44, -1 shows 255). For fail-fast scripts start with \`$ErrorActionPreference = 'Stop'\`${legacy ? " (in this edition a native command writing to stderr then also stops the script)" : ""}.`,
     ...sharedNotes("cd dir; cmd", legacy ? "`a; if ($LASTEXITCODE -eq 0) { b }`" : "`a && b`"),
   ]
 }

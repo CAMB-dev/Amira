@@ -43,11 +43,15 @@ export const POWERSHELL_SCRIPT = [
   "  $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
   "  [Console]::Out.WriteLine($e.Message); exit 1",
   "}",
-  "$__amira_ok = $true",
+  "$__amira_ok = $null",
   "$__amira_threw = $false",
+  "$__amira_errs = $Error.Count",
   "$global:LASTEXITCODE = 0",
+  // $? after the dot-source is always true, so the command's own last line records it.
   "try { . { . $__amira } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim }",
   "catch { $__amira_threw = $true; __amira_error $_ -At | Out-String -Stream -Width 300 | __amira_trim }",
+  // A top-level `return` skipped that line: failed if the latest error came from the command.
+  "if ($null -eq $__amira_ok) { $__amira_ok = -not ($Error.Count -gt $__amira_errs -and \"$($Error[0].FullyQualifiedErrorId)\" -notlike 'NativeCommandError*') }",
   // 5.1 marks a native command that wrote to stderr as failed even when it exited 0.
   "if (-not $__amira_ok -and -not $global:LASTEXITCODE -and \"$($Error[0].FullyQualifiedErrorId)\" -like 'NativeCommandError*') { $__amira_ok = $true }",
   "if ($__amira_threw -or -not $__amira_ok) { if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } else { exit 1 } }",

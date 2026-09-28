@@ -83,6 +83,11 @@ for (const path of editions) {
       expect(textOf(r)).toContain("Exit code: 1")
     })
 
+    test("a top-level return keeps the failure of the statement before it", async () => {
+      expect(textOf(await run(String.raw`Get-Item C:\nope\x; return`))).toContain("Exit code: 1")
+      expect(textOf(await run("Write-Output x; return; Write-Output y"))).toBe("x\n\nExit code: 0")
+    })
+
     test("exit and throw inside the command are honoured", async () => {
       expect(textOf(await run("Write-Output before; exit 7; Write-Output after"))).toBe(
         "before\n\nExit code: 7",
