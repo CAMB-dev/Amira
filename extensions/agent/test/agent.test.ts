@@ -482,3 +482,56 @@ test("a spent budget is reported for tasks that cannot start", async () => {
     "did not start: the agent tree's budget is spent (500 tokens used, limit 100)",
   )
 })
+
+test("uncollected background sub-agents are stopped when the session ends, their work kept", async () => {
+  const repo = await gitRepo()
+  const { root, bus, events } = await setup(slowCoder({ background: true }), { cwd: repo })
+  const wrote = afterChildWrite(bus)
+  await root.prompt("go")
+  expect(agentResult(root)).toContain("Started in the background")
+  await wrote
+  const reported = new Promise<void>((resolve) => {
+    bus.subscribe((e) => {
+      if (e.type === "extension.error") resolve()
+    })
+  })
+  bus.emit("session.end", { reason: "exit" }, { sessionId: root.sessionId })
+  await reported
+  await bus.flush()
+  const end = events.find((e) => e.type === "subagent.end")
+  expect(end?.type === "subagent.end" && end.data.status).toBe("aborted")
+  const error = events.find((e) => e.type === "extension.error")
+  expect(error?.type === "extension.error" && error.data.error).toContain(
+    "ended after its commander stopped: Worktree: NOT merged",
+  )
+  expect(readText(path.join(repo, "f.txt"))).toBe("one\n")
+})
+
+test("a sub-agent's own background sub-agents end with its turn", async () => {
+  const { root, bus, events } = await setup((req) => {
+    const last = req.messages.at(-1)
+    if (who(req) === "explorer") return { text: "never", delayMs: 30_000 }
+    if (who(req) === "coder") {
+      return last?.role === "toolResult"
+        ? { text: "coder done without collecting" }
+        : {
+            toolCalls: [
+              { name: "agent", args: { tasks: [{ role: "explorer", prompt: "bg" }], background: true } },
+            ],
+          }
+    }
+    return last?.role === "toolResult"
+      ? { text: "ok" }
+      : { toolCalls: [{ name: "agent", args: { tasks: [{ role: "coder", prompt: "c" }] } }] }
+  })
+  const grandchildEnded = new Promise<void>((resolve) => {
+    bus.subscribe((e) => {
+      if (e.type === "subagent.end" && e.parentSessionId !== undefined) resolve()
+    })
+  })
+  await root.prompt("go")
+  await grandchildEnded
+  await bus.flush()
+  const ends = events.flatMap((e) => (e.type === "subagent.end" ? [e.data.status] : []))
+  expect(ends.sort()).toEqual(["aborted", "done"])
+})

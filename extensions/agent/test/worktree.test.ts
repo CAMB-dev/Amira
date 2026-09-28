@@ -1,5 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -15,6 +15,8 @@ import {
   parseNumstat,
   projectKey,
   type RunGit,
+  STALE_WORKTREE_MS,
+  sweepWorktrees,
   type Worktree,
 } from "../src/worktree.ts"
 
@@ -200,6 +202,25 @@ test("a clean merge past the review threshold is reviewed first (D38)", async ()
   expect(options).toEqual([[MERGE, KEEP, DISCARD]])
   expect(r.outcome).toBe("merged")
   expect(read(path.join(root, "f.txt"))).toBe("1\n2\n3\n")
+})
+
+test("the sweep deletes worktrees left behind long ago and keeps recent ones", async () => {
+  const { root, home } = await setup()
+  const old = await createWorktree(git, { cwd: root, home, name: "old" })
+  const fresh = await createWorktree(git, { cwd: root, home, name: "fresh" })
+  if ("error" in old || "error" in fresh) throw new Error("no worktree")
+  writeFileSync(old.patch, "patch")
+  const now = Date.now()
+  const then = new Date(now - STALE_WORKTREE_MS - 60_000)
+  utimesSync(old.dir, then, then)
+  utimesSync(old.patch, then, then)
+  expect(await sweepWorktrees(git, { root, home, now })).toEqual(["old"])
+  expect(existsSync(old.dir)).toBe(false)
+  expect(existsSync(old.patch)).toBe(false)
+  expect(existsSync(fresh.dir)).toBe(true)
+  const list = await git(["worktree", "list", "--porcelain"], root, true)
+  expect(list.output).not.toContain("/old")
+  expect(list.output).toContain("/fresh")
 })
 
 test("outside a repository there is no worktree", async () => {

@@ -17,6 +17,7 @@ import {
   mergeWorktree,
   type RunGit,
   removeWorktree,
+  sweepWorktrees,
   type Worktree,
 } from "./worktree.ts"
 
@@ -195,6 +196,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
     const git = opts.git ?? hostGit(api)
     const dirs = { home: api.home, cwd: api.cwd }
     const reported = new Set<string>()
+    const swept = new Set<string>()
     /** Background jobs by commander session, then by child id. */
     const background = new Map<string, Map<string, Job>>()
     let cached: { at: number; roles: Map<string, Role> } | undefined
@@ -223,7 +225,14 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
           name: `sa_${crypto.randomUUID().slice(0, 8)}`,
         })
         if ("error" in made) note = `No worktree (${made.error}); it worked in the shared directory.`
-        else wt = made
+        else {
+          wt = made
+          // Once per repository and process: clear out what earlier sessions left behind (D62).
+          if (!swept.has(made.root)) {
+            swept.add(made.root)
+            await sweepWorktrees(git, { root: made.root, home: api.home }).catch(() => [])
+          }
+        }
       }
       // Making the worktree takes a while; the commander may have been interrupted meanwhile.
       if (ctx.signal.aborted) {
@@ -450,6 +459,26 @@ ${list.join("\n")}`
         }
         return textResult(parts.join("\n\n"))
       },
+    })
+
+    /** Stops `commander`'s uncollected background jobs and forgets them: nobody will ask for them. */
+    const dropBackground = (commander: string, reason: string) => {
+      const mine = background.get(commander)
+      if (!mine) return
+      background.delete(commander)
+      for (const j of mine.values()) if (j.done === undefined) cancel(j, reason, true)
+    }
+    api.on("turn.end", (e) => {
+      // A sub-agent's one turn is its whole life, so its background jobs end with it.
+      if (e.parentSessionId !== undefined) return dropBackground(e.sessionId, "its commander finished")
+      // An interrupt stops background work too; the results stay collectible in the next turn.
+      if (e.data.reason !== "aborted") return
+      for (const j of background.get(e.sessionId)?.values() ?? []) {
+        if (j.done === undefined) cancel(j, "the commander's turn was interrupted", false)
+      }
+    })
+    api.on("session.end", () => {
+      for (const commander of [...background.keys()]) dropBackground(commander, "the session ended")
     })
 
     api.registerTool(agentTool)

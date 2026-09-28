@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, rmSync } from "node:fs"
+import { type Dirent, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs"
 import path from "node:path"
 
 /** Runs git in `cwd`. `stdoutOnly` keeps stderr out of the output, for commands whose output is parsed. */
@@ -226,4 +226,43 @@ export async function removeWorktree(
     rm(wt.patch, { force: true })
   } catch {}
   return problem
+}
+
+/** How old a worktree left behind must be before the sweep deletes it. */
+export const STALE_WORKTREE_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Deletes the worktrees of `root` that earlier sessions left behind (killed mid-run, unable to
+ * delete them, or kept for review and never cleaned up) once they are older than `maxAgeMs`,
+ * with their patches, and prunes git's records of worktrees whose directory is gone.
+ * Returns the names it deleted.
+ */
+export async function sweepWorktrees(
+  git: RunGit,
+  opts: { root: string; home: string; maxAgeMs?: number; now?: number; rm?: Remove },
+): Promise<string[]> {
+  const dir = path.join(opts.home, "worktrees", projectKey(opts.root))
+  const cutoff = (opts.now ?? Date.now()) - (opts.maxAgeMs ?? STALE_WORKTREE_MS)
+  const rm = opts.rm ?? rmSync
+  const removed: string[] = []
+  let entries: Dirent[] = []
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {}
+  for (const e of entries) {
+    const full = path.join(dir, e.name)
+    try {
+      if (statSync(full).mtimeMs >= cutoff) continue
+      if (e.isDirectory()) {
+        await git(["worktree", "remove", "--force", full], opts.root)
+        rm(full, { recursive: true, force: true })
+        rm(`${full}.diff`, { force: true })
+        removed.push(e.name)
+      } else if (e.name.endsWith(".diff") && !existsSync(full.slice(0, -".diff".length))) {
+        rm(full, { force: true })
+      }
+    } catch {}
+  }
+  await git(["worktree", "prune"], opts.root)
+  return removed
 }

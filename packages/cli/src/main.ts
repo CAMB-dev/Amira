@@ -151,8 +151,13 @@ async function run(argv: string[]): Promise<number> {
     })
   } finally {
     stopWorkspace()
-    // Give a catalog download a moment to reach the cache, so short runs still fill it.
-    await Promise.race([catalogRefresh, Bun.sleep(5000)])
+    const last = agentRef ?? agent
+    last.bus.emit("session.end", { reason: "exit" }, { sessionId: last.sessionId })
+    // Sub-agents still running (in the background) end with the session; give them a moment
+    // to stop cleanly. Give a catalog download a moment to reach the cache, so short runs still fill it.
+    session.tree.abortAll("the session ended")
+    const children = Promise.all(session.tree.children.map((c) => c.result()))
+    await Promise.race([Promise.all([children, catalogRefresh]), Bun.sleep(5000)])
   }
 }
 
