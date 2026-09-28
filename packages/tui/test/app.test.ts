@@ -15,6 +15,8 @@ const noProbe = async () => ({
 
 /** Alt+Enter in the kitty keyboard protocol. */
 const ALT_ENTER = "\x1b[13;3u"
+/** Windows terminals keep Alt+Enter for fullscreen, so the hint names Ctrl+Q there. */
+const QUEUE_HINT = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -174,6 +176,25 @@ test("turn events from other sessions on the bus do not affect the UI", async ()
   await exited
 })
 
+test("Ctrl+Q queues a message while working, like Alt+Enter", async () => {
+  const { terminal, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    { text: "second answer" },
+  ])
+  terminal.send("go\r")
+  await waitFor(() => agent.status === "working", "working")
+  terminal.send("later\x11")
+  await shows("queued › later")
+  await shows("second answer")
+  await idle()
+  const users = agent.messages
+    .filter((m) => m.role === "user")
+    .map((m) => (m.content[0] as { text: string }).text)
+  expect(users).toEqual(["go", "later"])
+  terminal.send("\x03")
+  await exited
+})
+
 test("a long streaming reply is committed progressively so its start stays visible", async () => {
   const reply = Array.from({ length: 15 }, (_, i) => `line ${i + 1}`).join("\n")
   const { terminal, screen, shows, idle, all, exited } = await setup([{ text: reply, delayMs: 5 }], {
@@ -298,7 +319,7 @@ test("Enter while working steers the turn; the message joins it before the next 
     (req) => ({ text: `saw ${lastUserText(req)}` }),
   ])
   terminal.send("go\r")
-  await waitFor(() => live().includes("Enter steer · Alt+Enter queue"), "steer hint")
+  await waitFor(() => live().includes(`Enter steer · ${QUEUE_HINT} queue`), "steer hint")
   terminal.send("also B\r")
   await shows("saw also B")
   await idle()

@@ -109,6 +109,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const editor = new Editor({ prompt: theme.accent("› "), placeholder: "Message Amira", onSubmit: submit })
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
+  // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
+  const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
   const root = new Stack([
     streaming,
     new View((width, ctx) => {
@@ -140,7 +142,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     new View((width, ctx) => {
       if (dialogs[0]) return []
       const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
-      const send = working ? "Enter steer · Alt+Enter queue" : "Enter send"
+      const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
       const esc = working ? "Esc interrupt · " : ""
       const hint = `${send} · ${newlineKey} newline · ${esc}Ctrl+C ${ctrlC}`
       return [ctx.theme.muted(truncateToWidth(hint, width, "…"))]
@@ -308,7 +310,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     renderer.requestRender()
   }
 
-  /** Alt+Enter: while a turn runs, queues the message to send after it. */
+  /** Alt+Enter or Ctrl+Q: while a turn runs, queues the message to send after it. */
   function queue() {
     const trimmed = editor.getText().trim()
     if (!trimmed) return
@@ -345,7 +347,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (dialog) {
       // Ctrl+C closes the dialog like Esc.
       dialog.handleInput(matchesKey(e, "c", { ctrl: true }) ? key("escape") : e)
-    } else if (matchesKey(e, "enter", { alt: true })) {
+    } else if (matchesKey(e, "enter", { alt: true }) || matchesKey(e, "q", { ctrl: true })) {
       queue()
     } else if (matchesKey(e, "c", { ctrl: true })) {
       if (working) agent.abort()
