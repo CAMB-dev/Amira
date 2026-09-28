@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { bashTool, runCommand } from "../src/bash.ts"
@@ -8,13 +8,16 @@ import { makeCtx, tempDirs, textOf } from "./util.ts"
 
 const tmp = tempDirs()
 let dir: string
-beforeAll(async () => {
-  dir = await tmp.make()
-})
-afterAll(() => tmp.cleanup())
-
 const isWindows = process.platform === "win32"
 const hasBash = (await resolveShell()).kind === "bash"
+
+// On Windows, antivirus scanning can stall a spawn for several seconds, the first one per process especially.
+setDefaultTimeout(30_000)
+beforeAll(async () => {
+  dir = await tmp.make()
+  if (hasBash) await bashTool.execute({ command: "true" }, makeCtx(dir))
+}, 60_000)
+afterAll(() => tmp.cleanup())
 
 test.if(hasBash)("returns combined output and exit code, running in cwd", async () => {
   const ctx = makeCtx(dir)
@@ -45,7 +48,7 @@ test.if(hasBash)("non-zero exit is reported as an error", async () => {
 test.if(hasBash)("times out and kills the command", async () => {
   const start = Date.now()
   const r = await bashTool.execute({ command: "echo before; sleep 30", timeout: 1000 }, makeCtx(dir))
-  expect(Date.now() - start).toBeLessThan(10_000)
+  expect(Date.now() - start).toBeLessThan(25_000)
   expect(r.isError).toBe(true)
   expect(textOf(r)).toContain("before")
   expect(textOf(r)).toContain("timed out after 1000 ms")
