@@ -117,3 +117,19 @@ test.if(process.platform === "win32")(
   },
   30_000,
 )
+
+test("finds Git Bash from git.exe on PATH without running git", async () => {
+  const exists = fakeFs("D:/Tools/Git/usr/bin/bash.exe")
+  let ranGit = false
+  const found = await findGitBash({
+    env: {},
+    exists,
+    which: () => "D:/Tools/Git/cmd/git.exe",
+    gitExecPath: async () => {
+      ranGit = true
+      return undefined
+    },
+  })
+  expect(norm(found!)).toBe("D:/Tools/Git/usr/bin/bash.exe")
+  expect(ranGit).toBe(false)
+})

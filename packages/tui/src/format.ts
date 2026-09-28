@@ -32,7 +32,8 @@ export function toolLines(
   width = 80,
 ): string[] {
   const failed = result.isError === true
-  const bullet = failed ? theme.error("●") : theme.success("●")
+  // A cross, not just a red dot: failure should not depend on seeing color.
+  const bullet = failed ? theme.error("✗") : theme.success("●")
   const summary = summarizeArgs(args)
   const head = `${bullet} ${theme.accent(name)}${summary ? ` ${summary}` : ""}`
   const text = resultText(result)

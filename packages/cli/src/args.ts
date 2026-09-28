@@ -10,9 +10,15 @@ export interface CliArgs {
   cwd: string
   extensions: string[]
   noBuiltins: boolean
+  /** Which shell tools the model gets on Windows (D68). */
+  shell: ShellMode
+  /** Tools hidden from the model (D70). */
+  disabledTools: string[]
   help: boolean
   version: boolean
 }
+
+export type ShellMode = "auto" | "bash" | "powershell"
 
 export class UsageError extends Error {}
 
@@ -27,6 +33,10 @@ Options:
   -e, --extension <f>   Load an extension file (repeatable; relative to where
                         amira is run, not to --cwd)
       --no-builtins     Do not load the built-in tools
+      --shell <mode>    Shell tools on Windows: auto (bash and powershell, the
+                        model picks), bash or powershell (default: auto)
+      --disable-tools <names>
+                        Hide tools from the model, comma-separated (repeatable)
   -C, --cwd <dir>       Working directory (default: current directory)
   -h, --help            Show this help
   -v, --version         Show the version
@@ -54,6 +64,13 @@ export function parseCliArgs(
     cwd: path.resolve(cwd, values.cwd ?? "."),
     extensions: (values.extension ?? []).map((e) => path.resolve(cwd, e)),
     noBuiltins: values["no-builtins"] ?? false,
+    shell: parseShell(values.shell),
+    disabledTools: (values["disable-tools"] ?? []).flatMap((v) =>
+      v
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
+    ),
     help: values.help ?? false,
     version: values.version ?? false,
   }
@@ -67,6 +84,12 @@ export function parseCliArgs(
     throw new UsageError(`--cwd is not a directory: ${args.cwd}`)
   }
   return args
+}
+
+function parseShell(value: string | undefined): ShellMode {
+  if (value === undefined || value === "auto") return "auto"
+  if (value === "bash" || value === "powershell") return value
+  throw new UsageError(`--shell must be auto, bash or powershell, got "${value}"`)
 }
 
 function isDirectory(p: string): boolean {
@@ -87,6 +110,8 @@ function parse(argv: string[]) {
       model: { type: "string", short: "m" },
       extension: { type: "string", short: "e", multiple: true },
       "no-builtins": { type: "boolean" },
+      shell: { type: "string" },
+      "disable-tools": { type: "string", multiple: true },
       cwd: { type: "string", short: "C" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },

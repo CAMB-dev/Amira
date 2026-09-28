@@ -242,3 +242,18 @@ test("a tool call after unterminated reply text starts on a new line", async () 
   const i = lines.indexOf("err:● echo x\n")
   expect(lines[i - 1]).toBe("out:\n")
 })
+
+test("--shell and --disable-tools decide which tools are hidden", async () => {
+  const a = parseCliArgs(
+    ["--shell", "bash", "--disable-tools", "glob, grep", "--disable-tools", "write", "x"],
+    here,
+    {},
+  )
+  expect(a.shell).toBe("bash")
+  expect(a.disabledTools).toEqual(["glob", "grep", "write"])
+  expect(() => parseCliArgs(["--shell", "zsh", "x"], here, {})).toThrow(/--shell/)
+  const { toolsToDisable } = await import("../src/session.ts")
+  expect(toolsToDisable("auto", [])).toEqual([])
+  expect(toolsToDisable("bash", ["glob"]).sort()).toEqual(["glob", "powershell"])
+  expect(toolsToDisable("powershell", [])).toEqual(["bash"])
+})

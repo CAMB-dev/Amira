@@ -101,3 +101,16 @@ test("deletes saved outputs older than a day the first time it saves", async () 
   expect(existsSync(old)).toBe(false)
   expect(existsSync(fresh)).toBe(true)
 })
+
+test("write and edit order calls to the same file, case-insensitively where paths are", async () => {
+  const { writeTool } = await import("../src/write.ts")
+  const { editTool } = await import("../src/edit.ts")
+  const cwd = process.cwd()
+  const a = writeTool.concurrencyKey?.({ path: "x/File.ts", content: "" }, { cwd })
+  const b = editTool.concurrencyKey?.({ path: `${cwd}/x/File.ts`, old_string: "", new_string: "" }, { cwd })
+  expect(a).toBeDefined()
+  expect(a).toBe(b)
+  if (process.platform === "win32") {
+    expect(writeTool.concurrencyKey?.({ path: "X/file.TS", content: "" }, { cwd })).toBe(a)
+  }
+})

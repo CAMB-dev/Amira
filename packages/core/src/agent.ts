@@ -9,7 +9,14 @@ import {
   type UserMessage,
   userMessage,
 } from "@amira/ai"
-import type { EventMap, SessionStatus, ToolRejection, ToolResult, TurnEndReason } from "@amira/api"
+import type {
+  EventMap,
+  SessionStatus,
+  ToolDefinition,
+  ToolRejection,
+  ToolResult,
+  TurnEndReason,
+} from "@amira/api"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { ToolRegistry } from "./tool-registry.ts"
@@ -30,6 +37,8 @@ export interface AgentOptions {
   maxTokens?: number
   /** How long tools get to stop after an abort before they are abandoned. Default 2000 ms. */
   abortGraceMs?: number
+  /** Most tool calls running at once (D71). Default 8. */
+  maxParallelTools?: number
   messages?: Message[]
 }
 
@@ -74,6 +83,7 @@ export class Agent {
   #maxSteps: number
   #maxTokens: number | undefined
   #abortGraceMs: number
+  #maxParallelTools: number
 
   constructor(opts: AgentOptions) {
     this.sessionId = opts.sessionId ?? `s_${crypto.randomUUID().slice(0, 8)}`
@@ -89,6 +99,7 @@ export class Agent {
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
     this.#abortGraceMs = opts.abortGraceMs ?? 2000
+    this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
   }
 
   get status(): SessionStatus {
@@ -255,30 +266,40 @@ export class Agent {
   }
 
   /**
-   * Runs tool calls in order; consecutive parallel-safe tools run concurrently.
-   * Every call gets exactly one result, even if a tool throws, misbehaves or ignores abort.
+   * Runs tool calls concurrently where it is safe (D71): calls start in order, a `serial` tool
+   * waits for everything before it and runs alone, calls with the same concurrency key (e.g. the
+   * same file) run one after another, and at most maxParallelTools run at once. Every call gets
+   * exactly one result, even if a tool throws, misbehaves or ignores abort.
    */
   async #runTools(turn: Turn, calls: ToolCallBlock[]): Promise<void> {
     const results = new Map<string, ToolResultMessage>()
     try {
-      let i = 0
-      while (i < calls.length && !turn.signal.aborted) {
-        const batch = [calls[i]!]
-        if (this.tools.get(calls[i]!.name)?.concurrency === "parallel") {
-          while (i + batch.length < calls.length) {
-            const next = calls[i + batch.length]!
-            if (this.tools.get(next.name)?.concurrency !== "parallel") break
-            batch.push(next)
-          }
+      const running = new Set<Promise<void>>()
+      const started: Promise<void>[] = []
+      const lastByKey = new Map<string, Promise<void>>()
+      for (const call of calls) {
+        if (turn.signal.aborted) break
+        const tool = this.tools.get(call.name)
+        const serial = tool !== undefined && (tool.concurrency ?? "serial") === "serial"
+        if (serial) await this.#untilDoneOrAbandoned(turn.signal, Promise.all(started))
+        while (running.size >= this.#maxParallelTools && !turn.signal.aborted) {
+          await this.#untilDoneOrAbandoned(turn.signal, Promise.race(running))
         }
-        const running = batch.map((c) =>
-          this.#runTool(turn, c).then((r) => {
-            if (!turn.finished.has(c.id)) results.set(c.id, r)
-          }),
-        )
-        await this.#untilDoneOrAbandoned(turn.signal, Promise.all(running))
-        i += batch.length
+        if (turn.signal.aborted) break
+
+        const key = serial ? undefined : concurrencyKey(tool, call, this.cwd)
+        const before = key === undefined ? undefined : lastByKey.get(key)
+        const task: Promise<void> = (async () => {
+          if (before) await before
+          const r = await this.#runTool(turn, call)
+          if (!turn.finished.has(call.id)) results.set(call.id, r)
+        })().finally(() => running.delete(task))
+        running.add(task)
+        started.push(task)
+        if (key !== undefined) lastByKey.set(key, task)
+        if (serial) await this.#untilDoneOrAbandoned(turn.signal, task)
       }
+      await this.#untilDoneOrAbandoned(turn.signal, Promise.all(started))
     } finally {
       for (const c of calls) {
         if (!results.has(c.id)) {
@@ -438,6 +459,20 @@ export class Agent {
     const meta: EmitMeta = { sessionId: this.sessionId, turnId: turn.id }
     if (this.parentSessionId) meta.parentSessionId = this.parentSessionId
     this.bus.emit(type, data, meta)
+  }
+}
+
+/** The tool's concurrency key for this call; a throwing key function means no key. */
+function concurrencyKey(
+  tool: ToolDefinition | undefined,
+  call: ToolCallBlock,
+  cwd: string,
+): string | undefined {
+  if (!tool?.concurrencyKey) return undefined
+  try {
+    return tool.concurrencyKey(call.args, { cwd })
+  } catch {
+    return undefined
   }
 }
 

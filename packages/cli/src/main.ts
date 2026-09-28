@@ -5,7 +5,7 @@ import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { runPrint } from "./print.ts"
-import { createSession } from "./session.ts"
+import { createSession, toolsToDisable } from "./session.ts"
 
 async function main(argv: string[]): Promise<number> {
   try {
@@ -28,6 +28,9 @@ async function run(argv: string[]): Promise<number> {
     return 0
   }
   if (!args.model) throw new UsageError("no model selected. Pass --model provider/model or set AMIRA_MODEL.")
+  if (args.shell === "powershell" && process.platform !== "win32") {
+    throw new UsageError("--shell powershell is only available on Windows")
+  }
   const interactive = !args.print
   if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
@@ -49,6 +52,7 @@ async function run(argv: string[]): Promise<number> {
     cwd: args.cwd,
     extensions: args.extensions,
     noBuiltins: args.noBuiltins,
+    disabledTools: toolsToDisable(args.shell, args.disabledTools),
     onSubscriberError,
   })
   agentRef = agent
