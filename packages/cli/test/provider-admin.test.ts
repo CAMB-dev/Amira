@@ -174,7 +174,10 @@ test("removing refuses the provider in use, then drops the entry and, if asked, 
   expect(auth()).toEqual({})
   expect(ai.providers().some((p) => p.id === "ds-test")).toBe(false)
   await expect(admin.remove("ds-test", { removeKey: false })).rejects.toThrow("is not in")
-  await expect(admin.remove("openai", { removeKey: false })).rejects.toThrow("built in")
+  // Nothing is built in: a provider settings do not have is simply not there.
+  await expect(admin.remove("openai", { removeKey: false })).rejects.toThrow(
+    `provider "openai" is not in ${path.join(home, "settings.json")}`,
+  )
 })
 
 test("a new key replaces the stored one and is used at once", async () => {
@@ -200,14 +203,18 @@ test("a new key replaces the stored one and is used at once", async () => {
 test("a deleted or replaced stored key stops being used at once, and auth.json is made private again", async () => {
   const { admin, ai, restricted, setCurrent } = setup()
   setCurrent("ds-test")
-  await admin.setKey("anthropic", "sk-ant-stored-11112222")
-  expect(ai.hasKey("anthropic")).toBe(true)
+  // A provider the session has that is not in the user settings (e.g. from a project file).
+  ai.registerProvider({ id: "keyed", dialect: "openai-chat", baseUrl: "http://k", apiKeyEnv: "KEYED_KEY" })
+  await admin.setKey("keyed", "sk-keyed-stored-11112222")
+  expect(ai.hasKey("keyed")).toBe(true)
   restricted.length = 0
-  // Built in: nothing in settings, but its stored key can go.
-  await admin.remove("anthropic", { removeKey: true })
+  // Nothing in settings, but its stored key can go.
+  await admin.remove("keyed", { removeKey: true })
   expect(restricted).toEqual([path.join(home, "auth.json")])
-  expect(ai.hasKey("anthropic")).toBe(false)
-  await expect(admin.save(draft({ id: "openai", keySource: "none" }))).rejects.toThrow("always needs a key")
+  expect(ai.hasKey("keyed")).toBe(false)
+  // Former built-in ids are ordinary ids now: one may go without a key.
+  expect(await admin.save(draft({ id: "openai", keySource: "none" }))).not.toContain("built in")
+  expect(settings().providers.openai.apiKeyEnv).toBeUndefined()
   // Switching a provider to an unset variable does not fall back to its old stored key.
   await admin.save(draft())
   await admin.save(draft({ keySource: "env", apiKeyEnv: "UNSET_VAR", apiKey: "" }))

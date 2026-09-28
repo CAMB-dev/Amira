@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync } from "node:fs"
+import { mkdtempSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
+import { createAi, createMockDialect, type MockStep, NO_MODEL } from "@amira/ai"
 import { defineTool, type Extension, textResult } from "@amira/api"
 import { type Agent, SessionStore } from "@amira/core"
 import commandsExtension from "@amira/ext-commands"
@@ -156,15 +156,25 @@ test("/cost counts replies a compaction replaced; /context previews the next req
   expect(await run("/cost")).toMatch(/mock\/m\s+2 replies/)
 })
 
-test("/provider add writes the preset to settings.json and makes it usable at once", async () => {
-  const { host, run, home, session } = await setup()
-  const out = await run("/provider add deepseek")
-  expect(out).toContain('Added provider "deepseek"')
-  expect(out).toContain("/model deepseek/<model>")
-  expect(JSON.parse(readFileSync(path.join(home, "settings.json"), "utf8")).providers.deepseek).toBeDefined()
-  expect(session.ai.providers().some((p) => p.id === "deepseek")).toBe(true)
-  expect(await run("/provider add deepseek")).toContain("already in")
-  expect(host.control.providerPresets()).toContain("ollama")
+test("/provider lists only the configured providers; an unknown one says how to add it", async () => {
+  const { host, run } = await setup()
+  const listed = await run("/provider")
+  expect(listed).toMatch(/\*\s+mock\s+mock/)
+  expect(listed).not.toMatch(/anthropic|openai|google/)
+  expect(host.control.providers().map((p) => p.id)).toEqual(["mock"])
+  const r = await host.run("/model anthropic/claude-x", { frontend: "print" })
+  expect(r.error).toBe(
+    'unknown provider "anthropic" (configured: mock); add it with /provider add (or amira provider add)',
+  )
+})
+
+test("while no model is selected, /model offers only real models", async () => {
+  const { host, session } = await setup()
+  session.agent.setModel(NO_MODEL)
+  expect(host.control.models()).toEqual([])
+  expect(host.control.info().model).toEqual({ provider: "", model: "" })
+  host.control.setModel("mock/m")
+  expect(host.control.models()).toEqual(["mock/m"])
 })
 
 test("/reload unloads and loads the extensions again", async () => {

@@ -1,18 +1,18 @@
 import { expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { parseCliArgs } from "../src/args.ts"
 import { resolveConfig } from "../src/config.ts"
 import { runPrint } from "../src/print.ts"
-import { runProviderCommand } from "../src/provider-command.ts"
+import { runProviderAdminCommand } from "../src/provider-cli.ts"
 import { createSession } from "../src/session.ts"
 
-// Runs a DeepSeek prompt through a provider added from a preset when AMIRA_LIVE_DEEPSEEK_KEY is set.
+// Runs a DeepSeek prompt through a provider added with amira provider add when AMIRA_LIVE_DEEPSEEK_KEY is set.
 const KEY_ENV = "AMIRA_LIVE_DEEPSEEK_KEY"
 
 test.skipIf(!process.env[KEY_ENV])(
-  "a preset added to settings.json reaches DeepSeek",
+  "a provider added with its protocol and flags reaches DeepSeek",
   async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "amira-live-config-"))
     try {
@@ -20,12 +20,20 @@ test.skipIf(!process.env[KEY_ENV])(
       const cwd = path.join(dir, "project")
       mkdirSync(path.join(cwd, ".amira"), { recursive: true })
       const quiet = { stdout: () => {}, stderr: () => {} }
-      expect(runProviderCommand(["add", "deepseek"], quiet, home)).toBe(0)
-      // The user layer points the preset at the test's key variable; a project file may not.
-      const userFile = path.join(home, "settings.json")
-      const user = JSON.parse(readFileSync(userFile, "utf8"))
-      user.providers.deepseek.apiKeyEnv = KEY_ENV
-      writeFileSync(userFile, JSON.stringify(user))
+      const added = await runProviderAdminCommand(
+        [
+          "add",
+          "openai-chat",
+          "--id",
+          "deepseek",
+          "--base-url",
+          "https://api.deepseek.com",
+          "--key-env",
+          KEY_ENV,
+        ],
+        { io: quiet, home, cwd, env: {}, interactive: false },
+      )
+      expect(added).toBe(0)
       writeFileSync(
         path.join(cwd, ".amira", "settings.json"),
         JSON.stringify({ model: "deepseek/deepseek-flash" }),

@@ -2,7 +2,6 @@ import path from "node:path"
 import {
   type Ai,
   BUILTIN_DIALECTS,
-  BUILTIN_PROVIDERS,
   type CatalogModel,
   catalogProviderId,
   host,
@@ -150,11 +149,6 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     }
     if (url.protocol !== "http:" && url.protocol !== "https:")
       throw new Error("the base URL must be http or https")
-    const builtinEnv = BUILTIN_PROVIDERS.find((b) => b.id === d.id)?.apiKeyEnv
-    if (d.keySource === "none" && builtinEnv) {
-      // Settings merge over the built-in provider and cannot take its variable away.
-      throw new Error(`"${d.id}" is built in and always needs a key ($${builtinEnv} or auth.json)`)
-    }
     if (d.keySource === "env" && !ENV.test(d.apiKeyEnv ?? "")) {
       throw new Error("the environment variable name must be letters, digits and _")
     }
@@ -221,9 +215,8 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     save: async (d) => {
       check(d)
       const { catalogId } = catalogFor(d, d.models)
-      const builtin = BUILTIN_PROVIDERS.find((b) => b.id === d.id)
       const { after } = updateProviderInSettings(settingsFile, d.id, (cur) =>
-        entryFor(cur ?? {}, d, builtin, catalogId && catalogId !== d.id ? catalogId : undefined),
+        entryFor(cur ?? {}, d, catalogId && catalogId !== d.id ? catalogId : undefined),
       )
       const lines = [`Saved provider "${d.id}" (${d.dialect}, ${d.baseUrl}) to ${settingsFile}.`]
       let key: string | undefined
@@ -253,11 +246,6 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       if (live) ai.registerProvider(key ? { ...live, apiKey: key } : live)
       // A provider switched away from auth.json must not keep using the stored key meanwhile.
       if (d.keySource !== "auth") ai.setStoredKey?.(d.id, undefined)
-      if (live && d.keySource !== "env" && live.apiKeyEnv) {
-        lines.push(
-          `Note: "${d.id}" is built in with $${live.apiKeyEnv}; when that is set, it wins over auth.json at startup.`,
-        )
-      }
       if (opts.currentProvider?.() === d.id)
         lines.push("It is in use: run /model again to pick up the changes.")
       const infos = describe(
@@ -273,16 +261,10 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         throw new Error(`provider "${id}" is in use; switch to another model with /model first`)
       }
       const { before } = updateProviderInSettings(settingsFile, id, () => undefined)
-      const builtin = BUILTIN_PROVIDERS.some((b) => b.id === id)
       if (!before && !(removeKey && storedKeys()[id])) {
-        throw new Error(
-          builtin
-            ? `provider "${id}" is built in; it has no entry in ${settingsFile} to remove`
-            : `provider "${id}" is not in ${settingsFile}`,
-        )
+        throw new Error(`provider "${id}" is not in ${settingsFile}`)
       }
       const lines = before ? [`Removed provider "${id}" from ${settingsFile}.`] : []
-      if (builtin && before) lines.push(`"${id}" is built in, so its built-in settings apply again.`)
       if (removeKey && setAuthKey(keysFile, id, undefined)) {
         lines.push(`Deleted its key from ${keysFile}.`)
         ai.setStoredKey?.(id, undefined)
@@ -330,12 +312,7 @@ function withoutKey(p: ProviderConfig): ProviderConfig {
 }
 
 /** The settings entry for a draft, over what the entry had: unknown keys and model overrides stay. */
-function entryFor(
-  cur: ProviderSettings,
-  d: ProviderDraft,
-  builtin: ProviderConfig | undefined,
-  catalogId: string | undefined,
-): ProviderSettings {
+function entryFor(cur: ProviderSettings, d: ProviderDraft, catalogId: string | undefined): ProviderSettings {
   const next: ProviderSettings = { ...cur, dialect: d.dialect, baseUrl: d.baseUrl }
   if (d.keySource === "env") next.apiKeyEnv = d.apiKeyEnv!
   else {
@@ -351,8 +328,8 @@ function entryFor(
   for (const cap of ["thinking", "images", "promptCache"] as const) {
     const want = d.defaults?.[cap]
     if (want === undefined) continue
-    // False is the default; it only needs saying over a built-in provider that has it on.
-    if (want || builtin?.defaultModel?.caps?.[cap]) caps[cap] = want
+    // False is the default, so it goes without saying.
+    if (want) caps[cap] = want
     else delete caps[cap]
   }
   const defaultModel: ModelOverrides = { ...cur.defaultModel }

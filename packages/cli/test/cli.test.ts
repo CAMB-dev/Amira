@@ -346,7 +346,7 @@ test("the amira command: help, version and usage errors have the right exit code
   expect((await run("--version")).code).toBe(0)
   const noModel = await run("-p", "hi")
   expect([noModel.code, noModel.out]).toEqual([2, ""])
-  expect(noModel.err).toContain("no model selected")
+  expect(noModel.err).toContain('amira: no providers configured; add one with "amira provider add"')
   expect((await run("-m", "nope/x", "-p", "hi")).code).toBe(2)
   const badRef = await run("-m", "foo", "-p", "hi")
   expect(badRef.code).toBe(2)

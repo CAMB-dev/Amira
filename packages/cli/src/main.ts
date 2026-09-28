@@ -64,13 +64,8 @@ async function run(argv: string[]): Promise<number> {
   const config = resolveConfig(args)
   // The interactive UI covers stderr, so there the warnings are shown as startup events.
   if (args.print) for (const w of config.warnings) process.stderr.write(`amira: warning: ${w}\n`)
-  const modelRef = config.settings.model
-  const requireModel = (): string => {
-    if (modelRef) return modelRef
-    throw new UsageError(
-      'no model selected. Pass --model provider/model, set AMIRA_MODEL or set "model" in settings.json.',
-    )
-  }
+  // Unset, the session picks the only provider's first model, or starts without one.
+  const model = config.settings.model
   const interactive = !args.print && !args.rpc
   let choice: { store: SessionStore; resumed: boolean } | undefined
   if (args.resume === "") {
@@ -83,12 +78,10 @@ async function run(argv: string[]): Promise<number> {
       process.stdout.write(`${formatSessionList(sessions)}\n`)
       return 0
     }
-    requireModel()
     const picked = await pickSession(sessions)
     if (!picked) return 0
     choice = { store: SessionStore.open(picked.file), resumed: true }
   }
-  const model = requireModel()
   if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
   }
@@ -114,7 +107,9 @@ async function run(argv: string[]): Promise<number> {
   })
   const { store, resumed } = choice
   const session = await createSession({
-    model,
+    ...(model ? { model } : {}),
+    // Print mode cannot pick a model; the UI and rpc clients can (/model, model.set).
+    requireModel: args.print,
     cwd: args.cwd,
     extensions: args.extensions,
     packages: activePackages({ cwd: args.cwd }),
@@ -128,7 +123,7 @@ async function run(argv: string[]): Promise<number> {
     ...(args.print ? {} : { warnings: config.warnings }),
     onSubscriberError,
   })
-  const { agent, host, startupEvents, catalogRefresh, ai } = session
+  const { agent, host, startupEvents, catalogRefresh, ai, modelNotice } = session
   agentRef = agent
 
   // Announce the session once the frontend listens, then fill in git facts in the background.
@@ -173,6 +168,7 @@ async function run(argv: string[]): Promise<number> {
       toolRenderers: host.renderers,
       startupEvents,
       onReady,
+      ...(modelNotice ? { notice: modelNotice } : {}),
       history: PromptHistory.forProject(args.cwd),
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
       ...(keybindings ? { keybindings: keybindings.keys } : {}),

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { parseCliArgs, UsageError } from "../src/args.ts"
@@ -173,66 +173,70 @@ test("settings warnings become startup events for the interactive UI", async () 
   ])
 })
 
-test("an unknown provider with a preset suggests adding it", async () => {
-  const create = (model: string) =>
-    createSession({ model, cwd, extensions: [], noBuiltins: true, catalog: false })
-  const err = await create("deepseek/deepseek-chat").catch((e) => e)
-  expect(err).toBeInstanceOf(UsageError)
-  expect(err.message).toContain('unknown provider "deepseek" (known: anthropic, openai, openai-chat, google)')
-  expect(err.message).toContain("amira provider add deepseek")
-  expect((await create("zzz/m").catch((e) => e)).message).toContain("amira provider presets")
+test("an unknown provider names the configured ones and says how to add one", async () => {
+  const create = (model: string, providers: { id: string; dialect: string; baseUrl: string }[] = []) =>
+    createSession({ model, cwd, extensions: [], noBuiltins: true, catalog: false, providers })
+  for (const ref of ["anthropic/claude-x", "openai/gpt-5", "google/gemini-x", "openai-chat/gpt-5"]) {
+    const err = await create(ref).catch((e) => e)
+    expect(err).toBeInstanceOf(UsageError)
+    expect(err.message).toBe(
+      `unknown provider "${ref.split("/")[0]}" (no providers are configured); add it with /provider add (or amira provider add)`,
+    )
+  }
+  const err = await create("zzz/m", [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }]).catch(
+    (e) => e,
+  )
+  expect(err.message).toBe(
+    'unknown provider "zzz" (configured: mine); add it with /provider add (or amira provider add)',
+  )
 })
 
-test("provider presets prints settings.json entries", () => {
-  const io = capture()
-  expect(runProviderCommand(["presets"], io, home)).toBe(0)
-  const all = JSON.parse(io.out)
-  expect(Object.keys(all.providers)).toEqual([
-    "deepseek",
-    "deepseek-anthropic",
-    "openrouter",
-    "ollama",
-    "lmstudio",
+test("without a model the only provider's first model is used, else none until one is picked", async () => {
+  const create = (providers: { id: string; dialect: string; baseUrl: string; models?: { id: string }[] }[]) =>
+    createSession({ cwd, extensions: [], noBuiltins: true, catalog: false, providers })
+  const none = await create([])
+  expect(none.agent.model.provider).toBe("")
+  expect(none.modelNotice).toBe(
+    "No providers configured — add one with /provider add, then pick a model with /model.",
+  )
+  const only = await create([
+    { id: "ds", dialect: "openai-chat", baseUrl: "http://ds", models: [{ id: "flash" }, { id: "pro" }] },
   ])
-  expect(all.providers.deepseek).toEqual({
-    dialect: "openai-chat",
-    baseUrl: "https://api.deepseek.com",
-    apiKeyEnv: "DEEPSEEK_API_KEY",
-  })
-  expect(all.providers["deepseek-anthropic"].compat).toEqual({ thinking: "budget" })
-  const one = capture()
-  runProviderCommand(["presets", "ollama"], one, home)
-  expect(JSON.parse(one.out)).toEqual({
-    providers: { ollama: { dialect: "openai-chat", baseUrl: "http://localhost:11434/v1" } },
-  })
-  expect(() => runProviderCommand(["presets", "nope"], capture(), home)).toThrow(/no preset "nope"/)
+  expect(`${only.agent.model.provider}/${only.agent.model.id}`).toBe("ds/flash")
+  expect(only.modelNotice).toBeUndefined()
+  const unlisted = await create([{ id: "ds", dialect: "openai-chat", baseUrl: "http://ds" }])
+  expect(unlisted.modelNotice).toBe(
+    'No model selected — pick one with /model, or set "model" in settings.json.',
+  )
+  const two = await create([
+    { id: "a", dialect: "openai-chat", baseUrl: "http://a", models: [{ id: "m" }] },
+    { id: "b", dialect: "openai-chat", baseUrl: "http://b", models: [{ id: "m" }] },
+  ])
+  expect(two.agent.model.provider).toBe("")
+  expect(two.modelNotice).toContain("No model selected")
 })
 
-test("provider add merges into the user settings and never replaces an entry", () => {
-  const file = path.join(home, "settings.json")
-  put(file, {
-    model: "deepseek/deepseek-chat",
-    providers: { ollama: { dialect: "openai-chat", baseUrl: "http://gpu:11434/v1" } },
-  })
+test("print mode needs a model: without one it is a usage error", async () => {
+  const create = (providers: { id: string; dialect: string; baseUrl: string }[]) =>
+    createSession({ cwd, extensions: [], noBuiltins: true, catalog: false, providers, requireModel: true })
+  const none = await create([]).catch((e) => e)
+  expect(none).toBeInstanceOf(UsageError)
+  expect(none.message).toBe(
+    'no providers configured; add one with "amira provider add", then pass --model provider/model',
+  )
+  const unpicked = await create([{ id: "a", dialect: "openai-chat", baseUrl: "http://a" }]).catch((e) => e)
+  expect(unpicked).toBeInstanceOf(UsageError)
+  expect(unpicked.message).toContain("no model selected. Pass --model provider/model")
+})
+
+test("amira provider help lists the commands; presets are gone", () => {
   const io = capture()
-  expect(runProviderCommand(["add", "deepseek"], io, home)).toBe(0)
-  expect(io.out).toContain('Added provider "deepseek"')
-  expect(io.out).toContain("DEEPSEEK_API_KEY")
-  expect(runProviderCommand(["add", "ollama"], io, home)).toBe(0)
-  expect(io.out).toContain('"ollama" is already in')
-  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({
-    model: "deepseek/deepseek-chat",
-    providers: {
-      ollama: { dialect: "openai-chat", baseUrl: "http://gpu:11434/v1" },
-      deepseek: {
-        dialect: "openai-chat",
-        baseUrl: "https://api.deepseek.com",
-        apiKeyEnv: "DEEPSEEK_API_KEY",
-      },
-    },
-  })
-  expect(() => runProviderCommand(["add"], capture(), home)).toThrow(UsageError)
-  expect(() => runProviderCommand([], capture(), home)).toThrow(/missing provider command/)
+  expect(runProviderCommand(["help"], io)).toBe(0)
+  expect(io.out).toContain("amira provider add [<protocol>]")
+  expect(io.out).toContain("Amira has no built-in providers")
+  expect(io.out).not.toContain("preset")
+  expect(() => runProviderCommand(["presets"], capture())).toThrow('unknown provider command "presets"')
+  expect(() => runProviderCommand([], capture())).toThrow(/missing provider command/)
 })
 
 test("a provider left incomplete by an ignored project key says why", () => {
@@ -246,7 +250,7 @@ test("a provider left incomplete by an ignored project key says why", () => {
   } catch (err) {
     message = (err as Error).message
   }
-  expect(message).toContain('provider "ollama" in settings needs "baseUrl"')
+  expect(message).toContain('provider "ollama" in settings.json needs "baseUrl"')
   expect(message).toContain('"providers.ollama.baseUrl" is ignored')
   expect(message).toContain(path.join(home, "settings.json"))
 })

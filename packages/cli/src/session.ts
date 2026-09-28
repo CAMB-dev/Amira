@@ -1,4 +1,11 @@
-import { type Ai, createAi, type ModelInfo, type ProviderConfig, type RetryOptions } from "@amira/ai"
+import {
+  type Ai,
+  createAi,
+  type ModelInfo,
+  NO_MODEL,
+  type ProviderConfig,
+  type RetryOptions,
+} from "@amira/ai"
 import type { AnyEvent, Extension, Settings } from "@amira/api"
 import {
   type ActivePackages,
@@ -20,11 +27,17 @@ import {
 } from "@amira/core"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
-import { withPresetHint } from "./provider-command.ts"
+import { withProviderHint } from "./provider-command.ts"
 import { testAiOptions } from "./test-hooks.ts"
 
 export interface SessionOptions {
-  model: string
+  /**
+   * "provider/model". Unset: the first model the only configured provider lists, else no
+   * model (NO_MODEL) until one is picked, and `modelNotice` says why.
+   */
+  model?: string
+  /** Throw a UsageError instead of starting without a model (print mode cannot pick one). */
+  requireModel?: boolean
   cwd: string
   extensions: string[]
   /** Installed packages (D24, D60): loaded after the built-ins and before `extensions`. */
@@ -47,7 +60,7 @@ export interface SessionOptions {
   builtins?: () => Promise<{ source: string; extension: Extension }[]>
   /** Merged settings (D35): handed to extensions; agent options come from them too. */
   settings?: Settings
-  /** Providers from settings, merged over the built-ins. Unused when `ai` is given. */
+  /** Providers from settings; there are no others. Unused when `ai` is given. */
   providers?: ProviderConfig[]
   /** Stored API keys by provider id (auth.json). Unused when `ai` is given. */
   apiKeys?: Record<string, string>
@@ -65,6 +78,8 @@ export interface Session {
   host: ExtensionHost
   /** Extension events emitted while loading, before any frontend subscribed. */
   startupEvents: AnyEvent[]
+  /** Why the session has no model yet (NO_MODEL) and what to do; for the UI to show. */
+  modelNotice?: string
   /** Settles when a background catalog refresh is done (at once when none was due). */
   catalogRefresh: Promise<void>
   ai: Ai
@@ -122,7 +137,10 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...(cached?.catalog ? { catalog: cached.catalog } : {}),
       ...(retry ? { retry } : {}),
     })
-  const model = resolveModel(ai, opts.model)
+  const modelRef = opts.model ?? onlyProviderModel(ai)
+  const model = modelRef ? resolveModel(ai, modelRef) : NO_MODEL
+  const modelNotice = modelRef ? undefined : noModelNotice(ai)
+  if (modelNotice && opts.requireModel) throw new UsageError(noModelError(ai))
   const compaction = opts.compaction ?? compactionFromSettings(ai, settings.compact)
   const bus = new EventBus(opts.onSubscriberError)
   const interceptors = new InterceptorRegistry({
@@ -207,7 +225,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
             if (!catalog) return
             ai.setCatalog?.(catalog)
             // Only replace the model this session started with, not one chosen since.
-            if (agent.model === model) agent.model = ai.model(opts.model)
+            if (modelRef && agent.model === model) agent.model = ai.model(modelRef)
           })
           .catch(() => {})
       : Promise.resolve()
@@ -215,6 +233,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     agent,
     host,
     startupEvents,
+    ...(modelNotice ? { modelNotice } : {}),
     catalogRefresh,
     ai,
     tree,
@@ -262,8 +281,30 @@ function resolveModel(ai: Ai, ref: string): ModelInfo {
   try {
     return ai.model(ref)
   } catch (err) {
-    throw new UsageError(withPresetHint(ref, err instanceof Error ? err.message : String(err)))
+    throw new UsageError(withProviderHint(err instanceof Error ? err.message : String(err)))
   }
+}
+
+/** With exactly one provider configured, the first model it lists ("provider/model"). */
+export function onlyProviderModel(ai: Ai): string | undefined {
+  const providers = ai.providers()
+  const [only] = providers
+  const first = only?.models?.find((m) => m.id)?.id
+  return providers.length === 1 && only && first ? `${only.id}/${first}` : undefined
+}
+
+/** What the UI says when a session starts without a model. */
+function noModelNotice(ai: Ai): string {
+  return ai.providers().length === 0
+    ? "No providers configured — add one with /provider add, then pick a model with /model."
+    : 'No model selected — pick one with /model, or set "model" in settings.json.'
+}
+
+/** The print-mode error for the same, which cannot be fixed from inside the run. */
+function noModelError(ai: Ai): string {
+  return ai.providers().length === 0
+    ? 'no providers configured; add one with "amira provider add", then pass --model provider/model'
+    : 'no model selected. Pass --model provider/model, set AMIRA_MODEL or set "model" in settings.json.'
 }
 
 /** Settings `compact` as agent options; its model is resolved like --model. */

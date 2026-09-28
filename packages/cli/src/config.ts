@@ -13,7 +13,7 @@ import { toolsToDisable } from "./session.ts"
 
 export interface Config {
   settings: Settings
-  /** Settings providers, merged over the built-ins by createAi. */
+  /** The providers in settings; Amira has no others. */
   providers: ProviderConfig[]
   /** Keys from auth.json, used when the environment has none. */
   apiKeys: Record<string, string>
