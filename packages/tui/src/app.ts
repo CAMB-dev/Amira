@@ -14,9 +14,9 @@ import {
   type SetupResult,
   Spinner,
   Stack,
+  StreamText,
   setupTerminalInput,
   type Terminal,
-  Text,
   type Theme,
   truncateToWidth,
   wrapText,
@@ -75,7 +75,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const terminal = opts.terminal ?? new ProcessTerminal()
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal)
 
-  const streaming = new Text()
+  const streaming = new StreamText()
   const spinner = new Spinner()
   const queued: string[] = []
   /** Messages steering the running turn that have not reached the model yet. */
@@ -103,8 +103,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
   /** Tool the model is currently writing a call for, before it runs. */
   let preparing: string | undefined
-  /** Whether this message already committed some of its lines early. */
-  let streamedEarly = false
   /** Whether the current turn showed anything besides the user's message. */
   let turnShowedOutput = false
 
@@ -112,8 +110,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
   // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
   const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
-  const root = new Stack([
-    streaming,
+  const bottom = new Stack([
     new View((width, ctx) => {
       if (!working) return []
       // A running tool shows as its own line with a blinking bullet, like the line it becomes.
@@ -155,6 +152,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return [ctx.theme.muted(truncateToWidth(hint, width, "…"))]
     }),
   ])
+  // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
+  // before it in view. Rows past that go to the scrollback as they are finished (StreamText).
+  const root = new View((width, ctx) => {
+    const rest = bottom.render(width, ctx)
+    streaming.maxRows = Math.max(1, ctx.rows - rest.length - 1)
+    return [...streaming.render(width, ctx), ...rest]
+  })
   const renderer = new LiveRenderer(terminal, root, {
     synchronizedOutput: capabilities.synchronizedOutput,
     theme,
@@ -164,23 +168,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const exited = new Promise<number>((r) => {
     resolveExit = r
   })
-
-  /**
-   * Keeps a long reply readable while it streams: once the complete lines would take
-   * more than half the screen, they are committed and only the unfinished tail stays live.
-   */
-  function commitStreamedLines() {
-    const text = streaming.getText()
-    const cut = text.lastIndexOf("\n")
-    if (cut === -1) return
-    const complete = streamedEarly ? text.slice(0, cut) : text.slice(0, cut).replace(/^\n+/, "")
-    const rows = wrapText(complete, Math.max(1, terminal.columns)).length
-    if (rows <= Math.max(2, Math.floor(terminal.rows / 2))) return
-    renderer.commit(complete.split("\n"))
-    streaming.setText(text.slice(cut + 1))
-    streamedEarly = true
-    turnShowedOutput = true
-  }
 
   const onEvent = (e: AnyEvent) => {
     // Sub-agents may share the bus; only this session's turn events drive the UI.
@@ -196,13 +183,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "message.start":
         thinking = false
         preparing = undefined
-        streamedEarly = false
         break
       case "message.delta":
         if (e.data.kind === "text") {
           thinking = false
           streaming.append(e.data.text)
-          commitStreamedLines()
         } else if (e.data.kind === "thinking") {
           thinking = true
         } else if (e.data.name) {
@@ -211,14 +196,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         break
       case "message.end": {
-        const rest = streaming.getText()
-        const text = streamedEarly ? rest.trimEnd() : rest.trim()
-        streaming.setText("")
-        if (text || streamedEarly) {
-          renderer.commit([...(text ? text.split("\n") : []), ""])
+        // The rows still live are committed as they are shown; earlier ones already were.
+        const early = streaming.committedRows > 0
+        const rows = streaming.take(terminal.columns)
+        if (rows.length || early) {
+          renderer.commit([...rows, ""])
           turnShowedOutput = true
         }
-        streamedEarly = false
         break
       }
       case "tool.execute.start":

@@ -32,6 +32,8 @@ interface SetupOptions {
   initialPrompt?: string
   leftoverInput?: string
   startupEvents?: AnyEvent[]
+  /** Called after every write to the terminal, once the screen shows it. */
+  onWrite?: (screen: VirtualScreen) => void
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -61,6 +63,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   terminal.write = (d: string) => {
     write(d)
     screen.write(d)
+    o.onWrite?.(screen)
   }
   const exited = runInteractive({
     agent,
@@ -207,6 +210,54 @@ test("a long streaming reply is committed progressively so its start stays visib
   const text = all()
   for (let i = 1; i <= 15; i++) expect(text.split(`line ${i}\n`).length - 1).toBeLessThanOrEqual(1)
   expect(text.indexOf("line 1\n")).toBeLessThan(text.indexOf("line 15"))
+  terminal.send("\x03")
+  await exited
+})
+
+/**
+ * Follows markers (L1, P2, ...) through a transcript. After every write, the markers on screen or
+ * in the scrollback must have no hole: a hole means a line was drawn and then lost off the top of
+ * the live region, to be printed again later — the view jumps back up when that happens.
+ */
+function transcriptChecker(markers: string[]) {
+  const index = new Map(markers.map((m, i) => [m, i]))
+  const problems: string[] = []
+  const found = (screen: VirtualScreen) =>
+    [...screen.scrollback, ...screen.lines].join("\n").match(/\b[LP]\d+\b/g) ?? []
+  return {
+    problems,
+    onWrite(screen: VirtualScreen) {
+      const seen = new Set(found(screen).map((m) => index.get(m) ?? -1))
+      const max = Math.max(-1, ...seen)
+      for (let i = 0; i <= max; i++) {
+        if (seen.has(i)) continue
+        if (problems.length < 5) problems.push(`${markers[i]} is gone while ${markers[max]} is shown`)
+        break
+      }
+    },
+    /** Every marker reached the transcript exactly once, in order. */
+    final(screen: VirtualScreen) {
+      expect(found(screen)).toEqual(markers)
+    },
+  }
+}
+
+test("a reply longer than the screen reaches the scrollback once, in order, never cut and reprinted", async () => {
+  const lines = Array.from({ length: 30 }, (_, i) => `L${i + 1} some text`)
+  const para = Array.from({ length: 90 }, (_, i) => `P${i + 1}`)
+  const tail = Array.from({ length: 10 }, (_, i) => `L${i + 31}`)
+  const reply = [...lines, para.join(" "), ...tail].join("\n")
+  const check = transcriptChecker([...lines.map((l) => l.split(" ")[0]!), ...para, ...tail])
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: reply, delayMs: 1 }], {
+    cols: 40,
+    rows: 12,
+    onWrite: (s) => check.onWrite(s),
+  })
+  terminal.send("go\r")
+  await shows("L40")
+  await idle()
+  expect(check.problems).toEqual([])
+  check.final(screen)
   terminal.send("\x03")
   await exited
 })
