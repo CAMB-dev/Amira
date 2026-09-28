@@ -231,9 +231,9 @@ test("/resume with a picked session resumes its id", async () => {
   expect(calls).toEqual(["resume old"])
 })
 
-test("/compact passes its instructions and says when there was nothing to do", async () => {
+test("/compact passes its instructions; the compact events report the outcome", async () => {
   const { run, calls } = await setup()
-  expect((await run("/compact keep the API notes")).text).toBe("Nothing to compact yet.")
+  expect((await run("/compact keep the API notes")).text).toBe("")
   await run("/compact")
   expect(calls).toEqual(["compact keep the API notes", "compact "])
 })

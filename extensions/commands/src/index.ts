@@ -197,9 +197,9 @@ export default defineExtension((api: ExtensionAPI) => {
     name: "compact",
     description: "Summarize older messages now to free context",
     args: { hint: "[instructions]" },
+    // Frontends show the outcome from compact.end and compact.failed, like an automatic one.
     async run(args, ctx) {
-      const done = await ctx.session.compact(args || undefined)
-      if (!done) ctx.print("Nothing to compact yet.")
+      await ctx.session.compact(args || undefined)
     },
   })
 
