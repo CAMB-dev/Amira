@@ -9,6 +9,11 @@ export interface RenderContext {
    * not check it; it is here for components that want another cue (bold, inverse) instead.
    */
   color: boolean
+  /**
+   * Height of the terminal in rows. The live region never shows more than this many lines (the
+   * top ones are cut), so a tall component can use it to decide what to leave out.
+   */
+  rows: number
 }
 
 /** Anything that can draw itself as lines for a given width. */

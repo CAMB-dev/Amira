@@ -7,4 +7,5 @@ const same = (s: string) => s
 export const plain: RenderContext = {
   theme: { text: same, accent: same, muted: same, error: same, success: same, warning: same } satisfies Theme,
   color: false,
+  rows: 24,
 }

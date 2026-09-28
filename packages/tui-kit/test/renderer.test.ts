@@ -268,7 +268,7 @@ test("components get the renderer's theme, and colors are stripped when off", ()
   const term = new FakeTerminal(20, 5)
   const r = new LiveRenderer(term, root, { theme, color: false })
   r.render()
-  expect(seen[0]).toEqual({ theme, color: false })
+  expect(seen[0]).toEqual({ theme, color: false, rows: 5 })
   expect(term.output).not.toContain("\x1b[31m")
   expect(term.output).toContain("a\x1b[1mb\x1b[22m")
   r.commit([red("c")])
@@ -276,4 +276,21 @@ test("components get the renderer's theme, and colors are stripped when off", ()
   r.context.color = true
   r.commit([red("d")])
   expect(term.writes.at(-1)).toContain("\x1b[31md")
+})
+
+test("the render context carries the terminal height", () => {
+  const rows: number[] = []
+  const root: Component = {
+    render: (_w, ctx) => {
+      rows.push(ctx.rows)
+      return ["a"]
+    },
+  }
+  const term = new FakeTerminal(20, 5)
+  const r = new LiveRenderer(term, root)
+  expect(r.context.rows).toBe(5)
+  r.render()
+  term.setSize(20, 9)
+  r.render()
+  expect(rows).toEqual([5, 9])
 })
