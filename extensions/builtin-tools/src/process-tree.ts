@@ -108,6 +108,8 @@ function windowsJobTree(proc: Subprocess): ProcessTree {
         proc.kill()
         return
       }
+      // Without a job, taskkill can only find children through a live parent.
+      if (proc.exitCode !== null || proc.signalCode !== null) return
       // taskkill needs the parent alive to find its children, so kill the parent afterwards.
       try {
         const tk = Bun.spawn(["taskkill", "/T", "/F", "/PID", String(proc.pid)], {

@@ -82,7 +82,8 @@ export const bashTool = defineTool<BashParams>({
       parts.push(
         "Warning: the command could not be placed in a job object, so processes it started may still be running.",
       )
-    } else if (!run.settled) {
+    } else if (!run.settled && !run.aborted) {
+      // After an abort the job was terminated, so open pipes are not a sign of survivors.
       parts.push("Note: output was still open after the command ended; some processes may still be running.")
     }
     return {
@@ -146,7 +147,14 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunR
     // POSIX: new session, so the whole process group can be killed.
     detached: process.platform !== "win32",
   })
-  const tree = (opts.trackTree ?? trackProcessTree)(proc)
+  let tree: ReturnType<typeof trackProcessTree>
+  try {
+    tree = (opts.trackTree ?? trackProcessTree)(proc)
+  } catch (err) {
+    // A gated command would wait on stdin forever; nothing may keep running unaccounted for.
+    proc.kill()
+    throw err
+  }
   if (opts.gated) releaseGate(proc.stdin)
 
   let output = ""

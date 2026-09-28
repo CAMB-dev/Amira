@@ -1,3 +1,5 @@
+import { statSync } from "node:fs"
+import path from "node:path"
 import { defineTool, textResult } from "@amira/api"
 import { statOrNull, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
@@ -70,6 +72,12 @@ export function splitGlob(root: string, pattern: string): { root: string; patter
   let p = pattern.replaceAll("\\", "/")
   while (p.startsWith("./")) p = p.slice(2)
   if (!/^([a-zA-Z]:)?\/|^~|^\.\.(\/|$)/.test(p)) return { root, pattern: p }
+  // Without wildcards it is just a path: list that directory, or match that one file.
+  if (!/[*?[\]{}]/.test(p)) {
+    const abs = resolvePath(root, p)
+    if (statSync(abs, { throwIfNoEntry: false })?.isDirectory()) return { root: abs, pattern: "*" }
+    return { root: path.dirname(abs), pattern: path.basename(abs) }
+  }
   const segs = p.split("/")
   let i = 0
   while (i < segs.length - 1 && !/[*?[\]{}]/.test(segs[i]!)) i++

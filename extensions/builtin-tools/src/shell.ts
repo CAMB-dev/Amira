@@ -8,7 +8,8 @@ export interface Shell {
   /** Shown to the model in every result when the shell is not bash. */
   label?: string
   args(command: string): string[]
-  env: Record<string, string | undefined>
+  /** Built fresh on each read from the current process environment. */
+  readonly env: Record<string, string | undefined>
   /** The command waits for a line on stdin before it runs, so the caller can contain it first. */
   gated: boolean
 }
@@ -132,7 +133,10 @@ export function windowsBashShell(found: string, exists: (p: string) => boolean =
   return {
     kind: "bash",
     path: bash,
-    env: root ? gitBashEnv(root) : { ...process.env },
+    // A getter, so variables set after the shell was resolved still reach commands.
+    get env() {
+      return root ? gitBashEnv(root) : { ...process.env }
+    },
     gated: true,
     args: (command) => [bash, "-c", GATE_SCRIPT, "bash", command],
   }
@@ -142,7 +146,9 @@ function posixBashShell(path: string): Shell {
   return {
     kind: "bash",
     path,
-    env: { ...process.env },
+    get env() {
+      return { ...process.env }
+    },
     gated: false,
     args: (command) => [path, "-c", command],
   }
@@ -155,7 +161,9 @@ export function powershellShell(
     kind: "powershell",
     path,
     label: "PowerShell (Git Bash not found)",
-    env: { ...process.env },
+    get env() {
+      return { ...process.env }
+    },
     gated: false,
     args: (command) => [path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
   }

@@ -46,3 +46,14 @@ test("accepts ./-prefixed, ../ and absolute patterns", async () => {
   expect(textOf(await glob(abs))).toBe("src/c.js")
   expect(textOf(await glob(`${dir}/old.ts`))).toBe("old.ts")
 })
+
+test("a wildcard-free parent or home pattern lists that directory instead of walking the drive", async () => {
+  const started = performance.now()
+  const up = textOf(await globTool.execute({ pattern: ".." }, makeCtx(join(dir, "src", "lib"))))
+  // Paths outside cwd are shown absolute.
+  const names = up.split("\n").map((p) => p.split("/").slice(-2).join("/"))
+  expect(names.sort()).toEqual(["src/a.ts", "src/c.js"])
+  expect(performance.now() - started).toBeLessThan(2000)
+  const one = textOf(await globTool.execute({ pattern: "../a.ts" }, makeCtx(join(dir, "src", "lib"))))
+  expect(one.endsWith("/src/a.ts")).toBe(true)
+})
