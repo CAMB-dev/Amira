@@ -2,7 +2,14 @@ import { BUILTIN_PROVIDERS, findPreset, type ProviderConfig } from "@amira/ai"
 import type { ProviderSettings } from "@amira/api"
 import { deepMerge } from "./merge.ts"
 
-export class ProviderSettingsError extends Error {}
+export class ProviderSettingsError extends Error {
+  constructor(
+    readonly provider: string,
+    message: string,
+  ) {
+    super(message)
+  }
+}
 
 /**
  * Providers from settings (D54). An entry for a built-in id is merged over it; any other
@@ -24,6 +31,7 @@ export function providersFromSettings(
         ? `; run "amira provider add ${id}" for a ready-made entry`
         : '; see "amira provider presets" for examples'
       throw new ProviderSettingsError(
+        id,
         `provider "${id}" in settings needs ${missing.map((k) => `"${k}"`).join(" and ")}${hint}`,
       )
     }

@@ -222,9 +222,17 @@ test("a reply with only thinking says so instead of showing nothing", async () =
 test("startup extension errors are shown in the transcript", async () => {
   const startupEvents: AnyEvent[] = [
     { seq: 1, ts: 0, sessionId: "host", type: "extension.error", data: { source: "x.ts", error: "boom" } },
+    {
+      seq: 2,
+      ts: 0,
+      sessionId: "host",
+      type: "extension.error",
+      data: { source: "settings", error: 'f: unknown setting "colour" (ignored)' },
+    },
   ]
   const { shows, terminal, exited } = await setup([], { startupEvents })
   await shows("[extension x.ts] boom")
+  await shows('warning: f: unknown setting "colour" (ignored)')
   terminal.send("\x03")
   await exited
 })

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -206,6 +215,9 @@ test("checks every documented key", () => {
   expect(bad({ tools: { disabled: "bash" } })).toThrow('"tools.disabled" must be a list')
   expect(bad({ mcpServers: { a: 1 } })).toThrow('"mcpServers.a" must be an object')
   expect(bad({ providers: { p: { headers: { a: 1 } } } })).toThrow('"providers.p.headers.a" must be a string')
+  expect(bad({ providers: { p: { models: [{ id: "m", cost: { input: 1 } }] } } })).toThrow(
+    '"providers.p.models[0].cost.output" is required',
+  )
 })
 
 test("providers from settings merge over built-ins and need a dialect and baseUrl otherwise", () => {
@@ -279,6 +291,15 @@ test("adding a provider refuses to run beside another writer and always releases
   expect(readdirSync(home).sort()).toEqual(["settings.json"])
 })
 
+test("adding a provider takes over a lock left behind by a process that died", () => {
+  const file = path.join(home, "settings.json")
+  put(`${file}.lock`, "")
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(`${file}.lock`, old, old)
+  expect(addProviderToSettings(file, "a", { dialect: "openai-chat" })).toBe("added")
+  expect(readdirSync(home).sort()).toEqual(["settings.json"])
+})
+
 test("extensions see the merged settings", async () => {
   let seen: unknown
   const host = new ExtensionHost({
@@ -291,4 +312,24 @@ test("extensions see the merged settings", async () => {
     seen = api.settings.mcpServers
   }, "t")
   expect(seen).toEqual({ fs: { command: "x" } })
+})
+
+test("an extension cannot change the settings another extension reads", async () => {
+  const settings = { tools: { disabled: ["bash"] } }
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+    settings,
+  })
+  await host.load((api) => {
+    const disabled = api.settings.tools?.disabled as string[]
+    disabled.push("grep")
+  }, "a")
+  let seen: unknown
+  await host.load((api) => {
+    seen = api.settings.tools?.disabled
+  }, "b")
+  expect(seen).toEqual(["bash"])
+  expect(settings.tools.disabled).toEqual(["bash"])
 })

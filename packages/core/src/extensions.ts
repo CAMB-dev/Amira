@@ -148,7 +148,8 @@ export class ExtensionHost {
           ),
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
-      settings: this.#opts.settings ?? {},
+      // Each extension gets its own frozen copy, so none can change what another reads.
+      settings: deepFreeze(structuredClone(this.#opts.settings ?? {})),
       registerStatusItem: (item) => {
         const off = this.status.register(item)
         this.#requestRender()
@@ -162,4 +163,12 @@ export class ExtensionHost {
       ui: this.#uiFor(source, track),
     }
   }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const v of Object.values(value)) deepFreeze(v)
+    Object.freeze(value)
+  }
+  return value
 }
