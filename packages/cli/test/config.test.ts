@@ -184,3 +184,19 @@ test("provider add merges into the user settings and never replaces an entry", (
   expect(() => runProviderCommand(["add"], capture(), home)).toThrow(UsageError)
   expect(() => runProviderCommand([], capture(), home)).toThrow(/missing provider command/)
 })
+
+test("a provider left incomplete by an ignored project key says why", () => {
+  put(path.join(cwd, ".amira", "settings.local.json"), {
+    model: "ollama/llama3",
+    providers: { ollama: { dialect: "openai-chat", baseUrl: "http://gpu:11434/v1" } },
+  })
+  let message = ""
+  try {
+    config([])
+  } catch (err) {
+    message = (err as Error).message
+  }
+  expect(message).toContain('provider "ollama" in settings needs "baseUrl"')
+  expect(message).toContain('"providers.ollama.baseUrl" is ignored')
+  expect(message).toContain(path.join(home, "settings.json"))
+})
