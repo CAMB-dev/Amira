@@ -38,3 +38,11 @@ test("reports no matches and missing directories", async () => {
   expect(textOf(none)).toContain("No files matched")
   expect((await glob("*", "missing")).isError).toBe(true)
 })
+
+test("accepts ./-prefixed, ../ and absolute patterns", async () => {
+  expect(textOf(await glob("./src/**/*.ts")).split("\n")).toEqual(["src/lib/b.ts", "src/a.ts"])
+  expect(textOf(await glob("../lib/*.ts", "src/lib/../lib/../lib"))).toBe("src/lib/b.ts")
+  const abs = `${dir.replaceAll("\\", "/")}/src/**/*.js`
+  expect(textOf(await glob(abs))).toBe("src/c.js")
+  expect(textOf(await glob(`${dir}/old.ts`))).toBe("old.ts")
+})

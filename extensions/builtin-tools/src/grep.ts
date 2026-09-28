@@ -123,7 +123,7 @@ export const grepTool = defineTool<GrepParams>({
 })
 
 function globFilter(pattern: string): (rel: string) => boolean {
-  const normalized = pattern.replaceAll("\\", "/")
+  const normalized = pattern.replaceAll("\\", "/").replace(/^(\.\/)+/, "")
   const g = new Bun.Glob(normalized)
   if (normalized.includes("/")) return (rel) => g.match(rel)
   return (rel) => g.match(rel) || g.match(rel.slice(rel.lastIndexOf("/") + 1))

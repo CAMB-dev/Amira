@@ -15,7 +15,7 @@ export const globTool = defineTool<GlobParams>({
   description: [
     'Find files by name with a glob pattern such as "**/*.ts" or "src/**/test_*.py".',
     "- The pattern is matched against paths relative to `path` (default: the working directory). Use `**/` to match at any depth; `*.ts` alone only matches the top level.",
-    "- Supports `*`, `**`, `?`, `[abc]` and `{a,b}`.",
+    "- Supports `*`, `**`, `?`, `[abc]` and `{a,b}`. A pattern may also start with an absolute directory or `../`, which then becomes the search root.",
     `- Returns matching file paths, newest modification time first, at most ${GLOB_LIMIT}.`,
     "- .git and node_modules are skipped. Use grep to search file contents.",
   ].join("\n"),
@@ -31,12 +31,13 @@ export const globTool = defineTool<GlobParams>({
   concurrency: "parallel",
   async execute({ pattern, path }, ctx) {
     if (typeof pattern !== "string" || pattern === "") return textResult("pattern is required", true)
-    const root = resolvePath(ctx.cwd, path ?? ".")
+    const split = splitGlob(resolvePath(ctx.cwd, path ?? "."), pattern)
+    const root = split.root
     const st = await statOrNull(root)
     if (!st) return textResult(`Directory not found: ${root}`, true)
     if (!st.isDirectory()) return textResult(`${root} is not a directory`, true)
 
-    const glob = new Bun.Glob(pattern.replaceAll("\\", "/"))
+    const glob = new Bun.Glob(split.pattern)
     const matches: { abs: string; mtime: number }[] = []
     for await (const e of walkFiles(root, ctx.signal)) {
       if (!glob.match(e.rel)) continue
@@ -60,3 +61,19 @@ export const globTool = defineTool<GlobParams>({
     }
   },
 })
+
+/**
+ * Drops leading `./` and moves a leading absolute, `~` or `../` directory into the search root, since
+ * patterns are matched against paths relative to the root.
+ */
+export function splitGlob(root: string, pattern: string): { root: string; pattern: string } {
+  let p = pattern.replaceAll("\\", "/")
+  while (p.startsWith("./")) p = p.slice(2)
+  if (!/^([a-zA-Z]:)?\/|^~|^\.\.(\/|$)/.test(p)) return { root, pattern: p }
+  const segs = p.split("/")
+  let i = 0
+  while (i < segs.length - 1 && !/[*?[\]{}]/.test(segs[i]!)) i++
+  let base = segs.slice(0, i).join("/") || "/"
+  if (/^[a-zA-Z]:$/.test(base)) base += "/"
+  return { root: resolvePath(root, base), pattern: segs.slice(i).join("/") }
+}

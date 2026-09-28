@@ -86,3 +86,7 @@ test("head_limit applies in every output mode", async () => {
   ])
   expect(content).toContain("(Showing 3 of 4 results.")
 })
+
+test("a ./-prefixed glob works like the plain one", async () => {
+  expect(textOf(await grep({ pattern: "TODO", glob: "./src/deep/**" }))).toBe("src/deep/b.ts")
+})
