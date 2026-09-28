@@ -1,6 +1,7 @@
 import type { FromWorker, RunRequest, ToWorker } from "./protocol.ts"
 import { type RunOptions, type RunResult, runCommandInline } from "./run-inline.ts"
 
+export { cmdArgv } from "./cmd-line.ts"
 export { type ProcessTree, trackProcessTree, warmUpProcessTree } from "./process-tree.ts"
 export { DRAIN_GRACE_MS, type RunOptions, type RunResult, runCommandInline } from "./run-inline.ts"
 
@@ -97,6 +98,8 @@ export function runCommand(argv: string[], opts: RunOptions): Promise<RunResult>
     timeoutMs: opts.timeoutMs,
     ...(opts.env ? { env: plainEnv(opts.env) } : {}),
     ...(opts.gated ? { gated: true } : {}),
+    ...(opts.gateLine !== undefined ? { gateLine: opts.gateLine } : {}),
+    ...(opts.viaCmd ? { viaCmd: true } : {}),
     ...(opts.stdoutOnly ? { stdoutOnly: true } : {}),
   }
   return new Promise<RunResult>((resolve, reject) => {

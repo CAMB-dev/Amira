@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { cmdArgv } from "@amira/proc"
 import {
   bashFromGitExecPath,
   findGitBash,
@@ -76,29 +77,52 @@ test("gives bash the environment Git's launcher would", () => {
 })
 
 const shell = await resolveShell()
-const gated = shell.kind === "bash" && shell.gated
+const gated = shell.kind === "bash" && shell.command(":").gated
+
+/** Starts a gated bash command directly or through cmd, and checks it waits for the gate line. */
+async function checkGate(throughCmd: boolean, line: string | undefined, expectRan: boolean) {
+  const dir = await mkdtemp(join(tmpdir(), "amira-gate-"))
+  try {
+    const marker = join(dir, "ran").replaceAll("\\", "/")
+    const { argv, env } = shell.command(`echo > "${marker}"; exit 4`)
+    const wrapped = throughCmd ? cmdArgv(argv, { cwd: dir, env, gated: true }) : argv
+    expect(wrapped).toBeDefined()
+    const proc = Bun.spawn(wrapped!, {
+      cwd: dir,
+      env,
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "ignore",
+      windowsVerbatimArguments: throughCmd,
+    })
+    await Bun.sleep(1500)
+    expect(existsSync(marker)).toBe(false)
+    if (line !== undefined) proc.stdin.write(`${line}\n`)
+    await proc.stdin.end()
+    expect(await proc.exited).toBe(expectRan ? 4 : 125)
+    expect(existsSync(marker)).toBe(expectRan)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
 
 test.if(gated)(
   "a gated command runs only after a line arrives on stdin",
+  () => checkGate(false, "", true),
+  30_000,
+)
+
+test.if(gated)("a gated command does not run when stdin closes without a line", () =>
+  checkGate(false, undefined, false),
+)
+
+test.if(gated)("through cmd, the gate is held by cmd", () => checkGate(true, "go", true), 30_000)
+
+test.if(gated)(
+  "through cmd, an empty or missing gate line runs nothing",
   async () => {
-    const dir = await mkdtemp(join(tmpdir(), "amira-gate-"))
-    try {
-      const marker = join(dir, "ran").replaceAll("\\", "/")
-      const proc = Bun.spawn(shell.args(`echo > "${marker}"`), {
-        env: shell.env,
-        stdin: "pipe",
-        stdout: "ignore",
-        stderr: "ignore",
-      })
-      await Bun.sleep(1500)
-      expect(existsSync(marker)).toBe(false)
-      proc.stdin.write("\n")
-      await proc.stdin.end()
-      expect(await proc.exited).toBe(0)
-      expect(existsSync(marker)).toBe(true)
-    } finally {
-      await rm(dir, { recursive: true, force: true })
-    }
+    await checkGate(true, "", false)
+    await checkGate(true, undefined, false)
   },
   30_000,
 )
@@ -109,7 +133,7 @@ test.if(process.platform === "win32")(
     const ps = powershellShell()
     // Embedded quotes, a trailing backslash before a quote, a literal $ and a PowerShell backtick escape.
     const command = "Write-Output 'a\"b' \"c d\" 'e\\f\\' '$x' \"g`\"h\""
-    const proc = Bun.spawn(ps.args(command), { stdout: "pipe", stderr: "pipe" })
+    const proc = Bun.spawn(ps.command(command).argv, { stdout: "pipe", stderr: "pipe" })
     const out = await new Response(proc.stdout).text()
     expect(await proc.exited).toBe(0)
     expect(out.split(/\r?\n/).filter(Boolean)).toEqual(['a"b', "c d", "e\\f\\", "$x", 'g"h'])

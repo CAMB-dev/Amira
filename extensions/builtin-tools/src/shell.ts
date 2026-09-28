@@ -3,16 +3,23 @@ import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
 import { runCommand } from "@amira/proc"
 
+/** How to run one command: argv plus the matching runCommand options. */
+export interface ShellCommand {
+  argv: string[]
+  /** Built fresh from the current process environment. */
+  env: Record<string, string | undefined>
+  /** The command waits for a line on stdin before it runs, so the caller can contain it first. */
+  gated: boolean
+  gateLine?: string
+  viaCmd?: boolean
+}
+
 export interface Shell {
   kind: "bash" | "powershell"
   path: string
   /** Shown to the model in every result when the shell is not bash. */
   label?: string
-  args(command: string): string[]
-  /** Built fresh on each read from the current process environment. */
-  readonly env: Record<string, string | undefined>
-  /** The command waits for a line on stdin before it runs, so the caller can contain it first. */
-  gated: boolean
+  command(command: string): ShellCommand
 }
 
 /** WSL's bash.exe (System32) and the Store alias (WindowsApps) are never Git Bash. */
@@ -51,6 +58,7 @@ async function gitExecPath(): Promise<string | undefined> {
       timeoutMs: 30_000,
       signal: new AbortController().signal,
       stdoutOnly: true,
+      viaCmd: true,
     })
     return run.exitCode === 0 ? run.output.trim() : undefined
   } catch {
@@ -135,24 +143,30 @@ export function gitBashEnv(
   return env
 }
 
+/** Carries the command to GATE_SCRIPT, so it never appears on cmd's command line. */
+export const COMMAND_VAR = "AMIRA_COMMAND"
+
 /**
- * Runs the command ($1) only after a line arrives on stdin (see runCommand). The trailing `exit $?` keeps
- * bash from exec-ing the inner shell: a Windows process killed by an MSYS signal exits 0, while the outer
+ * Runs $AMIRA_COMMAND once the gate is open: cmd.exe held it (AMIRA_GATE is set, stdin is at its
+ * end) or a line arrives on stdin (see RunOptions.viaCmd). The trailing `exit $?` keeps bash from
+ * exec-ing the inner shell: a Windows process killed by an MSYS signal exits 0, while the outer
  * shell reports it as 128+n.
  */
-export const GATE_SCRIPT = 'read -r _ || exit 125; "$BASH" -c "$1" bash; exit $?'
+export const GATE_SCRIPT = `read -r _ || [ -n "$AMIRA_GATE" ] || exit 125; c=$${COMMAND_VAR}; unset AMIRA_GATE ${COMMAND_VAR}; "$BASH" -c "$c" bash; exit $?`
 
 export function windowsBashShell(found: string, exists: (p: string) => boolean = existsSync): Shell {
   const { bash, root } = gitBashLayout(found, exists)
   return {
     kind: "bash",
     path: bash,
-    // A getter, so variables set after the shell was resolved still reach commands.
-    get env() {
-      return root ? gitBashEnv(root) : { ...process.env }
-    },
-    gated: true,
-    args: (command) => [bash, "-c", GATE_SCRIPT, "bash", command],
+    // Built per command, so variables set after the shell was resolved still reach commands.
+    command: (command) => ({
+      argv: [bash, "-c", GATE_SCRIPT, "bash"],
+      env: { ...(root ? gitBashEnv(root) : process.env), [COMMAND_VAR]: command },
+      gated: true,
+      // Bun stalls for seconds on some direct spawns of MSYS programs.
+      viaCmd: true,
+    }),
   }
 }
 
@@ -160,11 +174,7 @@ function posixBashShell(path: string): Shell {
   return {
     kind: "bash",
     path,
-    get env() {
-      return { ...process.env }
-    },
-    gated: false,
-    args: (command) => [path, "-c", command],
+    command: (command) => ({ argv: [path, "-c", command], env: { ...process.env }, gated: false }),
   }
 }
 
@@ -175,11 +185,11 @@ export function powershellShell(
     kind: "powershell",
     path,
     label: "PowerShell (Git Bash not found)",
-    get env() {
-      return { ...process.env }
-    },
-    gated: false,
-    args: (command) => [path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+    command: (command) => ({
+      argv: [path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+      env: { ...process.env },
+      gated: false,
+    }),
   }
 }
 
@@ -215,18 +225,18 @@ export function gatedPowerShell(
   return {
     kind: "powershell",
     path,
-    get env() {
-      return { ...process.env }
-    },
-    gated: true,
-    args: (command) => [
-      path,
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      encodePowerShell(powershellScript(command)),
-    ],
+    command: (command) => ({
+      argv: [
+        path,
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        encodePowerShell(powershellScript(command)),
+      ],
+      env: { ...process.env },
+      gated: true,
+    }),
   }
 }
 
@@ -251,14 +261,15 @@ export function resolveShell(): Promise<Shell> {
  * paying that at startup keeps the model's first command fast.
  */
 export function warmUpShell(): void {
-  const warm = (shell: Shell, command: string) =>
-    runCommand(shell.args(command), {
+  const warm = (shell: Shell, command: string) => {
+    const { argv, ...spawn } = shell.command(command)
+    return runCommand(argv, {
+      ...spawn,
       cwd: process.cwd(),
-      env: shell.env,
-      gated: shell.gated,
       timeoutMs: 60_000,
       signal: new AbortController().signal,
     }).catch(() => {})
+  }
   resolveShell()
     .then((shell) =>
       process.platform === "win32" ? warm(shell, shell.kind === "bash" ? ":" : "$null") : undefined,

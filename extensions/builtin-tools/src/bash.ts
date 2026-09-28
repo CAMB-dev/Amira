@@ -60,10 +60,10 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
       let output = ""
       let run: RunResult
       try {
-        run = await runCommand(shell.args(command), {
+        const { argv, ...spawn } = shell.command(command)
+        run = await runCommand(argv, {
+          ...spawn,
           cwd: ctx.cwd,
-          env: shell.env,
-          gated: shell.gated,
           timeoutMs,
           signal: ctx.signal,
           onChunk(chunk) {
