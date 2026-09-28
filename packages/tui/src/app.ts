@@ -1,5 +1,12 @@
 import type { AnyEvent, UserMessage } from "@amira/api"
-import { type Agent, AgentBusyError, type StatusRegistry, type UiRequests } from "@amira/core"
+import {
+  type Agent,
+  AgentBusyError,
+  type CommandHost,
+  parseCommandLine,
+  type StatusRegistry,
+  type UiRequests,
+} from "@amira/core"
 import {
   type Component,
   defaultTheme,
@@ -21,6 +28,7 @@ import {
   truncateToWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
 import { historyLines, summarizeArgs, toolLines, userLines } from "./format.ts"
 import { StatusBar } from "./status-bar.ts"
@@ -30,6 +38,11 @@ export interface InteractiveOptions {
   status: StatusRegistry
   /** Extension dialogs, answered inline. Without it they are left to other frontends. */
   ui?: UiRequests
+  /**
+   * Slash commands and their completion popup. It owns the active session: the UI follows
+   * the agent it switches to (/clear, /resume).
+   */
+  commands?: CommandHost
   /** Events emitted before the UI subscribed, such as extension load errors. */
   startupEvents?: AnyEvent[]
   /** Sent as the first message once the UI is up. */
@@ -57,6 +70,7 @@ const HOST_EVENTS = new Set<string>([
   "extension.loaded",
   "ui.request",
   "ui.resolved",
+  "command.output",
 ])
 
 /** How a user message reads in the transcript. */
@@ -70,7 +84,7 @@ function messageText(m: UserMessage): string {
  * status bar. Resolves with the process exit code when the user quits.
  */
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
-  const { agent } = opts
+  let { agent } = opts
   const theme = opts.theme ?? defaultTheme
   const terminal = opts.terminal ?? new ProcessTerminal()
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal)
@@ -109,6 +123,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let turnShowedOutput = false
 
   const editor = new Editor({ prompt: theme.accent("› "), placeholder: "Message Amira", onSubmit: submit })
+  const commands = opts.commands
+  const popup = commands ? new CommandPopup(commands, () => renderer.requestRender()) : undefined
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
   // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
   const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
@@ -144,10 +160,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
       ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
     ]),
+    new View((width, ctx) => {
+      if (dialogs[0] || !popup) return []
+      // Synced on every frame, so text set any way (typing, Tab, a dropped steer) is completed.
+      popup.update(editor.getText())
+      return popup.render(width, ctx)
+    }),
     new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : editor.render(width, ctx))),
     new StatusBar(() => opts.status.snapshot()),
     new View((width, ctx) => {
       if (dialogs[0]) return []
+      if (popup?.open) {
+        return [
+          ctx.theme.muted(truncateToWidth("↑↓ select · Tab complete · Enter run · Esc close", width, "…")),
+        ]
+      }
       const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
       const esc = working ? "Esc interrupt · " : ""
@@ -310,6 +337,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (i !== -1) dialogs.splice(i, 1)
         break
       }
+      case "command.output": {
+        const style =
+          e.data.level === "error" ? theme.error : e.data.level === "warning" ? theme.warning : theme.text
+        renderer.commit([...e.data.text.split("\n").map((l) => style(l)), ""])
+        break
+      }
     }
     renderer.requestRender()
   }
@@ -333,13 +366,27 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     })
   }
 
-  /** Enter: sends, or while a turn runs steers it (D29). */
+  /** Enter: runs a slash command, sends, or while a turn runs steers it (D29). */
   function submit(text: string) {
     const trimmed = text.trim()
     if (!trimmed) return
     editor.clear()
-    if (working) agent.steer(trimmed)
+    if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
+    else if (working) agent.steer(trimmed)
     else send(trimmed)
+    renderer.requestRender()
+  }
+
+  /** Runs at once, even during a turn; commands that need an idle session say so. */
+  function runCommand(line: string) {
+    renderer.commit([theme.muted(`› ${line}`), ""])
+    void commands!.run(line, { frontend: "tui", quit: () => quit() }).then(() => renderer.requestRender())
+  }
+
+  /** Follows the session a command switched to; a resumed one shows its history. */
+  function followAgent(next: Agent) {
+    agent = next
+    if (next.messages.length) renderer.commit(historyLines(theme, next.messages))
     renderer.requestRender()
   }
 
@@ -365,6 +412,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   function quit(code = 0) {
     off()
+    offSwitch?.()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
     setBlinking(false)
@@ -377,9 +425,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   function onInput(e: InputEvent) {
     const dialog = dialogs[0]
+    // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
+    // with candidates for text the editor no longer holds.
+    if (!dialog) popup?.update(editor.getText())
     if (dialog) {
       // Ctrl+C closes the dialog like Esc.
       dialog.handleInput(matchesKey(e, "c", { ctrl: true }) ? key("escape") : e)
+    } else if (popup?.open && handlePopupKey(e)) {
+      // The popup took ↑↓, Tab, Enter or Esc.
     } else if (matchesKey(e, "enter", { alt: true }) || matchesKey(e, "q", { ctrl: true })) {
       queue()
     } else if (matchesKey(e, "c", { ctrl: true })) {
@@ -396,7 +449,20 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     renderer.requestRender()
   }
 
+  /** Applies what the popup did with a key; false when it left the key to the editor. */
+  function handlePopupKey(e: InputEvent): boolean {
+    const action = popup!.handleKey(e)
+    if (!action) return false
+    if (action.type === "replace") editor.setText(action.text)
+    else if (action.type === "run") {
+      editor.clear()
+      runCommand(action.line)
+    }
+    return true
+  }
+
   const off = agent.bus.subscribe(onEvent)
+  const offSwitch = commands?.onSwitch(followAgent)
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()

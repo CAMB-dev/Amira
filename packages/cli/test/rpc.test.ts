@@ -17,7 +17,11 @@ const main = path.join(here, "..", "src", "main.ts")
 type Line = Record<string, any>
 
 /** Drives `amira --rpc` as a child process, the way a real client would. Sessions go to `home`. */
-function spawnRpc(replies: MockReply[], home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))) {
+function spawnRpc(
+  replies: MockReply[],
+  home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-")),
+  extraArgs: string[] = [],
+) {
   const p = Bun.spawn(
     [
       "bun",
@@ -28,6 +32,7 @@ function spawnRpc(replies: MockReply[], home = mkdtempSync(path.join(os.tmpdir()
       "--no-builtins",
       "-e",
       path.join(here, "fixtures", "rpc-tools.ts"),
+      ...extraArgs,
     ],
     {
       stdin: "pipe",
@@ -207,6 +212,48 @@ test("amira --rpc: session.resume continues a stored session on the same connect
   expect((await second.close()).code).toBe(0)
 }, 60_000)
 
+test("amira --rpc: slash commands list, complete and run, and may ask questions", async () => {
+  const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
+  const rpc = spawnRpc([{ text: "hello" }], undefined, ["-e", commandsExt])
+  const started = await rpc.event("session.start")
+
+  rpc.send({ id: 1, cmd: "command.list" })
+  const names = (await rpc.response(1)).commands.map((c: Line) => c.name)
+  expect(names).toContain("status")
+  expect(names).toContain("cost")
+  rpc.send({ id: 2, cmd: "command.complete", text: "/sta" })
+  expect((await rpc.response(2)).candidates[0]).toMatchObject({ value: "status" })
+
+  rpc.send({ id: 3, cmd: "prompt", text: "hi" })
+  await rpc.event("turn.end")
+  rpc.send({ id: 4, cmd: "command.run", text: "/cost" })
+  const cost = await rpc.response(4)
+  expect(cost).toMatchObject({ ok: true, command: "cost" })
+  expect(cost.output[0]).toContain("mock/m")
+  expect((await rpc.event("command.output")).data).toMatchObject({ command: "cost", level: "info" })
+
+  // /model without an argument asks; the answer arrives while command.run is still pending.
+  rpc.send({ id: 5, cmd: "command.run", text: "/model" })
+  const ask = await rpc.event("ui.request")
+  expect(ask.data.options).toContain("mock/m")
+  rpc.send({ id: 6, cmd: "ui.respond", requestId: ask.data.requestId, value: "mock/m" })
+  expect(await rpc.response(5)).toMatchObject({ ok: true, output: ["Model: mock/m"] })
+
+  rpc.send({ id: 7, cmd: "command.run", text: "/nope" })
+  expect((await rpc.response(7)).error.code).toBe("not_found")
+  rpc.send({ id: 8, cmd: "command.run", text: "/tools enable nope" })
+  expect((await rpc.response(8)).error).toEqual({ code: "command_failed", message: 'no tool named "nope"' })
+
+  // /clear starts a new session, and the rpc frontend follows it.
+  rpc.send({ id: 9, cmd: "command.run", text: "/clear" })
+  await rpc.response(9)
+  const cleared = await rpc.waitFor((l) => l.type === "session.start" && l.data.reason === "clear", "clear")
+  expect(cleared.sessionId).not.toBe(started.sessionId)
+  rpc.send({ id: 10, cmd: "state" })
+  expect(await rpc.response(10)).toMatchObject({ sessionId: cleared.sessionId, messages: 0 })
+  expect((await rpc.close()).code).toBe(0)
+}, 60_000)
+
 test("amira --rpc-schema prints a JSON Schema covering every command", async () => {
   const p = Bun.spawn(["bun", main, "--rpc-schema"], { stdout: "pipe", stderr: "pipe" })
   const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited])
@@ -215,7 +262,19 @@ test("amira --rpc-schema prints a JSON Schema covering every command", async () 
   expect(schema.$schema).toContain("json-schema.org")
   const commands = schema.$defs.Command.oneOf.map((c: any) => c.properties.cmd.enum[0])
   expect(commands.sort()).toEqual(
-    ["abort", "model.set", "prompt", "session.read", "session.resume", "state", "steer", "ui.respond"].sort(),
+    [
+      "abort",
+      "command.complete",
+      "command.list",
+      "command.run",
+      "model.set",
+      "prompt",
+      "session.read",
+      "session.resume",
+      "state",
+      "steer",
+      "ui.respond",
+    ].sort(),
   )
   expect(Object.keys(COMMAND_PARAMS).sort()).toEqual(commands)
   // Every $ref points at a definition.

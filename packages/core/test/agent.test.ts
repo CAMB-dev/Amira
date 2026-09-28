@@ -217,6 +217,18 @@ export default function (api: any) {
   await bus.flush()
   expect(errors).toEqual([])
   expect(tools.get("hello")?.description).toMatch(/^v\d/)
+  // Loading the file again after an edit runs the edited code (/reload).
+  host.unloadAll()
+  await writeFile(
+    file,
+    `import { defineTool, textResult } from "@amira/api"
+export default function (api: any) {
+  api.registerTool(defineTool({ name: "hello", description: "edited", parameters: {}, execute: async () => textResult("hi") }))
+}`,
+  )
+  expect(await host.loadFile(file)).toBe(true)
+  expect(host.loaded).toEqual([file])
+  expect(tools.get("hello")?.description).toBe("edited")
   expect(await host.loadFile(path.join(dir, "missing.ts"))).toBe(false)
   await bus.flush()
   expect(errors).toHaveLength(1)

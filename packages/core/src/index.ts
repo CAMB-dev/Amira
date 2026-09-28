@@ -1,4 +1,5 @@
 export * from "./agent.ts"
+export * from "./commands.ts"
 export * from "./compaction.ts"
 export * from "./config/index.ts"
 export * from "./deferred-tools.ts"

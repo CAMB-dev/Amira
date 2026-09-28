@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
 import { API_VERSION, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
 import { runCommand } from "@amira/proc"
+import { CommandRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
@@ -34,6 +35,8 @@ export interface ExtensionHostOptions {
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
+  /** Where slash commands go. Default: a new registry. */
+  commands?: CommandRegistry
   /** Where extension dialogs go. Default: a new one on `bus`. */
   ui?: UiRequests
   /** Session id used on extension.* and ui.* events. Default "host". */
@@ -50,12 +53,16 @@ export class ExtensionHost {
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
   #renderPending = false
+  /** Extension files imported before, which a reload must import anew. */
+  #imported = new Set<string>()
   readonly status: StatusRegistry
+  readonly commands: CommandRegistry
   readonly ui: UiRequests
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
     this.status = opts.status ?? new StatusRegistry()
+    this.commands = opts.commands ?? new CommandRegistry()
     this.ui = opts.ui ?? new UiRequests(opts.bus, opts.sessionId ? { sessionId: opts.sessionId } : {})
   }
 
@@ -82,6 +89,10 @@ export class ExtensionHost {
     installVirtualApi()
     const abs = path.resolve(file)
     let mod: { default?: unknown }
+    // The module cache would hand back the old code on a reload (Bun ignores a query on a file
+    // URL, but drops an ES module from require.cache). Files the extension imports stay cached.
+    if (this.#imported.has(abs)) delete require.cache[abs]
+    this.#imported.add(abs)
     try {
       mod = await import(pathToFileURL(abs).href)
     } catch (err) {
@@ -99,6 +110,11 @@ export class ExtensionHost {
     this.#disposers.delete(source)
     this.#requestRender()
     return true
+  }
+
+  /** Unloads every extension, the last loaded first. */
+  unloadAll(): void {
+    for (const source of this.loaded.reverse()) this.unload(source)
   }
 
   /** Coalesces render requests into one ui.render per macrotask. */
@@ -138,6 +154,15 @@ export class ExtensionHost {
       home: amiraHome(),
       reportError: (error) => void this.#fail(source, error),
       registerTool: (tool) => track(tools.register(tool, source)),
+      // A taken name skips only this command, not the whole extension (e.g. a skill named "help").
+      registerCommand: (command) => {
+        try {
+          return track(this.commands.register(command, source))
+        } catch (err) {
+          this.#fail(source, err instanceof Error ? err.message : String(err))
+          return () => {}
+        }
+      },
       on: (type, handler) =>
         track(
           bus.subscribe(

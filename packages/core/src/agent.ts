@@ -7,6 +7,7 @@ import {
   type ModelRef,
   type ToolCallBlock,
   type ToolResultMessage,
+  type ToolSpec,
   type UserMessage,
   userMessage,
 } from "@amira/ai"
@@ -200,18 +201,38 @@ export class Agent {
   }
 
   /**
-   * Summarizes older history now, keeping recent turns verbatim. Resolves false when there
-   * was nothing to compact or compaction failed (see compact.failed).
+   * Summarizes older history now, keeping recent turns verbatim; `instructions` steer the
+   * summary. Resolves false when there was nothing to compact or compaction failed (see
+   * compact.failed).
    */
-  async compact(): Promise<boolean> {
+  async compact(instructions?: string): Promise<boolean> {
     if (this.#abort) throw new AgentBusyError("a turn is already running")
     const abort = new AbortController()
     this.#abort = abort
     try {
-      return await this.#compact("manual", abort.signal, undefined)
+      return await this.#compact("manual", abort.signal, undefined, instructions)
     } finally {
       this.#abort = undefined
     }
+  }
+
+  /** Tokens the context held at the last reply; unknown before one and right after a compaction. */
+  get contextTokens(): number | undefined {
+    return this.#contextTokens
+  }
+
+  /**
+   * What the next model call would send: the system prompt and history after the system.build
+   * and context.build interceptors, and the tools offered. Throws when context.build blocks.
+   */
+  async preview(signal: AbortSignal = new AbortController().signal): Promise<{
+    systemPrompt: string
+    messages: Message[]
+    tools: ToolSpec[]
+  }> {
+    const built = await this.#buildContext(signal)
+    if (built.blocked) throw new Error(`context.build blocked the request: ${built.reason}`)
+    return { ...built.value, tools: offeredTools(this.tools, this.#loadedTools) }
   }
 
   /** When and with which model this agent compacts. */
@@ -222,6 +243,11 @@ export class Agent {
   /** Most tool calls this agent runs at once. */
   get maxParallelTools(): number {
     return this.#maxParallelTools
+  }
+
+  /** True while a turn or a manual compaction runs; a compaction has no turn id. */
+  get busy(): boolean {
+    return this.#abort !== undefined
   }
 
   /** Id of the running turn, if any. */
@@ -360,7 +386,8 @@ export class Agent {
     }
   }
 
-  async #callModel(turn: Turn): Promise<ModelReply> {
+  /** The system prompt and history for a model call, through the system.build and context.build interceptors. */
+  async #buildContext(signal: AbortSignal) {
     // The core owns the "deferred-tools" section: interceptors see it filled in, and it is
     // listed again afterwards so tools registered while they waited (e.g. MCP servers that
     // were still connecting) are included, unless an interceptor rewrote the section.
@@ -368,18 +395,21 @@ export class Agent {
     const built = await this.interceptors.run(
       "system.build",
       { sections: setSection(this.#sections, "deferred-tools", listed).map((s) => ({ ...s })) },
-      { sessionId: this.sessionId, signal: turn.signal },
+      { sessionId: this.sessionId, signal },
     )
-    if (turn.signal.aborted) return { kind: "aborted" }
     let sections = built.value.sections
     if (sections.find((s) => s.name === "deferred-tools")?.text === listed) {
       sections = setSection(sections, "deferred-tools", deferredToolsSection(this.tools.deferred()))
     }
-    const ctx = await this.interceptors.run(
+    return this.interceptors.run(
       "context.build",
       { systemPrompt: renderPrompt(sections), messages: [...this.messages] },
-      { sessionId: this.sessionId, signal: turn.signal },
+      { sessionId: this.sessionId, signal },
     )
+  }
+
+  async #callModel(turn: Turn): Promise<ModelReply> {
+    const ctx = await this.#buildContext(turn.signal)
     if (turn.signal.aborted) return { kind: "aborted" }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
@@ -691,7 +721,12 @@ export class Agent {
    * Replaces older history with a summary (D19, D57). Never throws; failures emit compact.failed.
    * compact.before runs first, so a compaction it blocks never starts and is reported as blocked.
    */
-  async #compact(reason: "threshold" | "manual", signal: AbortSignal, turn: Turn | undefined) {
+  async #compact(
+    reason: "threshold" | "manual",
+    signal: AbortSignal,
+    turn: Turn | undefined,
+    instructions?: string,
+  ) {
     const split = splitHistory(this.messages, this.#compaction.keepTurns ?? 2)
     if (!split) {
       if (reason === "manual") this.#emit(turn, "compact.failed", { error: "nothing to compact yet" })
@@ -716,7 +751,7 @@ export class Agent {
       })
       const summary =
         gate.value.summary?.trim() ||
-        (await summarize(this.#ai, this.#compaction.model ?? this.model, split.older, signal))
+        (await summarize(this.#ai, this.#compaction.model ?? this.model, split.older, signal, instructions))
       if (signal.aborted) throw new Error("aborted")
       const replaces = [
         ...new Set(split.older.flatMap((m) => (this.#entryIds.has(m) ? [this.#entryIds.get(m)!] : []))),

@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import { type AnyEvent, defineTool, textResult } from "@amira/api"
-import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import {
+  type AnyEvent,
+  type CommandDefinition,
+  defineTool,
+  type SessionControl,
+  textResult,
+} from "@amira/api"
+import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import statusExtension from "@amira/ext-status"
 import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
@@ -32,6 +38,9 @@ interface SetupOptions {
   initialPrompt?: string
   leftoverInput?: string
   startupEvents?: AnyEvent[]
+  /** Slash commands to offer; the UI gets a CommandHost when given. */
+  commands?: CommandDefinition[]
+  control?: Partial<SessionControl>
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -62,10 +71,24 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     write(d)
     screen.write(d)
   }
+  let commands: CommandHost | undefined
+  if (o.commands) {
+    await host.load((api) => {
+      for (const c of o.commands!) api.registerCommand(c)
+    }, "test-commands")
+    commands = new CommandHost({
+      registry: host.commands,
+      bus,
+      ui: host.ui,
+      control: (o.control ?? {}) as SessionControl,
+      agent,
+    })
+  }
   const exited = runInteractive({
     agent,
     status: host.status,
     ui: host.ui,
+    ...(commands ? { commands } : {}),
     terminal,
     setup: async () => ({ ...(await noProbe()), leftoverInput: o.leftoverInput ?? "" }),
     onReady: () => agent.start("startup"),
@@ -81,7 +104,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     await Bun.sleep(30)
   }
   await shows("Amira")
-  return { agent, bus, host, terminal, screen, all, live, shows, idle, exited }
+  return { agent, ai, bus, host, commands, terminal, screen, all, live, shows, idle, exited }
 }
 
 test("a conversation: user message, tool call and reply end up in the transcript", async () => {
@@ -417,4 +440,172 @@ test("extension dialogs are answered inline: confirm, select and input", async (
   expect(host.ui.pending).toEqual([])
   terminal.send("\x03")
   await exited
+})
+
+const MODELS = ["deepseek/deepseek-flash", "deepseek/deepseek-pro", "openai/gpt-5"]
+
+/** Commands like the built-in ones, enough to drive the popup. */
+function testCommands(log: string[]): CommandDefinition[] {
+  return [
+    { name: "help", description: "List the slash commands", run: (_a, ctx) => ctx.print("HELP TEXT") },
+    { name: "clear", description: "Start a new session", run: async (_a, ctx) => ctx.session.newSession() },
+    {
+      name: "model",
+      description: "Switch the model",
+      args: { hint: "[provider/model]", complete: () => MODELS.map((value) => ({ value })) },
+      async run(args, ctx) {
+        const ref = args || (await ctx.ui.select("Model", MODELS))
+        log.push(`model ${ref}`)
+        ctx.print(`Model: ${ref}`)
+      },
+    },
+    { name: "status", description: "Show the status", run: (_a, ctx) => ctx.print("STATUS OK", "warning") },
+    { name: "quit", description: "Leave Amira", run: (_a, ctx) => ctx.quit() },
+  ]
+}
+
+test("typing a slash opens the command list above the editor; Tab and Enter complete and run", async () => {
+  const log: string[] = []
+  const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
+  terminal.send("/")
+  await waitFor(() => live().includes("/status"), "popup")
+  const rows = live().split("\n")
+  const popupRow = rows.findIndex((l) => l.includes("/clear"))
+  const editorRow = rows.findIndex((l) => l.trimEnd() === "› /")
+  expect(popupRow).toBeGreaterThan(-1)
+  expect(popupRow).toBeLessThan(editorRow)
+  expect(live()).toContain("↑↓ select · Tab complete · Enter run · Esc close")
+  // Prefix first: "/he" puts help on top; Tab completes it, Enter runs it.
+  terminal.send("he")
+  await waitFor(() => live().includes("› /help"), "help selected")
+  terminal.send("\t")
+  await waitFor(() => live().includes("› /help "), "completed")
+  terminal.send("\r")
+  await shows("HELP TEXT")
+  expect(live()).toContain("› Message Amira")
+  terminal.send("\x03")
+  await exited
+})
+
+test("arguments complete after the name, ↑↓ pick one and Enter runs with it", async () => {
+  const log: string[] = []
+  const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
+  terminal.send("/model ")
+  await waitFor(() => live().includes("openai/gpt-5"), "model candidates")
+  terminal.send("\x1b[B\x1b[B")
+  await waitFor(() => live().includes("› openai/gpt-5"), "selection moved")
+  terminal.send("\r")
+  await shows("Model: openai/gpt-5")
+  // Part of a candidate typed: Enter takes the best match.
+  terminal.send("/model flash")
+  await waitFor(() => live().includes("› deepseek/deepseek-flash"), "filtered")
+  terminal.send("\r")
+  await shows("Model: deepseek/deepseek-flash")
+  expect(log).toEqual(["model openai/gpt-5", "model deepseek/deepseek-flash"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("keys arriving in one chunk are not answered by the popup of the previous frame", async () => {
+  const log: string[] = []
+  const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
+  terminal.send("/model deep")
+  await waitFor(() => live().includes("› deepseek/deepseek-flash"), "candidates for deep")
+  terminal.send("seek/deepseek-pro\r")
+  await shows("Model: deepseek/deepseek-pro")
+  expect(log).toEqual(["model deepseek/deepseek-pro"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("a command's picker is a select dialog that filters as you type", async () => {
+  const log: string[] = []
+  const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
+  terminal.send("/model")
+  await waitFor(() => live().includes("› /model"), "popup")
+  terminal.send("\r")
+  await waitFor(() => live().includes("? Model"), "picker")
+  terminal.send("gpt")
+  await waitFor(() => live().includes("filter › gpt") && !live().includes("deepseek-pro"), "filtered")
+  terminal.send("\r")
+  await shows("Model: openai/gpt-5")
+  terminal.send("\x03")
+  await exited
+})
+
+test("Esc closes the popup without leaving the text; Enter then runs what was typed", async () => {
+  const log: string[] = []
+  const { terminal, live, all, shows, exited } = await setup([], { commands: testCommands(log) })
+  terminal.send("/sta")
+  await waitFor(() => live().includes("› /status"), "popup")
+  terminal.send("\x1b[27u")
+  await waitFor(() => !live().includes("Show the status"), "closed")
+  expect(live()).toContain("› /sta")
+  terminal.send("tus\r")
+  await shows("STATUS OK")
+  expect(all()).toContain("› /status")
+  terminal.send("\x03")
+  await exited
+})
+
+test("unknown commands are reported and not sent to the model; slash paths are messages", async () => {
+  const { terminal, agent, shows, idle, exited } = await setup([{ text: "a path" }], {
+    commands: testCommands([]),
+  })
+  terminal.send("/nope\r")
+  await shows("Unknown command /nope")
+  expect(agent.messages).toEqual([])
+  terminal.send("/usr/bin is empty\r")
+  await shows("a path")
+  await idle()
+  expect(agent.messages.filter((m) => m.role === "user")).toHaveLength(1)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a command typed during a turn runs at once instead of steering it", async () => {
+  const { terminal, agent, shows, idle, exited } = await setup(
+    [{ text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 }],
+    { commands: testCommands([]) },
+  )
+  terminal.send("go\r")
+  await waitFor(() => agent.status === "working", "working")
+  terminal.send("/status")
+  await Bun.sleep(20)
+  terminal.send("\r")
+  await shows("STATUS OK")
+  await idle()
+  expect(agent.messages.filter((m) => m.role === "user")).toHaveLength(1)
+  terminal.send("\x03")
+  await exited
+})
+
+test("the UI follows the session a command switches to, and /quit leaves", async () => {
+  let host!: CommandHost
+  let next!: Agent
+  const { terminal, shows, idle, exited, ...s } = await setup([{ text: "from the new session" }], {
+    commands: testCommands([]),
+    control: {
+      newSession: async () => {
+        next = new Agent({
+          ai: s.ai,
+          model: s.ai.model("mock/m1"),
+          cwd: "/work/proj",
+          systemPrompt: "",
+          bus: s.bus,
+        })
+        host.switchTo(next)
+      },
+    },
+  })
+  host = s.commands!
+  terminal.send("/clear\r")
+  await waitFor(() => next !== undefined, "switched")
+  terminal.send("hello\r")
+  await shows("from the new session")
+  await idle()
+  expect(next.messages.filter((m) => m.role === "user")).toHaveLength(1)
+  expect(s.agent.messages).toEqual([])
+  terminal.send("/quit\r")
+  expect(await exited).toBe(0)
 })

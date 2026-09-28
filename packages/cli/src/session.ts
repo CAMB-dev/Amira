@@ -64,6 +64,8 @@ export interface Session {
    * (rpc session.resume). It starts with `model`, by default the current model.
    */
   resume(store: SessionStore, model?: ModelInfo): Agent
+  /** Unloads every extension and loads the same ones again (/reload); failures arrive as extension.error. */
+  reload(): Promise<void>
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -71,6 +73,7 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
   const bundled: [string, () => Promise<{ default?: unknown }>][] = [
     ["builtin:tools", () => import("@amira/builtin-tools")],
     ["builtin:status", () => import("@amira/ext-status")],
+    ["builtin:commands", () => import("@amira/ext-commands")],
     ["builtin:tool-search", async () => ({ default: toolSearchExtension })],
     ["builtin:skills", () => import("@amira/ext-skills")],
     ["builtin:mcp", () => import("@amira/ext-mcp")],
@@ -124,21 +127,24 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
   }
 
-  if (!opts.noBuiltins) {
-    try {
-      for (const b of await (opts.builtins ?? defaultBuiltins)()) await host.load(b.extension, b.source)
-    } catch (err) {
-      const error = `failed to load built-in extensions: ${err instanceof Error ? err.message : String(err)}`
-      bus.emit("extension.error", { source: "builtin", error }, { sessionId: "host" })
+  const loadExtensions = async () => {
+    if (!opts.noBuiltins) {
+      try {
+        for (const b of await (opts.builtins ?? defaultBuiltins)()) await host.load(b.extension, b.source)
+      } catch (err) {
+        const error = `failed to load built-in extensions: ${err instanceof Error ? err.message : String(err)}`
+        bus.emit("extension.error", { source: "builtin", error }, { sessionId: "host" })
+      }
     }
+    for (const p of opts.packages?.packages ?? []) {
+      for (const file of p.manifest.extensions) await host.loadFile(file)
+    }
+    for (const file of opts.extensions) await host.loadFile(file)
   }
   for (const p of opts.packages?.problems ?? []) {
     bus.emit("extension.error", { source: `package:${p.name}`, error: p.error }, { sessionId: "host" })
   }
-  for (const p of opts.packages?.packages ?? []) {
-    for (const file of p.manifest.extensions) await host.loadFile(file)
-  }
-  for (const file of opts.extensions) await host.loadFile(file)
+  await loadExtensions()
   const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
   for (const name of requested) {
     if (tools.has(name)) continue
@@ -182,6 +188,10 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     catalogRefresh,
     ai,
     resume: (store, m) => newAgent(m ?? agent.model, store),
+    reload: async () => {
+      host.unloadAll()
+      await loadExtensions()
+    },
   }
 }
 

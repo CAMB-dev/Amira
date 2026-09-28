@@ -66,14 +66,16 @@ export function renderTranscript(messages: Message[], maxBlock = 2000): string {
   return out.join("\n\n")
 }
 
-/** Asks the model for a summary of `messages`. Throws when the model fails. */
+/** Asks the model for a summary of `messages`; `instructions` from the user steer it. Throws when the model fails. */
 export async function summarize(
   ai: Ai,
   model: ModelInfo,
   messages: Message[],
   signal: AbortSignal,
+  instructions?: string,
 ): Promise<string> {
-  const request = `Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>`
+  const extra = instructions?.trim() ? `\n\nThe user asked for this summary: ${instructions.trim()}` : ""
+  const request = `Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>${extra}`
   let text = ""
   for await (const ev of ai.stream(
     {

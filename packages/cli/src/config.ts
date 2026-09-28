@@ -17,6 +17,8 @@ export interface Config {
   providers: ProviderConfig[]
   /** Keys from auth.json, used when the environment has none. */
   apiKeys: Record<string, string>
+  /** Which shell tools the model gets (D68), after falling back from powershell off Windows. */
+  shell: ShellMode
   /** Tools hidden from the model, from the shell mode and tools.disabled. */
   disabledTools: string[]
   /** The names the user asked to disable, and where: reported if no tool has them. */
@@ -49,6 +51,7 @@ export function resolveConfig(
     settings,
     providers: settingsProviders(settings, warnings),
     apiKeys: auth.keys,
+    shell,
     disabledTools: toolsToDisable(shell, settings.tools?.disabled ?? []),
     requestedDisabled: {
       names: settings.tools?.disabled ?? [],

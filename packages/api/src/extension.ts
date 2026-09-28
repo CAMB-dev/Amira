@@ -1,3 +1,4 @@
+import type { CommandDefinition } from "./commands.ts"
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
@@ -17,6 +18,11 @@ export interface ExtensionAPI {
   readonly home: string
   /** Returns a function that removes this registration. */
   registerTool(tool: ToolDefinition): () => void
+  /**
+   * Adds a slash command (D55). A name that is taken is reported as extension.error and
+   * skipped, unless the command sets `override: true`.
+   */
+  registerCommand(command: CommandDefinition): () => void
   /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */
   registerStatusItem(item: StatusItem): () => void
   /** Asks frontends to redraw, e.g. after a status item's state changed. */

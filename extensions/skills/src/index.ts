@@ -41,6 +41,8 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
     const reported = new Set<string>()
     let skills: Skill[] = []
     let registered = false
+    /** Skills already offered as slash commands (or refused, e.g. for a taken name). */
+    const commands = new Set<string>()
     // Rescanned before every model call, so skills written during a session are listed (and
     // the tool appears) right away; the listing only changes when the skills do.
     const scan = () => {
@@ -55,7 +57,24 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
         registered = true
         api.registerTool(skillTool)
       }
+      for (const s of skills) addCommand(s.name)
       return skills
+    }
+
+    // Every skill is also /<name>, user-only ones included: that is how the user runs them.
+    const addCommand = (name: string) => {
+      if (commands.has(name)) return
+      commands.add(name)
+      api.registerCommand({
+        name,
+        description: `Skill: ${skills.find((s) => s.name === name)?.description ?? name}`,
+        args: { hint: "[arguments]" },
+        async run(args, ctx) {
+          const skill = skills.find((s) => s.name === name) ?? scan().find((s) => s.name === name)
+          if (!skill) throw new Error(`the skill "${name}" is gone`)
+          await ctx.session.send(skillPrompt(skill, args))
+        },
+      })
     }
 
     const find = (name: string) => {

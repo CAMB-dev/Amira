@@ -11,6 +11,8 @@ export interface CatalogModel {
 /** Model facts by catalog provider id and model id (D51). */
 export interface ModelCatalog {
   find(catalogProvider: string, modelId: string): CatalogModel | undefined
+  /** Every model id the catalog lists for a provider, e.g. to offer them for completion. */
+  list?(catalogProvider: string): string[]
 }
 
 /**
@@ -47,6 +49,10 @@ export function createCatalog(data: unknown): ModelCatalog {
       const key = `${provider}\n${modelId}`
       if (!mapped.has(key)) mapped.set(key, toCatalogModel(lookup(models, modelId)))
       return mapped.get(key)
+    },
+    list(provider) {
+      const models = providers[provider]?.models
+      return isObject(models) ? Object.keys(models) : []
     },
   }
 }
