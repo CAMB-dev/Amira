@@ -15,6 +15,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     },
     registerCommand: () => () => {},
     registerStatusItem: () => () => {},
+    registerToolRenderer: () => () => {},
     requestRender: () => {},
     settings: {},
     on: () => () => {},
