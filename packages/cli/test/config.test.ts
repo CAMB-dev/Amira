@@ -110,6 +110,33 @@ test("settings reach the session: extensions, retry hook and model lookup", asyn
   expect(plain.agent.maxParallelTools).toBe(8)
 })
 
+test("settings compact sets the agent's threshold and summary model", async () => {
+  const providers = [
+    {
+      id: "mine",
+      dialect: "openai-chat" as const,
+      baseUrl: "http://mine",
+      models: [{ id: "m" }, { id: "small" }],
+    },
+  ]
+  const base = { cwd, extensions: [], noBuiltins: true, providers }
+  const session = await createSession({
+    ...base,
+    model: "mine/m",
+    settings: { compact: { threshold: 0.5, model: "mine/small" } },
+  })
+  expect(session.agent.compaction.threshold).toBe(0.5)
+  expect(session.agent.compaction.model?.id).toBe("small")
+  const plain = await createSession({ ...base, model: "mine/m" })
+  expect(plain.agent.compaction).toEqual({})
+  const err = await createSession({
+    ...base,
+    model: "mine/m",
+    settings: { compact: { model: "nope/x" } },
+  }).catch((e) => e)
+  expect(err).toBeInstanceOf(UsageError)
+})
+
 test("settings warnings become startup events for the interactive UI", async () => {
   const session = await createSession({
     model: "mine/m",

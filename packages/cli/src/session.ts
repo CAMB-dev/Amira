@@ -2,11 +2,14 @@ import { type Ai, createAi, type ModelInfo, type ProviderConfig } from "@amira/a
 import type { AnyEvent, Extension, Settings } from "@amira/api"
 import {
   Agent,
+  type CompactionOptions,
   defaultSections,
   EventBus,
   ExtensionHost,
   InterceptorRegistry,
-  renderPrompt,
+  instructionsSection,
+  loadInstructions,
+  type SessionStore,
   ToolRegistry,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
@@ -20,6 +23,10 @@ export interface SessionOptions {
   /** Tools hidden from the model. */
   disabledTools?: string[]
   ai?: Ai
+  /** Where the conversation is persisted; a stored one is resumed. Omit to keep nothing. */
+  store?: SessionStore
+  /** Compaction options; unset, they come from settings `compact`. */
+  compaction?: CompactionOptions
   /** Receives failures of event subscribers (extensions or frontends). The core itself never prints. */
   onSubscriberError?: (error: unknown, event: AnyEvent) => void
   /** Loads the bundled extensions; injectable for tests. */
@@ -68,12 +75,8 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
 export async function createSession(opts: SessionOptions): Promise<Session> {
   const ai = opts.ai ?? createAi({ providers: opts.providers ?? [], apiKeys: opts.apiKeys ?? {} })
   const settings = opts.settings ?? {}
-  let model: ModelInfo
-  try {
-    model = ai.model(opts.model)
-  } catch (err) {
-    throw new UsageError(withPresetHint(opts.model, err instanceof Error ? err.message : String(err)))
-  }
+  const model = resolveModel(ai, opts.model)
+  const compaction = opts.compaction ?? compactionFromSettings(ai, settings.compact)
   const bus = new EventBus(opts.onSubscriberError)
   const interceptors = new InterceptorRegistry({
     onError: (point, source, error) =>
@@ -106,14 +109,33 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ai,
     model,
     cwd: opts.cwd,
-    systemPrompt: renderPrompt(defaultSections({ cwd: opts.cwd })),
+    sections: defaultSections({ cwd: opts.cwd, project: instructionsSection(loadInstructions(opts.cwd)) }),
     bus,
     interceptors,
     tools,
+    ...(opts.store ? { session: opts.store } : {}),
+    ...(compaction ? { compaction } : {}),
     ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
   const retryAttempts = settings.retry?.attempts
   return { agent, host, startupEvents, ...(retryAttempts !== undefined ? { retryAttempts } : {}) }
+}
+
+function resolveModel(ai: Ai, ref: string): ModelInfo {
+  try {
+    return ai.model(ref)
+  } catch (err) {
+    throw new UsageError(withPresetHint(ref, err instanceof Error ? err.message : String(err)))
+  }
+}
+
+/** Settings `compact` as agent options; its model is resolved like --model. */
+function compactionFromSettings(ai: Ai, compact: Settings["compact"]): CompactionOptions | undefined {
+  if (!compact) return undefined
+  const out: CompactionOptions = {}
+  if (compact.threshold !== undefined) out.threshold = compact.threshold
+  if (compact.model) out.model = resolveModel(ai, compact.model)
+  return Object.keys(out).length ? out : undefined
 }
 
 /** The tools to hide for a shell mode and an explicit list (D68, D70). */

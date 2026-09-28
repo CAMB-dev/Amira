@@ -4,6 +4,7 @@ import {
   invalidArgs,
   type Message,
   type ModelInfo,
+  type ModelRef,
   type ToolCallBlock,
   type ToolResultMessage,
   type UserMessage,
@@ -17,8 +18,11 @@ import type {
   ToolResult,
   TurnEndReason,
 } from "@amira/api"
+import { type CompactionOptions, contextTokens, splitHistory, summarize } from "./compaction.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
+import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
+import { newSessionId, type SessionEntryData, type SessionStore, summaryMessages } from "./session-store.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 import { checkArgs } from "./validate-args.ts"
 
@@ -26,7 +30,16 @@ export interface AgentOptions {
   ai: Ai
   model: ModelInfo
   cwd: string
-  systemPrompt: string
+  /** The whole system prompt as one "identity" section; `sections` takes precedence. */
+  systemPrompt?: string
+  /** The system prompt's named sections, in order (D43). */
+  sections?: PromptSection[]
+  /**
+   * Where the conversation is persisted. Its id becomes the session id and, unless
+   * `messages` is given, its current branch is restored.
+   */
+  session?: SessionStore
+  compaction?: CompactionOptions
   sessionId?: string
   parentSessionId?: string
   bus?: EventBus
@@ -74,8 +87,8 @@ export class Agent {
   readonly tools: ToolRegistry
   readonly cwd: string
   readonly messages: Message[]
+  readonly session: SessionStore | undefined
   model: ModelInfo
-  systemPrompt: string
 
   #ai: Ai
   #status: SessionStatus = "idle"
@@ -83,27 +96,99 @@ export class Agent {
   #maxSteps: number
   #maxTokens: number | undefined
   #abortGraceMs: number
+  #sections: PromptSection[]
+  #compaction: CompactionOptions
+  /** The session entry each message was stored as. */
+  #entryIds = new Map<Message, string>()
+  /** Context size reported with the last reply; unknown right after a compaction. */
+  #contextTokens: number | undefined
+  #storeFailed = false
   #maxParallelTools: number
 
   constructor(opts: AgentOptions) {
-    this.sessionId = opts.sessionId ?? `s_${crypto.randomUUID().slice(0, 8)}`
+    this.session = opts.session
+    this.sessionId = opts.session?.id ?? opts.sessionId ?? newSessionId()
     this.parentSessionId = opts.parentSessionId
     this.bus = opts.bus ?? new EventBus()
     this.interceptors = opts.interceptors ?? new InterceptorRegistry()
     this.tools = opts.tools ?? new ToolRegistry()
     this.cwd = opts.cwd
-    this.messages = opts.messages ?? []
     this.model = opts.model
-    this.systemPrompt = opts.systemPrompt
+    this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
+    this.#compaction = opts.compaction ?? {}
     this.#ai = opts.ai
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
     this.#abortGraceMs = opts.abortGraceMs ?? 2000
     this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
+
+    if (opts.messages || !opts.session) {
+      this.messages = opts.messages ?? []
+      const last = this.messages.findLast((m) => m.role === "assistant" && m.usage) as
+        | AssistantMessage
+        | undefined
+      if (last?.usage) this.#contextTokens = contextTokens(last.usage)
+    } else {
+      const restored = opts.session.restore()
+      this.messages = restored.messages
+      this.#entryIds = restored.entryIds
+      this.#contextTokens = restored.contextTokens
+    }
+    const stored = opts.session?.model()
+    if (opts.session && (stored?.provider !== this.model.provider || stored.model !== this.model.id)) {
+      this.#store({ type: "model_change", model: modelRef(this.model) })
+    }
   }
 
   get status(): SessionStatus {
     return this.#status
+  }
+
+  /** The system prompt before system.build interceptors run. Setting it replaces every section. */
+  get systemPrompt(): string {
+    return renderPrompt(this.#sections)
+  }
+
+  set systemPrompt(text: string) {
+    this.#sections = [{ name: "identity", text }]
+  }
+
+  get sections(): readonly PromptSection[] {
+    return this.#sections
+  }
+
+  /** Replaces one section of the system prompt, leaving the others untouched. */
+  setSection(name: string, text: string): void {
+    this.#sections = setSection(this.#sections, name, text)
+  }
+
+  /** Switches models for later model calls and records the change in the session (D59). */
+  setModel(model: ModelInfo): void {
+    const from = modelRef(this.model)
+    this.model = model
+    if (from.provider === model.provider && from.model === model.id) return
+    this.#store({ type: "model_change", model: modelRef(model) })
+    this.#emit(undefined, "model.changed", { from, to: modelRef(model) })
+  }
+
+  /**
+   * Summarizes older history now, keeping recent turns verbatim. Resolves false when there
+   * was nothing to compact or compaction failed (see compact.failed).
+   */
+  async compact(): Promise<boolean> {
+    if (this.#abort) throw new AgentBusyError("a turn is already running")
+    const abort = new AbortController()
+    this.#abort = abort
+    try {
+      return await this.#compact("manual", abort.signal, undefined)
+    } finally {
+      this.#abort = undefined
+    }
+  }
+
+  /** When and with which model this agent compacts. */
+  get compaction(): Readonly<CompactionOptions> {
+    return this.#compaction
   }
 
   /** Most tool calls this agent runs at once. */
@@ -148,8 +233,12 @@ export class Agent {
     this.#emit(turn, "turn.start", { prompt: user })
     this.#setStatus(turn, "working")
     try {
-      this.messages.push(user)
+      this.#push(user)
+      let compactFailed = false
       while (true) {
+        if (!compactFailed && this.#needsCompaction()) {
+          compactFailed = !(await this.#compact("threshold", abort.signal, turn))
+        }
         if (abort.signal.aborted) {
           result = { reason: "aborted", steps }
           break
@@ -196,9 +285,15 @@ export class Agent {
   }
 
   async #callModel(turn: Turn): Promise<ModelReply> {
+    const built = await this.interceptors.run(
+      "system.build",
+      { sections: this.#sections.map((s) => ({ ...s })) },
+      { sessionId: this.sessionId, signal: turn.signal },
+    )
+    if (turn.signal.aborted) return { kind: "aborted" }
     const ctx = await this.interceptors.run(
       "context.build",
-      { systemPrompt: this.systemPrompt, messages: [...this.messages] },
+      { systemPrompt: renderPrompt(built.value.sections), messages: [...this.messages] },
       { sessionId: this.sessionId, signal: turn.signal },
     )
     if (turn.signal.aborted) return { kind: "aborted" }
@@ -262,7 +357,8 @@ export class Agent {
     }
     // An interrupted reply keeps its text but drops tool calls, which were never executed.
     if (aborted || error) message.content = message.content.filter((b) => b.type !== "toolCall")
-    if (message.content.length) this.messages.push(message)
+    if (message.content.length) this.#push(message)
+    if (message.usage) this.#contextTokens = contextTokens(message.usage)
     this.#emit(turn, "message.end", { message })
 
     if (aborted) return { kind: "aborted" }
@@ -315,7 +411,7 @@ export class Agent {
         }
         turn.finished.add(c.id)
       }
-      this.messages.push(...calls.map((c) => results.get(c.id)!))
+      this.#push(...calls.map((c) => results.get(c.id)!))
     }
   }
 
@@ -451,7 +547,84 @@ export class Agent {
           missing.push(toolError(b, "This tool call did not complete."))
       }
     }
-    this.messages.push(...missing)
+    this.#push(...missing)
+  }
+
+  /** Adds messages to the history and persists each one. */
+  #push(...messages: Message[]) {
+    for (const m of messages) {
+      this.messages.push(m)
+      const id = this.#store({ type: "message", message: m })
+      if (id) this.#entryIds.set(m, id)
+    }
+  }
+
+  /** Appends to the session file. A failing disk is reported once and never breaks the turn. */
+  #store(data: SessionEntryData): string | undefined {
+    if (!this.session) return undefined
+    try {
+      return this.session.append(data)
+    } catch (err) {
+      if (!this.#storeFailed) {
+        this.#storeFailed = true
+        const error = `could not save the session: ${err instanceof Error ? err.message : String(err)}`
+        this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId })
+      }
+      return undefined
+    }
+  }
+
+  #needsCompaction(): boolean {
+    if (this.#compaction.auto === false || this.#contextTokens === undefined) return false
+    return this.#contextTokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
+  }
+
+  /**
+   * Replaces older history with a summary (D19, D57). Never throws; failures emit compact.failed.
+   * compact.before runs first, so a compaction it blocks never starts and is reported as blocked.
+   */
+  async #compact(reason: "threshold" | "manual", signal: AbortSignal, turn: Turn | undefined) {
+    const split = splitHistory(this.messages, this.#compaction.keepTurns ?? 2)
+    if (!split) {
+      if (reason === "manual") this.#emit(turn, "compact.failed", { error: "nothing to compact yet" })
+      return false
+    }
+    try {
+      const gate = await this.interceptors.run(
+        "compact.before",
+        { messages: split.older, kept: split.kept },
+        { sessionId: this.sessionId, signal },
+      )
+      if (signal.aborted) throw new Error("aborted")
+      if (gate.blocked) {
+        this.#emit(turn, "compact.failed", { error: gate.reason, blocked: true })
+        return false
+      }
+      this.#emit(turn, "compact.start", {
+        reason,
+        replacing: split.older.length,
+        kept: split.kept.length,
+        ...(this.#contextTokens !== undefined ? { tokens: this.#contextTokens } : {}),
+      })
+      const summary =
+        gate.value.summary?.trim() ||
+        (await summarize(this.#ai, this.#compaction.model ?? this.model, split.older, signal))
+      if (signal.aborted) throw new Error("aborted")
+      const replaces = [
+        ...new Set(split.older.flatMap((m) => (this.#entryIds.has(m) ? [this.#entryIds.get(m)!] : []))),
+      ]
+      const entryId = this.#store({ type: "compaction", summary, replaces })
+      const replacement = summaryMessages(summary, modelRef(this.model))
+      for (const m of replacement) if (entryId) this.#entryIds.set(m, entryId)
+      for (const m of split.older) this.#entryIds.delete(m)
+      this.messages.splice(0, split.older.length, ...replacement)
+      this.#contextTokens = undefined
+      this.#emit(turn, "compact.end", { summary, replaced: split.older.length, kept: split.kept.length })
+      return true
+    } catch (err) {
+      this.#emit(turn, "compact.failed", { error: err instanceof Error ? err.message : String(err) })
+      return false
+    }
   }
 
   #setStatus(turn: Turn, status: SessionStatus, reason?: string) {
@@ -460,11 +633,15 @@ export class Agent {
     this.#emit(turn, "status.changed", { status, ...(reason !== undefined ? { reason } : {}) })
   }
 
-  #emit<K extends keyof EventMap>(turn: Turn, type: K, data: EventMap[K]) {
-    const meta: EmitMeta = { sessionId: this.sessionId, turnId: turn.id }
+  #emit<K extends keyof EventMap>(turn: Turn | undefined, type: K, data: EventMap[K]) {
+    const meta: EmitMeta = { sessionId: this.sessionId, ...(turn ? { turnId: turn.id } : {}) }
     if (this.parentSessionId) meta.parentSessionId = this.parentSessionId
     this.bus.emit(type, data, meta)
   }
+}
+
+function modelRef(model: ModelInfo): ModelRef {
+  return { provider: model.provider, model: model.id }
 }
 
 /** The tool's concurrency key for this call; a throwing key function means no key. */

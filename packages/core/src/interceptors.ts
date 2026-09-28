@@ -19,6 +19,8 @@ export type FailurePolicy = "pass" | "block"
 export const FAILURE_POLICY: Record<keyof InterceptorMap, FailurePolicy> = {
   "context.build": "pass",
   "tool.call.before": "block",
+  "system.build": "pass",
+  "compact.before": "pass",
 }
 
 export type InterceptOutcome<T> = { blocked: false; value: T } | { blocked: true; reason: string; value: T }
