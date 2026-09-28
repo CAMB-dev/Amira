@@ -1,5 +1,5 @@
-import { type Ai, createAi, type ModelInfo } from "@amira/ai"
-import type { AnyEvent, Extension } from "@amira/api"
+import { type Ai, createAi, type ModelInfo, type ProviderConfig } from "@amira/ai"
+import type { AnyEvent, Extension, Settings } from "@amira/api"
 import {
   Agent,
   defaultSections,
@@ -10,6 +10,7 @@ import {
   ToolRegistry,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
+import { withPresetHint } from "./provider-command.ts"
 
 export interface SessionOptions {
   model: string
@@ -23,6 +24,12 @@ export interface SessionOptions {
   onSubscriberError?: (error: unknown, event: AnyEvent) => void
   /** Loads the bundled extensions; injectable for tests. */
   builtins?: () => Promise<{ source: string; extension: Extension }[]>
+  /** Merged settings (D35): handed to extensions; agent options come from them too. */
+  settings?: Settings
+  /** Providers from settings, merged over the built-ins. Unused when `ai` is given. */
+  providers?: ProviderConfig[]
+  /** Stored API keys by provider id (auth.json). Unused when `ai` is given. */
+  apiKeys?: Record<string, string>
 }
 
 export interface Session {
@@ -30,6 +37,11 @@ export interface Session {
   host: ExtensionHost
   /** Extension events emitted while loading, before any frontend subscribed. */
   startupEvents: AnyEvent[]
+  /**
+   * Retry hook: settings retry.attempts, for the retry support that is still to come. Pass it
+   * to the Agent once it takes a retry option.
+   */
+  retryAttempts?: number
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -52,12 +64,13 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  const ai = opts.ai ?? createAi()
+  const ai = opts.ai ?? createAi({ providers: opts.providers ?? [], apiKeys: opts.apiKeys ?? {} })
+  const settings = opts.settings ?? {}
   let model: ModelInfo
   try {
     model = ai.model(opts.model)
   } catch (err) {
-    throw new UsageError(err instanceof Error ? err.message : String(err))
+    throw new UsageError(withPresetHint(opts.model, err instanceof Error ? err.message : String(err)))
   }
   const bus = new EventBus(opts.onSubscriberError)
   const interceptors = new InterceptorRegistry({
@@ -65,7 +78,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       bus.emit("extension.error", { source, error: `${point}: ${error}` }, { sessionId: "host" }),
   })
   const tools = new ToolRegistry()
-  const host = new ExtensionHost({ bus, interceptors, tools })
+  const host = new ExtensionHost({ bus, interceptors, tools, settings })
   const startupEvents: AnyEvent[] = []
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
     types: ["extension.error", "extension.loaded"],
@@ -92,8 +105,10 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     bus,
     interceptors,
     tools,
+    ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
-  return { agent, host, startupEvents }
+  const retryAttempts = settings.retry?.attempts
+  return { agent, host, startupEvents, ...(retryAttempts !== undefined ? { retryAttempts } : {}) }
 }
 
 /** The tools to hide for a shell mode and an explicit list (D68, D70). */
