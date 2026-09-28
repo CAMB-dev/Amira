@@ -105,6 +105,8 @@ export class UiRequests {
           o(rest),
         )
       },
+      reviewDiff: (title, diff, options, opts) =>
+        this.ask({ kind: "diff-review", title, diff, options: [...options] }, o(opts)),
     }
   }
 
@@ -124,6 +126,7 @@ export class UiRequests {
 function checkValue(request: UiRequest, value: unknown): string | undefined {
   switch (request.kind) {
     case "select":
+    case "diff-review":
       return typeof value === "string" && request.options.includes(value)
         ? undefined
         : `value must be one of the options: ${JSON.stringify(request.options)}`

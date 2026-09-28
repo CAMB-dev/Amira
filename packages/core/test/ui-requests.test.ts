@@ -81,3 +81,13 @@ test("extensions get api.ui; unloading one cancels its open dialogs", async () =
   host.unload("ext")
   expect(await answer).toBeUndefined()
 })
+
+test("diff-review shows a diff and resolves with one of its options", async () => {
+  const { ui, next } = setup()
+  const answer = ui.api("agent").reviewDiff("Merge?", "+a\n-b\n", ["merge", "keep"])
+  const req = await next()
+  expect(req.data).toMatchObject({ kind: "diff-review", diff: "+a\n-b\n", options: ["merge", "keep"] })
+  expect(ui.respond(req.data.requestId, "other")).toContain("one of the options")
+  ui.respond(req.data.requestId, "keep")
+  expect(await answer).toBe("keep")
+})

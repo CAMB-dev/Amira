@@ -25,6 +25,8 @@ export type UiRequest =
   | { kind: "select"; title: string; options: string[] }
   | { kind: "confirm"; title: string; message?: string }
   | { kind: "input"; title: string; placeholder?: string; initial?: string }
+  /** A unified diff to look over, answered with one of `options` (D16, D38). */
+  | { kind: "diff-review"; title: string; diff: string; options: string[] }
 
 export type UiRequestKind = UiRequest["kind"]
 
@@ -33,6 +35,7 @@ export interface UiAnswer {
   select: string
   confirm: boolean
   input: string
+  "diff-review": string
 }
 
 export interface UiRequestOptions {
@@ -53,5 +56,12 @@ export interface UiApi {
   input(
     title: string,
     opts?: UiRequestOptions & { placeholder?: string; initial?: string },
+  ): Promise<string | undefined>
+  /** Shows a diff and asks what to do with it; resolves with the chosen option. */
+  reviewDiff(
+    title: string,
+    diff: string,
+    options: string[],
+    opts?: UiRequestOptions,
   ): Promise<string | undefined>
 }
