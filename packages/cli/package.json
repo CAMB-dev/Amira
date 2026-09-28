@@ -1,0 +1,16 @@
+{
+  "name": "amira",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "amira": "./src/main.ts"
+  },
+  "dependencies": {
+    "@amira/ai": "workspace:*",
+    "@amira/core": "workspace:*",
+    "@amira/api": "workspace:*",
+    "@amira/tui": "workspace:*",
+    "@amira/builtin-tools": "workspace:*"
+  }
+}
