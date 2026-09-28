@@ -9,32 +9,46 @@ interface Registered {
 }
 
 export class ToolRegistry {
-  #tools = new Map<string, Registered>()
+  /** Per name, a stack of registrations; the last one wins. */
+  #tools = new Map<string, Registered[]>()
 
-  /** Replacing an existing tool requires `override: true`; otherwise it is a conflict. */
+  /**
+   * Replacing an existing tool requires `override: true`; otherwise it is a conflict.
+   * The returned function removes exactly this registration, whatever its position.
+   */
   register(tool: ToolDefinition, source: string): () => void {
-    const existing = this.#tools.get(tool.name)
-    if (existing && !tool.override) {
+    const stack = this.#tools.get(tool.name) ?? []
+    const top = stack.at(-1)
+    if (top && !tool.override) {
       throw new ToolConflictError(
-        `tool "${tool.name}" from ${source} conflicts with the one from ${existing.source}; set override: true to replace it`,
+        `tool "${tool.name}" from ${source} conflicts with the one from ${top.source}; set override: true to replace it`,
       )
     }
     const entry = { tool, source }
-    this.#tools.set(tool.name, entry)
+    stack.push(entry)
+    this.#tools.set(tool.name, stack)
     return () => {
-      if (this.#tools.get(tool.name) !== entry) return
-      if (existing) this.#tools.set(tool.name, existing)
+      const s = this.#tools.get(tool.name)
+      if (!s) return
+      const rest = s.filter((e) => e !== entry)
+      if (rest.length) this.#tools.set(tool.name, rest)
       else this.#tools.delete(tool.name)
     }
   }
 
   get(name: string): ToolDefinition | undefined {
-    return this.#tools.get(name)?.tool
+    return this.#tools.get(name)?.at(-1)?.tool
+  }
+
+  #current(): Registered[] {
+    return [...this.#tools.values()].map((s) => s.at(-1)!)
   }
 
   /** Tools the model sees on every call. */
   active(): ToolDefinition[] {
-    return [...this.#tools.values()].map((r) => r.tool).filter((t) => (t.exposure ?? "active") === "active")
+    return this.#current()
+      .map((r) => r.tool)
+      .filter((t) => (t.exposure ?? "active") === "active")
   }
 
   specs(): ToolSpec[] {
@@ -42,6 +56,6 @@ export class ToolRegistry {
   }
 
   all(): { tool: ToolDefinition; source: string }[] {
-    return [...this.#tools.values()]
+    return this.#current()
   }
 }

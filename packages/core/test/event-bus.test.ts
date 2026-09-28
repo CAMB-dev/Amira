@@ -55,8 +55,36 @@ test("overflow drops streaming deltas first and reports events.lost", async () =
   bus.emit("turn.end", { reason: "done", steps: 1 }, meta) // full: drops delta "b"
   bus.emit("message.delta", { kind: "text", text: "c" }, meta) // full: the incoming delta is dropped
   await bus.flush()
-  expect(seen.map((e) => e.type)).toEqual(["events.lost", "turn.start", "message.end", "turn.end"])
-  expect((seen[0] as Extract<AnyEvent, { type: "events.lost" }>).data.dropped).toBe(3)
+  expect(seen.map((e) => e.type)).toEqual(["turn.start", "message.end", "events.lost", "turn.end"])
+  expect((seen[2] as Extract<AnyEvent, { type: "events.lost" }>).data.dropped).toBe(3)
+  const seqs = seen.map((e) => e.seq)
+  expect(seqs).toEqual([...seqs].sort((a, b) => a - b))
+})
+
+test("filtered subscribers never receive events.lost unless they ask for it", async () => {
+  const bus = new EventBus()
+  const seen: string[] = []
+  bus.subscribe((e) => void seen.push(e.type), { types: ["turn.end"], maxQueue: 1 })
+  bus.emit("turn.end", { reason: "done", steps: 0 }, meta)
+  bus.emit("turn.end", { reason: "done", steps: 1 }, meta)
+  await bus.flush()
+  expect(seen).toEqual(["turn.end"])
+})
+
+test("a throwing error handler neither crashes nor wedges the subscriber", async () => {
+  const bus = new EventBus(() => {
+    throw new Error("handler broke")
+  })
+  let calls = 0
+  bus.subscribe(() => {
+    calls++
+    throw new Error("subscriber broke")
+  })
+  bus.emit("turn.end", { reason: "done", steps: 0 }, meta)
+  await bus.flush()
+  bus.emit("turn.end", { reason: "done", steps: 0 }, meta)
+  await bus.flush()
+  expect(calls).toBe(2)
 })
 
 test("type filters and unsubscribe", async () => {

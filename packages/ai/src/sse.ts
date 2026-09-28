@@ -3,7 +3,10 @@ export interface SSEMessage {
   data: string
 }
 
-/** Parses a text/event-stream body into messages. Handles chunks split anywhere. */
+/**
+ * Parses a text/event-stream body into messages. Handles chunks split anywhere and
+ * CRLF, LF or CR line endings. Stopping iteration early cancels the body.
+ */
 export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEMessage> {
   const decoder = new TextDecoder()
   let buf = ""
@@ -22,36 +25,52 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
     return msg
   }
 
+  const onLine = (line: string): SSEMessage | undefined => {
+    if (line === "") return flush()
+    if (line.startsWith(":")) return undefined
+    const colon = line.indexOf(":")
+    const field = colon === -1 ? line : line.slice(0, colon)
+    let value = colon === -1 ? "" : line.slice(colon + 1)
+    if (value.startsWith(" ")) value = value.slice(1)
+    if (field === "data") data.push(value)
+    else if (field === "event") event = value
+    return undefined
+  }
+
   const reader = body.getReader()
+  const eol = /\r\n|\r|\n/g
+  let scanFrom = 0
+  let finished = false
   try {
     while (true) {
       const { value, done } = await reader.read()
       buf += done ? decoder.decode() : decoder.decode(value, { stream: true })
-      let nl = buf.search(/\r?\n/)
-      while (nl !== -1) {
-        const line = buf.slice(0, nl)
-        buf = buf.slice(buf[nl] === "\r" ? nl + 2 : nl + 1)
-        if (line === "") {
-          const msg = flush()
-          if (msg) yield msg
-        } else if (!line.startsWith(":")) {
-          const colon = line.indexOf(":")
-          const field = colon === -1 ? line : line.slice(0, colon)
-          let value = colon === -1 ? "" : line.slice(colon + 1)
-          if (value.startsWith(" ")) value = value.slice(1)
-          if (field === "data") data.push(value)
-          else if (field === "event") event = value
+      let start = 0
+      eol.lastIndex = scanFrom
+      let heldCR = false
+      for (let m = eol.exec(buf); m; m = eol.exec(buf)) {
+        // A trailing CR may be the first half of a CRLF split across chunks.
+        if (!done && m[0] === "\r" && m.index === buf.length - 1) {
+          heldCR = true
+          break
         }
-        nl = buf.search(/\r?\n/)
+        const msg = onLine(buf.slice(start, m.index))
+        if (msg) yield msg
+        start = eol.lastIndex
       }
+      buf = buf.slice(start)
+      scanFrom = heldCR ? buf.length - 1 : buf.length
       if (done) break
     }
     if (buf !== "") {
-      if (buf.startsWith("data:")) data.push(buf.slice(5).trimStart())
+      const msg = onLine(buf)
+      if (msg) yield msg
     }
     const msg = flush()
     if (msg) yield msg
+    finished = true
   } finally {
+    if (!finished) await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
 }

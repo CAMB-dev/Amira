@@ -1,6 +1,8 @@
 import type { AnyEvent, EventEnvelope, EventMap } from "@amira/api"
 
-const isStreaming = (type: string) => type === "message.delta" || type === "tool.execute.update"
+/** Events a lagging subscriber can lose without harm; later events supersede them. */
+const isStreaming = (type: string) =>
+  type === "message.delta" || type === "tool.execute.update" || type === "ui.render"
 
 export type Subscriber = (event: AnyEvent) => void | Promise<void>
 
@@ -23,7 +25,8 @@ interface Sub {
   max: number
   types?: Set<string>
   draining: boolean
-  dropped: number
+  /** Pending events.lost marker still sitting in the queue, if any. */
+  lost?: EventEnvelope<"events.lost">
 }
 
 /**
@@ -35,8 +38,9 @@ export class EventBus {
   #subs = new Set<Sub>()
   #onError: (err: unknown, event: AnyEvent) => void
 
+  /** onError receives subscriber failures. The default ignores them: the core never prints. */
   constructor(onError?: (err: unknown, event: AnyEvent) => void) {
-    this.#onError = onError ?? ((err) => console.error("[amira] event subscriber failed:", err))
+    this.#onError = onError ?? (() => {})
   }
 
   subscribe(fn: Subscriber, opts: SubscribeOptions = {}): () => void {
@@ -45,7 +49,6 @@ export class EventBus {
       queue: [],
       max: opts.maxQueue ?? 10_000,
       draining: false,
-      dropped: 0,
       ...(opts.types ? { types: new Set(opts.types as string[]) } : {}),
     }
     this.#subs.add(sub)
@@ -56,14 +59,20 @@ export class EventBus {
     const ev: EventEnvelope<K> = { seq: ++this.#seq, ts: Date.now(), ...meta, type, data }
     for (const sub of this.#subs) {
       if (sub.types && !sub.types.has(type)) continue
+      let keep = true
       if (sub.queue.length >= sub.max) {
         // Drop streaming updates first; clients can resync from the final message.
-        sub.dropped++
-        if (isStreaming(type)) continue
-        const i = sub.queue.findIndex((e) => isStreaming(e.type))
-        sub.queue.splice(i === -1 ? 0 : i, 1)
+        if (isStreaming(type)) keep = false
+        else {
+          const i = sub.queue.findIndex((e) => isStreaming(e.type))
+          const j = i !== -1 ? i : sub.queue.findIndex((e) => e !== sub.lost)
+          if (j !== -1) sub.queue.splice(j, 1)
+        }
+        if (keep) sub.queue.push(ev as AnyEvent)
+        this.#noteLoss(sub, meta)
+      } else {
+        sub.queue.push(ev as AnyEvent)
       }
-      sub.queue.push(ev as AnyEvent)
       this.#drain(sub)
     }
     return ev
@@ -74,26 +83,40 @@ export class EventBus {
     while ([...this.#subs].some((s) => s.draining || s.queue.length)) await Bun.sleep(0)
   }
 
+  /**
+   * Records a drop as an events.lost marker placed after everything queued so far,
+   * so delivery order stays in seq order. Consecutive drops share one marker.
+   */
+  #noteLoss(sub: Sub, meta: EmitMeta) {
+    if (sub.types && !sub.types.has("events.lost")) return
+    if (sub.lost) {
+      sub.lost.data.dropped++
+      return
+    }
+    const lost: EventEnvelope<"events.lost"> = {
+      seq: ++this.#seq,
+      ts: Date.now(),
+      sessionId: meta.sessionId,
+      type: "events.lost",
+      data: { dropped: 1 },
+    }
+    sub.lost = lost
+    sub.queue.push(lost)
+  }
+
   #drain(sub: Sub) {
     if (sub.draining) return
     sub.draining = true
     queueMicrotask(async () => {
-      while (sub.queue.length) {
-        if (sub.dropped) {
-          const lost: AnyEvent = {
-            seq: ++this.#seq,
-            ts: Date.now(),
-            sessionId: sub.queue[0]!.sessionId,
-            type: "events.lost",
-            data: { dropped: sub.dropped },
-          }
-          sub.dropped = 0
-          await this.#deliver(sub, lost)
+      try {
+        while (sub.queue.length) {
+          const ev = sub.queue.shift()!
+          if (ev === sub.lost) sub.lost = undefined
+          await this.#deliver(sub, ev)
         }
-        const ev = sub.queue.shift()!
-        await this.#deliver(sub, ev)
+      } finally {
+        sub.draining = false
       }
-      sub.draining = false
     })
   }
 
@@ -102,7 +125,11 @@ export class EventBus {
     try {
       await sub.fn(ev)
     } catch (err) {
-      this.#onError(err, ev)
+      try {
+        this.#onError(err, ev)
+      } catch {
+        // A broken error handler must not take the process down.
+      }
     }
   }
 }

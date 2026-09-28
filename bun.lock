@@ -17,6 +17,17 @@
         "@amira/api": "workspace:*",
       },
     },
+    "extensions/status": {
+      "name": "@amira/ext-status",
+      "version": "0.0.0",
+      "dependencies": {
+        "@amira/api": "workspace:*",
+      },
+      "devDependencies": {
+        "@amira/ai": "workspace:*",
+        "@amira/core": "workspace:*",
+      },
+    },
     "packages/ai": {
       "name": "@amira/ai",
       "version": "0.0.0",
@@ -72,6 +83,8 @@
     "@amira/builtin-tools": ["@amira/builtin-tools@workspace:extensions/builtin-tools"],
 
     "@amira/core": ["@amira/core@workspace:packages/core"],
+
+    "@amira/ext-status": ["@amira/ext-status@workspace:extensions/status"],
 
     "@amira/tui": ["@amira/tui@workspace:packages/tui"],
 
