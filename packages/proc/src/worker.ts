@@ -1,40 +1,85 @@
 // Runs commands off the main thread: spawning can block its thread for seconds on
 // some Windows machines (antivirus scanning), which would freeze the UI.
 import { warmUpProcessTree } from "./process-tree.ts"
-import type { FromWorker, ToWorker } from "./protocol.ts"
-import { runCommandInline } from "./run-inline.ts"
+import type { FromWorker, ReleaseRequest, SpawnRequest, ToWorker } from "./protocol.ts"
+import {
+  type PreparedCommand,
+  prepareCommandInline,
+  type ReleaseOptions,
+  type RunResult,
+  runCommandInline,
+  StandbyGoneError,
+} from "./run-inline.ts"
 
 declare const self: Worker
 
 const running = new Map<number, AbortController>()
+/** Prepared commands waiting for their release. */
+const prepared = new Map<number, PreparedCommand>()
 const post = (m: FromWorker) => self.postMessage(m)
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
   const msg = e.data
-  if (msg.type === "warmup") {
-    try {
-      warmUpProcessTree()
-    } catch {}
-    return
+  switch (msg.type) {
+    case "warmup":
+      try {
+        warmUpProcessTree()
+      } catch {}
+      return
+    case "abort":
+      return running.get(msg.id)?.abort()
+    case "prepare":
+      return prepare(msg.id, msg.request)
+    case "dispose":
+      prepared.get(msg.id)?.dispose()
+      prepared.delete(msg.id)
+      return
+    case "run":
+      return track(msg.id, msg.request, (opts) =>
+        runCommandInline(msg.request.argv, { ...msg.request, ...opts }),
+      )
+    case "release": {
+      const command = prepared.get(msg.id)
+      prepared.delete(msg.id)
+      return track(msg.id, msg.request, (opts) =>
+        command ? command.run(opts) : Promise.reject(new StandbyGoneError("the prepared command is gone")),
+      )
+    }
   }
-  if (msg.type === "abort") return running.get(msg.id)?.abort()
-  const { id, request } = msg
+}
+
+function prepare(id: number, request: SpawnRequest) {
+  try {
+    const command = prepareCommandInline(request.argv, request, () => {
+      if (prepared.get(id) !== command) return
+      prepared.delete(id)
+      post({ type: "gone", id })
+    })
+    prepared.set(id, command)
+  } catch {
+    post({ type: "gone", id })
+  }
+}
+
+/** Runs a command under an abort controller the main thread can reach, and reports back. */
+function track(id: number, request: ReleaseRequest, start: (opts: ReleaseOptions) => Promise<RunResult>) {
   const abort = new AbortController()
   running.set(id, abort)
-  runCommandInline(request.argv, {
-    cwd: request.cwd,
+  start({
     timeoutMs: request.timeoutMs,
     signal: abort.signal,
     onChunk: (chunk) => post({ type: "chunk", id, chunk }),
-    ...(request.env ? { env: request.env } : {}),
-    ...(request.gated ? { gated: true } : {}),
     ...(request.gateLine !== undefined ? { gateLine: request.gateLine } : {}),
-    ...(request.viaCmd ? { viaCmd: true } : {}),
-    ...(request.stdoutOnly ? { stdoutOnly: true } : {}),
   })
     .then(
       (result) => post({ type: "done", id, result }),
-      (err) => post({ type: "failed", id, error: err instanceof Error ? err.message : String(err) }),
+      (err) =>
+        post({
+          type: "failed",
+          id,
+          error: err instanceof Error ? err.message : String(err),
+          ...(err instanceof StandbyGoneError ? { gone: true } : {}),
+        }),
     )
     .finally(() => running.delete(id))
 }

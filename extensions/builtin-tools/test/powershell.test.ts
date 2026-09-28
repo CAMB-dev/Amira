@@ -7,8 +7,12 @@ import { makeCtx, textOf } from "./util.ts"
 setDefaultTimeout(120_000)
 const onWindows = process.platform === "win32"
 
-test("the script reads the command from the gate line before anything else", () => {
-  expect(POWERSHELL_SCRIPT.split("\n")[0]).toContain("[Console]::In.ReadLine()")
+test("the script reads the command from the gate line before running it", () => {
+  const gate = POWERSHELL_SCRIPT.indexOf("[Console]::In.ReadLine()")
+  expect(gate).toBeGreaterThan(0)
+  expect(POWERSHELL_SCRIPT.indexOf("FromBase64String")).toBeGreaterThan(gate)
+  // Before the gate the process is not yet known to be in its job: it must start nothing.
+  expect(POWERSHELL_SCRIPT.slice(0, gate)).not.toMatch(/Start-Process|Invoke-Expression|\.exe|&\s*\$/i)
   expect(POWERSHELL_SCRIPT).toContain("UTF8Encoding")
   expect(Buffer.from(encodePowerShell("é"), "base64").toString("utf16le")).toBe("é")
   expect(encodeCommand("你好\nx")).not.toContain("\n")
@@ -105,6 +109,13 @@ for (const path of editions) {
     test("commands longer than -EncodedCommand allows still run", async () => {
       const r = await run(`$x = '${"a".repeat(40_000)}'; $x.Length`)
       expect(textOf(r)).toBe("40000\n\nExit code: 0")
+    })
+
+    test("each call gets a fresh process, also when a standby serves it", async () => {
+      const first = textOf(await run("$global:amiraLeak = 1; $PID"))
+      const second = textOf(await run("[string]($null -eq $global:amiraLeak) + ' ' + $PID"))
+      expect(second).toStartWith("True ")
+      expect(second.split("\n")[0]?.split(" ")[1]).not.toBe(first.split("\n")[0])
     })
 
     test("abort stops a long command promptly", async () => {

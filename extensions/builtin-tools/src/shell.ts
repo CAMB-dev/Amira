@@ -2,7 +2,13 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
 import { runCommand } from "@amira/proc"
-import { findPowerShell, gatedPowerShell, powershellEdition, resolvePowerShell } from "./powershell.ts"
+import {
+  findPowerShell,
+  gatedPowerShell,
+  powershellEdition,
+  powershellStandby,
+  resolvePowerShell,
+} from "./powershell.ts"
 
 /** How to run one command: argv plus the matching runCommand options. */
 export interface ShellCommand {
@@ -196,9 +202,9 @@ export function resolveShell(): Promise<Shell> {
 }
 
 /**
- * Finds the shells and runs an empty command in each, in the background. On machines where
- * antivirus scans each new program, the first start of bash or PowerShell takes seconds;
- * paying that at startup keeps the model's first command fast.
+ * Finds the shells and, in the background, runs an empty bash command and starts a PowerShell
+ * standby. On machines where antivirus scans each new program, the first start of bash or
+ * PowerShell takes seconds; paying that at startup keeps the model's first command fast.
  */
 export function warmUpShell(): void {
   const warm = (shell: Shell, command: string) => {
@@ -215,9 +221,10 @@ export function warmUpShell(): void {
       process.platform === "win32" ? warm(shell, shell.kind === "bash" ? ":" : "$null") : undefined,
     )
     .catch(() => {})
+  // Where the powershell tool is offered: a started process waits for its first command.
   if (process.platform === "win32") {
     resolvePowerShell()
-      .then((shell) => warm(shell, "$null"))
+      .then((shell) => powershellStandby.fill(shell.command(""), process.cwd()))
       .catch(() => {})
   }
 }
