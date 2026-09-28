@@ -62,6 +62,9 @@ Use -- before a prompt that starts with a dash: amira -p -- "-v means verbose?"
 Commands:
   amira provider presets [id]   Print settings.json entries for known providers
   amira provider add <id>       Add a preset to ~/.amira/settings.json
+  amira ext <command>           Install, list, update, remove and search extension
+                                packages (see amira ext help)
+  amira <name> ...              A command an installed package provides
 
 Settings come from ~/.amira/settings.json, <cwd>/.amira/settings.json and
 <cwd>/.amira/settings.local.json (later files win; flags win over all). Provider

@@ -91,6 +91,7 @@
         "@amira/ext-skills": "workspace:*",
         "@amira/ext-status": "workspace:*",
         "@amira/ext-web": "workspace:*",
+        "@amira/proc": "workspace:*",
         "@amira/tui": "workspace:*",
       },
     },

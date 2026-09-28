@@ -10,6 +10,7 @@
     "@amira/ai": "workspace:*",
     "@amira/core": "workspace:*",
     "@amira/api": "workspace:*",
+    "@amira/proc": "workspace:*",
     "@amira/tui": "workspace:*",
     "@amira/builtin-tools": "workspace:*",
     "@amira/ext-status": "workspace:*",

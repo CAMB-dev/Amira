@@ -1,6 +1,7 @@
 import { type Ai, createAi, type ModelInfo, type ProviderConfig, type RetryOptions } from "@amira/ai"
 import type { AnyEvent, Extension, Settings } from "@amira/api"
 import {
+  type ActivePackages,
   Agent,
   type CompactionOptions,
   defaultSections,
@@ -22,6 +23,8 @@ export interface SessionOptions {
   model: string
   cwd: string
   extensions: string[]
+  /** Installed packages (D24, D60): loaded after the built-ins and before `extensions`. */
+  packages?: ActivePackages
   noBuiltins: boolean
   /** Tools hidden from the model. */
   disabledTools?: string[]
@@ -87,7 +90,7 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  const settings = opts.settings ?? {}
+  const settings = withPackageSkills(opts.settings ?? {}, opts.packages)
   // AMIRA_TEST_MOCK (end-to-end tests only) adds a scripted "mock" provider and keeps the
   // catalog download out of the test run.
   const mock = testAiOptions()
@@ -128,6 +131,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       const error = `failed to load built-in extensions: ${err instanceof Error ? err.message : String(err)}`
       bus.emit("extension.error", { source: "builtin", error }, { sessionId: "host" })
     }
+  }
+  for (const p of opts.packages?.problems ?? []) {
+    bus.emit("extension.error", { source: `package:${p.name}`, error: p.error }, { sessionId: "host" })
+  }
+  for (const p of opts.packages?.packages ?? []) {
+    for (const file of p.manifest.extensions) await host.loadFile(file)
   }
   for (const file of opts.extensions) await host.loadFile(file)
   const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
@@ -174,6 +183,13 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ai,
     resume: (store, m) => newAgent(m ?? agent.model, store),
   }
+}
+
+/** Package skill directories are searched after the ones from settings. */
+function withPackageSkills(settings: Settings, packages: ActivePackages | undefined): Settings {
+  const dirs = packages?.packages.flatMap((p) => p.manifest.skills) ?? []
+  if (!dirs.length) return settings
+  return { ...settings, skills: { ...settings.skills, dirs: [...(settings.skills?.dirs ?? []), ...dirs] } }
 }
 
 /** Settings `retry` as ai retry options (D52); `attempts` counts the retries after the first try. */

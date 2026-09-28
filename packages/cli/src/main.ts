@@ -1,10 +1,19 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
-import { type Agent, findSession, listSessions, SessionStore, trackWorkspace } from "@amira/core"
+import {
+  type Agent,
+  activePackages,
+  findSession,
+  listSessions,
+  SessionStore,
+  trackWorkspace,
+} from "@amira/core"
 import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { resolveConfig } from "./config.ts"
+import { runExtCommand } from "./ext-command.ts"
+import { runPackageCommand } from "./package-command.ts"
 import { runPrint } from "./print.ts"
 import { runProviderCommand } from "./provider-command.ts"
 import { chooseStore, formatSessionList, pickSession } from "./resume.ts"
@@ -23,13 +32,14 @@ async function main(argv: string[]): Promise<number> {
 }
 
 async function run(argv: string[]): Promise<number> {
-  if (argv[0] === "provider") {
-    const io = {
-      stdout: (s: string) => void process.stdout.write(s),
-      stderr: (s: string) => void process.stderr.write(s),
-    }
-    return runProviderCommand(argv.slice(1), io)
+  const io = {
+    stdout: (s: string) => void process.stdout.write(s),
+    stderr: (s: string) => void process.stderr.write(s),
   }
+  if (argv[0] === "provider") return runProviderCommand(argv.slice(1), io)
+  if (argv[0] === "ext") return runExtCommand(argv.slice(1), io)
+  const fromPackage = await runPackageCommand(argv, io)
+  if (fromPackage !== undefined) return fromPackage
   const args = parseCliArgs(argv)
   if (args.help) {
     process.stdout.write(`${USAGE}\n`)
@@ -99,6 +109,7 @@ async function run(argv: string[]): Promise<number> {
     model,
     cwd: args.cwd,
     extensions: args.extensions,
+    packages: activePackages({ cwd: args.cwd }),
     noBuiltins: args.noBuiltins,
     store,
     disabledTools: config.disabledTools,
