@@ -51,7 +51,8 @@ export interface EventMap {
   "turn.start": { prompt: UserMessage }
   /** Always emitted once per turn, including after errors and aborts. */
   "turn.end": { reason: TurnEndReason; error?: string; steps: number }
-  "message.start": { model: ModelRef }
+  /** `contextWindow` is the model's context size in tokens, when known. */
+  "message.start": { model: ModelRef; contextWindow?: number }
   "message.delta":
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
