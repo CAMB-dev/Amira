@@ -145,6 +145,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       const content: UserContent[] = [{ type: "text", text: text(p) }, ...attachments(p.attachments)]
       const shown = display(p.display)
       if (agent.turnId) throw new RpcError("busy", "a turn is running; steer it or wait for turn.end")
+      if (agent.busy) throw new RpcError("busy", "a compaction is running; steer to queue the message")
       const turnId = newTurnId()
       agent
         .prompt({ role: "user", content, ...(shown ? { display: shown } : {}) }, { turnId })
@@ -153,12 +154,12 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     },
     steer: (p) => {
       const message = userMessage(text(p), display(p.display))
-      const queued = agent.turnId !== undefined
+      const queued = agent.busy
       agent.steer(message)
       return { ...(agent.turnId ? { turnId: agent.turnId } : {}), queued }
     },
     abort: () => {
-      const aborted = agent.turnId !== undefined
+      const aborted = agent.busy
       agent.abort()
       return { aborted }
     },
@@ -189,7 +190,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     "model.set": (p) => {
       const ref = text(p, "model")
       // The running turn's history may carry state only its model understands.
-      if (agent.turnId) throw new RpcError("busy", "a turn is running; set the model after turn.end")
+      if (agent.busy)
+        throw new RpcError("busy", "a turn or compaction is running; set the model after it ends")
       try {
         agent.setModel(ai.model(ref))
       } catch (err) {
@@ -206,12 +208,13 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         ...(agent.turnId ? { turnId: agent.turnId } : {}),
         messages: agent.messages.length,
         ...(last !== undefined ? { lastAssistantText: last } : {}),
+        busy: agent.busy,
         uiRequests: ui.pending,
       }
     },
     "session.resume": async (p) => {
       const sessionId = text(p, "sessionId")
-      if (agent.turnId) throw new RpcError("busy", "a turn is running")
+      if (agent.busy) throw new RpcError("busy", "a turn or compaction is running")
       if (commands) {
         if (sessionId === agent.sessionId) return { sessionId }
         try {
@@ -304,9 +307,9 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     closed = true
     ui.cancelAll()
     await Promise.all(runningCommands)
-    // The running turn, background sub-agents still expected to report, and the turns their
-    // results start; Ctrl+C stops waiting.
-    while (agent.turnId || (!interrupted && (agent.busy || agent.expectedNotices > 0))) await Bun.sleep(10)
+    // The running turn or /compact, background sub-agents still expected to report, and the
+    // turns their results start; Ctrl+C stops waiting for the sub-agents.
+    while (agent.busy || (!interrupted && agent.expectedNotices > 0)) await Bun.sleep(10)
     await Promise.race([agent.bus.flush(), Bun.sleep(opts.flushTimeoutMs ?? 2000)])
     await io.flush?.()
     return 0

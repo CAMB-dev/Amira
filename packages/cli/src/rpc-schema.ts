@@ -27,7 +27,7 @@ function obj(props: Record<string, Schema>, description?: string): Schema {
 export const COMMAND_PARAMS = {
   prompt: {
     description:
-      "Starts a turn. Answered at once with the new turnId, before the turn runs; fails with `busy` while a turn runs (also one that background sub-agents' results started: steer it instead).",
+      "Starts a turn. Answered at once with the new turnId, before the turn runs; fails with `busy` while a turn or a /compact runs, including a turn that background sub-agents' results started (steer instead: it queues).",
     params: {
       text: str,
       "attachments?": {
@@ -39,10 +39,14 @@ export const COMMAND_PARAMS = {
   },
   steer: {
     description:
-      "Adds a message to the running turn before its next model call, without interrupting a tool. With no turn running it starts one.",
+      "Adds a message to the running turn before its next model call, without interrupting a tool. With no turn running it starts one; during a /compact it is queued and starts a turn once the compaction ends.",
     params: { text: str, "display?": ref("MessageDisplay") },
   },
-  abort: { description: "Aborts the running turn; it still ends with turn.end.", params: {} },
+  abort: {
+    description:
+      "Aborts the running turn (it still ends with turn.end) or /compact (messages queued meanwhile are dropped: turn.steer dropped).",
+    params: {},
+  },
   "ui.respond": {
     description:
       "Answers a ui.request. `value` is required; an explicit null cancels the dialog, and a missing value fails with `invalid_params`.",
@@ -53,13 +57,14 @@ export const COMMAND_PARAMS = {
     params: { what: strings("lastTurn", "messages") },
   },
   "model.set": {
-    description: 'Switches the model, as "provider/model". Fails with `busy` while a turn runs.',
+    description:
+      'Switches the model, as "provider/model". Fails with `busy` while a turn or a /compact runs.',
     params: { model: str },
   },
   state: { description: "A snapshot to resync from, e.g. after events.lost.", params: {} },
   "session.resume": {
     description:
-      "Switches to a stored session of this directory (its id from session.start or `amira -r`), keeping the current model; a session.start with reason resume follows. Fails with `not_found` for an unknown id and `busy` while a turn runs.",
+      "Switches to a stored session of this directory (its id from session.start or `amira -r`), keeping the current model; a session.start with reason resume follows. Fails with `not_found` for an unknown id and `busy` while a turn or a /compact runs.",
     params: { sessionId: str },
   },
   "command.list": { description: "Lists the slash commands.", params: {} },
@@ -77,7 +82,14 @@ export const COMMAND_PARAMS = {
 
 const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
   prompt: { turnId: str },
-  steer: { "turnId?": str, queued: { ...bool, description: "False when the message started a new turn." } },
+  steer: {
+    "turnId?": str,
+    queued: {
+      ...bool,
+      description:
+        "False when the message started a new turn; true when it waits for the running turn or /compact.",
+    },
+  },
   abort: { aborted: bool },
   "ui.respond": {},
   "session.read": {
@@ -93,6 +105,7 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
     model: str,
     sessionId: str,
     "turnId?": str,
+    busy: { ...bool, description: "A turn or a /compact is running: prompt and model.set fail with busy." },
     messages: { ...num, description: "Number of messages in the history." },
     "lastAssistantText?": str,
     uiRequests: { ...arrayOf(ref("UiRequest")), description: "Dialogs still waiting for ui.respond." },

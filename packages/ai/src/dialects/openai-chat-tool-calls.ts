@@ -1,3 +1,5 @@
+import { madeUpIdPrefix } from "./tool-results.ts"
+
 export interface PendingCall {
   id: string
   name: string
@@ -21,6 +23,7 @@ export class ToolCallAssembler {
   readonly calls: PendingCall[] = []
   readonly #slots = new Map<number, PendingCall>()
   readonly #idKnown = new Set<PendingCall>()
+  readonly #idPrefix = madeUpIdPrefix()
 
   apply(toolCalls: unknown): ToolCallDelta[] {
     if (!Array.isArray(toolCalls)) return []
@@ -31,7 +34,7 @@ export class ToolCallAssembler {
       let call = this.#slots.get(slot)
       // Without an index, a new id in a slot means a new call.
       if (!call || (!hasIndex && id && this.#idKnown.has(call) && id !== call.id)) {
-        call = { id: `call_${this.calls.length}`, name: "", args: "" }
+        call = { id: `${this.#idPrefix}${this.calls.length}`, name: "", args: "" }
         this.calls.push(call)
         this.#slots.set(slot, call)
       }

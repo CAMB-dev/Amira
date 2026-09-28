@@ -1,28 +1,81 @@
-import type { Message, ToolResultMessage } from "../types.ts"
+import type { Message, ToolCallBlock, ToolResultMessage } from "../types.ts"
 
 /** Sent for a tool call whose result is missing, so wire formats that require one stay valid. */
 export const MISSING_RESULT = "[no result: the call did not complete]"
 
-export type ResultIndex = Map<string, { at: number; result: ToolResultMessage }[]>
+/**
+ * A fresh prefix for ids made up for calls the server sent without one. It differs per reply,
+ * so a made-up id never repeats one from an earlier step of the conversation.
+ */
+export function madeUpIdPrefix(): string {
+  return `call_${crypto.randomUUID().slice(0, 8)}_`
+}
+
+export interface ResultIndex {
+  /** Results by call id, in history order. */
+  results: Map<string, { at: number; result: ToolResultMessage }[]>
+  /** Where each call id is used, in history order: providers may reuse an id in a later step. */
+  calls: Map<string, number[]>
+}
 
 /** Tool results by call id, so each call can be paired with its result wherever it sits in history. */
-export function indexResults(messages: Message[]): ResultIndex {
-  const index: ResultIndex = new Map()
+export function indexResults(messages: readonly Message[]): ResultIndex {
+  const index: ResultIndex = { results: new Map(), calls: new Map() }
   messages.forEach((m, at) => {
-    if (m.role !== "toolResult") return
-    const list = index.get(m.toolCallId) ?? []
-    list.push({ at, result: m })
-    index.set(m.toolCallId, list)
+    if (m.role === "toolResult") {
+      const list = index.results.get(m.toolCallId) ?? []
+      list.push({ at, result: m })
+      index.results.set(m.toolCallId, list)
+    } else if (m.role === "assistant") {
+      for (const b of m.content) {
+        if (b.type !== "toolCall") continue
+        const list = index.calls.get(b.id) ?? []
+        list.push(at)
+        index.calls.set(b.id, list)
+      }
+    }
   })
   return index
 }
 
-/** The first unused result for a call that comes after the call itself. */
+/**
+ * The first unused result for a call that comes after the call itself. When a later message
+ * reuses the id, results after that message belong to the later call, so a call whose own
+ * result is missing never takes the later call's.
+ */
 export function takeResult(index: ResultIndex, id: string, callAt: number): ToolResultMessage | undefined {
-  const list = index.get(id)
-  const pos = list?.findIndex((r) => r.at > callAt) ?? -1
-  if (!list || pos === -1) return undefined
+  const list = index.results.get(id)
+  if (!list) return undefined
+  const until = index.calls.get(id)?.find((at) => at > callAt) ?? Number.POSITIVE_INFINITY
+  const pos = list.findIndex((r) => r.at > callAt && r.at < until)
+  if (pos === -1) return undefined
   return list.splice(pos, 1)[0]?.result
+}
+
+/**
+ * Tool calls in `messages` left without a result, for repairing history. Each result answers
+ * the earliest open call with its id before it, so an id reused across steps counts once per
+ * call, and after appending a result for every call returned here this returns nothing: repair
+ * never grows the history turn after turn. takeResult pairs differently on purpose (a result
+ * belongs to the latest call with its id before it), so in a malformed history such as
+ * [call x, call x, result x] the wire still sends MISSING_RESULT for the first call and drops
+ * the appended result; the request stays valid either way.
+ */
+export function unansweredCalls(messages: readonly Message[]): Set<ToolCallBlock> {
+  const open = new Map<string, ToolCallBlock[]>()
+  for (const m of messages) {
+    if (m.role === "assistant") {
+      for (const b of m.content) {
+        if (b.type !== "toolCall") continue
+        const list = open.get(b.id) ?? []
+        list.push(b)
+        open.set(b.id, list)
+      }
+    } else if (m.role === "toolResult") {
+      open.get(m.toolCallId)?.shift()
+    }
+  }
+  return new Set([...open.values()].flat())
 }
 
 /**

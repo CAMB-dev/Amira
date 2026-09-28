@@ -157,6 +157,60 @@ test("a notice delivered during a manual compaction starts its turn once that en
   expect(texts(mock.requests.at(-1)!.messages).at(-1)).toBe("user:done meanwhile")
 })
 
+test("a notice and a prompt held during a manual compaction start one turn together after it", async () => {
+  const { agent, mock, bus } = setup([
+    { text: "r1" },
+    { text: "r2" },
+    { text: "r3" },
+    { text: "summary", delayMs: 20 },
+    { text: "both" },
+  ])
+  await agent.prompt("one")
+  await agent.prompt("two")
+  await agent.prompt("three")
+  const compacting = agent.compact()
+  const asked = agent.prompt("typed meanwhile")
+  agent.expectNotice().deliver(notice("result meanwhile"))
+  await compacting
+  expect((await asked).reason).toBe("done")
+  await idle(agent)
+  await bus.flush()
+  expect(mock.requests.length).toBe(5)
+  expect(texts(mock.requests.at(-1)!.messages).slice(-2)).toEqual([
+    "user:typed meanwhile",
+    "user:result meanwhile",
+  ])
+  expect(agent.waitingNotices).toBe(0)
+})
+
+test("aborting a manual compaction drops held steers but keeps notices for the next turn", async () => {
+  const { agent, mock, bus, events } = setup([
+    { text: "r1" },
+    { text: "r2" },
+    { text: "r3" },
+    { text: "summary", delayMs: 200 },
+    { text: "later" },
+  ])
+  await agent.prompt("one")
+  await agent.prompt("two")
+  await agent.prompt("three")
+  const compacting = agent.compact()
+  agent.steer("steered meanwhile")
+  agent.expectNotice().deliver(notice("kept"))
+  await Bun.sleep(10)
+  agent.abort()
+  await compacting
+  await bus.flush()
+  expect(agent.busy).toBe(false)
+  expect(agent.waitingNotices).toBe(1)
+  const dropped = events.filter((e) => e.type === "turn.steer" && e.data.state === "dropped")
+  expect(dropped.map((e) => (e.type === "turn.steer" ? e.data.message.display?.origin : "x"))).toEqual([
+    undefined,
+  ])
+  await agent.prompt("next")
+  expect(texts(mock.requests.at(-1)!.messages).slice(-2)).toEqual(["user:next", "user:kept"])
+})
+
 test("only a top-level session's tools can announce notices", async () => {
   const { agent } = setup([{ toolCalls: [{ name: "peek", args: {} }] }, { text: "ok" }])
   const seen: boolean[] = []
