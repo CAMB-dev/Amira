@@ -95,6 +95,21 @@ export class Agent {
     return this.#status
   }
 
+  /** Announces the session to subscribers. Frontends call this once they are listening. */
+  start(
+    reason: EventMap["session.start"]["reason"],
+    extra: Omit<EventMap["session.start"], "reason" | "cwd" | "model"> = {},
+  ): void {
+    this.bus.emit(
+      "session.start",
+      { reason, cwd: this.cwd, model: { provider: this.model.provider, model: this.model.id }, ...extra },
+      {
+        sessionId: this.sessionId,
+        ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
+      },
+    )
+  }
+
   /** Aborts the running turn, if any. The turn still ends with a turn.end event. */
   abort(): void {
     this.#abort?.abort()

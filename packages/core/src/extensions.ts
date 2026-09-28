@@ -4,6 +4,7 @@ import * as publicApi from "@amira/api"
 import { API_VERSION, type Extension, type ExtensionAPI } from "@amira/api"
 import type { EventBus } from "./event-bus.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
+import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
 
 let virtualApiInstalled = false
@@ -27,7 +28,8 @@ export interface ExtensionHostOptions {
   bus: EventBus
   interceptors: InterceptorRegistry
   tools: ToolRegistry
-  /** Session id used on extension.* events. Default "host". */
+  status?: StatusRegistry
+  /** Session id used on extension.* and ui.* events. Default "host". */
   sessionId?: string
 }
 
@@ -38,9 +40,11 @@ export interface ExtensionHostOptions {
 export class ExtensionHost {
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
+  readonly status: StatusRegistry
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
+    this.status = opts.status ?? new StatusRegistry()
   }
 
   get loaded(): string[] {
@@ -83,6 +87,10 @@ export class ExtensionHost {
     return true
   }
 
+  #requestRender() {
+    this.#opts.bus.emit("ui.render", {}, this.#meta())
+  }
+
   #fail(source: string, error: string): false {
     this.#opts.bus.emit("extension.error", { source, error }, this.#meta())
     return false
@@ -111,6 +119,15 @@ export class ExtensionHost {
           ),
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
+      registerStatusItem: (item) => {
+        const off = track(this.status.register(item))
+        this.#requestRender()
+        return () => {
+          off()
+          this.#requestRender()
+        }
+      },
+      requestRender: () => this.#requestRender(),
     }
   }
 }
