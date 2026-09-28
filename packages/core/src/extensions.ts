@@ -53,6 +53,8 @@ export class ExtensionHost {
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
   #renderPending = false
+  /** Extension files imported before, which a reload must import anew. */
+  #imported = new Set<string>()
   readonly status: StatusRegistry
   readonly commands: CommandRegistry
   readonly ui: UiRequests
@@ -87,6 +89,10 @@ export class ExtensionHost {
     installVirtualApi()
     const abs = path.resolve(file)
     let mod: { default?: unknown }
+    // The module cache would hand back the old code on a reload (Bun ignores a query on a file
+    // URL, but drops an ES module from require.cache). Files the extension imports stay cached.
+    if (this.#imported.has(abs)) delete require.cache[abs]
+    this.#imported.add(abs)
     try {
       mod = await import(pathToFileURL(abs).href)
     } catch (err) {
