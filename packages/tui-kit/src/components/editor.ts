@@ -8,6 +8,10 @@ export interface EditorOptions {
   placeholder?: string
   onSubmit?: (text: string) => void
   onChange?: (text: string) => void
+  /** The submit key; default plain Enter. */
+  isSubmit?: (e: InputEvent) => boolean
+  /** The newline key; default Shift+Enter or Ctrl+Enter. */
+  isNewline?: (e: InputEvent) => boolean
 }
 
 /** A visual row: part of logical line `line` from `start` to `end` (UTF-16 indices). */
@@ -88,14 +92,14 @@ export class Editor implements Component {
       return true
     }
     if (e.type !== "key") return false
-    if (isSubmitKey(e)) {
+    if ((this.opts.isSubmit ?? isSubmitKey)(e)) {
       const text = this.getText()
       if (text === "") return false
       this.clear()
       this.opts.onSubmit?.(text)
       return true
     }
-    if (isNewlineKey(e)) {
+    if ((this.opts.isNewline ?? isNewlineKey)(e)) {
       this.insert("\n")
       return true
     }
