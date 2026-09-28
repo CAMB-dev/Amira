@@ -78,6 +78,13 @@ test("argument candidates: Tab fills them in; Enter keeps typed text unless it i
     type: "run",
     line: "/model deepseek/deepseek-flash",
   })
+  // A looser fuzzy match only suggests: Enter runs what was typed, which may be a model the
+  // list does not know. Tab still takes the suggestion.
+  const fuzzy = await popupFor("/model deepseek/flash")
+  expect(fuzzy.lines()).toEqual(["› deepseek/deepseek-flash"])
+  expect(fuzzy.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/model deepseek/flash" })
+  fuzzy.popup.handleKey(key("down"))
+  expect(fuzzy.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/model deepseek/deepseek-flash" })
   // Nothing typed: Enter runs the bare command (here the picker), unless one was selected.
   const empty = await popupFor("/model ")
   expect(empty.lines()).toHaveLength(3)

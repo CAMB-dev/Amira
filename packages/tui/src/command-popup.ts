@@ -109,11 +109,14 @@ export class CommandPopup implements Component {
       if (r.text === "/" && !this.#navigated) return { type: "handled" }
       return { type: "run", line: `/${chosen}` }
     }
-    const typed = r.text.replace(/^\/\S+\s+/, "").trim()
-    const exact = r.candidates.some((c) => c.value.toLowerCase() === typed.toLowerCase())
-    // What was typed stands unless the user picked a candidate or typed only part of one.
-    if (!this.#navigated && (!typed || exact)) return { type: "run", line: r.text.trim() }
-    return { type: "run", line: `/${r.command} ${chosen}` }
+    const typed = r.text.replace(/^\/\S+\s+/, "").trim().toLowerCase()
+    // What was typed stands unless the user picked a candidate or typed a piece of the
+    // highlighted one. A looser fuzzy match is only a suggestion (Tab): a model or id that is
+    // not in the list, like "llama3.3" next to "llama3.1", must not be swapped for it.
+    const exact = r.candidates.some((c) => c.value.toLowerCase() === typed)
+    const partOf = typed && !exact && chosen.toLowerCase().includes(typed)
+    if (this.#navigated || partOf) return { type: "run", line: `/${r.command} ${chosen}` }
+    return { type: "run", line: r.text.trim() }
   }
 
   render(width: number, ctx: RenderContext): string[] {
