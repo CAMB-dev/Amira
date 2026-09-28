@@ -248,6 +248,7 @@ test("a failed summary emits compact.failed and the turn continues uncompacted",
   expect(events.filter((e) => e.type === "compact.failed").map((e) => e.data)).toEqual([
     { error: "summary broke" },
   ])
+  expect(types(events).filter((t) => t.startsWith("compact."))).toEqual(["compact.start", "compact.failed"])
   expect(mock.requests[3]!.messages.length).toBe(5)
 })
 
@@ -267,5 +268,6 @@ test("a blocking compact.before cancels compaction", async () => {
   expect(await agent.compact()).toBe(false)
   await bus.flush()
   expect(agent.messages.length).toBe(4)
-  expect(events.at(-1)?.data).toEqual({ error: "compact.before blocked compaction: not now" })
+  expect(events.at(-1)?.data).toEqual({ error: "not now", blocked: true })
+  expect(types(events)).not.toContain("compact.start")
 })

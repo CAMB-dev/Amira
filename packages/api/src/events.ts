@@ -93,8 +93,12 @@ export interface EventMap {
    */
   "compact.start": { reason: "threshold" | "manual"; replacing: number; kept: number; tokens?: number }
   "compact.end": { summary: string; replaced: number; kept: number }
-  /** Compaction did not happen; the conversation continues uncompacted. */
-  "compact.failed": { error: string }
+  /**
+   * Compaction did not happen; the conversation continues uncompacted. `blocked` means a
+   * compact.before interceptor cancelled it on purpose (`error` is its reason); no
+   * compact.start precedes it then.
+   */
+  "compact.failed": { error: string; blocked?: boolean }
 }
 
 /** A named part of the system prompt (D43). */

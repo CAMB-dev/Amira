@@ -97,6 +97,20 @@ test("plain print mode streams text to stdout and tool activity to stderr", asyn
   expect(io.err).toBe("● echo x\n")
 })
 
+test("a compaction blocked by an extension is reported as skipped, not failed", async () => {
+  const { agent } = await mockSession([
+    { text: "r1" },
+    { text: "r2", usage: { input: 100_000_000 } },
+    { text: "r3" },
+  ])
+  agent.interceptors.add("compact.before", () => ({ action: "block", reason: "not now" }))
+  await runPrint(agent, "q1", false, { io: capture() })
+  await runPrint(agent, "q2", false, { io: capture() })
+  const io = capture()
+  expect(await runPrint(agent, "q3", false, { io })).toBe(0)
+  expect(io.err).toBe("● compaction skipped: not now\n")
+})
+
 test("json print mode writes one parseable event per line, ending with turn.end", async () => {
   const { agent } = await mockSession([{ text: "hi" }])
   const io = capture()

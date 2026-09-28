@@ -548,27 +548,33 @@ export class Agent {
     return this.#contextTokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
   }
 
-  /** Replaces older history with a summary (D19, D57). Never throws; failures emit compact.failed. */
+  /**
+   * Replaces older history with a summary (D19, D57). Never throws; failures emit compact.failed.
+   * compact.before runs first, so a compaction it blocks never starts and is reported as blocked.
+   */
   async #compact(reason: "threshold" | "manual", signal: AbortSignal, turn: Turn | undefined) {
     const split = splitHistory(this.messages, this.#compaction.keepTurns ?? 2)
     if (!split) {
       if (reason === "manual") this.#emit(turn, "compact.failed", { error: "nothing to compact yet" })
       return false
     }
-    this.#emit(turn, "compact.start", {
-      reason,
-      replacing: split.older.length,
-      kept: split.kept.length,
-      ...(this.#contextTokens !== undefined ? { tokens: this.#contextTokens } : {}),
-    })
     try {
       const gate = await this.interceptors.run(
         "compact.before",
         { messages: split.older, kept: split.kept },
         { sessionId: this.sessionId, signal },
       )
-      if (gate.blocked) throw new Error(`compact.before blocked compaction: ${gate.reason}`)
       if (signal.aborted) throw new Error("aborted")
+      if (gate.blocked) {
+        this.#emit(turn, "compact.failed", { error: gate.reason, blocked: true })
+        return false
+      }
+      this.#emit(turn, "compact.start", {
+        reason,
+        replacing: split.older.length,
+        kept: split.kept.length,
+        ...(this.#contextTokens !== undefined ? { tokens: this.#contextTokens } : {}),
+      })
       const summary =
         gate.value.summary?.trim() ||
         (await summarize(this.#ai, this.#compaction.model ?? this.model, split.older, signal))

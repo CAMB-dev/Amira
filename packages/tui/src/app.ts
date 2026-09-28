@@ -237,7 +237,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "compact.failed":
         compacting = false
-        renderer.commit([theme.warning(`Compaction failed: ${e.data.error}`), ""])
+        renderer.commit([
+          e.data.blocked
+            ? theme.muted(`Compaction skipped: ${e.data.error}`)
+            : theme.warning(`Compaction failed: ${e.data.error}`),
+          "",
+        ])
         break
       case "extension.error":
         renderer.commit([theme.warning(`[extension ${e.data.source}] ${e.data.error}`), ""])

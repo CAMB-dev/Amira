@@ -88,7 +88,11 @@ export async function runPrint(
         io.stderr(`● compacting ${e.data.replacing} older messages\n`)
         break
       case "compact.failed":
-        io.stderr(`  ✗ compaction failed: ${e.data.error}\n`)
+        io.stderr(
+          e.data.blocked
+            ? `● compaction skipped: ${e.data.error}\n`
+            : `  ✗ compaction failed: ${e.data.error}\n`,
+        )
         break
       case "extension.error":
         io.stderr(`[extension ${e.data.source}] ${e.data.error}\n`)
