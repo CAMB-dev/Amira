@@ -70,11 +70,11 @@ export function createMockDialect(steps: MockStep[] = []) {
             yield { type: "text.delta", text: chunk }
           }
         }
-        for (const tc of reply.toolCalls ?? []) {
+        for (const [index, tc] of (reply.toolCalls ?? []).entries()) {
           await wait()
           const id = tc.id ?? `mock_call_${++counter}`
           const raw = typeof tc.args === "string" ? tc.args : JSON.stringify(tc.args)
-          yield { type: "toolCall.delta", id, name: tc.name, argsDelta: raw }
+          yield { type: "toolCall.delta", index, id, name: tc.name, argsDelta: raw }
           message.content.push({ type: "toolCall", id, name: tc.name, args: parseToolArgs(raw) })
         }
         message.stopReason = reply.toolCalls?.length ? "toolUse" : "end"

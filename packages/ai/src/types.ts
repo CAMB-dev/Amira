@@ -115,7 +115,15 @@ export type StreamEvent =
   | { type: "start" }
   | { type: "text.delta"; text: string }
   | { type: "thinking.delta"; text: string }
-  | { type: "toolCall.delta"; id: string; name?: string; argsDelta: string }
+  | {
+      type: "toolCall.delta"
+      /** May change once while streaming (placeholder, then the real id); key on index instead. */
+      id: string
+      /** Position of the call among the message's tool calls. Stable for the whole stream. */
+      index?: number
+      name?: string
+      argsDelta: string
+    }
   | { type: "done"; message: AssistantMessage }
   | { type: "error"; error: ModelError; retryable: boolean; message: AssistantMessage }
 

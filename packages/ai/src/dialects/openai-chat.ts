@@ -11,6 +11,7 @@ import type {
   Usage,
 } from "../types.ts"
 import { emptyUsage } from "../types.ts"
+import { ToolCallAssembler } from "./openai-chat-tool-calls.ts"
 
 type ChatMessage =
   | { role: "system"; content: string }
@@ -149,7 +150,7 @@ export const openaiChat: Dialect = {
       yield { type: "start" }
       let textBlock: { type: "text"; text: string } | undefined
       let thinkingBlock: { type: "thinking"; text: string } | undefined
-      const calls = new Map<number, { id: string; name: string; args: string }>()
+      const calls = new ToolCallAssembler()
       let finish: string | null | undefined
 
       try {
@@ -186,19 +187,7 @@ export const openaiChat: Dialect = {
             textBlock.text += delta.content
             yield { type: "text.delta", text: delta.content }
           }
-          for (const tc of delta.tool_calls ?? []) {
-            const idx: number = tc.index ?? 0
-            let call = calls.get(idx)
-            if (!call) {
-              call = { id: tc.id ?? `call_${idx}`, name: "", args: "" }
-              calls.set(idx, call)
-            }
-            if (tc.id) call.id = tc.id
-            if (tc.function?.name) call.name += tc.function.name
-            const argsDelta: string = tc.function?.arguments ?? ""
-            call.args += argsDelta
-            yield { type: "toolCall.delta", id: call.id, name: call.name || undefined, argsDelta }
-          }
+          yield* calls.apply(delta.tool_calls)
           if (choice.finish_reason) finish = choice.finish_reason
         }
       } catch (e) {
@@ -207,7 +196,7 @@ export const openaiChat: Dialect = {
         return
       }
 
-      const toolBlocks: AssistantContent[] = [...calls.values()].map((c) => ({
+      const toolBlocks: AssistantContent[] = calls.calls.map((c) => ({
         type: "toolCall",
         id: c.id,
         name: c.name,
