@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
 import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
-import statusExtension, { formatContext, formatTokens, tokensPerSecond } from "../src/index.ts"
+import statusExtension, { cacheHitRate, formatContext, formatTokens, tokensPerSecond } from "../src/index.ts"
 
 test("formats token counts compactly, rounding before picking the unit", () => {
   expect([999, 1234, 9_999, 45_600, 999_950, 2_500_000].map(formatTokens)).toEqual([
@@ -48,6 +48,7 @@ test("fills the status bar from session and workspace events", async () => {
   expect(texts(host)).toEqual([
     ["model", "left", "mock/m1"],
     ["tokens", "right", "ctx 2.0k/128k (2%) · out 30"],
+    ["cache", "right", "cache 40%"],
     ["place", "right", "proj ⎇ main"],
   ])
 
@@ -171,4 +172,10 @@ test("the status bar shows the speed of the last reply", async () => {
   const items = Object.fromEntries(host.status.snapshot().map((i) => [i.id, i.text]))
   expect(items.tokens).toBe("ctx 1.1k/1.0M (0%) · out 100")
   expect(items.speed).toMatch(/tok\/s$/)
+})
+
+test("cache hit rate is the share of prompt tokens read from cache", () => {
+  expect(cacheHitRate(0, 0, 0)).toBeUndefined()
+  expect(cacheHitRate(200, 800, 0)).toBe(0.8)
+  expect(cacheHitRate(100, 0, 300)).toBe(0)
 })
