@@ -188,6 +188,10 @@ test("lists sessions newest first with their first user text", async () => {
   expect(findSession("/proj", a.id, dir)).toBe(a.file)
   expect(findSession("/proj", "../evil", dir)).toBeUndefined()
   expect(listSessions("/proj", path.join(dir, "missing"))).toEqual([])
+  // Listing again reuses unchanged files and reads a file that grew.
+  a.appendMessage(userMessage("more"))
+  expect(listSessions("/proj", dir).find((s) => s.id === a.id)?.messageCount).toBe(3)
+  expect(listSessions("/proj", dir).find((s) => s.id === b.id)?.messageCount).toBe(1)
 })
 
 test("session directories are per working directory", () => {
