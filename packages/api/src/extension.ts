@@ -11,14 +11,14 @@ export interface InterceptContext {
 
 export interface ExtensionAPI {
   readonly apiVersion: string
-  /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */
-  readonly settings: Readonly<Settings>
   /** Returns a function that removes this registration. */
   registerTool(tool: ToolDefinition): () => void
   /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */
   registerStatusItem(item: StatusItem): () => void
   /** Asks frontends to redraw, e.g. after a status item's state changed. */
   requestRender(): void
+  /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */
+  readonly settings: Readonly<Settings>
   /**
    * Runs a command off the main thread (a slow spawn cannot freeze the UI), killing the
    * whole process tree on abort, timeout and exit.

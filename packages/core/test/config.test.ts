@@ -13,6 +13,7 @@ import {
   settingsFiles,
   validateSettings,
 } from "../src/config/index.ts"
+import { EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "../src/index.ts"
 
 let dir: string
 let home: string
@@ -200,4 +201,18 @@ test("adding a provider keeps the rest of the file and never replaces an entry",
   put(file, "{ broken")
   expect(() => addProviderToSettings(file, "c", {})).toThrow(SettingsError)
   expect(readFileSync(file, "utf8")).toBe("{ broken")
+})
+
+test("extensions see the merged settings", async () => {
+  let seen: unknown
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+    settings: { mcpServers: { fs: { command: "x" } } },
+  })
+  await host.load((api) => {
+    seen = api.settings.mcpServers
+  }, "t")
+  expect(seen).toEqual({ fs: { command: "x" } })
 })

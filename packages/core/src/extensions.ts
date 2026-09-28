@@ -27,11 +27,11 @@ export function installVirtualApi(): void {
 
 export interface ExtensionHostOptions {
   bus: EventBus
+  /** Merged settings handed to extensions. Default {}. */
+  settings?: Settings
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
-  /** Merged settings handed to extensions. Default {}. */
-  settings?: Settings
   /** Session id used on extension.* and ui.* events. Default "host". */
   sessionId?: string
 }
@@ -120,7 +120,6 @@ export class ExtensionHost {
     }
     return {
       apiVersion: API_VERSION,
-      settings: this.#opts.settings ?? {},
       registerTool: (tool) => track(tools.register(tool, source)),
       on: (type, handler) =>
         track(
@@ -132,6 +131,7 @@ export class ExtensionHost {
           ),
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
+      settings: this.#opts.settings ?? {},
       registerStatusItem: (item) => {
         const off = this.status.register(item)
         this.#requestRender()
