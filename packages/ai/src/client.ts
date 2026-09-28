@@ -1,5 +1,5 @@
 import type { Dialect } from "./dialect.ts"
-import { openaiChat } from "./dialects/openai-chat.ts"
+import { BUILTIN_DIALECTS } from "./dialects/index.ts"
 import { BUILTIN_PROVIDERS, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import type { ModelInfo, ModelRequest, StreamEvent } from "./types.ts"
 
@@ -23,7 +23,7 @@ export function createAi(opts: AiOptions = {}): Ai {
   const providers = new Map<string, ProviderConfig>()
   const dialects = new Map<string, Dialect>()
   for (const p of [...BUILTIN_PROVIDERS, ...(opts.providers ?? [])]) providers.set(p.id, p)
-  for (const d of [openaiChat, ...(opts.dialects ?? [])]) dialects.set(d.id, d)
+  for (const d of [...BUILTIN_DIALECTS, ...(opts.dialects ?? [])]) dialects.set(d.id, d)
   const env = opts.env ?? process.env
   const doFetch = opts.fetch ?? fetch
 

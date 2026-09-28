@@ -18,6 +18,8 @@ export interface ThinkingBlock {
   text: string
   /** Opaque signature that can only be sent back to the dialect that produced it. */
   signature?: { dialect: string; value: string }
+  /** The provider hid the reasoning; `signature.value` holds its encrypted form and `text` is empty. */
+  redacted?: boolean
 }
 
 export interface ToolCallBlock {
@@ -103,7 +105,13 @@ export interface ModelRequest {
   tools: ToolSpec[]
   maxTokens?: number
   temperature?: number
+  /** How hard a reasoning model should think; dialects map it to their own setting. Omit for the default. */
+  reasoning?: { effort: ReasoningEffort }
+  /** Mark stable prefixes for prompt caching where the dialect needs explicit markers. Default true. */
+  promptCache?: boolean
 }
+
+export type ReasoningEffort = "low" | "medium" | "high" | "max"
 
 export interface ModelError {
   message: string
