@@ -20,6 +20,7 @@ export function visibleWidth(s: string): number {
   return Bun.stringWidth(stripAnsi(sanitize(s)))
 }
 
+/** Splits a string into user-perceived characters (grapheme clusters). */
 export function graphemes(s: string): string[] {
   return Array.from(segmenter.segment(s), (seg) => seg.segment)
 }

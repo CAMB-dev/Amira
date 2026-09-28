@@ -9,17 +9,17 @@ test("the package exports its public API and not its internals", () => {
     "Editor",
     "setupTerminalInput",
     "wrapText",
+    "InputParser",
+    "BaseTerminal",
+    "key",
+    "textKey",
+    "graphemes",
+    "stripColors",
+    "TAB_WIDTH",
   ]) {
     expect(api).toHaveProperty(name)
   }
-  for (const name of [
-    "InputParser",
-    "BaseTerminal",
-    "tokenize",
-    "sgrAttributes",
-    "probeTerminal",
-    "cursor",
-  ]) {
+  for (const name of ["tokenize", "sgrAttributes", "probeTerminal", "cursor"]) {
     expect(api).not.toHaveProperty(name)
   }
 })
