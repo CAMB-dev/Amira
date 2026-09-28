@@ -5,6 +5,8 @@ import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { runPrint } from "./print.ts"
+import { runRpc } from "./rpc.ts"
+import { rpcSchema } from "./rpc-schema.ts"
 import { createSession } from "./session.ts"
 
 async function main(argv: string[]): Promise<number> {
@@ -27,8 +29,12 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${pkg.version}\n`)
     return 0
   }
+  if (args.rpcSchema) {
+    process.stdout.write(`${JSON.stringify(rpcSchema(), null, 2)}\n`)
+    return 0
+  }
   if (!args.model) throw new UsageError("no model selected. Pass --model provider/model or set AMIRA_MODEL.")
-  const interactive = !args.print
+  const interactive = !args.print && !args.rpc
   if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
   }
@@ -44,7 +50,7 @@ async function run(argv: string[]): Promise<number> {
     }
   }
 
-  const { agent, host, startupEvents } = await createSession({
+  const { agent, host, startupEvents, ai } = await createSession({
     model: args.model,
     cwd: args.cwd,
     extensions: args.extensions,
@@ -60,12 +66,20 @@ async function run(argv: string[]): Promise<number> {
     stopWorkspace = trackWorkspace(agent.bus, agent.sessionId, agent.cwd)
   }
   try {
+    if (args.rpc) {
+      return await runRpc({ agent, ai, ui: host.ui }, { pending: startupEvents, onReady })
+    }
     if (!interactive) {
-      return await runPrint(agent, args.prompt ?? "", args.json, { pending: startupEvents, onReady })
+      return await runPrint(agent, args.prompt ?? "", args.json, {
+        pending: startupEvents,
+        onReady,
+        ui: host.ui,
+      })
     }
     return await runInteractive({
       agent,
       status: host.status,
+      ui: host.ui,
       startupEvents,
       onReady,
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),

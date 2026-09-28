@@ -1,5 +1,5 @@
 import type { AnyEvent } from "@amira/api"
-import type { Agent, TurnResult } from "@amira/core"
+import type { Agent, TurnResult, UiRequests } from "@amira/core"
 
 export interface PrintIO {
   stdout: (s: string) => void
@@ -21,6 +21,8 @@ export interface PrintOptions {
   onReady?: () => void
   /** Called on a second Ctrl+C. Default exits the process with 130. */
   forceExit?: () => void
+  /** Dialogs extensions open; print mode cannot answer them, so they are cancelled. */
+  ui?: UiRequests
 }
 
 /** Exit codes: 0 done, 1 error, 130 aborted. */
@@ -58,6 +60,10 @@ export async function runPrint(
   const io = opts.io ?? defaultIO
   let endedWithNewline = true
   const handle = (e: AnyEvent) => {
+    if (e.type === "ui.request") {
+      io.stderr(`amira: cancelled "${e.data.title}": print mode cannot answer questions\n`)
+      opts.ui?.cancel(e.data.requestId)
+    }
     if (json) {
       io.stdout(`${safeJson(e)}\n`)
       return

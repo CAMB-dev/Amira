@@ -12,6 +12,10 @@ export interface CliArgs {
   noBuiltins: boolean
   help: boolean
   version: boolean
+  /** Headless JSONL protocol on stdin and stdout. */
+  rpc: boolean
+  /** Print the JSON Schema of the rpc protocol and exit. */
+  rpcSchema: boolean
 }
 
 export class UsageError extends Error {}
@@ -23,6 +27,9 @@ Without --print, opens the interactive UI; a prompt becomes the first message.
 Options:
   -p, --print           Run one turn non-interactively and print the reply
       --json            With --print, write every event as a JSON line to stdout
+      --rpc             Headless mode: JSONL commands on stdin, responses and
+                        events on stdout (see --rpc-schema)
+      --rpc-schema      Print the JSON Schema of the --rpc protocol
   -m, --model <ref>     Model as provider/model (default: $AMIRA_MODEL)
   -e, --extension <f>   Load an extension file (repeatable; relative to where
                         amira is run, not to --cwd)
@@ -56,10 +63,15 @@ export function parseCliArgs(
     noBuiltins: values["no-builtins"] ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
+    rpc: values.rpc ?? false,
+    rpcSchema: values["rpc-schema"] ?? false,
   }
   if (positionals.length) args.prompt = positionals.join(" ")
   const model = values.model ?? env.AMIRA_MODEL
   if (model) args.model = model
+  if (args.rpc && (args.print || args.prompt !== undefined)) {
+    throw new UsageError("--rpc takes prompts on stdin; it cannot be combined with --print or a prompt")
+  }
   if (args.json && !args.print) throw new UsageError("--json requires --print")
   if (args.print && !args.prompt && !args.help && !args.version)
     throw new UsageError("--print needs a prompt")
@@ -90,6 +102,8 @@ function parse(argv: string[]) {
       cwd: { type: "string", short: "C" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
+      rpc: { type: "boolean" },
+      "rpc-schema": { type: "boolean" },
     },
   })
 }

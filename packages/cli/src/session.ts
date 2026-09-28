@@ -10,6 +10,7 @@ import {
   ToolRegistry,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
+import { testAiOptions } from "./test-hooks.ts"
 
 export interface SessionOptions {
   model: string
@@ -28,6 +29,7 @@ export interface Session {
   host: ExtensionHost
   /** Extension events emitted while loading, before any frontend subscribed. */
   startupEvents: AnyEvent[]
+  ai: Ai
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -50,7 +52,7 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  const ai = opts.ai ?? createAi()
+  const ai = opts.ai ?? createAi(testAiOptions())
   let model: ModelInfo
   try {
     model = ai.model(opts.model)
@@ -90,5 +92,5 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     interceptors,
     tools,
   })
-  return { agent, host, startupEvents }
+  return { agent, host, startupEvents, ai }
 }
