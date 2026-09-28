@@ -189,7 +189,7 @@ export class Agent {
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
     const modelRef = { provider: this.model.provider, model: this.model.id }
-    this.#emit(turn, "message.start", { model: modelRef })
+    this.#emit(turn, "message.start", { model: modelRef, contextWindow: this.model.contextWindow })
 
     let final: AssistantMessage | undefined
     let error: string | undefined

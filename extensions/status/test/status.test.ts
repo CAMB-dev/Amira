@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
 import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
-import statusExtension, { formatTokens } from "../src/index.ts"
+import statusExtension, { formatContext, formatTokens, tokensPerSecond } from "../src/index.ts"
 
 test("formats token counts compactly, rounding before picking the unit", () => {
   expect([999, 1234, 9_999, 45_600, 999_950, 2_500_000].map(formatTokens)).toEqual([
@@ -47,7 +47,7 @@ test("fills the status bar from session and workspace events", async () => {
   await bus.flush()
   expect(texts(host)).toEqual([
     ["model", "left", "mock/m1"],
-    ["tokens", "right", "ctx 2.0k · out 30"],
+    ["tokens", "right", "ctx 2.0k/128k (2%) · out 30"],
     ["place", "right", "proj ⎇ main"],
   ])
 
@@ -136,4 +136,39 @@ test("bad item texts are skipped or sanitized, and defaults apply", async () => 
     { id: "first", align: "left", tone: "default", text: "x" },
     { id: "nl", align: "left", tone: "default", text: "two lines [31m" },
   ])
+})
+
+test("context shows use against the window, and speed is timed from the first delta", () => {
+  expect(formatContext(12_300, 128_000)).toBe("12k/128k (10%)")
+  expect(formatContext(500, undefined)).toBe("500")
+  expect(tokensPerSecond(84, 1000, 3000)).toBe(42)
+  expect(tokensPerSecond(10, 1000, 1100)).toBeUndefined()
+  expect(tokensPerSecond(0, 1000, 5000)).toBeUndefined()
+})
+
+test("the status bar shows the speed of the last reply", async () => {
+  const bus = new EventBus()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  await host.load(statusExtension, "builtin:status")
+  const meta = { sessionId: "s" }
+  const model = { provider: "p", model: "m" }
+  bus.emit("message.start", { model, contextWindow: 1_000_000 }, meta)
+  bus.emit("message.delta", { kind: "text", text: "a" }, meta)
+  await Bun.sleep(250)
+  bus.emit(
+    "message.end",
+    {
+      message: {
+        role: "assistant",
+        content: [],
+        model,
+        usage: { input: 1000, output: 100, cacheRead: 0, cacheWrite: 0 },
+      },
+    },
+    meta,
+  )
+  await bus.flush()
+  const items = Object.fromEntries(host.status.snapshot().map((i) => [i.id, i.text]))
+  expect(items.tokens).toBe("ctx 1.1k/1.0M (0%) · out 100")
+  expect(items.speed).toMatch(/tok\/s$/)
 })
