@@ -8,7 +8,8 @@ export interface InterceptContext {
 
 export interface ExtensionAPI {
   readonly apiVersion: string
-  registerTool(tool: ToolDefinition): void
+  /** Returns a function that removes this registration. */
+  registerTool(tool: ToolDefinition): () => void
   on<K extends keyof EventMap>(type: K, handler: (event: EventEnvelope<K>) => void): () => void
   intercept<K extends keyof InterceptorMap>(
     point: K,
