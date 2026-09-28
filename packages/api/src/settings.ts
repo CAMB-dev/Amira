@@ -52,8 +52,12 @@ export interface Settings {
   web?: WebSettings
   /** Per sub-agent role (D61): the model it runs on, ahead of the role file's. */
   agents?: Record<string, { model?: string }>
-  /** Nesting depth (D15, default 2) and children running at once per parent (D63, default 4). */
-  subagents?: { maxDepth?: number; maxConcurrent?: number }
+  /**
+   * Nesting depth (D15, default 2) and children running at once per parent (D63, default 4).
+   * `background` (default true): the main session's `agent` tool runs sub-agents in the
+   * background unless the call says otherwise; their results come back as a message.
+   */
+  subagents?: { maxDepth?: number; maxConcurrent?: number; background?: boolean }
   /** A limit for the whole agent tree (D37); unlimited by default. */
   budget?: Budget
   /** Worktree merges (D38): clean merges past either size are reviewed too. Default: only conflicts. */

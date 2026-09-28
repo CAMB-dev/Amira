@@ -107,6 +107,9 @@ export interface EventMap {
    * the history before the next model call, `dropped` when the turn failed or was aborted
    * first, `promoted` when the turn finished before reaching it. Promoted messages start the
    * turn `nextTurnId` together, as one prompt holding their content in order.
+   * Notices (ToolSession.expectNotice, e.g. background sub-agents' results; their display has
+   * an `origin`) go through the same states but are never dropped: an interrupted or failed
+   * turn leaves them for the next one. Notices waiting together are injected as one message.
    */
   "turn.steer":
     | { message: UserMessage; state: "queued" | "injected" | "dropped" }
@@ -143,6 +146,13 @@ export interface EventMap {
   "budget.update": { tokens: number; costUsd?: number; limit?: Budget }
   /** The tree went over its budget: running sub-agents are aborted and no new ones start. */
   "budget.exceeded": { tokens: number; costUsd?: number; limit: Budget }
+  /**
+   * A turn carrying notices (background sub-agents' results) failed: in `delayMs` they are
+   * sent again, starting turn number `attempt` of at most `attempts` retries (after the last
+   * failing one they wait for the user's next message). A turn starting first (the user sent a
+   * message) takes them along and cancels the retry. No retry follows an interrupt.
+   */
+  "notice.retry": { attempt: number; attempts: number; delayMs: number; error?: string }
 }
 
 /** A named part of the system prompt (D43). */

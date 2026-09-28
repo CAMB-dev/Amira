@@ -48,6 +48,8 @@ export function formatDuration(ms: number): string {
  * content.
  */
 export function userLines(theme: Theme, message: UserMessage, width = Number.POSITIVE_INFINITY): string[] {
+  // A notice (e.g. background sub-agents' results) shows as its short lines, not as typed text.
+  if (message.display?.origin && message.display.text.trim()) return originLines(theme, message.display.text)
   const text = (message.display?.text.trim() || userText(message)).trim()
   const rows = Number.isFinite(width)
     ? text.split("\n").flatMap((l) => (l ? wrapText(l, Math.max(10, width - 2)) : [""]))
@@ -56,6 +58,17 @@ export function userLines(theme: Theme, message: UserMessage, width = Number.POS
   const note = message.display?.note
   if (note) lines.push(`  ${theme.muted(glyphs.result)} ${theme.muted(note)}`)
   return lines
+}
+
+/** A notice's lines, e.g. "◆ explorer finished · 41s · 12.3k tok": the marker accented, the rest muted. */
+function originLines(theme: Theme, text: string): string[] {
+  return text
+    .trim()
+    .split("\n")
+    .map((l) => {
+      const m = /^(\s*◆)(.*)$/.exec(l)
+      return m ? `${theme.accent(m[1]!)}${theme.muted(m[2]!)}` : theme.muted(l)
+    })
 }
 
 /** A user message's content as text, with images as placeholders. */

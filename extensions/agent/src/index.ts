@@ -3,11 +3,13 @@ import {
   defineExtension,
   defineTool,
   type ExtensionAPI,
+  type PendingNotice,
   type SubagentResult,
   type ToolContext,
   type ToolPresenter,
   type ToolSession,
   textResult,
+  type UserMessage,
 } from "@amira/api"
 import { agentsCommand, formatTokens } from "./agents-command.ts"
 import { type Isolation, loadRoles, type Role, roleModel } from "./roles.ts"
@@ -58,6 +60,14 @@ interface Job {
   /** Settles with the report for the commander; never rejects. */
   report: Promise<string>
   done?: string
+  /** How it ended, once it did. */
+  result?: SubagentResult
+  /** Called once the report is done. */
+  onDone?: () => void
+  /** Where its report goes by itself when it finishes in the background (top-level commanders). */
+  notice?: PendingNotice
+  /** agent_result calls waiting for it: they hand the report out, so it is not also sent. */
+  waiters: number
   /** Stopped by its commander: its worktree changes are kept for review, never merged. */
   cancelled?: boolean
   /** Nobody will read its report any more, so what it leaves behind is reported as an error. */
@@ -177,6 +187,39 @@ function reportOf(job: Job, r: SubagentResult, changes: string, note?: string): 
   return lines.join("\n\n")
 }
 
+/** How long a finished background report waits for others finishing close by, to go as one message. */
+export const BATCH_MS = 300
+
+const ENDED: Record<SubagentResult["status"], string> = {
+  done: "finished",
+  error: "failed",
+  aborted: "stopped",
+}
+
+/**
+ * The message that brings background reports to their commander: the reports for the model,
+ * one short line each for the transcript ("◆ explorer finished · 41s · 12.3k tok").
+ */
+function noticeMessage(jobs: Pick<Job, "role" | "done" | "result">[]): UserMessage {
+  const lines = jobs.map((j) => {
+    const r = j.result
+    if (!r) return `◆ ${j.role} finished`
+    const u = r.usage
+    const tokens = formatTokens(u.input + u.output + u.cacheRead + u.cacheWrite)
+    return `◆ ${j.role} ${ENDED[r.status]} · ${Math.round(r.durationMs / 1000)}s · ${tokens} tok`
+  })
+  const head =
+    jobs.length === 1
+      ? "A sub-agent you started in the background has ended. Its report follows."
+      : `${jobs.length} sub-agents you started in the background have ended. Their reports follow.`
+  const text = `${head} (Sent automatically; the user did not write this message.)\n\n${jobs.map((j) => j.done ?? "").join("\n\n")}`
+  return {
+    role: "user",
+    content: [{ type: "text", text }],
+    display: { text: lines.join("\n"), origin: "subagent" },
+  }
+}
+
 function taskList(params: unknown): AgentTask[] {
   const p = params as Partial<AgentParams> & Partial<AgentTask>
   if (Array.isArray(p.tasks)) return p.tasks
@@ -197,6 +240,10 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
     const swept = new Set<string>()
     /** Background jobs by commander session, then by child id. */
     const background = new Map<string, Map<string, Job>>()
+    /** Reports waiting a moment to be sent together, by commander session. */
+    const batches = new Map<string, { jobs: Job[]; timer: ReturnType<typeof setTimeout> }>()
+    /** Ids of background sub-agents whose report was sent to their commander as a message. */
+    const delivered = new Set<string>()
     let cached: { at: number; roles: Map<string, Role> } | undefined
 
     const roles = (): Map<string, Role> => {
@@ -264,6 +311,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
         prompt: task.prompt,
         startedAt: Date.now(),
         report: Promise.resolve(""),
+        waiters: 0,
       }
       job.report = (async () => {
         const r = await child.result()
@@ -298,26 +346,61 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
         }
         const text = reportOf(job, r, changes, note)
         job.done = text
+        job.result = r
         if (job.orphaned && leftBehind) {
           api.reportError(`sub-agent ${child.id} (${job.role}) ended after its commander stopped: ${changes}`)
         }
+        job.onDone?.()
         return text
       })()
       return job
     }
 
-    /** Files background jobs under their commander and tells it their ids. */
-    const startedInBackground = (commander: string, jobs: Job[], failed: string[]) => {
+    /**
+     * Files a background job under its commander. With a notice its report is sent to the
+     * commander by itself when it finishes; without one it waits for agent_result.
+     */
+    const adopt = (commander: string, job: Job, notice: PendingNotice | undefined) => {
       const mine = background.get(commander) ?? new Map<string, Job>()
       background.set(commander, mine)
-      for (const j of jobs) mine.set(j.child.id, j)
+      mine.set(job.child.id, job)
+      if (!notice) return
+      job.notice = notice
+      job.onDone = () => finished(commander, job)
+      if (job.done !== undefined) finished(commander, job)
+    }
+
+    /** A background job's report is ready: send it, unless an agent_result call is waiting for it. */
+    const finished = (commander: string, job: Job) => {
+      if (!job.notice || job.waiters > 0) return
+      background.get(commander)?.delete(job.child.id)
+      delivered.add(job.child.id)
+      let batch = batches.get(commander)
+      if (!batch) {
+        batch = { jobs: [], timer: setTimeout(() => flush(commander), BATCH_MS) }
+        batches.set(commander, batch)
+      }
+      batch.jobs.push(job)
+    }
+
+    /** Sends the reports that finished close together as one message. */
+    const flush = (commander: string) => {
+      const batch = batches.get(commander)
+      if (!batch) return
+      batches.delete(commander)
+      const [first, ...rest] = batch.jobs
+      first?.notice?.deliver(noticeMessage(batch.jobs))
+      for (const j of rest) j.notice?.cancel()
+    }
+
+    /** Tells the commander the ids of the jobs it started in the background. */
+    const startedInBackground = (jobs: Job[], failed: string[], auto: boolean) => {
       const started = jobs.map((j) => `${j.child.id} (${j.role})`).join(", ")
+      const next = auto
+        ? `Their results come to you by themselves, as a message, when they finish: do not wait or poll for them. Go on with other work, or end your turn if there is nothing else to do now. Call ${AGENT_RESULT_TOOL} only when you cannot go on without a result.`
+        : `Call ${AGENT_RESULT_TOOL} with these ids to get their results before you finish; it waits for them unless wait is false.`
       const text = [
-        ...(jobs.length
-          ? [
-              `Started in the background: ${started}. Call ${AGENT_RESULT_TOOL} with these ids to get their results; it waits for them unless wait is false.`,
-            ]
-          : []),
+        ...(jobs.length ? [`Started in the background: ${started}. ${next}`] : []),
         ...failed,
       ].join("\n")
       return textResult(text, jobs.length === 0)
@@ -331,8 +414,12 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
 - Several tasks in one call run in parallel (a few at a time; the rest wait their turn).
 - A sub-agent sees only its prompt (context "fresh", the default), so write complete instructions: the goal, relevant paths, constraints and what to report back. context "fork" gives it this whole conversation instead.
 - isolation "worktree" runs it in its own git worktree; when it finishes its changes are merged into the working tree (a conflict goes to the user for review). Use it for coders that may touch the same files as others.
-- background: true returns at once with the sub-agents' ids; get their results later with ${AGENT_RESULT_TOOL}.
-- The result holds each sub-agent's final answer and what it changed.
+${
+  api.settings.subagents?.background === false
+    ? `- The call waits for the sub-agents and returns their results. background: true returns at once with their ids instead: in the main session their results then come to you by themselves as a message when they finish; a sub-agent must collect them with ${AGENT_RESULT_TOOL} before it finishes.`
+    : `- In the main session sub-agents run in the background by default: the call returns at once with their ids, and when they finish their results come to you by themselves as a message. Meanwhile go on with other work, or end your turn if there is nothing else to do; do not wait or poll for them. Call ${AGENT_RESULT_TOOL} only when you cannot go on without a result. background: false waits for them and returns their results. A sub-agent's calls wait by default; with background: true it must collect the results with ${AGENT_RESULT_TOOL} before it finishes.`
+}
+- A result holds each sub-agent's final answer and what it changed.
 Roles:
 ${list.join("\n")}`
       },
@@ -369,7 +456,8 @@ ${list.join("\n")}`
           },
           background: {
             type: "boolean",
-            description: `Return right away with the sub-agents' ids instead of waiting; collect the results with ${AGENT_RESULT_TOOL}.`,
+            description:
+              "true: return right away with the sub-agents' ids; false: wait for their results. Default: see above.",
           },
         },
         required: ["tasks"],
@@ -388,11 +476,15 @@ ${list.join("\n")}`
             true,
           )
         }
+        // Results can be sent by themselves only to a session that can be woken: the main one.
+        const auto = session.expectNotice !== undefined
+        const bg = params.background ?? (auto && api.settings.subagents?.background !== false)
         const jobs: Job[] = []
         const failed: string[] = []
-        // Listening before anything starts: starting (making worktrees) can take seconds.
+        // Listening before anything starts: starting (making worktrees) can take seconds. An
+        // interrupt stops waiting sub-agents; background ones keep running.
         const stop = () => {
-          for (const j of jobs) cancel(j, "the commander's turn was interrupted", !params.background)
+          if (!bg) for (const j of jobs) cancel(j, "the commander's turn was interrupted", true)
         }
         ctx.signal.addEventListener("abort", stop, { once: true })
         try {
@@ -401,6 +493,7 @@ ${list.join("\n")}`
             try {
               const job = await start(task, session, ctx)
               jobs.push(job)
+              if (bg) adopt(session.sessionId, job, auto ? session.expectNotice?.() : undefined)
               if (ctx.signal.aborted) stop()
             } catch (err) {
               failed.push(
@@ -408,7 +501,7 @@ ${list.join("\n")}`
               )
             }
           }
-          if (params.background) return startedInBackground(session.sessionId, jobs, failed)
+          if (bg) return startedInBackground(jobs, failed, auto)
           const reports = await Promise.all(jobs.map((j) => j.report))
           return textResult([...failed, ...reports].join("\n\n"), jobs.length === 0)
         } finally {
@@ -419,7 +512,7 @@ ${list.join("\n")}`
 
     const resultTool = defineTool<{ ids?: string[]; wait?: boolean }>({
       name: AGENT_RESULT_TOOL,
-      description: `Gets the results of sub-agents started with ${AGENT_TOOL} and background: true. Waits for them to finish unless wait is false. Without ids, covers every background sub-agent you started whose result you have not collected yet. A result is handed out once.`,
+      description: `Gets the results of sub-agents started in the background with ${AGENT_TOOL}. Waits for them to finish unless wait is false. Without ids, covers every background sub-agent you started whose result you have not received yet. A result is handed out once: one that already came to you as a message is not repeated. In the main session results come by themselves, so use this only when you cannot go on without one.`,
       parameters: {
         type: "object",
         properties: {
@@ -433,21 +526,48 @@ ${list.join("\n")}`
         const ids = p.ids?.length ? p.ids : [...(mine?.keys() ?? [])]
         if (!ids.length) return textResult("There are no background sub-agents to collect.")
         const parts: string[] = []
+        const batched = (id: string) =>
+          [...batches.values()].some((b) => b.jobs.some((j) => j.child.id === id))
+        const gone = (id: string) =>
+          batched(id)
+            ? `${id}: it has ended; its result is on its way to you as a message.`
+            : delivered.has(id)
+              ? `${id}: its result was already sent to you as a message.`
+              : `${id}: no such background sub-agent (or its result was already collected).`
         const found = ids.flatMap((id) => {
           const job = mine?.get(id)
-          if (!job) parts.push(`${id}: no such background sub-agent (or its result was already collected).`)
+          if (!job) parts.push(gone(id))
           return job ? [job] : []
         })
         if (p.wait !== false) {
-          const aborted = new Promise<void>((resolve) =>
-            ctx.signal.addEventListener("abort", () => resolve(), { once: true }),
-          )
-          await Promise.race([Promise.all(found.map((j) => j.report)), aborted])
+          // The turn may have been interrupted before this tool even started.
+          const aborted = new Promise<void>((resolve) => {
+            if (ctx.signal.aborted) resolve()
+            else ctx.signal.addEventListener("abort", () => resolve(), { once: true })
+          })
+          // While this call waits for a job, its report is handed out here, not sent.
+          for (const j of found) j.waiters++
+          try {
+            await Promise.race([Promise.all(found.map((j) => j.report)), aborted])
+          } finally {
+            for (const j of found) j.waiters--
+          }
+        }
+        const commander = ctx.session?.sessionId
+        if (ctx.signal.aborted && commander) {
+          // This result may never reach the model: reports that ended meanwhile go as a notice.
+          for (const job of found)
+            if (job.done !== undefined && mine?.has(job.child.id)) finished(commander, job)
+          return textResult("Interrupted; finished results come to you as a message.", true)
         }
         for (const job of found) {
-          if (job.done !== undefined) {
+          if (!mine?.has(job.child.id)) {
+            // Another call collected it meanwhile.
+            parts.push(gone(job.child.id))
+          } else if (job.done !== undefined) {
             parts.push(job.done)
-            mine?.delete(job.child.id)
+            mine.delete(job.child.id)
+            job.notice?.cancel()
           } else {
             const seconds = Math.round((Date.now() - job.startedAt) / 1000)
             parts.push(
@@ -461,22 +581,37 @@ ${list.join("\n")}`
 
     /** Stops `commander`'s uncollected background jobs and forgets them: nobody will ask for them. */
     const dropBackground = (commander: string, reason: string) => {
+      const batch = batches.get(commander)
+      if (batch) {
+        clearTimeout(batch.timer)
+        batches.delete(commander)
+        for (const j of batch.jobs) j.notice?.cancel()
+      }
       const mine = background.get(commander)
       if (!mine) return
       background.delete(commander)
-      for (const j of mine.values()) if (j.done === undefined) cancel(j, reason, true)
+      for (const j of mine.values()) {
+        j.notice?.cancel()
+        j.notice = undefined
+        if (j.done === undefined) cancel(j, reason, true)
+      }
     }
     api.on("turn.end", (e) => {
-      // A sub-agent's one turn is its whole life, so its background jobs end with it.
-      if (e.parentSessionId !== undefined) return dropBackground(e.sessionId, "its commander finished")
-      // An interrupt stops background work too; the results stay collectible in the next turn.
-      if (e.data.reason !== "aborted") return
-      for (const j of background.get(e.sessionId)?.values() ?? []) {
-        if (j.done === undefined) cancel(j, "the commander's turn was interrupted", false)
+      // A sub-agent's one turn is its whole life, so its background jobs end with it. The main
+      // session's keep running through an interrupt (Esc stops only the turn).
+      if (e.parentSessionId !== undefined) dropBackground(e.sessionId, "its commander finished")
+    })
+    api.on("session.start", (e) => {
+      // Another conversation took over (/clear, /resume): nobody will read the old one's results.
+      if (e.parentSessionId !== undefined) return
+      for (const commander of [...background.keys(), ...batches.keys()]) {
+        if (commander !== e.sessionId) dropBackground(commander, "its commander's session was closed")
       }
     })
     api.on("session.end", () => {
-      for (const commander of [...background.keys()]) dropBackground(commander, "the session ended")
+      for (const commander of [...background.keys(), ...batches.keys()]) {
+        dropBackground(commander, "the session ended")
+      }
     })
 
     api.registerTool(agentTool)

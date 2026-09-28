@@ -57,6 +57,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     throw new Error(`${running} is running; ${what} after it ends (or press Esc to stop it)`)
   }
   const switchTo = (next: Agent, reason: "resume" | "clear") => {
+    // Nobody reads the old conversation any more: no resend of its held notices.
+    agent().cancelNoticeRetry()
     host.switchTo(next)
     opts.announce?.(next, reason)
   }
@@ -87,6 +89,9 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     },
     subagents: () => listSubagents(agent(), session.tree).map((e) => e.info),
     subagentMessages: (id) => subagentMessages(agent(), session.tree, id),
+    stopSubagent: (id) =>
+      listSubagents(agent(), session.tree).some((e) => e.info.id === id) &&
+      session.tree.stop(id, "stopped by the user"),
     models: () => {
       const current = `${agent().model.provider}/${agent().model.id}`
       return [...new Set([current, ...ai.knownModels()])]

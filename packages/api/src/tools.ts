@@ -1,4 +1,4 @@
-import type { ImageBlock, JSONSchema, ModelRef, TextBlock } from "@amira/ai"
+import type { ImageBlock, JSONSchema, ModelRef, TextBlock, UserMessage } from "@amira/ai"
 import type { ChildSession, SpawnOptions } from "./subagents.ts"
 
 export interface ToolResult {
@@ -46,6 +46,27 @@ export interface ToolSession {
    * tree's budget is spent or the model is unknown. Absent when the host has no agent tree.
    */
   spawn?(opts: SpawnOptions): ChildSession
+  /**
+   * Announces a message this session will get later, from outside its turns: e.g. the
+   * result of a sub-agent running in the background. Until the handle is delivered or
+   * cancelled the session counts as expecting it (print mode waits for it). Absent when
+   * the host cannot wake the session, as for sub-agents.
+   */
+  expectNotice?(): PendingNotice
+}
+
+/**
+ * A message a session was told to expect (ToolSession.expectNotice). Delivered while a turn
+ * runs, it joins that turn before its next model call; delivered while the session is idle,
+ * it starts a turn. Several waiting at once go to the model together, as one message. It is
+ * never dropped: one the turn did not reach because it was interrupted or failed waits for
+ * the next turn. Only the first deliver or cancel counts.
+ */
+export interface PendingNotice {
+  /** Hands the message over. Give it a `display` with origin so frontends show it as a notice. */
+  deliver(message: UserMessage): void
+  /** Nothing will come after all. */
+  cancel(): void
 }
 
 export type ToolExposure = "active" | "inactive" | "deferred"

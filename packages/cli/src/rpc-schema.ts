@@ -27,7 +27,7 @@ function obj(props: Record<string, Schema>, description?: string): Schema {
 export const COMMAND_PARAMS = {
   prompt: {
     description:
-      "Starts a turn. Answered at once with the new turnId, before the turn runs; fails with `busy` while a turn or a /compact runs (steer instead: it queues).",
+      "Starts a turn. Answered at once with the new turnId, before the turn runs; fails with `busy` while a turn or a /compact runs, including a turn that background sub-agents' results started (steer instead: it queues).",
     params: {
       text: str,
       "attachments?": {
@@ -231,6 +231,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   }),
   "budget.update": obj({ tokens: num, "costUsd?": num, "limit?": budget }),
   "budget.exceeded": obj({ tokens: num, "costUsd?": num, limit: budget }),
+  "notice.retry": obj(
+    { attempt: num, attempts: num, delayMs: num, "error?": str },
+    "A turn carrying background sub-agents' results failed: they are sent again in delayMs, starting a turn (attempt of attempts). Sending a message first takes them along instead.",
+  ),
 }
 
 const envelope = (type: Schema, data: Schema): Schema =>
@@ -297,6 +301,11 @@ export function rpcSchema(): Schema {
           "note?": {
             ...str,
             description: 'A line to show under text, e.g. "Loaded skill review-pr (120 lines)".',
+          },
+          "origin?": {
+            ...str,
+            description:
+              'Set when the user did not write the message: "subagent" for background sub-agents\' results sent to the session. Show it as a notice; a turn it starts is otherwise an ordinary turn.',
           },
         },
         "How to show a user message instead of its content, which the model still gets in full. Never sent to the model.",
