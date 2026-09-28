@@ -17,14 +17,14 @@ export function repairJsonObject(raw: string): Record<string, unknown> | undefin
   let out = ""
   const stack: string[] = []
   let quote: string | undefined
-  let escape = false
+  let escaped = false
   for (let i = 0; i < text.length; i++) {
     const ch = text[i]!
     if (quote) {
-      if (escape) {
+      if (escaped) {
         out += quote === "'" && ch === "'" ? "'" : `\\${ch}`
-        escape = false
-      } else if (ch === "\\") escape = true
+        escaped = false
+      } else if (ch === "\\") escaped = true
       else if (ch === quote) {
         out += '"'
         quote = undefined
