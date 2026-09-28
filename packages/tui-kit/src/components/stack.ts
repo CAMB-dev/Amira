@@ -1,4 +1,4 @@
-import type { Component } from "../component.ts"
+import type { Component, RenderContext } from "../component.ts"
 
 /** Stacks children vertically. */
 export class Stack implements Component {
@@ -21,7 +21,7 @@ export class Stack implements Component {
     return this.children.includes(child)
   }
 
-  render(width: number): string[] {
-    return this.children.flatMap((c) => c.render(width))
+  render(width: number, ctx: RenderContext): string[] {
+    return this.children.flatMap((c) => c.render(width, ctx))
   }
 }

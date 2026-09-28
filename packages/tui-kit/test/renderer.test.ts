@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test"
 import { cursor, syncOutput } from "../src/ansi.ts"
-import { type Component, CURSOR_MARKER } from "../src/component.ts"
+import { type Component, CURSOR_MARKER, type RenderContext } from "../src/component.ts"
 import { Text } from "../src/components/text.ts"
 import { LiveRenderer } from "../src/renderer.ts"
+import { bold, defaultTheme, red } from "../src/style.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { truncateToWidth } from "../src/width.ts"
 import { VirtualScreen } from "./screen.ts"
@@ -253,4 +254,26 @@ test("a caret beyond the visible width hides the cursor", () => {
   r.render()
   expect(screen.cursorVisible).toBe(true)
   expect(screen.x).toBe(9)
+})
+
+test("components get the renderer's theme, and colors are stripped when off", () => {
+  const theme = { ...defaultTheme, accent: red }
+  const seen: RenderContext[] = []
+  const root: Component = {
+    render: (_w, ctx) => {
+      seen.push(ctx)
+      return [ctx.theme.accent("a") + bold("b")]
+    },
+  }
+  const term = new FakeTerminal(20, 5)
+  const r = new LiveRenderer(term, root, { theme, color: false })
+  r.render()
+  expect(seen[0]).toEqual({ theme, color: false })
+  expect(term.output).not.toContain("\x1b[31m")
+  expect(term.output).toContain("a\x1b[1mb\x1b[22m")
+  r.commit([red("c")])
+  expect(term.writes.at(-1)).not.toContain("\x1b[31m")
+  r.context.color = true
+  r.commit([red("d")])
+  expect(term.writes.at(-1)).toContain("\x1b[31md")
 })

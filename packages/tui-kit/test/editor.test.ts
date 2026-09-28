@@ -1,12 +1,10 @@
-import { beforeAll, expect, test } from "bun:test"
+import { expect, test } from "bun:test"
 import { CURSOR_MARKER } from "../src/component.ts"
 import { Editor } from "../src/components/editor.ts"
 import { InputParser } from "../src/input.ts"
 import { type InputEvent, key } from "../src/keys.ts"
-import { setColorEnabled } from "../src/style.ts"
 import { visibleWidth } from "../src/width.ts"
-
-beforeAll(() => setColorEnabled(false))
+import { plain } from "./context.ts"
 
 function type(ed: Editor, raw: string) {
   for (const e of new InputParser().feed(raw)) ed.handleInput(e)
@@ -18,7 +16,7 @@ function press(ed: Editor, name: string, mods: { ctrl?: boolean; shift?: boolean
 
 /** Renders and returns the rows with the caret shown as "|". */
 function view(ed: Editor, width = 40): string[] {
-  return ed.render(width).map((l) => l.replace(CURSOR_MARKER, "|"))
+  return ed.render(width, plain).map((l) => l.replace(CURSOR_MARKER, "|"))
 }
 
 test("typing, backspace and delete", () => {
@@ -112,7 +110,7 @@ test("CJK and emoji: the caret moves by whole characters and sits at the right c
   press(ed, "left")
   press(ed, "left")
   expect(ed.cursor).toEqual({ line: 0, col: 2 })
-  const [row] = ed.render(40)
+  const [row] = ed.render(40, plain)
   expect(visibleWidth(row!.slice(0, row!.indexOf(CURSOR_MARKER)))).toBe(5)
   press(ed, "backspace")
   expect(ed.getText()).toBe("a😀b")
@@ -152,7 +150,7 @@ test("renders the prompt, wraps long lines and marks the caret", () => {
 test("up/down move between wrapped rows of one line", () => {
   const ed = new Editor()
   ed.setText("abcdefghij")
-  ed.render(4)
+  ed.render(4, plain)
   press(ed, "up")
   expect(ed.cursor).toEqual({ line: 0, col: 6 })
   press(ed, "up")

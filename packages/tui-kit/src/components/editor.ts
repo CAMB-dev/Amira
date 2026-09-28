@@ -1,13 +1,11 @@
-import { type Component, CURSOR_MARKER } from "../component.ts"
+import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { type InputEvent, isNewlineKey, isSubmitKey } from "../keys.ts"
-import { defaultTheme, type Theme } from "../style.ts"
 import { graphemes, visibleWidth } from "../width.ts"
 
 export interface EditorOptions {
   /** Shown before the first row; later rows are indented to line up with it. */
   prompt?: string
   placeholder?: string
-  theme?: Theme
   onSubmit?: (text: string) => void
   onChange?: (text: string) => void
 }
@@ -114,9 +112,8 @@ export class Editor implements Component {
     return false
   }
 
-  render(width: number): string[] {
+  render(width: number, { theme }: RenderContext): string[] {
     this.width = width
-    const theme = this.opts.theme ?? defaultTheme
     const prompt = this.opts.prompt ?? ""
     const indent = " ".repeat(visibleWidth(prompt))
     const caret = this.focused ? CURSOR_MARKER : ""

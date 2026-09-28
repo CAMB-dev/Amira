@@ -1,5 +1,6 @@
 import { cursor, erase, syncOutput } from "./ansi.ts"
-import { type Component, CURSOR_MARKER } from "./component.ts"
+import { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
+import { defaultTheme, isColorEnabled, stripColors, type Theme } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
 import { closeStyles, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
 
@@ -8,6 +9,10 @@ export interface RendererOptions {
   synchronizedOutput?: boolean
   /** Minimum time between frames scheduled with `requestRender()`. */
   frameIntervalMs?: number
+  /** Handed to components in the render context. Defaults to `defaultTheme`. */
+  theme?: Theme
+  /** Whether colors reach the terminal. Defaults to `isColorEnabled()`, which follows NO_COLOR. */
+  color?: boolean
 }
 
 interface Frame {
@@ -22,6 +27,8 @@ interface Frame {
  */
 export class LiveRenderer {
   synchronizedOutput: boolean
+  /** The context handed to components; change it and render again to switch theme or colors. */
+  context: RenderContext
   private frameIntervalMs: number
   private prev: Frame | undefined
   /** Row and column of the terminal cursor, relative to the top of the live region. */
@@ -41,6 +48,7 @@ export class LiveRenderer {
   ) {
     this.synchronizedOutput = opts.synchronizedOutput ?? false
     this.frameIntervalMs = opts.frameIntervalMs ?? 16
+    this.context = { theme: opts.theme ?? defaultTheme, color: opts.color ?? isColorEnabled() }
   }
 
   start(): void {
@@ -115,19 +123,19 @@ export class LiveRenderer {
   }
 
   private layout(width: number, height: number): Frame {
-    let lines = this.root.render(width)
+    let lines = this.root.render(width, this.context)
     let pos: Frame["cursor"]
     let found = false
     lines = lines.map((line, row) => {
       const at = line.indexOf(CURSOR_MARKER)
-      if (at === -1) return fit(line, width)
+      if (at === -1) return this.finish(truncateToWidth(line, width))
       if (!found) {
         found = true
         // A caret past the last visible cell has nowhere to go; hide the cursor instead.
         const col = visibleWidth(line.slice(0, at))
         if (col < width) pos = { row, col }
       }
-      return fit(line.replaceAll(CURSOR_MARKER, ""), width)
+      return this.finish(truncateToWidth(line.replaceAll(CURSOR_MARKER, ""), width))
     })
     // Rows that scrolled off the top cannot be redrawn, so never draw more than fits.
     if (lines.length > height) {
@@ -141,7 +149,7 @@ export class LiveRenderer {
   private fullBody(frame: Frame, committed: string[], width: number): string {
     let out = this.prev ? this.toTop(width) : "\r"
     out += erase.toScreenEnd
-    for (const line of committed) out += `${closeStyles(line)}\r\n`
+    for (const line of committed) out += `${this.finish(line)}\r\n`
     out += frame.lines.join("\r\n")
     this.row = Math.max(0, frame.lines.length - 1)
     return out
@@ -173,6 +181,11 @@ export class LiveRenderer {
     return `${this.moveTo(Math.max(0, frame.lines.length - 1))}\r`
   }
 
+  /** Closes what a line opened, and strips its colors when they are off. */
+  private finish(line: string): string {
+    return closeStyles(this.context.color ? line : stripColors(line))
+  }
+
   /** Moves between rows of the live region. Moving down uses newlines so missing rows get created. */
   private moveTo(target: number): string {
     const from = this.row
@@ -200,10 +213,6 @@ export class LiveRenderer {
 
 function rowsFor(cells: number, width: number): number {
   return Math.max(1, Math.ceil(cells / width))
-}
-
-function fit(line: string, width: number): string {
-  return closeStyles(truncateToWidth(line, width))
 }
 
 function sameCursor(a: Frame["cursor"], b: Frame["cursor"]): boolean {

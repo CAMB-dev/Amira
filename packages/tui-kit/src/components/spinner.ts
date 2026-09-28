@@ -1,12 +1,10 @@
-import type { Component } from "../component.ts"
-import { defaultTheme, type Theme } from "../style.ts"
+import type { Component, RenderContext } from "../component.ts"
 import { truncateToWidth } from "../width.ts"
 
 export interface SpinnerOptions {
   label?: string
   frames?: string[]
   intervalMs?: number
-  theme?: Theme
 }
 
 const DOTS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -16,7 +14,6 @@ export class Spinner implements Component {
   label: string
   private frames: string[]
   private intervalMs: number
-  private theme: Theme
   private frame = 0
   private timer: ReturnType<typeof setInterval> | undefined
 
@@ -24,7 +21,6 @@ export class Spinner implements Component {
     this.label = opts.label ?? ""
     this.frames = opts.frames ?? DOTS
     this.intervalMs = opts.intervalMs ?? 80
-    this.theme = opts.theme ?? defaultTheme
   }
 
   start(onFrame: () => void): void {
@@ -44,9 +40,9 @@ export class Spinner implements Component {
     this.frame = (this.frame + 1) % this.frames.length
   }
 
-  render(width: number): string[] {
-    const glyph = this.theme.accent(this.frames[this.frame] ?? "")
-    const text = this.label ? `${glyph} ${this.theme.muted(this.label)}` : glyph
+  render(width: number, { theme }: RenderContext): string[] {
+    const glyph = theme.accent(this.frames[this.frame] ?? "")
+    const text = this.label ? `${glyph} ${theme.muted(this.label)}` : glyph
     return [truncateToWidth(text, width)]
   }
 }

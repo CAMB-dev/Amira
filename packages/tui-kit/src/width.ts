@@ -1,5 +1,6 @@
 import { ANSI_PATTERN, RESET, stripAnsi } from "./ansi.ts"
 import { CURSOR_MARKER } from "./component.ts"
+import { sgrAttributes, sgrGroup } from "./style.ts"
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
@@ -171,32 +172,6 @@ function wrapParagraph(tokens: Token[], width: number): Token[][] {
   return lines
 }
 
-/**
- * Splits SGR parameters into single attributes: `1;38;5;196` is `1` and `38;5;196`, while the
- * colon form `38:5:196` is one parameter already.
- */
-function sgrAttributes(params: string): string[] {
-  const parts = params.split(";")
-  const out: string[] = []
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i]!
-    if ((p === "38" || p === "48" || p === "58") && (parts[i + 1] === "5" || parts[i + 1] === "2")) {
-      const n = parts[i + 1] === "5" ? 2 : 4
-      out.push(parts.slice(i, i + 1 + n).join(";"))
-      i += n
-    } else out.push(p === "" ? "0" : p)
-  }
-  return out
-}
-
-/** Attributes in the same group replace each other; a close code ends whole groups. */
-function sgrGroup(attr: string): string {
-  const n = Number.parseInt(attr, 10)
-  if ((n >= 30 && n <= 38) || (n >= 90 && n <= 97)) return "fg"
-  if ((n >= 40 && n <= 48) || (n >= 100 && n <= 107)) return "bg"
-  return String(n)
-}
-
 const CLOSES: Record<string, string[]> = {
   "22": ["1", "2"],
   "23": ["3"],
@@ -209,7 +184,7 @@ const CLOSES: Record<string, string[]> = {
   "39": ["fg"],
   "49": ["bg"],
   "55": ["53"],
-  "59": ["58"],
+  "59": ["ul"],
 }
 
 /** Applies an SGR sequence to the list of active attributes. */
