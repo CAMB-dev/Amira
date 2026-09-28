@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { bashTool } from "../src/bash.ts"
+import { bashTool, runCommand } from "../src/bash.ts"
+import { type ProcessTree, trackProcessTree } from "../src/process-tree.ts"
 import { resolveShell } from "../src/shell.ts"
 import { makeCtx, tempDirs, textOf } from "./util.ts"
 
@@ -49,6 +50,43 @@ test.if(hasBash)("times out and kills the command", async () => {
   expect(textOf(r)).toContain("before")
   expect(textOf(r)).toContain("timed out after 1000 ms")
 })
+
+test.if(hasBash)(
+  "a command that exits while a pipe holder survives is not a timeout, and output stops at return",
+  async () => {
+    const shell = await resolveShell()
+    let real: ProcessTree | undefined
+    let calls = 0
+    try {
+      const run = await runCommand(
+        shell.args("(sleep 0.3; while true; do echo tick; sleep 0.1; done) & echo done"),
+        {
+          cwd: dir,
+          env: shell.env,
+          gated: shell.gated,
+          timeoutMs: 1000,
+          signal: new AbortController().signal,
+          onOutput: () => void calls++,
+          // Contain the tree but leave it running, as if a pipe holder had escaped.
+          trackTree(proc) {
+            real = trackProcessTree(proc)
+            return { contained: true, kill() {}, dispose() {} }
+          },
+        },
+      )
+      expect(run).toMatchObject({ exitCode: 0, timedOut: false, aborted: false, settled: false })
+      expect(run.output).toContain("done")
+      expect(run.output).toContain("tick")
+      const seen = calls
+      await Bun.sleep(600)
+      expect(calls).toBe(seen)
+    } finally {
+      real?.kill()
+      real?.dispose()
+    }
+  },
+  30_000,
+)
 
 test("errors when already aborted or when command is missing", async () => {
   const ac = new AbortController()
