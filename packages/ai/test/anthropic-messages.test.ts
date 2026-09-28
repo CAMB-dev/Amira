@@ -89,22 +89,25 @@ test("sends images as base64 blocks, also inside tool results", () => {
   expect(out[2]!.content).toEqual([{ type: "tool_result", tool_use_id: "a", content: [wire] }])
 })
 
-test("replays signed and redacted thinking unchanged and first", () => {
+test("replays signed and redacted thinking unchanged and in place", () => {
   const out = toAnthropicMessages([
     user("q"),
     assistant(
-      txt("before"),
       { type: "thinking", text: "plan", signature: { dialect: SIG, value: "sig1" } },
+      txt("before"),
       call("a"),
       { type: "thinking", text: "", redacted: true, signature: { dialect: SIG, value: "enc" } },
+      call("b"),
     ),
     result("a"),
+    result("b"),
   ])
   expect(out[1]!.content).toEqual([
     { type: "thinking", thinking: "plan", signature: "sig1" },
-    { type: "redacted_thinking", data: "enc" },
     txt("before"),
     { type: "tool_use", id: "a", name: "read", input: {} },
+    { type: "redacted_thinking", data: "enc" },
+    { type: "tool_use", id: "b", name: "read", input: {} },
   ])
 })
 

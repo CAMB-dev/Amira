@@ -32,7 +32,7 @@ export interface AnthropicMessage {
 /**
  * Translates history to Messages API turns. Roles must alternate, every tool_use must be
  * answered by a tool_result in the next user turn, and signed thinking goes back unchanged
- * at the start of its assistant turn. Thinking signed elsewhere becomes text first.
+ * where it was. Thinking signed elsewhere becomes text first.
  */
 export function toAnthropicMessages(messages: Message[]): AnthropicMessage[] {
   const history = adaptThinking(messages, ANTHROPIC_DIALECT)
@@ -68,23 +68,23 @@ function imageBlock(b: ImageBlock): AnthropicBlock {
   return { type: "image", source: { type: "base64", media_type: b.mimeType, data: b.data } }
 }
 
+/** Keeps the block order: models that interleave thinking with tool calls need it unchanged. */
 function assistantBlocks(m: AssistantMessage): AnthropicBlock[] {
-  const thinking: AnthropicBlock[] = []
-  const rest: AnthropicBlock[] = []
+  const out: AnthropicBlock[] = []
   for (const b of m.content) {
     if (b.type === "thinking") {
       // adaptThinking left only thinking signed by this dialect, or unsigned thinking.
       const sig = b.signature?.dialect === ANTHROPIC_DIALECT ? b.signature.value : ""
-      if (b.redacted && sig) thinking.push({ type: "redacted_thinking", data: sig })
-      else if (sig) thinking.push({ type: "thinking", thinking: b.text, signature: sig })
-      else if (b.text.trim()) rest.push({ type: "text", text: `<thinking>\n${b.text}\n</thinking>` })
+      if (b.redacted && sig) out.push({ type: "redacted_thinking", data: sig })
+      else if (sig) out.push({ type: "thinking", thinking: b.text, signature: sig })
+      else if (b.text.trim()) out.push({ type: "text", text: `<thinking>\n${b.text}\n</thinking>` })
     } else if (b.type === "text") {
-      if (b.text) rest.push({ type: "text", text: b.text })
+      if (b.text) out.push({ type: "text", text: b.text })
     } else {
-      rest.push({ type: "tool_use", id: b.id, name: b.name, input: b.args })
+      out.push({ type: "tool_use", id: b.id, name: b.name, input: b.args })
     }
   }
-  return [...thinking, ...rest]
+  return out
 }
 
 function toolResult(id: string, result: ToolResultMessage | undefined): AnthropicBlock {
