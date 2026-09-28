@@ -18,6 +18,17 @@
         "@amira/proc": "workspace:*",
       },
     },
+    "extensions/skills": {
+      "name": "@amira/ext-skills",
+      "version": "0.0.0",
+      "dependencies": {
+        "@amira/api": "workspace:*",
+      },
+      "devDependencies": {
+        "@amira/ai": "workspace:*",
+        "@amira/core": "workspace:*",
+      },
+    },
     "extensions/status": {
       "name": "@amira/ext-status",
       "version": "0.0.0",
@@ -52,6 +63,7 @@
         "@amira/api": "workspace:*",
         "@amira/builtin-tools": "workspace:*",
         "@amira/core": "workspace:*",
+        "@amira/ext-skills": "workspace:*",
         "@amira/ext-status": "workspace:*",
         "@amira/tui": "workspace:*",
       },
@@ -95,6 +107,8 @@
     "@amira/builtin-tools": ["@amira/builtin-tools@workspace:extensions/builtin-tools"],
 
     "@amira/core": ["@amira/core@workspace:packages/core"],
+
+    "@amira/ext-skills": ["@amira/ext-skills@workspace:extensions/skills"],
 
     "@amira/ext-status": ["@amira/ext-status@workspace:extensions/status"],
 
