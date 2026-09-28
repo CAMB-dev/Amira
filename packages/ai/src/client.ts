@@ -36,6 +36,10 @@ export interface Ai {
   knownModels(): string[]
   /** Replaces the catalog, e.g. after a refresh; affects models resolved from now on. */
   setCatalog?(catalog: ModelCatalog | undefined): void
+  /** The catalog in use, if any. */
+  catalog?(): ModelCatalog | undefined
+  /** Forgets a provider; a built-in one comes back as it was built in. */
+  removeProvider?(id: string): void
 }
 
 export function createAi(opts: AiOptions = {}): Ai {
@@ -112,6 +116,12 @@ export function createAi(opts: AiOptions = {}): Ai {
     },
     setCatalog: (c) => {
       catalog = c
+    },
+    catalog: () => catalog,
+    removeProvider: (id) => {
+      const builtin = BUILTIN_PROVIDERS.find((p) => p.id === id)
+      if (builtin) providers.set(id, builtin)
+      else providers.delete(id)
     },
   }
 }
