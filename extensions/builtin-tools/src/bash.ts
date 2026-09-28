@@ -18,6 +18,7 @@ const SHARED_NOTES = [
   "- Starts in the working directory. Each call is a fresh shell: `cd`, variables and functions do not persist between calls. Prefer absolute paths or `cd dir && cmd`.",
   `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed.`,
   "- Background processes are killed when the command finishes; do not use this tool to start long-running servers.",
+  "- Several calls issued together run at the same time. Put commands that depend on each other in one call (`a && b`) or in separate turns.",
   "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
   "- Very long output is cut in the middle; the full output is saved to a file you can read.",
   "- Prefer the read, write, edit, grep and glob tools over shell commands for reading, editing and searching files.",
@@ -44,7 +45,8 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
     name,
     description: [...description, ...SHARED_NOTES].join("\n"),
     parameters: PARAMETERS,
-    concurrency: "serial",
+    // Commands issued together run at the same time (D71); the model orders dependent ones.
+    concurrency: "parallel",
     async execute({ command, timeout }, ctx) {
       if (typeof command !== "string" || command.trim() === "") return textResult("command is required", true)
       if (ctx.signal.aborted) return textResult("Aborted before the command started", true)

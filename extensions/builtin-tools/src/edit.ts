@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { defineTool, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
-import { displayPath, resolvePath } from "./paths.ts"
+import { displayPath, fileKey, resolvePath } from "./paths.ts"
 import { decodeText, encodeText, looksBinary } from "./text.ts"
 
 export interface EditParams {
@@ -33,7 +33,9 @@ export const editTool = defineTool<EditParams>({
     required: ["path", "old_string", "new_string"],
     additionalProperties: false,
   },
-  concurrency: "serial",
+  // Writes to different files run in parallel; writes to the same file keep their order (D71).
+  concurrency: "parallel",
+  concurrencyKey: (p, ctx) => fileKey(ctx.cwd, p.path),
   async execute({ path, old_string, new_string, replace_all }, ctx) {
     if (typeof path !== "string" || path === "") return textResult("path is required", true)
     if (typeof old_string !== "string" || typeof new_string !== "string") {

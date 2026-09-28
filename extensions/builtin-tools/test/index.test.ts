@@ -19,10 +19,10 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
   await extension(api)
   expect(Object.fromEntries(tools.map((t) => [t.name, t.concurrency]))).toEqual({
     read: "parallel",
-    write: "serial",
-    edit: "serial",
-    bash: "serial",
-    ...(process.platform === "win32" ? { powershell: "serial" } : {}),
+    write: "parallel",
+    edit: "parallel",
+    bash: "parallel",
+    ...(process.platform === "win32" ? { powershell: "parallel" } : {}),
     grep: "parallel",
     glob: "parallel",
   })
