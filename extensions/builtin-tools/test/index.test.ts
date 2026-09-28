@@ -1,0 +1,26 @@
+import { expect, test } from "bun:test"
+import type { ExtensionAPI, ToolDefinition } from "@amira/api"
+import extension from "../src/index.ts"
+
+test("registers the six built-in tools with the expected concurrency", async () => {
+  const tools: ToolDefinition[] = []
+  const api: ExtensionAPI = {
+    apiVersion: "0.1.0",
+    registerTool: (t) => void tools.push(t),
+    on: () => () => {},
+    intercept: () => () => {},
+  }
+  await extension(api)
+  expect(Object.fromEntries(tools.map((t) => [t.name, t.concurrency]))).toEqual({
+    read: "parallel",
+    write: "serial",
+    edit: "serial",
+    bash: "serial",
+    grep: "parallel",
+    glob: "parallel",
+  })
+  for (const t of tools) {
+    expect(t.description.length).toBeGreaterThan(50)
+    expect(t.parameters.type).toBe("object")
+  }
+})
