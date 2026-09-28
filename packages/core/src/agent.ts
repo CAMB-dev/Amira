@@ -12,6 +12,7 @@ import {
 import type { EventMap, SessionStatus, ToolRejection, ToolResult, TurnEndReason } from "@amira/api"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
+import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 import { checkArgs } from "./validate-args.ts"
 
@@ -194,6 +195,7 @@ export class Agent {
     let final: AssistantMessage | undefined
     let error: string | undefined
     let aborted = false
+    let retrying = false
     try {
       const stream = this.#ai.stream(
         {
@@ -206,7 +208,18 @@ export class Agent {
         turn.signal,
       )
       for await (const ev of stream) {
+        if (retrying && ev.type !== "retry") {
+          retrying = false
+          this.#emit(turn, "status.changed", { status: "working" })
+        }
         switch (ev.type) {
+          case "retry":
+            retrying = true
+            this.#emit(turn, "status.changed", {
+              status: "working",
+              reason: `retrying (${ev.attempt}/${ev.maxRetries})`,
+            })
+            break
           case "text.delta":
             this.#emit(turn, "message.delta", { kind: "text", text: ev.text })
             break
@@ -246,12 +259,23 @@ export class Agent {
     }
     // An interrupted reply keeps its text but drops tool calls, which were never executed.
     if (aborted || error) message.content = message.content.filter((b) => b.type !== "toolCall")
+    else message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
     if (message.content.length) this.messages.push(message)
     this.#emit(turn, "message.end", { message })
 
     if (aborted) return { kind: "aborted" }
     if (error) return { kind: "error", error }
     return { kind: "ok", message }
+  }
+
+  /** Renames a call to a tool the model misspelled, so history, events and results agree. */
+  #fixToolName(call: ToolCallBlock): ToolCallBlock {
+    if (this.tools.get(call.name)) return call
+    const name = resolveToolName(
+      call.name,
+      this.tools.active().map((t) => t.name),
+    )
+    return name ? { ...call, name } : call
   }
 
   /**
