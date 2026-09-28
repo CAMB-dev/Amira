@@ -61,7 +61,7 @@ export function toAnthropicMessages(messages: Message[]): AnthropicMessage[] {
 
 function userBlock(b: TextBlock | ImageBlock): AnthropicBlock[] {
   if (b.type === "image") return [imageBlock(b)]
-  return b.text ? [{ type: "text", text: b.text }] : []
+  return b.text.trim() ? [{ type: "text", text: b.text }] : []
 }
 
 function imageBlock(b: ImageBlock): AnthropicBlock {
@@ -79,7 +79,7 @@ function assistantBlocks(m: AssistantMessage): AnthropicBlock[] {
       else if (sig) out.push({ type: "thinking", thinking: b.text, signature: sig })
       else if (b.text.trim()) out.push({ type: "text", text: `<thinking>\n${b.text}\n</thinking>` })
     } else if (b.type === "text") {
-      if (b.text) out.push({ type: "text", text: b.text })
+      if (b.text.trim()) out.push({ type: "text", text: b.text })
     } else {
       out.push({ type: "tool_use", id: b.id, name: b.name, input: b.args })
     }

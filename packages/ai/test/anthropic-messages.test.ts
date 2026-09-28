@@ -25,8 +25,15 @@ const result = (id: string, text = `out ${id}`, isError = false): ToolResultMess
 })
 const txt = (text: string) => ({ type: "text" as const, text })
 
-test("merges consecutive same-role messages and drops empty ones", () => {
-  const out = toAnthropicMessages([user("a"), user("b"), assistant(), assistant(txt("x")), user("")])
+test("merges consecutive same-role messages and drops empty or blank ones", () => {
+  const out = toAnthropicMessages([
+    user("a"),
+    user("b"),
+    user(" \n"),
+    assistant(),
+    assistant(txt("x"), txt("  ")),
+    user(""),
+  ])
   expect(out).toEqual([
     { role: "user", content: [txt("a"), txt("b")] },
     { role: "assistant", content: [txt("x")] },
