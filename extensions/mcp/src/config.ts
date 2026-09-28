@@ -23,13 +23,15 @@ export interface McpConfig {
 
 /**
  * Files holding `mcpServers`, lowest precedence first: a later file's entry replaces an earlier
- * one of the same name. Amira's own settings win over the Claude Code style `.mcp.json`.
+ * one of the same name. Amira's own settings (the same layers the settings loader merges, D35)
+ * win over the Claude Code style `.mcp.json`.
  */
 export function mcpConfigFiles(cwd: string, home: string): string[] {
   return [
     path.join(cwd, ".mcp.json"),
     path.join(home, "settings.json"),
     path.join(cwd, ".amira", "settings.json"),
+    path.join(cwd, ".amira", "settings.local.json"),
   ]
 }
 
@@ -37,8 +39,11 @@ export function mcpConfigFiles(cwd: string, home: string): string[] {
 export const TRUST_KEY = "mcpTrustedProjects"
 
 /**
- * A deliberately tiny reader for the `mcpServers` of these files; a full settings loader can
- * replace it by handing parsed entries to `parseServers`.
+ * A deliberately tiny reader for the `mcpServers` of these files.
+ *
+ * TODO(integrate): read `api.settings.mcpServers` from the core settings loader instead, once
+ * it can say which layer (user or project) each entry came from. The merged settings lose
+ * that, and the trust rule below depends on it; `.mcp.json` is read here in any case.
  *
  * Project files come with whatever repository was cloned, so unless the project (or a parent
  * directory) is listed under `mcpTrustedProjects` in the user settings, their stdio servers are

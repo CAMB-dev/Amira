@@ -38,5 +38,7 @@ export interface Settings {
   retry?: { attempts?: number; baseDelayMs?: number; maxDelayMs?: number }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */
   mcpServers?: Record<string, Record<string, unknown>>
+  /** Project directories whose own MCP servers may run; honoured in the user settings only. */
+  mcpTrustedProjects?: string[]
   skills?: { dirs?: string[] }
 }

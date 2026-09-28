@@ -24,6 +24,11 @@ export interface DiscoverOptions {
   home: string
   /** The OS user's home, for ~/.claude/skills. Default os.homedir(). */
   userHome?: string
+  /**
+   * Extra skill directories from settings `skills.dirs`, searched after Amira's own. `~` is the
+   * OS user's home; relative paths are resolved against `cwd`.
+   */
+  dirs?: string[]
 }
 
 export interface Discovery {
@@ -38,6 +43,7 @@ export function skillRoots(opts: DiscoverOptions): string[] {
   return [
     path.join(opts.cwd, ".amira", "skills"),
     path.join(opts.home, "skills"),
+    ...(opts.dirs ?? []).map((d) => path.resolve(opts.cwd, d.replace(/^~(?=$|[\\/])/, userHome))),
     path.join(opts.cwd, ".agents", "skills"),
     path.join(opts.cwd, ".claude", "skills"),
     path.join(userHome, ".claude", "skills"),

@@ -174,3 +174,40 @@ test("skills written during a session are listed and usable from the next model 
   // A broken skill is reported once, not on every model call.
   expect(events.filter((e) => e.type === "extension.error")).toHaveLength(1)
 })
+
+test("settings skills.dirs adds directories, and the listing fills the prompt's skills section", async () => {
+  const d = layout()
+  skill(path.join(d.cwd, "team-skills"), "lint", "name: lint\ndescription: Lint it")
+  skill(path.join(d.userHome, "more"), "fmt", "name: fmt\ndescription: Format it")
+  expect(discoverSkills({ ...d, dirs: ["team-skills", "~/more"] }).skills.map((s) => s.name)).toEqual([
+    "fmt",
+    "lint",
+  ])
+
+  const mock = createMockDialect([{ text: "ok" }])
+  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
+  const bus = new EventBus()
+  const interceptors = new InterceptorRegistry()
+  const tools = new ToolRegistry()
+  const settings = { skills: { dirs: ["team-skills"] } }
+  const host = new ExtensionHost({ bus, interceptors, tools, cwd: d.cwd, settings })
+  await host.load(createSkillsExtension({ home: d.home, userHome: d.userHome }), "builtin:skills")
+  const agent = new Agent({
+    ai,
+    model: ai.model("mock/test"),
+    cwd: d.cwd,
+    sections: [
+      { name: "identity", text: "sys" },
+      { name: "skills", text: "" },
+      { name: "role", text: "# Role" },
+    ],
+    bus,
+    interceptors,
+    tools,
+  })
+  await agent.prompt("go")
+  const prompt = mock.requests[0]!.systemPrompt
+  expect(prompt.startsWith("sys\n\n# Skills\n")).toBe(true)
+  expect(prompt).toContain("- lint: Lint it")
+  expect(prompt.endsWith("\n\n# Role")).toBe(true)
+})

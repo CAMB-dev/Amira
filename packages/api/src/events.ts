@@ -107,6 +107,19 @@ export interface SystemSection {
   text: string
 }
 
+/**
+ * For system.build handlers: replaces the named section's text, or adds the section before
+ * "role" (or last) when the prompt has none of that name. Returns a new list.
+ */
+export function withSection(sections: SystemSection[], name: string, text: string): SystemSection[] {
+  if (sections.some((s) => s.name === name))
+    return sections.map((s) => (s.name === name ? { name, text } : s))
+  const role = sections.findIndex((s) => s.name === "role")
+  const out = [...sections]
+  out.splice(role === -1 ? out.length : role, 0, { name, text })
+  return out
+}
+
 export type Intercept<T> =
   | { action: "pass" }
   | { action: "modify"; value: T }

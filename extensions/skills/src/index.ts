@@ -1,4 +1,4 @@
-import { defineExtension, defineTool, type ExtensionAPI, textResult } from "@amira/api"
+import { defineExtension, defineTool, type ExtensionAPI, textResult, withSection } from "@amira/api"
 import { type DiscoverOptions, discoverSkills, readSkillBody, type Skill } from "./discover.ts"
 
 export {
@@ -36,7 +36,8 @@ export function skillPrompt(skill: Skill, args = ""): string {
 
 export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
   return defineExtension((api: ExtensionAPI) => {
-    const where: DiscoverOptions = { cwd: api.cwd, home: api.home, ...opts }
+    const dirs = api.settings.skills?.dirs
+    const where: DiscoverOptions = { cwd: api.cwd, home: api.home, ...(dirs ? { dirs } : {}), ...opts }
     const reported = new Set<string>()
     let skills: Skill[] = []
     let registered = false
@@ -90,14 +91,11 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
     })
 
     scan()
-    // Until named prompt sections land, the listing is appended as its own block here.
-    api.intercept("context.build", (ctx) => {
+    // Fills the prompt's "skills" section (D43), which keeps its place in the prompt.
+    api.intercept("system.build", (ctx) => {
       const section = skillsSection(scan())
       if (!section) return { action: "pass" }
-      return {
-        action: "modify",
-        value: { ...ctx, systemPrompt: `${ctx.systemPrompt.trimEnd()}\n\n${section}` },
-      }
+      return { action: "modify", value: { sections: withSection(ctx.sections, "skills", section) } }
     })
   })
 }

@@ -1,4 +1,4 @@
-import { defineExtension, type Extension } from "@amira/api"
+import { defineExtension, type Extension, withSection } from "@amira/api"
 import { type McpConfig, readMcpConfig } from "./config.ts"
 import { ServerConnection, type ServerOptions, type ServerState } from "./server.ts"
 
@@ -63,17 +63,15 @@ export function createMcpExtension(opts: McpExtensionOptions = {}): McpExtension
     const waitMs = opts.startupWaitMs ?? 8000
     const waitUntil = Date.now() + waitMs
     const pending = () => connections.filter((c) => c.state === "idle" || c.state === "connecting")
-    // Until named prompt sections land, the note is appended as its own block here.
+    // Waits in system.build, so the core's "deferred-tools" section, listed after it, already
+    // names the tools of servers that connected meanwhile; the rest get an "mcp" note.
     api.intercept(
-      "context.build",
+      "system.build",
       async (ctx, { signal }) => {
         if (pending().length) await settledWithin(started, waitUntil - Date.now(), signal)
         const note = pendingSection(pending().map((c) => c.config.name))
         if (!note) return { action: "pass" }
-        return {
-          action: "modify",
-          value: { ...ctx, systemPrompt: `${ctx.systemPrompt.trimEnd()}\n\n${note}` },
-        }
+        return { action: "modify", value: { sections: withSection(ctx.sections, "mcp", note) } }
       },
       { timeoutMs: waitMs + 2000 },
     )
