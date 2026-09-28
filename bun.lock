@@ -18,6 +18,17 @@
         "@amira/proc": "workspace:*",
       },
     },
+    "extensions/commands": {
+      "name": "@amira/ext-commands",
+      "version": "0.0.0",
+      "dependencies": {
+        "@amira/api": "workspace:*",
+      },
+      "devDependencies": {
+        "@amira/ai": "workspace:*",
+        "@amira/core": "workspace:*",
+      },
+    },
     "extensions/mcp": {
       "name": "@amira/ext-mcp",
       "version": "0.0.0",
@@ -74,6 +85,7 @@
         "@amira/api": "workspace:*",
         "@amira/builtin-tools": "workspace:*",
         "@amira/core": "workspace:*",
+        "@amira/ext-commands": "workspace:*",
         "@amira/ext-mcp": "workspace:*",
         "@amira/ext-skills": "workspace:*",
         "@amira/ext-status": "workspace:*",
@@ -119,6 +131,8 @@
     "@amira/builtin-tools": ["@amira/builtin-tools@workspace:extensions/builtin-tools"],
 
     "@amira/core": ["@amira/core@workspace:packages/core"],
+
+    "@amira/ext-commands": ["@amira/ext-commands@workspace:extensions/commands"],
 
     "@amira/ext-mcp": ["@amira/ext-mcp@workspace:extensions/mcp"],
 
