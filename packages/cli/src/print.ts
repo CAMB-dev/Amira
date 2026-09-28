@@ -17,6 +17,8 @@ export interface PrintOptions {
   pending?: AnyEvent[]
   /** How long to wait for slow event subscribers after the turn. Default 2000 ms. */
   flushTimeoutMs?: number
+  /** Called once this frontend is subscribed, e.g. to announce the session. */
+  onReady?: () => void
   /** Called on a second Ctrl+C. Default exits the process with 130. */
   forceExit?: () => void
 }
@@ -85,6 +87,7 @@ export async function runPrint(
   }
   for (const e of opts.pending ?? []) handle(e)
   const off = agent.bus.subscribe(handle)
+  opts.onReady?.()
 
   // First Ctrl+C aborts the turn; a second one exits immediately.
   let interrupted = false
