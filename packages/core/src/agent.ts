@@ -177,6 +177,11 @@ export class Agent {
   #maxParallelTools: number
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
+  /**
+   * Loaded tools restored from the session file, checked at the first model call: by then
+   * system.build has waited for tools that register late (MCP servers).
+   */
+  #restoredTools: string[] | undefined
   #toolSession: ToolSession
   #turn: Turn | undefined
   /** Steering messages waiting for the next model call of the running turn. */
@@ -217,6 +222,8 @@ export class Agent {
       this.messages = restored.messages
       this.#entryIds = restored.entryIds
       this.#contextTokens = restored.contextTokens
+      for (const name of restored.loadedTools) this.#loadedTools.add(name)
+      if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
     }
     const stored = opts.session?.model()
     if (opts.session && (stored?.provider !== this.model.provider || stored.model !== this.model.id)) {
@@ -224,8 +231,15 @@ export class Agent {
     }
     const agent = this
     const tree = opts.tree
+    const deferred = createToolSession(this.sessionId, this.tools, this.#loadedTools)
     this.#toolSession = {
-      ...createToolSession(this.sessionId, this.tools, this.#loadedTools),
+      ...deferred,
+      // Recorded in the session, so resuming it offers the same tools again.
+      loadTools: (names) => {
+        const added = deferred.loadTools(names)
+        if (added.length) this.#store({ type: "tools_loaded", names: added })
+        return added
+      },
       depth: this.depth,
       get maxDepth() {
         return tree?.maxDepth ?? 0
@@ -545,6 +559,7 @@ export class Agent {
 
   async #callModel(turn: Turn): Promise<ModelReply> {
     const ctx = await this.#buildContext(turn.signal)
+    this.#checkRestoredTools()
     if (turn.signal.aborted) return { kind: "aborted" }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
@@ -627,6 +642,23 @@ export class Agent {
     if (aborted) return { kind: "aborted" }
     if (error) return { kind: "error", error }
     return { kind: "ok", message }
+  }
+
+  /** Drops restored tools that are gone (e.g. an MCP server removed since), with a note. */
+  #checkRestoredTools() {
+    const restored = this.#restoredTools
+    if (!restored) return
+    this.#restoredTools = undefined
+    // A disabled tool stays loaded for when it is turned back on; one that became active is
+    // offered anyway.
+    const unavailable = restored.filter((name) => !this.tools.has(name))
+    for (const name of restored) {
+      const tool = this.tools.get(name)
+      if (!this.tools.has(name) || (tool && tool.exposure !== "deferred")) this.#loadedTools.delete(name)
+    }
+    if (!unavailable.length) return
+    const error = `tools loaded earlier in this session are no longer available: ${unavailable.join(", ")}`
+    this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId })
   }
 
   /** Renames a call to a tool the model misspelled, so history, events and results agree. */

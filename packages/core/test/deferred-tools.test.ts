@@ -1,8 +1,13 @@
 import { expect, test } from "bun:test"
+import { mkdtemp } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import { defineTool, textResult } from "@amira/api"
+import { type AnyEvent, defineTool, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { searchDeferred, TOOL_SEARCH, toolSearchTool } from "../src/deferred-tools.ts"
+import { EventBus } from "../src/event-bus.ts"
+import { SessionStore } from "../src/session-store.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
 
 function setup(steps: MockStep[], tools = new ToolRegistry()) {
@@ -180,4 +185,73 @@ test("searchDeferred ranks name hits over description hits and honours select:",
   expect(searchDeferred(tools, "web", 1).map((t) => t.name)).toEqual(["web_get"])
   expect(searchDeferred(tools, "select:other, ALPHA,nope", 5).map((t) => t.name)).toEqual(["other", "alpha"])
   expect(searchDeferred(tools, "Other", 5).map((t) => t.name)).toEqual(["other"])
+})
+
+async function storedSession(steps: MockStep[], tools: ToolRegistry) {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "amira-deferred-"))
+  const mock = createMockDialect(steps)
+  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
+  const session = SessionStore.create({ cwd: "/proj", dir })
+  const agent = new Agent({
+    ai,
+    model: ai.model("mock/test"),
+    cwd: "/proj",
+    systemPrompt: "",
+    tools,
+    session,
+  })
+  return { agent, ai, session }
+}
+
+function resume(ai: ReturnType<typeof createAi>, file: string, tools: ToolRegistry) {
+  const mock = createMockDialect([{ text: "again" }])
+  ai.registerDialect(mock)
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const agent = new Agent({
+    ai,
+    model: ai.model("mock/test"),
+    cwd: "/proj",
+    tools,
+    bus,
+    session: SessionStore.open(file),
+  })
+  return { agent, mock, bus, events }
+}
+
+test("tools loaded with tool_search are offered again after resuming the session", async () => {
+  const { agent, ai, session } = await storedSession(
+    [{ toolCalls: [{ name: TOOL_SEARCH, args: { names: ["mcp__math__add"] } }] }, { text: "loaded" }],
+    registry(),
+  )
+  await agent.prompt("load it")
+  expect(agent.loadedTools).toEqual(["mcp__math__add"])
+
+  const resumed = resume(ai, session.file, registry())
+  expect(resumed.agent.loadedTools).toEqual(["mcp__math__add"])
+  await resumed.agent.prompt("use it")
+  await resumed.bus.flush()
+  expect(resumed.mock.requests[0]!.tools.map((t) => t.name)).toEqual(["plain", TOOL_SEARCH, "mcp__math__add"])
+  expect(resumed.events.filter((e) => e.type === "extension.error")).toEqual([])
+})
+
+test("a restored tool that no longer exists is dropped with a note", async () => {
+  const { agent, ai, session } = await storedSession(
+    [{ toolCalls: [{ name: TOOL_SEARCH, args: { names: ["mcp__web__fetch"] } }] }, { text: "loaded" }],
+    registry(),
+  )
+  await agent.prompt("load it")
+  const tools = new ToolRegistry()
+  tools.register(plain, "test")
+  const resumed = resume(ai, session.file, tools)
+  await resumed.agent.prompt("go")
+  await resumed.bus.flush()
+  expect(resumed.agent.loadedTools).toEqual([])
+  expect(resumed.events.filter((e) => e.type === "extension.error").map((e) => e.data)).toEqual([
+    {
+      source: "session",
+      error: "tools loaded earlier in this session are no longer available: mcp__web__fetch",
+    },
+  ])
 })

@@ -23,6 +23,8 @@ export type SessionEntryData =
   /** Makes `target` the tip of the current branch. */
   | { type: "checkout"; target: string }
   | { type: "subagent"; childSessionId: string; role: string }
+  /** Deferred tools the session loaded (via tool_search), offered to the model from then on. */
+  | { type: "tools_loaded"; names: string[] }
   | { type: "custom"; ext: string; data: unknown }
 
 export type SessionEntry = SessionEntryData & { id: string; parentId: string | null; ts: number }
@@ -34,6 +36,8 @@ export interface RestoredSession {
   model?: ModelRef
   /** Context size from the last reply since the last compaction; older usage no longer applies. */
   contextTokens?: number
+  /** Deferred tools loaded on this branch, in load order. */
+  loadedTools: string[]
 }
 
 /** Sessions for a working directory live in `~/.amira/sessions/<hash of cwd>/`. */
@@ -164,8 +168,13 @@ export class SessionStore {
     let items: { id: string; message: Message }[] = []
     let model: ModelRef | undefined
     let tokens: number | undefined
+    const loadedTools = new Set<string>()
     for (const e of this.branch()) {
-      if (e.type === "message") {
+      if (e.type === "tools_loaded") {
+        for (const name of Array.isArray(e.names) ? e.names : []) {
+          if (typeof name === "string") loadedTools.add(name)
+        }
+      } else if (e.type === "message") {
         items.push({ id: e.id, message: e.message })
         if (e.message.role === "assistant" && e.message.usage) tokens = contextTokens(e.message.usage)
       } else if (e.type === "model_change") model = e.model
@@ -185,6 +194,7 @@ export class SessionStore {
       entryIds,
       ...(model ? { model } : {}),
       ...(tokens !== undefined ? { contextTokens: tokens } : {}),
+      loadedTools: [...loadedTools],
     }
   }
 
@@ -270,6 +280,7 @@ const ENTRY_TYPES = new Set<unknown>([
   "compaction",
   "checkout",
   "subagent",
+  "tools_loaded",
   "custom",
 ])
 
