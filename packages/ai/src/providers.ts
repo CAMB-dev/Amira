@@ -1,3 +1,4 @@
+import type { CatalogModel } from "./catalog.ts"
 import type { ProviderCompat } from "./dialect.ts"
 import type { ModelCaps, ModelInfo } from "./types.ts"
 
@@ -14,6 +15,11 @@ export interface ProviderConfig {
   apiKey?: string
   headers?: Record<string, string>
   compat?: ProviderCompat
+  /**
+   * The model catalog's id for this provider (models.dev), or false to not use the catalog.
+   * Defaults to CATALOG_PROVIDER_IDS, then to the provider id.
+   */
+  catalogId?: string | false
   /** Known models. Unlisted models get defaultModel values. */
   models?: ModelOverrides[]
   defaultModel?: ModelOverrides
@@ -53,16 +59,25 @@ export const BUILTIN_PROVIDERS: ProviderConfig[] = [
   { id: "lmstudio", dialect: "openai-chat", baseUrl: "http://localhost:1234/v1" },
 ]
 
-export function resolveModelInfo(provider: ProviderConfig, modelId: string): ModelInfo {
+/**
+ * A model's settings. A model the provider lists wins over the catalog, which wins over the
+ * provider's defaultModel (meant for models nobody described), which wins over built-in defaults.
+ */
+export function resolveModelInfo(
+  provider: ProviderConfig,
+  modelId: string,
+  catalog?: CatalogModel,
+): ModelInfo {
   const known = provider.models?.find((m) => m.id === modelId)
   const d = provider.defaultModel
+  const cost = known?.cost ?? catalog?.cost ?? d?.cost
   return {
     id: modelId,
     provider: provider.id,
     dialect: known?.dialect ?? d?.dialect ?? provider.dialect,
-    contextWindow: known?.contextWindow ?? d?.contextWindow ?? 128_000,
-    maxOutput: known?.maxOutput ?? d?.maxOutput ?? 8_192,
-    caps: { ...DEFAULT_CAPS, ...d?.caps, ...known?.caps },
-    ...((known?.cost ?? d?.cost) ? { cost: known?.cost ?? d?.cost } : {}),
+    contextWindow: known?.contextWindow ?? catalog?.contextWindow ?? d?.contextWindow ?? 128_000,
+    maxOutput: known?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? 8_192,
+    caps: { ...DEFAULT_CAPS, ...d?.caps, ...catalog?.caps, ...known?.caps },
+    ...(cost ? { cost } : {}),
   }
 }
