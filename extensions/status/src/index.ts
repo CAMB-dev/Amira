@@ -17,6 +17,13 @@ export function formatContext(used: number, window: number | undefined): string 
   return `${formatTokens(used)}/${formatTokens(window)} (${pct}%)`
 }
 
+/** "$0.012", "$1.25"; amounts under a tenth of a cent show as "<$0.001". */
+export function formatCost(usd: number): string {
+  if (usd >= 1) return `$${usd.toFixed(2)}`
+  if (usd > 0 && usd < 0.0005) return "<$0.001"
+  return `$${usd.toFixed(3)}`
+}
+
 /**
  * Output tokens per second of one reply, timed from its first streamed piece to its end.
  * Undefined when the reply was too short to time meaningfully.
@@ -33,7 +40,7 @@ export function tokensPerSecond(
 
 /**
  * The default status bar: model, activity, context use against the model's window,
- * output tokens, the speed of the last reply, and the git branch or folder.
+ * output tokens and session cost, the speed of the last reply, and the git branch or folder.
  */
 export default defineExtension((api) => {
   let model = ""
@@ -42,6 +49,7 @@ export default defineExtension((api) => {
   let context = 0
   let contextWindow: number | undefined
   let output = 0
+  let cost: number | undefined
   let firstDeltaAt: number | undefined
   let tps: number | undefined
   let place = ""
@@ -51,6 +59,7 @@ export default defineExtension((api) => {
     if (e.data.reason !== "resume") {
       context = 0
       output = 0
+      cost = undefined
       tps = undefined
       status = "idle"
       statusReason = ""
@@ -77,6 +86,7 @@ export default defineExtension((api) => {
     if (!u) return
     context = u.input + u.cacheRead + u.cacheWrite + u.output
     output += u.output
+    if (u.cost !== undefined) cost = (cost ?? 0) + u.cost
     if (firstDeltaAt !== undefined) tps = tokensPerSecond(u.output, firstDeltaAt, e.ts) ?? tps
     api.requestRender()
   })
@@ -92,7 +102,13 @@ export default defineExtension((api) => {
     align: "left",
     order: 10,
     text: () =>
-      status === "idle" ? "" : status === "blocked" && statusReason ? `waiting: ${statusReason}` : status,
+      status === "idle"
+        ? ""
+        : status === "blocked" && statusReason
+          ? `waiting: ${statusReason}`
+          : status === "working" && statusReason
+            ? statusReason
+            : status,
   })
   api.registerStatusItem({
     id: "tokens",
@@ -100,7 +116,9 @@ export default defineExtension((api) => {
     order: 0,
     tone: "muted",
     text: () =>
-      context || output ? `ctx ${formatContext(context, contextWindow)} · out ${formatTokens(output)}` : "",
+      context || output
+        ? `ctx ${formatContext(context, contextWindow)} · out ${formatTokens(output)}${cost === undefined ? "" : ` · ${formatCost(cost)}`}`
+        : "",
   })
   api.registerStatusItem({
     id: "speed",
