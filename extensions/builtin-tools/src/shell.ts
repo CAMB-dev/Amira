@@ -1,10 +1,16 @@
 import { existsSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { homedir } from "node:os"
+import { dirname, join, win32 } from "node:path"
 
 export interface Shell {
   kind: "bash" | "powershell"
   path: string
+  /** Shown to the model in every result when the shell is not bash. */
+  label?: string
   args(command: string): string[]
+  env: Record<string, string | undefined>
+  /** The command waits for a line on stdin before it runs, so the caller can contain it first. */
+  gated: boolean
 }
 
 /** WSL's bash.exe (System32) and the Store alias (WindowsApps) are never Git Bash. */
@@ -14,7 +20,7 @@ export function isRejectedShellPath(path: string): boolean {
 }
 
 function bashIn(root: string, exists: (p: string) => boolean): string | undefined {
-  // bin/bash.exe is Git's launcher: it sets up PATH (/usr/bin etc.) before starting usr/bin/bash.exe.
+  // bin/bash.exe is Git's launcher; windowsBashShell maps it to usr/bin/bash.exe.
   for (const rel of ["bin/bash.exe", "usr/bin/bash.exe"]) {
     const p = join(root, rel)
     if (exists(p) && !isRejectedShellPath(p)) return p
@@ -75,15 +81,82 @@ export async function findGitBash(deps: FindGitBashDeps = {}): Promise<string | 
   return undefined
 }
 
-function bashShell(path: string): Shell {
-  return { kind: "bash", path, args: (command) => [path, "-c", command] }
+/** Maps Git's bin/bash.exe launcher to the real usr/bin/bash.exe and finds the Git root, when recognizable. */
+export function gitBashLayout(path: string, exists: (p: string) => boolean = existsSync) {
+  const p = win32.normalize(path)
+  const lower = p.toLowerCase()
+  if (lower.endsWith("\\usr\\bin\\bash.exe")) {
+    return { bash: p, root: win32.dirname(win32.dirname(win32.dirname(p))) }
+  }
+  if (lower.endsWith("\\bin\\bash.exe")) {
+    const root = win32.dirname(win32.dirname(p))
+    const real = win32.join(root, "usr", "bin", "bash.exe")
+    if (exists(real)) return { bash: real, root }
+  }
+  return { bash: p, root: undefined }
 }
 
-function powershell(): Shell {
-  const path = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe"
+function envKey(env: Record<string, string | undefined>, name: string): string {
+  return Object.keys(env).find((k) => k.toUpperCase() === name) ?? name
+}
+
+/** The environment Git's bin/bash.exe launcher would give usr/bin/bash.exe. */
+export function gitBashEnv(
+  root: string,
+  base: Record<string, string | undefined> = process.env,
+  home = homedir(),
+): Record<string, string | undefined> {
+  const env = { ...base }
+  const pathKey = envKey(env, "PATH")
+  const prefix = [win32.join(root, "mingw64", "bin"), win32.join(root, "usr", "bin"), win32.join(home, "bin")]
+  env[pathKey] = [...prefix, env[pathKey]].filter(Boolean).join(";")
+  for (const [name, value] of [
+    ["MSYSTEM", "MINGW64"],
+    ["PLINK_PROTOCOL", "ssh"],
+  ] as const) {
+    const key = envKey(env, name)
+    env[key] ??= value
+  }
+  return env
+}
+
+/**
+ * Runs the command ($1) only after a line arrives on stdin (see runCommand). The trailing `exit $?` keeps
+ * bash from exec-ing the inner shell: a Windows process killed by an MSYS signal exits 0, while the outer
+ * shell reports it as 128+n.
+ */
+export const GATE_SCRIPT = 'read -r _ || exit 125; "$BASH" -c "$1" bash; exit $?'
+
+export function windowsBashShell(found: string, exists: (p: string) => boolean = existsSync): Shell {
+  const { bash, root } = gitBashLayout(found, exists)
+  return {
+    kind: "bash",
+    path: bash,
+    env: root ? gitBashEnv(root) : { ...process.env },
+    gated: true,
+    args: (command) => [bash, "-c", GATE_SCRIPT, "bash", command],
+  }
+}
+
+function posixBashShell(path: string): Shell {
+  return {
+    kind: "bash",
+    path,
+    env: { ...process.env },
+    gated: false,
+    args: (command) => [path, "-c", command],
+  }
+}
+
+export function powershellShell(
+  path = Bun.which("pwsh") ?? Bun.which("powershell") ?? "powershell.exe",
+): Shell {
   return {
     kind: "powershell",
     path,
+    label: "PowerShell (Git Bash not found)",
+    env: { ...process.env },
+    gated: false,
     args: (command) => [path, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
   }
 }
@@ -94,7 +167,12 @@ let cached: Promise<Shell> | undefined
 export function resolveShell(): Promise<Shell> {
   cached ??=
     process.platform === "win32"
-      ? findGitBash().then((bash) => (bash ? bashShell(bash) : powershell()))
-      : Promise.resolve(bashShell("/bin/bash"))
+      ? findGitBash().then((bash) => (bash ? windowsBashShell(bash) : powershellShell()))
+      : Promise.resolve(posixBashShell("/bin/bash"))
   return cached
+}
+
+/** Starts shell discovery in the background so the first bash call does not wait for it. */
+export function warmUpShell(): void {
+  resolveShell().catch(() => {})
 }

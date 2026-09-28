@@ -53,6 +53,8 @@ export const bashTool = defineTool<BashParams>({
     try {
       run = await runCommand(shell.args(command), {
         cwd: ctx.cwd,
+        env: shell.env,
+        gated: shell.gated,
         timeoutMs,
         signal: ctx.signal,
         onOutput(output) {
@@ -71,6 +73,11 @@ export const bashTool = defineTool<BashParams>({
     if (run.timedOut) parts.push(`Command timed out after ${timeoutMs} ms and was killed.`)
     else if (run.aborted) parts.push("Command was aborted.")
     else parts.push(`Exit code: ${run.exitCode}`)
+    if (!run.contained) {
+      parts.push(
+        "Warning: the command could not be placed in a job object, so processes it started may still be running.",
+      )
+    }
     return {
       content: [{ type: "text", text: parts.join("\n\n") }],
       isError: run.timedOut || run.aborted || run.exitCode !== 0,
@@ -87,6 +94,9 @@ export const bashTool = defineTool<BashParams>({
 
 export interface RunOptions {
   cwd: string
+  env?: Record<string, string | undefined>
+  /** The command waits for a line on stdin, which is sent once the process tree is contained. */
+  gated?: boolean
   timeoutMs: number
   signal: AbortSignal
   onOutput?: (output: string) => void
@@ -97,14 +107,16 @@ export interface RunResult {
   exitCode: number | null
   timedOut: boolean
   aborted: boolean
+  /** False when the process tree could not be contained, so kills may have missed processes. */
+  contained: boolean
 }
 
 /** Runs argv with stdout and stderr interleaved, killing the whole process tree on abort, timeout and exit. */
 export async function runCommand(argv: string[], opts: RunOptions): Promise<RunResult> {
   const proc = Bun.spawn(argv, {
     cwd: opts.cwd,
-    env: process.env,
-    stdin: "ignore",
+    env: opts.env ?? process.env,
+    stdin: opts.gated ? "pipe" : "ignore",
     stdout: "pipe",
     stderr: "pipe",
     windowsHide: true,
@@ -112,6 +124,7 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunR
     detached: process.platform !== "win32",
   })
   const tree = trackProcessTree(proc)
+  if (opts.gated) releaseGate(proc.stdin)
 
   let output = ""
   const pump = async (stream: ReadableStream<Uint8Array>) => {
@@ -139,10 +152,24 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunR
     // Kill background leftovers too; they would otherwise keep the pipes open and outlive the call.
     tree.kill()
     await Promise.race([drained, Bun.sleep(DRAIN_GRACE_MS)])
-    return { output, exitCode, timedOut: reason === "timeout", aborted: reason === "abort" }
+    return {
+      output,
+      exitCode,
+      timedOut: reason === "timeout",
+      aborted: reason === "abort",
+      contained: tree.contained,
+    }
   } finally {
     clearTimeout(timer)
     opts.signal.removeEventListener("abort", onAbort)
     tree.dispose()
   }
+}
+
+function releaseGate(stdin: Bun.FileSink | undefined): void {
+  if (!stdin) return
+  try {
+    stdin.write("\n")
+    Promise.resolve(stdin.end()).catch(() => {})
+  } catch {}
 }

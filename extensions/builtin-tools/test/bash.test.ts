@@ -26,6 +26,14 @@ test.if(hasBash)("returns combined output and exit code, running in cwd", async 
   expect(ctx.updates.length).toBeGreaterThan(0)
 })
 
+test.if(hasBash)("finds coreutils and other tools on PATH", async () => {
+  const r = await bashTool.execute(
+    { command: "which ls grep sed && ls >/dev/null && echo abc | grep -c b" },
+    makeCtx(dir),
+  )
+  expect(textOf(r)).toEndWith("1\n\nExit code: 0")
+})
+
 test.if(hasBash)("non-zero exit is reported as an error", async () => {
   const r = await bashTool.execute({ command: "echo failing; exit 3" }, makeCtx(dir))
   expect(r.isError).toBe(true)
@@ -108,6 +116,32 @@ test.if(hasBash)(
     } finally {
       ac.abort()
       await run.catch(() => {})
+      for (const p of await ours()) {
+        try {
+          process.kill(p.pid, "SIGKILL")
+        } catch {}
+      }
+    }
+  },
+  60_000,
+)
+
+test.if(hasBash)(
+  "the first call in a fresh process times out with no surviving grandchildren",
+  async () => {
+    const marker = `96.${Date.now() % 100000}`
+    const ours = async () => (await listSleeps()).filter((p) => p.cmd.includes(marker))
+    const fixture = join(import.meta.dir, "fixtures", "first-bash-call.ts")
+    const child = Bun.spawn([process.execPath, fixture, marker, dir], { stdout: "pipe", stderr: "pipe" })
+    try {
+      const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+      expect(code).toBe(0)
+      const r = JSON.parse(out.trim().split("\n").at(-1)!)
+      expect(r.text).toContain("timed out after 2000 ms")
+      await Bun.sleep(500)
+      expect(await ours()).toEqual([])
+    } finally {
+      child.kill()
       for (const p of await ours()) {
         try {
           process.kill(p.pid, "SIGKILL")
