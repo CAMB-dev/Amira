@@ -62,6 +62,8 @@ export interface FindGitBashDeps {
   env?: Record<string, string | undefined>
   exists?: (p: string) => boolean
   gitExecPath?: () => Promise<string | undefined>
+  /** Looks a program up on PATH. Defaults to Bun.which. */
+  which?: (name: string) => string | null
 }
 
 export async function findGitBash(deps: FindGitBashDeps = {}): Promise<string | undefined> {
@@ -70,9 +72,12 @@ export async function findGitBash(deps: FindGitBashDeps = {}): Promise<string | 
   const override = env.AMIRA_BASH
   if (override && exists(override) && !isRejectedShellPath(override)) return override
 
-  const execPath = await (deps.gitExecPath ?? gitExecPath)()
-  const derived = execPath ? bashFromGitExecPath(execPath, exists) : undefined
-  if (derived) return derived
+  // Cheapest first: git.exe on PATH points at the Git root without spawning anything.
+  // Spawning git can take seconds on machines where antivirus scans new processes.
+  const gitOnPath = (deps.which ?? Bun.which)("git")
+  const fromPath =
+    gitOnPath && !isRejectedShellPath(gitOnPath) ? bashFromGitExecPath(gitOnPath, exists) : undefined
+  if (fromPath) return fromPath
 
   const roots = [
     env.ProgramFiles && join(env.ProgramFiles, "Git"),
@@ -85,7 +90,10 @@ export async function findGitBash(deps: FindGitBashDeps = {}): Promise<string | 
     const found = root && bashIn(root, exists)
     if (found) return found
   }
-  return undefined
+
+  // Last resort: ask git where it lives.
+  const execPath = await (deps.gitExecPath ?? gitExecPath)()
+  return execPath ? bashFromGitExecPath(execPath, exists) : undefined
 }
 
 /** Maps Git's bin/bash.exe launcher to the real usr/bin/bash.exe and finds the Git root when it can. */
@@ -237,6 +245,28 @@ export function resolveShell(): Promise<Shell> {
 }
 
 /** Starts shell discovery in the background so the first bash call does not wait for it. */
+/**
+ * Finds the shells and runs an empty command in each, in the background. On machines where
+ * antivirus scans each new program, the first start of bash or PowerShell takes seconds;
+ * paying that at startup keeps the model's first command fast.
+ */
 export function warmUpShell(): void {
-  resolveShell().catch(() => {})
+  const warm = (shell: Shell, command: string) =>
+    runCommand(shell.args(command), {
+      cwd: process.cwd(),
+      env: shell.env,
+      gated: shell.gated,
+      timeoutMs: 60_000,
+      signal: new AbortController().signal,
+    }).catch(() => {})
+  resolveShell()
+    .then((shell) =>
+      process.platform === "win32" ? warm(shell, shell.kind === "bash" ? ":" : "$null") : undefined,
+    )
+    .catch(() => {})
+  if (process.platform === "win32") {
+    resolvePowerShell()
+      .then((shell) => warm(shell, "$null"))
+      .catch(() => {})
+  }
 }
