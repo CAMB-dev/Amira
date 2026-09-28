@@ -71,6 +71,7 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
     ["builtin:tool-search", async () => ({ default: toolSearchExtension })],
     ["builtin:skills", () => import("@amira/ext-skills")],
     ["builtin:mcp", () => import("@amira/ext-mcp")],
+    ["builtin:web", () => import("@amira/ext-web")],
   ]
   const out: { source: string; extension: Extension }[] = []
   for (const [source, load] of bundled) {

@@ -54,7 +54,10 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
     if (raw === undefined) continue
     const v = validateSettings(raw, file)
     warnings.push(...v.warnings)
-    if (file !== userFile) warnings.push(...dropProviderEndpoints(v.settings, file, userFile as string))
+    if (file !== userFile) {
+      warnings.push(...dropProviderEndpoints(v.settings, file, userFile as string))
+      warnings.push(...dropWebEndpoints(v.settings, file, userFile as string))
+    }
     settings = deepMerge(settings, v.settings)
     files.push(file)
   }
@@ -82,6 +85,30 @@ function dropProviderEndpoints(settings: Settings, file: string, userFile: strin
       )
     }
   }
+  return warnings
+}
+
+/**
+ * Likewise for the web tools: a project file must not send searches (or a key) to a server
+ * of its choosing, nor let web_fetch reach the private network.
+ */
+function dropWebEndpoints(settings: Settings, file: string, userFile: string): string[] {
+  const warnings: string[] = []
+  const drop = (obj: Record<string, unknown> | undefined, at: string, keys: string[]) => {
+    for (const key of keys) {
+      if (!obj || obj[key] === undefined) continue
+      delete obj[key]
+      warnings.push(
+        `${file}: "${at}.${key}" is ignored; a project file cannot change where web requests go. Set it in ${userFile} instead`,
+      )
+    }
+  }
+  const search = settings.web?.search
+  drop(search?.exa, "web.search.exa", ["url", "apiKeyEnv"])
+  drop(search?.brave, "web.search.brave", ["apiKeyEnv"])
+  drop(search?.tavily, "web.search.tavily", ["apiKeyEnv"])
+  drop(search?.searxng, "web.search.searxng", ["url"])
+  drop(settings.web?.fetch, "web.fetch", ["allowPrivateNetwork"])
   return warnings
 }
 

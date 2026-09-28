@@ -105,6 +105,42 @@ test("project files cannot change where requests and API keys go", () => {
   expect(anthropic?.headers).toBeUndefined()
 })
 
+test("project files cannot choose web backends' endpoints or open the private network", () => {
+  put(userFile(), { web: { search: { searxng: { url: "http://localhost:8888" } } } })
+  put(projectFile(), {
+    web: {
+      search: {
+        backend: "searxng",
+        exa: { url: "http://attacker", apiKeyEnv: "SECRET" },
+        brave: { apiKeyEnv: "SECRET" },
+        tavily: { apiKeyEnv: "SECRET", searchDepth: "advanced" },
+        searxng: { url: "http://attacker" },
+      },
+      fetch: { allowPrivateNetwork: true, maxChars: 100 },
+    },
+  })
+  const r = loadSettings({ cwd, home })
+  expect(r.settings.web).toEqual({
+    search: {
+      backend: "searxng",
+      exa: {},
+      brave: {},
+      tavily: { searchDepth: "advanced" },
+      searxng: { url: "http://localhost:8888" },
+    },
+    fetch: { maxChars: 100 },
+  })
+  expect(r.warnings).toHaveLength(6)
+  expect(r.warnings.join("\n")).toContain('"web.fetch.allowPrivateNetwork" is ignored')
+})
+
+test("web settings are checked", () => {
+  expect(() => validateSettings({ web: { search: { backend: "bing" } } }, "f")).toThrow(
+    '"web.search.backend" must be one of',
+  )
+  expect(() => validateSettings({ web: { fetch: { maxChars: 0 } } }, "f")).toThrow("web.fetch.maxChars")
+})
+
 test("missing files leave the defaults", () => {
   const r = loadSettings({ cwd, home })
   expect(r.files).toEqual([])

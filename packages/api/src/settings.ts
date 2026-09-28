@@ -41,4 +41,43 @@ export interface Settings {
   /** Project directories whose own MCP servers may run; honoured in the user settings only. */
   mcpTrustedProjects?: string[]
   skills?: { dirs?: string[] }
+  /** The web_search and web_fetch tools. Hide them with tools.disabled. */
+  web?: WebSettings
+}
+
+export type WebSearchBackend = "exa" | "brave" | "tavily" | "searxng"
+
+/**
+ * Keys that choose where requests go or which key they carry (the backends' url and apiKeyEnv,
+ * fetch.allowPrivateNetwork) are only taken from the user file.
+ */
+export interface WebSettings {
+  search?: {
+    /** Default "exa" (Exa's hosted MCP server, no key needed). */
+    backend?: WebSearchBackend
+    /** Backends tried in order when the one before fails. Default none. */
+    fallback?: WebSearchBackend[]
+    /** Results returned when the call does not say. Default 8. */
+    maxResults?: number
+    /** Per-backend request timeout. Default 20000. */
+    timeoutMs?: number
+    /** url default https://mcp.exa.ai/mcp; apiKeyEnv (optional) raises the free rate limit. */
+    exa?: { url?: string; apiKeyEnv?: string }
+    /** apiKeyEnv default BRAVE_API_KEY. */
+    brave?: { apiKeyEnv?: string }
+    /** apiKeyEnv default TAVILY_API_KEY; searchDepth default "basic". */
+    tavily?: { apiKeyEnv?: string; searchDepth?: "basic" | "advanced" }
+    /** url of a SearXNG instance with the JSON format enabled; required for this backend. */
+    searxng?: { url?: string }
+  }
+  fetch?: {
+    /** Characters of converted text returned per call. Default 20000. */
+    maxChars?: number
+    /** Largest response body read. Default 5 MB. */
+    maxBytes?: number
+    /** Default 30000. */
+    timeoutMs?: number
+    /** Allow localhost and private-network addresses. Default false. */
+    allowPrivateNetwork?: boolean
+  }
 }
