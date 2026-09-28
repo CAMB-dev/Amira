@@ -1,7 +1,15 @@
 import { existsSync } from "node:fs"
 import { PROVIDER_PRESETS, userMessage } from "@amira/ai"
 import type { AssistantMessage, SessionControl, ShellMode } from "@amira/api"
-import { type Agent, CommandHost, findSession, listSessions, SessionStore } from "@amira/core"
+import {
+  type Agent,
+  CommandHost,
+  findSession,
+  listSessions,
+  listSubagents,
+  SessionStore,
+  subagentMessages,
+} from "@amira/core"
 import { addPreset, withPresetHint } from "./provider-command.ts"
 import type { Session } from "./session.ts"
 import { toolsToDisable } from "./session.ts"
@@ -77,6 +85,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         : a.messages
       return all.filter((m): m is AssistantMessage => m.role === "assistant")
     },
+    subagents: () => listSubagents(agent(), session.tree).map((e) => e.info),
+    subagentMessages: (id) => subagentMessages(agent(), session.tree, id),
     models: () => {
       const current = `${agent().model.provider}/${agent().model.id}`
       return [...new Set([current, ...ai.knownModels()])]

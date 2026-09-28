@@ -8,6 +8,7 @@ import {
   type ToolSession,
   textResult,
 } from "@amira/api"
+import { agentsCommand, formatTokens } from "./agents-command.ts"
 import { type Isolation, loadRoles, type Role, roleModel } from "./roles.ts"
 import {
   createWorktree,
@@ -21,6 +22,7 @@ import {
   type Worktree,
 } from "./worktree.ts"
 
+export * from "./agents-command.ts"
 export * from "./roles.ts"
 export * from "./worktree.ts"
 
@@ -91,11 +93,6 @@ function serialized<T>(work: () => Promise<T>): Promise<T> {
   const next = mergeChain.then(work, work)
   mergeChain = next.catch(() => {})
   return next
-}
-
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(n)
-  return n < 100_000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`
 }
 
 function shorten(text: string, max: number): string {
@@ -483,6 +480,7 @@ ${list.join("\n")}`
 
     api.registerTool(agentTool)
     api.registerTool(resultTool)
+    api.registerCommand(agentsCommand())
   })
 }
 
