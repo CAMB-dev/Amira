@@ -39,6 +39,24 @@ test("parses -c, -r <id> and a bare -r", () => {
   expect(parseCliArgs(["-p", "-r"], here, {})).toMatchObject({ print: true, resume: "" })
   expect(parseCliArgs(["-p", "--", "-r"], here, {}).prompt).toBe("-r")
   expect(() => parseCliArgs(["-c", "-r", "s_x"], here, {})).toThrow(UsageError)
+})
+
+test("-r grouped with boolean flags keeps its optional id", () => {
+  const here = process.cwd()
+  expect(parseCliArgs(["-pr", "s_ab12", "fix it"], here, {})).toMatchObject({
+    print: true,
+    resume: "s_ab12",
+    prompt: "fix it",
+  })
+  expect(parseCliArgs(["-pr"], here, {})).toMatchObject({ print: true, resume: "" })
+  expect(() => parseCliArgs(["-pr", "fix it"], here, {})).toThrow(/only lists sessions/)
+  expect(parseCliArgs(["-m", "p/m", "-r"], here, {})).toMatchObject({ model: "p/m", resume: "" })
+})
+
+test("print mode refuses a prompt it would ignore while listing sessions", () => {
+  const here = process.cwd()
+  expect(() => parseCliArgs(["-p", "-r", "hello there"], here, {})).toThrow(/only lists sessions/)
+  expect(parseCliArgs(["-r", "hello there"], here, {})).toMatchObject({ resume: "", prompt: "hello there" })
   expect(() => parseCliArgs(["-p", "-c"], here, {})).toThrow(/needs a prompt/)
 })
 

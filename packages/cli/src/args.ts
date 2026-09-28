@@ -73,6 +73,10 @@ export function parseCliArgs(
   const listing = args.resume === ""
   if (args.print && !args.prompt && !args.help && !args.version && !listing)
     throw new UsageError("--print needs a prompt")
+  if (args.print && listing && args.prompt)
+    throw new UsageError(
+      "with --print, --resume without a session id only lists sessions; pass an id to send a prompt",
+    )
   if (values.cwd !== undefined && !isDirectory(args.cwd)) {
     throw new UsageError(`--cwd is not a directory: ${args.cwd}`)
   }
@@ -87,14 +91,21 @@ function isDirectory(p: string): boolean {
   }
 }
 
-/** --resume takes an optional id: a bare flag becomes `--resume=` so parseArgs sees an empty value. */
+/**
+ * --resume takes an optional id: a bare flag becomes `--resume=` so parseArgs sees an empty
+ * value. A group of boolean short flags ending in r, like -pr, is split first.
+ */
 function optionalResumeValue(argv: string[]): string[] {
   const out: string[] = []
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!
+    let a = argv[i]!
     if (a === "--") {
       out.push(...argv.slice(i))
       break
+    }
+    if (FLAGS_THEN_R.test(a)) {
+      out.push(a.slice(0, -1))
+      a = "-r"
     }
     const next = argv[i + 1]
     if ((a === "-r" || a === "--resume") && (next === undefined || !SESSION_ID.test(next)))
@@ -105,6 +116,7 @@ function optionalResumeValue(argv: string[]): string[] {
 }
 
 const SESSION_ID = /^s_[\w-]+$/
+const FLAGS_THEN_R = /^-[pchv]+r$/
 
 function parse(argv: string[]) {
   return parseArgs({
