@@ -126,16 +126,31 @@ function wrapParagraph(tokens: Token[], width: number): Token[][] {
   return lines
 }
 
+/** Which open codes each close code ends, so closed styles are not re-opened on the next line. */
+const CLOSES: Record<string, (open: string) => boolean> = {
+  "22": (o) => o === "1" || o === "2",
+  "23": (o) => o === "3",
+  "24": (o) => o === "4",
+  "27": (o) => o === "7",
+  "39": (o) => /^(3[0-8]|9[0-7])(;|$)/.test(o),
+  "49": (o) => /^(4[0-8]|10[0-7])(;|$)/.test(o),
+}
+
+function applySgr(active: string[], seq: string): string[] {
+  if (isReset(seq)) return []
+  const params = seq.slice(2, -1)
+  const closes = CLOSES[params]
+  if (!closes) return [...active, seq]
+  return active.filter((a) => !closes(a.slice(2, -1)))
+}
+
 function carryStyles(lines: Token[][]): string[] {
   let active: string[] = []
   return lines.map((tokens) => {
     let out = active.join("")
     for (const t of tokens) {
       out += t.text
-      if (t.ansi && SGR.test(t.text)) {
-        if (isReset(t.text)) active = []
-        else active.push(t.text)
-      }
+      if (t.ansi && SGR.test(t.text)) active = applySgr(active, t.text)
     }
     return active.length > 0 ? out + RESET : out
   })
