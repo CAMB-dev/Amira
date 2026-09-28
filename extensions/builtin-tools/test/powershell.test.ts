@@ -1,7 +1,19 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test"
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test"
+import { existsSync } from "node:fs"
+import { mkdir, rename, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import { prepareCommand, runCommand } from "@amira/proc"
 import { createPowershellTool, powershellDescription } from "../src/bash.ts"
-import { encodeCommand, encodePowerShell, POWERSHELL_SCRIPT, powershellEdition } from "../src/powershell.ts"
-import { makeCtx, textOf } from "./util.ts"
+import {
+  encodeCommand,
+  encodePowerShell,
+  gatedPowerShell,
+  POWERSHELL_SCRIPT,
+  powershellEdition,
+  powershellStartDir,
+} from "../src/powershell.ts"
+import { StandbyPool } from "../src/standby.ts"
+import { makeCtx, tempDirs, textOf } from "./util.ts"
 
 // PowerShell starts slowly, and antivirus can stall spawns for seconds.
 setDefaultTimeout(120_000)
@@ -15,7 +27,16 @@ test("the script reads the command from the gate line before running it", () => 
   expect(POWERSHELL_SCRIPT.slice(0, gate)).not.toMatch(/Start-Process|Invoke-Expression|\.exe|&\s*\$/i)
   expect(POWERSHELL_SCRIPT).toContain("UTF8Encoding")
   expect(Buffer.from(encodePowerShell("é"), "base64").toString("utf16le")).toBe("é")
-  expect(encodeCommand("你好\nx")).not.toContain("\n")
+  expect(encodeCommand("你好\nx", "C:\\a b\nc")).not.toContain("\n")
+  // Working directory and command are base64 each, so neither can end up in script text.
+  const [dir, cmd, extra] = encodeCommand("x y", "C:\\a b").split(" ")
+  expect(extra).toBeUndefined()
+  expect(Buffer.from(dir ?? "", "base64").toString()).toBe("C:\\a b")
+  expect(Buffer.from(cmd ?? "", "base64").toString()).toBe("x y")
+  // Every PowerShell process starts outside the session directory.
+  const home = gatedPowerShell("pwsh").command("x", process.cwd()).cwd
+  expect(home).toBe(powershellStartDir())
+  expect(home).not.toBe(process.cwd())
 })
 
 test("the description names the edition and its syntax", () => {
@@ -125,6 +146,126 @@ for (const path of editions) {
       const started = performance.now()
       expect(textOf(await p)).toContain("aborted")
       expect(performance.now() - started).toBeLessThan(30_000)
+    })
+
+    describe("working directory", () => {
+      const temp = tempDirs()
+      afterAll(() => temp.cleanup())
+      const shell = gatedPowerShell(path)
+      const lf = (s: string) => s.replaceAll("\r\n", "\n")
+      const runIn = (dir: string, command: string) => tool.execute({ command }, makeCtx(dir))
+      /** Runs through a pool that counts cold runs and records where standbys start. */
+      const countingPool = () => {
+        const counts = { cold: 0, prepared: [] as string[] }
+        const pool = new StandbyPool({
+          prepare: (argv, opts) => {
+            counts.prepared.push(opts.cwd)
+            return prepareCommand(argv, opts)
+          },
+          run: (argv, opts) => {
+            counts.cold++
+            return runCommand(argv, opts)
+          },
+        })
+        const run = (dir: string, command: string) =>
+          pool.run(shell.command(command, dir), { timeoutMs: 60_000, signal: new AbortController().signal })
+        return { pool, counts, run }
+      }
+      const special = async () => {
+        const dir = join(await temp.make(), "we [x] 'q' $y `b é你 ;&(%) ~")
+        await mkdir(dir)
+        await writeFile(join(dir, "rel.txt"), "hi")
+        return dir
+      }
+
+      test("cmdlets, .NET methods and native programs all see it, whatever its characters", async () => {
+        const dir = await special()
+        const r = await runIn(
+          dir,
+          [
+            "(Get-Location).ProviderPath",
+            "[Environment]::CurrentDirectory",
+            "[IO.File]::Exists('rel.txt')",
+            "Get-Content rel.txt",
+            'cmd /c "echo native> native.txt"',
+          ].join("\n"),
+        )
+        expect(lf(textOf(r))).toBe(`${dir}\n${dir}\nTrue\nhi\n\nExit code: 0`)
+        expect(existsSync(join(dir, "native.txt"))).toBe(true)
+      })
+
+      test("a working directory that is gone fails before the command runs", async () => {
+        const parent = await temp.make()
+        const dir = join(parent, "gone [x] 'q' $y é")
+        const marker = join(parent, "ran.txt")
+        const { argv, ...spawn } = shell.command(`New-Item -ItemType File -Path '${marker}'`, dir)
+        const run = await runCommand(argv, {
+          ...spawn,
+          timeoutMs: 60_000,
+          signal: new AbortController().signal,
+        })
+        expect(run.output.trim()).toBe(`Working directory does not exist: ${dir}`)
+        expect(run.exitCode).toBe(1)
+        expect(existsSync(marker)).toBe(false)
+      })
+
+      const unc = "\\\\localhost\\C$\\Windows"
+      test.if(existsSync(unc))("a UNC working directory is entered as is", async () => {
+        const r = await runIn(
+          unc,
+          "(Get-Location).ProviderPath; [Environment]::CurrentDirectory; [IO.Directory]::Exists('System32')",
+        )
+        expect(lf(textOf(r))).toBe(`${unc}\n${unc}\nTrue\n\nExit code: 0`)
+      })
+
+      test("a working directory longer than MAX_PATH still runs cmdlets there", async () => {
+        let dir = await temp.make()
+        while (dir.length < 300) dir = join(dir, "d".repeat(40))
+        await mkdir(dir, { recursive: true })
+        await writeFile(join(dir, "rel.txt"), "long")
+        const text = lf(textOf(await runIn(dir, "(Get-Location).ProviderPath; Get-Content rel.txt")))
+        // Where the process cannot take the directory, .NET and native programs cannot use it: said so.
+        expect(text.replace(/^Warning: .*\n/, "")).toBe(`${dir}\nlong\n\nExit code: 0`)
+      })
+
+      test("one standby serves every working directory, and it starts outside them", async () => {
+        const { pool, counts, run } = countingPool()
+        try {
+          const a = await special()
+          const b = await temp.make()
+          pool.fill(shell.command("", a))
+          expect((await run(a, "(Get-Location).ProviderPath")).output.trim()).toBe(a)
+          expect((await run(b, "(Get-Location).ProviderPath")).output.trim()).toBe(b)
+          expect(counts.cold).toBe(0)
+          expect(counts.prepared).toEqual([powershellStartDir(), powershellStartDir(), powershellStartDir()])
+        } finally {
+          pool.dispose()
+        }
+      })
+
+      test("an idle standby does not hold the session directory", async () => {
+        const { pool, counts, run } = countingPool()
+        try {
+          const parent = await temp.make()
+          const project = join(parent, "project")
+          await mkdir(project)
+          pool.fill(shell.command("", project))
+          // Starts the standby's replacement and waits until it is surely running.
+          await run(project, "$null")
+          await Bun.sleep(2000)
+          await rename(project, join(parent, "renamed"))
+          const renamedAt = Date.now()
+          const r = await run(
+            join(parent, "renamed"),
+            "[DateTimeOffset]::new((Get-Process -Id $PID).StartTime).ToUnixTimeMilliseconds()",
+          )
+          expect(counts.cold).toBe(0)
+          // The process that ran it was already started while the directory was renamed.
+          expect(Number(r.output.trim())).toBeLessThan(renamedAt)
+        } finally {
+          pool.dispose()
+        }
+      })
     })
   })
 }

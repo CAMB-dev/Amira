@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs"
+import { homedir } from "node:os"
 import { win32 } from "node:path"
 import type { Shell } from "./shell.ts"
 import { StandbyPool } from "./standby.ts"
@@ -13,15 +15,33 @@ export function powershellEdition(path: string): string {
   return name === "pwsh.exe" || name === "pwsh" ? "PowerShell 7 (pwsh)" : "Windows PowerShell 5.1"
 }
 
+let startDir: string | undefined
+
 /**
- * The fixed script run for every PowerShell command. The command arrives as the gate line
- * (base64 UTF-8, sent once the process is in its Job Object), so it is not size-limited like
- * -EncodedCommand, and it is compiled here, after UTF-8 is set, so syntax errors are readable.
+ * Where every PowerShell process starts: the user's home, which always exists and, as the
+ * signed-in user's profile, cannot be renamed or deleted anyway. The process enters the
+ * command's working directory only after the gate, so an idle standby never holds the session
+ * directory open (Windows refuses to rename or delete a directory some process is in), and one
+ * standby serves every working directory. Falls back to the Windows directory if home is gone.
+ */
+export function powershellStartDir(): string {
+  startDir ??=
+    [homedir(), process.env.SystemRoot, "C:\\Windows"].find((d) => !!d && existsSync(d)) ?? homedir()
+  return startDir
+}
+
+/**
+ * The fixed script run for every PowerShell command. The command and its working directory
+ * arrive as the gate line (base64 UTF-8 each, sent once the process is in its Job Object), so
+ * the command is not size-limited like -EncodedCommand, neither is ever spliced into script
+ * text, and the command is compiled here, after UTF-8 is set, so syntax errors are readable.
  * Everything before the gate only prepares this process (a standby does it while it waits):
  * it starts nothing and dry-runs the output pipeline so its first real use is already compiled.
- * Every stream is rendered as text on stdout: redirected error, progress and information
- * records would otherwise come out as CLIXML. Exits with $LASTEXITCODE, or 1 when the final
- * statement failed.
+ * After the gate it enters the working directory, for cmdlets (Set-Location) and for .NET
+ * methods and native programs (the process directory); a directory it cannot enter fails the
+ * command with exit code 1 before anything runs. Every stream is rendered as text on stdout:
+ * redirected error, progress and information records would otherwise come out as CLIXML.
+ * Exits with $LASTEXITCODE, or 1 when the final statement failed.
  */
 export const POWERSHELL_SCRIPT = [
   "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
@@ -42,11 +62,27 @@ export const POWERSHELL_SCRIPT = [
   ". { $null } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim",
   "$__amira = [Console]::In.ReadLine()",
   "if ($null -eq $__amira) { exit 125 }",
+  // The gate line is `<base64 directory> <base64 command>`.
+  "$__amira_at = $__amira.IndexOf(' ')",
+  "$__amira_dir = $null",
   "try {",
-  '  $__amira = [scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__amira)) + "`n`$__amira_ok = `$?")',
+  "  $__amira_dir = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__amira.Substring(0, $__amira_at)))",
+  '  $__amira = [scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__amira.Substring($__amira_at + 1))) + "`n`$__amira_ok = `$?")',
   "} catch {",
   "  $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
   "  [Console]::Out.WriteLine($e.Message); exit 1",
+  "}",
+  "try { Set-Location -LiteralPath $__amira_dir -ErrorAction Stop } catch {",
+  "  if (Test-Path -LiteralPath $__amira_dir -PathType Container) {",
+  '    [Console]::Out.WriteLine("Cannot enter the working directory $($__amira_dir): $($_.Exception.Message)")',
+  '  } else { [Console]::Out.WriteLine("Working directory does not exist: $__amira_dir") }',
+  "  exit 1",
+  "}",
+  // Relative paths in .NET methods and native programs' working directory follow this one.
+  // pwsh 7 refuses a directory past MAX_PATH even with long paths enabled; cmdlets still work.
+  "try { [Environment]::CurrentDirectory = (Get-Location).ProviderPath } catch {",
+  "  $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
+  '  [Console]::Out.WriteLine("Warning: cmdlets run in $($__amira_dir), but .NET methods and native programs cannot (they resolve relative paths against $([Environment]::CurrentDirectory)): $($e.Message)")',
   "}",
   "$__amira_ok = $null",
   "$__amira_threw = $false",
@@ -68,9 +104,10 @@ export function encodePowerShell(script: string): string {
   return Buffer.from(script, "utf16le").toString("base64")
 }
 
-/** The gate line that carries a command to POWERSHELL_SCRIPT. */
-export function encodeCommand(command: string): string {
-  return Buffer.from(command, "utf8").toString("base64")
+/** The gate line that carries a command and its working directory to POWERSHELL_SCRIPT. */
+export function encodeCommand(command: string, cwd: string): string {
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64")
+  return `${b64(cwd)} ${b64(command)}`
 }
 
 /** Gated PowerShell: the command is not run, or even read, until the job holds the process. */
@@ -90,9 +127,9 @@ export function gatedPowerShell(path = findPowerShell(), label?: string): Shell 
     command: (command, cwd) => ({
       argv,
       env: { ...process.env },
-      cwd,
+      cwd: powershellStartDir(),
       gated: true,
-      gateLine: encodeCommand(command),
+      gateLine: encodeCommand(command, cwd),
     }),
   }
 }

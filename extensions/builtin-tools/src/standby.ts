@@ -16,7 +16,9 @@ export interface StandbyPoolDeps {
  * Keeps one gated shell process started and waiting, so a command skips the process start
  * (hundreds of ms for PowerShell, more under antivirus). A standby only serves a command with
  * the same argv, start directory and environment; every command still gets a fresh process.
- * Calls that find no matching standby run cold, as do parallel calls beyond the one standby.
+ * PowerShell starts in a fixed directory and gets the working directory with the command, so
+ * one standby serves every working directory. Calls that find no matching standby run cold,
+ * as do parallel calls beyond the one standby.
  */
 export class StandbyPool {
   #slot: { key: string; standby: Standby } | undefined
@@ -76,7 +78,10 @@ export class StandbyPool {
   }
 }
 
-/** Everything the process is started with; the gate line is sent later, so it is not part of it. */
+/**
+ * Everything the process is started with; the gate line (for PowerShell, the command and its
+ * working directory) is sent later, so it is not part of it.
+ */
 function standbyKey(command: ShellCommand): string {
   const env = Object.entries(command.env)
     .filter((e): e is [string, string] => typeof e[1] === "string")
