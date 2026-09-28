@@ -36,8 +36,13 @@ export function usageText(info: SubagentInfo): string {
 
 /** One line about a sub-agent: role, id, state, time and usage, then the task. */
 export function subagentSummary(info: SubagentInfo, now: number, taskChars = 60): string {
-  const state = info.status === "queued" ? "queued" : `${info.status} · ${elapsed(info, now)}`
-  return `${info.role} · ${info.id} · ${state} · ${usageText(info)} · ${oneLine(info.task, taskChars)}`
+  return `${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)} · ${oneLine(info.task, taskChars)}`
+}
+
+/** Its status and how long it ran; just the status when that is not known (it never started). */
+function stateText(info: SubagentInfo, now: number): string {
+  const known = info.durationMs !== undefined || info.startedAt !== undefined
+  return info.status === "queued" || !known ? info.status : `${info.status} · ${elapsed(info, now)}`
 }
 
 function blockText(content: Message["content"]): string {
@@ -72,8 +77,7 @@ export function transcriptText(
   all: SubagentInfo[],
   now = Date.now(),
 ): string {
-  const state = info.status === "queued" ? "queued" : `${info.status} · ${elapsed(info, now)}`
-  const out = [`◆ ${info.role} · ${info.id} · ${state} · ${usageText(info)}`]
+  const out = [`◆ ${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)}`]
   // A forked child starts with its parent's history; its own part starts at its task.
   const from = Math.max(
     0,
@@ -176,10 +180,20 @@ export function agentsCommand(): CommandDefinition {
       complete(prefix, ctx) {
         const list = ctx.session.subagents()
         const now = Date.now()
-        if (/^view\s/.test(prefix)) {
-          return list.map((s, i) => ({ value: `view ${s.id}`, description: label(s, i, now) }))
+        // A number is offered as itself, so what was typed stays what runs.
+        const ref = (s: SubagentInfo, i: number, typed: string) =>
+          /^\d+$/.test(typed) ? String(i + 1) : s.id
+        const view = /^view\s+(.*)$/.exec(prefix)
+        if (view) {
+          // Nothing after it yet: Enter opens the default one, not the first candidate.
+          if (!view[1]) return []
+          return list.map((s, i) => ({ value: `view ${ref(s, i, view[1]!)}`, description: label(s, i, now) }))
         }
-        const out: CommandCandidate[] = list.map((s, i) => ({ value: s.id, description: label(s, i, now) }))
+        const out: CommandCandidate[] = list.map((s, i) => ({
+          value: ref(s, i, prefix),
+          description: label(s, i, now),
+        }))
+        if (/^\d+$/.test(prefix)) return out
         if (list.length) out.push({ value: "view", description: "Open the live view" })
         return out
       },
@@ -204,7 +218,8 @@ export function agentsCommand(): CommandDefinition {
         return
       }
       const now = Date.now()
-      const options = [...(ctx.openView ? [LIVE_VIEW] : []), ...list.map((s, i) => label(s, i, now))]
+      // The live view comes last, so a digit picks the sub-agent of that number.
+      const options = [...list.map((s, i) => label(s, i, now)), ...(ctx.openView ? [LIVE_VIEW] : [])]
       const pick = await ctx.ui.select("Sub-agents", options, { signal: ctx.signal })
       if (pick === undefined) return
       if (pick === LIVE_VIEW) return openView(ctx, defaultView(list)!)

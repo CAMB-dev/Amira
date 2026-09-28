@@ -14,7 +14,7 @@ import {
   listSubagents,
   ToolRegistry,
 } from "@amira/core"
-import { createAgentExtension, findSubagent, transcriptText } from "../src/index.ts"
+import { createAgentExtension, findSubagent, subagentSummary, transcriptText } from "../src/index.ts"
 
 const dirs: string[] = []
 const savedHome = process.env.AMIRA_HOME
@@ -123,12 +123,13 @@ test("/agents lists the sub-agents and prints a finished one's transcript compac
   const request = host.ui.pending[0]!
   expect(request.kind).toBe("select")
   const options = request.kind === "select" ? request.options : []
-  expect(options[0]).toBe("Open the live view")
-  expect(options[1]).toMatch(
+  // Numbered like /agents <n>, and in that position, so a digit in the dialog picks the same one.
+  expect(options[0]).toMatch(
     /^1\. coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021 · fix the bug in a\.ts$/,
   )
-  expect(options[2]).toMatch(/^2\. {3}explorer · s_\w+ · done · /)
-  host.ui.respond(request.requestId, options[1]!)
+  expect(options[1]).toMatch(/^2\. {3}explorer · s_\w+ · done · /)
+  expect(options[2]).toBe("Open the live view")
+  host.ui.respond(request.requestId, options[0]!)
   const { text, ok } = await picking
   expect(ok).toBe(true)
   const lines = text.split("\n")
@@ -229,18 +230,22 @@ test("/agents view opens the live view where the frontend has one", async () => 
   expect(rpc.error).toContain("interactive")
 })
 
-test("the argument completes to ids, and to view <id> after view", async () => {
+test("the argument completes to ids, numbers as themselves, and to view <ref> after view", async () => {
   const { root, commands, control } = await setup(nested)
   await root.prompt("go")
-  const [coder] = control.subagents()
+  const [coder, explorer] = control.subagents()
   const all = await commands.complete("/agents ")
-  expect(all.candidates.map((c) => c.value)).toEqual([coder!.id, expect.any(String), "view"])
+  expect(all.candidates.map((c) => c.value)).toEqual([coder!.id, explorer!.id, "view"])
   expect(all.candidates[0]!.description).toMatch(/^1\. coder · /)
-  const view = await commands.complete("/agents view ")
-  expect(view.candidates.map((c) => c.value)).toEqual([
+  // A typed number stays a number (the popup keeps an exact match), rather than an id with that digit.
+  expect((await commands.complete("/agents 2")).candidates.map((c) => c.value)).toEqual(["2"])
+  // Nothing after view yet: no candidates, so Enter runs /agents view on the default one.
+  expect((await commands.complete("/agents view ")).candidates).toEqual([])
+  expect((await commands.complete("/agents view s_")).candidates.map((c) => c.value)).toEqual([
     `view ${coder!.id}`,
-    expect.stringMatching(/^view s_/),
+    `view ${explorer!.id}`,
   ])
+  expect((await commands.complete("/agents view 1")).candidates.map((c) => c.value)).toEqual(["view 1"])
 })
 
 test("findSubagent takes a number, an id or a unique start of one", () => {
@@ -259,4 +264,6 @@ test("findSubagent takes a number, an id or a unique start of one", () => {
   expect(findSubagent(list, "s_a")).toBeUndefined()
   expect(findSubagent(list, "s_ab")?.id).toBe("s_ab22")
   expect(transcriptText({ ...list[0]!, status: "error", error: "boom" }, [], list)).toContain("✗ boom")
+  // One that never started has no time to show.
+  expect(subagentSummary({ ...list[0]!, status: "aborted" }, 0)).toBe("agent · s_aa11 · aborted · 0 tok · ")
 })
