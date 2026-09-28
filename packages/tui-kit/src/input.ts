@@ -1,4 +1,4 @@
-import { type InputEvent, type KeyEvent, key, type PasteEvent, textKey } from "./keys.ts"
+import { type InputEvent, type KeyEvent, type KeyName, key, type PasteEvent, textKey } from "./keys.ts"
 
 const ESC = "\x1b"
 const PASTE_END = "\x1b[201~"
@@ -12,7 +12,7 @@ interface Parsed {
   pasteStart?: boolean
 }
 
-const LETTER_FINALS: Record<string, string> = {
+const LETTER_FINALS: Record<string, KeyName> = {
   A: "up",
   B: "down",
   C: "right",
@@ -25,7 +25,7 @@ const LETTER_FINALS: Record<string, string> = {
   S: "f4",
 }
 
-const TILDE_CODES: Record<number, string> = {
+const TILDE_CODES: Record<number, KeyName> = {
   1: "home",
   2: "insert",
   3: "delete",
@@ -48,7 +48,7 @@ const TILDE_CODES: Record<number, string> = {
   24: "f12",
 }
 
-const KITTY_CODES: Record<number, string> = {
+const KITTY_CODES: Record<number, KeyName> = {
   9: "tab",
   13: "enter",
   27: "escape",
@@ -85,7 +85,7 @@ const KITTY_CODES: Record<number, string> = {
   57439: "volume_up",
   57440: "volume_mute",
 }
-for (let i = 0; i < 23; i++) KITTY_CODES[57376 + i] = `f${i + 13}`
+for (let i = 0; i < 23; i++) KITTY_CODES[57376 + i] = `f${i + 13}` as KeyName
 
 /** Keypad keys that type a character. */
 const KITTY_KEYPAD_TEXT: Record<number, string> = {
@@ -104,7 +104,7 @@ function isPrivateUse(code: number): boolean {
   return code >= 0xe000 && code <= 0xf8ff
 }
 
-const VK_NAMES: Record<number, string> = {
+const VK_NAMES: Record<number, KeyName> = {
   8: "backspace",
   9: "tab",
   13: "enter",
@@ -121,7 +121,7 @@ const VK_NAMES: Record<number, string> = {
   45: "insert",
   46: "delete",
 }
-for (let i = 0; i < 12; i++) VK_NAMES[112 + i] = `f${i + 1}`
+for (let i = 0; i < 12; i++) VK_NAMES[112 + i] = `f${i + 1}` as KeyName
 
 /** Shift, Ctrl, Alt, CapsLock, Windows keys, NumLock, ScrollLock: never emitted on their own. */
 const VK_MODIFIERS = new Set([16, 17, 18, 20, 91, 92, 93, 144, 145])
