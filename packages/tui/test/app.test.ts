@@ -202,7 +202,7 @@ test("a conversation: user message, tool call and reply end up in the transcript
 
 test("without providers the UI starts, says how to add one, and a message explains it again", async () => {
   const notice = "No providers configured — add one with /provider add, then pick a model with /model."
-  const { terminal, all, live, shows, idle, exited, mock } = await setup([], { noModel: "none", notice })
+  const { terminal, all, live, shows, idle, exited, mock } = await setup([], { noModel: "none", notice, cols: 100 })
   await shows(notice)
   expect(all()).toContain("Amira · (no model) · /work/proj")
   await waitFor(() => live().includes("(no model)  "), "the status bar's (no model)")
