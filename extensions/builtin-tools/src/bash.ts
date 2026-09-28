@@ -1,5 +1,6 @@
 import { defineTool, textResult } from "@amira/api"
 import type { Subprocess } from "bun"
+import { statOrNull } from "./files.ts"
 import { type ProcessTree, trackProcessTree } from "./process-tree.ts"
 import { resolveShell } from "./shell.ts"
 import { truncateOutput } from "./truncate.ts"
@@ -20,11 +21,12 @@ export const bashTool = defineTool<BashParams>({
   name: "bash",
   description: [
     "Run a shell command and return its combined stdout and stderr plus the exit code.",
-    "- Runs in bash (Git Bash on Windows, so use POSIX syntax and forward slashes; PowerShell only if Git Bash is not installed).",
+    "- Runs in bash (Git Bash on Windows, so use POSIX syntax and forward slashes). If Git Bash is not installed, Windows falls back to PowerShell: every result then starts with a `Shell: PowerShell` line and you must use PowerShell syntax.",
     "- Starts in the working directory. Each call is a fresh shell: `cd`, variables and functions do not persist between calls. Prefer absolute paths or `cd dir && cmd`.",
     `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed.`,
     "- Background processes (`cmd &`) are killed when the command finishes; do not use this tool to start long-running servers.",
     "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
+    "- Output is decoded as UTF-8. Windows programs that print in a legacy console code page may show garbled non-ASCII text.",
     "- Very long output is cut in the middle; the full output is saved to a file you can read.",
     "- Prefer the read, write, edit, grep and glob tools over cat, sed, echo >, grep and find.",
   ].join("\n"),
@@ -46,6 +48,9 @@ export const bashTool = defineTool<BashParams>({
   async execute({ command, timeout }, ctx) {
     if (typeof command !== "string" || command.trim() === "") return textResult("command is required", true)
     if (ctx.signal.aborted) return textResult("Aborted before the command started", true)
+    if (!(await statOrNull(ctx.cwd))?.isDirectory()) {
+      return textResult(`Working directory does not exist: ${ctx.cwd}`, true)
+    }
     const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1, Math.floor(timeout ?? DEFAULT_TIMEOUT_MS)))
     const shell = await resolveShell()
 
@@ -71,6 +76,7 @@ export const bashTool = defineTool<BashParams>({
 
     const out = await truncateOutput(run.output.trimEnd(), "bash")
     const parts = [out.text || "(no output)"]
+    if (shell.label) parts.unshift(`Shell: ${shell.label}`)
     parts.push(statusLine(run, timeoutMs))
     if (!run.contained) {
       parts.push(
@@ -88,6 +94,7 @@ export const bashTool = defineTool<BashParams>({
         aborted: run.aborted,
         settled: run.settled,
         shell: shell.path,
+        shellKind: shell.kind,
         fullOutputPath: out.fullOutputPath,
       },
     }
@@ -97,6 +104,8 @@ export const bashTool = defineTool<BashParams>({
 function statusLine(run: RunResult, timeoutMs: number): string {
   if (run.timedOut) return `Command timed out after ${timeoutMs} ms and was killed.`
   if (run.aborted) return "Command was aborted."
+  if (run.exitCode === null)
+    return `Command was killed by signal${run.signalCode ? ` ${run.signalCode}` : ""}.`
   return `Exit code: ${run.exitCode}`
 }
 
@@ -115,6 +124,7 @@ export interface RunOptions {
 export interface RunResult {
   output: string
   exitCode: number | null
+  signalCode: string | null
   /** Set only when the timeout fired before the process exited. */
   timedOut: boolean
   aborted: boolean
@@ -188,6 +198,7 @@ export async function runCommand(argv: string[], opts: RunOptions): Promise<RunR
     return {
       output,
       exitCode,
+      signalCode: proc.signalCode,
       timedOut: cause === "timeout",
       aborted: cause === "abort",
       settled,

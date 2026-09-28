@@ -88,6 +88,18 @@ test.if(hasBash)(
   30_000,
 )
 
+test("a missing working directory is reported clearly", async () => {
+  const r = await bashTool.execute({ command: "echo x" }, makeCtx(join(dir, "does-not-exist")))
+  expect(r.isError).toBe(true)
+  expect(textOf(r)).toStartWith("Working directory does not exist:")
+})
+
+test.if(hasBash && !isWindows)("a command killed by a signal says so", async () => {
+  expect(textOf(await bashTool.execute({ command: "kill -9 $$" }, makeCtx(dir)))).toContain(
+    "killed by signal",
+  )
+})
+
 test("errors when already aborted or when command is missing", async () => {
   const ac = new AbortController()
   ac.abort()
