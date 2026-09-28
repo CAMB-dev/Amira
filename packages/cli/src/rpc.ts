@@ -137,17 +137,18 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     prompt: (p) => {
       const content: UserContent[] = [{ type: "text", text: text(p) }, ...attachments(p.attachments)]
       if (agent.turnId) throw new RpcError("busy", "a turn is running; steer it or wait for turn.end")
+      if (agent.busy) throw new RpcError("busy", "a compaction is running; steer to queue the message")
       const turnId = newTurnId()
       agent.prompt({ role: "user", content }, { turnId }).catch(() => {})
       return { turnId }
     },
     steer: (p) => {
-      const queued = agent.turnId !== undefined
+      const queued = agent.busy
       agent.steer(text(p))
       return { ...(agent.turnId ? { turnId: agent.turnId } : {}), queued }
     },
     abort: () => {
-      const aborted = agent.turnId !== undefined
+      const aborted = agent.busy
       agent.abort()
       return { aborted }
     },
@@ -178,7 +179,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     "model.set": (p) => {
       const ref = text(p, "model")
       // The running turn's history may carry state only its model understands.
-      if (agent.turnId) throw new RpcError("busy", "a turn is running; set the model after turn.end")
+      if (agent.busy)
+        throw new RpcError("busy", "a turn or compaction is running; set the model after it ends")
       try {
         agent.setModel(ai.model(ref))
       } catch (err) {
@@ -200,7 +202,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     },
     "session.resume": async (p) => {
       const sessionId = text(p, "sessionId")
-      if (agent.turnId) throw new RpcError("busy", "a turn is running")
+      if (agent.busy) throw new RpcError("busy", "a turn or compaction is running")
       if (commands) {
         if (sessionId === agent.sessionId) return { sessionId }
         try {
@@ -293,7 +295,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     closed = true
     ui.cancelAll()
     await Promise.all(runningCommands)
-    while (agent.turnId) await Bun.sleep(10)
+    while (agent.busy) await Bun.sleep(10)
     await Promise.race([agent.bus.flush(), Bun.sleep(opts.flushTimeoutMs ?? 2000)])
     await io.flush?.()
     return 0

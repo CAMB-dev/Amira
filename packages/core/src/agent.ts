@@ -123,6 +123,17 @@ interface CallRun {
   result?: ToolResultMessage
 }
 
+/** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
+interface AfterCompaction {
+  /** In the order they were sent; `steered` ones came through steer(). */
+  messages: { message: UserMessage; steered: boolean }[]
+  /** The id a prompt() call asked for. */
+  turnId?: string
+  /** A prompt() call is waiting; a second one is refused as busy. */
+  prompted: boolean
+  waiters: { resolve: (r: TurnResult) => void; reject: (err: unknown) => void }[]
+}
+
 type ModelReply =
   | { kind: "ok"; message: AssistantMessage }
   | { kind: "error"; error: string }
@@ -170,6 +181,10 @@ export class Agent {
   #turn: Turn | undefined
   /** Steering messages waiting for the next model call of the running turn. */
   #steering: UserMessage[] = []
+  /** A manual compaction is running (busy, but no turn). */
+  #compacting = false
+  /** Messages sent during a manual compaction; they start one turn when it ends. */
+  #afterCompaction: AfterCompaction | undefined
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -270,17 +285,54 @@ export class Agent {
   /**
    * Summarizes older history now, keeping recent turns verbatim; `instructions` steer the
    * summary. Resolves false when there was nothing to compact or compaction failed (see
-   * compact.failed).
+   * compact.failed). Messages sent meanwhile (prompt or steer) start a turn once it ends,
+   * even when it failed or was aborted.
    */
   async compact(instructions?: string): Promise<boolean> {
     if (this.#abort) throw new AgentBusyError("a turn is already running")
     const abort = new AbortController()
     this.#abort = abort
+    this.#compacting = true
     try {
       return await this.#compact("manual", abort.signal, undefined, instructions)
     } finally {
       this.#abort = undefined
+      this.#compacting = false
+      this.#startAfterCompaction()
     }
+  }
+
+  /** Holds a message sent during a manual compaction for the turn that follows it. */
+  #holdForCompaction(message: UserMessage, steered: boolean, turnId?: string): AfterCompaction {
+    this.#afterCompaction ??= { messages: [], prompted: false, waiters: [] }
+    const next = this.#afterCompaction
+    next.messages.push({ message, steered })
+    if (turnId !== undefined) next.turnId = turnId
+    return next
+  }
+
+  /** Starts the turn held during a manual compaction, if anything was sent meanwhile. */
+  #startAfterCompaction() {
+    const next = this.#afterCompaction
+    this.#afterCompaction = undefined
+    if (!next) return
+    const turnId = next.turnId ?? newTurnId()
+    for (const { message, steered } of next.messages) {
+      if (steered) this.#emit(undefined, "turn.steer", { message, state: "promoted", nextTurnId: turnId })
+    }
+    const [only, ...more] = next.messages
+    const prompt: UserMessage =
+      only && !more.length
+        ? only.message
+        : { role: "user", content: next.messages.flatMap((m) => m.message.content) }
+    this.prompt(prompt, { turnId }).then(
+      (r) => {
+        for (const w of next.waiters) w.resolve(r)
+      },
+      (err) => {
+        for (const w of next.waiters) w.reject(err)
+      },
+    )
   }
 
   /** Tokens the context held at the last reply; unknown before one and right after a compaction. */
@@ -346,10 +398,17 @@ export class Agent {
    * Adds a message to the running turn without interrupting it (D29): it joins the history
    * before the next model call, and a running tool finishes first. Queued messages the turn
    * never reached become the next prompt; with no turn running, the message starts one.
+   * During a manual compaction it is queued (a turn.steer without a turn id) and promoted to
+   * the turn that starts when the compaction ends.
    */
   steer(input: string | UserMessage): void {
     const message = typeof input === "string" ? userMessage(input) : input
     const turn = this.#turn
+    if (!turn && this.#compacting) {
+      this.#holdForCompaction(message, true)
+      this.#emit(undefined, "turn.steer", { message, state: "queued" })
+      return
+    }
     if (!turn) {
       this.prompt(message).catch(() => {})
       return
@@ -360,9 +419,20 @@ export class Agent {
 
   /**
    * Runs one turn. Everything up to the turn.start event happens synchronously, so once this
-   * returns the turn is running and `turnId` is set.
+   * returns the turn is running and `turnId` is set. During a manual compaction the turn
+   * starts when the compaction ends, together with anything steered meanwhile.
    */
-  async prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
+  prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
+    if (this.#compacting && !this.#afterCompaction?.prompted) {
+      const user = typeof input === "string" ? userMessage(input) : input
+      const next = this.#holdForCompaction(user, false, opts.turnId)
+      next.prompted = true
+      return new Promise((resolve, reject) => next.waiters.push({ resolve, reject }))
+    }
+    return this.#runTurn(input, opts)
+  }
+
+  async #runTurn(input: string | UserMessage, opts: PromptOptions): Promise<TurnResult> {
     if (this.#abort) throw new AgentBusyError("a turn is already running")
     const abort = new AbortController()
     this.#abort = abort
