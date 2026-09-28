@@ -2,7 +2,6 @@ import { expect, test } from "bun:test"
 import { createAi } from "../src/client.ts"
 import { collect } from "../src/dialect.ts"
 import { MISSING_RESULT, toChatMessages } from "../src/dialects/openai-chat-messages.ts"
-import { DEFAULT_CAPS } from "../src/providers.ts"
 import type { AssistantContent, AssistantMessage, Message, ToolResultMessage } from "../src/types.ts"
 import { fakeFetch, type Seen, sseResponse } from "./helpers.ts"
 
@@ -164,7 +163,7 @@ test("the dialect sends tool-result images when the model supports images", asyn
         id: "test",
         dialect: "openai-chat",
         baseUrl: "http://test",
-        models: [{ id: "vision", caps: { ...DEFAULT_CAPS, images: true } }],
+        models: [{ id: "vision", caps: { images: true } }],
       },
     ],
   })

@@ -1,6 +1,9 @@
 import type { ProviderCompat } from "./dialect.ts"
 import type { ModelCaps, ModelInfo } from "./types.ts"
 
+/** Model settings a provider overrides; caps are merged key by key over the defaults. */
+export type ModelOverrides = Partial<Omit<ModelInfo, "caps">> & { caps?: Partial<ModelCaps> }
+
 /** A provider is configuration: where to connect and which dialect it speaks. */
 export interface ProviderConfig {
   id: string
@@ -12,8 +15,8 @@ export interface ProviderConfig {
   headers?: Record<string, string>
   compat?: ProviderCompat
   /** Known models. Unlisted models get defaultModel values. */
-  models?: Partial<ModelInfo>[]
-  defaultModel?: Partial<Omit<ModelInfo, "caps">> & { caps?: Partial<ModelCaps> }
+  models?: ModelOverrides[]
+  defaultModel?: ModelOverrides
 }
 
 export const DEFAULT_CAPS: ModelCaps = {
