@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
-import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { Agent, AgentTree, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import statusExtension from "@amira/ext-status"
 import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
-import { summarizeArgs, toolLines } from "../src/format.ts"
+import { subagentLines, summarizeArgs, toolLines } from "../src/format.ts"
 
 const noProbe = async () => ({
   capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -32,6 +32,8 @@ interface SetupOptions {
   initialPrompt?: string
   leftoverInput?: string
   startupEvents?: AnyEvent[]
+  /** Give the agent a tree, so tools can start sub-agents. */
+  tree?: boolean
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -43,7 +45,16 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     dialects: [createMockDialect(steps)],
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
   })
-  const agent = new Agent({ ai, model: ai.model("mock/m1"), cwd: "/work/proj", systemPrompt: "", bus, tools })
+  const tree = o.tree ? { tree: new AgentTree({ ai, sections: () => [] }) } : {}
+  const agent = new Agent({
+    ai,
+    model: ai.model("mock/m1"),
+    cwd: "/work/proj",
+    systemPrompt: "",
+    bus,
+    tools,
+    ...tree,
+  })
   tools.register(
     defineTool<{ path: string }>({
       name: "read",
@@ -415,6 +426,91 @@ test("extension dialogs are answered inline: confirm, select and input", async (
   expect(all()).toContain("? Pick one › green")
   expect(all()).toContain("? Skip me › cancelled")
   expect(host.ui.pending).toEqual([])
+  terminal.send("\x03")
+  await exited
+})
+
+test("running sub-agents show with role, elapsed time, tokens and task, and go away when done", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup(
+    [
+      { toolCalls: [{ name: "delegate", args: {} }] },
+      { text: "child says hi", delayMs: 150, usage: { input: 1500, output: 20 } },
+      { text: "all done" },
+    ],
+    { cols: 80, tree: true },
+  )
+  agent.tools.register(
+    defineTool({
+      name: "delegate",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        const r = await ctx.session!.spawn!({ role: "explorer", prompt: "find the   config file" }).result()
+        return textResult(r.text)
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => live().includes("◆ explorer · 0s · 0 tok · find the config file"), "sub-agent line")
+  await shows("all done")
+  await idle()
+  expect(live()).not.toContain("◆ explorer")
+  // The child's reply only shows as its commander's tool result, not as a reply of its own.
+  expect(all()).toContain("⎿ child says hi")
+  expect(all()).not.toMatch(/^child says hi$/m)
+  terminal.send("\x03")
+  await exited
+})
+
+test("sub-agent lines: queued ones say so, deeper ones are indented, long tasks are cut", () => {
+  const theme = { accent: (s: string) => s, muted: (s: string) => s } as never
+  const lines = subagentLines(
+    [
+      { role: "coder", task: "a\nb", depth: 1, startedAt: 1000, tokens: 12_345 },
+      { role: "explorer", task: "x".repeat(100), depth: 2, tokens: 0 },
+    ],
+    6500,
+    40,
+    theme,
+  )
+  expect(lines).toEqual(["◆ coder · 5s · 12.3k tok · a b", "  ◆ explorer · queued · 0 tok · xxxxxxx…", ""])
+})
+
+test("a diff review shows the diff above its options", async () => {
+  const { host, terminal, live, idle, exited, agent } = await setup([
+    { toolCalls: [{ name: "review", args: {} }] },
+    { text: "reviewed" },
+  ])
+  await host.load((api) => {
+    api.registerTool(
+      defineTool({
+        name: "review",
+        description: "",
+        parameters: {},
+        execute: async () =>
+          textResult(
+            String(
+              await api.ui.reviewDiff("Merge?", "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n", [
+                "merge",
+                "keep",
+              ]),
+            ),
+          ),
+      }),
+    )
+  }, "reviewer")
+  terminal.send("go\r")
+  await waitFor(() => live().includes("? Merge?"), "review dialog")
+  expect(live()).toContain("-old")
+  expect(live()).toContain("+new")
+  expect(live()).toContain("› merge")
+  terminal.send("2")
+  await idle()
+  expect(agent.messages.find((m) => m.role === "toolResult")?.content[0]).toEqual({
+    type: "text",
+    text: "keep",
+  })
   terminal.send("\x03")
   await exited
 })

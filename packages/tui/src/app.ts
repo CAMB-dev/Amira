@@ -22,7 +22,14 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
-import { historyLines, summarizeArgs, toolLines, userLines } from "./format.ts"
+import {
+  historyLines,
+  type SubagentLine,
+  subagentLines,
+  summarizeArgs,
+  toolLines,
+  userLines,
+} from "./format.ts"
 import { StatusBar } from "./status-bar.ts"
 
 export interface InteractiveOptions {
@@ -107,6 +114,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let streamedEarly = false
   /** Whether the current turn showed anything besides the user's message. */
   let turnShowedOutput = false
+  /** This session's sub-agents (and theirs) that are queued or running, in start order. */
+  const subagents = new Map<string, SubagentLine>()
+  /** Redraws once a second while sub-agents run, so their elapsed time moves. */
+  let subagentTimer: ReturnType<typeof setInterval> | undefined
+  const tickSubagents = () => {
+    if (subagents.size && !subagentTimer) subagentTimer = setInterval(() => renderer.requestRender(), 1000)
+    else if (!subagents.size && subagentTimer) {
+      clearInterval(subagentTimer)
+      subagentTimer = undefined
+    }
+  }
 
   const editor = new Editor({ prompt: theme.accent("› "), placeholder: "Message Amira", onSubmit: submit })
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
@@ -140,6 +158,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             : "working"
       return [...spinner.render(width, ctx), ""]
     }),
+    new View((width, ctx) => subagentLines([...subagents.values()], Date.now(), width, ctx.theme)),
     new View((width, ctx) => [
       ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
       ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
@@ -182,8 +201,47 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     turnShowedOutput = true
   }
 
+  /** Keeps the sub-agent lines current; true when the event was about a sub-agent. */
+  function trackSubagent(e: AnyEvent): boolean {
+    const mine = e.sessionId === agent.sessionId || subagents.has(e.sessionId)
+    switch (e.type) {
+      case "subagent.start":
+        if (!mine) return false
+        subagents.set(e.data.childSessionId, {
+          role: e.data.role ?? "agent",
+          task: e.data.prompt,
+          depth: e.data.depth,
+          tokens: 0,
+          ...(e.data.queued ? {} : { startedAt: e.ts }),
+        })
+        break
+      case "subagent.end":
+        if (!subagents.delete(e.data.childSessionId)) return false
+        break
+      case "budget.exceeded":
+        renderer.commit([
+          theme.warning(`Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`),
+          "",
+        ])
+        return true
+      default: {
+        const sub = subagents.get(e.sessionId)
+        if (!sub) return false
+        if (e.type === "session.start") sub.startedAt ??= e.ts
+        else if (e.type === "message.end" && e.data.message.usage) {
+          const u = e.data.message.usage
+          sub.tokens += u.input + u.output + u.cacheRead + u.cacheWrite
+        }
+        return true
+      }
+    }
+    tickSubagents()
+    return true
+  }
+
   const onEvent = (e: AnyEvent) => {
-    // Sub-agents may share the bus; only this session's turn events drive the UI.
+    if (trackSubagent(e)) renderer.requestRender()
+    // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
@@ -368,6 +426,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
     setBlinking(false)
+    subagents.clear()
+    tickSubagents()
     reader.stop()
     renderer.stop({ clear: true })
     if (terminal instanceof ProcessTerminal) terminal.stop()
