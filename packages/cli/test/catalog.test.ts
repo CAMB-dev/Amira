@@ -2,11 +2,14 @@ import { expect, test } from "bun:test"
 import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { findPreset } from "@amira/ai"
 import fixture from "../../ai/test/fixtures/models-dev.json" with { type: "json" }
 import { readCatalogCache, refreshCatalog } from "../src/catalog.ts"
 import { createSession } from "../src/session.ts"
 
 const here = import.meta.dir
+// DeepSeek is a preset now, not built in; settings add it as a provider.
+const providers = [findPreset("deepseek")!]
 
 async function tmpFile() {
   const dir = await mkdtemp(path.join(os.tmpdir(), "amira-catalog-"))
@@ -66,6 +69,7 @@ test("a session uses the cached catalog at once and refreshes a stale one in the
     cwd: here,
     extensions: [],
     noBuiltins: true,
+    providers,
     catalog: { file, fetch: serve(fixture, calls) },
   })
   expect(first.agent.model.contextWindow).toBe(128_000)
@@ -80,6 +84,7 @@ test("a session uses the cached catalog at once and refreshes a stale one in the
     cwd: here,
     extensions: [],
     noBuiltins: true,
+    providers,
     catalog: { file, fetch: serve(fixture, calls) },
   })
   expect(second.agent.model.contextWindow).toBe(1_000_000)
@@ -94,6 +99,7 @@ test("a model chosen during the refresh is not replaced", async () => {
     cwd: here,
     extensions: [],
     noBuiltins: true,
+    providers,
     catalog: { file, fetch: serve(fixture) },
   })
   const chosen = { ...s.agent.model, id: "other" }
