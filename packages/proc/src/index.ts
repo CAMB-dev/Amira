@@ -1,13 +1,31 @@
-import type { FromWorker, RunRequest, ToWorker } from "./protocol.ts"
-import { type RunOptions, type RunResult, runCommandInline } from "./run-inline.ts"
+import type { FromWorker, RunRequest, SpawnRequest, ToWorker } from "./protocol.ts"
+import {
+  type ReleaseOptions,
+  type RunOptions,
+  type RunResult,
+  runCommandInline,
+  type SpawnOptions,
+  StandbyGoneError,
+} from "./run-inline.ts"
 
 export { cmdArgv } from "./cmd-line.ts"
 export { type ProcessTree, trackProcessTree, warmUpProcessTree } from "./process-tree.ts"
-export { DRAIN_GRACE_MS, type RunOptions, type RunResult, runCommandInline } from "./run-inline.ts"
+export {
+  DRAIN_GRACE_MS,
+  type PreparedCommand,
+  prepareCommandInline,
+  type ReleaseOptions,
+  type RunOptions,
+  type RunResult,
+  runCommandInline,
+  type SpawnOptions,
+  StandbyGoneError,
+} from "./run-inline.ts"
 
 interface Pending {
-  argv: string[]
-  opts: RunOptions
+  opts: ReleaseOptions
+  /** Runs the command on this thread if the worker never loads; absent for prepared commands. */
+  inline?: () => Promise<RunResult>
   resolve: (r: RunResult) => void
   reject: (e: Error) => void
   onAbort: () => void
@@ -21,6 +39,8 @@ let workerReady = false
 let workerBroken = false
 let nextId = 1
 const pending = new Map<number, Pending>()
+/** Prepared commands not yet released, by id; called when the worker reports them gone. */
+const standbys = new Map<number, () => void>()
 
 function getWorker(): Worker | undefined {
   if (worker || workerBroken) return worker
@@ -45,28 +65,26 @@ function onWorkerGone(w: Worker) {
   if (worker !== w) return
   worker = undefined
   w.terminate()
-  if (!workerReady) {
-    // It never loaded: stop trying and run what was waiting on this thread instead.
-    workerBroken = true
-    for (const [id, p] of pending) {
-      pending.delete(id)
-      p.opts.signal.removeEventListener("abort", p.onAbort)
-      runCommandInline(p.argv, p.opts).then(p.resolve, p.reject)
-    }
-    return
-  }
-  // It crashed after working; fail what was running and start a fresh worker next time.
-  // Processes it started lose their job handles and may keep running.
+  // Prepared commands lived in that worker.
+  for (const gone of [...standbys.values()]) gone()
+  const neverLoaded = !workerReady
+  // It never loaded: stop trying and run what was waiting on this thread instead.
+  if (neverLoaded) workerBroken = true
   for (const [id, p] of pending) {
     pending.delete(id)
     p.opts.signal.removeEventListener("abort", p.onAbort)
-    p.reject(new Error("the command worker stopped unexpectedly"))
+    if (neverLoaded && p.inline) p.inline().then(p.resolve, p.reject)
+    else if (!p.inline) p.reject(new StandbyGoneError("the command worker stopped"))
+    // It crashed after working; fail what was running and start a fresh worker next time.
+    // Processes it started lose their job handles and may keep running.
+    else p.reject(new Error("the command worker stopped unexpectedly"))
   }
 }
 
 function onMessage(m: FromWorker) {
   workerReady = true
   if (m.type === "ready") return
+  if (m.type === "gone") return standbys.get(m.id)?.()
   const p = pending.get(m.id)
   if (!p) return
   if (m.type === "chunk") {
@@ -81,7 +99,26 @@ function onMessage(m: FromWorker) {
   if (pending.size === 0) worker?.unref()
   p.opts.signal.removeEventListener("abort", p.onAbort)
   if (m.type === "done") p.resolve(m.result)
-  else p.reject(new Error(m.error))
+  else p.reject(m.gone ? new StandbyGoneError(m.error) : new Error(m.error))
+}
+
+/** Sends a run or release and settles with its result; the worker stays ref'ed meanwhile. */
+function start(
+  w: Worker,
+  id: number,
+  message: ToWorker,
+  opts: ReleaseOptions,
+  inline?: () => Promise<RunResult>,
+) {
+  return new Promise<RunResult>((resolve, reject) => {
+    const onAbort = () => worker?.postMessage({ type: "abort", id } satisfies ToWorker)
+    pending.set(id, { opts, resolve, reject, onAbort, ...(inline ? { inline } : {}) })
+    // A running command keeps the process alive, or a caller awaiting it could see Bun exit.
+    w.ref()
+    opts.signal.addEventListener("abort", onAbort, { once: true })
+    w.postMessage(message)
+    if (opts.signal.aborted) onAbort()
+  })
 }
 
 /**
@@ -94,24 +131,68 @@ export function runCommand(argv: string[], opts: RunOptions): Promise<RunResult>
   if (!w) return runCommandInline(argv, opts)
   const id = nextId++
   const request: RunRequest = {
-    argv,
-    cwd: opts.cwd,
+    ...spawnRequest(argv, opts),
     timeoutMs: opts.timeoutMs,
-    ...(opts.env ? { env: plainEnv(opts.env) } : {}),
-    ...(opts.gated ? { gated: true } : {}),
     ...(opts.gateLine !== undefined ? { gateLine: opts.gateLine } : {}),
-    ...(opts.viaCmd ? { viaCmd: true } : {}),
-    ...(opts.stdoutOnly ? { stdoutOnly: true } : {}),
   }
-  return new Promise<RunResult>((resolve, reject) => {
-    const onAbort = () => worker?.postMessage({ type: "abort", id } satisfies ToWorker)
-    pending.set(id, { argv, opts, resolve, reject, onAbort })
-    // A running command keeps the process alive, or a caller awaiting it could see Bun exit.
-    w.ref()
-    opts.signal.addEventListener("abort", onAbort, { once: true })
-    w.postMessage({ type: "run", id, request } satisfies ToWorker)
-    if (opts.signal.aborted) onAbort()
-  })
+  return start(w, id, { type: "run", id, request }, opts, () => runCommandInline(argv, opts))
+}
+
+/** A gated command started ahead of time in the worker; see `prepareCommand`. */
+export interface Standby {
+  /** False once it was run or disposed, or the worker reported that it exited or failed to start. */
+  readonly alive: boolean
+  /**
+   * Releases the command; the timeout counts from here. Rejects with StandbyGoneError when the
+   * process is gone, so the caller can run the command cold instead.
+   */
+  run(opts: ReleaseOptions): Promise<RunResult>
+  /** Kills the process tree unless it was already run. */
+  dispose(): void
+}
+
+/**
+ * Starts a gated command in the worker and contains it, without releasing it: pays the process
+ * start ahead of time. An idle standby does not keep this process alive, and it exits when this
+ * process does (its stdin closes). Without a worker there is no standby: it is never alive.
+ */
+export function prepareCommand(argv: string[], opts: Omit<SpawnOptions, "trackTree">): Standby {
+  const w = getWorker()
+  let state: "idle" | "released" | "gone" = w ? "idle" : "gone"
+  const id = nextId++
+  const markGone = () => {
+    if (state !== "idle") return
+    state = "gone"
+    standbys.delete(id)
+  }
+  if (w) {
+    standbys.set(id, markGone)
+    w.postMessage({ type: "prepare", id, request: spawnRequest(argv, opts) } satisfies ToWorker)
+  }
+  return {
+    get alive() {
+      return state === "idle"
+    },
+    run(release) {
+      const current = worker
+      if (state !== "idle" || !current) {
+        markGone()
+        return Promise.reject(new StandbyGoneError("the standby process is gone"))
+      }
+      state = "released"
+      standbys.delete(id)
+      const request = {
+        timeoutMs: release.timeoutMs,
+        ...(release.gateLine !== undefined ? { gateLine: release.gateLine } : {}),
+      }
+      return start(current, id, { type: "release", id, request }, release)
+    },
+    dispose() {
+      if (state !== "idle") return
+      markGone()
+      worker?.postMessage({ type: "dispose", id } satisfies ToWorker)
+    },
+  }
 }
 
 /** Loads process-tree bindings in the worker ahead of the first command. */
@@ -123,9 +204,21 @@ export function warmUpCommands(): void {
 export function resetCommandWorker(opts: { url?: string } = {}): void {
   worker?.terminate()
   worker = undefined
+  for (const gone of [...standbys.values()]) gone()
   workerReady = false
   workerBroken = false
   workerUrl = opts.url ?? new URL("./worker.ts", import.meta.url).href
+}
+
+function spawnRequest(argv: string[], opts: SpawnOptions): SpawnRequest {
+  return {
+    argv,
+    cwd: opts.cwd,
+    ...(opts.env ? { env: plainEnv(opts.env) } : {}),
+    ...(opts.gated ? { gated: true } : {}),
+    ...(opts.viaCmd ? { viaCmd: true } : {}),
+    ...(opts.stdoutOnly ? { stdoutOnly: true } : {}),
+  }
 }
 
 /** Environment objects may be getters or proxies; send a plain copy of string values. */
