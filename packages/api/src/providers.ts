@@ -45,14 +45,15 @@ export interface ProviderTestResult {
 
 /**
  * Managing the configured providers (settings.json `providers`, keys in auth.json), for
- * /provider. Keys never come back out: only a hint of the last characters of a stored one.
+ * /provider. There are no built-in providers: only the ones added here or in settings.json
+ * exist. Keys never come back out: only a hint of the last characters of a stored one.
  */
 export interface ProviderAdmin {
-  /** The dialects providers can speak. */
+  /** The dialects (protocols) providers can speak; adding a provider starts by picking one. */
   dialects(): string[]
-  /** A provider configured now (built in or in settings). */
+  /** A provider configured now. */
   exists(id: string): boolean
-  /** A provider as a draft to edit (its settings over the built-in one), without its key. */
+  /** A configured provider as a draft to edit, without its key. */
   draft(id: string): ProviderDraft | undefined
   /** "…abcd" when auth.json holds a key for the provider. */
   storedKeyHint(id: string): string | undefined

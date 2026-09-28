@@ -213,11 +213,8 @@ export interface SessionControl {
   /** Enables or disables a tool for the rest of this session; throws for an unknown tool. */
   setToolEnabled(name: string, enabled: boolean): void
   setShell(mode: ShellMode): void
+  /** The configured providers; Amira has none built in. */
   providers(): ProviderInfo[]
-  /** Ids of the ready-made provider configurations. */
-  providerPresets(): string[]
-  /** Adds a preset to the user settings and makes it usable at once; resolves with what was done. */
-  addProvider(presetId: string): Promise<string>
   /** Adding, editing and removing providers and their keys; unset where the host cannot. */
   readonly providerAdmin?: ProviderAdmin
   preview(): Promise<ContextPreview>
