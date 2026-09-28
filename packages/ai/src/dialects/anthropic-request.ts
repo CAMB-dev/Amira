@@ -22,7 +22,8 @@ export const THINKING_BUDGET: Record<ReasoningEffort, number> = {
 const EPHEMERAL: CacheControl = { type: "ephemeral" }
 
 export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<string, unknown> {
-  const messages = toAnthropicMessages(req.messages)
+  const sendTools = req.tools.length > 0 && req.model.caps.tools === "native"
+  const messages = toAnthropicMessages(req.messages, { tools: sendTools })
   const maxTokens = Math.max(
     1,
     Math.min(req.maxTokens ?? req.model.maxOutput, req.model.maxOutput, MAX_TOKENS_CAP),
@@ -35,7 +36,7 @@ export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Rec
     body.system = [{ type: "text", text: req.systemPrompt, ...(cache ? { cache_control: EPHEMERAL } : {}) }]
     if (cache) breakpoints++
   }
-  if (req.tools.length && req.model.caps.tools === "native") {
+  if (sendTools) {
     const tools: Record<string, unknown>[] = req.tools.map((t) => ({
       name: t.name,
       description: t.description,

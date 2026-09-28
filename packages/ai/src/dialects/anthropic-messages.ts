@@ -1,5 +1,12 @@
 import { adaptThinking } from "../thinking.ts"
-import type { AssistantMessage, ImageBlock, Message, TextBlock, ToolResultMessage } from "../types.ts"
+import type {
+  AssistantMessage,
+  ImageBlock,
+  Message,
+  TextBlock,
+  ToolCallBlock,
+  ToolResultMessage,
+} from "../types.ts"
 import { indexResults, MISSING_RESULT, takeResult } from "./tool-results.ts"
 
 export const ANTHROPIC_DIALECT = "anthropic-messages"
@@ -34,7 +41,11 @@ export interface AnthropicMessage {
  * answered by a tool_result in the next user turn, and signed thinking goes back unchanged
  * where it was. Thinking signed elsewhere becomes text first.
  */
-export function toAnthropicMessages(messages: Message[]): AnthropicMessage[] {
+export function toAnthropicMessages(
+  messages: Message[],
+  opts: AnthropicMessageOptions = {},
+): AnthropicMessage[] {
+  const tools = opts.tools !== false
   const history = adaptThinking(messages, ANTHROPIC_DIALECT)
   const out: AnthropicMessage[] = []
   const push = (role: AnthropicMessage["role"], content: AnthropicBlock[]) => {
@@ -48,15 +59,22 @@ export function toAnthropicMessages(messages: Message[]): AnthropicMessage[] {
     if (m.role === "user") {
       push("user", m.content.flatMap(userBlock))
     } else if (m.role === "assistant") {
-      const content = assistantBlocks(m)
-      push("assistant", content)
-      const answers = content
-        .filter((b) => b.type === "tool_use")
-        .map((call) => toolResult(call.id, takeResult(results, call.id, i)))
+      push("assistant", assistantBlocks(m, tools))
+      const answers = m.content
+        .filter((b) => b.type === "toolCall")
+        .flatMap((call) => {
+          const result = takeResult(results, call.id, i)
+          return tools ? [toolResult(call.id, result)] : toolResultText(call, result)
+        })
       push("user", answers)
     }
   })
   return out
+}
+
+export interface AnthropicMessageOptions {
+  /** Whether the request sends tools; without them the API rejects tool blocks, so they become text. */
+  tools?: boolean
 }
 
 function userBlock(b: TextBlock | ImageBlock): AnthropicBlock[] {
@@ -69,7 +87,7 @@ function imageBlock(b: ImageBlock): AnthropicBlock {
 }
 
 /** Keeps the block order: models that interleave thinking with tool calls need it unchanged. */
-function assistantBlocks(m: AssistantMessage): AnthropicBlock[] {
+function assistantBlocks(m: AssistantMessage, tools: boolean): AnthropicBlock[] {
   const out: AnthropicBlock[] = []
   for (const b of m.content) {
     if (b.type === "thinking") {
@@ -80,11 +98,21 @@ function assistantBlocks(m: AssistantMessage): AnthropicBlock[] {
       else if (b.text.trim()) out.push({ type: "text", text: `<thinking>\n${b.text}\n</thinking>` })
     } else if (b.type === "text") {
       if (b.text.trim()) out.push({ type: "text", text: b.text })
-    } else {
+    } else if (tools) {
       out.push({ type: "tool_use", id: b.id, name: b.name, input: b.args })
+    } else {
+      out.push({ type: "text", text: `[tool call ${b.name}(${JSON.stringify(b.args)})]` })
     }
   }
   return out
+}
+
+function toolResultText(call: ToolCallBlock, result: ToolResultMessage | undefined): AnthropicBlock[] {
+  const label = `[tool ${result?.isError ? "error" : "result"} from ${call.name}]`
+  if (!result) return [{ type: "text", text: `${label}\n${MISSING_RESULT}` }]
+  const texts = result.content.filter((b) => b.type === "text").map((b) => b.text)
+  const images = result.content.filter((b) => b.type === "image").map(imageBlock)
+  return [{ type: "text", text: [label, ...texts].join("\n") }, ...images]
 }
 
 function toolResult(id: string, result: ToolResultMessage | undefined): AnthropicBlock {

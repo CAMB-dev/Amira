@@ -79,7 +79,7 @@ test("adaptive mode, the default, sends an effort and never a budget, disabled o
   expect(plain.output_config).toBeUndefined()
   expect(plain.temperature).toBeUndefined()
   const reasoning = { effort: "low" as const }
-  const loop = (await sent({ reasoning, messages: toolTurn(false) })).body
+  const loop = (await sent({ reasoning, messages: toolTurn(false), tools: [tool("read")] })).body
   expect(loop.thinking).toEqual({ type: "adaptive" })
 })
 
@@ -113,13 +113,13 @@ test("budget mode turns thinking off mid tool loop when the loop has no signed t
   const reasoning = { effort: "low" as const }
   const off = { type: "disabled" }
   const thinkingOf = async (extra: Partial<ModelRequest>) => (await sent(extra, budgetMode)).body.thinking
-  expect(await thinkingOf({ reasoning, messages: toolTurn(false) })).toEqual(off)
-  expect(await thinkingOf({ messages: toolTurn(false) })).toBeUndefined()
-  expect(await thinkingOf({ reasoning, messages: toolTurn(true) })).toEqual({
+  expect(await thinkingOf({ reasoning, messages: toolTurn(false), tools: [tool("read")] })).toEqual(off)
+  expect(await thinkingOf({ messages: toolTurn(false), tools: [tool("read")] })).toBeUndefined()
+  expect(await thinkingOf({ reasoning, messages: toolTurn(true), tools: [tool("read")] })).toEqual({
     type: "enabled",
     budget_tokens: 2_048,
   })
-  expect(await thinkingOf({ messages: toolTurn(true) })).toBeUndefined()
+  expect(await thinkingOf({ messages: toolTurn(true), tools: [tool("read")] })).toBeUndefined()
 })
 
 test("the tool-loop check looks at the loop's first assistant turn", () => {
@@ -173,7 +173,7 @@ test("never places more than four breakpoints and none when caching is off", asy
 })
 
 test("caches the tool results of an agent loop", async () => {
-  const { body } = await sent({ messages: toolTurn(false) })
+  const { body } = await sent({ messages: toolTurn(false), tools: [tool("read")] })
   expect(body.messages[2].content.at(-1)).toEqual({
     type: "tool_result",
     tool_use_id: "a",

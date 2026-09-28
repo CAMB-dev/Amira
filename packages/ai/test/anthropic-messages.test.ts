@@ -136,3 +136,32 @@ test("turns foreign and unsigned thinking into text and drops foreign redacted t
     txt("a"),
   ])
 })
+
+test("turns tool blocks into text when the request sends no tools", () => {
+  const img = { type: "image" as const, mimeType: "image/png", data: "AAA" }
+  const out = toAnthropicMessages(
+    [
+      user("go"),
+      assistant(txt("sure"), call("a", { p: 1 }), call("b")),
+      { role: "toolResult", toolCallId: "a", toolName: "read", isError: false, content: [txt("A"), img] },
+      user("next"),
+    ],
+    { tools: false },
+  )
+  expect(out).toEqual([
+    { role: "user", content: [txt("go")] },
+    {
+      role: "assistant",
+      content: [txt("sure"), txt('[tool call read({"p":1})]'), txt("[tool call read({})]")],
+    },
+    {
+      role: "user",
+      content: [
+        txt("[tool result from read]\nA"),
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "AAA" } },
+        txt(`[tool result from read]\n${MISSING_RESULT}`),
+        txt("next"),
+      ],
+    },
+  ])
+})
