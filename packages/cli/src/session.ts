@@ -16,6 +16,8 @@ export interface SessionOptions {
   cwd: string
   extensions: string[]
   noBuiltins: boolean
+  /** Tools hidden from the model. */
+  disabledTools?: string[]
   ai?: Ai
   /** Receives failures of event subscribers (extensions or frontends). The core itself never prints. */
   onSubscriberError?: (error: unknown, event: AnyEvent) => void
@@ -78,6 +80,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     }
   }
   for (const file of opts.extensions) await host.loadFile(file)
+  tools.setDisabled(opts.disabledTools ?? [])
   await bus.flush()
   stopCapture()
 
@@ -91,4 +94,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     tools,
   })
   return { agent, host, startupEvents }
+}
+
+/** The tools to hide for a shell mode and an explicit list (D68, D70). */
+export function toolsToDisable(shell: "auto" | "bash" | "powershell", explicit: string[]): string[] {
+  const out = new Set(explicit)
+  if (shell === "bash") out.add("powershell")
+  if (shell === "powershell") out.add("bash")
+  return [...out]
 }
