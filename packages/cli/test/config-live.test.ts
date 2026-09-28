@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { parseCliArgs } from "../src/args.ts"
@@ -21,12 +21,15 @@ test.skipIf(!process.env[KEY_ENV])(
       mkdirSync(path.join(cwd, ".amira"), { recursive: true })
       const quiet = { stdout: () => {}, stderr: () => {} }
       expect(runProviderCommand(["add", "deepseek"], quiet, home)).toBe(0)
-      // The project layer points the preset at the test's key variable.
-      writeFileSync(
-        path.join(cwd, ".amira", "settings.json"),
-        JSON.stringify({ model: "deepseek/deepseek-flash", providers: { deepseek: { apiKeyEnv: KEY_ENV } } }),
-      )
+      // The user layer points the preset at the test's key variable; a project file may not.
+      const userFile = path.join(home, "settings.json")
+      const user = JSON.parse(readFileSync(userFile, "utf8"))
+      user.providers.deepseek.apiKeyEnv = KEY_ENV
+      writeFileSync(userFile, JSON.stringify(user))
+      writeFileSync(path.join(cwd, ".amira", "settings.json"), JSON.stringify({ model: "deepseek/deepseek-flash" }))
       const config = resolveConfig(parseCliArgs(["-C", cwd, "-p", "x"], dir, {}), home)
+      expect(config.warnings).toEqual([])
+      expect(config.providers.find((p) => p.id === "deepseek")?.apiKeyEnv).toBe(KEY_ENV)
       const { agent } = await createSession({
         model: config.settings.model!,
         cwd,
