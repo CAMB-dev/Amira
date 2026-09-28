@@ -140,6 +140,7 @@
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
         "@amira/core": "workspace:*",
+        "@amira/proc": "workspace:*",
         "@amira/tui-kit": "workspace:*",
       },
       "devDependencies": {

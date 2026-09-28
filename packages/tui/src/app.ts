@@ -31,6 +31,8 @@ import {
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
+import { FileIndex, type FileSource } from "./file-index.ts"
+import { FilePicker } from "./file-picker.ts"
 import {
   historyLines,
   type SubagentLine,
@@ -69,6 +71,8 @@ export interface InteractiveOptions {
    * Default: one kept in memory for this run.
    */
   history?: PromptHistory
+  /** The files the @ picker offers. Default: the working directory's, from git or a walk. */
+  files?: FileSource
 }
 
 /** Bracketed pastes this big become one placeholder in the editor, expanded when sent. */
@@ -161,12 +165,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const history = opts.history ?? new PromptHistory()
   const historyNav = new HistoryNavigator(history, editor)
   const search = new HistorySearch(history, editor)
+  const filePicker = new FilePicker(opts.files ?? new FileIndex(agent.cwd), () => renderer.requestRender())
   /**
-   * Tells the command popup what the editor holds. Cheap on any text: it only looks at a single
-   * line.
+   * Tells the completion lists what the editor holds. Cheap on any text: the command popup only
+   * looks at a single line, the file picker at the caret's line up to the caret.
    */
   const syncCompletions = () => {
     popup?.update(editor.lineCount === 1 ? editor.getText() : "")
+    filePicker.update(editor.textBeforeCaret())
   }
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
   // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
@@ -210,7 +216,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // Synced on every frame, so text set any way (typing, Tab, a dropped steer) is completed.
       syncCompletions()
       if (popup?.visible) return popup.render(width, ctx)
-      return []
+      return filePicker.render(width, ctx)
     }),
     new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : inputBox.render(width, ctx))),
     new StatusBar(() => opts.status.snapshot()),
@@ -220,7 +226,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         ? "Enter accept · Ctrl+R older · Ctrl+S newer · Esc cancel"
         : popup?.visible
           ? "↑↓ select · Tab complete · Enter run · Esc close"
-          : undefined
+          : filePicker.visible
+            ? "↑↓ select · Tab/Enter insert · Esc close"
+            : undefined
       if (fixed) return [ctx.theme.muted(truncateToWidth(fixed, width, "…"))]
       const ctrlC = working ? "interrupt" : editor.isEmpty ? "quit" : "clear"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
@@ -518,6 +526,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (search.handleKey(e) === "accepted-pass") return onInput(e)
     } else if (popup?.open && handlePopupKey(e)) {
       // The popup took ↑↓, Tab, Enter or Esc.
+    } else if (filePicker.open && handleFileKey(e)) {
+      // The file picker took ↑↓, Tab, Enter or Esc.
     } else if (matchesKey(e, "r", { ctrl: true })) {
       search.start()
     } else if (
@@ -552,6 +562,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       editor.clear()
       runCommand(action.line)
     }
+    return true
+  }
+
+  /** Applies what the file picker did with a key; false when it left the key to the editor. */
+  function handleFileKey(e: InputEvent): boolean {
+    const action = filePicker.handleKey(e)
+    if (!action) return false
+    if (action.type === "insert") editor.replaceBeforeCaret(action.replace, action.text)
     return true
   }
 

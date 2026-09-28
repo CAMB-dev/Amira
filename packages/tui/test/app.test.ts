@@ -55,6 +55,8 @@ interface SetupOptions {
   /** Called after every write to the terminal, once the screen shows it. */
   onWrite?: (screen: VirtualScreen) => void
   history?: PromptHistory
+  /** The files the @ picker offers. */
+  files?: string[]
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -116,6 +118,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     terminal,
     setup: async () => ({ ...(await noProbe()), leftoverInput: o.leftoverInput ?? "" }),
     onReady: () => agent.start("startup"),
+    files: { files: async () => o.files ?? [] },
     ...(o.history ? { history: o.history } : {}),
     ...(o.initialPrompt ? { initialPrompt: o.initialPrompt } : {}),
     ...(o.startupEvents ? { startupEvents: o.startupEvents } : {}),
@@ -914,5 +917,23 @@ test("Esc leaves the history search with the draft back", async () => {
   await waitFor(() => live().includes("› my draft"), "draft back")
   expect(live()).not.toContain("search history")
   terminal.send("\x03\x03")
+  await exited
+})
+
+test("typing @ offers project files; Tab inserts the path and the message keeps it", async () => {
+  const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "read it" }], {
+    files: ["src/app.ts", "src/format.ts", "README.md"],
+  })
+  terminal.send("look at @form")
+  await waitFor(() => live().includes("› src/format.ts"), "file list")
+  expect(live()).toContain("Tab/Enter insert")
+  terminal.send("\t")
+  await waitFor(() => live().includes("› look at @src/format.ts"), "inserted")
+  expect(live()).not.toContain("Tab/Enter insert")
+  terminal.send("please\r")
+  await shows("read it")
+  await idle()
+  expect(userTexts(agent)).toEqual(["look at @src/format.ts please"])
+  terminal.send("\x03")
   await exited
 })
