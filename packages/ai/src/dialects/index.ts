@@ -1,5 +1,6 @@
 import type { Dialect } from "../dialect.ts"
 import { openaiChat } from "./openai-chat.ts"
+import { openaiResponses } from "./openai-responses.ts"
 
 /** Dialects available without registration. Each wire protocol adds one entry here. */
-export const BUILTIN_DIALECTS: Dialect[] = [openaiChat]
+export const BUILTIN_DIALECTS: Dialect[] = [openaiChat, openaiResponses]
