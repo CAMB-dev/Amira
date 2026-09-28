@@ -1,4 +1,19 @@
-import type { EventMap, UiAnswer, UiApi, UiRequest, UiRequestOptions } from "@amira/api"
+import {
+  checkForm,
+  describeFormErrors,
+  type EventMap,
+  type FormActionResult,
+  type FormOption,
+  type FormSpec,
+  type FormValues,
+  runFormAction,
+  runFormDialogs,
+  toFormSchema,
+  type UiAnswer,
+  type UiApi,
+  type UiRequest,
+  type UiRequestOptions,
+} from "@amira/api"
 import type { EventBus } from "./event-bus.ts"
 
 type Value = UiAnswer[keyof UiAnswer]
@@ -7,17 +22,37 @@ interface Pending {
   request: EventMap["ui.request"]
   resolve: (value: Value | undefined) => void
   cleanup: () => void
+  /** For a form: the spec with its validators and actions, which never leave the host. */
+  form?: FormState
 }
+
+interface FormState {
+  spec: FormSpec
+  /** Options actions have filled in since the form was asked, by field id. */
+  options: Record<string, FormOption[]>
+  /** Actions running now; aborted when the form closes. */
+  running: Set<AbortController>
+}
+
+/**
+ * How forms are shown: `native` sends them as one ui.request of kind "form" (the TUI and rpc
+ * clients show them whole); `dialogs` asks them one field at a time (runFormDialogs), for
+ * clients that only know select, confirm and input.
+ */
+export type FormMode = "native" | "dialogs"
 
 /**
  * Dialogs waiting for the user (D42). Asking emits ui.request; whichever frontend is attached
  * answers with respond() or cancel(), and ui.resolved tells every frontend it is closed.
+ * Forms keep their validators and actions here: frontends reach them with validateForm()
+ * and runFormAction().
  */
 export class UiRequests {
   #bus: EventBus
   #sessionId: string
   #pending = new Map<string, Pending>()
   #seq = 0
+  formMode: FormMode = "native"
 
   constructor(bus: EventBus, opts: { sessionId?: string } = {}) {
     this.#bus = bus
@@ -30,10 +65,25 @@ export class UiRequests {
   }
 
   /** Resolves with the answer, or undefined when cancelled, aborted or timed out. */
-  ask<K extends keyof UiAnswer>(
+  ask<K extends Exclude<keyof UiAnswer, "form">>(
     request: Extract<UiRequest, { kind: K }>,
     opts: UiRequestOptions & { source?: string } = {},
   ): Promise<UiAnswer[K] | undefined> {
+    return this.#ask(request, opts) as Promise<UiAnswer[K] | undefined>
+  }
+
+  /** Asks a form: natively, or one field at a time in `dialogs` mode. */
+  form(spec: FormSpec, opts: UiRequestOptions & { source?: string } = {}): Promise<FormValues | undefined> {
+    if (this.formMode === "dialogs") {
+      const api = this.api(opts.source)
+      const signal = timeoutSignal(opts)
+      return runFormDialogs(spec, api, signal ? { signal } : {})
+    }
+    const form: FormState = { spec, options: {}, running: new Set() }
+    return this.#ask({ kind: "form", ...toFormSchema(spec) }, opts, form) as Promise<FormValues | undefined>
+  }
+
+  #ask(request: UiRequest, opts: UiRequestOptions & { source?: string }, form?: FormState) {
     if (opts.signal?.aborted) return Promise.resolve(undefined)
     const requestId = `ui_${++this.#seq}_${crypto.randomUUID().slice(0, 6)}`
     const event = {
@@ -41,17 +91,19 @@ export class UiRequests {
       requestId,
       ...(opts.source ? { source: opts.source } : {}),
     } as EventMap["ui.request"]
-    return new Promise((resolve) => {
+    return new Promise<Value | undefined>((resolve) => {
       const onAbort = () => this.cancel(requestId)
       const timer = opts.timeoutMs !== undefined ? setTimeout(onAbort, opts.timeoutMs) : undefined
       opts.signal?.addEventListener("abort", onAbort, { once: true })
       this.#pending.set(requestId, {
         request: event,
-        resolve: resolve as (v: Value | undefined) => void,
+        resolve,
         cleanup: () => {
           clearTimeout(timer)
           opts.signal?.removeEventListener("abort", onAbort)
+          for (const c of form?.running ?? []) c.abort()
         },
+        ...(form ? { form } : {}),
       })
       this.#bus.emit("ui.request", event, { sessionId: this.#sessionId })
     })
@@ -59,7 +111,8 @@ export class UiRequests {
 
   /**
    * Answers a dialog. null or undefined cancels it. Returns an error message when the
-   * request is unknown or the value does not fit its kind; the dialog then stays open.
+   * request is unknown or the value does not fit its kind (for a form: a field is invalid);
+   * the dialog then stays open.
    */
   respond(requestId: string, value: unknown): string | undefined {
     const p = this.#pending.get(requestId)
@@ -68,10 +121,64 @@ export class UiRequests {
       this.cancel(requestId)
       return undefined
     }
+    if (p.form) {
+      if (typeof value !== "object" || Array.isArray(value)) return "value must be an object of field values"
+      const { values, errors } = checkForm(p.form.spec, value as Record<string, unknown>, p.form.options)
+      if (Object.keys(errors).length) return `invalid form values: ${describeFormErrors(p.form.spec, errors)}`
+      this.#settle(requestId, values)
+      return undefined
+    }
     const problem = checkValue(p.request, value)
     if (problem) return problem
     this.#settle(requestId, value as Value)
     return undefined
+  }
+
+  /**
+   * Checks a pending form's values as they stand, validators included: problems by field id
+   * (empty when it may be submitted); undefined for an unknown request or one that is no form.
+   */
+  validateForm(requestId: string, values: Record<string, unknown>): Record<string, string> | undefined {
+    const form = this.#pending.get(requestId)?.form
+    if (!form) return undefined
+    return checkForm(form.spec, values, form.options).errors
+  }
+
+  /**
+   * Runs an action of a pending form with the values so far. Progress goes out as ui.progress
+   * (and to `onProgress`); the result never carries secret values. Aborted by `signal` and
+   * when the form closes.
+   */
+  async runFormAction(
+    requestId: string,
+    action: string,
+    values: Record<string, unknown>,
+    opts: { signal?: AbortSignal; onProgress?: (text: string) => void } = {},
+  ): Promise<FormActionResult> {
+    const form = this.#pending.get(requestId)?.form
+    if (!form) return { message: `no pending form "${requestId}"`, tone: "error" }
+    const controller = new AbortController()
+    const onAbort = () => controller.abort()
+    opts.signal?.addEventListener("abort", onAbort, { once: true })
+    if (opts.signal?.aborted) controller.abort()
+    form.running.add(controller)
+    // Field checks do not matter here; an action may run on a half-filled form.
+    const current = checkForm(form.spec, values, form.options).values
+    try {
+      const result = await runFormAction(form.spec, action, current, {
+        signal: controller.signal,
+        progress: (text) => {
+          if (controller.signal.aborted) return
+          opts.onProgress?.(text)
+          this.#bus.emit("ui.progress", { requestId, action, text }, { sessionId: this.#sessionId })
+        },
+      })
+      if (result.options) Object.assign(form.options, result.options)
+      return result
+    } finally {
+      form.running.delete(controller)
+      opts.signal?.removeEventListener("abort", onAbort)
+    }
   }
 
   cancel(requestId: string): boolean {
@@ -94,19 +201,22 @@ export class UiRequests {
       confirm: (title, message, opts) =>
         this.ask({ kind: "confirm", title, ...(message !== undefined ? { message } : {}) }, o(opts)),
       input: (title, opts = {}) => {
-        const { placeholder, initial, ...rest } = opts
+        const { placeholder, initial, secret, ...rest } = opts
         return this.ask(
           {
             kind: "input",
             title,
             ...(placeholder !== undefined ? { placeholder } : {}),
-            ...(initial !== undefined ? { initial } : {}),
+            // A secret input never carries a value to frontends.
+            ...(initial !== undefined && !secret ? { initial } : {}),
+            ...(secret ? { secret: true } : {}),
           },
           o(rest),
         )
       },
       reviewDiff: (title, diff, options, opts) =>
         this.ask({ kind: "diff-review", title, diff, options: [...options] }, o(opts)),
+      form: (spec, opts) => this.form(spec, o(opts)),
     }
   }
 
@@ -114,13 +224,35 @@ export class UiRequests {
     const p = this.#pending.get(requestId)!
     this.#pending.delete(requestId)
     p.cleanup()
+    // Form values and secret answers stay out of events, which frontends and extensions log.
+    const r = p.request
+    const shareable =
+      value !== undefined &&
+      r.kind !== "form" &&
+      !(r.kind === "input" && r.secret) &&
+      typeof value !== "object"
     this.#bus.emit(
       "ui.resolved",
-      { requestId, cancelled: value === undefined, ...(value !== undefined ? { value } : {}) },
+      {
+        requestId,
+        cancelled: value === undefined,
+        ...(shareable ? { value: value as string | boolean } : {}),
+      },
       { sessionId: this.#sessionId },
     )
     p.resolve(value)
   }
+}
+
+/** The caller's signal, joined with a timeout when one is given. */
+function timeoutSignal(opts: UiRequestOptions): AbortSignal | undefined {
+  const signals = [
+    opts.signal,
+    opts.timeoutMs !== undefined ? AbortSignal.timeout(opts.timeoutMs) : undefined,
+  ]
+  const present = signals.filter((s): s is AbortSignal => s !== undefined)
+  if (present.length <= 1) return present[0]
+  return AbortSignal.any(present)
 }
 
 function checkValue(request: UiRequest, value: unknown): string | undefined {
@@ -134,5 +266,7 @@ function checkValue(request: UiRequest, value: unknown): string | undefined {
       return typeof value === "boolean" ? undefined : "value must be true or false"
     case "input":
       return typeof value === "string" ? undefined : "value must be a string"
+    case "form":
+      return "value must be an object of field values"
   }
 }

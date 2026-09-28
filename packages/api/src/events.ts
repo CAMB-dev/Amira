@@ -113,8 +113,13 @@ export interface EventMap {
     | { message: UserMessage; state: "promoted"; nextTurnId: string }
   /** A dialog waiting for an answer (D42); `source` is the extension that asked. */
   "ui.request": UiRequest & { requestId: string; source?: string }
-  /** A dialog was answered or cancelled; frontends showing it should close it. */
+  /**
+   * A dialog was answered or cancelled; frontends showing it should close it. `value` is left
+   * out for forms and secret inputs.
+   */
   "ui.resolved": { requestId: string; cancelled: boolean; value?: string | boolean }
+  /** Progress of a form action (a button such as "Fetch models") running on the host. */
+  "ui.progress": { requestId: string; action: string; text: string }
   /** Text a slash command shows the user; `command` is its name, without the slash. */
   "command.output": { command: string; text: string; level: CommandOutputLevel }
   /**

@@ -18,6 +18,7 @@ export type {
 export * from "./commands.ts"
 export * from "./events.ts"
 export * from "./extension.ts"
+export * from "./form.ts"
 export * from "./package.ts"
 export * from "./process.ts"
 export * from "./settings.ts"

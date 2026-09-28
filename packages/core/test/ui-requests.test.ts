@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { AnyEvent, EventEnvelope } from "@amira/api"
+import type { AnyEvent, EventEnvelope, FormSpec } from "@amira/api"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
@@ -90,4 +90,92 @@ test("diff-review shows a diff and resolves with one of its options", async () =
   expect(ui.respond(req.data.requestId, "other")).toContain("one of the options")
   ui.respond(req.data.requestId, "keep")
   expect(await answer).toBe("keep")
+})
+
+const keyForm = (): FormSpec => ({
+  title: "Key",
+  fields: [
+    { type: "text", id: "name", label: "Name", required: true },
+    { type: "secret", id: "key", label: "Key", validate: (v) => (v === "bad" ? "rejected" : undefined) },
+    {
+      type: "action",
+      id: "check",
+      label: "Check",
+      run: async ({ values, progress, signal }) => {
+        progress("checking")
+        if (values.name === "slow") {
+          await new Promise((_, reject) =>
+            signal.addEventListener("abort", () => reject(new Error("stopped"))),
+          )
+        }
+        return { message: `ok ${values.name}`, options: {}, values: { key: "overwrite" } }
+      },
+    },
+  ],
+})
+
+test("a form travels as a schema; answers are checked and never echoed", async () => {
+  const { ui, next, events, bus } = setup()
+  const values = ui.api("ext").form(keyForm())
+  const req = await next()
+  expect(req.data).toMatchObject({ kind: "form", title: "Key", source: "ext" })
+  expect(JSON.stringify(req.data)).not.toContain("validate")
+  const id = req.data.requestId
+  expect(ui.validateForm(id, { key: "bad" })).toEqual({ name: "is required", key: "rejected" })
+  expect(ui.respond(id, "x")).toContain("object")
+  expect(ui.respond(id, { name: "", key: "sk-secret" })).toContain("Name: is required")
+  const progress: string[] = []
+  const r = await ui.runFormAction(id, "check", { name: "a" }, { onProgress: (t) => progress.push(t) })
+  expect(r).toEqual({ message: "ok a", options: {}, values: {} })
+  expect(progress).toEqual(["checking"])
+  expect(ui.respond(id, { name: "a", key: "sk-secret" })).toBeUndefined()
+  expect(await values).toEqual({ name: "a", key: "sk-secret" })
+  await bus.flush()
+  expect(events.find((e) => e.type === "ui.progress")?.data).toEqual({
+    requestId: id,
+    action: "check",
+    text: "checking",
+  })
+  expect(events.find((e) => e.type === "ui.resolved")?.data).toEqual({ requestId: id, cancelled: false })
+  expect(JSON.stringify(events)).not.toContain("sk-secret")
+})
+
+test("closing a form aborts its running actions; secret inputs keep their answer out of events", async () => {
+  const { ui, next, events, bus } = setup()
+  const values = ui.api().form(keyForm())
+  const id = (await next()).data.requestId
+  const running = ui.runFormAction(id, "check", { name: "slow" })
+  ui.cancel(id)
+  expect(await values).toBeUndefined()
+  expect((await running).tone).toBe("warning")
+  expect(await ui.runFormAction(id, "check", {})).toMatchObject({ tone: "error" })
+
+  const key = ui.api().input("Key", { secret: true, initial: "old" })
+  const req = await next()
+  expect(req.data).toMatchObject({ kind: "input", secret: true })
+  expect("initial" in req.data).toBe(false)
+  ui.respond(req.data.requestId, "sk-typed")
+  expect(await key).toBe("sk-typed")
+  await bus.flush()
+  expect(JSON.stringify(events)).not.toContain("sk-typed")
+})
+
+test("in dialogs mode a form is asked one field at a time", async () => {
+  const { ui, events, bus } = setup()
+  ui.formMode = "dialogs"
+  bus.subscribe(
+    (e) => {
+      if (e.type !== "ui.request") return
+      const d = e.data
+      if (d.kind === "input") ui.respond(d.requestId, d.secret ? "sk-1" : "ada")
+      // "Check? No|Yes" takes the default; the last question offers Save first.
+      else if (d.kind === "select") ui.respond(d.requestId, d.options[0]!)
+    },
+    { types: ["ui.request"] },
+  )
+  expect(await ui.api().form(keyForm())).toEqual({ name: "ada", key: "sk-1" })
+  await bus.flush()
+  const kinds = events.filter((e) => e.type === "ui.request").map((e) => (e.data as { kind: string }).kind)
+  expect(kinds).toEqual(["input", "input", "select", "select"])
+  expect(JSON.stringify(events)).not.toContain("sk-1")
 })
