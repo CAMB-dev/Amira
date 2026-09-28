@@ -1,6 +1,6 @@
 import { modes, queries } from "./ansi.ts"
 import { hasInputReader } from "./reader.ts"
-import type { Terminal } from "./terminal.ts"
+import { ProcessTerminal, type Terminal } from "./terminal.ts"
 
 type Env = Record<string, string | undefined>
 
@@ -104,6 +104,8 @@ export interface SetupResult {
  * modifier bit. Switches the terminal to raw mode first, since the replies cannot be read
  * otherwise. Everything enabled here, raw mode included, is undone by `terminal.restore()`.
  * Must run before an `InputReader` is started, or keys typed while probing would arrive twice.
+ * A `ProcessTerminal` that was not started yet is started here, since the replies arrive as
+ * input; stopping it stays with the caller.
  */
 export async function setupTerminalInput(
   term: Terminal,
@@ -111,6 +113,7 @@ export async function setupTerminalInput(
   opts: { timeoutMs?: number } = {},
 ): Promise<SetupResult> {
   if (hasInputReader(term)) throw new Error("setupTerminalInput must run before an InputReader is started")
+  if (term instanceof ProcessTerminal) term.start()
   term.setRawMode(true)
   const info = detectEnv(env)
   const win32InputMode = info.windowsTerminal
