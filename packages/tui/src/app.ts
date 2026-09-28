@@ -37,6 +37,7 @@ import {
   summarizeArgs,
   toolLines,
   userLines,
+  userText,
 } from "./format.ts"
 import { InputBox } from "./input-box.ts"
 import { StatusBar } from "./status-bar.ts"
@@ -81,9 +82,9 @@ const HOST_EVENTS = new Set<string>([
   "command.output",
 ])
 
-/** How a user message reads in the transcript. */
+/** How a user message reads while queued, or back in the editor: its display text, if any. */
 function messageText(m: UserMessage): string {
-  return m.content.map((b) => (b.type === "text" ? b.text : `[image ${b.mimeType}]`)).join("\n\n")
+  return m.display?.text ?? userText(m)
 }
 
 /**
@@ -261,7 +262,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
       case "turn.start":
-        renderer.commit([...userLines(theme, messageText(e.data.prompt)), ""])
+        renderer.commit([...userLines(theme, e.data.prompt), ""])
         working = true
         thinking = false
         turnShowedOutput = false
@@ -362,7 +363,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        if (e.data.state === "injected") renderer.commit([...userLines(theme, text), ""])
+        if (e.data.state === "injected") renderer.commit([...userLines(theme, e.data.message), ""])
         // Put a message the turn dropped back into the editor rather than losing it.
         else if (e.data.state === "dropped")
           editor.setText(editor.getText() ? `${editor.getText()}\n${text}` : text)
