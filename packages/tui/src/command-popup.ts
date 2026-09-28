@@ -38,7 +38,8 @@ interface Result {
 
 /**
  * The completion list shown above the editor while the input starts with "/" (D55): command
- * names first, then the command's argument candidates. ↑↓ select, Tab completes, Enter runs,
+ * names first (with their aliases, and settings aliases with what they run), then the command's
+ * argument candidates. ↑↓ select, Tab completes, Enter runs,
  * Esc closes until the text changes. Candidates arrive asynchronously; a stale answer is dropped.
  */
 export class CommandPopup implements Component {
@@ -155,13 +156,15 @@ export class CommandPopup implements Component {
       // No candidates for the arguments: show how the command is used instead.
       const info = r.command ? this.source.list().find((c) => c.name === r.command) : undefined
       if (!info) return []
-      const usage = `/${info.name}${info.hint ? ` ${info.hint}` : ""}  ${info.description}`
+      const aliases = info.aliases.length ? ` (${info.aliases.join(", ")})` : ""
+      const usage = `/${info.name}${aliases}${info.hint ? ` ${info.hint}` : ""}  ${info.description}`
       return [muted(truncateToWidth(`  ${usage}`, width, "…"))]
     }
     const n = r.candidates.length
     const start = Math.min(Math.max(0, this.#selected - MAX_ROWS + 1), Math.max(0, n - MAX_ROWS))
     const shown = r.candidates.slice(start, start + MAX_ROWS)
-    const label = (c: CommandCandidate) => (r.command ? c.value : `/${c.value}`)
+    // A command row shows its aliases, a settings alias what it runs: "/quit (exit, q)".
+    const label = (c: CommandCandidate) => `${r.command ? "" : "/"}${c.label ?? c.value}`
     const col = Math.min(32, Math.max(...shown.map((c) => visibleWidth(label(c)))))
     const lines = shown.map((c, i) => {
       const selected = start + i === this.#selected
