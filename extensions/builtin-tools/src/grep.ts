@@ -9,6 +9,8 @@ import { truncateOutput } from "./truncate.ts"
 export const DEFAULT_HEAD_LIMIT = 250
 export const MAX_GREP_FILE_BYTES = 5 * 1024 * 1024
 const MAX_MATCH_LINE_CHARS = 2000
+/** Longer lines are only searched up to here, which bounds the cost of a pathological pattern per line. */
+const MAX_TESTED_LINE_CHARS = 10_000
 
 export type GrepOutputMode = "files_with_matches" | "content" | "count"
 
@@ -29,7 +31,7 @@ export const grepTool = defineTool<GrepParams>({
     "- `path` is a file or directory (default: the working directory). `glob` filters files, e.g. `*.ts` or `src/**/*.{ts,tsx}`; a glob without `/` matches file names at any depth.",
     "- `output_mode`: `files_with_matches` (default) lists matching files; `content` shows `file:line:text` for each matching line; `count` shows `file:count`.",
     `- \`head_limit\` caps the number of output lines (default ${DEFAULT_HEAD_LIMIT}).`,
-    "- Skips .git, node_modules, binary files and files over 5 MB. Paths are relative to the working directory.",
+    "- Skips .git, node_modules, binary files and files over 5 MB, and only searches the first 10,000 characters of each line. Paths are relative to the working directory.",
     "- Use glob to find files by name.",
   ].join("\n"),
   parameters: {
@@ -89,7 +91,9 @@ export const grepTool = defineTool<GrepParams>({
       const lines = text.split(/\r?\n/)
       let count = 0
       for (let i = 0; i < lines.length; i++) {
-        if (!re.test(lines[i]!)) continue
+        const line = lines[i]!
+        if (!re.test(line.length > MAX_TESTED_LINE_CHARS ? line.slice(0, MAX_TESTED_LINE_CHARS) : line))
+          continue
         count++
         if (mode === "files_with_matches") break
         if (mode === "content") {

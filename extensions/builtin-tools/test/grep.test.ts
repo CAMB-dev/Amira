@@ -61,3 +61,9 @@ test("errors on invalid regex and missing path; no matches is not an error", asy
   expect(none.isError).toBeUndefined()
   expect(textOf(none)).toContain("No matches")
 })
+
+test("only the first 10,000 characters of a line are searched", async () => {
+  await writeFile(join(dir, "long.txt"), `${"a".repeat(9_000)}NEAR${"a".repeat(2_000)}FAR`)
+  expect(textOf(await grep({ pattern: "NEAR", path: "long.txt" }))).toBe("long.txt")
+  expect(textOf(await grep({ pattern: "FAR", path: "long.txt" }))).toContain("No matches")
+})
