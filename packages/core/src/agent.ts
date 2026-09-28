@@ -218,6 +218,7 @@ export class Agent {
               kind: "toolCall",
               toolCallId: ev.id,
               argsDelta: ev.argsDelta,
+              ...(ev.index !== undefined ? { index: ev.index } : {}),
               ...(ev.name ? { name: ev.name } : {}),
             })
             break

@@ -55,7 +55,15 @@ export interface EventMap {
   "message.delta":
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
-    | { kind: "toolCall"; toolCallId: string; name?: string; argsDelta: string }
+    | {
+        kind: "toolCall"
+        /** May change once while streaming; prefer `index` when present. */
+        toolCallId: string
+        /** Stable position of the call within the message. */
+        index?: number
+        name?: string
+        argsDelta: string
+      }
   "message.end": { message: AssistantMessage }
   "tool.execute.start": { toolCallId: string; name: string; args: Record<string, unknown> }
   "tool.execute.update": { toolCallId: string; name: string; partial: ToolResult }
