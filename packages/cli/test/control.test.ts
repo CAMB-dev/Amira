@@ -111,6 +111,18 @@ test("/clear and /resume switch the active agent and announce it; a running turn
   expect(session.agent).toBe(first)
 })
 
+test("/clear and /resume keep the model chosen on the active agent", async () => {
+  const { host, run, session } = await setup()
+  const first = host.agent.sessionId
+  await run("/clear")
+  await run("/model mock/other")
+  await run("/clear")
+  expect(host.agent.model.id).toBe("other")
+  await run(`/resume ${first}`)
+  expect(host.agent.model.id).toBe("other")
+  expect(session.agent.model.id).toBe("m")
+})
+
 test("/cost counts replies a compaction replaced; /context previews the next request", async () => {
   const { host, run } = await setup([{ text: "one" }, { text: "two" }, { text: "summary" }])
   await host.agent.prompt("a")

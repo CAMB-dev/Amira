@@ -86,7 +86,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     },
     newSession: async () => {
       idle("start a new session")
-      switchTo(session.resume(SessionStore.create({ cwd })), "clear")
+      switchTo(session.resume(SessionStore.create({ cwd }), agent().model), "clear")
     },
     sessions: () =>
       listSessions(cwd).map((s) => ({
@@ -100,7 +100,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       if (id === agent().sessionId) throw new Error(`already in session ${id}`)
       const file = findSession(cwd, id)
       if (!file) throw new Error(`no session ${id} in ${cwd}`)
-      switchTo(session.resume(SessionStore.open(file)), "resume")
+      switchTo(session.resume(SessionStore.open(file), agent().model), "resume")
     },
     compact: (instructions) => {
       idle("compact")
