@@ -4,7 +4,9 @@ import { type Agent, trackWorkspace } from "@amira/core"
 import { runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
+import { resolveConfig } from "./config.ts"
 import { runPrint } from "./print.ts"
+import { runProviderCommand } from "./provider-command.ts"
 import { createSession } from "./session.ts"
 
 async function main(argv: string[]): Promise<number> {
@@ -18,6 +20,13 @@ async function main(argv: string[]): Promise<number> {
 }
 
 async function run(argv: string[]): Promise<number> {
+  if (argv[0] === "provider") {
+    const io = {
+      stdout: (s: string) => void process.stdout.write(s),
+      stderr: (s: string) => void process.stderr.write(s),
+    }
+    return runProviderCommand(argv.slice(1), io)
+  }
   const args = parseCliArgs(argv)
   if (args.help) {
     process.stdout.write(`${USAGE}\n`)
@@ -27,7 +36,18 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${pkg.version}\n`)
     return 0
   }
-  if (!args.model) throw new UsageError("no model selected. Pass --model provider/model or set AMIRA_MODEL.")
+  if (args.shell === "powershell" && process.platform !== "win32") {
+    throw new UsageError("--shell powershell is only available on Windows")
+  }
+  const config = resolveConfig(args)
+  // The interactive UI covers stderr, so there the warnings are shown as startup events.
+  if (args.print) for (const w of config.warnings) process.stderr.write(`amira: warning: ${w}\n`)
+  const modelRef = config.settings.model
+  if (!modelRef) {
+    throw new UsageError(
+      'no model selected. Pass --model provider/model, set AMIRA_MODEL or set "model" in settings.json.',
+    )
+  }
   const interactive = !args.print
   if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
@@ -45,10 +65,15 @@ async function run(argv: string[]): Promise<number> {
   }
 
   const { agent, host, startupEvents } = await createSession({
-    model: args.model,
+    model: modelRef,
     cwd: args.cwd,
     extensions: args.extensions,
     noBuiltins: args.noBuiltins,
+    disabledTools: config.disabledTools,
+    settings: config.settings,
+    providers: config.providers,
+    apiKeys: config.apiKeys,
+    ...(args.print ? {} : { warnings: config.warnings }),
     onSubscriberError,
   })
   agentRef = agent

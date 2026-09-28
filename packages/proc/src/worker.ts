@@ -28,6 +28,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     onChunk: (chunk) => post({ type: "chunk", id, chunk }),
     ...(request.env ? { env: request.env } : {}),
     ...(request.gated ? { gated: true } : {}),
+    ...(request.gateLine !== undefined ? { gateLine: request.gateLine } : {}),
+    ...(request.viaCmd ? { viaCmd: true } : {}),
     ...(request.stdoutOnly ? { stdoutOnly: true } : {}),
   })
     .then(

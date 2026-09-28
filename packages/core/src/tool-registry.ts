@@ -11,6 +11,19 @@ interface Registered {
 export class ToolRegistry {
   /** Per name, a stack of registrations; the last one wins. */
   #tools = new Map<string, Registered[]>()
+  #disabled = new Set<string>()
+
+  /**
+   * Hides tools by name from the model. A disabled tool is not offered and calling it
+   * anyway is treated as an unknown tool. Replaces any previous set.
+   */
+  setDisabled(names: Iterable<string>): void {
+    this.#disabled = new Set(names)
+  }
+
+  get disabled(): ReadonlySet<string> {
+    return this.#disabled
+  }
 
   /**
    * Replacing an existing tool requires `override: true`; otherwise it is a conflict.
@@ -37,6 +50,7 @@ export class ToolRegistry {
   }
 
   get(name: string): ToolDefinition | undefined {
+    if (this.#disabled.has(name)) return undefined
     return this.#tools.get(name)?.at(-1)?.tool
   }
 
@@ -48,7 +62,7 @@ export class ToolRegistry {
   active(): ToolDefinition[] {
     return this.#current()
       .map((r) => r.tool)
-      .filter((t) => (t.exposure ?? "active") === "active")
+      .filter((t) => (t.exposure ?? "active") === "active" && !this.#disabled.has(t.name))
   }
 
   specs(): ToolSpec[] {

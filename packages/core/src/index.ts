@@ -1,4 +1,5 @@
 export * from "./agent.ts"
+export * from "./config/index.ts"
 export * from "./event-bus.ts"
 export * from "./extensions.ts"
 export * from "./git.ts"

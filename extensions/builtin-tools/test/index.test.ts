@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import type { ExtensionAPI, ToolDefinition } from "@amira/api"
 import extension from "../src/index.ts"
 
-test("registers the six built-in tools with the expected concurrency", async () => {
+test("registers the built-in tools (plus powershell on Windows) with the expected concurrency", async () => {
   const tools: ToolDefinition[] = []
   const api: ExtensionAPI = {
     apiVersion: "0.1.0",
@@ -12,6 +12,7 @@ test("registers the six built-in tools with the expected concurrency", async () 
     },
     registerStatusItem: () => () => {},
     requestRender: () => {},
+    settings: {},
     on: () => () => {},
     intercept: () => () => {},
     runCommand: () => Promise.reject(new Error("not used")),
@@ -19,9 +20,10 @@ test("registers the six built-in tools with the expected concurrency", async () 
   await extension(api)
   expect(Object.fromEntries(tools.map((t) => [t.name, t.concurrency]))).toEqual({
     read: "parallel",
-    write: "serial",
-    edit: "serial",
-    bash: "serial",
+    write: "parallel",
+    edit: "parallel",
+    bash: "parallel",
+    ...(process.platform === "win32" ? { powershell: "parallel" } : {}),
     grep: "parallel",
     glob: "parallel",
   })

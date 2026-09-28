@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { defineTool, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
-import { displayPath, resolvePath } from "./paths.ts"
+import { displayPath, fileKey, resolvePath } from "./paths.ts"
 
 export interface WriteParams {
   path: string
@@ -26,7 +26,9 @@ export const writeTool = defineTool<WriteParams>({
     required: ["path", "content"],
     additionalProperties: false,
   },
-  concurrency: "serial",
+  // Writes to different files run in parallel; writes to the same file keep their order (D71).
+  concurrency: "parallel",
+  concurrencyKey: (p, ctx) => fileKey(ctx.cwd, p.path),
   async execute({ path, content }, ctx) {
     if (typeof path !== "string" || path === "") return textResult("path is required", true)
     if (typeof content !== "string") return textResult("content must be a string", true)

@@ -10,9 +10,15 @@ export interface CliArgs {
   cwd: string
   extensions: string[]
   noBuiltins: boolean
+  /** Which shell tools the model gets on Windows (D68). Unset: from settings. */
+  shell?: ShellMode
+  /** Tools hidden from the model (D70). Unset: from settings. */
+  disabledTools?: string[]
   help: boolean
   version: boolean
 }
+
+export type ShellMode = "auto" | "bash" | "powershell"
 
 export class UsageError extends Error {}
 
@@ -23,18 +29,36 @@ Without --print, opens the interactive UI; a prompt becomes the first message.
 Options:
   -p, --print           Run one turn non-interactively and print the reply
       --json            With --print, write every event as a JSON line to stdout
-  -m, --model <ref>     Model as provider/model (default: $AMIRA_MODEL)
+  -m, --model <ref>     Model as provider/model (default: $AMIRA_MODEL, then
+                        "model" in settings.json)
   -e, --extension <f>   Load an extension file (repeatable; relative to where
                         amira is run, not to --cwd)
       --no-builtins     Do not load the built-in tools
+      --shell <mode>    Shell tools on Windows: auto (bash and powershell, the
+                        model picks), bash or powershell (default: "shell"
+                        in settings.json, else auto)
+      --disable-tools <names>
+                        Hide tools from the model, comma-separated (repeatable;
+                        replaces "tools.disabled" from settings.json)
   -C, --cwd <dir>       Working directory (default: current directory)
   -h, --help            Show this help
   -v, --version         Show the version
 
 Use -- before a prompt that starts with a dash: amira -p -- "-v means verbose?"
 
-Providers read their API key from the environment, e.g. OPENAI_API_KEY,
-DEEPSEEK_API_KEY or OPENROUTER_API_KEY. Ollama and LM Studio need no key.`
+Commands:
+  amira provider presets [id]   Print settings.json entries for known providers
+  amira provider add <id>       Add a preset to ~/.amira/settings.json
+
+Settings come from ~/.amira/settings.json, <cwd>/.amira/settings.json and
+<cwd>/.amira/settings.local.json (later files win; flags win over all). Provider
+baseUrl, apiKeyEnv and headers are only read from ~/.amira/settings.json.
+
+Built-in providers: anthropic, openai, openai-chat and google. Others, such as
+deepseek, openrouter, ollama or lmstudio, are added with amira provider add.
+API keys come from the environment (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+GEMINI_API_KEY, ...) or from ~/.amira/auth.json: {"<provider>": {"apiKey": "..."}}.
+$AMIRA_HOME replaces ~/.amira.`
 
 export function parseCliArgs(
   argv: string[],
@@ -58,6 +82,15 @@ export function parseCliArgs(
     version: values.version ?? false,
   }
   if (positionals.length) args.prompt = positionals.join(" ")
+  if (values.shell !== undefined) args.shell = parseShell(values.shell)
+  if (values["disable-tools"]) {
+    args.disabledTools = values["disable-tools"].flatMap((v) =>
+      v
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
+    )
+  }
   const model = values.model ?? env.AMIRA_MODEL
   if (model) args.model = model
   if (args.json && !args.print) throw new UsageError("--json requires --print")
@@ -67,6 +100,12 @@ export function parseCliArgs(
     throw new UsageError(`--cwd is not a directory: ${args.cwd}`)
   }
   return args
+}
+
+function parseShell(value: string | undefined): ShellMode {
+  if (value === undefined || value === "auto") return "auto"
+  if (value === "bash" || value === "powershell") return value
+  throw new UsageError(`--shell must be auto, bash or powershell, got "${value}"`)
 }
 
 function isDirectory(p: string): boolean {
@@ -87,6 +126,8 @@ function parse(argv: string[]) {
       model: { type: "string", short: "m" },
       extension: { type: "string", short: "e", multiple: true },
       "no-builtins": { type: "boolean" },
+      shell: { type: "string" },
+      "disable-tools": { type: "string", multiple: true },
       cwd: { type: "string", short: "C" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },

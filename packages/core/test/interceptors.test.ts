@@ -82,3 +82,16 @@ test("tool registry requires override: true to replace, and restores on unregist
   )
   expect(reg.specs().map((s) => s.name)).toEqual(["read"])
 })
+
+test("disabled tools are hidden from the model and cannot be called", () => {
+  const reg = new ToolRegistry()
+  const mk = (name: string) =>
+    defineTool({ name, description: "", parameters: {}, execute: async () => ({ content: [] }) })
+  reg.register(mk("bash"), "b")
+  reg.register(mk("powershell"), "b")
+  reg.setDisabled(["powershell"])
+  expect(reg.specs().map((s) => s.name)).toEqual(["bash"])
+  expect(reg.get("powershell")).toBeUndefined()
+  reg.setDisabled([])
+  expect(reg.get("powershell")).toBeDefined()
+})

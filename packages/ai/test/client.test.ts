@@ -33,6 +33,9 @@ test("refuses to send an unauthenticated request when the key variable is missin
   let called = false
   const ai = createAi({
     env: {},
+    providers: [
+      { id: "openrouter", dialect: "openai-chat", baseUrl: "http://or", apiKeyEnv: "OPENROUTER_API_KEY" },
+    ],
     fetch: (async () => {
       called = true
       return sseResponse([])
@@ -52,6 +55,7 @@ test("keyless providers and explicit keys need no environment variable", async (
     env: {},
     fetch: fakeFetch(() => sseResponse([]), seen),
     providers: [
+      { id: "ollama", dialect: "openai-chat", baseUrl: "http://localhost:11434/v1" },
       { id: "keyed", dialect: "openai-chat", baseUrl: "http://k", apiKeyEnv: "KEYED", apiKey: "inline" },
     ],
   })
@@ -61,4 +65,31 @@ test("keyless providers and explicit keys need no environment variable", async (
   expect(seen.headers.authorization).toBeUndefined()
   expect((await events(ai.stream({ ...req("keyed"), model: ai.model("keyed/m") }))).at(-1)?.type).toBe("done")
   expect(seen.headers.authorization).toBe("Bearer inline")
+})
+
+test("the key comes from the variable, then its fallbacks, then the stored keys", async () => {
+  const seen: Seen = {}
+  const providers = [
+    { id: "p", dialect: "openai-chat", baseUrl: "http://p", apiKeyEnv: "MAIN", apiKeyEnvFallbacks: ["ALT"] },
+  ]
+  const auth = async (env: Record<string, string>, apiKeys?: Record<string, string>) => {
+    seen.headers = undefined
+    const ai = createAi({ env, providers, fetch: fakeFetch(() => sseResponse([]), seen), apiKeys })
+    const evs = await events(ai.stream({ ...req("p"), model: ai.model("p/m") }))
+    const last = evs.at(-1)
+    return last?.type === "error" ? (last as ErrorEvent).error.message : seen.headers?.authorization
+  }
+  expect(await auth({ MAIN: "a", ALT: "b" }, { p: "c" })).toBe("Bearer a")
+  expect(await auth({ ALT: "b" }, { p: "c" })).toBe("Bearer b")
+  expect(await auth({}, { p: "c" })).toBe("Bearer c")
+  expect(await auth({})).toBe("MAIN or ALT is not set; export it to use provider p")
+})
+
+test("the built-in providers are anthropic, openai, openai-chat and google", () => {
+  const ai = createAi()
+  expect(ai.providers().map((p) => p.id)).toEqual(["anthropic", "openai", "openai-chat", "google"])
+  expect(ai.model("anthropic/claude-x").caps).toMatchObject({ thinking: true, promptCache: true })
+  expect(ai.model("openai/gpt-5").dialect).toBe("openai-responses")
+  expect(ai.model("google/gemini-x").dialect).toBe("google-gemini")
+  expect(() => ai.model("deepseek/x")).toThrow(/unknown provider "deepseek"/)
 })
