@@ -1,4 +1,13 @@
-import { closeSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import path from "node:path"
 import type { ProviderSettings } from "@amira/api"
 import { readJsonFile } from "./load.ts"
@@ -22,6 +31,56 @@ export function addProviderToSettings(
     if (providers[id] !== undefined) return "exists"
     writeJsonAtomic(file, { ...raw, providers: { ...providers, [id]: provider } })
     return "added"
+  })
+}
+
+/**
+ * Changes one provider of a settings file under its lock, keeping everything else: `change`
+ * gets the entry (undefined when there is none) and returns the new one, or undefined to
+ * remove it. Nothing is written when it returns the entry unchanged.
+ */
+export function updateProviderInSettings(
+  file: string,
+  id: string,
+  change: (current: ProviderSettings | undefined) => ProviderSettings | undefined,
+): { before?: ProviderSettings; after?: ProviderSettings } {
+  return withLock(file, () => {
+    const raw = readJsonFile(file) ?? {}
+    if (!isPlainObject(raw)) throw new SettingsError(file, ["must hold a JSON object"])
+    const providers = raw.providers ?? {}
+    if (!isPlainObject(providers)) throw new SettingsError(file, ['"providers" must be an object'])
+    const before = providers[id] as ProviderSettings | undefined
+    const after = change(before === undefined ? undefined : structuredClone(before))
+    const result = { ...(before ? { before } : {}), ...(after ? { after } : {}) }
+    if (JSON.stringify(after) === JSON.stringify(before)) return result
+    const next: Record<string, unknown> = { ...providers }
+    if (after === undefined) delete next[id]
+    else next[id] = after
+    writeJsonAtomic(file, { ...raw, providers: next })
+    return result
+  })
+}
+
+/**
+ * Stores (or with undefined, removes) a provider's API key in auth.json under its lock,
+ * keeping the other entries. On POSIX systems the file is only readable by its owner; see
+ * restrictToCurrentUser for Windows. Returns whether the file changed.
+ */
+export function setAuthKey(file: string, id: string, apiKey: string | undefined): boolean {
+  return withLock(file, () => {
+    const raw = readJsonFile(file) ?? {}
+    if (!isPlainObject(raw)) throw new SettingsError(file, ["must hold a JSON object"])
+    const current = raw[id]
+    const next: Record<string, unknown> = { ...raw }
+    if (apiKey === undefined) {
+      if (current === undefined) return false
+      delete next[id]
+    } else {
+      if (isPlainObject(current) && current.apiKey === apiKey) return false
+      next[id] = { ...(isPlainObject(current) ? current : {}), apiKey }
+    }
+    writeJsonAtomic(file, next, 0o600)
+    return true
   })
 }
 
@@ -67,9 +126,11 @@ function removeIfStale(lock: string): boolean {
   }
 }
 
-function writeJsonAtomic(file: string, value: unknown): void {
+function writeJsonAtomic(file: string, value: unknown, mode?: number): void {
   const tmp = `${file}.${process.pid}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`)
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, mode !== undefined ? { mode } : {})
+  // The mode given to writeFileSync only applies to a new file, and the umask may cut it.
+  if (mode !== undefined && process.platform !== "win32") chmodSync(tmp, mode)
   try {
     renameSync(tmp, file)
   } catch (err) {
