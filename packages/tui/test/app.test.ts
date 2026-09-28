@@ -348,7 +348,8 @@ test("the editor sits in a rounded box above the status bar, with the caret insi
 test("a long draft scrolls inside the input box instead of growing past the screen", async () => {
   const { terminal, screen, live, exited } = await setup([], { cols: 30, rows: 12 })
   await waitFor(() => live().includes("Message Amira"), "input box")
-  terminal.send(`\x1b[200~${Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join("\n")}\x1b[201~`)
+  // Typed with Shift+Enter between rows: a paste this long would be folded into a placeholder.
+  terminal.send(Array.from({ length: 20 }, (_, i) => `row ${i + 1}`).join("\x1b[13;2u"))
   await waitFor(() => live().includes("row 20"), "draft")
   const rows = screen.lines
   const top = rows.findIndex((l) => l.startsWith("╭"))
@@ -833,6 +834,25 @@ test("a diff review shows the diff above its options", async () => {
     type: "text",
     text: "keep",
   })
+  terminal.send("\x03")
+  await exited
+})
+
+const userTexts = (agent: Agent) =>
+  agent.messages.flatMap((m) =>
+    m.role === "user" ? [m.content.map((b) => (b.type === "text" ? b.text : "")).join("")] : [],
+  )
+
+test("a big paste shows as one placeholder in the input box and is sent in full", async () => {
+  const { terminal, agent, live, shows, idle, exited } = await setup([{ text: "got it" }])
+  const log = Array.from({ length: 30 }, (_, i) => `log line ${i}`).join("\n")
+  terminal.send(`see \x1b[200~${log}\x1b[201~ please`)
+  await waitFor(() => live().includes("see [pasted 30 lines #1] please"), "placeholder")
+  expect(live()).not.toContain("log line 3")
+  terminal.send("\r")
+  await shows("got it")
+  await idle()
+  expect(userTexts(agent)).toEqual([`see ${log} please`])
   terminal.send("\x03")
   await exited
 })

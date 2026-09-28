@@ -63,6 +63,9 @@ export interface InteractiveOptions {
   theme?: Theme
 }
 
+/** Bracketed pastes this big become one placeholder in the editor, expanded when sent. */
+const FOLD_PASTES = { lines: 8, chars: 1000 }
+
 /** A component that draws a function's lines; handy for small pieces of view state. */
 class View implements Component {
   constructor(private draw: (width: number, ctx: RenderContext) => string[]) {}
@@ -139,9 +142,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
-  const editor = new Editor({ prompt: theme.accent("› "), placeholder: "Message Amira", onSubmit: submit })
+  const editor = new Editor({
+    prompt: theme.accent("› "),
+    placeholder: "Message Amira",
+    onSubmit: (text) => submit(text),
+    foldPastes: FOLD_PASTES,
+  })
   const commands = opts.commands
   const popup = commands ? new CommandPopup(commands, () => renderer.requestRender()) : undefined
+  /**
+   * Tells the command popup what the editor holds. Cheap on any text: it only looks at a single
+   * line.
+   */
+  const syncCompletions = () => {
+    popup?.update(editor.lineCount === 1 ? editor.getText() : "")
+  }
   const newlineKey = capabilities.shiftEnter ? "Shift+Enter" : "Ctrl+Enter"
   // Windows Terminal and conhost take Alt+Enter for fullscreen, so Ctrl+Q queues there too.
   const queueKey = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
@@ -179,21 +194,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       ...queued.flatMap((q) => wrapText(ctx.theme.muted(`queued › ${q.replace(/\s+/g, " ")}`), width)),
     ]),
     new View((width, ctx) => {
-      if (dialogs[0] || !popup) return []
+      if (dialogs[0]) return []
       // Synced on every frame, so text set any way (typing, Tab, a dropped steer) is completed.
-      popup.update(editor.getText())
-      return popup.render(width, ctx)
+      syncCompletions()
+      if (popup?.visible) return popup.render(width, ctx)
+      return []
     }),
     new View((width, ctx) => (dialogs[0] ? dialogs[0].render(width, ctx) : inputBox.render(width, ctx))),
     new StatusBar(() => opts.status.snapshot()),
     new View((width, ctx) => {
       if (dialogs[0]) return []
-      if (popup?.visible) {
-        return [
-          ctx.theme.muted(truncateToWidth("↑↓ select · Tab complete · Enter run · Esc close", width, "…")),
-        ]
-      }
-      const ctrlC = working ? "interrupt" : editor.getText() ? "clear" : "quit"
+      const fixed = popup?.visible ? "↑↓ select · Tab complete · Enter run · Esc close" : undefined
+      if (fixed) return [ctx.theme.muted(truncateToWidth(fixed, width, "…"))]
+      const ctrlC = working ? "interrupt" : editor.isEmpty ? "quit" : "clear"
       const send = working ? `Enter steer · ${queueKey} queue` : "Enter send"
       const esc = working ? "Esc interrupt · " : ""
       const hint = `${send} · ${newlineKey} newline · ${esc}Ctrl+C ${ctrlC}`
@@ -365,7 +378,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (e.data.state === "injected") renderer.commit([...userLines(theme, text), ""])
         // Put a message the turn dropped back into the editor rather than losing it.
         else if (e.data.state === "dropped")
-          editor.setText(editor.getText() ? `${editor.getText()}\n${text}` : text)
+          editor.setParts(editor.isEmpty ? [text] : [...editor.getParts(), `\n${text}`])
         // A promoted one shows up again as the next turn's prompt.
         break
       }
@@ -410,7 +423,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     })
   }
 
-  /** Enter: runs a slash command, sends, or while a turn runs steers it (D29). */
+  /**
+   * Enter: runs a slash command, sends, or while a turn runs steers it (D29).
+   */
   function submit(text: string) {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -473,7 +488,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const dialog = dialogs[0]
     // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
     // with candidates for text the editor no longer holds.
-    if (!dialog) popup?.update(editor.getText())
+    if (!dialog) syncCompletions()
     if (dialog) {
       // Ctrl+C closes the dialog like Esc.
       dialog.handleInput(matchesKey(e, "c", { ctrl: true }) ? key("escape") : e)
@@ -483,9 +498,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       queue()
     } else if (matchesKey(e, "c", { ctrl: true })) {
       if (working) agent.abort()
-      else if (editor.getText()) editor.clear()
+      else if (!editor.isEmpty) editor.clear()
       else return quit()
-    } else if (matchesKey(e, "d", { ctrl: true }) && !working && !editor.getText()) {
+    } else if (matchesKey(e, "d", { ctrl: true }) && !working && editor.isEmpty) {
       return quit()
     } else if (matchesKey(e, "escape")) {
       if (working) agent.abort()
