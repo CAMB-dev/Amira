@@ -173,10 +173,11 @@ test("the status bar shows the speed of the last reply", async () => {
   expect(items.speed).toMatch(/tok\/s$/)
 })
 
-test("formats costs to a tenth of a cent", () => {
-  expect([0, 0.0001, 0.0123, 0.4567, 1.234, 25].map(formatCost)).toEqual([
+test("formats costs with more digits for small amounts", () => {
+  expect([0, 0.00001, 0.00012, 0.0123, 0.4567, 1.234, 25].map(formatCost)).toEqual([
     "$0.000",
-    "<$0.001",
+    "<$0.0001",
+    "$0.0001",
     "$0.012",
     "$0.457",
     "$1.23",

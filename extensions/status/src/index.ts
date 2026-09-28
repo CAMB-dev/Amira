@@ -17,11 +17,11 @@ export function formatContext(used: number, window: number | undefined): string 
   return `${formatTokens(used)}/${formatTokens(window)} (${pct}%)`
 }
 
-/** "$0.012", "$1.25"; amounts under a tenth of a cent show as "<$0.001". */
+/** "$1.25", "$0.012", "$0.0004"; tinier amounts show as "<$0.0001". */
 export function formatCost(usd: number): string {
   if (usd >= 1) return `$${usd.toFixed(2)}`
-  if (usd > 0 && usd < 0.0005) return "<$0.001"
-  return `$${usd.toFixed(3)}`
+  if (usd >= 0.01 || usd === 0) return `$${usd.toFixed(3)}`
+  return usd < 0.00005 ? "<$0.0001" : `$${usd.toFixed(4)}`
 }
 
 /**
