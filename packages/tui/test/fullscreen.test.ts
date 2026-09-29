@@ -319,7 +319,7 @@ test("sub-agents stay under their call, also running in the background after the
 
 test("blocks fold and unfold: a tool call's output, a reply's details; Ctrl+O applies to all calls", async () => {
   const details = "Intro\n\n<details>\n<summary>More</summary>\n\nhidden body\n</details>\n\nOutro"
-  const { terminal, view, shows, idle, exited } = await setup([
+  const { terminal, screen, view, shows, idle, exited } = await setup([
     { toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
     { text: details },
   ])
@@ -351,6 +351,10 @@ test("blocks fold and unfold: a tool call's output, a reply's details; Ctrl+O ap
   expect(view()).not.toContain("line 3")
   terminal.send("\x03")
   await exited
+  // What was folded by hand prints as the inline transcript shows it: nothing is lost.
+  expect(screen.mainText).toContain("hidden body")
+  expect(screen.mainText).toContain("    line 3")
+  expect(screen.mainText).not.toContain("▌")
 })
 
 test("Ctrl+F finds text in the transcript, highlights matches and moves between them", async () => {

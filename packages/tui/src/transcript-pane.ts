@@ -141,12 +141,16 @@ export class TranscriptPane {
     return out
   }
 
-  /** Every block at `width`, spaced like the inline transcript: what exiting prints. */
+  /**
+   * Every block at `width`, spaced like the inline transcript: what exiting prints. Blocks
+   * folded or unfolded by hand print as the inline transcript shows them, so nothing folded
+   * away is lost.
+   */
   printout(env: BlockEnv): string[] {
     const out: string[] = []
     let prev: Block | undefined
     for (const b of this.blocks) {
-      const lines = this.lines(b, env, false)
+      const lines = b.refolded ? b.printLines(env) : this.lines(b, env, false)
       if (!lines.length) continue
       if (prev && gapBetween(prev.kind, b.kind)) out.push("")
       out.push(...lines)

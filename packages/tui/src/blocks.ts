@@ -65,6 +65,16 @@ export abstract class Block {
   /** Folds or unfolds it; only called when `foldable`. */
   toggleFold(_env: BlockEnv): void {}
 
+  /** Whether it was folded or unfolded by hand, so it shows other than it would inline. */
+  get refolded(): boolean {
+    return false
+  }
+
+  /** Its lines as the inline transcript shows them, whatever it was folded to: what exiting prints. */
+  printLines(env: BlockEnv): string[] {
+    return this.lines(env)
+  }
+
   touch(): void {
     this.version++
   }
@@ -254,6 +264,20 @@ export class ReplyBlock extends Block {
     this.folded = !this.folded
     this.touch()
   }
+
+  override get refolded(): boolean {
+    return this.folded
+  }
+
+  override printLines(env: BlockEnv): string[] {
+    const folded = this.folded
+    this.folded = false
+    try {
+      return this.lines(env)
+    } finally {
+      this.folded = folded
+    }
+  }
 }
 
 /** A tool call: its head, its output while it runs, then its result, with its sub-agents under it. */
@@ -362,6 +386,20 @@ export class ToolBlock extends Block {
   override toggleFold(env: BlockEnv): void {
     this.folding = this.detail(env) === "full" ? "collapsed" : "full"
     this.touch()
+  }
+
+  override get refolded(): boolean {
+    return this.folding !== undefined
+  }
+
+  override printLines(env: BlockEnv): string[] {
+    const folding = this.folding
+    this.folding = undefined
+    try {
+      return this.lines(env)
+    } finally {
+      this.folding = folding
+    }
   }
 }
 
