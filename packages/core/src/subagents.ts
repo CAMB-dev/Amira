@@ -15,6 +15,10 @@ import {
 import {
   type AnyEvent,
   type ApprovalRequest,
+  type AskAnswer,
+  type AskOutcome,
+  type AskQuestion,
+  type AskRequest,
   type Budget,
   type ChildSession,
   type ChildState,
@@ -556,6 +560,7 @@ export class AgentTree {
       depth,
       tree: this,
       approve: (request, signal) => this.#askParent(parent, request, signal),
+      ask: (request, signal) => this.#askParentQuestions(parent, request, signal),
       ...(this.#opts.compaction ? { compaction: this.#opts.compaction } : {}),
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
       // The tree runs a child's turns, and a failed turn ends it: nothing is ever sent again
@@ -1042,13 +1047,25 @@ export class AgentTree {
    * One question to a parent at a time: each is a call with the parent's whole context, and
    * children asking together would otherwise start that many such calls at once.
    */
-  async #askParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
-    const before = this.#asking.get(parent.sessionId) ?? Promise.resolve()
-    const mine = before.then(() =>
-      signal.aborted
-        ? { approved: false, reason: "aborted before the parent was asked" }
-        : this.#consultParent(parent, req, signal),
+  #askParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
+    return this.#oneAtATime(
+      parent,
+      signal,
+      { approved: false, reason: "aborted before the parent was asked" },
+      () => this.#consultParent(parent, req, signal),
     )
+  }
+
+  /** A child's questions (ask_user) go to its commander the same way, in the same line. */
+  #askParentQuestions(parent: Agent, req: AskRequest, signal: AbortSignal): Promise<AskOutcome> {
+    return this.#oneAtATime(parent, signal, { declined: true }, () =>
+      this.#consultParentQuestions(parent, req, signal),
+    )
+  }
+
+  async #oneAtATime<T>(parent: Agent, signal: AbortSignal, aborted: T, ask: () => Promise<T>): Promise<T> {
+    const before = this.#asking.get(parent.sessionId) ?? Promise.resolve()
+    const mine = before.then(() => (signal.aborted ? aborted : ask()))
     const tail = mine.catch(() => {})
     this.#asking.set(parent.sessionId, tail)
     try {
@@ -1059,17 +1076,22 @@ export class AgentTree {
   }
 
   /**
-   * D14: a child's approval request goes to its parent's model, not to the user. It gets the
-   * parent's conversation and the request, without tools, and must answer APPROVE or DENY.
+   * The parent's model answers a child's questions like it decides its approvals (D14): with
+   * its conversation, without tools. It may answer them, decline, or reply ASK_USER to pass
+   * them on to whoever answers for itself (the user, or its own commander).
    */
-  async #consultParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
-    const args = JSON.stringify(req.args, null, 2)
-    const question = [
-      `A sub-agent you started (session ${req.sessionId}) wants to call the tool "${req.name}" and needs your approval.`,
-      `Why it needs approval: ${req.reason}`,
-      `Arguments:\n${args.length > 4000 ? `${args.slice(0, 4000)}\n[...]` : args}`,
-      "Reply with APPROVE or DENY on the first line, then one short sentence with your reason.",
-    ].join("\n\n")
+  async #consultParentQuestions(parent: Agent, req: AskRequest, signal: AbortSignal): Promise<AskOutcome> {
+    const reply = await this.#consult(parent, askParentPrompt(req), signal)
+    if (!reply.text) return { declined: true, by: `the commander (${reply.failure ?? "no reply"})` }
+    const first = reply.text.trimStart().split("\n", 1)[0]!.trim().toUpperCase()
+    if (/^\W*ASK_USER\b/.test(first)) return parent.askQuestions(req, signal)
+    if (/^\W*DECLINE\b/.test(first)) return { declined: true, by: "the commander" }
+    const answers = parseParentAnswers(req.questions, reply.text)
+    return answers ? { answers, by: "the commander" } : { declined: true, by: "the commander" }
+  }
+
+  /** One call to the parent's model with its conversation and `question`, without tools. */
+  async #consult(parent: Agent, question: string, signal: AbortSignal) {
     let reply: AssistantMessage | undefined
     let failure: string | undefined
     for await (const ev of this.#opts.ai.stream(
@@ -1085,14 +1107,84 @@ export class AgentTree {
       if (ev.type === "error") failure = ev.error.message
     }
     if (reply?.usage) this.recordUsage(parent, reply.usage)
-    if (!reply) return { approved: false, reason: `the parent could not decide: ${failure ?? "no reply"}` }
-    const text = finalText([reply])
+    return { text: reply ? finalText([reply]) : undefined, failure }
+  }
+
+  /**
+   * D14: a child's approval request goes to its parent's model, not to the user. It gets the
+   * parent's conversation and the request, without tools, and must answer APPROVE or DENY.
+   */
+  async #consultParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
+    const args = JSON.stringify(req.args, null, 2)
+    const question = [
+      `A sub-agent you started (session ${req.sessionId}) wants to call the tool "${req.name}" and needs your approval.`,
+      `Why it needs approval: ${req.reason}`,
+      `Arguments:\n${args.length > 4000 ? `${args.slice(0, 4000)}\n[...]` : args}`,
+      "Reply with APPROVE or DENY on the first line, then one short sentence with your reason.",
+    ].join("\n\n")
+    const { text, failure } = await this.#consult(parent, question, signal)
+    if (text === undefined)
+      return { approved: false, reason: `the parent could not decide: ${failure ?? "no reply"}` }
     const verdict = /\b(APPROVE|DENY)\b/i.exec(text)?.[1]?.toUpperCase()
     const why = text.replace(/^[^\n]*\n?/, "").trim()
     return verdict === "APPROVE"
       ? { approved: true }
       : { approved: false, reason: `the parent agent denied it${why ? `: ${why}` : ""}` }
   }
+}
+
+/** A child's questions as its commander reads them, with how to answer. */
+function askParentPrompt(req: AskRequest): string {
+  const questions = req.questions.map((q, i) => {
+    const how = q.multiSelect ? "choose any number" : "choose one"
+    const options = q.options.map((o) => `   - ${o.label}${o.description ? `: ${o.description}` : ""}`)
+    return [`${i + 1}. ${q.header ? `[${q.header}] ` : ""}${q.question} (${how})`, ...options].join("\n")
+  })
+  return [
+    `A sub-agent you started (session ${req.sessionId}) asks you ${req.questions.length === 1 ? "this question" : "these questions"} before it goes on:`,
+    questions.join("\n\n"),
+    [
+      'Answer with one line per question, numbered like the questions: "1: <option label>". Where several may be chosen, separate the labels with " | ". When no option fits, write your own answer instead of a label.',
+      "If the user should decide instead, reply with ASK_USER alone on the first line, and the questions go to the user. To refuse to answer, reply with DECLINE on the first line.",
+    ].join(" "),
+  ].join("\n\n")
+}
+
+/** Case, spacing, quotes and a "(Recommended)" mark do not matter when matching a label. */
+const labelKey = (s: string) =>
+  s
+    .replace(/\(recommended\)/i, "")
+    .replace(/^[\s"'`*_]+|[\s"'`*_.]+$/g, "")
+    .toLowerCase()
+
+/**
+ * The commander's numbered answers ("1: label", "2: a | b", or its own words) as one answer
+ * per question; undefined when a question has none. A single question may be answered by the
+ * whole reply.
+ */
+export function parseParentAnswers(questions: AskQuestion[], text: string): AskAnswer[] | undefined {
+  const byNumber = new Map<number, string>()
+  for (const line of text.split("\n")) {
+    const m = /^\s*(?:\*\*)?(\d+)(?:\*\*)?\s*[:.)-]\s*(.+)$/.exec(line)
+    if (m && !byNumber.has(Number(m[1]))) byNumber.set(Number(m[1]), m[2]!.trim())
+  }
+  if (questions.length === 1 && !byNumber.has(1) && text.trim()) byNumber.set(1, text.trim())
+  const answers: AskAnswer[] = []
+  for (const [i, q] of questions.entries()) {
+    const reply = byNumber.get(i + 1)
+    if (!reply) return undefined
+    const labels = new Map(q.options.map((o) => [labelKey(o.label), o.label]))
+    const whole = labels.get(labelKey(reply))
+    if (whole) {
+      answers.push({ selected: [whole] })
+      continue
+    }
+    const parts = q.multiSelect ? reply.split("|").map((p) => p.trim()) : [reply]
+    const selected = parts.map((p) => labels.get(labelKey(p))).filter((l): l is string => l !== undefined)
+    const rest = parts.filter((p) => !labels.has(labelKey(p)))
+    answers.push({ selected: [...new Set(selected)], ...(rest.length ? { other: rest.join(" | ") } : {}) })
+  }
+  return answers
 }
 
 function resultInstructions(): string {

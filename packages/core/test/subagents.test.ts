@@ -3,18 +3,26 @@ import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type ModelRequest } from "@amira/ai"
-import { type AnyEvent, type Budget, type ChildSession, defineTool, textResult } from "@amira/api"
-import { Agent } from "../src/agent.ts"
+import {
+  type AnyEvent,
+  type AskQuestion,
+  type AskRequest,
+  type Budget,
+  type ChildSession,
+  defineTool,
+  textResult,
+} from "@amira/api"
+import { Agent, type Asker } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
 import { SessionStore } from "../src/session-store.ts"
-import { AgentTree, forkHistory, SpawnError } from "../src/subagents.ts"
+import { AgentTree, forkHistory, parseParentAnswers, SpawnError } from "../src/subagents.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
 
 /** Every model call goes through `reply`, which sees the request (and so the session's role). */
 async function setup(
   reply: (req: ModelRequest) => MockReply,
-  opts: { maxConcurrent?: number; maxDepth?: number; budget?: Budget; store?: boolean } = {},
+  opts: { maxConcurrent?: number; maxDepth?: number; budget?: Budget; store?: boolean; ask?: Asker } = {},
 ) {
   const mock = createMockDialect()
   for (let i = 0; i < 200; i++) mock.push(reply)
@@ -48,6 +56,7 @@ async function setup(
     interceptors,
     tools,
     ...(session ? { session } : {}),
+    ...(opts.ask ? { ask: opts.ask } : {}),
   })
   return { ai, mock, bus, events, tree, root, dir, session, interceptors, tools }
 }
@@ -460,6 +469,104 @@ test("a child's approval request goes to the parent's model (D14)", async () => 
       (e) => e.type === "status.changed" && e.sessionId === denied.id && e.data.status === "blocked",
     ),
   ).toBe(true)
+})
+
+/** A tool that puts the questions in its args to whoever answers and returns the outcome. */
+const askTool = defineTool<{ questions: AskQuestion[] }>({
+  name: "ask",
+  description: "ask",
+  parameters: { type: "object" },
+  execute: async ({ questions }, ctx) =>
+    textResult(JSON.stringify(await ctx.session!.askUser!(questions, ctx.signal))),
+})
+
+const QUESTIONS: AskQuestion[] = [
+  {
+    question: "Which approach?",
+    header: "Approach",
+    options: [{ label: "Fast (Recommended)" }, { label: "Safe" }],
+  },
+  {
+    question: "Extras?",
+    options: [{ label: "tests" }, { label: "docs" }, { label: "lint" }],
+    multiSelect: true,
+  },
+]
+
+/** The commander replies `commander`; the child asks QUESTIONS once and ends with the outcome. */
+async function askChild(commander: string, ask?: Asker) {
+  const prompts: string[] = []
+  const s = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      const text = last?.content[0]?.type === "text" ? last.content[0].text : ""
+      if (text.includes("asks you these questions")) {
+        prompts.push(text)
+        return { text: commander }
+      }
+      if (last?.role === "toolResult") return { text: "finished" }
+      return { toolCalls: [{ name: "ask", args: { questions: QUESTIONS } }] }
+    },
+    ask ? { ask } : {},
+  )
+  s.tools.register(askTool, "t")
+  const child = s.tree.spawn(s.root, { prompt: "p" })
+  await child.result()
+  await s.bus.flush()
+  const end = s.events.find((e) => e.type === "tool.execute.end" && e.sessionId === child.id)
+  const content = end?.type === "tool.execute.end" ? end.data.result.content[0] : undefined
+  const outcome = JSON.parse(content?.type === "text" ? content.text : "null")
+  return { ...s, prompts, outcome, child }
+}
+
+test("a child's questions go to its commander's model, which answers them", async () => {
+  const { outcome, prompts, events, child } = await askChild("1: Fast\n2: tests | lint | also docs please")
+  expect(prompts[0]).toContain("1. [Approach] Which approach? (choose one)")
+  expect(prompts[0]).toContain("   - Fast (Recommended)")
+  expect(prompts[0]).toContain("2. Extras? (choose any number)")
+  expect(outcome).toEqual({
+    answers: [
+      { selected: ["Fast (Recommended)"] },
+      { selected: ["tests", "lint"], other: "also docs please" },
+    ],
+    by: "the commander",
+  })
+  // The child shows as blocked while it waits, like for an approval.
+  expect(
+    events.some(
+      (e) =>
+        e.type === "status.changed" &&
+        e.sessionId === child.id &&
+        e.data.status === "blocked" &&
+        e.data.reason === "question for the user",
+    ),
+  ).toBe(true)
+})
+
+test("a commander may decline, or pass a child's questions on to whoever answers for it", async () => {
+  expect((await askChild("DECLINE\nnot mine to say")).outcome).toEqual({
+    declined: true,
+    by: "the commander",
+  })
+  // Without anyone above it, passing them on reaches nobody.
+  expect((await askChild("ASK_USER")).outcome).toEqual({ unavailable: "nobody can answer questions here" })
+  const asked: AskRequest[] = []
+  const user: Asker = async (req) => {
+    asked.push(req)
+    return { answers: [{ selected: ["Safe"] }, { selected: [] }] }
+  }
+  const { outcome, child } = await askChild("ASK_USER", user)
+  expect(outcome).toEqual({ answers: [{ selected: ["Safe"] }, { selected: [] }] })
+  expect(asked).toEqual([{ sessionId: child.id, toolCallId: expect.any(String), questions: QUESTIONS }])
+})
+
+test("a commander's answers are read loosely, and a question without one fails the lot", () => {
+  const one = [QUESTIONS[0]!]
+  expect(parseParentAnswers(one, "**1.** `safe`")).toEqual([{ selected: ["Safe"] }])
+  expect(parseParentAnswers(one, "Go with the fast one, but carefully")).toEqual([
+    { selected: [], other: "Go with the fast one, but carefully" },
+  ])
+  expect(parseParentAnswers(QUESTIONS, "1: Safe")).toBeUndefined()
 })
 
 test("approval questions to one parent are asked one at a time", async () => {
