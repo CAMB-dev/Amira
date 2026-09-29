@@ -20,7 +20,7 @@ export {
   loadKeybindings,
 } from "./keybindings.ts"
 export { HISTORY_LIMIT, PromptHistory } from "./prompt-history.ts"
-export { StatusBar } from "./status-bar.ts"
+export { type StatusEntry, statusBorder, statusLine } from "./status-bar.ts"
 export {
   type SubagentSource,
   SubagentViewer,

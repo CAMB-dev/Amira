@@ -47,6 +47,10 @@ export const ACTIONS = {
     scope: "input",
     description: "Fold or unfold the live panels above the activity line (e.g. a todo list)",
   },
+  help: {
+    scope: "input",
+    description: "List every key and what it does, while the input is empty and no list is open",
+  },
   "popup.up": { scope: "popup", description: "Select the previous command, argument or file" },
   "popup.down": { scope: "popup", description: "Select the next command, argument or file" },
   "popup.complete": {
@@ -130,6 +134,7 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "history.search": ["ctrl+r"],
     "tool-output": ["ctrl+o"],
     "panels.toggle": ["ctrl+t"],
+    help: ["?"],
     "popup.up": ["up"],
     "popup.down": ["down"],
     "popup.complete": ["tab"],

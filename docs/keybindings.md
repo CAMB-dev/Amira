@@ -15,6 +15,11 @@ a key or a list of keys:
 - A key replaces all of the action's default keys. An empty list unbinds the action.
 - The first key of an action is the one the hint line shows (for `newline`, the first one the
   terminal can report).
+- The hint line under the input shows only the few keys that matter now: `Enter send · ? keys`
+  while idle (`Shift+Enter newline` in place of `? keys` once the input has text), and
+  `Enter steer · Alt+Enter queue · Esc interrupt` while a turn runs. The lists, the history
+  search, the find bar and a block selection show their own. `?` (the `help` action) opens the
+  key reference: every action with the keys bound to it now and its name for this file.
 - The file is read at startup. Unknown actions, keys that cannot be read and a key bound to two
   actions in the same place are reported as warnings when Amira starts; the rest of the file
   still applies. If the file is not valid JSON, the default keys are used.
@@ -57,6 +62,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `history.search` | `ctrl+r` | Search the prompt history |
 | `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
 | `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as an extension's todo list) to one line each, or unfold them |
+| `help` | `?` | Open the key reference, while the input is empty and no dialog or list is open (with text, `?` is typed). It scrolls with ↑↓, PgUp/PgDn, Home/End; Esc, `q` or `?` close it |
 
 ### Completion lists
 
@@ -217,7 +223,7 @@ These live under `tui` in `settings.json`, the user's or a project's (`.amira/se
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `tui.mode` | `"fullscreen"` | `"fullscreen"` draws on the alternate screen: Amira scrolls, finds, folds and copies the conversation, redraws all of it when the window changes size, and prints it to the normal screen when it exits (also after a crash). `"inline"` leaves finished output in the terminal's own scrollback, for SSH, tmux, or native scrolling and selection. The `--inline` and `--fullscreen` flags win |
-| `tui.title` | `true` | Set the terminal title to `Amira · <folder> ⎇ <branch>`, marked with `●` while a turn runs; the previous title comes back on exit |
+| `tui.title` | `true` | Set the terminal title to `Amira · <folder> ⎇ <branch>`, marked with `●` while a turn runs; the previous title comes back on exit. The title bar draws it in the system's font, so `⎇` is safe there; the status in the input box's border leaves it out (Cascadia Code and Mono lack it) |
 | `tui.progress` | `true` | Show a busy indicator on the tab and taskbar while a turn runs, and a paused one while a dialog waits (OSC 9;4: Windows Terminal, ConEmu, VS Code, Ghostty) |
 | `tui.bell` | `true` | Ring the bell when a turn ends or a dialog opens while the terminal is in the background; where the terminal does not report focus, only after a turn of 15 seconds or more |
 | `tui.reflow` | `"auto"` | Inline mode: `"off"` for terminals that do not re-wrap lines when they get narrower, so a resize does not erase the transcript above the input; `"auto"` and `"on"` assume they do |

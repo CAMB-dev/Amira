@@ -59,9 +59,10 @@ import { HistorySearch } from "./history-search.ts"
 import { remoteImageFetch } from "./images.ts"
 import { createInlineView } from "./inline-view.ts"
 import { InputBox } from "./input-box.ts"
+import { KeyReference } from "./key-reference.ts"
 import { defaultKeys, Keybindings } from "./keybindings.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
-import { StatusBar } from "./status-bar.ts"
+import { statusLine } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
 import { TerminalStatus } from "./terminal-status.ts"
 import { formatElapsed, type PresenterSource } from "./tool-view.ts"
@@ -373,10 +374,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // Shift+Enter is no use where the terminal sends it as plain Enter.
   const newlineKey = keys.label("newline", (s) => capabilities.shiftEnter || !(s.shift && s.name === "enter"))
   const queueKey = keys.label("queue")
-  const inputBox = new InputBox(editor)
+  const inputBox = new InputBox(editor, () => opts.status.snapshot())
   /** Rows the last frame's dialog took, to size it against the rest of the bottom area. */
   let dialogRows = 0
-  const statusBar = new StatusBar(() => opts.status.snapshot())
   /** The user folded the live panels to one line each (panels.toggle). */
   let panelsCollapsed = false
   /** Whether the last frame showed a panel, for the key hint. */
@@ -411,15 +411,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }),
     // The activity line: what the turn is doing, how long it has run, the tokens it wrote.
     // It shows for the whole turn, also while tools run (their rows carry a spinner of their own).
+    // How to interrupt is on the hint line.
     new View((width, ctx) => {
       if (!working && !compacting) return []
       const label = activityLabel({ compacting, running: view.runningTools, preparing, thinking })
       const tokens = turnTokens + estimateTokens(streamedChars)
-      const interruptKey = keys.label("interrupt")
       const stats = [
         formatElapsed(Date.now() - (working ? turnStartedAt : compactStartedAt)),
         ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
-        ...(interruptKey ? [`${interruptKey} interrupt`] : []),
       ].join(` ${glyphs.separator} `)
       const head = `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
       return [truncateToWidth(head + ctx.theme.muted(stats), width, glyphs.more), ""]
@@ -431,24 +430,29 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         wrapText(ctx.theme.muted(`queued › ${(q.display ?? q.text).replace(/\s+/g, " ")}`), width),
       ),
     ]),
+    // The input box carries the status in its bottom border. A dialog takes the box's place;
+    // the status then gets a line of its own under it.
     new View((width, ctx) => {
       if (!dialogs[0]) return inputBox.render(width, ctx)
       const lines = dialogs[0].render(width, ctx)
       dialogRows = lines.length
-      return lines
+      return [...lines, ...statusLine(opts.status.snapshot(), width, ctx)]
     }),
-    // The command or skill list, file list or history search opens below the input box, in place of the
-    // status bar and the hint, so the box stays where it is while the list changes with each key.
+    // The command or skill list, file list or history search opens below the input box, in place of
+    // the hint, so the box stays where it is while the list changes with each key.
     new View((width, ctx) => {
       const list = dialogs[0] ? undefined : inputList()
-      if (!list) return statusBar.render(width, ctx)
+      if (!list) return []
       return [...list.lines(width, ctx), ctx.theme.muted(fitHint(list.hint(), width))]
     }),
+    // The key hint, or a note in its place. A find bar or block selection (full screen) shows
+    // its own keys above the transcript: the row stays, blank, so the layout does not jump.
     new View((width, ctx) => {
       if (dialogs[0] || inputList()) return []
       if (hintNote && Date.now() < hintNote.until) {
         return [ctx.theme.muted(truncateToWidth(hintNote.text, width, glyphs.more))]
       }
+      if (view.capturing) return [""]
       return [ctx.theme.muted(fitHint(inputHint(), width))]
     }),
   ])
@@ -475,59 +479,60 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     return rest
   }
 
-  /** What the keys do now, the most useful first to stay as the line narrows. */
+  /**
+   * The few keys that matter now, the most useful first to stay as the line narrows; the key
+   * reference (the help key) lists the rest.
+   */
   function inputHint(): HintItems {
-    const ctrlC = working ? "interrupt" : editor.isEmpty ? "quit" : "clear"
     const submitKey = keys.label("submit")
-    // The interrupt key is on the activity line while something runs.
+    const interruptKey = keys.label("interrupt")
+    if (working) {
+      return [
+        submitKey && { text: `${submitKey} ${enterDoes}`, priority: 5 },
+        queueKey && { text: `${queueKey} ${otherWay(enterDoes)}`, priority: 3 },
+        interruptKey && { text: `${interruptKey} interrupt`, priority: 4 },
+      ]
+    }
+    const helpKey = keys.label("help")
     return [
-      submitKey && { text: `${submitKey} ${working ? enterDoes : "send"}`, priority: 5 },
-      working && queueKey && { text: `${queueKey} ${otherWay(enterDoes)}`, priority: 3 },
-      newlineKey && { text: `${newlineKey} newline`, priority: 1 },
-      keys.label("cancel") && { text: `${keys.label("cancel")} ${ctrlC}`, priority: working ? 2 : 4 },
-      panelsShown &&
-        keys.label("panels.toggle") && {
-          text: `${keys.label("panels.toggle")} ${panelsCollapsed ? "unfold" : "fold"} panels`,
-          priority: 0,
-        },
-      ...view.hints(),
+      submitKey && { text: `${submitKey} send`, priority: 5 },
+      // A /compact runs without a turn; the interrupt key stops it too.
+      compacting && interruptKey && { text: `${interruptKey} interrupt`, priority: 4 },
+      // The help key only works on an empty input; with text, how to break a line matters more.
+      editor.isEmpty
+        ? helpKey && { text: `${helpKey} keys`, priority: 3 }
+        : newlineKey && { text: `${newlineKey} newline`, priority: 3 },
     ]
   }
 
   function searchHint(): HintItems {
     const accept = keys.label("search.accept")
     const older = keys.label("search.older")
-    const newer = keys.label("search.newer")
     const cancel = keys.label("search.cancel")
     return [
       accept && { text: `${accept} accept`, priority: 5 },
       older && { text: `${older} older`, priority: 3 },
-      newer && { text: `${newer} newer`, priority: 2 },
       cancel && { text: `${cancel} cancel`, priority: 4 },
     ]
   }
 
   /** The file list takes the command popup's keys; Tab and Enter both insert. */
   function fileHint(): HintItems {
-    const move = keys.pairLabel("popup.up", "popup.down")
     const insert = [keys.label("popup.complete"), keys.label("popup.accept")].filter(Boolean).join("/")
     const close = keys.label("popup.close")
     // Nothing to choose yet (the project is still listed, or the query still searched).
     if (!filePicker.open) return [close && { text: `${close} close`, priority: 4 }]
     return [
-      move && { text: `${move} select`, priority: 3 },
       insert && { text: `${insert} insert`, priority: 5 },
       close && { text: `${close} close`, priority: 4 },
     ]
   }
 
   function popupHint(): HintItems {
-    const move = keys.pairLabel("popup.up", "popup.down")
     const complete = keys.label("popup.complete")
     const accept = keys.label("popup.accept")
     const close = keys.label("popup.close")
     return [
-      move && { text: `${move} select`, priority: 3 },
       complete && { text: `${complete} complete`, priority: 2 },
       accept && { text: `${accept} run`, priority: 5 },
       close && { text: `${close} close`, priority: 4 },
@@ -538,7 +543,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * The full-screen sub-agent viewer or an extension's view, open over the conversation. Inline,
    * the UI is suspended meanwhile: what the main session commits is held and printed when it closes.
    */
-  let viewer: SubagentViewer | ExtensionViewer | undefined
+  let viewer: SubagentViewer | ExtensionViewer | KeyReference | undefined
   let viewerTimer: ReturnType<typeof setInterval> | undefined
   /**
    * Forms (ui.form) waiting to be shown full screen, oldest first; the first one is open while
@@ -608,8 +613,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     view.renderOverlay()
   }
 
+  /** Opens the key reference over the conversation (the help key); a form keeps the screen. */
+  function openKeyReference() {
+    if (form) return
+    showOverlay(new KeyReference(keys, { fullscreen: mode === "fullscreen", onClose: closeView }))
+    view.renderOverlay()
+  }
+
   /** Puts `next` over the conversation, in place of the viewer open there if any. */
-  function showOverlay(next: SubagentViewer | ExtensionViewer) {
+  function showOverlay(next: SubagentViewer | ExtensionViewer | KeyReference) {
     const opened = viewer !== undefined
     if (viewer instanceof ExtensionViewer) viewer.dispose()
     viewer = next
@@ -1097,6 +1109,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       showNote(setDetail(nextDetail(detail)))
     } else if (keys.is(e, "panels.toggle") && panelsShown) {
       panelsCollapsed = !panelsCollapsed
+    } else if (keys.is(e, "help") && editor.isEmpty) {
+      // Lists open only on text, so an empty input has none; a dialog took the key above.
+      return openKeyReference()
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too.
       if (working || compacting) interrupt()

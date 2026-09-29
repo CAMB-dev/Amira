@@ -263,11 +263,9 @@ test("parallel tool calls keep their places in call order and finish in place", 
   terminal.send("go\r")
   // The fast one finished below the slow one, which still runs above it.
   await waitFor(() => /● slow a\.ts .*\n● fast b\.ts\n {2}└ fast result/.test(view()), "fast done in place")
-  // The activity line stays while tools run: its spinner, the tool still running, time and interrupt.
-  await waitFor(
-    () => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running slow · \d+s · (↓ \d+ tokens · )?Esc interrupt$/m.test(view()),
-    "activity",
-  )
+  // The activity line stays while tools run: its spinner, the tool still running and the time.
+  await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running slow · \d+s( · ↓ \d+ tokens)?$/m.test(view()), "activity")
+  expect(view()).toContain("Esc interrupt")
   expect(view()).toMatch(/● slow a\.ts +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+s/)
   release()
   await shows("done")
@@ -818,6 +816,10 @@ test("Ctrl+F finds text in the transcript, highlights matches and moves between 
   terminal.send("\x7f".repeat(6))
   terminal.send("needle")
   await shows("2/2")
+  // The find bar keeps its essential keys; the input's hint row stays, blank.
+  expect(view()).toMatch(/2\/2 · Enter older · Esc close$/m)
+  expect(view()).not.toContain("newer")
+  expect(view()).not.toContain("? keys")
   expect(view()).toContain("needle 30")
   // The current match is marked (inverse and underlined), the other one inverse.
   expect(terminal.output).toContain("\x1b[7;4mneedle\x1b[27;24m")
@@ -882,6 +884,9 @@ test("copying the last reply and a selected block goes through OSC 52", async ()
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
   await waitFor(() => view().includes("user block"), "the user message selected")
+  // The selection's bar keeps its essential keys; moving is in the key reference.
+  expect(view()).toMatch(/› user block \d+ of \d+ · (Enter fold · )?y copy · Esc back$/m)
+  expect(view()).not.toContain(" move")
   terminal.send("y")
   await shows("Copied the user block")
   expect(terminal.output).toContain(`\x1b]52;c;${b64("go")}\x07`)
@@ -1043,10 +1048,10 @@ const imageReply = (after = 0) =>
 const imageRows = (screen: VirtualScreen) => screen.lines.flatMap((l, i) => (l.includes("▓") ? [i] : []))
 
 /**
- * Where the image's cells must be, from where its neighbors "top" and "bottom" are: its six
- * rows between them, cut to the transcript (which ends a row above the input box).
+ * Where the image's cells must be, from where its neighbors "top" and "bottom" are: its rows
+ * (six unless said) between them, cut to the transcript (which ends a row above the input box).
  */
-function expectedImageRows(screen: VirtualScreen): number[] {
+function expectedImageRows(screen: VirtualScreen, height = 6): number[] {
   const lines = screen.lines
   const top = lines.indexOf("  top")
   const bottom = lines.indexOf("  bottom")
@@ -1055,9 +1060,9 @@ function expectedImageRows(screen: VirtualScreen): number[] {
   let end: number
   if (top >= 0) {
     start = top + 2
-    end = Math.min(top + 7, paneEnd - 1)
+    end = Math.min(top + 1 + height, paneEnd - 1)
   } else if (bottom >= 0) {
-    start = Math.max(0, bottom - 7)
+    start = Math.max(0, bottom - 1 - height)
     end = bottom - 2
   } else return []
   return Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i)
@@ -1200,7 +1205,7 @@ test("a resize fits the image again: fewer rows on a lower screen", async () => 
   await Bun.sleep(30)
   expect(screen.images.at(-1)).toMatchObject({ rows: 4, cols: 3 })
   expect(imageRows(screen)).toHaveLength(4)
-  expect(imageRows(screen)).toEqual(expectedImageRows(screen).slice(0, 4))
+  expect(imageRows(screen)).toEqual(expectedImageRows(screen, 4))
   // Back to the first size: the size drawn before is still there, drawn again at once.
   const drawn = screen.images.length
   resize(60, 24)
