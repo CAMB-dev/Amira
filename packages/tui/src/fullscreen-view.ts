@@ -9,6 +9,7 @@ import {
   modes,
   osc,
   ProcessTerminal,
+  stripAnsi,
   stripColors,
   truncateToWidth,
   visibleWidth,
@@ -18,7 +19,6 @@ import {
   type Block,
   type BlockEnv,
   fixedLine,
-  fixedLines,
   LinesBlock,
   ReplyBlock,
   SubagentGroupBlock,
@@ -508,7 +508,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         ),
       )
     },
-    dialogEcho: (lines) => add(fixedLines("dialog", lines)),
+    dialogEcho: (draw) =>
+      add(
+        new LinesBlock(
+          "dialog",
+          (width) => draw(width),
+          stripAnsi(draw(Number.POSITIVE_INFINITY).join("\n")),
+        ),
+      ),
     history(messages: Message[], session) {
       const results = new Map<string, ToolResult>()
       for (const m of messages) {

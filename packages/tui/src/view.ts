@@ -116,8 +116,8 @@ export interface TranscriptView {
   commandEcho(line: string): void
   /** What a command printed: under its echo right after it, else as a notice. */
   commandOutput(level: "info" | "warning" | "error", text: string): void
-  /** A dialog's questions and answers, once answered: a line each. */
-  dialogEcho(lines: string[]): void
+  /** A dialog's questions and answers, once answered, drawn to fit a width. */
+  dialogEcho(draw: (width: number) => string[]): void
   /** A resumed conversation, then a separator naming the session. */
   history(messages: Message[], session: HistorySession): void
   /** The UI is about to follow another session: calls of this one end here. */

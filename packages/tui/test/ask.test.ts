@@ -304,7 +304,8 @@ for (const mode of MODES) {
     await s.shows("b")
     await s.idle()
     // The echo wraps like any line: the answer follows the question.
-    expect(s.all()).toMatch(/┃ \? 你想用哪种方法来实现这个功能[^›]*› 修补/)
+    expect(s.all()).toContain("┃ ? 你想用哪种方法来实现这个功\n┃   能？ › 修补")
+    expect(s.all()).toContain("┃ ? Which approach do you\n┃   prefer? › Rewrite\n┃   (Recommended)")
     s.terminal.send("\x03")
     await s.exited
   })

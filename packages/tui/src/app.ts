@@ -919,7 +919,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const { requestId } = dialog.request
     const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
     if (answer === undefined || refused) ui.cancel(requestId)
-    view.dialogEcho(dialogEchoLines(dialog.request, refused ? undefined : answer, theme))
+    const echoed = refused ? undefined : answer
+    view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
     view.requestRender()
     openNextForm()
   }

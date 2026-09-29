@@ -535,15 +535,26 @@ function barStyle(r: DialogRequest, theme: Theme): StyleFn {
  * What stays in the transcript once a dialog is answered: a line per question under the same
  * bar, "┃ ? Allow bash? › Yes". A secret answer is never shown.
  */
-export function dialogEchoLines(r: DialogRequest, answer: DialogAnswer, theme: Theme): string[] {
+export function dialogEchoLines(
+  r: DialogRequest,
+  answer: DialogAnswer,
+  theme: Theme,
+  width = Number.POSITIVE_INFINITY,
+): string[] {
   const bar = barStyle(r, theme)(glyphs.dialogBar)
-  const line = (question: string, shown: string) =>
-    `${bar} ${theme.accent(glyphs.question)} ${question} ${theme.muted(`${glyphs.pointer} ${shown}`)}`
-  if (answer === undefined) return [line(r.title, "cancelled")]
-  if (r.kind === "ask" && Array.isArray(answer)) {
-    return r.questions.map((q, i) => line(q.question, answer[i] ? askAnswerText(answer[i]) : "(no answer)"))
+  // Wrapped, a line goes on under its question, the bar still at its left.
+  const line = (question: string, shown: string) => {
+    const text = `${theme.accent(glyphs.question)} ${question} ${theme.muted(`${glyphs.pointer} ${shown}`)}`
+    const rows = Number.isFinite(width) ? wrapText(text, Math.max(1, width - BAR_WIDTH - 2)) : [text]
+    return rows.map((l, i) => (i === 0 ? `${bar} ${l}` : `${bar}   ${l}`))
   }
-  if (r.kind === "input" && r.secret) return [line(r.title, "(hidden)")]
+  if (answer === undefined) return line(r.title, "cancelled")
+  if (r.kind === "ask" && Array.isArray(answer)) {
+    return r.questions.flatMap((q, i) =>
+      line(q.question, answer[i] ? askAnswerText(answer[i]) : "(no answer)"),
+    )
+  }
+  if (r.kind === "input" && r.secret) return line(r.title, "(hidden)")
   if (r.kind === "confirm") {
     const shown =
       answer === true
@@ -555,9 +566,9 @@ export function dialogEchoLines(r: DialogRequest, answer: DialogAnswer, theme: T
             : typeof answer === "object" && "other" in answer
               ? JSON.stringify(answer.other)
               : String(answer)
-    return [line(r.title, shown)]
+    return line(r.title, shown)
   }
-  return [line(r.title, String(answer))]
+  return line(r.title, String(answer))
 }
 
 /** An ask answer in words: the labels chosen, then the text typed, quoted. */
