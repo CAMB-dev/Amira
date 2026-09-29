@@ -101,6 +101,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   })
   /** command.run calls still going; they may wait on dialogs answered by later lines. */
   const runningCommands = new Set<Promise<void>>()
+  /** What the client last said about its focus (ui.focus); events go out on changes only. */
+  let focused: boolean | undefined
 
   const send = (value: unknown) => io.write(`${safeJson(value)}\n`)
   const reply = (id: Id, result: Record<string, unknown>) => void send({ id, ok: true, ...result })
@@ -191,6 +193,14 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         throw new RpcError("invalid_params", '"forms" must be "native" or "dialogs"')
       }
       ui.formMode = p.forms
+      return {}
+    },
+    "ui.focus": (p) => {
+      if (typeof p.focused !== "boolean") throw new RpcError("invalid_params", '"focused" must be a boolean')
+      if (p.focused !== focused) {
+        focused = p.focused
+        agent.bus.emit("ui.focus", { focused }, { sessionId: "host" })
+      }
       return {}
     },
     "session.read": (p) => {

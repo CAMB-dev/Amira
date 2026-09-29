@@ -2277,7 +2277,8 @@ test("outside Windows Terminal and friends no progress is sent; settings turn ti
   await exited
   expect(screen.oscs).toEqual([])
   expect(screen.bells).toBe(0)
-  expect(terminal.output).not.toContain("\x1b[?1004h")
+  // Focus reports stay on without the bell: extensions get them as ui.focus.
+  expect(terminal.output).toContain("\x1b[?1004h")
 })
 
 test("the bell rings when a turn ends in the background; focus reports never reach the editor", async () => {
@@ -2293,6 +2294,19 @@ test("the bell rings when a turn ends in the background; focus reports never rea
   expect(screen.bells).toBe(1)
   expect(live()).not.toContain("[O")
   expect(live()).not.toContain("[I")
+  terminal.send("\x03")
+  await exited
+})
+
+test("focus reports reach extensions as ui.focus, once per change", async () => {
+  const { terminal, agent, exited } = await setup([])
+  const seen: boolean[] = []
+  agent.bus.subscribe((e) => void (e.type === "ui.focus" && seen.push(e.data.focused)), {
+    types: ["ui.focus"],
+  })
+  terminal.send("\x1b[O\x1b[O\x1b[I\x1b[I\x1b[O")
+  await agent.bus.flush()
+  expect(seen).toEqual([false, true, false])
   terminal.send("\x03")
   await exited
 })

@@ -87,7 +87,8 @@ test("settings turn each part off", () => {
   status.turnEnded("completed")
   status.stop()
   expect(screen.oscs).toEqual([])
-  expect(terminal.output).toBe("")
+  // Only the focus reports, which extensions use too (ui.focus), are left.
+  expect(terminal.output).toBe("\x1b[?1004h\x1b[?1004l")
 })
 
 test("with focus reports, the bell rings only while the terminal is in the background", () => {
