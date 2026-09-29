@@ -177,6 +177,46 @@ test("remote images go through the fetcher, which must answer with an image type
   ])
 })
 
+test("a few images load at once; one that waits past the timeout is skipped, and not cached", async () => {
+  const started: string[] = []
+  const gates = new Map<string, () => void>()
+  const bytes = png(20, 20)
+  const loader = new ImageLoader({
+    support: { protocol: "sixel", cell: { width: 10, height: 20 } },
+    cwd: dir,
+    maxRows: () => 4,
+    timeoutMs: 40,
+    concurrency: 2,
+    fetchRemote: async (url) => {
+      started.push(url.pathname)
+      await new Promise<void>((go) => gates.set(url.pathname, go))
+      return { bytes, contentType: "image/png" }
+    },
+  })
+  const a = loader.load("https://x.dev/a.png", 80)
+  const b = loader.load("https://x.dev/b.png", 80)
+  const c = loader.load("https://x.dev/c.png", 80)
+  const d = loader.load("https://x.dev/d.png", 80)
+  await Bun.sleep(5)
+  expect(started).toEqual(["/a.png", "/b.png"])
+  // c gets its turn in time.
+  gates.get("/a.png")!()
+  expect(await a).toMatchObject({ cols: 2 })
+  await Bun.sleep(5)
+  expect(started).toEqual(["/a.png", "/b.png", "/c.png"])
+  // d has waited too long by the time b ends.
+  await Bun.sleep(50)
+  gates.get("/b.png")!()
+  gates.get("/c.png")!()
+  expect(await Promise.all([b, c, d])).toEqual([expect.anything(), expect.anything(), undefined])
+  expect(started).toEqual(["/a.png", "/b.png", "/c.png"])
+  // Skipped, not failed: asked again, it loads.
+  const again = loader.load("https://x.dev/d.png", 80)
+  await Bun.sleep(5)
+  gates.get("/d.png")!()
+  expect(await again).toMatchObject({ cols: 2 })
+})
+
 test("local paths: relative to the working directory, absolute, file: URLs, escapes decoded", () => {
   const cwd = process.platform === "win32" ? "C:\\work" : "/work"
   expect(localPath("img/a%20b.png", cwd)).toBe(join(cwd, "img", "a b.png"))

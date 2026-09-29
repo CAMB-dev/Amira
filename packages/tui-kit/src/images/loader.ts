@@ -25,6 +25,8 @@ export interface ImageLoaderOptions {
   maxRows: () => number
   /** Encoded images kept, in characters of their sequences. Default 64 M. */
   cacheChars?: number
+  /** Images loaded at once; the others wait their turn. Default 2. */
+  concurrency?: number
 }
 
 const MB = 1024 * 1024
@@ -34,6 +36,9 @@ const MAX_ENTRIES = 500
 /** Content types that are images this can show (the signature is checked as well). */
 const IMAGE_TYPES = /^image\/(png|jpeg|jpg|gif|webp)\b/i
 const REMOTE = /^https?:\/\//i
+
+/** A load that waited its turn longer than the loader's timeout: not cached, so it can be tried again. */
+class Skipped extends Error {}
 
 /**
  * Loads the images a Markdown reply shows, for one session: from local files (relative to the
@@ -49,6 +54,9 @@ export class ImageLoader {
   private sizes = new Map<string, number>()
   private chars = 0
   private files = new Map<string, Promise<Uint8Array>>()
+  /** Loads running (or handed their turn), and those waiting for one. */
+  private active = 0
+  private queue: (() => void)[] = []
 
   constructor(private opts: ImageLoaderOptions) {
     this.maxBytes = opts.maxBytes ?? 10 * MB
@@ -74,18 +82,47 @@ export class ImageLoader {
       }
       return hit
     }
-    hit = this.encode(source, remote, maxCols, maxRows).then(
+    hit = this.limited(() => this.encode(source, remote, maxCols, maxRows)).then(
       (block) => {
         this.remember(key, block?.seq.length ?? 0)
         return block
       },
-      () => {
-        this.remember(key, 0)
+      (err) => {
+        if (err instanceof Skipped) this.cache.delete(key)
+        else this.remember(key, 0)
         return undefined
       },
     )
     this.cache.set(key, hit)
     return hit
+  }
+
+  /**
+   * Runs `task` once fewer than `concurrency` loads run: decoding blocks the thread, and a reply
+   * with dozens of images would otherwise start them all at once. One that waited longer than
+   * the timeout is skipped, its fallback committed long before.
+   */
+  private async limited<T>(task: () => Promise<T>): Promise<T> {
+    if (this.active >= (this.opts.concurrency ?? 2)) {
+      const queued = performance.now()
+      // The turn is handed over by the load that ends: `active` already counts this one.
+      await new Promise<void>((go) => this.queue.push(go))
+      if (performance.now() - queued > this.timeoutMs) {
+        this.release()
+        throw new Skipped()
+      }
+    } else this.active++
+    try {
+      return await task()
+    } finally {
+      this.release()
+    }
+  }
+
+  private release(): void {
+    const next = this.queue.shift()
+    if (next) next()
+    else this.active--
   }
 
   private remember(key: string, size: number) {
