@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -241,11 +241,10 @@ test("installs from a git repository, pins the commit, restores the pin and upda
 
   // update moves the pin to the branch head.
   const [u] = await updatePackages({ scope: project(), cwd })
-  expect(u).toMatchObject({ name: "git-pkg", changed: true })
-  expect(u!.to.pinned.commit).toBe(second)
+  expect(u).toMatchObject({ name: "git-pkg", changed: true, to: { pinned: { commit: second } } })
   expect(readManifest(installed).version).toBe("2.0.0")
   const [again] = await updatePackages({ scope: project(), cwd }, ["git-pkg"])
-  expect(again!.changed).toBe(false)
+  expect(again).toMatchObject({ changed: false })
 
   // A #ref installs that tag's commit.
   const tagged = await installPackage(`${url}#v1`, { scope: user(), cwd })
@@ -254,6 +253,17 @@ test("installs from a git repository, pins the commit, restores the pin and upda
   // Awaited before expect: .rejects on a promise waiting for the command worker never settles.
   const missing = await installPackage(`${url}#nope`, { scope: user(), cwd }).catch((e: Error) => e)
   expect(String(missing)).toMatch(/no branch, tag or commit/)
+})
+
+test("a repository without a package at its root is named by its URL, not the work directory", async () => {
+  const repo = path.join(dir, "mono")
+  makePackage(path.join(repo, "pkgs", "inner"), "inner", "1.0.0")
+  await gitRepo(repo)
+  const url = pathToFileURL(repo).href
+  const err = await installPackage(url, { scope: user(), cwd }).catch((e: Error) => e)
+  expect(String(err)).toBe(
+    `PackageError: ${url}: no amira-package.json or package.json (a package in a subdirectory of a repository installs by its name from the extensions index)`,
+  )
 })
 
 test("a project package replaces a user package of the same name; user ones load first", async () => {
@@ -418,4 +428,143 @@ test("npm packages are resolved on the registry, checked and pinned to version a
   })
   expect(r.entry.pinned).toEqual({ version: "1.4.0", integrity })
   expect(readManifest(path.join(home, "packages", "npm-thing")).version).toBe("1.4.0")
+})
+
+test("update keeps going past a package that fails, which keeps its files and pin; unchanged ones stay as they are", async () => {
+  const repo = makePackage(path.join(dir, "repo"), "git-pkg", "1.0.0")
+  const first = await gitRepo(repo)
+  const url = pathToFileURL(repo).href
+  await installPackage(url, { scope: user(), cwd })
+  const other = makePackage(path.join(dir, "other"), "other-pkg", "1.0.0")
+  await gitRepo(other)
+  await installPackage(pathToFileURL(other).href, { scope: user(), cwd })
+  // Point other-pkg at a ref that does not exist, as a hand-edited lock might.
+  const lockFile = path.join(home, "packages.lock")
+  const edited = JSON.parse(readFileSync(lockFile, "utf8"))
+  edited.packages["other-pkg"].source.ref = "no-such-ref"
+  writeFileSync(lockFile, JSON.stringify(edited, null, 2))
+  const before = readFileSync(lockFile, "utf8")
+  const logged: string[] = []
+
+  // Nothing new upstream: git-pkg is left alone (lock untouched); other-pkg fails and is kept.
+  const quiet = await updatePackages({ scope: user(), cwd, log: (l) => logged.push(l) })
+  expect(quiet.map((r) => ("error" in r ? `${r.name}: error` : `${r.name}: ${r.changed}`))).toEqual([
+    "git-pkg: false",
+    "other-pkg: error",
+  ])
+  expect(quiet[1]).toMatchObject({ error: expect.stringMatching(/no branch, tag or commit "no-such-ref"/) })
+  expect(readFileSync(lockFile, "utf8")).toBe(before)
+  expect(readManifest(path.join(home, "packages", "other-pkg")).version).toBe("1.0.0")
+  expect(readdirSync(path.join(home, "packages")).sort()).toEqual(["git-pkg", "other-pkg"])
+
+  // A new commit: git-pkg moves on although other-pkg, listed after it, still fails.
+  makePackage(repo, "git-pkg", "2.0.0")
+  await git(repo, "commit", "-qam", "two")
+  const second = await git(repo, "rev-parse", "HEAD")
+  const [moved, failed] = await updatePackages({ scope: user(), cwd })
+  expect(moved).toMatchObject({ name: "git-pkg", changed: true, to: { pinned: { commit: second } } })
+  expect(moved).toMatchObject({ from: { pinned: { commit: first } } })
+  expect(failed).toMatchObject({ name: "other-pkg", error: expect.any(String) })
+  const lock = readLock(lockFile)
+  expect(lock.packages["git-pkg"]!.pinned.commit).toBe(second)
+  expect(lock.packages["other-pkg"]!.source).toMatchObject({ ref: "no-such-ref" })
+  expect(readManifest(path.join(home, "packages", "git-pkg")).version).toBe("2.0.0")
+})
+
+test("update reads the index afresh, and updates from the recorded source when the index is out of reach", async () => {
+  const repo = path.join(dir, "exts")
+  makePackage(path.join(repo, "packages", "sub-pkg"), "sub-pkg", "0.3.0")
+  const first = await gitRepo(repo)
+  await git(repo, "tag", "v1")
+  makePackage(path.join(repo, "packages", "sub-pkg"), "sub-pkg", "0.4.0")
+  await git(repo, "commit", "-qam", "two")
+  const second = await git(repo, "rev-parse", "HEAD")
+  const repoUrl = pathToFileURL(repo).href
+  let body = JSON.stringify(fixtureIndex(repoUrl))
+  let online = true
+  const fakeFetch = (async () => {
+    if (!online) throw new Error("offline")
+    return new Response(body)
+  }) as unknown as typeof fetch
+  const index = {
+    url: "https://example.invalid/index.json",
+    cacheFile: path.join(home, "cache", "extensions-index.json"),
+    fetch: fakeFetch,
+  }
+  const r = await installPackage("sub-pkg", { scope: user(), cwd, index })
+  expect(r.entry.pinned.commit).toBe(second)
+
+  // The index now pins the tag; its cached copy is still fresh, but update asks again.
+  const pinned = fixtureIndex(repoUrl)
+  pinned.extensions[0]!.source = { git: repoUrl, path: "packages/sub-pkg", ref: "v1" } as never
+  body = JSON.stringify(pinned)
+  const [u] = await updatePackages({ scope: user(), cwd, index })
+  expect(u).toMatchObject({ changed: true, to: { version: "0.3.0", pinned: { commit: first } } })
+
+  // Offline with a cached index: the cached copy is used, with a warning.
+  online = false
+  const logged: string[] = []
+  const [cached] = await updatePackages({ scope: user(), cwd, index, log: (l) => logged.push(l) })
+  expect(cached).toMatchObject({ name: "sub-pkg", changed: false })
+  expect(logged.some((l) => /^warning: could not refresh the extensions index/.test(l))).toBe(true)
+  // Offline with no cached index: not updated from the recorded source (the index may have moved
+  // the package away from it); it fails and keeps what is installed.
+  rmSync(index.cacheFile)
+  const lockFile = path.join(home, "packages.lock")
+  const before = readFileSync(lockFile, "utf8")
+  const [offline] = await updatePackages({ scope: user(), cwd, index }, ["sub-pkg"])
+  expect(offline).toMatchObject({
+    name: "sub-pkg",
+    error: `cannot download the extensions index ${index.url}: offline`,
+  })
+  expect(readFileSync(lockFile, "utf8")).toBe(before)
+})
+
+test("a lock file's git path may not leave the repository", async () => {
+  const lockFile = path.join(home, "packages.lock")
+  for (const bad of ["../outside", "a/../../b", "/abs"]) {
+    writeFileSync(
+      lockFile,
+      JSON.stringify({
+        lockfileVersion: 1,
+        packages: {
+          x: {
+            version: "1.0.0",
+            source: { type: "git", url: "file:///r", path: bad },
+            pinned: {},
+            installedAt: "",
+          },
+        },
+      }),
+    )
+    expect(() => readLock(lockFile)).toThrow('entry "x" has a git "path" outside the repository')
+  }
+})
+
+test("update leaves a package in a repository's subdirectory alone when only other parts changed", async () => {
+  const repo = path.join(dir, "mono-exts")
+  makePackage(path.join(repo, "packages", "sub-pkg"), "sub-pkg", "0.3.0")
+  makePackage(path.join(repo, "packages", "neighbour"), "neighbour", "1.0.0")
+  const first = await gitRepo(repo)
+  const indexFile = path.join(dir, "index.json")
+  writeFileSync(indexFile, JSON.stringify(fixtureIndex(pathToFileURL(repo).href)))
+  const index = { url: indexFile }
+  await installPackage("sub-pkg", { scope: user(), cwd, index })
+  const lockFile = path.join(home, "packages.lock")
+  const before = readFileSync(lockFile, "utf8")
+
+  makePackage(path.join(repo, "packages", "neighbour"), "neighbour", "1.1.0")
+  await git(repo, "commit", "-qam", "neighbour only")
+  const [same] = await updatePackages({ scope: user(), cwd, index })
+  expect(same).toMatchObject({ name: "sub-pkg", changed: false, to: { pinned: { commit: first } } })
+  expect(readFileSync(lockFile, "utf8")).toBe(before)
+
+  // Its own files change (even at the same version): it moves.
+  writeFileSync(path.join(repo, "packages", "sub-pkg", "extra.ts"), "export {}\n")
+  await git(repo, "add", "-A")
+  await git(repo, "commit", "-qm", "sub-pkg")
+  const third = await git(repo, "rev-parse", "HEAD")
+  const [moved] = await updatePackages({ scope: user(), cwd, index })
+  expect(moved).toMatchObject({ changed: true, to: { pinned: { commit: third } } })
+  expect(existsSync(path.join(home, "packages", "sub-pkg", "extra.ts"))).toBe(true)
 })

@@ -11,8 +11,9 @@ import {
 } from "node:fs"
 import path from "node:path"
 import { runCommand } from "@amira/proc"
-import { type IndexOptions, loadIndex } from "./index-file.ts"
+import { type IndexOptions, type LoadedIndex, loadIndex } from "./index-file.ts"
 import {
+  describeSource,
   type LockEntry,
   type PackageScope,
   type PackageSource,
@@ -85,17 +86,22 @@ export async function restorePackages(opts: InstallOptions): Promise<InstallResu
   return out
 }
 
-export interface UpdateResult {
-  name: string
-  from: LockEntry
-  to: LockEntry
-  /** Whether a different commit or version was installed. */
-  changed: boolean
-}
+/** One package's update: what it moved to, or why it could not (the installed one is kept). */
+export type UpdateResult =
+  | {
+      name: string
+      from: LockEntry
+      to: LockEntry
+      /** Whether a different commit or version was installed. */
+      changed: boolean
+    }
+  | { name: string; from: LockEntry; error: string }
 
 /**
  * Fetches the newest files each source offers (a branch's head, the highest matching npm
- * version, a path's current contents; index entries are looked up again) and re-pins.
+ * version, a path's current contents; index entries are looked up again, bypassing the
+ * index cache) and re-pins. A package whose pin did not move is left as it is. A package
+ * that fails keeps its installed files and lock entry, and the others are still updated.
  */
 export async function updatePackages(opts: InstallOptions, names?: string[]): Promise<UpdateResult[]> {
   const lock = readLock(opts.scope.lockFile)
@@ -103,22 +109,54 @@ export async function updatePackages(opts: InstallOptions, names?: string[]): Pr
   for (const n of selected) {
     if (!lock.packages[n]) throw new PackageError(`"${n}" is not installed in the ${opts.scope.kind} scope`)
   }
+  /**
+   * Each index once per update, by URL. A package from an index is not updated without it: the
+   * index may have moved the package away from the source it was installed from.
+   */
+  const indexes = new Map<string, Promise<LoadedIndex>>()
+  const readIndex = (url: string) => {
+    let p = indexes.get(url)
+    if (!p) {
+      p = loadIndex({ ...opts.index, refresh: true, url })
+      p.then(
+        (loaded) => {
+          for (const w of loaded.warnings) opts.log?.(`warning: ${w}`)
+        },
+        () => {},
+      )
+      indexes.set(url, p)
+    }
+    return p
+  }
   const out: UpdateResult[] = []
   for (const name of selected) {
     const from = lock.packages[name]!
-    let source = from.source
-    let index = from.index
-    if (from.index) {
-      const loaded = await loadIndex({ ...opts.index, url: from.index.url })
-      const e = loaded.index.extensions.find((x) => x.name === from.index!.name)
-      if (e) source = e.source
-      else opts.log?.(`${name}: no longer in the extensions index; updating from its recorded source`)
-      index = { name: from.index.name, url: loaded.url }
+    try {
+      let source = from.source
+      let index = from.index
+      if (from.index) {
+        const loaded = await readIndex(from.index.url)
+        const e = loaded.index.extensions.find((x) => x.name === from.index!.name)
+        if (e) source = e.source
+        else
+          opts.log?.(
+            `warning: ${name} is no longer in the extensions index; updating from its recorded source`,
+          )
+        index = { name: from.index.name, url: loaded.url }
+      }
+      const r = await install(source, { expectName: name, ...(index ? { index } : {}), current: from }, opts)
+      out.push({ name, from, to: r.entry, changed: pinKey(from) !== pinKey(r.entry) })
+    } catch (err) {
+      // Stopped (Ctrl+C): do not go on to the next package.
+      if (opts.signal?.aborted) throw err
+      out.push({ name, from, error: errorMessage(err) })
     }
-    const r = await install(source, { expectName: name, ...(index ? { index } : {}) }, opts)
-    out.push({ name, from, to: r.entry, changed: pinKey(from) !== pinKey(r.entry) })
   }
   return out
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 /** Deletes the package's files and lock entry; false if it was not installed in this scope. */
@@ -141,6 +179,11 @@ interface InstallHow {
   index?: { name: string; url: string }
   /** Restoring: keep this entry's record rather than writing a new one. */
   keep?: LockEntry
+  /**
+   * Updating: the installed entry. When the fetched pin, version and source are the same and
+   * the files are there, nothing is swapped in and the lock is not rewritten.
+   */
+  current?: LockEntry
 }
 
 async function install(source: PackageSource, how: InstallHow, opts: InstallOptions): Promise<InstallResult> {
@@ -149,15 +192,47 @@ async function install(source: PackageSource, how: InstallHow, opts: InstallOpti
   // Inside the scope directory so the final rename stays on one volume.
   const work = mkdtempSync(path.join(opts.scope.dir, `.work-${process.pid}-`))
   try {
-    const { root, pinned } = await fetchSource(source, how.pinned, work, opts)
-    const manifest = readManifest(root)
+    const { root, pinned, sameTree } = await fetchSource(
+      source,
+      how.pinned,
+      work,
+      opts,
+      how.current?.pinned.commit,
+    )
+    // A clone or download lives in the work directory, whose name means nothing to the user.
+    const where = isWithin(root, work) ? describeSource(source) : root
+    let manifest: PackageManifest
+    try {
+      manifest = readManifest(root)
+    } catch (err) {
+      if (!(err instanceof PackageError) || where === root) throw err
+      const hint =
+        source.type === "git" && !source.path
+          ? " (a package in a subdirectory of a repository installs by its name from the extensions index)"
+          : ""
+      throw new PackageError(`${err.message.split(root).join(where)}${hint}`)
+    }
     if (how.expectName && manifest.name !== how.expectName) {
       throw new PackageError(
-        `expected a package named "${how.expectName}", but ${root} is "${manifest.name}"`,
+        `expected a package named "${how.expectName}", but ${where} is "${manifest.name}"`,
       )
     }
     const mismatch = engineMismatch(manifest)
     if (mismatch) throw new PackageError(mismatch)
+    const current = how.current
+    if (
+      current &&
+      (pinned.commit || pinned.version) &&
+      // The same pin; or, for a package in a repository's subdirectory, other parts of the
+      // repository moved on while its own files stayed the same (the older pin is kept).
+      (pinKey(current) === pinKey({ ...current, version: manifest.version, pinned }) ||
+        (sameTree === true && current.version === manifest.version)) &&
+      sameJson(current.source, source) &&
+      sameJson(current.index, how.index) &&
+      existsSync(packageDir(opts.scope, manifest.name))
+    ) {
+      return { name: manifest.name, entry: current, previous: current, manifest, warnings: [] }
+    }
     const staged = path.join(work, "package")
     // The source may contain the scope itself (`amira ext install --project .` in a package's
     // own repository), so the scope directory is skipped rather than copied into itself.
@@ -247,6 +322,20 @@ function swapIn(staged: string, dest: string, work: string) {
   }
 }
 
+/** Equal as JSON, whatever the key order (lock files are hand-edited). */
+function sameJson(a: unknown, b: unknown): boolean {
+  const norm = (v: unknown): unknown =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v)
+            .filter(([, x]) => x !== undefined)
+            .sort(([x], [y]) => x.localeCompare(y))
+            .map(([k, x]) => [k, norm(x)]),
+        )
+      : v
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b))
+}
+
 function pinKey(e: LockEntry): string {
   return `${e.version} ${e.pinned.commit ?? ""} ${e.pinned.version ?? ""} ${e.pinned.integrity ?? ""}`
 }
@@ -256,12 +345,14 @@ async function fetchSource(
   pin: LockEntry["pinned"] | undefined,
   work: string,
   opts: InstallOptions,
-): Promise<{ root: string; pinned: LockEntry["pinned"] }> {
+  /** The commit installed now, when updating. */
+  since?: string,
+): Promise<{ root: string; pinned: LockEntry["pinned"]; sameTree?: boolean }> {
   if (source.type === "path") {
     if (!existsSync(source.path)) throw new PackageError(`${source.path} does not exist`)
     return { root: source.path, pinned: {} }
   }
-  if (source.type === "git") return fetchGit(source, pin, work, opts)
+  if (source.type === "git") return fetchGit(source, pin, work, opts, since)
   return fetchNpm(source.spec, pin, work, opts)
 }
 
@@ -270,7 +361,8 @@ async function fetchGit(
   pin: LockEntry["pinned"] | undefined,
   work: string,
   opts: InstallOptions,
-): Promise<{ root: string; pinned: LockEntry["pinned"] }> {
+  since?: string,
+): Promise<{ root: string; pinned: LockEntry["pinned"]; sameTree?: boolean }> {
   const clone = path.join(work, "clone")
   opts.log?.(`cloning ${source.url}`)
   await run(["git", "clone", "--quiet", "--", source.url, clone], work, opts, "git clone")
@@ -286,8 +378,31 @@ async function fetchGit(
     commit = (await run(["git", "rev-parse", "HEAD"], clone, opts, "git rev-parse", true)).trim()
   }
   const root = source.path ? path.join(clone, source.path) : clone
+  if (!isWithin(root, clone))
+    throw new PackageError(`${source.url}: path ${source.path} is outside the repository`)
   if (!existsSync(root)) throw new PackageError(`${source.url} has no directory ${source.path}`)
-  return { root, pinned: { commit } }
+  // A package in a subdirectory: whether its files are the same as at the installed commit.
+  // Only a full object id: an abbreviated one could be taken for a branch of that name.
+  let sameTree: boolean | undefined
+  if (source.path && since && since !== commit && /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(since)) {
+    const sub = source.path.replace(/\\/g, "/").replace(/^\.?\/+|\/+$/g, "")
+    const [before, after] = await Promise.all([
+      treeOf(clone, `${since}:${sub}`, opts),
+      treeOf(clone, `${commit}:${sub}`, opts),
+    ])
+    sameTree = before !== undefined && before === after
+  }
+  return { root, pinned: { commit }, ...(sameTree !== undefined ? { sameTree } : {}) }
+}
+
+/** The object id of `<commit>:<path>`, if the clone has it. */
+async function treeOf(clone: string, spec: string, opts: InstallOptions): Promise<string | undefined> {
+  try {
+    const out = await run(["git", "rev-parse", "--verify", "--quiet", spec], clone, opts, "", true)
+    return out.trim() || undefined
+  } catch {
+    return undefined
+  }
 }
 
 async function revParse(clone: string, ref: string, opts: InstallOptions): Promise<string | undefined> {

@@ -169,6 +169,47 @@ test("ext list, search and remove", async () => {
   expect((await ext(["list"])).io.out).not.toContain("listed")
 })
 
+test("ext update reports each package; one that fails keeps its version and makes the exit code 1", async () => {
+  await ext(["install", makePackage("kept", "1.0.0", "k")])
+  const gone = makePackage("gone", "1.0.0", "g")
+  await ext(["install", gone])
+  rmSync(gone, { recursive: true, force: true })
+  const r = await ext(["update"])
+  expect(r.code).toBe(1)
+  expect(r.io.out).toBe("kept is up to date (1.0.0 (local copy))\n")
+  expect(r.io.err).toMatch(/^amira: gone: update failed, kept 1\.0\.0 \(local copy\): .* does not exist\n$/)
+  expect((await ext(["list"])).io.out).toContain("gone 1.0.0 (local copy)")
+})
+
+test("ext update names the scope a package is in, and the other scope's packages it did not update", async () => {
+  await ext(["install", makePackage("mine", "1.0.0", "m")])
+  await ext(["install", "--project", makePackage("theirs", "1.0.0", "t")])
+  const user = await ext(["update", "theirs"])
+  expect(user.code).toBe(1)
+  expect(user.io.err).toBe(
+    "amira: theirs is not installed in the user scope; it is in the project scope (use --project)\n",
+  )
+  const project = await ext(["update", "--project", "mine"])
+  expect(project.io.err).toContain("it is in the user scope (leave out --project)")
+  expect((await ext(["update", "nowhere", "theirs"])).io.err).toBe(
+    "amira: nowhere is not installed in the user scope\namira: theirs is not installed in the user scope; it is in the project scope (use --project)\n",
+  )
+  // A broken lock file in the other scope does not stop an update of this one.
+  const projectLock = path.join(cwd, ".amira", "packages.lock")
+  const saved = await Bun.file(projectLock).text()
+  writeFileSync(projectLock, "{ not json")
+  const broken = await ext(["update", "mine"])
+  expect(broken.code).toBe(0)
+  expect(broken.io.out).toBe("mine is up to date (1.0.0 (local copy))\n")
+  writeFileSync(projectLock, saved)
+  const all = await ext(["update"])
+  expect(all.code).toBe(0)
+  expect(all.io.out).toBe("mine is up to date (1.0.0 (local copy))\n")
+  expect(all.io.err).toBe(
+    "amira: the project scope's packages (theirs) are updated with amira ext update --project\n",
+  )
+})
+
 test("an install failure is reported without a stack", async () => {
   const r = await ext(["install", path.join(dir, "missing")])
   expect(r.code).toBe(1)
