@@ -42,6 +42,24 @@ export interface CommandDefinition {
   run(args: string, ctx: CommandContext): void | Promise<void>
 }
 
+/**
+ * Claims some of the lines the user sends before they reach the model, e.g. `@name text`
+ * for a message to a swarm member while a swarm runs. Frontends ask the handlers (the one
+ * registered last first) about each line that is not a slash command or a skill; the first
+ * that claims it runs it, and the model never sees the line.
+ */
+export interface InputHandler {
+  /** Names it in errors, e.g. "swarm". */
+  name: string
+  /**
+   * Whether the line is for this handler. Asked about every line the user sends, so it must
+   * answer at once; claim only what is clearly yours (a throw counts as no).
+   */
+  claims(text: string): boolean
+  /** Handles a line it claimed, as a command runs. Throwing reports the message to the user. */
+  run(text: string, ctx: CommandContext): void | Promise<void>
+}
+
 /** A registered command, as frontends list it. */
 export interface CommandInfo {
   name: string

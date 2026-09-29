@@ -425,3 +425,73 @@ test("extensions register commands; a taken name is reported and skipped, and un
   host.unloadAll()
   expect(host.commands.list()).toEqual([])
 })
+
+test("input handlers claim lines before the model: the last registered is asked first", async () => {
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const ext = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  const ran: string[] = []
+  await ext.load((api) => {
+    api.registerInputHandler({
+      name: "mentions",
+      claims: (t) => t.startsWith("@"),
+      run: (t, ctx) => {
+        ran.push(`mentions ${t} ${ctx.frontend}`)
+        ctx.print(`sent to ${t.slice(1).split(" ")[0]}`)
+      },
+    })
+    api.registerInputHandler({
+      name: "swarm",
+      claims: (t) => {
+        if (t.startsWith("@boom")) throw new Error("claims must not throw")
+        return t.startsWith("@writer ")
+      },
+      run: (t) => {
+        if (t.endsWith("fail")) throw new Error("writer is not running")
+        ran.push(`swarm ${t}`)
+      },
+    })
+    api.registerInputHandler({ name: " ", claims: () => true, run: () => {} })
+  }, "ext")
+  const ai = createAi({
+    dialects: [createMockDialect([])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const agent = new Agent({ ai, model: ai.model("mock/m"), cwd: "/work", bus })
+  const host = new CommandHost({
+    registry: ext.commands,
+    inputs: ext.inputs,
+    bus,
+    ui: new UiRequests(bus),
+    control: {} as SessionControl,
+    agent,
+  })
+  expect(host.inputLine("hello")).toBe(false)
+  expect(host.inputLine("  @writer shorter  ")).toBe(true)
+  expect(host.inputLine("@boom")).toBe(true)
+  expect(await host.runInput("@writer shorter", { frontend: "tui" })).toEqual({
+    ok: true,
+    command: "swarm",
+    output: [],
+  })
+  expect(await host.runInput("@planner hi", { frontend: "rpc" })).toEqual({
+    ok: true,
+    command: "mentions",
+    output: ["sent to planner"],
+  })
+  expect(await host.runInput("@writer fail", { frontend: "tui" })).toMatchObject({
+    ok: false,
+    command: "swarm",
+    error: "writer is not running",
+  })
+  expect(await host.runInput("plain", { frontend: "tui" })).toMatchObject({ ok: false })
+  expect(ran).toEqual(["swarm @writer shorter", "mentions @planner hi rpc"])
+  await bus.flush()
+  // A handler without a name is refused, the others stay.
+  expect(events.find((e) => e.type === "extension.error")?.data).toMatchObject({
+    error: "an input handler needs a name",
+  })
+  ext.unloadAll()
+  expect(host.inputLine("@writer shorter")).toBe(false)
+})

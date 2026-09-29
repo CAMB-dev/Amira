@@ -5,6 +5,7 @@ import {
   type ChildSession,
   type CommandDefinition,
   defineTool,
+  type InputHandler,
   type Message,
   type SessionControl,
   type SkillDefinition,
@@ -57,6 +58,8 @@ interface SetupOptions {
   commands?: CommandDefinition[]
   /** `$` skills to offer, next to `commands`. */
   skills?: SkillDefinition[]
+  /** Input handlers extensions register, next to `commands`. */
+  inputs?: InputHandler[]
   control?: Partial<SessionControl>
   /** Give the agent a tree, so tools can start sub-agents. */
   tree?: boolean
@@ -136,10 +139,12 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     await host.load((api) => {
       for (const c of o.commands!) api.registerCommand(c)
       for (const s of o.skills ?? []) api.registerSkill(s)
+      for (const h of o.inputs ?? []) api.registerInputHandler(h)
     }, "test-commands")
     commands = new CommandHost({
       registry: host.commands,
       skills: host.skills,
+      inputs: host.inputs,
       bus,
       ui: host.ui,
       control: (o.control ?? {}) as SessionControl,
@@ -1508,6 +1513,42 @@ test("the / list has no skills, and /<skill> points at $ instead of running it",
   terminal.send("/deploy now\r")
   await shows("Unknown command /deploy — skills now start with $: $deploy")
   expect(agent.messages).toEqual([])
+  terminal.send("\x03")
+  await exited
+})
+
+test("a line an input handler claims runs at once, also during a turn, and never reaches the model", async () => {
+  const got: string[] = []
+  const { terminal, agent, all, shows, idle, mock, exited } = await setup(
+    [{ text: "Working on it.", delayMs: 300 }, { text: "Hello." }],
+    {
+      commands: testCommands([]),
+      inputs: [
+        {
+          name: "swarm",
+          claims: (t) => /^@writer\s/.test(t),
+          run: (t, ctx) => {
+            got.push(t)
+            ctx.print("→ writer: message sent")
+          },
+        },
+      ],
+    },
+  )
+  terminal.send("start\r")
+  await waitFor(() => agent.status === "working", "turn")
+  terminal.send("@writer keep it short\r")
+  await shows("→ writer: message sent")
+  expect(got).toEqual(["@writer keep it short"])
+  await idle()
+  expect(all()).toContain("› @writer keep it short")
+  // Not steered into the turn: the model only ever saw the first message.
+  expect(mock.requests).toHaveLength(1)
+  expect(JSON.stringify(agent.messages)).not.toContain("keep it short")
+  // A line nobody claims is a message as usual.
+  terminal.send("@reader hi\r")
+  await shows("Hello.")
+  expect(JSON.stringify(mock.requests[1]!.messages)).toContain("@reader hi")
   terminal.send("\x03")
   await exited
 })
