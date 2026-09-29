@@ -83,7 +83,7 @@ test("in a terminal each package has a line that is redrawn in place, then a sum
   ])
   progress.update({ name: "alpha", phase: "extracting" })
   progress.finish("alpha", { kind: "updated", text: "0.1.0 → 0.1.3", line: "Updated alpha" })
-  progress.update({ name: "beta", phase: "resolving", detail: "asking CAMB-dev/amira-extensions" })
+  progress.update({ name: "beta", phase: "resolving", detail: "CAMB-dev/amira-extensions" })
   progress.finish("beta", { kind: "up to date", text: "0.2.0 @ 15a460da2aef", line: "beta is up to date" })
   progress.update({ name: "gamma", phase: "dependencies" })
   expect(screen.text()).toEqual([

@@ -135,7 +135,7 @@ export class GitCache {
   }
 
   private async lsRemote(url: string, ref: string | undefined, ctx: GitContext): Promise<RemoteLookup> {
-    ctx.progress?.("resolving", `asking ${repoLabel(url)}`)
+    ctx.progress?.("resolving", repoLabel(url))
     this.stats.lsRemote++
     mkdirSync(this.dir, { recursive: true })
     const patterns = ref ? [ref, `${ref}^{}`] : ["HEAD"]
