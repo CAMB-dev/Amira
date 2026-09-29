@@ -264,7 +264,7 @@ export interface CommandRunOptions {
   quit?: () => void
   signal?: AbortSignal
   /** Shows a full-screen view; frontends without views leave it out. */
-  openView?: (view: FrontendView) => void
+  openView?: (view: FrontendView) => boolean
   /** The frontend's most useful keys, for /help; frontends without keys leave it out. */
   keys?: CommandContext["keys"]
 }
