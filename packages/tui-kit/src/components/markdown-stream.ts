@@ -2,6 +2,8 @@ import { stripAnsi } from "../ansi.ts"
 import { supportsHyperlinks } from "../capabilities.ts"
 import type { Component, RenderContext } from "../component.ts"
 import { defaultGlyphs, type Glyphs } from "../glyphs.ts"
+import type { ImageBlock } from "../images/encode.ts"
+import { pendingImage } from "../images/placement.ts"
 import {
   type BlockState,
   cloneState,
@@ -35,6 +37,20 @@ export interface MarkdownStreamOptions {
   hyperlinks?: boolean
   /** Color keywords, strings and comments in code blocks of the languages it knows. */
   highlight?: boolean
+  /**
+   * Shows images that stand on a line of their own: committed as the image once it is loaded (the
+   * renderer holds what follows back until then), as its alt text while loading and instead of it
+   * when it fails or takes too long. Without it, images are only their alt text.
+   */
+  images?: MarkdownImages
+}
+
+/** Where a Markdown stream gets its images. */
+export interface MarkdownImages {
+  /** The image at `url`, fitted to `maxCols` columns; undefined when it cannot be shown. */
+  load(url: string, maxCols: number): Promise<ImageBlock | undefined>
+  /** How long a committed image may take to load before its alt text goes instead. Default 3 s. */
+  waitMs?: number
 }
 
 /** Renders a whole Markdown text to rows, as `MarkdownStream` shows it once it has streamed in. */
@@ -82,6 +98,7 @@ export class MarkdownStream implements Component {
   private readonly glyphs: Glyphs
   private readonly hyperlinks: boolean
   private readonly highlight: boolean
+  private readonly images: MarkdownImages | undefined
   private state = newState()
   /** Text not processed yet: complete lines, then the partial line being written. */
   private src = ""
@@ -97,6 +114,7 @@ export class MarkdownStream implements Component {
     this.glyphs = opts.glyphs ?? defaultGlyphs
     this.hyperlinks = opts.hyperlinks ?? supportsHyperlinks()
     this.highlight = opts.highlight ?? true
+    this.images = opts.images
   }
 
   /** Adds streamed text. */
@@ -122,7 +140,9 @@ export class MarkdownStream implements Component {
 
   render(width: number, ctx: RenderContext): string[] {
     this.theme = ctx.theme
-    const env = this.env(width)
+    // Rows that cannot be committed now are shown live, so they get no image markers.
+    const env = this.env(width, !!ctx.commit)
+    const liveEnv = ctx.commit ? this.env(width, false) : env
     const sink: Sink = ctx.commit
       ? (rows) => {
           ctx.commit!(rows)
@@ -131,13 +151,13 @@ export class MarkdownStream implements Component {
       : (rows) => this.done.push(...rows)
     if (ctx.commit && this.done.length) sink(this.done.splice(0))
     this.processLines(env, sink)
-    let live = this.live(env)
+    let live = this.live(liveEnv)
     if (ctx.commit && live.length > this.maxRows) {
       if (hasOpenBlock(this.state)) {
         commitOpenBlocks(this.state, env, sink)
-        live = this.live(env)
+        live = this.live(liveEnv)
       }
-      if (live.length > this.maxRows && this.commitPartial(env, sink)) live = this.live(env)
+      if (live.length > this.maxRows && this.commitPartial(env, sink)) live = this.live(liveEnv)
     }
     return this.done.length ? [...this.done, ...live] : live
   }
@@ -163,8 +183,9 @@ export class MarkdownStream implements Component {
     return rows
   }
 
-  private env(width: number): Env {
-    return {
+  /** What rendering needs; with `commit`, standalone images become markers for the renderer. */
+  private env(width: number, commit = true): Env {
+    const env: Env = {
       width: Math.max(1, width),
       styles: markdownStyles(this.theme),
       glyphs: this.glyphs,
@@ -172,6 +193,18 @@ export class MarkdownStream implements Component {
       highlight: this.highlight,
       refs: this.state.refs,
     }
+    const images = this.images
+    if (images) {
+      env.image = (image, rows, col) => {
+        // Asked for while it is live too, so it is often ready by the time it is committed.
+        const load = images.load(image.url, Math.max(1, env.width - col))
+        if (!commit) return rows
+        const indent = " ".repeat(col)
+        const fallback = rows.map((r) => (r.startsWith(indent) ? r.slice(col) : r))
+        return [indent + pendingImage(load, fallback, images.waitMs ?? 3000)]
+      }
+    }
+    return env
   }
 
   /** Processes the complete lines, leaving the partial one. */

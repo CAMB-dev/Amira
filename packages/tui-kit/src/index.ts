@@ -1,7 +1,11 @@
 export { stripAnsi, type TerminalMode } from "./ansi.ts"
 export {
   type Capabilities,
+  chooseImageSupport,
   detectEnv,
+  type GraphicsReplies,
+  type ImageSetting,
+  type ImageSupport,
   type SetupResult,
   setupTerminalInput,
   supportsHyperlinks,
@@ -28,7 +32,12 @@ export {
   LineInput,
   type LineInputOptions,
 } from "./components/form.ts"
-export { MarkdownStream, type MarkdownStreamOptions, renderMarkdown } from "./components/markdown-stream.ts"
+export {
+  type MarkdownImages,
+  MarkdownStream,
+  type MarkdownStreamOptions,
+  renderMarkdown,
+} from "./components/markdown-stream.ts"
 export { type ScrollPosition, ScrollView } from "./components/scroll-view.ts"
 export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
@@ -36,6 +45,12 @@ export { StreamText } from "./components/stream-text.ts"
 export { Text } from "./components/text.ts"
 export { FullScreenRenderer } from "./fullscreen.ts"
 export { defaultGlyphs, type Glyphs } from "./glyphs.ts"
+export { type Bitmap, decodeImage, type ImageFormat, imageSize, resizeBitmap } from "./images/decode.ts"
+export { canShow, encodeImage, type ImageBlock, type ImageProtocol } from "./images/encode.ts"
+export { type CellSize, type Fit, fitImage } from "./images/fit.ts"
+export { ImageLoader, type ImageLoaderOptions, type RemoteImageFetch } from "./images/loader.ts"
+export { pendingImage, placeImage } from "./images/placement.ts"
+export { encodeSixel } from "./images/sixel.ts"
 export { InputParser } from "./input.ts"
 export {
   type FocusEvent,

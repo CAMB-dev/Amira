@@ -3,6 +3,7 @@ import type { StyleFn } from "../style.ts"
 import { truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import { highlightLine } from "./highlight.ts"
 import {
+  type ImageRef,
   type Lead,
   type LinkRef,
   type MarkdownStyles,
@@ -22,6 +23,11 @@ export interface Env {
   highlight: boolean
   /** Reference definitions seen so far; the block state's, set by the functions here. */
   refs?: ReadonlyMap<string, LinkRef>
+  /**
+   * Shows a paragraph line that is only an image (maybe inside a link) as the image: gets the
+   * image, the rows the line renders as, and its column; returns the rows to emit instead.
+   */
+  image?: (image: Required<ImageRef>, rows: string[], col: number) => string[]
 }
 
 /**
@@ -112,6 +118,8 @@ const DELIMITER_CELL = /^:?-+:?$/
 /** A reference definition: `[label]: url`, maybe in <>, maybe with a title. */
 const DEFINITION =
   /^[ \t]*\[([^\]]*[^\]\s][^\]]*)\]:[ \t]*<?([^\s<>]+)>?(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/
+/** The start of a line that may be an image and nothing else. */
+const IMAGE_START = /^[ \t]*\[?!\[/
 /** The start of a line that is, or may still become, a reference definition. */
 const DEFINITION_START = /^[ \t]*\[(?:[^\]]*$|[^\]]+\](?::|$))/
 /** A table column is not narrowed below this many cells to fit the screen. */
@@ -260,6 +268,8 @@ export function partialRender(
   if (s.table && line.includes("|")) return { state: s, render: rawRender(s.table, line), raw: true }
   // It may be a reference definition, which is not shown.
   if (DEFINITION_START.test(line)) return undefined
+  // It may be an image on its own, shown once the line is complete.
+  if (env.image && IMAGE_START.test(line)) return undefined
   const next = cloneState(s)
   next.table = undefined
   const d = classify(next, line, env)
@@ -385,7 +395,25 @@ function flushHeld(s: BlockState, env: Env, sink: Sink) {
     indent: h.renderCol,
     start: 0,
   }
-  emit(s, sink, renderLine(lr, h.text, env).rows)
+  const rows = renderLine(lr, h.text, env).rows
+  const image = env.image && standaloneImage(h.text, env)
+  emit(s, sink, image ? env.image!(image, rows, h.renderCol) : rows)
+}
+
+/** The image a line holds and nothing else (but a link around it), when it has a target. */
+function standaloneImage(text: string, env: Env): Required<ImageRef> | undefined {
+  if (!IMAGE_START.test(text)) return undefined
+  const runs = parseInline(text, {
+    styles: env.styles,
+    hyperlinks: false,
+    ...(env.refs ? { refs: env.refs } : {}),
+  })
+  const images = runs.filter((r) => r.image)
+  const image = images[0]?.image
+  if (images.length !== 1 || image?.url === undefined) return undefined
+  // Everything else is added text (the URLs), not text of the line.
+  if (runs.some((r) => r.cuttable && r.text.trim() !== "")) return undefined
+  return { url: image.url, alt: image.alt }
 }
 
 export interface Rendered {
