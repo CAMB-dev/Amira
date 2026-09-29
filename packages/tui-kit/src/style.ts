@@ -107,6 +107,8 @@ export const defaultTheme: Theme = {
   success: green,
   warning: yellow,
   border: gray,
+  /** Text selected with the mouse, as in a full-screen transcript. */
+  selection: inverse,
   ...markdownTheme,
 }
 
