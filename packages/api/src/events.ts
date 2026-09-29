@@ -51,6 +51,11 @@ export interface EventMap {
     /** Short commit hash, useful when HEAD is detached. */
     head?: string
     isWorktree?: boolean
+    /**
+     * The working tree has changes not committed yet (staged, unstaged or untracked files). It
+     * is checked after turns that ran tools, so edits made outside Amira show from the next one.
+     */
+    dirty?: boolean
   }
   "session.end": { reason: "exit" | "error" }
   "status.changed": { status: SessionStatus; reason?: string; pending?: number }
