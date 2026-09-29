@@ -865,6 +865,11 @@ export class SubagentGroupBlock extends Block {
     return this.running
   }
 
+  /** No tool call: what its head says. */
+  override get label(): string {
+    return "background sub-agents"
+  }
+
   override subagents(env: BlockEnv): SubagentNode[] {
     return this.roots.flatMap((id) => {
       const node = env.nodes.get(id)

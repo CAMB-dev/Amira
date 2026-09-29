@@ -467,6 +467,11 @@ test("the members of a group a command started share one block: a compact group 
   expect(view().match(/◆ background/g)).toHaveLength(1)
   expect(view().match(/workflow demo/g)).toHaveLength(1)
   expect(view()).not.toContain("Scan api")
+  // Selected, it is named as its head says, not as a tool call.
+  terminal.send(CTRL_UP)
+  await waitFor(() => /› background sub-agents \d+ of \d+/.test(view()), "the group selected")
+  terminal.send(ESC)
+  await waitFor(() => !/sub-agents \d+ of/.test(view()), "done selecting")
   release()
   await Promise.all(kids.map((k) => k.result()))
   group.end()
