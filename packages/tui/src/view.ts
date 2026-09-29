@@ -24,6 +24,13 @@ export class View implements Component {
 /** How a tool call ended, as the controller hands it over. */
 export type CallEnd = NonNullable<TrackedCall["end"]>
 
+/** A tool call a reply asked for. */
+export interface CallRef {
+  id: string
+  name: string
+  args: Record<string, unknown>
+}
+
 /** The session a resumed history belongs to, for the separator after it. */
 export interface HistorySession {
   id: string
@@ -87,7 +94,7 @@ export interface TranscriptView {
   user(message: UserMessage): void
   replyDelta(text: string): void
   /** The reply ended and asked for these tool calls; true when it showed anything. */
-  replyEnd(toolCallIds: string[]): boolean
+  replyEnd(calls: CallRef[]): boolean
   toolStart(id: string, name: string, args: Record<string, unknown>, at: number): void
   toolUpdate(id: string, partial: ToolResult): void
   /** True when a call reached the transcript. */

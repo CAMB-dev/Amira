@@ -3,9 +3,10 @@ import { detectEnv, type InputEvent, type TerminalEnv } from "@amira/tui-kit"
 
 /**
  * Where an action applies: the input box, a completion list below it while open (commands
- * or files), the history search while it runs, or a dialog.
+ * or files), the history search while it runs, or a dialog; in full-screen mode also the
+ * transcript (keys taken before the input's), a block selection, and the find bar.
  */
-export type KeyScope = "input" | "popup" | "search" | "dialog"
+export type KeyScope = "input" | "popup" | "search" | "dialog" | "transcript" | "select" | "find"
 
 interface ActionInfo {
   scope: KeyScope
@@ -59,6 +60,32 @@ export const ACTIONS = {
   "dialog.cancel": { scope: "dialog", description: "Cancel the dialog" },
   "dialog.yes": { scope: "dialog", description: "Answer yes to a confirmation" },
   "dialog.no": { scope: "dialog", description: "Answer no to a confirmation" },
+  "scroll.up": { scope: "transcript", description: "Scroll the transcript up a line" },
+  "scroll.down": { scope: "transcript", description: "Scroll the transcript down a line" },
+  "scroll.page-up": { scope: "transcript", description: "Scroll the transcript up a page" },
+  "scroll.page-down": { scope: "transcript", description: "Scroll the transcript down a page" },
+  "scroll.top": {
+    scope: "transcript",
+    description: "Go to the start of the transcript (Home only while the input is empty)",
+  },
+  "scroll.bottom": {
+    scope: "transcript",
+    description: "Go to the end of the transcript and follow it (End only while the input is empty)",
+  },
+  "select.start": { scope: "transcript", description: "Select the newest block of the transcript" },
+  find: { scope: "transcript", description: "Find text in the transcript" },
+  "copy.reply": { scope: "transcript", description: "Copy the last reply (its Markdown) to the clipboard" },
+  "select.prev": { scope: "select", description: "Select the block before" },
+  "select.next": { scope: "select", description: "Select the block after" },
+  "select.toggle": {
+    scope: "select",
+    description: "Fold or unfold the selected block (tool output, long code, details, sub-agents)",
+  },
+  "select.copy": { scope: "select", description: "Copy the selected block to the clipboard" },
+  "select.exit": { scope: "select", description: "Stop selecting and go back to the input" },
+  "find.next": { scope: "find", description: "Go to the next match up (older)" },
+  "find.prev": { scope: "find", description: "Go to the next match down (newer)" },
+  "find.close": { scope: "find", description: "Close the find bar, staying where the match is" },
 } satisfies Record<string, ActionInfo>
 
 export type Action = keyof typeof ACTIONS
@@ -102,6 +129,24 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "dialog.cancel": ["escape", "ctrl+c"],
     "dialog.yes": ["y"],
     "dialog.no": ["n"],
+    "scroll.up": ["shift+up"],
+    "scroll.down": ["shift+down"],
+    "scroll.page-up": ["pageup"],
+    "scroll.page-down": ["pagedown"],
+    "scroll.top": ["ctrl+home", "home"],
+    "scroll.bottom": ["ctrl+end", "end"],
+    // VS Code keeps Ctrl+↑↓ for moving between commands; Alt+↑↓ reaches the UI there.
+    "select.start": env.vscode ? ["alt+up", "ctrl+up"] : ["ctrl+up", "alt+up"],
+    find: ["ctrl+f"],
+    "copy.reply": ["alt+c"],
+    "select.prev": ["up", "ctrl+up", "alt+up", "k"],
+    "select.next": ["down", "ctrl+down", "alt+down", "j"],
+    "select.toggle": ["enter", "space"],
+    "select.copy": ["y", "c"],
+    "select.exit": ["escape"],
+    "find.next": ["enter", "up", "f3"],
+    "find.prev": ["shift+enter", "down", "shift+f3"],
+    "find.close": ["escape", "ctrl+c", "ctrl+g"],
   }
   return keys
 }

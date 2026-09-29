@@ -311,13 +311,13 @@ export function createInlineView(host: ViewHost): TranscriptView {
     banner: (line) => commitBlock("banner", [line]),
     user: (m) => commitBlock("user", userLines(theme, m, terminal.columns)),
     replyDelta: (text) => streaming.append(text),
-    replyEnd(ids) {
+    replyEnd(calls) {
       // The rows still live are committed as they are shown; earlier ones already were.
       const early = streaming.committedRows > 0
       const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(gutter)))
       if (rows.length) commit(transcript.continue("assistant", replyRows(rows)))
       transcript.end()
-      toolCalls.expect(ids)
+      toolCalls.expect(calls.map((c) => c.id))
       return rows.length > 0 || early
     },
     toolStart(id, name, args, at) {

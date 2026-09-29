@@ -85,4 +85,4 @@ export {
   yellow,
 } from "./style.ts"
 export { BaseTerminal, FakeTerminal, ProcessTerminal, type Terminal } from "./terminal.ts"
-export { graphemes, TAB_WIDTH, truncateToWidth, visibleWidth, wrapText } from "./width.ts"
+export { closeStyles, graphemes, TAB_WIDTH, truncateToWidth, visibleWidth, wrapText } from "./width.ts"

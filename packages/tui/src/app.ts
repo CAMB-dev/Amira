@@ -43,6 +43,7 @@ import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
 import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
 import { compactTokens, userLines, userText } from "./format.ts"
+import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { HistorySearch } from "./history-search.ts"
@@ -473,7 +474,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     editorEmpty: () => editor.isEmpty,
     showNote,
   }
-  const view: TranscriptView = createInlineView(host)
+  const mode = opts.mode ?? settings.mode ?? "inline"
+  const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
 
   function openView(v: FrontendView) {
     // A form owns the screen until it is answered.
@@ -587,8 +589,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "message.end": {
         const { message } = e.data
-        const ids = message.content.flatMap((b) => (b.type === "toolCall" ? [b.id] : []))
-        if (view.replyEnd(ids)) turnShowedOutput = true
+        const calls = message.content.flatMap((b) => (b.type === "toolCall" ? [b] : []))
+        if (view.replyEnd(calls)) turnShowedOutput = true
         turnTokens += message.usage?.output ?? estimateTokens(streamedChars)
         streamedChars = 0
         break
