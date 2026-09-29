@@ -39,8 +39,8 @@ const TEXT_SYMBOLS = "#*0123456789©®™‼↔↕▪▫◻◼▶◀☺♀♂♠
 /** A character that counts as an emoji although it has no emoji presentation of its own. */
 const TEXT_EMOJI = new RegExp(`[\\p{Emoji}--\\p{Emoji_Presentation}--[${TEXT_SYMBOLS}]]`, "v")
 const TEXT_EMOJI_START = new RegExp(`^${TEXT_EMOJI.source}`, "v")
-const VS15 = "︎"
-const VS16 = "️"
+const VS15 = "\uFE0E"
+const VS16 = "\uFE0F"
 
 /** A grapheme drawn as an emoji although it does not ask for it: its width goes from 1 to 2. */
 function isBareEmoji(g: string): boolean {

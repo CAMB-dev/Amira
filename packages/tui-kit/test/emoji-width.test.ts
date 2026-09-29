@@ -10,8 +10,8 @@ import { presentEmoji, textWidth, truncateToWidth, visibleWidth, wrapText } from
 import { plain } from "./context.ts"
 import { VirtualScreen } from "./screen.ts"
 
-const VS15 = "︎"
-const VS16 = "️"
+const VS15 = "\uFE0E"
+const VS16 = "\uFE0F"
 
 /** Emoji without an emoji presentation of their own, which terminals draw two cells wide. */
 const TEXT_DEFAULT = [
@@ -88,8 +88,8 @@ test("emoji, CJK, ZWJ sequences, flags, keycaps and modifiers keep their widths"
   expect(visibleWidth(`❤${VS16}‍🔥`)).toBe(2)
   expect(visibleWidth("🏳‍🌈")).toBe(2)
   expect(visibleWidth("🇯🇵")).toBe(2)
-  expect(visibleWidth(`1${VS16}⃣`)).toBe(2)
-  expect(visibleWidth(`#${VS16}⃣`)).toBe(2)
+  expect(visibleWidth(`1${VS16}\u20E3`)).toBe(2)
+  expect(visibleWidth(`#${VS16}\u20E3`)).toBe(2)
   expect(visibleWidth("☝🏽")).toBe(2)
   expect(visibleWidth("〰")).toBe(2)
   expect(visibleWidth("✓ ✗ • ◦ ▸ ▲ ● ◆ › … ─ │")).toBe(23)
@@ -119,7 +119,7 @@ test("presentEmoji adds VS16 where the emoji was not asked for, and nowhere else
 })
 
 test("presentEmoji never changes a width", () => {
-  const all = [...TEXT_DEFAULT, ...TEXT_SYMBOLS, "😀", "你", "👨‍👩‍👧", "❤‍🔥", "🇯🇵", "☝🏽", `✉${VS15}`, `✉́`]
+  const all = [...TEXT_DEFAULT, ...TEXT_SYMBOLS, "😀", "你", "👨‍👩‍👧", "❤‍🔥", "🇯🇵", "☝🏽", `✉${VS15}`, `✉\u0301`]
   for (const s of all) expect([s, visibleWidth(presentEmoji(s))]).toEqual([s, visibleWidth(s)])
   // And the terminal draws it as measured: two cells once VS16 follows.
   for (const c of TEXT_DEFAULT) expect([c, Bun.stringWidth(presentEmoji(c))]).toEqual([c, 2])
@@ -193,7 +193,7 @@ test("a truncated row with ✉ ends where it was measured to", () => {
   const { term, screen } = setup(10, 3)
   const r = new LiveRenderer(term, new Lines(["abcdefgh✉xyz", "✉✉✉✉✉✉"]))
   r.start()
-  expect(stripAnsi(screen.lines[0]!)).toBe("abcdefgh✉️")
+  expect(stripAnsi(screen.lines[0]!)).toBe("abcdefgh✉\uFE0F")
   expect(screen.grid[1]!.filter((c) => c !== "").length).toBe(5)
   expect(screen.y).toBe(1)
   r.stop()
