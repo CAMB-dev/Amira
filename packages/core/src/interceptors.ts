@@ -104,7 +104,17 @@ export class InterceptorRegistry {
       // After the fact there is nothing left to block.
       if (result.action === "block" && point === "tool.call.after") continue
       if (result.action === "block") return { blocked: true, reason: result.reason, value: current }
-      if (result.action === "modify") current = result.value
+      if (result.action === "modify") {
+        // A result without content (a handler's slip) would turn a call that worked into an error.
+        if (
+          point === "tool.call.after" &&
+          !Array.isArray((result.value as InterceptorMap["tool.call.after"])?.result?.content)
+        ) {
+          this.#onError(point, entry.source, "the modified result has no content; it was ignored")
+          continue
+        }
+        current = result.value
+      }
       if (result.action === "ask" && point === "tool.call.before") ask.push(result.reason)
     }
     return ask.length ? { blocked: false, value: current, ask } : { blocked: false, value: current }

@@ -146,10 +146,11 @@ export class ExtensionHost {
 
   /**
    * Runs the extensions' exit handlers (ExtensionAPI.onExit) together and resolves once all
-   * finished, or after `timeoutMs`, when their signal aborts. Failures are reported as
-   * extension.error. Never rejects.
+   * finished. After `timeoutMs` their signal aborts, and they get `graceMs` more to stop (e.g.
+   * for a command they started to be killed) before this resolves anyway. Failures are reported
+   * as extension.error. Never rejects.
    */
-  async runExitHandlers(timeoutMs = 5000): Promise<void> {
+  async runExitHandlers(timeoutMs = 4000, graceMs = 1000): Promise<void> {
     const handlers = [...this.#exitHandlers]
     if (!handlers.length) return
     const abort = new AbortController()
@@ -157,7 +158,7 @@ export class ExtensionHost {
     const late = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
         abort.abort()
-        resolve()
+        timer = setTimeout(resolve, graceMs)
       }, timeoutMs)
     })
     const runs = handlers.map(async (h) => {

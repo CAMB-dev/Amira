@@ -131,10 +131,13 @@ test("exit handlers run together; a slow one is cut off, a failing one reported,
     api.onExit(
       (signal) =>
         new Promise<void>((resolve) => {
-          signal.addEventListener("abort", () => {
-            slowAborted = true
-            resolve()
-          })
+          // Stopping takes a moment, which the grace after the abort allows for.
+          signal.addEventListener("abort", () =>
+            setTimeout(() => {
+              slowAborted = true
+              resolve()
+            }, 50),
+          )
         }),
     )
     api.onExit(() => {

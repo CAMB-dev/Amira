@@ -240,7 +240,8 @@ export interface InterceptorMap {
    * Runs after a tool ran, before its result reaches the model and tool.execute.end is
    * emitted; not for calls that were rejected, blocked or aborted first. Only `result` may be
    * modified, e.g. to add a formatter's complaints or a language server's diagnostics to what
-   * the model reads. block counts as pass. Failures pass, and the result stays as it was.
+   * the model reads. block counts as pass. Failures pass, and the result stays as it was, as it
+   * does when the modified result has no `content`.
    */
   "tool.call.after": {
     readonly toolCallId: string

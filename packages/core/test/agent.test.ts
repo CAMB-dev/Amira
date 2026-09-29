@@ -149,10 +149,14 @@ test("tool.call.after can add to a result before the model and tool.execute.end 
       },
     }
   })
-  // A failing handler leaves the result as it was.
+  // A failing handler, or one that drops the content, leaves the result as it was.
   agent.interceptors.add("tool.call.after", () => {
     throw new Error("broken")
   })
+  agent.interceptors.add("tool.call.after", (v) => ({
+    action: "modify",
+    value: { ...v, result: { isError: true } as unknown as typeof v.result },
+  }))
   await agent.prompt("go")
   await bus.flush()
   // Only calls that ran reach it: not the unknown tool.
