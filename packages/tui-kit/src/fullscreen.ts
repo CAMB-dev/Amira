@@ -1,5 +1,6 @@
 import { cursor, erase, modes, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
+import { type ImagePlacement, ScreenImageLayer } from "./images/screen.ts"
 import type { RendererOptions } from "./renderer.ts"
 import { defaultTheme, isColorEnabled, stripColors } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
@@ -13,6 +14,9 @@ import { closeStyles, sanitize, truncateToWidth, visibleWidth } from "./width.ts
  * are rewritten; a resize redraws everything. The cursor stays hidden, unless a line holds
  * `CURSOR_MARKER` (a focused text input): then the terminal cursor is shown there, which is
  * also where input methods (IME) put their composition window.
+ *
+ * Images are shown with `ctx.place` over blank rows of the frame: drawn after the text, only
+ * when they appear, move or change (see `ScreenImageLayer`), and cleared from rows they leave.
  *
  * Leaving the alternate screen gives the main screen back exactly as it was, cursor
  * included, so an inline `LiveRenderer` can be suspended while this one is open and resumed
@@ -31,6 +35,7 @@ export class FullScreenRenderer {
   private opened = false
   /** Where the cursor was shown by the last frame; undefined when hidden. */
   private cursorAt: { row: number; col: number } | undefined
+  private images = new ScreenImageLayer()
 
   constructor(
     private terminal: Terminal,
@@ -74,6 +79,8 @@ export class FullScreenRenderer {
     this.offResize?.()
     this.offResize = undefined
     this.prev = undefined
+    const free = this.images.close()
+    if (free) this.terminal.write(free)
     this.terminal.disableMode(modes.alternateScroll)
     // The alternate screen does not save whether the cursor was shown; it was before we hid it.
     this.terminal.write(cursor.show)
@@ -104,7 +111,8 @@ export class FullScreenRenderer {
     this.lastFrameAt = performance.now()
     const { columns, rows } = this.terminal
     this.context.rows = rows
-    const drawn = this.root.render(columns, { ...this.context })
+    const placed: ImagePlacement[] = []
+    const drawn = this.root.render(columns, { ...this.context, place: (p) => placed.push(p) })
     const lines: string[] = []
     let at: { row: number; col: number } | undefined
     for (let i = 0; i < rows; i++) {
@@ -118,11 +126,19 @@ export class FullScreenRenderer {
       lines.push(this.finish(truncateToWidth(raw.replaceAll(CURSOR_MARKER, ""), columns)))
     }
     const full = !this.prev || columns !== this.size.columns || rows !== this.size.rows
-    let body = full ? erase.screen : ""
+    const prev = this.prev
+    const images = this.images.frame(placed, {
+      full,
+      rows,
+      columns,
+      changed: (i) => !prev || prev[i] !== lines[i],
+    })
+    let body = (full ? erase.screen : "") + images.before
     for (let i = 0; i < rows; i++) {
-      if (!full && this.prev![i] === lines[i]) continue
+      if (!full && prev![i] === lines[i] && !images.repaint.has(i)) continue
       body += `${cursor.to(i)}${erase.line}${lines[i]}`
     }
+    body += images.after
     this.prev = lines
     this.size = { columns, rows }
     const moved = at?.row !== this.cursorAt?.row || at?.col !== this.cursorAt?.col

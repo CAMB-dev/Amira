@@ -48,8 +48,15 @@ export { defaultGlyphs, type Glyphs } from "./glyphs.ts"
 export { type Bitmap, decodeImage, type ImageFormat, imageSize, resizeBitmap } from "./images/decode.ts"
 export { canShow, encodeImage, type ImageBlock, type ImageProtocol } from "./images/encode.ts"
 export { type CellSize, type Fit, fitImage } from "./images/fit.ts"
-export { ImageLoader, type ImageLoaderOptions, type RemoteImageFetch } from "./images/loader.ts"
+export {
+  ImageLoader,
+  type ImageLoaderOptions,
+  type RemoteImageFetch,
+  type ScreenSource,
+} from "./images/loader.ts"
 export { pendingImage, placeImage } from "./images/placement.ts"
+export { type Prepared, type PrepareRequest, prepareImage } from "./images/prepare.ts"
+export { type ImagePlacement, ScreenImage } from "./images/screen.ts"
 export { encodeSixel } from "./images/sixel.ts"
 export { InputParser } from "./input.ts"
 export {

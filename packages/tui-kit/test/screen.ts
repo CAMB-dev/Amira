@@ -22,8 +22,24 @@ export class VirtualScreen {
   /** Pixels per cell for Sixel images. */
   cell = { width: 10, height: 20 }
   /** Images drawn: where (the row counted from the top of the scrollback), and the cells taken. */
-  images: { protocol: "sixel" | "iterm2" | "kitty"; row: number; col: number; rows: number; cols: number }[] =
-    []
+  images: {
+    protocol: "sixel" | "iterm2" | "kitty"
+    row: number
+    col: number
+    rows: number
+    cols: number
+    /** The row of the screen it started on, on the alternate screen. */
+    screenRow?: number
+  }[] = []
+  /** kitty images sent (a=t) and not freed, by id: their size in pixels. */
+  kittyImages = new Map<number, { width: number; height: number }>()
+  /** kitty placements shown, by `id:pid`; `y` and `h` are the source rows of a cropped one. */
+  kittyPlacements = new Map<
+    string,
+    { id: number; pid: number; row: number; col: number; rows: number; cols: number; y?: number; h?: number }
+  >()
+  /** kitty commands other than a=T, in order: `t i=5`, `p i=5 p=1`, `d:i i=5 p=1`, `d:I i=5`. */
+  kittyLog: string[] = []
   private savedCursor = { x: 0, y: 0 }
   /** OSC strings received (`0;title`, `9;4;3;0`), without ESC ] and the terminator. */
   oscs: string[] = []
@@ -161,11 +177,59 @@ export class VirtualScreen {
   /** Paints an image of `rows`×`cols` cells at the cursor, scrolling to make room. */
   private image(protocol: "sixel" | "iterm2" | "kitty", rows: number, cols: number): void {
     const col = this.x
+    const top = this.y
     for (let r = 0; r < rows; r++) {
       if (r > 0) this.lineFeed()
       for (let c = col; c < Math.min(this.cols, col + cols); c++) this.grid[this.y]![c] = "▓"
     }
-    this.images.push({ protocol, row: this.scrollback.length + this.y - (rows - 1), col, rows, cols })
+    this.images.push({
+      protocol,
+      row: this.scrollback.length + this.y - (rows - 1),
+      col,
+      rows,
+      cols,
+      ...(this.saved ? { screenRow: top } : {}),
+    })
+  }
+
+  /**
+   * kitty's graphics commands other than a=T: a=t (sent, `kittyImages`), a=p (placed at the
+   * cursor, in `kittyPlacements`, not painted: kitty draws them over the text) and a=d (d=i
+   * with or without p, d=I, d=a take placements away; d=I frees the image too).
+   */
+  private kittyCommand(body: string): void {
+    const keys = new Map(
+      body
+        .slice(1, body.indexOf(";") === -1 ? undefined : body.indexOf(";"))
+        .split(",")
+        .map((kv) => kv.split("=") as [string, string]),
+    )
+    const num = (k: string) => (keys.has(k) ? Number(keys.get(k)) : undefined)
+    const id = num("i") ?? 0
+    const a = keys.get("a")
+    this.kittyLog.push(
+      `${a}${keys.has("d") ? `:${keys.get("d")}` : ""} i=${id}${keys.has("p") ? ` p=${num("p")}` : ""}`,
+    )
+    if (a === "t") this.kittyImages.set(id, { width: num("s") ?? 0, height: num("v") ?? 0 })
+    else if (a === "p") {
+      if (!this.kittyImages.has(id)) return
+      this.kittyPlacements.set(`${id}:${num("p") ?? 0}`, {
+        id,
+        pid: num("p") ?? 0,
+        row: this.y,
+        col: this.x,
+        rows: num("r") ?? 1,
+        cols: num("c") ?? 1,
+        ...(keys.has("y") ? { y: num("y")!, h: num("h")! } : {}),
+      })
+    } else if (a === "d") {
+      const d = keys.get("d") ?? "a"
+      for (const [k, p] of this.kittyPlacements) {
+        const hit = d === "a" || d === "A" || (p.id === id && (keys.has("p") ? p.pid === num("p") : true))
+        if (hit) this.kittyPlacements.delete(k)
+      }
+      if (d === "I") this.kittyImages.delete(id)
+    }
   }
 
   private escape(data: string, i: number): number {
@@ -198,6 +262,8 @@ export class VirtualScreen {
           this.lineFeed()
           this.x = x
         }
+      } else if (body.startsWith("G") && /[,G]a=[tpd][,;]/.test(body)) {
+        this.kittyCommand(body)
       } else if (body.startsWith("G") && /[,G]a=T/.test(body)) {
         const g = /s=(\d+),v=(\d+)/.exec(body)!
         const { x, y } = this

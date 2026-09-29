@@ -201,9 +201,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
-  // Images on a line of their own are drawn where the terminal can, in the inline view: at most
-  // 20 rows, and 40% of the screen. The full-screen view and full-screen overlays (the sub-agent
-  // viewer, forms) show their alt text (D83, D84).
+  // Images on a line of their own are drawn where the terminal can, in both views: at most 20
+  // rows, and 40% of the screen. Full-screen overlays (the sub-agent viewer, forms) show their
+  // alt text (D83, D84).
   const imageSupport = chooseImageSupport(imageSetting, capabilities.graphics, env)
   const images =
     imageSupport &&
