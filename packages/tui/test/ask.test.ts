@@ -212,7 +212,8 @@ for (const mode of MODES) {
     )
     // No echo of the dialog: the tool call's result shows the answers.
     expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ›")
-    expect(s.all()).toContain("Approach › Patch")
+    // Each question's label, with the answer whole under it.
+    expect(s.all()).toMatch(/Approach\n +Patch\n/)
     expect(s.dialog()).toEqual([])
     s.terminal.send("\x03")
     await s.exited
