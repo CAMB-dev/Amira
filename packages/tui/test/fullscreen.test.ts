@@ -262,6 +262,12 @@ test("parallel tool calls keep their places in call order and finish in place", 
   terminal.send("go\r")
   // The fast one finished below the slow one, which still runs above it.
   await waitFor(() => /● slow a\.ts .*\n● fast b\.ts\n {2}└ fast result/.test(view()), "fast done in place")
+  // The activity line stays while tools run: its spinner, the tool still running, time and interrupt.
+  await waitFor(
+    () => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running slow · \d+s · (↓ \d+ tokens · )?Esc interrupt$/m.test(view()),
+    "activity",
+  )
+  expect(view()).toMatch(/● slow a\.ts +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+s/)
   release()
   await shows("done")
   await idle()
@@ -325,6 +331,8 @@ test("sub-agents stay under their call, also running in the background after the
     "rows under the call",
   )
   expect(view()).not.toContain("running in background")
+  // No turn runs: the sub-agent working on brings no activity line.
+  expect(view()).not.toContain("Esc interrupt")
   finish()
   await child!.result()
   await bus.flush()

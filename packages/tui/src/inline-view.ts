@@ -314,7 +314,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
   }
 
   return {
-    get toolsRunning() {
+    get runningTools() {
       return toolCalls.running
     },
     capturing: false,

@@ -26,7 +26,7 @@ import {
 import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies, type RemoteImageFetch } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
-import { runInteractive } from "../src/app.ts"
+import { activityLabel, runInteractive } from "../src/app.ts"
 
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
@@ -504,6 +504,60 @@ test("the activity line shows what the turn does, its time, output tokens and ho
   await exited
 })
 
+test("while tools run the activity line names them and keeps its spinner, time and interrupt hint", async () => {
+  const { terminal, live, idle, exited, agent } = await setup(
+    [
+      {
+        toolCalls: [
+          { name: "slowa", args: {} },
+          { name: "slowb", args: {} },
+        ],
+      },
+      { text: "ok" },
+    ],
+    { cols: 80 },
+  )
+  const release: Record<string, () => void> = {}
+  for (const name of ["slowa", "slowb"]) {
+    agent.tools.register(
+      defineTool({
+        name,
+        description: "",
+        parameters: {},
+        concurrency: "parallel",
+        execute: () =>
+          new Promise((r) => {
+            release[name] = () => r(textResult("done"))
+          }),
+      }),
+      "test",
+    )
+  }
+  const activity = (label: string) =>
+    new RegExp(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ${label} · \\d+s · (↓ \\d+ tokens · )?Esc interrupt$`, "m")
+  terminal.send("go\r")
+  await waitFor(() => activity("running 2 tools").test(live()), "two tools")
+  // The rows keep their own spinners.
+  expect(live()).toMatch(/● slowa +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+s/)
+  release.slowb!()
+  await waitFor(() => activity("running slowa").test(live()), "one tool left")
+  release.slowa!()
+  await idle()
+  expect(live()).not.toContain("Esc interrupt")
+  terminal.send("\x03")
+  await exited
+})
+
+test("the activity label names the most specific activity", () => {
+  const base = { compacting: false, running: [] as string[], preparing: undefined, thinking: false }
+  expect(activityLabel(base)).toBe("working")
+  expect(activityLabel({ ...base, thinking: true })).toBe("thinking")
+  expect(activityLabel({ ...base, preparing: "bash" })).toBe("preparing bash")
+  expect(activityLabel({ ...base, running: ["bash"], thinking: true })).toBe("running bash")
+  expect(activityLabel({ ...base, running: ["bash", "read", "grep"] })).toBe("running 3 tools")
+  expect(activityLabel({ ...base, compacting: true, running: ["bash"] })).toBe("compacting the conversation")
+})
+
 test("a message sent during /compact counts its own time and tokens, not the last turn's", async () => {
   const said = (text: string): Message[] => [
     { role: "user", content: [{ type: "text", text }] },
@@ -909,9 +963,9 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   await shows("● block")
   await idle()
   // The running tool is drawn as its own line with a spinner and its time on the right, and the
-  // activity line under it has the turn's time and how to interrupt.
+  // activity line under it keeps its spinner, says what runs, the turn's time and how to interrupt.
   expect(seenWhileRunning).toMatch(/● block +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 0s/)
-  expect(seenWhileRunning).toMatch(/^0s · (↓ \d+ tokens · )?Esc interrupt$/m)
+  expect(seenWhileRunning).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running block · 0s · (↓ \d+ tokens · )?Esc interrupt$/m)
   terminal.send("\x03")
   await exited
 })
@@ -1932,6 +1986,9 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   )
   const committed = all().split("running in background")[0]!
   expect(committed).not.toContain("Scan the logs")
+  // No turn runs: sub-agents working in the background bring no activity line.
+  expect(live()).not.toContain("Esc interrupt")
+  expect(live()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] (working|running)/)
   finish()
   await child!.result()
   await bus.flush()

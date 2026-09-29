@@ -80,8 +80,8 @@ export interface ViewHost {
  * keys into these calls; everything else (the input, dialogs, the queue) it keeps itself.
  */
 export interface TranscriptView {
-  /** Tool calls running now, for the activity line. */
-  readonly toolsRunning: number
+  /** The names of the tool calls running now, in call order, for the activity line. */
+  readonly runningTools: string[]
   /** Draws the first frame, with what was added before it. */
   start(): void
   requestRender(): void

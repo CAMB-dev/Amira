@@ -183,6 +183,20 @@ function messageText(m: UserMessage): string {
 /** Output tokens a streamed text is worth, until the reply's usage says. */
 const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 
+/** What the turn is doing now, as the activity line names it: the most specific activity first. */
+export function activityLabel(s: {
+  compacting: boolean
+  running: readonly string[]
+  preparing: string | undefined
+  thinking: boolean
+}): string {
+  if (s.compacting) return "compacting the conversation"
+  if (s.running.length === 1) return `running ${s.running[0]}`
+  if (s.running.length > 1) return `running ${s.running.length} tools`
+  if (s.preparing) return `preparing ${s.preparing}`
+  return s.thinking ? "thinking" : "working"
+}
+
 /**
  * The interactive terminal UI. This is its controller: it follows the bus and the keys, keeps
  * the input, dialogs, forms and the message queue, and hands the conversation to a view that
@@ -357,18 +371,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const bottom = new Stack([
     // The activity line: what the turn is doing, how long it has run, the tokens it wrote.
-    // Running tools carry their own spinner, so it is left out while they run.
+    // It shows for the whole turn, also while tools run (their rows carry a spinner of their own).
     new View((width, ctx) => {
       if (!working && !compacting) return []
-      const label = compacting
-        ? "compacting the conversation"
-        : preparing
-          ? `preparing ${preparing}`
-          : thinking
-            ? "thinking"
-            : view.toolsRunning
-              ? ""
-              : "working"
+      const label = activityLabel({ compacting, running: view.runningTools, preparing, thinking })
       const tokens = turnTokens + estimateTokens(streamedChars)
       const interruptKey = keys.label("interrupt")
       const stats = [
@@ -376,9 +382,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
         ...(interruptKey ? [`${interruptKey} interrupt`] : []),
       ].join(` ${glyphs.separator} `)
-      const head = label
-        ? `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
-        : ""
+      const head = `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
       return [truncateToWidth(head + ctx.theme.muted(stats), width, glyphs.more), ""]
     }),
     new View((width, ctx) => [
