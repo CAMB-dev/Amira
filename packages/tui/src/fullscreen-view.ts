@@ -622,16 +622,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       const last = pane.last?.kind
       // Right after its command it hangs under the echo; on its own it is a notice.
       if (last !== "command" && last !== "command-output") return notice(level, text)
-      add(
-        new LinesBlock(
-          "command-output",
-          (width, t) => {
-            const style = level === "error" ? t.error : level === "warning" ? t.warning : t.text
-            return commandOutputLines(style, t.muted, text, width)
-          },
-          text,
-        ),
-      )
+      add(new LinesBlock("command-output", (width, t) => commandOutputLines(t, level, text, width), text))
     },
     dialogEcho: (draw) =>
       add(

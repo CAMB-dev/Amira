@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { EventEnvelope } from "@amira/api"
-import { defaultTheme, RESET, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import { defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import {
   bandRows,
   commandEchoLines,
@@ -110,7 +110,8 @@ test("a wrapped echo keeps the band after the reset that ends its style on a row
   const rows = commandEchoLines(banded, `/model ${"x".repeat(30)}`, 20)
   expectBand(rows, 20)
   expect(rows.length).toBeGreaterThan(3)
-  expect(rows.join("")).toContain(RESET)
+  // Its rows after the first hang under the command, past "› ".
+  expect(rows.slice(2, -1).every((r) => stripAnsi(r).startsWith("  x"))).toBe(true)
   for (const r of rows) {
     const resets = r.split("\x1b[0m").slice(1)
     for (const after of resets) expect(after.startsWith(BAND)).toBe(true)

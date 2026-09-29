@@ -163,12 +163,9 @@ export class LinesBlock extends Block {
 
   override copyRows(plain: readonly string[]): CopyRow[] {
     if (this.kind !== "user" && this.kind !== "command") return chromeRows(plain)
-    // A message sits behind "› ", its rows lined up after it; a command echo wraps under it.
+    // A message or a command echo sits behind "› ", its rows lined up after it.
     const gutter = visibleWidth(glyphs.user) + 1
-    const rows: CopyRow[] =
-      this.kind === "user"
-        ? gutterRows(plain, gutter)
-        : plain.map((p) => ({ from: p.startsWith(`${glyphs.user} `) ? gutter : 0 }))
+    const rows: CopyRow[] = gutterRows(plain, gutter)
     // On the band behind them its blank rows above and below are chrome too (and the fill
     // that runs each row to the edge is trailing blanks, which never copy).
     const last = plain.length - 1

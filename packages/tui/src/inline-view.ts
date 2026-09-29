@@ -379,8 +379,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     commandOutput(level, text) {
       // Right after its command it hangs under the echo; on its own it is a notice.
       if (transcript.last === "command" || transcript.last === "command-output") {
-        const style = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.text
-        commitBlock("command-output", commandOutputLines(style, theme.muted, text, terminal.columns))
+        commitBlock("command-output", commandOutputLines(theme, level, text, terminal.columns))
       } else commitBlock("notice", note(level, text))
     },
     dialogEcho: (draw) => commitBlock("dialog", draw(Math.max(1, terminal.columns))),

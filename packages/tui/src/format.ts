@@ -77,7 +77,12 @@ export function userLines(theme: Theme, message: UserMessage, width = Number.POS
 export function commandEchoLines(theme: Theme, line: string, width: number): string[] {
   const bg = themeToken(theme, "userBg")
   const muted = (bg && themeToken(theme, "surfaceMuted")) || theme.muted
-  const rows = wrapText(muted(`${glyphs.user} ${line}`), Math.max(1, width - (bg ? 1 : 0)))
+  // Its rows after the first hang under the text, past the prompt symbol, as a message's do.
+  const gutter = visibleWidth(glyphs.user) + 1
+  const room = Math.max(1, width - (bg ? 1 : 0) - gutter)
+  const rows = wrapText(line, room).map((r, i) =>
+    muted(`${i === 0 ? `${glyphs.user} ` : " ".repeat(gutter)}${r}`),
+  )
   return bg ? bandRows(rows, width, bg) : rows
 }
 

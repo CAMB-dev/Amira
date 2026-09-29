@@ -21,6 +21,7 @@ import {
 import {
   type Component,
   chooseImageSupport,
+  colorSupported,
   defaultTheme,
   detectEnv,
   Editor,
@@ -29,6 +30,7 @@ import {
   type InputEvent,
   InputReader,
   isColorEnabled,
+  monoTheme,
   ProcessTerminal,
   progressSupported,
   type RenderContext,
@@ -222,10 +224,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     background: true,
   })
   // Surface colors (the band behind the user's messages, diff lines) for the terminal's
-  // background; none without colors, where the band would only be blank rows.
+  // background; none without colors, where the band would only be blank rows and attributes
+  // (dim, bold) tell apart what colors would.
   const theme =
     opts.theme ??
-    (isColorEnabled() ? { ...defaultTheme, ...surfaceTheme(capabilities.background) } : defaultTheme)
+    (isColorEnabled() && colorSupported(env)
+      ? { ...defaultTheme, ...surfaceTheme(capabilities.background) }
+      : monoTheme)
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
@@ -584,7 +589,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     editorEmpty: () => editor.isEmpty,
     showNote,
   }
-  const mode = opts.mode ?? settings.mode ?? "inline"
+  // A dumb terminal has no alternate screen to draw the full-screen view on.
+  const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
 
   function openView(v: FrontendView) {

@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test"
+import { stripAnsi } from "../src/ansi.ts"
+import { renderMarkdown } from "../src/components/markdown-stream.ts"
 import {
   blue,
   bold,
   colorSupported,
   defaultTheme,
+  monoTheme,
   red,
   stripColors,
   surfaceTheme,
@@ -20,6 +23,32 @@ test("NO_COLOR turns colors off by default", () => {
   expect(colorSupported({ NO_COLOR: "1" })).toBe(false)
   expect(colorSupported({ NO_COLOR: "" })).toBe(true)
   expect(colorSupported({})).toBe(true)
+})
+
+test("a dumb terminal gets no colors either", () => {
+  expect(colorSupported({ TERM: "dumb" })).toBe(false)
+  expect(colorSupported({ TERM: "xterm-256color" })).toBe(true)
+})
+
+test("without colors the mono theme tells things apart by attributes, which survive stripColors", () => {
+  const md = "# One\n\n## Two\n\n### Three\n\nuse `npm test` now"
+  const rows = renderMarkdown(md, 40, monoTheme, { hyperlinks: false }).map(stripColors)
+  const h1 = rows.find((r) => r.includes("One"))!
+  const h2 = rows.find((r) => r.includes("Two"))!
+  const h3 = rows.find((r) => r.includes("Three"))!
+  // Three different looks: bold and underlined, bold, bold and italic.
+  expect(new Set([h1, h2, h3].map((r) => r.replace(/One|Two|Three/, ""))).size).toBe(3)
+  expect(h1).toContain("\x1b[4m")
+  // Inline code keeps its backticks, and they count in the width.
+  const code = rows.find((r) => r.includes("npm test"))!
+  expect(stripAnsi(code)).toBe("use `npm test` now")
+  expect(stripColors(monoTheme.muted("x"))).toBe("\x1b[2mx\x1b[22m")
+  expect(stripColors(monoTheme.accent("x"))).toBe("\x1b[1mx\x1b[22m")
+})
+
+test("with colors inline code shows without its backticks", () => {
+  const rows = renderMarkdown("use `npm test` now", 40, defaultTheme, { hyperlinks: false })
+  expect(stripAnsi(rows[0]!)).toBe("use npm test now")
 })
 
 test("stripColors keeps text attributes", () => {
