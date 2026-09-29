@@ -1058,6 +1058,29 @@ test("a selected call opens the sub-agent viewer on its sub-agent", async () => 
   await exited
 })
 
+test("a selected row of background sub-agents opens the viewer on them with →", async () => {
+  const { terminal, view, shows, exited, agent, tree, bus } = await setup([{ text: "scanned" }], {
+    cols: 80,
+    commands: true,
+  })
+  const group = tree!.createGroup(agent, { name: "workflow demo", compact: true })
+  const kid = group.spawn({ role: "explorer", title: "Scan api", prompt: "scan" })
+  await shows("◆ workflow demo")
+  await bus.flush()
+  terminal.send(CTRL_UP)
+  await waitFor(() => /background sub-agents \d+ of \d+ · .*→ sub-agent/.test(view()), "the row selected")
+  terminal.send(RIGHT)
+  await waitFor(() => view().includes("Esc back") && view().includes("Scan api"), "the viewer")
+  terminal.send(ESC)
+  await waitFor(() => /background sub-agents \d+ of \d+/.test(view()), "back, still selected")
+  terminal.send(ESC)
+  await kid.result()
+  group.end()
+  await group.ended()
+  terminal.send("\x03")
+  await exited
+})
+
 test("a resize reflows the whole transcript to the new width", async () => {
   const words = Array.from({ length: 30 }, (_, i) => `word${i}`).join(" ")
   const { terminal, view, shows, idle, resize, screen, exited } = await setup([{ text: words }], { cols: 80 })
