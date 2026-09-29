@@ -478,7 +478,7 @@ test("the built-in presenters: an edit shows its diff with line numbers", async 
   await exited
 })
 
-test("a resumed session shows its history like the live transcript, then a separator with its id", async () => {
+test("a resumed session shows a boundary with its id, then its history like the live transcript", async () => {
   const { terminal, all, agent, exited } = await setup([], {
     presenters: true,
     history: [
@@ -503,19 +503,8 @@ test("a resumed session shows its history like the live transcript, then a separ
     ],
   })
   await waitFor(() => all().includes("── resumed"), "history")
-  expect(all()).toContain(
-    [
-      "› count",
-      "",
-      "",
-      "● glob *.ts",
-      "  └ 2 files",
-      "",
-      "  Two.",
-      "",
-      `── resumed ${agent.sessionId} ──`,
-    ].join("\n"),
-  )
+  expect(all()).toContain(`── resumed ${agent.sessionId} ${"─".repeat(38)}\n\n\n› count`)
+  expect(all()).toContain(["› count", "", "", "● glob *.ts", "  └ 2 files", "", "  Two."].join("\n"))
   terminal.send("\x03")
   await exited
 })

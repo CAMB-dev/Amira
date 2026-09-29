@@ -19,6 +19,7 @@ import {
 } from "@amira/tui-kit"
 import { replyRows, userLines, userText } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { summaryLines } from "./history.ts"
 import { apiNode, nodeRows, type ReplyRenderers } from "./markdown-nodes.ts"
 import { childrenOf, isActive, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
 import { type CopyRow, chromeRows, gutterRows } from "./text-selection.ts"
@@ -215,6 +216,42 @@ export function fixedLine(kind: BlockKind, line: string): LinesBlock {
 export function userBlock(message: UserMessage): LinesBlock {
   const text = message.display?.text.trim() || userText(message)
   return new LinesBlock("user", (width, theme) => userLines(theme, message, width), text)
+}
+
+/** The summary a compaction left, in a resumed history: folded to one line until unfolded. */
+export class SummaryBlock extends Block {
+  readonly kind = "summary"
+  folded = true
+
+  constructor(readonly summary: string) {
+    super()
+  }
+
+  lines(env: BlockEnv): string[] {
+    return summaryLines(env.theme, this.summary, env.width, this.folded)
+  }
+
+  copyText(): string {
+    return this.summary
+  }
+
+  override foldable(): boolean {
+    return true
+  }
+
+  override toggleFold(): void {
+    this.folded = !this.folded
+    this.touch()
+  }
+
+  override isFolded(): boolean {
+    return this.folded
+  }
+
+  /** Unfolded by hand, it prints unfolded: nothing shown is lost. */
+  override get refolded(): boolean {
+    return !this.folded
+  }
 }
 
 /** Code blocks longer than this are cut when their reply is folded. */

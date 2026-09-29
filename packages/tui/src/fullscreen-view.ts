@@ -1,4 +1,5 @@
 import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
+import { isSummaryMessage } from "@amira/core"
 import {
   closeStyles,
   FullScreenRenderer,
@@ -24,13 +25,14 @@ import {
   LinesBlock,
   ReplyBlock,
   SubagentGroupBlock,
+  SummaryBlock,
   ToolBlock,
   userBlock,
 } from "./blocks.ts"
 import { commandEchoLines, compactTokens } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
-import { historySeparator } from "./history.ts"
+import { sessionBoundary, summaryText } from "./history.ts"
 import {
   endNode,
   isActive,
@@ -290,6 +292,21 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     host.showNote(
       `Copied ${what} (${compactTokens(text.length)} characters) to the clipboard. Not there? Shift+drag selects text.`,
     )
+  }
+
+  /** The transcript starts afresh for another session: only the banner stays. */
+  function clearTranscript(): void {
+    settleStep()
+    reply = undefined
+    closeFind()
+    pane.clear((b) => b.kind === "banner")
+    // The old session's calls and sub-agents are not shown under the new one.
+    nodes.clear()
+    groups.clear()
+    callBlocks.clear()
+    owners.clear()
+    groupBlocks.clear()
+    tickSubagents()
   }
 
   function closeFind(): void {
@@ -705,13 +722,18 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           stripAnsi(draw(Number.POSITIVE_INFINITY).join("\n")),
         ),
       ),
-    history(messages: Message[], session) {
+    openSession(boundary, messages: Message[], switched) {
+      if (switched) clearTranscript()
+      add(new LinesBlock("history", (w, t) => [sessionBoundary(t, boundary, w)], ""))
       const results = new Map<string, ToolResult>()
       for (const m of messages) {
         if (m.role === "toolResult") results.set(m.toolCallId, { content: m.content, isError: m.isError })
       }
       for (const m of messages) {
-        if (m.role === "user") pane.add(userBlock(m))
+        // A compaction's summary is a folded block of its own; the reply that took it goes with it.
+        if (isSummaryMessage(m)) {
+          if (m.role === "user") pane.add(new SummaryBlock(summaryText(m)))
+        } else if (m.role === "user") pane.add(userBlock(m))
         else if (m.role === "assistant") {
           for (const b of m.content) {
             if (b.type === "text" && b.text.trim()) pane.add(new ReplyBlock(b.text, false, host.hyperlinks))
@@ -724,7 +746,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           }
         }
       }
-      add(new LinesBlock("history", (_w, t) => [historySeparator(t, session)], ""))
+      renderer.requestRender()
     },
     leaveSession() {
       settleStep()

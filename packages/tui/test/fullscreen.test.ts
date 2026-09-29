@@ -166,7 +166,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     terminal.setSize(c, r)
   }
   await shows("Amira")
-  return { agent, bus, host, tree, terminal, screen, view, shows, idle, resize, exited }
+  return { agent, ai, bus, host, commands, tree, terminal, screen, view, shows, idle, resize, exited }
 }
 
 test("the conversation is drawn on the alternate screen and printed to the normal one on exit", async () => {
@@ -1078,14 +1078,90 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
   ]
   const { terminal, view, shows, screen, exited } = await setup([], { history })
   await shows("── resumed")
-  expect(view()).toMatch(
-    /› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
-  )
+  const shown =
+    /── resumed s_[^\n]*─\n\n\n› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents/
+  expect(view()).toMatch(shown)
   terminal.send("\x03")
   await exited
-  expect(screen.mainText).toMatch(
-    /› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
+  expect(screen.mainText).toMatch(shown)
+})
+
+test("/clear starts the transcript afresh: find, copying, selecting and the printout see the new session only", async () => {
+  const { terminal, view, shows, idle, exited, screen, ai, bus, host, commands } = await setup(
+    [{ text: "old answer" }, { text: "new answer" }],
+    { commands: true },
   )
+  let next: Agent | undefined
+  await host.load((api) => {
+    api.registerCommand({
+      name: "clear",
+      description: "",
+      run: async (_a, ctx) => {
+        next = new Agent({ ai, model: ai.model("mock/m1"), cwd: "/work/proj", systemPrompt: "", bus })
+        commands!.switchTo(next)
+        ctx.print(`Started a new session (${next.sessionId}).`)
+      },
+    })
+  }, "test-clear")
+  terminal.send("old question\r")
+  await shows("old answer")
+  await idle()
+  terminal.send("/clear\r")
+  await waitFor(() => next !== undefined && view().includes("── new session"), "the new session")
+  expect(view()).toContain(`── new session ${next!.sessionId} `)
+  expect(view()).toContain("Amira · mock/m1")
+  expect(view()).not.toContain("old question")
+  expect(view()).not.toContain("old answer")
+  // Nothing of the old session to find or copy.
+  terminal.send(CTRL_F)
+  terminal.send("old")
+  await shows("no matches")
+  terminal.send(ESC)
+  terminal.send("\x1bc")
+  await shows("Nothing to copy")
+  terminal.send("new question\r")
+  await shows("new answer")
+  await idle()
+  terminal.send("\x03")
+  await exited
+  expect(screen.mainText).toContain("new answer")
+  expect(screen.mainText).not.toContain("old answer")
+})
+
+test("a compaction's summary in a resumed history is a folded block that unfolds", async () => {
+  const history: Message[] = [
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "The earlier part of this conversation was compacted. Summary:\n\nFixed the parser.\nTests pass.",
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Understood. I will continue from this summary." }],
+      model: { provider: "amira", model: "compaction" },
+      stopReason: "end",
+    } as Message,
+    { role: "user", content: [{ type: "text", text: "and now?" }] },
+  ]
+  const { terminal, view, shows, exited, screen } = await setup([], { history })
+  await shows("▸ Compacted summary of earlier messages · 2 lines")
+  expect(view()).not.toContain("Understood")
+  expect(view()).not.toContain("Fixed the parser")
+  terminal.send(CTRL_UP)
+  terminal.send(CTRL_UP)
+  await waitFor(() => /summary \d+ of \d+ · Enter unfold/.test(view()), "the summary selected")
+  terminal.send("\r")
+  await shows("Fixed the parser.")
+  expect(view()).toContain("▾ Compacted summary of earlier messages")
+  terminal.send(ESC)
+  terminal.send("\x03")
+  await exited
+  // Unfolded by hand, it prints unfolded.
+  expect(screen.mainText).toContain("Fixed the parser.")
 })
 
 // --- images (D83)

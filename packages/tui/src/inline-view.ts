@@ -384,13 +384,14 @@ export function createInlineView(host: ViewHost): TranscriptView {
       } else commitBlock("notice", note(level, text))
     },
     dialogEcho: (draw) => commitBlock("dialog", draw(Math.max(1, terminal.columns))),
-    history(messages: Message[], session) {
+    openSession(boundary, messages: Message[]) {
+      // The scrollback keeps what was committed: the boundary says where this session starts.
       commit(
         historyLines(theme, messages, {
           ...(presenters ? { presenters } : {}),
           width: terminal.columns,
           detail: host.detail(),
-          session,
+          session: boundary,
           transcript,
           hyperlinks: host.hyperlinks,
           nodes,

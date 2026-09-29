@@ -158,6 +158,23 @@ export class TranscriptPane {
     this.changed()
   }
 
+  /**
+   * Starts afresh with the blocks `keep` keeps (the banner): the rest goes, and with it the
+   * selection, selected text and find matches; the view follows the end.
+   */
+  clear(keep: (b: Block) => boolean): void {
+    const kept = this.blocks.filter(keep)
+    for (const b of this.blocks) if (!kept.includes(b)) b.index = -1
+    this.blocks.splice(0, this.blocks.length, ...kept)
+    this.reindex(0)
+    this.select(undefined)
+    this.clearText()
+    this.clearFind()
+    this.layout = []
+    this.top = undefined
+    this.follow()
+  }
+
   get last(): Block | undefined {
     return this.blocks[this.blocks.length - 1]
   }

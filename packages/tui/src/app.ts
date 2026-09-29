@@ -965,23 +965,31 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       .then(() => view.requestRender())
   }
 
-  /** A session's history, with its id and last write in the separator. */
-  function showHistory(a: Agent) {
+  /**
+   * Shows the session `a` from here: the boundary with its id (and last write, resumed), then
+   * its history. `switched` by a command, full screen starts the transcript afresh.
+   */
+  function showSession(a: Agent, switched: boolean) {
     let updatedAt: number | undefined
     try {
-      if (a.session?.file) updatedAt = statSync(a.session.file).mtimeMs
+      if (a.session?.file && a.messages.length) updatedAt = statSync(a.session.file).mtimeMs
     } catch {}
-    view.history(a.messages, { id: a.sessionId, ...(updatedAt !== undefined ? { updatedAt } : {}) })
+    const boundary = {
+      id: a.sessionId,
+      resumed: a.messages.length > 0,
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
+    }
+    view.openSession(boundary, a.messages, switched)
   }
 
-  /** Follows the session a command switched to; a resumed one shows its history. */
+  /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
     view.leaveSession()
     agent = next
     pendingNotices.length = 0
     setRetry(undefined)
     termStatus.setFolder(next.cwd)
-    if (next.messages.length) showHistory(next)
+    showSession(next, true)
     view.requestRender()
   }
 
@@ -1187,7 +1195,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   view.banner(
     `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${agent.cwd}`)}`,
   )
-  if (agent.messages.length) showHistory(agent)
+  if (agent.messages.length) showSession(agent, false)
   for (const e of opts.startupEvents ?? []) onEvent(e)
   if (opts.notice) view.notice("warning", opts.notice)
   // The first frame carries the banner, history and startup messages.

@@ -9,6 +9,7 @@ import type {
   Terminal,
   Theme,
 } from "@amira/tui-kit"
+import type { SessionBoundary } from "./history.ts"
 import type { Keybindings } from "./keybindings.ts"
 import type { ReplyRenderers } from "./markdown-nodes.ts"
 import type { TrackedCall } from "./tool-calls.ts"
@@ -31,12 +32,6 @@ export interface CallRef {
   id: string
   name: string
   args: Record<string, unknown>
-}
-
-/** The session a resumed history belongs to, for the separator after it. */
-export interface HistorySession {
-  id: string
-  updatedAt?: number
 }
 
 /** What the controller shares with the view that draws the conversation. */
@@ -125,8 +120,13 @@ export interface TranscriptView {
   commandOutput(level: "info" | "warning" | "error", text: string): void
   /** A dialog's questions and answers, once answered, drawn to fit a width. */
   dialogEcho(draw: (width: number) => string[]): void
-  /** A resumed conversation, then a separator naming the session. */
-  history(messages: Message[], session: HistorySession): void
+  /**
+   * The UI follows a session from here: a boundary naming it, then its conversation so far.
+   * `switched` (a command switched sessions: /clear, /resume): full screen, the transcript
+   * starts afresh first (the banner stays), so finding, copying, selecting and the exit
+   * printout see this session only; inline, the boundary follows what was committed.
+   */
+  openSession(boundary: SessionBoundary, messages: Message[], switched: boolean): void
   /** The UI is about to follow another session: calls of this one end here. */
   leaveSession(): void
   /** The note shown when the tool output level changes. */
