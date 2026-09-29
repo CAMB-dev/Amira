@@ -209,10 +209,9 @@ for (const mode of MODES) {
         "   → Tests, Changelog",
       ].join("\n"),
     )
-    // The answers stay in the transcript, a line each, under the bar.
-    expect(s.all()).toContain(
-      "┃ ? Which approach do you prefer? › Patch\n┃ ? What else should I do? › Tests, Changelog",
-    )
+    // No echo of the dialog: the tool call's result shows the answers.
+    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ›")
+    expect(s.all()).toContain("Approach › Patch")
     expect(s.dialog()).toEqual([])
     s.terminal.send("\x03")
     await s.exited
@@ -239,7 +238,7 @@ for (const mode of MODES) {
     expect(s.toolResult("ask_user")).toBe(
       'The user answered:\n1. Which approach do you prefer?\n   → (own words) "both, 2 steps"',
     )
-    expect(s.all()).toContain('┃ ? Which approach do you prefer? › "both, 2 steps"')
+    expect(s.all()).toContain('└ (own words) "both, 2 steps"')
     s.terminal.send("again\r")
     await waitFor(() => s.dialog().length > 0, "the second dialog")
     s.terminal.send(`${UP}\r`)
@@ -251,7 +250,7 @@ for (const mode of MODES) {
     await s.idle()
     const results = s.agent.messages.filter((m) => m.role === "toolResult")
     expect(JSON.stringify(results.at(-1))).toContain("The user declined to answer.")
-    expect(s.all()).toContain("┃ ? Which approach do you prefer? › cancelled")
+    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ›")
     s.terminal.send("\x03")
     await s.exited
   })
@@ -304,8 +303,8 @@ for (const mode of MODES) {
     await s.shows("b")
     await s.idle()
     // The echo wraps like any line: the answer follows the question.
-    expect(s.all()).toContain("┃ ? 你想用哪种方法来实现这个功\n┃   能？ › 修补")
-    expect(s.all()).toContain("┃ ? Which approach do you\n┃   prefer? › Rewrite\n┃   (Recommended)")
+    expect(s.all()).toContain("└ 修补")
+    expect(s.all()).toContain("└ Rewrite (Recommended)")
     s.terminal.send("\x03")
     await s.exited
   })
@@ -339,7 +338,7 @@ for (const mode of MODES) {
     await s.shows("wiped twice")
     await s.idle()
     expect(s.host.ui.pending).toEqual([])
-    expect(s.all()).toContain("┃ ? Allow wipe? › Yes, and don't ask again this session")
+    expect(s.all()).not.toContain("┃ ? Allow wipe? ›")
     // Asked once for both calls.
     expect(s.all().split("? Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
     s.terminal.send("\x03")
@@ -359,7 +358,7 @@ test("an approval refused with free text tells the model what to do instead", as
   await s.shows("ok, moving to trash")
   await s.idle()
   expect(s.toolResult("wipe")).toContain("the user said no: move them to the trash")
-  expect(s.all()).toContain('┃ ? Allow wipe? › "move them to the trash"')
+  expect(s.all()).toContain("the user said no: move them to")
   s.terminal.send("\x03")
   await s.exited
 })

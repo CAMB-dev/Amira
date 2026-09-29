@@ -927,7 +927,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
     if (answer === undefined || refused) ui.cancel(requestId)
     const echoed = refused ? undefined : answer
-    view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
+    // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
+    // declined, the answer). A command's picker or input keeps one, since nothing else shows it.
+    const kind = dialog.request.kind
+    if (kind !== "confirm" && kind !== "ask")
+      view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
     view.requestRender()
     openNextForm()
   }
