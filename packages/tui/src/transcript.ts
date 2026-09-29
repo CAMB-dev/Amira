@@ -1,4 +1,4 @@
-import { type StyleFn, type Theme, wrapText } from "@amira/tui-kit"
+import { type StyleFn, type Theme, textWidth, wrapText } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
 /** What a block of the transcript is; the spacing rule depends on it. */
@@ -79,8 +79,13 @@ export type NoticeLevel = "info" | "success" | "warning" | "error" | "interrupte
  */
 export function noticeLines(theme: Theme, level: NoticeLevel, text: string, width = 80): string[] {
   const style: StyleFn = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.muted
-  const glyph = level === "success" ? theme.success(glyphs.success) : style(glyphs[level])
-  return hanging(text, width - 2).map((l, i) => (i === 0 ? `${glyph} ${style(l)}` : `  ${style(l)}`))
+  const mark = glyphs[level]
+  const glyph = level === "success" ? theme.success(mark) : style(mark)
+  // Rows after the first hang under the text, past a mark that may be two cells (an emoji).
+  const pad = " ".repeat(textWidth(mark) + 1)
+  return hanging(text, width - pad.length).map((l, i) =>
+    i === 0 ? `${glyph} ${style(l)}` : `${pad}${style(l)}`,
+  )
 }
 
 /** Output of a command, hanging under its echo like a tool's result. */
