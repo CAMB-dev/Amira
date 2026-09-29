@@ -264,6 +264,28 @@ test("a table taller than the live region is committed with the widths it has so
   expect(committed.slice(4)).toEqual(["wider │ 5", "wider │ 6", "still │"])
 })
 
+test("a header line is not committed as a paragraph while its delimiter row is still coming", () => {
+  const table = "| col | other |\n|-----|-------|\n| 1 | 2 |\n\nafter\n"
+  const heading = "Title\n-----\n\nafter\n"
+  for (const text of [`para\n\n${table}`, `para\n\n${heading}`]) {
+    // Every chunk boundary: a frame may come at any of them, with the live region too small for
+    // the held line, its blank row and the partial line that decides what it is.
+    for (let at = 1; at < text.length; at++) {
+      const { ctx, committed } = committing()
+      const m = new MarkdownStream({ hyperlinks: false })
+      m.maxRows = 2
+      for (const chunk of [text.slice(0, at), text.slice(at)]) {
+        m.append(chunk)
+        expect(m.render(40, ctx).length).toBeLessThanOrEqual(2)
+      }
+      const rows = [...committed, ...m.take(40)].map(stripAnsi)
+      // Taller than the live region, the table keeps the widths it had with room to spare.
+      const shape = (r: string[]) => r.map((row) => row.replace(/ +│/, " │").replace(/─+┼─+/, "─┼─"))
+      expect({ at, rows: shape(rows) }).toEqual({ at, rows: shape(md(text)) })
+    }
+  }
+})
+
 test("a table row too tall for the live region is committed as its source; the table goes on", () => {
   for (const frozenFirst of [true, false]) {
     const { ctx, committed } = committing()

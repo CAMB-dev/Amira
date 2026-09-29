@@ -125,15 +125,23 @@ test.if(hasBash)("large output is truncated with the full text saved to a file",
   expect(text).toContain(path!)
 })
 
-/** Lists running `sleep` processes as pid + command line. */
-async function listSleeps(): Promise<{ pid: number; cmd: string }[]> {
+/**
+ * A `sleep` duration that marks the processes a test creates: its own random digits, all of one
+ * length, so no other run's marker (other suites may run on the machine too) contains it.
+ */
+function newMarker(whole: number): string {
+  return `${whole}.${String(Math.floor(Math.random() * 1e9)).padStart(9, "0")}1`
+}
+
+/** The processes whose command line has `marker` (sleeps, and the shells that started them). */
+async function marked(marker: string): Promise<{ pid: number; cmd: string }[]> {
   const argv = isWindows
     ? [
         "powershell.exe",
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `Get-CimInstance Win32_Process -Filter "Name='sleep.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`,
+        `Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%${marker}%'" | Where-Object { $_.ProcessId -ne $PID } | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`,
       ]
     : ["ps", "-eo", "pid=,args="]
   const out = await new Response(Bun.spawn(argv, { stdout: "pipe", stderr: "ignore" }).stdout).text()
@@ -142,16 +150,33 @@ async function listSleeps(): Promise<{ pid: number; cmd: string }[]> {
     .map((l) => l.trim().match(/^(\d+)\s+(.*)$/))
     .filter((m): m is RegExpMatchArray => m !== null)
     .map((m) => ({ pid: Number(m[1]), cmd: m[2]! }))
-    .filter((p) => isWindows || /\bsleep\b/.test(p.cmd))
+    .filter((p) => p.cmd.includes(marker))
+}
+
+/** The marked processes left once they are all gone or `ms` passed: killing and listing take time. */
+async function survivors(marker: string, ms = 10_000): Promise<{ pid: number; cmd: string }[]> {
+  const deadline = Date.now() + ms
+  let left = await marked(marker)
+  while (left.length && Date.now() < deadline) {
+    await Bun.sleep(200)
+    left = await marked(marker)
+  }
+  return left
+}
+
+function killMarked(procs: { pid: number }[]) {
+  for (const p of procs) {
+    try {
+      process.kill(p.pid, "SIGKILL")
+    } catch {}
+  }
 }
 
 test.if(hasBash)(
   "abort kills background grandchildren with no survivors",
   async () => {
-    // A unique duration marks the sleeps this test creates, so cleanup never touches anyone else's.
-    const marker = `97.${Date.now() % 100000}`
-    const ours = async () => (await listSleeps()).filter((p) => p.cmd.includes(marker))
-    const before = await listSleeps()
+    const marker = newMarker(97)
+    const sleeps = async () => (await marked(marker)).filter((p) => /\bsleep(\.exe)?\b/.test(p.cmd))
     const ac = new AbortController()
     const run = bashTool.execute(
       { command: `(sleep ${marker} &); sleep ${marker} & echo started; sleep ${marker}` },
@@ -159,26 +184,20 @@ test.if(hasBash)(
     )
     try {
       const deadline = Date.now() + 15_000
-      while ((await ours()).length < 3 && Date.now() < deadline) await Bun.sleep(200)
-      expect((await ours()).length).toBe(3)
+      while ((await sleeps()).length < 3 && Date.now() < deadline) await Bun.sleep(200)
+      expect((await sleeps()).length).toBe(3)
 
       ac.abort()
       const r = await run
       expect(r.isError).toBe(true)
       expect(textOf(r)).toContain("aborted")
 
-      await Bun.sleep(500)
-      const after = await listSleeps()
-      expect(await ours()).toEqual([])
-      if (isWindows) expect(after.length).toBeLessThanOrEqual(before.length)
+      // No sleep, and no shell that ran one, is left.
+      expect(await survivors(marker)).toEqual([])
     } finally {
       ac.abort()
       await run.catch(() => {})
-      for (const p of await ours()) {
-        try {
-          process.kill(p.pid, "SIGKILL")
-        } catch {}
-      }
+      killMarked(await marked(marker))
     }
   },
   60_000,
@@ -187,8 +206,7 @@ test.if(hasBash)(
 test.if(hasBash)(
   "the first call in a fresh process times out with no surviving grandchildren",
   async () => {
-    const marker = `96.${Date.now() % 100000}`
-    const ours = async () => (await listSleeps()).filter((p) => p.cmd.includes(marker))
+    const marker = newMarker(96)
     const fixture = join(import.meta.dir, "fixtures", "first-bash-call.ts")
     const child = Bun.spawn([process.execPath, fixture, marker, dir], { stdout: "pipe", stderr: "pipe" })
     try {
@@ -196,15 +214,10 @@ test.if(hasBash)(
       expect(code).toBe(0)
       const r = JSON.parse(out.trim().split("\n").at(-1)!)
       expect(r.text).toContain("timed out after 2000 ms")
-      await Bun.sleep(500)
-      expect(await ours()).toEqual([])
+      expect(await survivors(marker)).toEqual([])
     } finally {
       child.kill()
-      for (const p of await ours()) {
-        try {
-          process.kill(p.pid, "SIGKILL")
-        } catch {}
-      }
+      killMarked(await marked(marker))
     }
   },
   60_000,

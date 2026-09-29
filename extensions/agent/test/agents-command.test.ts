@@ -151,12 +151,12 @@ test("/agents lists the sub-agents and prints a finished one's transcript compac
     "  in a.ts",
     "",
     "● read a.ts",
-    "  ⎿ contents of a.ts (+2 lines)",
+    "  └ contents of a.ts (+2 lines)",
     "",
     "Let me ask an explorer.…",
     "",
     "● agent",
-    expect.stringMatching(/^ {2}⎿ ## Find its uses · explorer · s_\w+ · done/),
+    expect.stringMatching(/^ {2}└ ## Find its uses · explorer · s_\w+ · done/),
     expect.stringMatching(
       /^ {2}◆ Find its uses · explorer · s_\w+ · done · \d+s · 0 tok · where is it used$/,
     ),
@@ -219,7 +219,7 @@ test("a running sub-agent shows its transcript so far", async () => {
     "Checking.",
     "",
     "● slow the disk",
-    "  ⎿ running…",
+    "  └ running…",
     "",
     "… still running",
   ])

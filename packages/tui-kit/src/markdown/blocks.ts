@@ -232,6 +232,16 @@ export function hasOpenBlock(s: BlockState): boolean {
 }
 
 /**
+ * Whether the partial `line` may still turn the held line into a table header or a setext heading
+ * once it is complete: it is the start of a delimiter row or of an underline.
+ */
+export function heldUndecided(s: BlockState, line: string): boolean {
+  if (!s.held || line.trim() === "") return false
+  if (SETEXT.test(line)) return true
+  return s.held.text.includes("|") && /^[ \t]*[|:-][|:\- \t]*$/.test(line)
+}
+
+/**
  * Commits what is open early, because it no longer fits: a held line as a paragraph, and a table
  * as laid out so far, fixing its column widths for the rows still to come.
  */

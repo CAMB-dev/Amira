@@ -346,8 +346,15 @@ test("an HTTP request is abortable", async () => {
   const call = client.callTool("slow", { ms: 5000 }, { timeoutMs: 10_000, signal: abort.signal })
   setTimeout(() => abort.abort(), 100)
   expect(await failure(call)).toContain("aborted")
-  const listed = await client.callTool("cancelled", {}, { timeoutMs: 5000 })
-  expect(JSON.stringify(listed)).toContain("[2]")
+  // The cancellation is a POST of its own, sent without waiting: the next request may overtake
+  // it. Ask until the server has it.
+  const deadline = performance.now() + 5000
+  let listed = ""
+  while (!listed.includes("[2]") && performance.now() < deadline) {
+    if (listed) await Bun.sleep(20)
+    listed = JSON.stringify(await client.callTool("cancelled", {}, { timeoutMs: 5000 }))
+  }
+  expect(listed).toContain("[2]")
   await client.close()
 })
 

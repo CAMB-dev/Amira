@@ -52,6 +52,7 @@ import { FilePicker } from "./file-picker.ts"
 import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
 import {
   compactTokens,
+  isLastSibling,
   replyRows,
   type SubagentLine,
   subagentEndLine,
@@ -252,6 +253,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const spinner = new Spinner()
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
+  /** Tool names by call id, for the head of sub-agents that outlive their committed call. */
+  const callNames = new Map<string, string>()
   const queued: Outgoing[] = []
   /** Content of recent messages with folded pastes, by their text, so a dropped steer comes back folded. */
   const sentParts = new Map<string, EditorPart[]>()
@@ -480,7 +483,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const presenter = presenters?.get(c.name)
       if (c.end) rows.push(heldToolLine(ctx.theme, presenter, finished(c), width))
       else rows.push(...runningToolLines(ctx.theme, presenter, c, now, spinner.glyph, width))
-      for (const n of callTree(c.id)) rows.push(...nodeRows(n, now, width, ctx.theme))
+      rows.push(...treeRows(callTree(c.id), now, width, ctx.theme))
     }
     return rows
   }
@@ -493,13 +496,33 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const roots = [...subagents.values()].filter((n) => !subagents.has(n.parent) && !underCall(n))
     if (!roots.length) return []
     const now = Date.now()
-    const head = `${t.accent(glyphs.subagent)} ${t.muted("background")}`
-    return [head, ...roots.flatMap(subtree).flatMap((n) => nodeRows(n, now, width, t)), ""]
+    // Grouped by the agent call that started them, under a head shaped like that call's, so the
+    // group reads as the call going on down here (a committed call cannot be updated in place).
+    const groups = new Map<string | undefined, SubagentNode[]>()
+    for (const n of roots) groups.set(n.toolCallId, [...(groups.get(n.toolCallId) ?? []), n])
+    const sep = ` ${t.muted(glyphs.separator)} `
+    const rows: string[] = []
+    for (const [callId, group] of groups) {
+      const started = Math.min(...group.map((n) => n.startedAt ?? now))
+      const count = `${group.length} sub-agent${group.length === 1 ? "" : "s"}`
+      const head =
+        callId === undefined
+          ? `${t.accent(glyphs.subagent)} ${t.muted("background")}`
+          : `${t.success(glyphs.toolRunning)} ${t.accent(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
+      rows.push(truncateToWidth(head, width, glyphs.more))
+      rows.push(...treeRows(group.flatMap(subtree), now, width, t))
+    }
+    return [...rows, ""]
   }
 
   /** A sub-agent's rows: live ones while it runs, its end line once it ended. */
-  function nodeRows(n: SubagentNode, now: number, width: number, t: Theme): string[] {
-    return n.end ? [subagentEndLine(n, n.end, width, t)] : subagentRows(n, now, width, t)
+  function nodeRows(n: SubagentNode, now: number, width: number, t: Theme, last = true): string[] {
+    return n.end ? [subagentEndLine(n, n.end, width, t, last)] : subagentRows(n, now, width, t, last)
+  }
+
+  /** Rows of a depth-first list of sub-agents, each closing its level ("└") when it is the last. */
+  function treeRows(list: SubagentNode[], now: number, width: number, t: Theme): string[] {
+    return list.flatMap((n, i) => nodeRows(n, now, width, t, isLastSibling(list, i)))
   }
 
   /** The sub-agents `parent` started (through `callId`, when given), in start order. */
@@ -730,9 +753,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const tree = callTree(c.id)
       const ends: string[] = []
       const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
-      for (const n of tree) {
+      for (const [i, n] of tree.entries()) {
         if (n.end) {
-          ends.push(subagentEndLine(n, n.end, terminal.columns, theme))
+          // The call's own result line comes after them, so only a nested one can close a level.
+          const last = n.depth > 1 && isLastSibling(tree, i)
+          ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last))
           subagents.delete(n.id)
         } else n.detached = cutShort ? "interrupted" : "background"
       }
@@ -903,6 +928,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "tool.execute.start":
         preparing = undefined
         toolCalls.start(e.data.toolCallId, e.data.name, e.data.args, Date.now())
+        callNames.set(e.data.toolCallId, e.data.name)
         // Draw now: the tool may block the event loop before a scheduled frame would run.
         renderer.render()
         return
@@ -920,6 +946,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         commitCalls(toolCalls.flush())
         // Sub-agents of calls that never ended.
         settleSubagents()
+        // Only calls with sub-agents still around need their names.
+        for (const id of callNames.keys())
+          if (![...subagents.values()].some((n) => n.toolCallId === id)) callNames.delete(id)
         tickSubagents()
         working = false
         preparing = undefined
@@ -1141,6 +1170,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function followAgent(next: Agent) {
     toolCalls.flush()
     settleSubagents()
+    callNames.clear()
     agent = next
     pendingNotices.length = 0
     setRetry(undefined)
