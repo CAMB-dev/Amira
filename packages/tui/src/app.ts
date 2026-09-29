@@ -804,7 +804,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         steering.length = 0
         retry = undefined
         if (e.data.reason === "error") errorNotice(e.data)
-        else if (e.data.reason === "aborted") view.notice("interrupted", "Interrupted.")
+        else if (e.data.reason === "aborted") view.notice("interrupted", interruptedText())
         else if (!turnShowedOutput) view.notice("info", "(no reply)")
         termStatus.turnEnded(e.data.reason)
         if (queued.length) {
@@ -916,6 +916,29 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const f = end.failure
     if (!f) return view.notice("error", end.error ?? "error")
     view.notice("error", f.hint ? `${f.summary}\n${f.hint}` : f.summary, f.detail)
+  }
+
+  /** Sub-agents (also a workflow's or a swarm's) still running in the background. */
+  const runningSubagents = () => agent.tree?.children.length ?? 0
+
+  /** "Interrupted", and that sub-agents run on in the background (an interrupt stops only the turn). */
+  function interruptedText(): string {
+    const n = runningSubagents()
+    return n ? `Interrupted · ${n} sub-agent${n === 1 ? "" : "s"} still running · /agents` : "Interrupted."
+  }
+
+  /** Until when a second Ctrl+C or Ctrl+D quits although sub-agents run. */
+  let quitArmedUntil = 0
+  /**
+   * Ctrl+C or Ctrl+D on an empty, idle input: quits, unless sub-agents still run in the
+   * background; then the first press says so and a second one (while the note shows) quits.
+   */
+  function quitOrWarn(action: "cancel" | "exit") {
+    const n = runningSubagents()
+    if (!n || Date.now() < quitArmedUntil) return quit()
+    quitArmedUntil = Date.now() + HINT_NOTE_MS
+    const key = keys.label(action) ?? "Ctrl+C"
+    showNote(`${n} sub-agent${n === 1 ? "" : "s"} still running — ${key} again to stop them and quit`)
   }
 
   /** The activity line counts the turn's time and tokens from here. */
@@ -1157,9 +1180,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (keys.is(e, "cancel")) {
       if (working) interrupt()
       else if (!editor.isEmpty) editor.clear()
-      else return quit()
+      else return quitOrWarn("cancel")
     } else if (keys.is(e, "exit") && !working && editor.isEmpty) {
-      return quit()
+      return quitOrWarn("exit")
     } else if (keys.is(e, "tool-output")) {
       showNote(setDetail(nextDetail(detail)))
     } else if (keys.is(e, "panels.toggle") && panelsShown) {

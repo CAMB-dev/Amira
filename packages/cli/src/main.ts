@@ -11,7 +11,7 @@ import { runPackageCommand } from "./package-command.ts"
 import { runPrint } from "./print.ts"
 import { runProviderAdminCommand } from "./provider-cli.ts"
 import { runProviderCommand } from "./provider-command.ts"
-import { chooseStore, formatSessionList, pickSession } from "./resume.ts"
+import { chooseStore, exitNote, formatSessionList, pickSession } from "./resume.ts"
 import { runRpc } from "./rpc.ts"
 import { rpcSchema } from "./rpc-schema.ts"
 import { createSession } from "./session.ts"
@@ -69,6 +69,8 @@ async function run(argv: string[]): Promise<number> {
   const model = config.settings.model
   const interactive = !args.print && !args.rpc
   let choice: { store: SessionStore; resumed: boolean } | undefined
+  /** amira -r without an id: the UI starts with its session picker. */
+  let pickInUi = false
   if (args.resume === "") {
     const sessions = listSessions(args.cwd)
     if (!sessions.length) {
@@ -79,9 +81,13 @@ async function run(argv: string[]): Promise<number> {
       process.stdout.write(`${formatSessionList(sessions)}\n`)
       return 0
     }
-    const picked = await pickSession(sessions)
-    if (!picked) return 0
-    choice = { store: SessionStore.open(picked.file), resumed: true }
+    // The UI's own picker (/resume) chooses, filterable like in a running session; with a
+    // prompt to send the terminal's numbered list does, before the UI starts.
+    if (args.prompt) {
+      const picked = await pickSession(sessions)
+      if (!picked) return 0
+      choice = { store: SessionStore.open(picked.file), resumed: true }
+    } else pickInUi = true
   }
   if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
     throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
@@ -169,7 +175,8 @@ async function run(argv: string[]): Promise<number> {
         commands,
       })
     }
-    return await runInteractive({
+    const running = () => session.tree.children.length
+    const code = await runInteractive({
       agent,
       status: host.status,
       panels: host.panels,
@@ -184,12 +191,14 @@ async function run(argv: string[]): Promise<number> {
       onReady,
       ...(modelNotice ? { notice: modelNotice } : {}),
       history: PromptHistory.forProject(args.cwd),
-      ...(args.prompt ? { initialPrompt: args.prompt } : {}),
+      ...(args.prompt ? { initialPrompt: args.prompt } : pickInUi ? { initialPrompt: "/resume" } : {}),
       ...(keybindings ? { keybindings: keybindings.keys } : {}),
       ...(config.settings.tui ? { settings: config.settings.tui } : {}),
       // Full screen unless a flag or tui.mode says inline (D84).
       mode: args.mode ?? config.settings.tui?.mode ?? "fullscreen",
     })
+    process.stdout.write(exitNote(agentRef ?? agent, running(), args.cwd))
+    return code
   } finally {
     stopWorkspace()
     const last = agentRef ?? agent

@@ -1835,6 +1835,49 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   await exited
 })
 
+test("with sub-agents running, Esc says they go on, and quitting takes a second Ctrl+C", async () => {
+  const { terminal, live, all, shows, idle, exited, agent } = await setup(
+    [
+      { toolCalls: [{ name: "spawn_bg", args: {} }] },
+      { text: "late child", delayMs: 3000 },
+      { text: "never shown", delayMs: 2000 },
+    ],
+    { cols: 90, tree: true },
+  )
+  agent.tools.register(
+    defineTool({
+      name: "spawn_bg",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        ctx.session!.spawn!({ role: "explorer", title: "Look around", prompt: "look" })
+        return textResult("started")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => (agent.tree?.children.length ?? 0) === 1, "the child")
+  await Bun.sleep(100)
+  terminal.send("\x1b[27u")
+  await shows("Interrupted · 1 sub-agent still running · /agents")
+  await idle()
+  let quit = false
+  void exited.then(() => {
+    quit = true
+  })
+  terminal.send("\x03")
+  await waitFor(
+    () => live().includes("1 sub-agent still running — Ctrl+C again to stop them and quit"),
+    "the warning",
+  )
+  await Bun.sleep(50)
+  expect(quit).toBe(false)
+  terminal.send("\x03")
+  await exited
+  expect(all()).not.toContain("never shown")
+})
+
 test("a sub-agent's end line stays with its call when that call is held behind a slower one", async () => {
   const { terminal, live, all, shows, idle, exited, agent } = await setup(
     [
@@ -1974,7 +2017,8 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   terminal.send("go\r")
   await waitFor(() => live().includes("◆ Stop me · explorer"), "both running")
   terminal.send("\x1b[27u")
-  await shows("Interrupted.")
+  // The one it stopped may not have ended yet when the turn does.
+  await waitFor(() => /Interrupted · [12] sub-agents? still running · \/agents/.test(all()), "the interrupt")
   await survivor!.result()
   await idle()
   await bus.flush()
