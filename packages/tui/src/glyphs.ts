@@ -16,8 +16,14 @@ export const glyphs = {
   toolBlocked: "⊘",
   toolUnknown: "⊘",
   toolInvalid: "⊘",
-  /** Starts the result line under a tool call or a command. */
-  result: "⎿",
+  /**
+   * Starts the result line under a tool call or a command, and the last row of a tree. Box
+   * drawing, not "⎿" (U+23BF): monospace fonts such as Cascadia lack that one, and the fallback
+   * font draws it wider than a cell, out of line with the "│" below it.
+   */
+  result: "└",
+  /** A row of a tree with more rows after it at the same level. */
+  treeBranch: "├",
   /** Starts each live output line of a running tool. */
   output: "│",
   /** A sub-agent, and how its run ended. */

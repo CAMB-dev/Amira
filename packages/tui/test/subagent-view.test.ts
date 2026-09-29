@@ -182,13 +182,13 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
     "› task for the explorer",
     "",
     "● read a.ts",
-    "  ⎿ contents of a.ts (+2 lines)",
+    "  └ contents of a.ts (+2 lines)",
     "",
     "Now waiting.",
     "",
     "● wait",
   ])
-  expect(s.view()).toContain("⎿ running…")
+  expect(s.view()).toContain("└ running…")
   expect(s.view()).toContain("… working…")
   expect(lines.at(-1)).toContain("following")
   const atOpen = s.screen.mainText
@@ -204,7 +204,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "the inline UI")
   const main = s.screen.mainText
-  const order = ["› go", "› /agents view", "● delegate", "⎿ child final answer", "all done"].map((t) =>
+  const order = ["› go", "› /agents view", "● delegate", "└ child final answer", "all done"].map((t) =>
     main.indexOf(t),
   )
   expect(order.every((i) => i >= 0)).toBe(true)
@@ -398,7 +398,7 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   const main = s.screen.mainText
   expect(main).toMatch(/◆ Check explorer · explorer · s_\w+ · done · \d+s/)
   expect(main).toContain("› task for the explorer")
-  expect(main).toContain("  ⎿ contents of b.ts (+2 lines)")
+  expect(main).toContain("  └ contents of b.ts (+2 lines)")
   expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("● read b.ts"))
   expect(s.screen.inAltScreen).toBe(false)
   // The last entry opens the live view.

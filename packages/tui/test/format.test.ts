@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { defaultTheme, stripAnsi } from "@amira/tui-kit"
-import { subagentEndLine, subagentRows, summarizeArgs, userLines } from "../src/format.ts"
+import { isLastSibling, subagentEndLine, subagentRows, summarizeArgs, userLines } from "../src/format.ts"
 import { historyLines } from "../src/history.ts"
 
 const plain = (lines: string[]) => lines.map(stripAnsi)
@@ -72,9 +72,9 @@ test("a resumed history uses the transcript's blocks, the tool presenters and a 
     "  Looking.",
     "",
     "● read a.ts",
-    "  ⎿ 2 lines",
+    "  └ 2 lines",
     "✗ grep x",
-    "  ⎿ Invalid regular expression",
+    "  └ Invalid regular expression",
     "",
     "  Done.",
     "",
@@ -130,11 +130,11 @@ test("a sub-agent's end line says how it ended, its time, tokens and the start o
         defaultTheme,
       ),
     )
-  expect(line("done")).toBe("  ⎿ ◆ US market trend ✓ explorer · 41.0s · 12.3k tok · Found it in a.ts")
+  expect(line("done")).toBe("  └ ◆ US market trend ✓ explorer · 41.0s · 12.3k tok · Found it in a.ts")
   expect(line("error", "model failed")).toBe(
-    "  ⎿ ◆ US market trend ✗ explorer · 41.0s · 12.3k tok · model failed",
+    "  └ ◆ US market trend ✗ explorer · 41.0s · 12.3k tok · model failed",
   )
-  expect(line("aborted")).toBe("  ⎿ ◆ US market trend ⊘ explorer · 41.0s · 12.3k tok · stopped")
+  expect(line("aborted")).toBe("  └ ◆ US market trend ⊘ explorer · 41.0s · 12.3k tok · stopped")
 })
 
 test("a sub-agent's live rows: title, role, time and tokens, then its current tool cut to 40 characters", () => {
@@ -142,18 +142,23 @@ test("a sub-agent's live rows: title, role, time and tokens, then its current to
     subagentRows(sub, 13_500, width, defaultTheme).map(stripAnsi)
   const base = { title: "US market trend", role: "explorer", depth: 1, tokens: 4_100 }
   // Queued: no time yet, and no tool.
-  expect(rows(base)).toEqual(["  ⎿ ◆ US market trend · explorer · queued"])
-  expect(rows({ ...base, startedAt: 1_000 })).toEqual(["  ⎿ ◆ US market trend · explorer · 12s · 4.1k tok"])
+  expect(rows(base)).toEqual(["  └ ◆ US market trend · explorer · queued"])
+  expect(rows({ ...base, startedAt: 1_000 })).toEqual(["  └ ◆ US market trend · explorer · 12s · 4.1k tok"])
   const busy = { ...base, startedAt: 1_000, activity: { name: "grep", summary: '"LiveRenderer"' } }
   expect(rows(busy)).toEqual([
-    "  ⎿ ◆ US market trend · explorer · 12s · 4.1k tok",
-    '  │   ● grep "LiveRenderer"',
+    "  └ ◆ US market trend · explorer · 12s · 4.1k tok",
+    '    └ ● grep "LiveRenderer"',
+  ])
+  // With a row of the same tree after it: "├", and "│" carries the tree past its tool row.
+  expect(subagentRows(busy, 13_500, 80, defaultTheme, false).map(stripAnsi)).toEqual([
+    "  ├ ◆ US market trend · explorer · 12s · 4.1k tok",
+    '  │ └ ● grep "LiveRenderer"',
   ])
   // One level deeper per nesting; a long summary is cut to 40 characters.
   const deep = { ...busy, depth: 2, activity: { name: "read", summary: "x".repeat(60) } }
   expect(rows(deep)).toEqual([
-    "    ⎿ ◆ US market trend · explorer · 12s · 4.1k tok",
-    `    │   ● read ${"x".repeat(39)}…`,
+    "    └ ◆ US market trend · explorer · 12s · 4.1k tok",
+    `      └ ● read ${"x".repeat(39)}…`,
   ])
   // Narrow: cut to the width.
   for (const r of rows(deep, 30)) expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
@@ -175,7 +180,7 @@ test("a resumed message with a display shows it and its note, not its content", 
   ).map(stripAnsi)
   expect(lines).toEqual([
     "› /review-pr 123",
-    "  ⎿ Loaded skill review-pr (120 lines)",
+    "  └ Loaded skill review-pr (120 lines)",
     "",
     "› /plain",
     "",
@@ -184,4 +189,9 @@ test("a resumed message with a display shows it and its note, not its content", 
     "",
     "── resumed ──",
   ])
+})
+
+test("isLastSibling: a row closes its level when no later row sits at its depth before the level ends", () => {
+  const list = [{ depth: 1 }, { depth: 2 }, { depth: 2 }, { depth: 1 }, { depth: 2 }]
+  expect(list.map((_, i) => isLastSibling(list, i))).toEqual([false, false, true, true, true])
 })
