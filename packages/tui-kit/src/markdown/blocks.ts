@@ -86,6 +86,8 @@ export interface BlockState {
   /** A paragraph line kept back one line: the next may turn it into a heading or a table header. */
   held?: { text: string; renderCol: number }
   prevBlank: boolean
+  /** The last line was paragraph text, held or committed early: a definition cannot follow it. */
+  paragraph: boolean
   /** Reference definitions (`[label]: url`) seen so far, by normalized label. */
   refs: Map<string, LinkRef>
   /** A blank line is due before the next rows, unless nothing was shown yet. */
@@ -96,7 +98,7 @@ export interface BlockState {
 export type Sink = (rows: string[]) => void
 
 export function newState(): BlockState {
-  return { list: [], prevBlank: false, refs: new Map(), blankPending: false, emitted: false }
+  return { list: [], prevBlank: false, paragraph: false, refs: new Map(), blankPending: false, emitted: false }
 }
 
 export function cloneState(s: BlockState): BlockState {
@@ -163,8 +165,12 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     endOpenBlocks(s, env, sink)
     s.blankPending = true
     s.prevBlank = true
+    s.paragraph = false
     return
   }
+  // A reference definition cannot interrupt a paragraph: there it is paragraph text.
+  const inParagraph = s.paragraph
+  s.paragraph = false
   if (s.held) {
     const h = s.held
     if (line.includes("|") && h.text.includes("|")) {
@@ -194,7 +200,7 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     }
     flushTable(s, env, sink)
   }
-  const def = line.match(DEFINITION)
+  const def = !inParagraph && line.match(DEFINITION)
   if (def) {
     // Not shown; links and images further on use it. The first definition of a label wins.
     const label = normalizeLabel(def[1]!)
@@ -205,7 +211,10 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
   const d = classify(s, line, env)
   s.prevBlank = false
   if (d.rows) emit(s, sink, d.rows)
-  else if (d.hold) s.held = { text: line.slice(d.render.start), renderCol: d.render.indent }
+  else if (d.hold) {
+    s.held = { text: line.slice(d.render.start), renderCol: d.render.indent }
+    s.paragraph = true
+  }
   else emit(s, sink, renderLine(d.render, line, env).rows)
 }
 
@@ -284,6 +293,7 @@ export function partialRender(
   next.table = undefined
   const d = classify(next, line, env)
   next.prevBlank = false
+  next.paragraph = !!d.hold
   if (d.rows) return undefined
   return { state: next, render: d.render }
 }

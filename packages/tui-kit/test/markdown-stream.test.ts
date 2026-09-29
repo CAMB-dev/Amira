@@ -193,6 +193,13 @@ test("reference-style images and links use the definitions seen so far, which ar
     "🖼 Our logo (https://a.dev/logo.png), 🖼 logo (https://a.dev/logo.png), 🖼 logo (https://a.dev/logo.png) and the docs (https://a.dev/docs), docs (https://a.dev/docs), Docs (https://a.dev/docs).",
     "🖼 later and [text][nope] and [nope].",
   ])
+  // A definition cannot interrupt a paragraph: there it is text.
+  expect(md("Some text\n[n]: https://a.dev/n.png\n\n![x][n]", 200)).toEqual([
+    "Some text",
+    "[n]: https://a.dev/n.png",
+    "",
+    "🖼 x",
+  ])
 })
 
 test("a closed block is committed at once; the open one stays live", () => {
