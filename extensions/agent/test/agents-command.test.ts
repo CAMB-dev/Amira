@@ -300,7 +300,7 @@ test("/agents stop stops one running sub-agent, or all of them, and completes to
   }
   await ended(1)
   expect(control.subagents()[1]).toMatchObject({ status: "aborted", error: "stopped by the user" })
-  expect((await run("/agents stop 2")).text).toBe(`Do two (agent ${b!.id}) has already ended (aborted).`)
+  expect((await run("/agents stop 2")).text).toBe(`Do two (agent ${b!.id}) has already ended (stopped).`)
   expect((await run("/agents stop")).ok).toBe(false)
   expect((await run("/agents stop all")).text).toBe(
     `Stopped 2 sub-agents: Do one (agent ${a!.id}), Do three (agent ${c!.id}).`,
@@ -329,6 +329,6 @@ test("findSubagent takes a number, an id or a unique start of one", () => {
   expect(transcriptText({ ...list[0]!, status: "error", error: "boom" }, [], list)).toContain("✗ boom")
   // One that never started has no time to show.
   expect(subagentSummary({ ...list[0]!, status: "aborted" }, 0)).toBe(
-    "Look around · agent · s_aa11 · aborted · 0 tok · ",
+    "Look around · agent · s_aa11 · stopped · 0 tok · ",
   )
 })

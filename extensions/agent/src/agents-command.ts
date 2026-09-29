@@ -9,6 +9,7 @@ import {
   plural,
   type SessionControl,
   type SubagentInfo,
+  subagentStateText,
   type ToolCallBlock,
   type ToolResultMessage,
 } from "@amira/api"
@@ -41,7 +42,8 @@ export function subagentSummary(info: SubagentInfo, now: number, taskChars = 60)
 /** Its status and how long it ran; just the status when that is not known (it never started). */
 function stateText(info: SubagentInfo, now: number): string {
   const known = info.durationMs !== undefined || info.startedAt !== undefined
-  return info.status === "queued" || !known ? info.status : `${info.status} · ${elapsed(info, now)}`
+  const state = subagentStateText(info.status)
+  return info.status === "queued" || !known ? state : `${state} · ${elapsed(info, now)}`
 }
 
 function blockText(content: Message["content"]): string {
@@ -204,7 +206,9 @@ function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
   const target = findSubagent(list, ref)
   if (!target) throw new Error(`no sub-agent "${ref}"; /agents lists them`)
   if (!live(target) || !ctx.session.stopSubagent(target.id)) {
-    ctx.print(`${target.title} (${target.role} ${target.id}) has already ended (${target.status}).`)
+    ctx.print(
+      `${target.title} (${target.role} ${target.id}) has already ended (${subagentStateText(target.status)}).`,
+    )
     return
   }
   ctx.print(`Stopped ${target.title} (${target.role} ${target.id}).`)

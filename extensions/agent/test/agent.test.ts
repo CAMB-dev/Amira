@@ -516,6 +516,39 @@ test("a sub-agent that fails keeps its worktree changes unmerged", async () => {
   expect(readText(path.join(repo, "f.txt"))).toBe("one\n")
 })
 
+test("a background sub-agent that fails says why and where its unmerged changes are", async () => {
+  const repo = await gitRepo()
+  const { root, bus } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "coder") {
+        return last?.role === "toolResult"
+          ? { error: { message: "provider exploded" } }
+          : { toolCalls: [{ name: "write", args: { path: "f.txt", content: "half\n" } }] }
+      }
+      if (isNotice(req)) return { text: "noted" }
+      return last?.role === "toolResult"
+        ? { text: "started" }
+        : {
+            toolCalls: [
+              {
+                name: "agent",
+                args: { tasks: [{ role: "coder", title: "Do x", prompt: "x", isolation: "worktree" }] },
+              },
+            ],
+          }
+    },
+    { cwd: repo, settings: {} },
+  )
+  await root.prompt("go")
+  await until(() => replied(root, "noted"))
+  await bus.flush()
+  const [notice] = notices(root)
+  const [head, kept] = notice!.shown.split("\n")
+  expect(head).toMatch(/^◆ Do x ✗ coder · \d+s · \d+ tok · provider exploded$/)
+  expect(kept).toMatch(/^ {2}changes kept: 1 file · .+\.diff$/)
+})
+
 test("an interrupt while worktrees are being made starts nothing further", async () => {
   const repo = await gitRepo()
   let makingSecond: () => void = () => {}
@@ -716,7 +749,7 @@ test("by default sub-agents run in the background and their result wakes the idl
   await until(() => replied(root, "thanks, reacting"))
   await bus.flush()
   const [notice] = notices(root)
-  expect(notice?.shown).toMatch(/^◆ Do look finished · explorer · \d+s · \d+ tok$/)
+  expect(notice?.shown).toMatch(/^◆ Do look ✓ explorer · \d+s · \d+ tok$/)
   expect(notice?.text).toContain("the user did not write this message")
   expect(notice?.text).toContain(`## Do look · explorer · ${childId} · done`)
   expect(notice?.text).toContain("found it in a.ts")

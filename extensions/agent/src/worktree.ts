@@ -117,10 +117,10 @@ function overThreshold(stat: ChangeStat, t: ReviewThreshold | undefined): boolea
   return t.lines !== undefined && stat.insertions + stat.deletions > t.lines
 }
 
-export const MERGE = "merge"
-export const APPLY_PARTIAL = "apply what fits (.rej files for the rest)"
-export const KEEP = "keep in worktree"
-export const DISCARD = "discard"
+export const MERGE = "Merge"
+export const APPLY_PARTIAL = "Apply what fits (.rej files for the rest)"
+export const KEEP = "Keep in the worktree"
+export const DISCARD = "Discard"
 
 /**
  * Merges a finished child's worktree into the parent's working tree (D16, D38). A patch that
@@ -131,7 +131,13 @@ export const DISCARD = "discard"
 export async function mergeWorktree(
   git: RunGit,
   wt: Worktree,
-  opts: { threshold?: ReviewThreshold; review?: Review; rm?: Remove } = {},
+  opts: {
+    threshold?: ReviewThreshold
+    review?: Review
+    rm?: Remove
+    /** Whose changes they are, for the review's title: the sub-agent's title and role. */
+    by?: string
+  } = {},
 ): Promise<MergeResult> {
   const stat = await collectChanges(git, wt)
   // The merge alone decides the outcome; a worktree that cannot be removed is only noted.
@@ -148,9 +154,10 @@ export async function mergeWorktree(
     const done = await apply()
     if (done.ok) return { outcome: "merged", stat, ...(await cleanup()) }
   }
+  const whose = opts.by ? `Changes of ${opts.by}` : "Sub-agent changes"
   const title = conflict
-    ? `Sub-agent changes conflict with the working tree (${formatStat(stat)})`
-    : `Merge sub-agent changes (${formatStat(stat)})?`
+    ? `${whose} conflict with the working tree (${formatStat(stat)})`
+    : `Merge ${opts.by ? `the changes of ${opts.by}` : "sub-agent changes"} (${formatStat(stat)})?`
   const options = conflict ? [APPLY_PARTIAL, KEEP, DISCARD] : [MERGE, KEEP, DISCARD]
   const choice = opts.review ? await opts.review(title, readPatch(wt.patch), options) : undefined
   const result = (outcome: MergeOutcome, extra: Partial<MergeResult> = {}): MergeResult => ({
