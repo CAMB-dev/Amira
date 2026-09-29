@@ -128,6 +128,21 @@ export abstract class Block {
   /** Folds or unfolds it; only called when `foldable`. */
   toggleFold(_env: BlockEnv): void {}
 
+  /** Whether folding it now would unfold it: it shows less than it can. */
+  isFolded(_env: BlockEnv): boolean {
+    return false
+  }
+
+  /** What a block selection calls it: "reply", "tool call", ... */
+  get label(): string {
+    return BLOCK_LABELS[this.kind]
+  }
+
+  /** The sub-agents it shows, with theirs, depth first: what the sub-agent viewer opens on. */
+  subagents(_env: BlockEnv): SubagentNode[] {
+    return []
+  }
+
   /** Whether it was folded or unfolded by hand, so it shows other than it would inline. */
   get refolded(): boolean {
     return false
@@ -141,6 +156,20 @@ export abstract class Block {
   touch(): void {
     this.version++
   }
+}
+
+/** What a block selection calls blocks, by kind. */
+const BLOCK_LABELS: Record<BlockKind, string> = {
+  banner: "banner",
+  user: "message",
+  assistant: "reply",
+  tool: "tool call",
+  notice: "notice",
+  command: "command",
+  "command-output": "command output",
+  dialog: "answer",
+  history: "session",
+  summary: "summary",
 }
 
 /** A block drawn by a function of the width: the banner, notices, echoes, separators. */
@@ -520,6 +549,10 @@ export class ReplyBlock extends Block {
     this.touch()
   }
 
+  override isFolded(): boolean {
+    return this.folded
+  }
+
   override get refolded(): boolean {
     return this.folded
   }
@@ -536,7 +569,7 @@ export class ReplyBlock extends Block {
 }
 
 /** A code block's frame in a reply's rows: its top and bottom rows, its code rows, and the column its code starts at. */
-interface CodeFrame {
+export interface CodeFrame {
   top: number
   bottom?: number
   rows: number[]
@@ -544,7 +577,7 @@ interface CodeFrame {
 }
 
 /** The frames of code blocks in rows of rendered Markdown (without styles). */
-function codeFrames(plain: readonly string[]): CodeFrame[] {
+export function codeFrames(plain: readonly string[]): CodeFrame[] {
   const { codeTop, codeSide, codeBottom } = defaultGlyphs
   const out: CodeFrame[] = []
   for (let i = 0; i < plain.length; i++) {
@@ -639,6 +672,9 @@ function expandTabs(line: string): string {
   }
   return out
 }
+
+/** How much each tool output level shows, least first. */
+const DETAIL_RANK: Record<ToolDetailLevel, number> = { collapsed: 0, summary: 1, full: 2 }
 
 /** A tool call: its head, its output while it runs, then its result, with its sub-agents under it. */
 export class ToolBlock extends Block {
@@ -748,12 +784,22 @@ export class ToolBlock extends Block {
     this.touch()
   }
 
+  override isFolded(env: BlockEnv): boolean {
+    return this.detail(env) !== "full"
+  }
+
+  override subagents(env: BlockEnv): SubagentNode[] {
+    return this.tree(env.nodes)
+  }
+
   override get refolded(): boolean {
     return this.folding !== undefined
   }
 
+  /** As the inline transcript shows it, or as unfolded by hand when that shows more. */
   override printLines(env: BlockEnv): string[] {
     const folding = this.folding
+    if (folding && DETAIL_RANK[folding] > DETAIL_RANK[env.detail]) return this.lines(env)
     this.folding = undefined
     try {
       return this.lines(env)
@@ -782,11 +828,15 @@ export class SubagentGroupBlock extends Block {
     return this.running
   }
 
-  lines(env: BlockEnv): string[] {
-    const list = this.roots.flatMap((id) => {
+  override subagents(env: BlockEnv): SubagentNode[] {
+    return this.roots.flatMap((id) => {
       const node = env.nodes.get(id)
       return node ? subtree(env.nodes, node) : []
     })
+  }
+
+  lines(env: BlockEnv): string[] {
+    const list = this.subagents(env)
     if (!list.length) return []
     this.running = list.some(isActive)
     const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted("background")}`

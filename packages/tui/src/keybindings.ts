@@ -99,7 +99,16 @@ export const ACTIONS = {
     scope: "select",
     description: "Fold or unfold the selected block (tool output, long code, details, sub-agents)",
   },
-  "select.copy": { scope: "select", description: "Copy the selected block to the clipboard" },
+  "select.copy": {
+    scope: "select",
+    description: "Copy the selected block (or code block) to the clipboard",
+  },
+  "select.open": {
+    scope: "select",
+    description:
+      "Open the selected block: a reply's code blocks, one at a time to copy; a tool call's sub-agents in the viewer",
+  },
+  "select.back": { scope: "select", description: "Go back from a code block to its whole reply" },
   "select.exit": { scope: "select", description: "Stop selecting and go back to the input" },
   "find.next": { scope: "find", description: "Go to the next match up (older)" },
   "find.prev": { scope: "find", description: "Go to the next match down (newer)" },
@@ -168,6 +177,8 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "select.next": ["down", "ctrl+down", "alt+down", "j"],
     "select.toggle": ["enter", "space"],
     "select.copy": ["y", "c"],
+    "select.open": ["right", "o"],
+    "select.back": ["left"],
     "select.exit": ["escape"],
     "find.next": ["enter", "up", "f3"],
     "find.prev": ["shift+enter", "down", "shift+f3"],

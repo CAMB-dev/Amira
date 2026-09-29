@@ -12,6 +12,7 @@ export type BlockKind =
   | "command-output"
   | "dialog"
   | "history"
+  | "summary"
 
 /** Blocks that follow one of the given kind with no blank line between them. */
 const JOINS: Partial<Record<BlockKind, BlockKind>> = {

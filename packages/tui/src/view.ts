@@ -76,6 +76,8 @@ export interface ViewHost {
   editorEmpty(): boolean
   /** Shows a short note in place of the key hints for a few seconds. */
   showNote(text: string): void
+  /** Opens the sub-agent viewer on one; unset where there is none (no commands). */
+  openSubagent?(id: string): void
 }
 
 /**

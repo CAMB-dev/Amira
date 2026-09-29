@@ -103,7 +103,7 @@ test("a changed width draws blocks again at that width; the cache keeps both whi
   expect(p.render(env(4), 2)).toEqual(["b2 l", "b2 l"])
 })
 
-test("the user's band fills the pane at every width, and the narrower width while selected", () => {
+test("the user's band fills the pane at every width, also while selected", () => {
   const p = new TranscriptPane()
   const user = userBlock({ role: "user", content: [{ type: "text", text: "看看 this test 🧪 please" }] })
   p.add(user)
@@ -119,9 +119,12 @@ test("the user's band fills the pane at every width, and the narrower width whil
       expect(visibleWidth(r)).toBe(width)
     }
   }
-  // Selected, it is drawn a column narrower after the marker: the row still ends at the edge.
+  // Selected, its first column is marked: the text is where it was, the row still ends at the edge.
+  const before = p.render(banded(17), 8).map(stripAnsi)
   p.select(user)
-  for (const r of p.render(banded(17), 8).filter((r) => r !== "")) expect(visibleWidth(r)).toBe(17)
+  const after = p.render(banded(17), 8)
+  for (const r of after.filter((r) => r !== "")) expect(visibleWidth(r)).toBe(17)
+  expect(after.map((r) => stripAnsi(r).slice(1))).toEqual(before.map((r) => r.slice(1)))
 })
 
 test("selecting moves over blocks, marks the selected one and scrolls it into view", () => {
@@ -129,12 +132,94 @@ test("selecting moves over blocks, marks the selected one and scrolls it into vi
   p.render(env(), 4)
   p.selectPrev()
   expect(p.selected).toBe(all[9])
-  expect(p.render(env(), 4).slice(-3)).toEqual(["▌b9 l0", "▌b9 l1", "▌b9 l2"])
+  // A character in the first column shows in inverse video.
+  const mark = (row: string) => `\x1b[7m${row[0]}\x1b[27m${row.slice(1)}`
+  expect(p.render(env(), 4).slice(-3)).toEqual([mark("b9 l0"), mark("b9 l1"), mark("b9 l2")])
   for (let i = 0; i < 5; i++) p.selectPrev()
   expect(p.selected).toBe(all[4])
-  expect(p.render(env(), 4)).toContain("▌b4 l0")
+  expect(p.render(env(), 4)).toContain(mark("b4 l0"))
   p.selectNext()
   expect(p.selected).toBe(all[5])
+})
+
+test("a selected block keeps its width: a blank first column shows the bar", () => {
+  const p = new TranscriptPane()
+  const reply = new ReplyBlock("a long line of words that wraps at this width", false, false)
+  p.add(reply)
+  const before = p.render(env(20), 6)
+  p.select(reply)
+  const after = p.render(env(20), 6)
+  expect(after.map((r) => r.slice(1))).toEqual(before.map((r) => r.slice(1)))
+  for (const r of after.filter((r) => r !== "")) expect(r.startsWith("▌")).toBe(true)
+})
+
+test("a block partly in view is selected where it is: the view does not jump to its top", () => {
+  const p = new TranscriptPane()
+  p.add(new Counted("user", ["first"]))
+  const long = new Counted(
+    "assistant",
+    Array.from({ length: 20 }, (_, i) => `row ${i}`),
+  )
+  p.add(long)
+  const before = p.render(env(), 5)
+  p.selectPrev()
+  expect(p.selected).toBe(long)
+  expect(p.following).toBe(true)
+  expect(
+    p
+      .render(env(), 5)
+      .map(stripAnsi)
+      .map((r) => r.slice(1)),
+  ).toEqual(before.map((r) => r.slice(1)))
+})
+
+test("rows below the view are counted once scrolled up", () => {
+  const { pane: p } = pane(4, 3)
+  p.render(env(), 4)
+  expect(p.rowsBelow).toBe(0)
+  p.scrollBy(-5)
+  p.render(env(), 4)
+  expect(p.rowsBelow).toBe(5)
+})
+
+test("find matches text that wraps over rows, and so at any width", () => {
+  const p = new TranscriptPane()
+  p.add(new ReplyBlock("the quick brown fox jumps over the lazy dog", false, false))
+  p.add(new Counted("user", ["quick", "brown"]))
+  for (const width of [80, 14, 9]) {
+    p.render(env(width), 10)
+    p.find("brown fox jumps")
+    expect(p.matchCount).toBe(1)
+    const rows = p.render(env(width), 10).join("\n")
+    // Every segment is marked, the current match underlined.
+    expect(rows).toContain("\x1b[7;4m")
+    expect(stripAnsi(rows)).toContain("fox")
+  }
+  // Separate lines of one block join like wrapped ones; blank rows do not.
+  p.find("quick brown")
+  expect(p.matchCount).toBe(2)
+})
+
+test("find follows the transcript as blocks come and a reply streams", () => {
+  const p = new TranscriptPane()
+  p.add(new Counted("user", ["needle"]))
+  p.render(env(), 10)
+  p.find("needle")
+  expect(p.matchCount).toBe(1)
+  p.add(new Counted("user", ["another needle"]))
+  p.render(env(), 10)
+  expect(p.matchCount).toBe(2)
+  const reply = new ReplyBlock("", true, false)
+  p.add(reply)
+  reply.append("a needle streams in")
+  const at = Date.now
+  try {
+    Date.now = () => at() + 1000
+    p.render(env(), 10)
+  } finally {
+    Date.now = at
+  }
+  expect(p.matchCount).toBe(3)
 })
 
 test("find matches ignore case unless the query has capitals, and move from the newest", () => {

@@ -583,6 +583,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     overlay: new View((width, ctx) => (form ? form.render(width, ctx) : (viewer?.render(width, ctx) ?? []))),
     editorEmpty: () => editor.isEmpty,
     showNote,
+    ...(commands ? { openSubagent: (id: string) => openView({ kind: "subagent", sessionId: id }) } : {}),
   }
   const mode = opts.mode ?? settings.mode ?? "inline"
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)

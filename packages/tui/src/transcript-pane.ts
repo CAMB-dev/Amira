@@ -1,7 +1,7 @@
 import type { ToolDetailLevel } from "@amira/api"
-import { type ImagePlacement, stripAnsi, truncateToWidth, visibleWidth } from "@amira/tui-kit"
-import { type Block, type BlockEnv, imagesIn, ReplyBlock } from "./blocks.ts"
-import { ESCAPE, markCells, selectionMarks, sliceCells, wordAt } from "./text-selection.ts"
+import { type ImagePlacement, stripAnsi, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { type Block, type BlockEnv, type CodeFrame, codeFrames, imagesIn, ReplyBlock } from "./blocks.ts"
+import { cellsOf, ESCAPE, markCells, selectionMarks, sliceCells, wordAt } from "./text-selection.ts"
 import { gapBetween } from "./transcript.ts"
 
 /** Lines of a block drawn at one width, for one version of it. */
@@ -23,7 +23,7 @@ export interface PaneRow {
   line: number
 }
 
-/** A match of the find bar: `len` characters at `col` of the plain text of a block's line. */
+/** A match of the find bar on a row: `len` characters at `col` of the plain text of a block's line. */
 export interface Match {
   block: Block
   line: number
@@ -81,7 +81,14 @@ const TICKING = /[\d⠀-⣿]/g
 const imageRowsOf = (env: BlockEnv) =>
   `${env.images ? env.images.store.maxRows() : 0}:${env.renders?.renders.generation ?? -1}`
 
-/** Marks the rows of the selected block, which is drawn one column narrower. */
+/** How often matches are found again while a block changes by itself (a reply streaming). */
+const FIND_LIVE_MS = 250
+
+/**
+ * Marks the rows of the selected block in their first column, which is mostly blank (the
+ * indent of replies, the band's edge): there it is this bar; a character there shows in
+ * inverse video instead. Its text stays where it is, at the same width.
+ */
 const SELECTED = "▌"
 
 /**
@@ -101,6 +108,8 @@ export class TranscriptPane {
   /** Something changed while not following. */
   unseen = false
   selected: Block | undefined
+  /** The selected code block of the selected reply, by its number there. */
+  private code: number | undefined
   /** Rows of the last frame, top to bottom; the padding above short content is left out. */
   layout: PaneRow[] = []
   /** Rows of blank padding above the content in the last frame. */
@@ -114,11 +123,14 @@ export class TranscriptPane {
   private frame = 0
   private env: BlockEnv | undefined
   private height = 1
-  private matches: Match[] = []
+  /** Matches of the find bar, top to bottom; each is a segment per row it covers. */
+  private matches: Match[][] = []
   private matchIndex = new Map<Block, Map<number, Match[]>>()
   private current = -1
   private findQuery = ""
   private findWidth = 0
+  /** What the matches were found in (see `stamp`). */
+  private findStamp = ""
   /** Text selected with the mouse, if any. */
   private text: TextSelection | undefined
   /** A drag selecting text: the cell it started at, where the mouse is (viewport rows), whether it left that cell. */
@@ -142,7 +154,7 @@ export class TranscriptPane {
     this.blocks.splice(block.index, 1)
     this.reindex(block.index)
     block.index = -1
-    if (this.selected === block) this.selected = undefined
+    if (this.selected === block) this.select(undefined)
     this.changed()
   }
 
@@ -155,14 +167,14 @@ export class TranscriptPane {
     if (!this.following) this.unseen = true
   }
 
-  /** A block's lines at the env's width (one column narrower while selected). */
-  lines(block: Block, env: BlockEnv, selected = block === this.selected): string[] {
-    return this.draw(block, env, selected).lines
+  /** A block's lines at the env's width. */
+  lines(block: Block, env: BlockEnv): string[] {
+    return this.draw(block, env).lines
   }
 
   /** A block's lines without styling, for finding text in them. */
   plain(block: Block, env: BlockEnv): string[] {
-    const d = this.draw(block, env, false)
+    const d = this.draw(block, env)
     d.plain ??= d.lines.map(stripAnsi)
     return d.plain
   }
@@ -176,7 +188,8 @@ export class TranscriptPane {
     this.frame++
     this.env = env
     this.height = Math.max(1, height)
-    if (this.findQuery && this.findWidth !== env.width) this.runFind()
+    // The matches follow the text: another width, blocks that came or changed, a reply streaming.
+    if (this.findQuery && (this.findWidth !== env.width || this.findStamp !== this.stamp())) this.runFind()
     let rows: PaneRow[] | undefined
     if (!this.following) {
       const a = this.anchor
@@ -214,8 +227,7 @@ export class TranscriptPane {
       const block = layout[i]!.block
       let j = i
       while (j < layout.length && layout[j]!.block === block) j++
-      const selected = block === this.selected
-      const images = imagesIn(this.draw(block, env, selected).lines)
+      const images = imagesIn(this.draw(block, env).lines)
       const first = layout[i]!.line
       const last = layout[j - 1]!.line
       for (const im of images ?? []) {
@@ -225,7 +237,7 @@ export class TranscriptPane {
         const from = top - im.line
         const to = end - im.line
         const at = i + (top - first)
-        const col = im.col + (selected ? 1 : 0)
+        const col = im.col
         const indent = " ".repeat(im.col)
         if (from === 0 && to === im.image.rows ? false : !im.image.croppable) {
           // Drawn whole only: said where to find it, when the view is tall enough to show it.
@@ -270,7 +282,7 @@ export class TranscriptPane {
         // Laid out without images (none is loaded for it), unless its lines as shown have none.
         const shown = this.cached(b, env)
         lines = shown && !imagesIn(shown) ? shown : b.printLines(text)
-      } else lines = this.lines(b, env, false)
+      } else lines = this.lines(b, env)
       if (!lines.length) continue
       if (prev && gapBetween(prev.kind, b.kind)) out.push("")
       out.push(...lines)
@@ -318,6 +330,7 @@ export class TranscriptPane {
   /** Selects a block, or none, and scrolls it into view. Selected text goes. */
   select(block: Block | undefined): void {
     this.selected = block
+    this.code = undefined
     if (block) {
       this.clearText()
       this.reveal(block)
@@ -329,7 +342,7 @@ export class TranscriptPane {
     if (!this.env) return
     const from = this.selected ? this.selected.index - 1 : this.blocks.length - 1
     for (let i = from; i >= 0; i--) {
-      if (this.lines(this.blocks[i]!, this.env, false).length) {
+      if (this.lines(this.blocks[i]!, this.env).length) {
         this.select(this.blocks[i])
         return
       }
@@ -339,26 +352,112 @@ export class TranscriptPane {
   selectNext(): void {
     if (!this.env || !this.selected) return
     for (let i = this.selected.index + 1; i < this.blocks.length; i++) {
-      if (this.lines(this.blocks[i]!, this.env, false).length) {
+      if (this.lines(this.blocks[i]!, this.env).length) {
         this.select(this.blocks[i])
         return
       }
     }
   }
 
-  /** Scrolls so `block` is in view: its top when it is above, its end when it is below. */
+  /**
+   * Scrolls so `block` is in view: its top when it is above, its end when it is below. A block
+   * already partly in view stays where it is (a long reply at the end is not scrolled to its
+   * top).
+   */
   reveal(block: Block): void {
     const env = this.env
     if (!env || block.index < 0) return
+    if (this.layout.some((r) => r.block === block && r.line >= 0)) return
+    this.revealRows(block, 0, this.lines(block, env).length - 1)
+  }
+
+  /** Scrolls so lines `from` to `to` of `block` are in view, unless they are: as `reveal` does. */
+  private revealRows(block: Block, from: number, to: number): void {
+    const env = this.env
+    if (!env || block.index < 0) return
     const rows = this.layout.filter((r) => r.block === block)
-    const lines = this.lines(block, env)
-    const whole = rows.some((r) => r.line === 0) && rows.some((r) => r.line === lines.length - 1)
-    if (whole) return
-    const above = !this.layout.length || this.layout[0]!.block.index >= block.index
+    if (rows.some((r) => r.line === from) && rows.some((r) => r.line === to)) return
+    const above =
+      !this.layout.length ||
+      this.layout[0]!.block.index > block.index ||
+      (this.layout[0]!.block === block && this.layout[0]!.line > from)
     const gap = this.gapBefore(block.index, env) ? 1 : 0
     this.following = false
-    if (above || lines.length + gap >= this.height) this.moveTo(block.index, gap)
-    else this.moveTo(block.index, gap + lines.length - this.height)
+    if (above || to - from + 1 >= this.height) this.moveTo(block.index, gap + from)
+    else this.moveTo(block.index, gap + to + 1 - this.height)
+  }
+
+  // --- code blocks of the selected reply
+
+  /** The code blocks of `block` (a reply's) as drawn now; none for other blocks. */
+  codeBlocks(block: Block | undefined): CodeFrame[] {
+    if (!(block instanceof ReplyBlock) || !this.env) return []
+    return codeFrames(this.plain(block, this.env))
+  }
+
+  /** The selected code block of the selected reply, if one is. */
+  get selectedCode(): { frame: CodeFrame; index: number; count: number } | undefined {
+    if (this.code === undefined) return undefined
+    const frames = this.codeBlocks(this.selected)
+    const frame = frames[this.code]
+    return frame ? { frame, index: this.code, count: frames.length } : undefined
+  }
+
+  /**
+   * Selects a code block of the selected reply: the first (`step` 0), or the one before or
+   * after the selected one; scrolls it into view. False when the reply has none.
+   */
+  selectCode(step: -1 | 0 | 1): boolean {
+    const frames = this.codeBlocks(this.selected)
+    if (!frames.length || !this.selected) return false
+    const at = this.code === undefined || step === 0 ? 0 : this.code + step
+    this.code = Math.max(0, Math.min(frames.length - 1, at))
+    const f = frames[this.code]!
+    this.revealRows(this.selected, f.top, f.bottom ?? f.rows[f.rows.length - 1] ?? f.top)
+    return true
+  }
+
+  /** Back from a code block to its whole reply. */
+  leaveCode(): void {
+    this.code = undefined
+  }
+
+  /**
+   * The code of the selected code block as it copies: its lines as written in the reply (a line
+   * wrapped over rows is one line), without the frame.
+   */
+  codeText(): string {
+    const env = this.env
+    const code = this.selectedCode
+    const block = this.selected
+    if (!env || !code || !block) return ""
+    const plain = this.plain(block, env)
+    const rows = block.copyRows(plain, this.lines(block, env))
+    const out: string[] = []
+    let exact = false
+    for (const r of code.frame.rows) {
+      const row = rows[r] ?? { from: 0 }
+      if (row.skip) continue
+      if (row.joins && out.length) {
+        if (!exact) out[out.length - 1] += sliceCells(plain[r]!, row.from, Number.POSITIVE_INFINITY)
+        continue
+      }
+      exact = row.exact !== undefined
+      out.push(row.exact ?? row.text ?? sliceCells(plain[r]!, row.from, Number.POSITIVE_INFINITY))
+    }
+    return out.map((l) => l.trimEnd()).join("\n")
+  }
+
+  // --- where the view is
+
+  /** Rows of the transcript below the last one in view: none while following the end. */
+  get rowsBelow(): number {
+    const env = this.env
+    const last = this.layout[this.layout.length - 1]
+    if (!env || !last || this.following || last.block.index < 0) return 0
+    let n = this.lines(last.block, env).length - 1 - last.line
+    for (let k = last.block.index + 1; k < this.blocks.length; k++) n += this.rowsOf(k, env)
+    return n
   }
 
   // --- text selection
@@ -454,7 +553,7 @@ export class TranscriptPane {
     const env = this.env
     const at = this.hit(row, col)
     if (!env || !at) return false
-    const lines = this.lines(at.block, env, false)
+    const lines = this.lines(at.block, env)
     const rows = at.block.copyRows(this.plain(at.block, env), lines)
     let first = at.line
     let last = at.line
@@ -478,7 +577,7 @@ export class TranscriptPane {
     const out: { text: string; whole: boolean; exact?: string | undefined }[] = []
     for (let k = start.block.index; k <= end.block.index; k++) {
       const block = this.blocks[k]!
-      const lines = this.lines(block, env, false)
+      const lines = this.lines(block, env)
       if (!lines.length) continue
       if (this.gapBefore(k, env) && this.rangeIn(block, -1)) out.push({ text: "", whole: false })
       const plain = this.plain(block, env)
@@ -624,7 +723,7 @@ export class TranscriptPane {
     let pick = this.matches.length - 1
     if (!this.following && bottom) {
       const at = this.matches.findLastIndex(
-        (m) => m.block.index < bottom.block.index || (m.block === bottom.block && m.line <= bottom.line),
+        ([m]) => m!.block.index < bottom.block.index || (m!.block === bottom.block && m!.line <= bottom.line),
       )
       if (at !== -1) pick = at
     }
@@ -647,38 +746,93 @@ export class TranscriptPane {
     this.current = -1
   }
 
+  /**
+   * Finds the query in each block's text as one run: its rows without their indent, a space
+   * between rows (where the text wrapped, the space it broke at), a blank row a break no match
+   * crosses. So a match does not depend on where the width wraps the text; one that goes over
+   * rows is a segment on each. The current match stays the one it was, where it still is.
+   */
   private runFind(): void {
     const env = this.env
+    const was = this.matches[this.current]?.[0]
     this.matches = []
     this.matchIndex.clear()
     if (!env || !this.findQuery) return
     this.findWidth = env.width
+    this.findStamp = this.stamp()
     const exact = this.findQuery !== this.findQuery.toLowerCase()
     const q = exact ? this.findQuery : this.findQuery.toLowerCase()
     for (const block of this.blocks) {
       const plain = this.plain(block, env)
+      let text = ""
+      /** The line and column of each character of `text`; -1 for what joins lines. */
+      const lineOf: number[] = []
+      const colOf: number[] = []
       for (let line = 0; line < plain.length; line++) {
-        const text = exact ? plain[line]! : plain[line]!.toLowerCase()
-        let at = text.indexOf(q)
-        while (at !== -1) {
-          const m = { block, line, col: at, len: q.length }
-          this.matches.push(m)
+        const raw = plain[line]!
+        const start = raw.length - raw.trimStart().length
+        const body = raw.slice(start).trimEnd()
+        if (text) {
+          text += body ? " " : "\n"
+          lineOf.push(-1)
+          colOf.push(-1)
+        }
+        for (let k = 0; k < body.length; k++) {
+          lineOf.push(line)
+          colOf.push(start + k)
+        }
+        text += body
+      }
+      const lower = exact ? text : text.toLowerCase()
+      const hay = lower.length === text.length ? lower : text
+      let at = hay.indexOf(q)
+      while (at !== -1) {
+        const match: Match[] = []
+        for (let k = at; k < at + q.length; k++) {
+          const line = lineOf[k]!
+          if (line < 0) continue
+          const last = match[match.length - 1]
+          if (last?.line === line) last.len = colOf[k]! + 1 - last.col
+          else match.push({ block, line, col: colOf[k]!, len: 1 })
+        }
+        if (match.length) {
+          this.matches.push(match)
           let byLine = this.matchIndex.get(block)
           if (!byLine) {
             byLine = new Map()
             this.matchIndex.set(block, byLine)
           }
-          byLine.set(line, [...(byLine.get(line) ?? []), m])
-          at = text.indexOf(q, at + Math.max(1, q.length))
+          for (const m of match) byLine.set(m.line, [...(byLine.get(m.line) ?? []), m])
         }
+        at = hay.indexOf(q, at + Math.max(1, q.length))
       }
+    }
+    if (was) {
+      const same = this.matches.findIndex(
+        (m) => m[0]!.block === was.block && m[0]!.line === was.line && m[0]!.col === was.col,
+      )
+      if (same !== -1) this.current = same
     }
     if (this.current >= this.matches.length) this.current = this.matches.length - 1
   }
 
+  /**
+   * What the matches depend on besides the width: the blocks and their versions, and while a
+   * block changes by itself (a reply streaming) the time, a few times a second.
+   */
+  private stamp(): string {
+    let versions = 0
+    let live = false
+    for (const b of this.blocks) {
+      versions += b.version
+      live ||= b.live
+    }
+    return `${this.blocks.length}:${versions}:${live ? Math.floor(Date.now() / FIND_LIVE_MS) : ""}`
+  }
+
   private jump(i: number): void {
     const env = this.env
-    const m = this.matches[i]
+    const m = this.matches[i]?.[0]
     if (!env || !m) return
     this.current = i
     const gap = this.gapBefore(m.block.index, env) ? 1 : 0
@@ -703,8 +857,8 @@ export class TranscriptPane {
     return d.lines
   }
 
-  private draw(block: Block, env: BlockEnv, selected: boolean): Drawn {
-    const width = selected ? Math.max(1, env.width - 1) : env.width
+  private draw(block: Block, env: BlockEnv): Drawn {
+    const width = env.width
     const list = this.drawn.get(block) ?? []
     const hit = list.find((d) => d.width === width)
     const imageRows = imageRowsOf(env)
@@ -712,7 +866,7 @@ export class TranscriptPane {
       ? hit?.frame === this.frame
       : hit?.version === block.version && hit.detail === env.detail && hit.imageRows === imageRows
     if (hit && fresh) return hit
-    const lines = block.lines(width === env.width ? env : { ...env, width })
+    const lines = block.lines(env)
     const d: Drawn = {
       width,
       version: block.version,
@@ -721,7 +875,7 @@ export class TranscriptPane {
       frame: this.frame,
       lines,
     }
-    // One width, plus the narrower one while selected.
+    // The width now, and the one before (a resize back and forth).
     this.drawn.set(block, [d, ...list.filter((x) => x.width !== width)].slice(0, 2))
     return d
   }
@@ -736,18 +890,22 @@ export class TranscriptPane {
         ? `${line}${marks!.on} ${marks!.off}`
         : line
     if (r.line < 0) return end("")
-    const selected = r.block === this.selected
-    let line = alt ?? this.lines(r.block, env, selected)[r.line] ?? ""
+    const code = r.block === this.selected ? this.selectedCode?.frame : undefined
+    const selected =
+      r.block === this.selected &&
+      (!code ||
+        (r.line >= code.top && r.line <= (code.bottom ?? code.rows[code.rows.length - 1] ?? code.top)))
+    let line = alt ?? this.lines(r.block, env)[r.line] ?? ""
     const found = this.matchIndex.get(r.block)?.get(r.line)
     if (range) line = end(markCells(line, range.from, range.to, marks!))
     else if (found && !selected) {
       const current = this.matches[this.current]
       line = highlight(
         line,
-        found.map((m) => ({ col: m.col, len: m.len, current: m === current })),
+        found.map((m) => ({ col: m.col, len: m.len, current: current?.includes(m) ?? false })),
       )
     }
-    return selected ? `${env.theme.accent(SELECTED)}${line}` : line
+    return selected ? markGutter(line, env.theme) : line
   }
 
   /** Whether the block at `i` has a blank row before it: by the kinds of it and the block with rows before it. */
@@ -843,6 +1001,16 @@ export class TranscriptPane {
   private reindex(from: number): void {
     for (let i = from; i < this.blocks.length; i++) this.blocks[i]!.index = i
   }
+}
+
+/** `line` with the selected block's mark in its first column (see SELECTED). */
+export function markGutter(line: string, theme: Theme): string {
+  const cells = cellsOf(line)
+  const first = cells.findIndex((c) => !c.escape)
+  if (first === -1) return `${line}${theme.accent(SELECTED)}`
+  if (cells[first]!.text !== " ") return markCells(line, 0, 1, { on: MARK_ON, off: "\x1b[27m" })
+  const text = (cs: typeof cells) => cs.map((c) => c.text).join("")
+  return `${text(cells.slice(0, first))}${theme.accent(SELECTED)}${text(cells.slice(first + 1))}`
 }
 
 const MARK_ON = "\x1b[7m"
