@@ -429,3 +429,30 @@ describe("focus reports", () => {
     expect(editor.getText()).toBe("")
   })
 })
+
+describe("mouse reports", () => {
+  const none = { shift: false, alt: false, ctrl: false }
+
+  test("SGR presses, releases, drags and the wheel, with zero-based cells and modifiers", () => {
+    expectSplitSafe("\x1b[<0;5;3M\x1b[<0;5;3m\x1b[<32;6;3M\x1b[<64;1;1M\x1b[<65;10;20M\x1b[<4;2;2M", [
+      { type: "mouse", action: "press", button: "left", x: 4, y: 2, ...none },
+      { type: "mouse", action: "release", button: "left", x: 4, y: 2, ...none },
+      { type: "mouse", action: "drag", button: "left", x: 5, y: 2, ...none },
+      { type: "mouse", action: "wheel", button: "up", x: 0, y: 0, ...none },
+      { type: "mouse", action: "wheel", button: "down", x: 9, y: 19, ...none },
+      { type: "mouse", action: "press", button: "left", x: 1, y: 1, ...none, shift: true },
+    ])
+  })
+
+  test("in win32-input-mode they arrive spelled out as characters and still parse", () => {
+    const spelled = [..."\x1b[<65;3;4M"].map((c) => win32(0, c.charCodeAt(0), 0)).join("")
+    expect(parse(spelled)).toEqual([{ type: "mouse", action: "wheel", button: "down", x: 2, y: 3, ...none }])
+  })
+
+  test("the editor leaves them alone", () => {
+    const editor = new Editor()
+    const e: InputEvent = { type: "mouse", action: "press", button: "left", x: 0, y: 0, ...none }
+    expect(editor.handleInput(e)).toBe(false)
+    expect(editor.getText()).toBe("")
+  })
+})

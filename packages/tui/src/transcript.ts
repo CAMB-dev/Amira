@@ -21,6 +21,11 @@ const JOINS: Partial<Record<BlockKind, BlockKind>> = {
   "command-output": "command",
 }
 
+/** Whether a block of `next` kind after one of `prev` kind gets a blank line between them. */
+export function gapBetween(prev: BlockKind | undefined, next: BlockKind): boolean {
+  return prev !== undefined && JOINS[next] !== prev
+}
+
 /**
  * The transcript's spacing rule, in one place: exactly one blank line between blocks, none
  * between blocks that belong together (the tool calls of a step, a command and its output).
@@ -40,8 +45,7 @@ export class Transcript {
   /** Whether a block of `kind` starting now gets a blank line before it. */
   gapBefore(kind: BlockKind): boolean {
     if (this.#open === kind) return false
-    if (this.#last === undefined) return false
-    return JOINS[kind] !== this.#last
+    return gapBetween(this.#last, kind)
   }
 
   /** The lines to commit for a whole block: a blank line first when the rule wants one. */

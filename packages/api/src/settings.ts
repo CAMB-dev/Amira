@@ -72,6 +72,13 @@ export interface Settings {
 
 export interface TuiSettings {
   /**
+   * "fullscreen" keeps the conversation on the alternate screen, scrolled and searched by
+   * Amira, and prints it to the normal screen on exit; "inline" leaves finished output in the
+   * terminal's own scrollback (for SSH, tmux, or native scrolling and copying). Default
+   * "fullscreen"; the --inline and --fullscreen flags win.
+   */
+  mode?: "fullscreen" | "inline"
+  /**
    * Ring the bell when a turn ends or a dialog opens while the terminal is in the background
    * (or, where the terminal does not report focus, after a long turn). Default true.
    */

@@ -196,6 +196,7 @@ const settings = object({
   budget: object({ tokens: integer(1), costUsd: number }),
   merge: object({ reviewThreshold: object({ lines: integer(0), files: integer(0) }) }),
   tui: object({
+    mode: oneOf("fullscreen", "inline"),
     bell: boolean,
     title: boolean,
     progress: boolean,

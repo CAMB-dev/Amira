@@ -173,6 +173,8 @@ async function run(argv: string[]): Promise<number> {
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
       ...(keybindings ? { keybindings: keybindings.keys } : {}),
       ...(config.settings.tui ? { settings: config.settings.tui } : {}),
+      // Full screen unless a flag or tui.mode says inline (D84).
+      mode: args.mode ?? config.settings.tui?.mode ?? "fullscreen",
     })
   } finally {
     stopWorkspace()

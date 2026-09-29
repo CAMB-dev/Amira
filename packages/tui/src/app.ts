@@ -3,7 +3,6 @@ import {
   type AnyEvent,
   type CommandDefinition,
   type FrontendView,
-  fallbackTitle,
   modelLabel,
   type ToolDetailLevel,
   type TuiSettings,
@@ -24,12 +23,9 @@ import {
   detectEnv,
   Editor,
   type EditorPart,
-  FullScreenRenderer,
   ImageLoader,
   type InputEvent,
   InputReader,
-  LiveRenderer,
-  MarkdownStream,
   ProcessTerminal,
   progressSupported,
   type RemoteImageFetch,
@@ -42,7 +38,6 @@ import {
   type Terminal,
   type Theme,
   truncateToWidth,
-  visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
@@ -50,44 +45,22 @@ import { Dialog, type DialogAnswer } from "./dialog.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
 import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
-import {
-  compactTokens,
-  isLastSibling,
-  replyRows,
-  type SubagentLine,
-  subagentEndLine,
-  subagentRows,
-  userLines,
-  userText,
-} from "./format.ts"
+import { compactTokens, userLines, userText } from "./format.ts"
+import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
-import { historyLines } from "./history.ts"
 import { HistorySearch } from "./history-search.ts"
 import { remoteImageFetch } from "./images.ts"
+import { createInlineView } from "./inline-view.ts"
 import { InputBox } from "./input-box.ts"
 import { defaultKeys, Keybindings } from "./keybindings.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { StatusBar } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
 import { TerminalStatus } from "./terminal-status.ts"
-import { ToolCalls, type TrackedCall } from "./tool-calls.ts"
-import {
-  callSummary,
-  finishedToolLines,
-  formatElapsed,
-  heldToolLine,
-  type PresenterSource,
-  runningToolLines,
-} from "./tool-view.ts"
-import {
-  type BlockKind,
-  commandOutputLines,
-  type NoticeLevel,
-  noticeLines,
-  Transcript,
-} from "./transcript.ts"
+import { formatElapsed, type PresenterSource } from "./tool-view.ts"
 import { detailCommand, nextDetail } from "./verbose.ts"
+import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
 export interface InteractiveOptions {
   agent: Agent
@@ -131,8 +104,17 @@ export interface InteractiveOptions {
   files?: FileSource
   /** The keys of every action; defaults to the defaults for this terminal. See loadKeybindings. */
   keybindings?: Keybindings
-  /** The `tui` settings: bell, title, progress indicator, reflow, what Enter does while working. */
+  /**
+   * The `tui` settings: the mode, bell, title, progress indicator, reflow, what Enter does
+   * while working.
+   */
   settings?: TuiSettings
+  /**
+   * Full screen (the conversation kept on the alternate screen, scrolled by Amira) or inline
+   * (finished output goes to the terminal's scrollback). Default: `settings.mode`, else inline;
+   * the CLI defaults to full screen (D84).
+   */
+  mode?: "fullscreen" | "inline"
   /** Tells the terminal apart (Windows Terminal, VS Code); injectable for tests. */
   env?: Record<string, string | undefined>
   /** How images in replies are fetched from the web; injectable for tests. */
@@ -166,33 +148,10 @@ function toPrompt(o: Outgoing): string | UserMessage {
   return { role: "user", content: [{ type: "text", text: o.text }], display: { text: o.display } }
 }
 
-/** A sub-agent the UI follows: its row, where it hangs, and how it ended once it did. */
-interface SubagentNode extends SubagentLine {
-  id: string
-  /** The session that started it: the main one, or another sub-agent's. */
-  parent: string
-  /** The call of `parent` that started it. */
-  toolCallId?: string
-  end?: { status: "done" | "error" | "aborted"; error?: string; durationMs: number; tokens: number }
-  /**
-   * Its call was committed while it ran: it returned at once (the sub-agent runs in the
-   * background and a notice reports it) or it was cut short (its end line is committed alone).
-   */
-  detached?: "background" | "interrupted"
-}
-
 /** What a message sent while a turn runs does: joins that turn, or waits for the next. */
 type WhileWorking = "steer" | "queue"
 
 const otherWay = (w: WhileWorking): WhileWorking => (w === "steer" ? "queue" : "steer")
-
-/** A component that draws a function's lines; handy for small pieces of view state. */
-class View implements Component {
-  constructor(private draw: (width: number, ctx: RenderContext) => string[]) {}
-  render(width: number, ctx: RenderContext): string[] {
-    return this.draw(width, ctx)
-  }
-}
 
 /** Events without a turn that the UI shows whatever session emitted them. */
 const HOST_EVENTS = new Set<string>([
@@ -219,9 +178,10 @@ function messageText(m: UserMessage): string {
 const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 
 /**
- * The interactive terminal UI. Finished messages and tool calls are committed to the
- * scrollback; the live region holds the streaming reply, activity, the editor and the
- * status bar. Resolves with the process exit code when the user quits.
+ * The interactive terminal UI. This is its controller: it follows the bus and the keys, keeps
+ * the input, dialogs, forms and the message queue, and hands the conversation to a view that
+ * draws it inline (finished output goes to the scrollback) or full screen (the conversation
+ * is kept and scrolled by Amira). Resolves with the process exit code when the user quits.
  */
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
   let { agent } = opts
@@ -235,11 +195,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     images: imageSetting !== "off",
   })
 
-  // The reply is Markdown: its finished blocks go to the scrollback as they close.
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
-  // Images on a line of their own are drawn where the terminal can: at most 20 rows, and 40% of
-  // the screen. Full-screen views (the sub-agent viewer, forms) show their alt text.
+  // Images on a line of their own are drawn where the terminal can, in the inline view: at most
+  // 20 rows, and 40% of the screen. The full-screen view and full-screen overlays (the sub-agent
+  // viewer, forms) show their alt text (D83, D84).
   const imageSupport = chooseImageSupport(imageSetting, capabilities.graphics, env)
   const images =
     imageSupport &&
@@ -249,12 +209,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       fetchRemote: opts.imageFetch ?? remoteImageFetch(),
       maxRows: () => Math.max(1, Math.min(20, Math.floor(terminal.rows * 0.4))),
     })
-  const streaming = new MarkdownStream({ hyperlinks, ...(images ? { images } : {}) })
   const spinner = new Spinner()
-  const transcript = new Transcript()
-  const toolCalls = new ToolCalls()
-  /** Tool names by call id, for the head of sub-agents that outlive their committed call. */
-  const callNames = new Map<string, string>()
   const queued: Outgoing[] = []
   /** Content of recent messages with folded pastes, by their text, so a dropped steer comes back folded. */
   const sentParts = new Map<string, EditorPart[]>()
@@ -272,7 +227,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let retryTimer: ReturnType<typeof setInterval> | undefined
   const setRetry = (at: number | undefined) => {
     noticeRetryAt = at
-    if (at !== undefined && !retryTimer) retryTimer = setInterval(() => renderer.requestRender(), 1000)
+    if (at !== undefined && !retryTimer) retryTimer = setInterval(() => view.requestRender(), 1000)
     else if (at === undefined && retryTimer) {
       clearInterval(retryTimer)
       retryTimer = undefined
@@ -314,26 +269,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let streamedChars = 0
   /** The user interrupted this turn: the failures of calls it cut short are not the tools'. */
   let interrupted = false
-  /** How much of each finished tool call is committed; Ctrl+O and /verbose change it. */
+  /** How much of each finished tool call is shown; Ctrl+O and /verbose change it. */
   let detail: ToolDetailLevel = "summary"
   /** A short note shown in place of the key hints, such as the new tool output level. */
   let hintNote: { text: string; until: number } | undefined
   let hintTimer: ReturnType<typeof setTimeout> | undefined
-  /**
-   * This session's sub-agents (and theirs), in start order, from their start until their line
-   * is committed: one that ends while its call is live stays, as its end line, until the call
-   * is committed with it; one whose call was committed already goes when it ends.
-   */
-  const subagents = new Map<string, SubagentNode>()
-  /** Redraws once a second while sub-agents run, so their elapsed time moves. */
-  let subagentTimer: ReturnType<typeof setInterval> | undefined
-  const tickSubagents = () => {
-    const running = [...subagents.values()].some((n) => !n.end)
-    if (running && !subagentTimer) subagentTimer = setInterval(() => renderer.requestRender(), 1000)
-    else if (!running && subagentTimer) {
-      clearInterval(subagentTimer)
-      subagentTimer = undefined
-    }
+  const showNote = (text: string) => {
+    hintNote = { text, until: Date.now() + HINT_NOTE_MS }
+    clearTimeout(hintTimer)
+    hintTimer = setTimeout(() => view.requestRender(), HINT_NOTE_MS + 10)
+    view.requestRender()
   }
 
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
@@ -356,10 +301,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // The "/" popup lists commands, the "$" one skills; at most one is open, by the first character.
   const popups = commands
     ? [
-        new CommandPopup(commands, () => renderer.requestRender(), keys),
+        new CommandPopup(commands, () => view.requestRender(), keys),
         new CommandPopup(
           { complete: (line) => commands.completeSkill(line), list: () => commands.skills() },
-          () => renderer.requestRender(),
+          () => view.requestRender(),
           keys,
           "$",
         ),
@@ -369,11 +314,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const history = opts.history ?? new PromptHistory()
   const historyNav = new HistoryNavigator(history, editor)
   const search = new HistorySearch(history, editor, keys)
-  const filePicker = new FilePicker(
-    opts.files ?? new FileIndex(agent.cwd),
-    () => renderer.requestRender(),
-    keys,
-  )
+  const filePicker = new FilePicker(opts.files ?? new FileIndex(agent.cwd), () => view.requestRender(), keys)
   /**
    * Tells the completion lists what the editor holds; a promise while candidates are on their
    * way. Cheap on any text: the command popup only looks at a single line, the file picker at
@@ -399,26 +340,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const newlineKey = keys.label("newline", (s) => capabilities.shiftEnter || !(s.shift && s.name === "enter"))
   const queueKey = keys.label("queue")
   const inputBox = new InputBox(editor)
-  /** Rows the last frame's dialog took, to size it against the rest of the live region. */
+  /** Rows the last frame's dialog took, to size it against the rest of the bottom area. */
   let dialogRows = 0
   const statusBar = new StatusBar(() => opts.status.snapshot())
-  /**
-   * Lines to print above the live region, sent with the next frame: running a command commits
-   * its echo and then each thing it prints, and a redraw for each of those flickered.
-   */
-  const pendingCommits: string[] = []
-  const commit = (lines: string[]) => {
-    pendingCommits.push(...lines)
-    renderer.requestRender()
-  }
-  /** Commits a whole block, spaced by the transcript's rule. */
-  const commitBlock = (kind: BlockKind, lines: string[]) => commit(transcript.block(kind, lines))
-  /** A system notice fitted to the terminal. */
-  const note = (level: NoticeLevel, text: string) => noticeLines(theme, level, text, terminal.columns)
 
   const bottom = new Stack([
-    // Sub-agents whose call is committed already (it returned at once): they run on here.
-    new View((width, ctx) => backgroundRows(width, ctx.theme)),
     // The activity line: what the turn is doing, how long it has run, the tokens it wrote.
     // Running tools carry their own spinner, so it is left out while they run.
     new View((width, ctx) => {
@@ -429,7 +355,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           ? `preparing ${preparing}`
           : thinking
             ? "thinking"
-            : toolCalls.running
+            : view.toolsRunning
               ? ""
               : "working"
       const tokens = turnTokens + estimateTokens(streamedChars)
@@ -473,127 +399,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }),
   ])
 
-  /** The tool calls of the step, in call order: running ones with their output, held ones done. */
-  function liveToolRows(width: number, ctx: RenderContext): string[] {
-    const live = toolCalls.live
-    if (!live.length) return []
-    const rows: string[] = transcript.gapBefore("tool") ? [""] : []
-    const now = Date.now()
-    for (const c of live) {
-      const presenter = presenters?.get(c.name)
-      if (c.end) rows.push(heldToolLine(ctx.theme, presenter, finished(c), width))
-      else rows.push(...runningToolLines(ctx.theme, presenter, c, now, spinner.glyph, width))
-      rows.push(...treeRows(callTree(c.id), now, width, ctx.theme))
-    }
-    return rows
-  }
-
-  /** Sub-agents running on after their call was committed, under a small header. */
-  function backgroundRows(width: number, t: Theme): string[] {
-    const live = new Set(toolCalls.live.map((c) => c.id))
-    const underCall = (n: SubagentNode) =>
-      n.parent === agent.sessionId && n.toolCallId !== undefined && live.has(n.toolCallId)
-    const roots = [...subagents.values()].filter((n) => !subagents.has(n.parent) && !underCall(n))
-    if (!roots.length) return []
-    const now = Date.now()
-    // Grouped by the agent call that started them, under a head shaped like that call's, so the
-    // group reads as the call going on down here (a committed call cannot be updated in place).
-    const groups = new Map<string | undefined, SubagentNode[]>()
-    for (const n of roots) groups.set(n.toolCallId, [...(groups.get(n.toolCallId) ?? []), n])
-    const sep = ` ${t.muted(glyphs.separator)} `
-    const rows: string[] = []
-    for (const [callId, group] of groups) {
-      const started = Math.min(...group.map((n) => n.startedAt ?? now))
-      const count = `${group.length} sub-agent${group.length === 1 ? "" : "s"}`
-      const head =
-        callId === undefined
-          ? `${t.accent(glyphs.subagent)} ${t.muted("background")}`
-          : `${t.success(glyphs.toolRunning)} ${t.accent(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
-      rows.push(truncateToWidth(head, width, glyphs.more))
-      rows.push(...treeRows(group.flatMap(subtree), now, width, t))
-    }
-    return [...rows, ""]
-  }
-
-  /** A sub-agent's rows: live ones while it runs, its end line once it ended. */
-  function nodeRows(n: SubagentNode, now: number, width: number, t: Theme, last = true): string[] {
-    return n.end ? [subagentEndLine(n, n.end, width, t, last)] : subagentRows(n, now, width, t, last)
-  }
-
-  /** Rows of a depth-first list of sub-agents, each closing its level ("└") when it is the last. */
-  function treeRows(list: SubagentNode[], now: number, width: number, t: Theme): string[] {
-    return list.flatMap((n, i) => nodeRows(n, now, width, t, isLastSibling(list, i)))
-  }
-
-  /** The sub-agents `parent` started (through `callId`, when given), in start order. */
-  function childrenOf(parent: string, callId?: string): SubagentNode[] {
-    return [...subagents.values()].filter(
-      (n) => n.parent === parent && (callId === undefined || n.toolCallId === callId),
-    )
-  }
-
-  /** A sub-agent and the ones under it, depth first, each after its parent. */
-  function subtree(n: SubagentNode): SubagentNode[] {
-    return [n, ...childrenOf(n.id).flatMap(subtree)]
-  }
-
-  /** The sub-agents a call of this session started, and theirs, depth first. */
-  function callTree(callId: string): SubagentNode[] {
-    return childrenOf(agent.sessionId, callId).flatMap(subtree)
-  }
-
-  /** The call of this session a sub-agent hangs under: its top ancestor's, when that is known. */
-  function rootCall(n: SubagentNode): string | undefined {
-    let top = n
-    while (top.parent !== agent.sessionId) {
-      const up = subagents.get(top.parent)
-      if (!up) return undefined
-      top = up
-    }
-    return top.toolCallId
-  }
-
-  const isLiveCall = (id: string | undefined) => id !== undefined && toolCalls.live.some((c) => c.id === id)
-
-  // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
-  // before it in view. Its finished blocks, and rows past that, go to the scrollback as they
-  // are finished (MarkdownStream), indented like the committed reply and spaced by the
-  // transcript's rule. A dialog gets what the rest leaves, so its title is never cut off the top.
-  const gutter = glyphs.assistant
-  const root = new View((width, ctx) => {
-    // Lines committed since the last frame go out with this one: one redraw, not one each.
-    if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
-    // Live tool rows sit above the dialog (often the call that asked it), with the blank row
-    // before the rest; the dialog fits in what they leave. No reply streams while tools are live.
-    const tools = liveToolRows(width, ctx)
-    const budget = ctx.rows - 1 - (tools.length ? tools.length + 1 : 0)
+  /** The bottom area under `top`, with the dialog fitted into what the rest leaves of `budget`. */
+  function layoutBottom(width: number, ctx: RenderContext, budget: number, top?: Component): string[] {
+    const parts = top ? [top, bottom] : [bottom]
+    const draw = () => parts.flatMap((c) => c.render(width, ctx))
     const dialog = dialogs[0]
     if (dialog) dialog.maxRows = Math.max(1, budget)
-    let rest = bottom.render(width, ctx)
+    let rest = draw()
     if (dialog && rest.length > budget) {
       dialog.maxRows = Math.max(1, budget - (rest.length - dialogRows))
-      rest = bottom.render(width, ctx)
+      rest = draw()
     }
-    streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - 3)
-    const commit = ctx.commit
-    const replyCtx: RenderContext = commit
-      ? {
-          ...ctx,
-          commit: (rows) => commit(transcript.continue("assistant", replyRows(rows))),
-        }
-      : ctx
-    const reply = streaming.render(Math.max(1, width - visibleWidth(gutter)), replyCtx)
-    const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
-    return [...lead, ...replyRows(reply), ...tools, "", ...rest]
-  })
-  const reflow = settings.reflow ?? "auto"
-  const renderer = new LiveRenderer(terminal, root, {
-    synchronizedOutput: capabilities.synchronizedOutput,
-    frameIntervalMs: FRAME_MS,
-    theme,
-    // "auto" assumes a re-wrapping terminal, as Windows Terminal, VS Code and most others are.
-    reflow: reflow !== "off",
-  })
+    return rest
+  }
 
   /** What the keys do now, the most useful first to stay as the line narrows. */
   function inputHint(): HintItems {
@@ -605,6 +423,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       working && queueKey && { text: `${queueKey} ${otherWay(enterDoes)}`, priority: 3 },
       newlineKey && { text: `${newlineKey} newline`, priority: 1 },
       keys.label("cancel") && { text: `${keys.label("cancel")} ${ctrlC}`, priority: working ? 2 : 4 },
+      ...view.hints(),
     ]
   }
 
@@ -647,8 +466,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   /**
-   * The full-screen sub-agent viewer, on the alternate screen while open. The inline UI is
-   * suspended meanwhile: what the main session commits is held and printed when it closes.
+   * The full-screen sub-agent viewer, open over the conversation. Inline, the UI is suspended
+   * meanwhile: what the main session commits is held and printed when it closes.
    */
   let viewer: SubagentViewer | undefined
   let viewerTimer: ReturnType<typeof setInterval> | undefined
@@ -664,29 +483,43 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     ...dialogs.map((d) => d.request.title),
     ...forms.slice(form ? 1 : 0).map((f) => f.title),
   ]
-  const fullScreen = new FullScreenRenderer(
-    terminal,
-    new View((width, ctx) => (form ? form.render(width, ctx) : (viewer?.render(width, ctx) ?? []))),
-    { synchronizedOutput: capabilities.synchronizedOutput, theme, frameIntervalMs: 33 },
-  )
 
-  function openView(view: FrontendView) {
+  const host: ViewHost = {
+    terminal,
+    theme,
+    capabilities,
+    settings,
+    presenters,
+    hyperlinks,
+    ...(images ? { images } : {}),
+    keys,
+    spinner,
+    sessionId: () => agent.sessionId,
+    detail: () => detail,
+    bottom: layoutBottom,
+    overlay: new View((width, ctx) => (form ? form.render(width, ctx) : (viewer?.render(width, ctx) ?? []))),
+    editorEmpty: () => editor.isEmpty,
+    showNote,
+  }
+  const mode = opts.mode ?? settings.mode ?? "inline"
+  const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
+
+  function openView(v: FrontendView) {
     // A form owns the screen until it is answered.
-    if (view.kind !== "subagent" || !commands || form) return
-    if (viewer) viewer.show(view.sessionId)
+    if (v.kind !== "subagent" || !commands || form) return
+    if (viewer) viewer.show(v.sessionId)
     else {
-      viewer = new SubagentViewer(view.sessionId, {
+      viewer = new SubagentViewer(v.sessionId, {
         source: commands.control,
         waiting: waitingTitles,
         onClose: closeView,
         ...(presenters ? { presenters } : {}),
       })
-      renderer.suspend()
-      fullScreen.open()
+      view.openOverlay()
       // Elapsed times move even when no event comes.
-      viewerTimer = setInterval(() => fullScreen.requestRender(), 1000)
+      viewerTimer = setInterval(() => view.requestOverlayRender(), 1000)
     }
-    fullScreen.render()
+    view.renderOverlay()
   }
 
   function closeView() {
@@ -694,8 +527,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     viewer = undefined
     clearInterval(viewerTimer)
     viewerTimer = undefined
-    fullScreen.close()
-    renderer.resume()
+    view.closeOverlay()
     openNextForm()
   }
 
@@ -705,25 +537,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const next = forms[0]
     if (!ui || !next || form || viewer || dialogs.length) return
     form = new FormView(uiFormBackend(ui, next), {
-      requestRender: () => fullScreen.requestRender(),
+      requestRender: () => view.requestOverlayRender(),
       waiting: waitingTitles,
       onClose: () => closeForm(next),
     })
-    renderer.suspend()
-    fullScreen.open()
-    fullScreen.render()
+    view.openOverlay()
+    view.renderOverlay()
     // A form waits for the user like a dialog does: the tab shows it.
     termStatus.setWaiting(true)
   }
 
-  /** The open form was answered, cancelled, or resolved elsewhere: back to the inline UI. */
+  /** The open form was answered, cancelled, or resolved elsewhere: back to the conversation. */
   function closeForm(request: FormRequest) {
     const i = forms.indexOf(request)
     if (i !== -1) forms.splice(i, 1)
     if (!form) return
     form = undefined
-    fullScreen.close()
-    renderer.resume()
+    view.closeOverlay()
     termStatus.setWaiting(dialogs.length > 0 || forms.length > 0)
     openNextForm()
   }
@@ -733,138 +563,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     resolveExit = r
   })
 
-  function finished(c: TrackedCall) {
-    return {
-      name: c.name,
-      args: c.args,
-      result: c.end!.result,
-      durationMs: c.end!.durationMs,
-      ...(c.end!.rejected ? { rejected: c.end!.rejected } : {}),
-      interrupted: c.end!.interrupted ?? false,
-    }
-  }
-
-  /**
-   * Commits finished calls, each with the end lines of the sub-agents it started right under
-   * its head. Sub-agents still running go on in the background rows.
-   */
-  function commitCalls(calls: TrackedCall[]) {
-    for (const c of calls) {
-      const tree = callTree(c.id)
-      const ends: string[] = []
-      const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
-      for (const [i, n] of tree.entries()) {
-        if (n.end) {
-          // The call's own result line comes after them, so only a nested one can close a level.
-          const last = n.depth > 1 && isLastSibling(tree, i)
-          ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last))
-          subagents.delete(n.id)
-        } else n.detached = cutShort ? "interrupted" : "background"
-      }
-      const lines = finishedToolLines(theme, presenters?.get(c.name), finished(c), detail, terminal.columns)
-      lines.splice(1, 0, ...ends)
-      commitBlock("tool", lines)
-      turnShowedOutput = true
-    }
-  }
-
-  /**
-   * Once calls were dropped without being committed (a turn ended or the session changed):
-   * ended sub-agents they held are committed on their own, running ones are cut loose.
-   */
-  function settleSubagents() {
-    for (const n of subagents.values()) {
-      if (isLiveCall(rootCall(n))) continue
-      if (n.end) {
-        if (endsAlone(n)) commitBlock("tool", [subagentEndLine(n, n.end, terminal.columns, theme)])
-        subagents.delete(n.id)
-      } else n.detached ??= "interrupted"
-    }
-  }
-
-  /**
-   * Whether a sub-agent that ended away from its call gets its end line on its own: only one
-   * the tree stopped. One that finished its task after its call was cut short kept running in
-   * the background (the main session's agent calls survive an interrupt), and its notice
-   * reports it; a line here would say it twice.
-   */
-  function endsAlone(n: SubagentNode): boolean {
-    return n.detached !== "background" && n.end?.status === "aborted"
-  }
-
-  /** Keeps the sub-agent rows current; true when the event was about a sub-agent. */
-  function trackSubagent(e: AnyEvent): boolean {
-    const mine = e.sessionId === agent.sessionId || subagents.has(e.sessionId)
-    switch (e.type) {
-      case "subagent.start": {
-        if (!mine) return false
-        const node: SubagentNode = {
-          id: e.data.childSessionId,
-          parent: e.sessionId,
-          ...(e.data.toolCallId ? { toolCallId: e.data.toolCallId } : {}),
-          title: e.data.title || fallbackTitle(e.data.prompt),
-          role: e.data.role ?? "agent",
-          depth: e.data.depth,
-          tokens: 0,
-          ...(e.data.queued ? {} : { startedAt: e.ts }),
-        }
-        subagents.set(node.id, node)
-        // Started under a tree whose call is committed already: it runs in the background.
-        const parent = subagents.get(node.parent)
-        if (parent?.detached) node.detached = parent.detached
-        break
-      }
-      case "subagent.end": {
-        const node = subagents.get(e.data.childSessionId)
-        if (!node) return false
-        node.end = {
-          status: e.data.status,
-          ...(e.data.error !== undefined ? { error: e.data.error } : {}),
-          durationMs: e.data.durationMs,
-          tokens: node.tokens,
-        }
-        // Under a live call its rows become its end line, committed with the call. Otherwise it
-        // is done: a background one's notice reports it; one cut short gets its line on its own.
-        if (isLiveCall(rootCall(node))) break
-        subagents.delete(node.id)
-        if (endsAlone(node)) commitBlock("tool", [subagentEndLine(node, node.end, terminal.columns, theme)])
-        break
-      }
-      case "budget.exceeded":
-        commitBlock(
-          "notice",
-          note("warning", `Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`),
-        )
-        return true
-      default: {
-        const sub = subagents.get(e.sessionId)
-        if (!sub) return false
-        if (e.type === "session.start") sub.startedAt ??= e.ts
-        else if (e.type === "tool.execute.start") {
-          sub.activity = {
-            name: e.data.name,
-            summary: callSummary(presenters?.get(e.data.name), e.data.args),
-          }
-        } else if (e.type === "message.end") {
-          const u = e.data.message.usage
-          if (u) sub.tokens += u.input + u.output + u.cacheRead + u.cacheWrite
-          const text = e.data.message.content
-            .map((b) => (b.type === "text" ? b.text : ""))
-            .join("")
-            .trim()
-          if (text) sub.lastText = text
-        }
-        return true
-      }
-    }
-    tickSubagents()
-    return true
-  }
-
   const onEvent = (e: AnyEvent) => {
-    if (trackSubagent(e)) renderer.requestRender()
-    if (viewer?.handleEvent(e)) fullScreen.requestRender()
-    if (form && (e.type === "ui.request" || e.type === "ui.resolved")) fullScreen.requestRender()
+    if (view.subagentEvent(e)) view.requestRender()
+    if (viewer?.handleEvent(e)) view.requestOverlayRender()
+    if (form && (e.type === "ui.request" || e.type === "ui.resolved")) view.requestOverlayRender()
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
@@ -879,7 +581,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           mergedQueue && messageText(prompt) === mergedQueue.join("\n\n") ? mergedQueue : undefined
         mergedQueue = undefined
         const shown = merged ? merged.map((text) => ({ ...prompt, display: { text } })) : [prompt]
-        for (const m of shown) commitBlock("user", userLines(theme, m, terminal.columns))
+        for (const m of shown) view.user(m)
         termStatus.turnStarted()
         working = true
         thinking = false
@@ -888,7 +590,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (!clockFromSend) startClock()
         clockFromSend = false
         streamedChars = 0
-        spinner.start(() => renderer.requestRender())
+        spinner.start(() => view.requestRender())
         break
       }
       case "message.start":
@@ -899,7 +601,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "message.delta":
         if (e.data.kind === "text") {
           thinking = false
-          streaming.append(e.data.text)
+          view.replyDelta(e.data.text)
           streamedChars += e.data.text.length
         } else if (e.data.kind === "thinking") {
           thinking = true
@@ -913,51 +615,39 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         break
       case "message.end": {
-        // The rows still live are committed as they are shown; earlier ones already were.
-        const early = streaming.committedRows > 0
-        const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(gutter)))
-        if (rows.length) commit(transcript.continue("assistant", replyRows(rows)))
-        if (rows.length || early) turnShowedOutput = true
-        transcript.end()
         const { message } = e.data
+        const calls = message.content.flatMap((b) => (b.type === "toolCall" ? [b] : []))
+        if (view.replyEnd(calls)) turnShowedOutput = true
         turnTokens += message.usage?.output ?? estimateTokens(streamedChars)
         streamedChars = 0
-        toolCalls.expect(message.content.flatMap((b) => (b.type === "toolCall" ? [b.id] : [])))
         break
       }
       case "tool.execute.start":
         preparing = undefined
-        toolCalls.start(e.data.toolCallId, e.data.name, e.data.args, Date.now())
-        callNames.set(e.data.toolCallId, e.data.name)
+        view.toolStart(e.data.toolCallId, e.data.name, e.data.args, Date.now())
         // Draw now: the tool may block the event loop before a scheduled frame would run.
-        renderer.render()
+        view.render()
         return
       case "tool.execute.update":
-        toolCalls.update(e.data.toolCallId, e.data.partial)
+        view.toolUpdate(e.data.toolCallId, e.data.partial)
         break
       case "tool.execute.end": {
         const { result, durationMs, rejected } = e.data
-        // Whether the user had interrupted is fixed when the call ends, not when it is committed.
+        // Whether the user had interrupted is fixed when the call ends, not when it is shown.
         const end = { result, durationMs, interrupted, ...(rejected ? { rejected } : {}) }
-        commitCalls(toolCalls.end(e.data.toolCallId, end))
+        if (view.toolEnd(e.data.toolCallId, end)) turnShowedOutput = true
         break
       }
       case "turn.end":
-        commitCalls(toolCalls.flush())
-        // Sub-agents of calls that never ended.
-        settleSubagents()
-        // Only calls with sub-agents still around need their names.
-        for (const id of callNames.keys())
-          if (![...subagents.values()].some((n) => n.toolCallId === id)) callNames.delete(id)
-        tickSubagents()
+        if (view.turnEnd()) turnShowedOutput = true
         working = false
         preparing = undefined
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
-        if (e.data.reason === "error") commitBlock("notice", note("error", e.data.error ?? "error"))
-        else if (e.data.reason === "aborted") commitBlock("notice", note("interrupted", "Interrupted."))
-        else if (!turnShowedOutput) commitBlock("notice", note("info", "(no reply)"))
+        if (e.data.reason === "error") view.notice("error", e.data.error ?? "error")
+        else if (e.data.reason === "aborted") view.notice("interrupted", "Interrupted.")
+        else if (!turnShowedOutput) view.notice("info", "(no reply)")
         termStatus.turnEnded(e.data.reason)
         if (queued.length) {
           const next = queued.splice(0, queued.length)
@@ -977,45 +667,37 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "compact.start":
         compacting = true
         compactStartedAt = Date.now()
-        spinner.start(() => renderer.requestRender())
+        spinner.start(() => view.requestRender())
         break
       case "compact.end":
         compacting = false
         if (!working) spinner.stop()
-        commitBlock("notice", note("success", `Compacted ${e.data.replaced} older messages into a summary.`))
+        view.notice("success", `Compacted ${e.data.replaced} older messages into a summary.`)
         break
       case "compact.failed":
         compacting = false
         if (!working) spinner.stop()
-        commitBlock(
-          "notice",
-          e.data.blocked
-            ? note("info", `Compaction skipped: ${e.data.error}`)
-            : note("warning", `Compaction failed: ${e.data.error}`),
-        )
+        if (e.data.blocked) view.notice("info", `Compaction skipped: ${e.data.error}`)
+        else view.notice("warning", `Compaction failed: ${e.data.error}`)
         break
       case "extension.error":
         // Settings warnings travel as extension.error from "settings" but are not extension failures.
-        commitBlock(
-          "notice",
-          note(
-            "warning",
-            e.data.source === "settings"
-              ? `warning: ${e.data.error}`
-              : `[extension ${e.data.source}] ${e.data.error}`,
-          ),
+        view.notice(
+          "warning",
+          e.data.source === "settings"
+            ? `warning: ${e.data.error}`
+            : `[extension ${e.data.source}] ${e.data.error}`,
         )
         break
       case "turn.steer": {
         const text = messageText(e.data.message)
         // A notice (background sub-agents' results) is not the user's steering. It waits in the
-        // live area until it joins the conversation (all waiting ones join together), also
+        // bottom area until it joins the conversation (all waiting ones join together), also
         // through an interrupt, after which it goes with the next message.
         if (e.data.message.display?.origin) {
           if (e.data.state === "queued") pendingNotices.push(...userLines(theme, e.data.message))
           else pendingNotices.length = 0
-          if (e.data.state === "injected")
-            commitBlock("user", userLines(theme, e.data.message, terminal.columns))
+          if (e.data.state === "injected") view.user(e.data.message)
           break
         }
         if (e.data.state === "queued") {
@@ -1024,8 +706,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        if (e.data.state === "injected")
-          commitBlock("user", userLines(theme, e.data.message, terminal.columns))
+        if (e.data.state === "injected") view.user(e.data.message)
         // Put a message the turn dropped back into the editor rather than losing it.
         else if (e.data.state === "dropped") {
           // A message with folded pastes comes back folded.
@@ -1061,17 +742,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         termStatus.setWaiting(dialogs.length > 0)
         break
       }
-      case "command.output": {
-        const { level, text } = e.data
-        // Right after its command it hangs under the echo; on its own it is a notice.
-        if (transcript.last === "command" || transcript.last === "command-output") {
-          const style = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.text
-          commitBlock("command-output", commandOutputLines(style, theme.muted, text, terminal.columns))
-        } else commitBlock("notice", note(level, text))
+      case "command.output":
+        view.commandOutput(e.data.level, e.data.text)
         break
-      }
     }
-    renderer.requestRender()
+    view.requestRender()
   }
 
   /** The activity line counts the turn's time and tokens from here. */
@@ -1086,7 +761,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     working = true
     startClock()
     clockFromSend = true
-    renderer.requestRender()
+    view.requestRender()
     agent.prompt(toPrompt(message)).catch((err) => {
       clockFromSend = false
       if (err instanceof AgentBusyError) {
@@ -1097,9 +772,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       } else {
         working = false
         spinner.stop()
-        commitBlock("notice", note("error", err instanceof Error ? err.message : String(err)))
+        view.notice("error", err instanceof Error ? err.message : String(err))
       }
-      renderer.requestRender()
+      view.requestRender()
     })
   }
 
@@ -1122,7 +797,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     else if (working && how === "steer") agent.steer(toPrompt(message))
     else if (working) queued.push(message)
     else send(message)
-    renderer.requestRender()
+    view.requestRender()
   }
 
   /** Sends what the editor holds, as a key other than Enter asks: steering or queued. */
@@ -1132,10 +807,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Runs at once, even during a turn; commands that need an idle session say so. */
   function runCommand(line: string) {
-    commitBlock("command", [theme.muted(`${glyphs.user} ${line}`)])
+    view.commandEcho(line)
     void commands!
       .run(line, { frontend: "tui", quit: () => quit(), openView })
-      .then(() => renderer.requestRender())
+      .then(() => view.requestRender())
   }
 
   /**
@@ -1145,45 +820,34 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function runSkill(line: string) {
     void commands!
       .runSkill(line, { frontend: "tui", quit: () => quit(), openView })
-      .then(() => renderer.requestRender())
+      .then(() => view.requestRender())
   }
 
-  /** The lines of a session's history, with its id and last write in the separator. */
+  /** A session's history, with its id and last write in the separator. */
   function showHistory(a: Agent) {
     let updatedAt: number | undefined
     try {
       if (a.session?.file) updatedAt = statSync(a.session.file).mtimeMs
     } catch {}
-    commit(
-      historyLines(theme, a.messages, {
-        ...(presenters ? { presenters } : {}),
-        width: terminal.columns,
-        detail,
-        session: { id: a.sessionId, ...(updatedAt !== undefined ? { updatedAt } : {}) },
-        transcript,
-        hyperlinks,
-      }),
-    )
+    view.history(a.messages, { id: a.sessionId, ...(updatedAt !== undefined ? { updatedAt } : {}) })
   }
 
   /** Follows the session a command switched to; a resumed one shows its history. */
   function followAgent(next: Agent) {
-    toolCalls.flush()
-    settleSubagents()
-    callNames.clear()
+    view.leaveSession()
     agent = next
     pendingNotices.length = 0
     setRetry(undefined)
     termStatus.setFolder(next.cwd)
     if (next.messages.length) showHistory(next)
-    renderer.requestRender()
+    view.requestRender()
   }
 
-  /** Sets how much of later tool results is committed; what is in the scrollback stays. */
+  /** Sets how much of tool results is shown; returns the note that says so. */
   function setDetail(level: ToolDetailLevel): string {
     detail = level
-    const cycle = keys.label("tool-output")
-    return `Tool output: ${level} (applies to tool results from now on${cycle ? `; ${cycle} cycles` : ""})`
+    view.requestRender()
+    return view.detailNote(level)
   }
 
   /** Keeps the folded pastes of the last few messages sent, for a steer the turn drops. */
@@ -1219,12 +883,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             : answer === false
               ? "no"
               : answer
-    commitBlock("dialog", [`${theme.accent(glyphs.question)} ${title} ${theme.muted(`› ${shown}`)}`])
-    renderer.requestRender()
+    view.dialogEcho(`${theme.accent(glyphs.question)} ${title} ${theme.muted(`› ${shown}`)}`)
+    view.requestRender()
     openNextForm()
   }
 
+  let quitting = false
   function quit(code = 0) {
+    if (quitting) return
+    quitting = true
     for (const f of forms.splice(0)) opts.ui?.cancel(f.requestId)
     form?.close()
     closeView()
@@ -1234,13 +901,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     clearTimeout(hintTimer)
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
-    subagents.clear()
-    tickSubagents()
     setRetry(undefined)
     reader.stop()
-    // What was committed but not drawn yet still belongs in the scrollback.
-    if (pendingCommits.length) renderer.render()
-    renderer.stop({ clear: true })
+    view.stop()
     termStatus.stop()
     if (terminal instanceof ProcessTerminal) terminal.stop()
     else terminal.restore()
@@ -1250,16 +913,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function onInput(e: InputEvent) {
     // Focus is the terminal's, not a key: it goes to the title and bell even over the viewer.
     if (e.type === "focus") return termStatus.focus(e.focused)
-    // A form owns the keyboard while it is open, Ctrl+L included: the inline UI is hidden.
-    if (form) {
-      form.handleInput(e)
-      fullScreen.requestRender()
-      return
-    }
-    // The viewer owns the keyboard while it is open, Ctrl+L included: the inline UI is hidden.
-    if (viewer) {
-      viewer.handleInput(e)
-      fullScreen.requestRender()
+    // A form or the viewer owns the keyboard while open, Ctrl+L included: the rest is hidden.
+    // The wheel scrolls them like ↑↓, as it does on the alternate screen without mouse reporting.
+    if (form || viewer) {
+      for (const k of overlayKeys(e)) {
+        if (form) form.handleInput(k)
+        else viewer?.handleInput(k)
+      }
+      view.requestOverlayRender()
       return
     }
     const dialog = dialogs[0]
@@ -1267,9 +928,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // with candidates for text the editor no longer holds.
     if (!dialog && !search.active) syncCompletions()
     if (keys.is(e, "redraw")) {
-      // Also over a dialog or the search: they are part of the live region.
-      return renderer.redraw()
+      // Also over a dialog or the search: they are part of the screen.
+      return view.redraw()
     }
+    // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
+    // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
+    const viewFirst = e.type === "mouse" || (!dialog && view.capturing)
+    if (viewFirst && (view.handleInput(e) || e.type === "mouse")) return redraw()
     if (dialog) {
       // Ctrl+C closes the dialog like Esc (dialog.cancel).
       dialog.handleInput(e)
@@ -1280,6 +945,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // The popup took one of its keys (popup.*).
     } else if (filePicker.open && handleFileKey(e)) {
       // The file picker took one of its keys (popup.*).
+    } else if (!viewFirst && view.handleInput(e)) {
+      // The view took one of its keys (scrolling, find, selecting, copying).
     } else if (keys.is(e, "history.search")) {
       search.start()
     } else if (
@@ -1301,9 +968,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (keys.is(e, "exit") && !working && editor.isEmpty) {
       return quit()
     } else if (keys.is(e, "tool-output")) {
-      hintNote = { text: setDetail(nextDetail(detail)), until: Date.now() + HINT_NOTE_MS }
-      clearTimeout(hintTimer)
-      hintTimer = setTimeout(() => renderer.requestRender(), HINT_NOTE_MS + 10)
+      showNote(setDetail(nextDetail(detail)))
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too.
       if (working || compacting) interrupt()
@@ -1321,8 +986,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   function redraw() {
     const pending = syncCompletions()
-    if (pending) setTimeout(() => renderer.requestRender(), FRAME_MS)
-    else renderer.requestRender()
+    if (pending) setTimeout(() => view.requestRender(), FRAME_MS)
+    else view.requestRender()
   }
 
   /** Applies what the popup did with a key; false when it left the key to the editor. */
@@ -1360,16 +1025,24 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const reader = new InputReader(terminal, onInput)
   reader.start()
   termStatus.start()
-  commitBlock("banner", [
+  view.banner(
     `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${agent.cwd}`)}`,
-  ])
+  )
   if (agent.messages.length) showHistory(agent)
   for (const e of opts.startupEvents ?? []) onEvent(e)
-  if (opts.notice) commitBlock("notice", note("warning", opts.notice))
+  if (opts.notice) view.notice("warning", opts.notice)
   // The first frame carries the banner, history and startup messages.
-  renderer.start()
+  view.start()
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)
 
   return exited
+}
+
+/** The events an overlay gets for one: the wheel as ↑ or ↓ three times, mouse clicks not at all. */
+function overlayKeys(e: InputEvent): InputEvent[] {
+  if (e.type !== "mouse") return [e]
+  if (e.action !== "wheel" || (e.button !== "up" && e.button !== "down")) return []
+  const k: InputEvent = { type: "key", name: e.button, ctrl: false, shift: false, alt: false }
+  return [k, k, k]
 }

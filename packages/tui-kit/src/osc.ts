@@ -39,6 +39,12 @@ export const osc = {
   progress: (state: ProgressState, percent = 0) =>
     `\x1b]9;4;${PROGRESS_CODES[state]};${Math.max(0, Math.min(100, Math.round(percent)))}\x07`,
   bell: "\x07",
+  /**
+   * Puts `text` on the system clipboard (OSC 52), as UTF-8 in base64. Windows Terminal, VS Code,
+   * iTerm2, kitty, WezTerm and xterm (when allowed) take it; others ignore it, and nothing tells
+   * whether it arrived.
+   */
+  clipboard: (text: string) => `\x1b]52;c;${Buffer.from(text, "utf8").toString("base64")}\x07`,
 }
 
 type Env = Record<string, string | undefined>

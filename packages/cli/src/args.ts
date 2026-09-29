@@ -20,6 +20,8 @@ export interface CliArgs {
   disabledTools?: string[]
   help: boolean
   version: boolean
+  /** How the interactive UI draws: --fullscreen or --inline. Unset: from settings, else full screen. */
+  mode?: "fullscreen" | "inline"
   /** Headless JSONL protocol on stdin and stdout. */
   rpc: boolean
   /** Print the JSON Schema of the rpc protocol and exit. */
@@ -54,6 +56,11 @@ Options:
       --disable-tools <names>
                         Hide tools from the model, comma-separated (repeatable;
                         replaces "tools.disabled" from settings.json)
+      --fullscreen      Draw the UI full screen: Amira scrolls, searches and
+                        folds the conversation, and prints it on exit (default,
+                        or "tui.mode" in settings.json)
+      --inline          Draw the UI inline: finished output goes to the
+                        terminal's scrollback (for SSH, tmux, native selection)
   -C, --cwd <dir>       Working directory (default: current directory)
   -h, --help            Show this help
   -v, --version         Show the version
@@ -112,6 +119,9 @@ export function parseCliArgs(
   if (positionals.length) args.prompt = positionals.join(" ")
   if (values.resume !== undefined) args.resume = values.resume
   if (args.continue && args.resume !== undefined) throw new UsageError("use either --continue or --resume")
+  if (values.inline && values.fullscreen) throw new UsageError("use either --inline or --fullscreen")
+  if (values.inline) args.mode = "inline"
+  if (values.fullscreen) args.mode = "fullscreen"
   if (values.shell !== undefined) args.shell = parseShell(values.shell)
   if (values["disable-tools"]) {
     args.disabledTools = values["disable-tools"].flatMap((v) =>
@@ -201,6 +211,8 @@ function parse(argv: string[]) {
       resume: { type: "string", short: "r" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
+      inline: { type: "boolean" },
+      fullscreen: { type: "boolean" },
       rpc: { type: "boolean" },
       "rpc-schema": { type: "boolean" },
     },

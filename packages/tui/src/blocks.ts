@@ -1,0 +1,431 @@
+import type { ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
+import { toolResultText } from "@amira/api"
+import {
+  MarkdownStream,
+  type RenderContext,
+  renderMarkdown,
+  stripAnsi,
+  type Theme,
+  truncateToWidth,
+  visibleWidth,
+  wrapText,
+} from "@amira/tui-kit"
+import { isLastSibling, replyRows, userLines, userText } from "./format.ts"
+import { glyphs } from "./glyphs.ts"
+import { childrenOf, nodeRows, type SubagentNode, subtree, treeRows } from "./subagents.ts"
+import { type FinishedCall, finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
+import type { BlockKind } from "./transcript.ts"
+
+/** What blocks need to draw themselves, the same for every block of a frame. */
+export interface BlockEnv {
+  theme: Theme
+  width: number
+  now: number
+  /** The glyph running tools show. */
+  spinner: string
+  /** How much of finished tool calls is shown, unless a block was folded or unfolded. */
+  detail: ToolDetailLevel
+  presenters: PresenterSource | undefined
+  hyperlinks: boolean
+  /** Every sub-agent seen, by id; tool calls draw theirs from here. */
+  nodes: Map<string, SubagentNode>
+}
+
+let nextId = 1
+
+/**
+ * A block of the full-screen transcript: a user message, a reply, a tool call, a notice, and
+ * so on. It keeps what it shows rather than lines, so it can be drawn again at any width and
+ * change in place (a call finishing, its sub-agents moving on). The transcript caches its
+ * lines by width and `version`, and draws blocks that are `live` afresh on every frame.
+ */
+export abstract class Block {
+  readonly id = nextId++
+  abstract readonly kind: BlockKind
+  /** Bumped whenever what the block shows changes, so its cached lines are drawn again. */
+  version = 0
+  /** Its position in the transcript, kept by the transcript. */
+  index = -1
+
+  /** Whether its lines change by themselves (a spinner, an elapsed time): drawn every frame. */
+  get live(): boolean {
+    return false
+  }
+
+  abstract lines(env: BlockEnv): string[]
+
+  /** The text "copy selected block" puts on the clipboard. */
+  abstract copyText(): string
+
+  /** Whether folding it shows less; folding does nothing to other blocks. */
+  foldable(_env: BlockEnv): boolean {
+    return false
+  }
+
+  /** Folds or unfolds it; only called when `foldable`. */
+  toggleFold(_env: BlockEnv): void {}
+
+  /** Whether it was folded or unfolded by hand, so it shows other than it would inline. */
+  get refolded(): boolean {
+    return false
+  }
+
+  /** Its lines as the inline transcript shows them, whatever it was folded to: what exiting prints. */
+  printLines(env: BlockEnv): string[] {
+    return this.lines(env)
+  }
+
+  touch(): void {
+    this.version++
+  }
+}
+
+/** A block drawn by a function of the width: the banner, notices, echoes, separators. */
+export class LinesBlock extends Block {
+  constructor(
+    readonly kind: BlockKind,
+    private draw: (width: number, theme: Theme) => string[],
+    private copy?: string,
+  ) {
+    super()
+  }
+
+  lines(env: BlockEnv): string[] {
+    return this.draw(env.width, env.theme)
+  }
+
+  copyText(): string {
+    return this.copy ?? ""
+  }
+}
+
+/** A line drawn as it is, wrapped when the screen is narrower. */
+export function fixedLine(kind: BlockKind, line: string): LinesBlock {
+  return new LinesBlock(kind, (width) => wrapText(line, Math.max(1, width)), stripAnsi(line))
+}
+
+export function userBlock(message: UserMessage): LinesBlock {
+  const text = message.display?.text.trim() || userText(message)
+  return new LinesBlock("user", (width, theme) => userLines(theme, message, width), text)
+}
+
+/** Code blocks longer than this are cut when their reply is folded. */
+export const FOLD_CODE_LINES = 12
+/** Lines a folded code block keeps. */
+const FOLDED_CODE_KEEP = 6
+
+const FENCE = /^ {0,3}(`{3,}|~{3,})/
+const DETAILS_OPEN = /^\s*<details(\s[^>]*)?>\s*$/i
+const DETAILS_CLOSE = /^\s*<\/details>\s*$/i
+const SUMMARY = /^\s*<summary>(.*?)<\/summary>\s*$/i
+
+/**
+ * A reply's Markdown as the full-screen transcript shows it. `<details>` sections read as
+ * "▾ summary" and their body, or folded as "▸ summary" alone; folded, a code block longer than
+ * FOLD_CODE_LINES keeps its first lines and says how many more there are. `foldable` says
+ * whether folding would change anything.
+ */
+export function foldMarkdown(source: string, folded: boolean): { text: string; foldable: boolean } {
+  const out: string[] = []
+  let foldable = false
+  let fence: { mark: string; start: number } | undefined
+  let details: { depth: number; start: number; summary?: string } | undefined
+  const lines = source.split("\n")
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    if (fence) {
+      const close = FENCE.exec(line)
+      if (
+        close &&
+        close[1]![0] === fence.mark[0] &&
+        close[1]!.length >= fence.mark.length &&
+        !line.trim().slice(close[1]!.length).trim()
+      ) {
+        const body = out.length - fence.start
+        if (body > FOLD_CODE_LINES) {
+          foldable = true
+          if (folded)
+            out.splice(
+              fence.start + FOLDED_CODE_KEEP,
+              body - FOLDED_CODE_KEEP,
+              `${glyphs.more} ${body - FOLDED_CODE_KEEP} more lines`,
+            )
+        }
+        fence = undefined
+      }
+      if (!details || !folded) out.push(line)
+      continue
+    }
+    const open = FENCE.exec(line)
+    if (open) {
+      if (!details || !folded) {
+        out.push(line)
+        fence = { mark: open[1]!, start: out.length }
+      } else fence = { mark: open[1]!, start: out.length }
+      continue
+    }
+    if (DETAILS_OPEN.test(line)) {
+      foldable = true
+      if (details) details.depth++
+      else details = { depth: 1, start: out.length }
+      continue
+    }
+    if (details && DETAILS_CLOSE.test(line)) {
+      if (--details.depth === 0) {
+        const title = `**${folded ? "▸" : "▾"} ${details.summary ?? "Details"}**`
+        out.splice(details.start, 0, title, "")
+        details = undefined
+      }
+      continue
+    }
+    const summary =
+      details && details.depth === 1 && details.summary === undefined ? SUMMARY.exec(line) : null
+    if (summary && details) {
+      details.summary = summary[1]!.trim()
+      continue
+    }
+    if (!details || !folded) out.push(line)
+  }
+  if (details) out.splice(details.start, 0, `**${folded ? "▸" : "▾"} ${details.summary ?? "Details"}**`, "")
+  return { text: out.join("\n"), foldable }
+}
+
+/**
+ * The assistant's reply: its Markdown source, rendered per width. While it streams, a
+ * MarkdownStream renders only what arrived since the last frame; a width change starts it
+ * over from the source.
+ */
+export class ReplyBlock extends Block {
+  readonly kind = "assistant"
+  source = ""
+  folded = false
+  private stream: MarkdownStream | undefined
+  private streamWidth = 0
+  #streaming: boolean
+
+  constructor(
+    source: string,
+    streaming: boolean,
+    private hyperlinks: boolean,
+  ) {
+    super()
+    this.source = source
+    this.#streaming = streaming
+  }
+
+  get streaming(): boolean {
+    return this.#streaming
+  }
+
+  override get live(): boolean {
+    return this.#streaming
+  }
+
+  append(text: string): void {
+    this.source += text
+    this.stream?.append(text)
+  }
+
+  /** The reply is complete; from now on it is drawn from its source. */
+  finish(): void {
+    this.#streaming = false
+    this.stream = undefined
+    this.touch()
+  }
+
+  lines(env: BlockEnv): string[] {
+    const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
+    let rows: string[]
+    if (this.#streaming && !this.folded) {
+      if (!this.stream || this.streamWidth !== width) {
+        this.stream = new MarkdownStream({ hyperlinks: this.hyperlinks })
+        this.stream.append(this.source)
+        this.streamWidth = width
+      }
+      const ctx: RenderContext = { theme: env.theme, color: true, rows: Number.POSITIVE_INFINITY }
+      rows = this.stream.render(width, ctx)
+      while (rows.length && rows[rows.length - 1]!.trim() === "") rows = rows.slice(0, -1)
+    } else {
+      const { text } = foldMarkdown(this.source, this.folded)
+      rows = renderMarkdown(text, width, env.theme, { hyperlinks: this.hyperlinks })
+    }
+    return replyRows(rows)
+  }
+
+  copyText(): string {
+    return this.source.trim()
+  }
+
+  override foldable(): boolean {
+    return foldMarkdown(this.source, false).foldable
+  }
+
+  override toggleFold(): void {
+    this.folded = !this.folded
+    this.touch()
+  }
+
+  override get refolded(): boolean {
+    return this.folded
+  }
+
+  override printLines(env: BlockEnv): string[] {
+    const folded = this.folded
+    this.folded = false
+    try {
+      return this.lines(env)
+    } finally {
+      this.folded = folded
+    }
+  }
+}
+
+/** A tool call: its head, its output while it runs, then its result, with its sub-agents under it. */
+export class ToolBlock extends Block {
+  readonly kind = "tool"
+  startedAt: number | undefined
+  partial: ToolResult | undefined
+  end:
+    | { result: ToolResult; durationMs?: number; rejected?: ToolRejection; interrupted?: boolean }
+    | undefined
+  /** Set by folding it: how much of it shows, whatever the global level. */
+  folding: ToolDetailLevel | undefined
+
+  constructor(
+    readonly callId: string,
+    public name: string,
+    public args: Record<string, unknown>,
+    /** The session that made the call; its sub-agents are found by it. */
+    readonly session: string,
+  ) {
+    super()
+  }
+
+  /** A call the reply asked for but that did not start yet takes no room. */
+  get started(): boolean {
+    return this.startedAt !== undefined || this.end !== undefined
+  }
+
+  /** Whether it or one of its sub-agents still runs. Checked against the nodes when drawn. */
+  running = false
+
+  override get live(): boolean {
+    return this.running
+  }
+
+  /** The sub-agents it started, and theirs, depth first. */
+  tree(nodes: Map<string, SubagentNode>): SubagentNode[] {
+    return childrenOf(nodes, this.session, this.callId).flatMap((n) => subtree(nodes, n))
+  }
+
+  detail(env: BlockEnv): ToolDetailLevel {
+    return this.folding ?? env.detail
+  }
+
+  lines(env: BlockEnv): string[] {
+    const tree = this.tree(env.nodes)
+    this.running = this.started && (!this.end || tree.some((n) => !n.end))
+    if (!this.started) return []
+    const presenter = env.presenters?.get(this.name)
+    const { theme, width, now } = env
+    if (!this.end) {
+      const call = {
+        name: this.name,
+        args: this.args,
+        startedAt: this.startedAt!,
+        ...(this.partial ? { partial: this.partial } : {}),
+      }
+      return [
+        ...runningToolLines(theme, presenter, call, now, env.spinner, width),
+        ...treeRows(tree, now, width, theme),
+      ]
+    }
+    const detail = this.detail(env)
+    const lines = finishedToolLines(theme, presenter, this.finished(), detail, width)
+    let rows: string[]
+    if (detail === "collapsed" && this.folding === "collapsed" && tree.length) {
+      const running = tree.filter((n) => !n.end).length
+      const text = `${tree.length} sub-agent${tree.length === 1 ? "" : "s"}${running ? ` · ${running} running` : ""}`
+      rows = [
+        truncateToWidth(
+          `  ${theme.muted(glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${theme.muted(text)}`,
+          width,
+          glyphs.more,
+        ),
+      ]
+    } else {
+      // The call's own result line comes after them, so only a nested one can close a level.
+      rows = tree.flatMap((n, i) => nodeRows(n, now, width, theme, n.depth > 1 && isLastSibling(tree, i)))
+    }
+    lines.splice(1, 0, ...rows)
+    return lines
+  }
+
+  finished(): FinishedCall {
+    const end = this.end!
+    return {
+      name: this.name,
+      args: this.args,
+      result: end.result,
+      ...(end.durationMs !== undefined ? { durationMs: end.durationMs } : {}),
+      ...(end.rejected ? { rejected: end.rejected } : {}),
+      interrupted: end.interrupted ?? false,
+    }
+  }
+
+  copyText(): string {
+    const head = `${this.name} ${JSON.stringify(this.args)}`
+    if (!this.end) return head
+    return `${head}\n${toolResultText(this.end.result)}`.trim()
+  }
+
+  override foldable(): boolean {
+    return this.end !== undefined
+  }
+
+  override toggleFold(env: BlockEnv): void {
+    this.folding = this.detail(env) === "full" ? "collapsed" : "full"
+    this.touch()
+  }
+
+  override get refolded(): boolean {
+    return this.folding !== undefined
+  }
+
+  override printLines(env: BlockEnv): string[] {
+    const folding = this.folding
+    this.folding = undefined
+    try {
+      return this.lines(env)
+    } finally {
+      this.folding = folding
+    }
+  }
+}
+
+/** Sub-agents started without a tool call of this session (by a command, say), under a small head. */
+export class SubagentGroupBlock extends Block {
+  readonly kind = "tool"
+  running = true
+
+  constructor(readonly root: string) {
+    super()
+  }
+
+  override get live(): boolean {
+    return this.running
+  }
+
+  lines(env: BlockEnv): string[] {
+    const node = env.nodes.get(this.root)
+    if (!node) return []
+    const list = subtree(env.nodes, node)
+    this.running = list.some((n) => !n.end)
+    const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted("background")}`
+    return [truncateToWidth(head, env.width, glyphs.more), ...treeRows(list, env.now, env.width, env.theme)]
+  }
+
+  copyText(): string {
+    return ""
+  }
+}
