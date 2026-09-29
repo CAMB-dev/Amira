@@ -443,3 +443,8 @@ test("the position row of a scrolled list gives way before the title when rows a
   expect(lines[0]).toBe("? Model")
   expect(lines[1]).toBe("❯ option 0")
 })
+
+test("an input answered with nothing echoes as (empty), not as a bare question", () => {
+  const r: DialogRequest = { kind: "input", requestId: "e", title: "Note" }
+  expect(dialogEchoLines(r, "", plain.theme)).toEqual(["┃ ? Note › (empty)"])
+})

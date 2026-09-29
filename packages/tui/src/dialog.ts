@@ -607,6 +607,7 @@ export function dialogEchoLines(
     )
   }
   if (r.kind === "input" && r.secret) return line(r.title, "(hidden)")
+  if (r.kind === "input" && answer === "") return line(r.title, "(empty)")
   if (r.kind === "confirm") {
     const shown =
       answer === true
