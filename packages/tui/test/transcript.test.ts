@@ -71,6 +71,20 @@ test("a row of columns in a command's output wraps under its last column", () =>
   for (const r of rows) expect(r.length).toBeLessThanOrEqual(60)
 })
 
+test("a last column too far in to wrap under goes under its row, indented", () => {
+  const text = [
+    `/tools [enable|disable <name>]     List tools; enable or disable one for this session`,
+    `/verbose [collapsed|summary|full]  Show more or less of later tool output`,
+  ].join("\n")
+  const rows = commandOutputLines(defaultTheme, "info", text, 60).map(stripAnsi)
+  expect(rows).toEqual([
+    "  └ /tools [enable|disable <name>]",
+    "        List tools; enable or disable one for this session",
+    "    /verbose [collapsed|summary|full]",
+    "        Show more or less of later tool output",
+  ])
+})
+
 test("parallel calls are released in call order, whatever order they finish in", () => {
   const calls = new ToolCalls()
   const end = { result: { content: [] }, durationMs: 1 }

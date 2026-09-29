@@ -156,6 +156,19 @@ function columnIndent(line: string, width: number): number {
 }
 
 /**
+ * A row of columns whose last column starts too far in to wrap under (a long first cell on a
+ * narrow screen): the cells before it on their own rows, then the last one indented under
+ * them, so its words are not pushed past the first cell's padding. Undefined for other lines.
+ */
+function farColumnRows(line: string, width: number): string[] | undefined {
+  const m = /^(.*\S) {2,}(?=\S)/.exec(line)
+  if (!m || textWidth(m[0]) <= width * 0.6) return undefined
+  const lead = /^ */.exec(line)![0].length + 4
+  const rest = wrapText(line.slice(m[0].length), Math.max(10, width - lead))
+  return [...wrapText(m[1]!, width), ...rest.map((r) => " ".repeat(lead) + r)]
+}
+
+/**
  * Text wrapped to `width`, so that its rows can hang under a symbol instead of wrapping to
  * column 0; with `columns`, a line's rows after its first line up under its last column.
  */
@@ -165,6 +178,8 @@ function hanging(text: string, width: number, columns = false): string[] {
     if (!l) return [""]
     const rows = wrapText(l, room)
     if (!columns || rows.length < 2) return rows
+    const far = farColumnRows(l, room)
+    if (far) return far
     const indent = columnIndent(l, room)
     if (!indent) return rows
     const rest = wrapText(l.slice(visibleOffset(l, rows[0]!)).trimStart(), Math.max(10, room - indent))
