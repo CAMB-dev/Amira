@@ -309,14 +309,15 @@ test("an extension's failing handler is its own failure: named once, then counte
     })
   }
   const seen: string[] = []
-  const { agent } = await mockSession(
-    Array.from({ length: 10 }, () => ({ text: "hi" })),
+  const session = await mockSession(
+    Array.from({ length: 11 }, () => ({ text: "hi" })),
     {
       noBuiltins: false,
       builtins: async () => [{ source: "boom", extension: boom }],
       onSubscriberError: (err, ev) => void seen.push(`${ev.type}: ${(err as Error).message}`),
     },
   )
+  const { agent } = session
   const errors: string[] = []
   agent.bus.subscribe((e) => {
     if (e.type === "extension.error") errors.push(`${e.data.source}: ${e.data.error}`)
@@ -328,6 +329,12 @@ test("an extension's failing handler is its own failure: named once, then counte
     "boom: its turn.start handler failed: kaput",
     "boom: its turn.start handler has failed 10 times now; the latest: kaput",
   ])
+  // A reload starts the count afresh: the extension is reported again when it still fails.
+  await session.reload()
+  await agent.prompt("go")
+  await agent.bus.flush()
+  expect(errors).toHaveLength(3)
+  expect(errors[2]).toBe("boom: its turn.start handler failed: kaput")
 })
 
 test("a package's extension is named after the package, and its failures say how to turn it off", async () => {

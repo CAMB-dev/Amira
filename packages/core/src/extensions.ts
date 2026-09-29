@@ -172,9 +172,11 @@ export class ExtensionHost {
     return true
   }
 
-  /** Unloads every extension, the last loaded first. */
+  /** Unloads every extension, the last loaded first. Their handlers' failures start counting afresh. */
   unloadAll(): void {
     for (const source of this.loaded.reverse()) this.unload(source)
+    this.#handlerFailures.clear()
+    this.#hints.clear()
   }
 
   /**
