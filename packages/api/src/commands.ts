@@ -87,13 +87,34 @@ export interface CommandContext extends CommandCompleteContext {
   quit(): void
   /**
    * Shows a full-screen view, on frontends that have them (the TUI does); unset elsewhere.
-   * Returns once the view is shown; the user leaves it when done.
+   * Returns once the view is shown; the user leaves it when done. Throws for a view kind no
+   * extension registered (see ExtensionAPI.registerView).
    */
   readonly openView?: (view: FrontendView) => void
 }
 
-/** A full-screen view a frontend can show: for now the live transcript of a sub-agent. */
-export type FrontendView = { kind: "subagent"; sessionId: string }
+/**
+ * A full-screen view a frontend can show: the live transcript of a sub-agent, or a view kind
+ * an extension registered, over the data given here (see ViewDefinition).
+ */
+export type FrontendView = SubagentView | ExtensionView
+
+export interface SubagentView {
+  kind: "subagent"
+  sessionId: string
+}
+
+export interface ExtensionView {
+  /** A kind registered with ExtensionAPI.registerView. */
+  kind: string
+  /** What the view shows; it is read again at each redraw, so changes to it show up. */
+  data?: unknown
+}
+
+/** Whether `view` is the frontend's own sub-agent view rather than an extension's. */
+export function isSubagentView(view: FrontendView): view is SubagentView {
+  return view.kind === "subagent" && typeof (view as Partial<SubagentView>).sessionId === "string"
+}
 
 /**
  * Where a sub-agent is: waiting for a slot, working, idle between turns (persistent ones

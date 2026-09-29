@@ -4,6 +4,7 @@ import {
   type CommandDefinition,
   type FrontendView,
   fallbackTitle,
+  isSubagentView,
   modelLabel,
   type ToolDetailLevel,
   type TuiSettings,
@@ -44,6 +45,7 @@ import {
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
+import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
 import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
@@ -101,6 +103,8 @@ export interface InteractiveOptions {
   registerCommand?: (command: CommandDefinition) => () => void
   /** Presenters of tool calls registered by extensions (D1); unknown tools use a generic one. */
   toolRenderers?: PresenterSource
+  /** Full-screen view kinds registered by extensions, which commands open with openView. */
+  views?: ViewSource
   /** Events emitted before the UI subscribed, such as extension load errors. */
   startupEvents?: AnyEvent[]
   /** Sent as the first message once the UI is up. */
@@ -603,7 +607,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * The full-screen sub-agent viewer, on the alternate screen while open. The inline UI is
    * suspended meanwhile: what the main session commits is held and printed when it closes.
    */
-  let viewer: SubagentViewer | undefined
+  let viewer: SubagentViewer | ExtensionViewer | undefined
   let viewerTimer: ReturnType<typeof setInterval> | undefined
   /**
    * Forms (ui.form) waiting to be shown full screen, oldest first; the first one is open while
@@ -624,22 +628,49 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   )
 
   function openView(view: FrontendView) {
-    // A form owns the screen until it is answered.
-    if (view.kind !== "subagent" || !commands || form) return
-    if (viewer) viewer.show(view.sessionId)
+    if (isSubagentView(view)) {
+      // A form owns the screen until it is answered.
+      if (!commands || form) return
+      if (viewer instanceof SubagentViewer) viewer.show(view.sessionId)
+      else {
+        showFullScreen(
+          new SubagentViewer(view.sessionId, {
+            source: commands.control,
+            waiting: waitingTitles,
+            onClose: closeView,
+            ...(presenters ? { presenters } : {}),
+          }),
+        )
+      }
+      fullScreen.render()
+      return
+    }
+    const definition = opts.views?.get(view.kind)
+    if (!definition) throw new Error(`there is no "${view.kind}" view`)
+    if (form) return
+    if (viewer instanceof ExtensionViewer && viewer.kind === view.kind) viewer.show(view.data)
     else {
-      viewer = new SubagentViewer(view.sessionId, {
-        source: commands.control,
-        waiting: waitingTitles,
-        onClose: closeView,
-        ...(presenters ? { presenters } : {}),
-      })
-      renderer.suspend()
-      fullScreen.open()
-      // Elapsed times move even when no event comes.
-      viewerTimer = setInterval(() => fullScreen.requestRender(), 1000)
+      showFullScreen(
+        new ExtensionViewer(definition, view.data, {
+          waiting: waitingTitles,
+          onClose: closeView,
+          requestRender: () => fullScreen.requestRender(),
+          onError: (error) => commitBlock("notice", note("warning", `[view ${view.kind}] ${error}`)),
+        }),
+      )
     }
     fullScreen.render()
+  }
+
+  /** Puts `next` on the full screen, in place of the view open there if any. */
+  function showFullScreen(next: SubagentViewer | ExtensionViewer) {
+    const opened = viewer !== undefined
+    viewer = next
+    if (opened) return
+    renderer.suspend()
+    fullScreen.open()
+    // Elapsed times move even when no event comes.
+    viewerTimer = setInterval(() => fullScreen.requestRender(), 1000)
   }
 
   function closeView() {
@@ -814,7 +845,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const onEvent = (e: AnyEvent) => {
     if (trackSubagent(e)) renderer.requestRender()
-    if (viewer?.handleEvent(e)) fullScreen.requestRender()
+    // An extension's view may show anything: it is drawn again at each event (at most once a frame).
+    if (viewer instanceof ExtensionViewer || viewer?.handleEvent(e)) fullScreen.requestRender()
     if (form && (e.type === "ui.request" || e.type === "ui.resolved")) fullScreen.requestRender()
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return

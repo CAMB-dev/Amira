@@ -21,6 +21,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
       renderers.push(name)
       return () => {}
     },
+    registerView: () => () => {},
     requestRender: () => {},
     settings: {},
     on: () => () => {},
