@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
-import { defaultTheme, ImageLoader, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import { defaultTheme, ImageStore, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
+import { fakeProvider } from "../../tui-kit/test/fake-images.ts"
 import {
   Block,
   type BlockEnv,
@@ -252,30 +253,25 @@ test("performance: long sessions scroll and stream with per-frame cost bounded b
   expect(find).toBeLessThan(3000)
 })
 
-/** A 30×40 PNG: 3 columns and 2 rows of 10×20 cells. */
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAB4AAAAoCAYAAADpE0oSAAAAaklEQVR4Xu3NkQKDUABA0XA4HA6HwzAMwzAIwjAMwzAMwzAMH4Zh2F/U/YjwwuETRWW4Xnjjgy9++CNGghQZchSoUKNBiw49BoyYMGPBioANOw6cMDY2NjY2NjYOxsbGxsbGxsbB2Pix+AZFpUoFb9YsKwAAAABJRU5ErkJggg==",
-  "base64",
-)
-
 test("a streaming reply folded and unfolded lays its image out again", async () => {
-  const loader = new ImageLoader({
+  // 30×40 pixels: 3 columns and 2 rows of 10×20 cells.
+  const store = new ImageStore({
     support: { protocol: "sixel", cell: { width: 10, height: 20 } },
     cwd: ".",
-    fetchRemote: async () => ({ bytes: PNG, contentType: "image/png" }),
+    open: fakeProvider().open,
     maxRows: () => 20,
   })
-  const images: BlockImages = { loader, changed: () => {} }
+  const images: BlockImages = { store, changed: () => {} }
   const e = { ...env(), images }
-  const reply = new ReplyBlock("hi\n\n![chart](https://img.test/c.png)\n\nmore", true, false)
+  const reply = new ReplyBlock("hi\n\n![chart](https://img.test/c-30x40.png)\n\nmore", true, false)
   reply.lines(e)
-  const source = loader.screen("https://img.test/c.png")!
+  const source = store.screen({ url: "https://img.test/c-30x40.png" })
   for (let i = 0; i < 200 && source.state === "loading"; i++) await Bun.sleep(5)
   const shown = () => imagesIn(reply.lines(e))
   expect(shown()).toEqual([expect.objectContaining({ line: 2, col: 2 })])
   reply.toggleFold()
   expect(shown()).toBeUndefined()
-  expect(reply.lines(e).map(stripAnsi)).toContain("  🖼️ chart (https://img.test/c.png)")
+  expect(reply.lines(e).map(stripAnsi)).toContain("  🖼️ chart (https://img.test/c-30x40.png)")
   reply.toggleFold()
   expect(shown()).toEqual([expect.objectContaining({ line: 2, col: 2 })])
 })

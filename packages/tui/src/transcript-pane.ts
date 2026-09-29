@@ -78,7 +78,7 @@ function compare(a: TextPoint, b: TextPoint): number {
 const TICKING = /[\d⠀-⣿]/g
 
 /** The most rows an image may take in this env; none without images. */
-const imageRowsOf = (env: BlockEnv) => (env.images ? env.images.loader.maxRows() : 0)
+const imageRowsOf = (env: BlockEnv) => (env.images ? env.images.store.maxRows() : 0)
 
 /** Marks the rows of the selected block, which is drawn one column narrower. */
 const SELECTED = "▌"
@@ -690,7 +690,7 @@ export class TranscriptPane {
   /** A block's lines at the env's width if they were drawn and are still current. */
   private cached(block: Block, env: BlockEnv): string[] | undefined {
     const d = this.drawn.get(block)?.find((x) => x.width === env.width)
-    const imageRows = env.images ? env.images.loader.maxRows() : 0
+    const imageRows = env.images ? env.images.store.maxRows() : 0
     if (
       !d ||
       block.live ||
@@ -706,7 +706,7 @@ export class TranscriptPane {
     const width = selected ? Math.max(1, env.width - 1) : env.width
     const list = this.drawn.get(block) ?? []
     const hit = list.find((d) => d.width === width)
-    const imageRows = env.images ? env.images.loader.maxRows() : 0
+    const imageRows = env.images ? env.images.store.maxRows() : 0
     const fresh = block.live
       ? hit?.frame === this.frame
       : hit?.version === block.version && hit.detail === env.detail && hit.imageRows === imageRows

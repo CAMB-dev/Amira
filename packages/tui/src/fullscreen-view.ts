@@ -19,6 +19,7 @@ import {
   type Block,
   type BlockEnv,
   type BlockImages,
+  type BlockRenders,
   fixedLine,
   LinesBlock,
   ReplyBlock,
@@ -91,24 +92,36 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Rows of the transcript in the last frame, for mouse clicks. */
   let paneRows = 0
 
-  /** Images of replies, drawn in the transcript where the terminal can (D83). */
-  const images: BlockImages | undefined = host.images && {
-    loader: host.images,
-    changed: () => renderer.requestRender(),
+  /**
+   * Images of replies, drawn in the transcript where the terminal can (D83) while an image
+   * provider is installed (D88): the same object from frame to frame.
+   */
+  let drawn: BlockImages | undefined
+  const imagesNow = (): BlockImages | undefined => {
+    const store = host.images?.()
+    if (!store) return undefined
+    if (drawn?.store !== store) drawn = { store, changed: () => renderer.requestRender() }
+    return drawn
   }
+  /** Nodes of replies extensions render (D88). */
+  const renders: BlockRenders = { renders: host.renders, changed: () => renderer.requestRender() }
 
-  const env = (width: number): BlockEnv => ({
-    theme,
-    width,
-    now: Date.now(),
-    spinner: host.spinner.glyph,
-    detail: host.detail(),
-    presenters: host.presenters,
-    hyperlinks: host.hyperlinks,
-    nodes,
-    groups,
-    ...(images ? { images } : {}),
-  })
+  const env = (width: number): BlockEnv => {
+    const images = imagesNow()
+    return {
+      theme,
+      width,
+      now: Date.now(),
+      spinner: host.spinner.glyph,
+      detail: host.detail(),
+      presenters: host.presenters,
+      hyperlinks: host.hyperlinks,
+      nodes,
+      groups,
+      renders,
+      ...(images ? { images } : {}),
+    }
+  }
 
   const root = new View((width, ctx) => {
     // Covered by a full-screen overlay, the transcript's images are not placed: they are cleared.

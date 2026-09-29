@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test"
-import { deflateSync } from "node:zlib"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import {
   type ChildSession,
   type CommandDefinition,
   defineTool,
   type FormSpec,
+  type ImageProvider,
+  type MarkdownRendererDefinition,
   type Message,
   type SessionControl,
   type SpawnGroup,
@@ -24,7 +25,8 @@ import {
 } from "@amira/core"
 import { agentsCommand } from "@amira/ext-agent"
 import statusExtension from "@amira/ext-status"
-import { FakeTerminal, type GraphicsReplies, type RemoteImageFetch } from "@amira/tui-kit"
+import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
+import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 
@@ -55,8 +57,10 @@ interface Options {
   /** What the terminal says about graphics when asked (only when images are not off). */
   graphics?: GraphicsReplies
   env?: Record<string, string>
-  /** How images in replies are fetched from the web. */
-  imageFetch?: RemoteImageFetch
+  /** An image provider, as the images extension registers one (D88). */
+  images?: ImageProvider
+  /** Markdown renderers extensions register (D88). */
+  markdown?: MarkdownRendererDefinition[]
 }
 
 /** The UI in full-screen mode on a fake terminal, as the CLI starts it by default. */
@@ -88,6 +92,12 @@ async function setup(steps: MockStep[], o: Options = {}) {
     }),
     "test",
   )
+  if (o.images || o.markdown) {
+    await host.load((api) => {
+      if (o.images) api.registerImageProvider(o.images)
+      for (const r of o.markdown ?? []) api.registerMarkdownRenderer(r)
+    }, "test-render")
+  }
   if (o.history) agent.messages.push(...o.history)
   let commands: CommandHost | undefined
   if (o.commands) {
@@ -131,7 +141,8 @@ async function setup(steps: MockStep[], o: Options = {}) {
       },
       leftoverInput: "",
     }),
-    ...(o.imageFetch ? { imageFetch: o.imageFetch } : {}),
+    imageProviders: host.images,
+    markdownRenderers: host.markdown,
     onReady: () => agent.start("startup"),
     files: { files: async () => [] },
     env: o.env ?? {},
@@ -984,37 +995,17 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
 
 // --- images (D83)
 
-/** A PNG of `width`×`height` pixels of one color. */
-function png(width: number, height: number): Uint8Array {
-  const raw = Buffer.alloc((width * 4 + 1) * height)
-  for (let y = 0; y < height; y++)
-    for (let x = 0; x < width; x++) raw.set([40, 120, 200, 255], y * (width * 4 + 1) + 1 + x * 4)
-  const chunk = (type: string, data: Uint8Array) => {
-    const body = Buffer.concat([Buffer.from(type, "latin1"), data])
-    const out = Buffer.alloc(body.length + 8)
-    out.writeUInt32BE(data.length, 0)
-    body.copy(out, 4)
-    out.writeUInt32BE(Bun.hash.crc32(body) >>> 0, body.length + 4)
-    return out
-  }
-  const head = Buffer.alloc(13)
-  head.writeUInt32BE(width, 0)
-  head.writeUInt32BE(height, 4)
-  head.set([8, 6, 0, 0, 0], 8)
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk("IHDR", head),
-    chunk("IDAT", deflateSync(raw)),
-    chunk("IEND", new Uint8Array()),
-  ])
-}
-
-/** 40×120 pixels: 4 columns and 6 rows of the 10×20 cells Windows Terminal draws Sixel in. */
-const TALL = png(40, 120)
 const SIXEL: GraphicsReplies = { answered: true, sixel: true, kitty: false }
 const KITTY: GraphicsReplies = { answered: true, sixel: false, kitty: true, cell: { width: 10, height: 20 } }
 const WT = { WT_SESSION: "1" }
-const imageFetch: RemoteImageFetch = async () => ({ bytes: TALL, contentType: "image/png" })
+/**
+ * The images extension's part, made up: every image is 40×120 pixels (4 columns and 6 rows of
+ * the 10×20 cells Windows Terminal draws Sixel in), encoded as made-up data of the fitted size.
+ */
+const images: ImageProvider = {
+  id: "test-images",
+  open: async () => ({ width: 40, height: 120, encode: async (req) => fakePayload(req) }),
+}
 const SHIFT_UP = "\x1b[1;2A"
 const SHIFT_DOWN = "\x1b[1;2B"
 
@@ -1058,7 +1049,7 @@ test("an image in a reply is drawn in its rows of the transcript, once; exiting 
   const { terminal, screen, view, shows, idle, exited } = await setup([{ text: imageReply() }], {
     env: WT,
     graphics: SIXEL,
-    imageFetch,
+    images,
   })
   terminal.send("go\r")
   await shows("bottom")
@@ -1087,7 +1078,7 @@ test("scrolling moves the image row by row: cropped at either edge, cleared once
   const { terminal, screen, shows, idle, exited } = await setup([{ text: imageReply(30) }], {
     env: WT,
     graphics: SIXEL,
-    imageFetch,
+    images,
   })
   terminal.send("go\r")
   await shows("line 30")
@@ -1123,7 +1114,7 @@ test("kitty: the image is sent once, placed as it scrolls, removed off screen an
   const { terminal, screen, shows, idle, exited } = await setup([{ text: imageReply(12) }], {
     env: { TERM: "xterm-kitty" },
     graphics: KITTY,
-    imageFetch,
+    images,
   })
   terminal.send("go\r")
   await shows("line 12")
@@ -1156,7 +1147,7 @@ test("a form over the transcript hides the image; closing it draws the image aga
   const { host, terminal, screen, shows, idle, exited } = await setup([{ text: imageReply() }], {
     env: WT,
     graphics: SIXEL,
-    imageFetch,
+    images,
   })
   terminal.send("go\r")
   await shows("bottom")
@@ -1178,7 +1169,7 @@ test("a resize fits the image again: fewer rows on a lower screen", async () => 
   const { terminal, screen, shows, idle, resize, exited } = await setup([{ text: imageReply() }], {
     env: WT,
     graphics: SIXEL,
-    imageFetch,
+    images,
     rows: 24,
   })
   terminal.send("go\r")
@@ -1205,7 +1196,7 @@ test("a folded reply shows its image as alt text; tui.images off shows alt text 
   const { terminal, screen, view, shows, idle, exited } = await setup([{ text: imageReply() }], {
     env: WT,
     graphics: SIXEL,
-    imageFetch,
+    images,
   })
   terminal.send("go\r")
   await shows("bottom")
@@ -1226,7 +1217,7 @@ test("a folded reply shows its image as alt text; tui.images off shows alt text 
   const off = await setup([{ text: imageReply() }], {
     env: WT,
     graphics: SIXEL,
-    imageFetch,
+    images,
     settings: { images: "off" },
   })
   off.terminal.send("go\r")
@@ -1242,7 +1233,7 @@ test("iTerm2 draws images whole: partly in view, the image is its alt text, to s
   const { terminal, screen, view, shows, idle, exited } = await setup([{ text: imageReply(30) }], {
     env: { TERM_PROGRAM: "WezTerm" },
     graphics: { answered: true, sixel: false, kitty: false, cell: { width: 10, height: 20 } },
-    imageFetch,
+    images,
   })
   terminal.send("go\r")
   await shows("line 30")
@@ -1264,6 +1255,74 @@ test("iTerm2 draws images whole: partly in view, the image is its alt text, to s
   expect(view()).not.toContain("scroll to view")
   terminal.send("\x03")
   await exited
+})
+
+// --- Markdown renderers of extensions (D88)
+
+/** Renders ```wide blocks as a rule the width it is given, and says how wide, after `delayMs`. */
+function ruleRenderer(calls: number[], delayMs = 0): MarkdownRendererDefinition {
+  return {
+    id: "rule",
+    match: { codeLang: ["wide"] },
+    render: async (_node, ctx) => {
+      calls.push(ctx.width)
+      if (delayMs) await Bun.sleep(delayMs)
+      return { lines: [{ kind: "text", text: `${ctx.width}${"=".repeat(ctx.width - 2)}` }] }
+    },
+  }
+}
+
+test("full screen: a node an extension renders shows as code until its lines come in, and again at a new width", async () => {
+  const calls: number[] = []
+  const { terminal, view, shows, idle, resize, exited } = await setup(
+    [{ text: "top\n\n```wide\nanything\n```\n\nbottom" }],
+    { markdown: [ruleRenderer(calls, 60)] },
+  )
+  terminal.send("go\r")
+  await shows("bottom")
+  // Until the rendering is in, the block shows as the code it is.
+  expect(view()).toContain("╭─ wide")
+  await shows(`  58${"=".repeat(56)}`)
+  await idle()
+  expect(view()).not.toContain("╭─ wide")
+  expect(view()).toContain(`  top\n\n  58${"=".repeat(56)}\n\n  bottom`)
+  // A resize reflows it: rendered for the new width, once per width.
+  resize(40, 20)
+  await shows(`  38${"=".repeat(36)}`)
+  resize(60, 20)
+  await shows(`  58${"=".repeat(56)}`)
+  expect(calls.filter((w) => w === 58)).toHaveLength(1)
+  expect(calls).toContain(38)
+  // Exiting prints the rendering too: the normal screen gets text.
+  terminal.send("\x03")
+  await exited
+  expect(terminal.output.slice(terminal.output.lastIndexOf("\x1b[?1049l"))).toContain(`58${"=".repeat(56)}`)
+})
+
+test("full screen: a renderer's image is drawn like a Markdown image; without a provider the code shows", async () => {
+  const chart: MarkdownRendererDefinition = {
+    id: "chart",
+    match: { codeLang: ["chart"] },
+    render: (_node, ctx) => (ctx.images ? { image: { data: new TextEncoder().encode("png") } } : undefined),
+  }
+  const text = "top\n\n```chart\npie\n```\n\nbottom"
+  const drawn = await setup([{ text }], { env: WT, graphics: SIXEL, images, markdown: [chart], rows: 24 })
+  drawn.terminal.send("go\r")
+  await drawn.shows("bottom")
+  await drawn.idle()
+  await waitFor(() => drawn.screen.images.length > 0, "the image")
+  expect(drawn.screen.images.at(-1)).toMatchObject({ protocol: "sixel", rows: 6, cols: 4 })
+  expect(imageRows(drawn.screen)).toEqual(expectedImageRows(drawn.screen))
+  drawn.terminal.send("\x03")
+  await drawn.exited
+  const none = await setup([{ text }], { env: WT, graphics: SIXEL, markdown: [chart] })
+  none.terminal.send("go\r")
+  await none.shows("bottom")
+  await none.idle()
+  expect(none.view()).toContain("  ╭─ chart\n  │ pie\n  ╰─")
+  expect(none.screen.images).toEqual([])
+  none.terminal.send("\x03")
+  await none.exited
 })
 
 test("an extension's notice shows in the transcript", async () => {

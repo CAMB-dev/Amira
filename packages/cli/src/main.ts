@@ -168,6 +168,8 @@ async function run(argv: string[]): Promise<number> {
       registerCommand: (c) => host.commands.register(c, "builtin:tui"),
       toolRenderers: host.renderers,
       views: host.views,
+      imageProviders: host.images,
+      markdownRenderers: host.markdown,
       startupEvents,
       onReady,
       ...(modelNotice ? { notice: modelNotice } : {}),

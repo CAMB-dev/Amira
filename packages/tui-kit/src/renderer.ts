@@ -1,7 +1,7 @@
 import { cursor, erase, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
-import type { ImageBlock } from "./images/encode.ts"
 import { findImageMarker, imageState, onImageSettled, placeImage, releaseImage } from "./images/placement.ts"
+import type { ImageBlock } from "./images/types.ts"
 import { defaultTheme, isColorEnabled, stripColors, type Theme } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
 import { closeStyles, presentEmoji, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
@@ -307,6 +307,7 @@ export class LiveRenderer {
         const fallback = fallbackRows(m.prefix, state.fallback)
         if (state.kind === "image")
           out.push(...fitScreen({ prefix: m.prefix, block: state.block, fallback }, width, height))
+        else if (state.kind === "rows") out.push(...fallbackRows(m.prefix, state.rows))
         else out.push(...fallback)
       }
       const rest = lines.slice(i)

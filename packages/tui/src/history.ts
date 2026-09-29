@@ -1,5 +1,11 @@
 import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
-import { renderMarkdown, type Theme, visibleWidth } from "@amira/tui-kit"
+import {
+  type MarkdownNodes,
+  type MarkdownStreamOptions,
+  renderMarkdown,
+  type Theme,
+  visibleWidth,
+} from "@amira/tui-kit"
 import { replyRows, userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
@@ -13,6 +19,8 @@ export interface HistoryOptions {
   session?: { id: string; updatedAt?: number }
   /** Make links in replies clickable (OSC 8); default: what the terminal is known to support. */
   hyperlinks?: boolean
+  /** Images and what extensions render (D88), committed as the inline transcript does. */
+  nodes?: MarkdownNodes
   /** Spacing continues from the blocks committed before; a fresh one when left out. */
   transcript?: Transcript
 }
@@ -48,7 +56,7 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
             b.text,
             Math.max(1, opts.width - visibleWidth(gutter)),
             theme,
-            opts.hyperlinks === undefined ? {} : { hyperlinks: opts.hyperlinks },
+            markdownOptions(opts),
           )
           out.push(...t.block("assistant", replyRows(rows)))
         } else if (b.type === "toolCall") {
@@ -75,4 +83,11 @@ export function historySeparator(theme: Theme, s?: { id: string; updatedAt?: num
     ? ` resumed ${s.id}${s.updatedAt !== undefined ? ` · ${localTime(s.updatedAt)}` : ""} `
     : " resumed "
   return theme.muted(`${glyphs.rule.repeat(2)}${label}${glyphs.rule.repeat(2)}`)
+}
+
+function markdownOptions(opts: HistoryOptions): MarkdownStreamOptions {
+  return {
+    ...(opts.hyperlinks === undefined ? {} : { hyperlinks: opts.hyperlinks }),
+    ...(opts.nodes ? { nodes: opts.nodes } : {}),
+  }
 }

@@ -1,25 +1,30 @@
 import { cursor } from "../ansi.ts"
 import { sanitize } from "../width.ts"
-import type { ImageBlock } from "./encode.ts"
+import type { ImageBlock } from "./types.ts"
 
 /**
- * Images reach the scrollback as committed lines holding a marker: an APC string with a random
- * per-process nonce and an id. Content can never forge one (the renderer strips APC strings from
- * everything else, and the nonce is not known), and only markers registered here count.
+ * Images, and other rows that are not ready when their line is committed (a diagram an
+ * extension renders), reach the scrollback as committed lines holding a marker: an APC string
+ * with a random per-process nonce and an id. Content can never forge one (the renderer strips
+ * APC strings from everything else, and the nonce is not known), and only markers registered
+ * here count.
  */
 const NONCE = Math.random().toString(36).slice(2, 10)
 const MARKER_START = `\x1b_tk:img:${NONCE}:`
 const MARKER = new RegExp(`\\x1b_tk:img:${NONCE}:(\\d+)\\x07$`)
 
 /**
- * How long a marker keeps its image after its deadline, for a line held back (suspended)
+ * How long a marker keeps what it became after its deadline, for a line held back (suspended)
  * meanwhile; after that only its fallback rows are kept until it is committed.
  */
 const KEEP_MS = 60_000
 
+/** What a pending line becomes: an image, or rows of text. */
+export type PendingResult = ImageBlock | string[]
+
 interface Pending {
   state: "loading" | "ready" | "failed"
-  block?: ImageBlock
+  result?: PendingResult
   /** Rows shown while it loads, and committed instead when it fails or takes too long. */
   fallback: string[]
   deadline: number
@@ -29,38 +34,44 @@ interface Pending {
 const pending = new Map<number, Pending>()
 let nextId = 1
 
+/** Printed as they are later: only styles and links may stay in them. */
+const safeRows = (rows: string[]) => rows.flatMap((r) => sanitize(r).split("\n"))
+
 /**
- * A line to commit that becomes the image once `load` has it, or `fallback` when it fails or is
- * not there by `timeoutMs` from now. Whatever is committed after it waits for it, so the
- * scrollback keeps the order. Text may go in front of the marker (a gutter); it is drawn first,
- * and the image or the fallback's first row start where it ends.
+ * A line to commit that becomes what `load` resolves to (an image, or rows), or `fallback`
+ * when it resolves to nothing, fails, or is not there by `timeoutMs` from now. Whatever is
+ * committed after it waits for it, so the scrollback keeps the order. Text may go in front of
+ * the marker (a gutter); it is drawn first, and the image or the first row start where it ends.
  */
-export function pendingImage(
-  load: Promise<ImageBlock | undefined>,
+export function pendingBlock(
+  load: Promise<PendingResult | undefined>,
   fallback: string[],
   timeoutMs = 3000,
   now = performance.now(),
 ): string {
   const id = nextId++
-  // Printed as they are later: only styles and links may stay in them.
-  fallback = fallback.flatMap((r) => sanitize(r).split("\n"))
-  const entry: Pending = { state: "loading", fallback, deadline: now + timeoutMs, listeners: new Set() }
+  const entry: Pending = {
+    state: "loading",
+    fallback: safeRows(fallback),
+    deadline: now + timeoutMs,
+    listeners: new Set(),
+  }
   pending.set(id, entry)
-  const settle = (block: ImageBlock | undefined) => {
+  const settle = (result: PendingResult | undefined) => {
     if (entry.state !== "loading") return
-    if (block) {
+    if (result) {
       entry.state = "ready"
-      entry.block = block
+      entry.result = Array.isArray(result) ? safeRows(result) : result
     } else entry.state = "failed"
     for (const fn of entry.listeners) fn()
     entry.listeners.clear()
   }
   load.then(settle, () => settle(undefined))
-  // Not committed long after its time (held back while a full-screen view is open): the image
-  // is let go, but the fallback stays, so the line still shows something when it goes out.
+  // Not committed long after its time (held back while a full-screen view is open): what it
+  // became is let go, but the fallback stays, so the line still shows something when it goes out.
   const forget = setTimeout(() => {
     if (!pending.has(id)) return
-    entry.block = undefined
+    entry.result = undefined
     entry.state = "failed"
     entry.listeners.clear()
   }, timeoutMs + KEEP_MS)
@@ -68,7 +79,17 @@ export function pendingImage(
   return `${MARKER_START}${id}\x07`
 }
 
-/** A committed line holding an image marker: the text in front of it and its id. */
+/** A line to commit that becomes the image once `load` has it: see `pendingBlock`. */
+export function pendingImage(
+  load: Promise<ImageBlock | undefined>,
+  fallback: string[],
+  timeoutMs = 3000,
+  now = performance.now(),
+): string {
+  return pendingBlock(load, fallback, timeoutMs, now)
+}
+
+/** A committed line holding a marker: the text in front of it and its id. */
 export function findImageMarker(line: string): { prefix: string; id: number } | undefined {
   if (!line.includes(MARKER_START)) return undefined
   const m = MARKER.exec(line)
@@ -79,18 +100,24 @@ export function findImageMarker(line: string): { prefix: string; id: number } | 
 export type ImageState =
   | { kind: "wait"; fallback: string[]; deadline: number }
   | { kind: "image"; block: ImageBlock; fallback: string[] }
+  | { kind: "rows"; rows: string[]; fallback: string[] }
   | { kind: "fallback"; fallback: string[] }
 
-/** Where an image stands: still loading (within its time), ready, or to be shown as its fallback. */
+/** Where a marker stands: still loading (within its time), ready, or to be shown as its fallback. */
 export function imageState(id: number, now = performance.now(), force = false): ImageState {
   const e = pending.get(id)
   if (!e) return { kind: "fallback", fallback: [] }
-  if (e.state === "ready") return { kind: "image", block: e.block!, fallback: e.fallback }
+  if (e.state === "ready") {
+    const r = e.result!
+    return Array.isArray(r)
+      ? { kind: "rows", rows: r, fallback: e.fallback }
+      : { kind: "image", block: r, fallback: e.fallback }
+  }
   if (e.state === "failed" || force || now >= e.deadline) return { kind: "fallback", fallback: e.fallback }
   return { kind: "wait", fallback: e.fallback, deadline: e.deadline }
 }
 
-/** Calls `fn` once when the image settles; returns how to stop waiting. */
+/** Calls `fn` once when the marker settles; returns how to stop waiting. */
 export function onImageSettled(id: number, fn: () => void): () => void {
   const e = pending.get(id)
   if (e?.state !== "loading") return () => {}

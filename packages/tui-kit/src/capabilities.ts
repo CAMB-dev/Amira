@@ -1,6 +1,5 @@
 import { modes, queries } from "./ansi.ts"
-import type { ImageProtocol } from "./images/encode.ts"
-import type { CellSize } from "./images/fit.ts"
+import type { CellSize, ImageProtocol } from "./images/types.ts"
 import { hasInputReader } from "./reader.ts"
 import { ProcessTerminal, type Terminal } from "./terminal.ts"
 

@@ -2,7 +2,7 @@ import type { AnyEvent, Message, ToolDetailLevel, ToolResult, TuiSettings, UserM
 import type {
   Capabilities,
   Component,
-  ImageLoader,
+  ImageStore,
   InputEvent,
   RenderContext,
   Spinner,
@@ -10,6 +10,7 @@ import type {
   Theme,
 } from "@amira/tui-kit"
 import type { Keybindings } from "./keybindings.ts"
+import type { ReplyRenderers } from "./markdown-nodes.ts"
 import type { TrackedCall } from "./tool-calls.ts"
 import type { PresenterSource } from "./tool-view.ts"
 import type { NoticeLevel } from "./transcript.ts"
@@ -50,9 +51,12 @@ export interface ViewHost {
   /**
    * Loads the images of replies where the terminal can draw them (D83): the inline view commits
    * them to the scrollback, the full-screen view draws them in its transcript. Full-screen
-   * overlays (forms, the sub-agent viewer) show their alt text.
+   * overlays (forms, the sub-agent viewer) show their alt text. Asked each time: undefined while
+   * no image provider is installed (D88).
    */
-  images?: ImageLoader
+  images?: () => ImageStore | undefined
+  /** Nodes of replies that extensions render (D88). */
+  renders: ReplyRenderers
   keys: Keybindings
   /** The spinner of the running turn; running tools show its glyph. */
   spinner: Spinner
