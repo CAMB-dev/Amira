@@ -241,12 +241,13 @@ test("ext install in a terminal draws the package line and the summary", async (
   const io = { stdout: (s: string) => screen.write(s), stderr: (s: string) => screen.write(s) }
   const src = makePackage("drawn", "2.0.0")
   expect(await runExtCommand(["install", src], io, { home, cwd, tty: true, spinnerMs: 0 })).toBe(0)
-  expect(screen.text()).toEqual(["✓ drawn  installed 2.0.0 (local copy)", "1 installed"])
+  const next = "Start amira again, or run /reload in a running session, to load the change."
+  expect(screen.text()).toEqual(["✓ drawn  installed 2.0.0 (local copy)", "1 installed", next])
   // NO_COLOR: plain lines even on a terminal.
   const plain = capture()
   await runExtCommand(["install", src], plain, { home, cwd, tty: true, env: { NO_COLOR: "1" } })
   expect(plain.out).toBe(
-    "Installed drawn 2.0.0 (local copy) into user scope (was 2.0.0 (local copy))\n1 installed\n",
+    `Installed drawn 2.0.0 (local copy) into user scope (was 2.0.0 (local copy))\n1 installed\n${next}\n`,
   )
 })
 

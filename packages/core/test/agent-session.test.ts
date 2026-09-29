@@ -553,3 +553,62 @@ test("extension records are kept in the session file, per key, and come back on 
   expect(plain.data.read("swarm")).toEqual(["x"])
   expect(plain.data.read("none")).toEqual([])
 })
+
+const overflow = { error: { message: "HTTP 400: maximum context length is 1000 tokens", status: 400 } }
+
+test("a request over the context window is compacted and sent again, once", async () => {
+  const { agent, mock, bus, events } = await setup([
+    { text: "r1" },
+    { text: "r2" },
+    overflow,
+    { text: "SUM" },
+    { text: "r3" },
+  ])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  const r = await agent.prompt("q3")
+  await bus.flush()
+  expect(r.reason).toBe("done")
+  expect(mock.requests).toHaveLength(5)
+  const start = events.find((e) => e.type === "compact.start")!
+  expect(start.data).toMatchObject({ reason: "overflow" })
+  expect((mock.requests[4]!.messages[0]!.content[0] as { text: string }).text).toContain("SUM")
+})
+
+test("a request still over the window after compacting fails with what to do", async () => {
+  const { agent, bus, events } = await setup([
+    { text: "r1" },
+    { text: "r2" },
+    overflow,
+    { text: "SUM" },
+    overflow,
+  ])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  const r = await agent.prompt("q3")
+  await bus.flush()
+  expect(r.reason).toBe("error")
+  expect(r.failure).toMatchObject({ kind: "context" })
+  expect(r.failure?.hint).toContain("/compact")
+  expect(events.filter((e) => e.type === "compact.start")).toHaveLength(1)
+  const end = events.findLast((e) => e.type === "turn.end")!
+  expect(end.data).toMatchObject({ reason: "error", failure: { kind: "context" } })
+})
+
+test("with nothing to compact, an overflow says so at once", async () => {
+  const { agent } = await setup([overflow])
+  const r = await agent.prompt("q1")
+  expect(r.failure?.kind).toBe("context")
+  expect(r.failure?.hint).toContain("Nothing older to compact")
+})
+
+test("a retried request is announced with model.retry", async () => {
+  const { agent, bus, events } = await setup([
+    { error: { message: "HTTP 429: slow", status: 429, retryable: true } },
+    { text: "ok" },
+  ])
+  await agent.prompt("q")
+  await bus.flush()
+  const retry = events.find((e) => e.type === "model.retry")
+  expect(retry?.data).toMatchObject({ attempt: 1, maxRetries: 3, status: 429, kind: "rate" })
+})

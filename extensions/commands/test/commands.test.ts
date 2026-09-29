@@ -102,7 +102,10 @@ function fakeControl(over: Partial<SessionControl> = {}) {
       tools: [{ name: "read", description: "reads", parameters: {} }],
       messages: [{ role: "user", content: [{ type: "text", text: "y".repeat(400) }] }],
     }),
-    reloadExtensions: async () => void calls.push("reload"),
+    reloadExtensions: async () => {
+      calls.push("reload")
+      return undefined
+    },
     ...over,
   }
   return { control, calls }

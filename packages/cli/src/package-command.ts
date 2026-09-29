@@ -1,7 +1,14 @@
 import { existsSync } from "node:fs"
 import { pathToFileURL } from "node:url"
-import { API_VERSION, type PackageCommandContext } from "@amira/api"
-import { amiraHome, findPackageCommand, installVirtualApi } from "@amira/core"
+import { API_VERSION, type PackageCommandContext, type Settings } from "@amira/api"
+import {
+  amiraHome,
+  findPackageCommand,
+  installVirtualApi,
+  loadSettings,
+  projectScopeIsUser,
+  projectTrust,
+} from "@amira/core"
 import { runCommand } from "@amira/proc"
 import type { PrintIO } from "./print.ts"
 
@@ -19,8 +26,21 @@ export async function runPackageCommand(
 ): Promise<number | undefined> {
   const [name, ...rest] = argv
   if (!name || name.startsWith("-") || RESERVED.has(name)) return undefined
-  const found = findPackageCommand(name, where)
-  if (!found) return undefined
+  // Disabled packages offer no commands, nor do a project's own before it is trusted.
+  let settings: Settings = {}
+  try {
+    settings = loadSettings(where).settings
+  } catch {}
+  const project = projectScopeIsUser(where) || projectTrust(where.cwd, settings) === true
+  const found = findPackageCommand(name, where, { disabled: settings.packages?.disabled ?? [], project })
+  if (!found) {
+    const untrusted = project ? undefined : findPackageCommand(name, where)
+    if (untrusted?.pkg.scope !== "project") return undefined
+    io.stderr(
+      `amira: "${name}" comes from this project's package ${untrusted.pkg.name}, which is not trusted; run amira ext trust to allow this project's packages\n`,
+    )
+    return 1
+  }
   installVirtualApi()
   const mod = (await import(pathToFileURL(found.file).href)) as { default?: unknown }
   if (typeof mod.default !== "function") {

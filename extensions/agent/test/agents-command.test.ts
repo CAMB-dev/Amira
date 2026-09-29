@@ -249,7 +249,7 @@ test("the argument completes to ids, numbers as themselves, and to view <ref> af
   await root.prompt("go")
   const [coder, explorer] = control.subagents()
   const all = await commands.complete("/agents ")
-  expect(all.candidates.map((c) => c.value)).toEqual([coder!.id, explorer!.id, "view"])
+  expect(all.candidates.map((c) => c.value)).toEqual([coder!.id, explorer!.id, "view", "worktrees"])
   expect(all.candidates[0]!.description).toMatch(/^1\. Fix the bug · coder · /)
   // A typed number stays a number (the popup keeps an exact match), rather than an id with that digit.
   expect((await commands.complete("/agents 2")).candidates.map((c) => c.value)).toEqual(["2"])

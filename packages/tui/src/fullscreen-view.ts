@@ -20,6 +20,7 @@ import {
   type BlockEnv,
   type BlockImages,
   type BlockRenders,
+  DetailNoticeBlock,
   fixedLine,
   LinesBlock,
   ReplyBlock,
@@ -218,8 +219,12 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     renderer.requestRender()
   }
 
-  function notice(level: NoticeLevel, text: string): void {
-    add(new LinesBlock("notice", (width, t) => noticeLines(t, level, text, width), text))
+  function notice(level: NoticeLevel, text: string, detail?: string): void {
+    add(
+      detail
+        ? new DetailNoticeBlock(level, text, detail)
+        : new LinesBlock("notice", (width, t) => noticeLines(t, level, text, width), text),
+    )
   }
 
   /** Ends the calls of the step that never finished: unstarted ones go, running ones read as cut short. */

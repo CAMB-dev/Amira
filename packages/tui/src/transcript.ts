@@ -88,6 +88,15 @@ export function noticeLines(theme: Theme, level: NoticeLevel, text: string, widt
   )
 }
 
+/**
+ * The details of a notice (e.g. what a provider answered to a failed request), muted and
+ * hanging under its text like the notice's own later rows.
+ */
+export function noticeDetailLines(theme: Theme, level: NoticeLevel, detail: string, width = 80): string[] {
+  const pad = " ".repeat(textWidth(glyphs[level]) + 1)
+  return hanging(detail, width - pad.length).map((l) => `${pad}${theme.muted(l)}`)
+}
+
 /** Output of a command, hanging under its echo like a tool's result. */
 export function commandOutputLines(style: StyleFn, muted: StyleFn, text: string, width = 80): string[] {
   return hanging(text, width - 4).map((l, i) => `  ${i === 0 ? muted(glyphs.result) : " "} ${style(l)}`)

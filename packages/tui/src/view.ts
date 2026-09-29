@@ -116,7 +116,8 @@ export interface TranscriptView {
   turnEnd(): boolean
   /** Follows sub-agents; true when the event was about one. */
   subagentEvent(e: AnyEvent): boolean
-  notice(level: NoticeLevel, text: string): void
+  /** `detail` stays folded until asked for (the full tool output level, or unfolding the block). */
+  notice(level: NoticeLevel, text: string, detail?: string): void
   /** A slash command as typed. */
   commandEcho(line: string): void
   /** What a command printed: under its echo right after it, else as a notice. */

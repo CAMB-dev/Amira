@@ -1,4 +1,4 @@
-import type { ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
+import type { ToolApproval, ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
 import { toolResultText } from "@amira/api"
 import {
   defaultGlyphs,
@@ -23,7 +23,7 @@ import { apiNode, nodeRows, type ReplyRenderers } from "./markdown-nodes.ts"
 import { childrenOf, isActive, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
 import { type CopyRow, chromeRows, gutterRows } from "./text-selection.ts"
 import { type FinishedCall, finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
-import type { BlockKind } from "./transcript.ts"
+import { type BlockKind, type NoticeLevel, noticeDetailLines, noticeLines } from "./transcript.ts"
 
 /** What blocks need to draw themselves, the same for every block of a frame. */
 export interface BlockEnv {
@@ -175,6 +175,51 @@ export class LinesBlock extends Block {
     if (last > 0 && !plain[0]!.trim()) rows[0] = { from: 0, skip: true }
     if (last > 0 && !plain[last]!.trim()) rows[last] = { from: 0, skip: true }
     return rows
+  }
+}
+
+/**
+ * A notice with details that stay folded (e.g. the provider's raw answer to a failed request):
+ * they show once unfolded, or at the full tool output level.
+ */
+export class DetailNoticeBlock extends Block {
+  readonly kind = "notice" as const
+  #open: boolean | undefined
+
+  constructor(
+    readonly level: NoticeLevel,
+    readonly text: string,
+    readonly detail: string,
+  ) {
+    super()
+  }
+
+  #shown(env: BlockEnv): boolean {
+    return this.#open ?? env.detail === "full"
+  }
+
+  lines(env: BlockEnv): string[] {
+    const head = noticeLines(env.theme, this.level, this.text, env.width)
+    return this.#shown(env)
+      ? [...head, ...noticeDetailLines(env.theme, this.level, this.detail, env.width)]
+      : head
+  }
+
+  copyText(): string {
+    return `${this.text}\n${this.detail}`
+  }
+
+  override foldable(): boolean {
+    return true
+  }
+
+  override toggleFold(env: BlockEnv): void {
+    this.#open = !this.#shown(env)
+    this.touch()
+  }
+
+  override get refolded(): boolean {
+    return this.#open !== undefined
   }
 }
 
@@ -646,7 +691,13 @@ export class ToolBlock extends Block {
   startedAt: number | undefined
   partial: ToolResult | undefined
   end:
-    | { result: ToolResult; durationMs?: number; rejected?: ToolRejection; interrupted?: boolean }
+    | {
+        result: ToolResult
+        durationMs?: number
+        rejected?: ToolRejection
+        interrupted?: boolean
+        approval?: ToolApproval
+      }
     | undefined
   /** Set by folding it: how much of it shows, whatever the global level. */
   folding: ToolDetailLevel | undefined
@@ -729,6 +780,7 @@ export class ToolBlock extends Block {
       result: end.result,
       ...(end.durationMs !== undefined ? { durationMs: end.durationMs } : {}),
       ...(end.rejected ? { rejected: end.rejected } : {}),
+      ...(end.approval ? { approval: end.approval } : {}),
       interrupted: end.interrupted ?? false,
     }
   }

@@ -1,4 +1,5 @@
 import {
+  type ToolApproval,
   type ToolCallView,
   type ToolDetailLevel,
   type ToolLine,
@@ -27,6 +28,8 @@ export interface FinishedCall {
   rejected?: ToolRejection
   /** The user interrupted the turn while this call ran, so its failure is not the tool's. */
   interrupted?: boolean
+  /** Who let it run, when it needed approval: a muted trace on its result line. */
+  approval?: ToolApproval
 }
 
 /** A call still running, as the live region shows it. */
@@ -186,8 +189,15 @@ export function finishedToolLines(
         "",
     )
   const style = outcome === "failed" ? theme.error : theme.muted
-  const time =
+  const approval =
+    call.approval === "user"
+      ? " · allowed by you"
+      : call.approval === "rule"
+        ? " · allowed · session rule"
+        : ""
+  const time = `${
     call.durationMs !== undefined && call.durationMs >= 1000 ? ` · ${formatDuration(call.durationMs)}` : ""
+  }${approval}`
   const prefix = `  ${theme.muted(glyphs.result)} `
   const room = Math.max(8, width - visibleWidth(prefix) - visibleWidth(time))
   out.push(`${prefix}${style(truncateToWidth(result, room, glyphs.more))}${theme.muted(time)}`)

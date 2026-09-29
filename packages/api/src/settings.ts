@@ -57,6 +57,8 @@ export interface Settings {
   extensions?: Record<string, Record<string, unknown>>
   /** Project directories whose own MCP servers may run; honoured in the user settings only. */
   mcpTrustedProjects?: string[]
+  /** Installed extension packages (D24, D60). */
+  packages?: PackageSettings
   skills?: { dirs?: string[] }
   /** The web_search and web_fetch tools. Hide them with tools.disabled. */
   web?: WebSettings
@@ -74,6 +76,22 @@ export interface Settings {
   merge?: { reviewThreshold?: { lines?: number; files?: number } }
   /** The interactive terminal UI. */
   tui?: TuiSettings
+}
+
+export interface PackageSettings {
+  /**
+   * Packages not to load, by name, of either scope; the lock files keep them. Set by
+   * `amira ext disable|enable <name>`; `--no-packages` leaves out every package for one run.
+   * Honoured in the user settings only.
+   */
+  disabled?: string[]
+  /**
+   * Project directories whose own packages (<dir>/.amira/packages) may load, and ones the user
+   * chose not to load: asked the first time a project has packages. Honoured in the user
+   * settings only.
+   */
+  trustedProjects?: string[]
+  untrustedProjects?: string[]
 }
 
 export interface TuiSettings {

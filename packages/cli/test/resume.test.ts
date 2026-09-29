@@ -7,7 +7,7 @@ import type { AnyEvent } from "@amira/api"
 import { listSessions } from "@amira/core"
 import { parseCliArgs, UsageError } from "../src/args.ts"
 import { runPrint } from "../src/print.ts"
-import { chooseStore, formatSessionList } from "../src/resume.ts"
+import { chooseStore, exitNote, formatSessionList } from "../src/resume.ts"
 import { createSession } from "../src/session.ts"
 
 const here = import.meta.dir
@@ -103,6 +103,21 @@ test("a session is stored, listed, and continued with its earlier turns", async 
   expect(() => chooseStore({ cwd: here, continue: false, resume: "s_missing" })).toThrow(
     /no session s_missing/,
   )
+})
+
+test("quitting says how to continue the session, set apart by blank lines", async () => {
+  const fresh = chooseStore({ cwd: here, continue: false })
+  const { agent } = await turn(fresh.store, "ok", "remember this")
+  expect(exitNote(agent, 0, here)).toBe(
+    `\nContinue this session with amira -c (or amira -r ${fresh.store.id}).\n\n`,
+  )
+  expect(exitNote(agent, 2, here)).toContain("Stopping 2 sub-agents that were still running.\n")
+  expect(exitNote({ session: { id: "s_old" }, messages: [1] }, 0, here)).toBe(
+    "\nContinue this session with amira -r s_old.\n\n",
+  )
+  // Nothing to continue: only the blank line that sets the shell's prompt apart.
+  expect(exitNote({ session: { id: "s_new" }, messages: [] }, 0, here)).toBe("\n")
+  expect(exitNote({ session: undefined, messages: [1] }, 0, here)).toBe("\n")
 })
 
 test("amira -p -r lists this directory's sessions and exits", async () => {

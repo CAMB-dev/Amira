@@ -273,7 +273,7 @@ test("amira --rpc: skills are listed and run apart from the slash commands", asy
     name: "rpc-deploy",
     description: "Ship it",
     hint: "[arguments]",
-    source: ext("skills"),
+    source: expect.stringMatching(/skills[/]src[/]index.ts$/),
   })
   rpc.send({ id: 2, cmd: "command.list" })
   expect((await rpc.response(2)).commands.map((c: Line) => c.name)).not.toContain("rpc-deploy")

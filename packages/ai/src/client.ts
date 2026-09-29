@@ -2,6 +2,7 @@ import { catalogProviderId, type ModelCatalog } from "./catalog.ts"
 import { withCost } from "./cost.ts"
 import type { Dialect } from "./dialect.ts"
 import { BUILTIN_DIALECTS } from "./dialects/index.ts"
+import { modelErrorKind } from "./errors.ts"
 import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import { type RetryOptions, withRetry } from "./retry.ts"
 import { withTextTools } from "./text-tools.ts"
@@ -114,7 +115,7 @@ export function createAi(opts: AiOptions = {}): Ai {
         ...(p.compat ? { compat: p.compat } : {}),
       }
       const attempt = () => withTextTools(req, (r) => dialect.stream(r, ctx))
-      return withCost(withRetry(attempt, sig, opts.retry), req.model)
+      return withErrorFacts(withCost(withRetry(attempt, sig, opts.retry), req.model), hostOf(p.baseUrl))
     },
     registerProvider: (p) => void providers.set(p.id, p),
     registerDialect: (d) => void dialects.set(d.id, d),
@@ -153,11 +154,33 @@ function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>):
   return undefined
 }
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url
+  } catch {
+    return url
+  }
+}
+
+/** Errors (and retries) handed out carry their kind and the host the request went to. */
+async function* withErrorFacts(
+  events: AsyncIterable<StreamEvent>,
+  where: string,
+): AsyncGenerator<StreamEvent> {
+  for await (const ev of events) {
+    if (ev.type === "error" || ev.type === "retry") {
+      const host = ev.error.host ?? where
+      const kind = ev.error.kind ?? modelErrorKind(ev.error)
+      yield { ...ev, error: { ...ev.error, ...(host ? { host } : {}), kind } }
+    } else yield ev
+  }
+}
+
 /** A stream that ends at once with an error, so callers see one failure path. */
 async function* failed(req: ModelRequest, message: string, code: string): AsyncGenerator<StreamEvent> {
   yield {
     type: "error",
-    error: { message, code },
+    error: { message, code, kind: "config" },
     retryable: false,
     message: {
       role: "assistant",

@@ -1,5 +1,6 @@
 import path from "node:path"
 import { parseArgs } from "node:util"
+import type { Settings } from "@amira/api"
 import {
   amiraHome,
   defaultGitCacheDir,
@@ -16,17 +17,21 @@ import {
   listGitCaches,
   listInstalled,
   loadIndex,
+  loadSettings,
   missingPackages,
   PackageError,
   packageScope,
   parseSpec,
+  projectTrust,
   pruneGitCaches,
   readLock,
+  rememberProjectTrust,
   removeGitCache,
   removePackage,
   repoLabel,
   restorePackages,
   searchIndex,
+  setPackageDisabled,
   type UpdateResult,
   updatePackages,
 } from "@amira/core"
@@ -39,6 +44,10 @@ export const EXT_USAGE = `Usage:
   amira ext install              Install what the lock file pins but is missing
   amira ext list                 List installed packages of both scopes
   amira ext remove <name>...     Remove packages
+  amira ext disable <name>...    Stop loading packages, keeping them installed and pinned
+  amira ext enable <name>...     Load disabled packages again
+  amira ext trust                Load this project's own packages (<cwd>/.amira/packages)
+  amira ext untrust              Stop loading this project's own packages
   amira ext update [name]...     Fetch the newest version and re-pin (all by default)
   amira ext search [query]       Search the extensions index
   amira ext cache [list]         Show the cached git repositories
@@ -56,7 +65,10 @@ Options:
   --json        install, update, remove: one JSON object per line
 
 Each scope pins exact commits and versions in its packages.lock. Project
-packages replace user packages of the same name. The index comes from
+packages replace user packages of the same name, and load only once you
+trust the project (amira asks the first time). disable, enable, trust and
+untrust change ~/.amira/settings.json, never a lock file; --no-packages
+starts amira without any package. The index comes from
 $AMIRA_EXTENSIONS_INDEX, or the CAMB-dev/amira-extensions repository. Git
 repositories are cached in ~/.amira/cache/git; a cache no package uses is
 deleted after ${GIT_CACHE_UNUSED_DAYS} days.`
@@ -128,11 +140,15 @@ export async function runExtCommand(
     progress.finish(name, { kind: "failed", text: shortReason(message), line, data: { error: message } })
     if (progress.mode === "tty") failures.push(line)
   }
+  /** What to do next, printed after the results unless the output is only results. */
+  const next: string[] = []
   const done = (code: number) => {
     progress.close()
     for (const f of failures) io.stderr(`${clean(f)}\n`)
+    if (next.length && progress.mode !== "json" && !parsed.values.quiet) io.stdout(`${next.join("\n")}\n`)
     return code
   }
+  const loadHint = "Start amira again, or run /reload in a running session, to load the change."
   try {
     switch (sub) {
       case "install":
@@ -176,13 +192,48 @@ export async function runExtCommand(
           })
         }
         autoPrune(cacheDir, home, cwd)
+        next.push(loadHint)
+        if (scope.kind === "project" && projectTrust(cwd, settingsOf(cwd, home)) !== true) {
+          next.push(
+            "Project packages load once you trust the project: amira asks at the next start (or run amira ext trust).",
+          )
+        }
         return done(0)
       }
       case "list":
       case "ls":
         noArgs(sub, rest)
-        io.stdout(formatList(listInstalled({ home, cwd }), { home, cwd }))
+        io.stdout(formatList(listInstalled({ home, cwd }), { home, cwd, settings: settingsOf(cwd, home) }))
         return 0
+      case "disable":
+      case "enable": {
+        if (!rest.length) throw new UsageError(`ext ${sub} needs a package name\n\n${EXT_USAGE}`)
+        const installed = new Set(listInstalled({ home, cwd }).map((p) => p.name))
+        let code = 0
+        for (const name of rest) {
+          if (!installed.has(name)) {
+            io.stderr(`amira: ${name} is not installed in either scope\n`)
+            code = 1
+            continue
+          }
+          const changed = setPackageDisabled(name, sub === "disable", home)
+          const state = sub === "disable" ? "disabled" : "enabled"
+          io.stdout(changed ? `${name} is ${state} now.\n` : `${name} was already ${state}.\n`)
+        }
+        if (code === 0) io.stdout(`${loadHint}\n`)
+        return code
+      }
+      case "trust":
+      case "untrust": {
+        noArgs(sub, rest)
+        rememberProjectTrust(cwd, sub === "trust", home)
+        io.stdout(
+          sub === "trust"
+            ? `This project's own packages (${packageScope("project", { home, cwd }).dir}) load from now on.\n${loadHint}\n`
+            : `This project's own packages are no longer loaded.\n${loadHint}\n`,
+        )
+        return 0
+      }
       case "remove":
       case "rm":
       case "uninstall": {
@@ -196,6 +247,7 @@ export async function runExtCommand(
               line: `Removed ${name} from ${scope.kind} scope.`,
               data: { scope: scope.kind },
             })
+            if (!next.length) next.push(loadHint)
             continue
           }
           const other = listInstalled({ home, cwd }).find((p) => p.name === name)
@@ -400,15 +452,34 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MiB`
 }
 
-function formatList(pkgs: InstalledPackage[], where: { home: string; cwd: string }): string {
+function formatList(
+  pkgs: InstalledPackage[],
+  where: { home: string; cwd: string; settings: Settings },
+): string {
   let out = ""
+  const disabled = new Set(where.settings.packages?.disabled ?? [])
+  const trust = projectTrust(where.cwd, where.settings)
   for (const kind of ["user", "project"] as const) {
     const scope = packageScope(kind, where)
     const mine = pkgs.filter((p) => p.scope === kind)
-    out += `${kind} (${scope.dir}):\n`
+    const trusted =
+      kind === "project" && mine.length
+        ? trust === true
+          ? ", trusted"
+          : trust === false
+            ? ", not trusted: not loaded (amira ext trust)"
+            : ", not trusted yet: amira asks at the next start"
+        : ""
+    out += `${kind} (${scope.dir}${trusted}):\n`
     if (!mine.length) out += "  (none)\n"
     for (const p of mine) {
-      const state = p.error ? `  [${p.error}]` : p.shadowed ? "  [replaced by the project package]" : ""
+      const state = p.error
+        ? `  [${p.error}]`
+        : disabled.has(p.name)
+          ? "  [disabled: amira ext enable]"
+          : p.shadowed
+            ? "  [replaced by the project package]"
+            : ""
       out += `  ${p.name} ${p.entry.version} ${pinText(p.entry)}${state}\n`
       out += `    from ${describeSource(p.entry.source)}${p.entry.index ? " via the extensions index" : ""}\n`
     }
@@ -437,4 +508,13 @@ function parse(argv: string[]) {
       json: { type: "boolean" },
     },
   })
+}
+
+/** The merged settings, or none when a file is broken: listing and hints do without them then. */
+function settingsOf(cwd: string, home: string): Settings {
+  try {
+    return loadSettings({ cwd, home }).settings
+  } catch {
+    return {}
+  }
 }

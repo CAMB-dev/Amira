@@ -112,6 +112,31 @@ test("saving writes settings and auth.json, and the provider works at once", asy
   expect(admin.storedKeyHint("ds-test")).toBe("…5678")
 })
 
+test("a saved provider the session starts using, or the one in use, needs no /model", async () => {
+  const saved: [string, string[]][] = []
+  const ai = createAi({ catalog, env: {} })
+  let current: string | undefined
+  const admin = createProviderAdmin({
+    ai,
+    home,
+    env: {},
+    currentProvider: () => current,
+    restrict: async () => undefined,
+    onSaved: (id, models) => {
+      saved.push([id, models])
+      return `${id}/${models[0]}`
+    },
+  })
+  const first = await admin.save(draft())
+  expect(saved).toEqual([["ds-test", ["deepseek-chat", "deepseek-new"]]])
+  expect(first).toContain("Now using ds-test/deepseek-chat.")
+  expect(first).not.toContain("/model ds-test")
+  current = "ds-test"
+  const edited = await admin.save(draft({ models: ["deepseek-new"] }))
+  expect(edited).toContain("In use: the changes apply now (ds-test/deepseek-new).")
+  expect(edited).not.toContain("run /model again")
+})
+
 test("editing keeps what the form does not show, and an empty key keeps the stored one", async () => {
   const { admin, seen } = setup()
   await admin.save(draft())

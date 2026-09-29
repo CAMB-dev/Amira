@@ -85,14 +85,16 @@ async function setup(steps: MockStep[], o: Options) {
   }
   const allowed = new Set<string>()
   const approve: Approver = async (req, signal) => {
-    if (allowed.has(req.name)) return { approved: true }
+    if (allowed.has(req.name)) return { approved: true, by: "rule" }
     const answer = await host.ui.ask(
       { kind: "confirm", title: `Allow ${req.name}?`, message: req.reason, always: true, other: true },
       { signal, source: "approval" },
     )
     if (answer === "always") allowed.add(req.name)
-    if (answer === true || answer === "always") return { approved: true }
+    if (answer === true || answer === "always") return { approved: true, by: "user" }
     if (typeof answer === "object") return { approved: false, reason: `the user said no: ${answer.other}` }
+    if (answer === undefined && !signal.aborted)
+      return { approved: false, reason: "dismissed", interrupt: true }
     return { approved: false, reason: "the user said no" }
   }
   const agent = new Agent({
@@ -342,10 +344,29 @@ for (const mode of MODES) {
     expect(s.all()).not.toContain("┃ ? Allow wipe? ›")
     // Asked once for both calls.
     expect(s.all().split("? Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
+    // Each call says who let it run.
+    expect(s.all()).toContain("└ wiped · allowed by you")
+    expect(s.all()).toContain("└ wiped · allowed · session rule")
     s.terminal.send("\x03")
     await s.exited
   })
 }
+
+test("Esc on an approval denies the call and interrupts the turn", async () => {
+  const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "never asked for" }], {
+    mode: "inline",
+    approve: ["wipe"],
+  })
+  s.terminal.send("clean up\r")
+  await waitFor(() => s.dialog().length > 0, "the approval")
+  s.terminal.send("\x1b[27u")
+  await s.shows("Interrupted")
+  await s.idle()
+  expect(s.all()).not.toContain("never asked for")
+  expect(s.agent.messages.at(-1)?.role).toBe("toolResult")
+  s.terminal.send("\x03")
+  await s.exited
+})
 
 test("an approval refused with free text tells the model what to do instead", async () => {
   const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "ok, moving to trash" }], {

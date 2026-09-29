@@ -216,12 +216,39 @@ function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
  * `/agents <n|id>` prints one; `/agents view [<n|id>]` opens the live view on it;
  * `/agents stop <n|id|all>` stops one or every running one.
  */
-export function agentsCommand(): CommandDefinition {
+export interface AgentsCommandOptions {
+  /** The worktrees sub-agents left behind in this repository with their changes, newest first. */
+  keptWorktrees?: () => Promise<KeptWorktreeInfo[]>
+}
+
+/** A sub-agent's worktree left behind (worktree.ts KeptWorktree). */
+export interface KeptWorktreeInfo {
+  name: string
+  dir: string
+  patch?: string
+  modifiedAt: number
+  /** Announced to be deleted by the next sweep a day or more later. */
+  expiring: boolean
+}
+
+/** The kept worktrees as /agents worktrees lists them. */
+export function keptWorktreesText(list: KeptWorktreeInfo[], now = Date.now()): string {
+  if (!list.length) return "No sub-agent worktrees are left behind in this repository."
+  const rows = list.map((w) => {
+    const days = Math.floor((now - w.modifiedAt) / 86_400_000)
+    const age = days < 1 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`
+    const gone = w.expiring ? " · to be deleted" : ""
+    return `${w.dir} · changed ${age}${gone}${w.patch ? `\n  patch: ${w.patch}` : ""}`
+  })
+  return `Sub-agent worktrees kept with their changes (git apply <patch> takes them over; git worktree remove <dir> deletes one):\n${rows.join("\n")}`
+}
+
+export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinition {
   return {
     name: "agents",
     description: "Show the sub-agents of this session and what they did",
     args: {
-      hint: "[<n>|<id>|view [<n>|<id>]|stop <n>|<id>|all]",
+      hint: "[<n>|<id>|view [<n>|<id>]|stop <n>|<id>|all|worktrees]",
       complete(prefix, ctx) {
         const list = ctx.session.subagents()
         const now = Date.now()
@@ -251,13 +278,23 @@ export function agentsCommand(): CommandDefinition {
         if (/^\d+$/.test(prefix)) return out
         if (list.length) out.push({ value: "view", description: "Open the live view" })
         if (list.some(live)) out.push({ value: "stop", description: "Stop a running sub-agent" })
+        if (opts.keptWorktrees) out.push({ value: "worktrees", description: "Worktrees left with changes" })
         return out
       },
     },
     async run(args, ctx) {
+      if (args === "worktrees" && opts.keptWorktrees) {
+        ctx.print(keptWorktreesText(await opts.keptWorktrees()))
+        return
+      }
       const list = ctx.session.subagents()
       if (!list.length) {
-        ctx.print("No sub-agents in this session yet.")
+        const kept = (await opts.keptWorktrees?.()) ?? []
+        ctx.print(
+          kept.length
+            ? `No sub-agents in this session yet.\n${keptWorktreesText(kept)}`
+            : "No sub-agents in this session yet.",
+        )
         return
       }
       const stopping = /^stop(?:\s+(.*))?$/.exec(args)
