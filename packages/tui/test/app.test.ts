@@ -2523,3 +2523,11 @@ test("an image slower than its time is committed as its alt text, and what follo
   terminal.send("\x03")
   await exited
 }, 10_000)
+
+test("an extension's notice shows in the transcript", async () => {
+  const { host, shows, terminal, exited } = await setup([])
+  await host.load((api) => api.notify("hook prettier · a.ts · ok", "success"), "ext:hooks")
+  await shows("✓ hook prettier · a.ts · ok")
+  terminal.send("\x03")
+  await exited
+})

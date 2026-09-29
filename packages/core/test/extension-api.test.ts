@@ -99,3 +99,19 @@ test("runCommand writes stdin, adding the newline, and closes it", async () => {
   expect(JSON.parse(same.output)).toBe("x\n")
   await expect(api!.runCommand(["x"], { ...opts, stdin: "x", viaCmd: true })).rejects.toThrow("stdin")
 })
+
+test("notify sends an extension.notice, info by default", async () => {
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  await host.load((api) => {
+    api.notify("formatted a.ts")
+    api.notify("tests failed", "error")
+  }, "ext:hooks")
+  await bus.flush()
+  expect(events.filter((e) => e.type === "extension.notice").map((e) => e.data)).toEqual([
+    { source: "ext:hooks", text: "formatted a.ts", level: "info" },
+    { source: "ext:hooks", text: "tests failed", level: "error" },
+  ])
+})

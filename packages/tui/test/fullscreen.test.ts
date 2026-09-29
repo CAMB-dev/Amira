@@ -708,3 +708,14 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
     /› earlier question\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
   )
 })
+
+test("an extension's notice shows in the transcript", async () => {
+  const { host, shows, terminal, exited } = await setup([])
+  await host.load((api) => {
+    api.notify("hook biome · src/a.ts · exit 1\nsrc/a.ts:3 unused variable", "warning")
+  }, "ext:hooks")
+  await shows("hook biome · src/a.ts · exit 1")
+  await shows("  src/a.ts:3 unused variable")
+  terminal.send("\x03")
+  await exited
+})

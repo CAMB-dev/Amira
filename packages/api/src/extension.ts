@@ -1,5 +1,12 @@
 import type { CommandDefinition, InputHandler } from "./commands.ts"
-import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
+import type {
+  EventEnvelope,
+  EventMap,
+  Intercept,
+  InterceptorMap,
+  InterceptorOptions,
+  NoticeLevel,
+} from "./events.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
 import type { SkillDefinition } from "./skills.ts"
@@ -62,6 +69,12 @@ export interface ExtensionAPI {
   runCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult>
   /** Reports a failure that happened after loading (e.g. in background work) as extension.error. */
   reportError(error: string): void
+  /**
+   * Tells the user something outside a command (extension.notice), e.g. that a hook failed.
+   * Frontends show it as a notice: the TUI in the transcript, print mode on stderr. Keep it
+   * short, and name what it is about, since the extension's name is not shown. Default "info".
+   */
+  notify(text: string, level?: NoticeLevel): void
   /** Asks the user through whichever frontend is attached (select, confirm, input). */
   readonly ui: UiApi
   on<K extends keyof EventMap>(type: K, handler: (event: EventEnvelope<K>) => void): () => void

@@ -18,6 +18,9 @@ export interface EventEnvelope<K extends keyof EventMap = keyof EventMap> {
 
 export type AnyEvent = { [K in keyof EventMap]: EventEnvelope<K> }[keyof EventMap]
 
+/** How a notice reads: information, something that went well, or a problem. */
+export type NoticeLevel = "info" | "success" | "warning" | "error"
+
 export type SessionStatus = "idle" | "working" | "blocked" | "error"
 
 export type TurnEndReason = "done" | "error" | "aborted"
@@ -86,6 +89,11 @@ export interface EventMap {
   /** Something visible changed outside the event stream (e.g. status bar state); frontends should redraw. */
   "ui.render": Record<string, never>
   "extension.error": { source: string; error: string }
+  /**
+   * Something an extension tells the user (ExtensionAPI.notify), e.g. how a hook it ran went.
+   * Frontends show it as a notice in the transcript; `source` is the extension.
+   */
+  "extension.notice": { source: string; text: string; level: NoticeLevel }
   /** A slow subscriber's queue overflowed and events were dropped for it. */
   "events.lost": { dropped: number }
   /** The session switched models; later turns use `to`. */

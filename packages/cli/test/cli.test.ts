@@ -459,3 +459,32 @@ test("the top-level session asks the user to approve, and nobody answering denie
   expect(await approve(request, signal)).toEqual({ approved: false, reason: "nobody answered" })
   expect(asked[0]).toBe('Allow bash? | policy\n{"command":"rm x"}')
 })
+
+test("plain print mode shows extensions' notices on stderr, problems with their level", async () => {
+  const { agent } = await mockSession([{ toolCalls: [{ name: "note", args: {} }] }, { text: "all done" }])
+  agent.tools.register(
+    defineTool({
+      name: "note",
+      description: "",
+      parameters: {},
+      execute: async () => {
+        agent.bus.emit(
+          "extension.notice",
+          { source: "x", text: "formatted a.ts", level: "success" },
+          { sessionId: "host" },
+        )
+        agent.bus.emit(
+          "extension.notice",
+          { source: "x", text: "tests failed", level: "error" },
+          { sessionId: "host" },
+        )
+        return textResult("ok")
+      },
+    }),
+    "test",
+  )
+  const io = capture()
+  expect(await runPrint(agent, "go", false, { io })).toBe(0)
+  expect(io.out).toBe("all done\n")
+  expect(io.err).toBe("● note \n● formatted a.ts\nerror: tests failed\n")
+})

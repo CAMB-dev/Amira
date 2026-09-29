@@ -155,6 +155,15 @@ export async function runPrint(
       case "extension.error":
         io.stderr(`[extension ${e.data.source}] ${e.data.error}\n`)
         break
+      case "extension.notice":
+        io.stderr(
+          e.data.level === "warning" || e.data.level === "error"
+            ? `${e.data.level}: ${e.data.text}
+`
+            : `● ${e.data.text}
+`,
+        )
+        break
       case "command.output":
         if (e.data.level === "info") io.stdout(`${e.data.text}\n`)
         else io.stderr(`${e.data.level}: ${e.data.text}\n`)

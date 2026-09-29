@@ -179,6 +179,8 @@ export class ExtensionHost {
       cwd: this.#opts.cwd ?? process.cwd(),
       home: amiraHome(),
       reportError: (error) => void this.#fail(source, error),
+      notify: (text, level = "info") =>
+        void bus.emit("extension.notice", { source, text: String(text), level }, this.#meta()),
       registerTool: (tool) => track(tools.register(tool, source)),
       // A taken name skips only this command, not the whole extension.
       registerCommand: (command) => {
