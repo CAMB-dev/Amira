@@ -670,6 +670,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const complete = keys.label("popup.complete")
     const accept = keys.label("popup.accept")
     const close = keys.label("popup.close")
+    // A usage line or "no command matches": nothing to pick or complete.
+    if (!popups.find((p) => p.visible)?.hasCandidates)
+      return [close && { text: `${close} close`, priority: 4 }]
     return [
       complete && { text: `${complete} complete`, priority: 2 },
       accept && { text: `${accept} run`, priority: 5 },

@@ -76,9 +76,11 @@ from `terminal.integrated.commandsToSkipShell`.
 
 The command popup, shown while the input starts with `/`; the skill popup, shown while it
 starts with `$`; and the file list, shown while an `@word` is typed. Their keys come before
-the input's. In the skill popup, Enter runs the highlighted skill only when it was picked or
-the typed name is the start of it; other text after a `$` (`$100 is the price`) is sent as a
-message.
+the input's. On a bare `/` or `$` no row is marked and Enter does nothing until one is picked
+(the first ↓ marks the first row). In the skill popup, Enter runs the highlighted skill only
+when it was picked or the typed name is the start of it; other text after a `$` (`$100 is the
+price`) is sent as a message. A name nothing matches keeps the list open with
+`no command matches /zzz`; a lone `$zzz` is then not sent until the list is closed with Esc.
 
 | Action | Default | What it does |
 | --- | --- | --- |

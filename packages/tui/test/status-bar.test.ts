@@ -104,11 +104,11 @@ test("the input box draws the status in its border, next to the rows hidden belo
   const bottom = rows.at(-1)!
   expect(visibleWidth(bottom)).toBe(50)
   // The count of hidden rows stays; the status gives way around it.
-  expect(bottom).toMatch(/ ↓ \d+ more ─╯$/)
+  expect(bottom).toMatch(/ ↓ \d+ rows ─╯$/)
   expect(bottom.startsWith("╰─ deepseek-flash")).toBe(true)
   // Narrower, the hidden rows' count outlasts every status item.
   const narrow = box.render(16, { ...plain, rows: 9 }).at(-1)!
-  expect(narrow).toMatch(/^╰─+ ↓ \d+ more ─╯$/)
+  expect(narrow).toMatch(/^╰─+ ↓ \d+ rows ─╯$/)
   expect(visibleWidth(narrow)).toBe(16)
   // Too narrow for a border, the box is bare and so is the status.
   expect(box.render(7, plain).some((r) => r.includes("deepseek"))).toBe(false)
