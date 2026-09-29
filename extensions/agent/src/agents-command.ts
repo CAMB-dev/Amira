@@ -394,7 +394,7 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
       }
       const list = ctx.session.subagents()
       if (args) {
-        if (!list.length) throw new Error("no sub-agents in this session yet")
+        if (!list.length) return ctx.print("No sub-agents in this session yet.")
         const stopping = /^stop(?:\s+(.*))?$/.exec(args)
         if (stopping) return stop(ctx, list, stopping[1]?.trim() ?? "")
         const view = /^view(?:\s+(.*))?$/.exec(args)
