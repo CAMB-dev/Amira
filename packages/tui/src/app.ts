@@ -979,8 +979,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return view.redraw()
     }
     // While a dialog or the history search has the keyboard, the wheel still scrolls the
-    // transcript but clicks do not select in it: that would take keys from them.
-    if (e.type === "mouse" && (dialog || search.active) && e.action !== "wheel") return
+    // transcript but clicks do not select in it; a drag started before still ends.
+    if (e.type === "mouse" && (dialog || search.active) && e.action !== "wheel" && e.action !== "release")
+      return
     // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
     // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
     const viewFirst = e.type === "mouse" || (!dialog && view.capturing)

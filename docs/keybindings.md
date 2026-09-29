@@ -104,9 +104,9 @@ In a list of up to nine options, the digit in front of an option chooses it.
 In full-screen mode (the default, see `tui.mode` below) Amira keeps the conversation and
 scrolls it itself. These keys act on the transcript before the input gets them. Home, End and
 plain characters act on the transcript only while the input is empty; otherwise the input
-uses them. The mouse wheel scrolls three rows a notch, and a click selects the block under
-it (a second click on its first row folds it) while the input is empty; with a draft in the
-input a click leaves the keyboard to it.
+uses them. The mouse wheel scrolls three rows a notch, and dragging selects text (see
+[Text selection](#text-selection)); a click does nothing else, so the keyboard stays with the
+input. Blocks are selected with the keyboard (`select.start`).
 
 The view follows the newest output. Scrolled up, it stays where it is while the conversation
 grows, and the row under it says `↓ new output`; scrolling to the end (or End) follows again.
@@ -140,6 +140,32 @@ Ctrl+D) do what they do in the input.
 `tool-output` (Ctrl+O) sets how much of every tool call shows; a call folded or unfolded by
 hand keeps its own level.
 
+### Text selection
+
+In full-screen mode Amira selects text with the mouse itself. Drag with the left button to
+select: the selection is marked across rows and blocks, and when the button is released it is
+copied to the clipboard (OSC 52, see [Copying](#copying)) and the hint row says how many
+characters were copied. A double click selects a word (letters, digits and the characters of
+paths and URLs), a triple click a line. Held on the top row of the transcript, or below its
+last row, the drag scrolls the transcript, faster the longer it is held.
+
+What is copied is the text as shown, without the transcript's own marks: the `›` in front of
+your messages, the indent of replies, the `●`, `└` and tree symbols of tool calls and
+sub-agents, and the frame of code blocks. Code copies exactly, its indentation kept, and a line
+of code wrapped over several rows copies as one line. An image copies as its alt text. Other
+text copies row by row, as wrapped on screen.
+
+The selection stays while the conversation goes on below it and while scrolling; a click
+clears it, and so does a change to the text it covers (a tool call finishing, folding) or a
+new terminal width (the text flows differently). Typing still goes to the input.
+
+| Action | Default | What it does |
+| --- | --- | --- |
+| `text.clear` | `escape` | Clear the selection; with text selected Esc does this before anything else (closing the find bar, stopping a turn) |
+
+Holding Shift while dragging still selects with the terminal's own selection instead (see
+[Copying](#copying)): a way out when OSC 52 does not reach the clipboard.
+
 ### Find
 
 The find bar searches the text of the whole transcript as you type. It ignores case unless
@@ -156,9 +182,10 @@ says which one of how many it is. It starts from the newest match.
 
 The copy keys send the text to the clipboard with OSC 52, which Windows Terminal, VS Code,
 iTerm2, kitty, WezTerm and others accept (tmux only with `set-clipboard on`); nothing tells
-Amira whether it arrived. Mouse reporting is on in full-screen mode, so to select text with
-the mouse hold Shift while dragging (Windows Terminal, VS Code on Windows and Linux, xterm);
-in VS Code on macOS hold Option, or set `terminal.integrated.macOptionClickForcesSelection`.
+Amira whether it arrived. Mouse reporting is on in full-screen mode, and a drag selects text
+the way [Text selection](#text-selection) says. For the terminal's own selection instead hold
+Shift while dragging (Windows Terminal, VS Code on Windows and Linux, xterm); in VS Code on
+macOS hold Option, or set `terminal.integrated.macOptionClickForcesSelection`.
 The same goes for pasting with the mouse: in Windows Terminal hold Shift while right-clicking
 (on Linux terminals, Shift+middle-click), or press Ctrl+V; Amira says so when a click with
 those buttons reaches it. In inline mode the terminal's own selection and paste work as usual.

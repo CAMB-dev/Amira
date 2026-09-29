@@ -539,7 +539,7 @@ test("keys a block selection does not use reach the input: Ctrl+C interrupts, ty
   expect(await exited).toBe(0)
 })
 
-test("a click with a draft in the input leaves Enter to it; right-click says how to paste", async () => {
+test("a click selects no block: a draft keeps Enter, typing types; right-click says how to paste", async () => {
   const { terminal, agent, screen, view, shows, idle, exited } = await setup(
     [
       { toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
@@ -561,14 +561,180 @@ test("a click with a draft in the input leaves Enter to it; right-click says how
   await idle()
   expect(view()).not.toMatch(/\w+ block \d+ of/)
   expect(agent.messages.filter((m) => m.role === "user")).toHaveLength(2)
-  // With the input empty a click selects the block under it.
+  // With the input empty a click selects no block either (that is Ctrl+↑): typing still types.
   const again = screen.lines.findIndex((l) => l.includes("● read a.ts"))
   terminal.send(click(again))
-  await waitFor(() => view().includes("tool block"), "selected by a click")
-  terminal.send(ESC)
-  await waitFor(() => !view().includes("tool block"), "unselected")
+  terminal.send(click(again))
+  terminal.send("x")
+  await shows("› x")
+  expect(view()).not.toMatch(/\w+ block \d+ of/)
   terminal.send(click(again, 2))
   await shows("Shift+right-click (or Ctrl+V) pastes")
+  terminal.send("\x03\x03")
+  await exited
+})
+
+/** SGR mouse reports of the left button at zero-based cells. */
+const press = (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}M`
+const drag = (x: number, y: number) => `\x1b[<32;${x + 1};${y + 1}M`
+const release = (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}m`
+
+/** The text of the newest OSC 52 in the output, if any. */
+function clipboard(output: string): string | undefined {
+  const at = output.lastIndexOf("\x1b]52;c;")
+  if (at === -1) return undefined
+  const end = output.indexOf("\x07", at)
+  return Buffer.from(output.slice(at + 7, end), "base64").toString("utf8")
+}
+
+/** The screen row showing `text` and the column it starts at. */
+function cellOf(screen: VirtualScreen, text: string): { x: number; y: number } {
+  const y = screen.lines.findIndex((l) => l.includes(text))
+  if (y === -1) throw new Error(`${JSON.stringify(text)} is not on the screen`)
+  return { x: Bun.stringWidth(screen.lines[y]!.slice(0, screen.lines[y]!.indexOf(text))), y }
+}
+
+test("dragging selects text across blocks, marks it, and copies it without the chrome on release", async () => {
+  const { terminal, screen, view, shows, idle, exited } = await setup([
+    { toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+    { text: "The file has **three** lines:\n\n```\nfirst\n  second\n```" },
+  ])
+  terminal.send("what is in a.ts?\r")
+  await shows("second")
+  await idle()
+  const from = cellOf(screen, "is in a.ts?")
+  const to = cellOf(screen, "second")
+  terminal.clearWrites()
+  terminal.send(press(from.x, from.y))
+  // Moves with the button held are reported while it is down.
+  await waitFor(() => terminal.output.includes("\x1b[?1002h"), "button-event tracking")
+  terminal.send(drag(from.x + 3, from.y))
+  terminal.send(drag(to.x + 5, to.y))
+  await waitFor(() => terminal.output.includes("\x1b[7m"), "the selection marked")
+  expect(clipboard(terminal.output)).toBeUndefined()
+  terminal.send(release(to.x + 5, to.y))
+  const copied = [
+    "is in a.ts?",
+    "",
+    "read a.ts",
+    "contents of a.ts (+2 lines)",
+    "",
+    "The file has three lines:",
+    "",
+    "first",
+    "  second",
+  ].join("\n")
+  await shows(`Copied ${copied.length} characters`)
+  expect(terminal.output).toContain("\x1b[?1002l")
+  expect(clipboard(terminal.output)).toBe(copied)
+  // It stays marked; typing still goes to the input.
+  terminal.send("x")
+  await shows("› x")
+  // A click clears it and does nothing else: no block is selected, nothing is copied.
+  terminal.clearWrites()
+  terminal.send(press(2, 1) + release(2, 1))
+  await waitFor(() => terminal.output.includes("three"), "the rows drawn again, unmarked")
+  expect(terminal.output).not.toContain("\x1b[7m")
+  expect(clipboard(terminal.output)).toBeUndefined()
+  expect(view()).not.toMatch(/\w+ block \d+ of/)
+  terminal.send("\x03\x03")
+  await exited
+})
+
+test("a double click selects a word, a triple click a line, each copied on release", async () => {
+  const { terminal, screen, shows, idle, exited } = await setup([
+    { text: "See src/app.ts for the 漢字 part.\n\nNext line." },
+  ])
+  terminal.send("go\r")
+  await shows("Next line.")
+  await idle()
+  const at = cellOf(screen, "app.ts")
+  const click2 = press(at.x, at.y) + release(at.x, at.y)
+  terminal.send(click2 + click2)
+  await waitFor(() => clipboard(terminal.output) === "src/app.ts", "the word copied")
+  await shows("Copied 10 characters")
+  const kanji = cellOf(screen, "漢字")
+  const click3 = press(kanji.x + 1, kanji.y) + release(kanji.x + 1, kanji.y)
+  terminal.send(click3 + click3)
+  await waitFor(() => clipboard(terminal.output) === "漢字", "a CJK word copied")
+  terminal.send(click3)
+  await waitFor(() => clipboard(terminal.output) === "See src/app.ts for the 漢字 part.", "the line copied")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a drag held under the transcript scrolls it down, one held on its top row scrolls it up", async () => {
+  const long = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n\n")
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: long }])
+  terminal.send("go\r")
+  await shows("line 40")
+  await idle()
+  // Up from the end of "line 38" to the top of the conversation.
+  const start = cellOf(screen, "line 38")
+  const end = start.x + "line 38".length - 1
+  terminal.send(press(end, start.y))
+  terminal.send(drag(0, 0))
+  // Scrolling takes a while: longer than a wait for a frame.
+  await waitFor(() => screen.lines[0] === "Amira · mock/m1 · /work/proj", "the top", 12_000)
+  terminal.send(release(0, 0))
+  await waitFor(() => clipboard(terminal.output) !== undefined, "copied")
+  const up = clipboard(terminal.output)!
+  expect(up.startsWith("Amira · mock/m1 · /work/proj\n\ngo\n\nline 1\n\nline 2\n")).toBe(true)
+  expect(up.endsWith("line 37\n\nline 38")).toBe(true)
+  // Down from "line 2" past the bottom of the transcript to its end.
+  const top = cellOf(screen, "line 2")
+  const below = screen.lines.findIndex((l) => l.startsWith("╭"))
+  terminal.clearWrites()
+  terminal.send(press(top.x, top.y))
+  terminal.send(drag(top.x, below))
+  await waitFor(() => screen.lines.some((l) => l.includes("line 40")), "the end", 12_000)
+  terminal.send(release(top.x, below))
+  await waitFor(() => clipboard(terminal.output) !== undefined, "copied")
+  const down = clipboard(terminal.output)!
+  expect(down.startsWith("line 2\n\nline 3\n")).toBe(true)
+  expect(down.endsWith("line 39\n\nline 40")).toBe(true)
+  terminal.send("\x03")
+  await exited
+}, 30_000)
+
+test("selected text stays while the reply streams on; Esc clears it before anything else", async () => {
+  const head = "alpha one\n\nbeta two!!!\n\n"
+  let release_!: () => void
+  const until = new Promise<void>((r) => {
+    release_ = r
+  })
+  const { terminal, screen, view, shows, idle, exited } = await setup([
+    { text: `${head}gamma three`, hold: { chunks: head.length / 8, until } },
+  ])
+  terminal.send("go\r")
+  await shows("beta two!!!")
+  const at = cellOf(screen, "alpha one")
+  const select = async () => {
+    terminal.clearWrites()
+    terminal.send(press(at.x, at.y) + drag(at.x + 8, at.y) + release(at.x + 8, at.y))
+    await waitFor(() => clipboard(terminal.output) === "alpha one", "alpha one copied")
+    await waitFor(() => terminal.output.includes("\x1b[7malpha one"), "alpha one marked")
+  }
+  await select()
+  // Esc while the turn runs clears the selection; it does not stop the turn.
+  terminal.clearWrites()
+  terminal.send(ESC)
+  await waitFor(() => terminal.output.includes("alpha one"), "the row drawn again, unmarked")
+  expect(terminal.output).not.toContain("\x1b[7m")
+  await select()
+  release_()
+  await shows("gamma three")
+  await idle()
+  expect(view()).not.toContain("interrupted")
+  // Still selected after the reply went on: Esc clears it before closing the find bar.
+  terminal.send(CTRL_F)
+  await shows("⌕ find ›")
+  terminal.clearWrites()
+  terminal.send(ESC)
+  await waitFor(() => terminal.output.includes("alpha one"), "unmarked after streaming")
+  expect(view()).toContain("⌕ find ›")
+  terminal.send(ESC)
+  await waitFor(() => !view().includes("⌕ find"), "the find bar closed")
   terminal.send("\x03")
   await exited
 })

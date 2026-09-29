@@ -49,14 +49,22 @@ const FRAME_MS = 16
 const MIN_TRANSCRIPT_ROWS = 3
 /** Rows one notch of the mouse wheel scrolls. */
 const WHEEL_ROWS = 3
+/** How often a drag held at the top or bottom edge scrolls the transcript. */
+const EDGE_SCROLL_MS = 40
+/** Held at an edge, the drag scrolls a row more per step every this many steps, up to EDGE_SCROLL_MAX rows. */
+const EDGE_SCROLL_RAMP = 10
+const EDGE_SCROLL_MAX = 6
+/** Presses on one cell this close together make a double or triple click. */
+const MULTI_CLICK_MS = 400
 
 /**
  * The full-screen view (D84): the conversation is kept as blocks on the alternate screen and
  * drawn into a scrollable viewport above the same bottom area the inline view has. Blocks
  * change in place (a call finishing, its sub-agents moving on, also in the background after
  * the turn), fold and unfold, and are drawn again at any width. The wheel, PgUp/PgDn and
- * Home/End scroll; Ctrl+F finds; Ctrl+↑ selects blocks to fold or copy (OSC 52). On exit the
- * whole conversation is printed to the normal screen, as the inline view would have left it.
+ * Home/End scroll; Ctrl+F finds; Ctrl+↑ selects blocks to fold or copy (OSC 52); dragging the
+ * mouse selects text (D86), copied when it is released. On exit the whole conversation is
+ * printed to the normal screen, as the inline view would have left it.
  */
 export function createFullscreenView(host: ViewHost): TranscriptView {
   const { terminal, theme, keys } = host
@@ -237,6 +245,49 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     pane.clearFind()
   }
 
+  /** The last press of the left button, for double and triple clicks. */
+  let lastPress: { x: number; y: number; at: number; count: number } | undefined
+  /** Scrolls while a drag is held above or below the transcript. */
+  let edgeTimer: ReturnType<typeof setInterval> | undefined
+  let edgeDirection = 0
+
+  /**
+   * Scrolls every EDGE_SCROLL_MS while the drag is held at the edge of the transcript: on its
+   * top row (the top of the screen) up, under its last row down; a row at a time at first,
+   * faster the longer it is held. `y` undefined stops.
+   */
+  function edgeScroll(y: number | undefined): void {
+    const direction = y === undefined ? 0 : y <= 0 ? -1 : y >= paneRows ? 1 : 0
+    if (direction === edgeDirection) return
+    edgeDirection = direction
+    clearInterval(edgeTimer)
+    edgeTimer = undefined
+    if (!direction) return
+    let ticks = 0
+    const tick = () => {
+      pane.scrollBy(direction * Math.min(EDGE_SCROLL_MAX, 1 + Math.floor(ticks++ / EDGE_SCROLL_RAMP)))
+      renderer.requestRender()
+    }
+    tick()
+    edgeTimer = setInterval(tick, EDGE_SCROLL_MS)
+  }
+
+  /** The drag is over: no more motion reports, no more scrolling at the edges. */
+  function stopDrag(): void {
+    pane.endDrag()
+    edgeScroll(undefined)
+    terminal.disableMode(modes.mouseDrag)
+  }
+
+  /** Copies the selected text, if any, and says so. */
+  function copySelection(): void {
+    const text = pane.selectedText()
+    if (!text) return
+    terminal.write(osc.clipboard(text))
+    const n = [...text].length
+    host.showNote(`Copied ${n} character${n === 1 ? "" : "s"}`)
+  }
+
   function mouse(e: MouseInput): boolean {
     if (e.action === "wheel") {
       if (e.button === "up") pane.scrollBy(-WHEEL_ROWS)
@@ -246,21 +297,40 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     if (e.action === "press" && (e.button === "right" || e.button === "middle")) {
       // The terminal hands every click to the app while it reports the mouse; say how to paste.
       host.showNote(
-        `Clicks go to Amira here: Shift+${e.button}-click (or Ctrl+V) pastes, Shift+drag selects text.`,
+        `Clicks go to Amira here: Shift+${e.button}-click (or Ctrl+V) pastes, Shift+drag selects natively.`,
       )
       return true
     }
-    if (e.action !== "press" || e.button !== "left" || e.y >= paneRows || finding) return true
-    // With a draft in the input a click (often just the one focusing the window) must not take
-    // the keyboard from it: Enter still sends and typing still types.
-    if (!host.editorEmpty()) return true
-    const hit = pane.blockAt(e.y)
-    if (!hit) return true
-    // A second click on the head of the selected block folds it.
-    const renv = env(terminal.columns)
-    if (hit.block === pane.selected && hit.line === 0) {
-      if (hit.block.foldable(renv)) hit.block.toggleFold(renv)
-    } else pane.selected = hit.block
+    if (e.button !== "left") return true
+    if (e.action === "press") {
+      // A click clears the selection and does nothing else: the keyboard stays with the input.
+      pane.clearText()
+      const now = Date.now()
+      const again =
+        lastPress && lastPress.x === e.x && lastPress.y === e.y && now - lastPress.at <= MULTI_CLICK_MS
+      const count = again ? (lastPress!.count % 3) + 1 : 1
+      lastPress = { x: e.x, y: e.y, at: now, count }
+      if (e.y >= paneRows) return true
+      if (count === 2) pane.selectWord(e.y, e.x)
+      else if (count === 3) pane.selectLine(e.y, e.x)
+      else {
+        pane.startDrag(e.y, e.x)
+        // Moves with the button held are reported from now on, until it is released.
+        if (pane.dragging) terminal.enableMode(modes.mouseDrag)
+      }
+      return true
+    }
+    if (e.action === "drag") {
+      if (!pane.dragging) return true
+      // A press after a drag starts again: it is no double click.
+      if (e.x !== lastPress?.x || e.y !== lastPress.y) lastPress = undefined
+      pane.dragTo(e.y, e.x)
+      edgeScroll(e.y)
+      return true
+    }
+    // Released: what is selected goes to the clipboard.
+    stopDrag()
+    copySelection()
     return true
   }
 
@@ -337,7 +407,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       return stepCalls.filter((b) => b.startedAt !== undefined && !b.end).length
     },
     get capturing() {
-      return !overlay && (finding || pane.selected !== undefined)
+      return !overlay && (finding || pane.selected !== undefined || pane.hasText)
     },
     start() {
       started = true
@@ -363,9 +433,11 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     stop() {
       if (subagentTimer) clearInterval(subagentTimer)
       subagentTimer = undefined
+      edgeScroll(undefined)
       offEmergency?.()
       if (!started) return
       started = false
+      terminal.disableMode(modes.mouseDrag)
       terminal.disableMode(modes.mouse)
       renderer.close()
       terminal.write(printout())
@@ -561,6 +633,11 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       if (overlay) return false
       if (e.type === "mouse") return mouse(e)
       if (e.type === "focus") return false
+      // Esc clears selected text before it does anything else (closing the find bar, a list).
+      if (pane.hasText && keys.is(e, "text.clear")) {
+        pane.clearText()
+        return true
+      }
       if (finding) return findKey(e)
       if (pane.selected && selectKey(e)) return true
       return transcriptKey(e)
