@@ -251,7 +251,10 @@ test("a persistent child goes idle after a turn, a message wakes it, and stop en
   expect(child.persistent).toBe(true)
   await until(() => child.state === "idle")
   expect(child.turns).toBe(1)
+  expect(child.pendingNotices).toBe(0)
   expect(child.send("second")).toBe(true)
+  // On its way until its model takes it.
+  expect(child.pendingNotices).toBe(1)
   await Bun.sleep(1)
   await until(() => child.state === "idle")
   expect(child.turns).toBe(2)
@@ -426,8 +429,12 @@ test("a persistent child's tools can announce notices: its background work wakes
     "t",
   )
   const resident = tree.spawn(root, { prompt: "start", systemPrompt: "ROLE resident", persistent: true })
+  // Idle after its first turn, but its background work is still on its way.
+  await until(() => resident.turns === 1 && resident.state === "idle")
+  expect(resident.pendingNotices).toBe(1)
   await until(() => resident.turns >= 2 && resident.state === "idle")
   expect(offered).toBe(true)
+  expect(resident.pendingNotices).toBe(0)
   resident.stop()
   expect((await resident.result()).text).toBe("got: background result")
 })

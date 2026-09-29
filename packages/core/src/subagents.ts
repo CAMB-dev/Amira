@@ -217,6 +217,11 @@ class Child implements ChildSession {
     return this.groups[0]?.id
   }
 
+  get pendingNotices(): number {
+    if (this.ended) return 0
+    return this.agent.expectedNotices + this.agent.waitingNotices
+  }
+
   get events(): AsyncIterable<AnyEvent> {
     return this.tree.eventsOf(this)
   }

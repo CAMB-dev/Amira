@@ -122,6 +122,13 @@ export interface ChildSession {
   readonly state: ChildState
   /** Turns it has started so far. */
   readonly turns: number
+  /**
+   * Messages on their way to a persistent child: notices announced for it (expectNotice, e.g.
+   * a background job of its own) and not delivered yet, and messages sent (send, or a
+   * delivered notice) that its model has not seen yet. 0 when nothing is on its way, so an
+   * idle child with 0 will stay idle until someone sends it something.
+   */
+  readonly pendingNotices: number
   /** The spawn group it counts against, if any (see SpawnGroup). */
   readonly groupId?: string
   /**
