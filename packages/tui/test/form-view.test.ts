@@ -125,7 +125,7 @@ test("a form opens full screen, queues a dialog behind it, and gives the inline 
   // Back on the main screen: the transcript is intact and the queued dialog shows inline.
   await waitFor(() => !screen.inAltScreen && live().includes("? Deploy too? (other)"), "inline dialog")
   expect(all()).toContain("› set it up")
-  terminal.send("y")
+  terminal.send("\x1b[B\r")
   expect(await later).toBe(true)
   await waitFor(() => all().includes("saved"), "reply")
   expect(got).toEqual({ url: "https://ci.example/hook", token: "tok-SECRET-9", note: "reachable" })

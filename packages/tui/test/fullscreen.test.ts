@@ -237,6 +237,7 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   await idle()
   const conversation = [
     "Amira · mock/m1 · /work/proj",
+    "@ files · ? keys",
     "",
     "",
     "› what is in a.ts?",
@@ -334,7 +335,7 @@ test("parallel tool calls keep their places in call order and finish in place", 
   // The fast one finished below the slow one, which still runs above it.
   await waitFor(() => /● slow a\.ts .*\n● fast b\.ts\n {2}└ fast result/.test(view()), "fast done in place")
   // The activity line stays while tools run: its spinner, the tool still running and the time.
-  await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running slow · \d+s( · ↓ \d+ tokens)?$/m.test(view()), "activity")
+  await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 1 tool running · \d+s( · ↓ \d+ tokens)?$/m.test(view()), "activity")
   expect(view()).toContain("Esc interrupt")
   expect(view()).toMatch(/● slow a\.ts +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+s/)
   release()
@@ -763,7 +764,9 @@ test("a drag held under the transcript scrolls it down, one held on its top row 
   terminal.send(release(0, 0))
   await waitFor(() => clipboard(terminal.output) !== undefined, "copied")
   const up = clipboard(terminal.output)!
-  expect(up.startsWith("Amira · mock/m1 · /work/proj\n\ngo\n\nline 1\n\nline 2\n")).toBe(true)
+  expect(up.startsWith("Amira · mock/m1 · /work/proj\n@ files · ? keys\n\ngo\n\nline 1\n\nline 2\n")).toBe(
+    true,
+  )
   expect(up.endsWith("line 37\n\nline 38")).toBe(true)
   // Down from "line 2" past the bottom of the transcript to its end.
   const top = cellOf(screen, "line 2")
@@ -889,7 +892,7 @@ test("Ctrl+F finds text in the transcript, highlights matches and moves between 
   // The find bar keeps its essential keys; the input's hint row stays, blank.
   expect(view()).toMatch(/2\/2 · Enter older · Esc close$/m)
   expect(view()).not.toContain("newer")
-  expect(view()).not.toContain("? keys")
+  expect(view()).not.toContain("Enter send")
   expect(view()).toContain("needle 30")
   // The current match is marked (inverse and underlined), the other one inverse.
   expect(terminal.output).toContain("\x1b[7;4mneedle\x1b[27;24m")
@@ -1015,7 +1018,7 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
   terminal.send(click(screen.lines.findIndex((l) => l.startsWith("› go"))))
   await Bun.sleep(30)
   expect(view()).not.toMatch(/block \d+ of/)
-  terminal.send("y")
+  terminal.send("\x1b[B\r")
   await shows("thanks")
   await idle()
   expect(view()).toContain("└ true")

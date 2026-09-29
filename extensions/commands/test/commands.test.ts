@@ -221,6 +221,8 @@ test("/help lists other extensions' commands in their own group, descriptions cu
   }, "my-ext")
   const { text } = await run("/help")
   expect(text.indexOf("Commands:")).toBeLessThan(text.indexOf("From my-ext:"))
+  // Built-in commands from anywhere are Commands, not an internal id.
+  expect(text).not.toContain("From builtin:")
   expect(text).toMatch(/\/deploy\s+Ship: very long.*…\n/)
   expect(text.split("\n").every((l) => l.length < 120)).toBe(true)
 })
@@ -233,8 +235,9 @@ test("/help lists the skills in their own section, run with $", async () => {
     api.registerSkill({ name: "deploy", description: `Ship ${"very long ".repeat(20)}`, run: () => {} })
   }, "builtin:skills")
   const { text } = await run("/help")
+  // Folded to a line: skills can be many, and typing $ lists them.
   expect(text).toMatch(
-    /\n\nSkills \(\$ runs a skill: \$<name> \[arguments\]\):\n\$deploy\s+Ship very long.*…\n\$review-pr\s+Review a pull request\n\nAliases from settings/,
+    /\n\nSkills: 2 skills · type \$ to list them; \$<name> \[arguments\] runs one\.\n\nAliases from settings/,
   )
   // Skills are not commands.
   expect(text).not.toContain("/deploy")
@@ -256,7 +259,9 @@ test("/status right at startup waits briefly for the git facts", async () => {
 test("/model switches with an argument and asks without one", async () => {
   const { run, host, asked } = await setup({}, ["openai/gpt-5", undefined])
   expect((await run("/model deepseek/deepseek-pro")).text).toBe("Model: deepseek/deepseek-pro")
-  expect((await run("/model")).text).toBe("Model: openai/gpt-5")
+  // Picked in the TUI: the picker's echo says what was chosen, so nothing is printed again.
+  expect((await run("/model")).text).toBe("")
+  expect((await run("/status")).text).toContain("openai/gpt-5")
   expect(asked[0]).toContain("deepseek/deepseek-flash | deepseek/deepseek-pro | openai/gpt-5")
   // Cancelling the picker keeps the model and says how to pick one.
   expect((await run("/model")).text).toContain("Model: openai/gpt-5. Pass one")
@@ -470,4 +475,20 @@ test("formatting helpers", () => {
   expect(sessionLabel({ id: "x", updatedAt: 0, firstUserText: "  a\n b ", messageCount: 3 }, 30_000)).toBe(
     "x  just now  3 msgs  a b",
   )
+})
+
+test("/help lists the frontend's common keys between the commands and the skills", async () => {
+  const { host } = await setup()
+  const r = await host.run("/help", {
+    frontend: "tui",
+    keys: () => [
+      { keys: "Enter", description: "Send the message" },
+      { keys: "Ctrl+R", description: "Search the prompt history" },
+    ],
+  })
+  const text = r.output.join("\n")
+  expect(text).toMatch(/\n\nKeys:\nEnter\s+Send the message\nCtrl\+R\s+Search the prompt history\n\nSkills:/)
+  // A frontend without keys has no such part.
+  const plain = await host.run("/help", { frontend: "rpc" })
+  expect(plain.output.join("\n")).not.toContain("Keys:")
 })

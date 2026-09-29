@@ -141,8 +141,8 @@ export class PromptHistory {
 
 /**
  * Walks the history with ↑/↓ (Claude Code's rule): only on an empty editor, or while the editor
- * holds an entry it recalled and the user has not edited it, with the caret on its first line
- * (↑) or last line (↓). Walking past the newest entry empties the editor again.
+ * holds an entry it recalled and the user has not edited it, with the caret on its first row
+ * (↑) or last row (↓), as drawn: a long line wraps over several. Walking past the newest entry empties the editor again.
  */
 export class HistoryNavigator {
   /** Index of the recalled entry; `entries.length` when none is. */
@@ -165,10 +165,10 @@ export class HistoryNavigator {
     const entries = this.history.entries
     const recalling = this.recalling
     if (!recalling) this.#index = -1
-    const { line } = this.editor.cursor
+    // Rows as drawn: in a recalled entry that wraps, ↑ first walks up its rows.
     if (recalling) {
-      if (dir === -1 && line !== 0) return false
-      if (dir === 1 && line !== this.editor.lineCount - 1) return false
+      if (dir === -1 && !this.editor.onFirstRow) return false
+      if (dir === 1 && !this.editor.onLastRow) return false
     } else if (!this.editor.isEmpty || dir === 1 || !entries.length) {
       return false
     }

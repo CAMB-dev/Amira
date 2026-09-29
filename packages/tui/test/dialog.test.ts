@@ -64,12 +64,12 @@ test("every dialog is a block with a bar down its left, the question, the option
     "┃   policy",
     '┃   {"command":"rm -rf build/ && bun run build"}',
     "┃",
-    "┃ ❯ Yes",
+    "┃   Yes",
     "┃   Yes, and don't ask again this session",
     "┃   No",
     "┃   Other…",
     "┃",
-    "┃ ↑↓ move · y/n · Enter choose · Esc cancel",
+    "┃ ↑↓ select · n no · Esc deny",
   ])
   expect(ask().dialog.render(60, plain)).toEqual([
     "┃ 1/2 · Approach",
@@ -79,7 +79,7 @@ test("every dialog is a block with a bar down its left, the question, the option
     "┃   2 Patch                  Fix it in place",
     "┃   3 Other…",
     "┃",
-    "┃ ←→ question · ↑↓ move · Enter choose · Esc cancel",
+    "┃ ←→ question · ↑↓ move · Enter next · Esc cancel",
   ])
   expect(open({ kind: "input", requestId: "i", title: "Name", placeholder: "your name" }).rows()).toEqual([
     "? Name",
@@ -89,28 +89,26 @@ test("every dialog is a block with a bar down its left, the question, the option
   ])
 })
 
-test("a confirm is a list: Enter chooses, y and n answer at once, digits do nothing", () => {
-  const yes = approval()
-  yes.type("1")
-  expect(yes.answers).toEqual([])
-  yes.type("y")
-  expect(yes.answers).toEqual([true])
+test("a confirm starts with nothing selected: Enter and y do nothing until a choice is picked", () => {
+  const early = approval()
+  // Keys typed into a message just as the approval shows up do not answer it.
+  early.type("1y")
+  early.press("enter")
+  expect(early.answers).toEqual([])
+  early.press("down")
+  expect(early.rows()[4]).toBe("❯ Yes")
+  expect(early.rows().at(-1)).toBe("↑↓ move · n no · Enter choose · Esc deny")
+  early.press("enter")
+  expect(early.answers).toEqual([true])
   const no = approval()
   no.type("n")
   expect(no.answers).toEqual([false])
   const always = approval()
-  always.press("down", "enter")
+  always.press("down", "down", "enter")
   expect(always.answers).toEqual(["always"])
-  // A confirm without the extras offers yes and no only.
+  // A confirm without the extras offers yes and no only; ↑ first picks the last one.
   const plainConfirm = open({ kind: "confirm", requestId: "c", title: "Go?" })
-  expect(plainConfirm.rows()).toEqual([
-    "? Go?",
-    "",
-    "❯ Yes",
-    "  No",
-    "",
-    "↑↓ move · y/n · Enter choose · Esc cancel",
-  ])
+  expect(plainConfirm.rows()).toEqual(["? Go?", "", "  Yes", "  No", "", "↑↓ select · n no · Esc cancel"])
   plainConfirm.press("up", "enter")
   expect(plainConfirm.answers).toEqual([false])
 })
@@ -157,7 +155,7 @@ test("a confirm's always choice says how far it reaches when the asker says so",
   }
   const { rows, press, answers } = open(r)
   expect(rows()[3]).toBe("  Yes, and don't ask again for bash (policy)")
-  press("down", "enter")
+  press("down", "down", "enter")
   expect(answers).toEqual(["always"])
   expect(dialogEchoLines(r, "always", plain.theme)).toEqual([
     "┃ ? Allow bash? ❯ Yes, and don't ask again for bash (policy)",
@@ -263,11 +261,11 @@ test("a tight approval gives up its blank rows and message before its options", 
   expect(rows()).toEqual([
     "? Allow bash? (approval)",
     "  policy …",
-    "❯ Yes",
+    "  Yes",
     "  Yes, and don't ask again this session",
     "  No",
     "  Other…",
-    "↑↓ move · y/n · Enter choose · Esc cancel",
+    "↑↓ select · n no · Esc deny",
   ])
 })
 
@@ -283,7 +281,7 @@ test("narrow, descriptions go under their labels; CJK text wraps by its width", 
     "    Fix it in place",
     "  3 Other…",
     "",
-    "Enter choose · Esc cancel",
+    "←→ question · Enter next",
   ])
   const cjk = ask([
     {
@@ -328,9 +326,21 @@ test("several questions are asked one after another and answered together", () =
   type("3")
   expect(rows()).toContain("  1 [x] Tests")
   expect(rows()).toContain("❯ 3 [x] Changelog")
-  expect(rows(80).at(-1)).toBe("←→ question · ↑↓ move · Space toggle · Enter submit · Esc cancel")
+  expect(rows(80).at(-1)).toBe("←→ question · ↑↓ move · Space toggle · Enter submit · Esc back")
   press("enter")
   expect(answers).toEqual([[{ selected: ["Patch"] }, { selected: ["Tests", "Changelog"] }]])
+})
+
+test("Esc on a later question goes back to the one before, keeping the answers; on the first it cancels", () => {
+  const { answers, type, press, rows } = ask()
+  type("1")
+  expect(rows()[0]).toBe("2/2 · Extras")
+  press("escape")
+  expect(answers).toEqual([])
+  expect(rows()[0]).toBe("1/2 · Approach")
+  expect(rows()).toContain("❯ 1 Rewrite (Recommended)  Start over")
+  press("escape")
+  expect(answers).toEqual([undefined])
 })
 
 test("in a multi-select, Other takes text next to the options checked", () => {
@@ -381,7 +391,7 @@ test("colors: the bar and ❯ in the accent, an approval's bar in the warning co
 test("dialog keys come from the keybindings", () => {
   const keys = new Keybindings({ ...defaultKeys({ vscode: false }), "dialog.yes": ["j"], "dialog.no": ["x"] })
   const { dialog, answers, rows } = open({ kind: "confirm", requestId: "r3", title: "Go?" }, keys)
-  expect(rows(60).at(-1)).toBe("↑↓ move · j/x · Enter choose · Esc cancel")
+  expect(rows(60).at(-1)).toBe("↑↓ select · j/x · Esc cancel")
   dialog.handleInput(textKey("y"))
   expect(answers).toEqual([])
   dialog.handleInput(textKey("j"))
@@ -402,6 +412,8 @@ test("an unbound action has no footer item", () => {
     "dialog.toggle": [],
   })
   const confirm = open({ kind: "confirm", requestId: "r5", title: "Go?" }, keys)
+  expect(confirm.rows(40).at(-1)).toBe("↓ select")
+  confirm.press("down")
   expect(confirm.rows(40).at(-1)).toBe("↓ move · Enter choose")
   const list = open({ kind: "select", requestId: "r6", title: "Pick", options: ["a"] }, keys)
   expect(list.rows(60).at(-1)).toBe("↓ move · type to filter · Enter choose")
@@ -411,4 +423,28 @@ test("an unbound action has no footer item", () => {
   expect(multi.rows(80).at(-1)).toBe("↑↓ move · Space toggle · Enter submit · Esc cancel")
   const unbound = open({ kind: "ask", requestId: "q", title: "q", questions: [QUESTIONS[1]!] }, keys)
   expect(unbound.rows(80).at(-1)).toBe("↓ move · Enter submit")
+})
+
+test("an input dialog short of rows keeps the caret: the title goes first, then the text scrolls", () => {
+  const d = open({ kind: "input", requestId: "i2", title: "Commit message" })
+  d.type("one two three four five six seven eight nine ten eleven twelve thirteen")
+  d.dialog.maxRows = 3
+  const lines = d.dialog.render(20, plain)
+  expect(lines.length).toBeLessThanOrEqual(3)
+  expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true)
+  expect(stripAnsi(lines.at(-1)!)).toContain("Enter")
+})
+
+test("the position row of a scrolled list gives way before the title when rows are short", () => {
+  const { dialog, rows } = select(Array.from({ length: 30 }, (_, i) => `option ${i}`))
+  dialog.maxRows = 3
+  const lines = rows()
+  expect(lines.length).toBe(3)
+  expect(lines[0]).toBe("? Model")
+  expect(lines[1]).toBe("❯ option 0")
+})
+
+test("an input answered with nothing echoes as (empty), not as a bare question", () => {
+  const r: DialogRequest = { kind: "input", requestId: "e", title: "Note" }
+  expect(dialogEchoLines(r, "", plain.theme)).toEqual(["┃ ? Note ❯ (empty)"])
 })

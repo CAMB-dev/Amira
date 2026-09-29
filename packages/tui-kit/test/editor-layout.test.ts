@@ -6,8 +6,9 @@ import { graphemes, TAB_WIDTH, textWidth } from "../src/width.ts"
 import { plain } from "./context.ts"
 
 /**
- * The layout the editor had before it was made incremental: every line wrapped from scratch.
- * The incremental editor must draw exactly what this draws, whatever happened before.
+ * The layout from scratch: every line wrapped at its last space that fits (a word longer than a
+ * row is split where the row ends). The incremental editor must draw exactly what this draws,
+ * whatever happened before.
  */
 function reference(lines: string[], caret: { line: number; col: number }, width: number, prompt: string) {
   const pw = prompt.length
@@ -15,20 +16,36 @@ function reference(lines: string[], caret: { line: number; col: number }, width:
   const cell = (g: string, used: number) =>
     g === "\t" ? TAB_WIDTH - ((pw + used) % TAB_WIDTH) : textWidth(g)
   const rows: { line: number; start: number; end: number; last: boolean }[] = []
+  const space = (g: string) => g === " " || g === "\t"
   lines.forEach((text, line) => {
+    const gs = graphemes(text)
     let start = 0
     let used = 0
     let pos = 0
-    for (const g of graphemes(text)) {
-      let w = cell(g, used)
-      if (used + w > max) {
+    let breakAt = -1
+    let breakPos = 0
+    let i = 0
+    while (i < gs.length) {
+      const g = gs[i]!
+      const w = cell(g, used)
+      if (used + w > max && pos > start) {
+        if (breakAt !== -1 && breakPos > start && !space(g)) {
+          i = breakAt
+          pos = breakPos
+        }
         rows.push({ line, start, end: pos, last: false })
         start = pos
         used = 0
-        w = cell(g, used)
+        breakAt = -1
+        continue
       }
       used += w
       pos += g.length
+      i++
+      if (space(g)) {
+        breakAt = i
+        breakPos = pos
+      }
     }
     if (used >= max && line === caret.line && caret.col === text.length) {
       rows.push({ line, start, end: pos, last: false })

@@ -17,7 +17,8 @@ a key or a list of keys:
   terminal can report).
 - The hint line under the input shows only the few keys that matter now: `Enter send · ? keys`
   while idle (`Shift+Enter newline` in place of `? keys` once the input has text), and
-  `Enter steer · Alt+Enter queue · Esc interrupt` while a turn runs. The lists, the history
+  `Enter steer · Alt+Enter queue · Esc interrupt` while a turn runs (`Esc send queued` while
+  steering or queued messages wait, and `Esc Esc rewind` where the session is stored). The lists, the history
   search, the find bar and a block selection show their own. `?` (the `help` action) opens the
   key reference: every action with the keys bound to it now and its name for this file.
 - The file is read at startup. Unknown actions, keys that cannot be read and a key bound to two
@@ -53,8 +54,8 @@ from `terminal.integrated.commandsToSkipShell`.
 | `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it (steer it with `tui.submitWhileWorking: "queue"`) |
 | `submit.steer` | none | Send the message; while a turn runs, always steer it |
 | `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |
-| `interrupt` | `escape` | Stop the running turn |
-| `cancel` | `ctrl+c` | Stop the running turn, else clear the input, else quit |
+| `interrupt` | `escape` | Stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. Files are not restored |
+| `cancel` | `ctrl+c` | Stop the running turn (with steering or queued messages waiting, they go out as for `interrupt`), else clear the input, else quit |
 | `exit` | `ctrl+d` | Quit when the input is empty and nothing runs |
 | `redraw` | `ctrl+l` | Clear the screen and draw it again: the latest transcript and the input |
 | `history.prev` | `up` | Recall the previous prompt (from the input's first line) |
@@ -63,14 +64,23 @@ from `terminal.integrated.commandsToSkipShell`.
 | `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
 | `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as an extension's todo list) to one line each, or unfold them |
 | `help` | `?` | Open the key reference, while the input is empty and no dialog or list is open (with text, `?` is typed). It scrolls with ↑↓, PgUp/PgDn, Home/End; Esc, `q` or `?` close it |
+| `edit.kill-to-start` | `ctrl+u` | Cut from the start of the line to the caret (at the start, the line break before it) |
+| `edit.kill-to-end` | `ctrl+k` | Cut from the caret to the end of the line (at the end, the line break after it) |
+| `edit.kill-word` | `ctrl+w` | Cut the word before the caret |
+| `edit.yank` | `ctrl+y` | Paste the text cut last; cuts in a row join into one. Folded pastes stay folded |
+| `edit.undo` | `ctrl+z` | Undo the last change to the input: a word typed, a run of deletes, a cut, a paste, a recalled prompt |
+| `edit.redo` | `ctrl+shift+z` | Redo the change undone last. Terminals without the kitty keyboard protocol send Ctrl+Shift+Z as Ctrl+Z; bind another key there |
+| `edit.external` | `ctrl+g` | Edit the message in your editor: `$VISUAL`, else `$EDITOR` (a command, e.g. `code --wait`), else Notepad on Windows and vi elsewhere. The terminal is the editor's until it exits; the saved text becomes the input |
 
 ### Completion lists
 
 The command popup, shown while the input starts with `/`; the skill popup, shown while it
 starts with `$`; and the file list, shown while an `@word` is typed. Their keys come before
-the input's. In the skill popup, Enter runs the highlighted skill only when it was picked or
-the typed name is the start of it; other text after a `$` (`$100 is the price`) is sent as a
-message.
+the input's. On a bare `/` or `$` no row is marked and Enter does nothing until one is picked
+(the first ↓ marks the first row). In the skill popup, Enter runs the highlighted skill only
+when it was picked or the typed name is the start of it; other text after a `$` (`$100 is the
+price`) is sent as a message. A name nothing matches keeps the list open with
+`no command matches /zzz`; a lone `$zzz` is then not sent until the list is closed with Esc.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -100,7 +110,13 @@ question, the options and the keys. In a list of up to nine options (not a confi
 digit in front of an option chooses it, or checks it where several may be chosen. "Other…"
 opens a text field in its row for an answer in your own words; there Enter keeps the text and
 Esc closes the field (Esc again cancels the dialog). Several questions are asked one after
-another in the same block and answered together.
+another in the same block and answered together: Enter goes on to the next question, and Esc
+on a later question goes back to the one before, keeping the answers given.
+
+A confirmation (such as an approval) starts with nothing selected: Enter does nothing until
+an option is picked with the arrows, so keys typed into a message just as it shows up cannot
+answer it. There is no single key that says yes (`dialog.yes` is unbound unless you bind it).
+Esc on an approval denies the call and stops the turn.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -108,7 +124,7 @@ another in the same block and answered together.
 | `dialog.down` | `down`, `tab` | Select the next option |
 | `dialog.choose` | `enter` | Choose the selected option, or submit the input |
 | `dialog.cancel` | `escape`, `ctrl+c` | Cancel the dialog |
-| `dialog.yes` | `y` | Answer yes to a confirmation |
+| `dialog.yes` | none | Answer yes to a confirmation at once |
 | `dialog.no` | `n` | Answer no to a confirmation |
 | `dialog.toggle` | `space` | Check or uncheck the selected option where several may be chosen |
 | `dialog.prev-question` | `left` | Go back to the previous question of several |
@@ -212,8 +228,8 @@ VS Code keeps Ctrl+F, Ctrl+Home, Ctrl+End and Ctrl+↑↓ for its terminal (they
 `terminal.integrated.commandsToSkipShell`), so there Alt+F, Alt+Home, Alt+End and Alt+↑ come
 first and the key reference (`?`) lists them first.
 
-Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
-the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for
+The other editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and
+deletes) and the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for
 now.
 
 ## Terminal settings

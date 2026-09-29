@@ -177,15 +177,15 @@ test("while the project is listed the picker shows a status row, then matches as
   // Shown at once, before any file is known, with a spinner and the count so far.
   expect(picker.visible).toBe(true)
   expect(picker.open).toBe(false)
-  expect(picker.render(60, plain)).toEqual(["⠋ indexing… 0 files"])
+  expect(picker.render(60, plain)).toEqual(["  ⠋ indexing… 0 files"])
   src.emit(["src/app.ts", "README.md"])
   await tick()
-  expect(picker.render(60, plain)).toEqual(["❯ src/app.ts", "⠋ indexing… 2 files"])
+  expect(picker.render(60, plain)).toEqual(["❯ src/app.ts", "  ⠋ indexing… 2 files"])
   // The list keys work on what is there.
   expect(picker.handleKey(key("tab"))).toEqual({ type: "insert", replace: 4, text: "@src/app.ts " })
   src.emit(["app.ts"])
   await tick()
-  expect(picker.render(60, plain)).toEqual(["❯ app.ts", "  src/app.ts", "⠋ indexing… 3 files"])
+  expect(picker.render(60, plain)).toEqual(["❯ app.ts", "  src/app.ts", "  ⠋ indexing… 3 files"])
   src.finish()
   await tick()
   expect(picker.render(60, plain)).toEqual(["❯ app.ts", "  src/app.ts"])
@@ -239,7 +239,7 @@ test("the selection stays on the path moved to while more matches arrive", async
   expect(picker.render(60, plain)[1]).toBe("❯ b2.ts")
   src.emit(["b.ts"])
   await tick()
-  expect(picker.render(60, plain)).toEqual(["  b.ts", "  b1.ts", "❯ b2.ts", "⠋ indexing… 3 files"])
+  expect(picker.render(60, plain)).toEqual(["  b.ts", "  b1.ts", "❯ b2.ts", "  ⠋ indexing… 3 files"])
   picker.dispose()
 })
 

@@ -27,7 +27,7 @@ export class InputBox implements Component {
     this.box = new Box(editor, {
       labels: () => {
         const { above } = this.editor.hidden
-        return above > 0 ? { top: `↑ ${above} more` } : {}
+        return above > 0 ? { top: `↑ ${above} ${above === 1 ? "row" : "rows"}` } : {}
       },
       bottom: (width, ctx) => {
         const { below } = this.editor.hidden
@@ -38,7 +38,7 @@ export class InputBox implements Component {
                 align: "right",
                 tone: "muted",
                 priority: Number.POSITIVE_INFINITY,
-                text: `↓ ${below} more`,
+                text: `↓ ${below} ${below === 1 ? "row" : "rows"}`,
               },
             ]
           : []

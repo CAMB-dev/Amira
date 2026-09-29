@@ -446,7 +446,8 @@ export class FilePicker implements Component {
       : []
     const listing = this.#listing
     if (this.#indexing && listing) {
-      const status = `${t.accent(this.#spinner.glyph)} ${t.muted(`indexing… ${count(listing.files)} files`)}`
+      // Lined up with the rows' text, as the "searched the first …" row is.
+      const status = `  ${t.accent(this.#spinner.glyph)} ${t.muted(`indexing… ${count(listing.files)} files`)}`
       rows.push(truncateToWidth(status, width, "…"))
     } else if (listing?.partial) {
       rows.push(truncateToWidth(t.muted(`  searched the first ${count(listing.files)} files`), width, "…"))

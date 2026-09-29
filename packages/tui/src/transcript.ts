@@ -21,6 +21,8 @@ const JOINS: Partial<Record<BlockKind, BlockKind>> = {
   tool: "tool",
   // What a command prints hangs under its echo.
   "command-output": "command",
+  // The banner's hint line goes right under it.
+  banner: "banner",
 }
 
 /** Whether a block of `next` kind after one of `prev` kind gets a blank line between them. */

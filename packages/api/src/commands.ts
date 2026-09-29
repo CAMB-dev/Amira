@@ -87,6 +87,12 @@ export interface CommandCompleteContext {
   readonly session: SessionControl
 }
 
+/** A key of the frontend and what it does, as /help lists it: "Ctrl+R", "Search the prompt history". */
+export interface KeyHelp {
+  keys: string
+  description: string
+}
+
 export interface CommandContext extends CommandCompleteContext {
   /** Where the command was typed. */
   readonly frontend: CommandFrontend
@@ -103,6 +109,11 @@ export interface CommandContext extends CommandCompleteContext {
   aliases(): CommandAlias[]
   /** Leaves the interactive UI; frontends with nothing to leave ignore it. */
   quit(): void
+  /**
+   * The frontend's most useful keys, as its keybindings have them now, for /help; unset where
+   * the frontend has no keys of its own.
+   */
+  readonly keys?: () => readonly KeyHelp[]
   /**
    * Shows a full-screen view, on frontends that have them (the TUI does); unset elsewhere.
    * Returns once the view is shown; the user leaves it when done. Throws for a view kind no

@@ -12,6 +12,8 @@ export type KeyScope = "input" | "popup" | "search" | "dialog" | "transcript" | 
 interface ActionInfo {
   scope: KeyScope
   description: string
+  /** A short line for /help, whose Keys part lists the actions that have one, in this order. */
+  help?: string
 }
 
 /**
@@ -23,26 +25,41 @@ export const ACTIONS = {
     scope: "input",
     description:
       'Send the message; while a turn runs, steer it (queue it with tui.submitWhileWorking "queue")',
+    help: "Send the message; while a turn runs, steer it",
   },
-  newline: { scope: "input", description: "Insert a line break" },
+  newline: { scope: "input", description: "Insert a line break", help: "Insert a line break" },
   queue: {
     scope: "input",
     description:
       'While a turn runs, send the message after it (steer it with tui.submitWhileWorking "queue")',
+    help: "While a turn runs, send the message after it",
   },
   "submit.steer": { scope: "input", description: "Send the message; while a turn runs, always steer it" },
   "submit.queue": {
     scope: "input",
     description: "Send the message; while a turn runs, always send it after the turn",
   },
-  interrupt: { scope: "input", description: "Stop the running turn" },
+  interrupt: {
+    scope: "input",
+    description:
+      "Stop the running turn, sending the steering and queued messages at once as one; twice in a row, rewind the conversation",
+    help: "Stop the turn; twice in a row, rewind to an earlier message",
+  },
   cancel: { scope: "input", description: "Stop the running turn, else clear the input, else quit" },
   exit: { scope: "input", description: "Quit when the input is empty and nothing runs" },
   redraw: { scope: "input", description: "Clear the screen and draw it again" },
   "history.prev": { scope: "input", description: "Recall the previous prompt, from the first line" },
   "history.next": { scope: "input", description: "Recall the next prompt, from the last line" },
-  "history.search": { scope: "input", description: "Search the prompt history" },
-  "tool-output": { scope: "input", description: "Cycle how much of tool results is shown" },
+  "history.search": {
+    scope: "input",
+    description: "Search the prompt history",
+    help: "Search the prompts sent before (↑ recalls them)",
+  },
+  "tool-output": {
+    scope: "input",
+    description: "Cycle how much of tool results is shown",
+    help: "Show more or less of tool output",
+  },
   "panels.toggle": {
     scope: "input",
     description: "Fold or unfold the live panels above the activity line (e.g. a todo list)",
@@ -50,6 +67,18 @@ export const ACTIONS = {
   help: {
     scope: "input",
     description: "List every key and what it does, while the input is empty and no list is open",
+    help: "Every key and what it does (on an empty input)",
+  },
+  "edit.kill-to-start": { scope: "input", description: "Cut from the start of the line to the caret" },
+  "edit.kill-to-end": { scope: "input", description: "Cut from the caret to the end of the line" },
+  "edit.kill-word": { scope: "input", description: "Cut the word before the caret" },
+  "edit.yank": { scope: "input", description: "Paste the text cut last (cuts in a row join)" },
+  "edit.undo": { scope: "input", description: "Undo the last change to the input" },
+  "edit.redo": { scope: "input", description: "Redo the change undone last" },
+  "edit.external": {
+    scope: "input",
+    description: "Edit the message in your editor ($VISUAL, else $EDITOR; Notepad on Windows, else vi)",
+    help: "Edit the message in your editor",
   },
   "popup.up": { scope: "popup", description: "Select the previous command, argument or file" },
   "popup.down": { scope: "popup", description: "Select the next command, argument or file" },
@@ -67,7 +96,10 @@ export const ACTIONS = {
   "dialog.down": { scope: "dialog", description: "Select the next option" },
   "dialog.choose": { scope: "dialog", description: "Choose the selected option, or submit the input" },
   "dialog.cancel": { scope: "dialog", description: "Cancel the dialog" },
-  "dialog.yes": { scope: "dialog", description: "Answer yes to a confirmation" },
+  "dialog.yes": {
+    scope: "dialog",
+    description: "Answer yes to a confirmation at once (unbound: a key typed early must not approve)",
+  },
   "dialog.no": { scope: "dialog", description: "Answer no to a confirmation" },
   "dialog.toggle": {
     scope: "dialog",
@@ -90,8 +122,16 @@ export const ACTIONS = {
     scope: "transcript",
     description: "Go to the end of the transcript and follow it (End only while the input is empty)",
   },
-  "select.start": { scope: "transcript", description: "Select the newest block of the transcript" },
-  find: { scope: "transcript", description: "Find text in the transcript" },
+  "select.start": {
+    scope: "transcript",
+    description: "Select the newest block of the transcript",
+    help: "Select a block to fold or copy it",
+  },
+  find: {
+    scope: "transcript",
+    description: "Find text in the transcript",
+    help: "Find text in the transcript",
+  },
   "copy.reply": { scope: "transcript", description: "Copy the last reply (its Markdown) to the clipboard" },
   "select.prev": { scope: "select", description: "Select the block before" },
   "select.next": { scope: "select", description: "Select the block after" },
@@ -135,6 +175,14 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "tool-output": ["ctrl+o"],
     "panels.toggle": ["ctrl+t"],
     help: ["?"],
+    "edit.kill-to-start": ["ctrl+u"],
+    "edit.kill-to-end": ["ctrl+k"],
+    "edit.kill-word": ["ctrl+w"],
+    "edit.yank": ["ctrl+y"],
+    "edit.undo": ["ctrl+z"],
+    // Terminals without the kitty keyboard protocol send Ctrl+Shift+Z as Ctrl+Z.
+    "edit.redo": ["ctrl+shift+z"],
+    "edit.external": ["ctrl+g"],
     "popup.up": ["up"],
     "popup.down": ["down"],
     "popup.complete": ["tab"],
@@ -148,7 +196,8 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "dialog.down": ["down", "tab"],
     "dialog.choose": ["enter"],
     "dialog.cancel": ["escape", "ctrl+c"],
-    "dialog.yes": ["y"],
+    // Unbound: a "y" typed into a message just as an approval shows up must not allow the call.
+    "dialog.yes": [],
     "dialog.no": ["n"],
     "dialog.toggle": ["space"],
     "dialog.prev-question": ["left"],

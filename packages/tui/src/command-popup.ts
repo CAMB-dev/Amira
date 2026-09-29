@@ -1,13 +1,8 @@
 import type { CommandCandidate, CommandInfo } from "@amira/api"
-import {
-  type Component,
-  type InputEvent,
-  type RenderContext,
-  truncateToWidth,
-  visibleWidth,
-} from "@amira/tui-kit"
+import { type Component, type InputEvent, type RenderContext, truncateToWidth } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
+import { pickerRows } from "./picker.ts"
 
 type Completion = { command?: string; candidates: CommandCandidate[] }
 
@@ -35,9 +30,6 @@ export type PopupAction =
   | { type: "replace"; text: string }
   /** Run this command (or skill) line (Enter). */
   | { type: "run"; line: string }
-
-/** Rows of candidates shown at once; the list scrolls to keep the selection visible. */
-const MAX_ROWS = 8
 
 /** One line of text that starts with the sigil: the only input the popup opens for. */
 const isInputFor = (sigil: PopupSigil, text: string) =>
@@ -143,10 +135,17 @@ export class CommandPopup implements Component {
       return { type: "handled" }
     }
     const n = r.candidates.length
-    if (!n) return undefined
+    if (!n) {
+      // A lone "$name" that is no skill: Enter would send it to the model as a message. The
+      // list says nothing matches; Esc closes it, and then Enter sends it as typed.
+      const lone = this.sigil === "$" && !r.command && /^\$\S+$/.test(r.text.trim())
+      return lone && this.keys.is(e, "popup.accept") ? { type: "handled" } : undefined
+    }
     if (this.keys.is(e, "popup.up") || this.keys.is(e, "popup.down")) {
-      const step = this.keys.is(e, "popup.up") ? -1 : 1
-      this.#selected = (this.#selected + step + n) % n
+      const up = this.keys.is(e, "popup.up")
+      // Nothing marked yet (a bare sigil): ↓ marks the first row, ↑ the last.
+      if (this.#pickedNothing(r)) this.#selected = up ? n - 1 : 0
+      else this.#selected = (this.#selected + (up ? -1 : 1) + n) % n
       this.#navigated = true
       return { type: "handled" }
     }
@@ -158,7 +157,7 @@ export class CommandPopup implements Component {
     if (!this.keys.is(e, "popup.accept")) return undefined
     if (!r.command) {
       // A bare "/" names nothing yet; Enter only runs a command once one is picked or typed.
-      if (r.text === sigil && !this.#navigated) return { type: "handled" }
+      if (this.#pickedNothing(r)) return { type: "handled" }
       // Text that is not the start of the skill's name, case included, is prose ("$HOME" next
       // to home-assistant): the editor sends it. The list still ranks without case.
       if (sigil === "$" && !this.#navigated && !chosen.startsWith(r.text.slice(1))) return undefined
@@ -175,6 +174,16 @@ export class CommandPopup implements Component {
     const partOf = typed && !exact && chosen.toLowerCase().includes(typed)
     if (this.#navigated || partOf) return { type: "run", line: `${sigil}${r.command} ${chosen}` }
     return { type: "run", line: r.text.trim() }
+  }
+
+  /** Whether the list shows candidates to pick from, not how a command is used or that none match. */
+  get hasCandidates(): boolean {
+    return (this.#shown?.candidates.length ?? 0) > 0
+  }
+
+  /** A bare sigil with nothing picked yet: no candidate is chosen. */
+  #pickedNothing(r: Result): boolean {
+    return !r.command && r.text === this.sigil && !this.#navigated
   }
 
   render(width: number, ctx: RenderContext): string[] {
@@ -195,32 +204,36 @@ export class CommandPopup implements Component {
   #lines(r: Result, ctx?: RenderContext, width = 80): string[] {
     const theme = ctx?.theme
     const muted = (s: string) => (theme ? theme.muted(s) : s)
-    const accent = (s: string) => (theme ? theme.accent(s) : s)
     if (!r.candidates.length) {
+      // Nothing matches the name typed: say so, rather than the list closing as if gone. Not
+      // for text that goes on after the name ("$100 is the price"): that is a message.
+      if (!r.command && /^\S+$/.test(r.text.trim())) {
+        const what = this.sigil === "$" ? "skill" : "command"
+        return [muted(truncateToWidth(`  no ${what} matches ${r.text.trim()}`, width, glyphs.more))]
+      }
       // No candidates for the arguments: show how the command is used instead.
-      const info = r.command ? this.source.list().find((c) => c.name === r.command) : undefined
+      const info = this.source.list().find((c) => c.name === r.command)
       if (!info) return []
       const aliases = info.aliases?.length ? ` (${info.aliases.join(", ")})` : ""
       const usage = `${this.sigil}${info.name}${aliases}${info.hint ? ` ${info.hint}` : ""}  ${info.description}`
       return [muted(truncateToWidth(`  ${usage}`, width, "…"))]
     }
-    const n = r.candidates.length
-    const start = Math.min(Math.max(0, this.#selected - MAX_ROWS + 1), Math.max(0, n - MAX_ROWS))
-    const shown = r.candidates.slice(start, start + MAX_ROWS)
-    // A command row shows its aliases, a settings alias what it runs: "/quit (exit, q)".
-    const label = (c: CommandCandidate) => `${r.command ? "" : this.sigil}${c.label ?? c.value}`
-    const col = Math.min(32, Math.max(...shown.map((c) => visibleWidth(label(c)))))
-    const lines = shown.map((c, i) => {
-      const selected = start + i === this.#selected
-      const name = label(c)
-      const pad = " ".repeat(Math.max(0, col - visibleWidth(name)))
-      const desc = c.description ? `  ${muted(c.description)}` : ""
-      const line = selected
-        ? `${accent(glyphs.pointer)} ${accent(name)}${pad}${desc}`
-        : `  ${name}${pad}${desc}`
-      return truncateToWidth(line, width, "…")
-    })
-    if (n > MAX_ROWS) lines.push(muted(`  ${this.#selected + 1}/${n}`))
-    return lines
+    // A command row shows its aliases, a settings alias what it runs: "/quit (exit, q)"; and the
+    // arguments it takes, muted: "/model [provider/model]".
+    // Skills all take "[arguments]": no hint for them.
+    const hints =
+      r.command || this.sigil === "$" ? undefined : new Map(this.source.list().map((u) => [u.name, u.hint]))
+    const label = (c: CommandCandidate) => {
+      const hint = hints?.get(c.value)
+      return `${r.command ? "" : this.sigil}${c.label ?? c.value}${hint ? ` ${muted(hint)}` : ""}`
+    }
+    const rows = r.candidates.map((c) => ({
+      label: label(c),
+      ...(c.description ? { description: c.description } : {}),
+    }))
+    // A bare sigil names nothing yet: no row is marked until one is picked, as Enter does nothing.
+    const selected = this.#pickedNothing(r) ? -1 : this.#selected
+    if (!theme) return rows.map((row) => row.label)
+    return pickerRows(rows, selected, width, theme)
   }
 }
