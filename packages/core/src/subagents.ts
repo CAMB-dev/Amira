@@ -1065,12 +1065,25 @@ export class AgentTree {
 
   async #oneAtATime<T>(parent: Agent, signal: AbortSignal, aborted: T, ask: () => Promise<T>): Promise<T> {
     const before = this.#asking.get(parent.sessionId) ?? Promise.resolve()
-    const mine = before.then(() => (signal.aborted ? aborted : ask()))
-    const tail = mine.catch(() => {})
+    // One aborted while it waits for its place leaves at once: the one before it may be a
+    // question passed on to the user, open for minutes.
+    let onAbort: (() => void) | undefined
+    const abandoned = new Promise<T>((resolve) => {
+      onAbort = () => resolve(aborted)
+      signal.addEventListener("abort", onAbort, { once: true })
+    })
+    const inLine = before.then(() => {
+      signal.removeEventListener("abort", onAbort!)
+      return signal.aborted ? aborted : ask()
+    })
+    const mine = Promise.race([inLine, abandoned])
+    // The next in line still waits for this one's model call to end, not only its abort.
+    const tail = inLine.catch(() => {})
     this.#asking.set(parent.sessionId, tail)
     try {
       return await mine
     } finally {
+      signal.removeEventListener("abort", onAbort!)
       if (this.#asking.get(parent.sessionId) === tail) this.#asking.delete(parent.sessionId)
     }
   }
@@ -1082,10 +1095,12 @@ export class AgentTree {
    */
   async #consultParentQuestions(parent: Agent, req: AskRequest, signal: AbortSignal): Promise<AskOutcome> {
     const reply = await this.#consult(parent, askParentPrompt(req), signal)
-    if (!reply.text) return { declined: true, by: `the commander (${reply.failure ?? "no reply"})` }
-    const first = reply.text.trimStart().split("\n", 1)[0]!.trim().toUpperCase()
-    if (/^\W*ASK_USER\b/.test(first)) return parent.askQuestions(req, signal)
-    if (/^\W*DECLINE\b/.test(first)) return { declined: true, by: "the commander" }
+    if (!reply.text) return { unavailable: `the commander could not answer: ${reply.failure ?? "no reply"}` }
+    // The word on the first line, or alone on a line after some prose.
+    const lines = reply.text.split("\n").map((l) => l.replace(/[*`\s.]/g, "").toUpperCase())
+    const says = (word: string) => lines[0]?.startsWith(word) || lines.includes(word)
+    if (says("ASK_USER")) return parent.askQuestions(req, signal)
+    if (says("DECLINE")) return { declined: true, by: "the commander" }
     const answers = parseParentAnswers(req.questions, reply.text)
     return answers ? { answers, by: "the commander" } : { declined: true, by: "the commander" }
   }
@@ -1141,7 +1156,7 @@ function askParentPrompt(req: AskRequest): string {
     return [`${i + 1}. ${q.header ? `[${q.header}] ` : ""}${q.question} (${how})`, ...options].join("\n")
   })
   return [
-    `A sub-agent you started (session ${req.sessionId}) asks you ${req.questions.length === 1 ? "this question" : "these questions"} before it goes on:`,
+    `A sub-agent working for you (session ${req.sessionId}) asks you ${req.questions.length === 1 ? "this question" : "these questions"} before it goes on:`,
     questions.join("\n\n"),
     [
       'Answer with one line per question, numbered like the questions: "1: <option label>". Where several may be chosen, separate the labels with " | ". When no option fits, write your own answer instead of a label.',

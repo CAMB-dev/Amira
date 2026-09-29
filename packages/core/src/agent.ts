@@ -1164,9 +1164,14 @@ export class Agent {
   async #askFromTool(turn: Turn, toolCallId: string, questions: AskQuestion[], signal?: AbortSignal) {
     const ask = this.#ask
     if (!ask) return { unavailable: "nobody can answer questions here" }
-    const both = signal ? AbortSignal.any([turn.signal, signal]) : turn.signal
+    const both = signal && signal !== turn.signal ? AbortSignal.any([turn.signal, signal]) : turn.signal
     const request: AskRequest = { sessionId: this.sessionId, toolCallId, questions }
-    return this.#waitBlocked(turn, "question for the user", () => ask(request, both))
+    const who = this.depth === 0 ? "the user" : "the commander"
+    try {
+      return await this.#waitBlocked(turn, `question for ${who}`, () => ask(request, both))
+    } catch (err) {
+      return { unavailable: `asking failed: ${err instanceof Error ? err.message : String(err)}` }
+    }
   }
 
   /**
@@ -1191,7 +1196,9 @@ export class Agent {
       return await wait()
     } finally {
       this.#blockedCalls--
-      if (this.#blockedCalls === 0) this.#setStatus(turn, "working")
+      // A wait that ends after its turn did (aborted, abandoned) must not wake the session.
+      const live = this.#turn === turn && !turn.signal.aborted
+      if (this.#blockedCalls === 0 && live) this.#setStatus(turn, "working")
     }
   }
 

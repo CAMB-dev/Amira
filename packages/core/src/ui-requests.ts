@@ -317,6 +317,7 @@ function checkAskAnswers(questions: AskQuestion[], value: unknown): string | und
     const labels = new Set(q.options.map((o) => o.label))
     const bad = a.selected.find((l) => typeof l !== "string" || !labels.has(l))
     if (bad !== undefined) return `${at}: ${JSON.stringify(bad)} is not one of the options`
+    if (new Set(a.selected).size !== a.selected.length) return `${at} names an option twice`
     const count = a.selected.length + (a.other !== undefined ? 1 : 0)
     if (!q.multiSelect && count !== 1) return `${at} must choose one option or give "other" text`
   }

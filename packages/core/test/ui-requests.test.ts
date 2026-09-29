@@ -194,6 +194,9 @@ test("ask questions are answered with one AskAnswer per question, checked agains
   expect(ui.respond(id, [{ selected: ["C"] }, { selected: [] }])).toContain('"C" is not one of the options')
   expect(ui.respond(id, [{ selected: ["A", "B"] }, { selected: [] }])).toContain("must choose one option")
   expect(ui.respond(id, [{ selected: [], other: " " }, { selected: [] }])).toContain('"other" must be text')
+  expect(ui.respond(id, [{ selected: ["A"] }, { selected: ["x", "x"] }])).toBe(
+    "answer 2 names an option twice",
+  )
   const value = [{ selected: [], other: "neither" }, { selected: ["x", "y"] }]
   expect(ui.respond(id, value)).toBeUndefined()
   expect(await answered).toEqual(value)

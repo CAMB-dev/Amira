@@ -538,7 +538,7 @@ test("a child's questions go to its commander's model, which answers them", asyn
         e.type === "status.changed" &&
         e.sessionId === child.id &&
         e.data.status === "blocked" &&
-        e.data.reason === "question for the user",
+        e.data.reason === "question for the commander",
     ),
   ).toBe(true)
 })
@@ -559,6 +559,60 @@ test("a commander may decline, or pass a child's questions on to whoever answers
   expect(outcome).toEqual({ answers: [{ selected: ["Safe"] }, { selected: [] }] })
   expect(asked).toEqual([{ sessionId: child.id, toolCallId: expect.any(String), questions: QUESTIONS }])
 })
+
+test("ASK_USER alone on a line after some prose still passes the questions on", async () => {
+  const user: Asker = async () => ({ answers: [{ selected: ["Safe"] }, { selected: [] }] })
+  const { outcome } = await askChild("That is for the user to decide.\n\n**ASK_USER**", user)
+  expect(outcome).toEqual({ answers: [{ selected: ["Safe"] }, { selected: [] }] })
+})
+
+test("a child aborted while its question waits behind another leaves the line at once", async () => {
+  let release!: () => void
+  const held = new Promise<void>((r) => (release = r))
+  const user: Asker = async () => {
+    await held
+    return { answers: [{ selected: ["Safe"] }, { selected: [] }] }
+  }
+  const s = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      const text = last?.content[0]?.type === "text" ? last.content[0].text : ""
+      if (text.includes("asks you these questions")) return { text: "ASK_USER" }
+      if (last?.role === "toolResult") return { text: "finished" }
+      return { toolCalls: [{ name: "ask", args: { questions: QUESTIONS } }] }
+    },
+    { ask: user },
+  )
+  s.tools.register(askTool, "t")
+  const first = s.tree.spawn(s.root, { prompt: "p" })
+  const second = s.tree.spawn(s.root, { prompt: "p" })
+  // Both have asked: the first waits for the user, the second for its place.
+  await waitUntil(() =>
+    [first.id, second.id].every((id) =>
+      s.events.some((e) => e.type === "status.changed" && e.sessionId === id && e.data.status === "blocked"),
+    ),
+  )
+  const started = performance.now()
+  second.abort()
+  expect((await second.result()).status).toBe("aborted")
+  expect(performance.now() - started).toBeLessThan(1000)
+  release()
+  expect((await first.result()).status).toBe("done")
+  await s.bus.flush()
+  // The aborted one is not set working again when the line moves on.
+  const statuses = s.events.flatMap((e) =>
+    e.type === "status.changed" && e.sessionId === second.id ? [e.data.status] : [],
+  )
+  expect(statuses.at(-1)).not.toBe("working")
+})
+
+async function waitUntil(check: () => boolean, timeoutMs = 3000) {
+  const deadline = performance.now() + timeoutMs
+  while (!check()) {
+    if (performance.now() > deadline) throw new Error("timed out")
+    await Bun.sleep(5)
+  }
+}
 
 test("a commander's answers are read loosely, and a question without one fails the lot", () => {
   const one = [QUESTIONS[0]!]

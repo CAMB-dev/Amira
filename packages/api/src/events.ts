@@ -118,7 +118,7 @@ export interface EventMap {
   "ui.request": UiRequest & { requestId: string; source?: string }
   /**
    * A dialog was answered or cancelled; frontends showing it should close it. `value` is left
-   * out for forms and secret inputs.
+   * out for forms, secret inputs and answers that are objects (ask answers, a confirm's free text).
    */
   "ui.resolved": { requestId: string; cancelled: boolean; value?: string | boolean }
   /** Progress of a form action (a button such as "Fetch models") running on the host. */
