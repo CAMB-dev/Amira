@@ -7,6 +7,7 @@ import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
+import { PanelRegistry } from "./panel-registry.ts"
 import { SkillRegistry } from "./skills.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
@@ -38,6 +39,8 @@ export interface ExtensionHostOptions {
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
+  /** Where live panels go. Default: a new registry. */
+  panels?: PanelRegistry
   /** Where tool presenters go. Default: a new registry. */
   renderers?: ToolRendererRegistry
   /** Where full-screen view kinds go. Default: a new registry. */
@@ -67,6 +70,7 @@ export class ExtensionHost {
   /** Extension files imported before, which a reload must import anew. */
   #imported = new Set<string>()
   readonly status: StatusRegistry
+  readonly panels: PanelRegistry
   readonly renderers: ToolRendererRegistry
   readonly views: ViewRegistry
   readonly commands: CommandRegistry
@@ -77,6 +81,7 @@ export class ExtensionHost {
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
     this.status = opts.status ?? new StatusRegistry()
+    this.panels = opts.panels ?? new PanelRegistry()
     this.renderers = opts.renderers ?? new ToolRendererRegistry()
     this.views = opts.views ?? new ViewRegistry()
     this.commands = opts.commands ?? new CommandRegistry()
@@ -213,6 +218,21 @@ export class ExtensionHost {
       settings: deepFreeze(structuredClone(this.#opts.settings ?? {})),
       registerStatusItem: (item) => {
         const off = this.status.register(item)
+        this.#requestRender()
+        return track(() => {
+          off()
+          this.#requestRender()
+        })
+      },
+      // A taken id skips only this panel.
+      registerPanel: (panel) => {
+        let off: () => void
+        try {
+          off = this.panels.register(panel)
+        } catch (err) {
+          this.#fail(source, err instanceof Error ? err.message : String(err))
+          return () => {}
+        }
         this.#requestRender()
         return track(() => {
           off()
