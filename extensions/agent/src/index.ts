@@ -507,7 +507,8 @@ ${list.join("\n")}`
             true,
           )
         }
-        // Results can be sent by themselves only to a session that can be woken: the main one.
+        // Results can be sent by themselves only to a session that can be woken: the main one,
+        // or a persistent sub-agent.
         const auto = session.expectNotice !== undefined
         // The main session never waits (the user keeps talking to it), whatever the model asks.
         const alwaysBackground = mainAlwaysBackground(session)
@@ -544,8 +545,10 @@ ${list.join("\n")}`
     })
 
     /** Whether `session` runs sub-agents in the background whatever the call says (D79). */
-    const mainAlwaysBackground = (session: { expectNotice?: unknown }) =>
-      session.expectNotice !== undefined && api.settings.subagents?.background !== false
+    const mainAlwaysBackground = (session: { expectNotice?: unknown; depth: number }) =>
+      session.depth === 0 &&
+      session.expectNotice !== undefined &&
+      api.settings.subagents?.background !== false
 
     const resultTool = defineTool<{ ids?: string[]; wait?: boolean }>({
       name: AGENT_RESULT_TOOL,

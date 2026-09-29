@@ -1,5 +1,11 @@
 import type { ImageBlock, JSONSchema, ModelRef, TextBlock, UserMessage } from "@amira/ai"
-import type { ChildSession, SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SpawnOptions } from "./subagents.ts"
+import type {
+  ChildSession,
+  SpawnGroup,
+  SpawnGroupInfo,
+  SpawnGroupOptions,
+  SpawnOptions,
+} from "./subagents.ts"
 
 export interface ToolResult {
   content: (TextBlock | ImageBlock)[]

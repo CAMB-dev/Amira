@@ -84,7 +84,9 @@ export class ToolRegistry {
 
   #current(): Registered[] {
     if (this.#base) {
-      const shown = this.#base.#current().filter((r) => this.#allow(r.tool.name) && !this.#own.has(r.tool.name))
+      const shown = this.#base
+        .#current()
+        .filter((r) => this.#allow(r.tool.name) && !this.#own.has(r.tool.name))
       return [...shown, ...this.#own.values()]
     }
     return [...this.#tools.values()].map((s) => s.at(-1)!)

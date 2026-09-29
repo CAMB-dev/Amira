@@ -28,7 +28,9 @@ function check(schema: JSONSchema, v: unknown, at: string, out: string[]): void 
   if (out.length >= MAX_PROBLEMS || typeof schema !== "object" || schema === null) return
   const s = schema as Record<string, unknown>
   if (s.type !== undefined && !typeMatches(s.type, v)) {
-    out.push(`${at} should be ${Array.isArray(s.type) ? s.type.join(" or ") : String(s.type)}, got ${typeOf(v)}`)
+    out.push(
+      `${at} should be ${Array.isArray(s.type) ? s.type.join(" or ") : String(s.type)}, got ${typeOf(v)}`,
+    )
     return
   }
   if (Array.isArray(s.enum) && !s.enum.some((e) => same(e, v))) {
@@ -89,7 +91,10 @@ function check(schema: JSONSchema, v: unknown, at: string, out: string[]): void 
   }
 
   if (Array.isArray(s.allOf)) for (const sub of s.allOf) check(sub as JSONSchema, v, at, out)
-  if (Array.isArray(s.anyOf) && !s.anyOf.some((sub) => validateValue(sub as JSONSchema, v, at).length === 0)) {
+  if (
+    Array.isArray(s.anyOf) &&
+    !s.anyOf.some((sub) => validateValue(sub as JSONSchema, v, at).length === 0)
+  ) {
     out.push(`${at} matches none of the allowed shapes (${firstProblem(s.anyOf as JSONSchema[], v, at)})`)
   }
   if (Array.isArray(s.oneOf)) {

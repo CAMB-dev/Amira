@@ -307,8 +307,9 @@ export class Agent {
             groups: () => tree.groups(),
           }
         : {}),
-      // A sub-agent's life is one turn: nothing may wake it afterwards.
-      ...(this.depth === 0 ? { expectNotice: () => agent.expectNotice() } : {}),
+      // A sub-agent's life is one turn, and nothing may wake it afterwards, unless it is
+      // persistent (its owner wakes it for the notices it gets).
+      ...(this.depth === 0 || this.#onIdleNotice ? { expectNotice: () => agent.expectNotice() } : {}),
     }
   }
 

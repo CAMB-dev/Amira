@@ -98,7 +98,8 @@ function addUsage(to: Usage, u: Usage) {
 function overBudget(used: Usage, limit: Budget | undefined): string | undefined {
   if (!limit) return undefined
   const tokens = usageTokens(used)
-  if (limit.tokens !== undefined && tokens > limit.tokens) return `${tokens} tokens used, limit ${limit.tokens}`
+  if (limit.tokens !== undefined && tokens > limit.tokens)
+    return `${tokens} tokens used, limit ${limit.tokens}`
   if (limit.costUsd !== undefined && used.cost !== undefined && used.cost > limit.costUsd) {
     return `$${used.cost.toFixed(4)} spent, limit $${limit.costUsd}`
   }
@@ -228,7 +229,7 @@ class Child implements ChildSession {
   }
 
   send(message: string | UserMessage): boolean {
-    if (!this.persistent || this.ended) return false
+    if (!this.persistent || this.ended || this.stopReason || this.abortReason) return false
     this.agent.expectNotice().deliver(typeof message === "string" ? userMessage(message) : message)
     return true
   }
@@ -468,7 +469,9 @@ export class AgentTree {
       if (g.state !== "active") throw new SpawnError(`the group "${g.name}" has ended`)
       const max = g.limits.maxAgents
       if (max !== undefined && g.total >= max) {
-        throw new SpawnError(`the group "${g.name}" has started its limit of ${max} sub-agent${max === 1 ? "" : "s"}`)
+        throw new SpawnError(
+          `the group "${g.name}" has started its limit of ${max} sub-agent${max === 1 ? "" : "s"}`,
+        )
       }
     }
     let model: ModelInfo = parent.model
@@ -527,7 +530,10 @@ export class AgentTree {
       ...(persistent
         ? {
             // The tree starts its turns; a failed turn ends it, so nothing is sent again.
-            onIdleNotice: () => child.waiting?.(),
+            // Only an idle child is woken: a queued one waits for its place as it is.
+            onIdleNotice: () => {
+              if (child.state === "idle") child.waiting?.()
+            },
             noticeRetryMs: [],
           }
         : {}),
@@ -879,12 +885,16 @@ export class AgentTree {
         }
         status = r.reason
         error = r.error
-        if (spec && status === "done" && !spec.returned) {
+        // A one-shot child whose last reply came in as it was aborted (say, the reply that
+        // spent the budget) still finished its task; a persistent one, or one that owed a
+        // result it never handed back, was cut short.
+        if (child.abortReason && (status !== "done" || child.persistent || (spec && !spec.returned))) {
+          status = "aborted"
+        } else if (spec && status === "done" && !spec.returned) {
           status = "error"
           error = `it did not return a valid result after ${spec.strikes} attempt${spec.strikes === 1 ? "" : "s"}${spec.problem ? `: ${spec.problem}` : ""}`
         }
-        if (status === "done" && child.stopReason && !child.abortReason) child.note = child.stopReason
-        if (child.abortReason) status = "aborted"
+        if (status === "done" && child.stopReason) child.note = child.stopReason
       }
     } catch (err) {
       status = "error"
