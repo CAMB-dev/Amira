@@ -146,22 +146,25 @@ In full-screen mode Amira selects text with the mouse itself. Drag with the left
 select: the selection is marked across rows and blocks, and when the button is released it is
 copied to the clipboard (OSC 52, see [Copying](#copying)) and the hint row says how many
 characters were copied. A double click selects a word (letters, digits and the characters of
-paths and URLs), a triple click a line. Held on the top row of the transcript, or below its
-last row, the drag scrolls the transcript, faster the longer it is held.
+paths and URLs), a triple click a line. Held below the last row of the transcript, or on its
+top row after it was lower, the drag scrolls the transcript, faster the longer it is held.
 
 What is copied is the text as shown, without the transcript's own marks: the `›` in front of
-your messages, the indent of replies, the `●`, `└` and tree symbols of tool calls and
-sub-agents, and the frame of code blocks. Code copies exactly, its indentation kept, and a line
-of code wrapped over several rows copies as one line. An image copies as its alt text. Other
-text copies row by row, as wrapped on screen.
+your messages, the indent of replies, the bars of quotes, the `●`, `└` and tree symbols of
+tool calls and sub-agents, and the frame of code blocks. Code copies as written: its
+indentation kept, a line wrapped over several rows as one line, and tabs kept when the whole
+line is selected. An image copies as its alt text. Other text copies row by row, as wrapped
+on screen, list bullets and links as they show. A very large selection (over about 100,000
+characters) may be more than the terminal takes; the note says so.
 
-The selection stays while the conversation goes on below it and while scrolling; a click
-clears it, and so does a change to the text it covers (a tool call finishing, folding) or a
-new terminal width (the text flows differently). Typing still goes to the input.
+The selection stays while the conversation goes on below it and while scrolling. A click
+clears it, and so do sending a message, a change to a block it covers (a tool call finishing,
+folding, another tool output level) and a resize (the text flows differently). Typing still
+goes to the input.
 
 | Action | Default | What it does |
 | --- | --- | --- |
-| `text.clear` | `escape` | Clear the selection; with text selected Esc does this before anything else (closing the find bar, stopping a turn) |
+| `text.clear` | `escape` | Clear the selection. With text selected Esc does this before anything else (closing a list, the find bar or the history search, stopping a turn), except answering a dialog |
 
 Holding Shift while dragging still selects with the terminal's own selection instead (see
 [Copying](#copying)): a way out when OSC 52 does not reach the clipboard.

@@ -56,6 +56,8 @@ const EDGE_SCROLL_RAMP = 10
 const EDGE_SCROLL_MAX = 6
 /** Presses on one cell this close together make a double or triple click. */
 const MULTI_CLICK_MS = 400
+/** Copies longer than this (in UTF-16 units) may be more than a terminal takes through OSC 52. */
+const OSC52_SAFE = 100_000
 
 /**
  * The full-screen view (D84): the conversation is kept as blocks on the alternate screen and
@@ -250,6 +252,10 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Scrolls while a drag is held above or below the transcript. */
   let edgeTimer: ReturnType<typeof setInterval> | undefined
   let edgeDirection = 0
+  /** Whether the drag was ever below the top row. */
+  let leftTop = false
+  /** Whether the left button went down in the transcript: its release copies. */
+  let armed = false
 
   /**
    * Scrolls every EDGE_SCROLL_MS while the drag is held at the edge of the transcript: on its
@@ -257,7 +263,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
    * faster the longer it is held. `y` undefined stops.
    */
   function edgeScroll(y: number | undefined): void {
-    const direction = y === undefined ? 0 : y <= 0 ? -1 : y >= paneRows ? 1 : 0
+    // A drag along the top row, where it started, selects there: it scrolls once it came back.
+    if (y !== undefined && y > 0) leftTop = true
+    const direction = y === undefined ? 0 : y <= 0 && leftTop ? -1 : y >= paneRows ? 1 : 0
     if (direction === edgeDirection) return
     edgeDirection = direction
     clearInterval(edgeTimer)
@@ -285,7 +293,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     if (!text) return
     terminal.write(osc.clipboard(text))
     const n = [...text].length
-    host.showNote(`Copied ${n} character${n === 1 ? "" : "s"}`)
+    const big =
+      text.length > OSC52_SAFE ? " (a lot: some terminals drop that much; Shift+drag selects natively)" : ""
+    host.showNote(`Copied ${n} character${n === 1 ? "" : "s"}${big}`)
   }
 
   function mouse(e: MouseInput): boolean {
@@ -302,19 +312,29 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       return true
     }
     if (e.button !== "left") return true
+    /** Near the last press: a column off still makes a double click. */
+    const near = (p: typeof lastPress) => p !== undefined && p.y === e.y && Math.abs(p.x - e.x) <= 1
     if (e.action === "press") {
       // A click clears the selection and does nothing else: the keyboard stays with the input.
+      stopDrag()
       pane.clearText()
       const now = Date.now()
-      const again =
-        lastPress && lastPress.x === e.x && lastPress.y === e.y && now - lastPress.at <= MULTI_CLICK_MS
+      const again = near(lastPress) && now - lastPress!.at <= MULTI_CLICK_MS
       const count = again ? (lastPress!.count % 3) + 1 : 1
       lastPress = { x: e.x, y: e.y, at: now, count }
-      if (e.y >= paneRows) return true
+      armed = e.y < paneRows
+      if (!armed) return true
+      if (pane.selected) {
+        // A block selected with the keyboard is drawn a column narrower: drawn at full width
+        // first, the press lands on the text under it.
+        pane.selected = undefined
+        renderer.render()
+      }
       if (count === 2) pane.selectWord(e.y, e.x)
       else if (count === 3) pane.selectLine(e.y, e.x)
       else {
         pane.startDrag(e.y, e.x)
+        leftTop = e.y > 0
         // Moves with the button held are reported from now on, until it is released.
         if (pane.dragging) terminal.enableMode(modes.mouseDrag)
       }
@@ -322,15 +342,16 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     }
     if (e.action === "drag") {
       if (!pane.dragging) return true
-      // A press after a drag starts again: it is no double click.
-      if (e.x !== lastPress?.x || e.y !== lastPress.y) lastPress = undefined
+      // Moved off: the next press is no double click.
+      if (!near(lastPress)) lastPress = undefined
       pane.dragTo(e.y, e.x)
       edgeScroll(e.y)
       return true
     }
-    // Released: what is selected goes to the clipboard.
+    // Released: what this press selected goes to the clipboard.
     stopDrag()
-    copySelection()
+    if (armed) copySelection()
+    armed = false
     return true
   }
 
@@ -407,7 +428,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       return stepCalls.filter((b) => b.startedAt !== undefined && !b.end).length
     },
     get capturing() {
-      return !overlay && (finding || pane.selected !== undefined || pane.hasText)
+      return !overlay && (finding || pane.selected !== undefined)
     },
     start() {
       started = true
@@ -422,6 +443,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     redraw: () => renderer.redraw(),
     openOverlay() {
       overlay = true
+      // The overlay takes the mouse: a drag under way would never see its release.
+      stopDrag()
+      armed = false
     },
     closeOverlay() {
       overlay = false
@@ -444,7 +468,11 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     },
 
     banner: (line) => add(fixedLine("banner", line)),
-    user: (m) => add(userBlock(m)),
+    user(m) {
+      // A message sent: the selection has done its work (and Esc goes back to stopping turns).
+      pane.clearText()
+      add(userBlock(m))
+    },
     replyDelta(text) {
       if (!reply) {
         reply = new ReplyBlock("", true, host.hyperlinks)
@@ -633,14 +661,16 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       if (overlay) return false
       if (e.type === "mouse") return mouse(e)
       if (e.type === "focus") return false
-      // Esc clears selected text before it does anything else (closing the find bar, a list).
-      if (pane.hasText && keys.is(e, "text.clear")) {
-        pane.clearText()
-        return true
-      }
       if (finding) return findKey(e)
       if (pane.selected && selectKey(e)) return true
       return transcriptKey(e)
+    },
+    takeFirst(e) {
+      // Esc clears selected text before it does anything else (closing the find bar or a list,
+      // leaving the search, stopping a turn).
+      if (overlay || !pane.hasText || !keys.is(e, "text.clear")) return false
+      pane.clearText()
+      return true
     },
   }
   return view

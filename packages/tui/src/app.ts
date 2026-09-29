@@ -984,6 +984,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return
     // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
     // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
+    // Esc with text selected clears it before closing a list or the search, or interrupting.
+    if (!dialog && view.takeFirst?.(e)) return redraw()
     const viewFirst = e.type === "mouse" || (!dialog && view.capturing)
     if (viewFirst && (view.handleInput(e) || e.type === "mouse")) return redraw()
     if (dialog) {

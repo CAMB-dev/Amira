@@ -564,7 +564,7 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   // With the input empty a click selects no block either (that is Ctrl+↑): typing still types.
   const again = screen.lines.findIndex((l) => l.includes("● read a.ts"))
   terminal.send(click(again))
-  terminal.send(click(again))
+  terminal.send(click(again - 1))
   terminal.send("x")
   await shows("› x")
   expect(view()).not.toMatch(/\w+ block \d+ of/)
@@ -625,7 +625,8 @@ test("dragging selects text across blocks, marks it, and copies it without the c
     "  second",
   ].join("\n")
   await shows(`Copied ${copied.length} characters`)
-  expect(terminal.output).toContain("\x1b[?1002l")
+  // Leaving it asks for plain mouse reporting again (xterm keeps the two as one setting).
+  expect(terminal.output).toContain("\x1b[?1002l\x1b[?1000h")
   expect(clipboard(terminal.output)).toBe(copied)
   // It stays marked; typing still goes to the input.
   terminal.send("x")
@@ -653,12 +654,16 @@ test("a double click selects a word, a triple click a line, each copied on relea
   terminal.send(click2 + click2)
   await waitFor(() => clipboard(terminal.output) === "src/app.ts", "the word copied")
   await shows("Copied 10 characters")
+  // A column off still counts: its second cell.
   const kanji = cellOf(screen, "漢字")
-  const click3 = press(kanji.x + 1, kanji.y) + release(kanji.x + 1, kanji.y)
-  terminal.send(click3 + click3)
+  const onKanji = (dx: number) => press(kanji.x + dx, kanji.y) + release(kanji.x + dx, kanji.y)
+  terminal.send(onKanji(0) + onKanji(1))
   await waitFor(() => clipboard(terminal.output) === "漢字", "a CJK word copied")
-  terminal.send(click3)
-  await waitFor(() => clipboard(terminal.output) === "See src/app.ts for the 漢字 part.", "the line copied")
+  // Three clicks in one go (waiting between them could take longer than a triple click may).
+  const next = cellOf(screen, "Next")
+  const onNext = press(next.x, next.y) + release(next.x, next.y)
+  terminal.send(onNext + onNext + onNext)
+  await waitFor(() => clipboard(terminal.output) === "Next line.", "the line copied")
   terminal.send("\x03")
   await exited
 })
@@ -735,6 +740,54 @@ test("selected text stays while the reply streams on; Esc clears it before anyth
   expect(view()).toContain("⌕ find ›")
   terminal.send(ESC)
   await waitFor(() => !view().includes("⌕ find"), "the find bar closed")
+  terminal.send("\x03")
+  await exited
+})
+
+test("with text selected the history search keeps its keys, and Esc clears the selection first", async () => {
+  const { terminal, screen, view, shows, idle, exited } = await setup([{ text: "some reply text" }])
+  terminal.send("go\r")
+  await shows("some reply text")
+  await idle()
+  const at = cellOf(screen, "reply")
+  terminal.send(press(at.x, at.y) + drag(at.x + 4, at.y) + release(at.x + 4, at.y))
+  await waitFor(() => clipboard(terminal.output) === "reply", "copied")
+  await waitFor(() => terminal.output.includes("\x1b[7mreply"), "marked")
+  terminal.send("\x12")
+  await shows("search history")
+  // Typing goes to the search.
+  terminal.send("g")
+  await waitFor(() => /search history › g/.test(view()), "typed into the search")
+  terminal.clearWrites()
+  terminal.send(ESC)
+  await waitFor(() => terminal.output.includes("reply"), "the row drawn again, unmarked")
+  expect(view()).toContain("search history")
+  terminal.send(ESC)
+  await waitFor(() => !view().includes("search history"), "the search left")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a drag along the top row selects there; it scrolls up once it came back to it", async () => {
+  // A list: every row has text, the top one too.
+  const long = Array.from({ length: 30 }, (_, i) => `- item ${i + 1}`).join("\n")
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: long }])
+  terminal.send("go\r")
+  await shows("item 30")
+  await idle()
+  const top = screen.lines[0]!
+  expect(top).toContain("item")
+  terminal.send(press(2, 0) + drag(4, 0) + drag(6, 0))
+  // Nothing scrolls: the text of the top row is selected.
+  await waitFor(() => terminal.output.includes("\x1b[7m"), "marked")
+  terminal.send(release(6, 0))
+  await waitFor(() => clipboard(terminal.output) !== undefined, "copied")
+  expect(screen.lines[0]).toBe(top)
+  expect(clipboard(terminal.output)).toBe(top.slice(2, 7))
+  // Started lower, a drag to the top row scrolls.
+  terminal.send(press(2, 3) + drag(2, 1) + drag(2, 0))
+  await waitFor(() => screen.lines[0] !== top, "scrolled up")
+  terminal.send(release(2, 0))
   terminal.send("\x03")
   await exited
 })
