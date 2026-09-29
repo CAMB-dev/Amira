@@ -7,6 +7,11 @@ import { graphemes } from "../src/width.ts"
  * (1049: saves the cursor, and the main screen comes back as it was). Colors and other modes are
  * ignored; OSC strings (title, progress, hyperlinks) are recorded in `oscs`, not drawn. `resize`
  * changes the size without re-wrapping, like a terminal that got wider.
+ *
+ * Images are drawn as cells of `▓`, scrolling when they reach the bottom: Sixel (its raster size
+ * in cells of `cell` pixels), leaving the cursor on the line below it as Windows Terminal does;
+ * iTerm2's (its width and height in cells), leaving the cursor after its last row; kitty's with
+ * C=1, not moving it. ESC 7 and ESC 8 save and restore the cursor.
  */
 export class VirtualScreen {
   grid: string[][]
@@ -14,6 +19,12 @@ export class VirtualScreen {
   x = 0
   y = 0
   cursorVisible = true
+  /** Pixels per cell for Sixel images. */
+  cell = { width: 10, height: 20 }
+  /** Images drawn: where (the row counted from the top of the scrollback), and the cells taken. */
+  images: { protocol: "sixel" | "iterm2" | "kitty"; row: number; col: number; rows: number; cols: number }[] =
+    []
+  private savedCursor = { x: 0, y: 0 }
   /** OSC strings received (`0;title`, `9;4;3;0`), without ESC ] and the terminator. */
   oscs: string[] = []
   /** Bell characters received outside OSC strings. */
@@ -147,19 +158,58 @@ export class VirtualScreen {
     } else this.y++
   }
 
-  private escape(data: string, i: number): number {
-    if (data[i + 1] === "_") {
-      const end = data.indexOf("\x07", i)
-      return end === -1 ? data.length : end + 1
+  /** Paints an image of `rows`×`cols` cells at the cursor, scrolling to make room. */
+  private image(protocol: "sixel" | "iterm2" | "kitty", rows: number, cols: number): void {
+    const col = this.x
+    for (let r = 0; r < rows; r++) {
+      if (r > 0) this.lineFeed()
+      for (let c = col; c < Math.min(this.cols, col + cols); c++) this.grid[this.y]![c] = "▓"
     }
-    if (data[i + 1] === "]") {
-      // OSC (title, progress, hyperlinks, ...): recorded, not drawn. Ends with BEL or ST.
-      const bel = data.indexOf("\x07", i)
+    this.images.push({ protocol, row: this.scrollback.length + this.y - (rows - 1), col, rows, cols })
+  }
+
+  private escape(data: string, i: number): number {
+    const kind = data[i + 1]
+    if (kind === "7" || kind === "8") {
+      if (kind === "7") this.savedCursor = { x: this.x, y: this.y }
+      else ({ x: this.x, y: this.y } = this.savedCursor)
+      return i + 2
+    }
+    if (kind === "_" || kind === "P" || kind === "]") {
+      // APC, DCS and OSC strings end with BEL (not DCS) or ST.
+      const bel = kind === "P" ? -1 : data.indexOf("\x07", i)
       const st = data.indexOf("\x1b\\", i + 2)
       const end = bel === -1 ? st : st === -1 ? bel : Math.min(bel, st)
-      const stop = end === -1 ? data.length : end
-      this.oscs.push(data.slice(i + 2, stop))
-      return end === -1 ? data.length : end === st ? end + 2 : end + 1
+      const body = data.slice(i + 2, end === -1 ? data.length : end)
+      const next = end === -1 ? data.length : end === st ? end + 2 : end + 1
+      if (kind === "]") {
+        const file = /^1337;File=([^:]*):/.exec(body)
+        if (file) {
+          const arg = (k: string) => Number(new RegExp(`${k}=(\\d+)`).exec(file[1]!)?.[1] ?? 1)
+          this.image("iterm2", arg("height"), arg("width"))
+          this.x = Math.min(this.cols - 1, this.x + arg("width"))
+        } else this.oscs.push(body)
+      } else if (kind === "P") {
+        const raster = /q"1;1;(\d+);(\d+)/.exec(body)
+        if (raster) {
+          const h = Math.ceil(Number(raster[2]) / 6) * 6
+          const x = this.x
+          this.image("sixel", Math.ceil(h / this.cell.height), Math.ceil(Number(raster[1]) / this.cell.width))
+          this.lineFeed()
+          this.x = x
+        }
+      } else if (body.startsWith("G") && /[,G]a=T/.test(body)) {
+        const g = /s=(\d+),v=(\d+)/.exec(body)!
+        const { x, y } = this
+        this.image(
+          "kitty",
+          Math.ceil(Number(g[2]) / this.cell.height),
+          Math.ceil(Number(g[1]) / this.cell.width),
+        )
+        this.x = x
+        this.y = y
+      }
+      return next
     }
     if (data[i + 1] !== "[") return i + 2
     let j = i + 2
