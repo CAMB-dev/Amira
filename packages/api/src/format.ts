@@ -47,6 +47,29 @@ export function clip(text: string, cells: number, ellipsis = "…"): string {
   return visibleWidth(text) > cells ? truncateToWidth(text, cells, ellipsis) : text
 }
 
+/**
+ * `text` (without escape sequences) cut to `cells` terminal cells in its middle, so both ends
+ * stay: a path keeps its file name ("src/…/deep/file.ts"), a command its start and its end.
+ * The end kept is at least the last path segment when that fits, else half of what fits.
+ */
+export function clipMiddle(text: string, cells: number, ellipsis = "…"): string {
+  if (visibleWidth(text) <= cells) return text
+  const mark = visibleWidth(ellipsis)
+  if (cells <= mark + 1) return clip(text, cells, ellipsis)
+  const room = cells - mark
+  const sep = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"))
+  const base = sep >= 0 ? visibleWidth(text.slice(sep)) : 0
+  const tailCells = Math.min(room - 1, Math.max(Math.ceil(room / 2), base))
+  const chars = [...text]
+  let tail = ""
+  for (let i = chars.length - 1; i >= 0; i--) {
+    if (visibleWidth(chars[i]! + tail) > tailCells) break
+    tail = chars[i]! + tail
+  }
+  const head = truncateToWidth(text, room - visibleWidth(tail))
+  return `${head}${ellipsis}${tail}`
+}
+
 /** `text` padded with spaces to `cells` terminal cells (never cut), for columns that line up. */
 export function padCells(text: string, cells: number): string {
   return text + " ".repeat(Math.max(0, cells - visibleWidth(text)))

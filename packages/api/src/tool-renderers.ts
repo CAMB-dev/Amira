@@ -54,6 +54,19 @@ export interface ToolBodyOptions {
   detail: ToolDetailLevel
   /** Columns available for each line. */
   width: number
+  /**
+   * At `summary` detail, how many of its last output lines a call that succeeded shows (a
+   * shell command's, as the user set it); 0 shows none. Undefined: the presenter's own choice.
+   */
+  outputLines?: number
+}
+
+/** What a call that only looks around did, for frontends that show several such calls as one row. */
+export interface ToolExploration {
+  /** What it did, the same word for calls that do the same: "Read", "Search", "List". */
+  verb: string
+  /** What it did that to: a path, a pattern. */
+  target: string
 }
 
 /**
@@ -78,6 +91,12 @@ export interface ToolPresenter<A = Record<string, unknown>, D = unknown> {
    * first). Frontends show at most three. Defaults to the last lines of the partial result.
    */
   running?(args: A, partial: ToolResult | undefined): ToolLine[]
+  /**
+   * For a tool that only looks around (reads a file, searches, lists files): what a call did.
+   * Frontends may show successful calls of such tools in a row as one row, e.g.
+   * "Explored · Read a.ts, b.ts · Search foo"; a failed call keeps its own lines.
+   */
+  explore?(args: A): ToolExploration | undefined
 }
 
 /**

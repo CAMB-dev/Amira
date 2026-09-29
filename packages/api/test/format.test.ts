@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test"
-import { clip, formatDuration, formatElapsed, formatTokens, padCells, plural } from "../src/format.ts"
+import {
+  clip,
+  clipMiddle,
+  formatDuration,
+  formatElapsed,
+  formatTokens,
+  padCells,
+  plural,
+} from "../src/format.ts"
 
 test("plural counts with the right noun", () => {
   expect(plural(1, "line")).toBe("1 line")
@@ -36,6 +44,15 @@ test("clip cuts by terminal cells and never splits a wide character", () => {
   expect(clip("你好世界", 5)).toBe("你好…")
   expect(clip("a😀b", 2)).toBe("a…")
   expect(clip("abc", 0)).toBe("")
+})
+
+test("clipMiddle keeps both ends, a path its file name", () => {
+  expect(clipMiddle("short", 10)).toBe("short")
+  const cut = clipMiddle("/home/me/projects/amira/packages/tui/src/tool-view.ts", 30)
+  expect(cut.endsWith("/tool-view.ts")).toBe(true)
+  expect(cut.startsWith("/home/me/")).toBe(true)
+  expect(cut).toHaveLength(30)
+  expect(clipMiddle("npm run build -- --watch --verbose", 20)).toBe("npm run b… --verbose")
 })
 
 test("padCells pads to a width in cells", () => {
