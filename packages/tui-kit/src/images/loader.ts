@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises"
-import { isAbsolute, resolve } from "node:path"
+import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { ImageSupport } from "../capabilities.ts"
 import { imageSize } from "./decode.ts"
@@ -177,7 +177,13 @@ export function localPath(src: string, cwd: string): string | undefined {
       path = decodeURI(src)
     } catch {}
   }
-  if (NETWORK_PATH.test(path)) return undefined
-  const full = isAbsolute(path) ? path : resolve(cwd, path)
-  return NETWORK_PATH.test(full) ? undefined : full
+  if (NETWORK_PATH.test(path) || NT_PATH.test(path)) return undefined
+  const full = resolve(cwd, path)
+  if (NETWORK_PATH.test(full)) return undefined
+  // On Windows only a plain path on a drive: not \\?\, \\.\, \??\ or a share, however written.
+  if (process.platform === "win32" && !/^[a-z]:\\(?![\\/])/i.test(full)) return undefined
+  return full
 }
+
+/** The NT object namespace (\??\UNC\host\..., \??\GLOBALROOT\...), which Windows accepts too. */
+const NT_PATH = /^[\\/]\?\?[\\/]/

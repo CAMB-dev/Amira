@@ -189,11 +189,17 @@ test("local paths: relative to the working directory, absolute, file: URLs, esca
     "file://evil.test/share/a.png",
     "\\\\?\\UNC\\evil.test\\share\\a.png",
     "%5C%5Cevil.test%5Cshare%5Ca.png",
+    // The NT object namespace reaches shares too.
+    "\\??\\UNC\\evil.test\\share\\a.png",
+    "/??/GLOBALROOT/Device/Mup/evil.test/share/a.png",
   ])
     expect([unc, localPath(unc, cwd)]).toEqual([unc, undefined])
   if (process.platform === "win32") {
     expect(localPath("D:\\pics\\a.png", cwd)).toBe("D:\\pics\\a.png")
     expect(localPath("file:///D:/pics/a.png", cwd)).toBe("D:\\pics\\a.png")
+    expect(localPath("\\\\.\\pipe\\x", cwd)).toBeUndefined()
+    // Rooted without a drive: on the working directory's drive.
+    expect(localPath("\\pics\\a.png", cwd)).toBe("C:\\pics\\a.png")
   } else expect(localPath("file:///pics/a.png", cwd)).toBe("/pics/a.png")
   expect(localPath("data:image/png;base64,AA", cwd)).toBeUndefined()
 })
