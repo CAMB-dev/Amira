@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import type { EventEnvelope } from "@amira/api"
+import type { EventEnvelope, Message } from "@amira/api"
+import { builtinPresenters } from "@amira/builtin-tools"
 import { defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import {
   bandRows,
@@ -178,6 +179,36 @@ test("a resumed history uses the transcript's blocks, the tool presenters and a 
     "",
     `── resumed s_42 · 2026-09-29 14:05 ${"─".repeat(25)}`,
   ])
+})
+
+test("a resumed shell command shows as many output lines as tui.shellOutputLines says", () => {
+  const messages: Message[] = [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "bash", args: { command: "ls" } }],
+      model: { provider: "p", model: "m" },
+    },
+    {
+      role: "toolResult",
+      toolCallId: "c1",
+      toolName: "bash",
+      content: [{ type: "text", text: "a\nb\nc\nd\n\nExit code: 0" }],
+      isError: false,
+    },
+  ]
+  const presenters = { get: (name: string) => builtinPresenters[name] }
+  const rows = (outputLines?: number) =>
+    plain(
+      historyLines(defaultTheme, messages, {
+        width: 60,
+        presenters,
+        ...(outputLines !== undefined ? { outputLines } : {}),
+      }),
+    ).filter((r) => r.trim() && !r.startsWith("──"))
+  // The presenter's own default: its last three lines.
+  expect(rows()).toEqual(["● bash ls", "  └ 4 lines", "    … 1 earlier line", "    b", "    c", "    d"])
+  expect(rows(1)).toEqual(["● bash ls", "  └ 4 lines", "    … 3 earlier lines", "    d"])
+  expect(rows(0)).toEqual(["● bash ls", "  └ 4 lines"])
 })
 
 test("a resumed reply renders as Markdown inside the assistant's gutter", () => {
