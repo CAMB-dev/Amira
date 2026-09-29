@@ -207,7 +207,7 @@ test("a running sub-agent shows its transcript so far", async () => {
   )
   const turn = root.prompt("go")
   const deadline = Date.now() + 3000
-  while (!control.subagents()[0]?.id || !(await run("/agents 1")).text.includes("running…")) {
+  while (!control.subagents()[0]?.id || !(await run("/agents 1")).text.includes("└ running")) {
     if (Date.now() > deadline) throw new Error("the child never called its tool")
     await Bun.sleep(10)
   }
@@ -219,7 +219,7 @@ test("a running sub-agent shows its transcript so far", async () => {
     "Checking.",
     "",
     "● slow the disk",
-    "  └ running…",
+    "  └ running",
     "",
     "… still running",
   ])

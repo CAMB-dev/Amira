@@ -123,7 +123,7 @@ export const fallbackPresenter: Required<Omit<ToolPresenter, "explore">> = {
     const json = !call.result.isError && jsonSummary(call.text)
     if (json) return json
     const all = lines(call.text)
-    if (!all.length) return "(no output)"
+    if (!all.length) return "no output"
     return all.length > 1 ? `${all[0]} (+${plural(all.length - 1, "line")})` : all[0]
   },
   body: (call, { detail }) => {

@@ -119,11 +119,11 @@ export function transcriptText(
       } else if (b.type === "toolCall") {
         const r = results.get(b.id)
         out.push(toolHead(b, r?.isError === true))
-        if (!r) out.push(finished ? "  └ (no result)" : "  └ running…")
+        if (!r) out.push(finished ? "  └ no result" : "  └ running")
         else {
           const lines = blockText(r.content).trim().split("\n")
           const more = lines.length > 1 ? ` (+${plural(lines.length - 1, "line")})` : ""
-          out.push(`  └ ${oneLine(lines[0] || "(no output)", 100)}${more}`)
+          out.push(`  └ ${oneLine(lines[0] || "no output", 100)}${more}`)
         }
         if (b.name === "agent") {
           for (const kid of callKids(kids, b)) out.push(`  ◆ ${subagentSummary(kid, now)}`)
