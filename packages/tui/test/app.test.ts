@@ -32,7 +32,7 @@ import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
-import { activityLabel, runInteractive } from "../src/app.ts"
+import { activityLabel, lastReasoningLine, retryLabel, runInteractive } from "../src/app.ts"
 import { FileIndex, type FileSource, fileList } from "../src/file-index.ts"
 
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
@@ -562,11 +562,11 @@ test("while tools run the activity line names them and keeps its spinner and tim
   }
   const activity = (label: string) => new RegExp(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ${label} · \\d+s( · ↓ \\d+ tokens)?$`, "m")
   terminal.send("go\r")
-  await waitFor(() => activity("running 2 tools").test(live()), "two tools")
+  await waitFor(() => activity("2 tools running").test(live()), "two tools")
   // The rows keep their own spinners.
   expect(live()).toMatch(/● slowa +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+s/)
   release.slowb!()
-  await waitFor(() => activity("running slowa").test(live()), "one tool left")
+  await waitFor(() => activity("1 tool running").test(live()), "one tool left")
   release.slowa!()
   await idle()
   expect(live()).not.toContain("Esc interrupt")
@@ -579,9 +579,45 @@ test("the activity label names the most specific activity", () => {
   expect(activityLabel(base)).toBe("working")
   expect(activityLabel({ ...base, thinking: true })).toBe("thinking")
   expect(activityLabel({ ...base, preparing: "bash" })).toBe("preparing bash")
-  expect(activityLabel({ ...base, running: ["bash"], thinking: true })).toBe("running bash")
-  expect(activityLabel({ ...base, running: ["bash", "read", "grep"] })).toBe("running 3 tools")
+  // Running tools are counted: their own rows name them.
+  expect(activityLabel({ ...base, running: ["bash"], thinking: true })).toBe("1 tool running")
+  expect(activityLabel({ ...base, running: ["bash", "read", "grep"] })).toBe("3 tools running")
   expect(activityLabel({ ...base, compacting: true, running: ["bash"] })).toBe("compacting the conversation")
+  expect(activityLabel({ ...base, preparing: "write", waiting: true })).toBe("waiting for you")
+  expect(activityLabel({ ...base, thinking: true, retrying: "retrying (2/3)" })).toBe("retrying (2/3)")
+})
+
+test("a retry reads as the status says it, when and why if the event tells", () => {
+  expect(retryLabel({ reason: "retrying (2/3)" })).toBe("retrying (2/3)")
+  expect(retryLabel({ reason: "compacting" })).toBeUndefined()
+  expect(retryLabel({})).toBeUndefined()
+  expect(retryLabel({ retry: { attempt: 2, maxRetries: 3, delayMs: 5200, status: 429 } })).toBe(
+    "retrying in 6s (2/3) · 429",
+  )
+  expect(retryLabel({ reason: "retrying (1/3)", retry: { attempt: 1 } })).toBe("retrying (1)")
+})
+
+test("the activity line shows the last line of the reasoning while the model thinks", async () => {
+  let release!: () => void
+  const until = new Promise<void>((r) => {
+    release = r
+  })
+  const { terminal, live, idle, exited } = await setup(
+    [{ thinking: "First, the plan.\nThen look at   a.ts\n\n", text: "done", hold: { chunks: 0, until } }],
+    { cols: 100 },
+  )
+  terminal.send("go\r")
+  await waitFor(
+    () => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] thinking · \d+s · ↓ \d+ tokens · Then look at a\.ts$/m.test(live()),
+    "the reasoning",
+  )
+  release()
+  await idle()
+  expect(live()).not.toContain("Then look at")
+  terminal.send("\x03")
+  await exited
+  expect(lastReasoningLine("")).toBe("")
+  expect(lastReasoningLine("a\n  b  c \n")).toBe("b c")
 })
 
 test("a message sent during /compact counts its own time and tokens, not the last turn's", async () => {
@@ -993,7 +1029,7 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   // The running tool is drawn as its own line with a spinner and its time on the right, and the
   // activity line under it keeps its spinner, says what runs and the turn's time.
   expect(seenWhileRunning).toMatch(/● block +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 0s/)
-  expect(seenWhileRunning).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running block · 0s( · ↓ \d+ tokens)?$/m)
+  expect(seenWhileRunning).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 1 tool running · 0s( · ↓ \d+ tokens)?$/m)
   terminal.send("\x03")
   await exited
 })

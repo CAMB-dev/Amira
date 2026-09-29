@@ -29,6 +29,7 @@ import {
   type InputEvent,
   InputReader,
   isColorEnabled,
+  italic,
   ProcessTerminal,
   progressSupported,
   type RenderContext,
@@ -190,18 +191,55 @@ function messageText(m: UserMessage): string {
 /** Output tokens a streamed text is worth, until the reply's usage says. */
 const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 
-/** What the turn is doing now, as the activity line names it: the most specific activity first. */
+/**
+ * What the turn is doing now, as the activity line names it: the most specific activity first.
+ * Running tools are counted, not named: their rows under the reply name them (D10).
+ */
 export function activityLabel(s: {
   compacting: boolean
   running: readonly string[]
   preparing: string | undefined
   thinking: boolean
+  /** A dialog waits for the user's answer. */
+  waiting?: boolean
+  /** The model request failed and is tried again, e.g. "retrying in 6s (2/3) · 429". */
+  retrying?: string | undefined
 }): string {
   if (s.compacting) return "compacting the conversation"
-  if (s.running.length === 1) return `running ${s.running[0]}`
-  if (s.running.length > 1) return `running ${s.running.length} tools`
+  if (s.waiting) return "waiting for you"
+  if (s.retrying) return s.retrying
+  if (s.running.length) return `${s.running.length} ${s.running.length === 1 ? "tool" : "tools"} running`
   if (s.preparing) return `preparing ${s.preparing}`
   return s.thinking ? "thinking" : "working"
+}
+
+/**
+ * The retry the model request is in, as status.changed tells it: "retrying in 6s (2/3) · 429"
+ * when the event says when and why, else its reason as given ("retrying (2/3)"). Undefined when
+ * the status is not about a retry.
+ */
+export function retryLabel(data: {
+  reason?: string
+  retry?: { attempt?: number; maxRetries?: number; delayMs?: number; status?: number; code?: string }
+}): string | undefined {
+  const r = data.retry
+  if (r && (r.attempt !== undefined || r.delayMs !== undefined)) {
+    const when = r.delayMs !== undefined ? ` in ${Math.max(1, Math.ceil(r.delayMs / 1000))}s` : ""
+    const count = r.attempt !== undefined ? ` (${r.attempt}${r.maxRetries ? `/${r.maxRetries}` : ""})` : ""
+    const why = r.status ?? r.code
+    return `retrying${when}${count}${why !== undefined ? ` ${glyphs.separator} ${why}` : ""}`
+  }
+  return data.reason?.startsWith("retrying") ? data.reason : undefined
+}
+
+/** The last line of the reasoning streamed so far, for the activity line; "" before any. */
+export function lastReasoningLine(text: string): string {
+  const lines = text.split("\n")
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.replace(/\s+/g, " ").trim()
+    if (line) return line
+  }
+  return ""
 }
 
 /**
@@ -288,6 +326,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const dialogs: Dialog[] = []
   let working = false
   let thinking = false
+  /** The end of the reasoning streamed in the current reply, whose last line the activity line shows. */
+  let reasoning = ""
+  /** The model request is being tried again, as the activity line says (status.changed). */
+  let retrying: string | undefined
   let compacting = false
   /** Tool the model is currently writing a call for, before it runs. */
   let preparing: string | undefined
@@ -417,19 +459,29 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       panelRows = panelsShown ? lines.length + 1 : 0
       return panelsShown ? [...lines, ""] : []
     }),
-    // The activity line: what the turn is doing, how long it has run, the tokens it wrote.
-    // It shows for the whole turn, also while tools run (their rows carry a spinner of their own).
-    // How to interrupt is on the hint line.
+    // The activity line: a summary of the turn (what it does now, how long it has run, the
+    // tokens it wrote), and while the model thinks the last line of its reasoning. It shows for
+    // the whole turn; running tools are counted here and named on their own rows. How to
+    // interrupt is on the hint line.
     new View((width, ctx) => {
       if (!working && !compacting) return []
-      const label = activityLabel({ compacting, running: view.runningTools, preparing, thinking })
+      const label = activityLabel({
+        compacting,
+        running: view.runningTools,
+        preparing,
+        thinking,
+        waiting: dialogs.length > 0,
+        retrying,
+      })
       const tokens = turnTokens + estimateTokens(streamedChars)
       const stats = [
         formatElapsed(Date.now() - (working ? turnStartedAt : compactStartedAt)),
         ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
       ].join(` ${glyphs.separator} `)
       const head = `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
-      return [truncateToWidth(head + ctx.theme.muted(stats), width, glyphs.more), ""]
+      const thought = label === "thinking" ? lastReasoningLine(reasoning) : ""
+      const tail = thought ? ctx.theme.muted(` ${glyphs.separator} `) + italic(ctx.theme.muted(thought)) : ""
+      return [truncateToWidth(head + ctx.theme.muted(stats) + tail, width, glyphs.more), ""]
     }),
     new View((width, ctx) => [
       ...pendingNoticeLines(ctx.theme).map((l) => truncateToWidth(l, width, "…")),
@@ -721,6 +773,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       case "message.start":
         thinking = false
+        reasoning = ""
         preparing = undefined
         streamedChars = 0
         break
@@ -731,6 +784,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           streamedChars += e.data.text.length
         } else if (e.data.kind === "thinking") {
           thinking = true
+          // Only the end is shown; keep enough of it to hold a whole line.
+          reasoning = (reasoning + e.data.text).slice(-2000)
           streamedChars += e.data.text.length
         } else {
           streamedChars += e.data.argsDelta.length
@@ -768,6 +823,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (view.turnEnd()) turnShowedOutput = true
         working = false
         preparing = undefined
+        retrying = undefined
+        reasoning = ""
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
@@ -786,6 +843,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "notice.retry":
         setRetry(e.ts + e.data.delayMs)
+        break
+      case "status.changed":
+        // A failed model request tried again says so until the stream goes on (or the turn ends).
+        retrying = retryLabel(e.data as Parameters<typeof retryLabel>[0])
         break
       case "workspace.changed":
         termStatus.setBranch(e.data.branch)
@@ -1014,6 +1075,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const { requestId } = dialog.request
     const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
     if (answer === undefined || refused) ui.cancel(requestId)
+    // Esc on an approval denies the call and stops the whole turn, as the dialog's keys say.
+    if (answer === undefined && dialog.request.source === "approval" && working) interrupt()
     const echoed = refused ? undefined : answer
     // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
     // declined, the answer). A command's picker or input keeps one, since nothing else shows it.

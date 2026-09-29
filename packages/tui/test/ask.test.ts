@@ -353,6 +353,24 @@ for (const mode of MODES) {
   })
 }
 
+test("Esc on an approval denies the call and stops the turn; meanwhile the activity line waits for you", async () => {
+  const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "tried another way" }], {
+    mode: "inline",
+    approve: ["wipe"],
+  })
+  s.terminal.send("clean up\r")
+  await waitFor(() => s.dialog().length > 0, "the approval")
+  expect(s.live()).toMatch(/waiting for you · \d+s/)
+  s.terminal.send(ESC)
+  await s.idle()
+  expect(s.host.ui.pending).toEqual([])
+  expect(s.all()).toContain("Interrupted")
+  // The turn stopped: the model was not asked again.
+  expect(s.all()).not.toContain("tried another way")
+  s.terminal.send("\x03")
+  await s.exited
+})
+
 test("an approval refused with free text tells the model what to do instead", async () => {
   const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "ok, moving to trash" }], {
     mode: "inline",
