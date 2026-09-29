@@ -16,6 +16,9 @@ import {
 } from "@amira/ai"
 import type {
   ApprovalRequest,
+  AskOutcome,
+  AskQuestion,
+  AskRequest,
   EventMap,
   PendingNotice,
   SessionData,
@@ -53,6 +56,9 @@ export interface ApprovalDecision {
 
 /** Decides a tool call that a tool.call.before interceptor asked about (D13, D14). */
 export type Approver = (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalDecision>
+
+/** Answers the questions a session puts (ToolSession.askUser). */
+export type Asker = (request: AskRequest, signal: AbortSignal) => Promise<AskOutcome>
 
 export interface AgentOptions {
   ai: Ai
@@ -95,6 +101,11 @@ export interface AgentOptions {
    * asks the parent's model; without one such calls are denied.
    */
   approve?: Approver
+  /**
+   * Answers questions this session's tools put (ToolSession.askUser, the ask_user tool): the
+   * user for a top-level session, the parent's model for sub-agents. Without one nobody answers.
+   */
+  ask?: Asker
   /**
    * Called instead of starting a turn when a notice arrives while the session is idle, for an
    * owner that decides when turns run (a persistent sub-agent waits for a place in its tree);
@@ -186,8 +197,9 @@ export class Agent {
 
   #ai: Ai
   #approve: Approver | undefined
-  /** Tool calls waiting for approval right now. */
-  #approvals = 0
+  #ask: Asker | undefined
+  /** Tool calls waiting for approval or for an answer right now. */
+  #blockedCalls = 0
   #status: SessionStatus = "idle"
   #abort: AbortController | undefined
   #maxSteps: number
@@ -280,6 +292,7 @@ export class Agent {
     this.depth = opts.depth ?? 0
     this.tree = opts.tree
     this.#approve = opts.approve
+    this.#ask = opts.ask
     this.#onIdleNotice = opts.onIdleNotice
     this.#endTurn = opts.endTurn
 
@@ -480,21 +493,32 @@ export class Agent {
    * The tool session one call gets: sub-agents it spawns carry the call's id, so frontends
    * show them under that call without guessing.
    */
-  #callSession(toolCallId: string): ToolSession {
+  #callSession(turn: Turn, toolCallId: string): ToolSession {
     const base = this.#toolSession
     const spawn = base.spawn
     const tree = this.tree
-    if (!spawn || !tree) return base
-    return Object.create(base, {
-      spawn: {
+    const props: PropertyDescriptorMap = {
+      ...(this.#ask
+        ? {
+            askUser: {
+              value: (questions: AskQuestion[], signal?: AbortSignal) =>
+                this.#askFromTool(turn, toolCallId, questions, signal),
+              enumerable: true,
+            },
+          }
+        : {}),
+    }
+    if (spawn && tree) {
+      props.spawn = {
         value: (o: SpawnOptions) => spawn({ ...o, toolCallId: o.toolCallId ?? toolCallId }),
         enumerable: true,
-      },
-      createGroup: {
+      }
+      props.createGroup = {
         value: (o: SpawnGroupOptions) => tree.createGroup(this, o, { toolCallId }),
         enumerable: true,
-      },
-    }) as ToolSession
+      }
+    }
+    return Object.keys(props).length ? (Object.create(base, props) as ToolSession) : base
   }
 
   /** Offers deferred tools to the model from its next call on, e.g. when restoring a session. */
@@ -1086,7 +1110,7 @@ export class Agent {
             cwd: this.cwd,
             toolCallId: call.id,
             signal: turn.signal,
-            session: this.#callSession(call.id),
+            session: this.#callSession(turn, call.id),
             update: (partial) => {
               if (run.finished) return
               this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })
@@ -1122,24 +1146,59 @@ export class Agent {
    * waiting). A missing or failing approver denies.
    */
   async #askApproval(turn: Turn, request: ApprovalRequest): Promise<ApprovalDecision> {
-    if (!this.#approve) return { approved: false, reason: "it needs approval and nobody can approve it here" }
-    this.#approvals++
-    this.#status = "blocked"
-    this.#emit(turn, "status.changed", {
-      status: "blocked",
-      reason: `approval for ${request.name}`,
-      pending: this.#approvals,
-    })
+    const approve = this.#approve
+    if (!approve) return { approved: false, reason: "it needs approval and nobody can approve it here" }
     try {
-      return await this.#approve(request, turn.signal)
+      return await this.#waitBlocked(turn, `approval for ${request.name}`, () =>
+        approve(request, turn.signal),
+      )
     } catch (err) {
       return {
         approved: false,
         reason: `approval failed: ${err instanceof Error ? err.message : String(err)}`,
       }
+    }
+  }
+
+  /** A tool's questions (ToolSession.askUser), asked while the session shows as blocked. */
+  async #askFromTool(turn: Turn, toolCallId: string, questions: AskQuestion[], signal?: AbortSignal) {
+    const ask = this.#ask
+    if (!ask) return { unavailable: "nobody can answer questions here" }
+    const both = signal && signal !== turn.signal ? AbortSignal.any([turn.signal, signal]) : turn.signal
+    const request: AskRequest = { sessionId: this.sessionId, toolCallId, questions }
+    const who = this.depth === 0 ? "the user" : "the commander"
+    try {
+      return await this.#waitBlocked(turn, `question for ${who}`, () => ask(request, both))
+    } catch (err) {
+      return { unavailable: `asking failed: ${err instanceof Error ? err.message : String(err)}` }
+    }
+  }
+
+  /**
+   * Puts questions to whoever answers for this session (the `ask` option): for a commander
+   * passing on its sub-agent's questions. Says so when nobody can answer here.
+   */
+  askQuestions(request: AskRequest, signal: AbortSignal): Promise<AskOutcome> {
+    return this.#ask
+      ? this.#ask(request, signal)
+      : Promise.resolve({ unavailable: "nobody can answer questions here" })
+  }
+
+  /**
+   * Waits for `wait` while the session shows as blocked (D44: with the number of calls waiting,
+   * for approval or for an answer).
+   */
+  async #waitBlocked<T>(turn: Turn, reason: string, wait: () => Promise<T>): Promise<T> {
+    this.#blockedCalls++
+    this.#status = "blocked"
+    this.#emit(turn, "status.changed", { status: "blocked", reason, pending: this.#blockedCalls })
+    try {
+      return await wait()
     } finally {
-      this.#approvals--
-      if (this.#approvals === 0) this.#setStatus(turn, "working")
+      this.#blockedCalls--
+      // A wait that ends after its turn did (aborted, abandoned) must not wake the session.
+      const live = this.#turn === turn && !turn.signal.aborted
+      if (this.#blockedCalls === 0 && live) this.#setStatus(turn, "working")
     }
   }
 

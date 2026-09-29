@@ -48,8 +48,9 @@ export interface ViewHost {
   /** Links in replies are clickable (OSC 8). */
   hyperlinks: boolean
   /**
-   * Loads the images of replies where the terminal can draw them. Only the inline view draws them;
-   * the full-screen view shows their alt text (D83, D84).
+   * Loads the images of replies where the terminal can draw them (D83): the inline view commits
+   * them to the scrollback, the full-screen view draws them in its transcript. Full-screen
+   * overlays (forms, the sub-agent viewer) show their alt text.
    */
   images?: ImageLoader
   keys: Keybindings
@@ -116,8 +117,8 @@ export interface TranscriptView {
   commandEcho(line: string): void
   /** What a command printed: under its echo right after it, else as a notice. */
   commandOutput(level: "info" | "warning" | "error", text: string): void
-  /** A dialog's question and answer, once answered. */
-  dialogEcho(line: string): void
+  /** A dialog's questions and answers, once answered, drawn to fit a width. */
+  dialogEcho(draw: (width: number) => string[]): void
   /** A resumed conversation, then a separator naming the session. */
   history(messages: Message[], session: HistorySession): void
   /** The UI is about to follow another session: calls of this one end here. */

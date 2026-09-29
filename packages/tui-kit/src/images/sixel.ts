@@ -18,33 +18,62 @@ export function encodeSixel(bmp: Bitmap, opts: SixelOptions = {}): string {
   const maxColors = Math.max(2, Math.min(256, opts.maxColors ?? 256))
   const { width, height } = bmp
   const { palette, index } = quantize(bmp, maxColors)
-  let out = `\x1bP0;1;0q"1;1;${width};${height}`
+  return `${sixelHead(width, height)}${sixelPalette(palette)}${sixelBands(index, width, height).join("-")}\x1b\\`
+}
+
+/** The start of a Sixel image of `width`×`height` pixels: 1:1 aspect, transparent background. */
+export function sixelHead(width: number, height: number): string {
+  return `\x1bP0;1;0q"1;1;${width};${height}`
+}
+
+/** The color registers of a palette of 0xRRGGBB colors, in percent as Sixel has them. */
+export function sixelPalette(palette: number[]): string {
+  const pct = (v: number) => Math.round((v * 100) / 255)
+  let out = ""
   palette.forEach((c, i) => {
-    const pct = (v: number) => Math.round((v * 100) / 255)
     out += `#${i};2;${pct(c >> 16)};${pct((c >> 8) & 255)};${pct(c & 255)}`
   })
+  return out
+}
+
+/**
+ * The bands of six pixel rows of an image `quantize` indexed, starting at pixel row `start`
+ * (the rows above it left out), without the `-` between them. A slice of the image is the
+ * bands it covers joined by `-`, after the same palette.
+ */
+export function sixelBands(index: Int16Array, width: number, height: number, start = 0): string[] {
   const bands: string[] = []
-  const rows = new Map<number, Uint8Array>()
-  for (let y0 = 0; y0 < height; y0 += 6) {
-    rows.clear()
+  let colors = 0
+  for (let i = 0; i < index.length; i++) if (index[i]! >= colors) colors = index[i]! + 1
+  // One row of sixels per color, reused from band to band; only the colors a band uses are cleared.
+  const bits = new Uint8Array(Math.max(1, colors) * width)
+  const used = new Uint8Array(Math.max(1, colors))
+  const list: number[] = []
+  for (let y0 = start; y0 < height; y0 += 6) {
     for (let dy = 0; dy < 6 && y0 + dy < height; dy++) {
       const base = (y0 + dy) * width
       for (let x = 0; x < width; x++) {
         const c = index[base + x]!
         if (c < 0) continue
-        let bits = rows.get(c)
-        if (!bits) {
-          bits = new Uint8Array(width)
-          rows.set(c, bits)
+        if (!used[c]) {
+          used[c] = 1
+          list.push(c)
         }
-        bits[x]! |= 1 << dy
+        bits[c * width + x]! |= 1 << dy
       }
     }
+    list.sort((a, b) => a - b)
     const parts: string[] = []
-    for (const c of [...rows.keys()].sort((a, b) => a - b)) parts.push(`#${c}${sixelRow(rows.get(c)!)}`)
+    for (const c of list) {
+      const row = bits.subarray(c * width, (c + 1) * width)
+      parts.push(`#${c}${sixelRow(row)}`)
+      row.fill(0)
+      used[c] = 0
+    }
+    list.length = 0
     bands.push(parts.join("$"))
   }
-  return `${out}${bands.join("-")}\x1b\\`
+  return bands
 }
 
 /** One color's row of sixels, run-length encoded, without its trailing empty sixels. */

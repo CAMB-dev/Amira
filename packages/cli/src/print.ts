@@ -63,6 +63,8 @@ export async function runPrint(
   opts: PrintOptions = {},
 ): Promise<number> {
   const io = opts.io ?? defaultIO
+  // Questions for the user (ask_user) are not even asked: nobody is there to answer.
+  if (opts.ui) opts.ui.unavailable = "print mode"
   let endedWithNewline = true
   /** Name, role and line indent of each sub-agent, by session id. */
   const subagents = new Map<string, { title: string; role: string; indent: string }>()

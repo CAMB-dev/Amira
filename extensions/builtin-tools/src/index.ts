@@ -1,5 +1,6 @@
 import { defineExtension } from "@amira/api"
 import { warmUpCommands } from "@amira/proc"
+import { askUserPresenter, askUserTool } from "./ask-user.ts"
 import { bashTool, powershellTool } from "./bash.ts"
 import { editTool } from "./edit.ts"
 import { globTool } from "./glob.ts"
@@ -9,7 +10,18 @@ import { readTool } from "./read.ts"
 import { warmUpShell } from "./shell.ts"
 import { writeTool } from "./write.ts"
 
-export { bashTool, builtinPresenters, editTool, globTool, grepTool, powershellTool, readTool, writeTool }
+export {
+  askUserPresenter,
+  askUserTool,
+  bashTool,
+  builtinPresenters,
+  editTool,
+  globTool,
+  grepTool,
+  powershellTool,
+  readTool,
+  writeTool,
+}
 
 /** PowerShell is offered next to bash on Windows only (D68). */
 export const builtinTools = [
@@ -20,6 +32,7 @@ export const builtinTools = [
   ...(process.platform === "win32" ? [powershellTool] : []),
   grepTool,
   globTool,
+  askUserTool,
 ]
 
 export default defineExtension((api) => {

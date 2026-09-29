@@ -42,7 +42,7 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
-import { Dialog, type DialogAnswer } from "./dialog.ts"
+import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
 import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
@@ -201,9 +201,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
-  // Images on a line of their own are drawn where the terminal can, in the inline view: at most
-  // 20 rows, and 40% of the screen. The full-screen view and full-screen overlays (the sub-agent
-  // viewer, forms) show their alt text (D83, D84).
+  // Images on a line of their own are drawn where the terminal can, in both views: at most 20
+  // rows, and 40% of the screen. Full-screen overlays (the sub-agent viewer, forms) show their
+  // alt text (D83, D84).
   const imageSupport = chooseImageSupport(imageSetting, capabilities.graphics, env)
   const images =
     imageSupport &&
@@ -916,20 +916,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const i = dialogs.indexOf(dialog)
     if (i !== -1) dialogs.splice(i, 1)
     termStatus.setWaiting(dialogs.length > 0)
-    const { requestId, title } = dialog.request
-    if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
-    const secret = dialog.request.kind === "input" && dialog.request.secret
-    const shown =
-      answer === undefined
-        ? "cancelled"
-        : secret
-          ? "(hidden)"
-          : answer === true
-            ? "yes"
-            : answer === false
-              ? "no"
-              : answer
-    view.dialogEcho(`${theme.accent(glyphs.question)} ${title} ${theme.muted(`› ${shown}`)}`)
+    const { requestId } = dialog.request
+    const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
+    if (answer === undefined || refused) ui.cancel(requestId)
+    const echoed = refused ? undefined : answer
+    view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
     view.requestRender()
     openNextForm()
   }

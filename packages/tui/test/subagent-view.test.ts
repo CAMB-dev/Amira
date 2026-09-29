@@ -374,7 +374,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await waitFor(() => s.view().includes("? Allow bash? (approval)"), "the inline dialog")
   s.terminal.send("y")
   expect(await answer).toBe(true)
-  await waitFor(() => s.screen.mainText.includes("? Allow bash? › yes"), "the answer")
+  await waitFor(() => s.screen.mainText.includes("? Allow bash? › Yes"), "the answer")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -392,7 +392,7 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   await waitFor(() => s.view().includes("? Sub-agents"), "the picker")
   // The digit in front is the option's own number, shown once.
   expect(s.view()).toContain("  2 Open the live view")
-  expect(s.view()).toMatch(/› 1 Check explorer · explorer · s_\w+ · done/)
+  expect(s.view()).toMatch(/❯ 1 Check explorer · explorer · s_\w+ · done/)
   s.terminal.send("1")
   await waitFor(() => s.screen.mainText.includes("● read b.ts"), "the transcript")
   const main = s.screen.mainText

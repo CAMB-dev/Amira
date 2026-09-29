@@ -87,8 +87,13 @@ the match in the input and then do what they do.
 
 ### Dialogs
 
-Questions from extensions and commands: confirmations, lists, diff reviews and text input.
-In a list of up to nine options, the digit in front of an option chooses it.
+Questions you answer inline: approvals and other confirmations, lists, diff reviews, text
+input, and the model's questions (ask_user). Each is a block with a bar down its left, the
+question, the options and the keys. In a list of up to nine options (not a confirmation), the
+digit in front of an option chooses it, or checks it where several may be chosen. "Other…"
+opens a text field in its row for an answer in your own words; there Enter keeps the text and
+Esc closes the field (Esc again cancels the dialog). Several questions are asked one after
+another in the same block and answered together.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -98,6 +103,9 @@ In a list of up to nine options, the digit in front of an option chooses it.
 | `dialog.cancel` | `escape`, `ctrl+c` | Cancel the dialog |
 | `dialog.yes` | `y` | Answer yes to a confirmation |
 | `dialog.no` | `n` | Answer no to a confirmation |
+| `dialog.toggle` | `space` | Check or uncheck the selected option where several may be chosen |
+| `dialog.prev-question` | `left` | Go back to the previous question of several |
+| `dialog.next-question` | `right` | Go on to the next question of several, up to the first one not answered yet |
 
 ### Transcript (full-screen mode)
 

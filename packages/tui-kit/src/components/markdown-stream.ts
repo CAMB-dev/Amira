@@ -44,6 +44,16 @@ export interface MarkdownStreamOptions {
    * when it fails or takes too long. Without it, images are only their alt text.
    */
   images?: MarkdownImages
+  /**
+   * Without `images`: the rows an image standing on a line of its own shows as, given its rows
+   * as alt text (`fallback`), its column and the width. For views that draw images themselves.
+   */
+  imageRows?: (
+    image: { url: string; alt: string },
+    fallback: string[],
+    col: number,
+    width: number,
+  ) => string[]
 }
 
 /** Where a Markdown stream gets its images. */
@@ -100,6 +110,7 @@ export class MarkdownStream implements Component {
   private readonly hyperlinks: boolean
   private readonly highlight: boolean
   private readonly images: MarkdownImages | undefined
+  private readonly imageRows: MarkdownStreamOptions["imageRows"]
   private state = newState()
   /** Text not processed yet: complete lines, then the partial line being written. */
   private src = ""
@@ -116,6 +127,7 @@ export class MarkdownStream implements Component {
     this.hyperlinks = opts.hyperlinks ?? supportsHyperlinks()
     this.highlight = opts.highlight ?? true
     this.images = opts.images
+    this.imageRows = opts.imageRows
   }
 
   /** Adds streamed text. */
@@ -208,6 +220,9 @@ export class MarkdownStream implements Component {
         const fallback = rows.map((r) => (r.startsWith(indent) ? r.slice(col) : r))
         return [indent + pendingImage(load, fallback, images.waitMs ?? 3000)]
       }
+    } else if (this.imageRows) {
+      const rowsFor = this.imageRows
+      env.image = (image, rows, col) => rowsFor(image, rows, col, env.width)
     }
     return env
   }

@@ -1,3 +1,4 @@
+import type { ImagePlacement } from "./images/screen.ts"
 import type { InputEvent } from "./keys.ts"
 import type { Theme } from "./style.ts"
 
@@ -20,6 +21,12 @@ export interface RenderContext {
    * such as the finished rows of a streaming reply. Only the renderer's own frames provide it.
    */
   commit?: (lines: string[]) => void
+  /**
+   * Shows an image over the frame's rows (the full-screen renderer's frames provide it): its row
+   * is the index of the line in what the root component returns. The rows under it should be
+   * blank; it is drawn once and left alone while the frame keeps placing it in the same place.
+   */
+  place?: (placement: ImagePlacement) => void
 }
 
 /** Anything that can draw itself as lines for a given width. */
