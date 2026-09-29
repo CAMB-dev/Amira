@@ -129,7 +129,7 @@ test("an image wider than the terminal when it is ready goes as its fallback; st
 test("an image marker is honored only as registered; content cannot forge or carry one", () => {
   const { screen, r, term } = setup()
   const marker = pendingImage(Promise.resolve(undefined), ["x"])
-  const forged = marker.replace(/:(\d+)\x07$/, ":999999\x07")
+  const forged = `${marker.slice(0, marker.lastIndexOf(":"))}:999999\x07`
   expect(findImageMarker(forged)).toBeUndefined()
   r.commit([`text ${forged} more`])
   expect(term.output).not.toContain("tk:img")

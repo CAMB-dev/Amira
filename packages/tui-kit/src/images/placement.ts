@@ -8,7 +8,6 @@ import type { ImageBlock } from "./encode.ts"
  */
 const NONCE = Math.random().toString(36).slice(2, 10)
 const MARKER_START = `\x1b_tk:img:${NONCE}:`
-// biome-ignore lint/suspicious/noControlCharactersInRegex: the marker is an escape sequence
 const MARKER = new RegExp(`\\x1b_tk:img:${NONCE}:(\\d+)\\x07$`)
 
 /** How long a marker stays known after its deadline, for a line held back (suspended) meanwhile. */
@@ -81,7 +80,7 @@ export function imageState(id: number, now = performance.now(), force = false): 
 /** Calls `fn` once when the image settles; returns how to stop waiting. */
 export function onImageSettled(id: number, fn: () => void): () => void {
   const e = pending.get(id)
-  if (!e || e.state !== "loading") return () => {}
+  if (e?.state !== "loading") return () => {}
   e.listeners.add(fn)
   return () => e.listeners.delete(fn)
 }
