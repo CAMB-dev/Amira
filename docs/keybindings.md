@@ -105,7 +105,8 @@ In full-screen mode (the default, see `tui.mode` below) Amira keeps the conversa
 scrolls it itself. These keys act on the transcript before the input gets them. Home, End and
 plain characters act on the transcript only while the input is empty; otherwise the input
 uses them. The mouse wheel scrolls three rows a notch, and a click selects the block under
-it (a second click on its first row folds it).
+it (a second click on its first row folds it) while the input is empty; with a draft in the
+input a click leaves the keyboard to it.
 
 The view follows the newest output. Scrolled up, it stays where it is while the conversation
 grows, and the row under it says `↓ new output`; scrolling to the end (or End) follows again.
@@ -116,16 +117,17 @@ grows, and the row under it says `↓ new output`; scrolling to the end (or End)
 | `scroll.down` | `shift+down` | Scroll down a line |
 | `scroll.page-up` | `pageup` | Scroll up a page |
 | `scroll.page-down` | `pagedown` | Scroll down a page |
-| `scroll.top` | `ctrl+home`, `home` | Go to the start of the conversation |
-| `scroll.bottom` | `ctrl+end`, `end` | Go to the end and follow it again |
+| `scroll.top` | `ctrl+home`, `home`, `alt+home` (VS Code: `alt+home` first) | Go to the start of the conversation |
+| `scroll.bottom` | `ctrl+end`, `end`, `alt+end` (VS Code: `alt+end` first) | Go to the end and follow it again |
 | `select.start` | `ctrl+up`, `alt+up` (VS Code: `alt+up` first) | Select the newest block (a message, a reply, a tool call, a notice) |
-| `find` | `ctrl+f` | Open the find bar |
+| `find` | `ctrl+f`, `alt+f` (VS Code: `alt+f` first) | Open the find bar |
 | `copy.reply` | `alt+c` | Copy the last reply, as Markdown, to the clipboard |
 
 ### Block selection
 
 While a block is selected it is marked with `▌` and the row above the input says what it is.
-Typing goes back to the input.
+Typing and pasting go back to the input; keys the selection does not use (Ctrl+C, Ctrl+O,
+Ctrl+D) do what they do in the input.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -157,7 +159,13 @@ iTerm2, kitty, WezTerm and others accept (tmux only with `set-clipboard on`); no
 Amira whether it arrived. Mouse reporting is on in full-screen mode, so to select text with
 the mouse hold Shift while dragging (Windows Terminal, VS Code on Windows and Linux, xterm);
 in VS Code on macOS hold Option, or set `terminal.integrated.macOptionClickForcesSelection`.
-In inline mode the terminal's own selection works as usual.
+The same goes for pasting with the mouse: in Windows Terminal hold Shift while right-clicking
+(on Linux terminals, Shift+middle-click), or press Ctrl+V; Amira says so when a click with
+those buttons reaches it. In inline mode the terminal's own selection and paste work as usual.
+
+VS Code keeps Ctrl+F, Ctrl+Home, Ctrl+End and Ctrl+↑↓ for its terminal (they are in its
+`terminal.integrated.commandsToSkipShell`), so there Alt+F, Alt+Home, Alt+End and Alt+↑ come
+first and the hints name them.
 
 Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
 the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for

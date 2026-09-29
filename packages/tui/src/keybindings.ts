@@ -133,11 +133,12 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "scroll.down": ["shift+down"],
     "scroll.page-up": ["pageup"],
     "scroll.page-down": ["pagedown"],
-    "scroll.top": ["ctrl+home", "home"],
-    "scroll.bottom": ["ctrl+end", "end"],
-    // VS Code keeps Ctrl+↑↓ for moving between commands; Alt+↑↓ reaches the UI there.
+    // VS Code keeps Ctrl+Home/End (scroll its terminal), Ctrl+F (its find widget) and Ctrl+↑↓
+    // (move between commands) for itself (commandsToSkipShell); the Alt keys reach the UI there.
+    "scroll.top": env.vscode ? ["alt+home", "home", "ctrl+home"] : ["ctrl+home", "home", "alt+home"],
+    "scroll.bottom": env.vscode ? ["alt+end", "end", "ctrl+end"] : ["ctrl+end", "end", "alt+end"],
     "select.start": env.vscode ? ["alt+up", "ctrl+up"] : ["ctrl+up", "alt+up"],
-    find: ["ctrl+f"],
+    find: env.vscode ? ["alt+f", "ctrl+f"] : ["ctrl+f", "alt+f"],
     "copy.reply": ["alt+c"],
     "select.prev": ["up", "ctrl+up", "alt+up", "k"],
     "select.next": ["down", "ctrl+down", "alt+down", "j"],
