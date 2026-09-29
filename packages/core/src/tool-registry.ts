@@ -36,6 +36,11 @@ export class ToolRegistry {
   /** A view's own tools, by name. */
   #own = new Map<string, Registered>()
 
+  /** Names of the tools only this view has (see `view`); none for a registry that is not a view. */
+  ownNames(): string[] {
+    return [...this.#own.keys()]
+  }
+
   /**
    * Hides tools by name from the model. A disabled tool is not offered and calling it
    * anyway is treated as an unknown tool. Replaces any previous set.

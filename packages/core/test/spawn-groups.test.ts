@@ -499,3 +499,60 @@ test("a child that ends aborts the sub-agents it left running, persistent or not
   expect(await grandchild!.result()).toMatchObject({ status: "aborted", error: "its parent ended" })
   expect(tree.children).toHaveLength(0)
 })
+
+// ---- extra tools ----
+
+test("a child's extra tools are its own: they know the child, win over the parent's and are hidden from its children", async () => {
+  const seen: Record<string, string[]> = {}
+  const { tree, root, tools } = setup((req) => {
+    const role = roleOf(req)
+    seen[role] = req.tools.map((t) => t.name).sort()
+    if (req.messages.at(-1)?.role === "toolResult") return { text: `${role}: ${lastText(req)}` }
+    return { toolCalls: [{ name: role === "b" ? "nest" : "whoami", args: {} }] }
+  })
+  tools.register(
+    defineTool({
+      name: "whoami",
+      description: "the shared one",
+      parameters: { type: "object" },
+      execute: async () => textResult("nobody"),
+    }),
+    "test",
+  )
+  tools.register(
+    defineTool({
+      name: "nest",
+      description: "starts a grandchild",
+      parameters: { type: "object" },
+      execute: async (_p, ctx) => {
+        const r = await ctx.session!.spawn!({ prompt: "g", systemPrompt: "ROLE g" }).result()
+        return textResult(r.text)
+      },
+    }),
+    "test",
+  )
+  const own = (name: string) =>
+    defineTool({
+      name: "whoami",
+      description: `only ${name}'s`,
+      parameters: { type: "object" },
+      execute: async () => textResult(`I am ${name}`),
+    })
+  const ping = defineTool({
+    name: "ping",
+    description: "b's own",
+    parameters: { type: "object" },
+    execute: async () => textResult("pong"),
+  })
+  const a = tree.spawn(root, { prompt: "a", systemPrompt: "ROLE a", extraTools: [own("a")] })
+  const b = tree.spawn(root, { prompt: "b", systemPrompt: "ROLE b", extraTools: [own("b"), ping] })
+  const [ra, rb] = await Promise.all([a.result(), b.result()])
+  expect(ra.text).toBe("a: I am a")
+  // The grandchild gets neither of b's own tools, nor the shared tool b's whoami hides.
+  expect(rb.text).toBe('b: g: Unknown tool "whoami". Available tools: nest')
+  expect(seen.b).toEqual(["nest", "ping", "whoami"])
+  expect(seen.g).toEqual(["nest"])
+  expect(() => tree.spawn(root, { prompt: "x", extraTools: [{ ...ping, name: "return_result" }] })).toThrow(
+    SpawnError,
+  )
+})

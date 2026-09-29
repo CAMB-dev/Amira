@@ -1,6 +1,6 @@
 import type { JSONSchema, ModelRef, Usage, UserMessage } from "@amira/ai"
 import type { AnyEvent } from "./events.ts"
-import type { PendingNotice } from "./tools.ts"
+import type { PendingNotice, ToolDefinition } from "./tools.ts"
 
 /** What a sub-agent starts with (D12): only its task, or the parent's conversation so far. */
 export type SpawnContext = "fresh" | "fork"
@@ -27,6 +27,13 @@ export interface SpawnOptions {
   tools?: string[]
   /** Tools the child may not use, e.g. the one that spawns sub-agents once it is deep enough. */
   excludeTools?: string[]
+  /**
+   * Tools only this child has, on top of the ones `tools` and `excludeTools` leave it: e.g. a
+   * swarm member's messaging tools, whose code knows which member calls them. They win over
+   * the parent's tools of the same name, and are hidden from the child's own sub-agents (a
+   * parent's tool of the same name too). None may be named return_result.
+   */
+  extraTools?: ToolDefinition[]
   /** Instructions for the child, placed in its system prompt's "role" section. */
   systemPrompt?: string
   /**

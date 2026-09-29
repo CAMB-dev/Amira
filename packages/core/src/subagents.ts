@@ -491,10 +491,15 @@ export class AgentTree {
     const context = opts.context ?? "fresh"
     const persistent = opts.persistent === true
     let base = context === "fork" ? [...parent.sections] : (this.#opts.sections ?? standardSections)(cwd)
+    const extra = opts.extraTools ?? []
+    if (extra.some((t) => t.name === RETURN_RESULT_TOOL)) {
+      throw new SpawnError(`an extra tool cannot be named ${RETURN_RESULT_TOOL}`)
+    }
     const allow = opts.tools ? new Set(opts.tools) : undefined
     const deny = new Set(opts.excludeTools ?? [])
-    // A parent's return_result is its own: never passed down.
+    // A parent's own tools (its return_result, its extra tools) are its own: never passed down.
     deny.add(RETURN_RESULT_TOOL)
+    for (const name of parent.tools.ownNames()) deny.add(name)
     const spec: ResultSpec | undefined = opts.schema
       ? { schema: opts.schema, wrapped: !isObjectSchema(opts.schema), strikes: 0 }
       : undefined
@@ -520,11 +525,10 @@ export class AgentTree {
       messages: context === "fork" ? forkHistory(parent.messages) : [],
       bus: parent.bus,
       interceptors: parent.interceptors,
-      tools: ToolRegistry.view(
-        parent.tools,
-        (n) => (allow?.has(n) ?? true) && !deny.has(n),
-        spec ? [returnResultTool(spec, this.resultRetries)] : [],
-      ),
+      tools: ToolRegistry.view(parent.tools, (n) => (allow?.has(n) ?? true) && !deny.has(n), [
+        ...extra,
+        ...(spec ? [returnResultTool(spec, this.resultRetries)] : []),
+      ]),
       ...(store ? { session: store } : {}),
       parentSessionId: parent.sessionId,
       depth,
