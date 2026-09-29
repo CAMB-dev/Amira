@@ -31,6 +31,8 @@ export const GIT_CACHE_UNUSED_DAYS = 30
 /** A lock is held for a fetch and a checkout, each of which may take up to COMMAND_TIMEOUT_MS. */
 const LOCK_STALE_MS = 4 * COMMAND_TIMEOUT_MS
 const LOCK_WAIT_MS = 2 * COMMAND_TIMEOUT_MS
+/** A holder touches its lock this often, so a long hold never looks stale. */
+const LOCK_HEARTBEAT_MS = 30_000
 const META = "amira-cache.json"
 
 export type GitPhase = "resolving" | "waiting" | "fetching" | "extracting"
@@ -146,8 +148,9 @@ export class GitCache {
         this.dir,
         "git ls-remote",
         {
-          signal: ctx.signal,
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
           timeoutMs: 60_000,
+          env: outsideRepos(this.dir),
         },
       )
     } catch (err) {
@@ -183,6 +186,7 @@ export class GitCache {
     if (req.ref?.startsWith("-")) throw new PackageError(`not a git ref: ${req.ref}`)
     let target = req.commit && isFullCommitId(req.commit) ? req.commit.toLowerCase() : undefined
     const want = req.commit && !target ? req.commit : req.ref
+    if (want?.startsWith("-")) throw new PackageError(`not a git ref or commit: ${want}`)
     let remote: RemoteLookup | undefined
     if (!target) {
       if (want && isFullCommitId(want)) target = want.toLowerCase()
@@ -263,6 +267,7 @@ export class GitCache {
       return await waitFileLock(path.join(this.dir, `${gitCacheKey(url)}.lock`), {
         staleMs: LOCK_STALE_MS,
         waitMs: LOCK_WAIT_MS,
+        heartbeatMs: LOCK_HEARTBEAT_MS,
         ...(ctx.signal ? { signal: ctx.signal } : {}),
         onWait: () => ctx.progress?.("waiting", `another amira is fetching ${repoLabel(url)}`),
       })
@@ -276,7 +281,6 @@ export class GitCache {
     // Cloned beside the cache's place and renamed in: a half-finished clone is never used.
     const tmp = `${dir}.tmp-${process.pid}`
     rmSync(tmp, { recursive: true, force: true, maxRetries: 3 })
-    rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
     const label = repoLabel(url)
     ctx.progress?.("fetching", label)
     this.stats.clone++
@@ -285,16 +289,27 @@ export class GitCache {
         ["git", "clone", "--bare", "--filter=blob:none", "--progress", "--", url, tmp],
         this.dir,
         "git clone",
-        { signal: ctx.signal, onChunk: progressParser(ctx, "fetching", label) },
+        {
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+          onChunk: progressParser(ctx, "fetching", label),
+          env: outsideRepos(this.dir),
+        },
       )
-      // A bare clone has no fetch refspec: keep branches and tags as the remote has them.
+      // A bare clone has no fetch refspec: keep branches as the remote has them.
       await git(tmp, ["config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"], "git config", ctx)
+      // Only now is the old (broken) copy replaced.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
       renameSync(tmp, dir)
     } catch (err) {
       rmSync(tmp, { recursive: true, force: true, maxRetries: 3 })
-      if (err instanceof ToolError && !err.aborted && !ctx.signal?.aborted)
+      if (err instanceof ToolError && (err.aborted || ctx.signal?.aborted)) throw err
+      ctx.signal?.throwIfAborted()
+      if (err instanceof ToolError)
         throw new PackageError(`cannot download ${url}: ${firstLine(err.output || err.message)}`)
-      throw err
+      if (err instanceof PackageError) throw err
+      throw new PackageError(
+        `cannot store ${url} in ${this.dir}: ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
     this.fetched.add(gitCacheKey(url))
   }
@@ -303,15 +318,29 @@ export class GitCache {
     const label = repoLabel(url)
     ctx.progress?.("fetching", label)
     this.stats.fetch++
-    // From origin, not the URL: the partial clone filter is the remote's setting.
-    const argv = ["fetch", "--prune", "--tags", "--progress", "--no-write-fetch-head", "origin"]
+    // From origin, not the URL: the partial clone filter is the remote's setting. Branches and
+    // tags as the remote has them now: forced (a tag that moved), and pruned (deleted ones).
+    const argv = [
+      "fetch",
+      "--prune",
+      "--no-tags",
+      "--progress",
+      "--no-write-fetch-head",
+      "origin",
+      "+refs/heads/*:refs/heads/*",
+      "+refs/tags/*:refs/tags/*",
+    ]
     try {
       await git(dir, argv, "git fetch", ctx, progressParser(ctx, "fetching", label))
     } catch (err) {
       if (err instanceof ToolError && err.aborted) throw err
       ctx.signal?.throwIfAborted()
-      // The remote answered ls-remote a moment ago, so the cache itself may be broken: start over.
-      ctx.log?.(`warning: the cache of ${url} could not be updated; cloning it again`)
+      // Only a broken cache is cloned again; a network failure keeps the cache as it is.
+      if (await isRepo(dir, ctx)) {
+        const why = err instanceof ToolError ? firstLine(err.output || err.message) : String(err)
+        throw new PackageError(`cannot fetch ${url}: ${why}`)
+      }
+      ctx.log?.(`warning: the cache of ${url} is damaged; cloning it again`)
       await this.clone(url, dir, ctx)
     }
     this.fetched.add(gitCacheKey(url))
@@ -327,6 +356,14 @@ export class GitCache {
       progressParser(ctx, "fetching", repoLabel(url)),
     )
   }
+}
+
+/**
+ * For git run in the cache directory without a repository of its own (ls-remote, clone): a
+ * repository around it (a home directory kept in git) must not lend its config.
+ */
+function outsideRepos(cacheDir: string): Record<string, string> {
+  return { GIT_CEILING_DIRECTORIES: path.dirname(cacheDir) }
 }
 
 /** The line of git's output that says what went wrong: its first `fatal:` or `error:`. */
@@ -484,6 +521,8 @@ function checkoutArgv(dir: string, dest: string, spec: string): string[] {
     "core.protectHFS=true",
     "-c",
     "core.fsmonitor=false",
+    "-c",
+    "core.sparseCheckout=false",
     "read-tree",
     "--reset",
     "-u",

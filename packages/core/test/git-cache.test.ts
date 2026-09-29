@@ -417,6 +417,60 @@ test("Ctrl+C during a download stops it and leaves no work directory, clone or l
   expect(r.name).toBe("alpha")
 })
 
+test("a tag that moved or went away upstream is followed without cloning again", async () => {
+  const { repo, url, head } = await monorepo(["alpha"])
+  await git(repo, "tag", "v1")
+  const index = writeIndex(url, ["alpha"])
+  const v = JSON.parse(readFileSync(index, "utf8"))
+  v.extensions[0].source.ref = "v1"
+  writeFileSync(index, JSON.stringify(v))
+  expect((await installPackage("alpha", opts({ index: { url: index } }))).entry.pinned.commit).toBe(head)
+  writeFileSync(path.join(repo, "extensions", "alpha", "index.ts"), "export default () => {} // v1 again\n")
+  await git(repo, "commit", "-qam", "two")
+  await git(repo, "tag", "-f", "v1")
+  await git(repo, "tag", "gone")
+  const second = await git(repo, "rev-parse", "HEAD")
+  const logged: string[] = []
+  const cache = new GitCache(cacheDir)
+  const [u] = await updatePackages(
+    opts({ index: { url: index }, gitCache: cache, log: (l: string) => logged.push(l) }),
+  )
+  expect(u).toMatchObject({ changed: true, to: { pinned: { commit: second } } })
+  expect(cache.stats).toEqual({ lsRemote: 1, clone: 0, fetch: 1 })
+  expect(logged).toEqual([])
+  // A deleted tag is pruned from the cache.
+  const bare = path.join(cacheDir, `${gitCacheKey(url)}.git`)
+  expect(await git(bare, "tag", "--list")).toContain("gone")
+  await git(repo, "tag", "-d", "gone")
+  await git(repo, "commit", "-q", "--allow-empty", "-m", "three")
+  await git(repo, "tag", "-f", "v1")
+  await updatePackages(opts({ index: { url: index } }))
+  expect(await git(bare, "tag", "--list")).not.toContain("gone")
+})
+
+test("a fetch that fails keeps the cache: a later offline restore still works", async () => {
+  const { repo, url, head } = await monorepo(["alpha"])
+  const index = { url: writeIndex(url, ["alpha"]) }
+  await installPackage("alpha", opts({ index }))
+  makePackage(path.join(repo, "extensions", "alpha"), "alpha", "2.0.0")
+  await git(repo, "commit", "-qam", "two")
+  // The remote answers ls-remote but cannot send objects (its object store is unreadable).
+  const objects = path.join(repo, ".git", "objects")
+  renameSync(objects, `${objects}-away`)
+  mkdirSync(objects)
+  const cache = new GitCache(cacheDir)
+  const [u] = await updatePackages(opts({ index, gitCache: cache }))
+  renameSync(objects, `${objects}-broken`)
+  renameSync(`${objects}-away`, objects)
+  expect(u).toMatchObject({ name: "alpha", error: expect.stringMatching(/^cannot (fetch|download)/) })
+  expect(cache.stats.clone).toBe(0)
+  expect(listGitCaches(cacheDir).length).toBe(1)
+  renameSync(repo, `${repo}-away`)
+  rmSync(path.join(user().dir, "alpha"), { recursive: true })
+  const restored = await restorePackages(opts())
+  expect(restored.map((r) => r.entry.pinned.commit)).toEqual([head])
+})
+
 test("an annotated tag, a branch and an abbreviated commit resolve like a clone would", async () => {
   const { repo, url, head } = await monorepo(["alpha"])
   await git(repo, "tag", "-a", "v1", "-m", "v1")
