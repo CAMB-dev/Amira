@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "prototype:dashboard": "bun prototypes/orchestration-dashboard.prototype.ts"
+  },
   "dependencies": {
     "@amira/ai": "workspace:*",
     "@amira/api": "workspace:*",
