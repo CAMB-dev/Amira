@@ -41,7 +41,11 @@ async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
 }
 
 const ESC = "\x1b[27u"
+/** The bar of a block selection: what is selected, and where it is among the blocks. */
+const SELECT_BAR = /(?:message|reply|tool call|notice|command|banner) \d+ of \d+/
 const CTRL_UP = "\x1b[1;5A"
+const RIGHT = "\x1b[C"
+const DOWN = "\x1b[B"
 const PAGE_UP = "\x1b[5~"
 const END = "\x1b[F"
 const CTRL_F = "\x06"
@@ -169,7 +173,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     terminal.setSize(c, r)
   }
   await shows("Amira")
-  return { agent, bus, host, tree, terminal, screen, view, shows, idle, resize, exited }
+  return { agent, ai, bus, host, commands, tree, terminal, screen, view, shows, idle, resize, exited }
 }
 
 test("reads in a row become one Explored row, which unfolds to the calls", async () => {
@@ -193,7 +197,7 @@ test("reads in a row become one Explored row, which unfolds to the calls", async
   // Selected, Enter shows each call under it.
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
-  await waitFor(() => view().includes("tool block"), "the row selected")
+  await waitFor(() => /tool call \d+ of|Explored \d+ of/.test(view()), "the row selected")
   terminal.send("\r")
   await waitFor(() => view().includes("● read a.ts"), "unfolded")
   expect(view()).toContain("● read b.ts")
@@ -213,7 +217,7 @@ test("thinking shows folded as how long it took, and unfolds to the text", async
   expect(view()).not.toContain("Maybe the answer")
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
-  await waitFor(() => view().includes("reasoning block"), "the thinking selected")
+  await waitFor(() => /thinking \d+ of/.test(view()), "the thinking selected")
   terminal.send("\r")
   await waitFor(() => view().includes("Maybe the answer is 42."), "unfolded")
   terminal.send(ESC)
@@ -255,8 +259,12 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   expect(await exited).toBe(0)
   expect(screen.inAltScreen).toBe(false)
   expect(terminal.output).toContain("\x1b[?1006l\x1b[?1000l")
-  // The normal screen holds the conversation as the inline UI would have left it, no input box.
-  expect(screen.mainText).toBe(conversation)
+  // The normal screen holds the conversation as the inline UI would have left it, no input box,
+  // a blank line before it (under the command that started Amira) and after it (above the prompt).
+  expect(screen.mainText).toBe(`\n${conversation}`)
+  expect(screen.lines[screen.y]).toBe("")
+  expect(screen.lines[screen.y - 1]).toBe("")
+  expect(screen.lines[screen.y - 2]).toBe("  The file has three lines.")
   expect(screen.altSwitches).toEqual([true, false])
 })
 
@@ -282,7 +290,7 @@ test("a streaming reply follows the end; scrolling up keeps its place and says t
   await idle()
   expect(view()).not.toContain("line 1\n")
   terminal.send(PAGE_UP)
-  await waitFor(() => view().includes("↓ more below"), "scrolled up")
+  await waitFor(() => /↓ \d+ rows? below/.test(view()), "scrolled up")
   const shown = view()
   expect(shown).not.toContain("line 60")
   // The wheel scrolls too.
@@ -519,6 +527,11 @@ test("the members of a group a command started share one block: a compact group 
   expect(view().match(/◆ in the background/g)).toHaveLength(1)
   expect(view().match(/workflow demo/g)).toHaveLength(1)
   expect(view()).not.toContain("Scan api")
+  // Selected, it is named as its head says, not as a tool call.
+  terminal.send(CTRL_UP)
+  await waitFor(() => /[›❯] background sub-agents \d+ of \d+/.test(view()), "the group selected")
+  terminal.send(ESC)
+  await waitFor(() => !/sub-agents \d+ of/.test(view()), "done selecting")
   release()
   await Promise.all(kids.map((k) => k.result()))
   group.end()
@@ -540,22 +553,23 @@ test("blocks fold and unfold: a tool call's output, a reply's details; Ctrl+O ap
   expect(view()).toContain("hidden body")
   // Ctrl+↑ selects the newest block, the reply; Enter folds its details.
   terminal.send(CTRL_UP)
-  await waitFor(() => view().includes("assistant block"), "selection bar")
-  expect(view()).toContain("▌  Intro")
+  await waitFor(() => /reply \d+ of \d+/.test(view()), "selection bar")
+  // The mark takes the blank first column: the text stays where it was.
+  expect(view()).toContain("▌ Intro")
   terminal.send("\r")
   await waitFor(() => view().includes("▸ More"), "folded")
   expect(view()).not.toContain("hidden body")
   // Up to the tool call; Enter shows all of its output, Enter again only its result line.
   terminal.send(CTRL_UP)
-  await waitFor(() => view().includes("tool block"), "the call selected")
+  await waitFor(() => view().includes("tool call"), "the call selected")
   terminal.send("\r")
   await waitFor(() => view().includes("line 3"), "unfolded")
-  expect(view()).toMatch(/▌ {4}line 2\n▌ {4}line 3/)
+  expect(view()).toMatch(/▌ {3}line 2\n▌ {3}line 3/)
   terminal.send(" ")
   await waitFor(() => !view().includes("line 3"), "folded again")
   // Esc stops selecting; Ctrl+O then shows every call in full, folded ones keeping theirs.
   terminal.send(ESC)
-  await waitFor(() => !view().includes("tool block"), "back to the input")
+  await waitFor(() => !view().includes("tool call"), "back to the input")
   terminal.send("\x0f")
   await shows("Tool output: full")
   expect(view()).not.toContain("line 3")
@@ -593,7 +607,7 @@ test("keys a block selection does not use reach the input: Ctrl+C interrupts, ty
   terminal.send("go\r")
   await waitFor(() => agent.status !== "idle" && view().includes("● hold"), "the turn running")
   terminal.send(CTRL_UP)
-  await waitFor(() => view().includes("tool block"), "selected")
+  await waitFor(() => view().includes("tool call"), "selected")
   // Ctrl+C stops the running turn with a block selected.
   terminal.send("\x03")
   await idle()
@@ -601,20 +615,20 @@ test("keys a block selection does not use reach the input: Ctrl+C interrupts, ty
   release()
   // Typing leaves the selection and types, first character included.
   terminal.send(CTRL_UP)
-  await waitFor(() => view().includes("block "), "selected again")
+  await waitFor(() => SELECT_BAR.test(view()), "selected again")
   terminal.send("hello")
   await shows("› hello")
-  expect(view()).not.toMatch(/\w+ block \d+ of/)
+  expect(view()).not.toMatch(SELECT_BAR)
   // A paste too.
   terminal.send("\x03")
   terminal.send(CTRL_UP)
-  await waitFor(() => /\w+ block \d+ of/.test(view()), "selected once more")
+  await waitFor(() => SELECT_BAR.test(view()), "selected once more")
   terminal.send("\x1b[200~pasted text\x1b[201~")
   await shows("› pasted text")
   // Ctrl+C with a selection and an empty input quits.
   terminal.send("\x03")
   terminal.send(CTRL_UP)
-  await waitFor(() => /\w+ block \d+ of/.test(view()), "selected before quitting")
+  await waitFor(() => SELECT_BAR.test(view()), "selected before quitting")
   terminal.send("\x03")
   expect(await exited).toBe(0)
 })
@@ -639,7 +653,7 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   terminal.send("\r")
   await shows("second answer")
   await idle()
-  expect(view()).not.toMatch(/\w+ block \d+ of/)
+  expect(view()).not.toMatch(SELECT_BAR)
   expect(agent.messages.filter((m) => m.role === "user")).toHaveLength(2)
   // With the input empty a click selects no block either (that is Ctrl+↑): typing still types.
   const again = screen.lines.findIndex((l) => l.includes("● read a.ts"))
@@ -647,7 +661,7 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   terminal.send(click(again - 1))
   terminal.send("x")
   await shows("› x")
-  expect(view()).not.toMatch(/\w+ block \d+ of/)
+  expect(view()).not.toMatch(SELECT_BAR)
   terminal.send(click(again, 2))
   await shows("Shift+right-click (or Ctrl+V) pastes")
   terminal.send("\x03\x03")
@@ -717,7 +731,7 @@ test("dragging selects text across blocks, marks it, and copies it without the c
   await waitFor(() => terminal.output.includes("three"), "the rows drawn again, unmarked")
   expect(terminal.output).not.toContain("\x1b[7m")
   expect(clipboard(terminal.output)).toBeUndefined()
-  expect(view()).not.toMatch(/\w+ block \d+ of/)
+  expect(view()).not.toMatch(SELECT_BAR)
   terminal.send("\x03\x03")
   await exited
 })
@@ -956,13 +970,89 @@ test("copying the last reply and a selected block goes through OSC 52", async ()
   expect(screen.oscs).toContain(`52;c;${b64("Use **bold** here.")}`)
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
-  await waitFor(() => view().includes("user block"), "the user message selected")
+  await waitFor(() => /message \d+ of/.test(view()), "the user message selected")
   // The selection's bar keeps its essential keys; moving is in the key reference.
-  expect(view()).toMatch(/❯ user block \d+ of \d+ · (Enter fold · )?y copy · Esc back$/m)
+  expect(view()).toMatch(/[›❯] message \d+ of \d+ · (Enter fold · )?y copy · Esc back$/m)
   expect(view()).not.toContain(" move")
   terminal.send("y")
-  await shows("Copied the user block")
+  await shows("Copied the message")
   expect(terminal.output).toContain(`\x1b]52;c;${b64("go")}\x07`)
+  terminal.send(ESC)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a selected reply opens into its code blocks: each is selected and copied on its own", async () => {
+  const text = "Two snippets:\n\n```ts\nconst a = 1\n```\n\nand\n\n```sh\necho hi\necho there\n```\n\nDone."
+  const { terminal, view, shows, idle, exited } = await setup([{ text }], { cols: 70, rows: 24 })
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64")
+  terminal.send("go\r")
+  await shows("Done.")
+  await idle()
+  terminal.send(CTRL_UP)
+  await waitFor(() => /reply \d+ of \d+ · → code blocks/.test(view()), "the reply selected")
+  terminal.send(RIGHT)
+  await shows("code block 1 of 2 in the reply")
+  terminal.send("y")
+  await shows("Copied the code block")
+  expect(terminal.output).toContain(`\x1b]52;c;${b64("const a = 1")}\x07`)
+  terminal.send(DOWN)
+  await shows("code block 2 of 2 in the reply")
+  // Only the code block's rows are marked.
+  expect(view()).toMatch(/▌ ╭[^\n]*\n▌ │ echo hi/)
+  expect(view()).not.toContain("▌ Two snippets")
+  terminal.send("c")
+  await waitFor(() => terminal.output.includes(b64("echo hi\necho there")), "the second copied")
+  // Esc goes back to the whole reply, Esc again stops selecting.
+  terminal.send(ESC)
+  await waitFor(() => /reply \d+ of \d+/.test(view()) && !/code block \d/.test(view()), "back to the reply")
+  terminal.send(ESC)
+  await waitFor(() => !SELECT_BAR.test(view()), "done selecting")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a selected call opens the sub-agent viewer on its sub-agent", async () => {
+  let finish!: () => void
+  const gate = new Promise<void>((r) => {
+    finish = r
+  })
+  const reply = (req: { messages: { role: string; content: unknown }[] }) => {
+    const child = JSON.stringify(req.messages[0]?.content).includes('"scan"')
+    const answered = req.messages.at(-1)?.role === "toolResult"
+    if (child) return { text: "scanned" }
+    return answered ? { text: "started it" } : { toolCalls: [{ name: "launch", args: {} }] }
+  }
+  const { terminal, view, shows, idle, exited, agent } = await setup([reply, reply, reply], {
+    cols: 80,
+    commands: true,
+  })
+  agent.tools.register(
+    defineTool({
+      name: "launch",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        ctx.session!.spawn!({ role: "explorer", title: "Scan the logs", prompt: "scan" })
+        await gate
+        return textResult("Started")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("◆ Scan the logs")
+  finish()
+  await shows("started it")
+  await idle()
+  terminal.send(CTRL_UP)
+  terminal.send(CTRL_UP)
+  await waitFor(() => /tool call \d+ of \d+ · Enter unfold · → sub-agent/.test(view()), "the call selected")
+  terminal.send("o")
+  await waitFor(() => view().includes("Esc back") && !SELECT_BAR.test(view()), "the viewer")
+  expect(view()).toContain("Scan the logs")
+  terminal.send(ESC)
+  await waitFor(() => SELECT_BAR.test(view()), "back, still selected")
   terminal.send(ESC)
   terminal.send("\x03")
   await exited
@@ -1017,7 +1107,7 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
   // A click on the transcript does not select a block while the dialog has the keyboard.
   terminal.send(click(screen.lines.findIndex((l) => l.startsWith("› go"))))
   await Bun.sleep(30)
-  expect(view()).not.toMatch(/block \d+ of/)
+  expect(view()).not.toMatch(SELECT_BAR)
   terminal.send("\x1b[B\r")
   await shows("thanks")
   await idle()
@@ -1059,14 +1149,90 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
   ]
   const { terminal, view, shows, screen, exited } = await setup([], { history })
   await shows("── resumed")
-  expect(view()).toMatch(
-    /› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
-  )
+  const shown =
+    /── resumed s_[^\n]*─\n\n\n› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents/
+  expect(view()).toMatch(shown)
   terminal.send("\x03")
   await exited
-  expect(screen.mainText).toMatch(
-    /› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
+  expect(screen.mainText).toMatch(shown)
+})
+
+test("/clear starts the transcript afresh: find, copying, selecting and the printout see the new session only", async () => {
+  const { terminal, view, shows, idle, exited, screen, ai, bus, host, commands } = await setup(
+    [{ text: "old answer" }, { text: "new answer" }],
+    { commands: true },
   )
+  let next: Agent | undefined
+  await host.load((api) => {
+    api.registerCommand({
+      name: "clear",
+      description: "",
+      run: async (_a, ctx) => {
+        next = new Agent({ ai, model: ai.model("mock/m1"), cwd: "/work/proj", systemPrompt: "", bus })
+        commands!.switchTo(next)
+        ctx.print(`Started a new session (${next.sessionId}).`)
+      },
+    })
+  }, "test-clear")
+  terminal.send("old question\r")
+  await shows("old answer")
+  await idle()
+  terminal.send("/clear\r")
+  await waitFor(() => next !== undefined && view().includes("── new session"), "the new session")
+  expect(view()).toContain(`── new session ${next!.sessionId} `)
+  expect(view()).toContain("Amira · mock/m1")
+  expect(view()).not.toContain("old question")
+  expect(view()).not.toContain("old answer")
+  // Nothing of the old session to find or copy.
+  terminal.send(CTRL_F)
+  terminal.send("old")
+  await shows("no matches")
+  terminal.send(ESC)
+  terminal.send("\x1bc")
+  await shows("Nothing to copy")
+  terminal.send("new question\r")
+  await shows("new answer")
+  await idle()
+  terminal.send("\x03")
+  await exited
+  expect(screen.mainText).toContain("new answer")
+  expect(screen.mainText).not.toContain("old answer")
+})
+
+test("a compaction's summary in a resumed history is a folded block that unfolds", async () => {
+  const history: Message[] = [
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "The earlier part of this conversation was compacted. Summary:\n\nFixed the parser.\nTests pass.",
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Understood. I will continue from this summary." }],
+      model: { provider: "amira", model: "compaction" },
+      stopReason: "end",
+    } as Message,
+    { role: "user", content: [{ type: "text", text: "and now?" }] },
+  ]
+  const { terminal, view, shows, exited, screen } = await setup([], { history })
+  await shows("▸ Compacted summary of earlier messages · 2 lines")
+  expect(view()).not.toContain("Understood")
+  expect(view()).not.toContain("Fixed the parser")
+  terminal.send(CTRL_UP)
+  terminal.send(CTRL_UP)
+  await waitFor(() => /summary \d+ of \d+ · Enter unfold/.test(view()), "the summary selected")
+  terminal.send("\r")
+  await shows("Fixed the parser.")
+  expect(view()).toContain("▾ Compacted summary of earlier messages")
+  terminal.send(ESC)
+  terminal.send("\x03")
+  await exited
+  // Unfolded by hand, it prints unfolded.
+  expect(screen.mainText).toContain("Fixed the parser.")
 })
 
 // --- images (D83)
@@ -1279,9 +1445,9 @@ test("a folded reply shows its image as alt text; tui.images off shows alt text 
   await idle()
   await waitFor(() => imageRows(screen).length === 6, "the image")
   terminal.send(CTRL_UP)
-  await waitFor(() => /assistant block/.test(view()), "selected")
-  // Selected, the block is drawn a column further right: so is the image.
-  await waitFor(() => screen.lines.some((l) => l.startsWith("▌  ▓▓▓▓")), "the image moved")
+  await waitFor(() => /reply \d+ of/.test(view()), "selected")
+  // Selected, the block is marked in its first column: the image stays where it is.
+  await waitFor(() => screen.lines.some((l) => l.startsWith("▌ ▓▓▓▓")), "the block marked")
   terminal.send("\r")
   await shows("🖼️ chart")
   expect(imageRows(screen)).toEqual([])

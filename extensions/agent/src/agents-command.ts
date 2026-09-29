@@ -158,8 +158,6 @@ function defaultView(list: SubagentInfo[]): SubagentInfo | undefined {
   return list.findLast((s) => s.status === "running") ?? list.at(-1)
 }
 
-const LIVE_VIEW = "Open the live view"
-
 function label(s: SubagentInfo, i: number, now: number): string {
   return `${i + 1}. ${"  ".repeat(Math.max(0, s.depth - 1))}${subagentSummary(s, now)}`
 }
@@ -215,8 +213,8 @@ function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
 }
 
 /**
- * /agents: this session's sub-agents. Without arguments a picker: choosing one prints its
- * transcript, and the first entry opens the live view where the frontend has one.
+ * /agents: this session's sub-agents. Without arguments a picker: choosing one opens the live
+ * view on it where the frontend has one (its p prints the snapshot), else prints its transcript.
  * `/agents <n|id>` prints one; `/agents view [<n|id>]` opens the live view on it;
  * `/agents stop <n|id|all>` stops one or every running one.
  */
@@ -317,13 +315,14 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
         return
       }
       const now = Date.now()
-      // The live view comes last, so a digit picks the sub-agent of that number.
-      const options = [...list.map((s, i) => label(s, i, now)), ...(ctx.openView ? [LIVE_VIEW] : [])]
-      const pick = await ctx.ui.select("Sub-agents", options, { signal: ctx.signal })
+      // A digit picks the sub-agent of that number.
+      const options = list.map((s, i) => label(s, i, now))
+      const title = ctx.openView ? "Sub-agents (Enter opens the live view; p there prints it)" : "Sub-agents"
+      const pick = await ctx.ui.select(title, options, { signal: ctx.signal })
       if (pick === undefined) return
-      if (pick === LIVE_VIEW) return openView(ctx, defaultView(list)!)
       const chosen = list[Number(/^(\d+)\./.exec(pick)?.[1]) - 1]
       if (!chosen) return
+      if (ctx.openView) return openView(ctx, chosen)
       // The pick may have taken a while; show it as it is now.
       const fresh = ctx.session.subagents()
       printTranscript(ctx, ctx.session, fresh.find((s) => s.id === chosen.id) ?? chosen, fresh)

@@ -44,6 +44,8 @@ export interface SubagentViewerOptions {
   onClose?: () => void
   /** Presents tool calls like the main transcript does. */
   presenters?: PresenterSource
+  /** Prints a snapshot of the one shown into the conversation (p); the viewer offers p when given. */
+  onPrint?: (id: string) => void
 }
 
 function elapsed(info: SubagentInfo, now: number): string {
@@ -205,6 +207,7 @@ export class SubagentViewer implements Component {
   #now: () => number
   #onClose: () => void
   #presenters: PresenterSource | undefined
+  #onPrint: ((id: string) => void) | undefined
   #current: string
   #views = new Map<string, ScrollView>()
   #streams = new Map<string, Streaming>()
@@ -222,6 +225,7 @@ export class SubagentViewer implements Component {
     this.#now = opts.now ?? Date.now
     this.#onClose = opts.onClose ?? (() => {})
     this.#presenters = opts.presenters
+    this.#onPrint = opts.onPrint
   }
 
   /** The sub-agent shown. */
@@ -278,6 +282,10 @@ export class SubagentViewer implements Component {
     }
     if (matchesKey(e, "x") && this.#canStop()) {
       this.#confirming = this.#current
+      return true
+    }
+    if (matchesKey(e, "p") && this.#onPrint) {
+      this.#onPrint(this.#current)
       return true
     }
     if (matchesKey(e, "escape") || matchesKey(e, "q") || matchesKey(e, "c", { ctrl: true })) {
@@ -371,6 +379,7 @@ export class SubagentViewer implements Component {
         { text: "↑↓ PgUp PgDn Home End scroll", priority: 1 },
         { text: "←→ switch", priority: 2 },
         this.#canStop() && { text: "x stop", priority: 4 },
+        this.#onPrint && { text: "p print", priority: 4 },
         { text: "Esc back", priority: 5 },
       ],
       width,

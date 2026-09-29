@@ -1,4 +1,5 @@
 import type { Message, ToolDetailLevel, ToolPresenter, ToolResult } from "@amira/api"
+import { isSummaryMessage } from "@amira/core"
 import {
   type MarkdownNodes,
   MarkdownStream,
@@ -23,8 +24,8 @@ export interface HistoryOptions {
   presenters?: PresenterSource
   width: number
   detail?: ToolDetailLevel
-  /** Names the session in the separator after the history. */
-  session?: { id: string; updatedAt?: number }
+  /** Names the session in the boundary before the history. */
+  session?: SessionBoundary
   /** Make links in replies clickable (OSC 8); default: what the terminal is known to support. */
   hyperlinks?: boolean
   /** Images and what extensions render (D88), committed as the inline transcript does. */
@@ -43,13 +44,15 @@ function localTime(ms: number): string {
 }
 
 /**
- * A resumed conversation, laid out like the live transcript: the same blocks and spacing,
- * tool calls through the same presenters (without durations, which history does not keep),
- * then a separator naming the session.
+ * A resumed conversation, laid out like the live transcript: the boundary naming the session,
+ * then the same blocks and spacing, tool calls through the same presenters (without durations,
+ * which history does not keep). A compaction's summary is one folded line.
  */
 export function historyLines(theme: Theme, messages: Message[], opts: HistoryOptions): string[] {
   const t = opts.transcript ?? new Transcript()
-  const out: string[] = []
+  const out: string[] = [
+    ...t.block("history", [sessionBoundary(theme, opts.session ?? { resumed: true }, opts.width)]),
+  ]
   const results = new Map<string, ToolResult>()
   for (const m of messages) {
     if (m.role === "toolResult") results.set(m.toolCallId, { content: m.content, isError: m.isError })
@@ -74,7 +77,10 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     out.push(...t.block(kind, lines))
   }
   for (const m of messages) {
-    if (m.role === "user") {
+    if (isSummaryMessage(m)) {
+      // The summary reads as what it is, not as a message of the user's; its reply goes with it.
+      if (m.role === "user") block("summary", summaryLines(theme, summaryText(m), opts.width, true))
+    } else if (m.role === "user") {
       block("user", userLines(theme, m, opts.width))
     } else if (m.role === "assistant") {
       for (const b of m.content) {
@@ -105,25 +111,56 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
       if (end) block("notice", noticeLines(theme, end.level, end.text, opts.width))
     }
   }
-  block("history", [historySeparator(theme, opts.session, opts.width)])
+  flush()
   return out
 }
 
+/** The session a boundary names: resumed (with its last write), or new (after /clear). */
+export interface SessionBoundary {
+  id?: string
+  updatedAt?: number
+  resumed: boolean
+}
+
 /**
- * The separator after a resumed history, across the width: `── resumed <id> · <last write> ───`.
- * Without a width, a short one.
+ * Where a session's part of the transcript starts: a rule across the width naming it,
+ * `── resumed s_42 · 2026-09-29 14:05 ─────` or `── new session s_43 ─────`. Narrow, the name
+ * is cut before the rule is.
  */
-export function historySeparator(
-  theme: Theme,
-  s?: { id: string; updatedAt?: number },
-  width?: number,
-): string {
-  const label = s
-    ? ` resumed ${s.id}${s.updatedAt !== undefined ? ` · ${localTime(s.updatedAt)}` : ""} `
-    : " resumed "
-  const head = `${glyphs.rule.repeat(2)}${label}`
-  const rest = width === undefined ? 2 : Math.max(2, width - visibleWidth(head))
-  return theme.muted(truncateToWidth(`${head}${glyphs.rule.repeat(rest)}`, width ?? Number.POSITIVE_INFINITY))
+export function sessionBoundary(theme: Theme, s: SessionBoundary, width: number): string {
+  const when = s.updatedAt !== undefined ? ` · ${localTime(s.updatedAt)}` : ""
+  const id = s.id ? ` ${s.id}` : ""
+  const label = s.resumed ? `resumed${id}${when}` : `new session${id}`
+  const head = `${glyphs.rule.repeat(2)} `
+  const room = Math.max(1, width - visibleWidth(head) - 3)
+  const text = truncateToWidth(label, room, glyphs.more)
+  const tail = glyphs.rule.repeat(Math.max(2, width - visibleWidth(head) - visibleWidth(text) - 1))
+  return theme.muted(truncateToWidth(`${head}${text} ${tail}`, Math.max(1, width), ""))
+}
+
+/** The summary a compaction left, without the words that introduce it to the model. */
+export function summaryText(m: Message): string {
+  const first = m.content[0]
+  const text = first?.type === "text" ? first.text : ""
+  const cut = text.indexOf("\n\n")
+  return (cut === -1 ? text : text.slice(cut + 2)).trim()
+}
+
+/**
+ * A compaction's summary: one line folded, `▸ Compacted summary of earlier messages · 12 lines`;
+ * unfolded, the summary as Markdown under that head.
+ */
+export function summaryLines(theme: Theme, summary: string, width: number, folded: boolean): string[] {
+  const n = summary ? summary.split("\n").length : 0
+  const title = `Compacted summary of earlier messages${folded ? ` · ${n} line${n === 1 ? "" : "s"}` : ""}`
+  const head = truncateToWidth(
+    `${theme.accent(folded ? "▸" : "▾")} ${theme.muted(title)}`,
+    width,
+    glyphs.more,
+  )
+  if (folded) return [head]
+  const body = renderMarkdown(summary, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)
+  return [head, "", ...replyRows(body)]
 }
 
 /**

@@ -53,6 +53,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer, type DialogRequest, dialogEchoLines } from "./dialog.ts"
 import { renderToolLines } from "./diff-view.ts"
@@ -774,6 +775,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     overlay: new View((width, ctx) => (form ? form.render(width, ctx) : (viewer?.render(width, ctx) ?? []))),
     editorEmpty: () => editor.isEmpty,
     showNote,
+    ...(commands ? { openSubagent: (id: string) => openView({ kind: "subagent", sessionId: id }) } : {}),
   }
   // A dumb terminal has no alternate screen to draw the full-screen view on.
   const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
@@ -790,6 +792,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             source: commands.control,
             waiting: waitingTitles,
             onClose: closeView,
+            // p: back to the conversation, with a snapshot of the one shown printed into it.
+            onPrint: (id) => {
+              closeView()
+              runCommand(`/agents ${id}`)
+            },
             ...(presenters ? { presenters } : {}),
           }),
         )
@@ -1283,23 +1290,31 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       .then(() => view.requestRender())
   }
 
-  /** A session's history, with its id and last write in the separator. */
-  function showHistory(a: Agent) {
+  /**
+   * Shows the session `a` from here: the boundary with its id (and last write, resumed), then
+   * its history. `switched` by a command, full screen starts the transcript afresh.
+   */
+  function showSession(a: Agent, switched: boolean) {
     let updatedAt: number | undefined
     try {
-      if (a.session?.file) updatedAt = statSync(a.session.file).mtimeMs
+      if (a.session?.file && a.messages.length) updatedAt = statSync(a.session.file).mtimeMs
     } catch {}
-    view.history(a.messages, { id: a.sessionId, ...(updatedAt !== undefined ? { updatedAt } : {}) })
+    const boundary = {
+      id: a.sessionId,
+      resumed: a.messages.length > 0,
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
+    }
+    view.openSession(boundary, a.messages, switched)
   }
 
-  /** Follows the session a command switched to; a resumed one shows its history. */
+  /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
     view.leaveSession()
     agent = next
     pendingNotices.length = 0
     setRetry(undefined)
     termStatus.setFolder(next.cwd)
-    if (next.messages.length) showHistory(next)
+    showSession(next, true)
     view.requestRender()
   }
 
@@ -1559,6 +1574,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       else return quitOrWarn("cancel")
     } else if (keys.is(e, "exit") && !working && editor.isEmpty) {
       return quitOrWarn("exit")
+    } else if (keys.is(e, "copy.reply")) {
+      // In both modes: from the session's messages, so a new session (/clear) has none yet.
+      const fallback = mode === "fullscreen" ? "Shift+drag selects text." : "Select it with the mouse."
+      copyToClipboard(terminal, lastReplyText(agent.messages), "the last reply", showNote, fallback)
     } else if (keys.is(e, "tool-output")) {
       showNote(setDetail(nextDetail(detail)))
     } else if (keys.is(e, "panels.toggle") && panelsShown) {
@@ -1698,7 +1717,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     helpKey && `${helpKey} keys`,
   ].filter(Boolean)
   view.banner(theme.muted(starts.join(` ${glyphs.separator} `)))
-  if (agent.messages.length) showHistory(agent)
+  if (agent.messages.length) showSession(agent, false)
   for (const e of opts.startupEvents ?? []) onEvent(e)
   // With no provider yet, a welcome card with the steps to a first message says what the
   // notice would.

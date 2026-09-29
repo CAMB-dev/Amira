@@ -63,6 +63,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `history.search` | `ctrl+r` | Search the prompt history |
 | `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
 | `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as an extension's todo list) to one line each, or unfold them |
+| `copy.reply` | `alt+c` | Copy the last reply of the session, as Markdown, to the clipboard (both modes) |
 | `help` | `?` | Open the key reference, while the input is empty and no dialog or list is open (with text, `?` is typed). It scrolls with ↑↓, PgUp/PgDn, Home/End; Esc, `q` or `?` close it |
 | `edit.kill-to-start` | `ctrl+u` | Cut from the start of the line to the caret (at the start, the line break before it) |
 | `edit.kill-to-end` | `ctrl+k` | Cut from the caret to the end of the line (at the end, the line break after it) |
@@ -137,10 +138,14 @@ scrolls it itself. These keys act on the transcript before the input gets them. 
 plain characters act on the transcript only while the input is empty; otherwise the input
 uses them. The mouse wheel scrolls three rows a notch, and dragging selects text (see
 [Text selection](#text-selection)); a click does nothing else, so the keyboard stays with the
-input. Blocks are selected with the keyboard (`select.start`).
+input. Blocks are selected with the keyboard (`select.start`). In inline mode the terminal
+keeps the scrollback: the first press of `find`, a page key or `select.start` says they are
+for full-screen mode, and the terminal's own scrollback and find work there.
 
 The view follows the newest output. Scrolled up, it stays where it is while the conversation
-grows, and the row under it says `↓ new output`; scrolling to the end (or End) follows again.
+grows, and the row under it says how many rows are below (`↓ 124 rows below`, or
+`↓ new output · 124 rows below` once more has come); scrolling to the end (or End) follows
+again.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -152,21 +157,31 @@ grows, and the row under it says `↓ new output`; scrolling to the end (or End)
 | `scroll.bottom` | `ctrl+end`, `end`, `alt+end` (VS Code: `alt+end` first) | Go to the end and follow it again |
 | `select.start` | `ctrl+up`, `alt+up` (VS Code: `alt+up` first) | Select the newest block (a message, a reply, a tool call, a notice) |
 | `find` | `ctrl+f`, `alt+f` (VS Code: `alt+f` first) | Open the find bar |
-| `copy.reply` | `alt+c` | Copy the last reply, as Markdown, to the clipboard |
 
 ### Block selection
 
-While a block is selected it is marked with `▌` and the row above the input says what it is.
-Typing and pasting go back to the input; keys the selection does not use (Ctrl+C, Ctrl+O,
-Ctrl+D) do what they do in the input.
+While a block is selected its first column is marked (`▌` where it is blank, the character
+there in inverse video otherwise; the block keeps its width, so nothing moves) and the row
+above the input says what it is and where: `reply 3 of 9`. Selecting a block that is partly
+in view does not scroll. Typing and pasting go back to the input; keys the selection does not
+use (Ctrl+C, Ctrl+O, Ctrl+D) do what they do in the input.
+
+`select.open` goes into a reply with code blocks: the first code block is selected, `↑`/`↓`
+move between the reply's code blocks, `select.copy` copies the one selected (its code as
+written, without the frame), and `select.back` or Esc go back to the whole reply. A folded
+reply unfolds first, so its code shows whole. On a tool call with sub-agents (or a block of
+background sub-agents) `select.open` opens the sub-agent viewer on the one still running, else
+the latest; `←`/`→` there switch between them.
 
 | Action | Default | What it does |
 | --- | --- | --- |
 | `select.prev` | `up`, `ctrl+up`, `alt+up`, `k` | Select the block before |
 | `select.next` | `down`, `ctrl+down`, `alt+down`, `j` | Select the block after |
 | `select.toggle` | `enter`, `space` | Fold or unfold it: a tool call's output (and its sub-agents), long code blocks and `<details>` in a reply |
-| `select.copy` | `y`, `c` | Copy the block to the clipboard |
-| `select.exit` | `escape` | Stop selecting |
+| `select.copy` | `y`, `c` | Copy the block (or the selected code block) to the clipboard |
+| `select.open` | `right`, `o` | Go into a reply's code blocks; open the sub-agent viewer on a call's sub-agents |
+| `select.back` | `left` | Go back from a code block to its whole reply |
+| `select.exit` | `escape` | Stop selecting (from a code block: back to its reply) |
 
 `tool-output` (Ctrl+O) sets how much of every tool call shows; a call folded or unfolded by
 hand keeps its own level.
@@ -202,9 +217,12 @@ Holding Shift while dragging still selects with the terminal's own selection ins
 
 ### Find
 
-The find bar searches the text of the whole transcript as you type. It ignores case unless
-the text has capitals. Matches are highlighted, the current one also underlined; the bar
-says which one of how many it is. It starts from the newest match.
+The find bar searches the text of the whole transcript as you type, and again as the
+conversation goes on. It ignores case unless the text has capitals. Text wrapped over rows
+is found as one line (a row break counts as a space), so what matches does not depend on the
+width. Matches are highlighted, the current one also underlined; the bar says which one of
+how many it is. It starts from the newest match. `/clear` and `/resume` start the transcript
+afresh: find, copying and the exit printout see only the session shown.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -228,8 +246,9 @@ VS Code keeps Ctrl+F, Ctrl+Home, Ctrl+End and Ctrl+↑↓ for its terminal (they
 `terminal.integrated.commandsToSkipShell`), so there Alt+F, Alt+Home, Alt+End and Alt+↑ come
 first and the key reference (`?`) lists them first.
 
-The other editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and
-deletes) and the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for
+Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
+the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `p` closes it and prints a
+snapshot of the one shown, `q`/Esc close) are fixed for
 now.
 
 ## Terminal settings

@@ -14,6 +14,7 @@ export type BlockKind =
   | "history"
   /** What the model thought before it answered: "∴ Thought for 12s", unfolded to the text. */
   | "reasoning"
+  | "summary"
 
 /** Blocks that follow one of the given kind with no blank line between them. */
 const JOINS: Partial<Record<BlockKind, BlockKind>> = {
