@@ -314,6 +314,20 @@ function parseEscape(s: string, flush: Flush): Parsed | undefined {
     // A sequence cut short (say, a late reply to a query) is never typed out as text.
     return flush === "drop" ? { len: s.length, events: [] } : undefined
   }
+  // Alt+] and the start of an OSC string are told apart by what follows, as for Alt+[.
+  if (second === "]" && s.length === 2 && flush === "wait") return undefined
+  if (second === "]" && s[2] !== undefined && s[2] >= "0" && s[2] <= "9") {
+    // An OSC string, such as a late reply to the background color query: never typed out.
+    for (let i = 2; i < s.length; i++) {
+      if (s[i] === "\x07") return { len: i + 1, events: [] }
+      if (s[i] !== ESC) continue
+      if (s[i + 1] === "\\") return { len: i + 2, events: [] }
+      // Cut short by another sequence: the part before it is dropped.
+      if (s[i + 1] !== undefined) return { len: i, events: [] }
+      break
+    }
+    return flush === "drop" ? { len: s.length, events: [] } : undefined
+  }
   if (second === ESC) {
     // ESC ESC [A is Alt+Up; ESC ESC otherwise is Esc pressed twice.
     if (startsSequence(s, 1)) {

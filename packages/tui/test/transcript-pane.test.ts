@@ -1,7 +1,15 @@
 import { expect, test } from "bun:test"
-import { ImageLoader, stripAnsi } from "@amira/tui-kit"
+import { defaultTheme, ImageLoader, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
-import { Block, type BlockEnv, type BlockImages, foldMarkdown, imagesIn, ReplyBlock } from "../src/blocks.ts"
+import {
+  Block,
+  type BlockEnv,
+  type BlockImages,
+  foldMarkdown,
+  imagesIn,
+  ReplyBlock,
+  userBlock,
+} from "../src/blocks.ts"
 import type { BlockKind } from "../src/transcript.ts"
 import { highlight, TranscriptPane } from "../src/transcript-pane.ts"
 
@@ -92,6 +100,27 @@ test("a changed width draws blocks again at that width; the cache keeps both whi
   p.render(env(4), 10)
   expect(all[2]!.draws).toBe(draws + 1)
   expect(p.render(env(4), 2)).toEqual(["b2 l", "b2 l"])
+})
+
+test("the user's band fills the pane at every width, and the narrower width while selected", () => {
+  const p = new TranscriptPane()
+  const user = userBlock({ role: "user", content: [{ type: "text", text: "看看 this test 🧪 please" }] })
+  p.add(user)
+  const banded = (width: number): BlockEnv => ({
+    ...env(width),
+    theme: { ...defaultTheme, ...surfaceTheme("light") },
+  })
+  for (const width of [40, 17, 11]) {
+    const rows = p.render(banded(width), 8).filter((r) => r !== "")
+    expect(rows.length).toBeGreaterThanOrEqual(3)
+    for (const r of rows) {
+      expect(r.startsWith("\x1b[48;5;254m")).toBe(true)
+      expect(visibleWidth(r)).toBe(width)
+    }
+  }
+  // Selected, it is drawn a column narrower after the marker: the row still ends at the edge.
+  p.select(user)
+  for (const r of p.render(banded(17), 8).filter((r) => r !== "")) expect(visibleWidth(r)).toBe(17)
 })
 
 test("selecting moves over blocks, marks the selected one and scrolls it into view", () => {
@@ -246,7 +275,7 @@ test("a streaming reply folded and unfolded lays its image out again", async () 
   expect(shown()).toEqual([expect.objectContaining({ line: 2, col: 2 })])
   reply.toggleFold()
   expect(shown()).toBeUndefined()
-  expect(reply.lines(e).map(stripAnsi)).toContain("  🖼 chart (https://img.test/c.png)")
+  expect(reply.lines(e).map(stripAnsi)).toContain("  🖼️ chart (https://img.test/c.png)")
   reply.toggleFold()
   expect(shown()).toEqual([expect.objectContaining({ line: 2, col: 2 })])
 })

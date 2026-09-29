@@ -1,7 +1,15 @@
 import { expect, test } from "bun:test"
 import type { EventEnvelope } from "@amira/api"
-import { defaultTheme, stripAnsi } from "@amira/tui-kit"
-import { isLastSibling, subagentEndLine, subagentRows, summarizeArgs, userLines } from "../src/format.ts"
+import { defaultTheme, RESET, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import {
+  bandRows,
+  commandEchoLines,
+  isLastSibling,
+  subagentEndLine,
+  subagentRows,
+  summarizeArgs,
+  userLines,
+} from "../src/format.ts"
 import { historyLines } from "../src/history.ts"
 import { isActive, type SubagentNode, stateNode } from "../src/subagents.ts"
 
@@ -30,6 +38,89 @@ test("the user's message wraps under its prompt symbol, not to the first column"
     "  four five six",
     "  seven",
   ])
+})
+
+const banded = { ...defaultTheme, ...surfaceTheme("dark") }
+const BAND = "\x1b[48;5;236m"
+
+/** Each row is on the band from the first cell to exactly the last one. */
+function expectBand(rows: string[], width: number) {
+  for (const r of rows) {
+    expect({ r, start: r.startsWith(BAND), end: r.endsWith("\x1b[49m"), w: visibleWidth(r) }).toEqual({
+      r,
+      start: true,
+      end: true,
+      w: width,
+    })
+    // The band is not ended early: a nested style closes its color only.
+    expect(r.slice(BAND.length, -"\x1b[49m".length)).not.toContain("\x1b[49m")
+  }
+}
+
+test("the user's message is on a band the width of the screen, with a row of it above and below", () => {
+  const message = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: "帮我看看这个测试为什么挂了" }],
+  }
+  const rows = userLines(banded, message, 34)
+  expectBand(rows, 34)
+  expect(plain(rows).map((r) => r.trimEnd())).toEqual(["", "› 帮我看看这个测试为什么挂了", ""])
+  // The prompt symbol in the accent color, the text in the normal one.
+  expect(rows[1]).toBe(
+    `${BAND}${defaultTheme.accent("›")} 帮我看看这个测试为什么挂了${" ".repeat(6)}\x1b[49m`,
+  )
+})
+
+test("wrapped rows, wide characters and the note line stay on the band, which never spills", () => {
+  const message = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: "x" }],
+    display: { text: "/review 看看这个很长的测试名称 🧪🧪 and more words here", note: "Loaded skill review" },
+  }
+  for (const width of [12, 13, 20, 31]) {
+    const rows = userLines(banded, message, width)
+    expectBand(rows, width)
+    const text = plain(rows).map((r) => r.trimEnd())
+    expect(text[0]).toBe("")
+    expect(text.at(-1)).toBe("")
+    expect(text.at(-2)).toBe("  └ Loaded skill review".slice(0, width).trimEnd())
+    // Every word is there, under the prompt symbol.
+    expect(text.slice(1, -2).join(" ").replace(/\s+/g, " ")).toContain("and more words here")
+  }
+  // Narrower than the text can wrap to: cut to the width, not wider.
+  expectBand(userLines(banded, message, 6), 6)
+})
+
+test("without the band token (NO_COLOR, or a theme without it) the message is as before", () => {
+  const message = { role: "user" as const, content: [{ type: "text" as const, text: "hi there" }] }
+  expect(userLines(defaultTheme, message, 20)).toEqual([`${defaultTheme.accent("›")} hi there`])
+  // With no width to fill, as for notices waiting to be sent, there is no band either.
+  expect(plain(userLines(banded, message))).toEqual(["› hi there"])
+})
+
+test("a command's echo is on the band too, muted", () => {
+  const rows = commandEchoLines(banded, "/status", 20)
+  expectBand(rows, 20)
+  expect(rows[1]).toBe(`${BAND}${defaultTheme.muted("› /status")}${" ".repeat(11)}\x1b[49m`)
+  expect(commandEchoLines(defaultTheme, "/status", 20)).toEqual([defaultTheme.muted("› /status")])
+  expect(bandRows(["abc"], 2, banded.userBg).map(visibleWidth)).toEqual([2, 2, 2])
+})
+
+test("a wrapped echo keeps the band after the reset that ends its style on a row", () => {
+  const rows = commandEchoLines(banded, `/model ${"x".repeat(30)}`, 20)
+  expectBand(rows, 20)
+  expect(rows.length).toBeGreaterThan(3)
+  expect(rows.join("")).toContain(RESET)
+  for (const r of rows) {
+    const resets = r.split("\x1b[0m").slice(1)
+    for (const after of resets) expect(after.startsWith(BAND)).toBe(true)
+  }
+})
+
+test("with an unknown background, muted text on the band is drawn as normal text", () => {
+  const unknown = { ...defaultTheme, ...surfaceTheme(undefined) }
+  const rows = commandEchoLines(unknown, "/status", 20)
+  expect(rows[1]).toBe(`\x1b[48;5;242m› /status${" ".repeat(11)}\x1b[49m`)
 })
 
 test("a resumed history uses the transcript's blocks, the tool presenters and a named separator", () => {

@@ -121,7 +121,7 @@ export function transcriptLines(
   )
   const task = own[0]?.role === "user" ? blockText(own[0].content).trim() : info.task
   const first = own[0]?.role === "user" && task ? own[0] : userMessage(task || "(no task)")
-  for (const l of userLines(theme, first)) out.push(...wrapText(l, width))
+  out.push(...userLines(theme, first, width))
   out.push("")
   const results = new Map<string, ToolResultMessage>()
   for (const m of own) if (m.role === "toolResult") results.set(m.toolCallId, m)

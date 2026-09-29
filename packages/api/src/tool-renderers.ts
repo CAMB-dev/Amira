@@ -87,7 +87,7 @@ export interface ToolPresenter<A = Record<string, unknown>, D = unknown> {
 export function diffToolLines(hunks: readonly DiffHunk[]): ToolLine[] {
   const out: ToolLine[] = []
   for (const [i, h] of hunks.entries()) {
-    if (i > 0) out.push({ kind: "diff-hunk", text: "⋮" })
+    if (i > 0) out.push({ kind: "diff-hunk", text: "⋯" })
     let oldNo = h.oldStart
     let newNo = h.newStart
     for (const line of h.lines) {

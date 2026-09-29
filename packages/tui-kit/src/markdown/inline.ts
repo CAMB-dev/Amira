@@ -1,3 +1,4 @@
+import { defaultGlyphs } from "../glyphs.ts"
 import { compose, type MarkdownToken, markdownTheme, type StyleFn, type Theme } from "../style.ts"
 
 export type MarkdownStyles = Record<MarkdownToken, StyleFn>
@@ -56,7 +57,18 @@ export function normalizeLabel(label: string): string {
  */
 export type Lead =
   | { url: true; head: string; style?: StyleFn }
-  | { url: false; text: string; len: number; style?: StyleFn; link?: string }
+  | { url: false; parts: LeadPart[]; len: number }
+
+/**
+ * Added text drawn after a cut: the rest of the run the cut went through, then the runs of added
+ * text that stand at the same place in the source (an image's URL after its alt text), which
+ * parsing the source from there would not bring back.
+ */
+export interface LeadPart {
+  text: string
+  style?: StyleFn
+  link?: string
+}
 
 export interface InlineOptions {
   styles: MarkdownStyles
@@ -66,7 +78,7 @@ export interface InlineOptions {
   base?: StyleFn
   /** Reference definitions seen so far, for `[text][label]` and `![alt][label]`. */
   refs?: ReadonlyMap<string, LinkRef>
-  /** Drawn in front of an image's alt text. Default 🖼. */
+  /** Drawn in front of an image's alt text. Default: the glyphs' `image`. */
   imageGlyph?: string
   /** A run's rest at offset `leadAt`: for a bare URL, the source there; otherwise `len` source characters. */
   lead?: Lead
@@ -302,24 +314,32 @@ function pushUrl(url: string, src: number, scope: Scope, opts: InlineOptions, ou
 function pushLead(s: string, i: number, end: number, scope: Scope, ctx: Context): number {
   const lead = ctx.lead!
   ctx.lead = undefined
-  let r: Run
-  let next: number
   if (lead.url) {
     URL_REST.lastIndex = i
     const text = URL_REST.exec(s)![0]
       .slice(0, end - i)
       .replace(URL_TAIL, "")
     if (text === "") return i
-    r = { text, src: i, carry: scope.carry, cuttable: false, rest: { url: true, head: lead.head } }
+    const r: Run = { text, src: i, carry: scope.carry, cuttable: false, rest: { url: true, head: lead.head } }
     if (ctx.opts.hyperlinks) r.link = lead.head + text
-    next = i + text.length
-  } else {
-    next = Math.min(end, i + lead.len)
-    r = { text: lead.text, src: i, carry: scope.carry, cuttable: false, rest: { url: false, resume: next } }
-    if (lead.link) r.link = lead.link
+    if (lead.style) r.style = lead.style
+    ctx.out.push(r)
+    return i + text.length
   }
-  if (lead.style) r.style = lead.style
-  if (r.text) ctx.out.push(r)
+  const next = Math.min(end, i + lead.len)
+  for (const part of lead.parts) {
+    if (!part.text) continue
+    const r: Run = {
+      text: part.text,
+      src: i,
+      carry: scope.carry,
+      cuttable: false,
+      rest: { url: false, resume: next },
+    }
+    if (part.link) r.link = part.link
+    if (part.style) r.style = part.style
+    ctx.out.push(r)
+  }
   return next
 }
 
@@ -473,7 +493,7 @@ function pushImage(s: string, i: number, image: LinkMatch, scope: Scope, ctx: Co
   // Added text, like a link's URL: it stands at the image's end, so the rest of it after a cut
   // goes on there.
   const r: Run = {
-    text: `${opts.imageGlyph ?? "🖼"} ${name}`,
+    text: `${opts.imageGlyph ?? defaultGlyphs.image} ${name}`,
     src: image.end,
     carry: scope.carry,
     cuttable: false,

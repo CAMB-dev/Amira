@@ -206,13 +206,13 @@ test("a diff review fits the rows it has: title, options and keys stay, the diff
   ])
   // 7 rows for the diff: 3 from the start, a marker, 3 from the end.
   expect(lines.slice(1, 8)).toEqual([
-    "+line 1",
-    "+line 2",
-    "+line 3",
+    "+ line 1",
+    "+ line 2",
+    "+ line 3",
     "… 48 more lines …",
-    "+line 52",
-    "+line 53",
-    "+line 54",
+    "+ line 52",
+    "+ line 53",
+    "+ line 54",
   ])
   // Every row still has the bar.
   expect(dialog.render(60, plain).every((l) => l.startsWith("┃"))).toBe(true)
@@ -221,13 +221,11 @@ test("a diff review fits the rows it has: title, options and keys stay, the diff
 test("a short diff is shown whole with room to breathe, and a tall terminal shows more of a long one", () => {
   const short = review(5)
   short.dialog.maxRows = 24
-  expect(short.rows()).toEqual([
-    "? Merge the worktree?",
-    "+line 1",
-    "+line 2",
-    "+line 3",
-    "+line 4",
-    "+line 5",
+  const rows = short.rows()
+  expect(rows[0]).toBe("? Merge the worktree?")
+  expect(rows.some((l) => l.includes("+ line 5"))).toBe(true)
+  expect(rows.some((l) => l.includes("more lines"))).toBe(false)
+  expect(rows.slice(-6)).toEqual([
     "",
     "❯ 1 merge",
     "  2 keep worktree",

@@ -164,19 +164,19 @@ test("links are clickable with OSC 8 when supported, and show their URL otherwis
 
 test("images show as a glyph and their alt text (or file name), linking to the image", () => {
   expect(md('![a cat](cat.png "Title") and ![](https://x.dev/img/dog%202.jpg?s=1)', 80)).toEqual([
-    "🖼 a cat (cat.png) and 🖼 dog 2.jpg (https://x.dev/img/dog%202.jpg?s=1)",
+    "🖼\uFE0F a cat (cat.png) and 🖼\uFE0F dog 2.jpg (https://x.dev/img/dog%202.jpg?s=1)",
   ])
   const m = new MarkdownStream({ hyperlinks: true })
   m.append("![a *cat*](cat.png)")
   const row = m.render(40, plain)[0]!
-  expect(row).toBe("\x1b]8;;cat.png\x07🖼 a *cat*\x1b]8;;\x07")
+  expect(row).toBe("\x1b]8;;cat.png\x07🖼\uFE0F a *cat*\x1b]8;;\x07")
   // Inside a link it is that link's text; the link's URL follows it.
   expect(md("[![CI](https://ci.x/badge.svg)](https://ci.x/run)", 80)).toEqual([
-    "🖼 CI (https://ci.x/badge.svg) (https://ci.x/run)",
+    "🖼\uFE0F CI (https://ci.x/badge.svg) (https://ci.x/run)",
   ])
   const linked = new MarkdownStream({ hyperlinks: true })
   linked.append("[![CI](https://ci.x/badge.svg)](https://ci.x/run)")
-  expect(linked.render(40, plain)[0]).toBe("\x1b]8;;https://ci.x/run\x07🖼 CI\x1b]8;;\x07")
+  expect(linked.render(40, plain)[0]).toBe("\x1b]8;;https://ci.x/run\x07🖼\uFE0F CI\x1b]8;;\x07")
   // Not an image: an empty target, or a lone `!`.
   expect(md("![x]() and a ! [y]")).toEqual(["![x]() and a ! [y]"])
 })
@@ -190,15 +190,15 @@ test("reference-style images and links use the definitions seen so far, which ar
     "![later][nope] and [text][nope] and [nope].",
   ].join("\n")
   expect(md(text, 200)).toEqual([
-    "🖼 Our logo (https://a.dev/logo.png), 🖼 logo (https://a.dev/logo.png), 🖼 logo (https://a.dev/logo.png) and the docs (https://a.dev/docs), docs (https://a.dev/docs), Docs (https://a.dev/docs).",
-    "🖼 later and [text][nope] and [nope].",
+    "🖼\uFE0F Our logo (https://a.dev/logo.png), 🖼\uFE0F logo (https://a.dev/logo.png), 🖼\uFE0F logo (https://a.dev/logo.png) and the docs (https://a.dev/docs), docs (https://a.dev/docs), Docs (https://a.dev/docs).",
+    "🖼\uFE0F later and [text][nope] and [nope].",
   ])
   // A definition cannot interrupt a paragraph: there it is text.
   expect(md("Some text\n[n]: https://a.dev/n.png\n\n![x][n]", 200)).toEqual([
     "Some text",
     "[n]: https://a.dev/n.png",
     "",
-    "🖼 x",
+    "🖼\uFE0F x",
   ])
 })
 
@@ -582,6 +582,33 @@ test("a width change mid-stream re-wraps only the live block and loses nothing",
     lives.forEach((live, i) => {
       for (const r of live) expect(visibleWidth(r)).toBeLessThanOrEqual(widths[i]!)
     })
+  }
+})
+
+test("an image cut after its glyph keeps the URL that follows its alt text", () => {
+  // The rows break between the glyph and the alt text, and the live region holds one row: the
+  // cut goes through the image's run, and its URL (added text at the same place) goes on too.
+  // Not about the glyph's width: a one-cell glyph lost the URL the same way.
+  for (const [image, width] of [
+    [String.fromCodePoint(0x1f5bc, 0xfe0f), 12],
+    [String.fromCodePoint(0x1f5bc), 11],
+  ] as const) {
+    const glyphs = { ...defaultGlyphs, image }
+    const chunks = ["sits and ", "![dog](d.jpg)", " ok"]
+    const text = chunks.join("")
+    const { ctx, committed } = committing()
+    const m = new MarkdownStream({ hyperlinks: false, glyphs })
+    m.maxRows = 1
+    for (const chunk of chunks) {
+      m.append(chunk)
+      m.render(width, ctx)
+    }
+    const whole = new MarkdownStream({ hyperlinks: false, glyphs })
+    whole.append(text)
+    whole.render(width, plain)
+    const rows = whole.take(width).map(stripAnsi)
+    expect(rows[0]).toBe(`sits and ${image}`)
+    expect([...committed, ...m.take(width)].map(stripAnsi)).toEqual(rows)
   }
 })
 

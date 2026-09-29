@@ -13,7 +13,6 @@ import {
   stripColors,
   truncateToWidth,
   visibleWidth,
-  wrapText,
 } from "@amira/tui-kit"
 import {
   type Block,
@@ -26,7 +25,7 @@ import {
   ToolBlock,
   userBlock,
 } from "./blocks.ts"
-import { compactTokens } from "./format.ts"
+import { commandEchoLines, compactTokens } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { historySeparator } from "./history.ts"
@@ -502,7 +501,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     },
     notice,
     commandEcho(line) {
-      add(new LinesBlock("command", (width, t) => wrapText(t.muted(`${glyphs.user} ${line}`), width), line))
+      add(new LinesBlock("command", (width, t) => commandEchoLines(t, line, width), line))
     },
     commandOutput(level, text) {
       const last = pane.last?.kind

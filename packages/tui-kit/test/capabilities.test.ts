@@ -3,6 +3,8 @@ import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
 import { modes, queries } from "../src/ansi.ts"
 import {
+  backgroundFromEnv,
+  backgroundOf,
   chooseImageSupport,
   detectEnv,
   parseProbeReplies,
@@ -200,6 +202,59 @@ test("the image protocol follows the terminal's answers and the setting", () => 
   ).toEqual({ protocol: "sixel", cell: { width: 10, height: 20 } })
   expect(chooseImageSupport("auto", g({ sixel: true }), { TMUX: "/tmp/t" })).toBeUndefined()
   expect(chooseImageSupport("auto", undefined, wt)).toBeUndefined()
+})
+
+test("OSC 11 replies give the background color, with any number of hex digits and either end", () => {
+  const r = parseProbeReplies("a\x1b]11;rgb:1e1e/1e1e/1e1e\x07b\x1b[?62c")
+  expect(r.rest).toBe("ab")
+  expect(r.background!.r).toBeCloseTo(0x1e / 0xff)
+  expect(parseProbeReplies("\x1b]11;rgb:f/f/f\x1b\\").background).toEqual({ r: 1, g: 1, b: 1 })
+  expect(parseProbeReplies("\x1b]11;rgba:0000/0000/0000/ffff\x07").background).toEqual({ r: 0, g: 0, b: 0 })
+  // A form it does not read tells nothing, and is not taken for input either.
+  expect(parseProbeReplies("x\x1b]11;#1e1e1e\x07y")).toMatchObject({ rest: "xy" })
+  expect(parseProbeReplies("x\x1b]11;#1e1e1e\x07y").background).toBeUndefined()
+  expect(backgroundOf({ r: 0.12, g: 0.12, b: 0.12 })).toBe("dark")
+  expect(backgroundOf({ r: 1, g: 1, b: 0.9 })).toBe("light")
+  // A dark blue (Campbell PowerShell) is dark, a light yellow (Solarized light) is light.
+  expect(backgroundOf({ r: 0x01 / 255, g: 0x24 / 255, b: 0x56 / 255 })).toBe("dark")
+  expect(backgroundOf({ r: 0xfd / 255, g: 0xf6 / 255, b: 0xe3 / 255 })).toBe("light")
+})
+
+test("COLORFGBG names the background when the terminal does not answer", async () => {
+  expect(backgroundFromEnv({ COLORFGBG: "15;0" })).toBe("dark")
+  expect(backgroundFromEnv({ COLORFGBG: "0;default;15" })).toBe("light")
+  expect(backgroundFromEnv({ COLORFGBG: "0;7" })).toBe("light")
+  expect(backgroundFromEnv({ COLORFGBG: "0;8" })).toBe("dark")
+  expect(backgroundFromEnv({ COLORFGBG: "0;default" })).toBeUndefined()
+  expect(backgroundFromEnv({})).toBeUndefined()
+
+  const term = new FakeTerminal()
+  const pending = setupTerminalInput(term, { COLORFGBG: "0;15" }, { background: true })
+  expect(term.writes[0]).toContain(queries.background)
+  term.send("\x1b]11;rgb:0000/0000/0000\x1b\\\x1b[?62c")
+  // The terminal's answer wins.
+  expect((await pending).capabilities.background).toBe("dark")
+  const quiet = await setupTerminalInput(
+    new FakeTerminal(),
+    { COLORFGBG: "0;15" },
+    {
+      background: true,
+      timeoutMs: 5,
+    },
+  )
+  expect(quiet.capabilities.background).toBe("light")
+  const unasked = new FakeTerminal()
+  const none = setupTerminalInput(unasked, { COLORFGBG: "0;15" })
+  expect(unasked.writes[0]).not.toContain(queries.background)
+  unasked.send("\x1b[?62c")
+  expect((await none).capabilities.background).toBeUndefined()
+})
+
+test("an OSC 11 reply cut short at the timeout never leaks into the input", async () => {
+  const term = new FakeTerminal()
+  const cut = probeTerminal(term, { timeoutMs: 10, lateReplyMs: 10, background: true })
+  term.send("d\x1b]11;rgb:1e1e/1e")
+  expect(await cut).toMatchObject({ complete: false, rest: "d" })
 })
 
 test("WT_SESSION inherited by tmux or WSL is not Windows Terminal", () => {
