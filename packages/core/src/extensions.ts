@@ -17,6 +17,7 @@ import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { PanelRegistry } from "./panel-registry.ts"
 import { openExtensionPipe } from "./pipes.ts"
+import { ImageProviderRegistry, MarkdownRendererRegistry, ServiceRegistry } from "./render-registry.ts"
 import { SkillRegistry } from "./skills.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
@@ -87,6 +88,12 @@ export class ExtensionHost {
   readonly skills: SkillRegistry
   readonly inputs: InputRegistry
   readonly ui: UiRequests
+  /** Renderers of Markdown nodes (D88). */
+  readonly markdown: MarkdownRendererRegistry
+  /** Where images get drawable (D88). */
+  readonly images: ImageProviderRegistry
+  /** What extensions offer each other (D88). */
+  readonly services: ServiceRegistry
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
@@ -98,6 +105,9 @@ export class ExtensionHost {
     this.skills = opts.skills ?? new SkillRegistry()
     this.inputs = opts.inputs ?? new InputRegistry()
     this.ui = opts.ui ?? new UiRequests(opts.bus, opts.sessionId ? { sessionId: opts.sessionId } : {})
+    this.markdown = new MarkdownRendererRegistry((source, error) => void this.#fail(source, error))
+    this.images = new ImageProviderRegistry()
+    this.services = new ServiceRegistry()
   }
 
   get loaded(): string[] {
@@ -204,6 +214,22 @@ export class ExtensionHost {
     return { sessionId: this.#opts.sessionId ?? "host" }
   }
 
+  /** Runs a registration; one that throws is reported and skipped. A render is asked for. */
+  #register(source: string, track: (d: () => void) => () => void, add: () => () => void): () => void {
+    let off: () => void
+    try {
+      off = add()
+    } catch (err) {
+      this.#fail(source, err instanceof Error ? err.message : String(err))
+      return () => {}
+    }
+    this.#requestRender()
+    return track(() => {
+      off()
+      this.#requestRender()
+    })
+  }
+
   /** Dialogs an extension leaves open are cancelled when it unloads. */
   #uiFor(source: string, track: (d: () => void) => void) {
     track(() => this.ui.cancelAll(source))
@@ -305,6 +331,14 @@ export class ExtensionHost {
           return () => {}
         }
       },
+      // A renderer, provider or service that cannot be taken skips only that one.
+      registerMarkdownRenderer: (renderer) =>
+        this.#register(source, track, () => this.markdown.register(renderer, source)),
+      registerImageProvider: (provider) =>
+        this.#register(source, track, () => this.images.register(provider, source)),
+      provideService: (name, service) =>
+        this.#register(source, track, () => this.services.provide(name, service, source)),
+      useService: (name) => this.services.get(name) as never,
       requestRender: () => this.#requestRender(),
       runCommand: (argv, options) => runExtensionCommand(argv, options),
       openPipe: (argv, options) => openExtensionPipe(argv, options),
