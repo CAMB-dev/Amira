@@ -1,8 +1,6 @@
 import { cursor } from "../ansi.ts"
-import type { ImageProtocol } from "./encode.ts"
-import type { Fit } from "./fit.ts"
-import type { Prepared } from "./prepare.ts"
-import { sixelHead } from "./sixel.ts"
+import { iterm2Sequence, kittyChunks, sixelHead, validPayload } from "./sequence.ts"
+import type { Fit, ImagePayload, ImageProtocol } from "./types.ts"
 
 /**
  * kitty's image numbers are shared by everything drawing in the window: start somewhere random
@@ -11,7 +9,6 @@ import { sixelHead } from "./sixel.ts"
 let nextImageId = 1 + Math.floor(Math.random() * 0x3fff_0000)
 
 const kitty = (keys: string, payload = "") => `\x1b_G${keys};${payload}\x1b\\`
-const KITTY_CHUNK = 4096
 
 /**
  * What every image of the full screen may hold at once (prepared bands and pixels, slices), in
@@ -31,8 +28,8 @@ const WANTED_MS = 1000
  */
 const SLICES_KEPT = 8
 
-function preparedChars(p: Prepared): number {
-  if (p.protocol === "iterm2") return p.seq.length
+function preparedChars(p: ImagePayload): number {
+  if (p.protocol === "iterm2") return p.data.length
   if (p.protocol === "kitty") return p.data.length
   let n = p.palette.length
   for (const bands of Object.values(p.phases)) for (const b of bands) n += b.length + 1
@@ -53,10 +50,10 @@ function trimHeld(now: number) {
 }
 
 /**
- * Prepares an image: gets its file and makes what drawing it needs. Returns undefined when it
- * failed, null when `wanted` said no before the work began (it was no longer needed).
+ * Prepares an image: gets it encoded at its fitted size (by its provider). Returns undefined
+ * when that failed, null when `wanted` said no before the work began (it was no longer needed).
  */
-export type PrepareImage = (wanted: () => boolean) => Promise<Prepared | undefined | null>
+export type PrepareImage = (wanted: () => boolean) => Promise<ImagePayload | undefined | null>
 
 /**
  * An image at one fitted size, as the full-screen view draws it: any run of its rows of cells
@@ -76,7 +73,7 @@ export class ScreenImage {
   readonly rows: number
   /** When it was last wanted or drawn. */
   usedAt = Number.NEGATIVE_INFINITY
-  private prepared: Prepared | undefined
+  private prepared: ImagePayload | undefined
   private state: "idle" | "preparing" | "ready" | "failed" = "idle"
   private slices = new Map<string, string>()
   private chars = 0
@@ -132,12 +129,12 @@ export class ScreenImage {
     )
   }
 
-  private settle(prepared: Prepared | undefined | null): void {
+  private settle(prepared: ImagePayload | undefined | null): void {
     if (prepared === null) {
       // Not wanted lately: left for when it is. Those waiting hear of it, so a view that still
       // shows it (idle for a while) wants it again.
       this.state = "idle"
-    } else if (prepared) {
+    } else if (prepared && validPayload(prepared, this.protocol, this.fit)) {
       this.prepared = prepared
       this.state = "ready"
       this.hold(preparedChars(prepared))
@@ -182,7 +179,8 @@ export class ScreenImage {
     const p = this.prepared
     if (!p) return undefined
     this.touch()
-    if (p.protocol === "iterm2") return from === 0 && to === this.rows ? p.seq : undefined
+    if (p.protocol === "iterm2")
+      return from === 0 && to === this.rows ? iterm2Sequence(p, this.fit) : undefined
     if (p.protocol !== "sixel") return undefined
     const key = `${from}:${to}`
     const hit = this.slices.get(key)
@@ -207,15 +205,7 @@ export class ScreenImage {
   upload(): string {
     const p = this.prepared
     if (p?.protocol !== "kitty") return ""
-    let out = ""
-    for (let at = 0; at < p.data.length || at === 0; at += KITTY_CHUNK) {
-      const more = at + KITTY_CHUNK < p.data.length ? 1 : 0
-      const keys =
-        at === 0 ? `a=t,f=32,s=${p.width},v=${p.height},o=z,i=${this.id},q=2,m=${more}` : `m=${more}`
-      out += kitty(keys, p.data.slice(at, at + KITTY_CHUNK))
-      if (!more) break
-    }
-    return out
+    return kittyChunks(`a=t,f=32,s=${p.width},v=${p.height},o=z,i=${this.id},q=2`, p.data)
   }
 
   /**
@@ -250,7 +240,7 @@ export class ScreenImage {
  * whole ones as fit above `limit` (so drawing never reaches the row below), and never past
  * the image's end.
  */
-function sixelSlice(p: Extract<Prepared, { protocol: "sixel" }>, y0: number, limit: number): string {
+function sixelSlice(p: Extract<ImagePayload, { protocol: "sixel" }>, y0: number, limit: number): string {
   if (y0 >= p.height) return ""
   const phase = y0 % 6
   const bands = p.phases[phase] ?? []

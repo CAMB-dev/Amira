@@ -18,6 +18,7 @@ import {
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { historyLines } from "./history.ts"
+import { inlineNodes } from "./markdown-nodes.ts"
 import {
   childrenOf,
   compactGroup,
@@ -54,10 +55,12 @@ const FRAME_MS = 16
  */
 export function createInlineView(host: ViewHost): TranscriptView {
   const { terminal, theme, presenters } = host
-  // The reply is Markdown: its finished blocks go to the scrollback as they close.
+  // The reply is Markdown: its finished blocks go to the scrollback as they close; images and
+  // what extensions render (D88) as they are ready.
+  const nodes = inlineNodes({ renders: host.renders, images: () => host.images?.(), theme })
   const streaming = new MarkdownStream({
     hyperlinks: host.hyperlinks,
-    ...(host.images ? { images: host.images } : {}),
+    nodes,
   })
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
@@ -390,6 +393,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
           session,
           transcript,
           hyperlinks: host.hyperlinks,
+          nodes,
         }),
       )
     },

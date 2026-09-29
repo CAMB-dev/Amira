@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
 import type { UserMessage } from "@amira/api"
-import { bg256, defaultGlyphs, ImageLoader, stripAnsi } from "@amira/tui-kit"
+import { bg256, defaultGlyphs, ImageStore, stripAnsi } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
+import { fakeProvider } from "../../tui-kit/test/fake-images.ts"
 import { Block, type BlockEnv, type BlockImages, LinesBlock, ReplyBlock, userBlock } from "../src/blocks.ts"
 import { cellsOf, chromeRows, markCells, sliceCells, wordAt } from "../src/text-selection.ts"
 import type { BlockKind } from "../src/transcript.ts"
@@ -304,24 +305,19 @@ test("a block selected with the keyboard takes the place of selected text", () =
   expect(pane.selected).toBeUndefined()
 })
 
-/** A 30×40 PNG: 3 columns and 2 rows of 10×20 cells. */
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAB4AAAAoCAYAAADpE0oSAAAAaklEQVR4Xu3NkQKDUABA0XA4HA6HwzAMwzAIwjAMwzAMwzAMH4Zh2F/U/YjwwuETRWW4Xnjjgy9++CNGghQZchSoUKNBiw49BoyYMGPBioANOw6cMDY2NjY2NjYOxsbGxsbGxsbB2Pix+AZFpUoFb9YsKwAAAABJRU5ErkJggg==",
-  "base64",
-)
-
 test("an image copies as its alt text, once, from any of its rows", async () => {
-  const loader = new ImageLoader({
+  // 30×40 pixels: 3 columns and 2 rows of 10×20 cells.
+  const store = new ImageStore({
     support: { protocol: "sixel", cell: { width: 10, height: 20 } },
     cwd: ".",
-    fetchRemote: async () => ({ bytes: PNG, contentType: "image/png" }),
+    open: fakeProvider().open,
     maxRows: () => 20,
   })
-  const images: BlockImages = { loader, changed: () => {} }
+  const images: BlockImages = { store, changed: () => {} }
   const e = { ...env(), images }
-  const reply = new ReplyBlock("Before\n\n![a cat](https://img.test/c.png)\n\nAfter", false, false)
+  const reply = new ReplyBlock("Before\n\n![a cat](https://img.test/c-30x40.png)\n\nAfter", false, false)
   reply.lines(e)
-  const source = loader.screen("https://img.test/c.png")!
+  const source = store.screen({ url: "https://img.test/c-30x40.png" })
   for (let i = 0; i < 200 && source.state === "loading"; i++) await Bun.sleep(5)
   const pane = new TranscriptPane()
   pane.add(reply)
@@ -329,7 +325,7 @@ test("an image copies as its alt text, once, from any of its rows", async () => 
   // It takes two rows (its alt text on the first until it is drawn).
   const before = rowOf(rows, "Before")
   expect(reply.lines(e).slice(2, 4)).toEqual(["", ""])
-  const alt = `${defaultGlyphs.image} a cat (https://img.test/c.png)`
+  const alt = `${defaultGlyphs.image} a cat (https://img.test/c-30x40.png)`
   pane.startDrag(before, 0)
   pane.dragTo(rowOf(rows, "After"), 100)
   expect(pane.selectedText()).toBe(`Before\n\n${alt}\n\nAfter`)

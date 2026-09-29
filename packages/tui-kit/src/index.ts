@@ -37,7 +37,10 @@ export {
   type LineInputOptions,
 } from "./components/form.ts"
 export {
+  imageNodes,
   type MarkdownImages,
+  type MarkdownNodeRef,
+  type MarkdownNodes,
   MarkdownStream,
   type MarkdownStreamOptions,
   renderMarkdown,
@@ -49,19 +52,22 @@ export { StreamText } from "./components/stream-text.ts"
 export { Text } from "./components/text.ts"
 export { FullScreenRenderer } from "./fullscreen.ts"
 export { defaultGlyphs, type Glyphs } from "./glyphs.ts"
-export { type Bitmap, decodeImage, type ImageFormat, imageSize, resizeBitmap } from "./images/decode.ts"
-export { canShow, encodeImage, type ImageBlock, type ImageProtocol } from "./images/encode.ts"
-export { type CellSize, type Fit, fitImage } from "./images/fit.ts"
-export {
-  ImageLoader,
-  type ImageLoaderOptions,
-  type RemoteImageFetch,
-  type ScreenSource,
-} from "./images/loader.ts"
-export { pendingImage, placeImage } from "./images/placement.ts"
-export { type Prepared, type PrepareRequest, prepareImage } from "./images/prepare.ts"
+export { fitImage } from "./images/fit.ts"
+export { type PendingResult, pendingBlock, pendingImage, placeImage } from "./images/placement.ts"
 export { type ImagePlacement, ScreenImage } from "./images/screen.ts"
-export { encodeSixel } from "./images/sixel.ts"
+export { inlineImage, validPayload } from "./images/sequence.ts"
+export { ImageStore, type ImageStoreOptions, type ScreenSource } from "./images/store.ts"
+export type {
+  CellSize,
+  EncodeRequest,
+  Fit,
+  ImageBlock,
+  ImageInput,
+  ImageOpener,
+  ImagePayload,
+  ImageProtocol,
+  OpenedImage,
+} from "./images/types.ts"
 export { InputParser } from "./input.ts"
 export {
   type FocusEvent,

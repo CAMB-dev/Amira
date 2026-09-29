@@ -1,44 +1,28 @@
-import { afterAll, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { encode as encodePng } from "fast-png"
+import { expect, test } from "bun:test"
 import type { Component, RenderContext } from "../src/component.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
-import { type ImageProtocol, iterm2Image } from "../src/images/encode.ts"
 import { fitImage } from "../src/images/fit.ts"
-import { ImageLoader } from "../src/images/loader.ts"
-import { prepareImage, prepareOffThread, resetPrepareWorker } from "../src/images/prepare.ts"
 import { type ImagePlacement, ScreenImage, setScreenImageBudget } from "../src/images/screen.ts"
+import type { ImageProtocol } from "../src/images/types.ts"
 import { FakeTerminal } from "../src/terminal.ts"
+import { fakePayload } from "./fake-images.ts"
 import { VirtualScreen } from "./screen.ts"
 
 const CELL = { width: 10, height: 20 }
 
-/** A PNG of `width`×`height` pixels in two colors, top and bottom half. */
-function png(width: number, height: number): Uint8Array {
-  const data = new Uint8Array(width * height * 4)
-  for (let i = 0; i < width * height; i++) {
-    const top = i < (width * height) / 2
-    data.set(top ? [200, 30, 30, 255] : [30, 30, 200, 255], i * 4)
-  }
-  return encodePng({ width, height, data, channels: 4 })
-}
-
 /** An image of 4×3 cells (40×60 pixels), ready to draw with `protocol`. */
-async function image(protocol: ImageProtocol = "sixel", bytes = png(40, 60)): Promise<ScreenImage> {
-  const img = unprepared(protocol, bytes)
+async function image(protocol: ImageProtocol = "sixel"): Promise<ScreenImage> {
+  const img = unprepared(protocol)
   await new Promise<void>((r) => img.whenReady(r))
   return img
 }
 
 /** The same, not prepared until wanted; `prepared` counts how often it was. */
-function unprepared(protocol: ImageProtocol = "sixel", bytes = png(40, 60)) {
+function unprepared(protocol: ImageProtocol = "sixel") {
   const fit = fitImage({ width: 40, height: 60 }, 30, 20, CELL)!
   const img = new ScreenImage(protocol, fit, CELL.height, async () => {
     counts.prepared++
-    if (protocol === "iterm2") return { protocol, seq: iterm2Image(bytes, fit) }
-    return prepareImage({ bytes, protocol, fit, cellHeight: CELL.height })
+    return fakePayload({ protocol, fit, cellHeight: CELL.height, whole: false })
   })
   return img
 }
@@ -298,7 +282,7 @@ test("a preparation that waited while nobody wanted the image is skipped, and do
     })
     if (!wanted()) return null
     runs++
-    return prepareImage({ bytes: png(40, 60), protocol: "sixel", fit, cellHeight: CELL.height })
+    return fakePayload({ protocol: "sixel", fit, cellHeight: CELL.height, whole: false })
   })
   let told = 0
   img.whenReady(() => told++)
@@ -314,64 +298,4 @@ test("a preparation that waited while nobody wanted the image is skipped, and do
   await Bun.sleep(5)
   expect(img.ready).toBe(true)
   expect(runs).toBe(1)
-})
-
-const dir = mkdtempSync(join(tmpdir(), "amira-fsimg-"))
-afterAll(() => rmSync(dir, { recursive: true, force: true }))
-
-test("the loader's screen images: size known once the file is in, each size prepared once, off the thread", async () => {
-  writeFileSync(join(dir, "a.png"), png(80, 120))
-  let prepared = 0
-  const loader = new ImageLoader({
-    support: { protocol: "sixel", cell: CELL },
-    cwd: dir,
-    maxRows: () => 20,
-    prepare: (req) => {
-      prepared++
-      return prepareOffThread(req)
-    },
-  })
-  const source = loader.screen("a.png")!
-  expect(loader.screen("a.png")).toBe(source)
-  expect(source.state).toBe("loading")
-  expect(source.image(30, 20)).toBeUndefined()
-  let settled = false
-  source.onSettled(() => {
-    settled = true
-  })
-  while (source.state === "loading") await Bun.sleep(5)
-  expect(settled).toBe(true)
-  expect(source.size).toEqual({ format: "png", width: 80, height: 120 })
-  // Synchronously sized: 6 rows at full size, 3 when the screen allows only 3.
-  const big = source.image(30, 20)!
-  expect([big.cols, big.rows]).toEqual([8, 6])
-  expect(source.image(30, 20)).toBe(big)
-  const small = source.image(30, 3)!
-  expect(small.rows).toBe(3)
-  // Prepared only once wanted, each size once.
-  expect(prepared).toBe(0)
-  await new Promise<void>((r) => big.whenReady(r))
-  await new Promise<void>((r) => small.whenReady(r))
-  await new Promise<void>((r) => big.whenReady(r))
-  expect(prepared).toBe(2)
-  expect(big.draw(0, 6)).toStartWith('\x1bP0;1;0q"1;1;80;120')
-  // A network path is never read; a missing file fails.
-  expect(loader.screen("\\\\host\\share\\x.png")).toBeUndefined()
-  const missing = loader.screen("missing.png")!
-  while (missing.state === "loading") await Bun.sleep(5)
-  expect(missing.state).toBe("failed")
-})
-
-test("preparing falls back to this thread when the worker cannot load", async () => {
-  resetPrepareWorker({ url: new URL("./fixtures/no-such-worker.ts", import.meta.url).href })
-  try {
-    const fit = fitImage({ width: 40, height: 60 }, 30, 20, CELL)!
-    const p = await prepareOffThread({ bytes: png(40, 60), protocol: "kitty", fit, cellHeight: 20 })
-    expect(p).toMatchObject({ protocol: "kitty", width: 40, height: 60 })
-    await expect(
-      prepareOffThread({ bytes: new Uint8Array([1, 2, 3]), protocol: "sixel", fit, cellHeight: 20 }),
-    ).rejects.toThrow()
-  } finally {
-    resetPrepareWorker({ url: new URL("../src/images/prepare-worker.ts", import.meta.url).href })
-  }
 })

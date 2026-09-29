@@ -9,6 +9,8 @@ import type {
 } from "./events.ts"
 import type { PanelDefinition } from "./panels.ts"
 import type { OpenPipeOptions, PipeProcess, RunCommandOptions, RunCommandResult } from "./process.ts"
+import type { ImageProvider, MarkdownRendererDefinition } from "./render.ts"
+import type { ServiceName, ServiceOf } from "./services.ts"
 import type { Settings } from "./settings.ts"
 import type { SkillDefinition } from "./skills.ts"
 import type { ToolPresenter } from "./tool-renderers.ts"
@@ -75,6 +77,28 @@ export interface ExtensionAPI {
    * reported as extension.error and skipped.
    */
   registerPanel(panel: PanelDefinition): () => void
+  /**
+   * Experimental (D88): renders nodes of the model's Markdown replies instead of Amira, e.g.
+   * ```mermaid blocks as a diagram, or standalone images (see MarkdownRendererDefinition). An id
+   * this extension registered already is reported as extension.error and skipped.
+   */
+  registerMarkdownRenderer(renderer: MarkdownRendererDefinition): () => void
+  /**
+   * Experimental (D88): makes images drawable: reads, downloads, decodes and encodes them for
+   * the terminal's protocol (see ImageProvider). Without a provider, images are their alt text.
+   */
+  registerImageProvider(provider: ImageProvider): () => void
+  /**
+   * Experimental (D88): offers a service to other extensions under `name` (see AmiraServices for
+   * names and versioning). A name another extension offers already is reported as
+   * extension.error and skipped; unloading removes it.
+   */
+  provideService<K extends ServiceName>(name: K, service: ServiceOf<K>): () => void
+  /**
+   * Experimental (D88): the service offered under `name`, or undefined when no extension offers
+   * it (now: look it up where it is used, not once at load).
+   */
+  useService<K extends ServiceName>(name: K): ServiceOf<K> | undefined
   /** Asks frontends to redraw, e.g. after a status item's or a panel's state changed. */
   requestRender(): void
   /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */

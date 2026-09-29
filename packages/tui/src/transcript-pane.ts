@@ -9,8 +9,8 @@ interface Drawn {
   width: number
   version: number
   detail: ToolDetailLevel
-  /** The most rows an image could take, and whether images were drawn at all. */
-  imageRows: number
+  /** The most rows an image could take (0 without images), and the renderers of extensions. */
+  imageRows: string
   /** The frame it was drawn in, for live blocks, which are drawn once per frame. */
   frame: number
   lines: string[]
@@ -57,7 +57,7 @@ interface TextSelection {
   focus: TextPoint
   width: number
   detail: ToolDetailLevel
-  imageRows: number
+  imageRows: string
   /** The blocks it covers, in order. */
   blocks: Block[]
   /**
@@ -77,8 +77,9 @@ function compare(a: TextPoint, b: TextPoint): number {
 /** What changes in a running call's rows by itself: its elapsed time, its spinner (braille). */
 const TICKING = /[\d⠀-⣿]/g
 
-/** The most rows an image may take in this env; none without images. */
-const imageRowsOf = (env: BlockEnv) => (env.images ? env.images.loader.maxRows() : 0)
+/** What decides how blocks lay out besides the width: image rows, and the renderers of extensions. */
+const imageRowsOf = (env: BlockEnv) =>
+  `${env.images ? env.images.store.maxRows() : 0}:${env.renders?.renders.generation ?? -1}`
 
 /** Marks the rows of the selected block, which is drawn one column narrower. */
 const SELECTED = "▌"
@@ -690,7 +691,7 @@ export class TranscriptPane {
   /** A block's lines at the env's width if they were drawn and are still current. */
   private cached(block: Block, env: BlockEnv): string[] | undefined {
     const d = this.drawn.get(block)?.find((x) => x.width === env.width)
-    const imageRows = env.images ? env.images.loader.maxRows() : 0
+    const imageRows = imageRowsOf(env)
     if (
       !d ||
       block.live ||
@@ -706,7 +707,7 @@ export class TranscriptPane {
     const width = selected ? Math.max(1, env.width - 1) : env.width
     const list = this.drawn.get(block) ?? []
     const hit = list.find((d) => d.width === width)
-    const imageRows = env.images ? env.images.loader.maxRows() : 0
+    const imageRows = imageRowsOf(env)
     const fresh = block.live
       ? hit?.frame === this.frame
       : hit?.version === block.version && hit.detail === env.detail && hit.imageRows === imageRows

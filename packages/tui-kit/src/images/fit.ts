@@ -1,16 +1,6 @@
-/** The size of a terminal cell in pixels. */
-export interface CellSize {
-  width: number
-  height: number
-}
+import type { CellSize, Fit } from "./types.ts"
 
-/** How an image is drawn: its size in pixels, and the cells that takes. */
-export interface Fit {
-  width: number
-  height: number
-  cols: number
-  rows: number
-}
+export type { CellSize, Fit }
 
 /** Sixel draws in bands of six pixel rows; a partial last band still moves by six. */
 const BAND = 6

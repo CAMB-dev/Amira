@@ -25,13 +25,12 @@ import {
   detectEnv,
   Editor,
   type EditorPart,
-  ImageLoader,
+  ImageStore,
   type InputEvent,
   InputReader,
   isColorEnabled,
   ProcessTerminal,
   progressSupported,
-  type RemoteImageFetch,
   type RenderContext,
   type SetupResult,
   Spinner,
@@ -56,10 +55,10 @@ import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { HistorySearch } from "./history-search.ts"
-import { remoteImageFetch } from "./images.ts"
 import { createInlineView } from "./inline-view.ts"
 import { InputBox } from "./input-box.ts"
 import { defaultKeys, Keybindings } from "./keybindings.ts"
+import { type ImageSource, type MarkdownRenderSource, ReplyRenderers } from "./markdown-nodes.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { StatusBar } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
@@ -127,8 +126,10 @@ export interface InteractiveOptions {
   mode?: "fullscreen" | "inline"
   /** Tells the terminal apart (Windows Terminal, VS Code); injectable for tests. */
   env?: Record<string, string | undefined>
-  /** How images in replies are fetched from the web; injectable for tests. */
-  imageFetch?: RemoteImageFetch
+  /** Image providers registered by extensions (D88); without one, images are their alt text. */
+  imageProviders?: ImageSource
+  /** Markdown renderers registered by extensions (D88), e.g. diagrams for ```mermaid blocks. */
+  markdownRenderers?: MarkdownRenderSource
 }
 
 /** The renderer's shortest time between frames, and how long a key waits for async candidates. */
@@ -229,16 +230,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const hyperlinks = supportsHyperlinks(env)
   // Images on a line of their own are drawn where the terminal can, in both views: at most 20
   // rows, and 40% of the screen. Full-screen overlays (the sub-agent viewer, forms) show their
-  // alt text (D83, D84).
+  // alt text (D83, D84). What images are made of comes from image providers (the images
+  // extension, D88): without one, they are their alt text.
   const imageSupport = chooseImageSupport(imageSetting, capabilities.graphics, env)
-  const images =
+  const providers = opts.imageProviders
+  const imageStore =
     imageSupport &&
-    new ImageLoader({
+    providers &&
+    new ImageStore({
       support: imageSupport,
+      open: (input, ctx) => providers.open(input, ctx),
       cwd: () => agent.cwd,
-      fetchRemote: opts.imageFetch ?? remoteImageFetch(),
       maxRows: () => Math.max(1, Math.min(20, Math.floor(terminal.rows * 0.4))),
     })
+  const images = imageStore ? () => (providers!.size > 0 ? imageStore : undefined) : undefined
+  // Nodes of replies extensions render, e.g. ```mermaid diagrams (D88).
+  const renders = new ReplyRenderers(opts.markdownRenderers)
   const spinner = new Spinner()
   const queued: Outgoing[] = []
   /** Content of recent messages with folded pastes, by their text, so a dropped steer comes back folded. */
@@ -561,6 +568,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     presenters,
     hyperlinks,
     ...(images ? { images } : {}),
+    renders,
     keys,
     spinner,
     sessionId: () => agent.sessionId,

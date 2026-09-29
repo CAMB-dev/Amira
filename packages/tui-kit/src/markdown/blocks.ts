@@ -28,6 +28,19 @@ export interface Env {
    * image, the rows the line renders as, and its column; returns the rows to emit instead.
    */
   image?: (image: Required<ImageRef>, rows: string[], col: number) => string[]
+  /**
+   * Whether a code block in `lang` is rendered by `code`: its lines are held until it closes
+   * (shown live as code meanwhile), then `code` gets its text and the rows it renders as.
+   */
+  claimsCode?: (lang: string) => boolean
+  code?: (block: CodeBlock, rows: string[], col: number) => string[]
+}
+
+/** A fenced code block's language, info string and text (without the fences). */
+export interface CodeBlock {
+  lang: string
+  info: string
+  code: string
 }
 
 /**
@@ -62,7 +75,10 @@ interface Fence {
   len: number
   indent: number
   lang: string
+  info: string
   renderCol: number
+  /** The lines so far of a block `Env.code` renders, held until it closes. */
+  held?: string[]
 }
 
 type Align = "left" | "center" | "right"
@@ -110,7 +126,7 @@ export function newState(): BlockState {
 
 export function cloneState(s: BlockState): BlockState {
   const c: BlockState = { ...s, list: s.list.map((e) => ({ ...e })), refs: new Map(s.refs) }
-  if (s.fence) c.fence = { ...s.fence }
+  if (s.fence) c.fence = { ...s.fence, ...(s.fence.held ? { held: [...s.fence.held] } : {}) }
   if (s.table) c.table = { ...s.table, rows: [...s.table.rows], lines: [...s.table.lines] }
   if (s.held) c.held = { ...s.held }
   return c
@@ -162,10 +178,11 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     const m = line.match(FENCE_CLOSE_LIKE)
     if (m && m[1]![0] === f.char && m[1]!.length >= f.len) {
       s.fence = undefined
-      emit(s, sink, [frameRow(f.renderCol, env.glyphs.codeBottom, env)])
+      emit(s, sink, f.held ? closeHeld(f, env) : [frameRow(f.renderCol, env.glyphs.codeBottom, env)])
       return
     }
-    emit(s, sink, renderLine(codeLine(f, line, env), line, env).rows)
+    if (f.held) f.held.push(line)
+    else emit(s, sink, renderLine(codeLine(f, line, env), line, env).rows)
     return
   }
   if (line.trim() === "") {
@@ -236,9 +253,46 @@ export function finish(s: BlockState, env: Env, sink: Sink): void {
   env = withRefs(s, env)
   endOpenBlocks(s, env, sink)
   if (s.fence) {
-    emit(s, sink, [frameRow(s.fence.renderCol, env.glyphs.codeBottom, env)])
+    const f = s.fence
     s.fence = undefined
+    emit(s, sink, f.held ? closeHeld(f, env) : [frameRow(f.renderCol, env.glyphs.codeBottom, env)])
   }
+}
+
+/**
+ * The rows of a held code block that is still open, as they show live: as a code block so far,
+ * without its bottom. None when no block is held.
+ */
+export function heldCode(s: BlockState, env: Env, sink: Sink): void {
+  const f = s.fence
+  if (!f?.held) return
+  emit(s, sink, heldRows(f, withRefs(s, env), false))
+}
+
+/** Whether a code block is held open (`Env.code` renders it once it closes). */
+export function holdsCode(s: BlockState): boolean {
+  return s.fence?.held !== undefined
+}
+
+/** A held code block's rows as a code block: its frame's top, its lines, and the bottom once closed. */
+function heldRows(f: Fence, env: Env, closed: boolean): string[] {
+  const label = f.lang ? ` ${f.lang}` : ""
+  const rows = [frameRow(f.renderCol, env.glyphs.codeTop + label, env)]
+  for (const line of f.held!) rows.push(...renderLine(codeLine(f, line, env), line, env).rows)
+  if (closed) rows.push(frameRow(f.renderCol, env.glyphs.codeBottom, env))
+  return rows
+}
+
+/** A held code block that closed: what `Env.code` makes of it, given its rows as a code block. */
+function closeHeld(f: Fence, env: Env): string[] {
+  const rows = heldRows(f, env, true)
+  if (!env.code) return rows
+  const code = f.held!.map((line) => {
+    let start = 0
+    while (start < f.indent && line[start] === " ") start++
+    return line.slice(start)
+  })
+  return env.code({ lang: f.lang, info: f.info, code: code.join("\n") }, rows, f.renderCol)
 }
 
 /** Whether a held line or an open table would be committed by `endOpenBlocks`. */
@@ -286,7 +340,9 @@ export function partialRender(
 ): { state: BlockState; render: LineRender; raw?: boolean } | undefined {
   if (hasOpenBlock(s) || line.trim() === "") return undefined
   if (s.fence)
-    return FENCE_CLOSE_LIKE.test(line) ? undefined : { state: s, render: codeLine(s.fence, line, env) }
+    return FENCE_CLOSE_LIKE.test(line) || s.fence.held
+      ? undefined
+      : { state: s, render: codeLine(s.fence, line, env) }
   // A row of a table whose widths are frozen, too tall to wait for its end: its cells may still
   // grow, so its rows cannot be committed as table rows. It is shown as its source instead (`raw`:
   // not as it renders now), and the table goes on with the next row.
@@ -325,8 +381,14 @@ function classify(s: BlockState, line: string, env: Env): Classified {
   }
   const col = s.list.length ? s.list[s.list.length - 1]!.renderCol : 0
   if (validFence) {
-    const lang = fence[2]!.trim().split(/\s+/)[0] ?? ""
-    s.fence = { char: fence[1]![0]!, len: fence[1]!.length, indent, lang, renderCol: col }
+    const info = fence[2]!.trim()
+    const lang = info.split(/\s+/)[0] ?? ""
+    s.fence = { char: fence[1]![0]!, len: fence[1]!.length, indent, lang, info, renderCol: col }
+    // Rendered by someone else once it closes: nothing shows until then but live rows.
+    if (lang && env.code && env.claimsCode?.(lang)) {
+      s.fence.held = []
+      return { rows: [] }
+    }
     const label = lang ? ` ${lang}` : ""
     return { rows: [frameRow(col, glyphs.codeTop + label, env)] }
   }

@@ -2,7 +2,9 @@ import type { ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@a
 import { toolResultText } from "@amira/api"
 import {
   defaultGlyphs,
-  type ImageLoader,
+  type ImageInput,
+  type ImageStore,
+  type MarkdownNodes,
   MarkdownStream,
   type MarkdownStreamOptions,
   type RenderContext,
@@ -17,6 +19,7 @@ import {
 } from "@amira/tui-kit"
 import { replyRows, userLines, userText } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { apiNode, nodeRows, type ReplyRenderers } from "./markdown-nodes.ts"
 import { childrenOf, isActive, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
 import { type CopyRow, chromeRows, gutterRows } from "./text-selection.ts"
 import { type FinishedCall, finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
@@ -39,12 +42,21 @@ export interface BlockEnv {
   groups?: SpawnGroups
   /** Where replies get their images, when the terminal draws them; without it, alt text. */
   images?: BlockImages
+  /** Nodes of replies extensions render (D88); without it, replies are Markdown as it renders. */
+  renders?: BlockRenders
 }
 
 /** What replies need to show their images (D83): the same object for every frame. */
 export interface BlockImages {
-  loader: ImageLoader
+  store: ImageStore
   /** Something a block shows changed by itself (an image came in): a frame is wanted. */
+  changed: () => void
+}
+
+/** What replies need for the nodes extensions render (D88): the same object for every frame. */
+export interface BlockRenders {
+  renders: ReplyRenderers
+  /** A rendering came in: a frame is wanted. */
   changed: () => void
 }
 
@@ -276,11 +288,20 @@ export class ReplyBlock extends Block {
   #hasImages = false
   #streaming: boolean
   private lastImages: BlockImages | undefined
+  private lastRenders: BlockRenders | undefined
+  /** What the stream was made with from the renderers: their generation, or -1 without them. */
+  private streamRenders = -1
   /** An image file came in (or failed): its rows change. */
   private readonly imageLoaded = () => {
     this.stream = undefined
     this.touch()
     this.lastImages?.changed()
+  }
+  /** A node an extension renders came in (or failed): its rows change. */
+  private readonly rendered = () => {
+    this.stream = undefined
+    this.touch()
+    this.lastRenders?.changed()
   }
 
   constructor(
@@ -317,17 +338,22 @@ export class ReplyBlock extends Block {
     const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
     // Folded, images are their alt text.
     const images = this.folded ? undefined : env.images
+    // Folded, its code is cut short: extensions do not render it.
+    const renders = this.folded ? undefined : env.renders
     this.lastImages = images
+    this.lastRenders = renders
     const opts: MarkdownStreamOptions = { hyperlinks: this.hyperlinks }
-    if (images) opts.imageRows = (image, fallback, col, w) => this.imageRows(images, image, fallback, col, w)
-    const imageRows = images ? images.loader.maxRows() : 0
+    if (images || renders?.renders.source) opts.nodes = this.nodes(env.theme, images, renders?.renders)
+    const imageRows = images ? images.store.maxRows() : 0
+    const generation = renders ? renders.renders.generation : -1
     let rows: string[]
     if (this.#streaming && !this.folded) {
       if (
         !this.stream ||
         this.streamWidth !== width ||
         this.streamImages !== images ||
-        this.streamImageRows !== imageRows
+        this.streamImageRows !== imageRows ||
+        this.streamRenders !== generation
       ) {
         // Images are laid out afresh with it: only those of its rows are kept.
         this.marks.clear()
@@ -336,6 +362,7 @@ export class ReplyBlock extends Block {
         this.streamWidth = width
         this.streamImages = images
         this.streamImageRows = imageRows
+        this.streamRenders = generation
       }
       const ctx: RenderContext = { theme: env.theme, color: true, rows: Number.POSITIVE_INFINITY }
       rows = this.stream.render(width, ctx)
@@ -350,22 +377,63 @@ export class ReplyBlock extends Block {
     return this.layOut(replyRows(rows), images !== undefined)
   }
 
+  /**
+   * The nodes of its Markdown drawn otherwise: images (with `images`), and what extensions
+   * render (with `renders`): their lines, or an image. A rendering still on its way shows as
+   * Markdown renders it, and the block is drawn again once it is in.
+   */
+  private nodes(
+    theme: Theme,
+    images: BlockImages | undefined,
+    renders: ReplyRenderers | undefined,
+  ): MarkdownNodes {
+    return {
+      images: true,
+      claimsCode: (lang) => !!renders?.claimsCode(lang),
+      render: (node, fallback, col, width) => {
+        const room = Math.max(1, width - col)
+        const alt =
+          node.type === "image" ? undefined : `${defaultGlyphs.image} ${node.lang || "diagram"}`.trim()
+        if (node.type === "image" && !renders?.claimsImages)
+          return images ? this.imageRows(images, { url: node.url }, fallback, col, width) : fallback
+        if (!renders) return fallback
+        const r = renders.get(apiNode(node), {
+          width: room,
+          images: !!images,
+          maxImageRows: images?.store.maxRows() ?? 0,
+        })
+        if (!r.done) {
+          r.onDone(this.rendered)
+          return fallback
+        }
+        const out = r.result
+        if (!out) {
+          if (node.type === "image" && images)
+            return this.imageRows(images, { url: node.url }, fallback, col, width)
+          return fallback
+        }
+        if ("lines" in out) return nodeRows(out.lines, theme, room).map((row) => " ".repeat(col) + row)
+        return images ? this.imageRows(images, out.image, fallback, col, width, alt) : fallback
+      },
+    }
+  }
+
   /** The rows an image takes: its marks, once its size is known; its alt text until then. */
   private imageRows(
     images: BlockImages,
-    ref: { url: string; alt: string },
+    input: ImageInput,
     fallback: string[],
     col: number,
     width: number,
+    altText?: string,
   ): string[] {
-    const source = images.loader.screen(ref.url)
-    if (!source) return fallback
+    const source = images.store.screen(input)
     if (source.state === "loading") source.onSettled(this.imageLoaded)
-    const image = source.image(Math.max(1, width - col), images.loader.maxRows())
+    const image = source.image(Math.max(1, width - col), images.store.maxRows())
     if (!image) return fallback
     const indent = " ".repeat(col)
     const first = fallback[0] ?? ""
-    const alt = first.startsWith(indent) ? first.slice(col) : first
+    const alt = altText ?? (first.startsWith(indent) ? first.slice(col) : first)
     this.marks.set(image.id, { image, alt })
     return Array.from({ length: image.rows }, (_, k) => indent + mark(image.id, k))
   }

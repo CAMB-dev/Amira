@@ -1,36 +1,15 @@
-import { afterAll, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { encode as encodePng } from "fast-png"
+import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
 import type { RenderContext } from "../src/component.ts"
-import { MarkdownStream } from "../src/components/markdown-stream.ts"
-import type { ImageBlock } from "../src/images/encode.ts"
-import { ImageLoader, localPath } from "../src/images/loader.ts"
-import { findImageMarker, imageState } from "../src/images/placement.ts"
+import { type MarkdownNodes, MarkdownStream } from "../src/components/markdown-stream.ts"
+import { findImageMarker, imageState, pendingBlock } from "../src/images/placement.ts"
+import { ImageStore } from "../src/images/store.ts"
+import type { ImageBlock } from "../src/images/types.ts"
 import { LiveRenderer } from "../src/renderer.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { plain } from "./context.ts"
+import { fakeProvider } from "./fake-images.ts"
 import { VirtualScreen } from "./screen.ts"
-
-const dir = mkdtempSync(join(tmpdir(), "amira-mdimg-"))
-afterAll(() => rmSync(dir, { recursive: true, force: true }))
-
-const png = (w: number, h: number) =>
-  encodePng({ width: w, height: h, data: new Uint8Array(w * h * 4).fill(255), channels: 4 })
-writeFileSync(join(dir, "cat.png"), png(40, 60))
-writeFileSync(join(dir, "notes.txt"), "not an image")
-// Noise does not compress: well over 1000 bytes.
-writeFileSync(
-  join(dir, "big.png"),
-  encodePng({
-    width: 100,
-    height: 100,
-    data: Uint8Array.from({ length: 100 * 100 * 4 }, (_, i) => (i * 2654435761) >>> 24),
-    channels: 4,
-  }),
-)
 
 const block = (seq = "IMG"): ImageBlock => ({ seq, cols: 2, rows: 2 })
 
@@ -110,15 +89,16 @@ test("through the renderer: the image is drawn in order, between the text around
     write(d)
     screen.write(d)
   }
-  const loader = new ImageLoader({
+  const store = new ImageStore({
     support: { protocol: "sixel", cell: { width: 10, height: 20 } },
-    cwd: dir,
+    open: fakeProvider().open,
+    cwd: "/work",
     maxRows: () => 5,
   })
-  const m = new MarkdownStream({ hyperlinks: false, images: loader })
+  const m = new MarkdownStream({ hyperlinks: false, images: store })
   const r = new LiveRenderer(term, m)
   r.start()
-  m.append("before\n\n![cat](cat.png)\n\nafter\n\nmore")
+  m.append("before\n\n![cat](cat-40x60.png)\n\nafter\n\nmore")
   r.render()
   await Bun.sleep(100)
   r.render()
@@ -128,118 +108,112 @@ test("through the renderer: the image is drawn in order, between the text around
   r.stop()
 })
 
-test("the loader reads local files and checks them; failures and repeats are cached", async () => {
-  const loader = new ImageLoader({
-    support: { protocol: "iterm2", cell: { width: 10, height: 20 } },
-    cwd: dir,
-    maxRows: () => 4,
-    maxBytes: 1000,
-  })
-  const cat = await loader.load("cat.png", 80)
-  expect(cat).toMatchObject({ cols: 4, rows: 3 })
-  expect(cat!.seq).toStartWith("\x1b]1337;File=inline=1;")
-  expect(await loader.load(join(dir, "cat.png"), 80)).toEqual(cat)
-  expect(await loader.load("cat.png", 2)).toMatchObject({ cols: 2, rows: 2 })
-  expect(loader.load("cat.png", 80)).toBe(loader.load("cat.png", 80))
-  expect(await loader.load("notes.txt", 80)).toBeUndefined()
-  expect(await loader.load("missing.png", 80)).toBeUndefined()
-  // Over the size limit.
-  expect(await loader.load("big.png", 80)).toBeUndefined()
-  expect(await loader.load(".", 80)).toBeUndefined()
-  expect(await loader.load("data:image/png;base64,AAAA", 80)).toBeUndefined()
-  // No remote fetcher: remote images are not shown.
-  expect(await loader.load("https://x.dev/a.png", 80)).toBeUndefined()
-})
-
-test("remote images go through the fetcher, which must answer with an image type in time", async () => {
-  const calls: string[] = []
-  const bytes = png(20, 20)
-  const loader = new ImageLoader({
-    support: { protocol: "sixel", cell: { width: 10, height: 20 } },
-    cwd: dir,
-    maxRows: () => 4,
-    timeoutMs: 50,
-    fetchRemote: async (url, { maxBytes, signal }) => {
-      calls.push(`${url.href} ${maxBytes}`)
-      if (url.pathname === "/slow.png")
-        await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)))
-      return { bytes, contentType: url.pathname === "/page.png" ? "text/html" : "image/png" }
+/** Nodes rendering ```diagram blocks: `render` says what each becomes, and is recorded. */
+function diagrams(render: (code: string, commit: boolean) => string[] | undefined) {
+  const calls: { code: string; info: string; fallback: string[]; col: number; commit: boolean }[] = []
+  const nodes: MarkdownNodes = {
+    claimsCode: (lang) => lang.toLowerCase() === "diagram",
+    render(node, fallback, col, _width, commit) {
+      if (node.type !== "code") return fallback
+      calls.push({ code: node.code, info: node.info, fallback: fallback.map(stripAnsi), col, commit })
+      return render(node.code, commit) ?? fallback
     },
-  })
-  expect(await loader.load("https://x.dev/a.png", 80)).toMatchObject({ cols: 2, rows: 1 })
-  expect(await loader.load("https://x.dev/a.png", 80)).toMatchObject({ cols: 2, rows: 1 })
-  expect(await loader.load("https://x.dev/page.png", 80)).toBeUndefined()
-  expect(await loader.load("https://x.dev/slow.png", 80)).toBeUndefined()
+  }
+  return { nodes, calls }
+}
+
+test("a claimed code block is held until it closes, shown live as code, then committed once as its rendering", () => {
+  const { nodes, calls } = diagrams((code) => [`[${code.replace("\n", "|")}]`])
+  const m = new MarkdownStream({ hyperlinks: false, highlight: false, nodes })
+  const { ctx, committed } = committing()
+  m.append("Here:\n\n```diagram big\nA --> B\n")
+  // Live: the code so far, no bottom yet; nothing of it committed, and nothing asked for yet.
+  expect(m.render(30, ctx).map(stripAnsi)).toEqual(["", "╭─ diagram", "│ A --> B"])
+  expect(committed).toEqual(["Here:"])
+  m.append("B --> C")
+  expect(m.render(30, ctx).map(stripAnsi)).toEqual(["", "╭─ diagram", "│ A --> B", "│ B --> C"])
+  expect(calls).toEqual([])
+  m.append("\n```\nafter")
+  m.render(30, ctx)
+  expect(committed).toEqual(["Here:", "", "[A --> B|B --> C]"])
   expect(calls).toEqual([
-    `https://x.dev/a.png ${10 * 1024 * 1024}`,
-    `https://x.dev/page.png ${10 * 1024 * 1024}`,
-    `https://x.dev/slow.png ${10 * 1024 * 1024}`,
-  ])
-})
-
-test("a few images load at once; one that waits past the timeout is skipped, and not cached", async () => {
-  const started: string[] = []
-  const gates = new Map<string, () => void>()
-  const bytes = png(20, 20)
-  const loader = new ImageLoader({
-    support: { protocol: "sixel", cell: { width: 10, height: 20 } },
-    cwd: dir,
-    maxRows: () => 4,
-    timeoutMs: 40,
-    concurrency: 2,
-    fetchRemote: async (url) => {
-      started.push(url.pathname)
-      await new Promise<void>((go) => gates.set(url.pathname, go))
-      return { bytes, contentType: "image/png" }
+    {
+      code: "A --> B\nB --> C",
+      info: "diagram big",
+      fallback: ["╭─ diagram", "│ A --> B", "│ B --> C", "╰─"],
+      col: 0,
+      commit: true,
     },
-  })
-  const a = loader.load("https://x.dev/a.png", 80)
-  const b = loader.load("https://x.dev/b.png", 80)
-  const c = loader.load("https://x.dev/c.png", 80)
-  const d = loader.load("https://x.dev/d.png", 80)
-  await Bun.sleep(5)
-  expect(started).toEqual(["/a.png", "/b.png"])
-  // c gets its turn in time.
-  gates.get("/a.png")!()
-  expect(await a).toMatchObject({ cols: 2 })
-  await Bun.sleep(5)
-  expect(started).toEqual(["/a.png", "/b.png", "/c.png"])
-  // d has waited too long by the time b ends.
-  await Bun.sleep(50)
-  gates.get("/b.png")!()
-  gates.get("/c.png")!()
-  expect(await Promise.all([b, c, d])).toEqual([expect.anything(), expect.anything(), undefined])
-  expect(started).toEqual(["/a.png", "/b.png", "/c.png"])
-  // Skipped, not failed: asked again, it loads.
-  const again = loader.load("https://x.dev/d.png", 80)
-  await Bun.sleep(5)
-  gates.get("/d.png")!()
-  expect(await again).toMatchObject({ cols: 2 })
+  ])
+  expect(m.take(30)).toEqual(["after"])
+  // Other languages stream as always, line by line.
+  const plainCode = new MarkdownStream({ hyperlinks: false, highlight: false, nodes })
+  const c2 = committing()
+  plainCode.append("```js\nx()\n")
+  plainCode.render(30, c2.ctx)
+  expect(c2.committed.map(stripAnsi)).toEqual(["╭─ js", "│ x()"])
 })
 
-test("local paths: relative to the working directory, absolute, file: URLs, escapes decoded", () => {
-  const cwd = process.platform === "win32" ? "C:\\work" : "/work"
-  expect(localPath("img/a%20b.png", cwd)).toBe(join(cwd, "img", "a b.png"))
-  // A file may have # or ? in its name.
-  expect(localPath("c#1.png", cwd)).toBe(join(cwd, "c#1.png"))
-  // Never a network path, which Windows would open with the user's credentials.
-  for (const unc of [
-    "\\\\evil.test\\share\\a.png",
-    "//evil.test/share/a.png",
-    "file://evil.test/share/a.png",
-    "\\\\?\\UNC\\evil.test\\share\\a.png",
-    "%5C%5Cevil.test%5Cshare%5Ca.png",
-    // The NT object namespace reaches shares too.
-    "\\??\\UNC\\evil.test\\share\\a.png",
-    "/??/GLOBALROOT/Device/Mup/evil.test/share/a.png",
-  ])
-    expect([unc, localPath(unc, cwd)]).toEqual([unc, undefined])
-  if (process.platform === "win32") {
-    expect(localPath("D:\\pics\\a.png", cwd)).toBe("D:\\pics\\a.png")
-    expect(localPath("file:///D:/pics/a.png", cwd)).toBe("D:\\pics\\a.png")
-    expect(localPath("\\\\.\\pipe\\x", cwd)).toBeUndefined()
-    // Rooted without a drive: on the working directory's drive.
-    expect(localPath("\\pics\\a.png", cwd)).toBe("C:\\pics\\a.png")
-  } else expect(localPath("file:///pics/a.png", cwd)).toBe("/pics/a.png")
-  expect(localPath("data:image/png;base64,AA", cwd)).toBeUndefined()
+test("a claimed block never commits in parts: taller than the live region, its end shows live", () => {
+  const { nodes } = diagrams(() => ["drawn"])
+  const m = new MarkdownStream({ hyperlinks: false, highlight: false, nodes })
+  const { ctx, committed } = committing()
+  m.maxRows = 3
+  m.append(`\`\`\`diagram\n${Array.from({ length: 8 }, (_, i) => `line ${i}`).join("\n")}\n`)
+  expect(m.render(30, ctx).map(stripAnsi)).toEqual(["│ line 5", "│ line 6", "│ line 7"])
+  expect(committed).toEqual([])
+  m.append("```\n")
+  m.render(30, ctx)
+  expect(committed).toEqual(["drawn"])
+})
+
+test("a claimed block the text ends inside is rendered too; in a list it keeps its column", () => {
+  const { nodes, calls } = diagrams((code) => [`<${code}>`])
+  const m = new MarkdownStream({ hyperlinks: false, highlight: false, nodes })
+  m.append("- item\n\n  ```diagram\n  A\n  B")
+  const rows = m.take(30)
+  expect(rows.map(stripAnsi)).toEqual(["• item", "", "<A\nB>"])
+  expect(calls[0]).toMatchObject({ code: "A\nB", col: 2, commit: true })
+  // Declined (the fallback back): shown as the code block it is.
+  const none = diagrams(() => undefined)
+  const n = new MarkdownStream({ hyperlinks: false, highlight: false, nodes: none.nodes })
+  n.append("```diagram\nA\n```")
+  expect(n.take(30).map(stripAnsi)).toEqual(["╭─ diagram", "│ A", "╰─"])
+})
+
+test("through the renderer: a rendering still on its way holds what follows, then goes in its place", async () => {
+  const term = new FakeTerminal(30, 12)
+  const screen = new VirtualScreen(30, 12)
+  const write = term.write.bind(term)
+  term.write = (d: string) => {
+    write(d)
+    screen.write(d)
+  }
+  let finish: (rows: string[] | undefined) => void = () => {}
+  const late = new Promise<string[] | undefined>((r) => {
+    finish = r
+  })
+  const { nodes } = diagrams((_code, commit) =>
+    commit ? [pendingBlock(late, ["(fallback)"], 3000)] : undefined,
+  )
+  const m = new MarkdownStream({ hyperlinks: false, highlight: false, nodes })
+  const r = new LiveRenderer(term, m)
+  r.start()
+  m.append("before\n\n```diagram\nA\n```\n\nafter\n")
+  r.render()
+  // Waiting: what follows is held back, drawn live with the fallback in its place.
+  expect(screen.lines.slice(0, 5)).toEqual(["before", "", "(fallback)", "", "after"])
+  finish(["┌─┐", "│A│", "└─┘"])
+  await Bun.sleep(10)
+  r.render()
+  expect(screen.lines.slice(0, 7)).toEqual(["before", "", "┌─┐", "│A│", "└─┘", "", "after"])
+  r.stop()
+  // One that fails goes as its fallback, once.
+  const failed = findImageMarker(pendingBlock(Promise.resolve(undefined), ["fb"]))!
+  await Bun.sleep(0)
+  expect(imageState(failed.id)).toEqual({ kind: "fallback", fallback: ["fb"] })
+  // Its rows are made safe to print: only styles stay.
+  const rows = findImageMarker(pendingBlock(Promise.resolve(["a\x1b]52;c;eA==\x07b"]), []))!
+  await Bun.sleep(0)
+  expect(imageState(rows.id)).toEqual({ kind: "rows", rows: ["ab"], fallback: [] })
 })

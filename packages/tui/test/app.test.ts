@@ -5,7 +5,11 @@ import {
   type ChildSession,
   type CommandDefinition,
   defineTool,
+  type ImageInput,
+  type ImageOpenContext,
+  type ImageProvider,
   type InputHandler,
+  type MarkdownRendererDefinition,
   type Message,
   type PanelDefinition,
   type SessionControl,
@@ -25,7 +29,8 @@ import {
   ToolRegistry,
 } from "@amira/core"
 import statusExtension from "@amira/ext-status"
-import { FakeTerminal, type GraphicsReplies, type RemoteImageFetch } from "@amira/tui-kit"
+import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
+import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { activityLabel, runInteractive } from "../src/app.ts"
 import { FileIndex, type FileSource, fileList } from "../src/file-index.ts"
@@ -92,8 +97,10 @@ interface SetupOptions {
   notice?: string
   /** What the terminal says about graphics when asked (only when images are not off). */
   graphics?: GraphicsReplies
-  /** How images in replies are fetched from the web. */
-  imageFetch?: RemoteImageFetch
+  /** An image provider, as the images extension registers one (D88). */
+  images?: ImageProvider
+  /** Markdown renderers extensions register (D88). */
+  markdown?: MarkdownRendererDefinition[]
   /** Live panels extensions register. */
   panels?: PanelDefinition[]
   /** Called with the options the UI sets the terminal up with. */
@@ -172,6 +179,12 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
       for (const p of o.panels!) api.registerPanel(p)
     }, "test-panels")
   }
+  if (o.images || o.markdown) {
+    await host.load((api) => {
+      if (o.images) api.registerImageProvider(o.images)
+      for (const r of o.markdown ?? []) api.registerMarkdownRenderer(r)
+    }, "test-render")
+  }
   if (o.history) agent.messages.push(...o.history)
   const exited = runInteractive({
     agent,
@@ -188,7 +201,8 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
       const graphics = setupOpts?.images && o.graphics ? { graphics: o.graphics } : {}
       return { capabilities: { ...probed.capabilities, ...graphics }, leftoverInput: o.leftoverInput ?? "" }
     },
-    ...(o.imageFetch ? { imageFetch: o.imageFetch } : {}),
+    imageProviders: host.images,
+    markdownRenderers: host.markdown,
     onReady: () => agent.start("startup"),
     files: o.fileSource ?? fileList(async () => o.files ?? []),
     ...(o.promptHistory ? { history: o.promptHistory } : {}),
@@ -2550,11 +2564,23 @@ test("with tui.reflow off, a narrower terminal does not move up past the live re
   }
 })
 
-/** A 30×40 PNG: 3 columns and 2 rows of 10×20 cells, as Sixel draws it in whole bands. */
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAB4AAAAoCAYAAADpE0oSAAAAaklEQVR4Xu3NkQKDUABA0XA4HA6HwzAMwzAIwjAMwzAMwzAMH4Zh2F/U/YjwwuETRWW4Xnjjgy9++CNGghQZchSoUKNBiw49BoyYMGPBioANOw6cMDY2NjY2NjYOxsbGxsbGxsbB2Pix+AZFpUoFb9YsKwAAAABJRU5ErkJggg==",
-  "base64",
-)
+/**
+ * A stand-in for the images extension's provider: `size` says what each image is (undefined:
+ * it cannot be shown), encoding makes up data of the fitted size.
+ */
+function testImages(
+  size: (input: ImageInput, ctx: ImageOpenContext) => Promise<{ width: number; height: number } | undefined>,
+): ImageProvider {
+  return {
+    id: "test-images",
+    open: async (input, ctx) => {
+      const s = await size(input, ctx)
+      return s && { ...s, encode: async (req) => fakePayload(req) }
+    },
+  }
+}
+/** 30×40 pixels: 3 columns and 2 rows of 10×20 cells, as Sixel draws it in whole bands. */
+const CHART = { width: 30, height: 40 }
 const SIXEL: GraphicsReplies = { answered: true, sixel: true, kitty: false }
 const WT = { WT_SESSION: "1" }
 
@@ -2580,13 +2606,14 @@ test("an image mid-reply is drawn in its place: every row once, in order, the re
     env: WT,
     graphics: SIXEL,
     onWrite: (s) => check.onWrite(s),
-    imageFetch: async (url) => {
+    images: testImages(async (input, ctx) => {
       fetched++
-      expect(url.href).toBe("https://img.test/chart.png")
+      expect(input).toEqual({ url: "https://img.test/chart.png" })
+      expect(ctx).toMatchObject({ protocol: "sixel", cwd: "/work/proj" })
       // Slower than the lines after it take to stream: they wait for it.
       await Bun.sleep(60)
-      return { bytes: PNG, contentType: "image/png" }
-    },
+      return CHART
+    }),
   })
   terminal.send("go\r")
   await shows(`line ${markers.at(-1)}`)
@@ -2605,7 +2632,7 @@ test("an image mid-reply is drawn in its place: every row once, in order, the re
   await exited
 })
 
-test("an image that cannot be fetched, or a private address, is its alt text; tui.images off draws none", async () => {
+test("without an image provider, one that cannot open it, or tui.images off, an image is its alt text", async () => {
   const setups: ({ images?: boolean; background?: boolean } | undefined)[] = []
   const run = async (text: string, o: Partial<SetupOptions>) => {
     const { terminal, screen, all, shows, idle, exited } = await setup([{ text }], {
@@ -2622,21 +2649,21 @@ test("an image that cannot be fetched, or a private address, is its alt text; tu
     await exited
     return out
   }
-  // The real fetcher refuses a local address, as web_fetch does.
-  const local = await run("![secret](http://127.0.0.1:9/a.png)\n\ndone", {})
+  // No images extension: the terminal could draw it, but nothing makes it drawable (D88).
+  const local = await run("![secret](https://img.test/secret.png)\n\ndone", {})
   expect(local.images).toBe(0)
   // Windows Terminal makes links clickable: the URL is in the link, not shown.
   expect(local.text).toContain("  🖼\uFE0F secret\n\n  done")
   const failing = await run("![gone](https://img.test/404.png)\n\ndone", {
-    imageFetch: async () => {
+    images: testImages(async () => {
       throw new Error("HTTP 404")
-    },
+    }),
   })
   expect(failing.images).toBe(0)
   expect(failing.text).toContain("  🖼\uFE0F gone\n\n  done")
   const off = await run("![chart](https://img.test/chart.png)\n\ndone", {
     settings: { images: "off" },
-    imageFetch: async () => ({ bytes: PNG, contentType: "image/png" }),
+    images: testImages(async () => CHART),
   })
   expect(off.images).toBe(0)
   expect(off.text).toContain("  🖼\uFE0F chart")
@@ -2646,11 +2673,11 @@ test("an image that cannot be fetched, or a private address, is its alt text; tu
     { images: false, background: true },
   ])
   // Without Sixel in the terminal's answer, "auto" draws none either.
-  const none = await run("![chart](https://img.test/chart.png)\n\ndone", {
+  const text = await run("![chart](https://img.test/chart.png)\n\ndone", {
     graphics: { answered: true, sixel: false, kitty: false },
-    imageFetch: async () => ({ bytes: PNG, contentType: "image/png" }),
+    images: testImages(async () => CHART),
   })
-  expect(none.images).toBe(0)
+  expect(text.images).toBe(0)
 })
 
 test("an image slower than its time is committed as its alt text, and what follows goes on", async () => {
@@ -2659,8 +2686,10 @@ test("an image slower than its time is committed as its alt text, and what follo
     {
       env: WT,
       graphics: SIXEL,
-      imageFetch: (_url, { signal }) =>
-        new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
+      images: testImages(
+        (_input, { signal }) =>
+          new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
+      ),
     },
   )
   terminal.send("go\r")
@@ -2673,6 +2702,168 @@ test("an image slower than its time is committed as its alt text, and what follo
   terminal.send("\x03")
   await exited
 }, 10_000)
+
+// --- Markdown renderers of extensions (D88)
+
+/** A renderer of ```box blocks: each line of the code in a frame, after `delayMs` when given. */
+function boxRenderer(calls: { code: string; width: number }[], delayMs?: number): MarkdownRendererDefinition {
+  const draw = (code: string) => {
+    const lines = code.split("\n")
+    const w = Math.max(...lines.map((l) => l.length))
+    return {
+      lines: [
+        { kind: "accent" as const, text: `┌${"─".repeat(w + 2)}┐` },
+        ...lines.map((l) => ({ kind: "code" as const, text: `│ ${l.padEnd(w)} │` })),
+        { kind: "accent" as const, text: `└${"─".repeat(w + 2)}┘` },
+      ],
+    }
+  }
+  return {
+    id: "box",
+    match: { codeLang: ["box"] },
+    render: (node, ctx) => {
+      if (node.type !== "code") return undefined
+      calls.push({ code: node.code, width: ctx.width })
+      return delayMs === undefined ? draw(node.code) : Bun.sleep(delayMs).then(() => draw(node.code))
+    },
+  }
+}
+
+test("inline: a code block an extension renders is committed once as its lines, in order; others stay code", async () => {
+  const calls: { code: string; width: number }[] = []
+  const markers = ["L1", "L2", "L3"]
+  const check = transcriptChecker(markers)
+  const text = "line L1\n\n```box\nA --> B\nB --> C\n```\n\nline L2\n\n```js\nx()\n```\n\nline L3"
+  const { terminal, screen, all, shows, idle, exited } = await setup([{ text, delayMs: 2 }], {
+    cols: 40,
+    rows: 24,
+    markdown: [boxRenderer(calls)],
+    onWrite: (s) => check.onWrite(s),
+  })
+  terminal.send("go\r")
+  await shows("line L3")
+  await idle()
+  expect(check.problems).toEqual([])
+  check.final(screen)
+  expect(all()).toContain(
+    [
+      "  line L1",
+      "",
+      "  ┌─────────┐",
+      "  │ A --> B │",
+      "  │ B --> C │",
+      "  └─────────┘",
+      "",
+      "  line L2",
+    ].join("\n"),
+  )
+  expect(all()).toContain("  ╭─ js\n  │ x()\n  ╰─")
+  expect(all()).not.toContain("╭─ box")
+  // Asked once, when it closed, for the reply's width less its indent.
+  expect(calls).toEqual([{ code: "A --> B\nB --> C", width: 38 }])
+  terminal.send("\x03")
+  await exited
+})
+
+test("inline: a rendering on its way holds what follows; one that takes too long goes as the code", async () => {
+  const calls: { code: string; width: number }[] = []
+  const late = await setup([{ text: "```box\nlate\n```\n\nafter it" }], {
+    markdown: [boxRenderer(calls, 80)],
+  })
+  late.terminal.send("go\r")
+  await late.shows("after it")
+  await late.idle()
+  await waitFor(() => late.all().includes("│ late │"), "the rendering")
+  const text = late.all()
+  expect(text.indexOf("│ late │")).toBeLessThan(text.indexOf("after it"))
+  expect(text).not.toContain("╭─ box")
+  late.terminal.send("\x03")
+  await late.exited
+  // Slower than its renderer's time: the code block is committed, and what follows goes on.
+  const slow = await setup([{ text: "```box\nslow\n```\n\nafter it" }], {
+    markdown: [{ ...boxRenderer([], 5000), waitMs: 100 }],
+  })
+  slow.terminal.send("go\r")
+  await slow.shows("after it")
+  await slow.idle()
+  await Bun.sleep(200)
+  expect(slow.all()).toContain("  ╭─ box\n  │ slow\n  ╰─\n\n  after it")
+  slow.terminal.send("\x03")
+  await slow.exited
+})
+
+test("inline: a resumed history renders its blocks through extensions too, in order, waiting for late ones", async () => {
+  const calls: { code: string; width: number }[] = []
+  const reply = (text: string): Message => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    model: { provider: "mock", model: "m1" },
+  })
+  const { terminal, all, exited } = await setup([], {
+    rows: 40,
+    markdown: [boxRenderer(calls, 60)],
+    history: [
+      { role: "user", content: [{ type: "text", text: "draw" }] },
+      reply("First:\n\n```box\nA\n```\n\nafter A"),
+      reply("```box\nB\n```\n\nafter B"),
+    ],
+  })
+  await waitFor(() => all().includes("── resumed"), "history")
+  // Meanwhile what waits for them shows below as it is, the blocks as code.
+  await waitFor(() => all().includes("│ B │"), "the renderings")
+  await Bun.sleep(50)
+  const text = all()
+  expect(text).toContain("  First:\n\n  ┌───┐\n  │ A │\n  └───┘\n\n  after A")
+  expect(text).toContain("  ┌───┐\n  │ B │\n  └───┘\n\n  after B")
+  expect(text).not.toContain("╭─ box")
+  expect(calls.map((c) => c.code)).toEqual(["A", "B"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("inline: a renderer's image goes to the image providers; a renderer that throws leaves the code", async () => {
+  const opened: string[] = []
+  const errors: string[] = []
+  const { terminal, screen, all, shows, idle, exited, bus } = await setup(
+    [{ text: "```chart\npie\n```\n\n```broken\nx\n```\n\ndone" }],
+    {
+      env: WT,
+      graphics: SIXEL,
+      images: testImages(async (input) => {
+        opened.push("data" in input ? new TextDecoder().decode(input.data) : input.url)
+        return CHART
+      }),
+      markdown: [
+        {
+          id: "chart",
+          match: { codeLang: ["chart"] },
+          render: async () => ({ image: { data: new TextEncoder().encode("png of pie") } }),
+        },
+        {
+          id: "broken",
+          match: { codeLang: ["broken"] },
+          render: () => {
+            throw new Error("no parser")
+          },
+        },
+      ],
+    },
+  )
+  bus.subscribe((e) => {
+    if (e.type === "extension.error") errors.push((e.data as { error: string }).error)
+  })
+  terminal.send("go\r")
+  await shows("done")
+  await idle()
+  await waitFor(() => screen.images.length > 0, "the image")
+  expect(opened).toEqual(["png of pie"])
+  expect(screen.images).toEqual([expect.objectContaining({ protocol: "sixel", rows: 2, cols: 3 })])
+  expect(all()).toContain("  ╭─ broken\n  │ x\n  ╰─")
+  await waitFor(() => errors.length > 0, "the error")
+  expect(errors).toEqual(['markdown renderer "broken" failed: no parser'])
+  terminal.send("\x03")
+  await exited
+})
 
 test("live panels sit above the input in both modes, fold with Ctrl+T and follow their state", async () => {
   for (const mode of ["inline", "fullscreen"] as const) {

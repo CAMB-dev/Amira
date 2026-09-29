@@ -1,5 +1,12 @@
 import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
-import { renderMarkdown, type Theme, visibleWidth } from "@amira/tui-kit"
+import {
+  type MarkdownNodes,
+  MarkdownStream,
+  type MarkdownStreamOptions,
+  renderMarkdown,
+  type Theme,
+  visibleWidth,
+} from "@amira/tui-kit"
 import { replyRows, userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
@@ -13,6 +20,8 @@ export interface HistoryOptions {
   session?: { id: string; updatedAt?: number }
   /** Make links in replies clickable (OSC 8); default: what the terminal is known to support. */
   hyperlinks?: boolean
+  /** Images and what extensions render (D88), committed as the inline transcript does. */
+  nodes?: MarkdownNodes
   /** Spacing continues from the blocks committed before; a fresh one when left out. */
   transcript?: Transcript
 }
@@ -44,12 +53,10 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
       for (const b of m.content) {
         if (b.type === "text" && b.text.trim()) {
           // Markdown, as the reply showed when it streamed in.
-          const rows = renderMarkdown(
-            b.text,
-            Math.max(1, opts.width - visibleWidth(gutter)),
-            theme,
-            opts.hyperlinks === undefined ? {} : { hyperlinks: opts.hyperlinks },
-          )
+          const width = Math.max(1, opts.width - visibleWidth(gutter))
+          const rows = opts.nodes
+            ? committedMarkdown(b.text, width, theme, markdownOptions(opts))
+            : renderMarkdown(b.text, width, theme, markdownOptions(opts))
           out.push(...t.block("assistant", replyRows(rows)))
         } else if (b.type === "toolCall") {
           const result = results.get(b.id) ?? { content: [], isError: true }
@@ -75,4 +82,25 @@ export function historySeparator(theme: Theme, s?: { id: string; updatedAt?: num
     ? ` resumed ${s.id}${s.updatedAt !== undefined ? ` · ${localTime(s.updatedAt)}` : ""} `
     : " resumed "
   return theme.muted(`${glyphs.rule.repeat(2)}${label}${glyphs.rule.repeat(2)}`)
+}
+
+/**
+ * A whole Markdown text as rows to commit, as the live transcript commits a reply: images and
+ * what extensions render go as they are ready, or as markers the renderer resolves in order.
+ */
+function committedMarkdown(text: string, width: number, theme: Theme, opts: MarkdownStreamOptions): string[] {
+  const m = new MarkdownStream(opts)
+  const rows: string[] = []
+  m.append(text)
+  m.render(width, { theme, color: true, rows: Number.POSITIVE_INFINITY, commit: (r) => rows.push(...r) })
+  rows.push(...m.take(width))
+  while (rows.length > 0 && rows[rows.length - 1]!.trim() === "") rows.pop()
+  return rows
+}
+
+function markdownOptions(opts: HistoryOptions): MarkdownStreamOptions {
+  return {
+    ...(opts.hyperlinks === undefined ? {} : { hyperlinks: opts.hyperlinks }),
+    ...(opts.nodes ? { nodes: opts.nodes } : {}),
+  }
 }

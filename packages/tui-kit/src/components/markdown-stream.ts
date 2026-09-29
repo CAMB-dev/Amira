@@ -2,8 +2,8 @@ import { stripAnsi } from "../ansi.ts"
 import { supportsHyperlinks } from "../capabilities.ts"
 import type { Component, RenderContext } from "../component.ts"
 import { defaultGlyphs, type Glyphs } from "../glyphs.ts"
-import type { ImageBlock } from "../images/encode.ts"
 import { pendingImage } from "../images/placement.ts"
+import type { ImageBlock } from "../images/types.ts"
 import {
   type BlockState,
   cloneState,
@@ -12,7 +12,9 @@ import {
   endOpenBlocks,
   finish,
   hasOpenBlock,
+  heldCode,
   heldUndecided,
+  holdsCode,
   type LineRender,
   newState,
   partialRender,
@@ -54,6 +56,11 @@ export interface MarkdownStreamOptions {
     col: number,
     width: number,
   ) => string[]
+  /**
+   * Nodes something else renders (D88): code blocks in the languages it claims, and (instead of
+   * `images` and `imageRows`) standalone images. Takes precedence over both.
+   */
+  nodes?: MarkdownNodes
 }
 
 /** Where a Markdown stream gets its images. */
@@ -62,6 +69,48 @@ export interface MarkdownImages {
   load(url: string, maxCols: number): Promise<ImageBlock | undefined>
   /** How long a committed image may take to load before its alt text goes instead. Default 3 s. */
   waitMs?: number
+}
+
+/** A node of the text that `MarkdownNodes` renders, once it is complete. */
+export type MarkdownNodeRef =
+  | { type: "image"; url: string; alt: string }
+  | { type: "code"; lang: string; info: string; code: string }
+
+/**
+ * Renders nodes of a Markdown stream instead of it: standalone images (with `images`) and code
+ * blocks in the languages `claimsCode` says. A claimed code block is held until it closes,
+ * shown live as code meanwhile, and nothing of it is committed before `render` has it.
+ */
+export interface MarkdownNodes {
+  images?: boolean
+  claimsCode?(lang: string): boolean
+  /**
+   * The rows a complete node shows as, given how it renders as Markdown (`fallback`: its alt
+   * text, the code block), its column and the stream's width. With `commit`, the rows go to the
+   * scrollback now and can never change (a `pendingBlock` marker is how to be late); without,
+   * they show live and it is asked again next frame.
+   */
+  render(node: MarkdownNodeRef, fallback: string[], col: number, width: number, commit: boolean): string[]
+}
+
+/**
+ * The nodes of a stream whose images come from `images`: each committed as a marker that the
+ * renderer turns into the image once it is loaded (holding what follows back until then), and
+ * shown as its alt text while loading, and instead of it when it fails or takes too long.
+ */
+export function imageNodes(images: MarkdownImages): MarkdownNodes {
+  return {
+    images: true,
+    render(node, rows, col, width, commit) {
+      if (node.type !== "image") return rows
+      // Asked for while it is live too, so it is often ready by the time it is committed.
+      const load = images.load(node.url, Math.max(1, width - col))
+      if (!commit) return rows
+      const indent = " ".repeat(col)
+      const fallback = rows.map((r) => (r.startsWith(indent) ? r.slice(col) : r))
+      return [indent + pendingImage(load, fallback, images.waitMs ?? 3000)]
+    },
+  }
 }
 
 /** Renders a whole Markdown text to rows, as `MarkdownStream` shows it once it has streamed in. */
@@ -109,8 +158,7 @@ export class MarkdownStream implements Component {
   private readonly glyphs: Glyphs
   private readonly hyperlinks: boolean
   private readonly highlight: boolean
-  private readonly images: MarkdownImages | undefined
-  private readonly imageRows: MarkdownStreamOptions["imageRows"]
+  private readonly nodes: MarkdownNodes | undefined
   private state = newState()
   /** Text not processed yet: complete lines, then the partial line being written. */
   private src = ""
@@ -126,8 +174,18 @@ export class MarkdownStream implements Component {
     this.glyphs = opts.glyphs ?? defaultGlyphs
     this.hyperlinks = opts.hyperlinks ?? supportsHyperlinks()
     this.highlight = opts.highlight ?? true
-    this.images = opts.images
-    this.imageRows = opts.imageRows
+    const rowsFor = opts.imageRows
+    this.nodes =
+      opts.nodes ??
+      (opts.images
+        ? imageNodes(opts.images)
+        : rowsFor
+          ? {
+              images: true,
+              render: (node, rows, col, width) =>
+                node.type === "image" ? rowsFor(node, rows, col, width) : rows,
+            }
+          : undefined)
   }
 
   /** Adds streamed text. */
@@ -175,6 +233,8 @@ export class MarkdownStream implements Component {
         live = this.live(liveEnv)
       }
       if (live.length > this.maxRows && this.commitPartial(env, sink)) live = this.live(liveEnv)
+      // A code block held for its renderer cannot be committed in parts: its end shows.
+      if (live.length > this.maxRows && holdsCode(this.state)) live = live.slice(live.length - this.maxRows)
     }
     return this.done.length ? [...this.done, ...live] : live
   }
@@ -210,19 +270,14 @@ export class MarkdownStream implements Component {
       highlight: this.highlight,
       refs: this.state.refs,
     }
-    const images = this.images
-    if (images) {
-      env.image = (image, rows, col) => {
-        // Asked for while it is live too, so it is often ready by the time it is committed.
-        const load = images.load(image.url, Math.max(1, env.width - col))
-        if (!commit) return rows
-        const indent = " ".repeat(col)
-        const fallback = rows.map((r) => (r.startsWith(indent) ? r.slice(col) : r))
-        return [indent + pendingImage(load, fallback, images.waitMs ?? 3000)]
-      }
-    } else if (this.imageRows) {
-      const rowsFor = this.imageRows
-      env.image = (image, rows, col) => rowsFor(image, rows, col, env.width)
+    const nodes = this.nodes
+    if (nodes?.images)
+      env.image = (image, rows, col) =>
+        nodes.render({ type: "image", url: image.url, alt: image.alt }, rows, col, env.width, commit)
+    if (nodes?.claimsCode) {
+      const claims = nodes.claimsCode.bind(nodes)
+      env.claimsCode = (lang) => claims(lang)
+      env.code = (block, rows, col) => nodes.render({ type: "code", ...block }, rows, col, env.width, commit)
     }
     return env
   }
@@ -252,6 +307,7 @@ export class MarkdownStream implements Component {
     const s = cloneState(this.state)
     if (line !== "") step(s, line, env, sink)
     endOpenBlocks(s, env, sink)
+    heldCode(s, env, sink)
     return rows
   }
 

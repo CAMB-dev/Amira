@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { Component, RenderContext } from "../src/component.ts"
-import type { ImageBlock } from "../src/images/encode.ts"
 import { findImageMarker, pendingImage, placeImage } from "../src/images/placement.ts"
+import type { ImageBlock } from "../src/images/types.ts"
 import { LiveRenderer } from "../src/renderer.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { VirtualScreen } from "./screen.ts"

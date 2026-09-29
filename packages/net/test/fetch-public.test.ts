@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { remoteImageFetch } from "../src/images.ts"
+import { fetchPublic } from "../src/index.ts"
 
 const publicDns = async (host: string) => (host === "intranet.test" ? ["192.168.1.20"] : ["93.184.215.14"])
 
@@ -12,15 +12,19 @@ function net(handler: (url: string) => Response) {
   return { fetch, calls }
 }
 
-const opts = (maxBytes = 1000) => ({ maxBytes, signal: new AbortController().signal })
-
 test("private and local addresses are refused before anything is requested, redirects too", async () => {
   const n = net((url) =>
     url.includes("93.184")
       ? new Response(null, { status: 302, headers: { location: "http://10.0.0.1/x.png" } })
       : new Response("inside"),
   )
-  const get = remoteImageFetch({ fetch: n.fetch, resolve: publicDns })
+  const get = (url: string) =>
+    fetchPublic(url, {
+      maxBytes: 1000,
+      signal: new AbortController().signal,
+      fetch: n.fetch,
+      resolve: publicDns,
+    })
   for (const u of [
     "http://127.0.0.1/a.png",
     "http://localhost:8080/a.png",
@@ -28,13 +32,13 @@ test("private and local addresses are refused before anything is requested, redi
     "http://169.254.169.254/latest/meta-data",
     "http://intranet.test/a.png",
   ])
-    await expect(get(new URL(u), opts())).rejects.toThrow("private-network")
+    await expect(get(u)).rejects.toThrow("private-network")
   expect(n.calls).toEqual([])
-  await expect(get(new URL("https://cdn.test/a.png"), opts())).rejects.toThrow("private-network")
+  await expect(get("https://cdn.test/a.png")).rejects.toThrow("private-network")
   expect(n.calls).toEqual(["https://93.184.215.14/a.png"])
 })
 
-test("only image types, within the size limit", async () => {
+test("only the types asked for, a 2xx answer, within the size limit, no credentials", async () => {
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10])
   const n = net((url) => {
     if (url.endsWith("/page")) return new Response("<html>", { headers: { "content-type": "text/html" } })
@@ -43,13 +47,23 @@ test("only image types, within the size limit", async () => {
     if (url.endsWith("/missing.png")) return new Response("no", { status: 404 })
     return new Response(png, { headers: { "content-type": "image/png" } })
   })
-  const get = remoteImageFetch({ fetch: n.fetch, resolve: publicDns })
-  expect(await get(new URL("https://cdn.test/a.png"), opts())).toEqual({
+  const get = (url: string) =>
+    fetchPublic(url, {
+      maxBytes: 1000,
+      signal: new AbortController().signal,
+      types: /^image\//,
+      headers: { accept: "image/png" },
+      fetch: n.fetch,
+      resolve: publicDns,
+    })
+  expect(await get("https://cdn.test/a.png")).toEqual({
     bytes: png,
     contentType: "image/png",
+    url: "https://cdn.test/a.png",
   })
-  await expect(get(new URL("https://cdn.test/page"), opts())).rejects.toThrow("not an image (text/html)")
-  await expect(get(new URL("https://cdn.test/huge.png"), opts())).rejects.toThrow("too large")
-  await expect(get(new URL("https://cdn.test/missing.png"), opts())).rejects.toThrow("HTTP 404")
-  await expect(get(new URL("https://u:p@cdn.test/a.png"), opts())).rejects.toThrow("credentials")
+  await expect(get("https://cdn.test/page")).rejects.toThrow("not an accepted type (text/html)")
+  await expect(get("https://cdn.test/huge.png")).rejects.toThrow("too large")
+  await expect(get("https://cdn.test/missing.png")).rejects.toThrow("HTTP 404")
+  await expect(get("https://u:p@cdn.test/a.png")).rejects.toThrow("credentials")
+  await expect(get("file:///etc/passwd")).rejects.toThrow("only http and https")
 })

@@ -5,13 +5,5 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
-  },
-  "dependencies": {
-    "fast-png": "^8.0.0",
-    "jpeg-js": "^0.4.4",
-    "omggif": "^1.0.10"
-  },
-  "devDependencies": {
-    "@types/omggif": "^1.0.5"
   }
 }
