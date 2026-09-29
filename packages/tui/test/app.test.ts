@@ -2853,7 +2853,7 @@ test("? opens the key reference on an empty input; it lists every action with it
     terminal.send("?")
     await waitFor(() => live().includes("? Keys"), `${mode}: the reference`)
     const text = live()
-    expect(text).toContain("Change them in ~/.amira/keybindings.json")
+    expect(text).toContain("To change a key, map the action name")
     expect(text).toMatch(/^Input$/m)
     // The keys bound now, all of them, next to what they do.
     expect(text).toMatch(/^ {2}Enter +Send the message/m)

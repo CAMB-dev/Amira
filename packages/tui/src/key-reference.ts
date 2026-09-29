@@ -10,7 +10,14 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
-import { ACTIONS, type Action, type Keybindings, type KeyScope, keyLabel } from "./keybindings.ts"
+import {
+  ACTIONS,
+  type Action,
+  type Keybindings,
+  type KeyScope,
+  type KeySpec,
+  keyLabel,
+} from "./keybindings.ts"
 
 /** The groups of the reference, in the order they are listed, with their headings. */
 const SCOPES: { scope: KeyScope; title: string; fullscreenOnly?: boolean }[] = [
@@ -32,6 +39,11 @@ export interface KeyReferenceOptions {
   fullscreen: boolean
   /** Called when the user asks to leave it. */
   onClose: () => void
+  /**
+   * Whether a bound key reaches Amira in this terminal (Shift+Enter may arrive as plain Enter);
+   * the others are left out. Default: all do.
+   */
+  usable?: (action: Action, key: KeySpec) => boolean
 }
 
 /**
@@ -72,9 +84,9 @@ export class KeyReference implements Component {
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const head = [
-      truncateToWidth(`${theme.accent("?")} ${theme.text("Keys")}`, width, glyphs.more),
+      truncateToWidth(`${theme.accent(glyphs.question)} ${theme.text("Keys")}`, width, glyphs.more),
       ...wrapText(
-        "Change them in ~/.amira/keybindings.json by the action names after the descriptions (docs/keybindings.md).",
+        "To change a key, map the action name after its description to keys in keybindings.json, in Amira's home folder (~/.amira unless AMIRA_HOME says otherwise).",
         width,
       ).map((l) => theme.muted(l)),
       theme.muted(glyphs.rule.repeat(width)),
@@ -91,7 +103,8 @@ export class KeyReference implements Component {
 
   /** The keys of an action as they read in hints, all of them; "not bound" without any. */
   #labels(action: Action): string | undefined {
-    const specs = this.keys.keys(action)
+    const usable = this.opts.usable
+    const specs = this.keys.keys(action).filter((s) => !usable || usable(action, s))
     return specs.length ? specs.map(keyLabel).join(", ") : undefined
   }
 

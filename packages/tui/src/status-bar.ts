@@ -1,16 +1,14 @@
 import type { StatusTone } from "@amira/api"
+import type { ResolvedStatusItem } from "@amira/core"
 import { type RenderContext, type StyleFn, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
-/** One item of the status: what extensions registered (ResolvedStatusItem), or the UI's own. */
-export interface StatusEntry {
-  id: string
-  align: "left" | "right"
-  tone: StatusTone
-  /** Higher stays longer when the line is too narrow; of equals, the later one goes first. */
-  priority: number
-  text: string
-}
+/**
+ * One item of the status: what extensions registered, or the UI's own (the input's hidden
+ * rows). Higher `priority` stays longer when the line is too narrow; of equals, the later one
+ * goes first.
+ */
+export type StatusEntry = ResolvedStatusItem
 
 const SEPARATOR = ` ${glyphs.separator} `
 

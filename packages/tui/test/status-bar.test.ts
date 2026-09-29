@@ -106,6 +106,30 @@ test("the input box draws the status in its border, next to the rows hidden belo
   // The count of hidden rows stays; the status gives way around it.
   expect(bottom).toMatch(/ ↓ \d+ more ─╯$/)
   expect(bottom.startsWith("╰─ deepseek-flash")).toBe(true)
+  // Narrower, the hidden rows' count outlasts every status item.
+  const narrow = box.render(16, { ...plain, rows: 9 }).at(-1)!
+  expect(narrow).toMatch(/^╰─+ ↓ \d+ more ─╯$/)
+  expect(visibleWidth(narrow)).toBe(16)
   // Too narrow for a border, the box is bare and so is the status.
   expect(box.render(7, plain).some((r) => r.includes("deepseek"))).toBe(false)
+})
+
+test("wide characters and emoji are measured by their cells", () => {
+  const wide = [entry("model", "模型名", 40, "left", "accent"), entry("place", "分支🚀*", 10)]
+  for (let width = 6; width <= 30; width++) {
+    expect([width, visibleWidth(statusBorder(wide, width, plain))]).toEqual([width, width])
+  }
+  // 模型名 is six cells, 分支🚀* seven.
+  expect(statusBorder(wide, 24, plain)).toBe("╰─ 模型名 ─── 分支🚀* ─╯")
+  expect(statusBorder(wide, 20, plain)).toBe("╰─ 模型名 ─────────╯")
+  // A wide character that would straddle the cut is left out, not split.
+  expect(visibleWidth(statusBorder(wide, 12, plain))).toBe(12)
+})
+
+test("a lone item with room for fewer than a few characters is left out, not cut to a stub", () => {
+  const lone = [entry("model", "deepseek-flash", 40, "left")]
+  expect(statusBorder(lone, 11, plain)).toBe("╰─ dee… ──╯")
+  expect(statusBorder(lone, 10, plain)).toBe("╰────────╯")
+  expect(statusLine(lone, 4, plain)).toEqual(["dee…"])
+  expect(statusLine(lone, 3, plain)).toEqual([])
 })

@@ -210,7 +210,7 @@ those buttons reaches it. In inline mode the terminal's own selection and paste 
 
 VS Code keeps Ctrl+F, Ctrl+Home, Ctrl+End and Ctrl+↑↓ for its terminal (they are in its
 `terminal.integrated.commandsToSkipShell`), so there Alt+F, Alt+Home, Alt+End and Alt+↑ come
-first and the hints name them.
+first and the key reference (`?`) lists them first.
 
 Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
 the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for

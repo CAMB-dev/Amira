@@ -60,7 +60,7 @@ import { remoteImageFetch } from "./images.ts"
 import { createInlineView } from "./inline-view.ts"
 import { InputBox } from "./input-box.ts"
 import { KeyReference } from "./key-reference.ts"
-import { defaultKeys, Keybindings } from "./keybindings.ts"
+import { defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { statusLine } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
@@ -372,14 +372,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     return undefined
   }
   // Shift+Enter is no use where the terminal sends it as plain Enter.
-  const newlineKey = keys.label("newline", (s) => capabilities.shiftEnter || !(s.shift && s.name === "enter"))
+  const reaches = (s: KeySpec) => capabilities.shiftEnter || !(s.shift && s.name === "enter")
+  const newlineKey = keys.label("newline", reaches)
   const queueKey = keys.label("queue")
   const inputBox = new InputBox(editor, () => opts.status.snapshot())
   /** Rows the last frame's dialog took, to size it against the rest of the bottom area. */
   let dialogRows = 0
   /** The user folded the live panels to one line each (panels.toggle). */
   let panelsCollapsed = false
-  /** Whether the last frame showed a panel, for the key hint. */
+  /** Whether the last frame showed a panel: only then does the fold key act. */
   let panelsShown = false
   /** Rows the panels may take this frame, their blank line included; layoutBottom sets it. */
   let panelRoom = Number.POSITIVE_INFINITY
@@ -616,7 +617,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Opens the key reference over the conversation (the help key); a form keeps the screen. */
   function openKeyReference() {
     if (form) return
-    showOverlay(new KeyReference(keys, { fullscreen: mode === "fullscreen", onClose: closeView }))
+    showOverlay(
+      new KeyReference(keys, {
+        fullscreen: mode === "fullscreen",
+        onClose: closeView,
+        usable: (action, s) => action !== "newline" || reaches(s),
+      }),
+    )
     view.renderOverlay()
   }
 

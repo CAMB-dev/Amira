@@ -12,7 +12,7 @@ export interface StatusItem {
   align?: "left" | "right"
   /**
    * Lower comes first within its side. Default 0; the built-in items use negative orders, so
-   * other items follow them.
+   * other items follow them: on the right side, between the built-in ones and the edge.
    */
   order?: number
   /**
