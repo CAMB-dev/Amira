@@ -21,7 +21,7 @@ import {
   step,
 } from "../markdown/blocks.ts"
 import { codeCarry } from "../markdown/highlight.ts"
-import { type Lead, markdownStyles, type Run } from "../markdown/inline.ts"
+import { type Lead, type LeadPart, markdownStyles, type Run } from "../markdown/inline.ts"
 import { defaultTheme, type Theme } from "../style.ts"
 import { TAB_WIDTH } from "../width.ts"
 
@@ -293,7 +293,6 @@ export class MarkdownStream implements Component {
     }
     if (n === 0) return false
     const cell = r.cells[r.layout[n - 1]!.next]!
-    const run = r.runs[cell.run]!
     if (state) {
       // Committed rows follow a pending blank line like any others.
       const blank = state.blankPending && state.emitted
@@ -303,13 +302,14 @@ export class MarkdownStream implements Component {
       if (blank) sink([""])
     }
     sink(r.rows.slice(0, n))
-    this.cut = cutInside(render, run, cell.src, skip)
+    this.cut = cutInside(render, r.runs, cell.run, cell.src, skip)
     return true
   }
 }
 
-/** Where the rest of a line starts after a cut before the cell at `src` of `run`. */
-function cutInside(render: LineRender, run: Run, src: number, skip: number): Cut {
+/** Where the rest of a line starts after a cut before the cell at `src` of `runs[index]`. */
+function cutInside(render: LineRender, runs: Run[], index: number, src: number, skip: number): Cut {
+  const run = runs[index]!
   const off = src - run.src
   const at = (to: number) => ({ ...render, start: render.start + to - skip, prefix: render.rest })
   if (run.cuttable) return { render: at(src), carry: render.code ? codeCarry(run, off) : run.carry }
@@ -318,14 +318,20 @@ function cutInside(render: LineRender, run: Run, src: number, skip: number): Cut
     const lead: Lead = { url: true, head: run.rest.head + run.text.slice(0, off), ...style }
     return { render: at(src), carry: run.carry, lead }
   }
-  // Text of its own: it goes on from where the cut left it, the source where the run ends.
+  // Text of its own: it goes on from where the cut left it, the source where the run ends. The
+  // runs of added text after it at the same place (an image's URL after its alt text) go on
+  // too: the source from there on does not have them.
   const resume = run.rest!.resume
-  const lead: Lead = {
-    url: false,
-    text: run.text.slice(off),
-    len: Math.max(0, resume - src),
-    ...style,
-    ...(run.link ? { link: run.link } : {}),
+  const parts: LeadPart[] = [part(run, run.text.slice(off))]
+  for (let i = index + 1; i < runs.length; i++) {
+    const next = runs[i]!
+    if (next.cuttable || next.rest?.url !== false || next.rest.resume !== resume) break
+    parts.push(part(next, next.text))
   }
+  const lead: Lead = { url: false, parts, len: Math.max(0, resume - src) }
   return { render: at(Math.min(src, resume)), carry: run.carry, lead }
+}
+
+function part(run: Run, text: string): LeadPart {
+  return { text, ...(run.style ? { style: run.style } : {}), ...(run.link ? { link: run.link } : {}) }
 }

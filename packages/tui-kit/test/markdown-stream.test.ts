@@ -585,6 +585,33 @@ test("a width change mid-stream re-wraps only the live block and loses nothing",
   }
 })
 
+test("an image cut after its glyph keeps the URL that follows its alt text", () => {
+  // The rows break between the glyph and the alt text, and the live region holds one row: the
+  // cut goes through the image's run, and its URL (added text at the same place) goes on too.
+  // Not about the glyph's width: a one-cell glyph lost the URL the same way.
+  for (const [image, width] of [
+    [String.fromCodePoint(0x1f5bc, 0xfe0f), 12],
+    [String.fromCodePoint(0x1f5bc), 11],
+  ] as const) {
+    const glyphs = { ...defaultGlyphs, image }
+    const chunks = ["sits and ", "![dog](d.jpg)", " ok"]
+    const text = chunks.join("")
+    const { ctx, committed } = committing()
+    const m = new MarkdownStream({ hyperlinks: false, glyphs })
+    m.maxRows = 1
+    for (const chunk of chunks) {
+      m.append(chunk)
+      m.render(width, ctx)
+    }
+    const whole = new MarkdownStream({ hyperlinks: false, glyphs })
+    whole.append(text)
+    whole.render(width, plain)
+    const rows = whole.take(width).map(stripAnsi)
+    expect(rows[0]).toBe(`sits and ${image}`)
+    expect([...committed, ...m.take(width)].map(stripAnsi)).toEqual(rows)
+  }
+})
+
 test("a prose line longer than the live region keeps it within maxRows", () => {
   const { ctx } = committing()
   const m = new MarkdownStream()
