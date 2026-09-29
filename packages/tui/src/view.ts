@@ -114,6 +114,8 @@ export interface TranscriptView {
   history(messages: Message[], session: HistorySession): void
   /** The UI is about to follow another session: calls of this one end here. */
   leaveSession(): void
+  /** Items the view adds to the input's key hint, e.g. how to find; low priority, dropped first. */
+  hints(): { text: string; priority: number }[]
   /** The note shown when the tool output level changes. */
   detailNote(level: ToolDetailLevel): string
   /** Keys the view takes before the input (scrolling, find, selecting); true when taken. */

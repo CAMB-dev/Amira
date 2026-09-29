@@ -28,7 +28,7 @@ import { compactTokens } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { historySeparator } from "./history.ts"
-import { endNode, rootCall, type SubagentNode, startedNode, updateNode } from "./subagents.ts"
+import { endNode, type SubagentNode, startedNode, updateNode } from "./subagents.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
 import { lastReply, TranscriptPane } from "./transcript-pane.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
@@ -55,8 +55,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const nodes = new Map<string, SubagentNode>()
   /** Tool calls by id, for their sub-agents; kept after their turn. */
   const callBlocks = new Map<string, ToolBlock>()
-  /** Blocks of sub-agents started without a call of this session, by the sub-agent's id. */
-  const groups = new Map<string, SubagentGroupBlock>()
+  /** The block each sub-agent shows in, by its id: the call that started it (or its top ancestor), or one of its own. */
+  const owners = new Map<string, Block>()
   /** Calls of the running step, in call order. */
   let stepCalls: ToolBlock[] = []
   let reply: ReplyBlock | undefined
@@ -164,14 +164,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   }
 
   /** The block a sub-agent shows in: its top ancestor's call, or a block of its own. */
-  function ownerOf(n: SubagentNode): Block | undefined {
-    const call = rootCall(nodes, host.sessionId(), n)
-    const block = call !== undefined ? callBlocks.get(call) : undefined
-    if (block) return block
-    let top = n
-    while (nodes.has(top.parent)) top = nodes.get(top.parent)!
-    return groups.get(top.id)
-  }
+  const ownerOf = (n: SubagentNode): Block | undefined => owners.get(n.id)
 
   function add(block: Block): void {
     pane.add(block)
@@ -410,11 +403,16 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           if (!mine) return false
           const node = startedNode(e)
           nodes.set(node.id, node)
-          const owner = ownerOf(node)
-          if (owner) owner.touch()
-          else if (node.parent === host.sessionId()) {
+          const main = node.parent === host.sessionId()
+          const call = main && node.toolCallId ? callBlocks.get(node.toolCallId) : undefined
+          const owner = owners.get(node.parent) ?? call
+          if (owner) {
+            owners.set(node.id, owner)
+            owner.touch()
+          } else if (main) {
+            // Started without a call of this session (by a command, say): a block of its own.
             const group = new SubagentGroupBlock(node.id)
-            groups.set(node.id, group)
+            owners.set(node.id, group)
             add(group)
           }
           break
@@ -485,6 +483,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       settleStep()
       reply?.finish()
       reply = undefined
+    },
+    hints() {
+      const find = keys.label("find")
+      const select = keys.label("select.start")
+      return [
+        ...(find ? [{ text: `${find} find`, priority: 0.5 }] : []),
+        ...(select ? [{ text: `${select} select`, priority: 0.4 }] : []),
+      ]
     },
     detailNote(level: ToolDetailLevel) {
       const cycle = keys.label("tool-output")

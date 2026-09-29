@@ -398,6 +398,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       working && queueKey && { text: `${queueKey} ${otherWay(enterDoes)}`, priority: 3 },
       newlineKey && { text: `${newlineKey} newline`, priority: 1 },
       keys.label("cancel") && { text: `${keys.label("cancel")} ${ctrlC}`, priority: working ? 2 : 4 },
+      ...view.hints(),
     ]
   }
 

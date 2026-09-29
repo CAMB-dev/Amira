@@ -475,6 +475,10 @@ export function highlight(line: string, ranges: { col: number; len: number; curr
   const sorted = [...ranges].sort((a, b) => a.col - b.col)
   let next = 0
   for (let i = 0; i < line.length; ) {
+    if (open && plain >= open.end) {
+      out += MARK_OFF
+      open = undefined
+    }
     ESCAPE.lastIndex = i
     const esc = ESCAPE.exec(line)
     if (esc) {
@@ -482,10 +486,6 @@ export function highlight(line: string, ranges: { col: number; len: number; curr
       if (open) out += open.on
       i += esc[0].length
       continue
-    }
-    if (open && plain >= open.end) {
-      out += MARK_OFF
-      open = undefined
     }
     while (!open && next < sorted.length && sorted[next]!.col + sorted[next]!.len <= plain) next++
     const r = sorted[next]
