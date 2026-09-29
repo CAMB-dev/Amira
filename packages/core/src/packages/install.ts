@@ -504,10 +504,7 @@ async function fetchGit(
       // A package in a subdirectory: whether its files are the same as at the installed commit.
       let sameTree: boolean | undefined
       if (sub && installed && installed !== commit) {
-        const [before, after] = await Promise.all([
-          repo.treeOf(`${installed}:${sub}`),
-          repo.treeOf(`${commit}:${sub}`),
-        ])
+        const [before, after] = await repo.treesOf([`${installed}:${sub}`, `${commit}:${sub}`])
         sameTree = before !== undefined && before === after
         // Other parts of the repository moved on; its own files are the same (the older pin is kept).
         if (sameTree && keepable) return { kept: true }

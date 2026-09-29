@@ -95,8 +95,8 @@ export interface ResolveRequest {
 export interface CachedRepo {
   readonly dir: string
   readonly commit: string
-  /** The object id of `<commit>:<path>`, if the cache has it. */
-  treeOf(spec: string): Promise<string | undefined>
+  /** The object ids of `<commit>:<path>` specs, undefined for those the cache lacks. */
+  treesOf(specs: string[]): Promise<(string | undefined)[]>
   /** Checks out `sub` of the commit (the whole tree when empty) into the empty directory `dest`. */
   materialize(sub: string, dest: string, indexFile: string): Promise<void>
 }
@@ -108,6 +108,10 @@ export interface CachedRepo {
 export class GitCache {
   private readonly fetched = new Set<string>()
   private readonly remotes = new Map<string, Promise<RemoteLookup>>()
+  /** Repositories found valid, commits found present, HEADs set: this command need not ask again. */
+  private readonly ready = new Set<string>()
+  private readonly present = new Set<string>()
+  private readonly headSet = new Set<string>()
   /** How many network round trips of each kind were made; for tests and measurements. */
   readonly stats = { lsRemote: 0, clone: 0, fetch: 0 }
 
@@ -195,21 +199,32 @@ export class GitCache {
     const lock = await this.lock(url, ctx)
     try {
       const dir = this.repoDir(url)
+      const key = gitCacheKey(url)
       let fresh = false
-      if (!(await isRepo(dir, ctx))) {
+      // Checked once per command (git is slow to start on Windows); after that, that it is there.
+      const known = this.ready.has(key) && existsSync(path.join(dir, "HEAD"))
+      if (!known && !(await isRepo(dir, ctx))) {
         if (offline !== undefined)
           throw new PackageError(`cannot reach ${url} and it is not in the cache: ${firstLine(offline)}`)
         await this.clone(url, dir, ctx)
         fresh = true
       }
-      const key = gitCacheKey(url)
-      const has = (c: string) => hasCommit(dir, c, ctx)
+      this.ready.add(key)
+      const has = async (c: string) => {
+        if (this.present.has(`${key} ${c}`)) return true
+        const yes = await hasCommit(dir, c, ctx)
+        if (yes) this.present.add(`${key} ${c}`)
+        return yes
+      }
       // Fetch when the cache lacks the commit (or, for a name the remote did not know, once
       // per command so that abbreviated ids and new refs are found).
       if (!fresh && offline === undefined && !this.fetched.has(key) && !(target && (await has(target)))) {
         await this.fetch(url, dir, ctx)
       }
-      if (remote && !("unreachable" in remote) && remote.headRef) await setHead(dir, remote.headRef, ctx)
+      if (remote && !("unreachable" in remote) && remote.headRef && !this.headSet.has(key)) {
+        await setHead(dir, remote.headRef, ctx)
+        this.headSet.add(key)
+      }
       let commit: string | undefined
       if (target) {
         if (!(await has(target)) && offline === undefined) {
@@ -235,7 +250,7 @@ export class GitCache {
       return await fn({
         dir,
         commit: found,
-        treeOf: (spec) => revParse(dir, spec, ctx),
+        treesOf: (specs) => treesOf(dir, specs, ctx),
         materialize: (sub, dest, indexFile) => materialize(url, dir, found, sub, dest, indexFile, ctx),
       })
     } finally {
@@ -366,6 +381,18 @@ async function revParse(dir: string, spec: string, ctx: GitContext): Promise<str
     if (err instanceof ToolError && err.aborted) throw err
     return undefined
   }
+}
+
+/** Several object ids with one git; one by one when some are missing. */
+async function treesOf(dir: string, specs: string[], ctx: GitContext): Promise<(string | undefined)[]> {
+  try {
+    const out = await git(dir, ["rev-parse", ...specs], "", ctx, undefined, NO_LAZY, true)
+    const ids = out.split(/\r?\n/).filter(Boolean)
+    if (ids.length === specs.length && ids.every(isFullCommitId)) return ids
+  } catch (err) {
+    if (err instanceof ToolError && err.aborted) throw err
+  }
+  return Promise.all(specs.map((s) => revParse(dir, s, ctx)))
 }
 
 async function hasCommit(dir: string, commit: string, ctx: GitContext): Promise<boolean> {
