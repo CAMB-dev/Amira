@@ -1783,7 +1783,7 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   await survivor!.result()
   await idle()
   await bus.flush()
-  await waitFor(() => !live().includes("◆ background"), "the rows gone")
+  await waitFor(() => !live().includes("running in background"), "the rows gone")
   expect(all()).toMatch(/⎿ ◆ Stop me ⊘ explorer · [^\n]*stopped/)
   expect(all().match(/◆ Stop me ⊘/g)).toHaveLength(1)
   // The survivor's notice (the agent extension's) reports it; no line of its own here.
@@ -1792,7 +1792,7 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   await exited
 })
 
-test("sub-agents that outlive their call run on under a background header, with no end line", async () => {
+test("sub-agents that outlive their call run on under a head shaped like the call, with no end line", async () => {
   let finish!: () => void
   // The child and the commander ask in no fixed order: each reply goes by who asks.
   const reply = (req: { messages: { role: string; content: unknown }[] }) => {
@@ -1843,12 +1843,12 @@ test("sub-agents that outlive their call run on under a background header, with 
   expect(all()).toMatch(/● launch\n {2}⎿ Started in the background/)
   await waitFor(
     () =>
-      /◆ background\n {2}⎿ ◆ Scan the logs · explorer · \d+s · 0 tok\n {2}│ {3}● scan logs\/app\.log\n/.test(
+      /● launch · 1 sub-agent · running in background · \d+s\n {2}⎿ ◆ Scan the logs · explorer · \d+s · 0 tok\n {2}│ {3}● scan logs\/app\.log\n/.test(
         live(),
       ),
     "background rows",
   )
-  const committed = all().split("◆ background")[0]!
+  const committed = all().split("running in background")[0]!
   expect(committed).not.toContain("Scan the logs")
   finish()
   await child!.result()
