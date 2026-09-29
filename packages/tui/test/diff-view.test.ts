@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test"
 import { diffToolLines, type ToolLine } from "@amira/api"
-import { defaultTheme, stripAnsi, stripColors, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import {
+  defaultTheme,
+  presentEmoji,
+  stripAnsi,
+  stripColors,
+  surfaceTheme,
+  visibleWidth,
+} from "@amira/tui-kit"
 import { MAX_DIFF_LINE_ROWS, parseUnifiedDiff, renderToolLines } from "../src/diff-view.ts"
 import { wordDiff } from "../src/word-diff.ts"
 
@@ -114,6 +121,19 @@ test("at any width, no row is wider than the screen", () => {
       for (const r of renderToolLines(lines, theme, width, "  "))
         expect({ width, r, fits: visibleWidth(r) <= width }).toEqual({ width, r, fits: true })
   }
+})
+
+test("text-default emoji take two cells in diff rows, as the terminal draws them", () => {
+  const lines: ToolLine[] = [
+    { kind: "diff-remove", text: "notify(✉, ⚠) ✉✉✉✉✉✉", lineNo: 7 },
+    { kind: "diff-add", text: "notify(✉, ❤) ✉✉✉✉✉✉", lineNo: 7 },
+  ]
+  for (let width = 10; width <= 30; width++)
+    for (const r of renderToolLines(lines, dark, width, "  ")) {
+      // presentEmoji is what the renderers apply; with it the terminal's width is the measured one.
+      expect({ width, r, w: visibleWidth(r) }).toEqual({ width, r, w: width })
+      expect({ width, r, w: Bun.stringWidth(presentEmoji(r)) }).toEqual({ width, r, w: width })
+    }
 })
 
 test("a very long line wraps to a few rows and says it goes on", () => {

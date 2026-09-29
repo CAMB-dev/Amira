@@ -3,8 +3,8 @@ import { defaultGlyphs, graphemes, textWidth } from "@amira/tui-kit"
 import { glyphs } from "../src/glyphs.ts"
 
 /** Every grapheme of a glyph table, with where it came from. */
-function cells(table: Record<string, string | string[]>): [string, string][] {
-  return Object.entries(table).flatMap(([name, v]) =>
+function cells(table: object): [string, string][] {
+  return (Object.entries(table) as [string, string | string[]][]).flatMap(([name, v]) =>
     (Array.isArray(v) ? v : [v]).flatMap((s) => graphemes(s).map((g): [string, string] => [name, g])),
   )
 }

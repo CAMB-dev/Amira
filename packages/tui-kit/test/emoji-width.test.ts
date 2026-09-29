@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
-import type { Component } from "../src/component.ts"
+import { type Component, CURSOR_MARKER } from "../src/component.ts"
 import { Box } from "../src/components/box.ts"
 import { Text } from "../src/components/text.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
@@ -119,7 +119,18 @@ test("presentEmoji adds VS16 where the emoji was not asked for, and nowhere else
 })
 
 test("presentEmoji never changes a width", () => {
-  const all = [...TEXT_DEFAULT, ...TEXT_SYMBOLS, "😀", "你", "👨‍👩‍👧", "❤‍🔥", "🇯🇵", "☝🏽", `✉${VS15}`, `✉\u0301`]
+  const all = [
+    ...TEXT_DEFAULT,
+    ...TEXT_SYMBOLS,
+    "😀",
+    "你",
+    "👨‍👩‍👧",
+    "❤‍🔥",
+    "🇯🇵",
+    "☝🏽",
+    `✉${VS15}`,
+    `✉\u0301`,
+  ]
   for (const s of all) expect([s, visibleWidth(presentEmoji(s))]).toEqual([s, visibleWidth(s)])
   // And the terminal draws it as measured: two cells once VS16 follows.
   for (const c of TEXT_DEFAULT) expect([c, Bun.stringWidth(presentEmoji(c))]).toEqual([c, 2])
@@ -197,4 +208,24 @@ test("a truncated row with ✉ ends where it was measured to", () => {
   expect(screen.grid[1]!.filter((c) => c !== "").length).toBe(5)
   expect(screen.y).toBe(1)
   r.stop()
+})
+
+test("the cursor after ✉ lands where the terminal put the text, inline and full-screen", () => {
+  const line = `✉ ⚠${CURSOR_MARKER}x`
+  {
+    const { term, screen } = setup(20, 5)
+    const r = new LiveRenderer(term, new Lines([line]))
+    r.start()
+    expect(screen.x).toBe(5)
+    expect(screen.grid[0]![screen.x]).toBe("x")
+    r.stop()
+  }
+  {
+    const { term, screen } = setup(20, 5)
+    const f = new FullScreenRenderer(term, new Lines([line]))
+    f.open()
+    expect(screen.x).toBe(5)
+    expect(screen.grid[0]![screen.x]).toBe("x")
+    f.close()
+  }
 })
