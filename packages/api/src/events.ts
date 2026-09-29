@@ -42,6 +42,12 @@ export interface EventMap {
     sessionFile?: string
     /** Command line that resumes this session, e.g. ["amira", "--resume", "s_01"]. */
     resume?: string[]
+    /**
+     * Tokens the context held at the last reply of a resumed conversation, and its model's
+     * window; unset before any reply (and right after a compaction).
+     */
+    contextTokens?: number
+    contextWindow?: number
   }
   /** Facts about the working directory. Sent after session.start and again whenever they change. */
   "workspace.changed": {

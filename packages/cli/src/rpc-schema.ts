@@ -230,6 +230,8 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     model: modelRef,
     "sessionFile?": str,
     "resume?": arrayOf(str),
+    "contextTokens?": num,
+    "contextWindow?": num,
   }),
   "workspace.changed": obj({
     cwd: str,

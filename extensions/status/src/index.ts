@@ -73,11 +73,12 @@ export default defineExtension((api) => {
   api.on("session.start", (e) => {
     if (!own(e)) return
     model = modelName(e.data.model)
-    if (e.data.reason !== "resume") {
-      context = 0
-      cost = undefined
-      treeCost = undefined
-    }
+    // Another session: its own context (a resumed one says where it was), and a cost that
+    // counts from here.
+    context = e.data.contextTokens ?? 0
+    if (e.data.contextWindow) contextWindow = e.data.contextWindow
+    cost = undefined
+    treeCost = undefined
     place ||= path.basename(e.data.cwd)
     api.requestRender()
   })

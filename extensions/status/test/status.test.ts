@@ -161,6 +161,50 @@ test("an interrupted reply without usage keeps the last known context", async ()
   expect(item(host, "context")?.text).toBe("ctx 29k/128k (23%)")
 })
 
+test("a resumed session shows its own context at once, and its cost counts from there", async () => {
+  const { bus, host } = setup()
+  await host.load(statusExtension, "builtin:status")
+  const meta = { sessionId: "s1" }
+  const model = { provider: "p", model: "m" }
+  bus.emit("message.start", { model, contextWindow: 128_000 }, meta)
+  bus.emit(
+    "message.end",
+    {
+      message: {
+        role: "assistant",
+        content: [],
+        model,
+        usage: { input: 50_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5 },
+      },
+    },
+    meta,
+  )
+  await bus.flush()
+  expect(item(host, "cost")?.text).toBe("$0.500")
+  // /resume switches to another stored session.
+  bus.emit(
+    "session.start",
+    { reason: "resume", cwd: "/w", model, contextTokens: 29_400, contextWindow: 128_000 },
+    { sessionId: "s2" },
+  )
+  await bus.flush()
+  expect(item(host, "context")?.text).toBe("ctx 29k/128k (23%)")
+  expect(item(host, "cost")).toBeUndefined()
+  // Resumed before any reply: nothing to show yet.
+  bus.emit("session.start", { reason: "resume", cwd: "/w", model }, { sessionId: "s3" })
+  await bus.flush()
+  expect(item(host, "context")).toBeUndefined()
+})
+
+test("Agent.start tells a resumed session's context", async () => {
+  const { bus, host, agent } = setup()
+  await host.load(statusExtension, "builtin:status")
+  await agent.prompt("go")
+  agent.start("resume")
+  await bus.flush()
+  expect(item(host, "context")?.text).toBe("ctx 2.0k/128k (2%)")
+})
+
 test("resets the counters on clear", async () => {
   const { bus, host, agent } = setup()
   await host.load(statusExtension, "builtin:status")
