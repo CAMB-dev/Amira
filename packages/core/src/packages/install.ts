@@ -190,7 +190,13 @@ async function install(source: PackageSource, how: InstallHow, opts: InstallOpti
   // Inside the scope directory so the final rename stays on one volume.
   const work = mkdtempSync(path.join(opts.scope.dir, `.work-${process.pid}-`))
   try {
-    const { root, pinned } = await fetchSource(source, how.pinned, work, opts)
+    const { root, pinned, sameTree } = await fetchSource(
+      source,
+      how.pinned,
+      work,
+      opts,
+      how.current?.pinned.commit,
+    )
     // A clone or download lives in the work directory, whose name means nothing to the user.
     const where = isWithin(root, work) ? describeSource(source) : root
     let manifest: PackageManifest
@@ -215,7 +221,10 @@ async function install(source: PackageSource, how: InstallHow, opts: InstallOpti
     if (
       current &&
       (pinned.commit || pinned.version) &&
-      pinKey(current) === pinKey({ ...current, version: manifest.version, pinned }) &&
+      // The same pin; or, for a package in a repository's subdirectory, other parts of the
+      // repository moved on while its own files stayed the same (the older pin is kept).
+      (pinKey(current) === pinKey({ ...current, version: manifest.version, pinned }) ||
+        (sameTree === true && current.version === manifest.version)) &&
       sameJson(current.source, source) &&
       sameJson(current.index, how.index) &&
       existsSync(packageDir(opts.scope, manifest.name))
@@ -334,12 +343,14 @@ async function fetchSource(
   pin: LockEntry["pinned"] | undefined,
   work: string,
   opts: InstallOptions,
-): Promise<{ root: string; pinned: LockEntry["pinned"] }> {
+  /** The commit installed now, when updating. */
+  since?: string,
+): Promise<{ root: string; pinned: LockEntry["pinned"]; sameTree?: boolean }> {
   if (source.type === "path") {
     if (!existsSync(source.path)) throw new PackageError(`${source.path} does not exist`)
     return { root: source.path, pinned: {} }
   }
-  if (source.type === "git") return fetchGit(source, pin, work, opts)
+  if (source.type === "git") return fetchGit(source, pin, work, opts, since)
   return fetchNpm(source.spec, pin, work, opts)
 }
 
@@ -348,7 +359,8 @@ async function fetchGit(
   pin: LockEntry["pinned"] | undefined,
   work: string,
   opts: InstallOptions,
-): Promise<{ root: string; pinned: LockEntry["pinned"] }> {
+  since?: string,
+): Promise<{ root: string; pinned: LockEntry["pinned"]; sameTree?: boolean }> {
   const clone = path.join(work, "clone")
   opts.log?.(`cloning ${source.url}`)
   await run(["git", "clone", "--quiet", "--", source.url, clone], work, opts, "git clone")
@@ -365,7 +377,27 @@ async function fetchGit(
   }
   const root = source.path ? path.join(clone, source.path) : clone
   if (!existsSync(root)) throw new PackageError(`${source.url} has no directory ${source.path}`)
-  return { root, pinned: { commit } }
+  // A package in a subdirectory: whether its files are the same as at the installed commit.
+  let sameTree: boolean | undefined
+  if (source.path && since && since !== commit && /^[0-9a-f]{7,64}$/i.test(since)) {
+    const sub = source.path.replace(/\\/g, "/").replace(/^\.?\/+|\/+$/g, "")
+    const [before, after] = await Promise.all([
+      treeOf(clone, `${since}:${sub}`, opts),
+      treeOf(clone, `${commit}:${sub}`, opts),
+    ])
+    sameTree = before !== undefined && before === after
+  }
+  return { root, pinned: { commit }, ...(sameTree !== undefined ? { sameTree } : {}) }
+}
+
+/** The object id of `<commit>:<path>`, if the clone has it. */
+async function treeOf(clone: string, spec: string, opts: InstallOptions): Promise<string | undefined> {
+  try {
+    const out = await run(["git", "rev-parse", "--verify", "--quiet", spec], clone, opts, "", true)
+    return out.trim() || undefined
+  } catch {
+    return undefined
+  }
 }
 
 async function revParse(clone: string, ref: string, opts: InstallOptions): Promise<string | undefined> {

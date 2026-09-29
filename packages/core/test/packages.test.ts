@@ -517,3 +517,31 @@ test("update reads the index afresh, and updates from the recorded source when t
     url: index.url,
   })
 })
+
+test("update leaves a package in a repository's subdirectory alone when only other parts changed", async () => {
+  const repo = path.join(dir, "mono-exts")
+  makePackage(path.join(repo, "packages", "sub-pkg"), "sub-pkg", "0.3.0")
+  makePackage(path.join(repo, "packages", "neighbour"), "neighbour", "1.0.0")
+  const first = await gitRepo(repo)
+  const indexFile = path.join(dir, "index.json")
+  writeFileSync(indexFile, JSON.stringify(fixtureIndex(pathToFileURL(repo).href)))
+  const index = { url: indexFile }
+  await installPackage("sub-pkg", { scope: user(), cwd, index })
+  const lockFile = path.join(home, "packages.lock")
+  const before = readFileSync(lockFile, "utf8")
+
+  makePackage(path.join(repo, "packages", "neighbour"), "neighbour", "1.1.0")
+  await git(repo, "commit", "-qam", "neighbour only")
+  const [same] = await updatePackages({ scope: user(), cwd, index })
+  expect(same).toMatchObject({ name: "sub-pkg", changed: false, to: { pinned: { commit: first } } })
+  expect(readFileSync(lockFile, "utf8")).toBe(before)
+
+  // Its own files change (even at the same version): it moves.
+  writeFileSync(path.join(repo, "packages", "sub-pkg", "extra.ts"), "export {}\n")
+  await git(repo, "add", "-A")
+  await git(repo, "commit", "-qm", "sub-pkg")
+  const third = await git(repo, "rev-parse", "HEAD")
+  const [moved] = await updatePackages({ scope: user(), cwd, index })
+  expect(moved).toMatchObject({ changed: true, to: { pinned: { commit: third } } })
+  expect(existsSync(path.join(home, "packages", "sub-pkg", "extra.ts"))).toBe(true)
+})
