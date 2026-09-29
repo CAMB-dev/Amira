@@ -1,7 +1,9 @@
 /**
  * Every symbol the TUI draws, in one place, so a styling pass can swap them without touching
  * the layout code. Colors come from the theme (tokens such as accent and muted). Each must be
- * one cell wide in the terminals Amira supports (Windows Terminal, VS Code, and common Unix ones).
+ * one cell wide in the terminals Amira supports (Windows Terminal, VS Code, and common Unix ones),
+ * so none has an emoji form (the Unicode Emoji property): terminals draw those from the emoji
+ * font, two cells wide (see `textWidth` in tui-kit). A test checks that.
  */
 export const glyphs = {
   /** In front of the user's messages and echoed commands. */
@@ -46,10 +48,13 @@ export const glyphs = {
    */
   checked: "[x]",
   unchecked: "[ ]",
-  /** System notices by level. */
+  /**
+   * System notices by level. The warning is ▲, not ⚠: ⚠ has an emoji form, which Windows
+   * Terminal draws two cells wide.
+   */
   info: "•",
   success: "✓",
-  warning: "⚠",
+  warning: "▲",
   error: "✗",
   interrupted: "⊘",
   /** Marks text left out. */
