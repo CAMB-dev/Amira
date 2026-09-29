@@ -20,6 +20,18 @@ export interface SubagentEntry {
  * points at with its "subagent" entries.
  */
 export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
+  return subagentsOf(agent.sessionId, agent.session, tree)
+}
+
+/**
+ * Like listSubagents, for any session by id and store: e.g. a stored session read without
+ * resuming it. Sub-agents the tree knows (started by this process) come with their live state.
+ */
+export function subagentsOf(
+  sessionId: string,
+  session: SessionStore | undefined,
+  tree?: AgentTree,
+): SubagentEntry[] {
   const out: SubagentEntry[] = []
   const seen = new Set<string>()
   const visit = (parentId: string, store: SessionStore | undefined, depth: number) => {
@@ -57,7 +69,7 @@ export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
       if (child) visit(id, child, depth + 1)
     }
   }
-  visit(agent.sessionId, agent.session, 1)
+  visit(sessionId, session, 1)
   return out
 }
 

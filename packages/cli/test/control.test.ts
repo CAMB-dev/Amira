@@ -182,6 +182,27 @@ test("/cost counts replies a compaction replaced; /context previews the next req
   expect(await run("/cost")).toMatch(/mock\/m\s+2 replies/)
 })
 
+test("readSession reads a stored session without switching to it, compacted messages included", async () => {
+  const { host } = await setup([{ text: "one" }, { text: "two" }, { text: "summary" }])
+  const first = host.agent
+  await first.prompt("a")
+  await first.prompt("b")
+  expect(await host.control.compact()).toBe(true)
+  await host.control.newSession()
+  const read = host.control.readSession!(first.sessionId)!
+  expect(host.agent).not.toBe(first)
+  expect(read.id).toBe(first.sessionId)
+  expect(read.cwd).toBe(here)
+  expect(read.createdAt).toBeLessThanOrEqual(read.updatedAt)
+  // The reply the compaction replaced is still part of the conversation as it happened.
+  const texts = read.messages.map((m) => m.content.map((b) => (b.type === "text" ? b.text : "")).join(""))
+  expect(texts).toEqual(["a", "one", "b", "two"])
+  expect(read.subagents).toEqual([])
+  expect(read.subagentMessages("s_nope")).toBeUndefined()
+  expect(host.control.readSession!("s_nope")).toBeUndefined()
+  expect(host.control.readSession!("../escape")).toBeUndefined()
+})
+
 test("/provider lists only the configured providers; an unknown one says how to add it", async () => {
   const { host, run } = await setup()
   const listed = await run("/provider")
