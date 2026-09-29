@@ -69,7 +69,7 @@ test("parallel calls are released in call order, whatever order they finish in",
     ["grep", false],
     ["edit", true],
   ])
-  expect(calls.running).toBe(2)
+  expect(calls.running).toEqual(["read", "grep"])
   expect(calls.end("read", end).map((c) => c.id)).toEqual(["read"])
   expect(calls.end("grep", end).map((c) => c.id)).toEqual(["grep", "edit"])
   expect(calls.live).toEqual([])

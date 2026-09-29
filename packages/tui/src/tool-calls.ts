@@ -70,10 +70,9 @@ export class ToolCalls {
     return this.#order.flatMap((id) => this.#calls.get(id) ?? [])
   }
 
-  get running(): number {
-    let n = 0
-    for (const c of this.#calls.values()) if (!c.end) n++
-    return n
+  /** The names of the calls started and not finished, in call order. */
+  get running(): string[] {
+    return this.live.flatMap((c) => (c.end ? [] : [c.name]))
   }
 
   /** Ends the turn: returns the finished calls still held, in order, and forgets the rest. */

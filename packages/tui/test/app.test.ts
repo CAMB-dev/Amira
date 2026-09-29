@@ -27,7 +27,8 @@ import {
 import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies, type RemoteImageFetch } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
-import { runInteractive } from "../src/app.ts"
+import { activityLabel, runInteractive } from "../src/app.ts"
+import { FileIndex, type FileSource, fileList } from "../src/file-index.ts"
 
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
@@ -79,6 +80,8 @@ interface SetupOptions {
   promptHistory?: PromptHistory
   /** The files the @ picker offers. */
   files?: string[]
+  /** Where the @ picker gets them, in place of `files`. */
+  fileSource?: FileSource
   /** The environment the UI tells the terminal apart by; empty by default. */
   env?: Record<string, string | undefined>
   keybindings?: Keybindings
@@ -187,7 +190,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     },
     ...(o.imageFetch ? { imageFetch: o.imageFetch } : {}),
     onReady: () => agent.start("startup"),
-    files: { files: async () => o.files ?? [] },
+    files: o.fileSource ?? fileList(async () => o.files ?? []),
     ...(o.promptHistory ? { history: o.promptHistory } : {}),
     env: o.env ?? {},
     ...(o.keybindings ? { keybindings: o.keybindings } : {}),
@@ -511,6 +514,60 @@ test("the activity line shows what the turn does, its time, output tokens and ho
   expect(live()).not.toContain("Esc interrupt")
   terminal.send("\x03")
   await exited
+})
+
+test("while tools run the activity line names them and keeps its spinner, time and interrupt hint", async () => {
+  const { terminal, live, idle, exited, agent } = await setup(
+    [
+      {
+        toolCalls: [
+          { name: "slowa", args: {} },
+          { name: "slowb", args: {} },
+        ],
+      },
+      { text: "ok" },
+    ],
+    { cols: 80 },
+  )
+  const release: Record<string, () => void> = {}
+  for (const name of ["slowa", "slowb"]) {
+    agent.tools.register(
+      defineTool({
+        name,
+        description: "",
+        parameters: {},
+        concurrency: "parallel",
+        execute: () =>
+          new Promise((r) => {
+            release[name] = () => r(textResult("done"))
+          }),
+      }),
+      "test",
+    )
+  }
+  const activity = (label: string) =>
+    new RegExp(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ${label} · \\d+s · (↓ \\d+ tokens · )?Esc interrupt$`, "m")
+  terminal.send("go\r")
+  await waitFor(() => activity("running 2 tools").test(live()), "two tools")
+  // The rows keep their own spinners.
+  expect(live()).toMatch(/● slowa +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+s/)
+  release.slowb!()
+  await waitFor(() => activity("running slowa").test(live()), "one tool left")
+  release.slowa!()
+  await idle()
+  expect(live()).not.toContain("Esc interrupt")
+  terminal.send("\x03")
+  await exited
+})
+
+test("the activity label names the most specific activity", () => {
+  const base = { compacting: false, running: [] as string[], preparing: undefined, thinking: false }
+  expect(activityLabel(base)).toBe("working")
+  expect(activityLabel({ ...base, thinking: true })).toBe("thinking")
+  expect(activityLabel({ ...base, preparing: "bash" })).toBe("preparing bash")
+  expect(activityLabel({ ...base, running: ["bash"], thinking: true })).toBe("running bash")
+  expect(activityLabel({ ...base, running: ["bash", "read", "grep"] })).toBe("running 3 tools")
+  expect(activityLabel({ ...base, compacting: true, running: ["bash"] })).toBe("compacting the conversation")
 })
 
 test("a message sent during /compact counts its own time and tokens, not the last turn's", async () => {
@@ -918,9 +975,9 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   await shows("● block")
   await idle()
   // The running tool is drawn as its own line with a spinner and its time on the right, and the
-  // activity line under it has the turn's time and how to interrupt.
+  // activity line under it keeps its spinner, says what runs, the turn's time and how to interrupt.
   expect(seenWhileRunning).toMatch(/● block +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 0s/)
-  expect(seenWhileRunning).toMatch(/^0s · (↓ \d+ tokens · )?Esc interrupt$/m)
+  expect(seenWhileRunning).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running block · 0s · (↓ \d+ tokens · )?Esc interrupt$/m)
   terminal.send("\x03")
   await exited
 })
@@ -1941,6 +1998,9 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   )
   const committed = all().split("running in background")[0]!
   expect(committed).not.toContain("Scan the logs")
+  // No turn runs: sub-agents working in the background bring no activity line.
+  expect(live()).not.toContain("Esc interrupt")
+  expect(live()).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] (working|running)/)
   finish()
   await child!.result()
   await bus.flush()
@@ -2270,6 +2330,40 @@ test("typing @ offers project files; Tab inserts the path and the message keeps 
   terminal.send("\x03")
   await exited
 })
+test("typing @ while the project is still listed shows a status row at once, then the files as they come", async () => {
+  let emit!: (paths: string[]) => void
+  let finish!: () => void
+  const fileSource = new FileIndex("/work/proj", {
+    list: (_cwd, e) => {
+      emit = e
+      return new Promise<void>((r) => {
+        finish = r
+      })
+    },
+  })
+  const { terminal, live, exited } = await setup([], { fileSource, cols: 60 })
+  terminal.send("see @app")
+  await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] indexing… 0 files$/m.test(live()), "status row")
+  // The input box took every key; the row is where the list goes, below the box.
+  expect(live()).toContain("│ › see @app")
+  const rows = live().split("\n")
+  expect(rows.findIndex((l) => l.includes("indexing…"))).toBeGreaterThan(
+    rows.findIndex((l) => l.startsWith("╰")),
+  )
+  emit(Array.from({ length: 12_345 }, (_, i) => `gen/f${i}.ts`).concat("src/app.ts"))
+  await waitFor(
+    () => /› src\/app\.ts/.test(live()) && live().includes("indexing… 12,346 files"),
+    "first files",
+  )
+  finish()
+  await waitFor(() => !live().includes("indexing…"), "indexed")
+  expect(live()).toMatch(/› src\/app\.ts/)
+  terminal.send("\t")
+  await waitFor(() => live().includes("› see @src/app.ts"), "inserted")
+  terminal.send("\x03\x03")
+  await exited
+})
+
 test("the terminal title names the folder and branch, and the progress indicator follows the turn", async () => {
   const { terminal, screen, bus, agent, shows, idle, exited } = await setup([{ text: "done", delayMs: 20 }], {
     env: { WT_SESSION: "1" },
@@ -2429,10 +2523,11 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   await waitFor(() => live().includes("› old prompt"), "recalled with Ctrl+P")
   terminal.send("\x03")
   terminal.send("@src")
-  await waitFor(() => live().includes("› src/app.ts"), "file list")
+  // The directory named as typed first, then its file.
+  await waitFor(() => live().includes("› src/\n  src/app.ts"), "file list")
   expect(live()).toContain("↑↓ select · Tab/Enter insert · Ctrl+X close")
   terminal.send("\x18")
-  await waitFor(() => !live().includes("› src/app.ts"), "file list closed")
+  await waitFor(() => !live().includes("src/app.ts"), "file list closed")
   terminal.send("\x03\x14")
   await waitFor(() => live().includes("Tool output: full"), "tool output note")
   expect(live()).toContain("Ctrl+T cycles")

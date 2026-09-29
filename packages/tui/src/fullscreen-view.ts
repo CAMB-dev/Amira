@@ -428,8 +428,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   let started = false
 
   const view: TranscriptView = {
-    get toolsRunning() {
-      return stepCalls.filter((b) => b.startedAt !== undefined && !b.end).length
+    get runningTools() {
+      return stepCalls.flatMap((b) => (b.startedAt !== undefined && !b.end ? [b.name] : []))
     },
     get capturing() {
       return !overlay && (finding || pane.selected !== undefined)

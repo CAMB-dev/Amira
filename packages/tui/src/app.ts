@@ -188,6 +188,20 @@ function messageText(m: UserMessage): string {
 /** Output tokens a streamed text is worth, until the reply's usage says. */
 const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 
+/** What the turn is doing now, as the activity line names it: the most specific activity first. */
+export function activityLabel(s: {
+  compacting: boolean
+  running: readonly string[]
+  preparing: string | undefined
+  thinking: boolean
+}): string {
+  if (s.compacting) return "compacting the conversation"
+  if (s.running.length === 1) return `running ${s.running[0]}`
+  if (s.running.length > 1) return `running ${s.running.length} tools`
+  if (s.preparing) return `preparing ${s.preparing}`
+  return s.thinking ? "thinking" : "working"
+}
+
 /**
  * The interactive terminal UI. This is its controller: it follows the bus and the keys, keeps
  * the input, dialogs, forms and the message queue, and hands the conversation to a view that
@@ -332,17 +346,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const history = opts.history ?? new PromptHistory()
   const historyNav = new HistoryNavigator(history, editor)
   const search = new HistorySearch(history, editor, keys)
-  const filePicker = new FilePicker(opts.files ?? new FileIndex(agent.cwd), () => view.requestRender(), keys)
+  /** The project's files for the @ picker; one the UI made itself it also stops on quit. */
+  const ownFiles = opts.files ? undefined : new FileIndex(agent.cwd)
+  const filePicker = new FilePicker(opts.files ?? ownFiles!, () => view.requestRender(), keys)
   /**
-   * Tells the completion lists what the editor holds; a promise while candidates are on their
-   * way. Cheap on any text: the command popup only looks at a single line, the file picker at
-   * the caret's line up to the caret.
+   * Tells the completion lists what the editor holds; a promise while commands' candidates are
+   * on their way. Cheap on any text: the command popup only looks at a single line, the file
+   * picker at the caret's line up to the caret, and it never waits for the project's files.
    */
   const syncCompletions = (): Promise<void> | undefined => {
     const line = editor.lineCount === 1 ? editor.getText() : ""
     const commandsPending = popups.map((p) => p.update(line)).find(Boolean)
-    const filesPending = filePicker.update(editor.textBeforeCaret())
-    return commandsPending ?? filesPending
+    filePicker.update(editor.textBeforeCaret())
+    return commandsPending
   }
   /** The list shown below the input box, if any, with its key hint. */
   const inputList = ():
@@ -394,18 +410,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return panelsShown ? [...lines, ""] : []
     }),
     // The activity line: what the turn is doing, how long it has run, the tokens it wrote.
-    // Running tools carry their own spinner, so it is left out while they run.
+    // It shows for the whole turn, also while tools run (their rows carry a spinner of their own).
     new View((width, ctx) => {
       if (!working && !compacting) return []
-      const label = compacting
-        ? "compacting the conversation"
-        : preparing
-          ? `preparing ${preparing}`
-          : thinking
-            ? "thinking"
-            : view.toolsRunning
-              ? ""
-              : "working"
+      const label = activityLabel({ compacting, running: view.runningTools, preparing, thinking })
       const tokens = turnTokens + estimateTokens(streamedChars)
       const interruptKey = keys.label("interrupt")
       const stats = [
@@ -413,9 +421,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
         ...(interruptKey ? [`${interruptKey} interrupt`] : []),
       ].join(` ${glyphs.separator} `)
-      const head = label
-        ? `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
-        : ""
+      const head = `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
       return [truncateToWidth(head + ctx.theme.muted(stats), width, glyphs.more), ""]
     }),
     new View((width, ctx) => [
@@ -506,6 +512,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const move = keys.pairLabel("popup.up", "popup.down")
     const insert = [keys.label("popup.complete"), keys.label("popup.accept")].filter(Boolean).join("/")
     const close = keys.label("popup.close")
+    // Nothing to choose yet (the project is still listed, or the query still searched).
+    if (!filePicker.open) return [close && { text: `${close} close`, priority: 4 }]
     return [
       move && { text: `${move} select`, priority: 3 },
       insert && { text: `${insert} insert`, priority: 5 },
@@ -1000,6 +1008,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     offSwitch?.()
     offCommand?.()
     clearTimeout(hintTimer)
+    filePicker.dispose()
+    ownFiles?.dispose()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
     setRetry(undefined)
@@ -1059,7 +1069,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (search.handleKey(e) === "accepted-pass") return onInput(e)
     } else if (openPopup() && handlePopupKey(e)) {
       // The popup took one of its keys (popup.*).
-    } else if (filePicker.open && handleFileKey(e)) {
+    } else if (filePicker.visible && handleFileKey(e)) {
       // The file picker took one of its keys (popup.*).
     } else if (!viewFirst && view.handleInput(e)) {
       // The view took one of its keys (scrolling, find, selecting, copying).
