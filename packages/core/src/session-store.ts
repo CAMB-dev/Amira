@@ -20,8 +20,8 @@ export type SessionEntryData =
   | { type: "model_change"; model: ModelRef }
   /** `summary` stands in for the entries in `replaces`; they stay in the file. */
   | { type: "compaction"; summary: string; replaces: string[] }
-  /** Makes `target` the tip of the current branch. */
-  | { type: "checkout"; target: string }
+  /** Makes `target` the tip of the current branch; null goes back to before the first entry. */
+  | { type: "checkout"; target: string | null }
   | { type: "subagent"; childSessionId: string; role: string; title?: string }
   /** Deferred tools the session loaded (via tool_search), offered to the model from then on. */
   | { type: "tools_loaded"; names: string[] }
@@ -141,7 +141,7 @@ export class SessionStore {
       parentId: this.#leaf,
       ts: Date.now(),
     } as SessionEntry
-    if (entry.type === "checkout" && !this.#byId.has(entry.target)) {
+    if (entry.type === "checkout" && entry.target !== null && !this.#byId.has(entry.target)) {
       throw new Error(`unknown entry ${entry.target}`)
     }
     // Written first, so a failed write leaves no entry behind for later ones to point at.
@@ -218,6 +218,7 @@ export class SessionStore {
     this.#entries.push(e)
     this.#byId.set(e.id, e)
     if (e.type !== "checkout") this.#leaf = e.id
+    else if (e.target === null) this.#leaf = null
     else if (this.#byId.has(e.target)) this.#leaf = e.target
   }
 

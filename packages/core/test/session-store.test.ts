@@ -75,6 +75,21 @@ test("checkout switches the branch without rewriting anything", async () => {
   expect(() => s.append({ type: "checkout", target: "nope" })).toThrow(/unknown entry/)
 })
 
+test("a checkout to null goes back to before the first entry, in the same file", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  s.appendMessage(userMessage("a"))
+  s.appendMessage(reply("b"))
+  s.append({ type: "checkout", target: null })
+  expect(s.restore().messages).toEqual([])
+  expect(s.leafId).toBeNull()
+  s.appendMessage(userMessage("again"))
+  const reopened = SessionStore.open(s.file)
+  expect(reopened.id).toBe(s.id)
+  expect(reopened.restore().messages).toEqual([userMessage("again")])
+  expect(reopened.entries.length).toBe(4)
+})
+
 test("a torn last line is ignored and the next write starts a fresh line", async () => {
   const dir = await tmp()
   const s = SessionStore.create({ cwd: "/proj", dir })

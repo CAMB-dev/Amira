@@ -139,7 +139,12 @@ test("an interrupt skips tool.call.after", async () => {
 
 test("a call that fails before running passes through tool.call.after too, as blocked", async () => {
   const { agent, mock } = setup([{ toolCalls: [{ name: "odd", args: {}, id: "o1" }] }, { text: "ok" }])
-  const odd = defineTool({ name: "odd", description: "", parameters: {}, execute: async () => textResult("ran") })
+  const odd = defineTool({
+    name: "odd",
+    description: "",
+    parameters: {},
+    execute: async () => textResult("ran"),
+  })
   // Once the call is on its way, checking its arguments throws: it cannot run.
   let armed = false
   Object.defineProperty(odd, "parameters", {

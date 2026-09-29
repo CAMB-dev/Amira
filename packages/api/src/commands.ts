@@ -211,7 +211,10 @@ export interface StoredSession {
   messages: readonly Message[]
   /** Its sub-agents and theirs, each followed by its own (as SessionControl.subagents). */
   subagents: SubagentInfo[]
-  /** A sub-agent's conversation; undefined for an id not in `subagents`. */
+  /**
+   * A sub-agent's conversation as it happened (compacted parts included, as `messages`);
+   * undefined for an id not in `subagents`.
+   */
   subagentMessages(id: string): readonly Message[] | undefined
 }
 
@@ -295,8 +298,8 @@ export interface SessionControl {
   /** Stored sessions of this directory, most recent first. */
   sessions(): StoredSessionInfo[]
   /**
-   * Reads a stored session of this directory (the current one too, once it has a file) without
-   * switching to it, e.g. to export it. Undefined for an unknown id. Unset where the host keeps
+   * Reads a stored session of this directory without switching to it, e.g. to export it; the
+   * current one is read from memory, so it is up to date even before its file is. Undefined for an unknown id. Unset where the host keeps
    * no session files.
    */
   readonly readSession?: (sessionId: string) => StoredSession | undefined
@@ -305,7 +308,8 @@ export interface SessionControl {
   /**
    * Cuts the conversation back to just before `messages()[index]`, which must be a user
    * message: it and everything after it are gone from later turns, e.g. to go back to before a
-   * turn that went wrong. The cut-off part stays in the session file on a branch of its own.
+   * turn that went wrong. The session stays the same (also when going back to before its first
+   * message); the cut-off part stays in its file on a branch of its own.
    * Frontends show the shortened conversation as they show a resumed one. Throws while a turn
    * runs, for an index that is not a user message, and for a message a compaction has since
    * summarized. Unset where the host keeps no session file.

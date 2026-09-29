@@ -8,6 +8,7 @@ import {
   listSessions,
   listSubagents,
   SessionStore,
+  storedHistory,
   subagentMessages,
   subagentsOf,
 } from "@amira/core"
@@ -127,13 +128,15 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         messageCount: s.messageCount,
       })),
     readSession: (id) => {
-      const file = findSession(cwd, id)
+      // The current session from memory: its file may lag behind (or have stopped saving).
+      const live = id === agent().sessionId ? agent().session : undefined
+      const file = live?.file ?? findSession(cwd, id)
       if (!file) return undefined
       let store: SessionStore
       let updatedAt: number
       try {
-        store = SessionStore.open(file)
-        updatedAt = statSync(file).mtimeMs
+        store = live ?? SessionStore.open(file)
+        updatedAt = live ? Date.now() : statSync(file).mtimeMs
       } catch {
         return undefined
       }
@@ -144,9 +147,9 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         cwd: store.header.cwd,
         createdAt: Number.isFinite(createdAt) ? createdAt : updatedAt,
         updatedAt,
-        messages: store.branch().flatMap((e) => (e.type === "message" ? [e.message] : [])),
+        messages: storedHistory(store),
         subagents: entries.map((e) => e.info),
-        subagentMessages: (childId) => entries.find((e) => e.info.id === childId)?.messages(),
+        subagentMessages: (childId) => entries.find((e) => e.info.id === childId)?.history(),
       }
     },
     resume: async (id) => {
@@ -169,11 +172,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       if (entry?.type !== "message") {
         throw new Error("that message was summarized by a compaction; only later ones can be rewound to")
       }
-      // Nothing came before it: going back to before it is an empty conversation.
-      if (!entry.parentId) {
-        switchTo(session.resume(SessionStore.create({ cwd }), a.model), "clear")
-        return
-      }
+      // Nothing came before it: back to an empty conversation, still in this session.
       store.append({ type: "checkout", target: entry.parentId })
       switchTo(session.resume(store, a.model), "resume")
     },
