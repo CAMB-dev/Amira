@@ -328,7 +328,13 @@ function pushLead(s: string, i: number, end: number, scope: Scope, ctx: Context)
   const next = Math.min(end, i + lead.len)
   for (const part of lead.parts) {
     if (!part.text) continue
-    const r: Run = { text: part.text, src: i, carry: scope.carry, cuttable: false, rest: { url: false, resume: next } }
+    const r: Run = {
+      text: part.text,
+      src: i,
+      carry: scope.carry,
+      cuttable: false,
+      rest: { url: false, resume: next },
+    }
     if (part.link) r.link = part.link
     if (part.style) r.style = part.style
     ctx.out.push(r)
