@@ -2,7 +2,16 @@ import type { Glyphs } from "../glyphs.ts"
 import type { StyleFn } from "../style.ts"
 import { truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import { highlightLine } from "./highlight.ts"
-import { type Lead, type MarkdownStyles, parseInline, parseLine, type Run } from "./inline.ts"
+import {
+  type ImageRef,
+  type Lead,
+  type LinkRef,
+  type MarkdownStyles,
+  normalizeLabel,
+  parseInline,
+  parseLine,
+  type Run,
+} from "./inline.ts"
 import { type Cell, cellText, type Row, toCells, wrapCells } from "./layout.ts"
 
 /** What rendering needs besides the text. */
@@ -12,6 +21,13 @@ export interface Env {
   glyphs: Glyphs
   hyperlinks: boolean
   highlight: boolean
+  /** Reference definitions seen so far; the block state's, set by the functions here. */
+  refs?: ReadonlyMap<string, LinkRef>
+  /**
+   * Shows a paragraph line that is only an image (maybe inside a link) as the image: gets the
+   * image, the rows the line renders as, and its column; returns the rows to emit instead.
+   */
+  image?: (image: Required<ImageRef>, rows: string[], col: number) => string[]
 }
 
 /**
@@ -70,6 +86,10 @@ export interface BlockState {
   /** A paragraph line kept back one line: the next may turn it into a heading or a table header. */
   held?: { text: string; renderCol: number }
   prevBlank: boolean
+  /** The last line was paragraph text, held or committed early: a definition cannot follow it. */
+  paragraph: boolean
+  /** Reference definitions (`[label]: url`) seen so far, by normalized label. */
+  refs: Map<string, LinkRef>
   /** A blank line is due before the next rows, unless nothing was shown yet. */
   blankPending: boolean
   emitted: boolean
@@ -78,11 +98,18 @@ export interface BlockState {
 export type Sink = (rows: string[]) => void
 
 export function newState(): BlockState {
-  return { list: [], prevBlank: false, blankPending: false, emitted: false }
+  return {
+    list: [],
+    prevBlank: false,
+    paragraph: false,
+    refs: new Map(),
+    blankPending: false,
+    emitted: false,
+  }
 }
 
 export function cloneState(s: BlockState): BlockState {
-  const c: BlockState = { ...s, list: s.list.map((e) => ({ ...e })) }
+  const c: BlockState = { ...s, list: s.list.map((e) => ({ ...e })), refs: new Map(s.refs) }
   if (s.fence) c.fence = { ...s.fence }
   if (s.table) c.table = { ...s.table, rows: [...s.table.rows], lines: [...s.table.lines] }
   if (s.held) c.held = { ...s.held }
@@ -97,6 +124,13 @@ const ITEM = /^([-*+]|\d{1,9}[.)])([ \t]+|$)/
 const TASK = /^\[([ xX])\][ \t]+/
 const SETEXT = /^ {0,3}(=+|-+)[ \t]*$/
 const DELIMITER_CELL = /^:?-+:?$/
+/** A reference definition: `[label]: url`, maybe in <>, maybe with a title. */
+const DEFINITION =
+  /^[ \t]*\[([^\]]*[^\]\s][^\]]*)\]:[ \t]*<?([^\s<>]+)>?(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/
+/** The start of a line that may be an image and nothing else. */
+const IMAGE_START = /^[ \t]*\[?!\[/
+/** The start of a line that is, or may still become, a reference definition. */
+const DEFINITION_START = /^[ \t]*\[(?:[^\]]*$|[^\]]+\](?::|$))/
 /** A table column is not narrowed below this many cells to fit the screen. */
 const MIN_COLUMN = 8
 
@@ -115,8 +149,14 @@ function frameRow(col: number, text: string, env: Env): string {
   return truncateToWidth(pad(col) + env.styles.codeFrame(text), env.width, "…")
 }
 
+/** The environment with the state's reference definitions. */
+function withRefs(s: BlockState, env: Env): Env {
+  return env.refs === s.refs ? env : { ...env, refs: s.refs }
+}
+
 /** Processes one complete source line (without its `\n`). */
 export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
+  env = withRefs(s, env)
   if (s.fence) {
     const f = s.fence
     const m = line.match(FENCE_CLOSE_LIKE)
@@ -132,8 +172,12 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     endOpenBlocks(s, env, sink)
     s.blankPending = true
     s.prevBlank = true
+    s.paragraph = false
     return
   }
+  // A reference definition cannot interrupt a paragraph: there it is paragraph text.
+  const inParagraph = s.paragraph
+  s.paragraph = false
   if (s.held) {
     const h = s.held
     if (line.includes("|") && h.text.includes("|")) {
@@ -163,21 +207,33 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     }
     flushTable(s, env, sink)
   }
+  const def = !inParagraph && line.match(DEFINITION)
+  if (def) {
+    // Not shown; links and images further on use it. The first definition of a label wins.
+    const label = normalizeLabel(def[1]!)
+    if (!s.refs.has(label)) s.refs.set(label, { url: def[2]! })
+    s.prevBlank = false
+    return
+  }
   const d = classify(s, line, env)
   s.prevBlank = false
   if (d.rows) emit(s, sink, d.rows)
-  else if (d.hold) s.held = { text: line.slice(d.render.start), renderCol: d.render.indent }
-  else emit(s, sink, renderLine(d.render, line, env).rows)
+  else if (d.hold) {
+    s.held = { text: line.slice(d.render.start), renderCol: d.render.indent }
+    s.paragraph = true
+  } else emit(s, sink, renderLine(d.render, line, env).rows)
 }
 
 /** Ends the blocks that a blank line or the end of the text closes: a held paragraph line, a table. */
 export function endOpenBlocks(s: BlockState, env: Env, sink: Sink): void {
+  env = withRefs(s, env)
   flushHeld(s, env, sink)
   flushTable(s, env, sink)
 }
 
 /** Ends everything at the end of the text, closing an unclosed code block too. */
 export function finish(s: BlockState, env: Env, sink: Sink): void {
+  env = withRefs(s, env)
   endOpenBlocks(s, env, sink)
   if (s.fence) {
     emit(s, sink, [frameRow(s.fence.renderCol, env.glyphs.codeBottom, env)])
@@ -205,6 +261,7 @@ export function heldUndecided(s: BlockState, line: string): boolean {
  * as laid out so far, fixing its column widths for the rows still to come.
  */
 export function commitOpenBlocks(s: BlockState, env: Env, sink: Sink): void {
+  env = withRefs(s, env)
   flushHeld(s, env, sink)
   const t = s.table
   if (t && !t.frozen) {
@@ -234,10 +291,15 @@ export function partialRender(
   // grow, so its rows cannot be committed as table rows. It is shown as its source instead (`raw`:
   // not as it renders now), and the table goes on with the next row.
   if (s.table && line.includes("|")) return { state: s, render: rawRender(s.table, line), raw: true }
+  // It may be a reference definition, which is not shown.
+  if (DEFINITION_START.test(line)) return undefined
+  // It may be an image on its own, shown once the line is complete.
+  if (env.image && IMAGE_START.test(line)) return undefined
   const next = cloneState(s)
   next.table = undefined
   const d = classify(next, line, env)
   next.prevBlank = false
+  next.paragraph = !!d.hold
   if (d.rows) return undefined
   return { state: next, render: d.render }
 }
@@ -359,7 +421,25 @@ function flushHeld(s: BlockState, env: Env, sink: Sink) {
     indent: h.renderCol,
     start: 0,
   }
-  emit(s, sink, renderLine(lr, h.text, env).rows)
+  const rows = renderLine(lr, h.text, env).rows
+  const image = env.image && standaloneImage(h.text, env)
+  emit(s, sink, image ? env.image!(image, rows, h.renderCol) : rows)
+}
+
+/** The image a line holds and nothing else (but a link around it), when it has a target. */
+function standaloneImage(text: string, env: Env): Required<ImageRef> | undefined {
+  if (!IMAGE_START.test(text)) return undefined
+  const runs = parseInline(text, {
+    styles: env.styles,
+    hyperlinks: false,
+    ...(env.refs ? { refs: env.refs } : {}),
+  })
+  const images = runs.filter((r) => r.image)
+  const image = images[0]?.image
+  if (images.length !== 1 || image?.url === undefined) return undefined
+  // Everything else is added text (the URLs), not text of the line.
+  if (runs.some((r) => r.cuttable && r.text.trim() !== "")) return undefined
+  return { url: image.url, alt: image.alt }
 }
 
 export interface Rendered {
@@ -402,6 +482,8 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
     const parsed = parseLine(text, {
       styles: env.styles,
       hyperlinks: env.hyperlinks,
+      imageGlyph: env.glyphs.image,
+      ...(env.refs ? { refs: env.refs } : {}),
       ...(lr.base ? { base: lr.base } : {}),
       ...(lead ? { lead, leadAt: skip } : {}),
     })
@@ -481,6 +563,8 @@ function inlineText(text: string, env: Env, base?: StyleFn): string {
   const runs = parseInline(text, {
     styles: env.styles,
     hyperlinks: env.hyperlinks,
+    imageGlyph: env.glyphs.image,
+    ...(env.refs ? { refs: env.refs } : {}),
     ...(base ? { base } : {}),
   })
   const cells = toCells(runs)

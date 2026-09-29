@@ -19,17 +19,20 @@ import {
 } from "@amira/core"
 import {
   type Component,
+  chooseImageSupport,
   defaultTheme,
   detectEnv,
   Editor,
   type EditorPart,
   FullScreenRenderer,
+  ImageLoader,
   type InputEvent,
   InputReader,
   LiveRenderer,
   MarkdownStream,
   ProcessTerminal,
   progressSupported,
+  type RemoteImageFetch,
   type RenderContext,
   type SetupResult,
   Spinner,
@@ -61,6 +64,7 @@ import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { historyLines } from "./history.ts"
 import { HistorySearch } from "./history-search.ts"
+import { remoteImageFetch } from "./images.ts"
 import { InputBox } from "./input-box.ts"
 import { defaultKeys, Keybindings } from "./keybindings.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
@@ -112,7 +116,11 @@ export interface InteractiveOptions {
   onReady?: () => void
   terminal?: Terminal
   /** Terminal setup; injectable for tests. Defaults to probing the real terminal. */
-  setup?: (terminal: Terminal) => Promise<SetupResult>
+  setup?: (
+    terminal: Terminal,
+    env?: Record<string, string | undefined>,
+    opts?: { images?: boolean },
+  ) => Promise<SetupResult>
   theme?: Theme
   /**
    * Prompts sent before, for ↑/↓ and Ctrl+R; the CLI passes the project's persisted history.
@@ -127,6 +135,8 @@ export interface InteractiveOptions {
   settings?: TuiSettings
   /** Tells the terminal apart (Windows Terminal, VS Code); injectable for tests. */
   env?: Record<string, string | undefined>
+  /** How images in replies are fetched from the web; injectable for tests. */
+  imageFetch?: RemoteImageFetch
 }
 
 /** The renderer's shortest time between frames, and how long a key waits for async candidates. */
@@ -218,13 +228,28 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const theme = opts.theme ?? defaultTheme
   const terminal = opts.terminal ?? new ProcessTerminal()
   const presenters = opts.toolRenderers
-  const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal)
+  const env = opts.env ?? process.env
+  const settings = opts.settings ?? {}
+  const imageSetting = settings.images ?? "auto"
+  const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal, env, {
+    images: imageSetting !== "off",
+  })
 
   // The reply is Markdown: its finished blocks go to the scrollback as they close.
-  const env = opts.env ?? process.env
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
-  const streaming = new MarkdownStream({ hyperlinks })
+  // Images on a line of their own are drawn where the terminal can: at most 20 rows, and 40% of
+  // the screen. Full-screen views (the sub-agent viewer, forms) show their alt text.
+  const imageSupport = chooseImageSupport(imageSetting, capabilities.graphics, env)
+  const images =
+    imageSupport &&
+    new ImageLoader({
+      support: imageSupport,
+      cwd: () => agent.cwd,
+      fetchRemote: opts.imageFetch ?? remoteImageFetch(),
+      maxRows: () => Math.max(1, Math.min(20, Math.floor(terminal.rows * 0.4))),
+    })
+  const streaming = new MarkdownStream({ hyperlinks, ...(images ? { images } : {}) })
   const spinner = new Spinner()
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
@@ -312,7 +337,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
-  const settings = opts.settings ?? {}
   /** What Enter does with a message while a turn runs; the queue key does the other. */
   const enterDoes: WhileWorking = settings.submitWhileWorking === "queue" ? "queue" : "steer"
   const termStatus = new TerminalStatus(terminal, agent.cwd, {

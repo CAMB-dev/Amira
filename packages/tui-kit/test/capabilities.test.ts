@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
 import { modes, queries } from "../src/ansi.ts"
 import {
+  chooseImageSupport,
   detectEnv,
   parseProbeReplies,
   probeTerminal,
@@ -23,7 +24,13 @@ test("detectEnv: Windows Terminal unless running inside VS Code", () => {
 
 test("parseProbeReplies reads kitty, DECRQM and DA1 replies and keeps other input", () => {
   const r = parseProbeReplies("a\x1b[?1u\x1b[?2026;2$yb\x1b[?62;22c")
-  expect(r).toEqual({ kittyKeyboard: true, synchronizedOutput: true, complete: true, rest: "ab" })
+  expect(r).toEqual({
+    kittyKeyboard: true,
+    synchronizedOutput: true,
+    complete: true,
+    rest: "ab",
+    attributes: [62, 22],
+  })
   expect(parseProbeReplies("\x1b[?2026;0$y").synchronizedOutput).toBe(false)
   expect(parseProbeReplies("\x1b[?2026;4$y").synchronizedOutput).toBe(false)
   expect(parseProbeReplies("\x1b[?2026;1$y").complete).toBe(false)
@@ -92,6 +99,107 @@ test("a reply cut short at the timeout gets more time and never leaks into the i
   const cut = probeTerminal(term, { timeoutMs: 10, lateReplyMs: 10 })
   term.send("b\x1b[?2026;")
   expect(await cut).toMatchObject({ complete: false, rest: "b" })
+
+  const apc = probeTerminal(term, { timeoutMs: 10, lateReplyMs: 10, kittyGraphics: true })
+  term.send("c\x1b_Gi=31;O")
+  expect(await apc).toMatchObject({ complete: false, rest: "c" })
+})
+
+test("graphics replies: Sixel in DA1, the cell size in pixels, kitty graphics", () => {
+  const r = parseProbeReplies("k\x1b[6;20;10t\x1b[4;480;800t\x1b_Gi=31;OK\x1b\\\x1b[?61;4;6;7;22c")
+  expect(r).toMatchObject({
+    complete: true,
+    attributes: [61, 4, 6, 7, 22],
+    cellPixels: { width: 10, height: 20 },
+    windowPixels: { width: 800, height: 480 },
+    kittyGraphics: true,
+    rest: "k",
+  })
+  expect(parseProbeReplies("\x1b_Gi=31;ENOTSUPPORTED:no\x1b\\").kittyGraphics).toBe(false)
+  expect(parseProbeReplies("\x1b[6;0;0t").cellPixels).toBeUndefined()
+})
+
+test("setup asks about graphics only when images are wanted, and kitty graphics only where it may be", async () => {
+  const term = new FakeTerminal(80, 24)
+  const pending = setupTerminalInput(term, { WT_SESSION: "1" }, { images: true })
+  expect(term.writes[0]).toBe(
+    queries.syncOutput + queries.cellPixels + queries.windowPixels + queries.primaryDeviceAttributes,
+  )
+  term.send("\x1b[4;480;800t\x1b[?61;4;22c")
+  const { capabilities } = await pending
+  // No cell size reply: the text area divided by the size in cells.
+  expect(capabilities.graphics).toEqual({
+    answered: true,
+    sixel: true,
+    kitty: false,
+    cell: { width: 10, height: 20 },
+  })
+
+  const kitty = new FakeTerminal(80, 24)
+  const asked = setupTerminalInput(kitty, { TERM: "xterm-kitty" }, { images: true })
+  expect(kitty.writes[0]).toContain(queries.kittyGraphics)
+  kitty.send("\x1b[?0u\x1b_Gi=31;OK\x1b\\\x1b[6;18;9t\x1b[?62;22c")
+  expect((await asked).capabilities.graphics).toEqual({
+    answered: true,
+    sixel: false,
+    kitty: true,
+    cell: { width: 9, height: 18 },
+  })
+  const plain = new FakeTerminal()
+  const noImages = setupTerminalInput(plain, {})
+  expect(plain.writes[0]).not.toContain(queries.cellPixels)
+  plain.send("\x1b[?62c")
+  expect((await noImages).capabilities.graphics).toBeUndefined()
+})
+
+test("the image protocol follows the terminal's answers and the setting", () => {
+  const g = (o: Partial<{ answered: boolean; sixel: boolean; kitty: boolean }> = {}) => ({
+    answered: true,
+    sixel: false,
+    kitty: false,
+    ...o,
+  })
+  const wt = { WT_SESSION: "1" }
+  // Windows Terminal with Sixel: its fixed virtual cell, whatever it reported.
+  expect(chooseImageSupport("auto", { ...g({ sixel: true }), cell: { width: 9, height: 19 } }, wt)).toEqual({
+    protocol: "sixel",
+    cell: { width: 10, height: 20 },
+  })
+  // Before 1.22 there is no Sixel in DA1: nothing on auto, Sixel on "on".
+  expect(chooseImageSupport("auto", g(), wt)).toBeUndefined()
+  expect(chooseImageSupport("on", g(), wt)?.protocol).toBe("sixel")
+  expect(chooseImageSupport("off", g({ sixel: true }), wt)).toBeUndefined()
+  // VS Code only with its image support on (DA1 lists Sixel); then iTerm2's protocol.
+  const vscode = { TERM_PROGRAM: "vscode" }
+  expect(chooseImageSupport("auto", g(), vscode)).toBeUndefined()
+  expect(chooseImageSupport("auto", g({ sixel: true }), vscode)).toEqual({
+    protocol: "iterm2",
+    cell: { width: 10, height: 20 },
+  })
+  expect(chooseImageSupport("auto", g(), { TERM_PROGRAM: "iTerm.app" })?.protocol).toBe("iterm2")
+  expect(chooseImageSupport("auto", g({ answered: false }), { TERM_PROGRAM: "WezTerm" })).toBeUndefined()
+  expect(
+    chooseImageSupport("auto", { ...g({ kitty: true, sixel: true }), cell: { width: 9, height: 18 } }, {}),
+  ).toEqual({ protocol: "kitty", cell: { width: 9, height: 18 } })
+  // Sixel elsewhere needs the cell size: a guess would reserve the wrong rows.
+  expect(chooseImageSupport("auto", g({ sixel: true }), { TERM: "xterm" })).toBeUndefined()
+  expect(chooseImageSupport("on", g({ sixel: true }), { TERM: "xterm" })).toEqual({
+    protocol: "sixel",
+    cell: { width: 8, height: 16 },
+  })
+  expect(
+    chooseImageSupport("auto", { ...g({ sixel: true }), cell: { width: 7, height: 14 } }, { TERM: "xterm" }),
+  ).toEqual({ protocol: "sixel", cell: { width: 7, height: 14 } })
+  // Windows Terminal behind WSL still draws Sixel in its virtual cells.
+  expect(
+    chooseImageSupport(
+      "auto",
+      { ...g({ sixel: true }), cell: { width: 9, height: 19 } },
+      { WT_SESSION: "1", WSL_DISTRO_NAME: "Ubuntu" },
+    ),
+  ).toEqual({ protocol: "sixel", cell: { width: 10, height: 20 } })
+  expect(chooseImageSupport("auto", g({ sixel: true }), { TMUX: "/tmp/t" })).toBeUndefined()
+  expect(chooseImageSupport("auto", undefined, wt)).toBeUndefined()
 })
 
 test("WT_SESSION inherited by tmux or WSL is not Windows Terminal", () => {

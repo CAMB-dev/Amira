@@ -20,6 +20,8 @@ export interface Glyphs {
   tableColumn: string
   tableRule: string
   tableCross: string
+  /** In front of an image's alt text where the image itself is not shown. */
+  image: string
 }
 
 export const defaultGlyphs: Glyphs = {
@@ -34,4 +36,5 @@ export const defaultGlyphs: Glyphs = {
   tableColumn: "│",
   tableRule: "─",
   tableCross: "┼",
+  image: "🖼",
 }

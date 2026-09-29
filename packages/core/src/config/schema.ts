@@ -201,6 +201,7 @@ const settings = object({
     progress: boolean,
     reflow: oneOf("auto", "on", "off"),
     submitWhileWorking: oneOf("steer", "queue"),
+    images: oneOf("auto", "on", "off"),
   }),
 })
 

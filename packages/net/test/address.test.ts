@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test"
 import { assertPublicHost, isPrivateAddress } from "../src/address.ts"
-import { publicResolver } from "./util.ts"
+
+const publicResolver =
+  (overrides: Record<string, string[]> = {}) =>
+  async (host: string) =>
+    overrides[host] ?? ["93.184.215.14"]
 
 test("private, loopback, link-local and reserved addresses are recognised", () => {
   for (const ip of [
