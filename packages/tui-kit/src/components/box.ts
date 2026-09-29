@@ -4,6 +4,11 @@ import { closeStyles, truncateToWidth, visibleWidth } from "../width.ts"
 export interface BoxOptions {
   /** Short texts drawn into the top and bottom border, against the right corner. */
   labels?: () => { top?: string; bottom?: string }
+  /**
+   * Draws the bottom border in place of the plain one (and its label), e.g. with a status in
+   * it; it must return exactly `width` cells.
+   */
+  bottom?: (width: number, ctx: RenderContext) => string
 }
 
 /** Below this width a border would leave the child almost no room; it is drawn bare instead. */
@@ -31,7 +36,8 @@ export class Box implements Component {
       return `${side} ${fitted}${" ".repeat(Math.max(0, inner - visibleWidth(fitted)))} ${side}`
     })
     const labels = this.opts.labels?.() ?? {}
-    return [edge("╭", "╮", labels.top, width, ctx), ...rows, edge("╰", "╯", labels.bottom, width, ctx)]
+    const bottom = this.opts.bottom?.(width, ctx) ?? edge("╰", "╯", labels.bottom, width, ctx)
+    return [edge("╭", "╮", labels.top, width, ctx), ...rows, bottom]
   }
 }
 

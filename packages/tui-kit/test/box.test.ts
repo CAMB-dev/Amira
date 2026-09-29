@@ -42,6 +42,16 @@ test("labels go into the border when they fit", () => {
   expect(box.render(14, plain)).toEqual(["╭────── ↑ 3 ─╮", "│ x          │", "╰────────────╯"])
 })
 
+test("a bottom border of the caller's own replaces the plain one and its label", () => {
+  const box = new Box(new Text("x"), {
+    labels: () => ({ bottom: "↓ 1 more" }),
+    bottom: (width) => `╰${"=".repeat(width - 2)}╯`,
+  })
+  expect(box.render(10, plain)).toEqual(["╭────────╮", "│ x      │", "╰========╯"])
+  // Too narrow for a border, it is not asked.
+  expect(box.render(7, plain)).toEqual(["x"])
+})
+
 test("too narrow for a border, the child is drawn bare", () => {
   const box = new Box(new Text("abc"))
   expect(box.render(7, plain)).toEqual(["abc"])
