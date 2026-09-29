@@ -638,10 +638,11 @@ ${list.join("\n")}`
         if (j.done === undefined) cancel(j, reason, true)
       }
     }
-    api.on("turn.end", (e) => {
-      // A sub-agent's one turn is its whole life, so its background jobs end with it. The main
-      // session's keep running through an interrupt (Esc stops only the turn).
-      if (e.parentSessionId !== undefined) dropBackground(e.sessionId, "its commander finished")
+    api.on("subagent.end", (e) => {
+      // A sub-agent's background jobs end with it, not with its turn: a persistent one goes
+      // idle between turns and is woken by their reports. The main session's keep running
+      // through an interrupt (Esc stops only the turn).
+      dropBackground(e.data.childSessionId, "its commander finished")
     })
     api.on("session.start", (e) => {
       // Another conversation took over (/clear, /resume): nobody will read the old one's results.
