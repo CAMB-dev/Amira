@@ -429,6 +429,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const action = FULLSCREEN_KEYS.find((a) => host.keys.is(e, a))
       // A key the input has an action for too (bound to both) is the input's.
       if (!action || INPUT_ACTIONS.some((a) => host.keys.is(e, a))) return false
+      // With text, Ctrl+↑ moves in it as ↑ does.
+      if (action === "select.start" && !host.editorEmpty()) return false
       fullscreenNoted = true
       host.showNote(
         `${host.keys.label(action) ?? "That key"} is for full-screen mode (--fullscreen, or tui.mode "fullscreen"). Inline, the terminal's own scrollback and find work.`,

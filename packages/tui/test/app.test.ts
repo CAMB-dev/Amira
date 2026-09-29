@@ -2143,6 +2143,11 @@ test("inline: Alt+C copies the last reply; a key of the full-screen view says so
   terminal.send("\x1bc")
   await shows("Copied the last reply")
   expect(terminal.output).toContain(`\x1b]52;c;${Buffer.from("Use **bold** here.").toString("base64")}\x07`)
+  // With text in the input, Ctrl+↑ is the input's (it moves up in it): no note yet.
+  terminal.send("draft")
+  await shows("draft")
+  terminal.send("\x1b[1;5A")
+  terminal.send("\x03")
   terminal.send("\x1b[5~")
   await shows("PgUp is for full-screen mode")
   terminal.send("\x03\x03")
