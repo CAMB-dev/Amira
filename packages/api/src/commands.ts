@@ -302,6 +302,15 @@ export interface SessionControl {
   readonly readSession?: (sessionId: string) => StoredSession | undefined
   /** Switches to a stored session of this directory. */
   resume(sessionId: string): Promise<void>
+  /**
+   * Cuts the conversation back to just before `messages()[index]`, which must be a user
+   * message: it and everything after it are gone from later turns, e.g. to go back to before a
+   * turn that went wrong. The cut-off part stays in the session file on a branch of its own.
+   * Frontends show the shortened conversation as they show a resumed one. Throws while a turn
+   * runs, for an index that is not a user message, and for a message a compaction has since
+   * summarized. Unset where the host keeps no session file.
+   */
+  readonly rewind?: (index: number) => Promise<void>
   /** Summarizes older history now; `instructions` steer the summary. Resolves false when nothing was compacted. */
   compact(instructions?: string): Promise<boolean>
   /**
