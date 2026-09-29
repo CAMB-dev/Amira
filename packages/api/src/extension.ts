@@ -1,5 +1,6 @@
 import type { CommandDefinition, InputHandler } from "./commands.ts"
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
+import type { PanelDefinition } from "./panels.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
 import type { SkillDefinition } from "./skills.ts"
@@ -51,7 +52,13 @@ export interface ExtensionAPI {
    * extension.error and skipped.
    */
   registerView(view: ViewDefinition): () => void
-  /** Asks frontends to redraw, e.g. after a status item's state changed. */
+  /**
+   * Experimental: adds a live panel, lines kept above the activity line such as a todo list
+   * (see PanelDefinition). Replacing an existing id requires `override: true`; a taken id is
+   * reported as extension.error and skipped.
+   */
+  registerPanel(panel: PanelDefinition): () => void
+  /** Asks frontends to redraw, e.g. after a status item's or a panel's state changed. */
   requestRender(): void
   /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */
   readonly settings: Readonly<Settings>

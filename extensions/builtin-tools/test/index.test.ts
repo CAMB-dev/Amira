@@ -23,6 +23,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
       return () => {}
     },
     registerView: () => () => {},
+    registerPanel: () => () => {},
     requestRender: () => {},
     settings: {},
     on: () => () => {},

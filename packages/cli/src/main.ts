@@ -162,6 +162,7 @@ async function run(argv: string[]): Promise<number> {
     return await runInteractive({
       agent,
       status: host.status,
+      panels: host.panels,
       ui: host.ui,
       commands,
       registerCommand: (c) => host.commands.register(c, "builtin:tui"),

@@ -13,6 +13,7 @@ import {
   type Agent,
   AgentBusyError,
   type CommandHost,
+  type PanelRegistry,
   parseCommandLine,
   type StatusRegistry,
   type UiRequests,
@@ -45,6 +46,7 @@ import {
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
+import { renderToolLines } from "./diff-view.ts"
 import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
@@ -69,6 +71,8 @@ import { type TranscriptView, View, type ViewHost } from "./view.ts"
 export interface InteractiveOptions {
   agent: Agent
   status: StatusRegistry
+  /** Live panels registered by extensions, shown above the activity line in both modes. */
+  panels?: PanelRegistry
   /** Extension dialogs, answered inline. Without it they are left to other frontends. */
   ui?: UiRequests
   /**
@@ -356,8 +360,38 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Rows the last frame's dialog took, to size it against the rest of the bottom area. */
   let dialogRows = 0
   const statusBar = new StatusBar(() => opts.status.snapshot())
+  /** The user folded the live panels to one line each (panels.toggle). */
+  let panelsCollapsed = false
+  /** Whether the last frame showed a panel, for the key hint. */
+  let panelsShown = false
+  /** Rows the panels may take this frame, their blank line included; layoutBottom sets it. */
+  let panelRoom = Number.POSITIVE_INFINITY
+  /** Rows the last frame's panels took. */
+  let panelRows = 0
+
+  const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) =>
+    (opts.panels?.size
+      ? opts.panels.snapshot({
+          width,
+          now: Date.now(),
+          sessionId: agent.sessionId,
+          data: agent.data,
+          collapsed,
+        })
+      : []
+    ).flatMap((p) => renderToolLines(p.lines, ctx.theme, width))
 
   const bottom = new Stack([
+    // Live panels (e.g. a todo list): extensions supply the lines, for the session shown now.
+    // They give way to everything else under the transcript: folded, then cut, when rows are short.
+    new View((width, ctx) => {
+      let lines = panelRoom < 2 ? [] : panelLines(width, ctx, panelsCollapsed)
+      if (!panelsCollapsed && lines.length + 1 > panelRoom) lines = panelLines(width, ctx, true)
+      if (lines.length + 1 > panelRoom) lines = lines.slice(0, Math.max(0, panelRoom - 1))
+      panelsShown = lines.length > 0
+      panelRows = panelsShown ? lines.length + 1 : 0
+      return panelsShown ? [...lines, ""] : []
+    }),
     // The activity line: what the turn is doing, how long it has run, the tokens it wrote.
     // Running tools carry their own spinner, so it is left out while they run.
     new View((width, ctx) => {
@@ -412,13 +446,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }),
   ])
 
-  /** The bottom area under `top`, with the dialog fitted into what the rest leaves of `budget`. */
+  /**
+   * The bottom area under `top`, fitted into `budget` rows: live panels give way first (to the
+   * dialog at its full size too), then the dialog is fitted into what the rest leaves.
+   */
   function layoutBottom(width: number, ctx: RenderContext, budget: number, top?: Component): string[] {
     const parts = top ? [top, bottom] : [bottom]
     const draw = () => parts.flatMap((c) => c.render(width, ctx))
     const dialog = dialogs[0]
     if (dialog) dialog.maxRows = Math.max(1, budget)
+    panelRoom = Number.POSITIVE_INFINITY
     let rest = draw()
+    if (panelRows && rest.length > budget) {
+      panelRoom = Math.max(0, budget - (rest.length - panelRows))
+      rest = draw()
+    }
     if (dialog && rest.length > budget) {
       dialog.maxRows = Math.max(1, budget - (rest.length - dialogRows))
       rest = draw()
@@ -436,6 +478,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       working && queueKey && { text: `${queueKey} ${otherWay(enterDoes)}`, priority: 3 },
       newlineKey && { text: `${newlineKey} newline`, priority: 1 },
       keys.label("cancel") && { text: `${keys.label("cancel")} ${ctrlC}`, priority: working ? 2 : 4 },
+      panelsShown &&
+        keys.label("panels.toggle") && {
+          text: `${keys.label("panels.toggle")} ${panelsCollapsed ? "unfold" : "fold"} panels`,
+          priority: 0,
+        },
       ...view.hints(),
     ]
   }
@@ -1027,6 +1074,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return quit()
     } else if (keys.is(e, "tool-output")) {
       showNote(setDetail(nextDetail(detail)))
+    } else if (keys.is(e, "panels.toggle") && panelsShown) {
+      panelsCollapsed = !panelsCollapsed
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too.
       if (working || compacting) interrupt()
