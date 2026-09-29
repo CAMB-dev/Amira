@@ -1,7 +1,14 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
-import { API_VERSION, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
+import {
+  API_VERSION,
+  type Extension,
+  type ExtensionAPI,
+  type RunCommandOptions,
+  type RunCommandResult,
+  type Settings,
+} from "@amira/api"
 import { runCommand } from "@amira/proc"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
@@ -230,10 +237,27 @@ export class ExtensionHost {
         }
       },
       requestRender: () => this.#requestRender(),
-      runCommand: (argv, options) => runCommand(argv, options),
+      runCommand: (argv, options) => runExtensionCommand(argv, options),
       ui: this.#uiFor(source, track),
     }
   }
+}
+
+/**
+ * ExtensionAPI.runCommand: `stdin` travels as the gate line, which is written once the process
+ * tree is contained and then closes stdin.
+ */
+export function runExtensionCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult> {
+  const { stdin, ...rest } = options
+  if (stdin === undefined) return runCommand(argv, rest)
+  if (rest.gated || rest.viaCmd) {
+    return Promise.reject(new Error("runCommand: stdin cannot be combined with gated or viaCmd"))
+  }
+  return runCommand(argv, {
+    ...rest,
+    gated: true,
+    gateLine: stdin.endsWith("\n") ? stdin.slice(0, -1) : stdin,
+  })
 }
 
 function deepFreeze<T>(value: T): T {

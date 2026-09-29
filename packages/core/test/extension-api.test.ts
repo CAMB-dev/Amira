@@ -73,3 +73,29 @@ test("views: the last one registered for a kind wins, unloading restores the one
   host.unload("ext:a")
   expect(host.views.kinds()).toEqual([])
 })
+
+test("runCommand writes stdin, adding the newline, and closes it", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let api: ExtensionAPI | undefined
+  await host.load((a) => {
+    api = a
+  }, "ext:stdin")
+  const read =
+    "let s = ''; for await (const c of process.stdin) s += c; process.stdout.write(JSON.stringify(s))"
+  const opts = {
+    cwd: process.cwd(),
+    timeoutMs: 20_000,
+    signal: new AbortController().signal,
+    stdoutOnly: true,
+  }
+  const r = await api!.runCommand([process.execPath, "-e", read], { ...opts, stdin: '{"a":1}' })
+  expect(r.exitCode).toBe(0)
+  expect(JSON.parse(r.output)).toBe('{"a":1}\n')
+  const same = await api!.runCommand([process.execPath, "-e", read], { ...opts, stdin: "x\n" })
+  expect(JSON.parse(same.output)).toBe("x\n")
+  await expect(api!.runCommand(["x"], { ...opts, stdin: "x", viaCmd: true })).rejects.toThrow("stdin")
+})
