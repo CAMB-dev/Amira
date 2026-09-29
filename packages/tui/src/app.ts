@@ -215,7 +215,8 @@ export function activityLabel(s: {
   thinking: boolean
   retry?: RetryState | undefined
 }): string {
-  if (s.retry) return retryLabel(s.retry)
+  // Once the wait is over the request is on its way again: the other activities apply.
+  if (s.retry && s.retry.at > Date.now()) return retryLabel(s.retry)
   if (s.compacting) return "compacting the conversation"
   if (s.running.length === 1) return `running ${s.running[0]}`
   if (s.running.length > 1) return `running ${s.running.length} tools`
@@ -750,6 +751,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         streamedChars = 0
         break
       case "message.delta":
+        retry = undefined
         if (e.data.kind === "text") {
           thinking = false
           view.replyDelta(e.data.text)

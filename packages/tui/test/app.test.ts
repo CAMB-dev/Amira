@@ -1990,7 +1990,7 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
     if (task.includes("stop me")) return { text: "never", delayMs: 5000 }
     return { toolCalls: [{ name: "pair", args: {} }] }
   }
-  const { terminal, live, all, shows, idle, exited, agent, bus } = await setup([reply, reply, reply], {
+  const { terminal, live, all, idle, exited, agent, bus } = await setup([reply, reply, reply], {
     cols: 90,
     tree: true,
   })
