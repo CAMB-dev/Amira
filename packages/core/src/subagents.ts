@@ -788,9 +788,12 @@ export class AgentTree {
     }
   }
 
-  /** Moves a child to `state`; a persistent one says so with subagent.state. */
-  #setState(child: Child, state: ChildState) {
-    if (child.state === state) return
+  /**
+   * Moves a child to `state`; a persistent one says so with subagent.state (also, with
+   * `turnStarted`, when it stays working for another turn).
+   */
+  #setState(child: Child, state: ChildState, turnStarted = false) {
+    if (child.state === state && !turnStarted) return
     child.state = state
     if (child.persistent && state !== "ended") {
       child.agent.bus.emit(
@@ -811,13 +814,14 @@ export class AgentTree {
     const agent = child.agent
     if (input === undefined && !agent.waitingNotices) return { reason: "done", steps: 0 }
     child.turns++
-    this.#setState(child, "working")
+    this.#setState(child, "working", true)
     const first = input !== undefined ? agent.prompt(input) : agent.wake()
     if (!first) return { reason: "done", steps: 0 }
     let r = await first
     let steps = r.steps
     for (let next = agent.currentTurn; next; next = agent.currentTurn) {
       child.turns++
+      this.#setState(child, "working", true)
       r = await next
       steps += r.steps
     }

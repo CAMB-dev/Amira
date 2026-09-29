@@ -197,6 +197,23 @@ const toolResult = obj({
 
 const usage = obj({ input: num, output: num, cacheRead: num, cacheWrite: num, "cost?": num })
 const budget = obj({ "tokens?": num, "costUsd?": num })
+const spawnGroup = obj({
+  id: str,
+  name: str,
+  parentSessionId: str,
+  state: strings("active", "ending", "ended"),
+  limits: obj({
+    "maxConcurrent?": num,
+    "maxAgents?": num,
+    "budget?": budget,
+    "maxTurnsPerAgent?": num,
+  }),
+  usage,
+  tokens: num,
+  agents: obj({ total: num, queued: num, working: num, idle: num, ended: num }),
+  "endReason?": str,
+  "exceeded?": bool,
+})
 
 const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "session.start": obj({
@@ -274,15 +291,26 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     cwd: str,
     context: strings("fresh", "fork"),
     queued: bool,
+    "persistent?": bool,
+    "groupId?": str,
   }),
   "subagent.end": obj({
     childSessionId: str,
     "toolCallId?": str,
     status: strings("done", "error", "aborted"),
     "error?": str,
+    "note?": str,
+    "turns?": num,
     usage: usage,
     durationMs: num,
   }),
+  "subagent.state": obj(
+    { childSessionId: str, state: strings("queued", "working", "idle"), turns: num },
+    "A persistent sub-agent started a turn (working), waits for a place to run one (queued), or waits for a message (idle).",
+  ),
+  "group.start": obj({ group: spawnGroup }),
+  "group.update": obj({ group: spawnGroup }),
+  "group.end": obj({ group: spawnGroup }),
   "budget.update": obj({ tokens: num, "costUsd?": num, "limit?": budget }),
   "budget.exceeded": obj({ tokens: num, "costUsd?": num, limit: budget }),
   "notice.retry": obj(
