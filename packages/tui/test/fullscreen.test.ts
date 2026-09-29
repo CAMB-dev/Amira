@@ -671,13 +671,13 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
   terminal.send("y")
   await shows("thanks")
   await idle()
-  expect(view()).toContain("? Proceed? › Yes")
+  expect(view()).toContain("└ true")
   // A form draws over the transcript on the same alternate screen.
   const form = host.ui.api("x").form(webhookForm)
   await shows("Where to send build results")
   terminal.send("https://ci.example\x13")
   expect(await form).toEqual({ url: "https://ci.example" })
-  await shows("? Proceed? › Yes")
+  await shows("└ true")
   // So does the sub-agent viewer.
   terminal.send("/agents view\r")
   await shows("No sub-agents")
