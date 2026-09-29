@@ -104,23 +104,20 @@ export default defineExtension((api: ExtensionAPI) => {
     return workspace.get(sessionId)
   }
 
-  // For /status: the speed of each session's last reply, timed from its first streamed piece,
-  // and the agent tree's own cost total (it also counts calls made outside a turn).
+  // For /status: the speed of each top-level session's last reply, timed from its first
+  // streamed piece. Sub-agents (their events carry parentSessionId) are left out.
   const firstDeltaAt = new Map<string, number>()
   const speed = new Map<string, number>()
-  const treeCost = new Map<string, number>()
   api.on("message.start", (e) => void firstDeltaAt.delete(e.sessionId))
   api.on("message.delta", (e) => {
-    if (!firstDeltaAt.has(e.sessionId)) firstDeltaAt.set(e.sessionId, e.ts)
+    if (e.parentSessionId === undefined && !firstDeltaAt.has(e.sessionId)) firstDeltaAt.set(e.sessionId, e.ts)
   })
   api.on("message.end", (e) => {
     const start = firstDeltaAt.get(e.sessionId)
+    firstDeltaAt.delete(e.sessionId)
     const out = e.data.message.usage?.output ?? 0
     const tps = start === undefined ? undefined : tokensPerSecond(out, start, e.ts)
     if (tps !== undefined) speed.set(e.sessionId, tps)
-  })
-  api.on("budget.update", (e) => {
-    if (e.data.costUsd !== undefined) treeCost.set(e.sessionId, e.data.costUsd)
   })
 
   const add = (c: CommandDefinition) => api.registerCommand(c)
@@ -232,19 +229,20 @@ export default defineExtension((api: ExtensionAPI) => {
         : ws.repoRoot
           ? `${ws.branch ?? (ws.head ? `detached at ${ws.head.slice(0, 7)}` : "no branch")}${ws.isWorktree ? " (worktree)" : ""} in ${ws.repoRoot}${ws.dirty ? ", with uncommitted changes" : ""}`
           : "not a git repository"
-      // This session's own replies, and with its sub-agents (the status shows the latter).
+      // This session's own replies, and with its sub-agents' (the status bar shows the latter,
+      // as spent since this run started). Both count earlier runs of a resumed session.
       const priced = rows.filter((r) => r.cost !== undefined)
       const own = priced.length ? priced.reduce((n, r) => n + (r.cost ?? 0), 0) : undefined
       const subs = ctx.session.subagents().filter((s) => s.usage.cost !== undefined)
-      const tree =
-        treeCost.get(info.id) ??
-        (own !== undefined || subs.length
-          ? (own ?? 0) + subs.reduce((n, s) => n + (s.usage.cost ?? 0), 0)
-          : undefined)
+      const withSubs = subs.length
+        ? (own ?? 0) + subs.reduce((n, s) => n + (s.usage.cost ?? 0), 0)
+        : undefined
       const cost =
-        tree === undefined
-          ? "unknown"
-          : `${formatCost(tree)} with sub-agents${own !== undefined && own !== tree ? `; this session alone ${formatCost(own)}` : ""}`
+        withSubs !== undefined
+          ? `${formatCost(withSubs)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${formatCost(own)}` : ""}`
+          : own !== undefined
+            ? `${formatCost(own)} (this session; no sub-agents)`
+            : "unknown"
       const usage = rows.reduce(
         (t, r) => ({
           input: t.input + r.usage.input,

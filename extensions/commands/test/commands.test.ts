@@ -302,7 +302,7 @@ test("/status shows model, provider, session, context, cost, cwd and git", async
   expect(text).toContain("deepseek (openai-chat, https://api.deepseek.com)")
   expect(text).toMatch(/Session\s+s1/)
   expect(text).toContain("32k of 128k tokens (25%)")
-  expect(text).toMatch(/Cost\s+\$0\.0020 with sub-agents\n/)
+  expect(text).toMatch(/Cost\s+\$0\.0020 \(this session; no sub-agents\)/)
   expect(text).toMatch(/Output\s+100 tokens written by this session's replies/)
   expect(text).toMatch(/Cache\s+0% of this session's prompt tokens read from the cache/)
   expect(text).toMatch(/Speed\s+not measured yet/)
@@ -338,18 +338,27 @@ test("/status names the scope of each number: the session's output, cache and sp
   await Bun.sleep(250)
   bus.emit("message.end", { message: cached }, meta)
   await bus.flush()
-  let { text } = await run("/status")
+  const { text } = await run("/status")
   expect(text).toMatch(/Output\s+300 tokens written by this session's replies/)
   expect(text).toMatch(/Cache\s+80% of this session's prompt tokens read from the cache/)
   expect(text).toMatch(/Speed\s+\d+(\.\d)? tokens\/s in this session's last reply/)
   // The sub-agents' replies count in the cost the status shows; this session's own is named too.
   expect(text).toMatch(/Cost\s+\$0\.014 with sub-agents; this session alone \$0\.010/)
   expect(text).toMatch(/Git\s+main in \/work, with uncommitted changes/)
-  // The tree's own total also has calls made outside a turn.
-  bus.emit("budget.update", { tokens: 2000, costUsd: 0.02 }, meta)
+})
+
+test("/status names only the session's cost when it had no sub-agents, and a sub-agent's speed is not its own", async () => {
+  const { run, bus } = await setup({ replies: () => [reply("deepseek/deepseek-flash", 1000, 100, 0.042)] })
+  const child = { sessionId: "c1", parentSessionId: "s1" }
+  const model = { provider: "deepseek", model: "deepseek-flash" }
+  bus.emit("message.start", { model }, child)
+  bus.emit("message.delta", { kind: "text", text: "a" }, child)
+  await Bun.sleep(250)
+  bus.emit("message.end", { message: reply("deepseek/deepseek-flash", 10, 100) }, child)
   await bus.flush()
-  ;({ text } = await run("/status"))
-  expect(text).toMatch(/Cost\s+\$0\.020 with sub-agents; this session alone \$0\.010/)
+  const { text } = await run("/status")
+  expect(text).toMatch(/Cost\s+\$0\.042 \(this session; no sub-agents\)/)
+  expect(text).toMatch(/Speed\s+not measured yet/)
 })
 
 test("/clear starts a new session; /resume switches, or asks among the other sessions", async () => {
