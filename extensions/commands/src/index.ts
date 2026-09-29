@@ -213,8 +213,10 @@ export default defineExtension((api: ExtensionAPI) => {
           ctx.print(`Model: ${current}. Pass one to switch: /model provider/model`)
           return
         }
-        // The picker's answer already shows what was chosen (in the TUI, its echo line).
+        // The TUI's picker leaves an echo line that shows what was chosen; other frontends
+        // get the model it came to.
         ctx.session.setModel(picked)
+        if (ctx.frontend !== "tui") ctx.print(`Model: ${modelRef(ctx.session.info().model)}`)
         return
       }
       ctx.session.setModel(ref)

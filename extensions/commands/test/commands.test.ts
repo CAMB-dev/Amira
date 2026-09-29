@@ -256,7 +256,7 @@ test("/status right at startup waits briefly for the git facts", async () => {
 test("/model switches with an argument and asks without one", async () => {
   const { run, host, asked } = await setup({}, ["openai/gpt-5", undefined])
   expect((await run("/model deepseek/deepseek-pro")).text).toBe("Model: deepseek/deepseek-pro")
-  // Picked: the picker's own answer says what was chosen, so nothing is printed again.
+  // Picked in the TUI: the picker's echo says what was chosen, so nothing is printed again.
   expect((await run("/model")).text).toBe("")
   expect((await run("/status")).text).toContain("openai/gpt-5")
   expect(asked[0]).toContain("deepseek/deepseek-flash | deepseek/deepseek-pro | openai/gpt-5")
