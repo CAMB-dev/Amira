@@ -12,7 +12,11 @@ import type { ToolLine } from "./tool-renderers.ts"
 export type ViewLine = ToolLine
 
 export interface ViewRenderOptions {
-  /** Columns available for each line; longer lines are cut. */
+  /**
+   * Columns available for each line. Longer text lines (text, muted, accent, success, warning,
+   * error) wrap, their later rows hanging under the text after any leading marker; code and
+   * diff lines are cut.
+   */
   width: number
   /** The current time, in ms since the epoch, for elapsed times. */
   now: number
@@ -30,6 +34,14 @@ export interface ViewControl {
    * undefined when cancelled or left empty. Asking again while one is open cancels that one.
    */
   prompt(title: string, opts?: { initial?: string }): Promise<string | undefined>
+  /**
+   * Asks the user to confirm something at the bottom of the view, the way the frontend's own
+   * views do before they stop something: "Stop the run? y stops it · any other key keeps it
+   * running". Resolves true only for y; any other key (or the view closing) is no. `yes` and
+   * `no` say what each answer does (default "yes" and "cancels"). Asking again while one is
+   * open answers that one no.
+   */
+  confirm(question: string, opts?: { yes?: string; no?: string }): Promise<boolean>
 }
 
 /**

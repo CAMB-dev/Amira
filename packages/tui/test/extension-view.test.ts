@@ -6,6 +6,7 @@ import statusExtension from "@amira/ext-status"
 import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
+import { wrapViewLines } from "../src/extension-view.ts"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -187,7 +188,7 @@ test("a long body starts at its top unless the view follows its end; the body sc
   const end = await setup({ rows: 12, view: long(true) })
   end.terminal.send("/progress\r")
   await waitFor(() => end.view().includes("row 39"), "the end")
-  expect(end.screen.lines.at(-1)).toMatch(/^end · /)
+  expect(end.screen.lines.at(-1)).toMatch(/^following · /)
   end.terminal.send(ESC)
   await waitFor(() => !end.screen.inAltScreen, "closed")
   end.terminal.send("\x03")
@@ -230,6 +231,63 @@ test("a view that throws shows the error in place and reports it once", async ()
   expect(s.screen.text.split("render failed").length).toBe(2)
   s.terminal.send("\x03")
   await s.exited
+})
+
+test("a key can ask to confirm first: y goes ahead, any other key does not", async () => {
+  const answers: boolean[] = []
+  const stopping: ViewDefinition<Progress> = {
+    ...progressView,
+    keys: [
+      {
+        key: "x",
+        label: "stop",
+        run: (d, view) =>
+          void view.confirm("Stop the run?", { yes: "stops it", no: "keeps it running" }).then((yes) => {
+            answers.push(yes)
+            if (yes) d.cancelled = true
+            view.requestRender()
+          }),
+      },
+    ],
+  }
+  const s = await setup({ view: stopping })
+  s.terminal.send("/progress\r")
+  await waitFor(() => s.view().includes("check the tests"), "the view")
+  s.terminal.send("x")
+  await waitFor(
+    () => s.screen.lines.at(-1) === "Stop the run? y stops it · any other key keeps it running",
+    "the question",
+  )
+  // Any other key keeps it running, and is used up: "q" does not close the view.
+  s.terminal.send("q")
+  await waitFor(() => answers.length === 1, "no")
+  expect(s.screen.inAltScreen).toBe(true)
+  s.terminal.send("x")
+  s.terminal.send("y")
+  await waitFor(() => answers.length === 2, "yes")
+  expect(answers).toEqual([false, true])
+  expect(s.data.cancelled).toBe(true)
+  s.terminal.send(ESC)
+  await waitFor(() => !s.screen.inAltScreen, "closed")
+  s.terminal.send("\x03")
+  await s.exited
+})
+
+test("long text lines wrap under their text; code lines are cut", () => {
+  const lines = wrapViewLines(
+    [
+      { kind: "error", text: `✗ Verify failed: ${"the reviewer ran out of time ".repeat(3).trim()}` },
+      { kind: "code", text: "x".repeat(60) },
+    ],
+    30,
+  )
+  expect(lines.map((l) => l.text)).toEqual([
+    "✗ Verify failed: the reviewer",
+    "  ran out of time the reviewer",
+    "  ran out of time the reviewer",
+    "  ran out of time",
+    "x".repeat(60),
+  ])
 })
 
 test("a key can ask for a line of text at the bottom of the view; Esc cancels it, not the view", async () => {
