@@ -105,6 +105,7 @@ export {
   type MarkdownToken,
   magenta,
   markdownTheme,
+  monoTheme,
   red,
   rgb,
   type StyleFn,

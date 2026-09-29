@@ -459,6 +459,13 @@ test("formatting helpers", () => {
       ["ccc", "d"],
     ]),
   ).toBe("a    bb\nccc  d")
+  // Columns line up in terminal cells: a CJK character takes two.
+  expect(
+    table([
+      ["名前", "x"],
+      ["abc", "y"],
+    ]),
+  ).toBe("名前  x\nabc   y")
   expect(ago(0, 90_000)).toBe("1m ago")
   expect(sessionLabel({ id: "x", updatedAt: 0, firstUserText: "  a\n b ", messageCount: 3 }, 30_000)).toBe(
     "x  just now  3 msgs  a b",

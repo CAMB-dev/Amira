@@ -4,6 +4,7 @@ import {
   type EditDetails,
   type GlobDetails,
   type GrepDetails,
+  plural,
   type ReadDetails,
   type ToolCallView,
   type ToolLine,
@@ -18,13 +19,15 @@ import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
 import type { ReadParams } from "./read.ts"
 import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE, STATUS_LINE } from "./shell-notes.ts"
+import { TRUNCATION_NOTE } from "./truncate.ts"
 import type { WriteParams } from "./write.ts"
 
 /** How the built-in tools are shown (D1, D27): through the same API as any extension's. */
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
-
 const str = (v: unknown) => (typeof v === "string" ? v : "")
+
+/** Last output lines a command that worked shows when the frontend does not say: as many as while it ran. */
+const SHELL_TAIL_LINES = 3
 
 /** The first line of a text, marked when more follow. */
 function firstLine(s: string): string {
@@ -32,8 +35,19 @@ function firstLine(s: string): string {
   return lines.length > 1 ? `${lines[0]!.trim()} …` : (lines[0] ?? "").trim()
 }
 
+/**
+ * Output as presenter lines; the note the tool puts where it cut oversized output (meant for
+ * the model) as a short muted line saying how much was left out and where all of it is.
+ */
 const outputLines = (text: string): ToolLine[] =>
-  text ? text.split("\n").map((t) => ({ kind: "code", text: t })) : []
+  text
+    ? text.split("\n").map((t) => {
+        const cut = TRUNCATION_NOTE.exec(t)
+        if (!cut) return { kind: "code", text: t }
+        const where = cut[2] ? ` ${"·"} full output: ${cut[2]}` : ""
+        return { kind: "muted", text: `… ${plural(Number(cut[1]), "line")} omitted${where}` }
+      })
+    : []
 
 /** A call's details, when they are there and of the right shape (they are not after a resume). */
 function detailsOf<D>(call: ToolCallView<any, unknown>, key: keyof D): D | undefined {
@@ -41,8 +55,8 @@ function detailsOf<D>(call: ToolCallView<any, unknown>, key: keyof D): D | undef
   return d && typeof d === "object" && key in d ? (d as D) : undefined
 }
 
-/** "+3 −1" */
-const changeCount = (added: number, removed: number) => `+${added} −${removed}`
+/** "+3 -1": the signs the diff lines under it carry. */
+const changeCount = (added: number, removed: number) => `+${added} -${removed}`
 
 /** Numbered file content as read returns it: "    12\tcode". */
 function readLines(text: string): ToolLine[] {
@@ -54,14 +68,19 @@ function readLines(text: string): ToolLine[] {
   return out
 }
 
+/** The lines a read asked for, as its head says them: "lines 50–69", "from line 50", "lines 1–20". */
+function readRange(args: ReadParams): string | undefined {
+  const start = Number.isInteger(args.offset) ? args.offset! : undefined
+  const count = Number.isInteger(args.limit) ? args.limit! : undefined
+  if (start === undefined && count === undefined) return undefined
+  const from = start ?? 1
+  return count !== undefined ? `lines ${from}–${from + count - 1}` : `from line ${from}`
+}
+
 export const readPresenter: ToolPresenter<ReadParams, ReadDetails> = {
   summary(args) {
-    const path = str(args.path)
-    const start = Number.isInteger(args.offset) ? args.offset! : undefined
-    const count = Number.isInteger(args.limit) ? args.limit! : undefined
-    if (start === undefined && count === undefined) return path
-    const from = start ?? 1
-    return `${path} · lines ${from}${count !== undefined ? `–${from + count - 1}` : "–"}`
+    const range = readRange(args)
+    return range ? `${str(args.path)} · ${range}` : str(args.path)
   },
   result(call) {
     if (call.result.isError) return undefined
@@ -71,13 +90,14 @@ export const readPresenter: ToolPresenter<ReadParams, ReadDetails> = {
     if (lines === 0) return firstLine(call.text).replace(/^\((.*)\)$/, "$1")
     const start = d?.startLine ?? 1
     const whole = d?.totalLines !== undefined && start === 1 && lines === d.totalLines
-    const range =
-      !whole && d
-        ? ` (${start}–${start + lines - 1}${d.totalLines !== undefined ? ` of ${d.totalLines}` : ""})`
-        : ""
-    return `${plural(lines, "line")}${range}`
+    if (whole || !d) return plural(lines, "line")
+    const of = d.totalLines !== undefined ? ` of ${d.totalLines}` : ""
+    // The head says which lines were asked for; the result how many came, of how many.
+    if (readRange(call.args)) return `${plural(lines, "line")}${of}`
+    return `${plural(lines, "line")} (${start}–${start + lines - 1}${of})`
   },
   body: (call, { detail }) => (detail === "full" && !call.result.isError ? readLines(call.text) : []),
+  explore: (args) => ({ verb: "Read", target: str(args.path) }),
 }
 
 /** The diff of an edit: from its details, or worked out from its arguments after a resume. */
@@ -142,12 +162,21 @@ export const shellPresenter: ToolPresenter<BashParams, BashDetails> = {
     if (d?.timedOut) return `timed out${printed}`
     if (d?.aborted) return `interrupted${printed}`
     if (d && d.exitCode === null) return `killed${printed}`
-    const code = d?.exitCode ?? Number(/Exit code: (\d+)/.exec(call.text)?.[1] ?? Number.NaN)
+    const code = d?.exitCode ?? Number(/Exit code: (-?\d+)/.exec(call.text)?.[1] ?? Number.NaN)
     if (Number.isNaN(code)) return undefined
+    // Success is the rule: only another exit code is worth saying.
+    if (code === 0) return lines ? plural(lines, "line") : "no output"
     return `exit ${code}${printed}`
   },
-  body: (call, { detail }) =>
-    call.result.isError || detail === "full" ? outputLines(shellOutput(call.text)) : [],
+  body(call, { detail, outputLines: tail = SHELL_TAIL_LINES }) {
+    const out = outputLines(shellOutput(call.text))
+    if (call.result.isError || detail === "full") return out
+    // A command that worked shows the end of what it printed, as it did while it ran.
+    if (detail !== "summary" || tail <= 0) return []
+    while (out.length && !out.at(-1)!.text.trim()) out.pop()
+    if (out.length <= tail) return out
+    return [{ kind: "muted", text: `… ${plural(out.length - tail, "earlier line")}` }, ...out.slice(-tail)]
+  },
 }
 
 export const grepPresenter: ToolPresenter<GrepParams, GrepDetails> = {
@@ -164,6 +193,10 @@ export const grepPresenter: ToolPresenter<GrepParams, GrepDetails> = {
     return d.matches === undefined ? files : `${plural(d.matches, "match", "matches")} in ${files}`
   },
   body: (call, { detail }) => (detail === "full" ? outputLines(call.text) : []),
+  explore: (args) => ({
+    verb: "Search",
+    target: `${str(args.pattern)}${args.path ? ` in ${str(args.path)}` : ""}`,
+  }),
 }
 
 export const globPresenter: ToolPresenter<GlobParams, GlobDetails> = {
@@ -175,6 +208,10 @@ export const globPresenter: ToolPresenter<GlobParams, GlobDetails> = {
     return call.text.startsWith("No files") ? "no files" : plural(call.text.split("\n").length, "file")
   },
   body: (call, { detail }) => (detail === "full" ? outputLines(call.text) : []),
+  explore: (args) => ({
+    verb: "List",
+    target: `${str(args.pattern)}${args.path ? ` in ${str(args.path)}` : ""}`,
+  }),
 }
 
 /** The presenters of the built-in tools, by tool name. */

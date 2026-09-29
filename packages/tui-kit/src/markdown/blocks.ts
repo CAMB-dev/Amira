@@ -109,6 +109,12 @@ export interface BlockState {
   /** A blank line is due before the next rows, unless nothing was shown yet. */
   blankPending: boolean
   emitted: boolean
+  /**
+   * The ordered lists still going on, by the source column of their items: the number the next
+   * item shows and the delimiter after it. Items are numbered from the first one's number on,
+   * whatever numbers they were written with ("1. 1. 1." shows as 1. 2. 3.).
+   */
+  ordinals: Map<number, { next: number; delimiter: string }>
 }
 
 export type Sink = (rows: string[]) => void
@@ -121,11 +127,17 @@ export function newState(): BlockState {
     refs: new Map(),
     blankPending: false,
     emitted: false,
+    ordinals: new Map(),
   }
 }
 
 export function cloneState(s: BlockState): BlockState {
-  const c: BlockState = { ...s, list: s.list.map((e) => ({ ...e })), refs: new Map(s.refs) }
+  const c: BlockState = {
+    ...s,
+    list: s.list.map((e) => ({ ...e })),
+    refs: new Map(s.refs),
+    ordinals: new Map([...s.ordinals].map(([k, v]) => [k, { ...v }])),
+  }
   if (s.fence) c.fence = { ...s.fence, ...(s.fence.held ? { held: [...s.fence.held] } : {}) }
   if (s.table) c.table = { ...s.table, rows: [...s.table.rows], lines: [...s.table.lines] }
   if (s.held) c.held = { ...s.held }
@@ -210,6 +222,7 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     const setext = line.match(SETEXT)
     if (setext) {
       s.held = undefined
+      s.blankPending = true
       const lr = headingRender(setext[1]![0] === "=" ? 1 : 2, h.renderCol, env)
       emit(s, sink, renderLine(lr, h.text, env).rows)
       s.prevBlank = false
@@ -379,6 +392,9 @@ function classify(s: BlockState, line: string, env: Env): Classified {
   if (s.list.length && (s.prevBlank || !para)) {
     while (s.list.length && s.list[s.list.length - 1]!.contentCol > indent) s.list.pop()
   }
+  // Something other than an item at this column ends the ordered lists from here in (a lazy
+  // continuation line of an item's paragraph does not).
+  if ((s.prevBlank || !para) && !item) endOrdinals(s, indent)
   const col = s.list.length ? s.list[s.list.length - 1]!.renderCol : 0
   if (validFence) {
     const info = fence[2]!.trim()
@@ -398,6 +414,8 @@ function classify(s: BlockState, line: string, env: Env): Classified {
     return { rows: [pad(at) + styles.rule(glyphs.rule.repeat(n))] }
   }
   if (heading) {
+    // A heading is set apart from what came before, even without a blank line in the source.
+    s.blankPending = true
     const level = heading[1]!.length
     const lr = headingRender(level, col, env)
     lr.start = indent + heading[0].length
@@ -432,7 +450,19 @@ function classify(s: BlockState, line: string, env: Env): Classified {
   if (item) {
     let marker = item[1]!
     const ordered = /\d/.test(marker)
-    if (!ordered) marker = glyphs.bullets[Math.min(s.list.length, glyphs.bullets.length - 1)] ?? "•"
+    // Deeper lists end with an item out here; so does an ordered list at this column when an
+    // item of another kind comes.
+    endOrdinals(s, indent + 1)
+    if (ordered) {
+      const delimiter = marker.slice(-1)
+      const going = s.ordinals.get(indent)
+      const n = going && going.delimiter === delimiter ? going.next : Number(marker.slice(0, -1))
+      s.ordinals.set(indent, { next: n + 1, delimiter })
+      marker = `${n}${delimiter}`
+    } else {
+      s.ordinals.delete(indent)
+      marker = glyphs.bullets[Math.min(s.list.length, glyphs.bullets.length - 1)] ?? "•"
+    }
     let start = indent + item[0].length
     const spaces = item[2]!.length
     const contentCol = indent + item[1]!.length + (spaces > 4 || spaces === 0 ? 1 : spaces)
@@ -458,8 +488,18 @@ function classify(s: BlockState, line: string, env: Env): Classified {
   }
 }
 
+/** Ends the ordered lists whose items are at column `from` or further in. */
+function endOrdinals(s: BlockState, from: number): void {
+  for (const col of s.ordinals.keys()) if (col >= from) s.ordinals.delete(col)
+}
+
 function headingRender(level: number, col: number, env: Env): LineRender {
-  const base = level <= 2 ? env.styles.heading : env.styles.subheading
+  const base =
+    level === 1
+      ? (env.styles.heading1 ?? env.styles.heading)
+      : level === 2
+        ? env.styles.heading
+        : env.styles.subheading
   return { code: false, lang: "", base, prefix: pad(col), rest: pad(col), indent: col, start: 0 }
 }
 

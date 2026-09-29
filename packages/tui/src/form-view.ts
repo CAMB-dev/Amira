@@ -28,6 +28,7 @@ import {
   type Terminal,
   type Theme,
 } from "@amira/tui-kit"
+import { glyphs } from "./glyphs.ts"
 
 /** Where a form's checks and actions run, and where its answer goes. */
 export interface FormBackend {
@@ -125,7 +126,7 @@ export class FormView implements Component {
         const titles = opts.waiting?.() ?? []
         if (!titles.length) return []
         const what = titles.length === 1 ? "1 dialog waits" : `${titles.length} dialogs wait`
-        return [`! ${what} behind this form: ${titles.join(" · ")}`]
+        return [`${glyphs.warning} ${what} behind this form: ${titles.join(" · ")}`]
       },
     })
   }

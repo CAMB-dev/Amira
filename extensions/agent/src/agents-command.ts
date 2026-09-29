@@ -1,30 +1,30 @@
-import type {
-  CommandCandidate,
-  CommandContext,
-  CommandDefinition,
-  Message,
-  SessionControl,
-  SubagentInfo,
-  ToolCallBlock,
-  ToolResultMessage,
+import {
+  type CommandCandidate,
+  type CommandContext,
+  type CommandDefinition,
+  clip,
+  formatElapsed,
+  formatTokens,
+  type Message,
+  plural,
+  type SessionControl,
+  type SubagentInfo,
+  subagentStateText,
+  type ToolCallBlock,
+  type ToolResultMessage,
 } from "@amira/api"
 
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(n)
-  return n < 100_000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`
-}
+export { formatTokens }
 
+/** `text` on one line, cut to `max` terminal cells. */
 function oneLine(text: string, max: number): string {
-  const s = text.replace(/\s+/g, " ").trim()
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+  return clip(text.replace(/\s+/g, " ").trim(), max)
 }
 
-/** How long it has run (or ran), e.g. "12s" or "3m05s"; "queued" before it starts. */
+/** How long it has run (or ran), e.g. "12s" or "3m 05s"; "queued" before it starts. */
 export function elapsed(info: SubagentInfo, now: number): string {
   const ms = info.durationMs ?? (info.startedAt !== undefined ? now - info.startedAt : undefined)
-  if (ms === undefined) return "queued"
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`
+  return ms === undefined ? "queued" : formatElapsed(ms)
 }
 
 /** Tokens, and the cost when the model's prices are known. */
@@ -42,7 +42,8 @@ export function subagentSummary(info: SubagentInfo, now: number, taskChars = 60)
 /** Its status and how long it ran; just the status when that is not known (it never started). */
 function stateText(info: SubagentInfo, now: number): string {
   const known = info.durationMs !== undefined || info.startedAt !== undefined
-  return info.status === "queued" || !known ? info.status : `${info.status} · ${elapsed(info, now)}`
+  const state = subagentStateText(info.status)
+  return info.status === "queued" || !known ? state : `${state} · ${elapsed(info, now)}`
 }
 
 function blockText(content: Message["content"]): string {
@@ -113,16 +114,16 @@ export function transcriptText(
         if (isFinal) out.push(...text.split("\n"), "")
         else {
           const first = text.split("\n")[0]!
-          out.push(first.length > 100 || text.includes("\n") ? `${oneLine(first, 99)}…` : first, "")
+          out.push(text.includes("\n") ? `${oneLine(first, 98)} …` : oneLine(first, 100), "")
         }
       } else if (b.type === "toolCall") {
         const r = results.get(b.id)
         out.push(toolHead(b, r?.isError === true))
-        if (!r) out.push(finished ? "  └ (no result)" : "  └ running…")
+        if (!r) out.push(finished ? "  └ no result" : "  └ running")
         else {
           const lines = blockText(r.content).trim().split("\n")
-          const more = lines.length > 1 ? ` (+${lines.length - 1} lines)` : ""
-          out.push(`  └ ${oneLine(lines[0] || "(no output)", 100)}${more}`)
+          const more = lines.length > 1 ? ` (+${plural(lines.length - 1, "line")})` : ""
+          out.push(`  └ ${oneLine(lines[0] || "no output", 100)}${more}`)
         }
         if (b.name === "agent") {
           for (const kid of callKids(kids, b)) out.push(`  ◆ ${subagentSummary(kid, now)}`)
@@ -136,6 +137,7 @@ export function transcriptText(
   if (kids.length) out.push("")
   if (info.error && info.status !== "done") out.push(`✗ ${info.error}`)
   else if (!finished) out.push(`… ${waitingFor(info)}`)
+  else if (info.note) out.push(`⊘ ${info.note}`)
   else if (!last) out.push("(no reply)")
   while (out.at(-1) === "") out.pop()
   return out.join("\n")
@@ -204,7 +206,9 @@ function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
   const target = findSubagent(list, ref)
   if (!target) throw new Error(`no sub-agent "${ref}"; /agents lists them`)
   if (!live(target) || !ctx.session.stopSubagent(target.id)) {
-    ctx.print(`${target.title} (${target.role} ${target.id}) has already ended (${target.status}).`)
+    ctx.print(
+      `${target.title} (${target.role} ${target.id}) has already ended (${subagentStateText(target.status)}).`,
+    )
     return
   }
   ctx.print(`Stopped ${target.title} (${target.role} ${target.id}).`)

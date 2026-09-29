@@ -140,6 +140,14 @@ export function isSubagentView(view: FrontendView): view is SubagentView {
  */
 export type SubagentState = "queued" | "running" | "idle" | SubagentStatus
 
+/**
+ * A sub-agent's state as every screen words it: running, queued, idle, done, failed, stopped
+ * (the states are named for code: an ended one is "error" or "aborted").
+ */
+export function subagentStateText(state: SubagentState): string {
+  return state === "error" ? "failed" : state === "aborted" ? "stopped" : state
+}
+
 /** A sub-agent of the session, running or finished, as commands list it. */
 export interface SubagentInfo {
   id: string

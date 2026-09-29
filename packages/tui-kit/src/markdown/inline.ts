@@ -1,12 +1,20 @@
 import { defaultGlyphs } from "../glyphs.ts"
 import { compose, type MarkdownToken, markdownTheme, type StyleFn, type Theme } from "../style.ts"
 
-export type MarkdownStyles = Record<MarkdownToken, StyleFn>
+/**
+ * The Markdown tokens, and two a theme may add: `heading1`, the style of level 1 headings when
+ * they should differ from level 2 (`heading` otherwise), and `codeTicks`, which, when set, draws
+ * the backticks around inline code in its style (a theme without colors, where the code's own
+ * style would not tell it apart).
+ */
+export type MarkdownStyles = Record<MarkdownToken, StyleFn> & { heading1?: StyleFn; codeTicks?: StyleFn }
 
 /** The Markdown tokens of a theme, with `markdownTheme` filling in the ones it lacks. */
 export function markdownStyles(theme: Theme): MarkdownStyles {
   const out = {} as MarkdownStyles
   for (const k of Object.keys(markdownTheme) as MarkdownToken[]) out[k] = theme[k] ?? markdownTheme[k]
+  if (theme.heading1) out.heading1 = theme.heading1
+  if (theme.codeTicks) out.codeTicks = theme.codeTicks
   return out
 }
 
@@ -200,7 +208,11 @@ function parse(s: string, start: number, end: number, scope: Scope, ctx: Context
       }
       if (to > from) {
         const codeScope = { ...scope, carry: scope.carry + "`".repeat(n) }
+        const ticks = opts.styles.codeTicks && styleOf([...scope.styles, opts.styles.codeTicks])
+        // Added text, like a link's URL: the backticks are drawn, not taken from the source.
+        if (ticks) out.push(run("`", from, ticks, scope, false))
         out.push(run(s.slice(from, to), from, styleOf([...scope.styles, opts.styles.code]), codeScope, true))
+        if (ticks) out.push(run("`", to, ticks, scope, false))
       }
       i = close + n
       textStart = i

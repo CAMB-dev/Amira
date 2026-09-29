@@ -6,6 +6,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
+import { glyphs } from "./glyphs.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 
 type Completion = { command?: string; candidates: CommandCandidate[] }
@@ -214,7 +215,9 @@ export class CommandPopup implements Component {
       const name = label(c)
       const pad = " ".repeat(Math.max(0, col - visibleWidth(name)))
       const desc = c.description ? `  ${muted(c.description)}` : ""
-      const line = selected ? `${accent("›")} ${accent(name)}${pad}${desc}` : `  ${name}${pad}${desc}`
+      const line = selected
+        ? `${accent(glyphs.pointer)} ${accent(name)}${pad}${desc}`
+        : `  ${name}${pad}${desc}`
       return truncateToWidth(line, width, "…")
     })
     if (n > MAX_ROWS) lines.push(muted(`  ${this.#selected + 1}/${n}`))

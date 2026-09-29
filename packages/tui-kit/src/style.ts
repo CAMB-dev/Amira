@@ -2,9 +2,9 @@ export type StyleFn = (text: string) => string
 
 let colorOn = colorSupported(process.env)
 
-/** Colors are off when `NO_COLOR` is set to a non-empty value. */
+/** Colors are off when `NO_COLOR` is set to a non-empty value, and on a dumb terminal (`TERM=dumb`). */
 export function colorSupported(env: Record<string, string | undefined>): boolean {
-  return !env.NO_COLOR
+  return !env.NO_COLOR && env.TERM !== "dumb"
 }
 
 /** Sets the default for `RenderContext.color`, used by renderers that are not told otherwise. */
@@ -110,6 +110,47 @@ export const defaultTheme: Theme = {
   /** Text selected with the mouse, as in a full-screen transcript. */
   selection: inverse,
   ...markdownTheme,
+}
+
+const plainText: StyleFn = (s) => s
+
+/**
+ * The theme for a terminal without colors (NO_COLOR): what colors told apart is told apart by
+ * attributes, which survive `stripColors`. Muted text and borders are dim, the accent and
+ * warnings bold, headings by level (H1 bold and underlined, H2 bold, deeper bold italic), and
+ * inline code keeps its backticks (`codeTicks`), since nothing else would mark it.
+ */
+export const monoTheme: Theme = {
+  text: plainText,
+  accent: bold,
+  muted: dim,
+  error: bold,
+  success: plainText,
+  warning: bold,
+  border: dim,
+  selection: inverse,
+  heading: bold,
+  heading1: compose(bold, underline),
+  subheading: compose(bold, italic),
+  strong: bold,
+  emphasis: italic,
+  strike: strikethrough,
+  code: plainText,
+  codeTicks: dim,
+  link: underline,
+  linkUrl: dim,
+  image: italic,
+  quote: italic,
+  quoteBar: dim,
+  listMarker: plainText,
+  rule: dim,
+  codeFrame: dim,
+  tableBorder: dim,
+  tableHeader: bold,
+  keyword: plainText,
+  string: plainText,
+  number: plainText,
+  comment: dim,
 }
 
 /**

@@ -12,6 +12,8 @@ export type BlockKind =
   | "command-output"
   | "dialog"
   | "history"
+  /** What the model thought before it answered: "∴ Thought for 12s", unfolded to the text. */
+  | "reasoning"
 
 /** Blocks that follow one of the given kind with no blank line between them. */
 const JOINS: Partial<Record<BlockKind, BlockKind>> = {
@@ -73,6 +75,30 @@ export class Transcript {
 
 export type NoticeLevel = "info" | "success" | "warning" | "error" | "interrupted"
 
+/** The notice after a turn the user interrupted. */
+export const INTERRUPTED_NOTICE = "Interrupted"
+
+/**
+ * The notice after a turn that failed: what went wrong, then what to do next. The error says
+ * itself what failed (a request, a missing model), so nothing is put in front of it.
+ */
+export function modelErrorNotice(error: string | undefined): string {
+  const said = error?.trim() || "The model request failed"
+  return `${said}\n↑ recalls the prompt · /model switches models`
+}
+
+/**
+ * The notice a reply of a resumed session ends with when it did not end well, as the live
+ * transcript showed it: interrupted, or failed (the error itself is not kept).
+ */
+export function replyEndNotice(message: {
+  stopReason?: string
+}): { level: NoticeLevel; text: string } | undefined {
+  if (message.stopReason === "aborted") return { level: "interrupted", text: INTERRUPTED_NOTICE }
+  if (message.stopReason === "error") return { level: "error", text: "Model request failed" }
+  return undefined
+}
+
 /**
  * A system notice (interrupted, compacted, an extension error, ...): a symbol by level, then
  * the text; later lines are indented under the first.
@@ -97,12 +123,54 @@ export function noticeDetailLines(theme: Theme, level: NoticeLevel, detail: stri
   return hanging(detail, width - pad.length).map((l) => `${pad}${theme.muted(l)}`)
 }
 
-/** Output of a command, hanging under its echo like a tool's result. */
-export function commandOutputLines(style: StyleFn, muted: StyleFn, text: string, width = 80): string[] {
-  return hanging(text, width - 4).map((l, i) => `  ${i === 0 ? muted(glyphs.result) : " "} ${style(l)}`)
+/**
+ * Output of a command, hanging under its echo like a tool's result. An error is marked with
+ * "✗" after the result mark too, so it reads as one without colors. A row of columns (cells two
+ * spaces or more apart, as /help and /cost print them) wraps under its last column, so the
+ * columns stay lined up.
+ */
+export function commandOutputLines(
+  theme: Theme,
+  level: "info" | "warning" | "error",
+  text: string,
+  width = 80,
+): string[] {
+  const style = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.text
+  const mark = level === "error" ? `${theme.error(glyphs.error)} ` : ""
+  const lead = level === "error" ? textWidth(glyphs.error) + 1 : 0
+  return hanging(text, width - 4 - lead, true).map(
+    (l, i) =>
+      `  ${i === 0 ? theme.muted(glyphs.result) : " "} ${i === 0 ? mark : " ".repeat(lead)}${style(l)}`,
+  )
 }
 
-/** Text wrapped to `width`, so that its rows can hang under a symbol instead of wrapping to column 0. */
-function hanging(text: string, width: number): string[] {
-  return text.split("\n").flatMap((l) => (l ? wrapText(l, Math.max(10, width)) : [""]))
+/** Where a row of columns wraps to: past its last run of two or more spaces, when that is not too far in. */
+function columnIndent(line: string, width: number): number {
+  const m = /^(.*\S) {2,}(?=\S)/.exec(line)
+  if (!m) return /^ */.exec(line)![0].length
+  const at = textWidth(m[0])
+  return at <= width * 0.6 ? at : /^ */.exec(line)![0].length
+}
+
+/**
+ * Text wrapped to `width`, so that its rows can hang under a symbol instead of wrapping to
+ * column 0; with `columns`, a line's rows after its first line up under its last column.
+ */
+function hanging(text: string, width: number, columns = false): string[] {
+  const room = Math.max(10, width)
+  return text.split("\n").flatMap((l) => {
+    if (!l) return [""]
+    const rows = wrapText(l, room)
+    if (!columns || rows.length < 2) return rows
+    const indent = columnIndent(l, room)
+    if (!indent) return rows
+    const rest = wrapText(l.slice(visibleOffset(l, rows[0]!)).trimStart(), Math.max(10, room - indent))
+    return [rows[0]!, ...rest.map((r) => " ".repeat(indent) + r)]
+  })
+}
+
+/** How much of `line` its first wrapped row `row` took, in characters. */
+function visibleOffset(line: string, row: string): number {
+  const plain = row.trimEnd()
+  return line.startsWith(plain) ? plain.length : Math.min(line.length, plain.length)
 }

@@ -49,15 +49,21 @@ test("blank lines separate blocks, collapsed to one; leading and trailing ones a
 })
 
 test("headings, setext headings and rules", () => {
+  // A heading is set apart from what came before it, blank line or not.
   expect(md("# One\n## Two ##\n#### Four\nText\n===\nMore\n---\n\n***")).toEqual([
     "One",
+    "",
     "Two",
+    "",
     "Four",
+    "",
     "Text",
+    "",
     "More",
     "",
     "─".repeat(40),
   ])
+  expect(md("Some text\n## Next")).toEqual(["Some text", "", "Next"])
   const m = new MarkdownStream()
   m.append("# Title")
   expect(m.render(20, { ...plain, theme: defaultTheme })[0]).toBe(defaultTheme.heading!("Title"))
@@ -80,6 +86,27 @@ test("lists hang their wrapped rows under the text, nest, number and check", () 
   // A line right after an item continues it; after a blank line it must be indented to.
   expect(md("- item\nlazy\n\nafter")).toEqual(["• item", "  lazy", "", "after"])
   expect(md("1. a\n\n   still a\n2. b")).toEqual(["1. a", "", "   still a", "2. b"])
+})
+
+test("ordered lists are numbered from their first item on, whatever numbers they were written with", () => {
+  expect(md("1. a\n1. b\n1. c")).toEqual(["1. a", "2. b", "3. c"])
+  expect(md("3) a\n3) b")).toEqual(["3) a", "4) b"])
+  // Loose, with nested lists and continued paragraphs, it goes on.
+  expect(md("1. a\n\n   more\n   1. x\n   1. y\n1. b")).toEqual([
+    "1. a",
+    "",
+    "   more",
+    "   1. x",
+    "   2. y",
+    "2. b",
+  ])
+  // A paragraph or another kind of list ends it: the next one starts again.
+  expect(md("1. a\n1. b\n\ntext\n\n1. c")).toEqual(["1. a", "2. b", "", "text", "", "1. c"])
+  expect(md("1. a\n- b\n1. c")).toEqual(["1. a", "• b", "1. c"])
+  // A lazy continuation line does not end it.
+  expect(md("1. a\nlazy\n1. b")).toEqual(["1. a", "   lazy", "2. b"])
+  // Nine items and a tenth: the number grows and its text moves along.
+  expect(md(`${"1. x\n".repeat(9)}1. ten`).at(-1)).toBe("10. ten")
 })
 
 test("blockquotes get a bar per level", () => {

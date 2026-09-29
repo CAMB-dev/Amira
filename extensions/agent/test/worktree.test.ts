@@ -198,14 +198,19 @@ test("a clean merge past the review threshold is reviewed first (D38)", async ()
   const wt = await worktree(root, home)
   writeFileSync(path.join(wt.cwd, "f.txt"), "1\n2\n3\n")
   const options: string[][] = []
+  const titles: string[] = []
   const r = await mergeWorktree(git, wt, {
     threshold: { lines: 4 },
-    review: async (_t, _d, o) => {
+    who: `"Fix the bug" (coder)`,
+    review: async (t, _d, o) => {
+      titles.push(t)
       options.push(o)
       return MERGE
     },
   })
   expect(options).toEqual([[MERGE, KEEP, DISCARD]])
+  // The review says whose changes they are.
+  expect(titles).toEqual(['Merge the changes of "Fix the bug" (coder) (1 file, +3 -5)?'])
   expect(r.outcome).toBe("merged")
   expect(read(path.join(root, "f.txt"))).toBe("1\n2\n3\n")
 })

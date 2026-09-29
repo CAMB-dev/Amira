@@ -128,6 +128,12 @@ export interface TuiSettings {
    * never. Otherwise, and until one loads, an image shows as its alt text. Default "auto".
    */
   images?: "auto" | "on" | "off"
+  /**
+   * How many of its last output lines a shell command that succeeded shows under its result
+   * (the tool output level "summary"; "full" shows all). 0 shows none. Default 3, as many as
+   * show while it runs.
+   */
+  shellOutputLines?: number
 }
 
 export type WebSearchBackend = "exa" | "brave" | "tavily" | "searxng"

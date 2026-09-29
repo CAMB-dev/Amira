@@ -83,7 +83,7 @@ test("every dialog is a block with a bar down its left, the question, the option
   ])
   expect(open({ kind: "input", requestId: "i", title: "Name", placeholder: "your name" }).rows()).toEqual([
     "? Name",
-    "› your name",
+    "❯ your name",
     "",
     "Enter submit · Esc cancel",
   ])
@@ -160,7 +160,7 @@ test("a confirm's always choice says how far it reaches when the asker says so",
   press("down", "enter")
   expect(answers).toEqual(["always"])
   expect(dialogEchoLines(r, "always", plain.theme)).toEqual([
-    "┃ ? Allow bash? › Yes, and don't ask again for bash (policy)",
+    "┃ ? Allow bash? ❯ Yes, and don't ask again for bash (policy)",
   ])
 })
 
@@ -352,16 +352,16 @@ test("the answer stays in the transcript as one line per question under the bar"
   const theme = plain.theme
   const r: DialogRequest = { kind: "ask", requestId: "q", title: "2 questions", questions: QUESTIONS }
   expect(dialogEchoLines(r, [{ selected: ["Patch"] }, { selected: [], other: "none" }], theme)).toEqual([
-    "┃ ? Which approach do you prefer? › Patch",
-    '┃ ? What else should I do? › "none"',
+    "┃ ? Which approach do you prefer? ❯ Patch",
+    '┃ ? What else should I do? ❯ "none"',
   ])
-  expect(dialogEchoLines(r, undefined, theme)).toEqual(["┃ ? 2 questions › cancelled"])
+  expect(dialogEchoLines(r, undefined, theme)).toEqual(["┃ ? 2 questions ❯ cancelled"])
   const confirm: DialogRequest = { kind: "confirm", requestId: "c", title: "Allow bash?", always: true }
   expect(dialogEchoLines(confirm, "always", theme)).toEqual([
-    "┃ ? Allow bash? › Yes, and don't ask again this session",
+    "┃ ? Allow bash? ❯ Yes, and don't ask again this session",
   ])
   const secret: DialogRequest = { kind: "input", requestId: "s", title: "Key", secret: true }
-  expect(dialogEchoLines(secret, "sk-1", theme)).toEqual(["┃ ? Key › (hidden)"])
+  expect(dialogEchoLines(secret, "sk-1", theme)).toEqual(["┃ ? Key ❯ (hidden)"])
 })
 
 test("colors: the bar and ❯ in the accent, an approval's bar in the warning color; without color the glyphs still tell", () => {

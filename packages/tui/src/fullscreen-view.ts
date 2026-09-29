@@ -21,8 +21,11 @@ import {
   type BlockImages,
   type BlockRenders,
   DetailNoticeBlock,
+  exploredRun,
   fixedLine,
+  groupExplored,
   LinesBlock,
+  ReasoningBlock,
   ReplyBlock,
   SubagentGroupBlock,
   ToolBlock,
@@ -42,7 +45,8 @@ import {
   trackGroup,
   updateNode,
 } from "./subagents.ts"
-import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
+import { OUTPUT_LINES } from "./tool-view.ts"
+import { commandOutputLines, type NoticeLevel, noticeLines, replyEndNotice } from "./transcript.ts"
 import { lastReply, TranscriptPane } from "./transcript-pane.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
@@ -87,7 +91,17 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Calls of the running step, in call order. */
   let stepCalls: ToolBlock[] = []
   let reply: ReplyBlock | undefined
+  /** The reasoning of the reply streaming now, while it thinks. */
+  let reasoning: ReasoningBlock | undefined
   let overlay = false
+
+  /** The thinking is over: its line says for how long. True when it was shown. */
+  const endReasoning = (): boolean => {
+    if (!reasoning) return false
+    reasoning.finish()
+    reasoning = undefined
+    return true
+  }
   const findInput = new LineInput()
   let finding = false
   /** Rows of the transcript in the last frame, for mouse clicks. */
@@ -120,8 +134,19 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       nodes,
       groups,
       renders,
+      outputLines: host.settings.shellOutputLines ?? OUTPUT_LINES,
       ...(images ? { images } : {}),
     }
+  }
+
+  /** Makes the exploring calls in a row around `block` one "Explored" row. */
+  function regroup(block: Block): void {
+    const run = exploredRun(pane.blocks, block, env(terminal.columns))
+    if (!run) return
+    pane.insertAfter(run.replaces.at(-1)!, run.group)
+    const selected = pane.selected
+    for (const b of run.replaces) pane.remove(b)
+    if (selected && run.replaces.includes(selected)) pane.selected = run.group
   }
 
   const root = new View((width, ctx) => {
@@ -219,12 +244,12 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     renderer.requestRender()
   }
 
+  function noticeBlock(level: NoticeLevel, text: string): LinesBlock {
+    return new LinesBlock("notice", (width, t) => noticeLines(t, level, text, width), text)
+  }
+
   function notice(level: NoticeLevel, text: string, detail?: string): void {
-    add(
-      detail
-        ? new DetailNoticeBlock(level, text, detail)
-        : new LinesBlock("notice", (width, t) => noticeLines(t, level, text, width), text),
-    )
+    add(detail ? new DetailNoticeBlock(level, text, detail) : noticeBlock(level, text))
   }
 
   /** Ends the calls of the step that never finished: unstarted ones go, running ones read as cut short. */
@@ -493,7 +518,21 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       pane.clearText()
       add(userBlock(m))
     },
+    reasoningDelta(text) {
+      if (!reasoning) {
+        // Thinking after some text: that text is a reply of its own, before it.
+        if (reply?.source.trim()) {
+          reply.finish()
+          reply = undefined
+        }
+        reasoning = new ReasoningBlock("", undefined, Date.now(), true)
+        pane.add(reasoning)
+      }
+      reasoning.append(text)
+      pane.changed()
+    },
     replyDelta(text) {
+      endReasoning()
       if (!reply) {
         reply = new ReplyBlock("", true, host.hyperlinks)
         pane.add(reply)
@@ -502,7 +541,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       pane.changed()
     },
     replyEnd(calls) {
-      let shown = false
+      let shown = endReasoning()
       if (reply) {
         reply.finish()
         if (reply.source.trim()) shown = true
@@ -545,6 +584,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       b.end = end
       b.touch()
       pane.changed()
+      regroup(b)
       return true
     },
     turnEnd() {
@@ -627,16 +667,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       const last = pane.last?.kind
       // Right after its command it hangs under the echo; on its own it is a notice.
       if (last !== "command" && last !== "command-output") return notice(level, text)
-      add(
-        new LinesBlock(
-          "command-output",
-          (width, t) => {
-            const style = level === "error" ? t.error : level === "warning" ? t.warning : t.text
-            return commandOutputLines(style, t.muted, text, width)
-          },
-          text,
-        ),
-      )
+      add(new LinesBlock("command-output", (width, t) => commandOutputLines(t, level, text, width), text))
     },
     dialogEcho: (draw) =>
       add(
@@ -651,24 +682,33 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       for (const m of messages) {
         if (m.role === "toolResult") results.set(m.toolCallId, { content: m.content, isError: m.isError })
       }
+      const blocks: Block[] = []
       for (const m of messages) {
-        if (m.role === "user") pane.add(userBlock(m))
+        if (m.role === "user") blocks.push(userBlock(m))
         else if (m.role === "assistant") {
           for (const b of m.content) {
-            if (b.type === "text" && b.text.trim()) pane.add(new ReplyBlock(b.text, false, host.hyperlinks))
+            if (b.type === "thinking" && (b.text.trim() || b.redacted))
+              blocks.push(new ReasoningBlock(b.text, undefined))
+            else if (b.type === "text" && b.text.trim())
+              blocks.push(new ReplyBlock(b.text, false, host.hyperlinks))
             else if (b.type === "toolCall") {
               const call = new ToolBlock(b.id, b.name, b.args, host.sessionId())
               const result = results.get(b.id)
               call.end = result ? { result } : { result: { content: [], isError: true }, rejected: "aborted" }
-              pane.add(call)
+              blocks.push(call)
             }
           }
+          // How the reply ended, when it did not end well: as the live transcript said it.
+          const end = replyEndNotice(m)
+          if (end) blocks.push(noticeBlock(end.level, end.text))
         }
       }
-      add(new LinesBlock("history", (_w, t) => [historySeparator(t, session)], ""))
+      for (const b of groupExplored(blocks, env(terminal.columns))) pane.add(b)
+      add(new LinesBlock("history", (w, t) => [historySeparator(t, session, w)], ""))
     },
     leaveSession() {
       settleStep()
+      endReasoning()
       reply?.finish()
       reply = undefined
     },

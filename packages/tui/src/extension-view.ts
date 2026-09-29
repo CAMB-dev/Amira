@@ -1,4 +1,4 @@
-import type { ViewControl, ViewDefinition, ViewLine } from "@amira/api"
+import type { ToolLine, ViewControl, ViewDefinition, ViewLine } from "@amira/api"
 import {
   type Component,
   type InputEvent,
@@ -10,8 +10,12 @@ import {
   type Theme,
   truncateToWidth,
   visibleWidth,
+  wrapText,
 } from "@amira/tui-kit"
-import { renderToolLines } from "./diff-view.ts"
+import { renderToolLines, terminalText } from "./diff-view.ts"
+import { glyphs } from "./glyphs.ts"
+import { fitHint } from "./hint.ts"
+import { scrollPosition, waitingLine } from "./subagent-view.ts"
 
 /** Where the TUI finds the view kinds extensions registered. */
 export interface ViewSource {
@@ -28,6 +32,47 @@ export interface ExtensionViewerOptions {
   requestRender?: () => void
   /** Reports a view that threw, e.g. as an extension error; the view shows a line instead. */
   onError?: (error: string) => void
+}
+
+/** Lines of text that wrap to the width; the rest (code, diffs) are cut, as tool output is. */
+const WRAPPED: ReadonlySet<ToolLine["kind"]> = new Set([
+  "text",
+  "muted",
+  "accent",
+  "success",
+  "warning",
+  "error",
+])
+
+/**
+ * Where a wrapped line's later rows start: past its indent and a leading marker such as "✗ ",
+ * "● ", "- " or "12. ", so they hang under its text.
+ */
+const HANG = /^(\s*)((?:[^\p{L}\p{N}\s]{1,2}|\d{1,3}[.)])\s+)?/u
+
+/**
+ * View lines fitted to `width`: text lines wrapped, their later rows hanging under their text,
+ * code and diff lines as they are (renderToolLines cuts them).
+ */
+export function wrapViewLines(lines: readonly ViewLine[], width: number): ViewLine[] {
+  const out: ViewLine[] = []
+  for (const l of lines) {
+    const text = terminalText(l.text)
+    if (!WRAPPED.has(l.kind) || l.lineNo !== undefined || visibleWidth(text) <= width) {
+      out.push(l)
+      continue
+    }
+    const m = HANG.exec(text)!
+    let hang = visibleWidth(m[0])
+    // A marker that leaves too little room hangs nothing.
+    if (width - hang < 10) hang = 0
+    const rest = text.slice(m[0].length)
+    const rows = hang ? wrapText(rest, width - hang) : wrapText(text, width)
+    for (const [i, r] of rows.entries()) {
+      out.push({ ...l, text: hang ? (i === 0 ? m[0] + r : " ".repeat(hang) + r) : r })
+    }
+  }
+  return out
 }
 
 /**
@@ -49,6 +94,8 @@ export class ExtensionViewer implements Component {
   #failed = new Map<string, string>()
   /** A line of text a key handler asked for (ViewControl.prompt), while it is open. */
   #prompt: { title: string; input: LineInput; resolve: (text: string | undefined) => void } | undefined
+  /** A question a key handler asked to confirm (ViewControl.confirm), until the next key answers. */
+  #confirm: { text: string; resolve: (yes: boolean) => void } | undefined
 
   constructor(view: ViewDefinition, data: unknown, opts: ExtensionViewerOptions = {}) {
     this.kind = view.kind
@@ -63,7 +110,10 @@ export class ExtensionViewer implements Component {
   /** Shows other data, e.g. when a command opens the same kind again. */
   show(data: unknown): void {
     // A prompt asked about the data shown before is cancelled, not answered for the new one.
-    if (data !== this.#data) this.#answer(undefined)
+    if (data !== this.#data) {
+      this.#answer(undefined)
+      this.#confirmed(false)
+    }
     this.#data = data
   }
 
@@ -72,6 +122,12 @@ export class ExtensionViewer implements Component {
   }
 
   handleInput(e: InputEvent): boolean {
+    if (this.#confirm) {
+      // y confirms; any other key says no.
+      this.#confirmed(matchesKey(e, "y"))
+      this.#opts.requestRender?.()
+      return true
+    }
     const asking = this.#prompt
     if (asking) {
       if (matchesKey(e, "escape") || matchesKey(e, "c", { ctrl: true })) this.#answer(undefined)
@@ -98,15 +154,26 @@ export class ExtensionViewer implements Component {
     return {
       close: () => {
         this.#answer(undefined)
+        this.#confirmed(false)
         this.#opts.onClose?.()
       },
       requestRender: () => this.#opts.requestRender?.(),
       prompt: (title, opts) => {
         this.#answer(undefined)
+        this.#confirmed(false)
         const input = new LineInput()
         if (opts?.initial) input.value = opts.initial
         return new Promise<string | undefined>((resolve) => {
           this.#prompt = { title: oneLine(title), input, resolve }
+          this.#opts.requestRender?.()
+        })
+      },
+      confirm: (question, opts) => {
+        this.#answer(undefined)
+        this.#confirmed(false)
+        const text = `${oneLine(question)} y ${opts?.yes ?? "yes"} ${glyphs.separator} any other key ${opts?.no ?? "cancels"}`
+        return new Promise<boolean>((resolve) => {
+          this.#confirm = { text, resolve }
           this.#opts.requestRender?.()
         })
       },
@@ -122,9 +189,18 @@ export class ExtensionViewer implements Component {
     asking.resolve(value ? value : undefined)
   }
 
-  /** The view is being closed by the frontend: an open prompt is cancelled. */
+  /** Answers the open confirmation, if any. */
+  #confirmed(yes: boolean) {
+    const asking = this.#confirm
+    if (!asking) return
+    this.#confirm = undefined
+    asking.resolve(yes)
+  }
+
+  /** The view is being closed by the frontend: an open prompt is cancelled, a question answered no. */
   dispose(): void {
     this.#answer(undefined)
+    this.#confirmed(false)
   }
 
   render(width: number, ctx: RenderContext): string[] {
@@ -132,15 +208,15 @@ export class ExtensionViewer implements Component {
     const opts = { width, now: this.#now() }
     const head: string[] = []
     const title = this.#call("title", () => this.#view.title(this.#data)) ?? this.kind
-    head.push(truncateToWidth(`${theme.accent("◆")} ${theme.text(oneLine(title))}`, width, "…"))
+    head.push(
+      truncateToWidth(`${theme.accent(glyphs.subagent)} ${theme.text(oneLine(title))}`, width, glyphs.more),
+    )
     const extra = this.#view.header
       ? (this.#call("header", () => this.#view.header?.(this.#data, opts)) ?? [])
       : []
-    head.push(...renderToolLines(extra, theme, width))
-    for (const t of this.#opts.waiting?.() ?? []) {
-      head.push(theme.warning(truncateToWidth(`! Waiting for you: ${t} · Esc to answer`, width, "…")))
-    }
-    head.push(theme.muted("─".repeat(width)))
+    head.push(...renderToolLines(wrapViewLines(extra, width), theme, width))
+    for (const t of this.#opts.waiting?.() ?? []) head.push(waitingLine(theme, t, width))
+    head.push(theme.muted(glyphs.rule.repeat(width)))
     this.#scroll.height = Math.max(1, ctx.rows - head.length - 1)
     let body = this.#scroll.render(width, ctx)
     if (!this.#placed) {
@@ -161,25 +237,29 @@ export class ExtensionViewer implements Component {
         text: `The ${this.kind} view failed: ${this.#failed.get("render") ?? "unknown error"}`,
       },
     ]
-    return renderToolLines(lines, theme, width)
+    return renderToolLines(wrapViewLines(lines, width), theme, width)
   }
 
   #footer(theme: Theme, width: number): string {
+    if (this.#confirm) return theme.warning(truncateToWidth(this.#confirm.text, width, glyphs.more))
     const asking = this.#prompt
     if (asking) {
-      const label = truncateToWidth(`${asking.title} `, Math.max(1, Math.floor(width / 2)), "…")
+      const label = truncateToWidth(`${asking.title} `, Math.max(1, Math.floor(width / 2)), glyphs.more)
       const room = Math.max(1, width - visibleWidth(label))
       return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder: "Enter send · Esc cancel" })}`
     }
     const p = this.#scroll.position
-    // Where the body is, when it does not fit.
-    const where =
-      p.total <= p.height
-        ? []
-        : [p.following ? "end" : `${p.top + 1}–${Math.min(p.total, p.top + p.height)} of ${p.total}`]
-    const own = (this.#view.keys ?? []).map((k) => `${k.key} ${k.label}`)
-    const keys = [...where, ...own, "↑↓ PgUp PgDn Home End scroll", "Esc back"].join(" · ")
-    return theme.muted(truncateToWidth(keys, width, "…"))
+    // The way back stays longest, then the view's own keys; the scroll keys go first.
+    const hint = fitHint(
+      [
+        p.total > p.height && { text: scrollPosition(this.#scroll), priority: 3 },
+        ...(this.#view.keys ?? []).map((k) => ({ text: `${k.key} ${k.label}`, priority: 4 })),
+        { text: "↑↓ PgUp PgDn Home End scroll", priority: 1 },
+        { text: "Esc back", priority: 5 },
+      ],
+      width,
+    )
+    return theme.muted(hint)
   }
 
   /** Runs a part of the view's code; a throw is reported (once in a row) and gives undefined. */

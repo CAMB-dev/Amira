@@ -1,4 +1,4 @@
-import type { AnyEvent, Message, ToolDetailLevel } from "@amira/api"
+import { type AnyEvent, type Message, plural, type ToolDetailLevel, type ToolPresenter } from "@amira/api"
 import {
   FullScreenRenderer,
   LiveRenderer,
@@ -11,15 +11,17 @@ import {
 import {
   commandEchoLines,
   formatElapsed,
-  isLastSibling,
+  reasoningLines,
   replyRows,
   subagentEndLine,
+  treeLayout,
   userLines,
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { historyLines } from "./history.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
 import {
+  backgroundLabel,
   childrenOf,
   compactGroup,
   endNode,
@@ -35,7 +37,15 @@ import {
   updateNode,
 } from "./subagents.ts"
 import { ToolCalls, type TrackedCall } from "./tool-calls.ts"
-import { finishedToolLines, heldToolLine, runningToolLines } from "./tool-view.ts"
+import {
+  explorationOf,
+  exploredLines,
+  type FinishedCall,
+  finishedToolLines,
+  heldToolLine,
+  OUTPUT_LINES,
+  runningToolLines,
+} from "./tool-view.ts"
 import {
   type BlockKind,
   commandOutputLines,
@@ -95,10 +105,56 @@ export function createInlineView(host: ViewHost): TranscriptView {
     pendingCommits.push(...lines)
     renderer.requestRender()
   }
-  /** Commits a whole block, spaced by the transcript's rule. */
-  const commitBlock = (kind: BlockKind, lines: string[]) => commit(transcript.block(kind, lines))
+  /**
+   * Commits a whole block, spaced by the transcript's rule. Exploring calls held to go as one
+   * row go first: what comes after them ends their run.
+   */
+  const commitBlock = (kind: BlockKind, lines: string[]) => {
+    flushExplored()
+    commit(transcript.block(kind, lines))
+  }
   /** A system notice fitted to the terminal. */
   const note = (level: NoticeLevel, text: string) => noticeLines(theme, level, text, terminal.columns)
+  /** How finished calls show besides the detail level: the user's settings. */
+  const toolOptions = () => ({ outputLines: host.settings.shellOutputLines ?? OUTPUT_LINES })
+
+  /**
+   * Successful calls in a row that only looked around (read, grep, glob), held back from the
+   * scrollback so that they go as one "Explored" row once something else comes.
+   */
+  let exploring: { call: FinishedCall; presenter: ToolPresenter | undefined }[] = []
+  /** The held exploring calls as they will be committed: one call as itself, more as one row. */
+  const exploredRows = (width: number, t: Theme, detail: ToolDetailLevel) => {
+    if (exploring.length === 1) {
+      const [{ call, presenter }] = exploring as [(typeof exploring)[number]]
+      return finishedToolLines(t, presenter, call, detail, width, toolOptions())
+    }
+    return exploredLines(t, exploring, detail === "full", detail, width, toolOptions())
+  }
+  function flushExplored(): void {
+    if (!exploring.length) return
+    const lines = exploredRows(terminal.columns, theme, host.detail())
+    exploring = []
+    commit(transcript.block("tool", lines))
+  }
+
+  /** The reasoning of the reply streaming now: its text and when it started. */
+  let thought: { text: string; startedAt: number } | undefined
+  /** Commits the reasoning, once the reply goes on: "∴ Thought for 12s", its text at "full". */
+  function commitThought(): boolean {
+    if (!thought) return false
+    const { text, startedAt } = thought
+    thought = undefined
+    const expanded = host.detail() === "full"
+    const lines = reasoningLines(
+      theme,
+      text,
+      { durationMs: Date.now() - startedAt, expanded },
+      terminal.columns,
+    )
+    commitBlock("reasoning", lines)
+    return true
+  }
 
   const childrenOfCall = (parent: string, callId?: string) => childrenOf(subagents, parent, callId)
   const subtree = (n: SubagentNode) => subtreeOf(subagents, n)
@@ -107,19 +163,42 @@ export function createInlineView(host: ViewHost): TranscriptView {
   const rootCall = (n: SubagentNode) => rootCallOf(subagents, host.sessionId(), n)
   const isLiveCall = (id: string | undefined) => id !== undefined && toolCalls.live.some((c) => c.id === id)
 
-  /** The tool calls of the step, in call order: running ones with their output, held ones done. */
-  function liveToolRows(width: number, ctx: RenderContext): string[] {
+  /**
+   * The tool calls of the step, in call order: running ones with their output, held ones done.
+   * At most `max` rows: past that, running calls drop their output lines, and then the first
+   * calls give way to a line counting them, so the latest stay in view.
+   */
+  function liveToolRows(width: number, ctx: RenderContext, max = Number.POSITIVE_INFINITY): string[] {
     const live = toolCalls.live
-    if (!live.length) return []
-    const rows: string[] = transcript.gapBefore("tool") ? [""] : []
+    if (!live.length && !exploring.length) return []
+    const gap = transcript.gapBefore("tool") ? [""] : []
     const now = Date.now()
-    for (const c of live) {
-      const presenter = presenters?.get(c.name)
-      if (c.end) rows.push(heldToolLine(ctx.theme, presenter, finished(c), width))
-      else rows.push(...runningToolLines(ctx.theme, presenter, c, now, host.spinner.glyph, width))
-      rows.push(...treeRows(callTree(c.id), now, width, ctx.theme, spawnGroups))
+    const draw = (output: boolean) => {
+      const calls: string[][] = []
+      // The exploring calls held back, as the row they become.
+      if (exploring.length) calls.push(exploredRows(width, ctx.theme, "collapsed").slice(0, 1))
+      for (const c of live) {
+        const presenter = presenters?.get(c.name)
+        const head = c.end
+          ? [heldToolLine(ctx.theme, presenter, finished(c), width)]
+          : runningToolLines(ctx.theme, presenter, c, now, host.spinner.glyph, width)
+        calls.push([
+          ...(output ? head : head.slice(0, 1)),
+          ...treeRows(callTree(c.id), now, width, ctx.theme, spawnGroups),
+        ])
+      }
+      return calls
     }
-    return rows
+    let calls = draw(true)
+    const count = (list: string[][]) => gap.length + list.reduce((n, c) => n + c.length, 0)
+    if (count(calls) > max) calls = draw(false)
+    let hidden = 0
+    while (count(calls) + (hidden ? 1 : 0) > max && calls.length > 1) {
+      calls = calls.slice(1)
+      hidden++
+    }
+    const more = hidden ? [ctx.theme.muted(`  ${glyphs.more} ${plural(hidden, "earlier call")}`)] : []
+    return [...gap, ...more, ...calls.flat()]
   }
 
   /** Sub-agents running on after their call was committed, under a small header. */
@@ -138,10 +217,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const rows: string[] = []
     for (const [callId, group] of groups) {
       const started = Math.min(...group.map((n) => n.startedAt ?? now))
-      const count = `${group.length} sub-agent${group.length === 1 ? "" : "s"}`
+      const count = plural(group.length, "sub-agent")
       const head =
         callId === undefined
-          ? `${t.accent(glyphs.subagent)} ${t.muted("background")}`
+          ? `${t.accent(glyphs.subagent)} ${t.muted(backgroundLabel(spawnGroups, group))}`
           : `${t.success(glyphs.toolRunning)} ${t.accent(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
       rows.push(truncateToWidth(head, width, glyphs.more))
       rows.push(...treeRows(group.flatMap(subtree), now, width, t, spawnGroups))
@@ -162,7 +241,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
     if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
     // Live tool rows sit above the dialog (often the call that asked it), with the blank row
     // before the rest; the dialog fits in what they leave. No reply streams while tools are live.
-    const tools = liveToolRows(width, ctx)
+    // Many calls at once take at most half the screen, so the input stays where it is.
+    const tools = liveToolRows(width, ctx, Math.max(4, Math.floor(ctx.rows / 2)))
     const budget = ctx.rows - 1 - (tools.length ? tools.length + 1 : 0)
     const rest = host.bottom(width, ctx, budget, background)
     streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - 3)
@@ -217,24 +297,26 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const tree = callTree(c.id)
       const ends: string[] = []
       const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
+      // The call's own result line comes after them, so only a nested one can close a level.
+      const layout = treeLayout(tree, false)
       for (const [i, n] of tree.entries()) {
         if (n.end && compactGroup(spawnGroups, n)) {
           // A compact group's line tells how it goes; its members get no lines of their own.
           subagents.delete(n.id)
         } else if (n.end) {
-          // The call's own result line comes after them, so only a nested one can close a level.
-          const last = n.depth > 1 && isLastSibling(tree, i)
-          ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last))
+          const { last, indent } = layout[i]!
+          ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last, indent))
           subagents.delete(n.id)
         } else n.detached = cutShort ? "interrupted" : "background"
       }
-      const lines = finishedToolLines(
-        theme,
-        presenters?.get(c.name),
-        finished(c),
-        host.detail(),
-        terminal.columns,
-      )
+      const presenter = presenters?.get(c.name)
+      const call = finished(c)
+      // A call that only looked around waits for the next one: a run of them is one row.
+      if (!tree.length && explorationOf(presenter, call)) {
+        exploring.push({ call, presenter })
+        continue
+      }
+      const lines = finishedToolLines(theme, presenter, call, host.detail(), terminal.columns, toolOptions())
       lines.splice(1, 0, ...ends)
       commitBlock("tool", lines)
     }
@@ -342,6 +424,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       subagents.clear()
       spawnGroups.clear()
       tickSubagents()
+      flushExplored()
       // What was committed but not drawn yet still belongs in the scrollback.
       if (pendingCommits.length) renderer.render()
       renderer.stop({ clear: true })
@@ -349,15 +432,26 @@ export function createInlineView(host: ViewHost): TranscriptView {
 
     banner: (line) => commitBlock("banner", [line]),
     user: (m) => commitBlock("user", userLines(theme, m, terminal.columns)),
-    replyDelta: (text) => streaming.append(text),
+    replyDelta(text) {
+      // The reply goes on: what it thought, and the calls held before it, go first.
+      commitThought()
+      flushExplored()
+      streaming.append(text)
+    },
+    reasoningDelta(text) {
+      thought ??= { text: "", startedAt: Date.now() }
+      thought.text += text
+    },
     replyEnd(calls) {
       // The rows still live are committed as they are shown; earlier ones already were.
       const early = streaming.committedRows > 0
       const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(gutter)))
       if (rows.length) commit(transcript.continue("assistant", replyRows(rows)))
       transcript.end()
+      // Thinking that came after the text (or with none) goes after it.
+      const thoughtShown = commitThought()
       toolCalls.expect(calls.map((c) => c.id))
-      return rows.length > 0 || early
+      return rows.length > 0 || early || thoughtShown
     },
     toolStart(id, name, args, at) {
       toolCalls.start(id, name, args, at)
@@ -367,6 +461,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
     toolEnd: (id, end) => commitCalls(toolCalls.end(id, end)),
     turnEnd() {
       const shown = commitCalls(toolCalls.flush())
+      // A run of exploring calls ends with the turn.
+      flushExplored()
       // Sub-agents of calls that never ended.
       settleSubagents()
       // Only calls with sub-agents still around need their names.
@@ -388,12 +484,12 @@ export function createInlineView(host: ViewHost): TranscriptView {
     commandOutput(level, text) {
       // Right after its command it hangs under the echo; on its own it is a notice.
       if (transcript.last === "command" || transcript.last === "command-output") {
-        const style = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.text
-        commitBlock("command-output", commandOutputLines(style, theme.muted, text, terminal.columns))
+        commitBlock("command-output", commandOutputLines(theme, level, text, terminal.columns))
       } else commitBlock("notice", note(level, text))
     },
     dialogEcho: (draw) => commitBlock("dialog", draw(Math.max(1, terminal.columns))),
     history(messages: Message[], session) {
+      flushExplored()
       commit(
         historyLines(theme, messages, {
           ...(presenters ? { presenters } : {}),
@@ -403,11 +499,14 @@ export function createInlineView(host: ViewHost): TranscriptView {
           transcript,
           hyperlinks: host.hyperlinks,
           nodes,
+          ...toolOptions(),
         }),
       )
     },
     leaveSession() {
       toolCalls.flush()
+      thought = undefined
+      flushExplored()
       settleSubagents()
       callNames.clear()
       // The old session's sub-agents and groups are not shown under the new one.

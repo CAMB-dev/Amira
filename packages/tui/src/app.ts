@@ -22,6 +22,7 @@ import {
 import {
   type Component,
   chooseImageSupport,
+  colorSupported,
   defaultTheme,
   detectEnv,
   Editor,
@@ -30,6 +31,7 @@ import {
   type InputEvent,
   InputReader,
   isColorEnabled,
+  monoTheme,
   ProcessTerminal,
   progressSupported,
   type RenderContext,
@@ -66,6 +68,7 @@ import { statusLine } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
 import { TerminalStatus } from "./terminal-status.ts"
 import { formatElapsed, type PresenterSource } from "./tool-view.ts"
+import { INTERRUPTED_NOTICE, modelErrorNotice } from "./transcript.ts"
 import { detailCommand, nextDetail } from "./verbose.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
@@ -242,10 +245,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     background: true,
   })
   // Surface colors (the band behind the user's messages, diff lines) for the terminal's
-  // background; none without colors, where the band would only be blank rows.
+  // background; none without colors, where the band would only be blank rows and attributes
+  // (dim, bold) tell apart what colors would.
   const theme =
     opts.theme ??
-    (isColorEnabled() ? { ...defaultTheme, ...surfaceTheme(capabilities.background) } : defaultTheme)
+    (isColorEnabled() && colorSupported(env)
+      ? { ...defaultTheme, ...surfaceTheme(capabilities.background) }
+      : monoTheme)
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
@@ -606,7 +612,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     editorEmpty: () => editor.isEmpty,
     showNote,
   }
-  const mode = opts.mode ?? settings.mode ?? "inline"
+  // A dumb terminal has no alternate screen to draw the full-screen view on.
+  const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
 
   function openView(v: FrontendView) {
@@ -637,7 +644,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           waiting: waitingTitles,
           onClose: closeView,
           requestRender: () => view.requestOverlayRender(),
-          onError: (error) => view.notice("warning", `[view ${v.kind}] ${error}`),
+          onError: (error) => view.notice("warning", `View ${v.kind}: ${error}`),
         }),
       )
     }
@@ -758,6 +765,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           streamedChars += e.data.text.length
         } else if (e.data.kind === "thinking") {
           thinking = true
+          view.reasoningDelta(e.data.text)
           streamedChars += e.data.text.length
         } else {
           streamedChars += e.data.argsDelta.length
@@ -807,7 +815,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         retry = undefined
         if (e.data.reason === "error") errorNotice(e.data)
         else if (e.data.reason === "aborted") view.notice("interrupted", interruptedText())
-        else if (!turnShowedOutput) view.notice("info", "(no reply)")
+        else if (!turnShowedOutput) view.notice("info", "No reply")
         termStatus.turnEnded(e.data.reason)
         if (queued.length) {
           const next = queued.splice(0, queued.length)
@@ -845,9 +853,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // Settings warnings travel as extension.error from "settings" but are not extension failures.
         view.notice(
           "warning",
+          // The glyph says it is a warning; the text says where from.
           e.data.source === "settings"
-            ? `warning: ${e.data.error}`
-            : `[extension ${e.data.source}] ${e.data.error}`,
+            ? `Settings: ${e.data.error}`
+            : `Extension ${e.data.source}: ${e.data.error}`,
         )
         break
       case "extension.notice":
@@ -916,8 +925,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** A failed turn: what went wrong in plain words and what to do, the provider's text folded. */
   function errorNotice(end: EventMap["turn.end"]) {
     const f = end.failure
-    if (!f) return view.notice("error", end.error ?? "error")
-    view.notice("error", f.hint ? `${f.summary}\n${f.hint}` : f.summary, f.detail)
+    // Without a next step of its own, the notice says what the user can always do.
+    if (!f) return view.notice("error", modelErrorNotice(end.error))
+    view.notice("error", f.hint ? `${f.summary}\n${f.hint}` : modelErrorNotice(f.summary), f.detail)
   }
 
   /** Sub-agents (also a workflow's or a swarm's) still running in the background. */
@@ -926,7 +936,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** "Interrupted", and that sub-agents run on in the background (an interrupt stops only the turn). */
   function interruptedText(): string {
     const n = runningSubagents()
-    return n ? `Interrupted · ${n} sub-agent${n === 1 ? "" : "s"} still running · /agents` : "Interrupted."
+    return n
+      ? `${INTERRUPTED_NOTICE} · ${n} sub-agent${n === 1 ? "" : "s"} still running · /agents`
+      : INTERRUPTED_NOTICE
   }
 
   /** Until when a second Ctrl+C or Ctrl+D quits although sub-agents run. */

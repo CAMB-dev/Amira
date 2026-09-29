@@ -176,7 +176,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   await waitFor(() => s.screen.inAltScreen, "the viewer")
   await waitFor(() => s.view().includes("● wait"), "the transcript")
   const lines = s.screen.lines
-  expect(lines[0]).toMatch(/^◆ Check explorer running · \d+s · 1\.5k tok · explorer · \S+ +1\/1$/)
+  expect(lines[0]).toMatch(/^◆ Check explorer · running · \d+s · 1\.5k tok · .+ 1 of 1$/)
   expect(lines[1]).toBe("task: task for the explorer")
   // The task on the user's band, a row of it above and below (blank on this screen).
   expect(lines.slice(3, 13)).toEqual([
@@ -191,8 +191,9 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
     "",
     "● wait",
   ])
-  expect(s.view()).toContain("└ running…")
-  expect(s.view()).toContain("… working…")
+  expect(s.view()).toContain("└ running\n")
+  // One ellipsis, not two.
+  expect(s.view()).toContain("… working\n")
   expect(lines.at(-1)).toContain("following")
   const atOpen = s.screen.mainText
   expect(atOpen).toContain(before.split("\n")[0]!)
@@ -338,10 +339,10 @@ test("←/→ and Tab switch between sub-agents; Ctrl+C closes the viewer instea
   s.terminal.send("go\r")
   await s.idle()
   s.terminal.send("/agents view\r")
-  await waitFor(() => /^◆ Check coder .* 2\/2$/.test(s.screen.lines[0]!), "the latest sub-agent")
+  await waitFor(() => /^◆ Check coder .* 2 of 2$/.test(s.screen.lines[0]!), "the latest sub-agent")
   expect(s.view()).toContain("coded")
   s.terminal.send("\x1b[D") // ←
-  await waitFor(() => /^◆ Check explorer .* 1\/2$/.test(s.screen.lines[0]!), "the previous one")
+  await waitFor(() => /^◆ Check explorer .* 1 of 2$/.test(s.screen.lines[0]!), "the previous one")
   expect(s.view()).toContain("explored")
   s.terminal.send("\x1b[C") // →
   await waitFor(() => s.screen.lines[0]!.startsWith("◆ Check coder"), "the next one")
@@ -366,7 +367,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await waitFor(() => s.view().includes("── done ──"), "the viewer")
   s.terminal.clearWrites()
   const answer = s.host.ui.api("approval").confirm("Allow bash?", "rm -rf build")
-  await waitFor(() => s.view().includes("! Waiting for you: Allow bash? · Esc to answer"), "the banner")
+  await waitFor(() => s.view().includes("⚠️ Waiting for you: Allow bash? · Esc to answer"), "the banner")
   expect(s.terminal.output.split("\x07").length).toBe(2)
   expect(s.screen.inAltScreen).toBe(true)
   // Keys still go to the viewer: "y" does not answer the dialog.

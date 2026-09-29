@@ -209,6 +209,7 @@ const settings = object({
     reflow: oneOf("auto", "on", "off"),
     submitWhileWorking: oneOf("steer", "queue"),
     images: oneOf("auto", "on", "off"),
+    shellOutputLines: integer(0),
   }),
 })
 

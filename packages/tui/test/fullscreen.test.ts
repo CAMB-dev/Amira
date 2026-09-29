@@ -13,6 +13,7 @@ import {
   type TuiSettings,
   textResult,
 } from "@amira/api"
+import { builtinPresenters } from "@amira/builtin-tools"
 import {
   Agent,
   AgentTree,
@@ -62,6 +63,8 @@ interface Options {
   images?: ImageProvider
   /** Markdown renderers extensions register (D88). */
   markdown?: MarkdownRendererDefinition[]
+  /** The built-in tools' presenters. */
+  presenters?: boolean
 }
 
 /** The UI in full-screen mode on a fake terminal, as the CLI starts it by default. */
@@ -98,6 +101,9 @@ async function setup(steps: MockStep[], o: Options = {}) {
       if (o.images) api.registerImageProvider(o.images)
       for (const r of o.markdown ?? []) api.registerMarkdownRenderer(r)
     }, "test-render")
+  }
+  if (o.presenters) {
+    for (const [name, p] of Object.entries(builtinPresenters)) host.renderers.register(name, p)
   }
   if (o.history) agent.messages.push(...o.history)
   let commands: CommandHost | undefined
@@ -144,6 +150,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     }),
     imageProviders: host.images,
     markdownRenderers: host.markdown,
+    ...(o.presenters ? { toolRenderers: host.renderers } : {}),
     onReady: () => agent.start("startup"),
     files: fileList([]),
     env: o.env ?? {},
@@ -164,6 +171,58 @@ async function setup(steps: MockStep[], o: Options = {}) {
   await shows("Amira")
   return { agent, bus, host, tree, terminal, screen, view, shows, idle, resize, exited }
 }
+
+test("reads in a row become one Explored row, which unfolds to the calls", async () => {
+  const { terminal, view, shows, idle, exited } = await setup(
+    [
+      {
+        toolCalls: [
+          { name: "read", args: { path: "a.ts" } },
+          { name: "read", args: { path: "b.ts" } },
+        ],
+      },
+      { text: "Both read." },
+    ],
+    { presenters: true },
+  )
+  terminal.send("go\r")
+  await shows("Both read.")
+  await idle()
+  expect(view()).toContain("● Explored · Read a.ts, b.ts\n\n  Both read.")
+  expect(view()).not.toContain("● read a.ts")
+  // Selected, Enter shows each call under it.
+  terminal.send(CTRL_UP)
+  terminal.send(CTRL_UP)
+  await waitFor(() => view().includes("tool block"), "the row selected")
+  terminal.send("\r")
+  await waitFor(() => view().includes("● read a.ts"), "unfolded")
+  expect(view()).toContain("● read b.ts")
+  terminal.send(ESC)
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
+})
+
+test("thinking shows folded as how long it took, and unfolds to the text", async () => {
+  const { terminal, view, shows, idle, screen, exited } = await setup([
+    { thinking: "Maybe the answer is 42.", text: "It is 42." },
+  ])
+  terminal.send("go\r")
+  await shows("It is 42.")
+  await idle()
+  expect(view()).toContain("∴ Thought for 1s\n\n  It is 42.")
+  expect(view()).not.toContain("Maybe the answer")
+  terminal.send(CTRL_UP)
+  terminal.send(CTRL_UP)
+  await waitFor(() => view().includes("reasoning block"), "the thinking selected")
+  terminal.send("\r")
+  await waitFor(() => view().includes("Maybe the answer is 42."), "unfolded")
+  terminal.send(ESC)
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
+  // Exiting prints it as the inline view shows it: folded.
+  expect(screen.mainText).toContain("∴ Thought for 1s")
+  expect(screen.mainText).not.toContain("Maybe the answer")
+})
 
 test("the conversation is drawn on the alternate screen and printed to the normal one on exit", async () => {
   const { terminal, screen, view, shows, idle, exited } = await setup([
@@ -456,7 +515,7 @@ test("the members of a group a command started share one block: a compact group 
   await shows("◆ workflow demo · Answer · 0/3 agents")
   await bus.flush()
   await Bun.sleep(50)
-  expect(view().match(/◆ background/g)).toHaveLength(1)
+  expect(view().match(/◆ in the background/g)).toHaveLength(1)
   expect(view().match(/workflow demo/g)).toHaveLength(1)
   expect(view()).not.toContain("Scan api")
   release()
@@ -896,7 +955,7 @@ test("copying the last reply and a selected block goes through OSC 52", async ()
   terminal.send(CTRL_UP)
   await waitFor(() => view().includes("user block"), "the user message selected")
   // The selection's bar keeps its essential keys; moving is in the key reference.
-  expect(view()).toMatch(/› user block \d+ of \d+ · (Enter fold · )?y copy · Esc back$/m)
+  expect(view()).toMatch(/❯ user block \d+ of \d+ · (Enter fold · )?y copy · Esc back$/m)
   expect(view()).not.toContain(" move")
   terminal.send("y")
   await shows("Copied the user block")

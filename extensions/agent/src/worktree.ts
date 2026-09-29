@@ -126,10 +126,10 @@ function overThreshold(stat: ChangeStat, t: ReviewThreshold | undefined): boolea
   return t.lines !== undefined && stat.insertions + stat.deletions > t.lines
 }
 
-export const MERGE = "merge"
-export const APPLY_PARTIAL = "apply what fits (.rej files for the rest)"
-export const KEEP = "keep in worktree"
-export const DISCARD = "discard"
+export const MERGE = "Merge"
+export const APPLY_PARTIAL = "Apply what fits (.rej files for the rest)"
+export const KEEP = "Keep in the worktree"
+export const DISCARD = "Discard"
 
 /**
  * Merges a finished child's worktree into the parent's working tree (D16, D38). A patch that
