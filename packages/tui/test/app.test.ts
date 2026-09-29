@@ -7,6 +7,7 @@ import {
   defineTool,
   type InputHandler,
   type Message,
+  type PanelDefinition,
   type SessionControl,
   type SkillDefinition,
   type SpawnGroup,
@@ -90,6 +91,8 @@ interface SetupOptions {
   graphics?: GraphicsReplies
   /** How images in replies are fetched from the web. */
   imageFetch?: RemoteImageFetch
+  /** Live panels extensions register. */
+  panels?: PanelDefinition[]
   /** Called with the options the UI sets the terminal up with. */
   onSetup?: (opts: { images?: boolean } | undefined) => void
 }
@@ -161,10 +164,16 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   if (o.presenters) {
     for (const [name, p] of Object.entries(builtinPresenters)) host.renderers.register(name, p)
   }
+  if (o.panels) {
+    await host.load((api) => {
+      for (const p of o.panels!) api.registerPanel(p)
+    }, "test-panels")
+  }
   if (o.history) agent.messages.push(...o.history)
   const exited = runInteractive({
     agent,
     status: host.status,
+    panels: host.panels,
     ui: host.ui,
     ...(commands ? { commands } : {}),
     ...(o.tuiCommands ? { registerCommand: (c) => host.commands.register(c, "builtin:tui") } : {}),
@@ -2523,3 +2532,53 @@ test("an image slower than its time is committed as its alt text, and what follo
   terminal.send("\x03")
   await exited
 }, 10_000)
+
+test("live panels sit above the input in both modes, fold with Ctrl+T and follow their state", async () => {
+  for (const mode of ["inline", "fullscreen"] as const) {
+    let items = ["✓ write the parser", "› test it", "• ship it"]
+    let seen: { sessionId: string; hasData: boolean } | undefined
+    const { terminal, live, host, exited } = await setup([], {
+      cols: 100,
+      settings: { mode },
+      panels: [
+        {
+          id: "todo",
+          render: (o) => {
+            seen = { sessionId: o.sessionId, hasData: !!o.data }
+            if (!items.length) return []
+            return [
+              {
+                kind: "muted",
+                text: `Todos ${items.filter((i) => i.startsWith("✓")).length}/${items.length}`,
+              },
+              ...items.map((text) => ({ kind: text.startsWith("›") ? "accent" : "text", text }) as const),
+            ]
+          },
+        },
+      ],
+    })
+    await waitFor(() => live().includes("› test it"), `${mode}: the panel`)
+    const rows = live().split("\n")
+    const panelRow = rows.findIndex((r) => r.startsWith("Todos 1/3"))
+    const boxRow = rows.findIndex((r) => r.startsWith("╭"))
+    expect(panelRow).toBeGreaterThan(-1)
+    // The panel, then a blank line, then the input box.
+    expect(boxRow).toBe(panelRow + 5)
+    expect(seen?.hasData).toBe(true)
+    expect(live()).toContain("fold panels")
+    terminal.send("\x14")
+    await waitFor(() => !live().includes("› test it"), `${mode}: folded`)
+    expect(live()).toContain("Todos 1/3")
+    expect(live()).toContain("unfold panels")
+    terminal.send("\x14")
+    items = ["✓ write the parser", "✓ test it", "› ship it"]
+    // A change shows at the next redraw the extension asks for.
+    await host.load((api) => api.requestRender(), `render-${mode}`)
+    await waitFor(() => live().includes("› ship it"), `${mode}: updated`)
+    items = []
+    await host.load((api) => api.requestRender(), `render2-${mode}`)
+    await waitFor(() => !live().includes("Todos"), `${mode}: hidden when empty`)
+    terminal.send("\x04")
+    await exited
+  }
+})

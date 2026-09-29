@@ -82,12 +82,12 @@ test("a label can skip keys the terminal cannot send", () => {
 
 test("keybindings.json replaces an action's keys; an empty list unbinds it", () => {
   const { keys, warnings } = parseKeybindings(
-    { queue: "ctrl+t", newline: ["ctrl+j"], redraw: [] },
+    { queue: "ctrl+b", newline: ["ctrl+j"], redraw: [] },
     "kb.json",
     defaults,
   )
   expect(warnings).toEqual([])
-  expect(keys.is(key("t", { ctrl: true }), "queue")).toBe(true)
+  expect(keys.is(key("b", { ctrl: true }), "queue")).toBe(true)
   expect(keys.is(key("q", { ctrl: true }), "queue")).toBe(false)
   expect(keys.is(key("j", { ctrl: true }), "newline")).toBe(true)
   expect(keys.is(key("l", { ctrl: true }), "redraw")).toBe(false)
@@ -125,10 +125,10 @@ test("the file: missing means the defaults, broken JSON a warning", () => {
     const broken = loadKeybindings(file, defaults)
     expect(broken.warnings[0]).toStartWith(`${file}: not valid JSON (`)
     expect(broken.keys.is(key("q", { ctrl: true }), "queue")).toBe(true)
-    writeFileSync(file, JSON.stringify({ $schema: "x", queue: "ctrl+t" }))
+    writeFileSync(file, JSON.stringify({ $schema: "x", queue: "ctrl+b" }))
     const loaded = loadKeybindings(file, defaults)
     expect(loaded.warnings).toEqual([])
-    expect(loaded.keys.label("queue")).toBe("Ctrl+T")
+    expect(loaded.keys.label("queue")).toBe("Ctrl+B")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
