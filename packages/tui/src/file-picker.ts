@@ -1,4 +1,4 @@
-import { type Component, type InputEvent, type RenderContext, Spinner } from "@amira/tui-kit"
+import { type Component, type InputEvent, type RenderContext, Spinner, truncateToWidth } from "@amira/tui-kit"
 import type { FileListing, FileSource } from "./file-index.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import { pickerRows } from "./picker.ts"
@@ -257,6 +257,11 @@ export class FilePicker implements Component {
   /** Finished searches, oldest first. */
   #kept: Search[] = []
   #results: string[] = []
+  /**
+   * The results are the last query's: the new one found nothing yet but is still searching. They
+   * stay drawn so the list does not blink out on each key, but do not take keys.
+   */
+  #stale = false
   #selected = 0
   #navigated = false
   #dismissed = false
@@ -284,10 +289,14 @@ export class FilePicker implements Component {
     if (query === undefined) {
       this.#stop()
       this.#results = []
+      this.#stale = false
       this.#search = undefined
       return
     }
-    this.#listing = this.source.listing()
+    const listing = this.source.listing()
+    // Searches of a listing that was replaced are no use any more.
+    if (listing !== this.#listing) this.#kept = []
+    this.#listing = listing
     this.#begin(FIRST_SLICE_MS)
   }
 
@@ -308,7 +317,7 @@ export class FilePicker implements Component {
     const search = this.#search
     if (!search) return
     const done = search.step(performance.now() + budgetMs)
-    this.#show(search.results)
+    this.#show(search.results, done)
     if (done) this.#keep(search)
     else this.#schedule()
     this.#spin()
@@ -329,8 +338,13 @@ export class FilePicker implements Component {
     if (this.#kept.length > KEPT_SEARCHES) this.#kept.shift()
   }
 
-  /** New results; the selection stays on the path the user moved to, if it is still there. */
-  #show(results: string[]) {
+  /**
+   * New results, `final` once the search caught up; until then no results yet leave the last ones
+   * drawn. The selection stays on the path the user moved to, if it is still there.
+   */
+  #show(results: string[], final: boolean) {
+    this.#stale = !results.length && !final && this.#results.length > 0
+    if (this.#stale) return
     const chosen = this.#navigated ? this.#results[this.#selected] : undefined
     this.#results = results
     const at = chosen === undefined ? -1 : results.indexOf(chosen)
@@ -378,14 +392,17 @@ export class FilePicker implements Component {
     this.#off()
   }
 
-  /** Whether it takes the list keys: there are matches to choose from. */
+  /** Whether it takes the list keys: there are matches of the query to choose from. */
   get open(): boolean {
-    return !this.#dismissed && this.#query !== undefined && this.#results.length > 0
+    return !this.#dismissed && this.#query !== undefined && this.#results.length > 0 && !this.#stale
   }
 
-  /** Whether it is drawn: matches, or the status row while the project is listed. */
+  /**
+   * Whether it is drawn: matches, the last query's while the new one is searched, or the status
+   * row while the project is listed. Then the list keys wait for the matches (Esc closes it).
+   */
   get visible(): boolean {
-    return this.open || (!this.#dismissed && this.#indexing)
+    return !this.#dismissed && this.#query !== undefined && (this.#results.length > 0 || this.#indexing)
   }
 
   /** Handles a key while shown; undefined leaves it to the editor. */
@@ -398,8 +415,11 @@ export class FilePicker implements Component {
       this.#spin()
       return { type: "handled" }
     }
+    const listKey = ["popup.up", "popup.down", "popup.complete", "popup.accept"] as const
+    // Shown but with nothing of this query to choose yet: the keys it names do nothing, rather
+    // than sending the half-typed "@word" or walking the prompt history.
+    if (!this.open) return listKey.some((a) => keys.is(e, a)) ? { type: "handled" } : undefined
     const n = this.#results.length
-    if (!n) return undefined
     if (keys.is(e, "popup.up") || keys.is(e, "popup.down")) {
       this.#selected = (this.#selected + (keys.is(e, "popup.up") ? -1 : 1) + n) % n
       this.#navigated = true
@@ -426,9 +446,10 @@ export class FilePicker implements Component {
       : []
     const listing = this.#listing
     if (this.#indexing && listing) {
-      rows.push(`${t.accent(this.#spinner.glyph)} ${t.muted(`indexing… ${count(listing.files)} files`)}`)
-    } else if (listing?.capped) {
-      rows.push(t.muted(`  searched the first ${count(listing.files)} files`))
+      const status = `${t.accent(this.#spinner.glyph)} ${t.muted(`indexing… ${count(listing.files)} files`)}`
+      rows.push(truncateToWidth(status, width, "…"))
+    } else if (listing?.partial) {
+      rows.push(truncateToWidth(t.muted(`  searched the first ${count(listing.files)} files`), width, "…"))
     }
     return rows
   }

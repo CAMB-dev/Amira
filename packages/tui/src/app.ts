@@ -339,7 +339,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const history = opts.history ?? new PromptHistory()
   const historyNav = new HistoryNavigator(history, editor)
   const search = new HistorySearch(history, editor, keys)
-  const filePicker = new FilePicker(opts.files ?? new FileIndex(agent.cwd), () => view.requestRender(), keys)
+  /** The project's files for the @ picker; one the UI made itself it also stops on quit. */
+  const ownFiles = opts.files ? undefined : new FileIndex(agent.cwd)
+  const filePicker = new FilePicker(opts.files ?? ownFiles!, () => view.requestRender(), keys)
   /**
    * Tells the completion lists what the editor holds; a promise while commands' candidates are
    * on their way. Cheap on any text: the command popup only looks at a single line, the file
@@ -460,6 +462,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const move = keys.pairLabel("popup.up", "popup.down")
     const insert = [keys.label("popup.complete"), keys.label("popup.accept")].filter(Boolean).join("/")
     const close = keys.label("popup.close")
+    // Nothing to choose yet (the project is still listed, or the query still searched).
+    if (!filePicker.open) return [close && { text: `${close} close`, priority: 4 }]
     return [
       move && { text: `${move} select`, priority: 3 },
       insert && { text: `${insert} insert`, priority: 5 },
@@ -952,6 +956,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     offCommand?.()
     clearTimeout(hintTimer)
     filePicker.dispose()
+    ownFiles?.dispose()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
     setRetry(undefined)

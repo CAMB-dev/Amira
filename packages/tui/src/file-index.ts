@@ -14,8 +14,8 @@ export interface FileListing {
   readonly files: number
   /** The listing is complete; it no longer grows. */
   readonly done: boolean
-  /** It stopped at its cap: the project has more files than it holds. */
-  readonly capped: boolean
+  /** It stopped short, at its cap or its time limit: the project has more files than it holds. */
+  readonly partial: boolean
 }
 
 /** Where the file picker gets the project's files. */
@@ -24,15 +24,21 @@ export interface FileSource {
   listing(): FileListing
   /** Called when the listing grows or is replaced by a fresh one; returns a function that unsubscribes. */
   subscribe(listener: () => void): () => void
+  /** Stops listing; the UI is quitting. */
+  dispose?(): void
 }
 
-/** Streams paths as they are found; resolves once the listing is over. */
-export type ListFiles = (cwd: string, emit: (paths: string[]) => void, signal: AbortSignal) => Promise<void>
+/** Streams paths as they are found; resolves once the listing is over, false when it was cut short. */
+export type ListFiles = (
+  cwd: string,
+  emit: (paths: string[]) => void,
+  signal: AbortSignal,
+) => Promise<unknown>
 
 export interface ListOptions {
   /** Stop after this many files. */
   limit?: number
-  /** Give up on git after this long; a walk stops listing then too. */
+  /** Stop listing after this long, git and a walk together. */
   timeoutMs?: number
   signal?: AbortSignal
 }
@@ -53,14 +59,16 @@ const SKIP_DIRS = new Set([".git", "node_modules"])
  * and untracked files, without what .gitignore ignores) in a repository, else from a walk of the
  * directory that skips .git and node_modules, like the glob tool. git runs in the command worker
  * and its output is handed over as it comes, so nothing here holds the event loop for long.
+ * Resolves false when the time ran out before the listing was complete.
  */
 export async function streamProjectFiles(
   cwd: string,
   emit: (paths: string[]) => void,
   opts: ListOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const limit = opts.limit ?? MAX_FILES
   const timeoutMs = opts.timeoutMs ?? LIST_TIMEOUT_MS
+  const deadline = performance.now() + timeoutMs
   const signal = opts.signal ?? new AbortController().signal
   let sent = 0
   const send = (paths: string[]) => {
@@ -69,9 +77,11 @@ export async function streamProjectFiles(
     sent += room.length
     emit(room)
   }
-  if (await gitFiles(cwd, timeoutMs, signal, send)) return
-  if (sent) return
-  await walk(cwd, performance.now() + timeoutMs, signal, send, () => sent >= limit)
+  const fromGit = await gitFiles(cwd, timeoutMs, signal, send)
+  if (fromGit !== "none") return fromGit === "listed"
+  // Some of git's output came before it failed: keep that rather than mixing in a walk.
+  if (sent) return false
+  return walk(cwd, deadline, signal, send, () => sent >= limit)
 }
 
 /** The files under `cwd` in one list; see streamProjectFiles. */
@@ -81,13 +91,17 @@ export async function listProjectFiles(cwd: string, opts: ListOptions = {}): Pro
   return [...new Set(out)]
 }
 
-/** Whether git listed the files (a repository); paths go to `emit` while it runs. */
+/**
+ * Lists the files with git, paths going to `emit` while it runs: "listed" in a repository, "partial"
+ * when it timed out or failed after some output, "none" when it gave none (not a repository).
+ */
 async function gitFiles(
   cwd: string,
   timeoutMs: number,
   signal: AbortSignal,
   emit: (paths: string[]) => void,
-): Promise<boolean> {
+): Promise<"listed" | "partial" | "none"> {
+  let any = false
   let rest = ""
   try {
     const run = await runCommand(
@@ -102,25 +116,28 @@ async function gitFiles(
         onChunk: (chunk) => {
           const parts = (rest + chunk).split("\0")
           rest = parts.pop()!
-          emit(parts.filter(Boolean))
+          const paths = parts.filter(Boolean)
+          if (paths.length) any = true
+          emit(paths)
         },
       },
     )
-    if (run.exitCode !== 0) return false
-    if (rest) emit([rest])
-    return true
-  } catch {
-    return false
-  }
+    if (run.exitCode === 0) {
+      if (rest) emit([rest])
+      return "listed"
+    }
+  } catch {}
+  return any ? "partial" : "none"
 }
 
+/** Walks the tree depth first until it is done or full; false when the time ran out first. */
 async function walk(
   root: string,
   deadline: number,
   signal: AbortSignal,
   emit: (paths: string[]) => void,
   full: () => boolean,
-): Promise<void> {
+): Promise<boolean> {
   const stack: string[] = [""]
   while (stack.length && !full() && !signal.aborted && performance.now() < deadline) {
     const rel = stack.pop()!
@@ -142,6 +159,7 @@ async function walk(
     emit(files)
     stack.push(...dirs.reverse())
   }
+  return !stack.length || full() || signal.aborted
 }
 
 /**
@@ -153,7 +171,7 @@ class GrowingListing implements FileListing {
   readonly entries: string[] = []
   files = 0
   done = false
-  capped = false
+  partial = false
   /** The directories added. */
   #seen = new Set<string>()
   #lastFile: string | undefined
@@ -167,7 +185,7 @@ class GrowingListing implements FileListing {
     let i = from
     while (i < paths.length) {
       if (this.files >= this.limit) {
-        this.capped = true
+        this.partial = true
         return paths.length
       }
       this.#addOne(paths[i++]!)
@@ -177,6 +195,8 @@ class GrowingListing implements FileListing {
   }
 
   #addOne(p: string) {
+    // git lists an untracked repository inside this one as its directory.
+    if (p.endsWith("/")) return this.#addDirs(p, p.length)
     if (p === this.#lastFile) return
     this.#lastFile = p
     this.entries.push(p)
@@ -185,7 +205,12 @@ class GrowingListing implements FileListing {
     if (!dirEnd) return
     if (dirEnd === this.#lastDir.length && p.startsWith(this.#lastDir)) return
     this.#lastDir = p.slice(0, dirEnd)
-    for (let i = p.indexOf("/"); i !== -1; i = p.indexOf("/", i + 1)) {
+    this.#addDirs(p, dirEnd)
+  }
+
+  /** Adds the directories of `p` up to `end`, each once. */
+  #addDirs(p: string, end: number) {
+    for (let i = p.indexOf("/"); i !== -1 && i < end; i = p.indexOf("/", i + 1)) {
       const dir = p.slice(0, i + 1)
       if (this.#seen.has(dir)) continue
       this.#seen.add(dir)
@@ -219,11 +244,21 @@ export class FileIndex implements FileSource {
   #next: GrowingListing | undefined
   #loadedAt = 0
   #listeners = new Set<() => void>()
+  /** Listings loading now, to stop on dispose. */
+  #loads = new Set<AbortController>()
+  #disposed = false
 
   constructor(
     private cwd: string,
     private opts: FileIndexOptions = {},
   ) {}
+
+  /** Stops the listings loading (the UI is quitting); it tells no one of changes after. */
+  dispose(): void {
+    this.#disposed = true
+    this.#listeners.clear()
+    for (const a of this.#loads) a.abort()
+  }
 
   listing(): FileListing {
     if (!this.#current) {
@@ -253,21 +288,26 @@ export class FileIndex implements FileSource {
     const limit = this.opts.limit ?? MAX_FILES
     const listing = new GrowingListing(limit)
     const abort = new AbortController()
+    this.#loads.add(abort)
     const shown = () => listing === this.#current
     // Paths come in bursts (a repository's whole listing at once); they are added in slices
     // between keys and frames, not as they arrive.
     const queue: string[][] = []
     let at = 0
     let listed = false
+    /** The listing ended before it was complete (its time ran out). */
+    let cut = false
     let draining: ReturnType<typeof setImmediate> | undefined
     const end = () => {
       if (listing.done) return
+      if (cut) listing.partial = true
       listing.finish()
       this.#loadedAt = performance.now()
       onDone(listing)
     }
     const drain = () => {
       draining = undefined
+      if (this.#disposed) return
       const deadline = performance.now() + ADD_SLICE_MS
       while (queue.length && performance.now() < deadline) {
         at = listing.add(queue[0]!, at, deadline)
@@ -276,7 +316,7 @@ export class FileIndex implements FileSource {
           at = 0
         }
       }
-      if (listing.capped) {
+      if (listing.partial) {
         queue.length = 0
         abort.abort()
       }
@@ -285,17 +325,23 @@ export class FileIndex implements FileSource {
       if (shown()) this.#notify()
     }
     const emit = (paths: string[]) => {
-      if (listing.done || listing.capped || !paths.length) return
+      if (listing.done || listing.partial || !paths.length) return
       queue.push(paths)
       draining ??= setImmediate(drain)
     }
     const list =
       this.opts.list ?? ((cwd, e, signal) => streamProjectFiles(cwd, e, { limit: limit + 1, signal }))
     list(this.cwd, emit, abort.signal)
-      .catch(() => {})
+      .then(
+        (complete) => {
+          cut = complete === false
+        },
+        () => {},
+      )
       .then(() => {
+        this.#loads.delete(abort)
         listed = true
-        if (draining) return
+        if (draining || this.#disposed) return
         end()
         this.#notify()
       })
@@ -303,7 +349,10 @@ export class FileIndex implements FileSource {
   }
 }
 
-/** A source for a list known up front, or one promise of it (tests, other frontends). */
+/**
+ * A source for a list of files known up front, or one promise of it (tests, other frontends).
+ * Like FileIndex it adds their directories, with a trailing "/".
+ */
 export function fileList(files: string[] | (() => string[] | Promise<string[]>)): FileSource {
   let listing: GrowingListing | undefined
   const listeners = new Set<() => void>()

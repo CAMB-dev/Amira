@@ -6,7 +6,6 @@ import { key } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { FileIndex, fileList, listProjectFiles, withDirectories } from "../src/file-index.ts"
 import { atReference, FilePicker, fuzzyScore, rankFiles, Search } from "../src/file-picker.ts"
-import { AsyncList } from "../src/picker.ts"
 
 const files = [
   "README.md",
@@ -194,14 +193,39 @@ test("while the project is listed the picker shows a status row, then matches as
   picker.dispose()
 })
 
-test("Esc closes the status row too, and keys it does not use pass to the editor meanwhile", () => {
+test("with only the status row shown, the list keys wait and Esc closes it; other keys pass", () => {
   const src = manualSource()
   const picker = new FilePicker(src.index, () => {})
   picker.update("@x")
-  expect(picker.handleKey(key("enter"))).toBeUndefined()
-  expect(picker.handleKey(key("down"))).toBeUndefined()
+  // Enter does not send the half-typed "@x", ↓ does not walk the prompt history.
+  expect(picker.handleKey(key("enter"))).toEqual({ type: "handled" })
+  expect(picker.handleKey(key("down"))).toEqual({ type: "handled" })
+  expect(picker.handleKey(key("left"))).toBeUndefined()
   expect(picker.handleKey(key("escape"))).toEqual({ type: "handled" })
   expect(picker.visible).toBe(false)
+  expect(picker.handleKey(key("enter"))).toBeUndefined()
+  picker.dispose()
+})
+
+test("while a new query is still searched without a match yet, the last list stays drawn", async () => {
+  const big = Array.from({ length: 200_000 }, (_, i) => `gen/d${i % 97}/t${i}.ts`).concat(
+    "zz/target-match.ts",
+  )
+  const picker = new FilePicker(fileList(big), () => {})
+  picker.update("@t1")
+  await waitUntil(() => picker.render(80, plain)[0] === "› gen/d1/t1.ts")
+  const before = picker.render(80, plain)
+  // Only the last entry matches: the first slice finds nothing.
+  picker.update("@targ")
+  expect(picker.visible).toBe(true)
+  expect(picker.open).toBe(false)
+  expect(picker.render(80, plain)).toEqual(before)
+  expect(picker.handleKey(key("tab"))).toEqual({ type: "handled" })
+  await waitUntil(() => picker.render(80, plain)[0] === "› zz/target-match.ts")
+  expect(picker.open).toBe(true)
+  // A query that matches nothing at all closes the list once searched.
+  picker.update("@qqq")
+  await waitUntil(() => !picker.visible)
   picker.dispose()
 })
 
@@ -219,24 +243,20 @@ test("the selection stays on the path moved to while more matches arrive", async
   picker.dispose()
 })
 
-test("a very large listing: a key searches only briefly, the rest follows between frames", async () => {
+test("a very large listing: a key searches one slice, the rest follows between frames", async () => {
   const big: string[] = []
   for (let i = 0; i < 200_000; i++)
     big.push(`pkg${i % 20}/mod${((i / 20) % 25) | 0}/sub${((i / 500) % 20) | 0}/file${i}.ts`)
   let updates = 0
   const picker = new FilePicker(fileList(big), () => updates++)
-  // Warm up the lower-cased copy the way the first search would.
   picker.update("@file")
-  await Bun.sleep(300)
-  const start = performance.now()
-  picker.update("@fil1234")
-  const took = performance.now() - start
-  expect(took).toBeLessThan(40)
+  // Too big to search in the key's slice: the rest comes in later slices, each drawn.
+  expect(updates).toBe(0)
+  await waitUntil(() => updates > 0)
+  picker.update("@file1234")
   await waitUntil(() => picker.render(80, plain)[0] === "› pkg14/mod11/sub2/file1234.ts")
-  // It refined the last search rather than scanning everything again, and says it is not done
-  // only through the list itself: no status row once the listing is complete.
+  // No status row once the listing is complete.
   expect(picker.render(80, plain).some((l) => l.includes("indexing"))).toBe(false)
-  expect(updates).toBeGreaterThan(0)
   picker.dispose()
 })
 
@@ -268,34 +288,6 @@ test("a search in slices, or refined from a shorter query, finds what a full one
   expect(first.canRefine("b", list)).toBe(false)
   expect(first.canRefine("ab", [...list])).toBe(false)
   expect(first.canRefine("ab", list)).toBe(true)
-})
-
-test("AsyncList drops stale answers and keeps drawing the last list while the next loads", async () => {
-  const pending: Record<string, (items: string[]) => void> = {}
-  const list = new AsyncList<string>(
-    (k) =>
-      new Promise((resolve) => {
-        pending[k] = resolve
-      }),
-    () => {},
-  )
-  list.update("a")
-  pending.a!(["a1", "a2"])
-  await tick()
-  expect(list.open).toBe(true)
-  list.update("ab")
-  // Not answered yet: still drawn, but not taking keys.
-  expect(list.visible).toBe(true)
-  expect(list.open).toBe(false)
-  list.update("abc")
-  pending.ab!(["stale"])
-  await tick()
-  expect(list.shown).toEqual(["a1", "a2"])
-  pending.abc!(["abc1"])
-  await tick()
-  expect(list.current).toEqual(["abc1"])
-  list.update(undefined)
-  expect(list.visible).toBe(false)
 })
 
 test("FileIndex lists once, then answers from its cache and refreshes in the background when stale", async () => {
@@ -354,7 +346,7 @@ test("FileIndex grows its listing in place, each directory once, and stops at it
   await tick()
   expect(listing.entries).toEqual(["a/b.ts", "a/", "a/c.ts", "x/d.ts", "x/"])
   expect(listing.files).toBe(3)
-  expect(listing.capped).toBe(true)
+  expect(listing.partial).toBe(true)
   expect(aborted).toBe(true)
   await tick()
   expect(listing.done).toBe(true)
@@ -374,6 +366,44 @@ function tree(root: string, paths: string[]) {
     writeFileSync(path.join(root, p), "")
   }
 }
+
+test("a listing cut short by its time limit says so; a repository listed as a directory is one entry", async () => {
+  const index = new FileIndex("/x", {
+    list: async (_cwd, emit) => {
+      emit(["a.ts", "nested/", "nested/x/"])
+      return false
+    },
+  })
+  const listing = index.listing()
+  await waitUntil(() => listing.done)
+  expect(listing.partial).toBe(true)
+  expect(listing.files).toBe(1)
+  expect(listing.entries).toEqual(["a.ts", "nested/", "nested/x/"])
+  const picker = new FilePicker(index, () => {})
+  picker.update("@a")
+  expect(picker.render(60, plain).at(-1)).toBe("  searched the first 1 files")
+  picker.dispose()
+})
+
+test("a disposed FileIndex stops its listing and tells no one", async () => {
+  let aborted = false
+  const index = new FileIndex("/x", {
+    list: (_cwd, _emit, signal) =>
+      new Promise<void>((r) => {
+        signal.addEventListener("abort", () => {
+          aborted = true
+          r()
+        })
+      }),
+  })
+  let changes = 0
+  index.subscribe(() => changes++)
+  index.listing()
+  index.dispose()
+  await tick()
+  expect(aborted).toBe(true)
+  expect(changes).toBe(0)
+})
 
 test("outside a repository the files are walked, skipping .git and node_modules", async () => {
   const root = path.join(tmp, "plain")
