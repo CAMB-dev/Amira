@@ -373,6 +373,41 @@ test("a running tool shows the last lines of its output live, and only its resul
   await exited
 })
 
+test("many calls at once take at most half the screen: output first, then the first calls give way", async () => {
+  const calls = Array.from({ length: 8 }, (_, i) => ({ name: "stream", args: { command: `job${i + 1}` } }))
+  const { terminal, live, shows, idle, exited, agent } = await setup(
+    [{ toolCalls: calls }, { text: "all built" }],
+    {
+      rows: 14,
+    },
+  )
+  const releases: (() => void)[] = []
+  agent.tools.register(
+    defineTool({
+      name: "stream",
+      ...parallel,
+      execute: async (_p, ctx) => {
+        ctx.update(textResult("l1\nl2\n"))
+        await new Promise<void>((r) => releases.push(r))
+        return textResult("ok")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => releases.length === 8 && live().includes("job8"), "all running")
+  // 14 rows: at most 7 for the calls, their output dropped, the first three counted.
+  expect(live()).not.toContain("│ l2")
+  expect(live()).toContain("… 3 earlier calls")
+  expect(live()).not.toContain("job3 ")
+  expect(live()).toContain("job4")
+  for (const r of releases) r()
+  await shows("all built")
+  await idle()
+  terminal.send("\x03")
+  await exited
+})
+
 test("Esc interrupting a running tool marks it interrupted, muted, not failed", async () => {
   const { terminal, live, all, shows, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "hang", args: { command: "sleep 100" } }] },

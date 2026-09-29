@@ -1,4 +1,4 @@
-import type { AnyEvent, Message, ToolDetailLevel, ToolPresenter } from "@amira/api"
+import { type AnyEvent, type Message, plural, type ToolDetailLevel, type ToolPresenter } from "@amira/api"
 import {
   FullScreenRenderer,
   LiveRenderer,
@@ -162,20 +162,42 @@ export function createInlineView(host: ViewHost): TranscriptView {
   const isLiveCall = (id: string | undefined) => id !== undefined && toolCalls.live.some((c) => c.id === id)
 
   /** The tool calls of the step, in call order: running ones with their output, held ones done. */
-  function liveToolRows(width: number, ctx: RenderContext): string[] {
+  /**
+   * The tool calls of the step, in call order: running ones with their output, held ones done.
+   * At most `max` rows: past that, running calls drop their output lines, and then the first
+   * calls give way to a line counting them, so the latest stay in view.
+   */
+  function liveToolRows(width: number, ctx: RenderContext, max = Number.POSITIVE_INFINITY): string[] {
     const live = toolCalls.live
     if (!live.length && !exploring.length) return []
-    const rows: string[] = transcript.gapBefore("tool") ? [""] : []
-    // The exploring calls held back, as the row they become.
-    if (exploring.length) rows.push(...exploredRows(width, ctx.theme, "collapsed").slice(0, 1))
+    const gap = transcript.gapBefore("tool") ? [""] : []
     const now = Date.now()
-    for (const c of live) {
-      const presenter = presenters?.get(c.name)
-      if (c.end) rows.push(heldToolLine(ctx.theme, presenter, finished(c), width))
-      else rows.push(...runningToolLines(ctx.theme, presenter, c, now, host.spinner.glyph, width))
-      rows.push(...treeRows(callTree(c.id), now, width, ctx.theme, spawnGroups))
+    const draw = (output: boolean) => {
+      const calls: string[][] = []
+      // The exploring calls held back, as the row they become.
+      if (exploring.length) calls.push(exploredRows(width, ctx.theme, "collapsed").slice(0, 1))
+      for (const c of live) {
+        const presenter = presenters?.get(c.name)
+        const head = c.end
+          ? [heldToolLine(ctx.theme, presenter, finished(c), width)]
+          : runningToolLines(ctx.theme, presenter, c, now, host.spinner.glyph, width)
+        calls.push([
+          ...(output ? head : head.slice(0, 1)),
+          ...treeRows(callTree(c.id), now, width, ctx.theme, spawnGroups),
+        ])
+      }
+      return calls
     }
-    return rows
+    let calls = draw(true)
+    const count = (list: string[][]) => gap.length + list.reduce((n, c) => n + c.length, 0)
+    if (count(calls) > max) calls = draw(false)
+    let hidden = 0
+    while (count(calls) + (hidden ? 1 : 0) > max && calls.length > 1) {
+      calls = calls.slice(1)
+      hidden++
+    }
+    const more = hidden ? [ctx.theme.muted(`  ${glyphs.more} ${plural(hidden, "earlier call")}`)] : []
+    return [...gap, ...more, ...calls.flat()]
   }
 
   /** Sub-agents running on after their call was committed, under a small header. */
@@ -218,7 +240,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
     if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
     // Live tool rows sit above the dialog (often the call that asked it), with the blank row
     // before the rest; the dialog fits in what they leave. No reply streams while tools are live.
-    const tools = liveToolRows(width, ctx)
+    // Many calls at once take at most half the screen, so the input stays where it is.
+    const tools = liveToolRows(width, ctx, Math.max(4, Math.floor(ctx.rows / 2)))
     const budget = ctx.rows - 1 - (tools.length ? tools.length + 1 : 0)
     const rest = host.bottom(width, ctx, budget, background)
     streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - 3)
