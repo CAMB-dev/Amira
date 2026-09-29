@@ -906,10 +906,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return view.redraw()
     }
     // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
-    if (e.type === "mouse" || (!dialog && view.capturing)) {
-      view.handleInput(e)
-      return redraw()
-    }
+    // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
+    const viewFirst = e.type === "mouse" || (!dialog && view.capturing)
+    if (viewFirst && (view.handleInput(e) || e.type === "mouse")) return redraw()
     if (dialog) {
       // Ctrl+C closes the dialog like Esc (dialog.cancel).
       dialog.handleInput(e)
@@ -920,7 +919,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // The popup took one of its keys (popup.*).
     } else if (filePicker.open && handleFileKey(e)) {
       // The file picker took one of its keys (popup.*).
-    } else if (view.handleInput(e)) {
+    } else if (!viewFirst && view.handleInput(e)) {
       // The view took one of its keys (scrolling, find, selecting, copying).
     } else if (keys.is(e, "history.search")) {
       search.start()

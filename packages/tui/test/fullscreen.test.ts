@@ -357,6 +357,92 @@ test("blocks fold and unfold: a tool call's output, a reply's details; Ctrl+O ap
   expect(screen.mainText).not.toContain("▌")
 })
 
+/** An SGR mouse press at a zero-based screen row. */
+const click = (row: number, button = 0) => `\x1b[<${button};3;${row + 1}M\x1b[<${button};3;${row + 1}m`
+
+test("keys a block selection does not use reach the input: Ctrl+C interrupts, typing and pasting type", async () => {
+  let release!: () => void
+  const { terminal, agent, view, shows, idle, exited } = await setup([
+    { toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+    { toolCalls: [{ name: "hold", args: {} }] },
+    { text: "never" },
+  ])
+  agent.tools.register(
+    defineTool({
+      name: "hold",
+      description: "",
+      parameters: {},
+      execute: (_p, ctx) =>
+        new Promise((r) => {
+          release = () => r(textResult("held"))
+          ctx.signal.addEventListener("abort", () => r(textResult("stopped")))
+        }),
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await waitFor(() => agent.status !== "idle" && view().includes("● hold"), "the turn running")
+  terminal.send(CTRL_UP)
+  await waitFor(() => view().includes("tool block"), "selected")
+  // Ctrl+C stops the running turn with a block selected.
+  terminal.send("\x03")
+  await idle()
+  expect(view()).not.toContain("never")
+  release()
+  // Typing leaves the selection and types, first character included.
+  terminal.send(CTRL_UP)
+  await waitFor(() => view().includes("block "), "selected again")
+  terminal.send("hello")
+  await shows("› hello")
+  expect(view()).not.toMatch(/\w+ block \d+ of/)
+  // A paste too.
+  terminal.send("\x03")
+  terminal.send(CTRL_UP)
+  await waitFor(() => /\w+ block \d+ of/.test(view()), "selected once more")
+  terminal.send("\x1b[200~pasted text\x1b[201~")
+  await shows("› pasted text")
+  // Ctrl+C with a selection and an empty input quits.
+  terminal.send("\x03")
+  terminal.send(CTRL_UP)
+  await waitFor(() => /\w+ block \d+ of/.test(view()), "selected before quitting")
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
+})
+
+test("a click with a draft in the input leaves Enter to it; right-click says how to paste", async () => {
+  const { terminal, agent, screen, view, shows, idle, exited } = await setup(
+    [
+      { toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+      { text: "first answer" },
+      { text: "second answer" },
+    ],
+    { cols: 100 },
+  )
+  terminal.send("go\r")
+  await shows("first answer")
+  await idle()
+  const row = screen.lines.findIndex((l) => l.includes("● read a.ts"))
+  expect(row).toBeGreaterThanOrEqual(0)
+  terminal.send("next question")
+  await shows("› next question")
+  terminal.send(click(row))
+  terminal.send("\r")
+  await shows("second answer")
+  await idle()
+  expect(view()).not.toMatch(/\w+ block \d+ of/)
+  expect(agent.messages.filter((m) => m.role === "user")).toHaveLength(2)
+  // With the input empty a click selects the block under it.
+  const again = screen.lines.findIndex((l) => l.includes("● read a.ts"))
+  terminal.send(click(again))
+  await waitFor(() => view().includes("tool block"), "selected by a click")
+  terminal.send(ESC)
+  await waitFor(() => !view().includes("tool block"), "unselected")
+  terminal.send(click(again, 2))
+  await shows("Shift+right-click (or Ctrl+V) pastes")
+  terminal.send("\x03")
+  await exited
+})
+
 test("Ctrl+F finds text in the transcript, highlights matches and moves between them", async () => {
   const lines = Array.from({ length: 40 }, (_, i) => (i === 5 || i === 30 ? `needle ${i}` : `hay ${i}`))
   const { terminal, view, shows, idle, exited } = await setup([{ text: lines.join("\n\n") }])

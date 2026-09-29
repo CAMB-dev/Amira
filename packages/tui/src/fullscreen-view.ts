@@ -218,7 +218,17 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       else if (e.button === "down") pane.scrollBy(WHEEL_ROWS)
       return true
     }
+    if (e.action === "press" && (e.button === "right" || e.button === "middle")) {
+      // The terminal hands every click to the app while it reports the mouse; say how to paste.
+      host.showNote(
+        `Clicks go to Amira here: Shift+${e.button}-click (or Ctrl+V) pastes, Shift+drag selects text.`,
+      )
+      return true
+    }
     if (e.action !== "press" || e.button !== "left" || e.y >= paneRows || finding) return true
+    // With a draft in the input a click (often just the one focusing the window) must not take
+    // the keyboard from it: Enter still sends and typing still types.
+    if (!host.editorEmpty()) return true
     const hit = pane.blockAt(e.y)
     if (!hit) return true
     // A second click on the head of the selected block folds it.
