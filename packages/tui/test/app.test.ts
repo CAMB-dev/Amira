@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createAi, createMockDialect, type MockStep, NO_MODEL, userMessage } from "@amira/ai"
 import {
   type AnyEvent,
@@ -3189,5 +3192,45 @@ test("? opens the key reference on an empty input; it lists every action with it
     expect(live()).not.toContain("? Keys")
     terminal.send("\x03\x03")
     await exited
+  }
+})
+
+test("the input's editing keys: Ctrl+W and Ctrl+U cut, Ctrl+Y pastes back, Ctrl+Z undoes", async () => {
+  const { terminal, live, exited } = await setup([])
+  terminal.send("one two three")
+  await waitFor(() => live().includes("one two three"), "typed")
+  terminal.send("\x17")
+  await waitFor(() => live().includes("› one two ") && !live().includes("three"), "word cut")
+  terminal.send("\x15")
+  await waitFor(() => !live().includes("one two"), "line cut")
+  terminal.send("\x19")
+  await waitFor(() => live().includes("one two"), "pasted back")
+  terminal.send("\x1a")
+  await waitFor(() => !live().includes("one two"), "undone")
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
+test("Ctrl+G edits the message in $VISUAL and takes the text back", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "amira-editor-"))
+  const script = join(dir, "fake-editor.ts")
+  writeFileSync(
+    script,
+    'import { appendFileSync } from "node:fs"\nappendFileSync(process.argv[2]!, " and more\\n")\n',
+  )
+  try {
+    const { terminal, live, exited } = await setup([], {
+      env: { VISUAL: `"${process.execPath}" "${script}"` },
+    })
+    terminal.send("draft")
+    await waitFor(() => live().includes("› draft"), "typed")
+    terminal.send("\x07")
+    await waitFor(() => live().includes("› draft and more"), "edited")
+    terminal.send("\x03")
+    terminal.send("\x03")
+    await exited
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

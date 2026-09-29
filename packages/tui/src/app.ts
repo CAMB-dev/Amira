@@ -1,4 +1,7 @@
-import { statSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   type AnyEvent,
   type CommandDefinition,
@@ -1407,6 +1410,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (keys.is(e, "help") && editor.isEmpty) {
       // Lists open only on text, so an empty input has none; a dialog took the key above.
       return openKeyReference()
+    } else if (editKey(e)) {
+      // An editing key of the input (cut, paste back, undo, the external editor).
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too. Twice in a row: rewind.
       pressInterrupt()
@@ -1426,6 +1431,61 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const pending = syncCompletions()
     if (pending) setTimeout(() => view.requestRender(), FRAME_MS)
     else view.requestRender()
+  }
+
+  /** The input's editing keys beyond typing: the kill ring, undo and redo, the external editor. */
+  function editKey(e: InputEvent): boolean {
+    if (keys.is(e, "edit.kill-to-start")) editor.killToLineStart()
+    else if (keys.is(e, "edit.kill-to-end")) editor.killToLineEnd()
+    else if (keys.is(e, "edit.kill-word")) editor.killWordBefore()
+    else if (keys.is(e, "edit.yank")) editor.yank()
+    else if (keys.is(e, "edit.undo")) editor.undo()
+    else if (keys.is(e, "edit.redo")) editor.redo()
+    else if (keys.is(e, "edit.external")) editExternally()
+    else return false
+    return true
+  }
+
+  /**
+   * Edits the message in the user's editor ($VISUAL, else $EDITOR; Notepad on Windows, else vi):
+   * the terminal is handed over until it exits, then the file's text is the input's.
+   */
+  function editExternally() {
+    const command =
+      env.VISUAL?.trim() || env.EDITOR?.trim() || (process.platform === "win32" ? "notepad" : "vi")
+    const file = join(tmpdir(), `amira-message-${process.pid}-${Date.now()}.md`)
+    try {
+      writeFileSync(file, editor.getText())
+    } catch (err) {
+      showNote(`Cannot write the message for the editor: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    const resume = terminal.suspend?.()
+    let result: ReturnType<typeof spawnSync> | undefined
+    try {
+      result = spawnSync(`${command} "${file}"`, {
+        stdio: "inherit",
+        shell: true,
+        env: { ...process.env, ...env },
+      })
+    } finally {
+      resume?.()
+    }
+    try {
+      if (result.error) showNote(`Cannot start ${command}: ${result.error.message}`)
+      else if (result.status !== 0)
+        showNote(`${command} exited with ${result.status ?? result.signal}; the message is unchanged`)
+      else {
+        // Editors end the file with a line break the message did not have.
+        const text = readFileSync(file, "utf8").replace(/\r\n?/g, "\n").replace(/\n$/, "")
+        if (text !== editor.getText()) editor.setText(text)
+      }
+    } catch (err) {
+      showNote(`Cannot read the message back: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      rmSync(file, { force: true })
+    }
+    view.redraw()
   }
 
   /** Applies what the popup did with a key; false when it left the key to the editor. */

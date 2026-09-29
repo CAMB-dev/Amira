@@ -64,6 +64,13 @@ from `terminal.integrated.commandsToSkipShell`.
 | `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
 | `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as an extension's todo list) to one line each, or unfold them |
 | `help` | `?` | Open the key reference, while the input is empty and no dialog or list is open (with text, `?` is typed). It scrolls with ↑↓, PgUp/PgDn, Home/End; Esc, `q` or `?` close it |
+| `edit.kill-to-start` | `ctrl+u` | Cut from the start of the line to the caret (at the start, the line break before it) |
+| `edit.kill-to-end` | `ctrl+k` | Cut from the caret to the end of the line (at the end, the line break after it) |
+| `edit.kill-word` | `ctrl+w` | Cut the word before the caret |
+| `edit.yank` | `ctrl+y` | Paste the text cut last; cuts in a row join into one. Folded pastes stay folded |
+| `edit.undo` | `ctrl+z` | Undo the last change to the input: a word typed, a run of deletes, a cut, a paste, a recalled prompt |
+| `edit.redo` | `ctrl+shift+z` | Redo the change undone last. Terminals without the kitty keyboard protocol send Ctrl+Shift+Z as Ctrl+Z; bind another key there |
+| `edit.external` | `ctrl+g` | Edit the message in your editor: `$VISUAL`, else `$EDITOR` (a command, e.g. `code --wait`), else Notepad on Windows and vi elsewhere. The terminal is the editor's until it exits; the saved text becomes the input |
 
 ### Completion lists
 
@@ -219,8 +226,8 @@ VS Code keeps Ctrl+F, Ctrl+Home, Ctrl+End and Ctrl+↑↓ for its terminal (they
 `terminal.integrated.commandsToSkipShell`), so there Alt+F, Alt+Home, Alt+End and Alt+↑ come
 first and the key reference (`?`) lists them first.
 
-Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
-the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for
+The other editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and
+deletes) and the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for
 now.
 
 ## Terminal settings
