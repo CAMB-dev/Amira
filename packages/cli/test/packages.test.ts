@@ -181,6 +181,27 @@ test("ext update reports each package; one that fails keeps its version and make
   expect((await ext(["list"])).io.out).toContain("gone 1.0.0 (local copy)")
 })
 
+test("ext update names the scope a package is in, and the other scope's packages it did not update", async () => {
+  await ext(["install", makePackage("mine", "1.0.0", "m")])
+  await ext(["install", "--project", makePackage("theirs", "1.0.0", "t")])
+  const user = await ext(["update", "theirs"])
+  expect(user.code).toBe(1)
+  expect(user.io.err).toBe(
+    "amira: theirs is not installed in the user scope; it is in the project scope (use --project)\n",
+  )
+  const project = await ext(["update", "--project", "mine"])
+  expect(project.io.err).toContain("it is in the user scope (leave out --project)")
+  expect((await ext(["update", "nowhere"])).io.err).toBe(
+    "amira: nowhere is not installed in the user scope\n",
+  )
+  const all = await ext(["update"])
+  expect(all.code).toBe(0)
+  expect(all.io.out).toBe("mine is up to date (1.0.0 (local copy))\n")
+  expect(all.io.err).toBe(
+    "amira: the project scope's packages (theirs) are updated with amira ext update --project\n",
+  )
+})
+
 test("an install failure is reported without a stack", async () => {
   const r = await ext(["install", path.join(dir, "missing")])
   expect(r.code).toBe(1)

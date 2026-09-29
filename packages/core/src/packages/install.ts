@@ -13,6 +13,7 @@ import path from "node:path"
 import { runCommand } from "@amira/proc"
 import { type IndexOptions, type LoadedIndex, loadIndex } from "./index-file.ts"
 import {
+  describeSource,
   type LockEntry,
   type PackageScope,
   type PackageSource,
@@ -189,10 +190,22 @@ async function install(source: PackageSource, how: InstallHow, opts: InstallOpti
   const work = mkdtempSync(path.join(opts.scope.dir, `.work-${process.pid}-`))
   try {
     const { root, pinned } = await fetchSource(source, how.pinned, work, opts)
-    const manifest = readManifest(root)
+    // A clone or download lives in the work directory, whose name means nothing to the user.
+    const where = isWithin(root, work) ? describeSource(source) : root
+    let manifest: PackageManifest
+    try {
+      manifest = readManifest(root)
+    } catch (err) {
+      if (!(err instanceof PackageError) || where === root) throw err
+      const hint =
+        source.type === "git" && !source.path
+          ? " (a package in a subdirectory of a repository installs by its name from the extensions index)"
+          : ""
+      throw new PackageError(`${err.message.split(root).join(where)}${hint}`)
+    }
     if (how.expectName && manifest.name !== how.expectName) {
       throw new PackageError(
-        `expected a package named "${how.expectName}", but ${root} is "${manifest.name}"`,
+        `expected a package named "${how.expectName}", but ${where} is "${manifest.name}"`,
       )
     }
     const mismatch = engineMismatch(manifest)

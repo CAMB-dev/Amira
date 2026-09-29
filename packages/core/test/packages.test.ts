@@ -255,6 +255,17 @@ test("installs from a git repository, pins the commit, restores the pin and upda
   expect(String(missing)).toMatch(/no branch, tag or commit/)
 })
 
+test("a repository without a package at its root is named by its URL, not the work directory", async () => {
+  const repo = path.join(dir, "mono")
+  makePackage(path.join(repo, "pkgs", "inner"), "inner", "1.0.0")
+  await gitRepo(repo)
+  const url = pathToFileURL(repo).href
+  const err = await installPackage(url, { scope: user(), cwd }).catch((e: Error) => e)
+  expect(String(err)).toBe(
+    `PackageError: ${url}: no amira-package.json or package.json (a package in a subdirectory of a repository installs by its name from the extensions index)`,
+  )
+})
+
 test("a project package replaces a user package of the same name; user ones load first", async () => {
   await installPackage(makePackage(path.join(dir, "u1"), "shared", "1.0.0", "from-user"), {
     scope: user(),
