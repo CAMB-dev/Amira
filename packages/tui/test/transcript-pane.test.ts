@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
-import { stripAnsi } from "@amira/tui-kit"
+import { ImageLoader, stripAnsi } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
-import { Block, type BlockEnv, foldMarkdown, ReplyBlock } from "../src/blocks.ts"
+import { Block, type BlockEnv, type BlockImages, foldMarkdown, imagesIn, ReplyBlock } from "../src/blocks.ts"
 import type { BlockKind } from "../src/transcript.ts"
 import { highlight, TranscriptPane } from "../src/transcript-pane.ts"
 
@@ -221,4 +221,32 @@ test("performance: long sessions scroll and stream with per-frame cost bounded b
   expect(p.matchCount).toBe(5000)
   console.log("find over 200k lines:", `${find.toFixed(1)} ms`)
   expect(find).toBeLessThan(3000)
+})
+
+/** A 30×40 PNG: 3 columns and 2 rows of 10×20 cells. */
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAB4AAAAoCAYAAADpE0oSAAAAaklEQVR4Xu3NkQKDUABA0XA4HA6HwzAMwzAIwjAMwzAMwzAMH4Zh2F/U/YjwwuETRWW4Xnjjgy9++CNGghQZchSoUKNBiw49BoyYMGPBioANOw6cMDY2NjY2NjYOxsbGxsbGxsbB2Pix+AZFpUoFb9YsKwAAAABJRU5ErkJggg==",
+  "base64",
+)
+
+test("a streaming reply folded and unfolded lays its image out again", async () => {
+  const loader = new ImageLoader({
+    support: { protocol: "sixel", cell: { width: 10, height: 20 } },
+    cwd: ".",
+    fetchRemote: async () => ({ bytes: PNG, contentType: "image/png" }),
+    maxRows: () => 20,
+  })
+  const images: BlockImages = { loader, changed: () => {} }
+  const e = { ...env(), images }
+  const reply = new ReplyBlock("hi\n\n![chart](https://img.test/c.png)\n\nmore", true, false)
+  reply.lines(e)
+  const source = loader.screen("https://img.test/c.png")!
+  for (let i = 0; i < 200 && source.state === "loading"; i++) await Bun.sleep(5)
+  const shown = () => imagesIn(reply.lines(e))
+  expect(shown()).toEqual([expect.objectContaining({ line: 2, col: 2 })])
+  reply.toggleFold()
+  expect(shown()).toBeUndefined()
+  expect(reply.lines(e).map(stripAnsi)).toContain("  🖼 chart (https://img.test/c.png)")
+  reply.toggleFold()
+  expect(shown()).toEqual([expect.objectContaining({ line: 2, col: 2 })])
 })

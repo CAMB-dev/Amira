@@ -313,6 +313,8 @@ export class ReplyBlock extends Block {
       rows = this.stream.render(width, ctx)
       while (rows.length && rows[rows.length - 1]!.trim() === "") rows = rows.slice(0, -1)
     } else {
+      // Its marks are laid out afresh: a stream made before (folded while streaming) starts over.
+      this.stream = undefined
       this.marks.clear()
       const { text } = foldMarkdown(this.source, this.folded)
       rows = renderMarkdown(text, width, env.theme, opts)

@@ -174,8 +174,16 @@ export class TranscriptPane {
         const to = end - im.line
         const at = i + (top - first)
         const col = im.col + (selected ? 1 : 0)
-        const whole = from === 0 && to === im.image.rows
-        if (im.image.ready && (whole || im.image.croppable)) {
+        const indent = " ".repeat(im.col)
+        if (from === 0 && to === im.image.rows ? false : !im.image.croppable) {
+          // Drawn whole only: said where to find it, when the view is tall enough to show it.
+          const note = im.image.rows <= this.height ? env.theme.muted(" (scroll to view)") : ""
+          alt.set(at, `${indent}${im.alt}${note}`)
+          continue
+        }
+        // In view: kept, and prepared if it is not ready.
+        im.image.want()
+        if (im.image.ready) {
           this.placements.push({
             image: im.image,
             row: this.padding + at,
@@ -186,9 +194,8 @@ export class TranscriptPane {
           })
           continue
         }
-        if (!im.image.ready && !im.image.broken) im.image.whenReady(env.images.changed)
-        const note = im.image.ready ? env.theme.muted(" (scroll to view)") : ""
-        alt.set(at, `${" ".repeat(im.col)}${im.alt}${note}`)
+        if (!im.image.broken) im.image.whenReady(env.images.changed)
+        alt.set(at, `${indent}${im.alt}`)
       }
       i = j
     }
@@ -205,8 +212,13 @@ export class TranscriptPane {
     let prev: Block | undefined
     const { images: _, ...text } = env
     for (const b of this.blocks) {
-      let lines = b.refolded ? b.printLines(text) : this.lines(b, env, false)
-      if (!b.refolded && imagesIn(lines)) lines = b.printLines(text)
+      let lines: string[]
+      if (b.refolded) lines = b.printLines(text)
+      else if (b instanceof ReplyBlock) {
+        // Laid out without images (none is loaded for it), unless its lines as shown have none.
+        const shown = this.cached(b, env)
+        lines = shown && !imagesIn(shown) ? shown : b.printLines(text)
+      } else lines = this.lines(b, env, false)
       if (!lines.length) continue
       if (prev && gapBetween(prev.kind, b.kind)) out.push("")
       out.push(...lines)
@@ -389,6 +401,21 @@ export class TranscriptPane {
   }
 
   // --- drawing
+
+  /** A block's lines at the env's width if they were drawn and are still current. */
+  private cached(block: Block, env: BlockEnv): string[] | undefined {
+    const d = this.drawn.get(block)?.find((x) => x.width === env.width)
+    const imageRows = env.images ? env.images.loader.maxRows() : 0
+    if (
+      !d ||
+      block.live ||
+      d.version !== block.version ||
+      d.detail !== env.detail ||
+      d.imageRows !== imageRows
+    )
+      return undefined
+    return d.lines
+  }
 
   private draw(block: Block, env: BlockEnv, selected: boolean): Drawn {
     const width = selected ? Math.max(1, env.width - 1) : env.width
