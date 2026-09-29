@@ -2582,3 +2582,31 @@ test("live panels sit above the input in both modes, fold with Ctrl+T and follow
     await exited
   }
 })
+
+test("live panels give way on a short screen: folded, then cut, the input box always shown", async () => {
+  for (const mode of ["fullscreen", "inline"] as const) {
+    const items = Array.from({ length: 9 }, (_, i) => `• step ${i + 1}`)
+    const { terminal, live, exited } = await setup([], {
+      cols: 70,
+      rows: 12,
+      settings: { mode },
+      panels: [
+        {
+          id: "todo",
+          render: () => [
+            { kind: "muted", text: "Todos 0/9" },
+            ...items.map((text) => ({ kind: "text" as const, text })),
+          ],
+        },
+      ],
+    })
+    await waitFor(() => live().includes("Todos 0/9"), `${mode}: the panel`)
+    const rows = live().split("\n")
+    // Folded to its header, since the whole list does not fit; the input box and hints stay.
+    expect(live()).not.toContain("step 1")
+    expect(rows.some((r) => r.startsWith("╰"))).toBe(true)
+    expect(rows.some((r) => r.includes("Ctrl+C quit"))).toBe(true)
+    terminal.send("\x04")
+    await exited
+  }
+})
