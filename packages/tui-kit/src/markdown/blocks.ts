@@ -98,7 +98,14 @@ export interface BlockState {
 export type Sink = (rows: string[]) => void
 
 export function newState(): BlockState {
-  return { list: [], prevBlank: false, paragraph: false, refs: new Map(), blankPending: false, emitted: false }
+  return {
+    list: [],
+    prevBlank: false,
+    paragraph: false,
+    refs: new Map(),
+    blankPending: false,
+    emitted: false,
+  }
 }
 
 export function cloneState(s: BlockState): BlockState {
@@ -214,8 +221,7 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
   else if (d.hold) {
     s.held = { text: line.slice(d.render.start), renderCol: d.render.indent }
     s.paragraph = true
-  }
-  else emit(s, sink, renderLine(d.render, line, env).rows)
+  } else emit(s, sink, renderLine(d.render, line, env).rows)
 }
 
 /** Ends the blocks that a blank line or the end of the text closes: a held paragraph line, a table. */
