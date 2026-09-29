@@ -2,10 +2,12 @@ import {
   type CommandCandidate,
   type CommandContext,
   type CommandDefinition,
+  clip,
   defineExtension,
   type EventMap,
   type ExtensionAPI,
   modelLabel,
+  type ReloadReport,
   type ShellMode,
   type StoredSessionInfo,
 } from "@amira/api"
@@ -51,10 +53,8 @@ export function ago(ms: number, now = Date.now()): string {
   return new Date(ms).toISOString().slice(0, 10)
 }
 
-const oneLine = (s: string, max = 60) => {
-  const t = s.replace(/\s+/g, " ").trim()
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t
-}
+/** `s` on one line, cut to `max` terminal cells. */
+const oneLine = (s: string, max = 60) => clip(s.replace(/\s+/g, " ").trim(), max)
 
 /** How a stored session reads in a picker: "<id>  3m ago  12 msgs  first words". */
 export function sessionLabel(s: StoredSessionInfo, now = Date.now()): string {
@@ -125,28 +125,32 @@ export default defineExtension((api: ExtensionAPI) => {
   add({
     name: "help",
     aliases: ["?", "h"],
-    description: "List the slash commands and skills",
+    description: "List the slash commands, the common keys and how to run skills",
     run(_args, ctx) {
-      // Grouped by where they come from, this extension's first; descriptions can be wordy.
+      // Three parts: the commands (built-in ones together, then each extension's), the common
+      // keys of the frontend, and the skills folded to a line: they can be many.
       const all = ctx.commands()
       const own = all.find((c) => c.name === "help")?.source
-      const sources = [...new Set(all.map((c) => c.source))].sort(
-        (a, b) => Number(b === own) - Number(a === own),
+      const builtIn = (source: string) => source === own || source.startsWith("builtin:")
+      const sources = [...new Set(all.map((c) => (builtIn(c.source) ? "" : c.source)))].sort(
+        (a, b) => Number(b === "") - Number(a === ""),
       )
       const groups = sources.map((source) => {
         const rows = all
-          .filter((c) => c.source === source)
+          .filter((c) => (builtIn(c.source) ? "" : c.source) === source)
           .map((c) => [
             `/${c.name}${c.aliases.length ? ` (${c.aliases.map((a) => `/${a}`).join(", ")})` : ""}${c.hint ? ` ${c.hint}` : ""}`,
             oneLine(c.description, 70),
           ])
-        return `${source === own ? "Commands" : `From ${source}`}:\n${table(rows)}`
+        return `${source === "" ? "Commands" : `From ${source}`}:\n${table(rows)}`
       })
-      // Skills run with a $, not a slash; they can be many.
-      const skills = ctx.skills()
+      const keys = ctx.keys?.() ?? []
+      if (keys.length) groups.push(`Keys:\n${table(keys.map((k) => [k.keys, oneLine(k.description, 70)]))}`)
+      // Skills run with a $, not a slash; typing $ lists them.
+      const n = ctx.skills().length
       groups.push(
-        skills.length
-          ? `Skills ($ runs a skill: $<name> [arguments]):\n${table(skills.map((s) => [`$${s.name}`, oneLine(s.description, 70)]))}`
+        n
+          ? `Skills: ${n} ${n === 1 ? "skill" : "skills"} · type $ to list them; $<name> [arguments] runs one.`
           : "Skills: none found ($ runs a skill: $<name> [arguments]).",
       )
       const aliases = ctx.aliases()
@@ -191,7 +195,7 @@ export default defineExtension((api: ExtensionAPI) => {
       },
     },
     async run(args, ctx) {
-      let ref = args
+      const ref = args
       if (!ref) {
         const current = modelRef(ctx.session.info().model)
         const models = ctx.session.models()
@@ -209,7 +213,11 @@ export default defineExtension((api: ExtensionAPI) => {
           ctx.print(`Model: ${current}. Pass one to switch: /model provider/model`)
           return
         }
-        ref = picked
+        // The TUI's picker leaves an echo line that shows what was chosen; other frontends
+        // get the model it came to.
+        ctx.session.setModel(picked)
+        if (ctx.frontend !== "tui") ctx.print(`Model: ${modelRef(ctx.session.info().model)}`)
+        return
       }
       ctx.session.setModel(ref)
       ctx.print(`Model: ${modelRef(ctx.session.info().model)}`)
@@ -429,10 +437,22 @@ export default defineExtension((api: ExtensionAPI) => {
     name: "reload",
     description: "Reload every extension",
     async run(_args, ctx) {
-      await ctx.session.reloadExtensions()
-      ctx.print("Reloaded extensions.")
+      const report = await ctx.session.reloadExtensions()
+      ctx.print(report ? reloadSummary(report) : "Reloaded extensions.")
     },
   })
 })
+
+/** "Reloaded 9 extensions · loaded workflow · 1 failed: x": what /reload changed. */
+export function reloadSummary(r: ReloadReport): string {
+  const parts = [`Reloaded ${r.extensions} ${r.extensions === 1 ? "extension" : "extensions"}`]
+  if (r.loaded.length) parts.push(`new: ${r.loaded.join(", ")}`)
+  if (r.unloaded.length) parts.push(`gone: ${r.unloaded.join(", ")}`)
+  if (r.skillsAdded) parts.push(`${r.skillsAdded} new ${r.skillsAdded === 1 ? "skill" : "skills"}`)
+  if (r.skillsRemoved) parts.push(`${r.skillsRemoved} ${r.skillsRemoved === 1 ? "skill" : "skills"} gone`)
+  if (r.failed.length) parts.push(`${r.failed.length} failed: ${r.failed.join(", ")}`)
+  if (parts.length === 1) parts.push("nothing changed")
+  return parts.join(" · ")
+}
 
 const modelRef = modelLabel

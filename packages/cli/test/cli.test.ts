@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import { defineExtension, defineTool, type Extension, textResult } from "@amira/api"
@@ -300,20 +302,65 @@ test("a hung event handler does not keep print mode from finishing", async () =>
   expect(io.err).toContain("did not finish")
 })
 
-test("subscriber failures reach onSubscriberError", async () => {
+test("an extension's failing handler is its own failure: named once, then counted", async () => {
   const boom: Extension = (api) => {
     api.on("turn.start", () => {
       throw new Error("kaput")
     })
   }
   const seen: string[] = []
-  const { agent } = await mockSession([{ text: "hi" }], {
-    noBuiltins: false,
-    builtins: async () => [{ source: "boom", extension: boom }],
-    onSubscriberError: (err, ev) => void seen.push(`${ev.type}: ${(err as Error).message}`),
+  const session = await mockSession(
+    Array.from({ length: 11 }, () => ({ text: "hi" })),
+    {
+      noBuiltins: false,
+      builtins: async () => [{ source: "boom", extension: boom }],
+      onSubscriberError: (err, ev) => void seen.push(`${ev.type}: ${(err as Error).message}`),
+    },
+  )
+  const { agent } = session
+  const errors: string[] = []
+  agent.bus.subscribe((e) => {
+    if (e.type === "extension.error") errors.push(`${e.data.source}: ${e.data.error}`)
   })
-  await runPrint(agent, "go", false, { io: capture() })
-  expect(seen).toEqual(["turn.start: kaput"])
+  for (let i = 0; i < 10; i++) await agent.prompt("go")
+  await agent.bus.flush()
+  expect(seen).toEqual([])
+  expect(errors).toEqual([
+    "boom: its turn.start handler failed: kaput",
+    "boom: its turn.start handler has failed 10 times now; the latest: kaput",
+  ])
+  // A reload starts the count afresh: the extension is reported again when it still fails.
+  await session.reload()
+  await agent.prompt("go")
+  await agent.bus.flush()
+  expect(errors).toHaveLength(3)
+  expect(errors[2]).toBe("boom: its turn.start handler failed: kaput")
+})
+
+test("a package's extension is named after the package, and its failures say how to turn it off", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-pkg-label-"))
+  const file = path.join(dir, "index.ts")
+  writeFileSync(file, `export default (api) => { api.on("turn.start", () => { throw new Error("nope") }) }\n`)
+  const pkg = {
+    name: "lint-hooks",
+    scope: "user" as const,
+    dir,
+    entry: { version: "1.0.0", source: { type: "path" as const, path: dir }, pinned: {}, installedAt: "" },
+    manifest: { name: "lint-hooks", version: "1.0.0", extensions: [file], skills: [], commands: {} },
+  }
+  const { agent, host } = await mockSession([{ text: "hi" }], {
+    packages: { packages: [pkg as never], problems: [], skipped: [] },
+  })
+  expect(host.loaded).toContain("lint-hooks")
+  const errors: string[] = []
+  agent.bus.subscribe((e) => {
+    if (e.type === "extension.error") errors.push(`${e.data.source}: ${e.data.error}`)
+  })
+  await agent.prompt("go")
+  await agent.bus.flush()
+  expect(errors).toEqual([
+    "lint-hooks: its turn.start handler failed: nope (user package; amira ext disable lint-hooks turns it off)",
+  ])
 })
 
 test("startup failures are reported: missing extension files and broken built-ins", async () => {
@@ -434,14 +481,14 @@ test("unknown names to disable are reported at startup, with where they came fro
   expect(agent.tools.specs().map((s) => s.name)).toEqual(["bash"])
 })
 
-test("the top-level session asks the user to approve, and nobody answering denies", async () => {
+test("the top-level session asks the user to approve; dismissing denies and stops the turn", async () => {
   const { userApprover } = await import("../src/session.ts")
   const bus = new EventBus()
   const ui = new UiRequests(bus)
   const answers: (boolean | null)[] = [true, false, null]
   const asked: string[] = []
   bus.subscribe((e) => {
-    if (e.type !== "ui.request") return
+    if (e.type !== "ui.request" || !answers.length) return
     asked.push(`${e.data.title} | ${e.data.kind === "confirm" ? e.data.message : ""}`)
     ui.respond(e.data.requestId, answers.shift())
   })
@@ -454,10 +501,56 @@ test("the top-level session asks the user to approve, and nobody answering denie
     reason: "policy",
   }
   const signal = new AbortController().signal
-  expect(await approve(request, signal)).toEqual({ approved: true })
+  expect(await approve(request, signal)).toEqual({ approved: true, by: "user" })
   expect(await approve(request, signal)).toEqual({ approved: false, reason: "the user said no" })
-  expect(await approve(request, signal)).toEqual({ approved: false, reason: "nobody answered" })
-  expect(asked[0]).toBe('Allow bash? | policy\n{"command":"rm x"}')
+  expect(await approve(request, signal)).toEqual({
+    approved: false,
+    reason: "the user dismissed the question and stopped the turn",
+    interrupt: true,
+  })
+  // Without a presenter the arguments show as they are, with what "don't ask again" covers.
+  expect(asked[0]).toBe(
+    `Allow bash? | policy\n{"command":"rm x"}\n"Don't ask again" covers bash asked about for: policy`,
+  )
+  // An interrupted turn cancels the question: that is no dismissal.
+  const stop = new AbortController()
+  const pending = approve({ ...request, reason: "other" }, stop.signal)
+  stop.abort()
+  expect(await pending).toEqual({ approved: false, reason: "the turn was interrupted" })
+  ui.unavailable = "print mode"
+  expect(await approve({ ...request, reason: "third" }, signal)).toEqual({
+    approved: false,
+    reason: "nobody can approve it (print mode)",
+  })
+})
+
+test("an approval shows what the call would do as its tool presents it", async () => {
+  const { userApprover, approvalPreview } = await import("../src/session.ts")
+  const { builtinPresenters } = await import("@amira/builtin-tools")
+  expect(approvalPreview({ command: "make build\necho done" }, builtinPresenters.bash)).toEqual([
+    { kind: "code", text: "make build" },
+    { kind: "code", text: "echo done" },
+  ])
+  const edit = approvalPreview({ path: "a.ts", old_string: "one", new_string: "two" }, builtinPresenters.edit)
+  expect(edit?.[0]).toEqual({ kind: "muted", text: "a.ts" })
+  expect(edit?.map((l) => l.kind)).toContain("diff-add")
+  expect(approvalPreview({ x: 1 }, undefined)).toBeUndefined()
+  const bus = new EventBus()
+  const ui = new UiRequests(bus)
+  const asked: unknown[] = []
+  bus.subscribe((e) => {
+    if (e.type !== "ui.request") return
+    asked.push(e.data)
+    ui.respond(e.data.requestId, true)
+  })
+  const approve = userApprover(ui, { presenters: { get: (n) => builtinPresenters[n] } })
+  const request = { sessionId: "s", toolCallId: "t", name: "bash", args: { command: "make" }, reason: "p" }
+  await approve(request, new AbortController().signal)
+  expect(asked[0]).toMatchObject({
+    message: `p\n"Don't ask again" covers bash asked about for: p`,
+    preview: [{ kind: "code", text: "make" }],
+    always: true,
+  })
 })
 
 test("an approval may be given for the rest of the session, or refused with what to do instead", async () => {
@@ -486,13 +579,16 @@ test("an approval may be given for the rest of the session, or refused with what
   })
   expect(asked[0]).toMatchObject({
     kind: "confirm",
-    always: "this session for bash (policy)",
+    always: true,
     other: true,
     source: "approval",
   })
-  expect(await approve(request, signal)).toEqual({ approved: true })
+  expect(await approve(request, signal)).toEqual({ approved: true, by: "user" })
   // Not asked again for the same tool and reason; asked for another reason.
-  expect(await approve({ ...request, args: { command: "rm y" } }, signal)).toEqual({ approved: true })
+  expect(await approve({ ...request, args: { command: "rm y" } }, signal)).toEqual({
+    approved: true,
+    by: "rule",
+  })
   expect(asked).toHaveLength(2)
   answers.push(false)
   expect(await approve({ ...request, reason: "other policy" }, signal)).toEqual({

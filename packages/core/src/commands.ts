@@ -265,6 +265,8 @@ export interface CommandRunOptions {
   signal?: AbortSignal
   /** Shows a full-screen view; frontends without views leave it out. */
   openView?: (view: FrontendView) => void
+  /** The frontend's most useful keys, for /help; frontends without keys leave it out. */
+  keys?: CommandContext["keys"]
 }
 
 export interface CommandOutcome {
@@ -580,6 +582,7 @@ export class CommandHost {
       aliases: () => this.aliases(),
       quit: opts.quit ?? (() => {}),
       ...(opts.openView ? { openView: opts.openView } : {}),
+      ...(opts.keys ? { keys: opts.keys } : {}),
     }
   }
 }

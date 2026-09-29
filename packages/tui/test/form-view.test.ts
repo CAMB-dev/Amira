@@ -125,7 +125,7 @@ test("a form opens full screen, queues a dialog behind it, and gives the inline 
   // Back on the main screen: the transcript is intact and the queued dialog shows inline.
   await waitFor(() => !screen.inAltScreen && live().includes("? Deploy too? (other)"), "inline dialog")
   expect(all()).toContain("› set it up")
-  terminal.send("y")
+  terminal.send("\x1b[B\r")
   expect(await later).toBe(true)
   await waitFor(() => all().includes("saved"), "reply")
   expect(got).toEqual({ url: "https://ci.example/hook", token: "tok-SECRET-9", note: "reachable" })
@@ -168,7 +168,7 @@ test("a secret input dialog is masked and its answer is not echoed", async () =>
   await waitFor(() => live().includes("**********"), "mask")
   terminal.send("\r")
   expect(await key).toBe("sk-abc-123")
-  await waitFor(() => all().includes("? API key › (hidden)"), "answer line")
+  await waitFor(() => all().includes("? API key ❯ (hidden)"), "answer line")
   expect(all()).not.toContain("sk-abc")
   terminal.send("\x03")
   await exited
@@ -180,7 +180,7 @@ test("narrow and short terminals: the form scrolls and resizes while editing", a
   await waitFor(() => screen.lines.join("\n").includes("Webhook"), "form")
   terminal.send("https://a.b")
   terminal.send("\t\t\t")
-  await waitFor(() => screen.lines.join("\n").includes("› Note"), "scrolled to note")
+  await waitFor(() => screen.lines.join("\n").includes("❯ Note"), "scrolled to note")
   expect(screen.lines.join("\n")).toContain("[ Save ]")
   screen.resize(40, 12)
   terminal.setSize(40, 12)

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs"
+import path from "node:path"
 import {
   type LockEntry,
   type PackageScope,
@@ -27,6 +28,18 @@ export interface Where {
   cwd: string
 }
 
+/**
+ * Whether the project scope is the user scope: amira run from the home directory, where the
+ * project's packages (<cwd>/.amira/packages) are the user's own and need no trust.
+ */
+export function projectScopeIsUser(where: Where): boolean {
+  const norm = (dir: string) => {
+    const r = path.resolve(dir)
+    return process.platform === "win32" ? r.toLowerCase() : r
+  }
+  return norm(packageScope("project", where).dir) === norm(packageScope("user", where).dir)
+}
+
 /** Every package the lock files of both scopes record, user scope first. */
 export function listInstalled(where: Where): InstalledPackage[] {
   const project = scopePackages(packageScope("project", where))
@@ -42,27 +55,63 @@ export interface ActivePackages {
   packages: (InstalledPackage & { manifest: PackageManifest })[]
   /** Packages that are recorded but cannot be loaded. */
   problems: { name: string; scope: ScopeKind; error: string }[]
+  /**
+   * Packages left out on purpose: `disabled` in settings (packages.disabled), or `untrusted`
+   * (a project's own packages, while the project is not trusted).
+   */
+  skipped: { name: string; scope: ScopeKind; why: "disabled" | "untrusted" }[]
 }
 
-/** The packages to load at startup: a project package replaces a user package of the same name. */
-export function activePackages(where: Where): ActivePackages {
-  const out: ActivePackages = { packages: [], problems: [] }
+export interface ActiveOptions {
+  /** Names of packages not to load (settings packages.disabled), of either scope. */
+  disabled?: readonly string[]
+  /**
+   * Whether the project's own packages (<cwd>/.amira/packages) may load. Default true; false
+   * leaves them out, and user packages they would replace load instead.
+   */
+  project?: boolean
+}
+
+/**
+ * The packages to load at startup: a project package replaces a user package of the same name.
+ * Disabled packages and, unless `project` allows them, the project's packages are skipped.
+ */
+export function activePackages(where: Where, opts: ActiveOptions = {}): ActivePackages {
+  const out: ActivePackages = { packages: [], problems: [], skipped: [] }
+  const project = opts.project ?? true
+  const disabled = new Set(opts.disabled ?? [])
   for (const p of listInstalled(where)) {
-    if (p.shadowed) continue
+    if (p.scope === "project" && !project) {
+      out.skipped.push({ name: p.name, scope: p.scope, why: "untrusted" })
+      continue
+    }
+    if (p.shadowed && project) continue
+    if (disabled.has(p.name)) {
+      out.skipped.push({ name: p.name, scope: p.scope, why: "disabled" })
+      continue
+    }
     if (p.manifest) out.packages.push({ ...p, manifest: p.manifest })
     else out.problems.push({ name: p.name, scope: p.scope, error: p.error ?? "unusable" })
   }
   return out
 }
 
+/** The names of the packages the project's own lock file records (<cwd>/.amira/packages). */
+export function projectPackageNames(where: Where): string[] {
+  return listInstalled(where)
+    .filter((p) => p.scope === "project")
+    .map((p) => p.name)
+}
+
 /** The module behind `amira <name>`, from the active packages. */
 export function findPackageCommand(
   name: string,
   where: Where,
+  opts: ActiveOptions = {},
 ): { file: string; pkg: InstalledPackage & { manifest: PackageManifest } } | undefined {
   let found: ReturnType<typeof findPackageCommand>
   // Later packages win, like later extensions: project over user.
-  for (const pkg of activePackages(where).packages) {
+  for (const pkg of activePackages(where, opts).packages) {
     const file = pkg.manifest.commands[name]
     if (file) found = { file, pkg }
   }

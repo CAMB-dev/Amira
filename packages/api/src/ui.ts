@@ -1,4 +1,5 @@
 import type { FormSchema, FormSpec, FormValues } from "./form.ts"
+import type { ToolLine } from "./tool-renderers.ts"
 
 /** Semantic color for status text; frontends map it to their theme. */
 export type StatusTone = "default" | "muted" | "accent" | "success" | "warning" | "error"
@@ -40,9 +41,17 @@ export type UiRequest =
    * (answered with "always"); a string says what that covers instead of "this session", e.g.
    * "this session for bash (policy)", so the user knows how far it reaches. `other` offers a
    * free-text choice (answered with `{ other: text }`) meaning no, and what to do instead. A
-   * client that knows neither may still answer a boolean.
+   * client that knows neither may still answer a boolean. `preview` shows what is asked
+   * about as a tool presents it (a command, a diff), under the message.
    */
-  | { kind: "confirm"; title: string; message?: string; always?: boolean | string; other?: boolean }
+  | {
+      kind: "confirm"
+      title: string
+      message?: string
+      always?: boolean | string
+      other?: boolean
+      preview?: ToolLine[]
+    }
   /** `secret` masks what is typed; the answer is never echoed, persisted or sent in ui.resolved. */
   | { kind: "input"; title: string; placeholder?: string; initial?: string; secret?: boolean }
   /** A unified diff to look over, answered with one of `options` (D16, D38). */

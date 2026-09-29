@@ -57,6 +57,7 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
     if (file !== userFile) {
       warnings.push(...dropProviderEndpoints(v.settings, file, userFile as string))
       warnings.push(...dropWebEndpoints(v.settings, file, userFile as string))
+      warnings.push(...dropPackageSettings(v.settings, file, userFile as string))
     }
     settings = deepMerge(settings, v.settings)
     files.push(file)
@@ -109,6 +110,26 @@ function dropWebEndpoints(settings: Settings, file: string, userFile: string): s
   drop(search?.tavily, "web.search.tavily", ["apiKeyEnv"])
   drop(search?.searxng, "web.search.searxng", ["url"])
   drop(settings.web?.fetch, "web.fetch", ["allowPrivateNetwork"])
+  return warnings
+}
+
+/**
+ * Nor may a project file say that projects are trusted to run their own packages, or which
+ * packages load: lists replace each other when settings merge, so a project file could turn a
+ * package the user disabled back on, or turn off one the user relies on (e.g. a permission
+ * policy). `amira ext disable|enable|trust|untrust` write the user file.
+ */
+function dropPackageSettings(settings: Settings, file: string, userFile: string): string[] {
+  const warnings: string[] = []
+  for (const key of ["disabled", "trustedProjects", "untrustedProjects"] as const) {
+    if (settings.packages?.[key] === undefined) continue
+    delete settings.packages[key]
+    const why =
+      key === "disabled"
+        ? "a project file cannot choose which packages load"
+        : "a project file cannot decide which projects are trusted"
+    warnings.push(`${file}: "packages.${key}" is ignored; ${why}. Set it in ${userFile} instead`)
+  }
   return warnings
 }
 

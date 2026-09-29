@@ -137,7 +137,19 @@ function detailsOf(call: ToolCallView<AskUserParams, unknown>): AskUserDetails |
 const questionsOf = (args: Partial<AskUserParams>): AskQuestion[] =>
   Array.isArray(args.questions) ? args.questions.filter((q) => q && typeof q.question === "string") : []
 
-/** The call shows its first question; the result, the answers under each question's header. */
+/** Longest a question's label (its header, else the question) may be above its answer. */
+const LABEL_CHARS = 40
+
+/** `s` cut to `max` characters, whole code points, with an ellipsis when cut. */
+function clipLabel(s: string, max: number): string {
+  const chars = [...s.replace(/\s+/g, " ").trim()]
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : chars.join("")
+}
+
+/**
+ * The call shows its first question; the result, each question's label (its header, cut short)
+ * with the answer under it, whole: a long label is cut, never the answer.
+ */
 export const askUserPresenter: ToolPresenter<AskUserParams, AskUserDetails> = {
   summary(args) {
     const qs = questionsOf(args)
@@ -159,11 +171,12 @@ export const askUserPresenter: ToolPresenter<AskUserParams, AskUserDetails> = {
     const d = detailsOf(call)
     if (!d || !("answers" in d.outcome) || d.outcome.answers.length < 2) return []
     const answers = d.outcome.answers
-    return d.questions.map(
-      (q, i): ToolLine => ({
-        kind: "text",
-        text: `${q.header || q.question} › ${answers[i] ? answerText(answers[i]) : "(no answer)"}`,
-      }),
-    )
+    return d.questions.flatMap((q, i): ToolLine[] => {
+      const answer = answers[i] ? answerText(answers[i]) : "(no answer)"
+      return [
+        { kind: "muted", text: clipLabel(q.header || q.question, LABEL_CHARS) },
+        ...answer.split("\n").map((l): ToolLine => ({ kind: "text", text: `  ${l}` })),
+      ]
+    })
   },
 }

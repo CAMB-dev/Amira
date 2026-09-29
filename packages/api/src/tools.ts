@@ -98,8 +98,12 @@ export interface ToolSession {
  * the next turn. Only the first deliver or cancel counts.
  */
 export interface PendingNotice {
-  /** Hands the message over. Give it a `display` with origin so frontends show it as a notice. */
-  deliver(message: UserMessage): void
+  /**
+   * Hands the message over. Give it a `display` with origin so frontends show it as a notice.
+   * `wake: false` starts no turn when the session is idle: the message waits for the next one
+   * (the user's next message), e.g. for news the user caused and already knows.
+   */
+  deliver(message: UserMessage, opts?: { wake?: boolean }): void
   /** Nothing will come after all. */
   cancel(): void
 }

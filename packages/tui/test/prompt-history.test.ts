@@ -3,7 +3,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { projectKey } from "@amira/core"
-import { Editor, key, textKey } from "@amira/tui-kit"
+import { defaultTheme, Editor, key, textKey } from "@amira/tui-kit"
+
+const plainTheme = () => defaultTheme
+
 import { HistoryNavigator, PromptHistory } from "../src/prompt-history.ts"
 
 const dir = mkdtempSync(path.join(os.tmpdir(), "amira-history-"))
@@ -135,4 +138,20 @@ test("a recalled entry with a folded paste comes back folded", () => {
   new HistoryNavigator(history, editor).move(-1)
   expect(editor.getDisplayText()).toBe("log: [pasted 20 lines #1]")
   expect(editor.getText()).toBe(`log: ${"x\n".repeat(20)}`)
+})
+
+test("in a recalled entry that wraps, ↑ first walks up its rows", () => {
+  const h = new PromptHistory()
+  h.add(["older"])
+  h.add(["a long entry that wraps over several rows of the editor"])
+  const ed = new Editor({ prompt: "> " })
+  const nav = new HistoryNavigator(h, ed)
+  expect(nav.move(-1)).toBe(true)
+  ed.setCursor({ line: 0, col: Number.POSITIVE_INFINITY })
+  ed.render(20, { theme: plainTheme() } as never)
+  // The caret is on the last row of the entry: ↑ is the editor's.
+  expect(nav.move(-1)).toBe(false)
+  ed.setCursor({ line: 0, col: 0 })
+  expect(nav.move(-1)).toBe(true)
+  expect(ed.getText()).toBe("older")
 })

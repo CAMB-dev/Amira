@@ -27,7 +27,7 @@ export function detectEnv(env: Env = process.env): TerminalEnv {
 export function supportsHyperlinks(env: Env = process.env): boolean {
   const force = env.FORCE_HYPERLINK
   if (force !== undefined && force !== "") return force !== "0"
-  if (env.TMUX || env.STY) return false
+  if (env.TMUX || env.STY || env.TERM === "dumb") return false
   if (env.WT_SESSION) return true
   const program = env.TERM_PROGRAM ?? ""
   if (["vscode", "iTerm.app", "WezTerm", "ghostty", "Hyper"].includes(program)) return true

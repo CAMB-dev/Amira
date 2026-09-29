@@ -127,13 +127,16 @@ test("streaming with NO_MODEL explains how to add a provider or pick a model", a
   expect(isNoModel(NO_MODEL)).toBe(true)
   const request = { ...req(""), model: NO_MODEL }
   const none = (await events(createAi().stream(request)))[0] as ErrorEvent
-  expect(none.error).toEqual({
+  expect(none.error).toMatchObject({
     code: "no_model",
     message: "no providers configured; add one with /provider add, then pick a model with /model",
   })
   const some = createAi({ providers: [{ id: "a", dialect: "openai-chat", baseUrl: "http://a" }] })
   const unpicked = (await events(some.stream(request))) as ErrorEvent[]
   expect(unpicked).toHaveLength(1)
-  expect(unpicked[0]?.error).toEqual({ code: "no_model", message: "no model selected; pick one with /model" })
+  expect(unpicked[0]?.error).toMatchObject({
+    code: "no_model",
+    message: "no model selected; pick one with /model",
+  })
   expect(unpicked[0]?.retryable).toBe(false)
 })

@@ -10,11 +10,13 @@ import {
   createWorktree,
   DISCARD,
   KEEP,
+  listKeptWorktrees,
   MERGE,
   mergeWorktree,
   parseNumstat,
   projectKey,
   type RunGit,
+  STALE_NOTICE_MS,
   STALE_WORKTREE_MS,
   sweepWorktrees,
   type Worktree,
@@ -149,6 +151,7 @@ test("a conflict goes to review; keeping it leaves both sides untouched", async 
   const { root, wt } = await conflicting()
   const asked: { title: string; diff: string; options: string[] }[] = []
   const r = await mergeWorktree(git, wt, {
+    who: `"Fix it" (coder)`,
     review: async (title, diff, options) => {
       asked.push({ title, diff, options })
       return KEEP
@@ -156,7 +159,10 @@ test("a conflict goes to review; keeping it leaves both sides untouched", async 
   })
   expect(r.outcome).toBe("kept")
   expect(r.conflict).toBeTruthy()
-  expect(asked[0]?.title).toContain("conflict")
+  // The review names whose changes they are.
+  expect(asked[0]?.title).toBe(
+    `The changes of "Fix it" (coder) conflict with the working tree (2 files, +2 -1)`,
+  )
   expect(asked[0]?.options).toEqual([APPLY_PARTIAL, KEEP, DISCARD])
   expect(asked[0]?.diff).toContain("+child")
   expect(read(path.join(root, "f.txt"))).toBe("a\nparent\nc\nd\ne\n")
@@ -192,19 +198,24 @@ test("a clean merge past the review threshold is reviewed first (D38)", async ()
   const wt = await worktree(root, home)
   writeFileSync(path.join(wt.cwd, "f.txt"), "1\n2\n3\n")
   const options: string[][] = []
+  const titles: string[] = []
   const r = await mergeWorktree(git, wt, {
     threshold: { lines: 4 },
-    review: async (_t, _d, o) => {
+    who: `"Fix the bug" (coder)`,
+    review: async (t, _d, o) => {
+      titles.push(t)
       options.push(o)
       return MERGE
     },
   })
   expect(options).toEqual([[MERGE, KEEP, DISCARD]])
+  // The review says whose changes they are.
+  expect(titles).toEqual(['Merge the changes of "Fix the bug" (coder) (1 file, +3 -5)?'])
   expect(r.outcome).toBe("merged")
   expect(read(path.join(root, "f.txt"))).toBe("1\n2\n3\n")
 })
 
-test("the sweep deletes worktrees left behind long ago and keeps recent ones", async () => {
+test("the sweep announces worktrees left behind long ago, deletes them a day later, and keeps recent ones", async () => {
   const { root, home } = await setup()
   const old = await createWorktree(git, { cwd: root, home, name: "old" })
   const fresh = await createWorktree(git, { cwd: root, home, name: "fresh" })
@@ -214,7 +225,17 @@ test("the sweep deletes worktrees left behind long ago and keeps recent ones", a
   const then = new Date(now - STALE_WORKTREE_MS - 60_000)
   utimesSync(old.dir, then, then)
   utimesSync(old.patch, then, then)
-  expect(await sweepWorktrees(git, { root, home, now })).toEqual(["old"])
+  expect(listKeptWorktrees(home, root).map((w) => w.name)).toEqual(["fresh", "old"])
+  // First the user is told; nothing goes yet.
+  const first = await sweepWorktrees(git, { root, home, now })
+  expect(first.removed).toEqual([])
+  expect(first.expiring.map((w) => [w.name, w.patch])).toEqual([["old", old.patch]])
+  expect(existsSync(old.dir)).toBe(true)
+  expect(listKeptWorktrees(home, root).find((w) => w.name === "old")?.expiring).toBe(true)
+  // Told again? No: once is enough, and within a day nothing is deleted.
+  expect(await sweepWorktrees(git, { root, home, now: now + 1000 })).toEqual({ removed: [], expiring: [] })
+  const later = now + STALE_NOTICE_MS + 60_000
+  expect(await sweepWorktrees(git, { root, home, now: later })).toEqual({ removed: ["old"], expiring: [] })
   expect(existsSync(old.dir)).toBe(false)
   expect(existsSync(old.patch)).toBe(false)
   expect(existsSync(fresh.dir)).toBe(true)

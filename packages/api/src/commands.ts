@@ -87,6 +87,12 @@ export interface CommandCompleteContext {
   readonly session: SessionControl
 }
 
+/** A key of the frontend and what it does, as /help lists it: "Ctrl+R", "Search the prompt history". */
+export interface KeyHelp {
+  keys: string
+  description: string
+}
+
 export interface CommandContext extends CommandCompleteContext {
   /** Where the command was typed. */
   readonly frontend: CommandFrontend
@@ -103,6 +109,11 @@ export interface CommandContext extends CommandCompleteContext {
   aliases(): CommandAlias[]
   /** Leaves the interactive UI; frontends with nothing to leave ignore it. */
   quit(): void
+  /**
+   * The frontend's most useful keys, as its keybindings have them now, for /help; unset where
+   * the frontend has no keys of its own.
+   */
+  readonly keys?: () => readonly KeyHelp[]
   /**
    * Shows a full-screen view, on frontends that have them (the TUI does); unset elsewhere.
    * Returns once the view is shown; the user leaves it when done. Throws for a view kind no
@@ -139,6 +150,14 @@ export function isSubagentView(view: FrontendView): view is SubagentView {
  * only), or how it ended.
  */
 export type SubagentState = "queued" | "running" | "idle" | SubagentStatus
+
+/**
+ * A sub-agent's state as every screen words it: running, queued, idle, done, failed, stopped
+ * (the states are named for code: an ended one is "error" or "aborted").
+ */
+export function subagentStateText(state: SubagentState): string {
+  return state === "error" ? "failed" : state === "aborted" ? "stopped" : state
+}
 
 /** A sub-agent of the session, running or finished, as commands list it. */
 export interface SubagentInfo {
@@ -332,6 +351,20 @@ export interface SessionControl {
   /** Adding, editing and removing providers and their keys; unset where the host cannot. */
   readonly providerAdmin?: ProviderAdmin
   preview(): Promise<ContextPreview>
-  /** Unloads every extension and loads them again. */
-  reloadExtensions(): Promise<void>
+  /**
+   * Unloads every extension and loads them again, with the packages as installed now. Says
+   * what changed where the host can tell.
+   */
+  reloadExtensions(): Promise<ReloadReport | undefined>
+}
+
+/** What /reload changed: extensions (by source) that came or went, and ones that failed. */
+export interface ReloadReport {
+  loaded: string[]
+  unloaded: string[]
+  failed: string[]
+  /** Extensions loaded now. */
+  extensions: number
+  skillsAdded: number
+  skillsRemoved: number
 }

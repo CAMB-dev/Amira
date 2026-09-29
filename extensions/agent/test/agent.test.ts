@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type ModelRequest } from "@amira/ai"
-import { type AnyEvent, defineTool, type Settings, textResult } from "@amira/api"
+import { type AnyEvent, defineTool, type Settings, textResult, USER_STOP_REASON } from "@amira/api"
 import { Agent, AgentTree, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import { runCommand } from "@amira/proc"
 import { createAgentExtension, hostGit, type RunGit } from "../src/index.ts"
@@ -516,6 +516,39 @@ test("a sub-agent that fails keeps its worktree changes unmerged", async () => {
   expect(readText(path.join(repo, "f.txt"))).toBe("one\n")
 })
 
+test("a background sub-agent that fails says why and where its unmerged changes are", async () => {
+  const repo = await gitRepo()
+  const { root, bus } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "coder") {
+        return last?.role === "toolResult"
+          ? { error: { message: "provider exploded" } }
+          : { toolCalls: [{ name: "write", args: { path: "f.txt", content: "half\n" } }] }
+      }
+      if (isNotice(req)) return { text: "noted" }
+      return last?.role === "toolResult"
+        ? { text: "started" }
+        : {
+            toolCalls: [
+              {
+                name: "agent",
+                args: { tasks: [{ role: "coder", title: "Do x", prompt: "x", isolation: "worktree" }] },
+              },
+            ],
+          }
+    },
+    { cwd: repo, settings: {} },
+  )
+  await root.prompt("go")
+  await until(() => replied(root, "noted"))
+  await bus.flush()
+  const [notice] = notices(root)
+  const [head, kept] = notice!.shown.split("\n")
+  expect(head).toMatch(/^◆ Do x ✗ coder · \d+s · \d+ tok · provider exploded$/)
+  expect(kept).toMatch(/^ {2}changes kept: 1 file · .+\.diff$/)
+})
+
 test("an interrupt while worktrees are being made starts nothing further", async () => {
   const repo = await gitRepo()
   let makingSecond: () => void = () => {}
@@ -716,7 +749,7 @@ test("by default sub-agents run in the background and their result wakes the idl
   await until(() => replied(root, "thanks, reacting"))
   await bus.flush()
   const [notice] = notices(root)
-  expect(notice?.shown).toMatch(/^◆ Do look finished · explorer · \d+s · \d+ tok$/)
+  expect(notice?.shown).toMatch(/^◆ Do look ✓ explorer · \d+s · \d+ tok$/)
   expect(notice?.text).toContain("the user did not write this message")
   expect(notice?.text).toContain(`## Do look · explorer · ${childId} · done`)
   expect(notice?.text).toContain("found it in a.ts")
@@ -728,6 +761,63 @@ test("by default sub-agents run in the background and their result wakes the idl
   expect(agentResult(root, "agent_result")).toBe(
     `${childId}: its result was already sent to you as a message.`,
   )
+})
+
+test("a background sub-agent that failed says why in its notice line", async () => {
+  const { root, bus } = await setup(
+    (req) => {
+      if (who(req) === "explorer") return { error: { message: "HTTP 429: slow down", status: 429 } }
+      if (isNotice(req)) return { text: "noted" }
+      if (req.messages.at(-1)?.role === "toolResult") return { text: "started" }
+      return {
+        toolCalls: [
+          { name: "agent", args: { tasks: [{ role: "explorer", title: "Do look", prompt: "l" }] } },
+        ],
+      }
+    },
+    { settings: {} },
+  )
+  await root.prompt("go")
+  await until(() => replied(root, "noted"))
+  await bus.flush()
+  expect(notices(root)[0]?.shown).toMatch(/^◆ Do look ✗ explorer · \d+s · \d+ tok · HTTP 429: slow down$/)
+})
+
+test("a background sub-agent the user stopped does not wake the commander; its report waits", async () => {
+  const { root, bus, tree, mock } = await setup(
+    (req) => {
+      if (who(req) === "explorer") return { text: "late", delayMs: 5_000 }
+      if (isNotice(req)) return { text: "woken" }
+      if (req.messages.at(-1)?.role === "toolResult") return { text: "started" }
+      if (lastText(req).includes("next")) return { text: "answered next" }
+      return {
+        toolCalls: [
+          { name: "agent", args: { tasks: [{ role: "explorer", title: "Do look", prompt: "l" }] } },
+        ],
+      }
+    },
+    { settings: {} },
+  )
+  await root.prompt("go")
+  const [child] = tree.children
+  expect(child).toBeDefined()
+  tree.stop(child!.id, USER_STOP_REASON)
+  await until(() => root.waitingNotices === 1)
+  await Bun.sleep(100)
+  await bus.flush()
+  // No turn of its own: the commander is idle, the report waits.
+  expect(root.busy).toBe(false)
+  expect(replied(root, "woken")).toBe(false)
+  const before = mock.requests.length
+  await root.prompt("next")
+  // The user's message and the report go to the model together, in one request.
+  expect(mock.requests.length).toBe(before + 1)
+  const sent = mock.requests
+    .at(-1)!
+    .messages.slice(-2)
+    .map((m) => m.role)
+  expect(sent).toEqual(["user", "user"])
+  expect(notices(root)[0]?.shown).toMatch(/^◆ Do look ⊘ explorer · .* · stopped$/)
 })
 
 test("settings subagents.background false makes calls wait again", async () => {

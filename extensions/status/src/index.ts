@@ -1,14 +1,7 @@
 import path from "node:path"
-import { defineExtension, type StatusTone } from "@amira/api"
+import { defineExtension, formatTokens, type StatusTone } from "@amira/api"
 
-/** Compact token counts: 999, 1.2k, 46k, 2.5M. Rounds before picking the unit. */
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(n)
-  const k = n / 1000
-  if (Number(k.toFixed(1)) < 10) return `${k.toFixed(1)}k`
-  if (Math.round(k) < 1000) return `${Math.round(k)}k`
-  return `${(n / 1_000_000).toFixed(1)}M`
-}
+export { formatTokens }
 
 /** "12.3k/128k (10%)", or just "12.3k" when the window is unknown. */
 export function formatContext(used: number, window: number | undefined): string {

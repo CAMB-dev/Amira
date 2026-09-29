@@ -1,3 +1,4 @@
+import path from "node:path"
 import {
   type Ai,
   createAi,
@@ -7,7 +8,7 @@ import {
   type ProviderConfig,
   type RetryOptions,
 } from "@amira/ai"
-import type { AnyEvent, Extension, Settings } from "@amira/api"
+import type { AnyEvent, Extension, ReloadReport, Settings, ToolLine, ToolPresenter } from "@amira/api"
 import {
   type ActivePackages,
   Agent,
@@ -42,8 +43,11 @@ export interface SessionOptions {
   requireModel?: boolean
   cwd: string
   extensions: string[]
-  /** Installed packages (D24, D60): loaded after the built-ins and before `extensions`. */
-  packages?: ActivePackages
+  /**
+   * Installed packages (D24, D60): loaded after the built-ins and before `extensions`. A
+   * function is asked again on each reload, so packages installed or removed since load then.
+   */
+  packages?: ActivePackages | (() => ActivePackages)
   noBuiltins: boolean
   /** Tools hidden from the model. */
   disabledTools?: string[]
@@ -92,8 +96,11 @@ export interface Session {
    * (rpc session.resume). It starts with `model`, by default the current model.
    */
   resume(store: SessionStore, model?: ModelInfo): Agent
-  /** Unloads every extension and loads the same ones again (/reload); failures arrive as extension.error. */
-  reload(): Promise<void>
+  /**
+   * Unloads every extension and loads them again (/reload), with the packages and their skill
+   * directories as they are installed now; failures arrive as extension.error. Says what changed.
+   */
+  reload(): Promise<ReloadReport>
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -122,7 +129,9 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  const settings = withPackageSkills(opts.settings ?? {}, opts.packages)
+  const readPackages = () => (typeof opts.packages === "function" ? opts.packages() : opts.packages)
+  let packages = readPackages()
+  const settings = withPackageSkills(opts.settings ?? {}, packages)
   // AMIRA_TEST_MOCK (end-to-end tests only) adds a scripted "mock" provider and keeps the
   // catalog download out of the test run.
   const mock = testAiOptions()
@@ -153,28 +162,46 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const host = new ExtensionHost({ bus, interceptors, tools, settings, cwd: opts.cwd })
   const startupEvents: AnyEvent[] = []
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
-    types: ["extension.error", "extension.loaded"],
+    types: ["extension.error", "extension.loaded", "extension.notice"],
   })
   for (const error of opts.warnings ?? []) {
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
   }
 
-  const loadExtensions = async () => {
+  /** Loads everything; returns the sources that failed. */
+  const loadExtensions = async (): Promise<string[]> => {
+    const failed: string[] = []
     if (!opts.noBuiltins) {
       try {
-        for (const b of await (opts.builtins ?? defaultBuiltins)()) await host.load(b.extension, b.source)
+        for (const b of await (opts.builtins ?? defaultBuiltins)()) {
+          if (!(await host.load(b.extension, b.source))) failed.push(b.source)
+        }
       } catch (err) {
         const error = `failed to load built-in extensions: ${err instanceof Error ? err.message : String(err)}`
         bus.emit("extension.error", { source: "builtin", error }, { sessionId: "host" })
+        failed.push("builtin")
       }
     }
-    for (const p of opts.packages?.packages ?? []) {
-      for (const file of p.manifest.extensions) await host.loadFile(file)
+    for (const p of packages?.packages ?? []) {
+      for (const file of p.manifest.extensions) {
+        const label = packageLabel(p, file)
+        if (!(await host.loadFile(file, label))) failed.push(label.source)
+      }
     }
-    for (const file of opts.extensions) await host.loadFile(file)
+    for (const file of opts.extensions) {
+      const source = fileLabel(file, opts.cwd)
+      if (!(await host.loadFile(file, { source }))) failed.push(source)
+    }
+    for (const p of packages?.problems ?? []) {
+      bus.emit("extension.error", { source: p.name, error: p.error }, { sessionId: "host" })
+      failed.push(p.name)
+    }
+    return failed
   }
-  for (const p of opts.packages?.problems ?? []) {
-    bus.emit("extension.error", { source: `package:${p.name}`, error: p.error }, { sessionId: "host" })
+  const untrusted = packages?.skipped.filter((s) => s.why === "untrusted").map((s) => s.name) ?? []
+  if (untrusted.length) {
+    const text = `Not loading this project's extension packages (${untrusted.join(", ")}): the project is not trusted. amira ext trust loads them from the next start.`
+    bus.emit("extension.notice", { source: "packages", text, level: "warning" }, { sessionId: "host" })
   }
   await loadExtensions()
   const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
@@ -201,7 +228,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ...(compaction ? { compaction } : {}),
     ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
-  const approve = userApprover(host.ui)
+  const approve = userApprover(host.ui, {
+    presenters: host.renderers,
+    notify: (text) =>
+      bus.emit("extension.notice", { source: "approval", text, level: "info" }, { sessionId: "host" }),
+  })
   const ask = userAsker(host.ui, tree)
   const newAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
     // A session resumed while no model is selected continues on the one it ran on.
@@ -247,10 +278,41 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     tree,
     resume: (store, m) => newAgent(m ?? agent.model, store),
     reload: async () => {
+      const before = new Set(host.loaded)
+      const skillsBefore = new Set(host.skills.list().map((s) => s.name))
+      packages = readPackages()
+      host.setSettings(withPackageSkills(opts.settings ?? {}, packages))
       host.unloadAll()
-      await loadExtensions()
+      const failed = await loadExtensions()
+      const after = new Set(host.loaded)
+      const skillsAfter = new Set(host.skills.list().map((s) => s.name))
+      return {
+        loaded: [...after].filter((s) => !before.has(s)),
+        unloaded: [...before].filter((s) => !after.has(s)),
+        failed,
+        extensions: after.size,
+        skillsAdded: [...skillsAfter].filter((s) => !skillsBefore.has(s)).length,
+        skillsRemoved: [...skillsBefore].filter((s) => !skillsAfter.has(s)).length,
+      }
     },
   }
+}
+
+/**
+ * How a package's extension file is named in errors and /help: the package's name, and the
+ * file too when the package has several. Its failures say how to turn it off.
+ */
+function packageLabel(p: ActivePackages["packages"][number], file: string): { source: string; hint: string } {
+  const rel = path.relative(p.dir, file).split(path.sep).join("/")
+  const source = p.manifest.extensions.length > 1 ? `${p.name}/${rel}` : p.name
+  return { source, hint: `${p.scope} package; amira ext disable ${p.name} turns it off` }
+}
+
+/** An extension file given with --extension: its path relative to the working directory, if inside it. */
+function fileLabel(file: string, cwd: string): string {
+  const abs = path.resolve(cwd, file)
+  const rel = path.relative(cwd, abs)
+  return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.split(path.sep).join("/") : abs
 }
 
 /** Package skill directories are searched after the ones from settings. */
@@ -260,30 +322,89 @@ function withPackageSkills(settings: Settings, packages: ActivePackages | undefi
   return { ...settings, skills: { ...settings.skills, dirs: [...(settings.skills?.dirs ?? []), ...dirs] } }
 }
 
+export interface ApproverOptions {
+  /** Where tools' presenters are, to show what a call would do (a command, a diff). */
+  presenters?: { get(toolName: string): ToolPresenter<any, any> | undefined }
+  /** Tells the user something, e.g. that a call is allowed for the rest of the session. */
+  notify?: (text: string) => void
+}
+
 /**
  * The top-level session's approvals go to the user (D13). Print mode cannot ask, so there a
- * call an interceptor asked about is denied.
+ * call an interceptor asked about is denied. Dismissing the question (Esc) denies the call
+ * and interrupts the turn.
  */
-export function userApprover(ui: UiRequests): Approver {
+export function userApprover(ui: UiRequests, opts: ApproverOptions = {}): Approver {
   /** Calls the user said not to ask about again: a tool with the reason it was asked about. */
   const allowed = new Set<string>()
   return async (request, signal) => {
     const key = JSON.stringify([request.name, request.reason])
-    if (allowed.has(key)) return { approved: true }
-    const args = JSON.stringify(request.args)
-    const detail = `${request.reason}\n${args.length > 300 ? `${args.slice(0, 297)}...` : args}`
-    // "Always" covers this tool asked about for this reason, and the choice says so.
-    const reason = request.reason.length > 40 ? `${request.reason.slice(0, 39)}…` : request.reason
-    const always = `this session for ${request.name} (${reason})`
+    if (allowed.has(key)) return { approved: true, by: "rule" }
+    if (ui.unavailable) return { approved: false, reason: `nobody can approve it (${ui.unavailable})` }
+    const preview = approvalPreview(request.args, opts.presenters?.get(request.name))
+    // "Don't ask again" covers this tool asked about for this reason; the message says so.
+    const scope = `"Don't ask again" covers ${request.name} asked about for: ${request.reason}`
+    const message = preview
+      ? `${request.reason}\n${scope}`
+      : `${request.reason}\n${rawArgs(request.args)}\n${scope}`
     const answer = await ui.ask(
-      { kind: "confirm", title: `Allow ${request.name}?`, message: detail, always, other: true },
+      {
+        kind: "confirm",
+        title: `Allow ${request.name}?`,
+        message,
+        always: true,
+        other: true,
+        ...(preview ? { preview } : {}),
+      },
       { signal, source: "approval" },
     )
-    if (answer === "always") allowed.add(key)
-    if (answer === true || answer === "always") return { approved: true }
+    if (answer === "always") {
+      allowed.add(key)
+      opts.notify?.(
+        `${request.name} is allowed without asking for the rest of this session (${request.reason}).`,
+      )
+    }
+    if (answer === true || answer === "always") return { approved: true, by: "user" }
     if (typeof answer === "object") return { approved: false, reason: `the user said no: ${answer.other}` }
-    return { approved: false, reason: answer === false ? "the user said no" : "nobody answered" }
+    if (answer === false) return { approved: false, reason: "the user said no" }
+    // Cancelled: by the turn's interrupt, or by the user dismissing the question.
+    if (signal.aborted) return { approved: false, reason: "the turn was interrupted" }
+    return {
+      approved: false,
+      reason: "the user dismissed the question and stopped the turn",
+      interrupt: true,
+    }
   }
+}
+
+/** A call's arguments as JSON, cut short. */
+function rawArgs(args: Record<string, unknown>): string {
+  const json = JSON.stringify(args)
+  return json.length > 300 ? `${json.slice(0, 299)}…` : json
+}
+
+/**
+ * What an asked-about call would do, as its presenter shows it: the lines of its body worked
+ * out from the arguments alone (edit and write show their diff), else its summary as a line
+ * of code (bash shows the command). Undefined when the tool has no presenter for it.
+ */
+export function approvalPreview(
+  args: Record<string, unknown>,
+  presenter: ToolPresenter<any, any> | undefined,
+): ToolLine[] | undefined {
+  if (!presenter) return undefined
+  try {
+    const view = { args, result: { content: [] }, text: "" }
+    const body = presenter.body?.(view, { detail: "full", width: 100 }) ?? []
+    const summary = presenter.summary?.(args)?.trim()
+    if (body.length) return summary ? [{ kind: "muted", text: summary }, ...body] : body
+    // A command is shown whole: the summary has its first line only.
+    const command = typeof args.command === "string" && args.command.trim() ? args.command : summary
+    if (command) return command.split("\n").map((text) => ({ kind: "code", text }))
+  } catch {
+    // A presenter that cannot show it leaves the raw arguments.
+  }
+  return undefined
 }
 
 /**

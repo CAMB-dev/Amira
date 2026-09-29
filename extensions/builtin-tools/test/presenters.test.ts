@@ -57,7 +57,7 @@ test("edit: the path as head, +added −removed as result and the diff as body",
   expect(editPresenter.summary!({ ...args, replace_all: true })).toBe("a.ts · all")
   const r = await editTool.execute(args, makeCtx(dir))
   const call = view(args, r)
-  expect(editPresenter.result!(call)).toBe("+1 −1")
+  expect(editPresenter.result!(call)).toBe("+1 -1")
   expect(editPresenter.body!(call, opts)).toEqual([
     { kind: "diff-context", text: "one", lineNo: 1 },
     { kind: "diff-remove", text: "two", lineNo: 2 },
@@ -67,7 +67,7 @@ test("edit: the path as head, +added −removed as result and the diff as body",
   ])
   // After a resume the change is worked out from the arguments, without line numbers.
   const resumed = view(args, { content: r.content })
-  expect(editPresenter.result!(resumed)).toBe("+1 −1")
+  expect(editPresenter.result!(resumed)).toBe("+1 -1")
   expect(editPresenter.body!(resumed, opts)).toEqual([
     { kind: "diff-remove", text: "two" },
     { kind: "diff-add", text: "2" },
@@ -79,7 +79,7 @@ test("write: created files count their lines, overwrites show the change", async
   expect(writePresenter.result!(view({ path: "n.ts", content: "" }, created))).toBe("created · 2 lines")
   const over = await writeTool.execute({ path: "n.ts", content: "a\nc\n" }, makeCtx(dir))
   const call = view({ path: "n.ts", content: "a\nc\n" }, over)
-  expect(writePresenter.result!(call)).toBe("+1 −1")
+  expect(writePresenter.result!(call)).toBe("+1 -1")
   expect(writePresenter.body!(call, opts).map((l) => l.kind)).toEqual([
     "diff-context",
     "diff-remove",
@@ -93,8 +93,28 @@ test("shell: the command alone as head, exit code and output lines as result, ou
     content: [{ type: "text" as const, text: "a\nb\n\nExit code: 0" }],
     details: { exitCode: 0, timedOut: false, aborted: false, outputLines: 2 },
   }
-  expect(shellPresenter.result!(view({ command: "x" }, ok))).toBe("exit 0 · 2 lines")
-  expect(shellPresenter.body!(view({ command: "x" }, ok), opts)).toEqual([])
+  // Success goes without saying: no "exit 0".
+  expect(shellPresenter.result!(view({ command: "x" }, ok))).toBe("2 lines")
+  // It shows the end of what it printed, as many lines as asked (3 by default); 0 hides it.
+  expect(shellPresenter.body!(view({ command: "x" }, ok), opts)).toEqual([
+    { kind: "code", text: "a" },
+    { kind: "code", text: "b" },
+  ])
+  expect(shellPresenter.body!(view({ command: "x" }, ok), { ...opts, outputLines: 0 })).toEqual([])
+  const long = {
+    content: [{ type: "text" as const, text: "1\n2\n3\n4\n5\n\nExit code: 0" }],
+    details: { exitCode: 0, timedOut: false, aborted: false, outputLines: 5 },
+  }
+  expect(shellPresenter.body!(view({ command: "x" }, long), { ...opts, outputLines: 2 })).toEqual([
+    { kind: "muted", text: "… 3 earlier lines" },
+    { kind: "code", text: "4" },
+    { kind: "code", text: "5" },
+  ])
+  const quiet = {
+    content: [{ type: "text" as const, text: "(no output)\n\nExit code: 0" }],
+    details: { exitCode: 0, timedOut: false, aborted: false, outputLines: 0 },
+  }
+  expect(shellPresenter.result!(view({ command: "x" }, quiet))).toBe("no output")
   const failed = {
     content: [{ type: "text" as const, text: "Shell: pwsh\n\nboom\n\nExit code: 1" }],
     isError: true,
@@ -146,4 +166,32 @@ test("grep and glob: the pattern and where as head, what they found as result", 
   expect(globPresenter.summary!({ pattern: "**/*.ts", path: "src" })).toBe("**/*.ts in src")
   const glob = await globTool.execute({ pattern: "*.ts" }, makeCtx(dir))
   expect(globPresenter.result!(view({ pattern: "*.ts" }, glob))).toBe("3 files")
+})
+
+test("read, grep and glob say what they explored, for the one row a run of them gets", () => {
+  expect(readPresenter.explore!({ path: "src/a.ts" })).toEqual({ verb: "Read", target: "src/a.ts" })
+  expect(grepPresenter.explore!({ pattern: "TODO", path: "src" })).toEqual({
+    verb: "Search",
+    target: "TODO in src",
+  })
+  expect(globPresenter.explore!({ pattern: "*.ts" })).toEqual({ verb: "List", target: "*.ts" })
+  // A shell command is no exploring: it may change anything.
+  expect(shellPresenter.explore).toBeUndefined()
+})
+
+test("read: the head says the lines asked for, the result how many came of how many", async () => {
+  expect(readPresenter.summary!({ path: "a.ts", offset: 50 })).toBe("a.ts · from line 50")
+  const part = await readTool.execute({ path: "a.ts", offset: 2, limit: 2 }, makeCtx(dir))
+  expect(readPresenter.result!(view({ path: "a.ts", offset: 2, limit: 2 }, part))).toBe("2 lines of 4")
+})
+
+test("the note where oversized output was cut shows short, with where the full output is", () => {
+  const note =
+    "[... 1234 characters (300 lines) omitted. Full output saved to /tmp/amira/out.txt — use the read tool with offset/limit to see the rest ...]"
+  const failed = textResult(`head\n${note}\ntail\n\nExit code: 1`, true)
+  expect(shellPresenter.body!(view({ command: "x" }, failed), opts)).toEqual([
+    { kind: "code", text: "head" },
+    { kind: "muted", text: "… 300 lines omitted · full output: /tmp/amira/out.txt" },
+    { kind: "code", text: "tail" },
+  ])
 })

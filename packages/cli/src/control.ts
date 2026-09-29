@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs"
 import { isNoModel, userMessage } from "@amira/ai"
-import type { AssistantMessage, SessionControl, ShellMode } from "@amira/api"
+import { type AssistantMessage, type SessionControl, type ShellMode, USER_STOP_REASON } from "@amira/api"
 import {
   type Agent,
   CommandHost,
@@ -94,7 +94,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     subagentMessages: (id) => subagentMessages(agent(), session.tree, id),
     stopSubagent: (id) =>
       listSubagents(agent(), session.tree).some((e) => e.info.id === id) &&
-      session.tree.stop(id, "stopped by the user"),
+      session.tree.stop(id, USER_STOP_REASON),
     createGroup: (groupOpts) => session.tree.createGroup(agent(), groupOpts),
     data: {
       append: (key, data) => agent().data.append(key, data),
@@ -232,12 +232,31 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       ...(opts.home ? { home: opts.home } : {}),
       platform,
       currentProvider: () => agent().model.provider,
+      // A first provider is used at once, and an edit of the one in use applies at once:
+      // neither needs /model. Not during a turn; /model does it then.
+      onSaved: (id, models) => {
+        const a = agent()
+        if (a.busy) return undefined
+        const m = a.model
+        const ref = isNoModel(m)
+          ? models[0] && `${id}/${models[0]}`
+          : m.provider === id
+            ? `${id}/${models.length && !models.includes(m.id) ? models[0] : m.id}`
+            : undefined
+        if (!ref) return undefined
+        try {
+          a.setModel(ai.model(ref))
+          return ref
+        } catch {
+          return undefined
+        }
+      },
     }),
     preview: () => agent().preview(),
     reloadExtensions: async () => {
       // Unloading drops tools and MCP connections a running tool call may still be using.
       idle("reload extensions")
-      await session.reload()
+      return session.reload()
     },
   }
 

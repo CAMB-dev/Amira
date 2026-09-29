@@ -51,9 +51,37 @@ test("system notices lead with a symbol by level and indent their later lines", 
   expect(plain(noticeLines(defaultTheme, "success", "Compacted"))).toEqual(["✓ Compacted"])
   expect(plain(noticeLines(defaultTheme, "error", "boom"))).toEqual(["✗ boom"])
   expect(plain(noticeLines(defaultTheme, "info", "(no reply)"))).toEqual(["• (no reply)"])
-  expect(plain(commandOutputLines(defaultTheme.text, defaultTheme.muted, "one\ntwo"))).toEqual([
-    "  └ one",
-    "    two",
+  expect(plain(commandOutputLines(defaultTheme, "info", "one\ntwo"))).toEqual(["  └ one", "    two"])
+})
+
+test("a command's error output is marked without colors too", () => {
+  const plain = (l: string[]) => l.map(stripAnsi)
+  expect(plain(commandOutputLines(defaultTheme, "error", "no such model\ntry /model"))).toEqual([
+    "  └ ✗ no such model",
+    "      try /model",
+  ])
+})
+
+test("a row of columns in a command's output wraps under its last column", () => {
+  const text = `/compact [instructions]  ${"Summarize the conversation so far to free up context ".repeat(2).trim()}`
+  const rows = commandOutputLines(defaultTheme, "info", text, 60).map(stripAnsi)
+  expect(rows.length).toBeGreaterThan(1)
+  const col = "  └ /compact [instructions]  ".length
+  for (const r of rows.slice(1)) expect(r.slice(0, col).trim()).toBe("")
+  for (const r of rows) expect(r.length).toBeLessThanOrEqual(60)
+})
+
+test("a last column too far in to wrap under goes under its row, indented", () => {
+  const text = [
+    `/tools [enable|disable <name>]     List tools; enable or disable one for this session`,
+    `/verbose [collapsed|summary|full]  Show more or less of later tool output`,
+  ].join("\n")
+  const rows = commandOutputLines(defaultTheme, "info", text, 60).map(stripAnsi)
+  expect(rows).toEqual([
+    "  └ /tools [enable|disable <name>]",
+    "        List tools; enable or disable one for this session",
+    "    /verbose [collapsed|summary|full]",
+    "        Show more or less of later tool output",
   ])
 })
 

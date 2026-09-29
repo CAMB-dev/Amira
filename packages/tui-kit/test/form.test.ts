@@ -160,7 +160,7 @@ describe("Form", () => {
     form.handleInput(key("right"))
     expect(form.values.mode).toBe("b")
     form.handleInput(key("enter"))
-    expect(view()).toContain("› ● Beta")
+    expect(view()).toContain("❯ ● Beta")
     type(form, "c")
     form.handleInput(key("enter"))
     expect(form.values.mode).toBe("c")
@@ -249,7 +249,7 @@ describe("Form", () => {
     while (form.focused !== "max") form.handleInput(key("tab"))
     const lines = form.render(40, { ...plain, rows })
     expect(lines.length).toBe(rows)
-    expect(lines.join("\n")).toContain("› Max")
+    expect(lines.join("\n")).toContain("❯ Max")
     expect(lines.join("\n")).toContain("[ Save ]")
     expect(lines.join("\n")).toContain("↑")
     // Tiny: still a title, a body row and the buttons.

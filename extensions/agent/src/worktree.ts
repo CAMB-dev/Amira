@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto"
-import { type Dirent, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs"
+import {
+  type Dirent,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import path from "node:path"
 
 /** Runs git in `cwd`. `stdoutOnly` keeps stderr out of the output, for commands whose output is parsed. */
@@ -117,10 +126,10 @@ function overThreshold(stat: ChangeStat, t: ReviewThreshold | undefined): boolea
   return t.lines !== undefined && stat.insertions + stat.deletions > t.lines
 }
 
-export const MERGE = "merge"
-export const APPLY_PARTIAL = "apply what fits (.rej files for the rest)"
-export const KEEP = "keep in worktree"
-export const DISCARD = "discard"
+export const MERGE = "Merge"
+export const APPLY_PARTIAL = "Apply what fits (.rej files for the rest)"
+export const KEEP = "Keep in the worktree"
+export const DISCARD = "Discard"
 
 /**
  * Merges a finished child's worktree into the parent's working tree (D16, D38). A patch that
@@ -131,7 +140,13 @@ export const DISCARD = "discard"
 export async function mergeWorktree(
   git: RunGit,
   wt: Worktree,
-  opts: { threshold?: ReviewThreshold; review?: Review; rm?: Remove } = {},
+  opts: {
+    threshold?: ReviewThreshold
+    review?: Review
+    rm?: Remove
+    /** Whose changes they are, for the review's title: e.g. `"Fix the parser" (coder)`. */
+    who?: string
+  } = {},
 ): Promise<MergeResult> {
   const stat = await collectChanges(git, wt)
   // The merge alone decides the outcome; a worktree that cannot be removed is only noted.
@@ -148,9 +163,10 @@ export async function mergeWorktree(
     const done = await apply()
     if (done.ok) return { outcome: "merged", stat, ...(await cleanup()) }
   }
+  const whose = opts.who ? `The changes of ${opts.who}` : "Sub-agent changes"
   const title = conflict
-    ? `Sub-agent changes conflict with the working tree (${formatStat(stat)})`
-    : `Merge sub-agent changes (${formatStat(stat)})?`
+    ? `${whose} conflict with the working tree (${formatStat(stat)})`
+    : `Merge ${opts.who ? `the changes of ${opts.who}` : "sub-agent changes"} (${formatStat(stat)})?`
   const options = conflict ? [APPLY_PARTIAL, KEEP, DISCARD] : [MERGE, KEEP, DISCARD]
   const choice = opts.review ? await opts.review(title, readPatch(wt.patch), options) : undefined
   const result = (outcome: MergeOutcome, extra: Partial<MergeResult> = {}): MergeResult => ({
@@ -230,39 +246,118 @@ export async function removeWorktree(
 
 /** How old a worktree left behind must be before the sweep deletes it. */
 export const STALE_WORKTREE_MS = 7 * 24 * 60 * 60 * 1000
+/** How long after the user was told a stale worktree goes that the sweep deletes it. */
+export const STALE_NOTICE_MS = 24 * 60 * 60 * 1000
+
+/** A sub-agent's worktree left behind with its changes (kept for review, or not removable). */
+export interface KeptWorktree {
+  name: string
+  dir: string
+  /** Its changes as a patch, when they were collected. */
+  patch?: string
+  /** When it last changed. */
+  modifiedAt: number
+  /** The user was told it is about to be deleted (the sweep deletes it after STALE_NOTICE_MS). */
+  expiring: boolean
+}
+
+/** Marks a worktree whose deletion the user was told about; it holds when that was. */
+const expiringMark = (dir: string) => `${dir}.expiring`
+
+/** The worktrees of `root` left behind under `home`, newest first. */
+export function listKeptWorktrees(home: string, root: string): KeptWorktree[] {
+  const dir = path.join(home, "worktrees", projectKey(root))
+  let entries: Dirent[] = []
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {}
+  const out: KeptWorktree[] = []
+  for (const e of entries) {
+    if (!e.isDirectory()) continue
+    const full = path.join(dir, e.name)
+    try {
+      out.push({
+        name: e.name,
+        dir: full,
+        ...(existsSync(`${full}.diff`) ? { patch: `${full}.diff` } : {}),
+        modifiedAt: statSync(full).mtimeMs,
+        expiring: existsSync(expiringMark(full)),
+      })
+    } catch {}
+  }
+  return out.sort((a, b) => b.modifiedAt - a.modifiedAt)
+}
+
+export interface SweepResult {
+  /** Worktrees deleted now: the user was told at least STALE_NOTICE_MS before. */
+  removed: string[]
+  /** Stale worktrees the user is told about now; the next sweep a day or more later deletes them. */
+  expiring: KeptWorktree[]
+}
 
 /**
- * Deletes the worktrees of `root` that earlier sessions left behind (killed mid-run, unable to
- * delete them, or kept for review and never cleaned up) once they are older than `maxAgeMs`,
- * with their patches, and prunes git's records of worktrees whose directory is gone.
- * Returns the names it deleted.
+ * Cleans up the worktrees of `root` that earlier sessions left behind (killed mid-run, unable
+ * to delete them, or kept for review and never cleaned up), never without warning: one older
+ * than `maxAgeMs` is marked and reported as `expiring` first, and deleted (with its patch) by a
+ * sweep at least `noticeMs` later. git's records of worktrees whose directory is gone are pruned.
+ * `keep` names directories not to touch (worktrees in use now).
  */
 export async function sweepWorktrees(
   git: RunGit,
-  opts: { root: string; home: string; maxAgeMs?: number; now?: number; rm?: Remove },
-): Promise<string[]> {
+  opts: {
+    root: string
+    home: string
+    maxAgeMs?: number
+    noticeMs?: number
+    now?: number
+    rm?: Remove
+    keep?: ReadonlySet<string>
+  },
+): Promise<SweepResult> {
   const dir = path.join(opts.home, "worktrees", projectKey(opts.root))
-  const cutoff = (opts.now ?? Date.now()) - (opts.maxAgeMs ?? STALE_WORKTREE_MS)
+  const now = opts.now ?? Date.now()
+  const cutoff = now - (opts.maxAgeMs ?? STALE_WORKTREE_MS)
+  const told = now - (opts.noticeMs ?? STALE_NOTICE_MS)
   const rm = opts.rm ?? rmSync
-  const removed: string[] = []
+  const out: SweepResult = { removed: [], expiring: [] }
   let entries: Dirent[] = []
   try {
     entries = readdirSync(dir, { withFileTypes: true })
   } catch {}
   for (const e of entries) {
     const full = path.join(dir, e.name)
+    if (opts.keep?.has(full)) continue
     try {
-      if (statSync(full).mtimeMs >= cutoff) continue
       if (e.isDirectory()) {
+        const mark = expiringMark(full)
+        if (statSync(full).mtimeMs >= cutoff) {
+          // Changed since it was marked: it is no longer about to go.
+          if (existsSync(mark)) rm(mark, { force: true })
+          continue
+        }
+        if (!existsSync(mark)) {
+          writeFileSync(mark, new Date(now).toISOString())
+          out.expiring.push({
+            name: e.name,
+            dir: full,
+            ...(existsSync(`${full}.diff`) ? { patch: `${full}.diff` } : {}),
+            modifiedAt: statSync(full).mtimeMs,
+            expiring: true,
+          })
+          continue
+        }
+        if (statSync(mark).mtimeMs > told) continue
         await git(["worktree", "remove", "--force", full], opts.root)
         rm(full, { recursive: true, force: true })
         rm(`${full}.diff`, { force: true })
-        removed.push(e.name)
-      } else if (e.name.endsWith(".diff") && !existsSync(full.slice(0, -".diff".length))) {
-        rm(full, { force: true })
+        rm(mark, { force: true })
+        out.removed.push(e.name)
+      } else if (statSync(full).mtimeMs < cutoff) {
+        const base = full.replace(/\.(diff|expiring)$/, "")
+        if (base !== full && !existsSync(base)) rm(full, { force: true })
       }
     } catch {}
   }
   await git(["worktree", "prune"], opts.root)
-  return removed
+  return out
 }

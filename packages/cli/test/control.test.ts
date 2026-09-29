@@ -299,7 +299,7 @@ test("/reload unloads and loads the extensions again", async () => {
   const loads: string[] = []
   const { run, host } = await setup([], { loads })
   expect(loads).toHaveLength(1)
-  expect(await run("/reload")).toBe("Reloaded extensions.")
+  expect(await run("/reload")).toMatch(/^Reloaded [0-9]+ extensions · nothing changed$/)
   expect(loads).toHaveLength(2)
   expect(host.list().map((c) => c.name)).toContain("status")
 })
@@ -324,7 +324,7 @@ test("a running turn or compaction blocks /reload, /clear and /model", async () 
   expect(await run("/reload")).toContain("a compaction is running")
   expect(await compaction).toBe(true)
   expect(host.control.info().busy).toBe(false)
-  expect(await run("/reload")).toBe("Reloaded extensions.")
+  expect(await run("/reload")).toMatch(/^Reloaded [0-9]+ extensions · nothing changed$/)
 })
 
 test("print mode runs a slash command instead of a turn", async () => {
@@ -378,4 +378,33 @@ test("print mode runs built-in and settings aliases; shadowed settings aliases w
   expect(await runPrint(session.agent, "/bad", false, { io, commands: host })).toBe(1)
   expect(err.join("")).toContain("error: The alias /bad runs /nope, which is not a command")
   expect(session.agent.messages).toEqual([])
+})
+
+test("the first provider saved is used at once, and an edit of the one in use applies at once", async () => {
+  const session = await createSession({
+    cwd: here,
+    extensions: [],
+    noBuiltins: true,
+    ai: createAi({}),
+  })
+  expect(session.agent.model).toBe(NO_MODEL)
+  const home = mkdtempSync(path.join(os.tmpdir(), "amira-control-first-"))
+  const host = createCommandHost({ session, cwd: here, home, announce: () => {} })
+  const admin = host.control.providerAdmin!
+  const draft = {
+    id: "local",
+    dialect: "openai-chat",
+    baseUrl: "http://127.0.0.1:1/v1",
+    keySource: "none" as const,
+    models: ["small", "big"],
+  }
+  expect(await admin.save(draft)).toContain("Now using local/small.")
+  expect(session.agent.model.provider).toBe("local")
+  expect(session.agent.model.id).toBe("small")
+  const before = session.agent.model
+  const edited = await admin.save({ ...draft, defaults: { contextWindow: 9000 } })
+  expect(edited).toContain("In use: the changes apply now (local/small).")
+  // The model is resolved again, with what the edit changed.
+  expect(session.agent.model).not.toBe(before)
+  expect(session.agent.model.contextWindow).toBe(9000)
 })

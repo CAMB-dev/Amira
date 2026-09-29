@@ -1,9 +1,13 @@
 import {
   type Ai,
   type AssistantMessage,
+  describeModelError,
   invalidArgs,
+  isContextOverflow,
   isNoModel,
   type Message,
+  type ModelError,
+  type ModelErrorInfo,
   type ModelInfo,
   type ModelRef,
   modelMessages,
@@ -25,6 +29,7 @@ import type {
   SessionStatus,
   SpawnGroupOptions,
   SpawnOptions,
+  ToolApproval,
   ToolDefinition,
   ToolRejection,
   ToolResult,
@@ -52,6 +57,10 @@ export interface ApprovalDecision {
   approved: boolean
   /** Shown to the model when the call is denied. */
   reason?: string
+  /** Who approved it, for the call's row (tool.execute.end `approval`). */
+  by?: ToolApproval
+  /** The user dismissed the question: the call is denied and the whole turn interrupted. */
+  interrupt?: boolean
 }
 
 /** Decides a tool call that a tool.call.before interceptor asked about (D13, D14). */
@@ -124,6 +133,8 @@ export interface TurnResult {
   reason: TurnEndReason
   steps: number
   error?: string
+  /** A failed model request, read for the user (turn.end `failure`). */
+  failure?: ModelErrorInfo
 }
 
 export interface PromptOptions {
@@ -164,6 +175,8 @@ interface CallRun {
   /** The call has its result (tool.call.after may still be running on it). */
   returned?: boolean
   result?: ToolResultMessage
+  /** Who approved it, when it needed approval. */
+  approval?: ToolApproval
 }
 
 /** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
@@ -179,7 +192,7 @@ interface AfterCompaction {
 
 type ModelReply =
   | { kind: "ok"; message: AssistantMessage }
-  | { kind: "error"; error: string }
+  | { kind: "error"; error: string; model?: ModelError }
   | { kind: "aborted" }
 
 /** One agent session: a conversation, a model and the loop that drives tool use. */
@@ -368,8 +381,8 @@ export class Agent {
       return true
     }
     return {
-      deliver: (message) => {
-        if (close()) this.#receive(message)
+      deliver: (message, opts) => {
+        if (close()) this.#receive(message, opts?.wake !== false)
       },
       cancel: () => void close(),
     }
@@ -393,13 +406,16 @@ export class Agent {
     return this.#notices.splice(0)
   }
 
-  #receive(message: UserMessage) {
+  #receive(message: UserMessage, wake = true) {
     this.#notices.push(message)
     const turn = this.#turn
     if (turn) this.#emit(turn, "turn.steer", { message, state: "queued" })
     else if (this.#compacting) {
       // A manual compaction runs: it is sent once that ends.
-      this.#noticedDuringCompaction = true
+      if (wake) this.#noticedDuringCompaction = true
+      this.#emit(undefined, "turn.steer", { message, state: "queued" })
+    } else if (!wake) {
+      // It waits for the next turn, which the user's next message starts.
       this.#emit(undefined, "turn.steer", { message, state: "queued" })
     } else if (this.#onIdleNotice) this.#onIdleNotice()
     else this.#wake()
@@ -784,6 +800,9 @@ export class Agent {
     try {
       this.#push(user)
       let compactFailed = false
+      /** A request over the context window is compacted and sent again, once a turn. */
+      let overflowRetried = false
+      let overflowCompacted: boolean | undefined
       while (true) {
         if (!compactFailed && this.#needsCompaction()) {
           compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
@@ -804,7 +823,23 @@ export class Agent {
           break
         }
         if (reply.kind === "error") {
-          result = { reason: "error", steps, error: reply.error }
+          const overflow = reply.model && isContextOverflow(reply.model)
+          if (overflow && !overflowRetried && this.#compaction.auto !== false) {
+            overflowRetried = true
+            overflowCompacted = await this.#compact("overflow", abort.signal, turn)
+            if (overflowCompacted === true) continue
+          }
+          const failure = reply.model
+            ? describeModelError(reply.model, { provider: this.model.provider })
+            : undefined
+          // Compacted once already, or nothing could be: the user decides what to leave out.
+          if (failure && overflow && overflowRetried) {
+            failure.hint =
+              overflowCompacted === undefined
+                ? "Nothing older to compact: /clear starts over, or /model switches to a model with a larger window"
+                : "Run /compact with what to keep, /clear to start over, or /model for a larger window"
+          }
+          result = { reason: "error", steps, error: reply.error, ...(failure ? { failure } : {}) }
           break
         }
         turn.unanswered = false
@@ -852,6 +887,7 @@ export class Agent {
         reason: result.reason,
         steps,
         ...(result.error !== undefined ? { error: result.error } : {}),
+        ...(result.failure ? { failure: result.failure } : {}),
       })
       this.#setStatus(turn, "idle")
       // A success resets the notice retries; after an interrupt the user decides when to go on.
@@ -906,6 +942,7 @@ export class Agent {
 
     let final: AssistantMessage | undefined
     let error: string | undefined
+    let modelError: ModelError | undefined
     let aborted = false
     let retrying = false
     try {
@@ -927,6 +964,14 @@ export class Agent {
         switch (ev.type) {
           case "retry":
             retrying = true
+            this.#emit(turn, "model.retry", {
+              attempt: ev.attempt,
+              maxRetries: ev.maxRetries,
+              delayMs: ev.delayMs,
+              error: ev.error.message,
+              kind: ev.error.kind ?? "other",
+              ...(ev.error.status !== undefined ? { status: ev.error.status } : {}),
+            })
             this.#emit(turn, "status.changed", {
               status: "working",
               reason: `retrying (${ev.attempt}/${ev.maxRetries})`,
@@ -953,7 +998,10 @@ export class Agent {
           case "error":
             final = ev.message
             if (ev.error.code === "aborted" || turn.signal.aborted) aborted = true
-            else error = ev.error.message
+            else {
+              error = ev.error.message
+              modelError = ev.error
+            }
             break
         }
       }
@@ -979,7 +1027,7 @@ export class Agent {
     if (message.usage) this.tree?.recordUsage(this, message.usage)
 
     if (aborted) return { kind: "aborted" }
-    if (error) return { kind: "error", error }
+    if (error) return { kind: "error", error, ...(modelError ? { model: modelError } : {}) }
     return { kind: "ok", message }
   }
 
@@ -1093,7 +1141,7 @@ export class Agent {
       run.returned = true
       if (rejected) this.#emitToolStart(turn, run, args)
       const result = await this.#afterTool(turn, run, batch, args, first, rejected)
-      if (!run.finished) this.#emitToolEnd(turn, call, result, durationMs, rejected)
+      if (!run.finished) this.#emitToolEnd(turn, call, result, durationMs, rejected, run.approval)
       return {
         role: "toolResult",
         toolCallId: call.id,
@@ -1134,6 +1182,9 @@ export class Agent {
       if (gate.ask) {
         const request = { sessionId: this.sessionId, toolCallId: call.id, name: call.name, args }
         const verdict = await this.#askApproval(turn, { ...request, reason: gate.ask.join("; ") })
+        // Dismissing the question stops the turn, like an interrupt.
+        if (!verdict.approved && verdict.interrupt && this.#turn === turn) this.#abort?.abort()
+        if (verdict.approved && verdict.by) run.approval = verdict.by
         if (turn.signal.aborted)
           return await reject("aborted", "Aborted by the user before this tool ran.", args)
         if (!verdict.approved) {
@@ -1297,6 +1348,7 @@ export class Agent {
     result: ToolResult,
     durationMs: number,
     rejected?: ToolRejection,
+    approval?: ToolApproval,
   ) {
     this.#emit(turn, "tool.execute.end", {
       toolCallId: call.id,
@@ -1304,6 +1356,7 @@ export class Agent {
       result,
       durationMs,
       ...(rejected ? { rejected } : {}),
+      ...(approval ? { approval } : {}),
     })
   }
 
@@ -1367,7 +1420,7 @@ export class Agent {
    * there was nothing to compact yet (a long turn may have enough a few steps later).
    */
   async #compact(
-    reason: "threshold" | "manual",
+    reason: "threshold" | "manual" | "overflow",
     signal: AbortSignal,
     turn: Turn | undefined,
     instructions?: string,
@@ -1378,7 +1431,8 @@ export class Agent {
       this.#compaction.keepSteps ?? 2,
     )
     if (!split) {
-      if (reason === "manual") this.#emit(turn, "compact.failed", { error: "nothing to compact yet" })
+      if (reason === "manual")
+        this.#emit(turn, "compact.failed", { error: "nothing to compact yet", empty: true })
       return undefined
     }
     try {

@@ -85,14 +85,16 @@ async function setup(steps: MockStep[], o: Options) {
   }
   const allowed = new Set<string>()
   const approve: Approver = async (req, signal) => {
-    if (allowed.has(req.name)) return { approved: true }
+    if (allowed.has(req.name)) return { approved: true, by: "rule" }
     const answer = await host.ui.ask(
       { kind: "confirm", title: `Allow ${req.name}?`, message: req.reason, always: true, other: true },
       { signal, source: "approval" },
     )
     if (answer === "always") allowed.add(req.name)
-    if (answer === true || answer === "always") return { approved: true }
+    if (answer === true || answer === "always") return { approved: true, by: "user" }
     if (typeof answer === "object") return { approved: false, reason: `the user said no: ${answer.other}` }
+    if (answer === undefined && !signal.aborted)
+      return { approved: false, reason: "dismissed", interrupt: true }
     return { approved: false, reason: "the user said no" }
   }
   const agent = new Agent({
@@ -150,7 +152,7 @@ async function setup(steps: MockStep[], o: Options) {
   const dialog = () => {
     const lines = screen.lines.map((l) => l.trimEnd())
     // The open dialog is the last run of barred rows, ending with its keys (echoes have none).
-    const end = lines.findLastIndex((l) => l.startsWith("┃") && / cancel$| back$/.test(l))
+    const end = lines.findLastIndex((l) => l.startsWith("┃") && / cancel$| back$| deny$/.test(l))
     if (end === -1) return []
     let start = end
     while (start > 0 && lines[start - 1]!.startsWith("┃")) start--
@@ -185,7 +187,7 @@ for (const mode of MODES) {
       "┃   2 Patch                  Fix it in place",
       "┃   3 Other…",
       "┃",
-      "┃ ←→ question · ↑↓ move · Enter choose · Esc cancel",
+      "┃ ←→ question · ↑↓ move · Enter next · Esc cancel",
     ])
     s.terminal.send("2")
     await waitFor(() => s.dialog()[0] === "┃ 2/2 · Extras", "the second question")
@@ -211,8 +213,9 @@ for (const mode of MODES) {
       ].join("\n"),
     )
     // No echo of the dialog: the tool call's result shows the answers.
-    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ›")
-    expect(s.all()).toContain("Approach › Patch")
+    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ❯")
+    // Each question's label, with the answer whole under it.
+    expect(s.all()).toMatch(/Approach\n +Patch\n/)
     expect(s.dialog()).toEqual([])
     s.terminal.send("\x03")
     await s.exited
@@ -251,7 +254,7 @@ for (const mode of MODES) {
     await s.idle()
     const results = s.agent.messages.filter((m) => m.role === "toolResult")
     expect(JSON.stringify(results.at(-1))).toContain("The user declined to answer.")
-    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ›")
+    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ❯")
     s.terminal.send("\x03")
     await s.exited
   })
@@ -325,27 +328,54 @@ for (const mode of MODES) {
       "┃ ? Allow wipe? (approval)",
       "┃   it deletes files",
       "┃",
-      "┃ ❯ Yes",
+      "┃   Yes",
       "┃   Yes, and don't ask again this session",
       "┃   No",
       "┃   Other…",
       "┃",
-      "┃ ↑↓ move · y/n · Enter choose · Esc cancel",
+      "┃ ↑↓ select · n no · Esc deny",
     ])
+    // Nothing is preselected: an Enter typed now does not answer it.
+    s.terminal.send("\r")
+    await Bun.sleep(30)
+    expect(s.host.ui.pending.length).toBe(1)
+    s.terminal.send(`${DOWN}${DOWN}`)
+    await waitFor(() => s.dialog().includes("┃ ❯ Yes, and don't ask again this session"), "moved")
     // The bar is drawn in the warning color (yellow), the ❯ in the accent (cyan).
     expect(s.terminal.output).toContain("\x1b[33m┃")
     expect(s.terminal.output).toContain("\x1b[36m❯")
-    s.terminal.send(`${DOWN}\r`)
+    s.terminal.send("\r")
     await s.shows("wiped twice")
     await s.idle()
     expect(s.host.ui.pending).toEqual([])
-    expect(s.all()).not.toContain("┃ ? Allow wipe? ›")
+    expect(s.all()).not.toContain("┃ ? Allow wipe? ❯")
     // Asked once for both calls.
     expect(s.all().split("? Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
+    // Each call says who let it run.
+    expect(s.all()).toContain("└ wiped · allowed by you")
+    expect(s.all()).toContain("└ wiped · allowed · session rule")
     s.terminal.send("\x03")
     await s.exited
   })
 }
+
+test("Esc on an approval denies the call and stops the turn; meanwhile the activity line waits for you", async () => {
+  const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "tried another way" }], {
+    mode: "inline",
+    approve: ["wipe"],
+  })
+  s.terminal.send("clean up\r")
+  await waitFor(() => s.dialog().length > 0, "the approval")
+  expect(s.live()).toMatch(/waiting for you · \d+s/)
+  s.terminal.send(ESC)
+  await s.idle()
+  expect(s.host.ui.pending).toEqual([])
+  expect(s.all()).toContain("Interrupted")
+  // The turn stopped: the model was not asked again.
+  expect(s.all()).not.toContain("tried another way")
+  s.terminal.send("\x03")
+  await s.exited
+})
 
 test("an approval refused with free text tells the model what to do instead", async () => {
   const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "ok, moving to trash" }], {

@@ -10,21 +10,35 @@ export interface PickerRow {
   description?: string
 }
 
-/** Draws list rows like the command popup does. */
+/** The most of the width the label column takes when rows have descriptions. */
+const LABEL_SHARE = 0.4
+
+/**
+ * Draws the rows of a completion list (commands, skills, files): ❯ before the selected one
+ * (none while `selected` is -1), and descriptions in a column after the labels. The column is
+ * as wide as the longest label of the whole list, so it stays put while the list scrolls, but
+ * at most 40% of the width: a longer label is cut with "…" rather than pushing every
+ * description out of view.
+ */
 export function pickerRows(rows: PickerRow[], selected: number, width: number, theme: Theme): string[] {
   const n = rows.length
-  const start = Math.min(Math.max(0, selected - PICKER_ROWS + 1), Math.max(0, n - PICKER_ROWS))
+  const at = Math.max(0, selected)
+  const start = Math.min(Math.max(0, at - PICKER_ROWS + 1), Math.max(0, n - PICKER_ROWS))
   const shown = rows.slice(start, start + PICKER_ROWS)
-  const col = Math.min(32, Math.max(...shown.map((r) => visibleWidth(r.label))))
+  const described = rows.some((r) => r.description)
+  const room = Math.max(8, Math.floor((width - 2) * LABEL_SHARE))
+  const col = Math.min(room, Math.max(...rows.map((r) => visibleWidth(r.label))))
   const lines = shown.map((r, i) => {
-    const pad = r.description ? " ".repeat(Math.max(0, col - visibleWidth(r.label))) : ""
+    const label =
+      described && visibleWidth(r.label) > col ? truncateToWidth(r.label, col, glyphs.more) : r.label
+    const pad = r.description ? " ".repeat(Math.max(0, col - visibleWidth(label))) : ""
     const desc = r.description ? `  ${theme.muted(r.description)}` : ""
     const line =
       start + i === selected
-        ? `${theme.accent(glyphs.pointer)} ${theme.accent(r.label)}${pad}${desc}`
-        : `  ${r.label}${pad}${desc}`
-    return truncateToWidth(line, width, "…")
+        ? `${theme.accent(glyphs.choice)} ${theme.accent(label)}${pad}${desc}`
+        : `  ${label}${pad}${desc}`
+    return truncateToWidth(line, width, glyphs.more)
   })
-  if (n > PICKER_ROWS) lines.push(theme.muted(`  ${selected + 1}/${n}`))
+  if (n > PICKER_ROWS) lines.push(theme.muted(`  ${at + 1}/${n}`))
   return lines
 }

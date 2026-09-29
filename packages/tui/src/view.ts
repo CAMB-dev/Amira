@@ -9,6 +9,7 @@ import type {
   Terminal,
   Theme,
 } from "@amira/tui-kit"
+import type { SessionBoundary } from "./history.ts"
 import type { Keybindings } from "./keybindings.ts"
 import type { ReplyRenderers } from "./markdown-nodes.ts"
 import type { TrackedCall } from "./tool-calls.ts"
@@ -31,12 +32,6 @@ export interface CallRef {
   id: string
   name: string
   args: Record<string, unknown>
-}
-
-/** The session a resumed history belongs to, for the separator after it. */
-export interface HistorySession {
-  id: string
-  updatedAt?: number
 }
 
 /** What the controller shares with the view that draws the conversation. */
@@ -76,6 +71,8 @@ export interface ViewHost {
   editorEmpty(): boolean
   /** Shows a short note in place of the key hints for a few seconds. */
   showNote(text: string): void
+  /** Opens the sub-agent viewer on one; unset where there is none (no commands). */
+  openSubagent?(id: string): void
 }
 
 /**
@@ -106,6 +103,11 @@ export interface TranscriptView {
   banner(line: string): void
   user(message: UserMessage): void
   replyDelta(text: string): void
+  /**
+   * The reply's reasoning streamed in (a thinking delta): it shows as "∴ Thought for 12s" once
+   * the reply goes on, and counts as something the reply showed.
+   */
+  reasoningDelta(text: string): void
   /** The reply ended and asked for these tool calls; true when it showed anything. */
   replyEnd(calls: CallRef[]): boolean
   toolStart(id: string, name: string, args: Record<string, unknown>, at: number): void
@@ -116,15 +118,21 @@ export interface TranscriptView {
   turnEnd(): boolean
   /** Follows sub-agents; true when the event was about one. */
   subagentEvent(e: AnyEvent): boolean
-  notice(level: NoticeLevel, text: string): void
+  /** `detail` stays folded until asked for (the full tool output level, or unfolding the block). */
+  notice(level: NoticeLevel, text: string, detail?: string): void
   /** A slash command as typed. */
   commandEcho(line: string): void
   /** What a command printed: under its echo right after it, else as a notice. */
   commandOutput(level: "info" | "warning" | "error", text: string): void
   /** A dialog's questions and answers, once answered, drawn to fit a width. */
   dialogEcho(draw: (width: number) => string[]): void
-  /** A resumed conversation, then a separator naming the session. */
-  history(messages: Message[], session: HistorySession): void
+  /**
+   * The UI follows a session from here: a boundary naming it, then its conversation so far.
+   * `switched` (a command switched sessions: /clear, /resume): full screen, the transcript
+   * starts afresh first (the banner stays), so finding, copying, selecting and the exit
+   * printout see this session only; inline, the boundary follows what was committed.
+   */
+  openSession(boundary: SessionBoundary, messages: Message[], switched: boolean): void
   /** The UI is about to follow another session: calls of this one end here. */
   leaveSession(): void
   /** The note shown when the tool output level changes. */

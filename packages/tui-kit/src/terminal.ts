@@ -29,6 +29,11 @@ export interface Terminal {
   exitAltScreen(): void
   /** Restores the terminal: leaves every mode that was enabled, shows the cursor, leaves raw mode. */
   restore(): void
+  /**
+   * Hands the terminal to another program for a while (e.g. an editor): leaves the modes and
+   * raw mode like `restore`, and returns a function that takes them back.
+   */
+  suspend?(): () => void
 }
 
 /** Mode bookkeeping shared by every terminal, so cleanup is the same everywhere. */
@@ -86,6 +91,22 @@ export abstract class BaseTerminal implements Terminal {
     this.write(this.takeRestoreSequence())
     this.setRawMode(false)
   }
+
+  suspend(): () => void {
+    const modes = [...this.active]
+    const raw = this.raw
+    this.restore()
+    this.pauseInput()
+    return () => {
+      this.resumeInput()
+      if (raw) this.setRawMode(true)
+      for (const m of modes) this.enableMode(m)
+    }
+  }
+
+  /** Stops reading input while another program has the terminal. */
+  protected pauseInput(): void {}
+  protected resumeInput(): void {}
 
   /** The sequence that leaves every active mode; the modes count as left afterwards. */
   protected takeRestoreSequence(): string {
@@ -159,6 +180,14 @@ export class ProcessTerminal extends BaseTerminal {
 
   protected applyRawMode(on: boolean): void {
     if (this.stdin.isTTY) this.stdin.setRawMode(on)
+  }
+
+  protected override pauseInput(): void {
+    if (this.cleanup.length) this.stdin.pause()
+  }
+
+  protected override resumeInput(): void {
+    if (this.cleanup.length) this.stdin.resume()
   }
 
   /**

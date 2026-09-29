@@ -1,4 +1,4 @@
-import type { ToolRejection, ToolResult } from "@amira/api"
+import type { ToolApproval, ToolRejection, ToolResult } from "@amira/api"
 
 /** A tool call of the current step, from its start until it is committed. */
 export interface TrackedCall {
@@ -15,6 +15,8 @@ export interface TrackedCall {
     rejected?: ToolRejection
     /** The user had interrupted the turn when it ended. */
     interrupted?: boolean
+    /** Who let it run, when it needed approval. */
+    approval?: ToolApproval
   }
 }
 

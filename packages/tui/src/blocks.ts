@@ -1,5 +1,13 @@
-import type { ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
-import { toolResultText } from "@amira/api"
+import {
+  plural,
+  type ToolApproval,
+  type ToolDetailLevel,
+  type ToolExploration,
+  type ToolRejection,
+  type ToolResult,
+  toolResultText,
+  type UserMessage,
+} from "@amira/api"
 import {
   defaultGlyphs,
   type ImageInput,
@@ -11,19 +19,35 @@ import {
   renderMarkdown,
   type ScreenImage,
   stripAnsi,
-  TAB_WIDTH,
   type Theme,
   truncateToWidth,
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { replyRows, userLines, userText } from "./format.ts"
+import { expandTabs } from "./diff-view.ts"
+import { reasoningLines, replyRows, userLines, userText } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { summaryLines } from "./history.ts"
 import { apiNode, nodeRows, type ReplyRenderers } from "./markdown-nodes.ts"
-import { childrenOf, isActive, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
+import {
+  backgroundLabel,
+  childrenOf,
+  isActive,
+  type SpawnGroups,
+  type SubagentNode,
+  subtree,
+  treeRows,
+} from "./subagents.ts"
 import { type CopyRow, chromeRows, gutterRows } from "./text-selection.ts"
-import { type FinishedCall, finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
-import type { BlockKind } from "./transcript.ts"
+import {
+  explorationOf,
+  exploredLines,
+  type FinishedCall,
+  finishedToolLines,
+  type PresenterSource,
+  runningToolLines,
+} from "./tool-view.ts"
+import { type BlockKind, type NoticeLevel, noticeDetailLines, noticeLines } from "./transcript.ts"
 
 /** What blocks need to draw themselves, the same for every block of a frame. */
 export interface BlockEnv {
@@ -44,6 +68,15 @@ export interface BlockEnv {
   images?: BlockImages
   /** Nodes of replies extensions render (D88); without it, replies are Markdown as it renders. */
   renders?: BlockRenders
+  /** Output lines a successful shell command shows at `summary` detail (tui.shellOutputLines). */
+  outputLines?: number
+}
+
+/** How much a folded block shows next, from what it shows now: summary, then all, then least. */
+const NEXT_DETAIL: Record<ToolDetailLevel, ToolDetailLevel> = {
+  summary: "full",
+  full: "collapsed",
+  collapsed: "summary",
 }
 
 /** What replies need to show their images (D83): the same object for every frame. */
@@ -128,6 +161,21 @@ export abstract class Block {
   /** Folds or unfolds it; only called when `foldable`. */
   toggleFold(_env: BlockEnv): void {}
 
+  /** Whether folding it now would unfold it: it shows less than it can. */
+  isFolded(_env: BlockEnv): boolean {
+    return false
+  }
+
+  /** What a block selection calls it: "reply", "tool call", ... */
+  get label(): string {
+    return BLOCK_LABELS[this.kind]
+  }
+
+  /** The sub-agents it shows, with theirs, depth first: what the sub-agent viewer opens on. */
+  subagents(_env: BlockEnv): SubagentNode[] {
+    return []
+  }
+
   /** Whether it was folded or unfolded by hand, so it shows other than it would inline. */
   get refolded(): boolean {
     return false
@@ -141,6 +189,21 @@ export abstract class Block {
   touch(): void {
     this.version++
   }
+}
+
+/** What a block selection calls blocks, by kind. */
+const BLOCK_LABELS: Record<BlockKind, string> = {
+  banner: "banner",
+  user: "message",
+  assistant: "reply",
+  tool: "tool call",
+  notice: "notice",
+  command: "command",
+  "command-output": "command output",
+  dialog: "answer",
+  history: "session",
+  summary: "summary",
+  reasoning: "thinking",
 }
 
 /** A block drawn by a function of the width: the banner, notices, echoes, separators. */
@@ -163,18 +226,60 @@ export class LinesBlock extends Block {
 
   override copyRows(plain: readonly string[]): CopyRow[] {
     if (this.kind !== "user" && this.kind !== "command") return chromeRows(plain)
-    // A message sits behind "› ", its rows lined up after it; a command echo wraps under it.
+    // A message or a command echo sits behind "› ", its rows lined up after it.
     const gutter = visibleWidth(glyphs.user) + 1
-    const rows: CopyRow[] =
-      this.kind === "user"
-        ? gutterRows(plain, gutter)
-        : plain.map((p) => ({ from: p.startsWith(`${glyphs.user} `) ? gutter : 0 }))
+    const rows: CopyRow[] = gutterRows(plain, gutter)
     // On the band behind them its blank rows above and below are chrome too (and the fill
     // that runs each row to the edge is trailing blanks, which never copy).
     const last = plain.length - 1
     if (last > 0 && !plain[0]!.trim()) rows[0] = { from: 0, skip: true }
     if (last > 0 && !plain[last]!.trim()) rows[last] = { from: 0, skip: true }
     return rows
+  }
+}
+
+/**
+ * A notice with details that stay folded (e.g. the provider's raw answer to a failed request):
+ * they show once unfolded, or at the full tool output level.
+ */
+export class DetailNoticeBlock extends Block {
+  readonly kind = "notice" as const
+  #open: boolean | undefined
+
+  constructor(
+    readonly level: NoticeLevel,
+    readonly text: string,
+    readonly detail: string,
+  ) {
+    super()
+  }
+
+  #shown(env: BlockEnv): boolean {
+    return this.#open ?? env.detail === "full"
+  }
+
+  lines(env: BlockEnv): string[] {
+    const head = noticeLines(env.theme, this.level, this.text, env.width)
+    return this.#shown(env)
+      ? [...head, ...noticeDetailLines(env.theme, this.level, this.detail, env.width)]
+      : head
+  }
+
+  copyText(): string {
+    return `${this.text}\n${this.detail}`
+  }
+
+  override foldable(): boolean {
+    return true
+  }
+
+  override toggleFold(env: BlockEnv): void {
+    this.#open = !this.#shown(env)
+    this.touch()
+  }
+
+  override get refolded(): boolean {
+    return this.#open !== undefined
   }
 }
 
@@ -186,6 +291,136 @@ export function fixedLine(kind: BlockKind, line: string): LinesBlock {
 export function userBlock(message: UserMessage): LinesBlock {
   const text = message.display?.text.trim() || userText(message)
   return new LinesBlock("user", (width, theme) => userLines(theme, message, width), text)
+}
+
+/**
+ * What the model thought before it answered: one folded line, "∴ Thought for 12s", that
+ * unfolds to the text (and shows it at the "full" level). While the thinking streams in it
+ * reads "∴ Thinking".
+ */
+export class ReasoningBlock extends Block {
+  readonly kind = "reasoning"
+  /** Set by folding it: whether its text shows, whatever the level. */
+  expanded: boolean | undefined
+  #thinking: boolean
+
+  constructor(
+    public text: string,
+    /** How long it thought; unknown for a resumed session. */
+    public durationMs: number | undefined,
+    readonly startedAt = Date.now(),
+    thinking = false,
+  ) {
+    super()
+    this.#thinking = thinking
+  }
+
+  get thinking(): boolean {
+    return this.#thinking
+  }
+
+  append(text: string): void {
+    this.text += text
+    if (this.expanded) this.touch()
+  }
+
+  /** The thinking is over, at `at`. */
+  finish(at = Date.now()): void {
+    if (!this.#thinking) return
+    this.#thinking = false
+    this.durationMs = at - this.startedAt
+    this.touch()
+  }
+
+  private shows(env: BlockEnv): boolean {
+    return this.expanded ?? env.detail === "full"
+  }
+
+  lines(env: BlockEnv): string[] {
+    return reasoningLines(
+      env.theme,
+      this.text,
+      {
+        ...(this.durationMs !== undefined ? { durationMs: this.durationMs } : {}),
+        thinking: this.#thinking,
+        expanded: this.shows(env),
+      },
+      env.width,
+    )
+  }
+
+  copyText(): string {
+    return this.text.trim()
+  }
+
+  override copyRows(plain: readonly string[]): CopyRow[] {
+    // The head is chrome; the text copies without its indent.
+    return plain.map((_, i) => (i === 0 ? { from: 0, skip: true } : { from: 2 }))
+  }
+
+  override foldable(): boolean {
+    return this.text.trim() !== ""
+  }
+
+  override toggleFold(env: BlockEnv): void {
+    const next = !this.shows(env)
+    this.expanded = next === (env.detail === "full") ? undefined : next
+    this.touch()
+  }
+
+  override isFolded(env: BlockEnv): boolean {
+    return !this.shows(env)
+  }
+
+  override get refolded(): boolean {
+    return this.expanded !== undefined
+  }
+
+  override printLines(env: BlockEnv): string[] {
+    const expanded = this.expanded
+    this.expanded = undefined
+    try {
+      return this.lines(env)
+    } finally {
+      this.expanded = expanded
+    }
+  }
+}
+
+/** The summary a compaction left, in a resumed history: folded to one line until unfolded. */
+export class SummaryBlock extends Block {
+  readonly kind = "summary"
+  folded = true
+
+  constructor(readonly summary: string) {
+    super()
+  }
+
+  lines(env: BlockEnv): string[] {
+    return summaryLines(env.theme, this.summary, env.width, this.folded)
+  }
+
+  copyText(): string {
+    return this.summary
+  }
+
+  override foldable(): boolean {
+    return true
+  }
+
+  override toggleFold(): void {
+    this.folded = !this.folded
+    this.touch()
+  }
+
+  override isFolded(): boolean {
+    return this.folded
+  }
+
+  /** Unfolded by hand, it prints unfolded: nothing shown is lost. */
+  override get refolded(): boolean {
+    return !this.folded
+  }
 }
 
 /** Code blocks longer than this are cut when their reply is folded. */
@@ -520,6 +755,10 @@ export class ReplyBlock extends Block {
     this.touch()
   }
 
+  override isFolded(): boolean {
+    return this.folded
+  }
+
   override get refolded(): boolean {
     return this.folded
   }
@@ -536,7 +775,7 @@ export class ReplyBlock extends Block {
 }
 
 /** A code block's frame in a reply's rows: its top and bottom rows, its code rows, and the column its code starts at. */
-interface CodeFrame {
+export interface CodeFrame {
   top: number
   bottom?: number
   rows: number[]
@@ -544,7 +783,7 @@ interface CodeFrame {
 }
 
 /** The frames of code blocks in rows of rendered Markdown (without styles). */
-function codeFrames(plain: readonly string[]): CodeFrame[] {
+export function codeFrames(plain: readonly string[]): CodeFrame[] {
   const { codeTop, codeSide, codeBottom } = defaultGlyphs
   const out: CodeFrame[] = []
   for (let i = 0; i < plain.length; i++) {
@@ -630,15 +869,8 @@ function linesOf(rows: string[], source: string[]): number[] | undefined {
   return r === rows.length ? out : undefined
 }
 
-/** Tabs as spaces to the next multiple of TAB_WIDTH, as Markdown is drawn. */
-function expandTabs(line: string): string {
-  if (!line.includes("\t")) return line
-  let out = ""
-  for (const part of line.split(/(\t)/)) {
-    out += part === "\t" ? " ".repeat(TAB_WIDTH - (Bun.stringWidth(out) % TAB_WIDTH)) : part
-  }
-  return out
-}
+/** How much each tool output level shows, least first. */
+const DETAIL_RANK: Record<ToolDetailLevel, number> = { collapsed: 0, summary: 1, full: 2 }
 
 /** A tool call: its head, its output while it runs, then its result, with its sub-agents under it. */
 export class ToolBlock extends Block {
@@ -646,7 +878,13 @@ export class ToolBlock extends Block {
   startedAt: number | undefined
   partial: ToolResult | undefined
   end:
-    | { result: ToolResult; durationMs?: number; rejected?: ToolRejection; interrupted?: boolean }
+    | {
+        result: ToolResult
+        durationMs?: number
+        rejected?: ToolRejection
+        interrupted?: boolean
+        approval?: ToolApproval
+      }
     | undefined
   /** Set by folding it: how much of it shows, whatever the global level. */
   folding: ToolDetailLevel | undefined
@@ -701,11 +939,15 @@ export class ToolBlock extends Block {
       ]
     }
     const detail = this.detail(env)
-    const lines = finishedToolLines(theme, presenter, this.finished(), detail, width)
+    const opts = env.outputLines !== undefined ? { outputLines: env.outputLines } : {}
+    const lines = finishedToolLines(theme, presenter, this.finished(), detail, width, opts)
     let rows: string[]
     if (detail === "collapsed" && this.folding === "collapsed" && tree.length) {
       const running = tree.filter(isActive).length
-      const text = `${tree.length} sub-agent${tree.length === 1 ? "" : "s"}${running ? ` · ${running} running` : ""}`
+      // Counted as the head counts them, its own; theirs said apart.
+      const own = tree.filter((n) => n.depth === tree[0]!.depth).length
+      const nested = tree.length - own
+      const text = `${plural(own, "sub-agent")}${nested ? ` (+${nested} nested)` : ""}${running ? ` · ${running} running` : ""}`
       rows = [
         truncateToWidth(
           `  ${theme.muted(glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${theme.muted(text)}`,
@@ -729,6 +971,7 @@ export class ToolBlock extends Block {
       result: end.result,
       ...(end.durationMs !== undefined ? { durationMs: end.durationMs } : {}),
       ...(end.rejected ? { rejected: end.rejected } : {}),
+      ...(end.approval ? { approval: end.approval } : {}),
       interrupted: end.interrupted ?? false,
     }
   }
@@ -744,16 +987,28 @@ export class ToolBlock extends Block {
   }
 
   override toggleFold(env: BlockEnv): void {
-    this.folding = this.detail(env) === "full" ? "collapsed" : "full"
+    // Around the three levels; back at the one everything shows, it follows that one again.
+    const next = NEXT_DETAIL[this.detail(env)]
+    this.folding = next === env.detail ? undefined : next
     this.touch()
+  }
+
+  override isFolded(env: BlockEnv): boolean {
+    return this.detail(env) !== "full"
+  }
+
+  override subagents(env: BlockEnv): SubagentNode[] {
+    return this.tree(env.nodes)
   }
 
   override get refolded(): boolean {
     return this.folding !== undefined
   }
 
+  /** As the inline transcript shows it, or as unfolded by hand when that shows more. */
   override printLines(env: BlockEnv): string[] {
     const folding = this.folding
+    if (folding && DETAIL_RANK[folding] > DETAIL_RANK[env.detail]) return this.lines(env)
     this.folding = undefined
     try {
       return this.lines(env)
@@ -761,6 +1016,120 @@ export class ToolBlock extends Block {
       this.folding = folding
     }
   }
+
+  /** What it only looked around for, once it succeeded: it can join an "Explored" row. */
+  exploration(env: BlockEnv): ToolExploration | undefined {
+    if (!this.end || this.tree(env.nodes).length) return undefined
+    return explorationOf(env.presenters?.get(this.name), this.finished())
+  }
+}
+
+/**
+ * Successful calls in a row that only looked around (read, searched, listed files), as one
+ * row: "● Explored · Read a.ts, b.ts · Search foo". Unfolded, each call under it.
+ */
+export class ExploredBlock extends Block {
+  readonly kind = "tool"
+  /** Set by folding it: how much of it shows, whatever the global level. */
+  folding: ToolDetailLevel | undefined
+
+  constructor(readonly calls: ToolBlock[]) {
+    super()
+  }
+
+  private detail(env: BlockEnv): ToolDetailLevel {
+    return this.folding ?? (env.detail === "full" ? "full" : "summary")
+  }
+
+  lines(env: BlockEnv): string[] {
+    const opts = env.outputLines !== undefined ? { outputLines: env.outputLines } : {}
+    const calls = this.calls.map((b) => ({ call: b.finished(), presenter: env.presenters?.get(b.name) }))
+    // Unfolded, each call shows as calls do now (all of it at the "full" level).
+    const expanded = this.detail(env) === "full"
+    const each = env.detail === "full" ? "full" : "summary"
+    return exploredLines(env.theme, calls, expanded, each, env.width, opts)
+  }
+
+  copyText(): string {
+    return this.calls.map((b) => b.copyText()).join("\n\n")
+  }
+
+  override foldable(): boolean {
+    return true
+  }
+
+  override toggleFold(env: BlockEnv): void {
+    const next = this.detail(env) === "full" ? "summary" : "full"
+    this.folding = next === (env.detail === "full" ? "full" : "summary") ? undefined : next
+    this.touch()
+  }
+
+  override isFolded(env: BlockEnv): boolean {
+    return this.detail(env) !== "full"
+  }
+
+  override get refolded(): boolean {
+    return this.folding !== undefined
+  }
+
+  /** As the inline transcript shows it, or as unfolded by hand when that shows more. */
+  override printLines(env: BlockEnv): string[] {
+    const folding = this.folding
+    if (folding && DETAIL_RANK[folding] > DETAIL_RANK[env.detail]) return this.lines(env)
+    this.folding = undefined
+    try {
+      return this.lines(env)
+    } finally {
+      this.folding = folding
+    }
+  }
+}
+
+/** Whether a block can be part of an "Explored" row: an exploring call that succeeded, or such a row. */
+function explores(b: Block | undefined, env: BlockEnv): b is ToolBlock | ExploredBlock {
+  return b instanceof ExploredBlock || (b instanceof ToolBlock && b.exploration(env) !== undefined)
+}
+
+/**
+ * Makes the run of exploring blocks around `block` in `list` one "Explored" block, when it is
+ * more than one call. Returns what to do to the list: the block to put in, and the blocks it
+ * replaces (in order); undefined when nothing changes.
+ */
+export function exploredRun(
+  list: readonly Block[],
+  block: Block,
+  env: BlockEnv,
+): { group: ExploredBlock; replaces: Block[] } | undefined {
+  const at = list.indexOf(block)
+  if (at < 0 || !explores(block, env)) return undefined
+  let from = at
+  let to = at
+  while (from > 0 && explores(list[from - 1], env)) from--
+  while (to + 1 < list.length && explores(list[to + 1], env)) to++
+  const run = list.slice(from, to + 1) as (ToolBlock | ExploredBlock)[]
+  if (run.length < 2) return undefined
+  const calls = run.flatMap((b) => (b instanceof ExploredBlock ? b.calls : [b]))
+  const group = new ExploredBlock(calls)
+  // A row the user folded keeps how it was folded.
+  const folded = run.find((b): b is ExploredBlock => b instanceof ExploredBlock && b.folding !== undefined)
+  if (folded) group.folding = folded.folding
+  return { group, replaces: run }
+}
+
+/** Blocks with each run of exploring calls made one "Explored" block, e.g. for a resumed history. */
+export function groupExplored(list: Block[], env: BlockEnv): Block[] {
+  const out: Block[] = []
+  for (const b of list) {
+    const prev = out[out.length - 1]
+    if (prev && explores(prev, env) && explores(b, env)) {
+      const calls = [
+        ...(prev instanceof ExploredBlock ? prev.calls : [prev]),
+        ...(b instanceof ExploredBlock ? b.calls : [b]),
+      ]
+      out[out.length - 1] = new ExploredBlock(calls)
+    } else out.push(b)
+  }
+  return out
 }
 
 /**
@@ -782,14 +1151,24 @@ export class SubagentGroupBlock extends Block {
     return this.running
   }
 
-  lines(env: BlockEnv): string[] {
-    const list = this.roots.flatMap((id) => {
+  /** No tool call: what its head says. */
+  override get label(): string {
+    return "background sub-agents"
+  }
+
+  override subagents(env: BlockEnv): SubagentNode[] {
+    return this.roots.flatMap((id) => {
       const node = env.nodes.get(id)
       return node ? subtree(env.nodes, node) : []
     })
+  }
+
+  lines(env: BlockEnv): string[] {
+    const list = this.subagents(env)
     if (!list.length) return []
     this.running = list.some(isActive)
-    const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted("background")}`
+    const roots = this.roots.flatMap((id) => env.nodes.get(id) ?? [])
+    const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted(backgroundLabel(env.groups, roots))}`
     return [
       truncateToWidth(head, env.width, glyphs.more),
       ...treeRows(list, env.now, env.width, env.theme, env.groups),

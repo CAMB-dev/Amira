@@ -1,15 +1,20 @@
+import path from "node:path"
 import {
   type ChildSession,
   defineExtension,
   defineTool,
   type ExtensionAPI,
+  formatDuration,
+  formatElapsed,
   MAX_TITLE_CHARS,
   type PendingNotice,
+  plural,
   type SubagentResult,
   type ToolContext,
   type ToolPresenter,
   type ToolSession,
   textResult,
+  USER_STOP_REASON,
   type UserMessage,
 } from "@amira/api"
 import { agentsCommand, formatTokens } from "./agents-command.ts"
@@ -17,11 +22,15 @@ import { type Isolation, loadRoles, type Role, roleModel } from "./roles.ts"
 import {
   createWorktree,
   formatStat,
+  type KeptWorktree,
   keepChanges,
+  listKeptWorktrees,
   type MergeResult,
   mergeWorktree,
   type RunGit,
   removeWorktree,
+  STALE_WORKTREE_MS,
+  type SweepResult,
   sweepWorktrees,
   type Worktree,
 } from "./worktree.ts"
@@ -76,6 +85,8 @@ interface Job {
   cancelled?: boolean
   /** Nobody will read its report any more, so what it leaves behind is reported as an error. */
   orphaned?: boolean
+  /** Changes it made that were not merged: how many files, and the patch that holds them. */
+  kept?: { files: number; patch: string }
 }
 
 /** Stops a job whose commander no longer wants it. */
@@ -180,9 +191,9 @@ function outcomeLine(m: MergeResult, wt: Worktree, unfinished?: string): string 
 }
 
 function reportOf(job: Job, r: SubagentResult, changes: string, note?: string): string {
-  const seconds = (r.durationMs / 1000).toFixed(1)
+  const took = formatDuration(r.durationMs)
   const tokens = formatTokens(r.usage.input + r.usage.output + r.usage.cacheRead + r.usage.cacheWrite)
-  const head = `## ${job.title} · ${job.role} · ${r.sessionId} · ${r.status} (${seconds}s, ${tokens} tokens)`
+  const head = `## ${job.title} · ${job.role} · ${r.sessionId} · ${r.status} (${took}, ${tokens} tokens)`
   const lines = [head]
   if (note) lines.push(note)
   if (r.status !== "done" && r.error) lines.push(`Error: ${r.error}`)
@@ -194,23 +205,48 @@ function reportOf(job: Job, r: SubagentResult, changes: string, note?: string): 
 /** How long a finished background report waits for others finishing close by, to go as one message. */
 export const BATCH_MS = 300
 
+/** How a sub-agent ended, as its line in the transcript marks it: done, failed, stopped. */
 const ENDED: Record<SubagentResult["status"], string> = {
-  done: "finished",
-  error: "failed",
-  aborted: "stopped",
+  done: "✓",
+  error: "✗",
+  aborted: "⊘",
+}
+
+/** Why it ended other than finishing, for the user's line: the error, or a stop not the user's own. */
+function endReason(r: SubagentResult): string | undefined {
+  if (r.status === "error") return r.error ? shorten(r.error, 100) : undefined
+  if (r.status === "aborted")
+    return r.error && r.error !== USER_STOP_REASON ? shorten(r.error, 100) : undefined
+  return r.note ? shorten(r.note, 100) : undefined
 }
 
 /**
  * The message that brings background reports to their commander: the reports for the model,
- * one short line each for the transcript ("◆ US market trend finished · explorer · 41s · 12.3k tok").
+ * short lines for the transcript, shaped like a sub-agent's end line under its call
+ * ("◆ US market trend ✓ explorer · 41s · 12k tok", why it failed or stopped after it), and
+ * where changes it made that were not merged are ("changes kept: 3 files · <patch>").
  */
-function noticeMessage(jobs: Pick<Job, "role" | "title" | "done" | "result">[]): UserMessage {
-  const lines = jobs.map((j) => {
+function noticeMessage(jobs: Pick<Job, "role" | "title" | "done" | "result" | "kept">[]): UserMessage {
+  const lines = jobs.flatMap((j) => {
     const r = j.result
-    if (!r) return `◆ ${j.title} finished · ${j.role}`
+    if (!r) return [`◆ ${j.title} ✓ ${j.role}`]
     const u = r.usage
     const tokens = formatTokens(u.input + u.output + u.cacheRead + u.cacheWrite)
-    return `◆ ${j.title} ${ENDED[r.status]} · ${j.role} · ${Math.round(r.durationMs / 1000)}s · ${tokens} tok`
+    // Why it failed or stopped: its error (not the user's own stop), else the stop's note.
+    const why =
+      endReason(r) ??
+      (r.status === "error"
+        ? "failed"
+        : r.status === "aborted"
+          ? r.note
+            ? shorten(r.note, 100)
+            : "stopped"
+          : "")
+    const head = `◆ ${j.title} ${ENDED[r.status]} ${j.role} · ${formatElapsed(r.durationMs)} · ${tokens} tok${why ? ` · ${why}` : ""}`
+    const kept = j.kept
+      ? [`  changes kept: ${j.kept.files ? `${plural(j.kept.files, "file")} · ` : ""}${j.kept.patch}`]
+      : []
+    return [head, ...kept]
   })
   const head =
     jobs.length === 1
@@ -263,6 +299,32 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
     const batches = new Map<string, { jobs: Job[]; timer: ReturnType<typeof setTimeout> }>()
     /** Ids of background sub-agents whose report was sent to their commander as a message. */
     const delivered = new Set<string>()
+    /** Worktrees sub-agents of this process work in now: the sweep and /agents leave them alone. */
+    const inUse = new Set<string>()
+    /** Tells the user what the sweep of old worktrees is about to delete, and what it deleted. */
+    const sweepNotices = (sweep: SweepResult) => {
+      const days = Math.round(STALE_WORKTREE_MS / 86_400_000)
+      if (sweep.expiring.length) {
+        const n = sweep.expiring.length
+        api.notify(
+          `${n} sub-agent worktree${n === 1 ? "" : "s"} kept from earlier sessions ${n === 1 ? "is" : "are"} over ${days} days old and will be deleted from tomorrow on: ${sweep.expiring.map((w) => w.patch ?? w.dir).join(", ")}. Copy what you need first; /agents worktrees lists them.`,
+          "warning",
+        )
+      }
+      if (sweep.removed.length) {
+        const n = sweep.removed.length
+        api.notify(
+          `Deleted ${n} old sub-agent worktree${n === 1 ? "" : "s"} (announced a day or more ago): ${sweep.removed.join(", ")}.`,
+        )
+      }
+    }
+    /** The worktrees of this repository that sub-agents left behind, not the ones in use. */
+    const keptWorktrees = async (): Promise<KeptWorktree[]> => {
+      const top = await git(["rev-parse", "--show-toplevel"], api.cwd, true)
+      if (!top.ok || !top.output.trim()) return []
+      const all = listKeptWorktrees(api.home, path.normalize(top.output.trim()))
+      return all.filter((w) => !inUse.has(w.dir))
+    }
     let cached: { at: number; roles: Map<string, Role> } | undefined
 
     const roles = (): Map<string, Role> => {
@@ -291,16 +353,24 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
         if ("error" in made) note = `No worktree (${made.error}); it worked in the shared directory.`
         else {
           wt = made
-          // Once per repository and process: clear out what earlier sessions left behind (D62).
+          inUse.add(made.dir)
+          // Once per repository and process: clear out what earlier sessions left behind (D62),
+          // never without telling the user a day before.
           if (!swept.has(made.root)) {
             swept.add(made.root)
-            await sweepWorktrees(git, { root: made.root, home: api.home }).catch(() => [])
+            const sweep = await sweepWorktrees(git, { root: made.root, home: api.home, keep: inUse }).catch(
+              () => undefined,
+            )
+            if (sweep) sweepNotices(sweep)
           }
         }
       }
       // Making the worktree takes a while; the commander may have been interrupted meanwhile.
       if (ctx.signal.aborted) {
-        if (wt) await removeWorktree(git, wt)
+        if (wt) {
+          inUse.delete(wt.dir)
+          await removeWorktree(git, wt)
+        }
         throw new Error("the commander's turn was interrupted")
       }
       // A child that could not spawn further hides the tools that would try (D15).
@@ -320,7 +390,10 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
           systemPrompt: childInstructions(role, wt),
         })
       } catch (err) {
-        if (wt) await removeWorktree(git, wt)
+        if (wt) {
+          inUse.delete(wt.dir)
+          await removeWorktree(git, wt)
+        }
         throw err
       }
       const activity: Activity = { files: new Set(), commands: 0 }
@@ -355,14 +428,19 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
                     ...(api.settings.merge?.reviewThreshold
                       ? { threshold: api.settings.merge.reviewThreshold }
                       : {}),
+                    who: `"${job.title}" (${job.role})`,
                     review: (title, diff, options) => api.ui.reviewDiff(title, diff, options),
                   }),
             )
             changes = mergeLine(merged, tree, unfinished)
             leftBehind = merged.outcome === "kept" || merged.outcome === "partial"
+            if (leftBehind) job.kept = { files: merged.stat.files.length, patch: tree.patch }
           } catch (err) {
             changes = `Worktree: merging failed (${err instanceof Error ? err.message : String(err)}); its changes stay in ${tree.dir}.`
             leftBehind = true
+            job.kept = { files: 0, patch: tree.patch }
+          } finally {
+            inUse.delete(tree.dir)
           }
         }
         const text = reportOf(job, r, changes, note)
@@ -410,7 +488,12 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
       if (!batch) return
       batches.delete(commander)
       const [first, ...rest] = batch.jobs
-      first?.notice?.deliver(noticeMessage(batch.jobs))
+      // Sub-agents the user stopped by hand do not start a turn: their reports wait for the
+      // user's next message.
+      const byUser = batch.jobs.every(
+        (j) => j.result?.status === "aborted" && j.result.error === USER_STOP_REASON,
+      )
+      first?.notice?.deliver(noticeMessage(batch.jobs), byUser ? { wake: false } : undefined)
       for (const j of rest) j.notice?.cancel()
     }
 
@@ -660,7 +743,7 @@ ${list.join("\n")}`
     api.registerTool(agentTool)
     api.registerTool(resultTool)
     api.registerToolRenderer(AGENT_TOOL, agentPresenter)
-    api.registerCommand(agentsCommand())
+    api.registerCommand(agentsCommand({ keptWorktrees }))
   })
 }
 
@@ -679,6 +762,15 @@ export const agentPresenter: ToolPresenter<AgentParams> = {
     const reports = call.text.split("\n").filter((l) => l.startsWith("## ")).length
     if (reports > 1) return `${reports} reports`
     return call.text.split("\n")[0]?.replace(/^#+\s*/, "") || undefined
+  },
+  /** All of the reports, at the full level: each one's heading as a heading, not as "## ". */
+  body(call, { detail }) {
+    if (detail !== "full" || call.result.isError) return []
+    return call.text
+      .split("\n")
+      .map((text) =>
+        text.startsWith("## ") ? { kind: "accent", text: text.slice(3) } : { kind: "text", text },
+      )
   },
 }
 

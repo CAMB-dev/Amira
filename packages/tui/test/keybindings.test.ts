@@ -48,7 +48,8 @@ test("the default keys match what terminals send", () => {
   expect(keys.is(events("\x1b[13;2u")[0]!, "submit")).toBe(false) // Shift+Enter
   expect(keys.is(events("\x1b[13;2u")[0]!, "newline")).toBe(true)
   expect(keys.is(events("\x0c")[0]!, "redraw")).toBe(true) // Ctrl+L
-  expect(keys.is(textKey("Y", { shift: true }), "dialog.yes")).toBe(true)
+  expect(keys.is(textKey("y"), "dialog.yes")).toBe(false)
+  expect(keys.is(textKey("N", { shift: true }), "dialog.no")).toBe(true)
   expect(keys.is(key("tab", { shift: true }), "dialog.up")).toBe(true)
   expect(keys.is(key("tab"), "dialog.up")).toBe(false)
 })
@@ -136,7 +137,8 @@ test("the file: missing means the defaults, broken JSON a warning", () => {
 
 test("every action has a default and a description", () => {
   // Enter and the queue key cover these two; they are there to be bound by hand.
-  const optIn = new Set(["submit.steer", "submit.queue"])
+  // A single key that approves is opt-in: typed early, it would answer an approval unseen.
+  const optIn = new Set(["submit.steer", "submit.queue", "dialog.yes"])
   for (const action of Object.keys(ACTIONS) as (keyof typeof ACTIONS)[]) {
     if (optIn.has(action)) expect(defaults[action]).toEqual([])
     else expect(defaults[action].length).toBeGreaterThan(0)

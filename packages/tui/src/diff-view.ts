@@ -1,10 +1,11 @@
-import type { ToolLine } from "@amira/api"
+import { plural, type ToolLine } from "@amira/api"
 import {
   type Component,
   graphemes,
   type RenderContext,
   type StyleFn,
   stripAnsi,
+  TAB_WIDTH,
   type Theme,
   textWidth,
   themeToken,
@@ -42,19 +43,55 @@ function styleOf(kind: ToolLine["kind"], theme: Theme): StyleFn {
     case "warning":
       return theme.warning
     case "text":
+    // A diff's unchanged lines read as the code they are; its signs and numbers are muted.
+    case "diff-context":
       return theme.text
     default:
-      // Output, file content, context and hunk gaps recede behind the conversation.
+      // Output, file content and hunk gaps recede behind the conversation.
       return theme.muted
   }
 }
 
 const FILE_HEADER = /^(?:--- |\+\+\+ |diff )/
 
+/** Tabs as spaces to the next multiple of TAB_WIDTH, as the terminal and Markdown code draw them. */
+export function expandTabs(line: string): string {
+  if (!line.includes("\t")) return line
+  let out = ""
+  for (const part of line.split(/(\t)/)) {
+    out += part === "\t" ? " ".repeat(TAB_WIDTH - (textWidth(out) % TAB_WIDTH)) : part
+  }
+  return out
+}
+
+/**
+ * A line of program output as a terminal leaves it: escape sequences out, a carriage return
+ * starting the line over (progress output such as "10%\r45%\r99%" shows as "99%"; the one of a
+ * CRLF goes), a backspace taking back the character before it, tabs to their stops. Line
+ * breaks inside it become spaces: a row is one line.
+ */
+export function terminalText(text: string): string {
+  const one = (line: string) => {
+    let s = line.replace(/\r+$/, "")
+    if (s.includes("\r")) {
+      const parts = s.split("\r")
+      s = parts.findLast((p) => p !== "") ?? ""
+    }
+    if (s.includes("\b")) {
+      const chars: string[] = []
+      for (const c of s) {
+        if (c === "\b") chars.pop()
+        else chars.push(c)
+      }
+      s = chars.join("")
+    }
+    return expandTabs(s)
+  }
+  return stripAnsi(text).split("\n").map(one).join(" ")
+}
+
 function cleanText(text: string): string {
-  return stripAnsi(text)
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\t/g, "  ")
+  return terminalText(text)
 }
 
 /**
@@ -315,7 +352,7 @@ export class DiffView implements Component {
     const shown = this.lines.length > this.maxLines ? this.lines.slice(0, this.maxLines) : this.lines
     const out = renderToolLines(shown, ctx.theme, width)
     if (shown.length < this.lines.length) {
-      out.push(ctx.theme.muted(`${glyphs.more} ${this.lines.length - shown.length} more lines`))
+      out.push(ctx.theme.muted(`${glyphs.more} ${plural(this.lines.length - shown.length, "more line")}`))
     }
     return out
   }

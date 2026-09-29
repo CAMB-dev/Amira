@@ -69,6 +69,24 @@ interface Paste {
   width: number
 }
 
+/** The content and caret at one point, for undo and redo. */
+interface Snapshot {
+  lines: string[]
+  line: number
+  col: number
+  pastes: Map<string, Paste>
+  nextPaste: number
+  nextToken: number
+}
+
+/** What the last change was, so that a run of typing (or of deleting) undoes as one step. */
+type EditKind = "type" | "delete" | "other"
+
+/** Undo steps kept at most. */
+const UNDO_LIMIT = 200
+/** Killed texts kept for yanking. */
+const KILL_RING = 10
+
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
 /**
@@ -121,6 +139,16 @@ export class Editor implements Component {
   private nextToken = TOKEN_BASE
   private changes = 0
   private readonly promptWidth: number
+  private undoStack: Snapshot[] = []
+  private redoStack: Snapshot[] = []
+  /** The kind of the last recorded change; a different one (or a caret move) starts a new undo step. */
+  private lastEdit: EditKind | undefined
+  /** Texts cut with the kill keys, newest last; each is the content as parts, pastes kept folded. */
+  private killRing: EditorPart[][] = []
+  /** The last key killed text, so that kills in a row join into one. */
+  private lastKilled = false
+  /** Inside one change made of several (a yank of several parts): recorded once, before it. */
+  private batching = false
 
   constructor(private opts: EditorOptions = {}) {
     this.promptWidth = visibleWidth(opts.prompt ?? "")
@@ -158,8 +186,12 @@ export class Editor implements Component {
     return parts
   }
 
-  /** Replaces the content, folding the `{ paste }` parts, and puts the caret at the end. Does not call `onChange`. */
+  /**
+   * Replaces the content, folding the `{ paste }` parts, and puts the caret at the end. Does not
+   * call `onChange`. Undo brings the content before it back.
+   */
   setParts(parts: EditorPart[]): void {
+    this.record("other")
     this.resetPastes()
     const text = parts
       .map((p) => (typeof p === "string" ? escapeTokens(normalize(p)) : this.addPaste(normalize(p.paste))))
@@ -215,6 +247,8 @@ export class Editor implements Component {
 
   /** Replaces the `count` UTF-16 units before the caret, on its line, with `text`. */
   replaceBeforeCaret(count: number, text: string): void {
+    this.record("other")
+    this.lastEdit = "other"
     const from = Math.max(0, this.col - count)
     if (this.pastes.size) this.dropPastes({ line: this.line, col: from }, { line: this.line, col: this.col })
     this.setLine(this.line, this.current.slice(0, from) + this.current.slice(this.col))
@@ -232,6 +266,8 @@ export class Editor implements Component {
 
   /** Inserts normalized text as it is, placeholders included. */
   private insertRaw(text: string): void {
+    // One character typed continues a run of typing; anything longer is a step of its own.
+    this.record(!/\s/.test(text) && graphemes(text).length === 1 ? "type" : "other")
     const parts = text.split("\n")
     const before = this.current.slice(0, this.col)
     const after = this.current.slice(this.col)
@@ -264,11 +300,16 @@ export class Editor implements Component {
       return true
     }
     if (e.type !== "key") return false
+    this.lastKilled = false
     if ((this.opts.isSubmit ?? isSubmitKey)(e)) {
       if (this.isEmpty) return false
       const text = this.getText()
       const info: SubmitInfo = { display: this.getDisplayText(), parts: this.getParts() }
       this.clear()
+      // A new message: what undo remembers was the one just sent.
+      this.undoStack = []
+      this.redoStack = []
+      this.lastEdit = undefined
       this.opts.onSubmit?.(text, info)
       return true
     }
@@ -304,6 +345,74 @@ export class Editor implements Component {
     return false
   }
 
+  /** Whether the caret is on the first visual row (a wrapped line has several), as last drawn. */
+  get onFirstRow(): boolean {
+    return this.caretRow() === 0
+  }
+
+  /** Whether the caret is on the last visual row, as last drawn. */
+  get onLastRow(): boolean {
+    return this.caretRow() === this.totalRows() - 1
+  }
+
+  /** Undoes the last change (a run of typing or deleting counts as one); false when there is none. */
+  undo(): boolean {
+    const prev = this.undoStack.pop()
+    if (!prev) return false
+    this.redoStack.push(this.snapshot())
+    this.restore(prev)
+    return true
+  }
+
+  /** Redoes the change undone last; false when there is none. */
+  redo(): boolean {
+    const next = this.redoStack.pop()
+    if (!next) return false
+    this.undoStack.push(this.snapshot())
+    this.restore(next)
+    return true
+  }
+
+  /** Cuts from the start of the caret's line to the caret (Ctrl+U), for yank. */
+  killToLineStart(): boolean {
+    if (this.col === 0) return this.killTo(this.charLeft(), "before")
+    return this.killTo({ line: this.line, col: 0 }, "before")
+  }
+
+  /** Cuts from the caret to the end of its line (Ctrl+K); at the end, the line break. */
+  killToLineEnd(): boolean {
+    if (this.col === this.current.length) return this.killTo(this.charRight(), "after")
+    return this.killTo({ line: this.line, col: this.current.length }, "after")
+  }
+
+  /** Cuts the word before the caret and the spaces after it (Ctrl+W). */
+  killWordBefore(): boolean {
+    const text = this.current
+    let i = this.col
+    if (i === 0) return this.killTo(this.charLeft(), "before")
+    while (i > 0 && /\s/.test(text[i - 1]!)) i--
+    while (i > 0 && !/\s/.test(text[i - 1]!)) i--
+    return this.killTo({ line: this.line, col: i }, "before")
+  }
+
+  /** Inserts the text cut last (Ctrl+Y), folded pastes folded again. */
+  yank(): boolean {
+    const parts = this.killRing.at(-1)
+    if (!parts?.length) return true
+    this.record("other")
+    this.batching = true
+    try {
+      for (const p of parts) {
+        if (typeof p === "string") this.insertRaw(escapeTokens(normalize(p)))
+        else this.insertRaw(this.addPaste(normalize(p.paste)))
+      }
+    } finally {
+      this.batching = false
+    }
+    this.lastEdit = undefined
+    return true
+  }
+
   render(width: number, { theme }: RenderContext): string[] {
     if (width !== this.width) {
       this.width = width
@@ -315,7 +424,9 @@ export class Editor implements Component {
     if (this.isEmpty && this.opts.placeholder) {
       this.top = 0
       this.hidden = { above: 0, below: 0 }
-      return [theme.accent(prompt) + caret + theme.muted(this.opts.placeholder)]
+      // Cut to the row: a placeholder longer than the box must not wrap or push past its edge.
+      const room = Math.max(0, width - this.promptWidth)
+      return [theme.accent(prompt) + caret + theme.muted(truncateToWidth(this.opts.placeholder, room, "…"))]
     }
     const total = this.totalRows()
     const caretRow = this.caretRow()
@@ -409,6 +520,93 @@ export class Editor implements Component {
     if (this.opts.onChange) this.opts.onChange(this.getText())
   }
 
+  // --- Undo, redo and the kill ring ---
+
+  private snapshot(): Snapshot {
+    return {
+      lines: this.lines.slice(),
+      line: this.line,
+      col: this.col,
+      pastes: new Map(this.pastes),
+      nextPaste: this.nextPaste,
+      nextToken: this.nextToken,
+    }
+  }
+
+  private restore(s: Snapshot): void {
+    this.replaceAll(s.lines.slice())
+    this.line = s.line
+    this.col = s.col
+    this.pastes = new Map(s.pastes)
+    this.nextPaste = s.nextPaste
+    this.nextToken = s.nextToken
+    this.lastEdit = undefined
+    this.changed()
+  }
+
+  /**
+   * Remembers the content before a change of `kind`, unless it continues a run of the same kind
+   * (typing a word, holding Backspace): such a run undoes as one step.
+   */
+  private record(kind: EditKind): void {
+    if (this.batching) return
+    const continues = kind !== "other" && kind === this.lastEdit
+    this.lastEdit = kind
+    if (continues) return
+    const top = this.undoStack.at(-1)
+    if (top && top.line === this.line && top.col === this.col && sameLines(top.lines, this.lines)) return
+    this.undoStack.push(this.snapshot())
+    if (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift()
+    this.redoStack = []
+  }
+
+  /** Cuts between the caret and `pos` into the kill ring; kills in a row join into one entry. */
+  private killTo(pos: { line: number; col: number }, side: "before" | "after"): boolean {
+    if (pos.line === this.line && pos.col === this.col) {
+      this.lastKilled = true
+      return true
+    }
+    const [a, b] =
+      pos.line < this.line || (pos.line === this.line && pos.col < this.col)
+        ? [pos, { line: this.line, col: this.col }]
+        : [{ line: this.line, col: this.col }, pos]
+    const cut = this.partsBetween(a, b)
+    const joining = this.lastKilled && this.killRing.length > 0
+    if (joining) {
+      const last = this.killRing[this.killRing.length - 1]!
+      this.killRing[this.killRing.length - 1] = side === "before" ? [...cut, ...last] : [...last, ...cut]
+    } else {
+      this.killRing.push(cut)
+      if (this.killRing.length > KILL_RING) this.killRing.shift()
+    }
+    this.deleteTo(pos, "other")
+    this.lastEdit = undefined
+    this.lastKilled = true
+    return true
+  }
+
+  /** The content between two positions as parts, folded pastes kept apart. */
+  private partsBetween(a: { line: number; col: number }, b: { line: number; col: number }): EditorPart[] {
+    const rows: string[] = []
+    for (let i = a.line; i <= b.line; i++) {
+      const text = this.lines[i]!
+      rows.push(text.slice(i === a.line ? a.col : 0, i === b.line ? b.col : text.length))
+    }
+    const joined = rows.join("\n")
+    if (!this.pastes.size) return joined ? [joined] : []
+    const parts: EditorPart[] = []
+    let last = 0
+    for (const m of joined.matchAll(TOKEN_PATTERN)) {
+      const paste = this.pastes.get(m[0])
+      if (!paste) continue
+      if (m.index > last) parts.push(joined.slice(last, m.index))
+      parts.push({ paste: paste.text })
+      last = m.index + m[0].length
+    }
+    if (last < joined.length) parts.push(joined.slice(last))
+    return parts
+  }
+
   // --- Lines and their layout cache ---
 
   private replaceAll(lines: string[]): void {
@@ -447,11 +645,26 @@ export class Editor implements Component {
     return fresh
   }
 
+  /**
+   * How a line wraps: at the last space that fits, as the transcript wraps words, so a word is
+   * not split across rows; a word longer than a row (or text without spaces, such as CJK) is
+   * split where the row ends. The space stays at the end of its row.
+   */
   private wrap(text: string, max: number): LineLayout {
     if (ASCII_PRINTABLE.test(text)) {
       const starts = [0]
-      for (let s = max; s < text.length; s += max) starts.push(s)
-      return { text, max, starts, full: text.length > 0 && text.length % max === 0 }
+      let s = 0
+      while (text.length - s > max) {
+        // A space right after a full row: the words fit exactly, the next row starts with it.
+        let next = s + max
+        if (text[next] !== " ") {
+          const space = text.lastIndexOf(" ", next - 1)
+          if (space >= s) next = space + 1
+        }
+        starts.push(next)
+        s = next
+      }
+      return { text, max, starts, full: text.length > 0 && text.length - s === max }
     }
     // Most lines fit on one row; the whole line's width says so without splitting it.
     if (!text.includes("\t") && !(this.pastes.size && TOKEN_TEST.test(text))) {
@@ -459,17 +672,36 @@ export class Editor implements Component {
       if (w <= max) return { text, max, starts: [0], full: w === max }
     }
     const starts = [0]
+    const gs = graphemes(text)
     let used = 0
     let pos = 0
-    for (const g of graphemes(text)) {
-      let w = this.cellWidth(g, used)
-      if (used + w > max) {
+    let rowStart = 0
+    /** Where the row may break: after its last space (grapheme index and offset); -1 for none. */
+    let breakAt = -1
+    let breakPos = 0
+    let i = 0
+    while (i < gs.length) {
+      const g = gs[i]!
+      const w = this.cellWidth(g, used)
+      if (used + w > max && pos > rowStart) {
+        // Inside a word, go back to after the row's last space and start the next row there.
+        if (breakAt !== -1 && breakPos > rowStart && !isSpace(g)) {
+          i = breakAt
+          pos = breakPos
+        }
         starts.push(pos)
+        rowStart = pos
         used = 0
-        w = this.cellWidth(g, used)
+        breakAt = -1
+        continue
       }
       used += w
       pos += g.length
+      i++
+      if (isSpace(g)) {
+        breakAt = i
+        breakPos = pos
+      }
     }
     return { text, max, starts, full: used >= max }
   }
@@ -559,12 +791,15 @@ export class Editor implements Component {
     this.line = pos.line
     this.col = pos.col
     this.goalCol = undefined
+    // Typing after the caret moved is a step of its own.
+    this.lastEdit = undefined
     return true
   }
 
   /** Deletes between the caret and `pos`, joining lines when the range crosses a line break. */
-  private deleteTo(pos: { line: number; col: number }): boolean {
+  private deleteTo(pos: { line: number; col: number }, kind: EditKind = "delete"): boolean {
     if (pos.line === this.line && pos.col === this.col) return true
+    this.record(kind)
     const [a, b] =
       pos.line < this.line || (pos.line === this.line && pos.col < this.col)
         ? [pos, { line: this.line, col: this.col }]
@@ -619,6 +854,16 @@ export class Editor implements Component {
     while (i < text.length && !/\s/.test(text[i]!)) i++
     return { line: this.line, col: i }
   }
+}
+
+/** A space or tab: where a row may break. */
+const isSpace = (g: string) => g === " " || g === "\t"
+
+/** Whether two line lists hold the same lines. */
+function sameLines(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
 }
 
 function normalize(text: string): string {

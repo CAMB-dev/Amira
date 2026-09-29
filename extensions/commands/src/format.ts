@@ -1,13 +1,14 @@
-import type { AssistantMessage, ContextPreview, Message, Usage } from "@amira/api"
+import {
+  type AssistantMessage,
+  type ContextPreview,
+  formatTokens,
+  type Message,
+  padCells,
+  textCells,
+  type Usage,
+} from "@amira/api"
 
-/** Compact token counts: 999, 1.2k, 46k, 2.5M. */
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(Math.round(n))
-  const k = n / 1000
-  if (Number(k.toFixed(1)) < 10) return `${k.toFixed(1)}k`
-  if (Math.round(k) < 1000) return `${Math.round(k)}k`
-  return `${(n / 1_000_000).toFixed(1)}M`
-}
+export { formatTokens }
 
 /** "$1.25", "$0.012", "$0.0004"; tinier amounts show as "<$0.0001". */
 export function formatCost(usd: number): string {
@@ -42,12 +43,13 @@ const percent = (part: number, whole: number) => (whole > 0 ? `${Math.round((par
 export function table(rows: string[][]): string {
   const widths: number[] = []
   for (const row of rows) {
-    for (const [i, cell] of row.entries()) widths[i] = Math.max(widths[i] ?? 0, cell.length)
+    for (const [i, cell] of row.entries()) widths[i] = Math.max(widths[i] ?? 0, textCells(cell))
   }
+  // Measured in terminal cells, so CJK and emoji cells line up too.
   return rows
     .map((row) =>
       row
-        .map((cell, i) => (i === row.length - 1 ? cell : cell.padEnd(widths[i]!)))
+        .map((cell, i) => (i === row.length - 1 ? cell : padCells(cell, widths[i]!)))
         .join("  ")
         .trimEnd(),
     )

@@ -1,4 +1,5 @@
 import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
+import { isSummaryMessage } from "@amira/core"
 import {
   closeStyles,
   FullScreenRenderer,
@@ -20,17 +21,23 @@ import {
   type BlockEnv,
   type BlockImages,
   type BlockRenders,
+  DetailNoticeBlock,
+  exploredRun,
   fixedLine,
+  groupExplored,
   LinesBlock,
+  ReasoningBlock,
   ReplyBlock,
   SubagentGroupBlock,
+  SummaryBlock,
   ToolBlock,
   userBlock,
 } from "./blocks.ts"
-import { commandEchoLines, compactTokens } from "./format.ts"
+import { copyToClipboard } from "./clipboard.ts"
+import { commandEchoLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
-import { historySeparator } from "./history.ts"
+import { sessionBoundary, summaryText } from "./history.ts"
 import {
   endNode,
   isActive,
@@ -41,8 +48,9 @@ import {
   trackGroup,
   updateNode,
 } from "./subagents.ts"
-import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
-import { lastReply, TranscriptPane } from "./transcript-pane.ts"
+import { OUTPUT_LINES } from "./tool-view.ts"
+import { commandOutputLines, type NoticeLevel, noticeLines, replyEndNotice } from "./transcript.ts"
+import { TranscriptPane } from "./transcript-pane.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
 /** The renderer's shortest time between frames. */
@@ -60,6 +68,8 @@ const EDGE_SCROLL_MAX = 6
 const MULTI_CLICK_MS = 400
 /** Copies longer than this (in UTF-16 units) may be more than a terminal takes through OSC 52. */
 const OSC52_SAFE = 100_000
+/** Columns the find bar keeps for its query, at the least, before its keys. */
+const FIND_QUERY_ROOM = 16
 
 /**
  * The full-screen view (D84): the conversation is kept as blocks on the alternate screen and
@@ -86,7 +96,17 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Calls of the running step, in call order. */
   let stepCalls: ToolBlock[] = []
   let reply: ReplyBlock | undefined
+  /** The reasoning of the reply streaming now, while it thinks. */
+  let reasoning: ReasoningBlock | undefined
   let overlay = false
+
+  /** The thinking is over: its line says for how long. True when it was shown. */
+  const endReasoning = (): boolean => {
+    if (!reasoning) return false
+    reasoning.finish()
+    reasoning = undefined
+    return true
+  }
   const findInput = new LineInput()
   let finding = false
   /** Rows of the transcript in the last frame, for mouse clicks. */
@@ -119,8 +139,19 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       nodes,
       groups,
       renders,
+      outputLines: host.settings.shellOutputLines ?? OUTPUT_LINES,
       ...(images ? { images } : {}),
     }
+  }
+
+  /** Makes the exploring calls in a row around `block` one "Explored" row. */
+  function regroup(block: Block): void {
+    const run = exploredRun(pane.blocks, block, env(terminal.columns))
+    if (!run) return
+    pane.insertAfter(run.replaces.at(-1)!, run.group)
+    const selected = pane.selected
+    for (const b of run.replaces) pane.remove(b)
+    if (selected && run.replaces.includes(selected)) pane.selected = run.group
   }
 
   const root = new View((width, ctx) => {
@@ -133,13 +164,15 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     const rows = pane.render(env(width), paneRows)
     // The transcript is at the top of the screen: its rows are the screen's.
     for (const p of pane.placements) ctx.place?.(p)
-    // The row under the transcript says when there is more below.
+    // The row under the transcript says how much is below.
+    const n = pane.rowsBelow
+    const rowsBelow = `${n} row${n === 1 ? "" : "s"} below`
     const below = pane.following
       ? ""
       : truncateToWidth(
           pane.unseen
-            ? theme.accent(`  ↓ new output${endHint()}`)
-            : theme.muted(`  ↓ more below${endHint()}`),
+            ? theme.accent(`  ↓ new output · ${rowsBelow}${endHint()}`)
+            : theme.muted(`  ↓ ${rowsBelow}${endHint()}`),
           width,
           glyphs.more,
         )
@@ -163,40 +196,72 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         ? "no matches"
         : ""
     const next = keys.label("find.next")
+    const prev = keys.label("find.prev")
     const close = keys.label("find.close")
-    // The newer-match key is in the key reference (the help key).
+    const head = `${theme.accent(glyphs.search)} find ${theme.muted(glyphs.searchPrompt)} `
+    // The query keeps room for what is typed (and the caret); the keys get the rest, the
+    // least needed going first.
+    const query = Math.max(FIND_QUERY_ROOM, visibleWidth(findInput.value) + 1)
     const hint = fitHint(
       [
         count && { text: count, priority: 5 },
         next && { text: `${next} older`, priority: 3 },
+        prev && { text: `${prev} newer`, priority: 2 },
         close && { text: `${close} close`, priority: 4 },
       ],
-      Math.max(10, Math.floor(width / 2)),
+      Math.max(0, width - visibleWidth(head) - query - 2),
     )
-    const head = `${theme.accent(glyphs.search)} find ${theme.muted(glyphs.searchPrompt)} `
     const room = Math.max(4, width - visibleWidth(head) - visibleWidth(hint) - 2)
     const input = findInput.render(room, theme, { focused: true, placeholder: "text in the transcript" })
     const pad = " ".repeat(Math.max(1, room - visibleWidth(input) + 2))
     return truncateToWidth(`${head}${input}${pad}${theme.muted(hint)}`, width, glyphs.more)
   }
 
+  /** The blocks a selection moves over (those with rows), and where `b` is among them. */
+  function position(b: Block, e: BlockEnv): string {
+    let at = 0
+    let count = 0
+    for (const x of pane.blocks) {
+      if (!pane.lines(x, e).length) continue
+      count++
+      if (x === b) at = count
+    }
+    return `${at} of ${count}`
+  }
+
+  /** What the open key does on a block: go into a reply's code blocks, open the sub-agent viewer. */
+  function opens(b: Block, e: BlockEnv): "code blocks" | "sub-agent" | undefined {
+    if (pane.codeBlocks(b).length) return "code blocks"
+    if (host.openSubagent && b.subagents(e).length) return "sub-agent"
+    return undefined
+  }
+
   function selectBar(width: number): string {
     const b = pane.selected!
+    const e = env(width)
     const fold = keys.label("select.toggle")
     const copy = keys.label("select.copy")
     const back = keys.label("select.exit")
-    const foldable = b.foldable(env(width))
+    const open = keys.label("select.open")
+    const code = pane.selectedCode
     // Moving between blocks is in the key reference (the help key).
-    const hint = fitHint(
-      [
-        { text: `${glyphs.pointer} ${b.kind} block ${b.index + 1} of ${pane.blocks.length}`, priority: 6 },
-        foldable && fold && { text: `${fold} fold`, priority: 5 },
-        copy && { text: `${copy} copy`, priority: 4 },
-        back && { text: `${back} back`, priority: 3 },
-      ],
-      width,
-    )
-    return theme.muted(hint)
+    const items = code
+      ? [
+          {
+            text: `${glyphs.pointer} code block ${code.index + 1} of ${code.count} in the reply`,
+            priority: 6,
+          },
+          copy && { text: `${copy} copy`, priority: 5 },
+          back && { text: `${back} reply`, priority: 5 },
+        ]
+      : [
+          { text: `${glyphs.pointer} ${b.label} ${position(b, e)}`, priority: 6 },
+          b.foldable(e) && fold && { text: `${fold} ${b.isFolded(e) ? "unfold" : "fold"}`, priority: 3 },
+          open && opens(b, e) && { text: `${open} ${opens(b, e)}`, priority: 3 },
+          copy && { text: `${copy} copy`, priority: 4 },
+          back && { text: `${back} back`, priority: 5 },
+        ]
+    return theme.muted(fitHint(items, width))
   }
 
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
@@ -218,8 +283,12 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     renderer.requestRender()
   }
 
-  function notice(level: NoticeLevel, text: string): void {
-    add(new LinesBlock("notice", (width, t) => noticeLines(t, level, text, width), text))
+  function noticeBlock(level: NoticeLevel, text: string): LinesBlock {
+    return new LinesBlock("notice", (width, t) => noticeLines(t, level, text, width), text)
+  }
+
+  function notice(level: NoticeLevel, text: string, detail?: string): void {
+    add(detail ? new DetailNoticeBlock(level, text, detail) : noticeBlock(level, text))
   }
 
   /** Ends the calls of the step that never finished: unstarted ones go, running ones read as cut short. */
@@ -237,23 +306,31 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
 
   /**
    * The text of the rows as they stay on the normal screen: styles closed, colors as allowed,
-   * and emoji asked for as they were measured, as the renderers write them.
+   * and emoji asked for as they were measured, as the renderers write them. A blank line
+   * sets it apart from the command that started Amira above it and the shell's prompt below.
    */
   function printout(): string {
     const color = isColorEnabled()
     const lines = pane.printout(env(terminal.columns))
-    return lines.map((l) => `${presentEmoji(closeStyles(color ? l : stripColors(l)))}\r\n`).join("")
+    const rows = lines.map((l) => `${presentEmoji(closeStyles(color ? l : stripColors(l)))}\r\n`).join("")
+    return `\r\n${rows}\r\n`
   }
 
-  function copy(text: string, what: string): void {
-    if (!text.trim()) {
-      host.showNote(`Nothing to copy in ${what}.`)
-      return
-    }
-    terminal.write(osc.clipboard(text))
-    host.showNote(
-      `Copied ${what} (${compactTokens(text.length)} characters) to the clipboard. Not there? Shift+drag selects text.`,
-    )
+  const copy = (text: string, what: string) => copyToClipboard(terminal, text, what, host.showNote)
+
+  /** The transcript starts afresh for another session: only the banner stays. */
+  function clearTranscript(): void {
+    settleStep()
+    reply = undefined
+    closeFind()
+    pane.clear((b) => b.kind === "banner")
+    // The old session's calls and sub-agents are not shown under the new one.
+    nodes.clear()
+    groups.clear()
+    callBlocks.clear()
+    owners.clear()
+    groupBlocks.clear()
+    tickSubagents()
   }
 
   function closeFind(): void {
@@ -339,12 +416,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       lastPress = { x: e.x, y: e.y, at: now, count }
       armed = e.y < paneRows
       if (!armed) return true
-      if (pane.selected) {
-        // A block selected with the keyboard is drawn a column narrower: drawn at full width
-        // first, the press lands on the text under it.
-        pane.selected = undefined
-        renderer.render()
-      }
+      pane.select(undefined)
       if (count === 2) pane.selectWord(e.y, e.x)
       else if (count === 3) pane.selectLine(e.y, e.x)
       else {
@@ -386,22 +458,55 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     return true
   }
 
+  /** Keys while a code block of the selected reply is selected. */
+  function codeKey(e: InputEvent): boolean {
+    if (keys.is(e, "select.exit") || keys.is(e, "select.back")) pane.leaveCode()
+    else if (keys.is(e, "select.prev")) pane.selectCode(-1)
+    else if (keys.is(e, "select.next")) pane.selectCode(1)
+    else if (keys.is(e, "select.copy")) copy(pane.codeText(), "the code block")
+    else if (keys.is(e, "select.toggle") || keys.is(e, "select.open")) {
+      const back = keys.label("select.exit")
+      host.showNote(`A code block does not fold${back ? `; ${back} goes back to the reply` : ""}.`)
+    } else return false
+    return true
+  }
+
+  /** The open key on a block: into a reply's code blocks, or the viewer of its sub-agents. */
+  function openBlock(block: Block, renv: BlockEnv): void {
+    const what = opens(block, renv)
+    if (what === "code blocks") {
+      // Folded, long code is cut short: its code blocks are shown whole to be picked.
+      if (block.isFolded(renv)) {
+        block.toggleFold(renv)
+        renderer.render()
+      }
+      pane.selectCode(0)
+    } else if (what === "sub-agent") {
+      const list = block.subagents(renv)
+      // The one still running, else the latest.
+      const target = list.findLast(isActive) ?? list[list.length - 1]!
+      host.openSubagent?.(target.id)
+    } else host.showNote(`Nothing in this ${block.label} opens: no code blocks, no sub-agents.`)
+  }
+
   function selectKey(e: InputEvent): boolean {
     const block = pane.selected!
     const renv = env(terminal.columns)
-    if (keys.is(e, "select.exit")) pane.selected = undefined
+    if (pane.selectedCode && codeKey(e)) return true
+    if (keys.is(e, "select.exit")) pane.select(undefined)
     else if (keys.is(e, "select.prev")) pane.selectPrev()
     else if (keys.is(e, "select.next")) pane.selectNext()
     else if (keys.is(e, "select.toggle")) {
       if (block.foldable(renv)) {
         block.toggleFold(renv)
         pane.reveal(block)
-      } else host.showNote("Nothing in this block folds.")
-    } else if (keys.is(e, "select.copy")) copy(block.copyText(), `the ${block.kind} block`)
+      } else host.showNote(`Nothing in this ${block.label} folds.`)
+    } else if (keys.is(e, "select.open")) openBlock(block, renv)
+    else if (keys.is(e, "select.copy")) copy(block.copyText(), `the ${block.label}`)
     else {
       // Typing goes back to the input.
       if (e.type === "paste" || (e.type === "key" && e.text !== undefined && !e.ctrl && !e.alt))
-        pane.selected = undefined
+        pane.select(undefined)
       return false
     }
     return true
@@ -428,10 +533,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     else if (keys.is(e, "select.start")) pane.selectPrev()
     else if (keys.is(e, "find")) {
       finding = true
-      pane.selected = undefined
+      pane.select(undefined)
       findInput.value = ""
-    } else if (keys.is(e, "copy.reply")) copy(lastReply(pane)?.copyText() ?? "", "the last reply")
-    else return false
+    } else return false
     return true
   }
 
@@ -488,7 +592,21 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       pane.clearText()
       add(userBlock(m))
     },
+    reasoningDelta(text) {
+      if (!reasoning) {
+        // Thinking after some text: that text is a reply of its own, before it.
+        if (reply?.source.trim()) {
+          reply.finish()
+          reply = undefined
+        }
+        reasoning = new ReasoningBlock("", undefined, Date.now(), true)
+        pane.add(reasoning)
+      }
+      reasoning.append(text)
+      pane.changed()
+    },
     replyDelta(text) {
+      endReasoning()
       if (!reply) {
         reply = new ReplyBlock("", true, host.hyperlinks)
         pane.add(reply)
@@ -497,7 +615,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       pane.changed()
     },
     replyEnd(calls) {
-      let shown = false
+      let shown = endReasoning()
       if (reply) {
         reply.finish()
         if (reply.source.trim()) shown = true
@@ -540,6 +658,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       b.end = end
       b.touch()
       pane.changed()
+      regroup(b)
       return true
     },
     turnEnd() {
@@ -622,16 +741,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       const last = pane.last?.kind
       // Right after its command it hangs under the echo; on its own it is a notice.
       if (last !== "command" && last !== "command-output") return notice(level, text)
-      add(
-        new LinesBlock(
-          "command-output",
-          (width, t) => {
-            const style = level === "error" ? t.error : level === "warning" ? t.warning : t.text
-            return commandOutputLines(style, t.muted, text, width)
-          },
-          text,
-        ),
-      )
+      add(new LinesBlock("command-output", (width, t) => commandOutputLines(t, level, text, width), text))
     },
     dialogEcho: (draw) =>
       add(
@@ -641,29 +751,43 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           stripAnsi(draw(Number.POSITIVE_INFINITY).join("\n")),
         ),
       ),
-    history(messages: Message[], session) {
+    openSession(boundary, messages: Message[], switched) {
+      if (switched) clearTranscript()
+      add(new LinesBlock("history", (w, t) => [sessionBoundary(t, boundary, w)], ""))
       const results = new Map<string, ToolResult>()
       for (const m of messages) {
         if (m.role === "toolResult") results.set(m.toolCallId, { content: m.content, isError: m.isError })
       }
+      const blocks: Block[] = []
       for (const m of messages) {
-        if (m.role === "user") pane.add(userBlock(m))
+        // A compaction's summary is a folded block of its own; the reply that took it goes with it.
+        if (isSummaryMessage(m)) {
+          if (m.role === "user") blocks.push(new SummaryBlock(summaryText(m)))
+        } else if (m.role === "user") blocks.push(userBlock(m))
         else if (m.role === "assistant") {
           for (const b of m.content) {
-            if (b.type === "text" && b.text.trim()) pane.add(new ReplyBlock(b.text, false, host.hyperlinks))
+            if (b.type === "thinking" && (b.text.trim() || b.redacted))
+              blocks.push(new ReasoningBlock(b.text, undefined))
+            else if (b.type === "text" && b.text.trim())
+              blocks.push(new ReplyBlock(b.text, false, host.hyperlinks))
             else if (b.type === "toolCall") {
               const call = new ToolBlock(b.id, b.name, b.args, host.sessionId())
               const result = results.get(b.id)
               call.end = result ? { result } : { result: { content: [], isError: true }, rejected: "aborted" }
-              pane.add(call)
+              blocks.push(call)
             }
           }
+          // How the reply ended, when it did not end well: as the live transcript said it.
+          const end = replyEndNotice(m)
+          if (end) blocks.push(noticeBlock(end.level, end.text))
         }
       }
-      add(new LinesBlock("history", (_w, t) => [historySeparator(t, session)], ""))
+      for (const b of groupExplored(blocks, env(terminal.columns))) pane.add(b)
+      renderer.requestRender()
     },
     leaveSession() {
       settleStep()
+      endReasoning()
       reply?.finish()
       reply = undefined
     },

@@ -41,12 +41,13 @@ export async function* withRetry(
         break
       }
       if (CONTENT.has(ev.type)) content = true
-      yield ev
+      // The final failure says how often it was retried.
+      yield ev.type === "error" && attempt > 0 && ev.error.code !== "aborted" ? retried(ev, attempt) : ev
     }
     if (!failed) return
     const delayMs = failed.retryAfterMs ?? base * 2 ** attempt
     if (delayMs > max) {
-      yield failed
+      yield attempt > 0 ? retried(failed, attempt) : failed
       return
     }
     yield { type: "retry", attempt: attempt + 1, maxRetries: retries, delayMs, error: failed.error }
@@ -60,6 +61,10 @@ export async function* withRetry(
       return
     }
   }
+}
+
+function retried(ev: ErrorEvent, retries: number): ErrorEvent {
+  return { ...ev, error: { ...ev.error, retries } }
 }
 
 /** Resolves true after ms, or false as soon as the signal aborts. */

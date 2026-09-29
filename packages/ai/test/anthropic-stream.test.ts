@@ -206,7 +206,7 @@ test("a refusal's stop_details go into the error message", async () => {
     usage: { output_tokens: 1 },
   } as any
   const e = last(await run(() => anthropicResponse(reply))) as ErrorEvent
-  expect(e.error).toEqual({
+  expect(e.error).toMatchObject({
     message: "the model refused to answer (stop_reason: refusal): cyber: Looks like malware.",
     code: "refusal",
   })
@@ -224,7 +224,7 @@ test("an in-stream overloaded error is retryable and keeps the partial message",
   )
   expect(terminal(evs)).toHaveLength(1)
   const e = last(evs) as ErrorEvent
-  expect(e.error).toEqual({ message: "Overloaded", status: 529, code: "overloaded_error" })
+  expect(e.error).toMatchObject({ message: "Overloaded", status: 529, code: "overloaded_error" })
   expect(e.retryable).toBe(true)
   expect(e.message.stopReason).toBe("error")
   expect(e.message.content).toEqual([{ type: "text", text: "par" }])
@@ -253,7 +253,7 @@ test("HTTP errors keep status and code; 429 and 5xx retry", async () => {
     return evs[0] as ErrorEvent
   }
   const rate = await httpErr(429, "rate_limit_error")
-  expect(rate.error).toEqual({
+  expect(rate.error).toMatchObject({
     message: "HTTP 429: rate_limit_error happened",
     status: 429,
     code: "rate_limit_error",
@@ -268,7 +268,7 @@ test("HTTP errors keep status and code; 429 and 5xx retry", async () => {
   expect(bad.retryable).toBe(false)
   expect(bad.message.stopReason).toBe("error")
   const plain = (await run(() => new Response("gateway down", { status: 502 })))[0] as ErrorEvent
-  expect(plain.error).toEqual({ message: "HTTP 502: gateway down", status: 502 })
+  expect(plain.error).toMatchObject({ message: "HTTP 502: gateway down", status: 502 })
   expect(plain.retryable).toBe(true)
 })
 

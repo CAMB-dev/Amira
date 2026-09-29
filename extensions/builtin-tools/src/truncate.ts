@@ -11,6 +11,13 @@ export interface Truncated {
   fullOutputPath?: string
 }
 
+/**
+ * The note `truncateOutput` leaves where it cut, for the model; frontends show it shorter. The
+ * groups: the lines left out, and where the full output is when it was saved.
+ */
+export const TRUNCATION_NOTE =
+  /^\[\.\.\. \d+ characters \((\d+) lines\) omitted\. (?:Full output saved to (.+?) — use the read tool.*|The full output could not be saved.*) \.\.\.\]$/
+
 export function toolOutputDir(): string {
   return join(tmpdir(), "amira", "tool-output")
 }

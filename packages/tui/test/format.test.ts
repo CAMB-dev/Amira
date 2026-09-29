@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
-import type { EventEnvelope } from "@amira/api"
-import { defaultTheme, RESET, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import type { EventEnvelope, Message } from "@amira/api"
+import { builtinPresenters } from "@amira/builtin-tools"
+import { defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import {
   bandRows,
   commandEchoLines,
@@ -8,9 +9,10 @@ import {
   subagentEndLine,
   subagentRows,
   summarizeArgs,
+  treeLayout,
   userLines,
 } from "../src/format.ts"
-import { historyLines } from "../src/history.ts"
+import { historyLines, sessionBoundary, summaryLines } from "../src/history.ts"
 import { isActive, type SubagentNode, stateNode } from "../src/subagents.ts"
 
 const plain = (lines: string[]) => lines.map(stripAnsi)
@@ -83,9 +85,12 @@ test("wrapped rows, wide characters and the note line stay on the band, which ne
     const text = plain(rows).map((r) => r.trimEnd())
     expect(text[0]).toBe("")
     expect(text.at(-1)).toBe("")
-    expect(text.at(-2)).toBe("  └ Loaded skill review".slice(0, width).trimEnd())
+    // The note wraps under "└ " rather than being cut.
+    const note = text.findIndex((r) => r.startsWith("  └ "))
+    const noteText = text.slice(note, -1).map((r) => r.slice(4))
+    expect(noteText.join(" ").replace(/\s+/g, " ").trim()).toBe("Loaded skill review")
     // Every word is there, under the prompt symbol.
-    expect(text.slice(1, -2).join(" ").replace(/\s+/g, " ")).toContain("and more words here")
+    expect(text.slice(1, note).join(" ").replace(/\s+/g, " ")).toContain("and more words here")
   }
   // Narrower than the text can wrap to: cut to the width, not wider.
   expectBand(userLines(banded, message, 6), 6)
@@ -110,7 +115,8 @@ test("a wrapped echo keeps the band after the reset that ends its style on a row
   const rows = commandEchoLines(banded, `/model ${"x".repeat(30)}`, 20)
   expectBand(rows, 20)
   expect(rows.length).toBeGreaterThan(3)
-  expect(rows.join("")).toContain(RESET)
+  // Its rows after the first hang under the command, past "› ".
+  expect(rows.slice(2, -1).every((r) => stripAnsi(r).startsWith("  x"))).toBe(true)
   for (const r of rows) {
     const resets = r.split("\x1b[0m").slice(1)
     for (const after of resets) expect(after.startsWith(BAND)).toBe(true)
@@ -123,7 +129,7 @@ test("with an unknown background, muted text on the band is drawn as normal text
   expect(rows[1]).toBe(`\x1b[48;5;242m› /status${" ".repeat(11)}\x1b[49m`)
 })
 
-test("a resumed history uses the transcript's blocks, the tool presenters and a named separator", () => {
+test("a resumed history starts at a boundary naming the session, then the transcript's blocks and presenters", () => {
   const lines = historyLines(
     defaultTheme,
     [
@@ -156,10 +162,12 @@ test("a resumed history uses the transcript's blocks, the tool presenters and a 
     {
       width: 60,
       presenters: { get: (name) => (name === "read" ? { result: () => "2 lines" } : undefined) },
-      session: { id: "s_42", updatedAt: new Date(2026, 8, 29, 14, 5).getTime() },
+      session: { id: "s_42", updatedAt: new Date(2026, 8, 29, 14, 5).getTime(), resumed: true },
     },
   )
   expect(plain(lines)).toEqual([
+    `── resumed s_42 · 2026-09-29 14:05 ${"─".repeat(25)}`,
+    "",
     "› fix it",
     "",
     "  Looking.",
@@ -170,9 +178,37 @@ test("a resumed history uses the transcript's blocks, the tool presenters and a 
     "  └ Invalid regular expression",
     "",
     "  Done.",
-    "",
-    "── resumed s_42 · 2026-09-29 14:05 ──",
   ])
+})
+
+test("a resumed shell command shows as many output lines as tui.shellOutputLines says", () => {
+  const messages: Message[] = [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "bash", args: { command: "ls" } }],
+      model: { provider: "p", model: "m" },
+    },
+    {
+      role: "toolResult",
+      toolCallId: "c1",
+      toolName: "bash",
+      content: [{ type: "text", text: "a\nb\nc\nd\n\nExit code: 0" }],
+      isError: false,
+    },
+  ]
+  const presenters = { get: (name: string) => builtinPresenters[name] }
+  const rows = (outputLines?: number) =>
+    plain(
+      historyLines(defaultTheme, messages, {
+        width: 60,
+        presenters,
+        ...(outputLines !== undefined ? { outputLines } : {}),
+      }),
+    ).filter((r) => r.trim() && !r.startsWith("──"))
+  // The presenter's own default: its last three lines.
+  expect(rows()).toEqual(["● bash ls", "  └ 4 lines", "    … 1 earlier line", "    b", "    c", "    d"])
+  expect(rows(1)).toEqual(["● bash ls", "  └ 4 lines", "    … 3 earlier lines", "    d"])
+  expect(rows(0)).toEqual(["● bash ls", "  └ 4 lines"])
 })
 
 test("a resumed reply renders as Markdown inside the assistant's gutter", () => {
@@ -193,16 +229,24 @@ test("a resumed reply renders as Markdown inside the assistant's gutter", () => 
     { width: 30 },
   )
   const rows = plain(lines)
-  expect(rows.slice(0, 6)).toEqual(["› fix it", "", "  Looking at it:", "", "  • one", ""])
+  expect(rows.slice(0, 8)).toEqual([
+    `── resumed ${"─".repeat(19)}`,
+    "",
+    "› fix it",
+    "",
+    "  Looking at it:",
+    "",
+    "  • one",
+    "",
+  ])
   // The code block is framed within the width less the gutter, every row indented.
-  const code = rows.slice(6, rows.indexOf("", 6))
+  const code = rows.slice(8, rows.indexOf("", 8))
   expect(code[0]).toStartWith("  ╭─ ts")
   expect(code.some((r) => r.includes("const a = 1"))).toBe(true)
   for (const r of code) {
     expect(r).toStartWith("  ")
     expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
   }
-  expect(rows.at(-1)).toBe("── resumed ──")
   expect(rows).toContain("● read a.ts")
 })
 
@@ -223,11 +267,68 @@ test("a sub-agent's end line says how it ended, its time, tokens and the start o
         defaultTheme,
       ),
     )
-  expect(line("done")).toBe("  └ ◆ US market trend ✓ explorer · 41.0s · 12.3k tok · Found it in a.ts")
+  expect(line("done")).toBe("  └ ◆ US market trend ✓ explorer · 41.0s · 12k tok · Found it in a.ts")
   expect(line("error", "model failed")).toBe(
-    "  └ ◆ US market trend ✗ explorer · 41.0s · 12.3k tok · model failed",
+    "  └ ◆ US market trend ✗ explorer · 41.0s · 12k tok · model failed",
   )
-  expect(line("aborted")).toBe("  └ ◆ US market trend ⊘ explorer · 41.0s · 12.3k tok · stopped")
+  expect(line("aborted")).toBe("  └ ◆ US market trend ⊘ explorer · 41.0s · 12k tok · stopped")
+})
+
+test("nested sub-agents keep the tree lines of the levels above them", () => {
+  const list = [{ depth: 1 }, { depth: 2 }, { depth: 3 }, { depth: 2 }, { depth: 1 }]
+  expect(treeLayout(list).map((r) => `${r.indent}${r.last ? "└" : "├"}`)).toEqual([
+    "  ├",
+    "  │ ├",
+    "  │ │ └",
+    "  │ └",
+    "  └",
+  ])
+})
+
+test("on a narrow screen a sub-agent's row cuts its title, keeping its role, time and tokens", () => {
+  const sub = {
+    title: "A rather long title for the task",
+    role: "explorer",
+    depth: 1,
+    tokens: 4_100,
+    startedAt: 1_000,
+  }
+  const [row] = subagentRows(sub, 13_500, 44, defaultTheme).map(stripAnsi)
+  expect(row).toEndWith("· explorer · 12s · 4.1k tok")
+  expect(row).toContain("…")
+  expect(visibleWidth(row!)).toBeLessThanOrEqual(44)
+})
+
+test("a stopped sub-agent's end line says why", () => {
+  const sub = { title: "Scan", role: "explorer", depth: 1, tokens: 0 }
+  const line = stripAnsi(
+    subagentEndLine(
+      sub,
+      { status: "aborted", note: "turn limit reached", durationMs: 3_000, tokens: 0 },
+      80,
+      defaultTheme,
+    ),
+  )
+  expect(line).toEndWith("· turn limit reached")
+})
+
+test("a background sub-agent's notice marks how it ended and wraps under its marker", () => {
+  const message = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: "report" }],
+    display: {
+      text: "◆ Scan the code ✗ explorer · 3s · 1.2k tok · HTTP 429 rate limited, try again later\n  changes kept: 2 files · /tmp/x.patch",
+      origin: "subagent",
+    },
+  }
+  const rows = userLines(defaultTheme, message, 40)
+  const shown = rows.map(stripAnsi)
+  expect(shown[0]).toStartWith("◆ Scan the code ✗ explorer")
+  expect(shown.slice(1).every((r) => r.startsWith("  "))).toBe(true)
+  expect(shown.join(" ").replace(/\s+/g, " ")).toContain("changes kept: 2 files · /tmp/x.patch")
+  expect(rows.every((r) => visibleWidth(r) <= 40)).toBe(true)
+  // The cross in the error color, not muted like the rest.
+  expect(rows[0]).toContain(defaultTheme.error("✗"))
 })
 
 test("a sub-agent's live rows: title, role, time and tokens, then its current tool cut to 40 characters", () => {
@@ -299,6 +400,8 @@ test("a resumed message with a display shows it and its note, not its content", 
     { width: 60 },
   ).map(stripAnsi)
   expect(lines).toEqual([
+    `── resumed ${"─".repeat(49)}`,
+    "",
     "› /review-pr 123",
     "  └ Loaded skill review-pr (120 lines)",
     "",
@@ -306,8 +409,49 @@ test("a resumed message with a display shows it and its note, not its content", 
     "",
     // A blank display falls back to the content.
     "› own text",
+  ])
+})
+
+test("a session boundary runs across the width; narrow, the name is cut before the rule", () => {
+  const b = { id: "s_42", resumed: true, updatedAt: new Date(2026, 8, 29, 14, 5).getTime() }
+  expect(stripAnsi(sessionBoundary(defaultTheme, b, 50))).toBe(
+    `── resumed s_42 · 2026-09-29 14:05 ${"─".repeat(15)}`,
+  )
+  expect(stripAnsi(sessionBoundary(defaultTheme, { id: "s_7", resumed: false }, 30))).toBe(
+    `── new session s_7 ${"─".repeat(11)}`,
+  )
+  const narrow = stripAnsi(sessionBoundary(defaultTheme, b, 20))
+  expect(narrow).toBe("── resumed s_42 … ──")
+  expect(Bun.stringWidth(narrow)).toBe(20)
+})
+
+test("a compaction's summary in a history is one folded line; its reply is left out", () => {
+  const lines = historyLines(
+    defaultTheme,
+    [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "The earlier part of this conversation was compacted. Summary:\n\nDid A.\nThen B.",
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Understood. I will continue from this summary." }],
+        model: { provider: "amira", model: "compaction" },
+      },
+      { role: "user", content: [{ type: "text", text: "go on" }] },
+    ],
+    { width: 60 },
+  ).map(stripAnsi)
+  expect(lines.slice(2)).toEqual(["▸ Compacted summary of earlier messages · 2 lines", "", "› go on"])
+  expect(summaryLines(defaultTheme, "Did A.", 60, false).map(stripAnsi)).toEqual([
+    "▾ Compacted summary of earlier messages",
     "",
-    "── resumed ──",
+    "  Did A.",
   ])
 })
 

@@ -1,4 +1,5 @@
-import { chmodSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import path from "node:path"
 import type { ProviderSettings } from "@amira/api"
 import { type FileLock, tryFileLock } from "../file-lock.ts"
 import { readJsonFile } from "./load.ts"
@@ -49,6 +50,26 @@ export function updateProviderInSettings(
     else next[id] = after
     writeJsonAtomic(file, { ...raw, providers: next })
     return result
+  })
+}
+
+/**
+ * Changes a settings file under its lock, keeping everything `change` leaves alone: it gets
+ * the parsed object ({} for a missing file) and returns the new one. Nothing is written when
+ * the result is the same. Returns whether the file changed.
+ */
+export function updateSettingsFile(
+  file: string,
+  change: (current: Record<string, unknown>) => Record<string, unknown>,
+): boolean {
+  mkdirSync(path.dirname(file), { recursive: true })
+  return withLock(file, () => {
+    const raw = readJsonFile(file) ?? {}
+    if (!isPlainObject(raw)) throw new SettingsError(file, ["must hold a JSON object"])
+    const next = change(structuredClone(raw))
+    if (JSON.stringify(next) === JSON.stringify(raw)) return false
+    writeJsonAtomic(file, next)
+    return true
   })
 }
 

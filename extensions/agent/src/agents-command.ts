@@ -1,30 +1,30 @@
-import type {
-  CommandCandidate,
-  CommandContext,
-  CommandDefinition,
-  Message,
-  SessionControl,
-  SubagentInfo,
-  ToolCallBlock,
-  ToolResultMessage,
+import {
+  type CommandCandidate,
+  type CommandContext,
+  type CommandDefinition,
+  clip,
+  formatElapsed,
+  formatTokens,
+  type Message,
+  plural,
+  type SessionControl,
+  type SubagentInfo,
+  subagentStateText,
+  type ToolCallBlock,
+  type ToolResultMessage,
 } from "@amira/api"
 
-export function formatTokens(n: number): string {
-  if (n < 1000) return String(n)
-  return n < 100_000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`
-}
+export { formatTokens }
 
+/** `text` on one line, cut to `max` terminal cells. */
 function oneLine(text: string, max: number): string {
-  const s = text.replace(/\s+/g, " ").trim()
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+  return clip(text.replace(/\s+/g, " ").trim(), max)
 }
 
-/** How long it has run (or ran), e.g. "12s" or "3m05s"; "queued" before it starts. */
+/** How long it has run (or ran), e.g. "12s" or "3m 05s"; "queued" before it starts. */
 export function elapsed(info: SubagentInfo, now: number): string {
   const ms = info.durationMs ?? (info.startedAt !== undefined ? now - info.startedAt : undefined)
-  if (ms === undefined) return "queued"
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`
+  return ms === undefined ? "queued" : formatElapsed(ms)
 }
 
 /** Tokens, and the cost when the model's prices are known. */
@@ -42,7 +42,8 @@ export function subagentSummary(info: SubagentInfo, now: number, taskChars = 60)
 /** Its status and how long it ran; just the status when that is not known (it never started). */
 function stateText(info: SubagentInfo, now: number): string {
   const known = info.durationMs !== undefined || info.startedAt !== undefined
-  return info.status === "queued" || !known ? info.status : `${info.status} · ${elapsed(info, now)}`
+  const state = subagentStateText(info.status)
+  return info.status === "queued" || !known ? state : `${state} · ${elapsed(info, now)}`
 }
 
 function blockText(content: Message["content"]): string {
@@ -113,16 +114,16 @@ export function transcriptText(
         if (isFinal) out.push(...text.split("\n"), "")
         else {
           const first = text.split("\n")[0]!
-          out.push(first.length > 100 || text.includes("\n") ? `${oneLine(first, 99)}…` : first, "")
+          out.push(text.includes("\n") ? `${oneLine(first, 98)} …` : oneLine(first, 100), "")
         }
       } else if (b.type === "toolCall") {
         const r = results.get(b.id)
         out.push(toolHead(b, r?.isError === true))
-        if (!r) out.push(finished ? "  └ (no result)" : "  └ running…")
+        if (!r) out.push(finished ? "  └ no result" : "  └ running")
         else {
           const lines = blockText(r.content).trim().split("\n")
-          const more = lines.length > 1 ? ` (+${lines.length - 1} lines)` : ""
-          out.push(`  └ ${oneLine(lines[0] || "(no output)", 100)}${more}`)
+          const more = lines.length > 1 ? ` (+${plural(lines.length - 1, "line")})` : ""
+          out.push(`  └ ${oneLine(lines[0] || "no output", 100)}${more}`)
         }
         if (b.name === "agent") {
           for (const kid of callKids(kids, b)) out.push(`  ◆ ${subagentSummary(kid, now)}`)
@@ -136,6 +137,7 @@ export function transcriptText(
   if (kids.length) out.push("")
   if (info.error && info.status !== "done") out.push(`✗ ${info.error}`)
   else if (!finished) out.push(`… ${waitingFor(info)}`)
+  else if (info.note) out.push(`⊘ ${info.note}`)
   else if (!last) out.push("(no reply)")
   while (out.at(-1) === "") out.pop()
   return out.join("\n")
@@ -155,8 +157,6 @@ export function findSubagent(list: SubagentInfo[], ref: string): SubagentInfo | 
 function defaultView(list: SubagentInfo[]): SubagentInfo | undefined {
   return list.findLast((s) => s.status === "running") ?? list.at(-1)
 }
-
-const LIVE_VIEW = "Open the live view"
 
 function label(s: SubagentInfo, i: number, now: number): string {
   return `${i + 1}. ${"  ".repeat(Math.max(0, s.depth - 1))}${subagentSummary(s, now)}`
@@ -204,24 +204,53 @@ function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
   const target = findSubagent(list, ref)
   if (!target) throw new Error(`no sub-agent "${ref}"; /agents lists them`)
   if (!live(target) || !ctx.session.stopSubagent(target.id)) {
-    ctx.print(`${target.title} (${target.role} ${target.id}) has already ended (${target.status}).`)
+    ctx.print(
+      `${target.title} (${target.role} ${target.id}) has already ended (${subagentStateText(target.status)}).`,
+    )
     return
   }
   ctx.print(`Stopped ${target.title} (${target.role} ${target.id}).`)
 }
 
 /**
- * /agents: this session's sub-agents. Without arguments a picker: choosing one prints its
- * transcript, and the first entry opens the live view where the frontend has one.
+ * /agents: this session's sub-agents. Without arguments a picker: choosing one opens the live
+ * view on it where the frontend has one (its p prints the snapshot), else prints its transcript.
  * `/agents <n|id>` prints one; `/agents view [<n|id>]` opens the live view on it;
  * `/agents stop <n|id|all>` stops one or every running one.
  */
-export function agentsCommand(): CommandDefinition {
+export interface AgentsCommandOptions {
+  /** The worktrees sub-agents left behind in this repository with their changes, newest first. */
+  keptWorktrees?: () => Promise<KeptWorktreeInfo[]>
+}
+
+/** A sub-agent's worktree left behind (worktree.ts KeptWorktree). */
+export interface KeptWorktreeInfo {
+  name: string
+  dir: string
+  patch?: string
+  modifiedAt: number
+  /** Announced to be deleted by the next sweep a day or more later. */
+  expiring: boolean
+}
+
+/** The kept worktrees as /agents worktrees lists them. */
+export function keptWorktreesText(list: KeptWorktreeInfo[], now = Date.now()): string {
+  if (!list.length) return "No sub-agent worktrees are left behind in this repository."
+  const rows = list.map((w) => {
+    const days = Math.floor((now - w.modifiedAt) / 86_400_000)
+    const age = days < 1 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`
+    const gone = w.expiring ? " · to be deleted" : ""
+    return `${w.dir} · changed ${age}${gone}${w.patch ? `\n  patch: ${w.patch}` : ""}`
+  })
+  return `Sub-agent worktrees kept with their changes (git apply <patch> takes them over; git worktree remove <dir> deletes one):\n${rows.join("\n")}`
+}
+
+export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinition {
   return {
     name: "agents",
     description: "Show the sub-agents of this session and what they did",
     args: {
-      hint: "[<n>|<id>|view [<n>|<id>]|stop <n>|<id>|all]",
+      hint: "[<n>|<id>|view [<n>|<id>]|stop <n>|<id>|all|worktrees]",
       complete(prefix, ctx) {
         const list = ctx.session.subagents()
         const now = Date.now()
@@ -251,13 +280,23 @@ export function agentsCommand(): CommandDefinition {
         if (/^\d+$/.test(prefix)) return out
         if (list.length) out.push({ value: "view", description: "Open the live view" })
         if (list.some(live)) out.push({ value: "stop", description: "Stop a running sub-agent" })
+        if (opts.keptWorktrees) out.push({ value: "worktrees", description: "Worktrees left with changes" })
         return out
       },
     },
     async run(args, ctx) {
+      if (args === "worktrees" && opts.keptWorktrees) {
+        ctx.print(keptWorktreesText(await opts.keptWorktrees()))
+        return
+      }
       const list = ctx.session.subagents()
       if (!list.length) {
-        ctx.print("No sub-agents in this session yet.")
+        const kept = (await opts.keptWorktrees?.()) ?? []
+        ctx.print(
+          kept.length
+            ? `No sub-agents in this session yet.\n${keptWorktreesText(kept)}`
+            : "No sub-agents in this session yet.",
+        )
         return
       }
       const stopping = /^stop(?:\s+(.*))?$/.exec(args)
@@ -276,13 +315,14 @@ export function agentsCommand(): CommandDefinition {
         return
       }
       const now = Date.now()
-      // The live view comes last, so a digit picks the sub-agent of that number.
-      const options = [...list.map((s, i) => label(s, i, now)), ...(ctx.openView ? [LIVE_VIEW] : [])]
-      const pick = await ctx.ui.select("Sub-agents", options, { signal: ctx.signal })
+      // A digit picks the sub-agent of that number.
+      const options = list.map((s, i) => label(s, i, now))
+      const title = ctx.openView ? "Sub-agents (Enter opens the live view; p there prints it)" : "Sub-agents"
+      const pick = await ctx.ui.select(title, options, { signal: ctx.signal })
       if (pick === undefined) return
-      if (pick === LIVE_VIEW) return openView(ctx, defaultView(list)!)
       const chosen = list[Number(/^(\d+)\./.exec(pick)?.[1]) - 1]
       if (!chosen) return
+      if (ctx.openView) return openView(ctx, chosen)
       // The pick may have taken a while; show it as it is now.
       const fresh = ctx.session.subagents()
       printTranscript(ctx, ctx.session, fresh.find((s) => s.id === chosen.id) ?? chosen, fresh)

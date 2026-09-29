@@ -176,7 +176,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   await waitFor(() => s.screen.inAltScreen, "the viewer")
   await waitFor(() => s.view().includes("● wait"), "the transcript")
   const lines = s.screen.lines
-  expect(lines[0]).toMatch(/^◆ Check explorer running · \d+s · 1\.5k tok · explorer · \S+ +1\/1$/)
+  expect(lines[0]).toMatch(/^◆ Check explorer · running · \d+s · 1\.5k tok · .+ 1 of 1$/)
   expect(lines[1]).toBe("task: task for the explorer")
   // The task on the user's band, a row of it above and below (blank on this screen).
   expect(lines.slice(3, 13)).toEqual([
@@ -191,8 +191,9 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
     "",
     "● wait",
   ])
-  expect(s.view()).toContain("└ running…")
-  expect(s.view()).toContain("… working…")
+  expect(s.view()).toContain("└ running\n")
+  // One ellipsis, not two.
+  expect(s.view()).toContain("… working\n")
   expect(lines.at(-1)).toContain("following")
   const atOpen = s.screen.mainText
   expect(atOpen).toContain(before.split("\n")[0]!)
@@ -235,7 +236,7 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   await waitFor(s.isWaiting, "the child to block")
   s.terminal.send("/agents view\r")
   await waitFor(() => s.view().includes("● wait"), "the viewer")
-  expect(s.screen.lines.at(-1)).toContain("←→ switch · x stop · Esc back")
+  expect(s.screen.lines.at(-1)).toContain("←→ switch · x stop · p print · Esc back")
   s.terminal.send("x")
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer (explorer s_"), "the question")
   expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")
@@ -338,10 +339,10 @@ test("←/→ and Tab switch between sub-agents; Ctrl+C closes the viewer instea
   s.terminal.send("go\r")
   await s.idle()
   s.terminal.send("/agents view\r")
-  await waitFor(() => /^◆ Check coder .* 2\/2$/.test(s.screen.lines[0]!), "the latest sub-agent")
+  await waitFor(() => /^◆ Check coder .* 2 of 2$/.test(s.screen.lines[0]!), "the latest sub-agent")
   expect(s.view()).toContain("coded")
   s.terminal.send("\x1b[D") // ←
-  await waitFor(() => /^◆ Check explorer .* 1\/2$/.test(s.screen.lines[0]!), "the previous one")
+  await waitFor(() => /^◆ Check explorer .* 1 of 2$/.test(s.screen.lines[0]!), "the previous one")
   expect(s.view()).toContain("explored")
   s.terminal.send("\x1b[C") // →
   await waitFor(() => s.screen.lines[0]!.startsWith("◆ Check coder"), "the next one")
@@ -366,7 +367,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await waitFor(() => s.view().includes("── done ──"), "the viewer")
   s.terminal.clearWrites()
   const answer = s.host.ui.api("approval").confirm("Allow bash?", "rm -rf build")
-  await waitFor(() => s.view().includes("! Waiting for you: Allow bash? · Esc to answer"), "the banner")
+  await waitFor(() => s.view().includes("⚠️ Waiting for you: Allow bash? · Esc to answer"), "the banner")
   expect(s.terminal.output.split("\x07").length).toBe(2)
   expect(s.screen.inAltScreen).toBe(true)
   // Keys still go to the viewer: "y" does not answer the dialog.
@@ -375,7 +376,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   expect(s.host.ui.pending).toHaveLength(1)
   s.terminal.send(ESC)
   await waitFor(() => s.view().includes("? Allow bash? (approval)"), "the inline dialog")
-  s.terminal.send("y")
+  s.terminal.send("\x1b[B\r")
   expect(await answer).toBe(true)
   // Answered: the dialog is gone and leaves no echo.
   await waitFor(() => !s.view().includes("? Allow bash?"), "the dialog gone")
@@ -383,7 +384,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await s.exited
 })
 
-test("/agents picks a sub-agent in an inline dialog and prints its transcript into the scrollback", async () => {
+test("/agents picks a sub-agent in an inline dialog and opens the live view on it; p there prints it", async () => {
   const s = await setup([
     { toolCalls: [{ name: "delegate", args: { roles: ["explorer"] } }] },
     { toolCalls: [{ name: "read", args: { path: "b.ts" } }] },
@@ -395,9 +396,13 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   s.terminal.send("/agents\r")
   await waitFor(() => s.view().includes("? Sub-agents"), "the picker")
   // The digit in front is the option's own number, shown once.
-  expect(s.view()).toContain("  2 Open the live view")
+  expect(s.view()).not.toContain("Open the live view")
   expect(s.view()).toMatch(/❯ 1 Check explorer · explorer · s_\w+ · done/)
   s.terminal.send("1")
+  await waitFor(() => s.screen.inAltScreen, "the viewer")
+  await waitFor(() => s.view().includes("task: task for the explorer"), "the viewer drawn")
+  // p leaves it with a snapshot of the one shown printed into the scrollback.
+  s.terminal.send("p")
   await waitFor(() => s.screen.mainText.includes("● read b.ts"), "the transcript")
   const main = s.screen.mainText
   expect(main).toMatch(/◆ Check explorer · explorer · s_\w+ · done · \d+s/)
@@ -405,13 +410,6 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   expect(main).toContain("  └ contents of b.ts (+2 lines)")
   expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("● read b.ts"))
   expect(s.screen.inAltScreen).toBe(false)
-  // The last entry opens the live view.
-  s.terminal.send("/agents\r")
-  await waitFor(() => s.view().includes("? Sub-agents"), "the picker again")
-  s.terminal.send("2")
-  await waitFor(() => s.screen.inAltScreen, "the viewer")
-  s.terminal.send(ESC)
-  await waitFor(() => !s.screen.inAltScreen, "closed")
   s.terminal.send("\x03")
   await s.exited
 })
