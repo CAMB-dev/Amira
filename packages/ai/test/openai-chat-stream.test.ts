@@ -176,7 +176,7 @@ test("keeps status and code of an error object inside the stream", async () => {
   expect(terminal(evs)).toHaveLength(1)
   const e = last(evs) as ErrorEvent
   expect(e.type).toBe("error")
-  expect(e.error).toEqual({ message: "rate limited", status: 429, code: "429" })
+  expect(e.error).toMatchObject({ message: "rate limited", status: 429, code: "429" })
   expect(e.retryable).toBe(true)
   expect(e.message.content).toEqual([{ type: "text", text: "hi" }])
   expect(e.message.stopReason).toBe("error")
@@ -185,13 +185,13 @@ test("keeps status and code of an error object inside the stream", async () => {
 test("derives status from a string code or status field", async () => {
   const errorOf = async (error: unknown) => last(await run(() => sseResponse([{ error }]))) as ErrorEvent
   const upstream = await errorOf({ message: "upstream", status: 502, type: "server_error" })
-  expect(upstream.error).toEqual({ message: "upstream", status: 502, code: "server_error" })
+  expect(upstream.error).toMatchObject({ message: "upstream", status: 502, code: "server_error" })
   expect(upstream.retryable).toBe(true)
   const bad = await errorOf({ message: "bad", code: "400" })
   expect(bad.error.status).toBe(400)
   expect(bad.retryable).toBe(false)
   const named = await errorOf({ message: "nope", code: "invalid_api_key" })
-  expect(named.error).toEqual({ message: "nope", code: "invalid_api_key" })
+  expect(named.error).toMatchObject({ message: "nope", code: "invalid_api_key" })
   expect(named.retryable).toBe(false)
 })
 

@@ -32,7 +32,7 @@ import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
-import { activityLabel, runInteractive } from "../src/app.ts"
+import { activityLabel, retryLabel, runInteractive } from "../src/app.ts"
 import { FileIndex, type FileSource, fileList } from "../src/file-index.ts"
 
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
@@ -273,7 +273,7 @@ test("without providers the UI starts, says how to add one, and a message explai
   expect(all()).toContain("Amira · (no model) · /work/proj")
   await waitFor(() => live().includes("╰─ (no model) ─"), "the status's (no model)")
   terminal.send("hello\r")
-  await shows("no providers configured; add one with /provider add, then pick a model with /model")
+  await shows("No providers configured; add one with /provider add, then pick a model with /model")
   await idle()
   expect(mock.requests).toHaveLength(0)
   terminal.send("\x03")
@@ -283,7 +283,7 @@ test("without providers the UI starts, says how to add one, and a message explai
 test("with providers but no model picked, a message says to pick one", async () => {
   const { terminal, shows, idle, exited } = await setup([], { noModel: "unpicked" })
   terminal.send("hello\r")
-  await shows("no model selected; pick one with /model")
+  await shows("No model selected; pick one with /model")
   await idle()
   terminal.send("\x03")
   expect(await exited).toBe(0)
@@ -582,6 +582,37 @@ test("the activity label names the most specific activity", () => {
   expect(activityLabel({ ...base, running: ["bash"], thinking: true })).toBe("running bash")
   expect(activityLabel({ ...base, running: ["bash", "read", "grep"] })).toBe("running 3 tools")
   expect(activityLabel({ ...base, compacting: true, running: ["bash"] })).toBe("compacting the conversation")
+  const retry = { attempt: 2, maxRetries: 3, status: 429, kind: "rate", at: Date.now() + 5500 }
+  expect(activityLabel({ ...base, running: ["bash"], retry })).toBe("retrying in 6s (2/3) · 429")
+  expect(retryLabel({ ...retry, status: undefined, at: 0 }, 1000)).toBe("retrying in 0s (2/3) · rate")
+})
+
+test("a failed model request reads as one line and the next step; the raw answer stays folded", async () => {
+  const raw = `HTTP 401: {"error":{"message":"Incorrect API key provided","code":"invalid_api_key"}}`
+  const { terminal, all, shows, idle, exited } = await setup([{ error: { message: raw, status: 401 } }], {
+    cols: 80,
+  })
+  terminal.send("hi\r")
+  await shows("The API key was rejected by the provider (HTTP 401)")
+  await idle()
+  expect(all()).toContain("Set a new key with /provider key mock")
+  expect(all()).not.toContain("invalid_api_key")
+  terminal.send("\x03")
+  await exited
+})
+
+test("while a failed request waits to be sent again, the activity line says so", async () => {
+  const { terminal, live, shows, idle, exited } = await setup([
+    { error: { message: "HTTP 429: slow down", status: 429, retryable: true } },
+    { text: "got through" },
+  ])
+  terminal.send("hi\r")
+  await waitFor(() => /retrying in 1s \(1\/3\) · 429/.test(live()), "the retry line")
+  await shows("got through")
+  await idle()
+  expect(live()).not.toContain("retrying")
+  terminal.send("\x03")
+  await exited
 })
 
 test("a message sent during /compact counts its own time and tokens, not the last turn's", async () => {

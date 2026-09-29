@@ -1,9 +1,13 @@
 import {
   type Ai,
   type AssistantMessage,
+  describeModelError,
   invalidArgs,
+  isContextOverflow,
   isNoModel,
   type Message,
+  type ModelError,
+  type ModelErrorInfo,
   type ModelInfo,
   type ModelRef,
   modelMessages,
@@ -124,6 +128,8 @@ export interface TurnResult {
   reason: TurnEndReason
   steps: number
   error?: string
+  /** A failed model request, read for the user (turn.end `failure`). */
+  failure?: ModelErrorInfo
 }
 
 export interface PromptOptions {
@@ -179,7 +185,7 @@ interface AfterCompaction {
 
 type ModelReply =
   | { kind: "ok"; message: AssistantMessage }
-  | { kind: "error"; error: string }
+  | { kind: "error"; error: string; model?: ModelError }
   | { kind: "aborted" }
 
 /** One agent session: a conversation, a model and the loop that drives tool use. */
@@ -784,6 +790,9 @@ export class Agent {
     try {
       this.#push(user)
       let compactFailed = false
+      /** A request over the context window is compacted and sent again, once a turn. */
+      let overflowRetried = false
+      let overflowCompacted: boolean | undefined
       while (true) {
         if (!compactFailed && this.#needsCompaction()) {
           compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
@@ -804,7 +813,23 @@ export class Agent {
           break
         }
         if (reply.kind === "error") {
-          result = { reason: "error", steps, error: reply.error }
+          const overflow = reply.model && isContextOverflow(reply.model)
+          if (overflow && !overflowRetried && this.#compaction.auto !== false) {
+            overflowRetried = true
+            overflowCompacted = await this.#compact("overflow", abort.signal, turn)
+            if (overflowCompacted === true) continue
+          }
+          const failure = reply.model
+            ? describeModelError(reply.model, { provider: this.model.provider })
+            : undefined
+          // Compacted once already, or nothing could be: the user decides what to leave out.
+          if (failure && overflow && overflowRetried) {
+            failure.hint =
+              overflowCompacted === undefined
+                ? "Nothing older to compact: /clear starts over, or /model switches to a model with a larger window"
+                : "Run /compact with what to keep, /clear to start over, or /model for a larger window"
+          }
+          result = { reason: "error", steps, error: reply.error, ...(failure ? { failure } : {}) }
           break
         }
         turn.unanswered = false
@@ -852,6 +877,7 @@ export class Agent {
         reason: result.reason,
         steps,
         ...(result.error !== undefined ? { error: result.error } : {}),
+        ...(result.failure ? { failure: result.failure } : {}),
       })
       this.#setStatus(turn, "idle")
       // A success resets the notice retries; after an interrupt the user decides when to go on.
@@ -906,6 +932,7 @@ export class Agent {
 
     let final: AssistantMessage | undefined
     let error: string | undefined
+    let modelError: ModelError | undefined
     let aborted = false
     let retrying = false
     try {
@@ -927,6 +954,14 @@ export class Agent {
         switch (ev.type) {
           case "retry":
             retrying = true
+            this.#emit(turn, "model.retry", {
+              attempt: ev.attempt,
+              maxRetries: ev.maxRetries,
+              delayMs: ev.delayMs,
+              error: ev.error.message,
+              kind: ev.error.kind ?? "other",
+              ...(ev.error.status !== undefined ? { status: ev.error.status } : {}),
+            })
             this.#emit(turn, "status.changed", {
               status: "working",
               reason: `retrying (${ev.attempt}/${ev.maxRetries})`,
@@ -953,7 +988,10 @@ export class Agent {
           case "error":
             final = ev.message
             if (ev.error.code === "aborted" || turn.signal.aborted) aborted = true
-            else error = ev.error.message
+            else {
+              error = ev.error.message
+              modelError = ev.error
+            }
             break
         }
       }
@@ -979,7 +1017,7 @@ export class Agent {
     if (message.usage) this.tree?.recordUsage(this, message.usage)
 
     if (aborted) return { kind: "aborted" }
-    if (error) return { kind: "error", error }
+    if (error) return { kind: "error", error, ...(modelError ? { model: modelError } : {}) }
     return { kind: "ok", message }
   }
 
@@ -1367,7 +1405,7 @@ export class Agent {
    * there was nothing to compact yet (a long turn may have enough a few steps later).
    */
   async #compact(
-    reason: "threshold" | "manual",
+    reason: "threshold" | "manual" | "overflow",
     signal: AbortSignal,
     turn: Turn | undefined,
     instructions?: string,
@@ -1378,7 +1416,8 @@ export class Agent {
       this.#compaction.keepSteps ?? 2,
     )
     if (!split) {
-      if (reason === "manual") this.#emit(turn, "compact.failed", { error: "nothing to compact yet" })
+      if (reason === "manual")
+        this.#emit(turn, "compact.failed", { error: "nothing to compact yet", empty: true })
       return undefined
     }
     try {

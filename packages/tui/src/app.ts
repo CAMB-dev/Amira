@@ -2,6 +2,7 @@ import { statSync } from "node:fs"
 import {
   type AnyEvent,
   type CommandDefinition,
+  type EventMap,
   type FrontendView,
   isSubagentView,
   modelLabel,
@@ -190,13 +191,31 @@ function messageText(m: UserMessage): string {
 /** Output tokens a streamed text is worth, until the reply's usage says. */
 const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 
+/** A model request waiting to be sent again: model.retry, and when the wait ends. */
+export interface RetryState {
+  attempt: number
+  maxRetries: number
+  status?: number
+  kind: string
+  at: number
+}
+
+/** "retrying in 6s (2/3) · 429": the wait for a failed model request to be sent again. */
+export function retryLabel(r: RetryState, now = Date.now()): string {
+  const secs = Math.max(0, Math.ceil((r.at - now) / 1000))
+  const why = r.status !== undefined ? String(r.status) : r.kind
+  return `retrying in ${secs}s (${r.attempt}/${r.maxRetries}) ${glyphs.separator} ${why}`
+}
+
 /** What the turn is doing now, as the activity line names it: the most specific activity first. */
 export function activityLabel(s: {
   compacting: boolean
   running: readonly string[]
   preparing: string | undefined
   thinking: boolean
+  retry?: RetryState | undefined
 }): string {
+  if (s.retry) return retryLabel(s.retry)
   if (s.compacting) return "compacting the conversation"
   if (s.running.length === 1) return `running ${s.running[0]}`
   if (s.running.length > 1) return `running ${s.running.length} tools`
@@ -289,6 +308,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let working = false
   let thinking = false
   let compacting = false
+  /** A failed model request waiting to be sent again (model.retry), until the next reply starts. */
+  let retry: RetryState | undefined
   /** Tool the model is currently writing a call for, before it runs. */
   let preparing: string | undefined
   /** Whether the current turn showed anything besides the user's message. */
@@ -422,7 +443,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // How to interrupt is on the hint line.
     new View((width, ctx) => {
       if (!working && !compacting) return []
-      const label = activityLabel({ compacting, running: view.runningTools, preparing, thinking })
+      const label = activityLabel({ compacting, running: view.runningTools, preparing, thinking, retry })
       const tokens = turnTokens + estimateTokens(streamedChars)
       const stats = [
         formatElapsed(Date.now() - (working ? turnStartedAt : compactStartedAt)),
@@ -719,7 +740,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         spinner.start(() => view.requestRender())
         break
       }
+      case "model.retry":
+        retry = { ...e.data, at: e.ts + e.data.delayMs }
+        break
       case "message.start":
+        retry = undefined
         thinking = false
         preparing = undefined
         streamedChars = 0
@@ -771,7 +796,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
-        if (e.data.reason === "error") view.notice("error", e.data.error ?? "error")
+        retry = undefined
+        if (e.data.reason === "error") errorNotice(e.data)
         else if (e.data.reason === "aborted") view.notice("interrupted", "Interrupted.")
         else if (!turnShowedOutput) view.notice("info", "(no reply)")
         termStatus.turnEnded(e.data.reason)
@@ -803,7 +829,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "compact.failed":
         compacting = false
         if (!working) spinner.stop()
-        if (e.data.blocked) view.notice("info", `Compaction skipped: ${e.data.error}`)
+        if (e.data.empty) view.notice("info", "Nothing to compact yet.")
+        else if (e.data.blocked) view.notice("info", `Compaction skipped: ${e.data.error}`)
         else view.notice("warning", `Compaction failed: ${e.data.error}`)
         break
       case "extension.error":
@@ -876,6 +903,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
     }
     view.requestRender()
+  }
+
+  /** A failed turn: what went wrong in plain words and what to do, the provider's text folded. */
+  function errorNotice(end: EventMap["turn.end"]) {
+    const f = end.failure
+    if (!f) return view.notice("error", end.error ?? "error")
+    view.notice("error", f.hint ? `${f.summary}\n${f.hint}` : f.summary, f.detail)
   }
 
   /** The activity line counts the turn's time and tokens from here. */

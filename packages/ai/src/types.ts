@@ -1,3 +1,4 @@
+import type { ModelErrorKind } from "./errors.ts"
 // Unified message model. Amira's own format is the source of truth;
 // dialect adapters translate to and from the wire format at the edge.
 
@@ -140,6 +141,12 @@ export interface ModelError {
   message: string
   status?: number
   code?: string
+  /** What kind of failure it is (errors.ts); the ai client sets it on the errors it hands out. */
+  kind?: ModelErrorKind
+  /** The host the request went to, set by the ai client, for messages ("Cannot reach api.x.com"). */
+  host?: string
+  /** Retries made before giving up, set by the ai client when there were any. */
+  retries?: number
 }
 
 export type StreamEvent =

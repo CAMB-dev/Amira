@@ -248,7 +248,31 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     "pending?": num,
   }),
   "turn.start": obj({ prompt: ref("UserMessage") }),
-  "turn.end": obj({ reason: strings("done", "error", "aborted"), "error?": str, steps: num }),
+  "turn.end": obj({
+    reason: strings("done", "error", "aborted"),
+    "error?": str,
+    steps: num,
+    "failure?": obj(
+      {
+        kind: strings("auth", "rate", "server", "network", "context", "config", "other"),
+        summary: str,
+        "hint?": str,
+        "detail?": str,
+      },
+      "A failed model request in plain words: one line, the next step, and the provider's own text.",
+    ),
+  }),
+  "model.retry": obj(
+    {
+      attempt: num,
+      maxRetries: num,
+      delayMs: num,
+      error: str,
+      kind: strings("auth", "rate", "server", "network", "context", "config", "other"),
+      "status?": num,
+    },
+    "A failed model request is sent again after delayMs.",
+  ),
   "turn.steer": oneOf(
     obj({ message: ref("UserMessage"), state: strings("queued", "injected", "dropped") }),
     obj(
@@ -293,13 +317,13 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "ui.progress": obj({ requestId: str, action: str, text: str }),
   "model.changed": obj({ from: modelRef, to: modelRef }),
   "compact.start": obj({
-    reason: strings("threshold", "manual"),
+    reason: strings("threshold", "manual", "overflow"),
     replacing: num,
     kept: num,
     "tokens?": num,
   }),
   "compact.end": obj({ summary: str, replaced: num, kept: num }),
-  "compact.failed": obj({ error: str, "blocked?": bool }),
+  "compact.failed": obj({ error: str, "blocked?": bool, "empty?": bool }),
   "command.output": obj({
     command: { ...str, description: 'The command that printed it, or "$<name>" for a skill.' },
     text: str,

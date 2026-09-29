@@ -40,6 +40,7 @@ import {
   type BlockKind,
   commandOutputLines,
   type NoticeLevel,
+  noticeDetailLines,
   noticeLines,
   Transcript,
 } from "./transcript.ts"
@@ -374,7 +375,14 @@ export function createInlineView(host: ViewHost): TranscriptView {
       return shown
     },
     subagentEvent: trackSubagent,
-    notice: (level, text) => commitBlock("notice", note(level, text)),
+    notice: (level, text, detail) =>
+      commitBlock("notice", [
+        ...note(level, text),
+        // Inline, details show only at the full tool output level: the notice is printed once.
+        ...(detail && host.detail() === "full"
+          ? noticeDetailLines(theme, level, detail, terminal.columns)
+          : []),
+      ]),
     commandEcho: (line) => commitBlock("command", commandEchoLines(theme, line, terminal.columns)),
     commandOutput(level, text) {
       // Right after its command it hangs under the echo; on its own it is a notice.
