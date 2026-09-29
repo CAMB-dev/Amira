@@ -105,19 +105,20 @@ test("a session is stored, listed, and continued with its earlier turns", async 
   )
 })
 
-test("quitting says how to continue the session, set apart by blank lines", async () => {
+test("quitting says how to continue the session, then a blank line before the shell's prompt", async () => {
   const fresh = chooseStore({ cwd: here, continue: false })
   const { agent } = await turn(fresh.store, "ok", "remember this")
+  // The UI already ends with a blank line after the transcript: nothing goes before the note.
   expect(exitNote(agent, 0, here)).toBe(
-    `\nContinue this session with amira -c (or amira -r ${fresh.store.id}).\n\n`,
+    `Continue this session with amira -c (or amira -r ${fresh.store.id}).\n\n`,
   )
   expect(exitNote(agent, 2, here)).toContain("Stopping 2 sub-agents that were still running.\n")
   expect(exitNote({ session: { id: "s_old" }, messages: [1] }, 0, here)).toBe(
-    "\nContinue this session with amira -r s_old.\n\n",
+    "Continue this session with amira -r s_old.\n\n",
   )
-  // Nothing to continue: only the blank line that sets the shell's prompt apart.
-  expect(exitNote({ session: { id: "s_new" }, messages: [] }, 0, here)).toBe("\n")
-  expect(exitNote({ session: undefined, messages: [1] }, 0, here)).toBe("\n")
+  // Nothing to continue: nothing; the UI's own last blank line sets the shell's prompt apart.
+  expect(exitNote({ session: { id: "s_new" }, messages: [] }, 0, here)).toBe("")
+  expect(exitNote({ session: undefined, messages: [1] }, 0, here)).toBe("")
 })
 
 test("amira -p -r lists this directory's sessions and exits", async () => {

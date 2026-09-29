@@ -49,10 +49,10 @@ export async function pickSession(sessions: SessionSummary[]): Promise<SessionSu
 }
 
 /**
- * What quitting the interactive UI prints last, set apart from the transcript above it and the
- * shell's prompt below by a blank line: sub-agents that are stopped now, and how to continue
- * the session. A session that holds no messages gets only the blank line, so the shell's
- * prompt never sits right under the transcript.
+ * What quitting the interactive UI prints last: sub-agents that are stopped now, and how to
+ * continue the session, then a blank line before the shell's prompt. Both views already end
+ * with a blank line after the transcript, so nothing goes before the note; with nothing to
+ * say, nothing is printed and that blank line is the one before the prompt.
  */
 export function exitNote(
   a: { session?: { id: string } | undefined; messages: readonly unknown[] },
@@ -73,5 +73,5 @@ export function exitNote(
         : `Continue this session with amira -r ${s.id}.`,
     )
   }
-  return lines.length ? `\n${lines.join("\n")}\n\n` : "\n"
+  return lines.length ? `${lines.join("\n")}\n\n` : ""
 }
