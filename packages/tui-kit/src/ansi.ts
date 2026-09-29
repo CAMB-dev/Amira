@@ -48,6 +48,12 @@ export const queries = {
   kittyKeyboard: "\x1b[?u",
   syncOutput: "\x1b[?2026$p",
   primaryDeviceAttributes: "\x1b[c",
+  /** XTWINOPS 16: the size of a cell in pixels, answered with CSI 6 ; height ; width t. */
+  cellPixels: "\x1b[16t",
+  /** XTWINOPS 14: the text area in pixels, answered with CSI 4 ; height ; width t. */
+  windowPixels: "\x1b[14t",
+  /** kitty graphics: a query that shows nothing, answered with APC G i=31;OK ST where supported. */
+  kittyGraphics: "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\",
 }
 
 /** Matches CSI, OSC, DCS/APC/PM/SOS strings and other escapes (`ESC 7`, `ESC c`, `ESC ( B`, ...). */
