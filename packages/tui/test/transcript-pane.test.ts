@@ -200,6 +200,16 @@ test("find matches text that wraps over rows, and so at any width", () => {
   expect(p.matchCount).toBe(2)
 })
 
+test("find matches CJK text that wraps between characters, with no space put in", () => {
+  const p = new TranscriptPane()
+  p.add(new ReplyBlock("这是一个很长的中文句子需要换行显示", false, false))
+  for (const width of [80, 12, 9]) {
+    p.render(env(width), 10)
+    p.find("中文句子需要换行")
+    expect(p.matchCount).toBe(1)
+  }
+})
+
 test("find follows the transcript as blocks come and a reply streams", () => {
   const p = new TranscriptPane()
   p.add(new Counted("user", ["needle"]))

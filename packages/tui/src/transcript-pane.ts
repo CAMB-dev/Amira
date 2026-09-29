@@ -765,7 +765,8 @@ export class TranscriptPane {
 
   /**
    * Finds the query in each block's text as one run: its rows without their indent, a space
-   * between rows (where the text wrapped, the space it broke at), a blank row a break no match
+   * between rows (where the text wrapped, the space it broke at; none after a wide character,
+   * where CJK text wraps without one), a blank row a break no match
    * crosses. So a match does not depend on where the width wraps the text; one that goes over
    * rows is a segment on each. The current match stays the one it was, where it still is.
    */
@@ -789,8 +790,10 @@ export class TranscriptPane {
         const raw = plain[line]!
         const start = raw.length - raw.trimStart().length
         const body = raw.slice(start).trimEnd()
-        if (text) {
-          text += body ? " " : "\n"
+        // Text wraps after a wide (CJK) character without dropping a space: those rows join as is.
+        const joint = !text ? "" : !body ? "\n" : endsWide(text) ? "" : " "
+        if (joint) {
+          text += joint
           lineOf.push(-1)
           colOf.push(-1)
         }
@@ -1018,6 +1021,12 @@ export class TranscriptPane {
   private reindex(from: number): void {
     for (let i = from; i < this.blocks.length; i++) this.blocks[i]!.index = i
   }
+}
+
+/** Whether `text` ends with a wide (two-cell) character, after which text wraps without a space. */
+function endsWide(text: string): boolean {
+  const last = Array.from(text.slice(-2)).pop()
+  return last !== undefined && visibleWidth(last) === 2
 }
 
 /** `line` with the selected block's mark in its first column (see SELECTED). */
