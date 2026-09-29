@@ -82,6 +82,7 @@ export interface PackageSettings {
   /**
    * Packages not to load, by name, of either scope; the lock files keep them. Set by
    * `amira ext disable|enable <name>`; `--no-packages` leaves out every package for one run.
+   * Honoured in the user settings only.
    */
   disabled?: string[]
   /**
