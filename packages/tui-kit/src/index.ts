@@ -1,4 +1,4 @@
-export { modes, stripAnsi, type TerminalMode } from "./ansi.ts"
+export { modes, RESET, stripAnsi, type TerminalMode } from "./ansi.ts"
 export {
   type Background,
   backgroundFromEnv,

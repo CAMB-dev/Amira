@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { EventEnvelope } from "@amira/api"
-import { defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import { defaultTheme, RESET, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import {
   bandRows,
   commandEchoLines,
@@ -104,6 +104,23 @@ test("a command's echo is on the band too, muted", () => {
   expect(rows[1]).toBe(`${BAND}${defaultTheme.muted("› /status")}${" ".repeat(11)}\x1b[49m`)
   expect(commandEchoLines(defaultTheme, "/status", 20)).toEqual([defaultTheme.muted("› /status")])
   expect(bandRows(["abc"], 2, banded.userBg).map(visibleWidth)).toEqual([2, 2, 2])
+})
+
+test("a wrapped echo keeps the band after the reset that ends its style on a row", () => {
+  const rows = commandEchoLines(banded, `/model ${"x".repeat(30)}`, 20)
+  expectBand(rows, 20)
+  expect(rows.length).toBeGreaterThan(3)
+  expect(rows.join("")).toContain(RESET)
+  for (const r of rows) {
+    const resets = r.split("\x1b[0m").slice(1)
+    for (const after of resets) expect(after.startsWith(BAND)).toBe(true)
+  }
+})
+
+test("with an unknown background, muted text on the band is drawn as normal text", () => {
+  const unknown = { ...defaultTheme, ...surfaceTheme(undefined) }
+  const rows = commandEchoLines(unknown, "/status", 20)
+  expect(rows[1]).toBe(`\x1b[48;5;242m› /status${" ".repeat(11)}\x1b[49m`)
 })
 
 test("a resumed history uses the transcript's blocks, the tool presenters and a named separator", () => {

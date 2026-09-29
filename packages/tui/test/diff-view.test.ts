@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { diffToolLines, type ToolLine } from "@amira/api"
 import { defaultTheme, stripAnsi, stripColors, surfaceTheme, visibleWidth } from "@amira/tui-kit"
-import { MAX_DIFF_LINE_ROWS, renderToolLines } from "../src/diff-view.ts"
+import { MAX_DIFF_LINE_ROWS, parseUnifiedDiff, renderToolLines } from "../src/diff-view.ts"
 import { wordDiff } from "../src/word-diff.ts"
 
 const dark = { ...defaultTheme, ...surfaceTheme("dark") }
@@ -90,7 +90,7 @@ test("long lines wrap at narrow widths, the gutter and the background continued"
     { kind: "diff-remove", text: "const message = `测试 {name} 失败了`", lineNo: 120 },
     { kind: "diff-add", text: "const message = `测试 {name} 通过了` // 🧪 checked", lineNo: 120 },
   ]
-  for (const width of [20, 21, 27, 34]) {
+  for (const width of [27, 28, 34, 40]) {
     const rows = renderToolLines(lines, dark, width, "  ")
     for (const r of rows) expect({ r, w: visibleWidth(r) }).toEqual({ r, w: width })
     const text = rows.map((r) => stripAnsi(r))
@@ -135,6 +135,41 @@ test("without the surface colors or without colors, the signs still tell the lin
     "40 + const gutter = 2",
     "41   return lines",
   ])
+})
+
+test("a unified diff: content lines like headers stay in their hunk, a header's context stays", () => {
+  const lines = parseUnifiedDiff(
+    [
+      "--- a/q.sql",
+      "+++ b/q.sql",
+      "@@ -1,3 +1,3 @@ select",
+      " a",
+      "--- old rule",
+      "+++ new",
+      " b",
+      "@@ -10 +10 @@",
+      "-x",
+      "+y",
+    ].join("\n"),
+  )
+  expect(lines.map((l) => [l.kind, l.text, l.lineNo])).toEqual([
+    ["muted", "--- a/q.sql", undefined],
+    ["muted", "+++ b/q.sql", undefined],
+    ["diff-hunk", "⋯ select", undefined],
+    ["diff-context", "a", 1],
+    ["diff-remove", "-- old rule", 2],
+    ["diff-add", "++ new", 2],
+    ["diff-context", "b", 3],
+    ["diff-hunk", "⋯", undefined],
+    ["diff-remove", "x", 10],
+    ["diff-add", "y", 10],
+  ])
+  expect(stripAnsi(renderToolLines(lines, defaultTheme, 40)[2]!)).toBe(" ⋯   select")
+})
+
+test("with an unknown background, line numbers on a changed line are drawn as normal text", () => {
+  const rows = renderToolLines(edit, { ...defaultTheme, ...surfaceTheme(undefined) }, 44)
+  expect(rows[1]!.startsWith("\x1b[48;5;131m39 - const")).toBe(true)
 })
 
 test("a light terminal gets light backgrounds", () => {

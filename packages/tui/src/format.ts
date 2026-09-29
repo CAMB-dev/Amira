@@ -1,5 +1,13 @@
 import type { SpawnGroupInfo, UserMessage } from "@amira/api"
-import { type StyleFn, type Theme, themeToken, truncateToWidth, visibleWidth, wrapText } from "@amira/tui-kit"
+import {
+  RESET,
+  type StyleFn,
+  type Theme,
+  themeToken,
+  truncateToWidth,
+  visibleWidth,
+  wrapText,
+} from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
 /** Arguments that say what a call is about; the first one present leads the summary. */
@@ -59,7 +67,8 @@ export function userLines(theme: Theme, message: UserMessage, width = Number.POS
     : text.split("\n")
   const lines = rows.map((l, i) => `${theme.accent(i === 0 ? glyphs.user : " ")} ${l}`)
   const note = message.display?.note
-  if (note) lines.push(`  ${theme.muted(glyphs.result)} ${theme.muted(note)}`)
+  const muted = (bg && themeToken(theme, "surfaceMuted")) || theme.muted
+  if (note) lines.push(`  ${muted(glyphs.result)} ${muted(note)}`)
   return bg ? bandRows(lines, width, bg) : lines
 }
 
@@ -69,7 +78,8 @@ export function userLines(theme: Theme, message: UserMessage, width = Number.POS
  */
 export function commandEchoLines(theme: Theme, line: string, width: number): string[] {
   const bg = themeToken(theme, "userBg")
-  const rows = wrapText(theme.muted(`${glyphs.user} ${line}`), Math.max(1, width - (bg ? 1 : 0)))
+  const muted = (bg && themeToken(theme, "surfaceMuted")) || theme.muted
+  const rows = wrapText(muted(`${glyphs.user} ${line}`), Math.max(1, width - (bg ? 1 : 0)))
   return bg ? bandRows(rows, width, bg) : rows
 }
 
@@ -80,9 +90,13 @@ export function commandEchoLines(theme: Theme, line: string, width: number): str
  */
 export function bandRows(rows: string[], width: number, bg: StyleFn): string[] {
   const w = Math.max(1, width)
+  // The band's own opening, to start again after a full reset in a row (wrapText and
+  // truncateToWidth end a style they cut with one), which would end the band too.
+  const open = bg("\0").split("\0")[0]!
   const fill = (row: string) => {
     const fit = visibleWidth(row) > w ? truncateToWidth(row, w) : row
-    return bg(fit + " ".repeat(Math.max(0, w - visibleWidth(fit))))
+    const body = fit.replaceAll(RESET, RESET + open)
+    return bg(body + " ".repeat(Math.max(0, w - visibleWidth(fit))))
   }
   return [fill(""), ...rows.map(fill), fill("")]
 }

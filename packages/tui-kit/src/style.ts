@@ -125,6 +125,8 @@ export interface SurfaceTokens {
   /** Behind the words that changed within a changed line. */
   diffAddedWordBg: StyleFn
   diffRemovedWordBg: StyleFn
+  /** Muted text (line numbers, an echoed command) drawn on one of these backgrounds. */
+  surfaceMuted: StyleFn
 }
 
 /**
@@ -146,6 +148,8 @@ export function surfaceTheme(background: "dark" | "light" | undefined): SurfaceT
     diffRemovedBg: bg256(removed),
     diffAddedWordBg: bg256(addedWord),
     diffRemovedWordBg: bg256(removedWord),
+    // The mid tones leave too little contrast for gray text: it is drawn as normal text there.
+    surfaceMuted: background ? gray : (s) => s,
   }
 }
 

@@ -2,7 +2,7 @@
 export type Range = [number, number]
 
 /** Words, runs of blanks, and single other characters: what a word diff compares. */
-const TOKEN = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu
+const TOKEN = /[\p{L}\p{M}\p{N}_]+|\s+|[^\p{L}\p{M}\p{N}_\s]/gu
 
 /** Longer lines are not compared word by word (the comparison grows with the product of their tokens). */
 export const WORD_DIFF_MAX_CHARS = 400

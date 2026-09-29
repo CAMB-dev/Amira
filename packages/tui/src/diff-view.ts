@@ -19,8 +19,11 @@ const SIGNS: Partial<Record<ToolLine["kind"], string>> = {
   "diff-context": " ",
 }
 
-/** Rows a long diff line wraps to at most; the last one ends in "…" when there is more. */
-export const MAX_DIFF_LINE_ROWS = 6
+/**
+ * Rows a long diff line wraps to at most, the last one ending in "…" when there is more: the
+ * limits on a body count lines, so a line may not take many more rows than one.
+ */
+export const MAX_DIFF_LINE_ROWS = 4
 
 /** Marks the gap between two hunks, in the line number column. */
 export const HUNK_GAP = "⋯"
@@ -68,7 +71,8 @@ export function renderToolLines(lines: ToolLine[], theme: Theme, width: number, 
   const numbered = lines.filter((l) => l.lineNo !== undefined)
   const gutter = numbered.length ? Math.max(...numbered.map((l) => String(l.lineNo).length)) : 0
   const texts = lines.map((l) => cleanText(l.text))
-  const words = changedWords(lines, texts)
+  // Words are only marked on their own background: without it, no need to compare them.
+  const words = themeToken(theme, "diffAddedWordBg") ? changedWords(lines, texts) : new Map<number, Range[]>()
   const signed = lines.some((l) => SIGNS[l.kind] !== undefined)
   const out: string[] = []
   lines.forEach((l, i) => {
@@ -78,9 +82,14 @@ export function renderToolLines(lines: ToolLine[], theme: Theme, width: number, 
       out.push(...diffRows(l, text, sign, words.get(i) ?? [], { theme, width, indent, gutter }))
       return
     }
-    if (l.kind === "diff-hunk" && (text === "⋮" || text === HUNK_GAP)) {
-      const at = gutter ? `${" ".repeat(Math.max(0, gutter - 1))}${HUNK_GAP}` : HUNK_GAP
-      out.push(`${indent}${theme.muted(truncateToWidth(at, Math.max(1, width - indent.length)))}`)
+    if (l.kind === "diff-hunk" && (text === "⋮" || text.startsWith(HUNK_GAP))) {
+      // The mark in the number column, what follows it (a function's name) lined up with the text.
+      const about = text.slice(HUNK_GAP.length).trim()
+      const mark = gutter ? `${" ".repeat(Math.max(0, gutter - 1))}${HUNK_GAP}` : HUNK_GAP
+      const at = about ? `${mark}${" ".repeat(signed ? 3 : 1)}${about}` : mark
+      out.push(
+        `${indent}${theme.muted(truncateToWidth(at, Math.max(1, width - indent.length), glyphs.more))}`,
+      )
       return
     }
     // A file's header starts at the edge, above the numbers of its lines; other lines (a note
@@ -152,14 +161,14 @@ function diffRows(l: ToolLine, text: string, sign: string, words: Range[], at: L
   const room = width - visibleWidth(indent) - lead
   if (room < 4) {
     // Too narrow to wrap in: one row cut to the width, as other lines.
-    const row = truncateToWidth(`${indent}${no}${sign}${text}`, width, glyphs.more)
+    const row = truncateToWidth(`${indent}${no}${head}${text}`, width, glyphs.more)
     const body = row.slice(indent.length + no.length)
     return [`${indent}${theme.muted(no)}${styleOf(l.kind, theme)(body)}`]
   }
   const rows = wrapPieces(pieces(text, words), room)
   const blankNo = " ".repeat(no.length)
   return rows.map((pieceRow, r) => {
-    const gut = theme.muted(r === 0 ? no : blankNo)
+    const gut = ((bg && themeToken(theme, "surfaceMuted")) || theme.muted)(r === 0 ? no : blankNo)
     const mark = r === 0 ? head : "  "
     const used = pieceRow.reduce((n, p) => n + visibleWidth(p.text), 0)
     if (bg) {
@@ -234,29 +243,44 @@ function wrapPieces(list: Piece[], room: number): Piece[][] {
 /**
  * A unified diff as presenter lines: file headers muted, then +, - and context lines numbered
  * from the hunk headers (the new file's numbers, the old one's for removed lines), with "⋯"
- * between the hunks of a file in place of their headers.
+ * between the hunks of a file in place of their headers (followed by what a header says the
+ * hunk is in). Lines of a hunk are counted, so a removed "-- x" is not taken for a file header.
  */
 export function parseUnifiedDiff(diff: string): ToolLine[] {
   const out: ToolLine[] = []
   let oldNo: number | undefined
   let newNo: number | undefined
+  /** Lines of the open hunk still to come, from its header: until then no line is a header. */
+  let oldLeft = 0
+  let newLeft = 0
   /** A hunk of the current file came before, so the next header is a gap. */
   let inFile = false
   for (const line of diff.replace(/\n$/, "").split("\n")) {
-    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) {
+    const inHunk = oldLeft > 0 || newLeft > 0
+    if (!inHunk && (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff "))) {
       out.push({ kind: "muted", text: line })
       inFile = false
       oldNo = undefined
       newNo = undefined
       continue
     }
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/.exec(line)
     if (hunk) {
-      if (inFile) out.push({ kind: "diff-hunk", text: HUNK_GAP })
+      // What the header says the hunk is in (a function's name) stays, after the gap mark.
+      const about = hunk[5]!.trim()
+      if (inFile || about) out.push({ kind: "diff-hunk", text: about ? `${HUNK_GAP} ${about}` : HUNK_GAP })
       inFile = true
       oldNo = Number(hunk[1])
-      newNo = Number(hunk[2])
+      newNo = Number(hunk[3])
+      oldLeft = hunk[2] === undefined ? 1 : Number(hunk[2])
+      newLeft = hunk[4] === undefined ? 1 : Number(hunk[4])
       continue
+    }
+    if (line.startsWith("+")) newLeft--
+    else if (line.startsWith("-")) oldLeft--
+    else if (line.startsWith(" ")) {
+      oldLeft--
+      newLeft--
     }
     if (line.startsWith("@@")) {
       out.push({ kind: "diff-hunk", text: line })
