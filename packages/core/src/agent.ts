@@ -381,8 +381,8 @@ export class Agent {
       return true
     }
     return {
-      deliver: (message) => {
-        if (close()) this.#receive(message)
+      deliver: (message, opts) => {
+        if (close()) this.#receive(message, opts?.wake !== false)
       },
       cancel: () => void close(),
     }
@@ -406,13 +406,16 @@ export class Agent {
     return this.#notices.splice(0)
   }
 
-  #receive(message: UserMessage) {
+  #receive(message: UserMessage, wake = true) {
     this.#notices.push(message)
     const turn = this.#turn
     if (turn) this.#emit(turn, "turn.steer", { message, state: "queued" })
     else if (this.#compacting) {
       // A manual compaction runs: it is sent once that ends.
-      this.#noticedDuringCompaction = true
+      if (wake) this.#noticedDuringCompaction = true
+      this.#emit(undefined, "turn.steer", { message, state: "queued" })
+    } else if (!wake) {
+      // It waits for the next turn, which the user's next message starts.
       this.#emit(undefined, "turn.steer", { message, state: "queued" })
     } else if (this.#onIdleNotice) this.#onIdleNotice()
     else this.#wake()

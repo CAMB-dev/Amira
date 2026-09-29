@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs"
 import { isNoModel, userMessage } from "@amira/ai"
-import type { AssistantMessage, SessionControl, ShellMode } from "@amira/api"
+import { type AssistantMessage, type SessionControl, type ShellMode, USER_STOP_REASON } from "@amira/api"
 import {
   type Agent,
   CommandHost,
@@ -94,7 +94,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     subagentMessages: (id) => subagentMessages(agent(), session.tree, id),
     stopSubagent: (id) =>
       listSubagents(agent(), session.tree).some((e) => e.info.id === id) &&
-      session.tree.stop(id, "stopped by the user"),
+      session.tree.stop(id, USER_STOP_REASON),
     createGroup: (groupOpts) => session.tree.createGroup(agent(), groupOpts),
     data: {
       append: (key, data) => agent().data.append(key, data),

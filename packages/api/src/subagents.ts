@@ -60,6 +60,9 @@ export interface SpawnOptions {
 /** Longest a sub-agent's title may be. */
 export const MAX_TITLE_CHARS = 60
 
+/** The error of a sub-agent the user stopped by hand (SessionControl.stopSubagent). */
+export const USER_STOP_REASON = "stopped by the user"
+
 /** The tool a child spawned with a `schema` hands its result back with. */
 export const RETURN_RESULT_TOOL = "return_result"
 
