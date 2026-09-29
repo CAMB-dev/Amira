@@ -55,7 +55,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `submit.steer` | none | Send the message; while a turn runs, always steer it |
 | `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |
 | `interrupt` | `escape` | Stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. Files are not restored |
-| `cancel` | `ctrl+c` | Stop the running turn, else clear the input, else quit |
+| `cancel` | `ctrl+c` | Stop the running turn (with steering or queued messages waiting, they go out as for `interrupt`), else clear the input, else quit |
 | `exit` | `ctrl+d` | Quit when the input is empty and nothing runs |
 | `redraw` | `ctrl+l` | Clear the screen and draw it again: the latest transcript and the input |
 | `history.prev` | `up` | Recall the previous prompt (from the input's first line) |

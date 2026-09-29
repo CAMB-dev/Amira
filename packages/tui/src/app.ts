@@ -625,6 +625,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       panelRoom = Math.max(0, budget - (rest.length - panelRows))
       rest = draw()
     }
+    // The blank rows a list keeps (full screen) go before anything else: the terminal shrank,
+    // or the rows above the box grew, since the list was that tall.
+    if (listRows && rest.length > budget) {
+      listRows = Math.max(0, listRows - (rest.length - budget))
+      rest = draw()
+    }
     if (dialog && rest.length > budget) {
       dialog.maxRows = Math.max(1, budget - (rest.length - dialogRows))
       rest = draw()
@@ -1530,19 +1536,26 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       showNote(`Cannot write the message for the editor: ${err instanceof Error ? err.message : String(err)}`)
       return
     }
-    const resume = terminal.suspend?.()
     let result: ReturnType<typeof spawnSync> | undefined
+    let failed: unknown
     try {
-      result = spawnSync(`${command} "${file}"`, {
-        stdio: "inherit",
-        shell: true,
-        env: { ...process.env, ...env },
-      })
-    } finally {
-      resume?.()
+      const resume = terminal.suspend?.()
+      try {
+        result = spawnSync(`${command} "${file}"`, {
+          stdio: "inherit",
+          shell: true,
+          env: { ...process.env, ...env },
+        })
+      } finally {
+        resume?.()
+      }
+    } catch (err) {
+      failed = err
     }
     try {
-      if (result.error) showNote(`Cannot start ${command}: ${result.error.message}`)
+      if (!result)
+        showNote(`Cannot start ${command}: ${failed instanceof Error ? failed.message : String(failed)}`)
+      else if (result.error) showNote(`Cannot start ${command}: ${result.error.message}`)
       else if (result.status !== 0)
         showNote(`${command} exited with ${result.status ?? result.signal}; the message is unchanged`)
       else {
