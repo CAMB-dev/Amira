@@ -109,21 +109,20 @@ export async function updatePackages(opts: InstallOptions, names?: string[]): Pr
   for (const n of selected) {
     if (!lock.packages[n]) throw new PackageError(`"${n}" is not installed in the ${opts.scope.kind} scope`)
   }
-  /** Each index once per update, by URL; undefined when it could not be read. */
-  const indexes = new Map<string, Promise<LoadedIndex | undefined>>()
+  /**
+   * Each index once per update, by URL. A package from an index is not updated without it: the
+   * index may have moved the package away from the source it was installed from.
+   */
+  const indexes = new Map<string, Promise<LoadedIndex>>()
   const readIndex = (url: string) => {
     let p = indexes.get(url)
     if (!p) {
-      p = loadIndex({ ...opts.index, refresh: true, url }).then(
+      p = loadIndex({ ...opts.index, refresh: true, url })
+      p.then(
         (loaded) => {
           for (const w of loaded.warnings) opts.log?.(`warning: ${w}`)
-          return loaded
         },
-        (err) => {
-          // The message names the index already.
-          opts.log?.(errorMessage(err))
-          return undefined
-        },
+        () => {},
       )
       indexes.set(url, p)
     }
@@ -137,16 +136,19 @@ export async function updatePackages(opts: InstallOptions, names?: string[]): Pr
       let index = from.index
       if (from.index) {
         const loaded = await readIndex(from.index.url)
-        const e = loaded?.index.extensions.find((x) => x.name === from.index!.name)
+        const e = loaded.index.extensions.find((x) => x.name === from.index!.name)
         if (e) source = e.source
-        else if (loaded)
-          opts.log?.(`${name}: no longer in the extensions index; updating from its recorded source`)
-        else opts.log?.(`${name}: updating from its recorded source`)
-        if (loaded) index = { name: from.index.name, url: loaded.url }
+        else
+          opts.log?.(
+            `warning: ${name} is no longer in the extensions index; updating from its recorded source`,
+          )
+        index = { name: from.index.name, url: loaded.url }
       }
       const r = await install(source, { expectName: name, ...(index ? { index } : {}), current: from }, opts)
       out.push({ name, from, to: r.entry, changed: pinKey(from) !== pinKey(r.entry) })
     } catch (err) {
+      // Stopped (Ctrl+C): do not go on to the next package.
+      if (opts.signal?.aborted) throw err
       out.push({ name, from, error: errorMessage(err) })
     }
   }
@@ -376,10 +378,13 @@ async function fetchGit(
     commit = (await run(["git", "rev-parse", "HEAD"], clone, opts, "git rev-parse", true)).trim()
   }
   const root = source.path ? path.join(clone, source.path) : clone
+  if (!isWithin(root, clone))
+    throw new PackageError(`${source.url}: path ${source.path} is outside the repository`)
   if (!existsSync(root)) throw new PackageError(`${source.url} has no directory ${source.path}`)
   // A package in a subdirectory: whether its files are the same as at the installed commit.
+  // Only a full object id: an abbreviated one could be taken for a branch of that name.
   let sameTree: boolean | undefined
-  if (source.path && since && since !== commit && /^[0-9a-f]{7,64}$/i.test(since)) {
+  if (source.path && since && since !== commit && /^([0-9a-f]{40}|[0-9a-f]{64})$/i.test(since)) {
     const sub = source.path.replace(/\\/g, "/").replace(/^\.?\/+|\/+$/g, "")
     const [before, after] = await Promise.all([
       treeOf(clone, `${since}:${sub}`, opts),

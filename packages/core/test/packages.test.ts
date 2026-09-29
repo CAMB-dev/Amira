@@ -501,21 +501,44 @@ test("update reads the index afresh, and updates from the recorded source when t
   const [u] = await updatePackages({ scope: user(), cwd, index })
   expect(u).toMatchObject({ changed: true, to: { version: "0.3.0", pinned: { commit: first } } })
 
-  // Offline with no cached index: the recorded source (the tag) is used, and it says so.
+  // Offline with a cached index: the cached copy is used, with a warning.
   online = false
-  rmSync(index.cacheFile)
   const logged: string[] = []
-  const [offline] = await updatePackages({ scope: user(), cwd, index, log: (l) => logged.push(l) }, [
-    "sub-pkg",
-  ])
-  expect(offline).toMatchObject({ name: "sub-pkg", changed: false })
-  expect(logged).toContain("sub-pkg: updating from its recorded source")
-  expect(logged).toContain(`cannot download the extensions index ${index.url}: offline`)
-  // The lock keeps the index it came from.
-  expect(readLock(path.join(home, "packages.lock")).packages["sub-pkg"]!.index).toEqual({
+  const [cached] = await updatePackages({ scope: user(), cwd, index, log: (l) => logged.push(l) })
+  expect(cached).toMatchObject({ name: "sub-pkg", changed: false })
+  expect(logged.some((l) => /^warning: could not refresh the extensions index/.test(l))).toBe(true)
+  // Offline with no cached index: not updated from the recorded source (the index may have moved
+  // the package away from it); it fails and keeps what is installed.
+  rmSync(index.cacheFile)
+  const lockFile = path.join(home, "packages.lock")
+  const before = readFileSync(lockFile, "utf8")
+  const [offline] = await updatePackages({ scope: user(), cwd, index }, ["sub-pkg"])
+  expect(offline).toMatchObject({
     name: "sub-pkg",
-    url: index.url,
+    error: `cannot download the extensions index ${index.url}: offline`,
   })
+  expect(readFileSync(lockFile, "utf8")).toBe(before)
+})
+
+test("a lock file's git path may not leave the repository", async () => {
+  const lockFile = path.join(home, "packages.lock")
+  for (const bad of ["../outside", "a/../../b", "/abs"]) {
+    writeFileSync(
+      lockFile,
+      JSON.stringify({
+        lockfileVersion: 1,
+        packages: {
+          x: {
+            version: "1.0.0",
+            source: { type: "git", url: "file:///r", path: bad },
+            pinned: {},
+            installedAt: "",
+          },
+        },
+      }),
+    )
+    expect(() => readLock(lockFile)).toThrow('entry "x" has a git "path" outside the repository')
+  }
 })
 
 test("update leaves a package in a repository's subdirectory alone when only other parts changed", async () => {
