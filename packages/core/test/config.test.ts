@@ -480,3 +480,10 @@ test("tui settings: bell, title, progress, reflow and submitWhileWorking", () =>
     'f: unknown setting "tui.blink" (ignored)',
   ])
 })
+
+test("tui.mode is fullscreen or inline", () => {
+  for (const mode of ["fullscreen", "inline"] as const) {
+    expect(validateSettings({ tui: { mode } }, "f")).toEqual({ settings: { tui: { mode } }, warnings: [] })
+  }
+  expect(() => validateSettings({ tui: { mode: "split" } }, "f")).toThrow('"tui.mode"')
+})

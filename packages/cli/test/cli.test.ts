@@ -32,6 +32,13 @@ test("rejects inconsistent flags", () => {
   expect(() => parseCliArgs(["--nope"], here, {})).toThrow(UsageError)
 })
 
+test("--inline and --fullscreen pick the UI's mode; unset leaves it to settings", () => {
+  expect(parseCliArgs(["--inline"], here, {}).mode).toBe("inline")
+  expect(parseCliArgs(["--fullscreen", "hi"], here, {}).mode).toBe("fullscreen")
+  expect(parseCliArgs(["hi"], here, {}).mode).toBeUndefined()
+  expect(() => parseCliArgs(["--inline", "--fullscreen"], here, {})).toThrow(UsageError)
+})
+
 test("supports -- before a dash-prefixed prompt", () => {
   expect(parseCliArgs(["-p", "--", "-weird"], here, {}).prompt).toBe("-weird")
 })
