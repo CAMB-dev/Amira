@@ -115,8 +115,9 @@ test("quitting says how to continue the session, set apart by blank lines", asyn
   expect(exitNote({ session: { id: "s_old" }, messages: [1] }, 0, here)).toBe(
     "\nContinue this session with amira -r s_old.\n\n",
   )
-  // Nothing to continue: nothing printed.
-  expect(exitNote({ session: { id: "s_new" }, messages: [] }, 0, here)).toBe("")
+  // Nothing to continue: only the blank line that sets the shell's prompt apart.
+  expect(exitNote({ session: { id: "s_new" }, messages: [] }, 0, here)).toBe("\n")
+  expect(exitNote({ session: undefined, messages: [1] }, 0, here)).toBe("\n")
 })
 
 test("amira -p -r lists this directory's sessions and exits", async () => {
