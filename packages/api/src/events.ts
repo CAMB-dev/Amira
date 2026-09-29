@@ -229,6 +229,25 @@ export interface InterceptorMap {
   /** Runs before a tool executes. Only `args` may be modified; block returns an error result to the model. */
   "tool.call.before": { readonly toolCallId: string; readonly name: string; args: Record<string, unknown> }
   /**
+   * Runs once a tool call has its result, before tool.execute.end and before the result joins
+   * the history: for calls that ran and for rejected ones (`rejected`), not for calls cut off
+   * by an interrupt. Only `result` may be modified, e.g. to append a linter's findings for the
+   * file an edit touched; block counts as pass. Failures pass, with the result unchanged.
+   * `pending` lists the other calls of the same model reply that have no result yet (running
+   * or still to start), so a handler can wait for the last of several edits and act once.
+   * `cwd` is the calling session's working directory, which relative paths in `args` are
+   * relative to.
+   */
+  "tool.result.after": {
+    readonly toolCallId: string
+    readonly name: string
+    readonly args: Readonly<Record<string, unknown>>
+    readonly cwd: string
+    readonly rejected?: ToolRejection
+    readonly pending: readonly { readonly toolCallId: string; readonly name: string }[]
+    result: ToolResult
+  }
+  /**
    * Runs before every model call, ahead of context.build, with the system prompt's sections
    * in order ("identity", "environment", "project", "skills", "deferred-tools", "role").
    * modify may edit, add or remove sections. Failures pass.

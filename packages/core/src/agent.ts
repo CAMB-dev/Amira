@@ -150,6 +150,8 @@ interface CallRun {
   started: boolean
   /** The batch recorded this call's result; later updates and results from it are dropped. */
   finished: boolean
+  /** The call has its result (tool.result.after may still be running on it). */
+  returned?: boolean
   result?: ToolResultMessage
 }
 
@@ -987,7 +989,7 @@ export class Agent {
         const before = key === undefined ? undefined : lastByKey.get(key)
         const task: Promise<void> = (async () => {
           if (before) await before
-          const r = await this.#runTool(turn, run)
+          const r = await this.#runTool(turn, run, runs)
           if (!run.finished) run.result = r
         })().finally(() => running.delete(task))
         running.add(task)
@@ -1029,18 +1031,34 @@ export class Agent {
   }
 
   /** Never rejects: every failure becomes an error result for the model. */
-  async #runTool(turn: Turn, run: CallRun): Promise<ToolResultMessage> {
+  async #runTool(turn: Turn, run: CallRun, batch: readonly CallRun[]): Promise<ToolResultMessage> {
     const call = run.call
     const started = performance.now()
-    const reject = (rejected: ToolRejection, text: string) => {
-      this.#emitToolStart(turn, run, call.args)
-      this.#emitToolEnd(turn, call, { content: [{ type: "text", text }], isError: true }, 0, rejected)
-      return toolError(call, text)
+    // Every outcome goes through tool.result.after, then tool.execute.end.
+    const finish = async (
+      args: Record<string, unknown>,
+      first: ToolResult,
+      durationMs: number,
+      rejected?: ToolRejection,
+    ): Promise<ToolResultMessage> => {
+      run.returned = true
+      if (rejected) this.#emitToolStart(turn, run, args)
+      const result = await this.#afterTool(turn, run, batch, args, first, rejected)
+      if (!run.finished) this.#emitToolEnd(turn, call, result, durationMs, rejected)
+      return {
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName: call.name,
+        content: result.content,
+        isError: result.isError ?? false,
+      }
     }
+    const reject = (rejected: ToolRejection, text: string, args = call.args) =>
+      finish(args, { content: [{ type: "text", text }], isError: true }, 0, rejected)
     try {
       const bad = invalidArgs(call.args)
       if (bad !== undefined) {
-        return reject(
+        return await reject(
           "invalidArgs",
           `Invalid JSON in tool arguments. Retry with valid JSON. Received: ${bad.slice(0, 500)}`,
         )
@@ -1051,7 +1069,7 @@ export class Agent {
           .active()
           .map((t) => t.name)
           .join(", ")
-        return reject("unknownTool", `Unknown tool "${call.name}". Available tools: ${names}`)
+        return await reject("unknownTool", `Unknown tool "${call.name}". Available tools: ${names}`)
       }
       const gate = await this.interceptors.run(
         "tool.call.before",
@@ -1060,20 +1078,25 @@ export class Agent {
       )
       if (gate.blocked) {
         return turn.signal.aborted
-          ? reject("aborted", "Aborted by the user before this tool ran.")
-          : reject("blocked", `Tool call blocked: ${gate.reason}`)
+          ? await reject("aborted", "Aborted by the user before this tool ran.")
+          : await reject("blocked", `Tool call blocked: ${gate.reason}`)
       }
       const args = gate.value.args
       if (gate.ask) {
         const request = { sessionId: this.sessionId, toolCallId: call.id, name: call.name, args }
         const verdict = await this.#askApproval(turn, { ...request, reason: gate.ask.join("; ") })
-        if (turn.signal.aborted) return reject("aborted", "Aborted by the user before this tool ran.")
+        if (turn.signal.aborted)
+          return await reject("aborted", "Aborted by the user before this tool ran.", args)
         if (!verdict.approved) {
-          return reject("blocked", `Tool call not approved${verdict.reason ? `: ${verdict.reason}` : "."}`)
+          return await reject(
+            "blocked",
+            `Tool call not approved${verdict.reason ? `: ${verdict.reason}` : "."}`,
+            args,
+          )
         }
       }
       const problem = checkArgs(tool.parameters, args)
-      if (problem) return reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`)
+      if (problem) return await reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`, args)
 
       this.#emitToolStart(turn, run, args)
       // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
@@ -1099,22 +1122,51 @@ export class Agent {
           : `Tool failed: ${err instanceof Error ? err.message : String(err)}`
         result = { content: [{ type: "text", text: msg }], isError: true }
       }
-      if (!run.finished) {
-        this.#emitToolEnd(turn, call, result, Math.round(performance.now() - started))
-      }
-      return {
-        role: "toolResult",
-        toolCallId: call.id,
-        toolName: call.name,
-        content: result.content,
-        isError: result.isError ?? false,
-      }
+      return await finish(args, result, Math.round(performance.now() - started))
     } catch (err) {
-      return reject(
-        "blocked",
-        `Tool call failed before running: ${err instanceof Error ? err.message : String(err)}`,
-      )
+      run.returned = true
+      const text = `Tool call failed before running: ${err instanceof Error ? err.message : String(err)}`
+      this.#emitToolStart(turn, run, call.args)
+      if (!run.finished) {
+        this.#emitToolEnd(turn, call, { content: [{ type: "text", text }], isError: true }, 0, "blocked")
+      }
+      return toolError(call, text)
     }
+  }
+
+  /**
+   * Runs tool.result.after on a call's result. An interrupt skips it: the result stands as it
+   * is, like after a failing handler.
+   */
+  async #afterTool(
+    turn: Turn,
+    run: CallRun,
+    batch: readonly CallRun[],
+    args: Record<string, unknown>,
+    result: ToolResult,
+    rejected?: ToolRejection,
+  ): Promise<ToolResult> {
+    if (turn.signal.aborted || run.finished) return result
+    const pending = batch
+      .filter((r) => r !== run && !r.returned && !r.finished)
+      .map((r) => ({ toolCallId: r.call.id, name: r.call.name }))
+    const out = await this.interceptors.run(
+      "tool.result.after",
+      {
+        toolCallId: run.call.id,
+        name: run.call.name,
+        args,
+        cwd: this.cwd,
+        ...(rejected ? { rejected } : {}),
+        pending,
+        result,
+      },
+      { sessionId: this.sessionId, signal: turn.signal },
+    )
+    const next = out.value.result
+    // A handler that broke the result leaves it as it was.
+    if (next === result || !Array.isArray(next?.content)) return result
+    return normalizeResult(next)
   }
 
   /**
