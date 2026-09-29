@@ -19,6 +19,7 @@ export type FailurePolicy = "pass" | "block"
 export const FAILURE_POLICY: Record<keyof InterceptorMap, FailurePolicy> = {
   "context.build": "pass",
   "tool.call.before": "block",
+  "tool.call.after": "pass",
   "system.build": "pass",
   "compact.before": "pass",
 }
@@ -100,6 +101,8 @@ export class InterceptorRegistry {
         }
         continue
       }
+      // After the fact there is nothing left to block.
+      if (result.action === "block" && point === "tool.call.after") continue
       if (result.action === "block") return { blocked: true, reason: result.reason, value: current }
       if (result.action === "modify") current = result.value
       if (result.action === "ask" && point === "tool.call.before") ask.push(result.reason)

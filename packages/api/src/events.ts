@@ -229,6 +229,19 @@ export interface InterceptorMap {
   /** Runs before a tool executes. Only `args` may be modified; block returns an error result to the model. */
   "tool.call.before": { readonly toolCallId: string; readonly name: string; args: Record<string, unknown> }
   /**
+   * Runs after a tool ran, before its result reaches the model and tool.execute.end is
+   * emitted; not for calls that were rejected, blocked or aborted first. Only `result` may be
+   * modified, e.g. to add a formatter's complaints or a language server's diagnostics to what
+   * the model reads. block counts as pass. Failures pass, and the result stays as it was.
+   */
+  "tool.call.after": {
+    readonly toolCallId: string
+    readonly name: string
+    /** The arguments the tool ran with. */
+    readonly args: Readonly<Record<string, unknown>>
+    result: ToolResult
+  }
+  /**
    * Runs before every model call, ahead of context.build, with the system prompt's sections
    * in order ("identity", "environment", "project", "skills", "deferred-tools", "role").
    * modify may edit, add or remove sections. Failures pass.

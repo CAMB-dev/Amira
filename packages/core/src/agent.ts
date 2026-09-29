@@ -1099,6 +1099,14 @@ export class Agent {
           : `Tool failed: ${err instanceof Error ? err.message : String(err)}`
         result = { content: [{ type: "text", text: msg }], isError: true }
       }
+      if (!turn.signal.aborted && !run.finished) {
+        const after = await this.interceptors.run(
+          "tool.call.after",
+          { toolCallId: call.id, name: call.name, args, result },
+          { sessionId: this.sessionId, signal: turn.signal },
+        )
+        if (!after.blocked && after.value.result !== result) result = normalizeResult(after.value.result)
+      }
       if (!run.finished) {
         this.#emitToolEnd(turn, call, result, Math.round(performance.now() - started))
       }
