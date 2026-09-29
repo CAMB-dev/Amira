@@ -144,6 +144,14 @@ test("web settings are checked", () => {
   expect(() => validateSettings({ web: { fetch: { maxChars: 0 } } }, "f")).toThrow("web.fetch.maxChars")
 })
 
+test("the workflow extension's section is kept as it is, for the extension to check", () => {
+  const ok = { workflow: { enabled: "always", maxAgents: 12, budget: { tokens: 500000 } } }
+  const v = validateSettings(ok, "f")
+  expect(v.settings).toEqual(ok)
+  expect(v.warnings).toEqual([])
+  expect(() => validateSettings({ workflow: "always" }, "f")).toThrow('"workflow" must be an object')
+})
+
 test("command aliases are checked: alias names like command names, values command lines", () => {
   const ok = { commandAliases: { ds: "model deepseek/deepseek-flash", "?": "help", m: " model " } }
   expect(validateSettings(ok, "f").settings).toEqual(ok)

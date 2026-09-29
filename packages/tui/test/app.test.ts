@@ -8,6 +8,7 @@ import {
   type Message,
   type SessionControl,
   type SkillDefinition,
+  type SpawnGroup,
   type TuiSettings,
   textResult,
 } from "@amira/api"
@@ -1868,6 +1869,75 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   await waitFor(() => !live().includes("◆ background"), "the rows gone")
   // Its end is reported by its notice (the agent extension's), not by an end line of its own.
   expect(all()).not.toContain("◆ Scan the logs ✓")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a compact spawn group shows as one line with its owner's status, not a row per member", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const reply = (req: { messages: { role: string; content: unknown }[] }) => {
+    const task = JSON.stringify(req.messages[0]?.content)
+    const answered = req.messages.at(-1)?.role === "toolResult"
+    if (task.includes("step"))
+      return answered ? { text: "step done" } : { toolCalls: [{ name: "hold", args: {} }] }
+    return answered ? { text: "running it" } : { toolCalls: [{ name: "flow", args: {} }] }
+  }
+  const { terminal, live, all, shows, idle, exited, agent, bus } = await setup(
+    [reply, reply, reply, reply, reply, reply, reply, reply],
+    { cols: 90, tree: true },
+  )
+  let group: SpawnGroup | undefined
+  // Members wait here until the test has seen the line.
+  agent.tools.register(
+    defineTool({
+      name: "hold",
+      ...parallel,
+      execute: async () => {
+        await gate
+        return textResult("held")
+      },
+    }),
+    "test",
+  )
+  agent.tools.register(
+    defineTool({
+      name: "flow",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        group = ctx.session!.createGroup!({ name: "workflow demo", compact: true })
+        group.setStatus("Explore · 0/3 agents")
+        const kids = ["Scan api", "Scan core", "Scan tui"].map((title) =>
+          group!.spawn({ role: "explorer", title, prompt: `step ${title}` }),
+        )
+        void Promise.all(kids.map((k) => k.result())).then(() => group!.end())
+        return textResult("Started in the background")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("running it")
+  await idle()
+  await waitFor(
+    () =>
+      /● flow · 3 sub-agents · running in background · \d+s\n {2}└ ◆ workflow demo · Explore · 0\/3 agents\n/.test(
+        live(),
+      ),
+    "one line for the group",
+  )
+  expect(live()).not.toContain("Scan api")
+  group!.setStatus("Verify · 2/3 agents")
+  await waitFor(() => live().includes("◆ workflow demo · Verify · 2/3 agents"), "the new status")
+  release()
+  await group!.ended()
+  await bus.flush()
+  await waitFor(() => !live().includes("workflow demo"), "the line gone")
+  // Its members never get lines of their own.
+  expect(all()).not.toContain("Scan core")
   terminal.send("\x03")
   await exited
 })

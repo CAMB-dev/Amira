@@ -203,7 +203,10 @@ test("a frontend with full-screen views hands openView to commands; others leave
     "test",
   )
   await host.run("/look", { frontend: "rpc" })
-  await host.run("/look", { frontend: "tui", openView: (v) => void seen.push(v.sessionId) })
+  await host.run("/look", {
+    frontend: "tui",
+    openView: (v) => void seen.push("sessionId" in v ? v.sessionId : v.kind),
+  })
   expect(seen).toEqual([false, true, "s_child"])
 })
 

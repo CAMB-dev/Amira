@@ -2,8 +2,8 @@ import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef, U
 import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
-import type { SubagentStatus } from "./subagents.ts"
-import type { ToolExposure } from "./tools.ts"
+import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
+import type { PendingNotice, ToolExposure } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
 
 /** A suggestion for a command's argument text. */
@@ -87,16 +87,40 @@ export interface CommandContext extends CommandCompleteContext {
   quit(): void
   /**
    * Shows a full-screen view, on frontends that have them (the TUI does); unset elsewhere.
-   * Returns once the view is shown; the user leaves it when done.
+   * Returns once the view is shown; the user leaves it when done. Throws for a view kind no
+   * extension registered (see ExtensionAPI.registerView).
    */
   readonly openView?: (view: FrontendView) => void
 }
 
-/** A full-screen view a frontend can show: for now the live transcript of a sub-agent. */
-export type FrontendView = { kind: "subagent"; sessionId: string }
+/**
+ * A full-screen view a frontend can show: the live transcript of a sub-agent, or a view kind
+ * an extension registered, over the data given here (see ViewDefinition).
+ */
+export type FrontendView = SubagentView | ExtensionView
 
-/** Where a sub-agent is: waiting for a slot, working, or how it ended. */
-export type SubagentState = "queued" | "running" | SubagentStatus
+export interface SubagentView {
+  kind: "subagent"
+  sessionId: string
+}
+
+export interface ExtensionView {
+  /** A kind registered with ExtensionAPI.registerView. */
+  kind: string
+  /** What the view shows; it is read again at each redraw, so changes to it show up. */
+  data?: unknown
+}
+
+/** Whether `view` is the frontend's own sub-agent view rather than an extension's. */
+export function isSubagentView(view: FrontendView): view is SubagentView {
+  return view.kind === "subagent" && typeof (view as Partial<SubagentView>).sessionId === "string"
+}
+
+/**
+ * Where a sub-agent is: waiting for a slot, working, idle between turns (persistent ones
+ * only), or how it ended.
+ */
+export type SubagentState = "queued" | "running" | "idle" | SubagentStatus
 
 /** A sub-agent of the session, running or finished, as commands list it. */
 export interface SubagentInfo {
@@ -121,6 +145,14 @@ export interface SubagentInfo {
   /** Tokens and cost of its own replies so far, its sub-agents excluded. */
   usage: Usage
   error?: string
+  /** Why it ended early without failing (stopped, turn limit). */
+  note?: string
+  /** A long-lived child (SpawnOptions.persistent). */
+  persistent?: boolean
+  /** Turns started so far, for persistent children. */
+  turns?: number
+  /** The spawn group it counts against. */
+  groupId?: string
 }
 
 export interface SessionInfo {
@@ -198,6 +230,19 @@ export interface SessionControl {
    * result says it was stopped by the user. False when it is unknown or already ended.
    */
   stopSubagent(id: string): boolean
+  /**
+   * Creates a spawn group whose sub-agents are children of this session, e.g. for a command
+   * that runs a workflow. Unset where the host has no agent tree.
+   */
+  readonly createGroup?: (opts: SpawnGroupOptions) => SpawnGroup
+  /** The agent tree's spawn groups, active and ended, oldest first; unset without a tree. */
+  readonly groups?: () => SpawnGroupInfo[]
+  /**
+   * Announces a message the session gets later, as ToolSession.expectNotice does: e.g. the
+   * result of work a command started in the background. Unset where the host cannot wake the
+   * session.
+   */
+  readonly expectNotice?: () => PendingNotice
   /** "provider/model" refs to offer, from providers that have a key. */
   models(): string[]
   /** Switches the model for later turns; throws for an unknown one. */

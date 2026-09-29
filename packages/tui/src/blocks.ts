@@ -10,9 +10,9 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { isLastSibling, replyRows, userLines, userText } from "./format.ts"
+import { replyRows, userLines, userText } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
-import { childrenOf, nodeRows, type SubagentNode, subtree, treeRows } from "./subagents.ts"
+import { childrenOf, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
 import { type FinishedCall, finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
 import type { BlockKind } from "./transcript.ts"
 
@@ -29,6 +29,8 @@ export interface BlockEnv {
   hyperlinks: boolean
   /** Every sub-agent seen, by id; tool calls draw theirs from here. */
   nodes: Map<string, SubagentNode>
+  /** Spawn groups by id; a compact one's members show as one line. */
+  groups?: SpawnGroups
 }
 
 let nextId = 1
@@ -337,7 +339,7 @@ export class ToolBlock extends Block {
       }
       return [
         ...runningToolLines(theme, presenter, call, now, env.spinner, width),
-        ...treeRows(tree, now, width, theme),
+        ...treeRows(tree, now, width, theme, env.groups),
       ]
     }
     const detail = this.detail(env)
@@ -355,7 +357,7 @@ export class ToolBlock extends Block {
       ]
     } else {
       // The call's own result line comes after them, so only a nested one can close a level.
-      rows = tree.flatMap((n, i) => nodeRows(n, now, width, theme, n.depth > 1 && isLastSibling(tree, i)))
+      rows = treeRows(tree, now, width, theme, env.groups, false)
     }
     lines.splice(1, 0, ...rows)
     return lines
@@ -422,7 +424,10 @@ export class SubagentGroupBlock extends Block {
     const list = subtree(env.nodes, node)
     this.running = list.some((n) => !n.end)
     const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted("background")}`
-    return [truncateToWidth(head, env.width, glyphs.more), ...treeRows(list, env.now, env.width, env.theme)]
+    return [
+      truncateToWidth(head, env.width, glyphs.more),
+      ...treeRows(list, env.now, env.width, env.theme, env.groups),
+    ]
   }
 
   copyText(): string {

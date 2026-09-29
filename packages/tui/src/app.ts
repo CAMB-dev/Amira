@@ -3,6 +3,7 @@ import {
   type AnyEvent,
   type CommandDefinition,
   type FrontendView,
+  isSubagentView,
   modelLabel,
   type ToolDetailLevel,
   type TuiSettings,
@@ -42,6 +43,7 @@ import {
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer } from "./dialog.ts"
+import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
 import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
@@ -79,6 +81,8 @@ export interface InteractiveOptions {
   registerCommand?: (command: CommandDefinition) => () => void
   /** Presenters of tool calls registered by extensions (D1); unknown tools use a generic one. */
   toolRenderers?: PresenterSource
+  /** Full-screen view kinds registered by extensions, which commands open with openView. */
+  views?: ViewSource
   /** Events emitted before the UI subscribed, such as extension load errors. */
   startupEvents?: AnyEvent[]
   /** Sent as the first message once the UI is up. */
@@ -466,10 +470,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   /**
-   * The full-screen sub-agent viewer, open over the conversation. Inline, the UI is suspended
-   * meanwhile: what the main session commits is held and printed when it closes.
+   * The full-screen sub-agent viewer or an extension's view, open over the conversation. Inline,
+   * the UI is suspended meanwhile: what the main session commits is held and printed when it closes.
    */
-  let viewer: SubagentViewer | undefined
+  let viewer: SubagentViewer | ExtensionViewer | undefined
   let viewerTimer: ReturnType<typeof setInterval> | undefined
   /**
    * Forms (ui.form) waiting to be shown full screen, oldest first; the first one is open while
@@ -505,21 +509,48 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
 
   function openView(v: FrontendView) {
-    // A form owns the screen until it is answered.
-    if (v.kind !== "subagent" || !commands || form) return
-    if (viewer) viewer.show(v.sessionId)
+    if (isSubagentView(v)) {
+      // A form owns the screen until it is answered.
+      if (!commands || form) return
+      if (viewer instanceof SubagentViewer) viewer.show(v.sessionId)
+      else {
+        showOverlay(
+          new SubagentViewer(v.sessionId, {
+            source: commands.control,
+            waiting: waitingTitles,
+            onClose: closeView,
+            ...(presenters ? { presenters } : {}),
+          }),
+        )
+      }
+      view.renderOverlay()
+      return
+    }
+    const definition = opts.views?.get(v.kind)
+    if (!definition) throw new Error(`there is no "${v.kind}" view`)
+    if (form) return
+    if (viewer instanceof ExtensionViewer && viewer.kind === v.kind) viewer.show(v.data)
     else {
-      viewer = new SubagentViewer(v.sessionId, {
-        source: commands.control,
-        waiting: waitingTitles,
-        onClose: closeView,
-        ...(presenters ? { presenters } : {}),
-      })
-      view.openOverlay()
-      // Elapsed times move even when no event comes.
-      viewerTimer = setInterval(() => view.requestOverlayRender(), 1000)
+      showOverlay(
+        new ExtensionViewer(definition, v.data, {
+          waiting: waitingTitles,
+          onClose: closeView,
+          requestRender: () => view.requestOverlayRender(),
+          onError: (error) => view.notice("warning", `[view ${v.kind}] ${error}`),
+        }),
+      )
     }
     view.renderOverlay()
+  }
+
+  /** Puts `next` over the conversation, in place of the viewer open there if any. */
+  function showOverlay(next: SubagentViewer | ExtensionViewer) {
+    const opened = viewer !== undefined
+    viewer = next
+    if (opened) return
+    view.openOverlay()
+    // Elapsed times move even when no event comes.
+    viewerTimer = setInterval(() => view.requestOverlayRender(), 1000)
   }
 
   function closeView() {
@@ -565,7 +596,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const onEvent = (e: AnyEvent) => {
     if (view.subagentEvent(e)) view.requestRender()
-    if (viewer?.handleEvent(e)) view.requestOverlayRender()
+    // An extension's view may show anything: it is drawn again at each event (at most once a frame).
+    if (viewer instanceof ExtensionViewer || viewer?.handleEvent(e)) view.requestOverlayRender()
     if (form && (e.type === "ui.request" || e.type === "ui.resolved")) view.requestOverlayRender()
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return

@@ -1,6 +1,6 @@
-import { type AnyEvent, type EventEnvelope, fallbackTitle } from "@amira/api"
+import { type AnyEvent, type EventEnvelope, fallbackTitle, type SpawnGroupInfo } from "@amira/api"
 import type { Theme } from "@amira/tui-kit"
-import { isLastSibling, type SubagentLine, subagentEndLine, subagentRows } from "./format.ts"
+import { isLastSibling, type SubagentLine, spawnGroupRow, subagentEndLine, subagentRows } from "./format.ts"
 import { callSummary, type PresenterSource } from "./tool-view.ts"
 
 /** A sub-agent the UI follows: its row, where it hangs, and how it ended once it did. */
@@ -10,6 +10,8 @@ export interface SubagentNode extends SubagentLine {
   parent: string
   /** The call of `parent` that started it. */
   toolCallId?: string
+  /** The spawn group it counts against. */
+  groupId?: string
   end?: { status: "done" | "error" | "aborted"; error?: string; durationMs: number; tokens: number }
   /**
    * Its call was committed while it ran (inline): it returned at once (the sub-agent runs in
@@ -24,6 +26,7 @@ export function startedNode(e: EventEnvelope<"subagent.start">): SubagentNode {
     id: e.data.childSessionId,
     parent: e.sessionId,
     ...(e.data.toolCallId ? { toolCallId: e.data.toolCallId } : {}),
+    ...(e.data.groupId ? { groupId: e.data.groupId } : {}),
     title: e.data.title || fallbackTitle(e.data.prompt),
     role: e.data.role ?? "agent",
     depth: e.data.depth,
@@ -97,7 +100,53 @@ export function nodeRows(n: SubagentNode, now: number, width: number, t: Theme, 
   return n.end ? [subagentEndLine(n, n.end, width, t, last)] : subagentRows(n, now, width, t, last)
 }
 
-/** Rows of a depth-first list of sub-agents, each closing its level ("└") when it is the last. */
-export function treeRows(list: SubagentNode[], now: number, width: number, t: Theme): string[] {
-  return list.flatMap((n, i) => nodeRows(n, now, width, t, isLastSibling(list, i)))
+/** Spawn groups of a session's tree, by id, as their latest event had them. */
+export type SpawnGroups = Map<string, SpawnGroupInfo>
+
+/** The group a sub-agent's row is folded into: one shown as a single line (SpawnGroupOptions.compact). */
+export function compactGroup(groups: SpawnGroups | undefined, n: SubagentNode): SpawnGroupInfo | undefined {
+  const g = n.groupId !== undefined ? groups?.get(n.groupId) : undefined
+  return g?.compact ? g : undefined
+}
+
+/**
+ * Records a group.* event; true when it changes what is shown (only a compact group's own line
+ * shows it). False for other events.
+ */
+export function trackGroup(groups: SpawnGroups, e: AnyEvent): boolean {
+  if (e.type !== "group.start" && e.type !== "group.update" && e.type !== "group.end") return false
+  groups.set(e.data.group.id, e.data.group)
+  return e.data.group.compact === true
+}
+
+/**
+ * Rows of a depth-first list of sub-agents, each closing its level ("└") when it is the last.
+ * The members of a compact group (and theirs) are one row for the whole group, where its first
+ * member would be. With `closeTop` false, only a nested row can close a level (a finished
+ * call's result line comes after them).
+ */
+export function treeRows(
+  list: SubagentNode[],
+  now: number,
+  width: number,
+  t: Theme,
+  groups?: SpawnGroups,
+  closeTop = true,
+): string[] {
+  const items: (SubagentNode | { group: SpawnGroupInfo; depth: number })[] = []
+  const folded = new Set<string>()
+  for (const n of list) {
+    const g = compactGroup(groups, n)
+    if (!g) items.push(n)
+    else if (!folded.has(g.id)) {
+      folded.add(g.id)
+      items.push({ group: g, depth: n.depth })
+    }
+  }
+  return items.flatMap((item, i) => {
+    const last = (closeTop || item.depth > 1) && isLastSibling(items, i)
+    return "group" in item
+      ? [spawnGroupRow(item.group, item.depth, width, t, last)]
+      : nodeRows(item, now, width, t, last)
+  })
 }

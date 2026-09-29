@@ -93,6 +93,9 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     stopSubagent: (id) =>
       listSubagents(agent(), session.tree).some((e) => e.info.id === id) &&
       session.tree.stop(id, "stopped by the user"),
+    createGroup: (groupOpts) => session.tree.createGroup(agent(), groupOpts),
+    groups: () => session.tree.groups(),
+    expectNotice: () => agent().expectNotice(),
     models: () => {
       const m = agent().model
       // NO_MODEL is no choice to offer.

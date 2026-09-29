@@ -1,4 +1,4 @@
-import type { UserMessage } from "@amira/api"
+import type { SpawnGroupInfo, UserMessage } from "@amira/api"
 import { type Theme, truncateToWidth, wrapText } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
@@ -177,6 +177,31 @@ export function subagentEndLine(
         ? theme.muted("stopped")
         : theme.muted(oneLine(sub.lastText ?? "") || "(no answer)")
   const line = `${subagentIndent(sub.depth)}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${mark} ${theme.muted(`${stats} ${s}`)} ${said}`
+  return truncateToWidth(line, width, glyphs.more)
+}
+
+/**
+ * The one line a compact spawn group (e.g. a workflow run) shows in place of its members'
+ * rows: `└ ◆ workflow deep-review · Verify · 3/7 agents · 12.3k tok`, from its owner's status
+ * line, or else from its counts.
+ */
+export function spawnGroupRow(
+  group: SpawnGroupInfo,
+  depth: number,
+  width: number,
+  theme: Theme,
+  last = true,
+): string {
+  const s = glyphs.separator
+  const a = group.agents
+  const counts = [
+    `${a.ended}/${a.total} done`,
+    ...(a.working ? [`${a.working} working`] : []),
+    ...(a.queued ? [`${a.queued} queued`] : []),
+    `${compactTokens(group.tokens)} tok`,
+  ].join(` ${s} `)
+  const about = group.status ? oneLine(group.status) : counts
+  const line = `${subagentIndent(depth)}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(group.name)} ${theme.muted(`${s} ${about}`)}`
   return truncateToWidth(line, width, glyphs.more)
 }
 

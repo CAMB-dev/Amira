@@ -6,6 +6,7 @@ import type { SkillDefinition } from "./skills.ts"
 import type { ToolPresenter } from "./tool-renderers.ts"
 import type { ToolDefinition } from "./tools.ts"
 import type { StatusItem, UiApi } from "./ui.ts"
+import type { ViewDefinition } from "./views.ts"
 
 export interface InterceptContext {
   sessionId: string
@@ -38,6 +39,13 @@ export interface ExtensionAPI {
    * the tool. The last presenter registered for a name wins; removing it restores the one before.
    */
   registerToolRenderer(toolName: string, presenter: ToolPresenter<any, any>): () => void
+  /**
+   * Experimental: adds a full-screen view kind that commands open with CommandContext.openView
+   * and data of their own. Like presenters, the last view registered for a kind wins and
+   * removing it restores the one before. The frontend's own kind ("subagent") is reported as
+   * extension.error and skipped.
+   */
+  registerView(view: ViewDefinition): () => void
   /** Asks frontends to redraw, e.g. after a status item's state changed. */
   requestRender(): void
   /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */

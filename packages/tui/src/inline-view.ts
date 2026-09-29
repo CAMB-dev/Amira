@@ -13,11 +13,14 @@ import { glyphs } from "./glyphs.ts"
 import { historyLines } from "./history.ts"
 import {
   childrenOf,
+  compactGroup,
   endNode,
   rootCall as rootCallOf,
+  type SpawnGroups,
   type SubagentNode,
   startedNode,
   subtree as subtreeOf,
+  trackGroup,
   treeRows,
   updateNode,
 } from "./subagents.ts"
@@ -57,6 +60,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
    * is committed with it; one whose call was committed already goes when it ends.
    */
   const subagents = new Map<string, SubagentNode>()
+  /** Spawn groups of this session's tree, as their latest event had them. */
+  const spawnGroups: SpawnGroups = new Map()
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tickSubagents = () => {
@@ -99,7 +104,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const presenter = presenters?.get(c.name)
       if (c.end) rows.push(heldToolLine(ctx.theme, presenter, finished(c), width))
       else rows.push(...runningToolLines(ctx.theme, presenter, c, now, host.spinner.glyph, width))
-      rows.push(...treeRows(callTree(c.id), now, width, ctx.theme))
+      rows.push(...treeRows(callTree(c.id), now, width, ctx.theme, spawnGroups))
     }
     return rows
   }
@@ -126,7 +131,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
           ? `${t.accent(glyphs.subagent)} ${t.muted("background")}`
           : `${t.success(glyphs.toolRunning)} ${t.accent(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
       rows.push(truncateToWidth(head, width, glyphs.more))
-      rows.push(...treeRows(group.flatMap(subtree), now, width, t))
+      rows.push(...treeRows(group.flatMap(subtree), now, width, t, spawnGroups))
     }
     return [...rows, ""]
   }
@@ -199,7 +204,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const ends: string[] = []
       const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
       for (const [i, n] of tree.entries()) {
-        if (n.end) {
+        if (n.end && compactGroup(spawnGroups, n)) {
+          // A compact group's line tells how it goes; its members get no lines of their own.
+          subagents.delete(n.id)
+        } else if (n.end) {
           // The call's own result line comes after them, so only a nested one can close a level.
           const last = n.depth > 1 && isLastSibling(tree, i)
           ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last))
@@ -240,7 +248,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
    * reports it; a line here would say it twice.
    */
   function endsAlone(n: SubagentNode): boolean {
-    return n.detached !== "background" && n.end?.status === "aborted"
+    return n.detached !== "background" && n.end?.status === "aborted" && !compactGroup(spawnGroups, n)
   }
 
   /** Keeps the sub-agent rows current; true when the event was about a sub-agent. */
@@ -267,6 +275,12 @@ export function createInlineView(host: ViewHost): TranscriptView {
         if (endsAlone(node)) commitBlock("tool", [subagentEndLine(node, node.end!, terminal.columns, theme)])
         break
       }
+      case "group.start":
+      case "group.update":
+      case "group.end":
+        // Only a compact group's own line shows it.
+        if (!mine || !trackGroup(spawnGroups, e)) return false
+        break
       case "budget.exceeded":
         commitBlock(
           "notice",
@@ -305,6 +319,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     renderOverlay: () => fullScreen.render(),
     stop() {
       subagents.clear()
+      spawnGroups.clear()
       tickSubagents()
       // What was committed but not drawn yet still belongs in the scrollback.
       if (pendingCommits.length) renderer.render()

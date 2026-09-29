@@ -72,6 +72,11 @@ export function subagentStats(theme: Theme, info: SubagentInfo, now: number): st
   return `${statusStyle(theme, info)(info.status)}${theme.muted(`${when} · ${tokens}${cost}`)}`
 }
 
+/** Not ended: running, waiting for a place to run, or (a persistent one) idle between turns. */
+function isLive(info: SubagentInfo): boolean {
+  return info.status === "running" || info.status === "queued" || info.status === "idle"
+}
+
 function blockText(content: Message["content"]): string {
   return content.map((b) => (b.type === "text" ? b.text : b.type === "image" ? "[image]" : "")).join("\n")
 }
@@ -121,7 +126,7 @@ export function transcriptLines(
   const results = new Map<string, ToolResultMessage>()
   for (const m of own) if (m.role === "toolResult") results.set(m.toolCallId, m)
   const rest = [...kids]
-  const finished = info.status !== "running" && info.status !== "queued"
+  const finished = !isLive(info)
   const kidLine = (k: SubagentInfo, indent: string) =>
     truncateToWidth(
       `${indent}${theme.accent("◆")} ${k.title} ${theme.muted(`· ${k.role} · ${k.id}`)} ${subagentStats(theme, k, now)} ${theme.muted(`· ${k.task.replace(/\s+/g, " ").trim()}`)}`,
@@ -315,9 +320,15 @@ export class SubagentViewer implements Component {
     const out = [...this.#cache.lines]
     const s = this.#streams.get(info.id)
     if (s?.text.trim()) out.push(...wrapText(s.text.trim(), width), "")
-    if (info.status === "running" || info.status === "queued") {
+    if (isLive(info)) {
       const what =
-        info.status === "queued" ? "waiting for a free slot" : s?.thinking ? "thinking…" : "working…"
+        info.status === "queued"
+          ? "waiting for a free slot"
+          : info.status === "idle"
+            ? "idle, waiting for a message"
+            : s?.thinking
+              ? "thinking…"
+              : "working…"
       out.push(theme.muted(`… ${what}`))
     } else if (info.error && info.status !== "done") out.push(theme.error(`✗ ${info.error}`))
     else out.push(theme.muted(`── ${info.status} ──`))
@@ -342,11 +353,7 @@ export class SubagentViewer implements Component {
   /** The one shown is running or queued and can be stopped from here. */
   #canStop(): boolean {
     const s = this.#shown.info
-    return (
-      !!this.#source.stopSubagent &&
-      s?.id === this.#current &&
-      (s.status === "running" || s.status === "queued")
-    )
+    return !!this.#source.stopSubagent && s?.id === this.#current && isLive(s)
   }
 
   #view(id: string): ScrollView {

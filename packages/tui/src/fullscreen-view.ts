@@ -28,7 +28,14 @@ import { compactTokens } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { historySeparator } from "./history.ts"
-import { endNode, type SubagentNode, startedNode, updateNode } from "./subagents.ts"
+import {
+  endNode,
+  type SpawnGroups,
+  type SubagentNode,
+  startedNode,
+  trackGroup,
+  updateNode,
+} from "./subagents.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
 import { lastReply, TranscriptPane } from "./transcript-pane.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
@@ -53,6 +60,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const pane = new TranscriptPane()
   /** Every sub-agent seen, by id; tool calls draw theirs from here. */
   const nodes = new Map<string, SubagentNode>()
+  /** Spawn groups of the sub-agents seen, as their latest event had them. */
+  const groups: SpawnGroups = new Map()
   /** Tool calls by id, for their sub-agents; kept after their turn. */
   const callBlocks = new Map<string, ToolBlock>()
   /** The block each sub-agent shows in, by its id: the call that started it (or its top ancestor), or one of its own. */
@@ -75,6 +84,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     presenters: host.presenters,
     hyperlinks: host.hyperlinks,
     nodes,
+    groups,
   })
 
   const root = new View((width, ctx) => {
@@ -433,6 +443,15 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           endNode(node, e)
           ownerOf(node)?.touch()
           break
+        }
+        case "group.start":
+        case "group.update":
+        case "group.end": {
+          if (!mine || !trackGroup(groups, e)) return false
+          // A compact group's line is drawn by the blocks its members show in.
+          for (const n of nodes.values()) if (n.groupId === e.data.group.id) ownerOf(n)?.touch()
+          renderer.requestRender()
+          return true
         }
         case "budget.exceeded":
           notice("warning", `Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`)

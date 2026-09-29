@@ -141,6 +141,22 @@ test("send passes a display along, whether it starts a turn or steers the runnin
   ])
 })
 
+test("a command's expectNotice wakes the idle session when the notice is delivered", async () => {
+  const { host } = await setup([{ text: "got it" }])
+  const notice = host.control.expectNotice!()
+  notice.deliver({
+    role: "user",
+    content: [{ type: "text", text: "the background work is done" }],
+    display: { text: "◆ done", origin: "test" },
+  })
+  const until = Date.now() + 2000
+  while (host.agent.messages.length < 2 && Date.now() < until) await Bun.sleep(5)
+  await host.agent.bus.flush()
+  expect(host.agent.messages.map((m) => m.role)).toEqual(["user", "assistant"])
+  const first = host.agent.messages[0]!
+  expect(first.role === "user" && first.display).toEqual({ text: "◆ done", origin: "test" })
+})
+
 test("/clear and /resume keep the model chosen on the active agent", async () => {
   const { host, run, session } = await setup()
   const first = host.agent.sessionId

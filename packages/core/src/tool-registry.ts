@@ -20,12 +20,21 @@ export class ToolRegistry {
    * A live view of `base` limited to the names `allow` accepts, e.g. a sub-agent's tools.
    * Registering through the view registers on `base`, and the disabled set is `base`'s.
    */
-  static view(base: ToolRegistry, allow: (name: string) => boolean): ToolRegistry {
+  static view(
+    base: ToolRegistry,
+    allow: (name: string) => boolean,
+    /** Tools only this view has, e.g. a sub-agent's return_result; they win over `base`'s. */
+    own: ToolDefinition[] = [],
+  ): ToolRegistry {
     const view = new ToolRegistry()
     view.#base = base
     view.#allow = allow
+    for (const tool of own) view.#own.set(tool.name, { tool, source: "core" })
     return view
   }
+
+  /** A view's own tools, by name. */
+  #own = new Map<string, Registered>()
 
   /**
    * Hides tools by name from the model. A disabled tool is not offered and calling it
@@ -66,13 +75,20 @@ export class ToolRegistry {
   }
 
   get(name: string): ToolDefinition | undefined {
+    const own = this.#own.get(name)
+    if (own) return own.tool
     if (this.#base) return this.#allow(name) ? this.#base.get(name) : undefined
     if (this.#disabled.has(name)) return undefined
     return this.#tools.get(name)?.at(-1)?.tool
   }
 
   #current(): Registered[] {
-    if (this.#base) return this.#base.#current().filter((r) => this.#allow(r.tool.name))
+    if (this.#base) {
+      const shown = this.#base
+        .#current()
+        .filter((r) => this.#allow(r.tool.name) && !this.#own.has(r.tool.name))
+      return [...shown, ...this.#own.values()]
+    }
     return [...this.#tools.values()].map((s) => s.at(-1)!)
   }
 
@@ -109,6 +125,7 @@ export class ToolRegistry {
 
   /** Whether a tool with this name is registered, disabled or not. */
   has(name: string): boolean {
+    if (this.#own.has(name)) return true
     if (this.#base) return this.#allow(name) && this.#base.has(name)
     return this.#tools.has(name)
   }

@@ -1,4 +1,5 @@
 export { type InteractiveOptions, runInteractive } from "./app.ts"
+export { ExtensionViewer, type ExtensionViewerOptions, type ViewSource } from "./extension-view.ts"
 export {
   type FormBackend,
   type FormScreenOptions,
