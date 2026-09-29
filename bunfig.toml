@@ -1,2 +1,3 @@
 [test]
+preload = ["./scripts/test-env.ts"]
 pathIgnorePatterns = [".claude/**", "**/node_modules/**"]
