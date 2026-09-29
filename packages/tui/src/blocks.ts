@@ -1,6 +1,7 @@
 import type { ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
 import { toolResultText } from "@amira/api"
 import {
+  defaultGlyphs,
   type ImageLoader,
   MarkdownStream,
   type MarkdownStreamOptions,
@@ -16,6 +17,7 @@ import {
 import { replyRows, userLines, userText } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { childrenOf, isActive, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
+import { type CopyRow, chromeRows, gutterRows } from "./text-selection.ts"
 import { type FinishedCall, finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
 import type { BlockKind } from "./transcript.ts"
 
@@ -96,6 +98,15 @@ export abstract class Block {
   /** The text "copy selected block" puts on the clipboard. */
   abstract copyText(): string
 
+  /**
+   * How each of its lines copies when text is selected with the mouse: `lines` as `lines`
+   * returned them, `plain` the same without styles. By default the symbols in front of rows
+   * (bullets, trees, result marks) are chrome.
+   */
+  copyRows(plain: readonly string[], _lines: readonly string[]): CopyRow[] {
+    return chromeRows(plain)
+  }
+
   /** Whether folding it shows less; folding does nothing to other blocks. */
   foldable(_env: BlockEnv): boolean {
     return false
@@ -135,6 +146,13 @@ export class LinesBlock extends Block {
 
   copyText(): string {
     return this.copy ?? ""
+  }
+
+  override copyRows(plain: readonly string[]): CopyRow[] {
+    // A message and a command echo sit behind "› ", their rows lined up after it.
+    if (this.kind === "user" || this.kind === "command")
+      return gutterRows(plain, visibleWidth(glyphs.user) + 1)
+    return chromeRows(plain)
   }
 }
 
@@ -370,6 +388,38 @@ export class ReplyBlock extends Block {
     return this.source.trim()
   }
 
+  /**
+   * Its rows copy without the reply's indent. Code blocks copy as their code: the frame rows
+   * are left out, the side before each row too, and a line of code wrapped over rows is one
+   * line again (matched against the source; if they do not match, its rows stay lines). An
+   * image copies as its alt text, once.
+   */
+  override copyRows(plain: readonly string[], lines: readonly string[]): CopyRow[] {
+    const indent = visibleWidth(glyphs.assistant)
+    const rows: CopyRow[] = plain.map(() => ({ from: indent }))
+    const frames = codeFrames(plain)
+    const fences = fencedCode(foldMarkdown(this.source, this.folded).text)
+    frames.forEach((f, i) => {
+      rows[f.top] = { from: 0, skip: true }
+      if (f.bottom !== undefined) rows[f.bottom] = { from: 0, skip: true }
+      const source = frames.length === fences.length ? fences[i] : undefined
+      const joins =
+        source &&
+        wrapsOf(
+          f.rows.map((r) => plain[r]!.slice(f.col)),
+          source,
+        )
+      for (const [k, r] of f.rows.entries())
+        rows[r] = joins?.[k] ? { from: f.col, joins: true } : { from: f.col }
+    })
+    for (const im of imagesIn(lines) ?? []) {
+      const text = stripAnsi(im.alt).trim()
+      for (let k = 0; k < im.image.rows && im.line + k < rows.length; k++)
+        rows[im.line + k] = k ? { from: 0, text, repeats: true } : { from: 0, text }
+    }
+    return rows
+  }
+
   override foldable(): boolean {
     // Folded, its images are their alt text.
     return this.#hasImages || foldMarkdown(this.source, false).foldable
@@ -393,6 +443,86 @@ export class ReplyBlock extends Block {
       this.folded = folded
     }
   }
+}
+
+/** A code block's frame in a reply's rows: its top and bottom rows, its code rows, and the column its code starts at. */
+interface CodeFrame {
+  top: number
+  bottom?: number
+  rows: number[]
+  col: number
+}
+
+/** The frames of code blocks in rows of rendered Markdown (without styles). */
+function codeFrames(plain: readonly string[]): CodeFrame[] {
+  const { codeTop, codeSide, codeBottom } = defaultGlyphs
+  const out: CodeFrame[] = []
+  for (let i = 0; i < plain.length; i++) {
+    const col = /^ */.exec(plain[i]!)![0].length
+    if (!plain[i]!.startsWith(codeTop, col)) continue
+    const frame: CodeFrame = { top: i, rows: [], col: col + visibleWidth(codeSide) + 1 }
+    out.push(frame)
+    const pad = " ".repeat(col)
+    while (i + 1 < plain.length) {
+      const row = plain[i + 1]!
+      if (row.startsWith(pad + codeBottom)) {
+        frame.bottom = ++i
+        break
+      }
+      if (!row.startsWith(pad + codeSide)) break
+      frame.rows.push(++i)
+    }
+  }
+  return out
+}
+
+/** The lines of each fenced code block of Markdown, in order (the last one maybe still open). */
+function fencedCode(markdown: string): string[][] {
+  const out: string[][] = []
+  let fence: { mark: string; indent: number; lines: string[] } | undefined
+  for (const line of markdown.split("\n")) {
+    if (fence) {
+      const close = FENCE.exec(line)
+      if (
+        close &&
+        close[1]![0] === fence.mark[0] &&
+        close[1]!.length >= fence.mark.length &&
+        !line.trim().slice(close[1]!.length).trim()
+      ) {
+        fence = undefined
+        continue
+      }
+      let start = 0
+      while (start < fence.indent && line[start] === " ") start++
+      fence.lines.push(line.slice(start))
+      continue
+    }
+    const open = FENCE.exec(line)
+    if (open) {
+      fence = { mark: open[1]!, indent: /^ */.exec(line)![0].length, lines: [] }
+      out.push(fence.lines)
+    }
+  }
+  return out
+}
+
+/**
+ * Which rows of a code block continue the line before them, found by matching the rows to the
+ * lines of its source. Undefined when they do not match.
+ */
+function wrapsOf(rows: string[], source: string[]): boolean[] | undefined {
+  const joins = rows.map(() => false)
+  let r = 0
+  for (const line of source) {
+    if (r >= rows.length) break
+    let text = rows[r++]!
+    while (r < rows.length && text.length < line.length && rows[r] && line.startsWith(text + rows[r])) {
+      text += rows[r]
+      joins[r++] = true
+    }
+    if (text.trimEnd() !== line.trimEnd()) return undefined
+  }
+  return r === rows.length ? joins : undefined
 }
 
 /** A tool call: its head, its output while it runs, then its result, with its sub-agents under it. */

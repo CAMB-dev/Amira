@@ -1,6 +1,7 @@
 import type { ToolDetailLevel } from "@amira/api"
 import { type ImagePlacement, stripAnsi, truncateToWidth } from "@amira/tui-kit"
 import { type Block, type BlockEnv, imagesIn, ReplyBlock } from "./blocks.ts"
+import { ESCAPE, markCells, selectionMarks, sliceCells, wordAt } from "./text-selection.ts"
 import { gapBetween } from "./transcript.ts"
 
 /** Lines of a block drawn at one width, for one version of it. */
@@ -35,6 +36,43 @@ interface Position {
   block: Block
   offset: number
 }
+
+/**
+ * A cell of the transcript's text: column `col` of a block's line (`line` -1 is the gap row
+ * before it). Infinity as `col` is the end of the line.
+ */
+export interface TextPoint {
+  block: Block
+  line: number
+  col: number
+}
+
+/**
+ * Text selected with the mouse, from `anchor` (where the press was) to `focus` (where the
+ * mouse is or was released), both cells included. It holds on to the blocks and the text it
+ * covers as drawn at `width`, and goes when that text changes.
+ */
+interface TextSelection {
+  anchor: TextPoint
+  focus: TextPoint
+  width: number
+  detail: ToolDetailLevel
+  imageRows: number
+  /** The blocks it covers, in order. */
+  blocks: Block[]
+  /** The text of its rows in each block, and the block's version when it was taken. */
+  texts: Map<Block, { version: number; text: string }>
+}
+
+/** Orders two cells of the transcript. */
+function compare(a: TextPoint, b: TextPoint): number {
+  if (a.block !== b.block) return a.block.index - b.block.index
+  if (a.line !== b.line) return a.line - b.line
+  return a.col === b.col ? 0 : a.col < b.col ? -1 : 1
+}
+
+/** The most rows an image may take in this env; none without images. */
+const imageRowsOf = (env: BlockEnv) => (env.images ? env.images.loader.maxRows() : 0)
 
 /** Marks the rows of the selected block, which is drawn one column narrower. */
 const SELECTED = "▌"
@@ -74,6 +112,10 @@ export class TranscriptPane {
   private current = -1
   private findQuery = ""
   private findWidth = 0
+  /** Text selected with the mouse, if any. */
+  private text: TextSelection | undefined
+  /** A drag selecting text: the cell it started at, where the mouse is (viewport rows), whether it left that cell. */
+  private drag: { anchor: TextPoint; row: number; col: number; moved: boolean } | undefined
 
   add(block: Block): void {
     block.index = this.blocks.length
@@ -140,6 +182,9 @@ export class TranscriptPane {
     if (this.following) rows = this.fillTail(this.height)
     this.layout = rows!
     this.padding = this.height - this.layout.length
+    this.checkText(env)
+    // Scrolled while dragging (the wheel, or the drag at an edge): the mouse is over other text.
+    if (this.drag) this.dragText()
     const alt = this.placeImages(env)
     const out: string[] = Array(this.padding).fill("")
     for (let i = 0; i < this.layout.length; i++) out.push(this.drawRow(this.layout[i]!, env, alt.get(i)))
@@ -263,10 +308,13 @@ export class TranscriptPane {
 
   // --- selection
 
-  /** Selects a block, or none, and scrolls it into view. */
+  /** Selects a block, or none, and scrolls it into view. Selected text goes. */
   select(block: Block | undefined): void {
     this.selected = block
-    if (block) this.reveal(block)
+    if (block) {
+      this.clearText()
+      this.reveal(block)
+    }
   }
 
   /** Selects the block before the selected one (the newest one when none is), skipping empty ones. */
@@ -309,6 +357,221 @@ export class TranscriptPane {
     this.following = false
     if (above || lines.length + gap >= this.height) this.moveTo(block.index, gap)
     else this.moveTo(block.index, gap + lines.length - this.height)
+  }
+
+  // --- text selection
+
+  /** Whether text is selected with the mouse. */
+  get hasText(): boolean {
+    return this.text !== undefined
+  }
+
+  /** Whether the mouse is selecting text. */
+  get dragging(): boolean {
+    return this.drag !== undefined
+  }
+
+  /**
+   * The cell at a row and column of the viewport in the last frame. Above its rows (the padding
+   * over short content) is the start of the first one, below them the end of the last.
+   */
+  pointAt(row: number, col: number): TextPoint | undefined {
+    const layout = this.layout
+    if (!layout.length) return undefined
+    const i = row - this.padding
+    if (i < 0) return { ...layout[0]!, col: 0 }
+    if (i >= layout.length) return { ...layout[layout.length - 1]!, col: Number.POSITIVE_INFINITY }
+    return { ...layout[i]!, col: Math.max(0, col) }
+  }
+
+  /** Selects the text from `anchor` to `focus`, both cells included; the selected block goes. */
+  selectText(anchor: TextPoint, focus: TextPoint): void {
+    const env = this.env
+    if (!env) return
+    this.selected = undefined
+    this.text = {
+      anchor,
+      focus,
+      width: env.width,
+      detail: env.detail,
+      imageRows: imageRowsOf(env),
+      blocks: [],
+      texts: new Map(),
+    }
+    const [start, end] = this.ends()!
+    this.text.blocks = this.blocks.slice(start.block.index, end.block.index + 1)
+    for (const b of this.text.blocks)
+      this.text.texts.set(b, { version: b.version, text: this.textIn(b, env) })
+  }
+
+  clearText(): void {
+    this.text = undefined
+    this.drag = undefined
+  }
+
+  /** Starts selecting text at a cell of the viewport; nothing is selected until the mouse leaves it. */
+  startDrag(row: number, col: number): void {
+    this.clearText()
+    const anchor = this.pointAt(row, col)
+    if (anchor) this.drag = { anchor, row, col, moved: false }
+  }
+
+  /** The mouse moved to a cell of the viewport while selecting. */
+  dragTo(row: number, col: number): void {
+    if (!this.drag) return
+    this.drag.row = row
+    this.drag.col = col
+    this.dragText()
+  }
+
+  /** The mouse was released: the selection stays, if the mouse moved. */
+  endDrag(): void {
+    this.drag = undefined
+  }
+
+  /** Selects the word at a cell of the viewport. False when there is none (a blank row). */
+  selectWord(row: number, col: number): boolean {
+    const env = this.env
+    const at = this.pointAt(row, col)
+    if (!env || !at || at.line < 0 || !Number.isFinite(at.col)) return false
+    const range = wordAt(this.plain(at.block, env)[at.line] ?? "", at.col)
+    if (!range) return false
+    this.selectText({ ...at, col: range.from }, { ...at, col: range.to - 1 })
+    return true
+  }
+
+  /** Selects the line at a row of the viewport, with the rows it wraps over. False on a blank row. */
+  selectLine(row: number, col: number): boolean {
+    const env = this.env
+    const at = this.pointAt(row, col)
+    if (!env || !at || at.line < 0) return false
+    const lines = this.lines(at.block, env, false)
+    const rows = at.block.copyRows(this.plain(at.block, env), lines)
+    let first = at.line
+    let last = at.line
+    while (first > 0 && rows[first]?.joins) first--
+    while (rows[last + 1]?.joins) last++
+    this.selectText({ ...at, line: first, col: 0 }, { ...at, line: last, col: Number.POSITIVE_INFINITY })
+    return true
+  }
+
+  /**
+   * The selected text as it copies: the rows as shown, less the transcript's chrome (gutters,
+   * trees, code frames: see `Block.copyRows`), wrapped lines of code joined, images as their
+   * alt text, a blank line where the transcript has one between blocks.
+   */
+  selectedText(): string {
+    const env = this.env
+    const ends = this.ends()
+    if (!env || !ends) return ""
+    const [start, end] = ends
+    const out: string[] = []
+    for (let k = start.block.index; k <= end.block.index; k++) {
+      const block = this.blocks[k]!
+      const lines = this.lines(block, env, false)
+      if (!lines.length) continue
+      if (this.gapBefore(k, env) && this.rangeIn(block, -1)) out.push("")
+      const plain = this.plain(block, env)
+      const rows = block.copyRows(plain, lines)
+      let last = -2
+      for (let l = 0; l < lines.length; l++) {
+        const range = this.rangeIn(block, l)
+        const row = rows[l] ?? { from: 0 }
+        if (!range || row.skip || (row.repeats && last === l - 1)) continue
+        const text = row.text ?? sliceCells(plain[l]!, Math.max(range.from, row.from), range.to)
+        if (row.joins && last === l - 1 && out.length) out[out.length - 1] += text
+        else out.push(text)
+        last = l
+      }
+    }
+    const lines = out.map((l) => l.trimEnd())
+    while (lines.length && !lines[0]) lines.shift()
+    while (lines.length && !lines[lines.length - 1]) lines.pop()
+    return lines.join("\n")
+  }
+
+  /** The selection's first and last cells, in order. */
+  private ends(): [TextPoint, TextPoint] | undefined {
+    const t = this.text
+    if (!t) return undefined
+    return compare(t.anchor, t.focus) <= 0 ? [t.anchor, t.focus] : [t.focus, t.anchor]
+  }
+
+  /** The columns selected in a line of a block (`to` excluded), if any. */
+  private rangeIn(block: Block, line: number): { from: number; to: number } | undefined {
+    const ends = this.ends()
+    if (!ends) return undefined
+    const [s, e] = ends
+    const before = block.index < s.block.index || (block === s.block && line < s.line)
+    const after = block.index > e.block.index || (block === e.block && line > e.line)
+    if (before || after) return undefined
+    const from = block === s.block && line === s.line ? s.col : 0
+    const to = block === e.block && line === e.line ? e.col + 1 : Number.POSITIVE_INFINITY
+    return { from, to }
+  }
+
+  /** The selected characters of a block's lines, as drawn; what a change to it is checked by. */
+  private textIn(block: Block, env: BlockEnv): string {
+    const [s, e] = this.ends()!
+    const plain = this.plain(block, env)
+    const first = block === s.block ? Math.max(0, s.line) : 0
+    const last = block === e.block ? e.line : plain.length - 1
+    const out: string[] = []
+    for (let l = first; l <= last; l++) {
+      const r = this.rangeIn(block, l)!
+      // A line it covers is gone: that is not the text it had.
+      out.push(l < plain.length ? sliceCells(plain[l]!, r.from, r.to) : "\0")
+    }
+    return out.join("\n")
+  }
+
+  /**
+   * Keeps the selection while the text it covers stays as it was: new output below it, a
+   * reply streaming on, scrolling. It goes with a new width (the text flows differently: its
+   * cells would be other text), a block of it removed or one put in it, and a change to the
+   * text it covers (a call finishing, folding).
+   */
+  private checkText(env: BlockEnv): void {
+    const t = this.text
+    const ends = this.ends()
+    if (!t || !ends) return
+    const [s, e] = ends
+    const keep = (() => {
+      if (t.width !== env.width || s.block.index < 0 || e.block.index < 0) return false
+      const blocks = this.blocks.slice(s.block.index, e.block.index + 1)
+      if (blocks.length !== t.blocks.length || blocks.some((b, i) => b !== t.blocks[i])) return false
+      const all = t.detail !== env.detail || t.imageRows !== imageRowsOf(env)
+      for (const b of blocks) {
+        const was = t.texts.get(b)!
+        if (!all && !b.live && b.version === was.version) continue
+        if (this.textIn(b, env) !== was.text) return false
+        was.version = b.version
+      }
+      return true
+    })()
+    if (!keep) {
+      this.text = undefined
+      if (t.width !== env.width) this.drag = undefined
+      return
+    }
+    t.detail = env.detail
+    t.imageRows = imageRowsOf(env)
+  }
+
+  /** Selects from where the drag started to the cell under the mouse, once it left the first one. */
+  private dragText(): void {
+    const d = this.drag!
+    if (d.anchor.block.index < 0) {
+      this.drag = undefined
+      return
+    }
+    const focus = this.pointAt(d.row, d.col)
+    if (!focus) return
+    if (!d.moved && compare(focus, d.anchor) === 0) return
+    d.moved = true
+    const t = this.text
+    if (t && t.anchor === d.anchor && compare(t.focus, focus) === 0) return
+    this.selectText(d.anchor, focus)
   }
 
   // --- find
@@ -444,8 +707,10 @@ export class TranscriptPane {
     if (r.line < 0) return ""
     const selected = r.block === this.selected
     let line = alt ?? this.lines(r.block, env, selected)[r.line] ?? ""
+    const range = this.rangeIn(r.block, r.line)
     const found = this.matchIndex.get(r.block)?.get(r.line)
-    if (found && !selected) {
+    if (range) line = markCells(line, range.from, range.to, selectionMarks(env.theme))
+    else if (found && !selected) {
       const current = this.matches[this.current]
       line = highlight(
         line,
@@ -549,10 +814,6 @@ export class TranscriptPane {
     for (let i = from; i < this.blocks.length; i++) this.blocks[i]!.index = i
   }
 }
-
-const ESCAPE =
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
-  /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]*[0-~]/y
 
 const MARK_ON = "\x1b[7m"
 const CURRENT_ON = "\x1b[7;4m"
