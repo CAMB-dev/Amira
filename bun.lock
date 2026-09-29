@@ -98,6 +98,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@amira/ai": "workspace:*",
+        "@amira/net": "workspace:*",
         "@amira/tui-kit": "workspace:*",
       },
     },
