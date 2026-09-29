@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
-import { ImageLoader, stripAnsi } from "@amira/tui-kit"
+import type { UserMessage } from "@amira/api"
+import { bg256, defaultGlyphs, ImageLoader, stripAnsi } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
-import { Block, type BlockEnv, type BlockImages, LinesBlock, ReplyBlock } from "../src/blocks.ts"
+import { Block, type BlockEnv, type BlockImages, LinesBlock, ReplyBlock, userBlock } from "../src/blocks.ts"
 import { cellsOf, chromeRows, markCells, sliceCells, wordAt } from "../src/text-selection.ts"
 import type { BlockKind } from "../src/transcript.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
@@ -328,7 +329,7 @@ test("an image copies as its alt text, once, from any of its rows", async () => 
   // It takes two rows (its alt text on the first until it is drawn).
   const before = rowOf(rows, "Before")
   expect(reply.lines(e).slice(2, 4)).toEqual(["", ""])
-  const alt = "🖼 a cat (https://img.test/c.png)"
+  const alt = `${defaultGlyphs.image} a cat (https://img.test/c.png)`
   pane.startDrag(before, 0)
   pane.dragTo(rowOf(rows, "After"), 100)
   expect(pane.selectedText()).toBe(`Before\n\n${alt}\n\nAfter`)
@@ -336,4 +337,24 @@ test("an image copies as its alt text, once, from any of its rows", async () => 
   pane.startDrag(before + 3, 0)
   pane.dragTo(rowOf(rows, "After"), 100)
   expect(pane.selectedText()).toBe(`${alt}\n\nAfter`)
+})
+
+test("a message on its band copies as its text: the band's blank rows and fill are chrome", () => {
+  const e = { ...env(40), theme: { ...plain.theme, userBg: bg256(236) } }
+  const pane = new TranscriptPane()
+  const message: UserMessage = { role: "user", content: [{ type: "text", text: "first line\nsecond line" }] }
+  pane.add(userBlock(message))
+  pane.add(new ReplyBlock("The reply.", false, false))
+  const rows = pane.render(e, 12)
+  // The band: a blank row of it above and below, each row filled to the edge.
+  const first = rowOf(rows, "first line")
+  expect(stripAnsi(rows[first - 1]!)).toBe(" ".repeat(40))
+  expect(stripAnsi(rows[first + 2]!)).toBe(" ".repeat(40))
+  pane.startDrag(first - 1, 0)
+  pane.dragTo(rowOf(rows, "The reply."), 100)
+  expect(pane.selectedText()).toBe("first line\nsecond line\n\nThe reply.")
+  // A message alone, from the band's top row to its bottom one: just its text.
+  pane.startDrag(first - 1, 5)
+  pane.dragTo(first + 2, 5)
+  expect(pane.selectedText()).toBe("first line\nsecond line")
 })
