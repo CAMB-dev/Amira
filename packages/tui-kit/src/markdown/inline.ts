@@ -77,7 +77,7 @@ export interface InlineOptions {
   base?: StyleFn
   /** Reference definitions seen so far, for `[text][label]` and `![alt][label]`. */
   refs?: ReadonlyMap<string, LinkRef>
-  /** Drawn in front of an image's alt text. Default 🖼. */
+  /** Drawn in front of an image's alt text. Default 🖼 in emoji presentation (two cells). */
   imageGlyph?: string
   /** A run's rest at offset `leadAt`: for a bare URL, the source there; otherwise `len` source characters. */
   lead?: Lead
@@ -486,7 +486,7 @@ function pushImage(s: string, i: number, image: LinkMatch, scope: Scope, ctx: Co
   // Added text, like a link's URL: it stands at the image's end, so the rest of it after a cut
   // goes on there.
   const r: Run = {
-    text: `${opts.imageGlyph ?? "🖼"} ${name}`,
+    text: `${opts.imageGlyph ?? "🖼\uFE0F"} ${name}`,
     src: image.end,
     carry: scope.carry,
     cuttable: false,

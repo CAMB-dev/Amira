@@ -45,11 +45,11 @@ function deferred<T>() {
 test("an image is placed where its line goes, and lines after it wait for it, shown live meanwhile", async () => {
   const { screen, r } = setup()
   const load = deferred<ImageBlock | undefined>()
-  r.commit(["before", `  ${pendingImage(load.promise, ["🖼 cat"])}`, "after 1"])
+  r.commit(["before", `  ${pendingImage(load.promise, ["🖼\uFE0F cat"])}`, "after 1"])
   // Waiting: the fallback and what follows are at the top of the live region, not committed.
-  expect(screen.lines.slice(0, 4)).toEqual(["before", "  🖼 cat", "after 1", "> live"])
+  expect(screen.lines.slice(0, 4)).toEqual(["before", "  🖼\uFE0F cat", "after 1", "> live"])
   r.commit(["after 2"])
-  expect(screen.lines.slice(0, 5)).toEqual(["before", "  🖼 cat", "after 1", "after 2", "> live"])
+  expect(screen.lines.slice(0, 5)).toEqual(["before", "  🖼\uFE0F cat", "after 1", "after 2", "> live"])
   expect(screen.images).toEqual([])
   load.resolve(sixel(4, 3))
   await Bun.sleep(30)
@@ -73,7 +73,7 @@ test("an image is placed where its line goes, and lines after it wait for it, sh
 test("at the bottom of the screen the image makes its rows first, so drawing it never scrolls it", async () => {
   const { screen, r } = setup(30, 6)
   r.commit(["1", "2", "3", "4"])
-  r.commit([pendingImage(Promise.resolve(sixel(3, 4)), ["🖼 x"])])
+  r.commit([pendingImage(Promise.resolve(sixel(3, 4)), ["🖼\uFE0F x"])])
   await Bun.sleep(20)
   r.commit(["next"])
   // The image's cells are exactly between the line before and the line after it.
@@ -85,28 +85,28 @@ test("at the bottom of the screen the image makes its rows first, so drawing it 
 
 test("an image that fails, or takes longer than its time, is committed as its fallback", async () => {
   const { screen, r } = setup()
-  r.commit([pendingImage(Promise.reject(new Error("404")), ["🖼 gone"]), "a"])
+  r.commit([pendingImage(Promise.reject(new Error("404")), ["🖼\uFE0F gone"]), "a"])
   await Bun.sleep(10)
   r.render()
   const slow = deferred<ImageBlock | undefined>()
-  r.commit([pendingImage(slow.promise, ["🖼 slow"], 40), "b"])
-  expect(screen.lines.slice(0, 4)).toEqual(["🖼 gone", "a", "🖼 slow", "b"])
+  r.commit([pendingImage(slow.promise, ["🖼\uFE0F slow"], 40), "b"])
+  expect(screen.lines.slice(0, 4)).toEqual(["🖼\uFE0F gone", "a", "🖼\uFE0F slow", "b"])
   await Bun.sleep(100)
   // Committed now: a live line added after it stays below it.
   slow.resolve(sixel(2, 2))
   await Bun.sleep(20)
   expect(screen.images).toEqual([])
-  expect(screen.lines.slice(0, 5)).toEqual(["🖼 gone", "a", "🖼 slow", "b", "> live"])
+  expect(screen.lines.slice(0, 5)).toEqual(["🖼\uFE0F gone", "a", "🖼\uFE0F slow", "b", "> live"])
 })
 
 test("lines waiting that would not fit on the screen let the image go as its fallback", async () => {
   const { screen, r } = setup(30, 6)
   const load = deferred<ImageBlock | undefined>()
-  r.commit([pendingImage(load.promise, ["🖼 big"]), "l1", "l2", "l3"])
+  r.commit([pendingImage(load.promise, ["🖼\uFE0F big"]), "l1", "l2", "l3"])
   expect(screen.images).toEqual([])
   r.commit(["l4", "l5"])
   // Six rows of waiting lines and the live one do not fit in six: nothing waits any more.
-  expect(screen.text).toBe(["🖼 big", "l1", "l2", "l3", "l4", "l5", "> live"].join("\n"))
+  expect(screen.text).toBe(["🖼\uFE0F big", "l1", "l2", "l3", "l4", "l5", "> live"].join("\n"))
   load.resolve(sixel(2, 2))
   await Bun.sleep(20)
   expect(screen.images).toEqual([])
@@ -114,25 +114,25 @@ test("lines waiting that would not fit on the screen let the image go as its fal
 
 test("an image wider than the terminal when it is ready goes as its fallback; stop does not wait", async () => {
   const { screen, r, term } = setup(10, 8)
-  r.commit([pendingImage(Promise.resolve(sixel(12, 2)), ["🖼 wide"])])
+  r.commit([pendingImage(Promise.resolve(sixel(12, 2)), ["🖼\uFE0F wide"])])
   await Bun.sleep(20)
   r.render()
   expect(screen.images).toEqual([])
-  expect(screen.lines[0]).toBe("🖼 wide")
+  expect(screen.lines[0]).toBe("🖼\uFE0F wide")
   const never = deferred<ImageBlock | undefined>()
-  r.commit([pendingImage(never.promise, ["🖼 never"]), "tail"])
+  r.commit([pendingImage(never.promise, ["🖼\uFE0F never"]), "tail"])
   r.stop()
-  expect(screen.text).toBe(["🖼 wide", "🖼 never", "tail", "> live"].join("\n"))
+  expect(screen.text).toBe(["🖼\uFE0F wide", "🖼\uFE0F never", "tail", "> live"].join("\n"))
   expect(term.output).not.toContain("tk:img")
 })
 
 test("an image as tall as the screen when it is ready goes as its fallback", async () => {
   const { screen, r } = setup(30, 6)
-  r.commit([pendingImage(Promise.resolve(sixel(3, 6)), ["🖼 tall"]), "next"])
+  r.commit([pendingImage(Promise.resolve(sixel(3, 6)), ["🖼\uFE0F tall"]), "next"])
   await Bun.sleep(20)
   r.render()
   expect(screen.images).toEqual([])
-  expect(screen.lines.slice(0, 3)).toEqual(["🖼 tall", "next", "> live"])
+  expect(screen.lines.slice(0, 3)).toEqual(["🖼\uFE0F tall", "next", "> live"])
 })
 
 test("an image marker is honored only as registered; content cannot forge or carry one", () => {
@@ -174,7 +174,7 @@ test("placing an image makes its rows, then draws it with the cursor saved aroun
 
 test("redraw draws committed images again when they still fit, else their fallback", async () => {
   const { screen, r, term } = setup(20, 12)
-  r.commit(["top", pendingImage(Promise.resolve(sixel(4, 2)), ["🖼 pic"]), "bottom"])
+  r.commit(["top", pendingImage(Promise.resolve(sixel(4, 2)), ["🖼\uFE0F pic"]), "bottom"])
   await Bun.sleep(20)
   r.render()
   expect(screen.images.length).toBe(1)
@@ -186,5 +186,5 @@ test("redraw draws committed images again when they still fit, else their fallba
   r.redraw()
   expect(screen.images.length).toBe(2)
   // Not re-wrapped by this screen, as a terminal that got narrower may: the fallback's row wraps.
-  expect(screen.lines.slice(0, 4)).toEqual(["top", "🖼 p", "ic", "bot"])
+  expect(screen.lines.slice(0, 4)).toEqual(["top", "🖼\uFE0F", "pic", "bot"])
 })

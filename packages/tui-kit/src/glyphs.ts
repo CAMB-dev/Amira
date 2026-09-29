@@ -23,7 +23,12 @@ export interface Glyphs {
   tableColumn: string
   tableRule: string
   tableCross: string
-  /** In front of an image's alt text where the image itself is not shown. */
+  /**
+   * In front of an image's alt text where the image itself is not shown. 🖼 has no emoji
+   * presentation of its own, so it measures one cell, but Windows Terminal draws it as a
+   * two-cell emoji over the next character: it asks for the emoji presentation (U+FE0F),
+   * which measures two cells.
+   */
   image: string
 }
 
@@ -39,5 +44,5 @@ export const defaultGlyphs: Glyphs = {
   tableColumn: "│",
   tableRule: "─",
   tableCross: "┼",
-  image: "🖼",
+  image: "🖼\uFE0F",
 }

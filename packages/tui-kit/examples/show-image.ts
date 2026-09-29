@@ -58,7 +58,7 @@ renderer.start()
 renderer.commit([
   ...info,
   "before the image",
-  `  ${pendingImage(load, [`🖼 ${src}`], 10_000)}`,
+  `  ${pendingImage(load, [`🖼\uFE0F ${src}`], 10_000)}`,
   "after the image",
 ])
 const block = await load

@@ -2454,7 +2454,7 @@ test("an image mid-reply is drawn in its place: every row once, in order, the re
   const all = [...screen.scrollback, ...screen.lines]
   const row = screen.images[0]!.row
   expect(all.slice(row - 2, row + 4)).toEqual(["  line L6", "", "  ▓▓▓", "  ▓▓▓", "", "  line L7"])
-  expect(all.join("\n")).not.toContain("🖼 chart")
+  expect(all.join("\n")).not.toContain("🖼\uFE0F chart")
   terminal.send("\x03")
   await exited
 })
@@ -2480,20 +2480,20 @@ test("an image that cannot be fetched, or a private address, is its alt text; tu
   const local = await run("![secret](http://127.0.0.1:9/a.png)\n\ndone", {})
   expect(local.images).toBe(0)
   // Windows Terminal makes links clickable: the URL is in the link, not shown.
-  expect(local.text).toContain("  🖼 secret\n\n  done")
+  expect(local.text).toContain("  🖼\uFE0F secret\n\n  done")
   const failing = await run("![gone](https://img.test/404.png)\n\ndone", {
     imageFetch: async () => {
       throw new Error("HTTP 404")
     },
   })
   expect(failing.images).toBe(0)
-  expect(failing.text).toContain("  🖼 gone\n\n  done")
+  expect(failing.text).toContain("  🖼\uFE0F gone\n\n  done")
   const off = await run("![chart](https://img.test/chart.png)\n\ndone", {
     settings: { images: "off" },
     imageFetch: async () => ({ bytes: PNG, contentType: "image/png" }),
   })
   expect(off.images).toBe(0)
-  expect(off.text).toContain("  🖼 chart")
+  expect(off.text).toContain("  🖼\uFE0F chart")
   expect(setups).toEqual([{ images: true }, { images: true }, { images: false }])
   // Without Sixel in the terminal's answer, "auto" draws none either.
   const none = await run("![chart](https://img.test/chart.png)\n\ndone", {
@@ -2518,7 +2518,7 @@ test("an image slower than its time is committed as its alt text, and what follo
   await idle()
   // Both show in the live region while waiting, then go to the scrollback as they were.
   await Bun.sleep(3300)
-  expect(all()).toContain("  🖼 slow\n\n  after it")
+  expect(all()).toContain("  🖼\uFE0F slow\n\n  after it")
   expect(screen.images).toEqual([])
   terminal.send("\x03")
   await exited
