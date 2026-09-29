@@ -147,14 +147,27 @@ export const fallbackPresenter: Required<Omit<ToolPresenter, "explore">> = {
 /** The working directory as it starts a path in a call's head, in each separator. */
 function cwdPrefixes(): string[] {
   const cwd = process.cwd().replace(/[\\/]+$/, "")
+  // At the root ("/", or "C:" left of "C:\") every path is under it: nothing is worth dropping.
+  if (!/[\\/]/.test(cwd)) return []
   const slashed = cwd.replaceAll("\\", "/")
   return [...new Set([`${cwd}/`, `${cwd}\\`, `${slashed}/`])]
 }
 
-/** Paths under the working directory, relative to it: the head has little room. */
-export function relativePaths(s: string, prefixes = cwdPrefixes()): string {
+/**
+ * Paths under the working directory, relative to it: the head has little room. A prefix counts
+ * only where a path starts (not inside another path that happens to contain it), and on Windows
+ * whatever the case of its letters.
+ */
+export function relativePaths(
+  s: string,
+  prefixes = cwdPrefixes(),
+  ignoreCase = process.platform === "win32",
+): string {
   let out = s
-  for (const p of prefixes) if (out.includes(p)) out = out.split(p).join("")
+  for (const p of prefixes) {
+    const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    out = out.replace(new RegExp(`(?<![^\\s"'=(\`])${escaped}`, ignoreCase ? "gi" : "g"), "")
+  }
   return out
 }
 

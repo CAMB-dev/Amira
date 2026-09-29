@@ -8,6 +8,7 @@ import {
   exploredLines,
   type FinishedCall,
   finishedToolLines,
+  relativePaths,
   runningToolLines,
 } from "../src/tool-view.ts"
 
@@ -181,6 +182,16 @@ test("a long path in the head is cut in its middle, keeping the file name; the w
   expect(head).toEndWith("/file-name.ts")
   expect(head).toContain("…")
   expect(visibleWidth(head!)).toBeLessThanOrEqual(50)
+})
+
+test("only a path that starts with the working directory is made relative", () => {
+  const cwd = ["/home/me/", "/home/me\\"]
+  expect(relativePaths("/home/me/src/a.ts", cwd, false)).toBe("src/a.ts")
+  expect(relativePaths('grep "x" /home/me/src', cwd, false)).toBe('grep "x" src')
+  // Inside another path, the same letters are not the working directory.
+  expect(relativePaths("/mnt/home/me/src/a.ts", cwd, false)).toBe("/mnt/home/me/src/a.ts")
+  // Windows paths ignore case.
+  expect(relativePaths("d:\\Dev\\app\\src\\a.ts", ["D:\\dev\\app\\"], true)).toBe("src\\a.ts")
 })
 
 test("progress output rewritten with carriage returns shows as the terminal left it, tabs at their stops", () => {
