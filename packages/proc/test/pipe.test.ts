@@ -1,5 +1,13 @@
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { openPipe, type PipeEvent, type PipeProcess, resetCommandWorker, runCommand } from "../src/index.ts"
+import {
+  killLivePipes,
+  livePipePids,
+  openPipe,
+  type PipeEvent,
+  type PipeProcess,
+  resetCommandWorker,
+  runCommand,
+} from "../src/index.ts"
 
 // Spawns can take seconds on Windows machines with antivirus scanning.
 setDefaultTimeout(60_000)
@@ -173,4 +181,19 @@ test("a lost worker ends its piped processes with an error", async () => {
   try {
     process.kill(pid, "SIGKILL")
   } catch {}
+})
+
+test("piped processes are tracked until they exit, so killLivePipes can end what is left at exit", async () => {
+  const done = open([bun, "-e", ECHO])
+  const left = open([bun, "-e", "process.stdin.resume(); setTimeout(() => {}, 60_000)"])
+  await Promise.all([done.spawned, left.spawned])
+  const pidOf = (p: ReturnType<typeof open>) => (p.events[0] as { pid: number }).pid
+  expect(livePipePids()).toEqual(expect.arrayContaining([pidOf(done), pidOf(left)]))
+  done.pipe.close(5000)
+  await done.exited
+  expect(livePipePids()).not.toContain(pidOf(done))
+  // What Amira's exit hook does: the tree of every pipe still running is killed.
+  killLivePipes()
+  await left.exited
+  expect(livePipePids()).not.toContain(pidOf(left))
 })

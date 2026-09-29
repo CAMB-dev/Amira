@@ -265,7 +265,8 @@ export interface PipeProcess {
 /**
  * Starts a long-lived process with piped stdin, stdout and stderr (e.g. an MCP server) in the
  * command worker. Events arrive asynchronously: first "spawned" (or "exit" with an error when it
- * cannot start), then output, then one "exit". An open pipe does not keep this process alive.
+ * cannot start), then output, then one "exit". An open pipe does not keep this process alive;
+ * when this process exits, the trees of pipes still running are killed (killLivePipes).
  *
  * Why the command worker: on Windows, libuv makes a child's pipe ends inheritable for the
  * duration of CreateProcess. A process started at that moment on another thread inherits them
@@ -275,6 +276,7 @@ export interface PipeProcess {
  * where runCommand then runs too.
  */
 export function openPipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void): PipeProcess {
+  onEvent = trackUntilExit(onEvent)
   const w = getWorker()
   if (!w) return inlinePipe(spec, onEvent)
   const id = nextId++
@@ -295,6 +297,63 @@ export function openPipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void): PipeP
       w.postMessage({ type: "pipe-close", id, graceMs } satisfies ToWorker)
     },
   }
+}
+
+/**
+ * Piped processes (or their launchers) that have not exited yet, from spawn until exit, so one
+ * still inside its close grace period is covered too.
+ */
+const livePipes = new Set<number>()
+let exitHookInstalled = false
+
+/**
+ * Kills the trees of piped processes still running when this process exits (openPipe installs
+ * it as an exit hook). Workers are gone by then, so this spawns on the main thread, without
+ * pipes: taskkill /T, because killing only a launcher (cmd.exe, a .cmd shim such as npx.cmd)
+ * leaves the real process running on Windows.
+ */
+export function killLivePipes(): void {
+  if (!livePipes.size) return
+  const pids = [...livePipes]
+  livePipes.clear()
+  if (process.platform === "win32") {
+    try {
+      Bun.spawnSync(["taskkill", "/T", "/F", ...pids.flatMap((p) => ["/PID", String(p)])], {
+        stdout: "ignore",
+        stderr: "ignore",
+        windowsHide: true,
+      })
+    } catch {}
+  }
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGKILL")
+    } catch {}
+  }
+}
+
+/** Records a pipe's process from "spawned" until a real "exit", for killLivePipes. */
+function trackUntilExit(onEvent: (e: PipeEvent) => void): (e: PipeEvent) => void {
+  let pid: number | undefined
+  return (e) => {
+    if (e.type === "spawned") {
+      pid = e.pid
+      livePipes.add(e.pid)
+      if (!exitHookInstalled) {
+        exitHookInstalled = true
+        process.once("exit", killLivePipes)
+      }
+    } else if (e.type === "exit" && pid !== undefined && !e.error) {
+      // Without an error the process really exited; a lost worker may have left it running.
+      livePipes.delete(pid)
+    }
+    onEvent(e)
+  }
+}
+
+/** Process ids of piped processes that have not exited yet (tests). */
+export function livePipePids(): number[] {
+  return [...livePipes]
 }
 
 function pipeEvent(onEvent: (e: PipeEvent) => void, e: PipeEvent) {
