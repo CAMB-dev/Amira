@@ -165,7 +165,7 @@ test("ext list, search and remove", async () => {
   const wrongScope = await ext(["remove", "--project", "listed"])
   expect(wrongScope.code).toBe(1)
   expect(wrongScope.io.err).toContain("it is in the user scope")
-  expect((await ext(["remove", "listed"])).io.out).toBe("Removed listed from user scope.\n")
+  expect((await ext(["remove", "listed"])).io.out).toBe("Removed listed from user scope.\n1 removed\n")
   expect((await ext(["list"])).io.out).not.toContain("listed")
 })
 
@@ -176,8 +176,11 @@ test("ext update reports each package; one that fails keeps its version and make
   rmSync(gone, { recursive: true, force: true })
   const r = await ext(["update"])
   expect(r.code).toBe(1)
-  expect(r.io.out).toBe("kept is up to date (1.0.0 (local copy))\n")
-  expect(r.io.err).toMatch(/^amira: gone: update failed, kept 1\.0\.0 \(local copy\): .* does not exist\n$/)
+  expect(r.io.out).toBe("kept is up to date (1.0.0 (local copy))\n1 up to date · 1 failed\n")
+  // Without a terminal, each phase is a line on stderr.
+  expect(r.io.err).toMatch(
+    /^amira: gone: update failed, kept 1\.0\.0 \(local copy\): .* does not exist\namira: kept: verifying\namira: kept: copying\n$/,
+  )
   expect((await ext(["list"])).io.out).toContain("gone 1.0.0 (local copy)")
 })
 
@@ -200,13 +203,13 @@ test("ext update names the scope a package is in, and the other scope's packages
   writeFileSync(projectLock, "{ not json")
   const broken = await ext(["update", "mine"])
   expect(broken.code).toBe(0)
-  expect(broken.io.out).toBe("mine is up to date (1.0.0 (local copy))\n")
+  expect(broken.io.out).toBe("mine is up to date (1.0.0 (local copy))\n1 up to date\n")
   writeFileSync(projectLock, saved)
   const all = await ext(["update"])
   expect(all.code).toBe(0)
-  expect(all.io.out).toBe("mine is up to date (1.0.0 (local copy))\n")
+  expect(all.io.out).toBe("mine is up to date (1.0.0 (local copy))\n1 up to date\n")
   expect(all.io.err).toBe(
-    "amira: the project scope's packages (theirs) are updated with amira ext update --project\n",
+    "amira: the project scope's packages (theirs) are updated with amira ext update --project\namira: mine: verifying\namira: mine: copying\n",
   )
 })
 

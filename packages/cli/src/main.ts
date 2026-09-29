@@ -42,7 +42,14 @@ async function run(argv: string[]): Promise<number> {
     const managed = await runProviderAdminCommand(argv.slice(1), { io })
     return managed ?? runProviderCommand(argv.slice(1), io)
   }
-  if (argv[0] === "ext") return runExtCommand(argv.slice(1), io)
+  if (argv[0] === "ext") {
+    return runExtCommand(argv.slice(1), io, {
+      tty: !!process.stdout.isTTY,
+      columns: () => process.stdout.columns,
+      rows: () => process.stdout.rows,
+      handleSigint: true,
+    })
+  }
   const fromPackage = await runPackageCommand(argv, io)
   if (fromPackage !== undefined) return fromPackage
   const args = parseCliArgs(argv)

@@ -121,6 +121,7 @@
         "@amira/ext-web": "workspace:*",
         "@amira/proc": "workspace:*",
         "@amira/tui": "workspace:*",
+        "@amira/tui-kit": "workspace:*",
       },
     },
     "packages/core": {

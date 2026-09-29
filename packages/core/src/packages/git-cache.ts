@@ -12,6 +12,7 @@ import {
 import path from "node:path"
 import { type FileLock, isProcessAlive, LockBusyError, tryFileLock, waitFileLock } from "../file-lock.ts"
 import { amiraHome } from "../home.ts"
+import { packageScope, readLock } from "./lock.ts"
 import { PackageError } from "./manifest.ts"
 import { COMMAND_TIMEOUT_MS, lastLines, runTool, ToolError } from "./run.ts"
 
@@ -586,6 +587,21 @@ export function pruneGitCaches(cacheDir: string, opts: PruneOptions = {}): GitCa
   }
   removeStaleClones(cacheDir)
   return removed
+}
+
+/**
+ * The git repositories the packages of the user scope and of this project come from. A broken
+ * lock file counts as none (pruning only takes caches unused for weeks, so little is lost).
+ */
+export function gitUrlsInUse(where: { home?: string; cwd: string }): string[] {
+  const urls: string[] = []
+  for (const kind of ["user", "project"] as const) {
+    try {
+      for (const e of Object.values(readLock(packageScope(kind, where).lockFile).packages))
+        if (e.source.type === "git") urls.push(e.source.url)
+    } catch {}
+  }
+  return urls
 }
 
 function mtimeOf(p: string): number {
