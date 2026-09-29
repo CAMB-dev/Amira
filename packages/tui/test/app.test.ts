@@ -3037,6 +3037,8 @@ test("live panels sit above the input in both modes, fold with Ctrl+T and follow
     terminal.send("\x14")
     await waitFor(() => !live().includes("› test it"), `${mode}: folded`)
     expect(live()).toContain("Todos 1/3")
+    // Folded, the hint says how to unfold them.
+    expect(live()).toContain("Ctrl+T unfold panels")
     terminal.send("\x14")
     items = ["✓ write the parser", "✓ test it", "› ship it"]
     // A change shows at the next redraw the extension asks for.
@@ -3237,4 +3239,25 @@ test("Ctrl+G edits the message in $VISUAL and takes the text back", async () => 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test("full screen, the input box stays put while the list under it gets shorter", async () => {
+  const { terminal, live, screen, exited } = await setup([], {
+    commands: testCommands([]),
+    settings: { mode: "fullscreen" },
+  })
+  const boxTop = () => screen.lines.findIndex((l) => l.startsWith("╭"))
+  terminal.send("/")
+  await waitFor(() => live().includes("/status"), "the list")
+  const top = boxTop()
+  terminal.send("mo")
+  await waitFor(() => live().includes("❯ /model") && !live().includes("/status"), "narrowed")
+  expect(boxTop()).toBe(top)
+  // Closed, the rows it kept go too.
+  terminal.send("\x1b[27u")
+  await waitFor(() => !live().includes("Switch the model"), "closed")
+  expect(boxTop()).toBeGreaterThan(top)
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
 })

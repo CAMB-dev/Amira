@@ -506,7 +506,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let panelRoom = Number.POSITIVE_INFINITY
   /** Rows the last frame's panels took. */
   let panelRows = 0
+  /** The most rows the list below the input had since it opened (full screen keeps them). */
+  let listRows = 0
 
+  /** The panels' rows; unfolded, a blank row sets each panel apart from the one before. */
   const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) =>
     (opts.panels?.size
       ? opts.panels.snapshot({
@@ -517,7 +520,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           collapsed,
         })
       : []
-    ).flatMap((p) => renderToolLines(p.lines, ctx.theme, width))
+    )
+      .map((p) => renderToolLines(p.lines, ctx.theme, width))
+      .filter((rows) => rows.length > 0)
+      .flatMap((rows, i) => (i > 0 && !collapsed ? ["", ...rows] : rows))
 
   const bottom = new Stack([
     // Live panels (e.g. a todo list): extensions supply the lines, for the session shown now.
@@ -574,11 +580,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return [...lines, ...statusLine(opts.status.snapshot(), width, ctx)]
     }),
     // The command or skill list, file list or history search opens below the input box, in place of
-    // the hint, so the box stays where it is while the list changes with each key.
+    // the hint, so the box stays where it is while the list changes with each key. Full screen,
+    // the bottom area is drawn up from the screen's last row: the list keeps the most rows it had
+    // since it opened (blank ones below it), so the box does not jump as it gets shorter.
     new View((width, ctx) => {
       const list = dialogs[0] ? undefined : inputList()
-      if (!list) return []
-      return [...list.lines(width, ctx), ctx.theme.muted(fitHint(list.hint(), width))]
+      if (!list) {
+        listRows = 0
+        return []
+      }
+      const rows = list.lines(width, ctx)
+      if (mode === "fullscreen") {
+        listRows = Math.max(listRows, rows.length)
+        while (rows.length < listRows) rows.push("")
+      }
+      return [...rows, ctx.theme.muted(fitHint(list.hint(), width))]
     }),
     // The key hint, or a note in its place. A find bar or block selection (full screen) shows
     // its own keys above the transcript: the row stays, blank, so the layout does not jump.
@@ -632,7 +648,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       ]
     }
     const helpKey = keys.label("help")
+    // Folded panels hide rows: say how to get them back.
+    const panelsKey = keys.label("panels.toggle")
     return [
+      panelsCollapsed && panelsShown && panelsKey && { text: `${panelsKey} unfold panels`, priority: 2 },
       submitKey && { text: `${submitKey} send`, priority: 5 },
       // A /compact runs without a turn; the interrupt key stops it too.
       compacting && interruptKey && { text: `${interruptKey} interrupt`, priority: 4 },
