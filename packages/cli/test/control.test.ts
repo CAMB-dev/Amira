@@ -379,3 +379,32 @@ test("print mode runs built-in and settings aliases; shadowed settings aliases w
   expect(err.join("")).toContain("error: The alias /bad runs /nope, which is not a command")
   expect(session.agent.messages).toEqual([])
 })
+
+test("the first provider saved is used at once, and an edit of the one in use applies at once", async () => {
+  const session = await createSession({
+    cwd: here,
+    extensions: [],
+    noBuiltins: true,
+    ai: createAi({}),
+  })
+  expect(session.agent.model).toBe(NO_MODEL)
+  const home = mkdtempSync(path.join(os.tmpdir(), "amira-control-first-"))
+  const host = createCommandHost({ session, cwd: here, home, announce: () => {} })
+  const admin = host.control.providerAdmin!
+  const draft = {
+    id: "local",
+    dialect: "openai-chat",
+    baseUrl: "http://127.0.0.1:1/v1",
+    keySource: "none" as const,
+    models: ["small", "big"],
+  }
+  expect(await admin.save(draft)).toContain("Now using local/small.")
+  expect(session.agent.model.provider).toBe("local")
+  expect(session.agent.model.id).toBe("small")
+  const before = session.agent.model
+  const edited = await admin.save({ ...draft, defaults: { contextWindow: 9000 } })
+  expect(edited).toContain("In use: the changes apply now (local/small).")
+  // The model is resolved again, with what the edit changed.
+  expect(session.agent.model).not.toBe(before)
+  expect(session.agent.model.contextWindow).toBe(9000)
+})

@@ -232,6 +232,25 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       ...(opts.home ? { home: opts.home } : {}),
       platform,
       currentProvider: () => agent().model.provider,
+      // A first provider is used at once, and an edit of the one in use applies at once:
+      // neither needs /model. Not during a turn; /model does it then.
+      onSaved: (id, models) => {
+        const a = agent()
+        if (a.busy) return undefined
+        const m = a.model
+        const ref = isNoModel(m)
+          ? models[0] && `${id}/${models[0]}`
+          : m.provider === id
+            ? `${id}/${models.length && !models.includes(m.id) ? models[0] : m.id}`
+            : undefined
+        if (!ref) return undefined
+        try {
+          a.setModel(ai.model(ref))
+          return ref
+        } catch {
+          return undefined
+        }
+      },
     }),
     preview: () => agent().preview(),
     reloadExtensions: async () => {

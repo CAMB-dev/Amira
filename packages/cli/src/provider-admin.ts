@@ -36,6 +36,12 @@ export interface ProviderAdminOptions {
   platform?: string
   /** The provider of the model in use, which cannot be removed. */
   currentProvider?: () => string | undefined
+  /**
+   * Called once a provider is saved and registered, with its models in order: a session starts
+   * using it (the first provider, when no model is picked yet) or picks up an edit of the one
+   * in use. Returns the model it runs on then ("provider/model"), if it changed to it.
+   */
+  onSaved?: (id: string, models: string[]) => string | undefined
   /** Makes auth.json private on Windows; injectable for tests. */
   restrict?: (file: string) => Promise<string | undefined>
 }
@@ -246,14 +252,16 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       if (live) ai.registerProvider(key ? { ...live, apiKey: key } : live)
       // A provider switched away from auth.json must not keep using the stored key meanwhile.
       if (d.keySource !== "auth") ai.setStoredKey?.(d.id, undefined)
-      if (opts.currentProvider?.() === d.id)
-        lines.push("It is in use: run /model again to pick up the changes.")
+      const inUse = opts.currentProvider?.() === d.id
       const infos = describe(
         d,
         d.models.map((id) => ({ id })),
       )
       if (infos.length) lines.push(`Models: ${infos.map(modelNote).join("; ")}.`)
-      lines.push(`Switch to it with /model ${d.id}/${d.models[0] ?? "<model>"}.`)
+      const now = opts.onSaved?.(d.id, d.models)
+      if (now) lines.push(inUse ? `In use: the changes apply now (${now}).` : `Now using ${now}.`)
+      else if (inUse) lines.push("It is in use: run /model again to pick up the changes.")
+      else lines.push(`Switch to it with /model ${d.id}/${d.models[0] ?? "<model>"}.`)
       return lines.join("\n")
     },
     remove: async (id, { removeKey }) => {
