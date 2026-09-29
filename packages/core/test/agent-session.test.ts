@@ -483,3 +483,51 @@ test("splitHistory never summarizes an earlier summary alone", () => {
     prompt: user,
   })
 })
+
+test("extension records are kept in the session file, per key, and come back on resume", async () => {
+  let seen: unknown[] | undefined
+  const { agent, session, ai } = await setup([
+    { toolCalls: [{ name: "note", args: {}, id: "c1" }] },
+    { text: "noted" },
+  ])
+  agent.tools.register(
+    defineTool({
+      name: "note",
+      description: "note",
+      parameters: { type: "object" },
+      execute: async (_p, ctx) => {
+        ctx.session!.data!.append("swarm", { key: "plan", value: "1. read" })
+        ctx.session!.data!.append("other", 42)
+        seen = ctx.session!.data!.read("swarm")
+        return textResult("ok")
+      },
+    }),
+    "t",
+  )
+  const record = { at: 1, nested: { list: [1, 2] } }
+  agent.data.append("swarm", record)
+  record.nested.list.push(3)
+  await agent.prompt("go")
+  expect(seen).toEqual([
+    { at: 1, nested: { list: [1, 2] } },
+    { key: "plan", value: "1. read" },
+  ])
+  const copy = agent.data.read("swarm")
+  ;(copy[0] as { at: number }).at = 99
+  expect(agent.data.read("swarm")[0]).toMatchObject({ at: 1 })
+  // A resumed session reads them back from its file; its messages are unchanged.
+  const resumed = new Agent({
+    ai,
+    model: ai.model("mock/m"),
+    cwd: "/proj",
+    session: SessionStore.open(session.file),
+  })
+  expect(resumed.data.read("swarm")).toEqual(seen!)
+  expect(resumed.data.read("other")).toEqual([42])
+  expect(resumed.messages).toEqual(agent.messages)
+  // Without a file they are kept in memory.
+  const plain = new Agent({ ai, model: ai.model("mock/m"), cwd: "/proj" })
+  plain.data.append("swarm", "x")
+  expect(plain.data.read("swarm")).toEqual(["x"])
+  expect(plain.data.read("none")).toEqual([])
+})

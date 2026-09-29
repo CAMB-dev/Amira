@@ -1,12 +1,15 @@
-import type { ViewDefinition, ViewLine } from "@amira/api"
+import type { ViewControl, ViewDefinition, ViewLine } from "@amira/api"
 import {
   type Component,
   type InputEvent,
+  isSubmitKey,
+  LineInput,
   matchesKey,
   type RenderContext,
   ScrollView,
   type Theme,
   truncateToWidth,
+  visibleWidth,
 } from "@amira/tui-kit"
 import { renderToolLines } from "./diff-view.ts"
 
@@ -44,6 +47,8 @@ export class ExtensionViewer implements Component {
   #placed: boolean
   /** The last error of each part of the view, so one that keeps throwing is reported once. */
   #failed = new Map<string, string>()
+  /** A line of text a key handler asked for (ViewControl.prompt), while it is open. */
+  #prompt: { title: string; input: LineInput; resolve: (text: string | undefined) => void } | undefined
 
   constructor(view: ViewDefinition, data: unknown, opts: ExtensionViewerOptions = {}) {
     this.kind = view.kind
@@ -65,22 +70,59 @@ export class ExtensionViewer implements Component {
   }
 
   handleInput(e: InputEvent): boolean {
+    const asking = this.#prompt
+    if (asking) {
+      if (matchesKey(e, "escape") || matchesKey(e, "c", { ctrl: true })) this.#answer(undefined)
+      else if (isSubmitKey(e)) this.#answer(asking.input.value)
+      else asking.input.handleInput(e)
+      this.#opts.requestRender?.()
+      return true
+    }
     if (matchesKey(e, "escape") || matchesKey(e, "q") || matchesKey(e, "c", { ctrl: true })) {
       this.#opts.onClose?.()
       return true
     }
     for (const k of this.#view.keys ?? []) {
       if (k.key.length !== 1 || k.key === "q" || !matchesKey(e, k.key)) continue
-      this.#call(`key ${k.key}`, () =>
-        k.run(this.#data, {
-          close: () => this.#opts.onClose?.(),
-          requestRender: () => this.#opts.requestRender?.(),
-        }),
-      )
+      this.#call(`key ${k.key}`, () => k.run(this.#data, this.#control()))
       this.#opts.requestRender?.()
       return true
     }
     return this.#scroll.handleInput(e)
+  }
+
+  /** What a key handler gets to act on the view with. */
+  #control(): ViewControl {
+    return {
+      close: () => {
+        this.#answer(undefined)
+        this.#opts.onClose?.()
+      },
+      requestRender: () => this.#opts.requestRender?.(),
+      prompt: (title, opts) => {
+        this.#answer(undefined)
+        const input = new LineInput()
+        if (opts?.initial) input.value = opts.initial
+        return new Promise<string | undefined>((resolve) => {
+          this.#prompt = { title: oneLine(title), input, resolve }
+          this.#opts.requestRender?.()
+        })
+      },
+    }
+  }
+
+  /** Closes the open prompt, if any, with `text` (empty text counts as cancelled). */
+  #answer(text: string | undefined) {
+    const asking = this.#prompt
+    if (!asking) return
+    this.#prompt = undefined
+    const value = text?.trim()
+    asking.resolve(value ? value : undefined)
+  }
+
+  /** The view is being closed by the frontend: an open prompt is cancelled. */
+  dispose(): void {
+    this.#answer(undefined)
   }
 
   render(width: number, ctx: RenderContext): string[] {
@@ -121,6 +163,12 @@ export class ExtensionViewer implements Component {
   }
 
   #footer(theme: Theme, width: number): string {
+    const asking = this.#prompt
+    if (asking) {
+      const label = truncateToWidth(`${asking.title} `, Math.max(1, Math.floor(width / 2)), "…")
+      const room = Math.max(1, width - visibleWidth(label))
+      return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder: "Enter send · Esc cancel" })}`
+    }
     const p = this.#scroll.position
     // Where the body is, when it does not fit.
     const where =

@@ -1,4 +1,4 @@
-import type { CommandDefinition } from "./commands.ts"
+import type { CommandDefinition, InputHandler } from "./commands.ts"
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
 import type { RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
@@ -32,6 +32,11 @@ export interface ExtensionAPI {
    * extension.error and skipped, unless the skill sets `override: true`.
    */
   registerSkill(skill: SkillDefinition): () => void
+  /**
+   * Claims lines the user sends before they reach the model (see InputHandler), e.g. `@name
+   * text` while a swarm runs. The handler registered last is asked first.
+   */
+  registerInputHandler(handler: InputHandler): () => void
   /** Adds an item to the status bar. Replacing an existing id requires `override: true`. */
   registerStatusItem(item: StatusItem): () => void
   /**

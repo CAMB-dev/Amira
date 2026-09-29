@@ -231,3 +231,46 @@ test("a view that throws shows the error in place and reports it once", async ()
   s.terminal.send("\x03")
   await s.exited
 })
+
+test("a key can ask for a line of text at the bottom of the view; Esc cancels it, not the view", async () => {
+  const answers: (string | undefined)[] = []
+  const asking: ViewDefinition<Progress> = {
+    ...progressView,
+    keys: [
+      {
+        key: "m",
+        label: "message",
+        run: (d, view) =>
+          void view.prompt("Message to writer:", { initial: "hi " }).then((text) => {
+            answers.push(text)
+            if (text) d.steps.push({ title: `sent: ${text}`, state: "done" })
+            view.requestRender()
+          }),
+      },
+    ],
+  }
+  const s = await setup({ view: asking })
+  s.terminal.send("/progress\r")
+  await waitFor(() => s.view().includes("check the tests"), "the view")
+  s.terminal.send("m")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer: hi"), "the prompt")
+  // Keys go to the prompt: "q" and "m" are typed, not run.
+  s.terminal.send("q m\r")
+  await waitFor(() => s.view().includes("sent: hi q m"), "the answer")
+  expect(s.screen.lines.at(-1)).toBe("m message · ↑↓ PgUp PgDn Home End scroll · Esc back")
+  s.terminal.send("m")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer:"), "the prompt again")
+  s.terminal.send(ESC)
+  await waitFor(() => answers.length === 2, "cancelled")
+  expect(s.screen.inAltScreen).toBe(true)
+  // Closing the view cancels a prompt left open.
+  s.terminal.send("m")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer:"), "a third prompt")
+  s.terminal.send("\x03")
+  await waitFor(() => answers.length === 3, "cancelled by Ctrl+C")
+  s.terminal.send(ESC)
+  await waitFor(() => !s.screen.inAltScreen, "closed")
+  expect(answers).toEqual(["hi q m", undefined, undefined])
+  s.terminal.send("\x03")
+  await s.exited
+})

@@ -1,6 +1,6 @@
 import type { JSONSchema, ModelRef, Usage, UserMessage } from "@amira/ai"
 import type { AnyEvent } from "./events.ts"
-import type { PendingNotice } from "./tools.ts"
+import type { PendingNotice, ToolDefinition } from "./tools.ts"
 
 /** What a sub-agent starts with (D12): only its task, or the parent's conversation so far. */
 export type SpawnContext = "fresh" | "fork"
@@ -27,6 +27,13 @@ export interface SpawnOptions {
   tools?: string[]
   /** Tools the child may not use, e.g. the one that spawns sub-agents once it is deep enough. */
   excludeTools?: string[]
+  /**
+   * Tools only this child has, on top of the ones `tools` and `excludeTools` leave it: e.g. a
+   * swarm member's messaging tools, whose code knows which member calls them. They win over
+   * the parent's tools of the same name, and are hidden from the child's own sub-agents (a
+   * parent's tool of the same name too). None may be named return_result.
+   */
+  extraTools?: ToolDefinition[]
   /** Instructions for the child, placed in its system prompt's "role" section. */
   systemPrompt?: string
   /**
@@ -115,6 +122,13 @@ export interface ChildSession {
   readonly state: ChildState
   /** Turns it has started so far. */
   readonly turns: number
+  /**
+   * Messages on their way to a persistent child: notices announced for it (expectNotice, e.g.
+   * a background job of its own) and not delivered yet, and messages sent (send, or a
+   * delivered notice) that its model has not seen yet. 0 when nothing is on its way, so an
+   * idle child with 0 will stay idle until someone sends it something.
+   */
+  readonly pendingNotices: number
   /** The spawn group it counts against, if any (see SpawnGroup). */
   readonly groupId?: string
   /**

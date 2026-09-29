@@ -144,14 +144,6 @@ test("web settings are checked", () => {
   expect(() => validateSettings({ web: { fetch: { maxChars: 0 } } }, "f")).toThrow("web.fetch.maxChars")
 })
 
-test("the workflow extension's section is kept as it is, for the extension to check", () => {
-  const ok = { workflow: { enabled: "always", maxAgents: 12, budget: { tokens: 500000 } } }
-  const v = validateSettings(ok, "f")
-  expect(v.settings).toEqual(ok)
-  expect(v.warnings).toEqual([])
-  expect(() => validateSettings({ workflow: "always" }, "f")).toThrow('"workflow" must be an object')
-})
-
 test("command aliases are checked: alias names like command names, values command lines", () => {
   const ok = { commandAliases: { ds: "model deepseek/deepseek-flash", "?": "help", m: " model " } }
   expect(validateSettings(ok, "f").settings).toEqual(ok)
@@ -263,9 +255,14 @@ test("checks every documented key", () => {
     compact: { threshold: 0.8, model: "p/small" },
     retry: { attempts: 0, baseDelayMs: 500, maxDelayMs: 30_000 },
     mcpServers: { fs: { command: "mcp-fs", args: ["."] } },
+    extensions: {
+      swarm: { confirm: false, limits: { maxMessages: 50 } },
+      workflow: { enabled: "always", maxAgents: 12, budget: { tokens: 500000 } },
+    },
     skills: { dirs: ["~/skills"] },
   }
   expect(validateSettings(ok, "f").warnings).toEqual([])
+  expect(validateSettings(ok, "f").settings.extensions).toEqual(ok.extensions)
   const bad = (v: unknown) => () => validateSettings(v, "f")
   expect(bad({ model: "gpt" })).toThrow('"model" must be a "provider/model" reference')
   expect(bad({ maxParallelTools: 0 })).toThrow('"maxParallelTools" must be a whole number of at least 1')
@@ -276,6 +273,7 @@ test("checks every documented key", () => {
   )
   expect(bad({ tools: { disabled: "bash" } })).toThrow('"tools.disabled" must be a list')
   expect(bad({ mcpServers: { a: 1 } })).toThrow('"mcpServers.a" must be an object')
+  expect(bad({ extensions: { swarm: true } })).toThrow('"extensions.swarm" must be an object')
   expect(bad({ providers: { p: { headers: { a: 1 } } } })).toThrow('"providers.p.headers.a" must be a string')
   expect(bad({ providers: { p: { models: [{ id: "m", cost: { input: 1 } }] } } })).toThrow(
     '"providers.p.models[0].cost.output" is required',

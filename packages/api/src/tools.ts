@@ -32,8 +32,22 @@ export interface DeferredToolInfo {
   loaded: boolean
 }
 
+/**
+ * Records an extension keeps in a session's file (as custom entries), e.g. a swarm's
+ * blackboard, so they are still there when the session is resumed. Each goes under a key of
+ * the extension's choosing (use its name) and must survive JSON. A session without a file
+ * keeps them in memory. Writing never throws: a failing disk is reported as extension.error.
+ */
+export interface SessionData {
+  append(key: string, data: unknown): void
+  /** The records under `key` on the session's current branch, oldest first, as copies. */
+  read(key: string): unknown[]
+}
+
 export interface ToolSession {
   readonly sessionId: string
+  /** Records extensions keep in this session (see SessionData). */
+  readonly data?: SessionData
   /** Deferred tools registered right now, in registration order. */
   deferredTools(): DeferredToolInfo[]
   /**

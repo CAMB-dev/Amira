@@ -171,6 +171,7 @@ const settings = object({
   compact: object({ threshold: number, model: modelRef }),
   retry: object({ attempts: integer(0), baseDelayMs: integer(0), maxDelayMs: integer(0) }),
   mcpServers: record(anyObject),
+  extensions: record(anyObject),
   mcpTrustedProjects: list(string),
   skills: object({ dirs: list(string) }),
   web: object({
@@ -195,8 +196,6 @@ const settings = object({
   subagents: object({ maxDepth: integer(1), maxConcurrent: integer(1), background: boolean }),
   budget: object({ tokens: integer(1), costUsd: number }),
   merge: object({ reviewThreshold: object({ lines: integer(0), files: integer(0) }) }),
-  // The workflow extension's section (D81): it checks its own fields.
-  workflow: anyObject,
   tui: object({
     mode: oneOf("fullscreen", "inline"),
     bell: boolean,

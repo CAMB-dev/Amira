@@ -16,6 +16,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     },
     registerCommand: () => () => {},
     registerSkill: () => () => {},
+    registerInputHandler: () => () => {},
     registerStatusItem: () => () => {},
     registerToolRenderer: (name) => {
       renderers.push(name)

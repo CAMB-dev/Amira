@@ -7,6 +7,7 @@ import type {
   CommandInfo,
   CommandOutputLevel,
   FrontendView,
+  InputHandler,
   SessionControl,
   SkillInfo,
 } from "@amira/api"
@@ -144,6 +145,33 @@ export class CommandRegistry {
 }
 
 /**
+ * The input handlers extensions registered (InputHandler): lines the user sends that one of
+ * them claims never reach the model. The handler registered last is asked first.
+ */
+export class InputRegistry {
+  #handlers: { handler: InputHandler; source: string }[] = []
+
+  register(handler: InputHandler, source: string): () => void {
+    if (!handler.name?.trim()) throw new Error("an input handler needs a name")
+    const entry = { handler, source }
+    this.#handlers.push(entry)
+    return () => {
+      this.#handlers = this.#handlers.filter((e) => e !== entry)
+    }
+  }
+
+  /** The handler that claims `text`, if any; one that throws does not. */
+  claim(text: string): InputHandler | undefined {
+    for (const { handler } of [...this.#handlers].reverse()) {
+      try {
+        if (handler.claims(text)) return handler
+      } catch {}
+    }
+    return undefined
+  }
+}
+
+/**
  * Problems with the user's `commandAliases`: one that is already a command or a command's
  * alias is ignored, since those win.
  */
@@ -262,6 +290,8 @@ export interface CommandHostOptions {
   aliases?: Record<string, string>
   /** The `$` skills; without it no line runs a skill. */
   skills?: SkillRegistry
+  /** Extensions' input handlers; without it no line is claimed. */
+  inputs?: InputRegistry
 }
 
 /** Candidates for a command line; `command` is set once the arguments are being completed. */
@@ -493,6 +523,38 @@ export class CommandHost {
       const error = err instanceof Error ? err.message : String(err)
       print(error, "error")
       return { ok: false, command: parsed.name, output, error }
+    }
+  }
+
+  /**
+   * Whether an extension's input handler claims the line (see InputHandler). Frontends ask
+   * after checking for a command and a skill, and run it with `runInput` instead of sending it.
+   */
+  inputLine(text: string): boolean {
+    return this.#opts.inputs?.claim(text.trim()) !== undefined
+  }
+
+  /**
+   * Runs a line an input handler claims; `command` in the outcome is the handler's name.
+   * Never throws: failures are printed and returned.
+   */
+  async runInput(line: string, opts: CommandRunOptions): Promise<CommandOutcome> {
+    const output: string[] = []
+    const text = line.trim()
+    const handler = this.#opts.inputs?.claim(text)
+    const print = this.#printer(handler?.name ?? "input", output)
+    if (!handler) {
+      const error = `No extension handles: ${text}`
+      print(error, "error")
+      return { ok: false, output, error }
+    }
+    try {
+      await handler.run(text, this.#context(opts, print))
+      return { ok: true, command: handler.name, output }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      print(error, "error")
+      return { ok: false, command: handler.name, output, error }
     }
   }
 

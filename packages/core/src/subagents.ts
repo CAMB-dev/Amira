@@ -217,6 +217,11 @@ class Child implements ChildSession {
     return this.groups[0]?.id
   }
 
+  get pendingNotices(): number {
+    if (this.ended) return 0
+    return this.agent.expectedNotices + this.agent.waitingNotices
+  }
+
   get events(): AsyncIterable<AnyEvent> {
     return this.tree.eventsOf(this)
   }
@@ -503,10 +508,18 @@ export class AgentTree {
     const context = opts.context ?? "fresh"
     const persistent = opts.persistent === true
     let base = context === "fork" ? [...parent.sections] : (this.#opts.sections ?? standardSections)(cwd)
+    const extra = opts.extraTools ?? []
+    if (extra.some((t) => t.name === RETURN_RESULT_TOOL)) {
+      throw new SpawnError(`an extra tool cannot be named ${RETURN_RESULT_TOOL}`)
+    }
+    // A sub-agent never gets a tool only top-level sessions may have (D81), not even as its own.
+    const mainOnly = extra.find((t) => t.mainOnly)
+    if (mainOnly) throw new SpawnError(`${mainOnly.name} is for top-level sessions only`)
     const allow = opts.tools ? new Set(opts.tools) : undefined
     const deny = new Set(opts.excludeTools ?? [])
-    // A parent's return_result is its own: never passed down.
+    // A parent's own tools (its return_result, its extra tools) are its own: never passed down.
     deny.add(RETURN_RESULT_TOOL)
+    for (const name of parent.tools.ownNames()) deny.add(name)
     const spec: ResultSpec | undefined = opts.schema
       ? { schema: opts.schema, wrapped: !isObjectSchema(opts.schema), strikes: 0 }
       : undefined
@@ -536,7 +549,7 @@ export class AgentTree {
         parent.tools,
         // Tools only top-level sessions get (ToolDefinition.mainOnly) never reach a child.
         (n) => (allow?.has(n) ?? true) && !deny.has(n) && parent.tools.get(n)?.mainOnly !== true,
-        spec ? [returnResultTool(spec, this.resultRetries)] : [],
+        [...extra, ...(spec ? [returnResultTool(spec, this.resultRetries)] : [])],
       ),
       ...(store ? { session: store } : {}),
       parentSessionId: parent.sessionId,

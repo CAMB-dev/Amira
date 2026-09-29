@@ -546,6 +546,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Puts `next` over the conversation, in place of the viewer open there if any. */
   function showOverlay(next: SubagentViewer | ExtensionViewer) {
     const opened = viewer !== undefined
+    if (viewer instanceof ExtensionViewer) viewer.dispose()
     viewer = next
     if (opened) return
     view.openOverlay()
@@ -555,6 +556,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   function closeView() {
     if (!viewer) return
+    if (viewer instanceof ExtensionViewer) viewer.dispose()
     viewer = undefined
     clearInterval(viewerTimer)
     viewerTimer = undefined
@@ -826,6 +828,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     remember(message, parts)
     if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
     else if (commands?.skillLine(trimmed)) runSkill(trimmed)
+    else if (commands?.inputLine(trimmed)) runInput(trimmed, display)
     else if (working && how === "steer") agent.steer(toPrompt(message))
     else if (working) queued.push(message)
     else send(message)
@@ -852,6 +855,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function runSkill(line: string) {
     void commands!
       .runSkill(line, { frontend: "tui", quit: () => quit(), openView })
+      .then(() => view.requestRender())
+  }
+
+  /**
+   * Runs a line an extension's input handler claimed (e.g. "@writer shorter, please" while a
+   * swarm runs), at once, even during a turn. It shows as typed; the model never gets it.
+   */
+  function runInput(line: string, display?: string) {
+    view.commandEcho(display ?? line)
+    void commands!
+      .runInput(line, { frontend: "tui", quit: () => quit(), openView })
       .then(() => view.requestRender())
   }
 

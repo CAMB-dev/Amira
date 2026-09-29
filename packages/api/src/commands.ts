@@ -3,7 +3,7 @@ import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
 import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
-import type { PendingNotice, ToolExposure } from "./tools.ts"
+import type { PendingNotice, SessionData, ToolExposure } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
 
 /** A suggestion for a command's argument text. */
@@ -40,6 +40,24 @@ export interface CommandDefinition {
   override?: boolean
   /** `args` is the text after the name, trimmed. Throwing reports the message to the user. */
   run(args: string, ctx: CommandContext): void | Promise<void>
+}
+
+/**
+ * Claims some of the lines the user sends before they reach the model, e.g. `@name text`
+ * for a message to a swarm member while a swarm runs. Frontends ask the handlers (the one
+ * registered last first) about each line that is not a slash command or a skill; the first
+ * that claims it runs it, and the model never sees the line.
+ */
+export interface InputHandler {
+  /** Names it in errors, e.g. "swarm". */
+  name: string
+  /**
+   * Whether the line is for this handler. Asked about every line the user sends, so it must
+   * answer at once; claim only what is clearly yours (a throw counts as no).
+   */
+  claims(text: string): boolean
+  /** Handles a line it claimed, as a command runs. Throwing reports the message to the user. */
+  run(text: string, ctx: CommandContext): void | Promise<void>
 }
 
 /** A registered command, as frontends list it. */
@@ -243,6 +261,12 @@ export interface SessionControl {
    * session.
    */
   readonly expectNotice?: () => PendingNotice
+  /**
+   * Records extensions keep in the session (see SessionData), e.g. to show what the tools of
+   * a resumed session recorded. Follows the session commands switch to. Unset where the host
+   * has none.
+   */
+  readonly data?: SessionData
   /** "provider/model" refs to offer, from providers that have a key. */
   models(): string[]
   /** Switches the model for later turns; throws for an unknown one. */
