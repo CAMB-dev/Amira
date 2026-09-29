@@ -204,7 +204,10 @@ export class LiveRenderer {
   }
 
   private draw(incoming: string[], release = false): void {
-    if (this.stopped) return
+    if (this.stopped) {
+      dropImages(incoming)
+      return
+    }
     if (this.suspended) {
       for (const line of incoming) this.held.push(line)
       return
@@ -242,7 +245,10 @@ export class LiveRenderer {
     let open = true
     const commit = (lines: string[]) => {
       // A component that kept the context cannot commit outside the frame it was given for.
-      if (!open) return
+      if (!open) {
+        dropImages(lines)
+        return
+      }
       for (const l of lines) committed.push(...safeLines(l))
     }
     let lines: string[]
@@ -492,6 +498,14 @@ function fitScreen(line: Line, width: number, height: number): Line[] {
 /** How much of the history's line budget a committed line uses: an image by its size too. */
 function historyWeight(line: Line): number {
   return typeof line === "string" ? 1 : line.block.rows + Math.ceil(line.block.seq.length / 10_000)
+}
+
+/** Forgets the images of lines that will never be printed, so their markers are not kept. */
+function dropImages(lines: string[]): void {
+  for (const line of lines) {
+    const m = findImageMarker(line)
+    if (m) releaseImage(m.id)
+  }
 }
 
 /** Lines to commit, made safe to print: an image marker is kept as it is. */

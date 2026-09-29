@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { Component } from "../src/component.ts"
+import type { Component, RenderContext } from "../src/component.ts"
 import type { ImageBlock } from "../src/images/encode.ts"
 import { findImageMarker, pendingImage, placeImage } from "../src/images/placement.ts"
 import { LiveRenderer } from "../src/renderer.ts"
@@ -143,6 +143,28 @@ test("an image marker is honored only as registered; content cannot forge or car
   r.commit([`text ${forged} more`])
   expect(term.output).not.toContain("tk:img")
   expect(screen.lines[0]).toBe("text  more")
+})
+
+test("a marker committed where it is never printed is forgotten", () => {
+  const { r } = setup()
+  let kept: RenderContext | undefined
+  r.stop()
+  const late = pendingImage(new Promise(() => {}), ["late"])
+  r.commit([late])
+  expect(findImageMarker(late)).toBeUndefined()
+  // Through a context kept past its frame.
+  const term = new FakeTerminal(30, 12)
+  const r2 = new LiveRenderer(term, {
+    render: (_w, ctx) => {
+      kept = ctx
+      return ["> live"]
+    },
+  })
+  r2.start()
+  const stale = pendingImage(new Promise(() => {}), ["stale"])
+  kept!.commit!([stale])
+  expect(findImageMarker(stale)).toBeUndefined()
+  r2.stop()
 })
 
 test("placing an image makes its rows, then draws it with the cursor saved around it", () => {
