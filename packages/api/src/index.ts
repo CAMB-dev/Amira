@@ -1,5 +1,5 @@
 /** Public API for Amira extensions. Extensions may import only from this package. */
-export const API_VERSION = "0.1.0"
+export const API_VERSION = "0.1.1"
 
 export type {
   AssistantMessage,
@@ -29,3 +29,4 @@ export * from "./tool-details.ts"
 export * from "./tool-renderers.ts"
 export * from "./tools.ts"
 export * from "./ui.ts"
+export * from "./views.ts"

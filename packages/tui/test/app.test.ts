@@ -5,9 +5,11 @@ import {
   type ChildSession,
   type CommandDefinition,
   defineTool,
+  type InputHandler,
   type Message,
   type SessionControl,
   type SkillDefinition,
+  type SpawnGroup,
   type TuiSettings,
   textResult,
 } from "@amira/api"
@@ -57,6 +59,8 @@ interface SetupOptions {
   commands?: CommandDefinition[]
   /** `$` skills to offer, next to `commands`. */
   skills?: SkillDefinition[]
+  /** Input handlers extensions register, next to `commands`. */
+  inputs?: InputHandler[]
   control?: Partial<SessionControl>
   /** Give the agent a tree, so tools can start sub-agents. */
   tree?: boolean
@@ -142,10 +146,12 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     await host.load((api) => {
       for (const c of o.commands!) api.registerCommand(c)
       for (const s of o.skills ?? []) api.registerSkill(s)
+      for (const h of o.inputs ?? []) api.registerInputHandler(h)
     }, "test-commands")
     commands = new CommandHost({
       registry: host.commands,
       skills: host.skills,
+      inputs: host.inputs,
       bus,
       ui: host.ui,
       control: (o.control ?? {}) as SessionControl,
@@ -1524,6 +1530,42 @@ test("the / list has no skills, and /<skill> points at $ instead of running it",
   await exited
 })
 
+test("a line an input handler claims runs at once, also during a turn, and never reaches the model", async () => {
+  const got: string[] = []
+  const { terminal, agent, all, shows, idle, mock, exited } = await setup(
+    [{ text: "Working on it.", delayMs: 300 }, { text: "Hello." }],
+    {
+      commands: testCommands([]),
+      inputs: [
+        {
+          name: "swarm",
+          claims: (t) => /^@writer\s/.test(t),
+          run: (t, ctx) => {
+            got.push(t)
+            ctx.print("→ writer: message sent")
+          },
+        },
+      ],
+    },
+  )
+  terminal.send("start\r")
+  await waitFor(() => agent.status === "working", "turn")
+  terminal.send("@writer keep it short\r")
+  await shows("→ writer: message sent")
+  expect(got).toEqual(["@writer keep it short"])
+  await idle()
+  expect(all()).toContain("› @writer keep it short")
+  // Not steered into the turn: the model only ever saw the first message.
+  expect(mock.requests).toHaveLength(1)
+  expect(JSON.stringify(agent.messages)).not.toContain("keep it short")
+  // A line nobody claims is a message as usual.
+  terminal.send("@reader hi\r")
+  await shows("Hello.")
+  expect(JSON.stringify(mock.requests[1]!.messages)).toContain("@reader hi")
+  terminal.send("\x03")
+  await exited
+})
+
 test("text that starts with $ but names no skill is sent as a message", async () => {
   const { terminal, agent, all, live, shows, idle, exited } = await skillSetup(
     [{ text: "Noted." }, { text: "Sure." }],
@@ -1868,6 +1910,75 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   await waitFor(() => !live().includes("◆ background"), "the rows gone")
   // Its end is reported by its notice (the agent extension's), not by an end line of its own.
   expect(all()).not.toContain("◆ Scan the logs ✓")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a compact spawn group shows as one line with its owner's status, not a row per member", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const reply = (req: { messages: { role: string; content: unknown }[] }) => {
+    const task = JSON.stringify(req.messages[0]?.content)
+    const answered = req.messages.at(-1)?.role === "toolResult"
+    if (task.includes("step"))
+      return answered ? { text: "step done" } : { toolCalls: [{ name: "hold", args: {} }] }
+    return answered ? { text: "running it" } : { toolCalls: [{ name: "flow", args: {} }] }
+  }
+  const { terminal, live, all, shows, idle, exited, agent, bus } = await setup(
+    [reply, reply, reply, reply, reply, reply, reply, reply],
+    { cols: 90, tree: true },
+  )
+  let group: SpawnGroup | undefined
+  // Members wait here until the test has seen the line.
+  agent.tools.register(
+    defineTool({
+      name: "hold",
+      ...parallel,
+      execute: async () => {
+        await gate
+        return textResult("held")
+      },
+    }),
+    "test",
+  )
+  agent.tools.register(
+    defineTool({
+      name: "flow",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        group = ctx.session!.createGroup!({ name: "workflow demo", compact: true })
+        group.setStatus("Explore · 0/3 agents")
+        const kids = ["Scan api", "Scan core", "Scan tui"].map((title) =>
+          group!.spawn({ role: "explorer", title, prompt: `step ${title}` }),
+        )
+        void Promise.all(kids.map((k) => k.result())).then(() => group!.end())
+        return textResult("Started in the background")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("running it")
+  await idle()
+  await waitFor(
+    () =>
+      /● flow · 3 sub-agents · running in background · \d+s\n {2}└ ◆ workflow demo · Explore · 0\/3 agents\n/.test(
+        live(),
+      ),
+    "one line for the group",
+  )
+  expect(live()).not.toContain("Scan api")
+  group!.setStatus("Verify · 2/3 agents")
+  await waitFor(() => live().includes("◆ workflow demo · Verify · 2/3 agents"), "the new status")
+  release()
+  await group!.ended()
+  await bus.flush()
+  await waitFor(() => !live().includes("workflow demo"), "the line gone")
+  // Its members never get lines of their own.
+  expect(all()).not.toContain("Scan core")
   terminal.send("\x03")
   await exited
 })

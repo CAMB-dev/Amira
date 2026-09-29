@@ -18,7 +18,9 @@ import type {
   ApprovalRequest,
   EventMap,
   PendingNotice,
+  SessionData,
   SessionStatus,
+  SpawnGroupOptions,
   SpawnOptions,
   ToolDefinition,
   ToolRejection,
@@ -93,6 +95,18 @@ export interface AgentOptions {
    * asks the parent's model; without one such calls are denied.
    */
   approve?: Approver
+  /**
+   * Called instead of starting a turn when a notice arrives while the session is idle, for an
+   * owner that decides when turns run (a persistent sub-agent waits for a place in its tree);
+   * the owner starts it with wake(). Notices left when a turn ends then wait as well, instead
+   * of starting the next turn by themselves.
+   */
+  onIdleNotice?: () => void
+  /**
+   * Asked after each batch of tool calls: true ends the turn there, as done, without another
+   * model call (a sub-agent that handed back its structured result).
+   */
+  endTurn?: () => boolean
 }
 
 export interface TurnResult {
@@ -221,6 +235,30 @@ export class Agent {
   #compacting = false
   /** Messages sent during a manual compaction; they start one turn when it ends. */
   #afterCompaction: AfterCompaction | undefined
+  #onIdleNotice: (() => void) | undefined
+  #endTurn: (() => boolean) | undefined
+  /** The running turn's promise, for owners that wait for whatever turn runs. */
+  #current: Promise<TurnResult> | undefined
+  /** Extension records of a session without a file (see `data`). */
+  #records: { key: string; data: unknown }[] = []
+
+  /**
+   * Records extensions keep in this session (SessionData): custom entries of its file, or
+   * kept in memory when it has none.
+   */
+  readonly data: SessionData = {
+    append: (key, data) => {
+      const copy = JSON.parse(JSON.stringify(data ?? null)) as unknown
+      if (this.session) this.#store({ type: "custom", ext: key, data: copy })
+      else this.#records.push({ key, data: copy })
+    },
+    read: (key) => {
+      const all = this.session
+        ? this.session.branch().flatMap((e) => (e.type === "custom" && e.ext === key ? [e.data] : []))
+        : this.#records.filter((r) => r.key === key).map((r) => r.data)
+      return all.map((d) => structuredClone(d))
+    },
+  }
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -242,6 +280,8 @@ export class Agent {
     this.depth = opts.depth ?? 0
     this.tree = opts.tree
     this.#approve = opts.approve
+    this.#onIdleNotice = opts.onIdleNotice
+    this.#endTurn = opts.endTurn
 
     if (opts.messages || !opts.session) {
       this.messages = opts.messages ?? []
@@ -268,6 +308,7 @@ export class Agent {
     const deferred = createToolSession(this.sessionId, this.tools, this.#loadedTools)
     this.#toolSession = {
       ...deferred,
+      data: this.data,
       // Recorded in the session, so resuming it offers the same tools again.
       loadTools: (names) => {
         const added = deferred.loadTools(names)
@@ -281,9 +322,16 @@ export class Agent {
       get model() {
         return modelRef(agent.model)
       },
-      ...(tree ? { spawn: (o: SpawnOptions) => tree.spawn(agent, o) } : {}),
-      // A sub-agent's life is one turn: nothing may wake it afterwards.
-      ...(this.depth === 0 ? { expectNotice: () => agent.expectNotice() } : {}),
+      ...(tree
+        ? {
+            spawn: (o: SpawnOptions) => tree.spawn(agent, o),
+            createGroup: (o: SpawnGroupOptions) => tree.createGroup(agent, o),
+            groups: () => tree.groups(),
+          }
+        : {}),
+      // A sub-agent's life is one turn, and nothing may wake it afterwards, unless it is
+      // persistent (its owner wakes it for the notices it gets).
+      ...(this.depth === 0 || this.#onIdleNotice ? { expectNotice: () => agent.expectNotice() } : {}),
     }
   }
 
@@ -321,6 +369,14 @@ export class Agent {
     return this.#notices.length
   }
 
+  /**
+   * Takes the delivered notices that have not reached the model, so they are never sent: for
+   * an owner that ends the session, to report them.
+   */
+  takeNotices(): UserMessage[] {
+    return this.#notices.splice(0)
+  }
+
   #receive(message: UserMessage) {
     this.#notices.push(message)
     const turn = this.#turn
@@ -329,7 +385,22 @@ export class Agent {
       // A manual compaction runs: it is sent once that ends.
       this.#noticedDuringCompaction = true
       this.#emit(undefined, "turn.steer", { message, state: "queued" })
-    } else this.#wake()
+    } else if (this.#onIdleNotice) this.#onIdleNotice()
+    else this.#wake()
+  }
+
+  /**
+   * Starts a turn with the delivered notices waiting, if any and the session is idle; for
+   * owners that passed `onIdleNotice`. Returns the turn, or undefined when none started.
+   */
+  wake(): Promise<TurnResult> | undefined {
+    if (this.#abort || this.#compacting || !this.#notices.length) return undefined
+    return this.prompt(joinMessages(this.#notices.splice(0)))
+  }
+
+  /** The turn running now, if any: settles with its result. */
+  get currentTurn(): Promise<TurnResult> | undefined {
+    return this.#current
   }
 
   /** When held notices are sent again after a failed turn, if they will be. */
@@ -412,10 +483,15 @@ export class Agent {
   #callSession(toolCallId: string): ToolSession {
     const base = this.#toolSession
     const spawn = base.spawn
-    if (!spawn) return base
+    const tree = this.tree
+    if (!spawn || !tree) return base
     return Object.create(base, {
       spawn: {
         value: (o: SpawnOptions) => spawn({ ...o, toolCallId: o.toolCallId ?? toolCallId }),
+        enumerable: true,
+      },
+      createGroup: {
+        value: (o: SpawnGroupOptions) => tree.createGroup(this, o, { toolCallId }),
         enumerable: true,
       },
     }) as ToolSession
@@ -629,7 +705,13 @@ export class Agent {
       next.prompted = true
       return new Promise((resolve, reject) => next.waiters.push({ resolve, reject }))
     }
-    return this.#runTurn(input, opts)
+    const turn = this.#runTurn(input, opts)
+    this.#current = turn
+    const clear = () => {
+      if (this.#current === turn) this.#current = undefined
+    }
+    turn.then(clear, clear)
+    return turn
   }
 
   async #runTurn(input: string | UserMessage, opts: PromptOptions): Promise<TurnResult> {
@@ -687,6 +769,10 @@ export class Agent {
           result = { reason: "aborted", steps }
           break
         }
+        if (this.#endTurn?.()) {
+          result = { reason: "done", steps }
+          break
+        }
       }
     } catch (err) {
       result = { reason: "error", steps, error: err instanceof Error ? err.message : String(err) }
@@ -696,7 +782,8 @@ export class Agent {
       this.#turn = undefined
       const leftover = this.#steering.splice(0)
       // Notices are never dropped: after an interrupted or failed turn they wait for the next.
-      const notices = result.reason === "done" ? this.#notices.splice(0) : []
+      // An owner that decides when turns run (onIdleNotice) starts the next one itself.
+      const notices = result.reason === "done" && !this.#onIdleNotice ? this.#notices.splice(0) : []
       const nextTurnId =
         result.reason === "done" && (leftover.length || notices.length) ? newTurnId() : undefined
       for (const message of leftover) {

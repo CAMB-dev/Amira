@@ -255,9 +255,14 @@ test("checks every documented key", () => {
     compact: { threshold: 0.8, model: "p/small" },
     retry: { attempts: 0, baseDelayMs: 500, maxDelayMs: 30_000 },
     mcpServers: { fs: { command: "mcp-fs", args: ["."] } },
+    extensions: {
+      swarm: { confirm: false, limits: { maxMessages: 50 } },
+      workflow: { enabled: "always", maxAgents: 12, budget: { tokens: 500000 } },
+    },
     skills: { dirs: ["~/skills"] },
   }
   expect(validateSettings(ok, "f").warnings).toEqual([])
+  expect(validateSettings(ok, "f").settings.extensions).toEqual(ok.extensions)
   const bad = (v: unknown) => () => validateSettings(v, "f")
   expect(bad({ model: "gpt" })).toThrow('"model" must be a "provider/model" reference')
   expect(bad({ maxParallelTools: 0 })).toThrow('"maxParallelTools" must be a whole number of at least 1')
@@ -268,6 +273,7 @@ test("checks every documented key", () => {
   )
   expect(bad({ tools: { disabled: "bash" } })).toThrow('"tools.disabled" must be a list')
   expect(bad({ mcpServers: { a: 1 } })).toThrow('"mcpServers.a" must be an object')
+  expect(bad({ extensions: { swarm: true } })).toThrow('"extensions.swarm" must be an object')
   expect(bad({ providers: { p: { headers: { a: 1 } } } })).toThrow('"providers.p.headers.a" must be a string')
   expect(bad({ providers: { p: { models: [{ id: "m", cost: { input: 1 } }] } } })).toThrow(
     '"providers.p.models[0].cost.output" is required',
@@ -479,4 +485,11 @@ test("tui settings: bell, title, progress, reflow and submitWhileWorking", () =>
   expect(validateSettings({ tui: { blink: true } }, "f").warnings).toEqual([
     'f: unknown setting "tui.blink" (ignored)',
   ])
+})
+
+test("tui.mode is fullscreen or inline", () => {
+  for (const mode of ["fullscreen", "inline"] as const) {
+    expect(validateSettings({ tui: { mode } }, "f")).toEqual({ settings: { tui: { mode } }, warnings: [] })
+  }
+  expect(() => validateSettings({ tui: { mode: "split" } }, "f")).toThrow('"tui.mode"')
 })

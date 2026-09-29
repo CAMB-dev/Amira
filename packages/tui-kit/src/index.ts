@@ -1,4 +1,4 @@
-export { stripAnsi, type TerminalMode } from "./ansi.ts"
+export { modes, stripAnsi, type TerminalMode } from "./ansi.ts"
 export {
   type Capabilities,
   chooseImageSupport,
@@ -61,6 +61,7 @@ export {
   type KeyId,
   type KeyName,
   key,
+  type MouseInput,
   matchesKey,
   type PasteEvent,
   textKey,
@@ -99,4 +100,4 @@ export {
   yellow,
 } from "./style.ts"
 export { BaseTerminal, FakeTerminal, ProcessTerminal, type Terminal } from "./terminal.ts"
-export { graphemes, TAB_WIDTH, truncateToWidth, visibleWidth, wrapText } from "./width.ts"
+export { closeStyles, graphemes, TAB_WIDTH, truncateToWidth, visibleWidth, wrapText } from "./width.ts"

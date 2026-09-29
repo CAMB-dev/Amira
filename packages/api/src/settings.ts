@@ -49,6 +49,12 @@ export interface Settings {
   retry?: { attempts?: number; baseDelayMs?: number; maxDelayMs?: number }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */
   mcpServers?: Record<string, Record<string, unknown>>
+  /**
+   * Settings of extensions installed as packages, by extension name, e.g.
+   * `{"swarm": {"confirm": false}, "workflow": {"enabled": "always"}}`. Their shape belongs
+   * to each extension, which reads its own section and checks it.
+   */
+  extensions?: Record<string, Record<string, unknown>>
   /** Project directories whose own MCP servers may run; honoured in the user settings only. */
   mcpTrustedProjects?: string[]
   skills?: { dirs?: string[] }
@@ -71,6 +77,13 @@ export interface Settings {
 }
 
 export interface TuiSettings {
+  /**
+   * "fullscreen" keeps the conversation on the alternate screen, scrolled and searched by
+   * Amira, and prints it to the normal screen on exit; "inline" leaves finished output in the
+   * terminal's own scrollback (for SSH, tmux, or native scrolling and copying). Default
+   * "fullscreen"; the --inline and --fullscreen flags win.
+   */
+  mode?: "fullscreen" | "inline"
   /**
    * Ring the bell when a turn ends or a dialog opens while the terminal is in the background
    * (or, where the terminal does not report focus, after a long turn). Default true.

@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
+import type { EventEnvelope } from "@amira/api"
 import { defaultTheme, stripAnsi } from "@amira/tui-kit"
 import { isLastSibling, subagentEndLine, subagentRows, summarizeArgs, userLines } from "../src/format.ts"
 import { historyLines } from "../src/history.ts"
+import { isActive, type SubagentNode, stateNode } from "../src/subagents.ts"
 
 const plain = (lines: string[]) => lines.map(stripAnsi)
 
@@ -162,6 +164,33 @@ test("a sub-agent's live rows: title, role, time and tokens, then its current to
   ])
   // Narrow: cut to the width.
   for (const r of rows(deep, 30)) expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
+  // A persistent one between turns says so, without a clock or a tool.
+  expect(rows({ ...busy, idle: true })).toEqual(["  └ ◆ US market trend · explorer · idle · 4.1k tok"])
+})
+
+test("subagent.state: an idle persistent sub-agent is not active, and working again is", () => {
+  const node: SubagentNode = {
+    id: "c1",
+    parent: "main",
+    title: "writer",
+    role: "agent",
+    depth: 1,
+    tokens: 0,
+    startedAt: 1,
+    activity: { name: "read", summary: "a.ts" },
+  }
+  const state = (s: "idle" | "working", turns: number) =>
+    ({
+      type: "subagent.state",
+      sessionId: "main",
+      ts: 5,
+      data: { childSessionId: "c1", state: s, turns },
+    }) as EventEnvelope<"subagent.state">
+  stateNode(node, state("idle", 1))
+  expect(isActive(node)).toBe(false)
+  expect(node.activity).toBeUndefined()
+  stateNode(node, state("working", 2))
+  expect(isActive(node)).toBe(true)
 })
 
 test("a resumed message with a display shows it and its note, not its content", () => {

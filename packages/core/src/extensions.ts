@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
 import { API_VERSION, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
 import { runCommand } from "@amira/proc"
-import { CommandRegistry } from "./commands.ts"
+import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
@@ -12,6 +12,7 @@ import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
 import { ToolRendererRegistry } from "./tool-renderers.ts"
 import { UiRequests } from "./ui-requests.ts"
+import { ViewRegistry } from "./view-registry.ts"
 
 let virtualApiInstalled = false
 
@@ -39,10 +40,14 @@ export interface ExtensionHostOptions {
   status?: StatusRegistry
   /** Where tool presenters go. Default: a new registry. */
   renderers?: ToolRendererRegistry
+  /** Where full-screen view kinds go. Default: a new registry. */
+  views?: ViewRegistry
   /** Where slash commands go. Default: a new registry. */
   commands?: CommandRegistry
   /** Where `$` skills go. Default: a new registry. */
   skills?: SkillRegistry
+  /** Where input handlers go. Default: a new registry. */
+  inputs?: InputRegistry
   /** Where extension dialogs go. Default: a new one on `bus`. */
   ui?: UiRequests
   /** Session id used on extension.* and ui.* events. Default "host". */
@@ -63,16 +68,20 @@ export class ExtensionHost {
   #imported = new Set<string>()
   readonly status: StatusRegistry
   readonly renderers: ToolRendererRegistry
+  readonly views: ViewRegistry
   readonly commands: CommandRegistry
   readonly skills: SkillRegistry
+  readonly inputs: InputRegistry
   readonly ui: UiRequests
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
     this.status = opts.status ?? new StatusRegistry()
     this.renderers = opts.renderers ?? new ToolRendererRegistry()
+    this.views = opts.views ?? new ViewRegistry()
     this.commands = opts.commands ?? new CommandRegistry()
     this.skills = opts.skills ?? new SkillRegistry()
+    this.inputs = opts.inputs ?? new InputRegistry()
     this.ui = opts.ui ?? new UiRequests(opts.bus, opts.sessionId ? { sessionId: opts.sessionId } : {})
   }
 
@@ -182,6 +191,14 @@ export class ExtensionHost {
           return () => {}
         }
       },
+      registerInputHandler: (handler) => {
+        try {
+          return track(this.inputs.register(handler, source))
+        } catch (err) {
+          this.#fail(source, err instanceof Error ? err.message : String(err))
+          return () => {}
+        }
+      },
       on: (type, handler) =>
         track(
           bus.subscribe(
@@ -203,6 +220,15 @@ export class ExtensionHost {
         })
       },
       registerToolRenderer: (toolName, presenter) => track(this.renderers.register(toolName, presenter)),
+      // A kind that cannot be taken skips only that view.
+      registerView: (view) => {
+        try {
+          return track(this.views.register(view))
+        } catch (err) {
+          this.#fail(source, err instanceof Error ? err.message : String(err))
+          return () => {}
+        }
+      },
       requestRender: () => this.#requestRender(),
       runCommand: (argv, options) => runCommand(argv, options),
       ui: this.#uiFor(source, track),

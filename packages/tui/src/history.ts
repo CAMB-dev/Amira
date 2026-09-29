@@ -65,10 +65,14 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
       }
     }
   }
-  const s = opts.session
+  out.push(...t.block("history", [historySeparator(theme, opts.session)]))
+  return out
+}
+
+/** The separator after a resumed history: `── resumed <id> · <last write> ──`. */
+export function historySeparator(theme: Theme, s?: { id: string; updatedAt?: number }): string {
   const label = s
     ? ` resumed ${s.id}${s.updatedAt !== undefined ? ` · ${localTime(s.updatedAt)}` : ""} `
     : " resumed "
-  out.push(...t.block("history", [theme.muted(`${glyphs.rule.repeat(2)}${label}${glyphs.rule.repeat(2)}`)]))
-  return out
+  return theme.muted(`${glyphs.rule.repeat(2)}${label}${glyphs.rule.repeat(2)}`)
 }

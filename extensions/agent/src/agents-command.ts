@@ -103,7 +103,7 @@ export function transcriptText(
   for (const m of own) if (m.role === "toolResult") results.set(m.toolCallId, m)
   const kids = all.filter((s) => s.parentSessionId === info.id)
   const last = own.findLast((m) => m.role === "assistant")
-  const finished = info.status !== "running" && info.status !== "queued"
+  const finished = !live(info)
   for (const m of own) {
     if (m.role !== "assistant") continue
     for (const b of m.content) {
@@ -135,7 +135,7 @@ export function transcriptText(
   for (const kid of kids) out.push(`◆ ${subagentSummary(kid, now)}`)
   if (kids.length) out.push("")
   if (info.error && info.status !== "done") out.push(`✗ ${info.error}`)
-  else if (!finished) out.push(`… ${info.status === "queued" ? "waiting for a free slot" : "still running"}`)
+  else if (!finished) out.push(`… ${waitingFor(info)}`)
   else if (!last) out.push("(no reply)")
   while (out.at(-1) === "") out.pop()
   return out.join("\n")
@@ -177,7 +177,15 @@ function openView(ctx: CommandContext, s: SubagentInfo) {
   ctx.openView({ kind: "subagent", sessionId: s.id })
 }
 
-const live = (s: SubagentInfo) => s.status === "running" || s.status === "queued"
+/** Not ended: running, waiting for a place to run, or (a persistent one) idle between turns. */
+function live(s: SubagentInfo): boolean {
+  return s.status === "running" || s.status === "queued" || s.status === "idle"
+}
+
+function waitingFor(s: SubagentInfo): string {
+  if (s.status === "queued") return "waiting for a free slot"
+  return s.status === "idle" ? "idle, waiting for a message" : "still running"
+}
 
 /** Stops one sub-agent, or every live one with "all"; says what it did. */
 function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {

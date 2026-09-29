@@ -101,7 +101,23 @@ export interface FocusEvent {
   focused: boolean
 }
 
-export type InputEvent = KeyEvent | PasteEvent | FocusEvent
+/**
+ * A mouse report (SGR encoding, mode 1006); only sent while mouse reporting is on. `x` and `y`
+ * are zero-based cells. The wheel arrives as `action: "wheel"` with `button` "up" or "down"
+ * (or "left"/"right" for a sideways wheel); other buttons as a press, a release, or a drag.
+ */
+export interface MouseInput {
+  type: "mouse"
+  action: "press" | "release" | "drag" | "wheel"
+  button: "left" | "middle" | "right" | "up" | "down" | "none"
+  x: number
+  y: number
+  shift: boolean
+  alt: boolean
+  ctrl: boolean
+}
+
+export type InputEvent = KeyEvent | PasteEvent | FocusEvent | MouseInput
 
 export function key(name: KeyId, mods: Partial<Pick<KeyEvent, "ctrl" | "shift" | "alt">> = {}): KeyEvent {
   return { type: "key", name, ctrl: !!mods.ctrl, shift: !!mods.shift, alt: !!mods.alt }

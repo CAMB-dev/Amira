@@ -60,6 +60,20 @@ test("the queue key hints show depends on the terminal: Ctrl+Q in Windows Termin
   expect(new Keybindings(defaultKeys({ vscode: false }, "darwin")).label("queue")).toBe("Alt+Enter")
 })
 
+test("in VS Code the transcript keys it keeps for itself have Alt ones first", () => {
+  const vscode = new Keybindings(defaultKeys({ vscode: true }, "win32"))
+  // Ctrl+F, Ctrl+Home and Ctrl+End are in its commandsToSkipShell.
+  expect(vscode.label("find")).toBe("Alt+F")
+  expect(vscode.label("scroll.top")).toBe("Alt+Home")
+  expect(vscode.label("scroll.bottom")).toBe("Alt+End")
+  expect(vscode.is(events("\x1bf")[0]!, "find")).toBe(true)
+  const other = new Keybindings(defaultKeys({ vscode: false }, "win32"))
+  expect(other.label("find")).toBe("Ctrl+F")
+  expect(other.label("scroll.bottom")).toBe("Ctrl+End")
+  // The Alt keys work everywhere.
+  expect(other.is(events("\x1b[1;3H")[0]!, "scroll.top")).toBe(true)
+})
+
 test("a label can skip keys the terminal cannot send", () => {
   const keys = new Keybindings(defaults)
   expect(keys.label("newline")).toBe("Shift+Enter")

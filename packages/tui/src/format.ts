@@ -1,4 +1,4 @@
-import type { UserMessage } from "@amira/api"
+import type { SpawnGroupInfo, UserMessage } from "@amira/api"
 import { type Theme, truncateToWidth, wrapText } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
@@ -97,6 +97,8 @@ export interface SubagentLine {
   activity?: { name: string; summary: string }
   /** The text of its latest reply, which becomes its result. */
   lastText?: string
+  /** A persistent sub-agent between turns, waiting for a message (subagent.state). */
+  idle?: boolean
 }
 
 /** Longest summary of a sub-agent's current tool on its row. */
@@ -132,10 +134,12 @@ export function subagentRows(
   const stats =
     sub.startedAt === undefined
       ? "queued"
-      : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
+      : sub.idle
+        ? `idle ${s} ${compactTokens(sub.tokens)} tok`
+        : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
   const head = `${indent}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${theme.muted(`${s} ${sub.role} ${s} ${stats}`)}`
   const rows = [truncateToWidth(head, width, glyphs.more)]
-  if (sub.startedAt !== undefined && sub.activity) {
+  if (sub.startedAt !== undefined && sub.activity && !sub.idle) {
     const summary = cut(oneLine(sub.activity.summary), ACTIVITY_CHARS)
     const tree = `${last ? " " : glyphs.output} ${glyphs.result}`
     const tool = `${indent}${theme.muted(tree)} ${theme.accent(glyphs.toolRunning)} ${theme.accent(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
@@ -177,6 +181,31 @@ export function subagentEndLine(
         ? theme.muted("stopped")
         : theme.muted(oneLine(sub.lastText ?? "") || "(no answer)")
   const line = `${subagentIndent(sub.depth)}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${mark} ${theme.muted(`${stats} ${s}`)} ${said}`
+  return truncateToWidth(line, width, glyphs.more)
+}
+
+/**
+ * The one line a compact spawn group (e.g. a workflow run) shows in place of its members'
+ * rows: `└ ◆ workflow deep-review · Verify · 3/7 agents · 12.3k tok`, from its owner's status
+ * line, or else from its counts.
+ */
+export function spawnGroupRow(
+  group: SpawnGroupInfo,
+  depth: number,
+  width: number,
+  theme: Theme,
+  last = true,
+): string {
+  const s = glyphs.separator
+  const a = group.agents
+  const counts = [
+    `${a.ended}/${a.total} done`,
+    ...(a.working ? [`${a.working} working`] : []),
+    ...(a.queued ? [`${a.queued} queued`] : []),
+    `${compactTokens(group.tokens)} tok`,
+  ].join(` ${s} `)
+  const about = group.status ? oneLine(group.status) : counts
+  const line = `${subagentIndent(depth)}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(group.name)} ${theme.muted(`${s} ${about}`)}`
   return truncateToWidth(line, width, glyphs.more)
 }
 

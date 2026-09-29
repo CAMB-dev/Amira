@@ -101,7 +101,7 @@ async function setup(
     // git is slow on Windows; an interrupted agent tool still gets to report its children.
     abortGraceMs: 30_000,
   })
-  return { root, mock, bus, events, cwd, home, tools }
+  return { root, mock, bus, events, cwd, home, tools, tree }
 }
 
 /** The text of the commander's agent tool result. */
@@ -1008,4 +1008,29 @@ test("a new conversation stops the old one's background sub-agents", async () =>
   expect(end?.type === "subagent.end" && end.data.error).toBe("its commander's session was closed")
   await Bun.sleep(400)
   expect(notices(root)).toEqual([])
+})
+
+test("a persistent sub-agent's background sub-agents outlive its turn and their report wakes it", async () => {
+  const { root, tree, bus, events } = await setup((req) => {
+    if (who(req) === "explorer") return { text: "found it in a.ts", delayMs: 150 }
+    if (!req.systemPrompt.includes("WORKER")) return { text: "root" }
+    if (isNotice(req)) return { text: "got the report" }
+    if (req.messages.at(-1)?.role === "toolResult") return { text: "waiting for the explorer" }
+    return {
+      toolCalls: [
+        {
+          name: "agent",
+          args: { tasks: [{ role: "explorer", title: "Look around", prompt: "look" }], background: true },
+        },
+      ],
+    }
+  })
+  const worker = tree.spawn(root, { prompt: "work", systemPrompt: "WORKER", persistent: true })
+  await until(() => worker.turns >= 2 && worker.state === "idle")
+  await bus.flush()
+  const explorerEnd = events.find((e) => e.type === "subagent.end" && e.sessionId === worker.id)
+  expect(explorerEnd?.type === "subagent.end" && explorerEnd.data.status).toBe("done")
+  worker.stop()
+  const r = await worker.result()
+  expect(r).toMatchObject({ status: "done", turns: 2, text: "got the report" })
 })

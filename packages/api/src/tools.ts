@@ -1,5 +1,11 @@
 import type { ImageBlock, JSONSchema, ModelRef, TextBlock, UserMessage } from "@amira/ai"
-import type { ChildSession, SpawnOptions } from "./subagents.ts"
+import type {
+  ChildSession,
+  SpawnGroup,
+  SpawnGroupInfo,
+  SpawnGroupOptions,
+  SpawnOptions,
+} from "./subagents.ts"
 
 export interface ToolResult {
   content: (TextBlock | ImageBlock)[]
@@ -26,8 +32,22 @@ export interface DeferredToolInfo {
   loaded: boolean
 }
 
+/**
+ * Records an extension keeps in a session's file (as custom entries), e.g. a swarm's
+ * blackboard, so they are still there when the session is resumed. Each goes under a key of
+ * the extension's choosing (use its name) and must survive JSON. A session without a file
+ * keeps them in memory. Writing never throws: a failing disk is reported as extension.error.
+ */
+export interface SessionData {
+  append(key: string, data: unknown): void
+  /** The records under `key` on the session's current branch, oldest first, as copies. */
+  read(key: string): unknown[]
+}
+
 export interface ToolSession {
   readonly sessionId: string
+  /** Records extensions keep in this session (see SessionData). */
+  readonly data?: SessionData
   /** Deferred tools registered right now, in registration order. */
   deferredTools(): DeferredToolInfo[]
   /**
@@ -46,6 +66,14 @@ export interface ToolSession {
    * tree's budget is spent or the model is unknown. Absent when the host has no agent tree.
    */
   spawn?(opts: SpawnOptions): ChildSession
+  /**
+   * Creates a spawn group under this session: sub-agents started through it share limits of
+   * their own (see SpawnGroup). Throws when the tree's budget is spent. Absent when the host
+   * has no agent tree.
+   */
+  createGroup?(opts: SpawnGroupOptions): SpawnGroup
+  /** The agent tree's spawn groups, active and ended, oldest first. Absent without a tree. */
+  groups?(): SpawnGroupInfo[]
   /**
    * Announces a message this session will get later, from outside its turns: e.g. the
    * result of a sub-agent running in the background. Until the handle is delivered or
@@ -92,6 +120,12 @@ export interface ToolDefinition<P = any> {
   concurrencyKey?(params: P, ctx: { cwd: string }): string | undefined
   /** Must be true to replace a tool of the same name registered earlier. */
   override?: boolean
+  /**
+   * Only top-level sessions get it: sub-agents, at any depth, never see or call it, whatever
+   * tools they were given. For tools that start work only the user's own session should
+   * start, such as a workflow or a swarm (D81).
+   */
+  mainOnly?: boolean
   execute(params: P, ctx: ToolContext): Promise<ToolResult>
 }
 
