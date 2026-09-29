@@ -111,6 +111,50 @@ export const defaultTheme: Theme = {
 }
 
 /**
+ * Background colors for surfaces: the band behind the user's messages and the lines of a diff.
+ * Not in `defaultTheme`, since what suits a terminal depends on its background; an app adds
+ * them with `surfaceTheme` (and leaves them out without colors, where a band would only be
+ * blank rows). Components draw without them as before.
+ */
+export interface SurfaceTokens {
+  /** Behind the user's messages, the width of the screen. */
+  userBg: StyleFn
+  /** Behind added and removed diff lines. */
+  diffAddedBg: StyleFn
+  diffRemovedBg: StyleFn
+  /** Behind the words that changed within a changed line. */
+  diffAddedWordBg: StyleFn
+  diffRemovedWordBg: StyleFn
+}
+
+/**
+ * Surface colors for a dark or light background, from the 256-color palette, which every
+ * terminal with colors has: subtle on the background they are for, with the default text
+ * readable on them. For an unknown background, mid tones that the default text of either kind
+ * (white on dark, black on light) still reads on, at the cost of being less subtle.
+ */
+export function surfaceTheme(background: "dark" | "light" | undefined): SurfaceTokens {
+  const [user, added, removed, addedWord, removedWord] =
+    background === "dark"
+      ? [236, 22, 52, 28, 88]
+      : background === "light"
+        ? [254, 194, 224, 157, 217]
+        : [242, 65, 131, 71, 167]
+  return {
+    userBg: bg256(user),
+    diffAddedBg: bg256(added),
+    diffRemovedBg: bg256(removed),
+    diffAddedWordBg: bg256(addedWord),
+    diffRemovedWordBg: bg256(removedWord),
+  }
+}
+
+/** A token of `theme` that it may not have, such as the surface colors. */
+export function themeToken(theme: Theme, name: string): StyleFn | undefined {
+  return (theme as Record<string, StyleFn | undefined>)[name]
+}
+
+/**
  * Splits SGR parameters into single attributes: `1;38;5;196` is `1` and `38;5;196`, while the
  * colon form `38:5:196` is one parameter already. An empty parameter is a reset (`0`).
  */

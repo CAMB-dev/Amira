@@ -45,6 +45,21 @@ export interface Capabilities {
   shiftEnter: boolean
   /** What the terminal said about graphics, when asked (`setupTerminalInput`'s `images`). */
   graphics?: GraphicsReplies
+  /**
+   * Whether the terminal's background is dark or light, when asked (`setupTerminalInput`'s
+   * `background`): from its answer to OSC 11, else from COLORFGBG. Unset when neither says.
+   */
+  background?: Background
+}
+
+/** A terminal background, as far as colors drawn on it are concerned. */
+export type Background = "dark" | "light"
+
+/** An RGB color, each channel from 0 to 1. */
+export interface Rgb {
+  r: number
+  g: number
+  b: number
 }
 
 /** The terminal's answers about graphics. */
@@ -74,6 +89,8 @@ export interface ProbeReplies {
   windowPixels?: CellSize
   /** The kitty graphics query was answered: true when with OK. */
   kittyGraphics?: boolean
+  /** OSC 11: the default background color. */
+  background?: Rgb
 }
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
@@ -86,9 +103,13 @@ const DA1_REPLY = /\x1b\[\?([\d;]*)c/g
 const PIXELS_REPLY = /\x1b\[([46]);(\d+);(\d+)t/g
 // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
 const KITTY_GRAPHICS_REPLY = /\x1b_Gi=31;([^\x1b]*)\x1b\\/g
-/** The start of a reply not finished yet: CSI parameters, or an APC string. */
+/** OSC 11 with `rgb:` and 1 to 4 hex digits a channel, ended by BEL or ST. */
+const BACKGROUND_REPLY =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
+  /\x1b\]11;rgba?:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})[^\x07\x1b]*(?:\x07|\x1b\\)/gi
+/** The start of a reply not finished yet: CSI parameters, or an APC or OSC string. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
-const PARTIAL_SEQUENCE = /\x1b(?:\[[ -?]*|_[^\x1b]*\x1b?)?$/
+const PARTIAL_SEQUENCE = /\x1b(?:\[[ -?]*|[_\]][^\x07\x1b]*\x1b?)?$/
 
 /**
  * Reads replies to the kitty keyboard, DECRQM 2026 and DA1 queries, and to the graphics ones
@@ -105,7 +126,12 @@ export function parseProbeReplies(data: string): ProbeReplies {
       .replace(SYNC_REPLY, "")
       .replace(DA1_REPLY, "")
       .replace(PIXELS_REPLY, "")
-      .replace(KITTY_GRAPHICS_REPLY, ""),
+      .replace(KITTY_GRAPHICS_REPLY, "")
+      .replace(BACKGROUND_REPLY, ""),
+  }
+  for (const m of data.matchAll(BACKGROUND_REPLY)) {
+    const channel = (hex: string) => Number.parseInt(hex, 16) / (16 ** hex.length - 1)
+    out.background = { r: channel(m[1]!), g: channel(m[2]!), b: channel(m[3]!) }
   }
   for (const m of data.matchAll(DA1_REPLY)) {
     out.complete = true
@@ -127,6 +153,8 @@ export interface ProbeOptions {
   pixels?: boolean
   /** Also send the kitty graphics query; an APC string, which some terminals print. */
   kittyGraphics?: boolean
+  /** Also ask for the default background color (OSC 11). */
+  background?: boolean
   timeoutMs?: number
   /** Extra time given to a reply that has started but not finished when `timeoutMs` is up. */
   lateReplyMs?: number
@@ -160,9 +188,27 @@ export function probeTerminal(term: Terminal, opts: ProbeOptions = {}): Promise<
         queries.syncOutput +
         (opts.pixels ? queries.cellPixels + queries.windowPixels : "") +
         (opts.kittyGraphics ? queries.kittyGraphics : "") +
+        (opts.background ? queries.background : "") +
         queries.primaryDeviceAttributes,
     )
   })
+}
+
+/** Dark or light, by the color's perceived brightness. */
+export function backgroundOf(c: Rgb): Background {
+  return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b < 0.5 ? "dark" : "light"
+}
+
+/**
+ * The background COLORFGBG names (`15;0`, `0;default;15`: the last field is the background's
+ * ANSI color), set by rxvt, Konsole and some others. Colors 7 and 9 to 15 are light.
+ */
+export function backgroundFromEnv(env: Env = process.env): Background | undefined {
+  const last = env.COLORFGBG?.split(";").at(-1)
+  if (!last || !/^\d+$/.test(last)) return undefined
+  const n = Number(last)
+  if (n > 15) return undefined
+  return n === 7 || n >= 9 ? "light" : "dark"
 }
 
 /** Terminals that may speak the kitty graphics protocol, the only ones sent its query. */
@@ -208,11 +254,12 @@ export interface SetupResult {
  * A `ProcessTerminal` that was not started yet is started here, since the replies arrive as
  * input; stopping it stays with the caller. With `images`, it also asks about graphics (the
  * cell size in pixels, and kitty graphics where that may be there) for `capabilities.graphics`.
+ * With `background`, it also asks for the background color, for `capabilities.background`.
  */
 export async function setupTerminalInput(
   term: Terminal,
   env: Env = process.env,
-  opts: { timeoutMs?: number; images?: boolean } = {},
+  opts: { timeoutMs?: number; images?: boolean; background?: boolean } = {},
 ): Promise<SetupResult> {
   if (hasInputReader(term)) throw new Error("setupTerminalInput must run before an InputReader is started")
   if (term instanceof ProcessTerminal) term.start()
@@ -224,7 +271,13 @@ export async function setupTerminalInput(
     timeoutMs: opts.timeoutMs,
     pixels: !!opts.images,
     kittyGraphics: !!opts.images && mayHaveKittyGraphics(env),
+    background: !!opts.background,
   })
+  const background = opts.background
+    ? probe.background
+      ? backgroundOf(probe.background)
+      : backgroundFromEnv(env)
+    : undefined
   const kittyKeyboard = !win32InputMode && probe.kittyKeyboard
   term.enableMode(modes.bracketedPaste)
   if (win32InputMode) term.enableMode(modes.win32Input)
@@ -236,6 +289,7 @@ export async function setupTerminalInput(
       synchronizedOutput: probe.synchronizedOutput,
       shiftEnter: win32InputMode || kittyKeyboard,
       ...(opts.images ? { graphics: graphicsOf(probe, term) } : {}),
+      ...(background ? { background } : {}),
     },
     leftoverInput: probe.rest,
   }

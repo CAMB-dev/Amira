@@ -60,6 +60,8 @@ export const queries = {
   windowPixels: "\x1b[14t",
   /** kitty graphics: a query that shows nothing, answered with APC G i=31;OK ST where supported. */
   kittyGraphics: "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\",
+  /** OSC 11: the default background color, answered with OSC 11 ; rgb:RRRR/GGGG/BBBB and BEL or ST. */
+  background: "\x1b]11;?\x07",
 }
 
 /** Matches CSI, OSC, DCS/APC/PM/SOS strings and other escapes (`ESC 7`, `ESC c`, `ESC ( B`, ...). */
