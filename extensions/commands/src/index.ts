@@ -125,28 +125,32 @@ export default defineExtension((api: ExtensionAPI) => {
   add({
     name: "help",
     aliases: ["?", "h"],
-    description: "List the slash commands and skills",
+    description: "List the slash commands, the common keys and how to run skills",
     run(_args, ctx) {
-      // Grouped by where they come from, this extension's first; descriptions can be wordy.
+      // Three parts: the commands (built-in ones together, then each extension's), the common
+      // keys of the frontend, and the skills folded to a line: they can be many.
       const all = ctx.commands()
       const own = all.find((c) => c.name === "help")?.source
-      const sources = [...new Set(all.map((c) => c.source))].sort(
-        (a, b) => Number(b === own) - Number(a === own),
+      const builtIn = (source: string) => source === own || source.startsWith("builtin:")
+      const sources = [...new Set(all.map((c) => (builtIn(c.source) ? "" : c.source)))].sort(
+        (a, b) => Number(b === "") - Number(a === ""),
       )
       const groups = sources.map((source) => {
         const rows = all
-          .filter((c) => c.source === source)
+          .filter((c) => (builtIn(c.source) ? "" : c.source) === source)
           .map((c) => [
             `/${c.name}${c.aliases.length ? ` (${c.aliases.map((a) => `/${a}`).join(", ")})` : ""}${c.hint ? ` ${c.hint}` : ""}`,
             oneLine(c.description, 70),
           ])
-        return `${source === own ? "Commands" : `From ${source}`}:\n${table(rows)}`
+        return `${source === "" ? "Commands" : `From ${source}`}:\n${table(rows)}`
       })
-      // Skills run with a $, not a slash; they can be many.
-      const skills = ctx.skills()
+      const keys = ctx.keys?.() ?? []
+      if (keys.length) groups.push(`Keys:\n${table(keys.map((k) => [k.keys, oneLine(k.description, 70)]))}`)
+      // Skills run with a $, not a slash; typing $ lists them.
+      const n = ctx.skills().length
       groups.push(
-        skills.length
-          ? `Skills ($ runs a skill: $<name> [arguments]):\n${table(skills.map((s) => [`$${s.name}`, oneLine(s.description, 70)]))}`
+        n
+          ? `Skills: ${n} ${n === 1 ? "skill" : "skills"} · type $ to list them; $<name> [arguments] runs one.`
           : "Skills: none found ($ runs a skill: $<name> [arguments]).",
       )
       const aliases = ctx.aliases()
@@ -191,7 +195,7 @@ export default defineExtension((api: ExtensionAPI) => {
       },
     },
     async run(args, ctx) {
-      let ref = args
+      const ref = args
       if (!ref) {
         const current = modelRef(ctx.session.info().model)
         const models = ctx.session.models()

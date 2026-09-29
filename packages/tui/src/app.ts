@@ -1,12 +1,14 @@
 import { spawnSync } from "node:child_process"
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
+import { isNoModel } from "@amira/ai"
 import {
   type AnyEvent,
   type CommandDefinition,
   type FrontendView,
   isSubagentView,
+  type KeyHelp,
   modelLabel,
   type ToolDetailLevel,
   type TuiSettings,
@@ -63,7 +65,7 @@ import { HistorySearch } from "./history-search.ts"
 import { createInlineView } from "./inline-view.ts"
 import { InputBox } from "./input-box.ts"
 import { KeyReference } from "./key-reference.ts"
-import { defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
+import { ACTIONS, type Action, defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
 import { type ImageSource, type MarkdownRenderSource, ReplyRenderers } from "./markdown-nodes.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { statusLine } from "./status-bar.ts"
@@ -1063,6 +1065,33 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     turnTokens = 0
   }
 
+  /** Whether no provider is configured: from the session when it says, else from the CLI's notice. */
+  function noProviders(): boolean {
+    const providers = commands?.control.providers
+    if (providers) {
+      try {
+        return providers().length === 0
+      } catch {}
+    }
+    return opts.notice?.startsWith("No providers") ?? false
+  }
+
+  /**
+   * Sending while no model is picked would only fail: the message stays in the editor, and a
+   * notice says what to do first.
+   */
+  function noModelYet(parts: EditorPart[]): boolean {
+    if (!isNoModel(agent.model)) return false
+    editor.setParts(parts)
+    view.notice(
+      "error",
+      noProviders()
+        ? "No providers configured: add one with /provider add, then pick a model with /model. Your message is still in the input."
+        : "No model selected: pick one with /model. Your message is still in the input.",
+    )
+    return true
+  }
+
   /** The user's message shows up in the transcript on turn.start. */
   function send(message: Outgoing) {
     const clock = { turnStartedAt, turnTokens }
@@ -1111,7 +1140,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       agent.steer(toPrompt(message))
     } else if (working) queued.push(message)
-    else send(message)
+    else if (!noModelYet(parts)) send(message)
     view.requestRender()
   }
 
@@ -1120,11 +1149,24 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     submit(editor.getText(), editor.getParts(), editor.getDisplayText(), how)
   }
 
+  /**
+   * The common keys, for /help: the actions with a help line, with their keys as bound now;
+   * the transcript's only in full-screen mode, where they work.
+   */
+  function keyHelp(): KeyHelp[] {
+    return (Object.keys(ACTIONS) as Action[]).flatMap((action) => {
+      const info: { scope: string; help?: string } = ACTIONS[action]
+      if (!info.help || (info.scope === "transcript" && mode !== "fullscreen")) return []
+      const label = keys.label(action, (s) => action !== "newline" || reaches(s))
+      return label ? [{ keys: label, description: info.help }] : []
+    })
+  }
+
   /** Runs at once, even during a turn; commands that need an idle session say so. */
   function runCommand(line: string) {
     view.commandEcho(line)
     void commands!
-      .run(line, { frontend: "tui", quit: () => quit(), openView })
+      .run(line, { frontend: "tui", quit: () => quit(), openView, keys: keyHelp })
       .then(() => view.requestRender())
   }
 
@@ -1546,17 +1588,51 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   reader.start()
   termStatus.start()
   view.banner(
-    `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${agent.cwd}`)}`,
+    `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${tildePath(agent.cwd, env)}`)}`,
   )
+  // Where to start: how to find the commands, the files, the skills and the keys.
+  const helpKey = keys.label("help")
+  const starts = [
+    commands && "/help commands",
+    "@ files",
+    commands && "$ skills",
+    helpKey && `${helpKey} keys`,
+  ].filter(Boolean)
+  view.banner(theme.muted(starts.join(` ${glyphs.separator} `)))
   if (agent.messages.length) showHistory(agent)
   for (const e of opts.startupEvents ?? []) onEvent(e)
-  if (opts.notice) view.notice("warning", opts.notice)
+  // With no provider yet, a welcome card with the steps to a first message says what the
+  // notice would.
+  if (isNoModel(agent.model) && noProviders()) view.notice("info", welcomeCard())
+  else if (opts.notice) view.notice("warning", opts.notice)
   // The first frame carries the banner, history and startup messages.
   view.start()
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)
 
   return exited
+}
+
+/** The steps to a first message, shown at startup while no provider is configured. */
+function welcomeCard(): string {
+  return [
+    "Welcome to Amira. Three steps to a first message:",
+    "1. Add a provider: /provider add",
+    "2. Pick one of its models: /model",
+    "3. Ask away: @ mentions files, /help lists the commands and keys",
+  ].join("\n")
+}
+
+/** `path` with the home directory as "~", as shells write it. */
+export function tildePath(path: string, env: Record<string, string | undefined> = process.env): string {
+  const home = (env.HOME || env.USERPROFILE || homedir()).replace(/[\\/]+$/, "")
+  if (!home) return path
+  const sep = path.charAt(home.length)
+  const same =
+    process.platform === "win32"
+      ? path.slice(0, home.length).toLowerCase() === home.toLowerCase()
+      : path.startsWith(home)
+  return same && (sep === "" || sep === "/" || sep === "\\") ? `~${path.slice(home.length)}` : path
 }
 
 /** The events an overlay gets for one: the wheel as ↑ or ↓ three times, mouse clicks not at all. */

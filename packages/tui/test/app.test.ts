@@ -42,6 +42,7 @@ import {
   pendingMessageRows,
   retryLabel,
   runInteractive,
+  tildePath,
 } from "../src/app.ts"
 import { FileIndex, type FileSource, fileList } from "../src/file-index.ts"
 
@@ -254,6 +255,8 @@ test("a conversation: user message, tool call and reply end up in the transcript
   expect(text).toContain(
     [
       "Amira · mock/m1 · /work/proj",
+      // Where to start, right under the banner.
+      "@ files · ? keys",
       "",
       "",
       "› what is in a.ts?",
@@ -272,31 +275,51 @@ test("a conversation: user message, tool call and reply end up in the transcript
   expect(terminal.isRaw).toBe(false)
 })
 
-test("without providers the UI starts, says how to add one, and a message explains it again", async () => {
+test("without providers the UI starts with a welcome card; a message sent keeps its text in the input", async () => {
   const notice = "No providers configured — add one with /provider add, then pick a model with /model."
-  const { terminal, all, live, shows, idle, exited, mock } = await setup([], {
+  const { terminal, all, live, shows, agent, exited, mock } = await setup([], {
     noModel: "none",
     notice,
     cols: 100,
   })
-  await shows(notice)
+  // The card says what the notice would, as steps.
+  await shows("Welcome to Amira. Three steps to a first message:")
+  expect(all()).toContain("1. Add a provider: /provider add")
+  expect(all()).toContain("2. Pick one of its models: /model")
+  expect(all()).toContain("3. Ask away: @ mentions files, /help lists the commands and keys")
+  expect(all()).not.toContain(notice)
   expect(all()).toContain("Amira · (no model) · /work/proj")
   await waitFor(() => live().includes("╰─ (no model) ─"), "the status's (no model)")
   terminal.send("hello\r")
-  await shows("no providers configured; add one with /provider add, then pick a model with /model")
-  await idle()
+  await shows("No providers configured: add one with /provider add, then pick a model with /model.")
+  // Not sent: the message waits in the input for a model.
+  expect(live()).toContain("│ › hello")
+  expect(agent.messages).toEqual([])
   expect(mock.requests).toHaveLength(0)
+  terminal.send("\x03")
   terminal.send("\x03")
   expect(await exited).toBe(0)
 })
 
-test("with providers but no model picked, a message says to pick one", async () => {
-  const { terminal, shows, idle, exited } = await setup([], { noModel: "unpicked" })
+test("with providers but no model picked, a message says to pick one and stays in the input", async () => {
+  const { terminal, live, shows, exited } = await setup([], {
+    noModel: "unpicked",
+    notice: 'No model selected — pick one with /model, or set "model" in settings.json.',
+  })
+  await shows("No model selected — pick one with /model")
   terminal.send("hello\r")
-  await shows("no model selected; pick one with /model")
-  await idle()
+  await shows("No model selected: pick one with /model.")
+  expect(live()).toContain("› hello")
+  terminal.send("\x03")
   terminal.send("\x03")
   expect(await exited).toBe(0)
+})
+
+test("a home directory in the banner reads as ~", () => {
+  expect(tildePath("/home/ada/proj", { HOME: "/home/ada" })).toBe("~/proj")
+  expect(tildePath("/home/ada", { HOME: "/home/ada/" })).toBe("~")
+  expect(tildePath("/home/adam/proj", { HOME: "/home/ada" })).toBe("/home/adam/proj")
+  expect(tildePath("/work/proj", { HOME: "/home/ada" })).toBe("/work/proj")
 })
 
 const parallel = { description: "", parameters: {}, concurrency: "parallel" as const }
@@ -1730,7 +1753,7 @@ test("typing $ opens the skill list; Enter runs the skill, shown as typed with i
   expect(live()).toContain("$deploy")
   expect(live()).toContain("Review a pull request")
   // Skills are not commands: the "/" list leaves them out.
-  expect(live()).not.toContain("/help")
+  expect(live().split("╰")[1]).not.toContain("/help")
   expect(live()).toContain("Tab complete · Enter run · Esc close")
   terminal.send("rev")
   await waitFor(() => live().includes("❯ $review-pr"), "review-pr selected")
@@ -3108,7 +3131,7 @@ test("the status goes under a dialog that takes the input box's place, and back 
     expect(rows.some((r) => r.startsWith("╰"))).toBe(false)
     const status = rows.findIndex((r) => /^m1 {2,}main\*$/.test(r))
     expect(status).toBeGreaterThan(rows.findIndex((r) => r.includes("Proceed?")))
-    expect(live()).not.toContain("? keys")
+    expect(live()).not.toContain("Enter send")
     terminal.send("\x1b[27u")
     expect(await answer).toBeUndefined()
     await waitFor(() => BORDER.test(live()) && live().includes("main* ─╯"), `${mode}: back in the border`)
@@ -3260,4 +3283,30 @@ test("full screen, the input box stays put while the list under it gets shorter"
   terminal.send("\x03")
   terminal.send("\x03")
   await exited
+})
+
+test("commands get the common keys as bound now, for /help; the transcript's only full screen", async () => {
+  for (const mode of ["inline", "fullscreen"] as const) {
+    const { terminal, shows, all, exited } = await setup([], {
+      cols: 120,
+      settings: { mode },
+      commands: [
+        {
+          name: "keys",
+          description: "List the keys",
+          run: (_a, ctx) =>
+            ctx.print((ctx.keys?.() ?? []).map((k) => `${k.keys}=${k.description}`).join("\n")),
+        },
+      ],
+    })
+    terminal.send("/keys\r")
+    await shows("Enter=Send the message; while a turn runs, steer it")
+    expect(all()).toContain("Ctrl+R=Search the prompts sent before")
+    expect(all()).toContain("Esc=Stop the turn; twice in a row, rewind to an earlier message")
+    expect(all()).toContain("?=Every key and what it does")
+    if (mode === "fullscreen") expect(all()).toContain("Ctrl+F=Find text in the transcript")
+    else expect(all()).not.toContain("Find text in the transcript")
+    terminal.send("\x03")
+    await exited
+  }
 })
