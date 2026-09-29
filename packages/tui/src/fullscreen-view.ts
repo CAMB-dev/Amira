@@ -66,6 +66,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const callBlocks = new Map<string, ToolBlock>()
   /** The block each sub-agent shows in, by its id: the call that started it (or its top ancestor), or one of its own. */
   const owners = new Map<string, Block>()
+  /** The block of each spawn group whose members started without a call of this session. */
+  const groupBlocks = new Map<string, SubagentGroupBlock>()
   /** Calls of the running step, in call order. */
   let stepCalls: ToolBlock[] = []
   let reply: ReplyBlock | undefined
@@ -430,10 +432,19 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
             owners.set(node.id, owner)
             owner.touch()
           } else if (main) {
-            // Started without a call of this session (by a command, say): a block of its own.
-            const group = new SubagentGroupBlock(node.id)
-            owners.set(node.id, group)
-            add(group)
+            // Started without a call of this session (by a command, say): a block of its own,
+            // shared by the members of its spawn group (a workflow's agents, a swarm's members).
+            const shared = node.groupId !== undefined ? groupBlocks.get(node.groupId) : undefined
+            if (shared) {
+              shared.roots.push(node.id)
+              owners.set(node.id, shared)
+              shared.touch()
+            } else {
+              const group = new SubagentGroupBlock(node.id)
+              owners.set(node.id, group)
+              if (node.groupId !== undefined) groupBlocks.set(node.groupId, group)
+              add(group)
+            }
           }
           break
         }

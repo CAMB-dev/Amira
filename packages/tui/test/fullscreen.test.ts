@@ -142,7 +142,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     terminal.setSize(c, r)
   }
   await shows("Amira")
-  return { agent, bus, host, terminal, screen, view, shows, idle, resize, exited }
+  return { agent, bus, host, tree, terminal, screen, view, shows, idle, resize, exited }
 }
 
 test("the conversation is drawn on the alternate screen and printed to the normal one on exit", async () => {
@@ -379,6 +379,50 @@ test("a compact spawn group is one line under its call, with its owner's status,
   await bus.flush()
   // Its members never get rows of their own; the group's line stays with its last status.
   await waitFor(() => !/Scan (api|core|tui)/.test(view()) && view().includes("workflow demo"), "ended")
+  terminal.send("\x03")
+  await exited
+})
+
+test("the members of a group a command started share one block: a compact group is one line", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const reply = (req: { messages: { role: string; content: unknown }[] }) =>
+    req.messages.at(-1)?.role === "toolResult"
+      ? { text: "step done" }
+      : { toolCalls: [{ name: "hold", args: {} }] }
+  const { view, shows, exited, terminal, agent, tree, bus } = await setup(Array(6).fill(reply), {
+    cols: 80,
+    tree: true,
+  })
+  agent.tools.register(
+    defineTool({
+      name: "hold",
+      ...parallel,
+      execute: async () => {
+        await gate
+        return textResult("held")
+      },
+    }),
+    "test",
+  )
+  // As /workflow <name> does: a group of the main session, with no tool call behind it.
+  const group = tree!.createGroup(agent, { name: "workflow demo", compact: true })
+  group.setStatus("Answer · 0/3 agents")
+  const kids = ["Scan api", "Scan core", "Scan tui"].map((title) =>
+    group.spawn({ role: "explorer", title, prompt: `step ${title}` }),
+  )
+  await shows("◆ workflow demo · Answer · 0/3 agents")
+  await bus.flush()
+  await Bun.sleep(50)
+  expect(view().match(/◆ background/g)).toHaveLength(1)
+  expect(view().match(/workflow demo/g)).toHaveLength(1)
+  expect(view()).not.toContain("Scan api")
+  release()
+  await Promise.all(kids.map((k) => k.result()))
+  group.end()
+  await group.ended()
   terminal.send("\x03")
   await exited
 })

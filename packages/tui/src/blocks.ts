@@ -405,13 +405,19 @@ export class ToolBlock extends Block {
   }
 }
 
-/** Sub-agents started without a tool call of this session (by a command, say), under a small head. */
+/**
+ * Sub-agents started without a tool call of this session (by a command, say), under a small
+ * head: one, or the members of one spawn group (a compact group's show as its one line).
+ */
 export class SubagentGroupBlock extends Block {
   readonly kind = "tool"
   running = true
+  /** The sub-agents it shows, with theirs, in start order. */
+  readonly roots: string[]
 
-  constructor(readonly root: string) {
+  constructor(root: string) {
     super()
+    this.roots = [root]
   }
 
   override get live(): boolean {
@@ -419,9 +425,11 @@ export class SubagentGroupBlock extends Block {
   }
 
   lines(env: BlockEnv): string[] {
-    const node = env.nodes.get(this.root)
-    if (!node) return []
-    const list = subtree(env.nodes, node)
+    const list = this.roots.flatMap((id) => {
+      const node = env.nodes.get(id)
+      return node ? subtree(env.nodes, node) : []
+    })
+    if (!list.length) return []
     this.running = list.some((n) => !n.end)
     const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted("background")}`
     return [
