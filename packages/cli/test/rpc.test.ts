@@ -355,6 +355,7 @@ test("amira --rpc-schema prints a JSON Schema covering every command", async () 
       "steer",
       "ui.action",
       "ui.configure",
+      "ui.focus",
       "ui.respond",
     ].sort(),
   )

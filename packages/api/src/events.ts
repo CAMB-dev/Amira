@@ -121,6 +121,13 @@ export interface EventMap {
    * out for forms and secret inputs.
    */
   "ui.resolved": { requestId: string; cancelled: boolean; value?: string | boolean }
+  /**
+   * Whether the user's frontend has focus, as far as it can tell: the TUI passes on what the
+   * terminal reports (focus reporting), rpc clients send ui.focus. Sent with session id "host"
+   * when it changes. A frontend that cannot tell never sends it, so until the first one
+   * whether the user is looking is unknown. E.g. for notifying only a user who is away.
+   */
+  "ui.focus": { focused: boolean }
   /** Progress of a form action (a button such as "Fetch models") running on the host. */
   "ui.progress": { requestId: string; action: string; text: string }
   /** Text a slash command shows the user; `command` is its name, without the slash. */

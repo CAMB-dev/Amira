@@ -293,6 +293,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     progress: (settings.progress ?? true) && progressSupported(env),
     bell: settings.bell ?? true,
   })
+  /** What the terminal last reported about its focus; unknown until it reports. */
+  let focused: boolean | undefined
   const editor = new Editor({
     prompt: theme.accent("› "),
     placeholder: "Message Amira",
@@ -957,8 +959,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   function onInput(e: InputEvent) {
-    // Focus is the terminal's, not a key: it goes to the title and bell even over the viewer.
-    if (e.type === "focus") return termStatus.focus(e.focused)
+    // Focus is the terminal's, not a key: it goes to the title and bell even over the viewer,
+    // and to extensions as ui.focus when it changes.
+    if (e.type === "focus") {
+      termStatus.focus(e.focused)
+      if (e.focused !== focused) {
+        focused = e.focused
+        agent.bus.emit("ui.focus", { focused }, { sessionId: "host" })
+      }
+      return
+    }
     // A form or the viewer owns the keyboard while open: the rest is hidden. Ctrl+L repaints it.
     // The wheel scrolls them like ↑↓, as it does on the alternate screen without mouse reporting.
     if (form || viewer) {
