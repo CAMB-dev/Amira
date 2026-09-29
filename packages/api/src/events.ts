@@ -33,6 +33,9 @@ export type SessionStatus = "idle" | "working" | "blocked" | "error"
 
 export type TurnEndReason = "done" | "error" | "aborted"
 
+/** Who let a call that needed approval run: the user, or a rule the user chose. */
+export type ToolApproval = "user" | "rule"
+
 /** Why a tool call produced an error result without its tool running to completion. */
 export type ToolRejection = "blocked" | "unknownTool" | "invalidArgs" | "aborted"
 
@@ -121,6 +124,11 @@ export interface EventMap {
     result: ToolResult
     durationMs: number
     rejected?: ToolRejection
+    /**
+     * The call ran after an approval (D13): `user` when the user allowed it, `rule` when a
+     * rule they chose did ("don't ask again"). Unset for calls nobody was asked about.
+     */
+    approval?: ToolApproval
   }
   "extension.loaded": { source: string }
   /** Something visible changed outside the event stream (e.g. status bar state); frontends should redraw. */

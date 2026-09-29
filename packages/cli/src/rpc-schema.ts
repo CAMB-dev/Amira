@@ -295,6 +295,11 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     result: toolResult,
     durationMs: num,
     "rejected?": strings("blocked", "unknownTool", "invalidArgs", "aborted"),
+    "approval?": {
+      ...strings("user", "rule"),
+      description:
+        "The call ran after an approval: the user allowed it, or a rule they chose (don't ask again) did.",
+    },
   }),
   "extension.loaded": obj({ source: str }),
   "extension.error": obj({ source: str, error: str }),
@@ -527,6 +532,11 @@ export function rpcSchema(): Schema {
             ...bool,
             description:
               'Also offer free text meaning no, and what to do instead; answered with {"other": text}.',
+          },
+          "preview?": {
+            ...arrayOf(obj({ kind: str, text: str, "lineNo?": num })),
+            description:
+              "What the call would do, as its tool presents it (a command, a diff): tool lines by kind (code, diff-add, diff-remove, diff-context, muted, ...).",
           },
         }),
         obj({

@@ -203,6 +203,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       result: c.end!.result,
       durationMs: c.end!.durationMs,
       ...(c.end!.rejected ? { rejected: c.end!.rejected } : {}),
+      ...(c.end!.approval ? { approval: c.end!.approval } : {}),
       interrupted: c.end!.interrupted ?? false,
     }
   }

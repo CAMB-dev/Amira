@@ -783,9 +783,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         view.toolUpdate(e.data.toolCallId, e.data.partial)
         break
       case "tool.execute.end": {
-        const { result, durationMs, rejected } = e.data
+        const { result, durationMs, rejected, approval } = e.data
         // Whether the user had interrupted is fixed when the call ends, not when it is shown.
-        const end = { result, durationMs, interrupted, ...(rejected ? { rejected } : {}) }
+        const end = {
+          result,
+          durationMs,
+          interrupted,
+          ...(rejected ? { rejected } : {}),
+          ...(approval ? { approval } : {}),
+        }
         if (view.toolEnd(e.data.toolCallId, end)) turnShowedOutput = true
         break
       }

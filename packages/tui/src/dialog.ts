@@ -213,7 +213,13 @@ export class Dialog implements Component {
             .split("\n")
             .flatMap((l) => wrapText(theme.muted(l), Math.max(1, width - 2)).map((w) => `  ${w}`))
         : []
-    const diff = r.kind === "diff-review" ? renderToolLines(parseUnifiedDiff(r.diff), theme, width) : []
+    // A diff to review, or what an approval is about as its tool presents it (a command, a diff).
+    const diff =
+      r.kind === "diff-review"
+        ? renderToolLines(parseUnifiedDiff(r.diff), theme, width)
+        : r.kind === "confirm" && r.preview?.length
+          ? renderToolLines(r.preview, theme, width)
+          : []
     const indicator =
       this.#pages.length > 1
         ? theme.muted(

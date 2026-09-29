@@ -1,4 +1,4 @@
-import type { ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
+import type { ToolApproval, ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
 import { toolResultText } from "@amira/api"
 import {
   defaultGlyphs,
@@ -206,8 +206,7 @@ export class DetailNoticeBlock extends Block {
   }
 
   copyText(): string {
-    return `${this.text}
-${this.detail}`
+    return `${this.text}\n${this.detail}`
   }
 
   override foldable(): boolean {
@@ -692,7 +691,13 @@ export class ToolBlock extends Block {
   startedAt: number | undefined
   partial: ToolResult | undefined
   end:
-    | { result: ToolResult; durationMs?: number; rejected?: ToolRejection; interrupted?: boolean }
+    | {
+        result: ToolResult
+        durationMs?: number
+        rejected?: ToolRejection
+        interrupted?: boolean
+        approval?: ToolApproval
+      }
     | undefined
   /** Set by folding it: how much of it shows, whatever the global level. */
   folding: ToolDetailLevel | undefined
@@ -775,6 +780,7 @@ export class ToolBlock extends Block {
       result: end.result,
       ...(end.durationMs !== undefined ? { durationMs: end.durationMs } : {}),
       ...(end.rejected ? { rejected: end.rejected } : {}),
+      ...(end.approval ? { approval: end.approval } : {}),
       interrupted: end.interrupted ?? false,
     }
   }

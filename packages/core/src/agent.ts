@@ -29,6 +29,7 @@ import type {
   SessionStatus,
   SpawnGroupOptions,
   SpawnOptions,
+  ToolApproval,
   ToolDefinition,
   ToolRejection,
   ToolResult,
@@ -56,6 +57,10 @@ export interface ApprovalDecision {
   approved: boolean
   /** Shown to the model when the call is denied. */
   reason?: string
+  /** Who approved it, for the call's row (tool.execute.end `approval`). */
+  by?: ToolApproval
+  /** The user dismissed the question: the call is denied and the whole turn interrupted. */
+  interrupt?: boolean
 }
 
 /** Decides a tool call that a tool.call.before interceptor asked about (D13, D14). */
@@ -170,6 +175,8 @@ interface CallRun {
   /** The call has its result (tool.call.after may still be running on it). */
   returned?: boolean
   result?: ToolResultMessage
+  /** Who approved it, when it needed approval. */
+  approval?: ToolApproval
 }
 
 /** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
@@ -1131,7 +1138,7 @@ export class Agent {
       run.returned = true
       if (rejected) this.#emitToolStart(turn, run, args)
       const result = await this.#afterTool(turn, run, batch, args, first, rejected)
-      if (!run.finished) this.#emitToolEnd(turn, call, result, durationMs, rejected)
+      if (!run.finished) this.#emitToolEnd(turn, call, result, durationMs, rejected, run.approval)
       return {
         role: "toolResult",
         toolCallId: call.id,
@@ -1172,6 +1179,9 @@ export class Agent {
       if (gate.ask) {
         const request = { sessionId: this.sessionId, toolCallId: call.id, name: call.name, args }
         const verdict = await this.#askApproval(turn, { ...request, reason: gate.ask.join("; ") })
+        // Dismissing the question stops the turn, like an interrupt.
+        if (!verdict.approved && verdict.interrupt && this.#turn === turn) this.#abort?.abort()
+        if (verdict.approved && verdict.by) run.approval = verdict.by
         if (turn.signal.aborted)
           return await reject("aborted", "Aborted by the user before this tool ran.", args)
         if (!verdict.approved) {
@@ -1335,6 +1345,7 @@ export class Agent {
     result: ToolResult,
     durationMs: number,
     rejected?: ToolRejection,
+    approval?: ToolApproval,
   ) {
     this.#emit(turn, "tool.execute.end", {
       toolCallId: call.id,
@@ -1342,6 +1353,7 @@ export class Agent {
       result,
       durationMs,
       ...(rejected ? { rejected } : {}),
+      ...(approval ? { approval } : {}),
     })
   }
 
