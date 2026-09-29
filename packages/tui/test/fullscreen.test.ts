@@ -827,6 +827,38 @@ test("Ctrl+F finds text in the transcript, highlights matches and moves between 
   await exited
 })
 
+test("text-default emoji are drawn two cells wide as measured; copies keep the source text", async () => {
+  const reply = "| to | from |\n| --- | --- |\n| ✉ Ana | ❤ x |\n| Bo | yy |"
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: reply }])
+  terminal.send("go\r")
+  await shows("Bo")
+  await idle()
+  // VS16 asks for the emoji form, so the terminal draws the two cells that were measured.
+  const rows = screen.grid.filter((r) => r.join("").includes("Ana") || r.join("").includes("Bo"))
+  expect(rows.length).toBe(2)
+  expect(rows[0]!.join("")).toContain("✉\uFE0F Ana")
+  expect(rows[0]!.join("")).toContain("❤\uFE0F x")
+  // The table's column separators line up from row to row.
+  const bars = (r: string[]) => r.flatMap((c, i) => (c === "│" ? [i] : []))
+  expect(bars(rows[0]!)).toEqual(bars(rows[1]!))
+  // Find matches the text as written.
+  terminal.send(CTRL_F)
+  await shows("⌕ find")
+  terminal.send("✉ Ana")
+  await shows("1/1")
+  terminal.send(ESC)
+  await waitFor(() => !screen.lines.join("\n").includes("⌕ find"), "find closed")
+  terminal.send("\x1bc")
+  await shows("Copied the last reply")
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64")
+  // What was copied is the reply as written, without the VS16 added for drawing.
+  expect(screen.oscs).toContain(`52;c;${b64(reply)}`)
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
+  // So is what stays on the normal screen.
+  expect(screen.mainText).toContain("✉\uFE0F Ana")
+})
+
 test("copying the last reply and a selected block goes through OSC 52", async () => {
   const { terminal, view, shows, idle, exited, screen } = await setup([{ text: "Use **bold** here." }])
   terminal.send("go\r")

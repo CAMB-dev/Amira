@@ -23,7 +23,7 @@ import {
 import { codeCarry } from "../markdown/highlight.ts"
 import { type Lead, type LeadPart, markdownStyles, type Run } from "../markdown/inline.ts"
 import { defaultTheme, type Theme } from "../style.ts"
-import { TAB_WIDTH } from "../width.ts"
+import { TAB_WIDTH, textWidth } from "../width.ts"
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters
 const CONTROLS = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g
@@ -146,7 +146,7 @@ export class MarkdownStream implements Component {
         continue
       }
       // Measured from the text, not summed per chunk: a chunk may end inside a grapheme.
-      const col = Bun.stringWidth(this.src.slice(this.src.lastIndexOf("\n") + 1))
+      const col = textWidth(this.src.slice(this.src.lastIndexOf("\n") + 1))
       this.src += " ".repeat(TAB_WIDTH - (col % TAB_WIDTH))
     }
   }

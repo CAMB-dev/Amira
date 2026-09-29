@@ -3,7 +3,10 @@
  * (together with the theme's color tokens) without touching the components.
  */
 export interface Glyphs {
-  /** List bullets by nesting depth; deeper levels repeat the last one. */
+  /**
+   * List bullets by nesting depth; deeper levels repeat the last one. ▸, not ▪: ▪ has an emoji
+   * form, drawn two cells wide by terminals whose font lacks it.
+   */
   bullets: string[]
   /**
    * Task list items: `- [ ]` and `- [x]`. Plain text, not ☐/☑: Windows Terminal draws ☑ as a
@@ -33,7 +36,7 @@ export interface Glyphs {
 }
 
 export const defaultGlyphs: Glyphs = {
-  bullets: ["•", "◦", "▪"],
+  bullets: ["•", "◦", "▸"],
   taskOpen: "[ ]",
   taskDone: "[✓]",
   quoteBar: "▎",

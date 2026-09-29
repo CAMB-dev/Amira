@@ -6,7 +6,7 @@ import { defaultGlyphs } from "../src/glyphs.ts"
 import { commitOpenBlocks, type Env, newState, step } from "../src/markdown/blocks.ts"
 import { markdownStyles } from "../src/markdown/inline.ts"
 import { defaultTheme } from "../src/style.ts"
-import { visibleWidth } from "../src/width.ts"
+import { presentEmoji, visibleWidth } from "../src/width.ts"
 import { plain } from "./context.ts"
 
 /** A render context whose commits are collected, like the renderer's during a frame. */
@@ -565,6 +565,48 @@ test("text with images streams like the whole text, also with a small live regio
     expect({ seed, text: letters(rows) }).toEqual({ seed, text: letters(whole) })
     for (const r of [...rows, ...lives.flat()])
       expect({ seed, r, w: visibleWidth(r) <= width }).toEqual({ seed, r, w: true })
+  }
+})
+
+/** Lines with text-default emoji (two cells unless VS15 follows), mixed with some of the above. */
+const EMOJI_LINES = [
+  "mail ✉ from ⚠ ops, ❤\uFE0F and © kept",
+  "✉✉✉✉✉✉✉✉✉✉✉✉✉✉",
+  "| to | from |",
+  "|----|------|",
+  "| ✉ mail ☑ | ❤ |",
+  "- ☑ done ✔ and ✏ edit",
+  "> ⚠ careful ☀ out",
+  "text ☑\uFE0E stays one cell",
+  "",
+  "plain words in a paragraph that is long enough to wrap around",
+]
+
+test("text with text-default emoji streams like the whole text, and fits once drawn", () => {
+  for (let seed = 1; seed <= 150; seed++) {
+    const rand = rng(seed * 17)
+    const text = randomDoc(rand, 15, EMOJI_LINES)
+    const width = 6 + Math.floor(rand() * 40)
+    const whole = md(text, width)
+    const full = stream(
+      text,
+      rand,
+      () => width,
+      () => 1000,
+    ).rows.map(stripAnsi)
+    expect({ seed, rows: full }).toEqual({ seed, rows: whole })
+    const { rows, lives } = stream(
+      text,
+      rand,
+      () => width,
+      () => 1 + Math.floor(rand() * 5),
+    )
+    expect({ seed, text: letters(rows) }).toEqual({ seed, text: letters(whole) })
+    for (const r of [...rows, ...lives.flat()]) {
+      expect({ seed, r, w: visibleWidth(r) <= width }).toEqual({ seed, r, w: true })
+      // As the renderers write it, the terminal takes the cells that were measured.
+      expect({ seed, r, w: Bun.stringWidth(presentEmoji(r)) }).toEqual({ seed, r, w: visibleWidth(r) })
+    }
   }
 })
 

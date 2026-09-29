@@ -647,6 +647,23 @@ test("a long streaming reply is committed progressively so its start stays visib
   await exited
 })
 
+test("a streamed reply with text-default emoji is drawn with VS16, its table aligned", async () => {
+  const reply = "Got ✉ from ⚠ ops.\n\n| a | b |\n| --- | --- |\n| ✉ ☑ | x |\n| yyyy | z |"
+  const { terminal, screen, shows, idle, all, exited } = await setup([{ text: reply, delayMs: 2 }])
+  terminal.send("go\r")
+  await shows("yyyy")
+  await idle()
+  expect(all()).toContain("Got ✉\uFE0F from ⚠\uFE0F ops.")
+  const rows = [...screen.scrollback, ...screen.lines].filter((l) => l.includes("x") || l.includes("yyyy"))
+  // Measured as the terminal draws it: ✉ with VS16 takes two cells, a bare one would take one.
+  const bar = (l: string) => Bun.stringWidth(l.slice(0, l.indexOf("│")))
+  const table = rows.filter((l) => l.includes("│"))
+  expect(table.length).toBe(2)
+  expect(bar(table[0]!)).toBe(bar(table[1]!))
+  terminal.send("\x03")
+  await exited
+})
+
 /**
  * Follows markers (L1, P2, ...) through a transcript. After every write, the markers on screen or
  * in the scrollback must have no hole: a hole means a line was drawn and then lost off the top of
