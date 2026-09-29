@@ -120,7 +120,8 @@ export async function updatePackages(opts: InstallOptions, names?: string[]): Pr
           return loaded
         },
         (err) => {
-          opts.log?.(`cannot read the extensions index ${url} (${errorMessage(err)})`)
+          // The message names the index already.
+          opts.log?.(errorMessage(err))
           return undefined
         },
       )

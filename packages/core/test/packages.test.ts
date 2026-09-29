@@ -510,7 +510,7 @@ test("update reads the index afresh, and updates from the recorded source when t
   ])
   expect(offline).toMatchObject({ name: "sub-pkg", changed: false })
   expect(logged).toContain("sub-pkg: updating from its recorded source")
-  expect(logged.some((l) => /cannot read the extensions index .*offline/.test(l))).toBe(true)
+  expect(logged).toContain(`cannot download the extensions index ${index.url}: offline`)
   // The lock keeps the index it came from.
   expect(readLock(path.join(home, "packages.lock")).packages["sub-pkg"]!.index).toEqual({
     name: "sub-pkg",
