@@ -65,12 +65,20 @@ test("a process that only awaits a command stays alive until it finishes", async
     `  const run = await runCommand([process.execPath, "-e", "await Bun.sleep(500); console.log('late')"], {`,
     "    cwd: process.cwd(), timeoutMs: 30_000, signal: new AbortController().signal })",
     "  console.log('result:' + run.output.trim())",
+    "  console.log(JSON.stringify({ ...run, output: undefined }))",
     "})",
   ].join("\n")
   const child = Bun.spawn([bun, "-e", script], { stdout: "pipe", stderr: "pipe" })
-  const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
-  expect(code).toBe(0)
-  expect(out.trim()).toBe("result:late")
+  const [out, err, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  // All of it on failure: whether Bun exited early (no result) or the command itself failed.
+  const lines = out.trim().split(/\r?\n/)
+  const ok = code === 0 && lines[0] === "result:late"
+  expect({ code, result: lines[0], ...(ok ? {} : { err }) }).toEqual({ code: 0, result: "result:late" })
+  expect(JSON.parse(lines[1]!)).toMatchObject({ exitCode: 0, timedOut: false, aborted: false })
 })
 
 test("a failing chunk callback does not break the run", async () => {

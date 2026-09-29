@@ -10,6 +10,7 @@ import {
   endOpenBlocks,
   finish,
   hasOpenBlock,
+  heldUndecided,
   type LineRender,
   newState,
   partialRender,
@@ -133,7 +134,11 @@ export class MarkdownStream implements Component {
     this.processLines(env, sink)
     let live = this.live(env)
     if (ctx.commit && live.length > this.maxRows) {
-      if (hasOpenBlock(this.state)) {
+      // A held line that the partial line may still make a table header or a heading is not
+      // committed as a paragraph: the partial line is left out of view until it is complete.
+      const held = !this.cut && heldUndecided(this.state, this.src) ? this.live(env, "") : undefined
+      if (held && held.length <= this.maxRows) live = held
+      else if (hasOpenBlock(this.state)) {
         commitOpenBlocks(this.state, env, sink)
         live = this.live(env)
       }
@@ -189,9 +194,8 @@ export class MarkdownStream implements Component {
     if (from > 0) this.src = this.src.slice(from)
   }
 
-  /** The rows of what is still open, as they would render if the text ended here. */
-  private live(env: Env): string[] {
-    const line = this.src
+  /** The rows of what is still open, as they would render if the text ended with `line`. */
+  private live(env: Env, line = this.src): string[] {
     if (this.cut)
       return line !== "" ? renderLine(this.cut.render, line, env, this.cut.carry, this.cut.lead).rows : []
     const rows: string[] = []

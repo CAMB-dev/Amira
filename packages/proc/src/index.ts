@@ -41,6 +41,19 @@ let workerReady = false
 let workerBroken = false
 let nextId = 1
 const pending = new Map<number, Pending>()
+/**
+ * Keeps the process alive while commands run in the worker. The worker is ref'ed then too, but a
+ * timer does not depend on how Bun handles ref() on a worker that has not started yet.
+ */
+let keepAlive: ReturnType<typeof setInterval> | undefined
+
+function trackPending() {
+  if (pending.size && !keepAlive) keepAlive = setInterval(() => {}, 1 << 30)
+  else if (!pending.size && keepAlive) {
+    clearInterval(keepAlive)
+    keepAlive = undefined
+  }
+}
 /** Prepared commands not yet released, by id; called when the worker reports them gone. */
 const standbys = new Map<number, () => void>()
 
@@ -111,6 +124,7 @@ function abandonWorker(neverLoaded: boolean) {
     // Processes it started lose their job handles and may keep running.
     else p.reject(new Error("the command worker stopped unexpectedly"))
   }
+  trackPending()
 }
 
 function onMessage(m: FromWorker) {
@@ -140,6 +154,7 @@ function onMessage(m: FromWorker) {
     return
   }
   pending.delete(m.id)
+  trackPending()
   if (pending.size === 0) worker?.unref()
   p.opts.signal.removeEventListener("abort", p.onAbort)
   if (m.type === "done") p.resolve(m.result)
@@ -158,6 +173,7 @@ function start(
     const onAbort = () => worker?.postMessage({ type: "abort", id } satisfies ToWorker)
     pending.set(id, { opts, resolve, reject, onAbort, ...(inline ? { inline } : {}) })
     // A running command keeps the process alive, or a caller awaiting it could see Bun exit.
+    trackPending()
     w.ref()
     opts.signal.addEventListener("abort", onAbort, { once: true })
     w.postMessage(message)
