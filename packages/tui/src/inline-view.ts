@@ -8,7 +8,14 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
-import { formatElapsed, isLastSibling, replyRows, subagentEndLine, userLines } from "./format.ts"
+import {
+  commandEchoLines,
+  formatElapsed,
+  isLastSibling,
+  replyRows,
+  subagentEndLine,
+  userLines,
+} from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { historyLines } from "./history.ts"
 import {
@@ -365,7 +372,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     },
     subagentEvent: trackSubagent,
     notice: (level, text) => commitBlock("notice", note(level, text)),
-    commandEcho: (line) => commitBlock("command", [theme.muted(`${glyphs.user} ${line}`)]),
+    commandEcho: (line) => commitBlock("command", commandEchoLines(theme, line, terminal.columns)),
     commandOutput(level, text) {
       // Right after its command it hangs under the echo; on its own it is a notice.
       if (transcript.last === "command" || transcript.last === "command-output") {

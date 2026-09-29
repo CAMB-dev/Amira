@@ -159,7 +159,9 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   const conversation = [
     "Amira · mock/m1 · /work/proj",
     "",
+    "",
     "› what is in a.ts?",
+    "",
     "",
     "● read a.ts",
     "  └ contents of a.ts (+2 lines)",
@@ -700,11 +702,11 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
   const { terminal, view, shows, screen, exited } = await setup([], { history })
   await shows("── resumed")
   expect(view()).toMatch(
-    /› earlier question\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
+    /› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
   )
   terminal.send("\x03")
   await exited
   expect(screen.mainText).toMatch(
-    /› earlier question\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
+    /› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
   )
 })

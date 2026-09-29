@@ -1,5 +1,5 @@
 import type { SpawnGroupInfo, UserMessage } from "@amira/api"
-import { type Theme, truncateToWidth, wrapText } from "@amira/tui-kit"
+import { type StyleFn, type Theme, themeToken, truncateToWidth, visibleWidth, wrapText } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
 /** Arguments that say what a call is about; the first one present leads the summary. */
@@ -51,13 +51,40 @@ export function userLines(theme: Theme, message: UserMessage, width = Number.POS
   // A notice (e.g. background sub-agents' results) shows as its short lines, not as typed text.
   if (message.display?.origin && message.display.text.trim()) return originLines(theme, message.display.text)
   const text = (message.display?.text.trim() || userText(message)).trim()
+  const bg = Number.isFinite(width) ? themeToken(theme, "userBg") : undefined
+  // On the band, a cell is left free at the right edge, as at the left.
+  const room = width - (bg ? 3 : 2)
   const rows = Number.isFinite(width)
-    ? text.split("\n").flatMap((l) => (l ? wrapText(l, Math.max(10, width - 2)) : [""]))
+    ? text.split("\n").flatMap((l) => (l ? wrapText(l, Math.max(10, room)) : [""]))
     : text.split("\n")
   const lines = rows.map((l, i) => `${theme.accent(i === 0 ? glyphs.user : " ")} ${l}`)
   const note = message.display?.note
   if (note) lines.push(`  ${theme.muted(glyphs.result)} ${theme.muted(note)}`)
-  return lines
+  return bg ? bandRows(lines, width, bg) : lines
+}
+
+/**
+ * An echoed command (`› /status`), muted: on the band like the user's messages, since it was
+ * typed too, but muted, since it went to Amira rather than to the model.
+ */
+export function commandEchoLines(theme: Theme, line: string, width: number): string[] {
+  const bg = themeToken(theme, "userBg")
+  const rows = wrapText(theme.muted(`${glyphs.user} ${line}`), Math.max(1, width - (bg ? 1 : 0)))
+  return bg ? bandRows(rows, width, bg) : rows
+}
+
+/**
+ * Rows on a band of `bg` the width of the screen, with a blank row of it above and below: each
+ * row filled with spaces to exactly `width` (cut to it when wider), so the band ends at the
+ * right edge and never wraps.
+ */
+export function bandRows(rows: string[], width: number, bg: StyleFn): string[] {
+  const w = Math.max(1, width)
+  const fill = (row: string) => {
+    const fit = visibleWidth(row) > w ? truncateToWidth(row, w) : row
+    return bg(fit + " ".repeat(Math.max(0, w - visibleWidth(fit))))
+  }
+  return [fill(""), ...rows.map(fill), fill("")]
 }
 
 /** A notice's lines, e.g. "◆ explorer finished · 41s · 12.3k tok": the marker accented, the rest muted. */

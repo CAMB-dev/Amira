@@ -91,7 +91,7 @@ interface SetupOptions {
   /** How images in replies are fetched from the web. */
   imageFetch?: RemoteImageFetch
   /** Called with the options the UI sets the terminal up with. */
-  onSetup?: (opts: { images?: boolean } | undefined) => void
+  onSetup?: (opts: { images?: boolean; background?: boolean } | undefined) => void
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -213,12 +213,15 @@ test("a conversation: user message, tool call and reply end up in the transcript
   expect(text).toContain("● read a.ts")
   expect(text).toContain("└ contents of a.ts (+2 lines)")
   expect(text.indexOf("● read")).toBeLessThan(text.indexOf("The file has three lines."))
-  // One blank line between blocks, and the reply indented so it reads apart from the rest.
+  // One blank line between blocks, and the reply indented so it reads apart from the rest. The
+  // user's message is on a band with a row of it above and below (blank on this screen).
   expect(text).toContain(
     [
       "Amira · mock/m1 · /work/proj",
       "",
+      "",
       "› what is in a.ts?",
+      "",
       "",
       "● read a.ts",
       "  └ contents of a.ts (+2 lines)",
@@ -404,9 +407,9 @@ test("/verbose sets the tool output level, printed under the command", async () 
   const { terminal, all, shows, exited } = await setup([], { commands: testCommands([]), tuiCommands: true })
   terminal.send("/verbose collapsed\r")
   await shows("Tool output: collapsed")
-  // Wrapped to the width, hanging under the result mark.
+  // Wrapped to the width, hanging under the result mark, below the echo's band.
   expect(all()).toContain(
-    "› /verbose collapsed\n  └ Tool output: collapsed (applies to tool results from now\n    on; Ctrl+O cycles)",
+    "› /verbose collapsed\n\n  └ Tool output: collapsed (applies to tool results from now\n    on; Ctrl+O cycles)",
   )
   terminal.send("/verbose loud\r")
   await shows('Unknown level "loud"')
@@ -475,9 +478,17 @@ test("a resumed session shows its history like the live transcript, then a separ
   })
   await waitFor(() => all().includes("── resumed"), "history")
   expect(all()).toContain(
-    ["› count", "", "● glob *.ts", "  └ 2 files", "", "  Two.", "", `── resumed ${agent.sessionId} ──`].join(
-      "\n",
-    ),
+    [
+      "› count",
+      "",
+      "",
+      "● glob *.ts",
+      "  └ 2 files",
+      "",
+      "  Two.",
+      "",
+      `── resumed ${agent.sessionId} ──`,
+    ].join("\n"),
   )
   terminal.send("\x03")
   await exited
@@ -734,8 +745,8 @@ test("a Markdown reply streams block by block: every row once, in order, never c
   expect(text).toContain("╭─ ts")
   expect(text).toContain("▎ quoted")
   expect(text).toMatch(/col +│ other/)
-  // In the assistant's gutter, one blank line from the prompt, blank rows between blocks blank.
-  expect(text).toContain(`› go\n\n  ${markers[0]} heading\n\n  Some bold`)
+  // In the assistant's gutter, one blank line from the prompt's band, blank rows between blocks blank.
+  expect(text).toContain(`› go\n\n\n  ${markers[0]} heading\n\n  Some bold`)
   expect(text).toContain("\n  ╭─ ts\n  │ const")
   expect(text).not.toMatch(/\n +\n/)
   terminal.send("\x03")
@@ -2146,7 +2157,7 @@ test("messages queued together are sent as one turn but shown one by one", async
   await shows("queued › two")
   await shows("second answer")
   await idle()
-  expect(all()).toContain("› one\n\n› two")
+  expect(all()).toContain("› one\n\n\n\n› two")
   expect(all()).not.toContain("  two")
   const prompts = agent.messages.filter((m) => m.role === "user")
   expect(prompts.length).toBe(2)
@@ -2460,7 +2471,7 @@ test("an image mid-reply is drawn in its place: every row once, in order, the re
 })
 
 test("an image that cannot be fetched, or a private address, is its alt text; tui.images off draws none", async () => {
-  const setups: ({ images?: boolean } | undefined)[] = []
+  const setups: ({ images?: boolean; background?: boolean } | undefined)[] = []
   const run = async (text: string, o: Partial<SetupOptions>) => {
     const { terminal, screen, all, shows, idle, exited } = await setup([{ text }], {
       env: WT,
@@ -2494,7 +2505,11 @@ test("an image that cannot be fetched, or a private address, is its alt text; tu
   })
   expect(off.images).toBe(0)
   expect(off.text).toContain("  🖼\uFE0F chart")
-  expect(setups).toEqual([{ images: true }, { images: true }, { images: false }])
+  expect(setups).toEqual([
+    { images: true, background: true },
+    { images: true, background: true },
+    { images: false, background: true },
+  ])
   // Without Sixel in the terminal's answer, "auto" draws none either.
   const none = await run("![chart](https://img.test/chart.png)\n\ndone", {
     graphics: { answered: true, sixel: false, kitty: false },

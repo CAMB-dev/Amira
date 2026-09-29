@@ -27,6 +27,7 @@ import {
   ImageLoader,
   type InputEvent,
   InputReader,
+  isColorEnabled,
   ProcessTerminal,
   progressSupported,
   type RemoteImageFetch,
@@ -36,6 +37,7 @@ import {
   Stack,
   setupTerminalInput,
   supportsHyperlinks,
+  surfaceTheme,
   type Terminal,
   type Theme,
   truncateToWidth,
@@ -96,7 +98,7 @@ export interface InteractiveOptions {
   setup?: (
     terminal: Terminal,
     env?: Record<string, string | undefined>,
-    opts?: { images?: boolean },
+    opts?: { images?: boolean; background?: boolean },
   ) => Promise<SetupResult>
   theme?: Theme
   /**
@@ -189,7 +191,6 @@ const estimateTokens = (chars: number) => Math.ceil(chars / 4)
  */
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
   let { agent } = opts
-  const theme = opts.theme ?? defaultTheme
   const terminal = opts.terminal ?? new ProcessTerminal()
   const presenters = opts.toolRenderers
   const env = opts.env ?? process.env
@@ -197,7 +198,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const imageSetting = settings.images ?? "auto"
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal, env, {
     images: imageSetting !== "off",
+    background: true,
   })
+  // Surface colors (the band behind the user's messages, diff lines) for the terminal's
+  // background; none without colors, where the band would only be blank rows.
+  const theme =
+    opts.theme ??
+    (isColorEnabled() ? { ...defaultTheme, ...surfaceTheme(capabilities.background) } : defaultTheme)
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
