@@ -239,3 +239,20 @@ test("trackWorkspace checks for changes after a turn that ran a writing tool, no
   stop()
   expect(dirty(2)).toBe(false)
 }, 60_000)
+
+test("trackWorkspace checks for changes made outside once the last check is old enough", async () => {
+  const d = await repo()
+  const bus = new EventBus()
+  const seen: AnyEvent[] = []
+  bus.subscribe((e) => void seen.push(e), { types: ["workspace.changed"] })
+  const stop = trackWorkspace(bus, "s", d, { initialDelayMs: 0, staleMs: 0 })
+  while (seen.length === 0) await Bun.sleep(20)
+  // Written by hand, and the turn ran no tool: the check is due anyway.
+  await writeFile(path.join(d, "new.txt"), "x")
+  await nextWorkspace(bus, seen, 2)
+  stop()
+  expect((seen[1] as Extract<AnyEvent, { type: "workspace.changed" }>).data).toMatchObject({
+    branch: "trunk",
+    dirty: true,
+  })
+}, 60_000)

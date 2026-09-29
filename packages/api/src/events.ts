@@ -53,7 +53,8 @@ export interface EventMap {
     isWorktree?: boolean
     /**
      * The working tree has changes not committed yet (staged, unstaged or untracked files). It
-     * is checked after turns that ran tools, so edits made outside Amira show from the next one.
+     * is checked at the end of turns that ran tools which may write files, and of any turn once
+     * the last check is a minute old, so edits made outside Amira show after a while.
      */
     dirty?: boolean
   }
