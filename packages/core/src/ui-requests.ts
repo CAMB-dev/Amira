@@ -211,12 +211,13 @@ export class UiRequests {
         return typeof answer === "object" ? answer.option : answer
       },
       choose: async (title, options, opts) => {
-        const { sections, ...rest } = opts
+        const { sections, descriptions, ...rest } = opts
         const request = {
           kind: "select" as const,
           title,
           options: [...options],
           sections: structuredClone(sections),
+          ...(descriptions ? { descriptions: [...descriptions] } : {}),
         }
         const answer = await this.ask(request, o(rest))
         return typeof answer === "string" ? { option: answer } : answer

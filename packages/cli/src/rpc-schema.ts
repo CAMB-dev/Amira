@@ -535,6 +535,10 @@ export function rpcSchema(): Schema {
             description:
               'Parts of the list, each from option index `at` to the next: a heading, what Enter does there, and keys besides Enter. A key pressed on an option answers {"option": option, "key": key}; the option alone answers as Enter.',
           },
+          "descriptions?": {
+            ...arrayOf(str),
+            description: 'Muted text shown with the option of the same index ("" for none).',
+          },
         }),
         obj({
           kind: strings("confirm"),

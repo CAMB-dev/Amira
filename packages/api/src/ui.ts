@@ -39,8 +39,15 @@ export type UiRequest =
    * A choice among `options`. `sections` split the list into parts with a heading each and
    * keys of their own besides Enter; a key answers with `{ option, key }` (SelectChoice) on
    * the option it was pressed on. Clients that do not know sections answer with the option.
+   * `descriptions` go with the options of the same index, in muted text ("" for none).
    */
-  | { kind: "select"; title: string; options: string[]; sections?: SelectSection[] }
+  | {
+      kind: "select"
+      title: string
+      options: string[]
+      sections?: SelectSection[]
+      descriptions?: string[]
+    }
   /**
    * A yes/no question. `always` offers "Yes, and don't ask again this session" as well
    * (answered with "always"); a string says what that covers instead of "this session", e.g.
@@ -179,7 +186,7 @@ export interface UiApi {
   choose(
     title: string,
     options: string[],
-    opts: UiRequestOptions & { sections: SelectSection[] },
+    opts: UiRequestOptions & { sections: SelectSection[]; descriptions?: string[] },
   ): Promise<SelectChoice | undefined>
   confirm(title: string, message?: string, opts?: UiRequestOptions): Promise<boolean | undefined>
   input(

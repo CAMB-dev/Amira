@@ -600,6 +600,15 @@ function pagesOf(r: DialogRequest): Page[] {
         ),
       ]
     case "select":
+      return [
+        page(
+          r.title,
+          r.options.map((o, i) => {
+            const description = r.descriptions?.[i]
+            return { label: o, value: o, ...(description ? { description } : {}) }
+          }),
+        ),
+      ]
     case "diff-review":
       return [
         page(
