@@ -122,9 +122,12 @@ test("dragging across rows and blocks marks them and copies what is shown, less 
   pane.dragTo(to, colOf(rows, "nested") + "nested".length - 1)
   expect(pane.hasText).toBe(true)
   const drawn = pane.render(e, 20)
-  // The rows in between are marked, the gutter of the first before the mark.
-  expect(drawn[from]).toBe(`› ${ON}hello there${OFF}`)
-  expect(drawn[rowOf(drawn, "After.")]).toBe(`${ON}  After.${OFF}`)
+  // The rows in between are marked, the gutter of the first before the mark, and a cell after
+  // each for its line break; blank rows show just that cell.
+  const end = `${ON} ${OFF}`
+  expect(drawn[from]).toBe(`› ${ON}hello there${OFF}${end}`)
+  expect(drawn[from + 1]).toBe(end)
+  expect(drawn[rowOf(drawn, "After.")]).toBe(`${ON}  After.${OFF}${end}`)
   // The last row up to the cell the drag ended on.
   expect(drawn[to]).toBe(`${ON}      nested${OFF}`)
   pane.endDrag()
@@ -211,21 +214,81 @@ test("the selection holds while a reply streams on below it and while scrolling;
   expect(pane.hasText).toBe(false)
 })
 
-test("a change to the text it covers clears the selection; one elsewhere does not", () => {
-  const { pane, rows, e, tool } = conversation()
-  const at = rowOf(rows, "contents")
+/** A running call: its spinner and elapsed time change by themselves. */
+class Running extends Lines {
+  override get live(): boolean {
+    return true
+  }
+}
+
+test("a change to a block it covers clears the selection; one elsewhere, or a ticking clock, does not", () => {
+  const { pane, e, tool } = conversation()
+  const running = new Running("tool", ["● slow ⠋ 3s", "  │ output"])
+  pane.add(running)
+  let drawn = pane.render(e, 20)
+  const at = rowOf(drawn, "contents")
   pane.startDrag(at, 4)
-  pane.dragTo(at, 100)
+  pane.dragTo(rowOf(drawn, "slow"), 100)
   pane.endDrag()
-  // Another row of the same block changes: what is selected is the same.
-  tool.text = [...tool.text.slice(0, 3), "      changed"]
-  tool.touch()
-  pane.render(e, 20)
-  expect(pane.selectedText()).toBe("contents of a.ts")
+  // The user message above changes; the running call's spinner and time move on.
+  pane.blocks[0]!.touch()
+  running.text = ["● slow ⠙ 4s", "  │ output"]
+  drawn = pane.render(e, 20)
+  expect(pane.selectedText()).toBe("contents of a.ts\nline 2\n  nested\nslow ⠙ 4s")
+  expect(drawn[at]).toContain(ON)
+  // The call covered changes (it finished, say): the selection goes.
   tool.text = ["● read a.ts", "  └ other result"]
   tool.touch()
   pane.render(e, 20)
   expect(pane.hasText).toBe(false)
+})
+
+test("code copies as written: tabs kept when a line is selected whole; a fence the source parse misses spoils no other block", () => {
+  const pane = new TranscriptPane()
+  const source = [
+    "```make",
+    "all:",
+    "\tgo build ./... && go vet ./... && echo done-done-done",
+    "```",
+    "",
+    "- item",
+    "",
+    "      ```",
+    "      nested",
+    "      ```",
+    "",
+    "> quoted text",
+    "",
+    "```",
+    "a line that is long enough to wrap at forty columns wide",
+    "```",
+  ].join("\n")
+  pane.add(new ReplyBlock(source, false, false))
+  const e = env(40)
+  const rows = pane.render(e, 30)
+  pane.startDrag(rowOf(rows, "all:"), 0)
+  pane.dragTo(rowOf(rows, "done"), 100)
+  expect(pane.selectedText()).toBe("all:\n\tgo build ./... && go vet ./... && echo done-done-done")
+  // Part of a line copies as drawn.
+  pane.startDrag(rowOf(rows, "go build"), colOf(rows, "go build"))
+  pane.dragTo(rowOf(rows, "go build"), colOf(rows, "go build") + 1)
+  expect(pane.selectedText()).toBe("go")
+  pane.startDrag(rowOf(rows, "quoted"), 0)
+  pane.dragTo(rowOf(rows, "a line"), 100)
+  // The quote's bar is chrome; the last block's wrapped line is one line again.
+  const text = pane.selectedText()
+  expect(text.split("\n")[0]).toBe("quoted text")
+  expect(text.split("\n").at(-1)).toBe("a line that is long enough to wrap at forty columns wide")
+})
+
+test("double and triple clicks off the text select nothing", () => {
+  const pane = new TranscriptPane()
+  pane.add(new ReplyBlock("short", false, false))
+  const rows = pane.render(env(), 6)
+  // The padding above short content.
+  expect(pane.selectWord(0, 3)).toBe(false)
+  expect(pane.selectLine(0, 3)).toBe(false)
+  expect(pane.selectWord(rowOf(rows, "short"), 3)).toBe(true)
 })
 
 test("a block selected with the keyboard takes the place of selected text", () => {

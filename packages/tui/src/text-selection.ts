@@ -123,7 +123,9 @@ export function wordAt(line: string, col: number): { from: number; to: number } 
  * the transcript's chrome: a gutter, a tree, a code frame), left out when `skip`, or `text`
  * in its place (an image's alt text). A row that `joins` continues the row before it (a wrapped
  * line of code), so no line break goes between them. A row that `repeats` is a further row of
- * what the row above is (an image): copied only when that one is not.
+ * what the row above is (an image): copied only when that one is not. `exact` is the line a
+ * row starts as it was written (a line of code, with its tabs): what copies when the line is
+ * selected whole.
  */
 export interface CopyRow {
   from: number
@@ -131,6 +133,7 @@ export interface CopyRow {
   joins?: boolean
   repeats?: boolean
   text?: string
+  exact?: string
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

@@ -9,6 +9,7 @@ import {
   renderMarkdown,
   type ScreenImage,
   stripAnsi,
+  TAB_WIDTH,
   type Theme,
   truncateToWidth,
   visibleWidth,
@@ -397,21 +398,33 @@ export class ReplyBlock extends Block {
   override copyRows(plain: readonly string[], lines: readonly string[]): CopyRow[] {
     const indent = visibleWidth(glyphs.assistant)
     const rows: CopyRow[] = plain.map(() => ({ from: indent }))
-    const frames = codeFrames(plain)
+    // A quote's bars are chrome too.
+    const bars = new RegExp(`^ {${indent}}((?:${defaultGlyphs.quoteBar} ?)+)`)
+    for (const [i, p] of plain.entries()) {
+      const m = bars.exec(p)
+      if (m) rows[i] = { from: indent + visibleWidth(m[1]!) }
+    }
     const fences = fencedCode(foldMarkdown(this.source, this.folded).text)
-    frames.forEach((f, i) => {
+    // Frames are matched to the fences of the source in order; one that matches none (a fence
+    // the source is not read for, say in a nested list) copies row by row.
+    let next = 0
+    for (const f of codeFrames(plain)) {
       rows[f.top] = { from: 0, skip: true }
       if (f.bottom !== undefined) rows[f.bottom] = { from: 0, skip: true }
-      const source = frames.length === fences.length ? fences[i] : undefined
-      const joins =
-        source &&
-        wrapsOf(
-          f.rows.map((r) => plain[r]!.slice(f.col)),
-          source,
-        )
-      for (const [k, r] of f.rows.entries())
-        rows[r] = joins?.[k] ? { from: f.col, joins: true } : { from: f.col }
-    })
+      const shown = f.rows.map((r) => plain[r]!.slice(f.col))
+      let at: number[] | undefined
+      for (let q = next; q < fences.length && !at; q++) {
+        at = linesOf(shown, fences[q]!.shown)
+        if (at) next = q + 1
+      }
+      const fence = at && fences[next - 1]!
+      for (const [k, r] of f.rows.entries()) {
+        const line = at?.[k]
+        if (line === undefined) rows[r] = { from: f.col }
+        else if (k > 0 && at![k - 1] === line) rows[r] = { from: f.col, joins: true }
+        else rows[r] = { from: f.col, exact: fence!.exact[line]! }
+      }
+    }
     for (const im of imagesIn(lines) ?? []) {
       const text = stripAnsi(im.alt).trim()
       for (let k = 0; k < im.image.rows && im.line + k < rows.length; k++)
@@ -476,53 +489,78 @@ function codeFrames(plain: readonly string[]): CodeFrame[] {
   return out
 }
 
-/** The lines of each fenced code block of Markdown, in order (the last one maybe still open). */
-function fencedCode(markdown: string): string[][] {
-  const out: string[][] = []
-  let fence: { mark: string; indent: number; lines: string[] } | undefined
+/** A fence at any indent: the source is read for more fences than there are, not fewer. */
+const ANY_FENCE = /^ *(`{3,}|~{3,})/
+
+/** A fenced code block of Markdown: its lines as drawn (tabs as spaces) and as written. */
+interface Fence {
+  shown: string[]
+  exact: string[]
+}
+
+/** The fenced code blocks of Markdown, in order (the last one maybe still open). */
+function fencedCode(markdown: string): Fence[] {
+  const out: Fence[] = []
+  let open: { mark: string; indent: number; fence: Fence } | undefined
   for (const line of markdown.split("\n")) {
-    if (fence) {
-      const close = FENCE.exec(line)
+    if (open) {
+      const close = ANY_FENCE.exec(line)
       if (
         close &&
-        close[1]![0] === fence.mark[0] &&
-        close[1]!.length >= fence.mark.length &&
+        close[1]![0] === open.mark[0] &&
+        close[1]!.length >= open.mark.length &&
         !line.trim().slice(close[1]!.length).trim()
       ) {
-        fence = undefined
+        open = undefined
         continue
       }
-      let start = 0
-      while (start < fence.indent && line[start] === " ") start++
-      fence.lines.push(line.slice(start))
+      // The fence's indent goes, as much of it as the line has.
+      const cut = (s: string) => {
+        let start = 0
+        while (start < open!.indent && s[start] === " ") start++
+        return s.slice(start)
+      }
+      open.fence.shown.push(cut(expandTabs(line)))
+      open.fence.exact.push(cut(line))
       continue
     }
-    const open = FENCE.exec(line)
-    if (open) {
-      fence = { mark: open[1]!, indent: /^ */.exec(line)![0].length, lines: [] }
-      out.push(fence.lines)
+    const start = ANY_FENCE.exec(line)
+    if (start) {
+      open = { mark: start[1]!, indent: /^ */.exec(line)![0].length, fence: { shown: [], exact: [] } }
+      out.push(open.fence)
     }
   }
   return out
 }
 
 /**
- * Which rows of a code block continue the line before them, found by matching the rows to the
- * lines of its source. Undefined when they do not match.
+ * The line of a code block's source each of its rows shows (a line wrapped over rows is shown
+ * by several), found by matching the rows to the lines. Undefined when they do not match.
  */
-function wrapsOf(rows: string[], source: string[]): boolean[] | undefined {
-  const joins = rows.map(() => false)
+function linesOf(rows: string[], source: string[]): number[] | undefined {
+  const out: number[] = []
   let r = 0
-  for (const line of source) {
+  for (const [i, line] of source.entries()) {
     if (r >= rows.length) break
     let text = rows[r++]!
+    out.push(i)
     while (r < rows.length && text.length < line.length && rows[r] && line.startsWith(text + rows[r])) {
-      text += rows[r]
-      joins[r++] = true
+      text += rows[r++]
+      out.push(i)
     }
     if (text.trimEnd() !== line.trimEnd()) return undefined
   }
-  return r === rows.length ? joins : undefined
+  return r === rows.length ? out : undefined
+}
+
+/** Tabs as spaces to the next multiple of TAB_WIDTH, as Markdown is drawn. */
+function expandTabs(line: string): string {
+  if (!line.includes("\t")) return line
+  let out = ""
+  for (const part of line.split(/(\t)/)) {
+    out += part === "\t" ? " ".repeat(TAB_WIDTH - (Bun.stringWidth(out) % TAB_WIDTH)) : part
+  }
+  return out
 }
 
 /** A tool call: its head, its output while it runs, then its result, with its sub-agents under it. */
