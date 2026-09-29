@@ -229,3 +229,24 @@ test("the cursor after ✉ lands where the terminal put the text, inline and ful
     f.close()
   }
 })
+
+test("presentEmoji judges a grapheme whole when an escape splits it", () => {
+  const hl = (s: string) => `\x1b[7m${s}\x1b[27m`
+  const cases = [
+    `${hl("⚠")}\uFE0E x`,
+    `${hl("⚠")}\uFE0F x`,
+    `❤\x1b[31m‍🔥`,
+    `${hl("✉")} x`,
+    `a${hl("🖼")}b`,
+    `\x1b]8;;http://x\x07✉\x1b]8;;\x07\uFE0E`,
+  ]
+  for (const s of cases) {
+    const out = presentEmoji(s)
+    expect([s, visibleWidth(out)]).toEqual([s, visibleWidth(s)])
+    // What the terminal takes, the escapes aside, is the width that was measured.
+    expect([s, Bun.stringWidth(stripAnsi(out))]).toEqual([s, visibleWidth(s)])
+  }
+  expect(presentEmoji(`${hl("⚠")}\uFE0E x`)).toBe(`${hl("⚠")}\uFE0E x`)
+  expect(presentEmoji(`${hl("✉")} x`)).toBe(`\x1b[7m✉\uFE0F\x1b[27m x`)
+  expect(presentEmoji(`a${hl("🖼")}b`)).toBe(`a\x1b[7m🖼\uFE0F\x1b[27mb`)
+})

@@ -33,11 +33,18 @@ export function visibleWidth(s: string): number {
  * Cascadia Mono lacks the other arrows (↖ ↗ ↘ ↙ ↩ ↪ ⤴ ⤵ ➡ ⬅ ⬆ ⬇), ⁉, ℹ and Ⓜ, so those
  * count as emoji. A character followed by VS15 (U+FE0E) or VS16 (U+FE0F) is measured as it asks:
  * one cell for text, two for emoji.
+ *
+ * This holds in every terminal, so such characters show as color emoji even where the font has
+ * them as text: one rule everywhere rather than a guess per terminal. It relies on the terminal
+ * giving a character with VS16 two cells, as Windows Terminal does.
  */
 const TEXT_SYMBOLS = "#*0123456789©®™‼↔↕▪▫◻◼▶◀☺♀♂♠♣♥♦"
 
 /** A character that counts as an emoji although it has no emoji presentation of its own. */
-const TEXT_EMOJI = new RegExp(`[\\p{Emoji}--\\p{Emoji_Presentation}--[${TEXT_SYMBOLS}]]`, "v")
+const TEXT_EMOJI = new RegExp(
+  `[\\p{Emoji}--\\p{Emoji_Presentation}--[${[...TEXT_SYMBOLS].map((c) => `\\u{${c.codePointAt(0)!.toString(16)}}`).join("")}]]`,
+  "v",
+)
 const TEXT_EMOJI_START = new RegExp(`^${TEXT_EMOJI.source}`, "v")
 const VS15 = "\uFE0E"
 const VS16 = "\uFE0F"
@@ -67,25 +74,34 @@ export function textWidth(s: string): number {
  */
 export function presentEmoji(s: string): string {
   if (!TEXT_EMOJI.test(s)) return s
-  let out = ""
+  // Graphemes are found in the text with its escapes taken out, as `visibleWidth` measures it,
+  // so a grapheme split by an escape (a find highlight ending between ✉ and its VS15) is judged
+  // whole. `raw[i]` is where the i-th code unit of that text is in `s`.
+  let plain = ""
+  const raw: number[] = []
   let last = 0
-  const text = (t: string) => {
-    for (const g of graphemes(t)) {
-      if (!isBareEmoji(g)) {
-        out += g
-        continue
-      }
-      const first = String.fromCodePoint(g.codePointAt(0)!)
-      out += first + VS16 + g.slice(first.length)
-    }
+  const text = (from: number, to: number) => {
+    plain += s.slice(from, to)
+    for (let i = from; i < to; i++) raw.push(i)
   }
   for (const m of s.matchAll(ANSI_PATTERN)) {
-    if (m.index > last) text(s.slice(last, m.index))
-    out += m[0]
+    text(last, m.index)
     last = m.index + m[0].length
   }
-  if (last < s.length) text(s.slice(last))
-  return out
+  text(last, s.length)
+  let out = ""
+  let from = 0
+  let at = 0
+  for (const g of graphemes(plain)) {
+    if (isBareEmoji(g)) {
+      // Right after the base character, before any escape that follows it.
+      const end = raw[at + (g.codePointAt(0)! > 0xffff ? 1 : 0)]! + 1
+      out += s.slice(from, end) + VS16
+      from = end
+    }
+    at += g.length
+  }
+  return out + s.slice(from)
 }
 
 /** Splits a string into user-perceived characters (grapheme clusters). */
