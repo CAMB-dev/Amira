@@ -316,6 +316,13 @@ test("with providers but no model picked, a message says to pick one and stays i
   expect(await exited).toBe(0)
 })
 
+test("a banner wider than the terminal wraps at a word, not where the terminal cuts it", async () => {
+  const { terminal, all, exited } = await setup([], { cols: 24 })
+  expect(all()).toContain("Amira · mock/m1 ·\n/work/proj")
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
+})
+
 test("a home directory in the banner reads as ~", () => {
   expect(tildePath("/home/ada/proj", { HOME: "/home/ada" })).toBe("~/proj")
   expect(tildePath("/home/ada", { HOME: "/home/ada/" })).toBe("~")

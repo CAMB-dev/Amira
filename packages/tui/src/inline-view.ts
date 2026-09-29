@@ -7,6 +7,7 @@ import {
   type Theme,
   truncateToWidth,
   visibleWidth,
+  wrapText,
 } from "@amira/tui-kit"
 import {
   commandEchoLines,
@@ -441,9 +442,12 @@ export function createInlineView(host: ViewHost): TranscriptView {
     },
 
     // A blank line between the command that started Amira and its first line (not between the
-    // banner's own lines).
+    // banner's own lines). Wrapped at words, as full screen does, not cut by the terminal.
     banner: (line) =>
-      commit([...(transcript.last === undefined ? [""] : []), ...transcript.block("banner", [line])]),
+      commit([
+        ...(transcript.last === undefined ? [""] : []),
+        ...transcript.block("banner", wrapText(line, Math.max(1, terminal.columns))),
+      ]),
     user: (m) => commitBlock("user", userLines(theme, m, terminal.columns)),
     replyDelta(text) {
       // The reply goes on: what it thought, and the calls held before it, go first.
