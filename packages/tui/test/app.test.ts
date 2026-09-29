@@ -320,6 +320,27 @@ test("a home directory in the banner reads as ~", () => {
   expect(tildePath("/home/ada", { HOME: "/home/ada/" })).toBe("~")
   expect(tildePath("/home/adam/proj", { HOME: "/home/ada" })).toBe("/home/adam/proj")
   expect(tildePath("/work/proj", { HOME: "/home/ada" })).toBe("/work/proj")
+  // Windows: the profile is the home, whatever HOME a shell set; the drive's case does not matter.
+  const win = { USERPROFILE: "C:\\Users\\Ada", HOME: "/c/Users/Ada" }
+  expect(tildePath("c:\\Users\\Ada\\proj", win, "win32")).toBe("~\\proj")
+  expect(tildePath("C:\\Users\\Adam\\proj", win, "win32")).toBe("C:\\Users\\Adam\\proj")
+})
+
+test("a startup notice about something else shows under the welcome card", async () => {
+  const { terminal, all, shows, exited } = await setup([], {
+    noModel: "none",
+    notice: "settings.json could not be read",
+    cols: 100,
+    // The session says there are no providers; the notice is about something else.
+    commands: [],
+    control: { providers: () => [] },
+  })
+  await shows("Welcome to Amira. Three steps to a first message:")
+  await shows("settings.json could not be read")
+  expect(all()).not.toContain("No providers configured")
+  terminal.send("\x03")
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
 })
 
 const parallel = { description: "", parameters: {}, concurrency: "parallel" as const }

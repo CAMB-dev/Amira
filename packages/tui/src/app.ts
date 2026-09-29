@@ -1609,8 +1609,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   for (const e of opts.startupEvents ?? []) onEvent(e)
   // With no provider yet, a welcome card with the steps to a first message says what the
   // notice would.
-  if (isNoModel(agent.model) && noProviders()) view.notice("info", welcomeCard())
-  else if (opts.notice) view.notice("warning", opts.notice)
+  const welcome = isNoModel(agent.model) && noProviders()
+  if (welcome) view.notice("info", welcomeCard())
+  // A notice about something else (a broken settings file, say) still shows under the card.
+  if (opts.notice && !(welcome && opts.notice.startsWith("No providers"))) view.notice("warning", opts.notice)
   // The first frame carries the banner, history and startup messages.
   view.start()
   if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
@@ -1630,12 +1632,19 @@ function welcomeCard(): string {
 }
 
 /** `path` with the home directory as "~", as shells write it. */
-export function tildePath(path: string, env: Record<string, string | undefined> = process.env): string {
-  const home = (env.HOME || env.USERPROFILE || homedir()).replace(/[\\/]+$/, "")
+export function tildePath(
+  path: string,
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  // On Windows the profile is the home; a HOME some shell set (Git Bash, MSYS) may spell it
+  // another way ("/c/Users/…") and would never match the cwd.
+  const candidates = platform === "win32" ? [env.USERPROFILE, env.HOME] : [env.HOME, env.USERPROFILE]
+  const home = (candidates.find((h) => h?.trim()) || homedir()).replace(/[\\/]+$/, "")
   if (!home) return path
   const sep = path.charAt(home.length)
   const same =
-    process.platform === "win32"
+    platform === "win32"
       ? path.slice(0, home.length).toLowerCase() === home.toLowerCase()
       : path.startsWith(home)
   return same && (sep === "" || sep === "/" || sep === "\\") ? `~${path.slice(home.length)}` : path
