@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { isNoModel, userMessage } from "@amira/ai"
 import type { AssistantMessage, SessionControl, ShellMode } from "@amira/api"
 import {
@@ -9,6 +9,7 @@ import {
   listSubagents,
   SessionStore,
   subagentMessages,
+  subagentsOf,
 } from "@amira/core"
 import { createProviderAdmin } from "./provider-admin.ts"
 import { withProviderHint } from "./provider-command.ts"
@@ -125,6 +126,29 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         firstUserText: s.firstUserText,
         messageCount: s.messageCount,
       })),
+    readSession: (id) => {
+      const file = findSession(cwd, id)
+      if (!file) return undefined
+      let store: SessionStore
+      let updatedAt: number
+      try {
+        store = SessionStore.open(file)
+        updatedAt = statSync(file).mtimeMs
+      } catch {
+        return undefined
+      }
+      const createdAt = Date.parse(store.header.createdAt)
+      const entries = subagentsOf(store.id, store, session.tree)
+      return {
+        id: store.id,
+        cwd: store.header.cwd,
+        createdAt: Number.isFinite(createdAt) ? createdAt : updatedAt,
+        updatedAt,
+        messages: store.branch().flatMap((e) => (e.type === "message" ? [e.message] : [])),
+        subagents: entries.map((e) => e.info),
+        subagentMessages: (childId) => entries.find((e) => e.info.id === childId)?.messages(),
+      }
+    },
     resume: async (id) => {
       idle("resume another session")
       if (id === agent().sessionId) throw new Error(`already in session ${id}`)

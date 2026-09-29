@@ -196,6 +196,25 @@ export interface StoredSessionInfo {
   messageCount: number
 }
 
+/** A stored session read without switching to it (SessionControl.readSession). */
+export interface StoredSession {
+  id: string
+  cwd: string
+  /** When it was created, in ms since the epoch. */
+  createdAt: number
+  /** Last write, in ms since the epoch. */
+  updatedAt: number
+  /**
+   * Every message on its current branch, oldest first, including ones a compaction has since
+   * replaced in what the model sees: the conversation as it happened, not the context.
+   */
+  messages: readonly Message[]
+  /** Its sub-agents and theirs, each followed by its own (as SessionControl.subagents). */
+  subagents: SubagentInfo[]
+  /** A sub-agent's conversation; undefined for an id not in `subagents`. */
+  subagentMessages(id: string): readonly Message[] | undefined
+}
+
 export interface ToolInfo {
   name: string
   description: string
@@ -275,6 +294,12 @@ export interface SessionControl {
   newSession(): Promise<void>
   /** Stored sessions of this directory, most recent first. */
   sessions(): StoredSessionInfo[]
+  /**
+   * Reads a stored session of this directory (the current one too, once it has a file) without
+   * switching to it, e.g. to export it. Undefined for an unknown id. Unset where the host keeps
+   * no session files.
+   */
+  readonly readSession?: (sessionId: string) => StoredSession | undefined
   /** Switches to a stored session of this directory. */
   resume(sessionId: string): Promise<void>
   /** Summarizes older history now; `instructions` steer the summary. Resolves false when nothing was compacted. */
