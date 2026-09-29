@@ -6,6 +6,7 @@ import {
   type StyleFn,
   stripAnsi,
   type Theme,
+  textWidth,
   themeToken,
   truncateToWidth,
   visibleWidth,
@@ -209,7 +210,7 @@ function wrapPieces(list: Piece[], room: number): Piece[][] {
   }
   for (const p of list) {
     for (const g of graphemes(p.text)) {
-      const w = Bun.stringWidth(g)
+      const w = textWidth(g)
       if (used + w > room && used > 0) {
         rows.push([])
         used = 0
@@ -227,7 +228,7 @@ function wrapPieces(list: Piece[], room: number): Piece[][] {
   for (const p of last) {
     let text = ""
     for (const g of graphemes(p.text)) {
-      const w = Bun.stringWidth(g)
+      const w = textWidth(g)
       if (w > left) break
       text += g
       left -= w

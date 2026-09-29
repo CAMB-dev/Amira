@@ -1,4 +1,4 @@
-import { graphemes } from "../width.ts"
+import { graphemes, textWidth } from "../width.ts"
 import type { Run } from "./inline.ts"
 
 /** One grapheme of rendered text and where it came from. */
@@ -28,7 +28,7 @@ export function toCells(runs: Run[]): Cell[] {
   runs.forEach((r, i) => {
     let src = r.src
     for (const g of graphemes(r.text)) {
-      cells.push({ g, width: Bun.stringWidth(g), run: i, src })
+      cells.push({ g, width: textWidth(g), run: i, src })
       src += g.length
     }
   })

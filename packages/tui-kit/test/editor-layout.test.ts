@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { CURSOR_MARKER } from "../src/component.ts"
 import { Editor } from "../src/components/editor.ts"
 import { key, textKey } from "../src/keys.ts"
-import { graphemes, TAB_WIDTH } from "../src/width.ts"
+import { graphemes, TAB_WIDTH, textWidth } from "../src/width.ts"
 import { plain } from "./context.ts"
 
 /**
@@ -13,7 +13,7 @@ function reference(lines: string[], caret: { line: number; col: number }, width:
   const pw = prompt.length
   const max = Math.max(2, width - pw)
   const cell = (g: string, used: number) =>
-    g === "\t" ? TAB_WIDTH - ((pw + used) % TAB_WIDTH) : Bun.stringWidth(g)
+    g === "\t" ? TAB_WIDTH - ((pw + used) % TAB_WIDTH) : textWidth(g)
   const rows: { line: number; start: number; end: number; last: boolean }[] = []
   lines.forEach((text, line) => {
     let start = 0

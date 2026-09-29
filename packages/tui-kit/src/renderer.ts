@@ -4,7 +4,7 @@ import type { ImageBlock } from "./images/encode.ts"
 import { findImageMarker, imageState, onImageSettled, placeImage, releaseImage } from "./images/placement.ts"
 import { defaultTheme, isColorEnabled, stripColors, type Theme } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
-import { closeStyles, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
+import { closeStyles, presentEmoji, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
 
 export interface RendererOptions {
   /** Wrap frames in synchronized-output sequences (mode 2026). */
@@ -444,9 +444,9 @@ export class LiveRenderer {
     return `${this.moveTo(Math.max(0, frame.lines.length - 1))}\r`
   }
 
-  /** Closes what a line opened, and strips its colors when they are off. */
+  /** Closes what a line opened, strips its colors when they are off, and asks for emoji as measured. */
   private finish(line: string): string {
-    return closeStyles(this.context.color ? line : stripColors(line))
+    return presentEmoji(closeStyles(this.context.color ? line : stripColors(line)))
   }
 
   /** Moves between rows of the live region. Moving down uses newlines so missing rows get created. */

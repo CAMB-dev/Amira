@@ -9,6 +9,7 @@ import {
   modes,
   osc,
   ProcessTerminal,
+  presentEmoji,
   stripAnsi,
   stripColors,
   truncateToWidth,
@@ -213,11 +214,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     stepCalls = []
   }
 
-  /** The text of the rows as they stay on the normal screen: styles closed, colors as allowed. */
+  /**
+   * The text of the rows as they stay on the normal screen: styles closed, colors as allowed,
+   * and emoji asked for as they were measured, as the renderers write them.
+   */
   function printout(): string {
     const color = isColorEnabled()
     const lines = pane.printout(env(terminal.columns))
-    return lines.map((l) => `${closeStyles(color ? l : stripColors(l))}\r\n`).join("")
+    return lines.map((l) => `${presentEmoji(closeStyles(color ? l : stripColors(l)))}\r\n`).join("")
   }
 
   function copy(text: string, what: string): void {

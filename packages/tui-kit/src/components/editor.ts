@@ -1,6 +1,6 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { type InputEvent, isNewlineKey, isSubmitKey } from "../keys.ts"
-import { graphemes, TAB_WIDTH, truncateToWidth, visibleWidth } from "../width.ts"
+import { graphemes, TAB_WIDTH, textWidth, truncateToWidth, visibleWidth } from "../width.ts"
 
 /** A piece of editor content: typed text, or a pasted text folded into one placeholder. */
 export type EditorPart = string | { paste: string }
@@ -399,7 +399,7 @@ export class Editor implements Component {
       const p = this.pastes.get(g)
       if (p) return Math.min(p.width, this.contentWidth)
     }
-    return Bun.stringWidth(g)
+    return textWidth(g)
   }
 
   private changed(): void {
@@ -455,7 +455,7 @@ export class Editor implements Component {
     }
     // Most lines fit on one row; the whole line's width says so without splitting it.
     if (!text.includes("\t") && !(this.pastes.size && TOKEN_TEST.test(text))) {
-      const w = Bun.stringWidth(text)
+      const w = textWidth(text)
       if (w <= max) return { text, max, starts: [0], full: w === max }
     }
     const starts = [0]

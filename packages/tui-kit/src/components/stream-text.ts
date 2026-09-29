@@ -1,6 +1,6 @@
 import { stripAnsi } from "../ansi.ts"
 import type { Component, RenderContext } from "../component.ts"
-import { graphemes, TAB_WIDTH } from "../width.ts"
+import { graphemes, TAB_WIDTH, textWidth } from "../width.ts"
 
 /** A visual row: `text.slice(start, end)`; the row after it starts at `next`. */
 interface Row {
@@ -63,7 +63,7 @@ export class StreamText implements Component {
       }
       // Measured from the text, not summed per chunk: a chunk may end inside a grapheme.
       const nl = this.text.lastIndexOf("\n")
-      const col = (nl === -1 ? this.cut : 0) + Bun.stringWidth(this.text.slice(nl + 1))
+      const col = (nl === -1 ? this.cut : 0) + textWidth(this.text.slice(nl + 1))
       this.text += " ".repeat(TAB_WIDTH - (col % TAB_WIDTH))
     }
   }
@@ -94,7 +94,7 @@ export class StreamText implements Component {
         // Rows depend only on where they start, so the rest lays out the same on its own.
         const from = rows[n]!.start
         const nl = this.text.lastIndexOf("\n", from - 1)
-        this.cut = (nl === -1 ? this.cut : 0) + Bun.stringWidth(this.text.slice(nl + 1, from))
+        this.cut = (nl === -1 ? this.cut : 0) + textWidth(this.text.slice(nl + 1, from))
         this.text = this.text.slice(from)
         rows = rows
           .slice(n)
@@ -149,7 +149,7 @@ function wrapParagraph(text: string, from: number, to: number, width: number, cl
   let breakNext = -1
   for (let j = 0; j < gs.length; j++) {
     const g = gs[j]!
-    const w = Bun.stringWidth(g)
+    const w = textWidth(g)
     if (used + w > width && j > i) {
       let end: number
       let next: number

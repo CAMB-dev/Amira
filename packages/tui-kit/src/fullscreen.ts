@@ -4,7 +4,7 @@ import { type ImagePlacement, ScreenImageLayer } from "./images/screen.ts"
 import type { RendererOptions } from "./renderer.ts"
 import { defaultTheme, isColorEnabled, stripColors } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
-import { closeStyles, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
+import { closeStyles, presentEmoji, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
 
 /**
  * Draws a component over the whole terminal on the alternate screen, for views that own the
@@ -148,7 +148,8 @@ export class FullScreenRenderer {
     this.terminal.write(this.synchronizedOutput ? syncOutput.begin + out + syncOutput.end : out)
   }
 
+  /** Closes what a line opened, strips its colors when they are off, and asks for emoji as measured. */
   private finish(line: string): string {
-    return closeStyles(this.context.color ? line : stripColors(line))
+    return presentEmoji(closeStyles(this.context.color ? line : stripColors(line)))
   }
 }
