@@ -171,6 +171,7 @@ const settings = object({
   compact: object({ threshold: number, model: modelRef }),
   retry: object({ attempts: integer(0), baseDelayMs: integer(0), maxDelayMs: integer(0) }),
   mcpServers: record(anyObject),
+  extensions: record(anyObject),
   mcpTrustedProjects: list(string),
   skills: object({ dirs: list(string) }),
   web: object({
