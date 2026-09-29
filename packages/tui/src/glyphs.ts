@@ -33,6 +33,19 @@ export const glyphs = {
   subagentAborted: "⊘",
   /** Dialog questions and their answers. */
   question: "?",
+  /**
+   * Runs down the left of a dialog (a question the user answers inline) and its echo. Box
+   * drawing, so it joins into one line from row to row.
+   */
+  dialogBar: "┃",
+  /** Before the selected option of a dialog. */
+  choice: "❯",
+  /**
+   * An option of a multi-select dialog, chosen or not. ASCII rather than ☐/☒: fonts such as
+   * Cascadia lack those, and the fallback font draws them wider than a cell.
+   */
+  checked: "[x]",
+  unchecked: "[ ]",
   /** System notices by level. */
   info: "•",
   success: "✓",

@@ -1,6 +1,7 @@
 import type { JSONSchema, ModelRef, Usage, UserMessage } from "@amira/ai"
 import type { AnyEvent } from "./events.ts"
 import type { PendingNotice, ToolDefinition } from "./tools.ts"
+import type { AskQuestion } from "./ui.ts"
 
 /** What a sub-agent starts with (D12): only its task, or the parent's conversation so far. */
 export type SpawnContext = "fresh" | "fork"
@@ -266,4 +267,12 @@ export interface ApprovalRequest {
   args: Record<string, unknown>
   /** Why the interceptor asked. */
   reason: string
+}
+
+/** Questions a session puts to whoever answers for it (ToolSession.askUser). */
+export interface AskRequest {
+  sessionId: string
+  /** The tool call asking, when a tool asks. */
+  toolCallId?: string
+  questions: AskQuestion[]
 }

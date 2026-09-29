@@ -13,6 +13,7 @@ import {
   Agent,
   AgentTree,
   type Approver,
+  type Asker,
   type CompactionOptions,
   commandAliasWarnings,
   defaultSections,
@@ -201,6 +202,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
   const approve = userApprover(host.ui)
+  const ask = userAsker(host.ui, tree)
   const newAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
     // A session resumed while no model is selected continues on the one it ran on.
     const stored = isNoModel(picked) ? storedModel(ai, store) : undefined
@@ -208,6 +210,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     return new Agent({
       tree,
       approve,
+      ask,
       ai,
       model: m,
       cwd: opts.cwd,
@@ -262,13 +265,37 @@ function withPackageSkills(settings: Settings, packages: ActivePackages | undefi
  * call an interceptor asked about is denied.
  */
 export function userApprover(ui: UiRequests): Approver {
-  const dialogs = ui.api("approval")
+  /** Calls the user said not to ask about again: a tool with the reason it was asked about. */
+  const allowed = new Set<string>()
   return async (request, signal) => {
+    const key = JSON.stringify([request.name, request.reason])
+    if (allowed.has(key)) return { approved: true }
     const args = JSON.stringify(request.args)
     const detail = `${request.reason}\n${args.length > 300 ? `${args.slice(0, 297)}...` : args}`
-    const answer = await dialogs.confirm(`Allow ${request.name}?`, detail, { signal })
-    if (answer) return { approved: true }
+    // "Always" covers this tool asked about for this reason, and the choice says so.
+    const reason = request.reason.length > 40 ? `${request.reason.slice(0, 39)}…` : request.reason
+    const always = `this session for ${request.name} (${reason})`
+    const answer = await ui.ask(
+      { kind: "confirm", title: `Allow ${request.name}?`, message: detail, always, other: true },
+      { signal, source: "approval" },
+    )
+    if (answer === "always") allowed.add(key)
+    if (answer === true || answer === "always") return { approved: true }
+    if (typeof answer === "object") return { approved: false, reason: `the user said no: ${answer.other}` }
     return { approved: false, reason: answer === false ? "the user said no" : "nobody answered" }
+  }
+}
+
+/**
+ * The top-level session's questions (ask_user) go to the user; a sub-agent's reach here when
+ * its commander passes them on, marked as such. Print mode says nobody can answer.
+ */
+export function userAsker(ui: UiRequests, tree?: AgentTree): Asker {
+  return async (request, signal) => {
+    if (ui.unavailable) return { unavailable: ui.unavailable }
+    const source = tree?.subagent(request.sessionId) ? "sub-agent" : undefined
+    const answers = await ui.api(source).ask(request.questions, { signal })
+    return answers ? { answers } : { declined: true }
   }
 }
 

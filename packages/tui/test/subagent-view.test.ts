@@ -178,8 +178,11 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   const lines = s.screen.lines
   expect(lines[0]).toMatch(/^◆ Check explorer running · \d+s · 1\.5k tok · explorer · \S+ +1\/1$/)
   expect(lines[1]).toBe("task: task for the explorer")
-  expect(lines.slice(3, 11)).toEqual([
+  // The task on the user's band, a row of it above and below (blank on this screen).
+  expect(lines.slice(3, 13)).toEqual([
+    "",
     "› task for the explorer",
+    "",
     "",
     "● read a.ts",
     "  └ contents of a.ts (+2 lines)",
@@ -303,13 +306,13 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   expect(s.screen.lines.at(-1)).toContain("following")
   s.terminal.send("\x1b[5~") // PgUp
   await waitFor(() => !s.screen.lines.at(-1)!.includes("following"), "scrolled up")
-  expect(s.screen.lines.at(-1)).toMatch(/^\d+–\d+ of 44 · /)
+  expect(s.screen.lines.at(-1)).toMatch(/^\d+–\d+ of 46 · /)
   expect(s.view()).not.toContain("── done ──")
   s.terminal.send("\x1b[H") // Home
-  await waitFor(() => s.screen.lines[3] === "› task for the explorer", "the top")
-  expect(s.screen.lines.at(-1)).toMatch(/^1–16 of 44 · /)
+  await waitFor(() => s.screen.lines[4] === "› task for the explorer", "the top")
+  expect(s.screen.lines.at(-1)).toMatch(/^1–16 of 46 · /)
   s.terminal.send("\x1b[B") // ↓
-  await waitFor(() => s.screen.lines[3] === "", "one row down")
+  await waitFor(() => s.screen.lines[3] === "› task for the explorer", "one row down")
   s.terminal.send("\x1b[F") // End
   await waitFor(() => s.screen.lines.at(-1)!.includes("following"), "the end")
   s.resize(70, 12)
@@ -374,7 +377,8 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await waitFor(() => s.view().includes("? Allow bash? (approval)"), "the inline dialog")
   s.terminal.send("y")
   expect(await answer).toBe(true)
-  await waitFor(() => s.screen.mainText.includes("? Allow bash? › yes"), "the answer")
+  // Answered: the dialog is gone and leaves no echo.
+  await waitFor(() => !s.view().includes("? Allow bash?"), "the dialog gone")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -392,7 +396,7 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   await waitFor(() => s.view().includes("? Sub-agents"), "the picker")
   // The digit in front is the option's own number, shown once.
   expect(s.view()).toContain("  2 Open the live view")
-  expect(s.view()).toMatch(/› 1 Check explorer · explorer · s_\w+ · done/)
+  expect(s.view()).toMatch(/❯ 1 Check explorer · explorer · s_\w+ · done/)
   s.terminal.send("1")
   await waitFor(() => s.screen.mainText.includes("● read b.ts"), "the transcript")
   const main = s.screen.mainText

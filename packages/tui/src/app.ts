@@ -27,6 +27,7 @@ import {
   ImageLoader,
   type InputEvent,
   InputReader,
+  isColorEnabled,
   ProcessTerminal,
   progressSupported,
   type RemoteImageFetch,
@@ -36,13 +37,14 @@ import {
   Stack,
   setupTerminalInput,
   supportsHyperlinks,
+  surfaceTheme,
   type Terminal,
   type Theme,
   truncateToWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
-import { Dialog, type DialogAnswer } from "./dialog.ts"
+import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
 import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
@@ -96,7 +98,7 @@ export interface InteractiveOptions {
   setup?: (
     terminal: Terminal,
     env?: Record<string, string | undefined>,
-    opts?: { images?: boolean },
+    opts?: { images?: boolean; background?: boolean },
   ) => Promise<SetupResult>
   theme?: Theme
   /**
@@ -189,7 +191,6 @@ const estimateTokens = (chars: number) => Math.ceil(chars / 4)
  */
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
   let { agent } = opts
-  const theme = opts.theme ?? defaultTheme
   const terminal = opts.terminal ?? new ProcessTerminal()
   const presenters = opts.toolRenderers
   const env = opts.env ?? process.env
@@ -197,7 +198,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const imageSetting = settings.images ?? "auto"
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal, env, {
     images: imageSetting !== "off",
+    background: true,
   })
+  // Surface colors (the band behind the user's messages, diff lines) for the terminal's
+  // background; none without colors, where the band would only be blank rows.
+  const theme =
+    opts.theme ??
+    (isColorEnabled() ? { ...defaultTheme, ...surfaceTheme(capabilities.background) } : defaultTheme)
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
@@ -916,20 +923,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const i = dialogs.indexOf(dialog)
     if (i !== -1) dialogs.splice(i, 1)
     termStatus.setWaiting(dialogs.length > 0)
-    const { requestId, title } = dialog.request
-    if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
-    const secret = dialog.request.kind === "input" && dialog.request.secret
-    const shown =
-      answer === undefined
-        ? "cancelled"
-        : secret
-          ? "(hidden)"
-          : answer === true
-            ? "yes"
-            : answer === false
-              ? "no"
-              : answer
-    view.dialogEcho(`${theme.accent(glyphs.question)} ${title} ${theme.muted(`› ${shown}`)}`)
+    const { requestId } = dialog.request
+    const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
+    if (answer === undefined || refused) ui.cancel(requestId)
+    const echoed = refused ? undefined : answer
+    // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
+    // declined, the answer). A command's picker or input keeps one, since nothing else shows it.
+    const kind = dialog.request.kind
+    if (kind !== "confirm" && kind !== "ask")
+      view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
     view.requestRender()
     openNextForm()
   }

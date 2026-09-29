@@ -167,7 +167,9 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   const conversation = [
     "Amira · mock/m1 · /work/proj",
     "",
+    "",
     "› what is in a.ts?",
+    "",
     "",
     "● read a.ts",
     "  └ contents of a.ts (+2 lines)",
@@ -900,13 +902,13 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
   terminal.send("y")
   await shows("thanks")
   await idle()
-  expect(view()).toContain("? Proceed? › yes")
+  expect(view()).toContain("└ true")
   // A form draws over the transcript on the same alternate screen.
   const form = host.ui.api("x").form(webhookForm)
   await shows("Where to send build results")
   terminal.send("https://ci.example\x13")
   expect(await form).toEqual({ url: "https://ci.example" })
-  await shows("? Proceed? › yes")
+  await shows("└ true")
   // So does the sub-agent viewer.
   terminal.send("/agents view\r")
   await shows("No sub-agents")
@@ -939,12 +941,12 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
   const { terminal, view, shows, screen, exited } = await setup([], { history })
   await shows("── resumed")
   expect(view()).toMatch(
-    /› earlier question\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
+    /› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
   )
   terminal.send("\x03")
   await exited
   expect(screen.mainText).toMatch(
-    /› earlier question\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
+    /› earlier question\n\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
   )
 })
 
@@ -1036,7 +1038,7 @@ test("an image in a reply is drawn in its rows of the transcript, once; exiting 
     expect.objectContaining({ protocol: "sixel", screenRow: top + 2, col: 2, rows: 6, cols: 4 }),
   ])
   expect(screen.lines.slice(top, top + 10)).toEqual(["  top", "", ...Array(6).fill("  ▓▓▓▓"), "", "  bottom"])
-  expect(view()).not.toContain("🖼")
+  expect(view()).not.toContain("🖼️")
   // Typing changes the input box only: the image is not drawn again.
   terminal.send("abc")
   await shows("abc")
@@ -1045,7 +1047,7 @@ test("an image in a reply is drawn in its rows of the transcript, once; exiting 
   terminal.send("\x03")
   terminal.send("\x03")
   expect(await exited).toBe(0)
-  expect(screen.mainText).toContain("  top\n\n  🖼 chart\n\n  bottom")
+  expect(screen.mainText).toContain("  top\n\n  🖼️ chart\n\n  bottom")
   expect(screen.mainText).not.toContain("▓")
 })
 
@@ -1182,7 +1184,7 @@ test("a folded reply shows its image as alt text; tui.images off shows alt text 
   // Selected, the block is drawn a column further right: so is the image.
   await waitFor(() => screen.lines.some((l) => l.startsWith("▌  ▓▓▓▓")), "the image moved")
   terminal.send("\r")
-  await shows("🖼 chart")
+  await shows("🖼️ chart")
   expect(imageRows(screen)).toEqual([])
   terminal.send("\r")
   await waitFor(() => imageRows(screen).length === 6, "unfolded")
@@ -1198,7 +1200,7 @@ test("a folded reply shows its image as alt text; tui.images off shows alt text 
   off.terminal.send("go\r")
   await off.shows("bottom")
   await off.idle()
-  expect(off.view()).toContain("  top\n\n  🖼 chart\n\n  bottom")
+  expect(off.view()).toContain("  top\n\n  🖼️ chart\n\n  bottom")
   expect(off.screen.images).toEqual([])
   off.terminal.send("\x03")
   await off.exited
@@ -1221,7 +1223,7 @@ test("iTerm2 draws images whole: partly in view, the image is its alt text, to s
     if (bottom >= 2 && bottom < 7) {
       partial = true
       expect(imageRows(screen)).toEqual([])
-      expect(view()).toContain("🖼 chart (scroll to view)")
+      expect(view()).toContain("🖼️ chart (scroll to view)")
     }
   }
   expect(partial).toBe(true)

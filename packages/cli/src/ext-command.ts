@@ -11,6 +11,7 @@ import {
   loadIndex,
   PackageError,
   packageScope,
+  readLock,
   removePackage,
   restorePackages,
   searchIndex,
@@ -116,16 +117,44 @@ export async function runExtCommand(
       }
       case "update":
       case "upgrade": {
+        const mine = readLock(scope.lockFile).packages
+        const otherKind = scope.kind === "user" ? "project" : "user"
+        // Only for hints: a broken lock file in the other scope does not stop this update.
+        let others: string[] = []
+        try {
+          others = Object.keys(readLock(packageScope(otherKind, { home, cwd }).lockFile).packages)
+        } catch {}
+        const unknown = rest.filter((name) => !mine[name])
+        for (const name of unknown) {
+          const hint = others.includes(name)
+            ? `; it is in the ${otherKind} scope${otherKind === "project" ? " (use --project)" : " (leave out --project)"}`
+            : ""
+          io.stderr(`amira: ${name} is not installed in the ${scope.kind} scope${hint}\n`)
+        }
+        if (unknown.length) return 1
         const results = await updatePackages(install, rest)
         if (!results.length) io.stdout(`No packages in the ${scope.kind} scope.\n`)
+        if (!rest.length && others.length) {
+          io.stderr(
+            `amira: the ${otherKind} scope's packages (${others.join(", ")}) are updated with amira ext update${otherKind === "project" ? " --project" : ""}\n`,
+          )
+        }
+        let code = 0
         for (const r of results) {
+          if ("error" in r) {
+            io.stderr(
+              `amira: ${r.name}: update failed, kept ${r.from.version} ${pinText(r.from)}: ${r.error}\n`,
+            )
+            code = 1
+            continue
+          }
           io.stdout(
             r.changed
               ? `Updated ${r.name}: ${r.from.version} ${pinText(r.from)} -> ${r.to.version} ${pinText(r.to)}\n`
               : `${r.name} is up to date (${r.to.version} ${pinText(r.to)})\n`,
           )
         }
-        return 0
+        return code
       }
       case "search": {
         const loaded = await loadIndex(index)

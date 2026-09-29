@@ -53,7 +53,7 @@ test("an image on a line of its own is committed as an image marker; its alt tex
   const { ctx, committed } = committing()
   m.append("Look:\n![a cat](cat.png)")
   // Live, it is its alt text; it is asked for already.
-  expect(m.render(30, ctx)).toEqual(["Look:", "🖼 a cat (cat.png)"])
+  expect(m.render(30, ctx)).toEqual(["Look:", "🖼\uFE0F a cat (cat.png)"])
   expect(loads).toEqual([["cat.png", 30]])
   m.append("\n\nafter")
   m.render(30, ctx)
@@ -61,7 +61,7 @@ test("an image on a line of its own is committed as an image marker; its alt tex
   expect(committed[0]).toBe("Look:")
   const marker = findImageMarker(committed[1]!)!
   expect(marker.prefix).toBe("")
-  expect(imageState(marker.id)).toMatchObject({ kind: "wait", fallback: ["🖼 a cat (cat.png)"] })
+  expect(imageState(marker.id)).toMatchObject({ kind: "wait", fallback: ["🖼\uFE0F a cat (cat.png)"] })
   expect(m.take(30)).toEqual(["", "after"])
 })
 
@@ -74,20 +74,20 @@ test("only a line that is one image (maybe linked) is shown as the image; indent
   }
   expect(findImageMarker(rows("[![CI](b.png)](https://ci.x)")[0]!)).toBeDefined()
   expect(findImageMarker(rows("  ![x](a.png)  ")[0]!)).toBeDefined()
-  expect(rows("see ![x](a.png)")).toEqual(["see 🖼 x (a.png)"])
-  expect(rows("![x](a.png) ![y](b.png)")).toEqual(["🖼 x (a.png) 🖼 y (b.png)"])
+  expect(rows("see ![x](a.png)")).toEqual(["see 🖼\uFE0F x (a.png)"])
+  expect(rows("![x](a.png) ![y](b.png)")).toEqual(["🖼\uFE0F x (a.png) 🖼\uFE0F y (b.png)"])
   // A reference not defined has no target to load.
-  expect(rows("![x][nope]")).toEqual(["🖼 x"])
+  expect(rows("![x][nope]")).toEqual(["🖼\uFE0F x"])
   expect(findImageMarker(rows("[r]: r.png\n\n![x][r]")[0]!)).toBeDefined()
   // Under a list item, at the item's text.
   const item = rows("- item\n\n  ![x](a.png)")
   const m = findImageMarker(item[2]!)!
   expect(m.prefix).toBe("  ")
-  expect((imageState(m.id) as { fallback: string[] }).fallback.map(stripAnsi)).toEqual(["🖼 x (a.png)"])
+  expect((imageState(m.id) as { fallback: string[] }).fallback.map(stripAnsi)).toEqual(["🖼\uFE0F x (a.png)"])
   // Without images, never.
   const none = new MarkdownStream({ hyperlinks: false })
   none.append("![x](a.png)")
-  expect(none.take(40).map(stripAnsi)).toEqual(["🖼 x (a.png)"])
+  expect(none.take(40).map(stripAnsi)).toEqual(["🖼\uFE0F x (a.png)"])
 })
 
 test("a long line starting with an image is not committed in pieces before it ends", () => {

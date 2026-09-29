@@ -75,6 +75,11 @@ function entryProblem(name: string, e: any): string | undefined {
     (s?.type === "git" && typeof s.url === "string") ||
     (s?.type === "npm" && typeof s.spec === "string")
   if (!sourceOk) return 'has no valid "source" (path, git or npm)'
+  // A git package's subdirectory stays inside the repository, as in the index.
+  if (s.type === "git" && s.path !== undefined) {
+    if (typeof s.path !== "string" || s.path.split(/[\\/]/).includes("..") || path.isAbsolute(s.path))
+      return 'has a git "path" outside the repository'
+  }
   if (typeof e.pinned !== "object" || e.pinned === null) return 'has no "pinned" object'
   if (e.index !== undefined && (typeof e.index?.name !== "string" || typeof e.index?.url !== "string"))
     return 'has an invalid "index"'
