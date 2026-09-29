@@ -432,14 +432,15 @@ test(
     expect(first.list).toMatchObject({
       kind: "select",
       title: "Worktrees sub-agents left with their changes",
-      options: [
-        "Fix the parser · coder · 1 file, +1 -1 · changed today · cleanup in 8 days",
-        "Tidy the docs · coder · 1 file, +1 -0 · changed 9 days ago · deleted in 1 day (announced)",
-      ],
+      options: ["Fix the parser · coder · 1 file, +1 -1", "Tidy the docs · coder · 1 file, +1 -0"],
       sections: [{ at: 0, choose: "review" }],
     })
+    // Under each: how old it is, when the cleanup deletes it, and where it is.
     const descriptions = first.list.kind === "select" ? (first.list.descriptions ?? []) : []
-    expect(descriptions.map((d) => d.replaceAll("\\", "/").split("/").at(-1))).toEqual(["sa_fix", "sa_old"])
+    expect(descriptions.map((d) => d.replaceAll("\\", "/"))).toEqual([
+      expect.stringMatching(/^changed today · cleanup in 8 days · .*\/sa_fix$/),
+      expect.stringMatching(/^changed 9 days ago · deleted in 1 day \(announced\) · .*\/sa_old$/),
+    ])
     expect(first.diff).toMatchObject({
       title: 'The changes "Tidy the docs" (coder) left in its worktree (1 file, +1 -0)',
       options: [MERGE_KEPT, KEEP_KEPT, DISCARD_KEPT],
@@ -493,9 +494,12 @@ test("with sub-agents too, the kept worktrees follow them under a heading of the
       { at: 2, title: "Worktrees kept with their changes", choose: "review" },
     ],
   })
-  expect(r.kind === "select" ? r.options[2] : "").toMatch(
-    /^Fix it · coder · 1 file, \+1 -3 · changed today · /,
-  )
+  expect(r.kind === "select" ? r.options[2] : "").toBe("Fix it · coder · 1 file, +1 -3")
+  expect(r.kind === "select" ? r.descriptions : []).toEqual([
+    "",
+    "",
+    expect.stringMatching(/^changed today · /),
+  ])
   host.ui.cancel(r.requestId)
   expect((await running).text).toBe("")
 }, 60_000)

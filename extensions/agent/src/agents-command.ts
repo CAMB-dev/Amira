@@ -270,18 +270,23 @@ export function keptWho(w: KeptWorktreeInfo): string {
   return w.title ? `"${w.title}" (${w.role ?? "sub-agent"})` : w.name
 }
 
-/**
- * One line about a kept worktree: whose, how much it changed, how old it is and when the
- * cleanup deletes it (always announced first).
- */
-export function keptSummary(w: KeptWorktreeInfo, now: number): string {
+/** Whose a kept worktree is and how much it changed: "Fix the parser · coder · 3 files, +40 -3". */
+function keptHead(w: KeptWorktreeInfo): string {
   const whose = w.title ? `${w.title} · ${w.role ?? "sub-agent"}` : w.name
-  const size = w.stat ? formatStat(w.stat) : "changes not collected"
+  return `${whose} · ${w.stat ? formatStat(w.stat) : "changes not collected"}`
+}
+
+/** How old a kept worktree is and when the cleanup deletes it (always announced first). */
+function keptWhen(w: KeptWorktreeInfo, now: number): string {
   const age = Math.floor((now - w.modifiedAt) / 86_400_000)
   const changed = age < 1 ? "changed today" : `changed ${days(age * 86_400_000)} ago`
   const left = w.deleteAfter - now
-  const cleanup = w.expiring ? `deleted ${until(left)} (announced)` : `cleanup ${until(left)}`
-  return `${whose} · ${size} · ${changed} · ${cleanup}`
+  return `${changed} · ${w.expiring ? `deleted ${until(left)} (announced)` : `cleanup ${until(left)}`}`
+}
+
+/** One line about a kept worktree: whose, how much it changed, how old it is and when it goes. */
+export function keptSummary(w: KeptWorktreeInfo, now: number): string {
+  return `${keptHead(w)} · ${keptWhen(w, now)}`
 }
 
 /** A path under the home directory as `~/…`. */
@@ -422,7 +427,8 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
       // A digit picks the sub-agent of that number; worktrees come after them.
       const agentRows = list.map((s, i) => label(s, i, now))
       // Two worktrees of the same task and age read the same: their names tell them apart.
-      const summaries = kept.map((w) => keptSummary(w, now))
+      // What matters most comes first: the rest (and the path) wraps under it when narrow.
+      const summaries = kept.map((w) => keptHead(w))
       const keptRows = summaries.map((row, i) =>
         summaries.indexOf(row) === summaries.lastIndexOf(row) ? row : `${row} · ${kept[i]!.name}`,
       )
@@ -444,7 +450,10 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
       const title = list.length ? "Sub-agents" : "Worktrees sub-agents left with their changes"
       const pick = await ctx.ui.choose(title, [...agentRows, ...keptRows], {
         sections,
-        descriptions: [...agentRows.map(() => ""), ...kept.map((w) => shortPath(w.dir, home))],
+        descriptions: [
+          ...agentRows.map(() => ""),
+          ...kept.map((w) => `${keptWhen(w, now)} · ${shortPath(w.dir, home)}`),
+        ],
         signal: ctx.signal,
       })
       if (!pick) return
