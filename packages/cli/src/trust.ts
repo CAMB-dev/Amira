@@ -1,4 +1,3 @@
-import path from "node:path"
 import { createInterface } from "node:readline/promises"
 import type { Settings } from "@amira/api"
 import {
@@ -7,6 +6,7 @@ import {
   loadSettings,
   packageScope,
   projectPackageNames,
+  projectScopeIsUser,
   projectTrust,
   rememberProjectTrust,
 } from "@amira/core"
@@ -41,8 +41,7 @@ export async function planPackages(opts: PlanOptions): Promise<PackagePlan> {
   const where = { cwd: opts.cwd, ...(opts.home ? { home: opts.home } : {}) }
   const projectDir = packageScope("project", where).dir
   // Run from the home directory, the project's packages are the user's own.
-  const same = path.resolve(projectDir) === path.resolve(packageScope("user", where).dir)
-  let trusted = same || projectTrust(opts.cwd, opts.settings)
+  let trusted = projectScopeIsUser(where) || projectTrust(opts.cwd, opts.settings)
   let warning: string | undefined
   const names = trusted === undefined ? projectPackageNames(where) : []
   if (trusted === undefined && names.length && opts.ask) {

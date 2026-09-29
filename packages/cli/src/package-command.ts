@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs"
-import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { API_VERSION, type PackageCommandContext, type Settings } from "@amira/api"
 import {
@@ -7,7 +6,7 @@ import {
   findPackageCommand,
   installVirtualApi,
   loadSettings,
-  packageScope,
+  projectScopeIsUser,
   projectTrust,
 } from "@amira/core"
 import { runCommand } from "@amira/proc"
@@ -32,9 +31,7 @@ export async function runPackageCommand(
   try {
     settings = loadSettings(where).settings
   } catch {}
-  const same =
-    path.resolve(packageScope("project", where).dir) === path.resolve(packageScope("user", where).dir)
-  const project = same || projectTrust(where.cwd, settings) === true
+  const project = projectScopeIsUser(where) || projectTrust(where.cwd, settings) === true
   const found = findPackageCommand(name, where, { disabled: settings.packages?.disabled ?? [], project })
   if (!found) {
     const untrusted = project ? undefined : findPackageCommand(name, where)

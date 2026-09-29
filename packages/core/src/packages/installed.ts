@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs"
+import path from "node:path"
 import {
   type LockEntry,
   type PackageScope,
@@ -25,6 +26,18 @@ export interface Where {
   /** The user directory; default $AMIRA_HOME or ~/.amira. */
   home?: string
   cwd: string
+}
+
+/**
+ * Whether the project scope is the user scope: amira run from the home directory, where the
+ * project's packages (<cwd>/.amira/packages) are the user's own and need no trust.
+ */
+export function projectScopeIsUser(where: Where): boolean {
+  const norm = (dir: string) => {
+    const r = path.resolve(dir)
+    return process.platform === "win32" ? r.toLowerCase() : r
+  }
+  return norm(packageScope("project", where).dir) === norm(packageScope("user", where).dir)
 }
 
 /** Every package the lock files of both scopes record, user scope first. */
