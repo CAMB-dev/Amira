@@ -27,6 +27,7 @@ import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies, type RemoteImageFetch } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
+import { fileList } from "../src/file-index.ts"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -133,7 +134,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     }),
     ...(o.imageFetch ? { imageFetch: o.imageFetch } : {}),
     onReady: () => agent.start("startup"),
-    files: { files: async () => [] },
+    files: fileList([]),
     env: o.env ?? {},
     ...(o.settings ? { settings: o.settings } : {}),
   })

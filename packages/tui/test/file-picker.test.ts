@@ -4,8 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import { key } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
-import { FileIndex, listProjectFiles, withDirectories } from "../src/file-index.ts"
-import { atReference, FilePicker, fuzzyScore, rankFiles } from "../src/file-picker.ts"
+import { FileIndex, fileList, listProjectFiles, withDirectories } from "../src/file-index.ts"
+import { atReference, FilePicker, fuzzyScore, rankFiles, Search } from "../src/file-picker.ts"
 import { AsyncList } from "../src/picker.ts"
 
 const files = [
@@ -109,12 +109,14 @@ const tick = () => Bun.sleep(1)
 
 test("the picker opens for @, inserts the chosen path with a space, and a directory without one", async () => {
   let updates = 0
-  const picker = new FilePicker({ files: async () => withDirectories(files) }, () => updates++)
+  const picker = new FilePicker(
+    fileList(async () => files),
+    () => updates++,
+  )
   picker.update("see @")
   await tick()
   expect(picker.open).toBe(true)
   picker.update("see @edit")
-  await tick()
   expect(picker.render(60, plain)).toEqual(["› packages/tui-kit/src/components/editor.ts"])
   expect(picker.handleKey(key("tab"))).toEqual({
     type: "insert",
@@ -122,15 +124,13 @@ test("the picker opens for @, inserts the chosen path with a space, and a direct
     text: "@packages/tui-kit/src/components/editor.ts ",
   })
   picker.update("@packages/tui-")
-  await tick()
   expect(picker.handleKey(key("enter"))).toEqual({ type: "insert", replace: 14, text: "@packages/tui-kit/" })
   expect(updates).toBeGreaterThan(0)
 })
 
-test("↑↓ move the selection, Esc closes until the word changes, other keys pass", async () => {
-  const picker = new FilePicker({ files: async () => files }, () => {})
+test("↑↓ move the selection, Esc closes until the word changes, other keys pass", () => {
+  const picker = new FilePicker(fileList(files), () => {})
   picker.update("@app")
-  await tick()
   expect(picker.handleKey(key("down"))).toEqual({ type: "handled" })
   expect(picker.render(60, plain)[1]).toBe("› docs/app-notes.md")
   expect(picker.handleKey(key("left"))).toBeUndefined()
@@ -139,22 +139,135 @@ test("↑↓ move the selection, Esc closes until the word changes, other keys p
   expect(picker.render(60, plain)).toEqual([])
   picker.update("@apps")
   picker.update("@app")
-  await tick()
   expect(picker.open).toBe(true)
   picker.update("no reference")
   expect(picker.open).toBe(false)
   expect(picker.handleKey(key("tab"))).toBeUndefined()
 })
 
-test("paths with spaces are quoted", async () => {
-  const picker = new FilePicker({ files: async () => ["my notes/todo list.md"] }, () => {})
+test("paths with spaces are quoted", () => {
+  const picker = new FilePicker(fileList(["my notes/todo list.md"]), () => {})
   picker.update("@todo")
-  await tick()
   expect(picker.handleKey(key("tab"))).toEqual({
     type: "insert",
     replace: 5,
     text: '@"my notes/todo list.md" ',
   })
+})
+
+/** A source whose listing the test fills by hand, as a slow git or walk would. */
+function manualSource() {
+  let emit!: (paths: string[]) => void
+  let finish!: () => void
+  const index = new FileIndex("/x", {
+    list: (_cwd, e) => {
+      emit = e
+      return new Promise<void>((r) => {
+        finish = r
+      })
+    },
+  })
+  return { index, emit: (paths: string[]) => emit(paths), finish: () => finish() }
+}
+
+test("while the project is listed the picker shows a status row, then matches as they arrive", async () => {
+  const src = manualSource()
+  let updates = 0
+  const picker = new FilePicker(src.index, () => updates++)
+  picker.update("@app")
+  // Shown at once, before any file is known, with a spinner and the count so far.
+  expect(picker.visible).toBe(true)
+  expect(picker.open).toBe(false)
+  expect(picker.render(60, plain)).toEqual(["⠋ indexing… 0 files"])
+  src.emit(["src/app.ts", "README.md"])
+  await tick()
+  expect(picker.render(60, plain)).toEqual(["› src/app.ts", "⠋ indexing… 2 files"])
+  // The list keys work on what is there.
+  expect(picker.handleKey(key("tab"))).toEqual({ type: "insert", replace: 4, text: "@src/app.ts " })
+  src.emit(["app.ts"])
+  await tick()
+  expect(picker.render(60, plain)).toEqual(["› app.ts", "  src/app.ts", "⠋ indexing… 3 files"])
+  src.finish()
+  await tick()
+  expect(picker.render(60, plain)).toEqual(["› app.ts", "  src/app.ts"])
+  expect(updates).toBeGreaterThan(0)
+  picker.dispose()
+})
+
+test("Esc closes the status row too, and keys it does not use pass to the editor meanwhile", () => {
+  const src = manualSource()
+  const picker = new FilePicker(src.index, () => {})
+  picker.update("@x")
+  expect(picker.handleKey(key("enter"))).toBeUndefined()
+  expect(picker.handleKey(key("down"))).toBeUndefined()
+  expect(picker.handleKey(key("escape"))).toEqual({ type: "handled" })
+  expect(picker.visible).toBe(false)
+  picker.dispose()
+})
+
+test("the selection stays on the path moved to while more matches arrive", async () => {
+  const src = manualSource()
+  const picker = new FilePicker(src.index, () => {})
+  picker.update("@b")
+  src.emit(["b1.ts", "b2.ts"])
+  await tick()
+  picker.handleKey(key("down"))
+  expect(picker.render(60, plain)[1]).toBe("› b2.ts")
+  src.emit(["b.ts"])
+  await tick()
+  expect(picker.render(60, plain)).toEqual(["  b.ts", "  b1.ts", "› b2.ts", "⠋ indexing… 3 files"])
+  picker.dispose()
+})
+
+test("a very large listing: a key searches only briefly, the rest follows between frames", async () => {
+  const big: string[] = []
+  for (let i = 0; i < 200_000; i++)
+    big.push(`pkg${i % 20}/mod${((i / 20) % 25) | 0}/sub${((i / 500) % 20) | 0}/file${i}.ts`)
+  let updates = 0
+  const picker = new FilePicker(fileList(big), () => updates++)
+  // Warm up the lower-cased copy the way the first search would.
+  picker.update("@file")
+  await Bun.sleep(300)
+  const start = performance.now()
+  picker.update("@fil1234")
+  const took = performance.now() - start
+  expect(took).toBeLessThan(40)
+  await waitUntil(() => picker.render(80, plain)[0] === "› pkg14/mod11/sub2/file1234.ts")
+  // It refined the last search rather than scanning everything again, and says it is not done
+  // only through the list itself: no status row once the listing is complete.
+  expect(picker.render(80, plain).some((l) => l.includes("indexing"))).toBe(false)
+  expect(updates).toBeGreaterThan(0)
+  picker.dispose()
+})
+
+async function waitUntil(check: () => boolean, timeoutMs = 3000) {
+  const deadline = performance.now() + timeoutMs
+  while (!check()) {
+    if (performance.now() > deadline) throw new Error("timed out")
+    await Bun.sleep(5)
+  }
+}
+
+test("a search in slices, or refined from a shorter query, finds what a full one does", () => {
+  const list = withDirectories([
+    ...files,
+    ...Array.from({ length: 3000 }, (_, i) => `gen/d${i % 17}/f${i}-app.ts`),
+  ])
+  for (const q of ["a", "ap", "app", "app.", "tui/", ""]) {
+    const whole = rankFiles(q, list)
+    const sliced = new Search(q, list)
+    while (!sliced.step(0)) {}
+    expect(sliced.results).toEqual(whole)
+  }
+  const first = new Search("a", list)
+  first.step(Number.POSITIVE_INFINITY)
+  const refined = new Search("app", list, 50, first)
+  refined.step(Number.POSITIVE_INFINITY)
+  expect(refined.results).toEqual(rankFiles("app", list))
+  // Only a longer query over the same listing refines.
+  expect(first.canRefine("b", list)).toBe(false)
+  expect(first.canRefine("ab", [...list])).toBe(false)
+  expect(first.canRefine("ab", list)).toBe(true)
 })
 
 test("AsyncList drops stale answers and keeps drawing the last list while the next loads", async () => {
@@ -190,21 +303,66 @@ test("FileIndex lists once, then answers from its cache and refreshes in the bac
   let answer = ["a.ts"]
   const index = new FileIndex("/x", {
     ttlMs: 20,
-    list: async () => {
+    list: async (_cwd, emit) => {
       calls++
-      return answer
+      emit(answer)
     },
   })
-  expect(await index.files()).toEqual(["a.ts"])
-  expect(await index.files()).toEqual(["a.ts"])
+  let changes = 0
+  index.subscribe(() => changes++)
+  const first = index.listing()
+  await tick()
+  expect(first.done).toBe(true)
+  expect(index.listing().entries).toEqual(["a.ts"])
   expect(calls).toBe(1)
+  expect(changes).toBeGreaterThan(0)
   await Bun.sleep(30)
   answer = ["a.ts", "b/c.ts"]
-  // Stale: the old list comes back at once, the new one is on its way.
-  expect(await index.files()).toEqual(["a.ts"])
+  // Stale: the old listing is answered at once, the fresh one replaces it once complete.
+  expect(index.listing()).toBe(first)
   await tick()
-  expect(await index.files()).toEqual(["a.ts", "b/c.ts", "b/"])
+  expect(index.listing().entries).toEqual(["a.ts", "b/c.ts", "b/"])
   expect(calls).toBe(2)
+})
+
+test("FileIndex grows its listing in place, each directory once, and stops at its cap", async () => {
+  let emit!: (paths: string[]) => void
+  let aborted = false
+  const index = new FileIndex("/x", {
+    limit: 3,
+    list: (_cwd, e, signal) => {
+      emit = e
+      return new Promise<void>((r) => {
+        signal.addEventListener("abort", () => {
+          aborted = true
+          r()
+        })
+      })
+    },
+  })
+  const listing = index.listing()
+  // A path repeated right after itself (a conflicted file's stages) counts once.
+  emit(["a/b.ts", "a/b.ts", "a/c.ts"])
+  // Added between keys and frames, not while the paths arrive.
+  expect(listing.entries).toEqual([])
+  await tick()
+  expect(index.listing()).toBe(listing)
+  expect(listing.entries).toEqual(["a/b.ts", "a/", "a/c.ts"])
+  expect(listing.files).toBe(2)
+  expect(listing.done).toBe(false)
+  emit(["x/d.ts", "e.ts", "f.ts"])
+  await tick()
+  expect(listing.entries).toEqual(["a/b.ts", "a/", "a/c.ts", "x/d.ts", "x/"])
+  expect(listing.files).toBe(3)
+  expect(listing.capped).toBe(true)
+  expect(aborted).toBe(true)
+  await tick()
+  expect(listing.done).toBe(true)
+  // A capped listing says so under the list.
+  const picker = new FilePicker(index, () => {})
+  picker.update("@.ts")
+  expect(picker.render(60, plain).at(-1)).toBe("  searched the first 3 files")
+  picker.dispose()
 })
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-files-"))

@@ -341,15 +341,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const search = new HistorySearch(history, editor, keys)
   const filePicker = new FilePicker(opts.files ?? new FileIndex(agent.cwd), () => view.requestRender(), keys)
   /**
-   * Tells the completion lists what the editor holds; a promise while candidates are on their
-   * way. Cheap on any text: the command popup only looks at a single line, the file picker at
-   * the caret's line up to the caret.
+   * Tells the completion lists what the editor holds; a promise while commands' candidates are
+   * on their way. Cheap on any text: the command popup only looks at a single line, the file
+   * picker at the caret's line up to the caret, and it never waits for the project's files.
    */
   const syncCompletions = (): Promise<void> | undefined => {
     const line = editor.lineCount === 1 ? editor.getText() : ""
     const commandsPending = popups.map((p) => p.update(line)).find(Boolean)
-    const filesPending = filePicker.update(editor.textBeforeCaret())
-    return commandsPending ?? filesPending
+    filePicker.update(editor.textBeforeCaret())
+    return commandsPending
   }
   /** The list shown below the input box, if any, with its key hint. */
   const inputList = ():
@@ -951,6 +951,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     offSwitch?.()
     offCommand?.()
     clearTimeout(hintTimer)
+    filePicker.dispose()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
     setRetry(undefined)
@@ -1002,7 +1003,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (search.handleKey(e) === "accepted-pass") return onInput(e)
     } else if (openPopup() && handlePopupKey(e)) {
       // The popup took one of its keys (popup.*).
-    } else if (filePicker.open && handleFileKey(e)) {
+    } else if (filePicker.visible && handleFileKey(e)) {
       // The file picker took one of its keys (popup.*).
     } else if (!viewFirst && view.handleInput(e)) {
       // The view took one of its keys (scrolling, find, selecting, copying).

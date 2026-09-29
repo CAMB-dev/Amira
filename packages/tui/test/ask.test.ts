@@ -15,6 +15,7 @@ import statusExtension from "@amira/ext-status"
 import { FakeTerminal, setColorEnabled } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
+import { fileList } from "../src/file-index.ts"
 
 /**
  * The unified dialog on the fake terminal, in both modes: ask_user asked by the model, an
@@ -140,7 +141,7 @@ async function setup(steps: MockStep[], o: Options) {
       leftoverInput: "",
     }),
     onReady: () => agent.start("startup"),
-    files: { files: async () => [] },
+    files: fileList([]),
     env: {},
   })
   const live = () => screen.lines.join("\n")
