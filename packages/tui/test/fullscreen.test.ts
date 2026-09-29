@@ -188,13 +188,22 @@ test("the conversation is drawn on the alternate screen and printed to the norma
 
 test("a streaming reply follows the end; scrolling up keeps its place and says there is new output", async () => {
   const long = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join("\n\n")
+  // The reply stops after "line 30" until released, so a frame is sure to show it mid-stream:
+  // streaming freely, one slow frame (a loaded machine) can skip past any given line.
+  let release!: () => void
+  const until = new Promise<void>((r) => {
+    release = r
+  })
+  const chunks = Math.ceil((long.indexOf("line 30") + "line 30".length) / 8)
   const { terminal, view, shows, idle, exited } = await setup([
-    { text: long, delayMs: 1 },
+    { text: long, hold: { chunks, until } },
     { text: "second reply" },
   ])
   terminal.send("go\r")
-  await shows("line 20")
   // Following: the newest rows are in view while it streams.
+  await shows("line 30")
+  expect(view()).not.toContain("line 1\n")
+  release()
   await shows("line 60")
   await idle()
   expect(view()).not.toContain("line 1\n")
@@ -208,8 +217,11 @@ test("a streaming reply follows the end; scrolling up keeps its place and says t
   const kept = view()
   terminal.send("more\r")
   await waitFor(() => view().includes("↓ new output"), "new output note")
-  // What was read stays where it was.
-  expect(view().split("↓")[0]).toBe(kept.split("↓")[0])
+  // What was read stays where it was, once the turn is over (while it runs, the bottom area
+  // can take a row more and the transcript a row less).
+  await idle()
+  await waitFor(() => view().split("↓")[0] === kept.split("↓")[0], "the rows read, in place")
+  expect(view()).toContain("↓ new output")
   terminal.send(END)
   await shows("second reply")
   expect(view()).not.toContain("↓ new output")
@@ -830,20 +842,24 @@ test("scrolling moves the image row by row: cropped at either edge, cleared once
   // Following the end: the image is far above, nothing drawn.
   expect(imageRows(screen)).toEqual([])
   const seen = new Set<string>()
-  for (let step = 0; step < 45; step++) {
-    terminal.send(SHIFT_UP)
-    await Bun.sleep(25)
+  // Each step waits for its frame and for the image to be where its rows are (a loaded machine
+  // can take longer than any fixed pause).
+  const step = async (key: string) => {
+    const before = screen.lines.join("\n")
+    terminal.send(key)
+    await waitFor(() => screen.lines.join("\n") !== before, "the scrolled frame")
+    const placed = () => Bun.deepEquals(imageRows(screen), expectedImageRows(screen))
+    await waitFor(placed, "the image in its rows").catch(() => {})
+    expect(imageRows(screen)).toEqual(expectedImageRows(screen))
+  }
+  for (let n = 0; n < 45; n++) {
+    await step(SHIFT_UP)
     const rows = imageRows(screen)
-    expect(rows).toEqual(expectedImageRows(screen))
     seen.add(rows.length === 0 ? "off" : rows.length < 6 ? "cropped" : "whole")
     if (screen.lines[0] === "Amira · mock/m1 · /work/proj") break
   }
   // Down again, past it: every row it covered is erased.
-  for (let step = 0; step < 45 && screen.lines.indexOf("  line 30") === -1; step++) {
-    terminal.send(SHIFT_DOWN)
-    await Bun.sleep(25)
-    expect(imageRows(screen)).toEqual(expectedImageRows(screen))
-  }
+  for (let n = 0; n < 45 && screen.lines.indexOf("  line 30") === -1; n++) await step(SHIFT_DOWN)
   expect(imageRows(screen)).toEqual([])
   expect([...seen].sort()).toEqual(["cropped", "off", "whole"])
   terminal.send("\x03")
