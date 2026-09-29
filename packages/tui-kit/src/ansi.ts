@@ -40,6 +40,13 @@ export const modes = {
    * Shift+drag (Windows Terminal, VS Code, xterm and most others).
    */
   mouse: { on: "\x1b[?1000h\x1b[?1006h", off: "\x1b[?1006l\x1b[?1000l" },
+  /**
+   * Button-event tracking (1002): with mouse reporting on, also the moves of the mouse while a
+   * button is held, reported as drags. Moves without a button are not sent. xterm, kitty and
+   * iTerm2 keep 1000 and 1002 as one setting, which leaving 1002 turns off: leaving it asks
+   * for 1000 again, so it is left before `mouse` is.
+   */
+  mouseDrag: { on: "\x1b[?1002h", off: "\x1b[?1002l\x1b[?1000h" },
   bracketedPaste: { on: "\x1b[?2004h", off: "\x1b[?2004l" },
   win32Input: { on: "\x1b[?9001h", off: "\x1b[?9001l" },
   kittyKeyboard: { on: "\x1b[>1u", off: "\x1b[<u" },

@@ -134,4 +134,9 @@ export interface TranscriptView {
    * `handleInput` first, after an open dialog.
    */
   readonly capturing: boolean
+  /**
+   * A key the view takes before everything but a dialog: Esc while text is selected with the
+   * mouse, which clears it. True when taken.
+   */
+  takeFirst?(e: InputEvent): boolean
 }

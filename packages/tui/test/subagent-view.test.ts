@@ -377,7 +377,8 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await waitFor(() => s.view().includes("? Allow bash? (approval)"), "the inline dialog")
   s.terminal.send("y")
   expect(await answer).toBe(true)
-  await waitFor(() => s.screen.mainText.includes("? Allow bash? › Yes"), "the answer")
+  // Answered: the dialog is gone and leaves no echo.
+  await waitFor(() => !s.view().includes("? Allow bash?"), "the dialog gone")
   s.terminal.send("\x03")
   await s.exited
 })

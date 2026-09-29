@@ -980,7 +980,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
     if (answer === undefined || refused) ui.cancel(requestId)
     const echoed = refused ? undefined : answer
-    view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
+    // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
+    // declined, the answer). A command's picker or input keeps one, since nothing else shows it.
+    const kind = dialog.request.kind
+    if (kind !== "confirm" && kind !== "ask")
+      view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
     view.requestRender()
     openNextForm()
   }
@@ -1038,10 +1042,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return view.redraw()
     }
     // While a dialog or the history search has the keyboard, the wheel still scrolls the
-    // transcript but clicks do not select in it: that would take keys from them.
-    if (e.type === "mouse" && (dialog || search.active) && e.action !== "wheel") return
+    // transcript but clicks do not select in it; a drag started before still ends.
+    if (e.type === "mouse" && (dialog || search.active) && e.action !== "wheel" && e.action !== "release")
+      return
     // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
     // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
+    // Esc with text selected clears it before closing a list or the search, or interrupting.
+    if (!dialog && view.takeFirst?.(e)) return redraw()
     const viewFirst = e.type === "mouse" || (!dialog && view.capturing)
     if (viewFirst && (view.handleInput(e) || e.type === "mouse")) return redraw()
     if (dialog) {
