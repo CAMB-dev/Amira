@@ -148,6 +148,22 @@ describe("escape timeout", () => {
     reader.stop()
   })
 
+  test("an OSC string (a late background color reply) is never typed out", () => {
+    expectSplitSafe("a\x1b]11;rgb:1e1e/1e1e/1e1e\x07b", [textKey("a"), textKey("b")])
+    expectSplitSafe("\x1b]11;#1e1e1e\x1b\\x", [textKey("x")])
+    // Cut short by another sequence, or never finished: dropped, the rest kept.
+    expect(parse("\x1b]11;rgb:1e\x1b[A")).toEqual([key("up")])
+    const p = new InputParser()
+    expect(p.feed("\x1b]11;rgb:1e1e/")).toEqual([])
+    expect(p.flush()).toEqual([])
+    expect(p.flush(true)).toEqual([])
+    expect(p.feed("z")).toEqual([textKey("z")])
+    // Alt+] is still a key, once nothing follows it.
+    const alt = new InputParser()
+    expect(alt.feed("\x1b]")).toEqual([])
+    expect(alt.flush()).toEqual([key("]", { alt: true })])
+  })
+
   test("a control character aborts a sequence cut short without being swallowed", () => {
     expectSplitSafe("\x1b[1;5\x1b[A", [key("up")])
     expectSplitSafe("\x1b[1;5\rb", [key("enter"), textKey("b")])

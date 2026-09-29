@@ -210,6 +210,9 @@ test("OSC 11 replies give the background color, with any number of hex digits an
   expect(r.background!.r).toBeCloseTo(0x1e / 0xff)
   expect(parseProbeReplies("\x1b]11;rgb:f/f/f\x1b\\").background).toEqual({ r: 1, g: 1, b: 1 })
   expect(parseProbeReplies("\x1b]11;rgba:0000/0000/0000/ffff\x07").background).toEqual({ r: 0, g: 0, b: 0 })
+  // A form it does not read tells nothing, and is not taken for input either.
+  expect(parseProbeReplies("x\x1b]11;#1e1e1e\x07y")).toMatchObject({ rest: "xy" })
+  expect(parseProbeReplies("x\x1b]11;#1e1e1e\x07y").background).toBeUndefined()
   expect(backgroundOf({ r: 0.12, g: 0.12, b: 0.12 })).toBe("dark")
   expect(backgroundOf({ r: 1, g: 1, b: 0.9 })).toBe("light")
   // A dark blue (Campbell PowerShell) is dark, a light yellow (Solarized light) is light.

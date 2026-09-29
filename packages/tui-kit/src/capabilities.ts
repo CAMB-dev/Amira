@@ -103,6 +103,9 @@ const DA1_REPLY = /\x1b\[\?([\d;]*)c/g
 const PIXELS_REPLY = /\x1b\[([46]);(\d+);(\d+)t/g
 // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
 const KITTY_GRAPHICS_REPLY = /\x1b_Gi=31;([^\x1b]*)\x1b\\/g
+/** Any reply to an OSC query, whether this reads its form or not: never input. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
+const OSC_REPLY = /\x1b\]\d+;[^\x07\x1b]*(?:\x07|\x1b\\)/g
 /** OSC 11 with `rgb:` and 1 to 4 hex digits a channel, ended by BEL or ST. */
 const BACKGROUND_REPLY =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
@@ -127,7 +130,7 @@ export function parseProbeReplies(data: string): ProbeReplies {
       .replace(DA1_REPLY, "")
       .replace(PIXELS_REPLY, "")
       .replace(KITTY_GRAPHICS_REPLY, "")
-      .replace(BACKGROUND_REPLY, ""),
+      .replace(OSC_REPLY, ""),
   }
   for (const m of data.matchAll(BACKGROUND_REPLY)) {
     const channel = (hex: string) => Number.parseInt(hex, 16) / (16 ** hex.length - 1)
