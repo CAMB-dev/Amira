@@ -146,6 +146,7 @@
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
         "@amira/core": "workspace:*",
+        "@amira/net": "workspace:*",
         "@amira/proc": "workspace:*",
         "@amira/tui-kit": "workspace:*",
       },

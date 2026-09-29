@@ -22,7 +22,7 @@ import {
   ToolRegistry,
 } from "@amira/core"
 import statusExtension from "@amira/ext-status"
-import { FakeTerminal } from "@amira/tui-kit"
+import { FakeTerminal, type GraphicsReplies, type RemoteImageFetch } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 
@@ -82,6 +82,12 @@ interface SetupOptions {
   noModel?: "none" | "unpicked"
   /** The startup notice, as the CLI passes it when there is no model. */
   notice?: string
+  /** What the terminal says about graphics when asked (only when images are not off). */
+  graphics?: GraphicsReplies
+  /** How images in replies are fetched from the web. */
+  imageFetch?: RemoteImageFetch
+  /** Called with the options the UI sets the terminal up with. */
+  onSetup?: (opts: { images?: boolean } | undefined) => void
 }
 
 async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -158,7 +164,13 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     ...(o.tuiCommands ? { registerCommand: (c) => host.commands.register(c, "builtin:tui") } : {}),
     ...(o.presenters ? { toolRenderers: host.renderers } : {}),
     terminal,
-    setup: async () => ({ ...(await noProbe()), leftoverInput: o.leftoverInput ?? "" }),
+    setup: async (_t, _env, setupOpts) => {
+      o.onSetup?.(setupOpts)
+      const probed = await noProbe()
+      const graphics = setupOpts?.images && o.graphics ? { graphics: o.graphics } : {}
+      return { capabilities: { ...probed.capabilities, ...graphics }, leftoverInput: o.leftoverInput ?? "" }
+    },
+    ...(o.imageFetch ? { imageFetch: o.imageFetch } : {}),
     onReady: () => agent.start("startup"),
     files: { files: async () => o.files ?? [] },
     ...(o.promptHistory ? { history: o.promptHistory } : {}),
@@ -2280,3 +2292,123 @@ test("with tui.reflow off, a narrower terminal does not move up past the live re
     await exited
   }
 })
+
+/** A 30×40 PNG: 3 columns and 2 rows of 10×20 cells, as Sixel draws it in whole bands. */
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAB4AAAAoCAYAAADpE0oSAAAAaklEQVR4Xu3NkQKDUABA0XA4HA6HwzAMwzAIwjAMwzAMwzAMH4Zh2F/U/YjwwuETRWW4Xnjjgy9++CNGghQZchSoUKNBiw49BoyYMGPBioANOw6cMDY2NjY2NjYOxsbGxsbGxsbB2Pix+AZFpUoFb9YsKwAAAABJRU5ErkJggg==",
+  "base64",
+)
+const SIXEL: GraphicsReplies = { answered: true, sixel: true, kitty: false }
+const WT = { WT_SESSION: "1" }
+
+test("an image mid-reply is drawn in its place: every row once, in order, the rest waiting for it", async () => {
+  const markers: string[] = []
+  const m = () => {
+    const id = `L${markers.length + 1}`
+    markers.push(id)
+    return id
+  }
+  const parts = [
+    ...Array.from({ length: 6 }, () => `line ${m()}`),
+    "",
+    "![chart](https://img.test/chart.png)",
+    "",
+    ...Array.from({ length: 6 }, () => `line ${m()}`),
+  ]
+  const check = transcriptChecker(markers)
+  let fetched = 0
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: parts.join("\n"), delayMs: 2 }], {
+    cols: 40,
+    rows: 24,
+    env: WT,
+    graphics: SIXEL,
+    onWrite: (s) => check.onWrite(s),
+    imageFetch: async (url) => {
+      fetched++
+      expect(url.href).toBe("https://img.test/chart.png")
+      // Slower than the lines after it take to stream: they wait for it.
+      await Bun.sleep(60)
+      return { bytes: PNG, contentType: "image/png" }
+    },
+  })
+  terminal.send("go\r")
+  await shows(`line ${markers.at(-1)}`)
+  await idle()
+  await waitFor(() => screen.images.length > 0, "the image")
+  await Bun.sleep(30)
+  expect(check.problems).toEqual([])
+  check.final(screen)
+  expect(fetched).toBe(1)
+  expect(screen.images).toEqual([expect.objectContaining({ protocol: "sixel", col: 2, rows: 2, cols: 3 })])
+  const all = [...screen.scrollback, ...screen.lines]
+  const row = screen.images[0]!.row
+  expect(all.slice(row - 2, row + 4)).toEqual(["  line L6", "", "  ▓▓▓", "  ▓▓▓", "", "  line L7"])
+  expect(all.join("\n")).not.toContain("🖼 chart")
+  terminal.send("\x03")
+  await exited
+})
+
+test("an image that cannot be fetched, or a private address, is its alt text; tui.images off draws none", async () => {
+  const setups: ({ images?: boolean } | undefined)[] = []
+  const run = async (text: string, o: Partial<SetupOptions>) => {
+    const { terminal, screen, all, shows, idle, exited } = await setup([{ text }], {
+      env: WT,
+      graphics: SIXEL,
+      onSetup: (opts) => setups.push(opts),
+      ...o,
+    })
+    terminal.send("go\r")
+    await shows("done")
+    await idle()
+    const out = { text: all(), images: screen.images.length }
+    terminal.send("\x03")
+    await exited
+    return out
+  }
+  // The real fetcher refuses a local address, as web_fetch does.
+  const local = await run("![secret](http://127.0.0.1:9/a.png)\n\ndone", {})
+  expect(local.images).toBe(0)
+  // Windows Terminal makes links clickable: the URL is in the link, not shown.
+  expect(local.text).toContain("  🖼 secret\n\n  done")
+  const failing = await run("![gone](https://img.test/404.png)\n\ndone", {
+    imageFetch: async () => {
+      throw new Error("HTTP 404")
+    },
+  })
+  expect(failing.images).toBe(0)
+  expect(failing.text).toContain("  🖼 gone\n\n  done")
+  const off = await run("![chart](https://img.test/chart.png)\n\ndone", {
+    settings: { images: "off" },
+    imageFetch: async () => ({ bytes: PNG, contentType: "image/png" }),
+  })
+  expect(off.images).toBe(0)
+  expect(off.text).toContain("  🖼 chart")
+  expect(setups).toEqual([{ images: true }, { images: true }, { images: false }])
+  // Without Sixel in the terminal's answer, "auto" draws none either.
+  const none = await run("![chart](https://img.test/chart.png)\n\ndone", {
+    graphics: { answered: true, sixel: false, kitty: false },
+    imageFetch: async () => ({ bytes: PNG, contentType: "image/png" }),
+  })
+  expect(none.images).toBe(0)
+})
+
+test("an image slower than its time is committed as its alt text, and what follows goes on", async () => {
+  const { terminal, screen, all, shows, idle, exited } = await setup(
+    [{ text: "![slow](https://img.test/slow.png)\n\nafter it" }],
+    {
+      env: WT,
+      graphics: SIXEL,
+      imageFetch: (_url, { signal }) =>
+        new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
+    },
+  )
+  terminal.send("go\r")
+  await shows("after it")
+  await idle()
+  // Both show in the live region while waiting, then go to the scrollback as they were.
+  await Bun.sleep(3300)
+  expect(all()).toContain("  🖼 slow\n\n  after it")
+  expect(screen.images).toEqual([])
+  terminal.send("\x03")
+  await exited
+}, 10_000)

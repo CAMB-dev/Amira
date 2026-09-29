@@ -90,6 +90,13 @@ export interface TuiSettings {
    * "queue" sends it after the turn. The queue key does the other. Default "steer".
    */
   submitWhileWorking?: "steer" | "queue"
+  /**
+   * Draw images that stand on a line of their own in replies (local files, and http(s) URLs
+   * fetched like web_fetch does): "auto" where the terminal says it can (Sixel, kitty graphics,
+   * iTerm2 inline images; VS Code with terminal.integrated.enableImages), "on" everywhere, "off"
+   * never. Otherwise, and until one loads, an image shows as its alt text. Default "auto".
+   */
+  images?: "auto" | "on" | "off"
 }
 
 export type WebSearchBackend = "exa" | "brave" | "tavily" | "searxng"

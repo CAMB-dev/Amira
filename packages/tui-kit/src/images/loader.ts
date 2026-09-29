@@ -13,8 +13,8 @@ export type RemoteImageFetch = (
 
 export interface ImageLoaderOptions {
   support: ImageSupport
-  /** Relative paths are found from here. */
-  cwd: string
+  /** Relative paths are found from here: the directory, or where to ask for it. */
+  cwd: string | (() => string)
   /** How http(s) images are fetched; without it they are not shown. */
   fetchRemote?: RemoteImageFetch
   /** Largest file read or downloaded. Default 10 MB. */
@@ -130,7 +130,8 @@ export class ImageLoader {
       if (!IMAGE_TYPES.test(contentType)) throw new Error(`not an image: ${contentType || "no content type"}`)
       return bytes
     }
-    const path = localPath(src, this.opts.cwd)
+    const cwd = this.opts.cwd
+    const path = localPath(src, typeof cwd === "string" ? cwd : cwd())
     if (!path) throw new Error(`not a file: ${src}`)
     const info = await stat(path)
     if (!info.isFile()) throw new Error(`not a file: ${src}`)
