@@ -959,9 +959,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function onInput(e: InputEvent) {
     // Focus is the terminal's, not a key: it goes to the title and bell even over the viewer.
     if (e.type === "focus") return termStatus.focus(e.focused)
-    // A form or the viewer owns the keyboard while open, Ctrl+L included: the rest is hidden.
+    // A form or the viewer owns the keyboard while open: the rest is hidden. Ctrl+L repaints it.
     // The wheel scrolls them like ↑↓, as it does on the alternate screen without mouse reporting.
     if (form || viewer) {
+      if (keys.is(e, "redraw")) return view.redrawOverlay()
       for (const k of overlayKeys(e)) {
         if (form) form.handleInput(k)
         else viewer?.handleInput(k)
@@ -977,6 +978,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // Also over a dialog or the search: they are part of the screen.
       return view.redraw()
     }
+    // While a dialog or the history search has the keyboard, the wheel still scrolls the
+    // transcript but clicks do not select in it: that would take keys from them.
+    if (e.type === "mouse" && (dialog || search.active) && e.action !== "wheel") return
     // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
     // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
     const viewFirst = e.type === "mouse" || (!dialog && view.capturing)

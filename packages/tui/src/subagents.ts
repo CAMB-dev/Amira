@@ -46,6 +46,22 @@ export function endNode(node: SubagentNode, e: EventEnvelope<"subagent.end">): v
 }
 
 /**
+ * Records a subagent.state event (a persistent sub-agent going idle between turns, or working
+ * again). It comes with the parent's session id, so it is looked up by the child's.
+ */
+export function stateNode(node: SubagentNode, e: EventEnvelope<"subagent.state">): void {
+  node.idle = e.data.state === "idle"
+  // Its last tool belonged to the turn that ended.
+  if (node.idle) delete node.activity
+  if (e.data.state === "working") node.startedAt ??= e.ts
+}
+
+/** Whether a sub-agent's row still moves: started or queued, not ended, not idle between turns. */
+export function isActive(n: SubagentNode): boolean {
+  return !n.end && !n.idle
+}
+
+/**
  * Applies an event of the sub-agent's own session to its row: when it started, the tool it
  * runs, the tokens it used and what it said last.
  */

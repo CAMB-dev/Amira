@@ -97,6 +97,8 @@ export interface SubagentLine {
   activity?: { name: string; summary: string }
   /** The text of its latest reply, which becomes its result. */
   lastText?: string
+  /** A persistent sub-agent between turns, waiting for a message (subagent.state). */
+  idle?: boolean
 }
 
 /** Longest summary of a sub-agent's current tool on its row. */
@@ -132,10 +134,12 @@ export function subagentRows(
   const stats =
     sub.startedAt === undefined
       ? "queued"
-      : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
+      : sub.idle
+        ? `idle ${s} ${compactTokens(sub.tokens)} tok`
+        : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
   const head = `${indent}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${theme.muted(`${s} ${sub.role} ${s} ${stats}`)}`
   const rows = [truncateToWidth(head, width, glyphs.more)]
-  if (sub.startedAt !== undefined && sub.activity) {
+  if (sub.startedAt !== undefined && sub.activity && !sub.idle) {
     const summary = cut(oneLine(sub.activity.summary), ACTIVITY_CHARS)
     const tree = `${last ? " " : glyphs.output} ${glyphs.result}`
     const tool = `${indent}${theme.muted(tree)} ${theme.accent(glyphs.toolRunning)} ${theme.accent(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`

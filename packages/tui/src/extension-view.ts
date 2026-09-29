@@ -62,6 +62,8 @@ export class ExtensionViewer implements Component {
 
   /** Shows other data, e.g. when a command opens the same kind again. */
   show(data: unknown): void {
+    // A prompt asked about the data shown before is cancelled, not answered for the new one.
+    if (data !== this.#data) this.#answer(undefined)
     this.#data = data
   }
 

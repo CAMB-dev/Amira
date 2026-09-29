@@ -15,10 +15,12 @@ import {
   childrenOf,
   compactGroup,
   endNode,
+  isActive,
   rootCall as rootCallOf,
   type SpawnGroups,
   type SubagentNode,
   startedNode,
+  stateNode,
   subtree as subtreeOf,
   trackGroup,
   treeRows,
@@ -65,7 +67,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tickSubagents = () => {
-    const running = [...subagents.values()].some((n) => !n.end)
+    const running = [...subagents.values()].some(isActive)
     if (running && !subagentTimer) subagentTimer = setInterval(() => renderer.requestRender(), 1000)
     else if (!running && subagentTimer) {
       clearInterval(subagentTimer)
@@ -275,6 +277,12 @@ export function createInlineView(host: ViewHost): TranscriptView {
         if (endsAlone(node)) commitBlock("tool", [subagentEndLine(node, node.end!, terminal.columns, theme)])
         break
       }
+      case "subagent.state": {
+        const node = subagents.get(e.data.childSessionId)
+        if (!node) return false
+        stateNode(node, e)
+        break
+      }
       case "group.start":
       case "group.update":
       case "group.end":
@@ -316,6 +324,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       renderer.resume()
     },
     requestOverlayRender: () => fullScreen.requestRender(),
+    redrawOverlay: () => fullScreen.redraw(),
     renderOverlay: () => fullScreen.render(),
     stop() {
       subagents.clear()
@@ -381,6 +390,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
       toolCalls.flush()
       settleSubagents()
       callNames.clear()
+      // The old session's sub-agents and groups are not shown under the new one.
+      subagents.clear()
+      spawnGroups.clear()
+      tickSubagents()
     },
     detailNote(level: ToolDetailLevel) {
       const cycle = host.keys.label("tool-output")

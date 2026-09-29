@@ -12,7 +12,7 @@ import {
 } from "@amira/tui-kit"
 import { replyRows, userLines, userText } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
-import { childrenOf, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
+import { childrenOf, isActive, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
 import { type FinishedCall, finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
 import type { BlockKind } from "./transcript.ts"
 
@@ -326,7 +326,7 @@ export class ToolBlock extends Block {
 
   lines(env: BlockEnv): string[] {
     const tree = this.tree(env.nodes)
-    this.running = this.started && (!this.end || tree.some((n) => !n.end))
+    this.running = this.started && (!this.end || tree.some(isActive))
     if (!this.started) return []
     const presenter = env.presenters?.get(this.name)
     const { theme, width, now } = env
@@ -346,7 +346,7 @@ export class ToolBlock extends Block {
     const lines = finishedToolLines(theme, presenter, this.finished(), detail, width)
     let rows: string[]
     if (detail === "collapsed" && this.folding === "collapsed" && tree.length) {
-      const running = tree.filter((n) => !n.end).length
+      const running = tree.filter(isActive).length
       const text = `${tree.length} sub-agent${tree.length === 1 ? "" : "s"}${running ? ` · ${running} running` : ""}`
       rows = [
         truncateToWidth(
@@ -430,7 +430,7 @@ export class SubagentGroupBlock extends Block {
       return node ? subtree(env.nodes, node) : []
     })
     if (!list.length) return []
-    this.running = list.some((n) => !n.end)
+    this.running = list.some(isActive)
     const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted("background")}`
     return [
       truncateToWidth(head, env.width, glyphs.more),

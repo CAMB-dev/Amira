@@ -654,6 +654,10 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
   }, "asker")
   terminal.send("go\r")
   await shows("? Proceed? (asker)")
+  // A click on the transcript does not select a block while the dialog has the keyboard.
+  terminal.send(click(screen.lines.findIndex((l) => l.startsWith("› go"))))
+  await Bun.sleep(30)
+  expect(view()).not.toMatch(/block \d+ of/)
   terminal.send("y")
   await shows("thanks")
   await idle()

@@ -92,6 +92,8 @@ export interface TranscriptView {
   openOverlay(): void
   closeOverlay(): void
   requestOverlayRender(): void
+  /** Clears the screen and draws the overlay again (Ctrl+L over a form or a viewer). */
+  redrawOverlay(): void
   renderOverlay(): void
   /** Leaves the terminal with the conversation in its normal screen; the UI is quitting. */
   stop(): void

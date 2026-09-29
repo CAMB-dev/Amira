@@ -30,9 +30,11 @@ import { fitHint } from "./hint.ts"
 import { historySeparator } from "./history.ts"
 import {
   endNode,
+  isActive,
   type SpawnGroups,
   type SubagentNode,
   startedNode,
+  stateNode,
   trackGroup,
   updateNode,
 } from "./subagents.ts"
@@ -167,7 +169,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tickSubagents = () => {
-    const running = [...nodes.values()].some((n) => !n.end)
+    const running = [...nodes.values()].some(isActive)
     if (running && !subagentTimer) subagentTimer = setInterval(() => renderer.requestRender(), 1000)
     else if (!running && subagentTimer) {
       clearInterval(subagentTimer)
@@ -345,6 +347,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       renderer.redraw()
     },
     requestOverlayRender: () => renderer.requestRender(),
+    redrawOverlay: () => renderer.redraw(),
     renderOverlay: () => renderer.render(),
     stop() {
       if (subagentTimer) clearInterval(subagentTimer)
@@ -452,6 +455,13 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           const node = nodes.get(e.data.childSessionId)
           if (!node) return false
           endNode(node, e)
+          ownerOf(node)?.touch()
+          break
+        }
+        case "subagent.state": {
+          const node = nodes.get(e.data.childSessionId)
+          if (!node) return false
+          stateNode(node, e)
           ownerOf(node)?.touch()
           break
         }
