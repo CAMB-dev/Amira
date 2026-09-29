@@ -515,7 +515,7 @@ test("the members of a group a command started share one block: a compact group 
   await shows("◆ workflow demo · Answer · 0/3 agents")
   await bus.flush()
   await Bun.sleep(50)
-  expect(view().match(/◆ background/g)).toHaveLength(1)
+  expect(view().match(/◆ in the background/g)).toHaveLength(1)
   expect(view().match(/workflow demo/g)).toHaveLength(1)
   expect(view()).not.toContain("Scan api")
   release()

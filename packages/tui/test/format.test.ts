@@ -8,6 +8,7 @@ import {
   subagentEndLine,
   subagentRows,
   summarizeArgs,
+  treeLayout,
   userLines,
 } from "../src/format.ts"
 import { historyLines } from "../src/history.ts"
@@ -83,9 +84,12 @@ test("wrapped rows, wide characters and the note line stay on the band, which ne
     const text = plain(rows).map((r) => r.trimEnd())
     expect(text[0]).toBe("")
     expect(text.at(-1)).toBe("")
-    expect(text.at(-2)).toBe("  └ Loaded skill review".slice(0, width).trimEnd())
+    // The note wraps under "└ " rather than being cut.
+    const note = text.findIndex((r) => r.startsWith("  └ "))
+    const noteText = text.slice(note, -1).map((r) => r.slice(4))
+    expect(noteText.join(" ").replace(/\s+/g, " ").trim()).toBe("Loaded skill review")
     // Every word is there, under the prompt symbol.
-    expect(text.slice(1, -2).join(" ").replace(/\s+/g, " ")).toContain("and more words here")
+    expect(text.slice(1, note).join(" ").replace(/\s+/g, " ")).toContain("and more words here")
   }
   // Narrower than the text can wrap to: cut to the width, not wider.
   expectBand(userLines(banded, message, 6), 6)
@@ -230,6 +234,63 @@ test("a sub-agent's end line says how it ended, its time, tokens and the start o
     "  └ ◆ US market trend ✗ explorer · 41.0s · 12k tok · model failed",
   )
   expect(line("aborted")).toBe("  └ ◆ US market trend ⊘ explorer · 41.0s · 12k tok · stopped")
+})
+
+test("nested sub-agents keep the tree lines of the levels above them", () => {
+  const list = [{ depth: 1 }, { depth: 2 }, { depth: 3 }, { depth: 2 }, { depth: 1 }]
+  expect(treeLayout(list).map((r) => `${r.indent}${r.last ? "└" : "├"}`)).toEqual([
+    "  ├",
+    "  │ ├",
+    "  │ │ └",
+    "  │ └",
+    "  └",
+  ])
+})
+
+test("on a narrow screen a sub-agent's row cuts its title, keeping its role, time and tokens", () => {
+  const sub = {
+    title: "A rather long title for the task",
+    role: "explorer",
+    depth: 1,
+    tokens: 4_100,
+    startedAt: 1_000,
+  }
+  const [row] = subagentRows(sub, 13_500, 44, defaultTheme).map(stripAnsi)
+  expect(row).toEndWith("· explorer · 12s · 4.1k tok")
+  expect(row).toContain("…")
+  expect(visibleWidth(row!)).toBeLessThanOrEqual(44)
+})
+
+test("a stopped sub-agent's end line says why", () => {
+  const sub = { title: "Scan", role: "explorer", depth: 1, tokens: 0 }
+  const line = stripAnsi(
+    subagentEndLine(
+      sub,
+      { status: "aborted", note: "turn limit reached", durationMs: 3_000, tokens: 0 },
+      80,
+      defaultTheme,
+    ),
+  )
+  expect(line).toEndWith("· turn limit reached")
+})
+
+test("a background sub-agent's notice marks how it ended and wraps under its marker", () => {
+  const message = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: "report" }],
+    display: {
+      text: "◆ Scan the code ✗ explorer · 3s · 1.2k tok · HTTP 429 rate limited, try again later\n  changes kept: 2 files · /tmp/x.patch",
+      origin: "subagent",
+    },
+  }
+  const rows = userLines(defaultTheme, message, 40)
+  const shown = rows.map(stripAnsi)
+  expect(shown[0]).toStartWith("◆ Scan the code ✗ explorer")
+  expect(shown.slice(1).every((r) => r.startsWith("  "))).toBe(true)
+  expect(shown.join(" ").replace(/\s+/g, " ")).toContain("changes kept: 2 files · /tmp/x.patch")
+  expect(rows.every((r) => visibleWidth(r) <= 40)).toBe(true)
+  // The cross in the error color, not muted like the rest.
+  expect(rows[0]).toContain(defaultTheme.error("✗"))
 })
 
 test("a sub-agent's live rows: title, role, time and tokens, then its current tool cut to 40 characters", () => {

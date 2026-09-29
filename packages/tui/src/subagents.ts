@@ -1,6 +1,6 @@
 import { type AnyEvent, type EventEnvelope, fallbackTitle, type SpawnGroupInfo } from "@amira/api"
 import type { Theme } from "@amira/tui-kit"
-import { isLastSibling, type SubagentLine, spawnGroupRow, subagentEndLine, subagentRows } from "./format.ts"
+import { type SubagentLine, spawnGroupRow, subagentEndLine, subagentRows, treeLayout } from "./format.ts"
 import { callSummary, type PresenterSource } from "./tool-view.ts"
 
 /** A sub-agent the UI follows: its row, where it hangs, and how it ended once it did. */
@@ -12,7 +12,14 @@ export interface SubagentNode extends SubagentLine {
   toolCallId?: string
   /** The spawn group it counts against. */
   groupId?: string
-  end?: { status: "done" | "error" | "aborted"; error?: string; durationMs: number; tokens: number }
+  end?: {
+    status: "done" | "error" | "aborted"
+    error?: string
+    /** Why it ended early without failing: stopped, turn limit. */
+    note?: string
+    durationMs: number
+    tokens: number
+  }
   /**
    * Its call was committed while it ran (inline): it returned at once (the sub-agent runs in
    * the background and a notice reports it) or it was cut short (its end line is committed alone).
@@ -40,6 +47,7 @@ export function endNode(node: SubagentNode, e: EventEnvelope<"subagent.end">): v
   node.end = {
     status: e.data.status,
     ...(e.data.error !== undefined ? { error: e.data.error } : {}),
+    ...(e.data.note !== undefined ? { note: e.data.note } : {}),
     durationMs: e.data.durationMs,
     tokens: node.tokens,
   }
@@ -112,8 +120,29 @@ export function rootCall(
 }
 
 /** A sub-agent's rows: live ones while it runs, its end line once it ended. */
-export function nodeRows(n: SubagentNode, now: number, width: number, t: Theme, last = true): string[] {
-  return n.end ? [subagentEndLine(n, n.end, width, t, last)] : subagentRows(n, now, width, t, last)
+export function nodeRows(
+  n: SubagentNode,
+  now: number,
+  width: number,
+  t: Theme,
+  last = true,
+  indent?: string,
+): string[] {
+  return n.end
+    ? [subagentEndLine(n, n.end, width, t, last, indent)]
+    : subagentRows(n, now, width, t, last, indent)
+}
+
+/**
+ * What started sub-agents that run without a call of this session, for the head over them:
+ * their spawn group's name (a workflow, a swarm), else a command.
+ */
+export function backgroundLabel(groups: SpawnGroups | undefined, roots: SubagentNode[]): string {
+  const of = roots.map((n) => (n.groupId !== undefined ? groups?.get(n.groupId) : undefined))
+  // A compact group's own row names it already.
+  if (of.length && of.every((g) => g?.compact)) return "in the background"
+  const names = [...new Set(of.flatMap((g) => (g && !g.compact ? [g.name] : [])))]
+  return names.length ? `${names.join(", ")} · in the background` : "started by a command · in the background"
 }
 
 /** Spawn groups of a session's tree, by id, as their latest event had them. */
@@ -159,10 +188,11 @@ export function treeRows(
       items.push({ group: g, depth: n.depth })
     }
   }
+  const layout = treeLayout(items, closeTop)
   return items.flatMap((item, i) => {
-    const last = (closeTop || item.depth > 1) && isLastSibling(items, i)
+    const { last, indent } = layout[i]!
     return "group" in item
-      ? [spawnGroupRow(item.group, item.depth, width, t, last)]
-      : nodeRows(item, now, width, t, last)
+      ? [spawnGroupRow(item.group, item.depth, width, t, last, indent)]
+      : nodeRows(item, now, width, t, last, indent)
   })
 }

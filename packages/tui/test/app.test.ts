@@ -1996,7 +1996,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /● delegate\n {2}├ ◆ Outer task ✓ explorer [^\n]*outer done\n {4}└ ◆ Inner check ✓ explorer [^\n]*inner done\n {2}└ outer done/,
+    /● delegate\n {2}├ ◆ Outer task ✓ explorer [^\n]*outer done\n {2}│ └ ◆ Inner check ✓ explorer [^\n]*inner done\n {2}└ outer done/,
   )
   terminal.send("\x03")
   await exited
@@ -2114,7 +2114,7 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   finish()
   await child!.result()
   await bus.flush()
-  await waitFor(() => !live().includes("◆ background"), "the rows gone")
+  await waitFor(() => !live().includes("running in background"), "the rows gone")
   // Its end is reported by its notice (the agent extension's), not by an end line of its own.
   expect(all()).not.toContain("◆ Scan the logs ✓")
   terminal.send("\x03")

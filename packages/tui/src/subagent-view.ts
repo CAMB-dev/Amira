@@ -5,6 +5,7 @@ import {
   formatTokens,
   type Message,
   type SubagentInfo,
+  subagentStateText,
   type ToolCallBlock,
   type ToolResultMessage,
 } from "@amira/api"
@@ -20,6 +21,8 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { summarizeArgs, userLines } from "./format.ts"
+import { glyphs } from "./glyphs.ts"
+import { fitHint } from "./hint.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
 
 /** What the viewer reads its sub-agents from. */
@@ -70,7 +73,22 @@ export function subagentStats(theme: Theme, info: SubagentInfo, now: number): st
   const cost = u.cost !== undefined ? ` · $${u.cost.toFixed(4)}` : ""
   const timed = info.durationMs !== undefined || info.startedAt !== undefined
   const when = info.status === "queued" || !timed ? "" : ` · ${elapsed(info, now)}`
-  return `${statusStyle(theme, info)(info.status)}${theme.muted(`${when} · ${tokens}${cost}`)}`
+  return `${statusStyle(theme, info)(subagentStateText(info.status))}${theme.muted(`${when} · ${tokens}${cost}`)}`
+}
+
+/** Where a scrolled body is: "following" at its end, else "12–30 of 80". */
+export function scrollPosition(view: ScrollView): string {
+  const p = view.position
+  return p.following
+    ? "following"
+    : `${Math.min(p.total, p.top + 1)}–${Math.min(p.total, p.top + p.height)} of ${p.total}`
+}
+
+/** The banner a full-screen view shows while a dialog of the main session waits for an answer. */
+export function waitingLine(theme: Theme, title: string, width: number): string {
+  return theme.warning(
+    truncateToWidth(`${glyphs.warning} Waiting for you: ${title} · Esc to answer`, width, glyphs.more),
+  )
 }
 
 /** Not ended: running, waiting for a place to run, or (a persistent one) idle between turns. */
@@ -130,7 +148,7 @@ export function transcriptLines(
   const finished = !isLive(info)
   const kidLine = (k: SubagentInfo, indent: string) =>
     truncateToWidth(
-      `${indent}${theme.accent("◆")} ${k.title} ${theme.muted(`· ${k.role} · ${k.id}`)} ${subagentStats(theme, k, now)} ${theme.muted(`· ${k.task.replace(/\s+/g, " ").trim()}`)}`,
+      `${indent}${theme.accent(glyphs.subagent)} ${k.title} ${theme.muted(`· ${k.role} · ${k.id}`)} ${subagentStats(theme, k, now)} ${theme.muted(`· ${k.task.replace(/\s+/g, " ").trim()}`)}`,
       width,
       "…",
     )
@@ -147,11 +165,11 @@ export function transcriptLines(
           const summary = summarizeArgs(b.args)
           out.push(
             truncateToWidth(
-              `${theme.accent("●")} ${theme.accent(b.name)}${summary ? ` ${summary}` : ""}`,
+              `${theme.accent(glyphs.toolRunning)} ${theme.accent(b.name)}${summary ? ` ${summary}` : ""}`,
               width,
               "…",
             ),
-            `  ${theme.muted(`└ ${finished ? "(no result)" : "running…"}`)}`,
+            `  ${theme.muted(`${glyphs.result} ${finished ? "no result" : "running"}`)}`,
           )
         }
         if (b.name === "agent") for (const k of callKids(rest, b)) out.push(kidLine(k, "  "))
@@ -280,9 +298,9 @@ export class SubagentViewer implements Component {
     this.#shown = { info, list }
     const head: string[] = []
     if (info) {
-      const pos = theme.muted(` ${index + 1}/${list.length}`)
+      const pos = theme.muted(` ${index + 1} of ${list.length}`)
       // What it is and how it goes first; its role and id are cut first on a narrow screen.
-      const title = `${theme.accent("◆")} ${theme.text(info.title)} ${subagentStats(theme, info, now)}${theme.muted(` · ${info.role} · ${info.id}`)}`
+      const title = `${theme.accent(glyphs.subagent)} ${theme.text(info.title)} ${theme.muted(glyphs.separator)} ${subagentStats(theme, info, now)}${theme.muted(` · ${info.role} · ${info.id}`)}`
       const room = width - visibleWidth(pos)
       const fitted = truncateToWidth(title, Math.max(1, room), "…")
       head.push(fitted + " ".repeat(Math.max(0, room - visibleWidth(fitted))) + pos)
@@ -290,10 +308,8 @@ export class SubagentViewer implements Component {
     } else {
       head.push(theme.warning(truncateToWidth(`No sub-agent ${this.#current} in this session.`, width, "…")))
     }
-    for (const title of this.#waiting()) {
-      head.push(theme.warning(truncateToWidth(`! Waiting for you: ${title} · Esc to answer`, width, "…")))
-    }
-    head.push(theme.muted("─".repeat(width)))
+    for (const title of this.#waiting()) head.push(waitingLine(theme, title, width))
+    head.push(theme.muted(glyphs.rule.repeat(width)))
     const view = this.#view(this.#current)
     view.height = Math.max(1, ctx.rows - head.length - 1)
     const body = view.render(width, ctx)
@@ -328,11 +344,17 @@ export class SubagentViewer implements Component {
           : info.status === "idle"
             ? "idle, waiting for a message"
             : s?.thinking
-              ? "thinking…"
-              : "working…"
-      out.push(theme.muted(`… ${what}`))
-    } else if (info.error && info.status !== "done") out.push(theme.error(`✗ ${info.error}`))
-    else out.push(theme.muted(`── ${info.status} ──`))
+              ? "thinking"
+              : "working"
+      out.push(theme.muted(`${glyphs.more} ${what}`))
+    } else if (info.error && info.status !== "done") out.push(theme.error(`${glyphs.error} ${info.error}`))
+    // Why it ended early, when it did without failing (stopped, turn limit).
+    else if (info.note && info.status !== "done")
+      out.push(theme.muted(`${glyphs.interrupted} ${subagentStateText(info.status)}: ${info.note}`))
+    else
+      out.push(
+        theme.muted(`${glyphs.rule.repeat(2)} ${subagentStateText(info.status)} ${glyphs.rule.repeat(2)}`),
+      )
     return out
   }
 
@@ -342,13 +364,18 @@ export class SubagentViewer implements Component {
       const ask = `Stop ${info.title} (${info.role} ${info.id})? y stops it · any other key keeps it running`
       return theme.warning(truncateToWidth(ask, width, "…"))
     }
-    const p = view.position
-    const where = p.following
-      ? "following"
-      : `${Math.min(p.total, p.top + 1)}–${Math.min(p.total, p.top + p.height)} of ${p.total}`
-    const stop = this.#canStop() ? " · x stop" : ""
-    const keys = `↑↓ PgUp PgDn Home End scroll · ←→ switch${stop} · Esc back`
-    return theme.muted(truncateToWidth(`${where} · ${keys}`, width, "…"))
+    // The way back stays longest, then stopping; the scroll keys go first.
+    const hint = fitHint(
+      [
+        { text: scrollPosition(view), priority: 3 },
+        { text: "↑↓ PgUp PgDn Home End scroll", priority: 1 },
+        { text: "←→ switch", priority: 2 },
+        this.#canStop() && { text: "x stop", priority: 4 },
+        { text: "Esc back", priority: 5 },
+      ],
+      width,
+    )
+    return theme.muted(hint)
   }
 
   /** The one shown is running or queued and can be stopped from here. */

@@ -27,7 +27,15 @@ import { expandTabs } from "./diff-view.ts"
 import { reasoningLines, replyRows, userLines, userText } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { apiNode, nodeRows, type ReplyRenderers } from "./markdown-nodes.ts"
-import { childrenOf, isActive, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
+import {
+  backgroundLabel,
+  childrenOf,
+  isActive,
+  type SpawnGroups,
+  type SubagentNode,
+  subtree,
+  treeRows,
+} from "./subagents.ts"
 import { type CopyRow, chromeRows, gutterRows } from "./text-selection.ts"
 import {
   explorationOf,
@@ -806,7 +814,10 @@ export class ToolBlock extends Block {
     let rows: string[]
     if (detail === "collapsed" && this.folding === "collapsed" && tree.length) {
       const running = tree.filter(isActive).length
-      const text = `${plural(tree.length, "sub-agent")}${running ? ` · ${running} running` : ""}`
+      // Counted as the head counts them, its own; theirs said apart.
+      const own = tree.filter((n) => n.depth === tree[0]!.depth).length
+      const nested = tree.length - own
+      const text = `${plural(own, "sub-agent")}${nested ? ` (+${nested} nested)` : ""}${running ? ` · ${running} running` : ""}`
       rows = [
         truncateToWidth(
           `  ${theme.muted(glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${theme.muted(text)}`,
@@ -1000,7 +1011,8 @@ export class SubagentGroupBlock extends Block {
     })
     if (!list.length) return []
     this.running = list.some(isActive)
-    const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted("background")}`
+    const roots = this.roots.flatMap((id) => env.nodes.get(id) ?? [])
+    const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted(backgroundLabel(env.groups, roots))}`
     return [
       truncateToWidth(head, env.width, glyphs.more),
       ...treeRows(list, env.now, env.width, env.theme, env.groups),

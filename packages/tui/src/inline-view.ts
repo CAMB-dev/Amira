@@ -11,16 +11,17 @@ import {
 import {
   commandEchoLines,
   formatElapsed,
-  isLastSibling,
   reasoningLines,
   replyRows,
   subagentEndLine,
+  treeLayout,
   userLines,
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { historyLines } from "./history.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
 import {
+  backgroundLabel,
   childrenOf,
   compactGroup,
   endNode,
@@ -216,10 +217,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const rows: string[] = []
     for (const [callId, group] of groups) {
       const started = Math.min(...group.map((n) => n.startedAt ?? now))
-      const count = `${group.length} sub-agent${group.length === 1 ? "" : "s"}`
+      const count = plural(group.length, "sub-agent")
       const head =
         callId === undefined
-          ? `${t.accent(glyphs.subagent)} ${t.muted("background")}`
+          ? `${t.accent(glyphs.subagent)} ${t.muted(backgroundLabel(spawnGroups, group))}`
           : `${t.success(glyphs.toolRunning)} ${t.accent(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
       rows.push(truncateToWidth(head, width, glyphs.more))
       rows.push(...treeRows(group.flatMap(subtree), now, width, t, spawnGroups))
@@ -295,14 +296,15 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const tree = callTree(c.id)
       const ends: string[] = []
       const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
+      // The call's own result line comes after them, so only a nested one can close a level.
+      const layout = treeLayout(tree, false)
       for (const [i, n] of tree.entries()) {
         if (n.end && compactGroup(spawnGroups, n)) {
           // A compact group's line tells how it goes; its members get no lines of their own.
           subagents.delete(n.id)
         } else if (n.end) {
-          // The call's own result line comes after them, so only a nested one can close a level.
-          const last = n.depth > 1 && isLastSibling(tree, i)
-          ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last))
+          const { last, indent } = layout[i]!
+          ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last, indent))
           subagents.delete(n.id)
         } else n.detached = cutShort ? "interrupted" : "background"
       }
