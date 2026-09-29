@@ -140,8 +140,13 @@ interface ResultSpec {
   schema: JSONSchema
   /** The schema is not an object's: the tool takes it as `{ value }`. */
   wrapped: boolean
-  /** Attempts that failed: a turn that ended without a valid result, or a call that did not fit. */
+  /**
+   * Attempts that failed: a call whose value did not fit, or a turn that ended without any
+   * such call and without a valid result. One turn with a bad call counts once, not twice.
+   */
   strikes: number
+  /** The turn running now already counted a call that did not fit. */
+  struck?: boolean
   /** The last reason an attempt failed. */
   problem?: string
   returned?: { value: unknown }
@@ -527,14 +532,15 @@ export class AgentTree {
       approve: (request, signal) => this.#askParent(parent, request, signal),
       ...(this.#opts.compaction ? { compaction: this.#opts.compaction } : {}),
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
+      // The tree runs a child's turns, and a failed turn ends it: nothing is ever sent again
+      // later by itself (that would start a turn in a child that already ended).
+      noticeRetryMs: [],
       ...(persistent
         ? {
-            // The tree starts its turns; a failed turn ends it, so nothing is sent again.
             // Only an idle child is woken: a queued one waits for its place as it is.
             onIdleNotice: () => {
               if (child.state === "idle") child.waiting?.()
             },
-            noticeRetryMs: [],
           }
         : {}),
       ...(spec ? { endTurn: () => this.#checkResult(child, spec) } : {}),
@@ -925,14 +931,19 @@ export class AgentTree {
     if (spec.returned) return true
     const limit = this.resultRetries + 1
     if (turnEnded) {
-      spec.strikes++
-      spec.problem ??= `it ended its turn without calling ${RETURN_RESULT_TOOL}`
+      // A turn whose bad call was counted already is not counted again for ending without one.
+      if (!spec.struck) {
+        spec.strikes++
+        spec.problem ??= `it ended its turn without calling ${RETURN_RESULT_TOOL}`
+      }
+      spec.struck = false
     } else {
       const messages = child.agent.messages
       const from = messages.findLastIndex((m) => m.role === "assistant")
       for (const m of messages.slice(from + 1)) {
         if (m.role === "toolResult" && m.toolName === RETURN_RESULT_TOOL && m.isError) {
           spec.strikes++
+          spec.struck = true
           const text = m.content.map((b) => (b.type === "text" ? b.text : "")).join(" ")
           spec.problem = text.replace(/\s+/g, " ").trim().slice(0, 500)
         }
@@ -946,6 +957,13 @@ export class AgentTree {
   #finish(child: Child, r: Pick<SubagentResult, "status" | "error" | "steps" | "durationMs">) {
     if (!this.#live.delete(child.id)) return
     child.waiting = undefined
+    child.agent.cancelNoticeRetry()
+    // Messages sent to it that never reached its model: the sender learns which.
+    const undelivered = child.agent.takeNotices()
+    // Its own live sub-agents (and theirs) end with it: nobody is left to collect them.
+    for (const c of [...this.#live.values()]) {
+      if (c.parentSessionId === child.id) this.abortChild(c, "its parent ended")
+    }
     const kids = (this.#liveKids.get(child.parentSessionId) ?? 1) - 1
     if (kids > 0) this.#liveKids.set(child.parentSessionId, kids)
     else this.#liveKids.delete(child.parentSessionId)
@@ -959,6 +977,7 @@ export class AgentTree {
       ...(r.error !== undefined ? { error: r.error } : {}),
       ...(child.note !== undefined && r.status !== "error" ? { note: child.note } : {}),
       ...(child.persistent || turns > 1 ? { turns } : {}),
+      ...(undelivered.length ? { undelivered } : {}),
       usage: { ...child.usage },
       steps: r.steps,
       durationMs: r.durationMs,
@@ -973,6 +992,7 @@ export class AgentTree {
         ...(result.error !== undefined ? { error: result.error } : {}),
         ...(result.note !== undefined ? { note: result.note } : {}),
         ...(result.turns !== undefined ? { turns: result.turns } : {}),
+        ...(undelivered.length ? { undelivered: undelivered.length } : {}),
         usage: result.usage,
         durationMs: result.durationMs,
       },

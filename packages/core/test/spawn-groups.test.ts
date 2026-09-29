@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockReply, type ModelRequest } from "@amira/ai"
-import { type AnyEvent, type Budget, defineTool, textResult } from "@amira/api"
+import { type AnyEvent, type Budget, type ChildSession, defineTool, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { AgentTree, SpawnError } from "../src/subagents.ts"
@@ -445,4 +445,57 @@ test("persistent children count against their group; an ended group stops its id
   expect(ra).toMatchObject({ status: "done", note: "swarm finished" })
   expect(rb).toMatchObject({ status: "done", note: "swarm finished" })
   expect((await group.ended()).agents).toMatchObject({ total: 2, ended: 2 })
+})
+
+test("messages that never reached a child's model come back in its result, e.g. after a failed turn", async () => {
+  const { tree, root, mock, bus, events } = setup((req) =>
+    lastText(req) === "break" ? { error: { message: "boom" }, delayMs: 20 } : { text: "ok" },
+  )
+  const child = tree.spawn(root, { prompt: "a", persistent: true })
+  await until(() => child.state === "idle")
+  expect(child.send("break")).toBe(true)
+  await until(() => child.state === "working")
+  await Bun.sleep(5)
+  expect(child.send("important follow-up")).toBe(true)
+  const r = await child.result()
+  expect(r.status).toBe("error")
+  expect(r.undelivered?.map((m) => m.content.map((b) => (b.type === "text" ? b.text : "")).join(""))).toEqual(
+    ["important follow-up"],
+  )
+  expect(mock.requests.some((q) => lastText(q).includes("important follow-up"))).toBe(false)
+  await bus.flush()
+  const end = events.find((e) => e.type === "subagent.end")
+  expect(end?.type === "subagent.end" && end.data.undelivered).toBe(1)
+  // Nothing is sent again later by itself.
+  expect(events.some((e) => e.type === "notice.retry")).toBe(false)
+})
+
+test("a child that ends aborts the sub-agents it left running, persistent or not", async () => {
+  const { tree, root, tools } = setup((req) =>
+    roleOf(req) === "lead" && req.messages.at(-1)?.role !== "toolResult"
+      ? { toolCalls: [{ name: "fire", args: {} }] }
+      : roleOf(req) === "slow"
+        ? { text: "slow done", delayMs: 400 }
+        : { text: "ok" },
+  )
+  let grandchild: ChildSession | undefined
+  tools.register(
+    defineTool({
+      name: "fire",
+      description: "fire",
+      parameters: { type: "object", properties: {} },
+      execute: async (_p, ctx) => {
+        grandchild = ctx.session!.spawn!({ prompt: "helper", systemPrompt: "ROLE slow" })
+        return textResult("started")
+      },
+    }),
+    "t",
+  )
+  const lead = tree.spawn(root, { prompt: "go", systemPrompt: "ROLE lead", persistent: true })
+  await until(() => lead.state === "idle")
+  expect(grandchild?.state).toBe("working")
+  lead.stop()
+  expect(await lead.result()).toMatchObject({ status: "done" })
+  expect(await grandchild!.result()).toMatchObject({ status: "aborted", error: "its parent ended" })
+  expect(tree.children).toHaveLength(0)
 })

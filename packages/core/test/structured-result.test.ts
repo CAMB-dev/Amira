@@ -177,3 +177,36 @@ test("validateValue reports where a value does not fit", () => {
   expect(validateValue({ oneOf: [{ type: "number" }, { type: "integer" }] }, 2)[0]).toContain("more than one")
   expect(validateValue({ type: "string", pattern: "^a" }, "b")).toEqual(["value should match /^a/"])
 })
+
+test("each failed attempt counts once: a bad call and then prose in one turn is one attempt", async () => {
+  const { tree, root, mock } = setup(
+    (req) =>
+      req.messages.at(-1)?.role === "toolResult"
+        ? { text: "never mind, here it is in prose" }
+        : { toolCalls: [{ name: RETURN_RESULT_TOOL, args: { summary: 3 } }] },
+    { resultRetries: 2 },
+  )
+  const r = await tree.spawn(root, { prompt: "look", schema: findings }).result()
+  expect(r.status).toBe("error")
+  expect(r.error).toContain("after 3 attempts")
+  expect(r.error).toContain('"summary" should be "string"')
+  // Asked again exactly resultRetries times.
+  expect(r.turns).toBe(3)
+  expect(
+    mock.requests.map(lastText).filter((t) => t.includes(`Call ${RETURN_RESULT_TOOL} now`)),
+  ).toHaveLength(2)
+})
+
+test("a reminder turn that fails ends the child without anything sent again later", async () => {
+  const { tree, root, mock, bus, events } = setup((req) =>
+    lastText(req).includes("You have not handed back") ? { error: { message: "boom" } } : { text: "prose" },
+  )
+  const r = await tree.spawn(root, { prompt: "look", schema: findings }).result()
+  expect(r).toMatchObject({ status: "error", error: "boom" })
+  await Bun.sleep(30)
+  await bus.flush()
+  expect(events.some((e) => e.type === "notice.retry")).toBe(false)
+  expect(mock.requests).toHaveLength(2)
+  const end = events.findIndex((e) => e.type === "subagent.end")
+  expect(events.slice(end).some((e) => e.type === "turn.start")).toBe(false)
+})

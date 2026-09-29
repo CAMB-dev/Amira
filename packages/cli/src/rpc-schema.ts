@@ -301,6 +301,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     "error?": str,
     "note?": str,
     "turns?": num,
+    "undelivered?": num,
     usage: usage,
     durationMs: num,
   }),

@@ -347,6 +347,14 @@ export class Agent {
     return this.#notices.length
   }
 
+  /**
+   * Takes the delivered notices that have not reached the model, so they are never sent: for
+   * an owner that ends the session, to report them.
+   */
+  takeNotices(): UserMessage[] {
+    return this.#notices.splice(0)
+  }
+
   #receive(message: UserMessage) {
     this.#notices.push(message)
     const turn = this.#turn

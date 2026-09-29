@@ -149,7 +149,8 @@ export interface EventMap {
   /**
    * A sub-agent finished; sent with the parent's session id. `usage` is the child's alone.
    * `note` says why one that did not fail ended early (stopped, turn limit); `turns` is set
-   * for children that ran more than one.
+   * for children that ran more than one. `undelivered` counts messages sent to it that never
+   * reached its model (SubagentResult.undelivered has them).
    */
   "subagent.end": {
     childSessionId: string
@@ -158,6 +159,7 @@ export interface EventMap {
     error?: string
     note?: string
     turns?: number
+    undelivered?: number
     usage: Usage
     durationMs: number
   }

@@ -84,6 +84,12 @@ export interface SubagentResult {
   note?: string
   /** Turns it ran: 1, unless it is persistent or was asked again for its result. */
   turns?: number
+  /**
+   * Messages sent to a persistent child (ChildSession.send, or a delivered expectNotice) that
+   * never reached its model because it ended first: a turn failed, it was stopped or aborted,
+   * or it hit its turn limit. Unset when there are none.
+   */
+  undelivered?: UserMessage[]
   /** Tokens and cost of this child alone, its own children excluded. */
   usage: Usage
   steps: number
@@ -117,7 +123,10 @@ export interface ChildSession {
    * iterating a child that already ended yields nothing.
    */
   readonly events: AsyncIterable<AnyEvent>
-  /** Settles once the child ended, however it ended. Never rejects. */
+  /**
+   * Settles once the child ended, however it ended. Never rejects. When a child ends, the
+   * sub-agents it started that are still live are aborted ("its parent ended").
+   */
   result(): Promise<SubagentResult>
   /** Stops the child (or takes it out of the queue); its result says aborted. */
   abort(reason?: string): void
@@ -132,7 +141,8 @@ export interface ChildSession {
    * call, or starts the next turn of an idle child (once there is a place for it to run).
    * Messages waiting together reach it as one. Give it a `display` with an origin so frontends
    * show it as a notice. False, and nothing is sent, when the child is not persistent or has
-   * ended.
+   * ended. True only means it was queued: if the child ends before its model saw it (a failed
+   * turn, a stop, its turn limit), it comes back in SubagentResult.undelivered.
    */
   send(message: string | UserMessage): boolean
   /**
