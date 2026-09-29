@@ -349,6 +349,9 @@ export function finishedToolLines(
     // The presenter keeps a failure's lines to itself (it said why in the result, or not):
     // the output is the only way to see what went wrong.
     if (failed && !body.length) body = cutShort ? output() : fallbackPresenter.body(view, bodyOpts)
+    // A one-line output the result line already says (e.g. "Aborted by the user …") is not
+    // said twice.
+    if (body.length === 1 && body[0]!.text.trim() === result.trim()) body = []
     out.push(...renderToolLines(cutBody(body, detail, failed), theme, width, BODY_INDENT))
   }
   return out

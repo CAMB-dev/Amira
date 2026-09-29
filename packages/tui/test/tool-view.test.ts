@@ -299,3 +299,15 @@ test("diff lines: a unified diff keeps its signs, numbered from its hunk headers
   )
   expect(gutter).toEqual(["   9   a", "  10 + b", "   ⋯"])
 })
+
+test("a failure whose one line of output is its result line says it once", () => {
+  const text = "Aborted by the user before this tool ran."
+  const call: FinishedCall = {
+    name: "bash",
+    args: { command: "make clean" },
+    result: { content: [{ type: "text", text }], isError: true },
+  }
+  const lines = show(builtinPresenters.bash, call)
+  expect(lines.filter((l) => l.includes(text))).toHaveLength(1)
+  expect(lines[0]).toBe("✗ bash make clean")
+})
