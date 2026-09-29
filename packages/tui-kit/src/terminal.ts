@@ -101,6 +101,7 @@ type Stdout = NodeJS.WriteStream
 /** A terminal on real stdin/stdout. Restores itself when the process exits, crashes or is signalled. */
 export class ProcessTerminal extends BaseTerminal {
   private cleanup: (() => void)[] = []
+  private lastWords = new Set<() => string>()
   private size: { columns: number; rows: number }
 
   constructor(
@@ -161,6 +162,16 @@ export class ProcessTerminal extends BaseTerminal {
   }
 
   /**
+   * Text to print once the terminal is restored when the process goes away without `stop()`
+   * (exit, crash, signal), such as the transcript a full-screen UI kept on the alternate
+   * screen. Written synchronously, each function once. Returns a function that removes it.
+   */
+  onEmergencyExit(fn: () => string): () => void {
+    this.lastWords.add(fn)
+    return () => this.lastWords.delete(fn)
+  }
+
+  /**
    * Restores the terminal when the process goes away without calling `stop()`: on exit, on an
    * uncaught exception (before the error is printed), and on SIGINT, SIGTERM, SIGHUP and SIGBREAK.
    * The restore is written synchronously, since the process may be about to die. An uncaught
@@ -172,10 +183,18 @@ export class ProcessTerminal extends BaseTerminal {
    */
   private restoreOnExit(): () => void {
     const restoreNow = () => {
+      const fd = (this.stdout as { fd?: number }).fd ?? 1
       try {
-        writeSync((this.stdout as { fd?: number }).fd ?? 1, this.takeRestoreSequence())
+        writeSync(fd, this.takeRestoreSequence())
       } catch {}
       this.setRawMode(false)
+      const words = [...this.lastWords]
+      this.lastWords.clear()
+      for (const fn of words) {
+        try {
+          writeSync(fd, fn())
+        } catch {}
+      }
     }
     const onUncaught = () => {
       if (process.listenerCount("uncaughtException") > 0) return

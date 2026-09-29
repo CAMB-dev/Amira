@@ -1,4 +1,4 @@
-export { stripAnsi, type TerminalMode } from "./ansi.ts"
+export { modes, stripAnsi, type TerminalMode } from "./ansi.ts"
 export {
   type Capabilities,
   detectEnv,
@@ -46,6 +46,7 @@ export {
   type KeyId,
   type KeyName,
   key,
+  type MouseInput,
   matchesKey,
   type PasteEvent,
   textKey,

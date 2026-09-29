@@ -16,6 +16,13 @@ test("progress percent is clamped and states map to their codes", () => {
   expect(osc.progress("error", 12.4)).toBe("\x1b]9;4;2;12\x07")
 })
 
+test("the clipboard sequence carries UTF-8 text in base64", () => {
+  expect(osc.clipboard("hé ✓")).toBe(`\x1b]52;c;${Buffer.from("hé ✓").toString("base64")}\x07`)
+  const screen = new VirtualScreen(20, 3)
+  screen.write(osc.clipboard("x"))
+  expect(screen.oscs).toEqual(["52;c;eA=="])
+})
+
 test("progress is only sent where OSC 9;4 is known to mean progress", () => {
   expect(progressSupported({ WT_SESSION: "x" })).toBe(true)
   expect(progressSupported({ TERM_PROGRAM: "vscode" })).toBe(true)

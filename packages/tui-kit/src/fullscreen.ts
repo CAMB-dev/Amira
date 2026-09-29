@@ -90,6 +90,12 @@ export class FullScreenRenderer {
     }, wait)
   }
 
+  /** Clears the screen and draws every row again, for a screen something else wrote over. */
+  redraw(): void {
+    this.prev = undefined
+    this.render()
+  }
+
   /** Draws a frame now. */
   render(): void {
     if (!this.opened) return

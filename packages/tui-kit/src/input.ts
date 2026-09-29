@@ -1,4 +1,12 @@
-import { type InputEvent, type KeyEvent, type KeyName, key, type PasteEvent, textKey } from "./keys.ts"
+import {
+  type InputEvent,
+  type KeyEvent,
+  type KeyName,
+  key,
+  type MouseInput,
+  type PasteEvent,
+  textKey,
+} from "./keys.ts"
 
 const ESC = "\x1b"
 const PASTE_END = "\x1b[201~"
@@ -12,6 +20,7 @@ interface Parsed {
   pasteStart?: boolean
   /** A focus report: CSI I (gained) or CSI O (lost). */
   focus?: boolean
+  mouse?: MouseInput
 }
 
 const LETTER_FINALS: Record<string, KeyName> = {
@@ -207,7 +216,29 @@ function decodeKitty(params: string): KeyEvent[] {
   return [charKey(String.fromCodePoint(code), mods)]
 }
 
+const MOUSE_BUTTONS: MouseInput["button"][] = ["left", "middle", "right", "none"]
+const WHEEL_BUTTONS: MouseInput["button"][] = ["up", "down", "left", "right"]
+
+/** An SGR mouse report: CSI < b ; x ; y M (press, drag, wheel) or m (release). */
+function decodeMouse(params: string, final: string): MouseInput | undefined {
+  const [b, x, y] = params
+    .slice(1)
+    .split(";")
+    .map((p) => Number.parseInt(p, 10))
+  if (b === undefined || x === undefined || y === undefined || [b, x, y].some(Number.isNaN)) return undefined
+  const mods = { shift: (b & 4) !== 0, alt: (b & 8) !== 0, ctrl: (b & 16) !== 0 }
+  const at = { x: Math.max(0, x - 1), y: Math.max(0, y - 1) }
+  if (b & 64) return { type: "mouse", action: "wheel", button: WHEEL_BUTTONS[b & 3]!, ...at, ...mods }
+  const button = MOUSE_BUTTONS[b & 3]!
+  const action = final === "m" ? "release" : b & 32 ? "drag" : "press"
+  return { type: "mouse", action, button, ...at, ...mods }
+}
+
 function decodeCsi(params: string, final: string): Decoded {
+  if (params.startsWith("<") && (final === "M" || final === "m")) {
+    const mouse = decodeMouse(params, final)
+    return mouse ? { mouse } : {}
+  }
   if (params.startsWith("?")) return {} // replies to capability queries
   if (final === "_") return decodeWin32(params)
   if (final === "u") return { events: decodeKitty(params) }
@@ -426,6 +457,7 @@ export class InputParser {
       this.buf = this.buf.slice(parsed.len)
       if (parsed.pasteStart) this.paste = ""
       if (parsed.focus !== undefined) out.push({ type: "focus", focused: parsed.focus })
+      if (parsed.mouse) out.push(parsed.mouse)
       for (const e of parsed.events ?? []) this.emit(e, out)
     }
     return out
