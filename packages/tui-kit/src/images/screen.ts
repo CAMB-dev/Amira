@@ -1,5 +1,5 @@
 import { cursor } from "../ansi.ts"
-import { type ImageProtocol, iterm2Image } from "./encode.ts"
+import type { ImageProtocol } from "./encode.ts"
 import type { Fit } from "./fit.ts"
 import type { Prepared } from "./prepare.ts"
 import { sixelHead } from "./sixel.ts"
@@ -10,36 +10,83 @@ import { sixelHead } from "./sixel.ts"
  */
 let nextImageId = 1 + Math.floor(Math.random() * 0x3fff_0000)
 
-/** Slices of one Sixel image kept, most recently drawn last. */
-const SLICES_KEPT = 48
-
 const kitty = (keys: string, payload = "") => `\x1b_G${keys};${payload}\x1b\\`
 const KITTY_CHUNK = 4096
+
+/**
+ * What every image of the full screen may hold at once (prepared bands and pixels, slices), in
+ * characters of their sequences. Past it, what was used longest ago is let go (not what was
+ * used within the last second, which is on screen); it is prepared again when wanted.
+ */
+let budget = 96 * 1024 * 1024
+/** Images holding something, least recently used first. */
+const holding = new Set<ScreenImage>()
+let held = 0
+/** An image not wanted (placed, or waited for) within this long is not prepared any more. */
+const WANTED_MS = 1000
+
+/**
+ * Slices of one Sixel image kept (joining one again costs a copy of its bands, well under a
+ * millisecond): scrolling makes a new one at almost every step.
+ */
+const SLICES_KEPT = 8
+
+function preparedChars(p: Prepared): number {
+  if (p.protocol === "iterm2") return p.seq.length
+  if (p.protocol === "kitty") return p.data.length
+  let n = p.palette.length
+  for (const bands of Object.values(p.phases)) for (const b of bands) n += b.length + 1
+  return n
+}
+
+/** For tests: the characters all screen images may hold. */
+export function setScreenImageBudget(chars: number): void {
+  budget = chars
+}
+
+function trimHeld(now: number) {
+  for (const image of holding) {
+    if (held <= budget) break
+    if (now - image.usedAt < WANTED_MS) continue
+    image.release()
+  }
+}
+
+/**
+ * Prepares an image: gets its file and makes what drawing it needs. Returns undefined when it
+ * failed, null when `wanted` said no before the work began (it was no longer needed).
+ */
+export type PrepareImage = (wanted: () => boolean) => Promise<Prepared | undefined | null>
 
 /**
  * An image at one fitted size, as the full-screen view draws it: any run of its rows of cells
  * (a slice) at a place on the screen, again and again. Sixel slices are joined from bands
  * encoded once (a slice starting at any row of cells has its bands ready); kitty's image is
  * sent once and then placed, cropped by the terminal; iTerm2's protocol takes the file whole,
- * so it is only drawn whole. Sixel and kitty images get ready off the main thread; `whenReady`
- * says when.
+ * so it is only drawn whole.
+ *
+ * Nothing is done until it is wanted (`whenReady`, by a view about to show it): then it is
+ * prepared (Sixel and kitty off the main thread). What it holds counts against a budget shared
+ * by all images, so one scrolled past long ago lets go of it, to be prepared again if it comes
+ * back.
  */
 export class ScreenImage {
   readonly id = nextImageId++
   readonly cols: number
   readonly rows: number
+  /** When it was last wanted or drawn. */
+  usedAt = Number.NEGATIVE_INFINITY
   private prepared: Prepared | undefined
-  private failed = false
-  private whole: string | undefined
+  private state: "idle" | "preparing" | "ready" | "failed" = "idle"
   private slices = new Map<string, string>()
+  private chars = 0
   private listeners = new Set<() => void>()
 
   constructor(
     readonly protocol: ImageProtocol,
     readonly fit: Fit,
     private cellHeight: number,
-    /** The file itself, for iTerm2's protocol. */
-    private bytes?: Uint8Array,
+    private prepare: PrepareImage,
   ) {
     this.cols = fit.cols
     this.rows = fit.rows
@@ -47,12 +94,12 @@ export class ScreenImage {
 
   /** Whether it can be drawn now. */
   get ready(): boolean {
-    return this.protocol === "iterm2" ? this.bytes !== undefined : this.prepared !== undefined
+    return this.state === "ready"
   }
 
   /** Whether getting it ready failed: it is shown as its alt text. */
   get broken(): boolean {
-    return this.failed
+    return this.state === "failed"
   }
 
   /** Whether a part of it can be drawn (the rest being off screen). */
@@ -60,18 +107,71 @@ export class ScreenImage {
     return this.protocol !== "iterm2"
   }
 
-  /** Takes what `prepareImage` made of it; called by the loader. */
-  settle(prepared: Prepared | undefined): void {
-    if (prepared) this.prepared = prepared
-    else this.failed = true
-    for (const fn of this.listeners) fn()
-    this.listeners.clear()
+  /** Calls `fn` once it is ready (or failed), at once if it is; wants it meanwhile (see `want`). */
+  whenReady(fn: () => void): void {
+    if (this.state === "ready" || this.state === "failed") {
+      this.touch()
+      fn()
+      return
+    }
+    this.listeners.add(fn)
+    this.want()
   }
 
-  /** Calls `fn` once it is ready (or failed); at once if it is already. */
-  whenReady(fn: () => void): void {
-    if (this.ready || this.failed) fn()
-    else this.listeners.add(fn)
+  /**
+   * Notes that it is on screen (views say so every frame): it keeps what it holds, and starts
+   * preparing if it is not ready.
+   */
+  want(): void {
+    this.touch()
+    if (this.state !== "idle") return
+    this.state = "preparing"
+    this.prepare(() => performance.now() - this.usedAt < WANTED_MS).then(
+      (p) => this.settle(p),
+      () => this.settle(undefined),
+    )
+  }
+
+  private settle(prepared: Prepared | undefined | null): void {
+    if (prepared === null) {
+      // Not wanted lately: left for when it is. Those waiting hear of it, so a view that still
+      // shows it (idle for a while) wants it again.
+      this.state = "idle"
+    } else if (prepared) {
+      this.prepared = prepared
+      this.state = "ready"
+      this.hold(preparedChars(prepared))
+    } else this.state = "failed"
+    const fns = [...this.listeners]
+    this.listeners.clear()
+    for (const fn of fns) fn()
+  }
+
+  /** Lets go of what it holds; it is prepared again when next wanted. */
+  release(): void {
+    if (this.state !== "ready") return
+    this.prepared = undefined
+    this.slices.clear()
+    this.state = "idle"
+    held -= this.chars
+    this.chars = 0
+    holding.delete(this)
+  }
+
+  private touch() {
+    this.usedAt = performance.now()
+    if (holding.has(this)) {
+      holding.delete(this)
+      holding.add(this)
+    }
+  }
+
+  private hold(chars: number) {
+    this.chars += chars
+    held += chars
+    holding.delete(this)
+    holding.add(this)
+    trimHeld(this.usedAt)
   }
 
   /**
@@ -79,13 +179,11 @@ export class ScreenImage {
    * be drawn (yet). For kitty, see `upload` and `place`.
    */
   draw(from: number, to: number): string | undefined {
-    if (this.protocol === "iterm2") {
-      if (from !== 0 || to !== this.rows || !this.bytes) return undefined
-      this.whole ??= iterm2Image(this.bytes, this.fit)
-      return this.whole
-    }
     const p = this.prepared
-    if (p?.protocol !== "sixel") return undefined
+    if (!p) return undefined
+    this.touch()
+    if (p.protocol === "iterm2") return from === 0 && to === this.rows ? p.seq : undefined
+    if (p.protocol !== "sixel") return undefined
     const key = `${from}:${to}`
     const hit = this.slices.get(key)
     if (hit !== undefined) {
@@ -95,7 +193,13 @@ export class ScreenImage {
     }
     const seq = sixelSlice(p, from * this.cellHeight, to * this.cellHeight)
     this.slices.set(key, seq)
-    if (this.slices.size > SLICES_KEPT) this.slices.delete(this.slices.keys().next().value!)
+    if (this.slices.size > SLICES_KEPT) {
+      const [oldest, dropped] = this.slices.entries().next().value!
+      this.slices.delete(oldest)
+      this.chars -= dropped.length
+      held -= dropped.length
+    }
+    this.hold(seq.length)
     return seq
   }
 
@@ -275,11 +379,6 @@ export class ScreenImageLayer {
       }
     }
     return { repaint, before, after }
-  }
-
-  /** The rows images cover now. */
-  get rows(): number[] {
-    return [...this.shown.values()].flatMap(rowsOf)
   }
 
   /** Forgets what is shown (the screen was left); returns what frees kitty's images. */

@@ -5,11 +5,11 @@ import { join } from "node:path"
 import { encode as encodePng } from "fast-png"
 import type { Component, RenderContext } from "../src/component.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
-import type { ImageProtocol } from "../src/images/encode.ts"
+import { type ImageProtocol, iterm2Image } from "../src/images/encode.ts"
 import { fitImage } from "../src/images/fit.ts"
 import { ImageLoader } from "../src/images/loader.ts"
 import { prepareImage, prepareOffThread, resetPrepareWorker } from "../src/images/prepare.ts"
-import { type ImagePlacement, ScreenImage } from "../src/images/screen.ts"
+import { type ImagePlacement, ScreenImage, setScreenImageBudget } from "../src/images/screen.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { VirtualScreen } from "./screen.ts"
 
@@ -26,12 +26,23 @@ function png(width: number, height: number): Uint8Array {
 }
 
 /** An image of 4×3 cells (40×60 pixels), ready to draw with `protocol`. */
-function image(protocol: ImageProtocol = "sixel", bytes = png(40, 60)): ScreenImage {
-  const fit = fitImage({ width: 40, height: 60 }, 30, 20, CELL)!
-  const img = new ScreenImage(protocol, fit, CELL.height, protocol === "iterm2" ? bytes : undefined)
-  if (protocol !== "iterm2") img.settle(prepareImage({ bytes, protocol, fit, cellHeight: CELL.height }))
+async function image(protocol: ImageProtocol = "sixel", bytes = png(40, 60)): Promise<ScreenImage> {
+  const img = unprepared(protocol, bytes)
+  await new Promise<void>((r) => img.whenReady(r))
   return img
 }
+
+/** The same, not prepared until wanted; `prepared` counts how often it was. */
+function unprepared(protocol: ImageProtocol = "sixel", bytes = png(40, 60)) {
+  const fit = fitImage({ width: 40, height: 60 }, 30, 20, CELL)!
+  const img = new ScreenImage(protocol, fit, CELL.height, async () => {
+    counts.prepared++
+    if (protocol === "iterm2") return { protocol, seq: iterm2Image(bytes, fit) }
+    return prepareImage({ bytes, protocol, fit, cellHeight: CELL.height })
+  })
+  return img
+}
+const counts = { prepared: 0 }
 
 /** Rows of text and images placed over them, as a view hands them to the renderer. */
 class Scene implements Component {
@@ -69,9 +80,9 @@ const at = (img: ScreenImage, row: number, from = 0, to = img.rows, col = 2): Im
   key: "a",
 })
 
-test("Sixel: drawn at its place after the text, then left alone while it stays there", () => {
+test("Sixel: drawn at its place after the text, then left alone while it stays there", async () => {
   const { term, screen, scene, full } = setup()
-  const img = image()
+  const img = await image()
   scene.places = [at(img, 1)]
   full.open()
   expect(screen.images).toEqual([
@@ -90,9 +101,9 @@ test("Sixel: drawn at its place after the text, then left alone while it stays t
   expect(screen.lines.slice(0, 4)).toEqual(["title 2", "  ▓▓▓▓", "  ▓▓▓▓", "  ▓▓▓▓"])
 })
 
-test("Sixel: moved, the rows it left are erased and it is drawn at its new place", () => {
+test("Sixel: moved, the rows it left are erased and it is drawn at its new place", async () => {
   const { screen, scene, full } = setup()
-  const img = image()
+  const img = await image()
   scene.places = [at(img, 2)]
   full.open()
   scene.places = [at(img, 1)]
@@ -101,9 +112,9 @@ test("Sixel: moved, the rows it left are erased and it is drawn at its new place
   expect(screen.lines.slice(0, 6)).toEqual(["title", "  ▓▓▓▓", "  ▓▓▓▓", "  ▓▓▓▓", "", "after"])
 })
 
-test("Sixel: no longer placed (scrolled off, covered), its pixels are erased, text rows unchanged or not", () => {
+test("Sixel: no longer placed (scrolled off, covered), its pixels are erased, text rows unchanged or not", async () => {
   const { screen, scene, full } = setup()
-  scene.places = [at(image(), 1)]
+  scene.places = [at(await image(), 1)]
   full.open()
   scene.places = []
   full.render()
@@ -111,9 +122,9 @@ test("Sixel: no longer placed (scrolled off, covered), its pixels are erased, te
   expect(screen.lines.slice(0, 6)).toEqual(["title", "", "", "", "", "after"])
 })
 
-test("Sixel: partly in view, the slice of rows in view is drawn, never reaching the row below", () => {
+test("Sixel: partly in view, the slice of rows in view is drawn, never reaching the row below", async () => {
   const { term, screen, scene, full } = setup()
-  const img = image()
+  const img = await image()
   // Its first row is scrolled off above: rows 1 and 2 of it at the top of the screen.
   scene.lines = ["", "", "rest", "", "", "", "", ""]
   scene.places = [at(img, 0, 1, 3)]
@@ -132,18 +143,18 @@ test("Sixel: partly in view, the slice of rows in view is drawn, never reaching 
   expect(term.output).toContain(first)
 })
 
-test("an image is never drawn on the last row (Sixel would scroll the screen): it is cut above it", () => {
+test("an image is never drawn on the last row (Sixel would scroll the screen): it is cut above it", async () => {
   const { screen, scene, full } = setup(20, 5)
   scene.lines = ["a", "b", "", "", ""]
-  scene.places = [at(image(), 2)]
+  scene.places = [at(await image(), 2)]
   full.open()
   expect(screen.images).toEqual([expect.objectContaining({ screenRow: 2, rows: 2 })])
   expect(screen.lines).toEqual(["a", "b", "  ▓▓▓▓", "  ▓▓▓▓", ""])
 })
 
-test("Sixel: a row under the image written over (a selection mark) has the image drawn again", () => {
+test("Sixel: a row under the image written over (a selection mark) has the image drawn again", async () => {
   const { screen, scene, full } = setup()
-  const img = image()
+  const img = await image()
   scene.places = [at(img, 1)]
   full.open()
   scene.lines = ["title", "▌", "", "", "", "after", "", "bottom"]
@@ -152,9 +163,9 @@ test("Sixel: a row under the image written over (a selection mark) has the image
   expect(screen.lines.slice(1, 4)).toEqual(["▌ ▓▓▓▓", "  ▓▓▓▓", "  ▓▓▓▓"])
 })
 
-test("a resize clears the screen and draws the images again", () => {
+test("a resize clears the screen and draws the images again", async () => {
   const { screen, scene, full, resize } = setup()
-  const img = image()
+  const img = await image()
   scene.places = [at(img, 1)]
   full.open()
   resize(24, 8)
@@ -163,9 +174,9 @@ test("a resize clears the screen and draws the images again", () => {
   expect(screen.lines.slice(0, 4)).toEqual(["title", "  ▓▓▓▓", "  ▓▓▓▓", "  ▓▓▓▓"])
 })
 
-test("iTerm2: drawn whole only; partly in view it is not drawn (the view shows its alt text)", () => {
+test("iTerm2: drawn whole only; partly in view it is not drawn (the view shows its alt text)", async () => {
   const { screen, scene, full } = setup()
-  const img = image("iterm2")
+  const img = await image("iterm2")
   scene.places = [at(img, 1)]
   full.open()
   expect(screen.images).toEqual([
@@ -177,9 +188,9 @@ test("iTerm2: drawn whole only; partly in view it is not drawn (the view shows i
   expect(screen.lines.slice(0, 5)).toEqual(["title", "", "", "", ""])
 })
 
-test("kitty: sent once under its id, placed, moved by placing it again, cropped, removed and freed", () => {
+test("kitty: sent once under its id, placed, moved by placing it again, cropped, removed and freed", async () => {
   const { term, screen, scene, full } = setup()
-  const img = image("kitty")
+  const img = await image("kitty")
   scene.places = [at(img, 1)]
   full.open()
   expect(screen.kittyLog).toEqual([`t i=${img.id}`, `p i=${img.id} p=1`])
@@ -223,9 +234,9 @@ test("kitty: sent once under its id, placed, moved by placing it again, cropped,
   expect(screen.kittyImages.size).toBe(0)
 })
 
-test("kitty: a redraw takes every placement away and places them again; two occurrences get two", () => {
+test("kitty: a redraw takes every placement away and places them again; two occurrences get two", async () => {
   const { screen, scene, full } = setup()
-  const img = image("kitty")
+  const img = await image("kitty")
   scene.places = [at(img, 0), { ...at(img, 4), key: "b" }]
   full.open()
   expect(screen.kittyPlacements.size).toBe(2)
@@ -234,19 +245,75 @@ test("kitty: a redraw takes every placement away and places them again; two occu
   expect(screen.kittyPlacements.size).toBe(2)
 })
 
-test("an image not ready yet is not drawn; it is once a frame finds it ready", () => {
+test("an image not ready yet is not drawn; it is once a frame finds it ready", async () => {
   const { screen, scene, full } = setup()
-  const fit = fitImage({ width: 40, height: 60 }, 30, 20, CELL)!
-  const img = new ScreenImage("sixel", fit, CELL.height)
+  const img = unprepared()
+  const before = counts.prepared
   scene.places = [at(img, 1)]
   full.open()
   expect(screen.images).toEqual([])
+  // Nothing is prepared until it is wanted.
+  expect(counts.prepared).toBe(before)
   let told = 0
-  img.whenReady(() => told++)
-  img.settle(prepareImage({ bytes: png(40, 60), protocol: "sixel", fit, cellHeight: CELL.height }))
+  await new Promise<void>((r) =>
+    img.whenReady(() => {
+      told++
+      r()
+    }),
+  )
   expect(told).toBe(1)
+  expect(counts.prepared).toBe(before + 1)
   full.render()
   expect(screen.images).toEqual([expect.objectContaining({ screenRow: 1, rows: 3 })])
+})
+
+test("images past the shared budget let go of what they hold, and are prepared again when wanted", async () => {
+  const a = await image()
+  const b = await image()
+  const before = counts.prepared
+  // Used over a second ago (off screen): let go of once b holds more than allowed.
+  a.usedAt -= 5000
+  setScreenImageBudget(1)
+  try {
+    b.draw(0, 3)
+    expect(a.ready).toBe(false)
+    expect(a.draw(0, 3)).toBeUndefined()
+    // b was used just now (on screen): kept, over budget or not.
+    expect(b.ready).toBe(true)
+    await new Promise<void>((r) => a.whenReady(r))
+    expect(a.ready).toBe(true)
+    expect(counts.prepared).toBe(before + 1)
+  } finally {
+    setScreenImageBudget(96 * 1024 * 1024)
+  }
+})
+
+test("a preparation that waited while nobody wanted the image is skipped, and done when it is wanted again", async () => {
+  const fit = fitImage({ width: 40, height: 60 }, 30, 20, CELL)!
+  let runs = 0
+  let gate!: () => void
+  const img = new ScreenImage("sixel", fit, CELL.height, async (wanted) => {
+    await new Promise<void>((r) => {
+      gate = r
+    })
+    if (!wanted()) return null
+    runs++
+    return prepareImage({ bytes: png(40, 60), protocol: "sixel", fit, cellHeight: CELL.height })
+  })
+  let told = 0
+  img.whenReady(() => told++)
+  img.usedAt -= 5000
+  gate()
+  await Bun.sleep(5)
+  expect(runs).toBe(0)
+  expect(img.ready).toBe(false)
+  // Those waiting heard of it: a view still showing it wants it again.
+  expect(told).toBe(1)
+  img.want()
+  gate()
+  await Bun.sleep(5)
+  expect(img.ready).toBe(true)
+  expect(runs).toBe(1)
 })
 
 const dir = mkdtempSync(join(tmpdir(), "amira-fsimg-"))
@@ -281,9 +348,12 @@ test("the loader's screen images: size known once the file is in, each size prep
   expect(source.image(30, 20)).toBe(big)
   const small = source.image(30, 3)!
   expect(small.rows).toBe(3)
-  expect(prepared).toBe(2)
+  // Prepared only once wanted, each size once.
+  expect(prepared).toBe(0)
   await new Promise<void>((r) => big.whenReady(r))
   await new Promise<void>((r) => small.whenReady(r))
+  await new Promise<void>((r) => big.whenReady(r))
+  expect(prepared).toBe(2)
   expect(big.draw(0, 6)).toStartWith('\x1bP0;1;0q"1;1;80;120')
   // A network path is never read; a missing file fails.
   expect(loader.screen("\\\\host\\share\\x.png")).toBeUndefined()

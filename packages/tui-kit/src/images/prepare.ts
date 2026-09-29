@@ -20,6 +20,7 @@ export interface PrepareRequest {
 export type Prepared =
   | { protocol: "sixel"; width: number; height: number; palette: string; phases: Record<number, string[]> }
   | { protocol: "kitty"; width: number; height: number; data: string }
+  | { protocol: "iterm2"; seq: string }
 
 /** Decodes, scales and encodes the image; slow for large images, so it runs in a worker when it can. */
 export function prepareImage(req: PrepareRequest): Prepared {
@@ -76,10 +77,14 @@ function getWorker(): Worker | undefined {
       worker = undefined
       w.terminate()
       if (!loaded) broken = true
-      // What was waiting is prepared here instead (or fails, when the worker died on it).
+      // What was waiting is prepared here when the worker never loaded; when it died on the
+      // way (out of memory on a large image, say), those fail rather than risk this thread.
       const waiting = [...jobs.values()]
       jobs.clear()
-      for (const job of waiting) inline(job)
+      for (const job of waiting) {
+        if (broken) inline(job)
+        else job.reject(new Error("the image worker stopped"))
+      }
     }
     w.addEventListener("error", gone)
     w.addEventListener("close", gone)

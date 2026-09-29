@@ -3,10 +3,10 @@ import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { ImageSupport } from "../capabilities.ts"
 import { type ImageFormat, imageSize } from "./decode.ts"
-import { canShow, encodeImage, type ImageBlock } from "./encode.ts"
-import { fitImage } from "./fit.ts"
+import { canShow, encodeImage, type ImageBlock, iterm2Image } from "./encode.ts"
+import { type Fit, fitImage } from "./fit.ts"
 import { type Prepared, type PrepareRequest, prepareOffThread } from "./prepare.ts"
-import { ScreenImage } from "./screen.ts"
+import { type PrepareImage, ScreenImage } from "./screen.ts"
 
 /** Fetches an image over the network: its bytes (at most `maxBytes`) and Content-Type. */
 export type RemoteImageFetch = (
@@ -131,12 +131,24 @@ export class ImageLoader {
       this.screens.set(source, hit)
       return hit
     }
-    const s = new ScreenSource(this.opts.support, (req) =>
-      this.limited(() => (this.opts.prepare ?? prepareOffThread)(req), false),
+    const remote = REMOTE.test(source)
+    const s: ScreenSource = new ScreenSource(
+      this.opts.support,
+      (fit) => (wanted) =>
+        this.limited(async () => {
+          // Waited its turn behind others: skipped if nobody wants it any more (a size the
+          // screen had while it was being resized, say).
+          if (!wanted()) return null
+          // The file is read again when it was let go meanwhile.
+          const bytes = this.screens.get(source)?.bytesKept ?? (await this.bytes(source, remote))
+          const { protocol, cell } = this.opts.support
+          if (protocol === "iterm2") return { protocol, seq: iterm2Image(bytes, fit) }
+          return (this.opts.prepare ?? prepareOffThread)({ bytes, protocol, fit, cellHeight: cell.height })
+        }, false),
     )
     this.screens.set(source, s)
     this.limited(async () => {
-      const bytes = await this.bytes(source, REMOTE.test(source))
+      const bytes = await this.bytes(source, remote)
       const size = imageSize(bytes)
       if (!size || !canShow(this.opts.support.protocol, size.format)) throw new Error("cannot show")
       return { bytes, size }
@@ -160,7 +172,8 @@ export class ImageLoader {
     for (const [k, s] of this.screens) {
       if (this.keptBytes <= limit && this.screens.size <= MAX_ENTRIES) break
       this.screens.delete(k)
-      this.keptBytes -= s.byteLength
+      this.keptBytes -= s.bytesKept?.length ?? 0
+      s.drop()
     }
   }
 
@@ -262,27 +275,31 @@ const SIZES_KEPT = 4
 export class ScreenSource {
   state: "loading" | "ready" | "failed" = "loading"
   size: { width: number; height: number; format: ImageFormat } | undefined
-  private bytes: Uint8Array | undefined
+  /** The file, while the loader keeps it. */
+  bytesKept: Uint8Array | undefined
   private sizes = new Map<string, ScreenImage>()
   private listeners = new Set<() => void>()
 
   constructor(
     private support: ImageSupport,
-    private prepare: (req: PrepareRequest) => Promise<Prepared>,
+    /** How an image of it at a fitted size is prepared. */
+    private preparer: (fit: Fit) => PrepareImage,
   ) {}
-
-  get byteLength(): number {
-    return this.bytes?.length ?? 0
-  }
 
   settle(bytes: Uint8Array | undefined, size?: ScreenSource["size"]): void {
     if (bytes && size) {
-      this.bytes = bytes
+      this.bytesKept = bytes
       this.size = size
       this.state = "ready"
     } else this.state = "failed"
-    for (const fn of this.listeners) fn()
+    const fns = [...this.listeners]
     this.listeners.clear()
+    for (const fn of fns) fn()
+  }
+
+  /** The loader let go of it: its file is read again for the images that need it. */
+  drop(): void {
+    this.bytesKept = undefined
   }
 
   /** Calls `fn` once when it is in or failed; never when it is already. */
@@ -291,12 +308,12 @@ export class ScreenSource {
   }
 
   /**
-   * The image fitted to `maxCols` × `maxRows` cells, which starts getting ready if it is new;
-   * undefined while loading, when it failed, or when nothing fits.
+   * The image fitted to `maxCols` × `maxRows` cells (prepared once it is wanted); undefined while
+   * loading, when it failed, or when nothing fits.
    */
   image(maxCols: number, maxRows: number): ScreenImage | undefined {
-    const { size, bytes } = this
-    if (!size || !bytes) return undefined
+    const { size } = this
+    if (!size) return undefined
     const { protocol, cell } = this.support
     const fit = fitImage(size, maxCols, maxRows, cell)
     if (!fit) return undefined
@@ -307,12 +324,7 @@ export class ScreenSource {
       this.sizes.set(key, hit)
       return hit
     }
-    const image = new ScreenImage(protocol, fit, cell.height, protocol === "iterm2" ? bytes : undefined)
-    if (protocol !== "iterm2")
-      this.prepare({ bytes, protocol, fit, cellHeight: cell.height }).then(
-        (p) => image.settle(p),
-        () => image.settle(undefined),
-      )
+    const image = new ScreenImage(protocol, fit, cell.height, this.preparer(fit))
     this.sizes.set(key, image)
     if (this.sizes.size > SIZES_KEPT) this.sizes.delete(this.sizes.keys().next().value!)
     return image
