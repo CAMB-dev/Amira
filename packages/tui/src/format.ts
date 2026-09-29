@@ -7,6 +7,7 @@ import {
   type UserMessage,
 } from "@amira/api"
 import {
+  italic,
   RESET,
   type StyleFn,
   type Theme,
@@ -113,6 +114,31 @@ function originLines(theme: Theme, text: string): string[] {
       const m = /^(\s*◆)(.*)$/.exec(l)
       return m ? `${theme.accent(m[1]!)}${theme.muted(m[2]!)}` : theme.muted(l)
     })
+}
+
+/**
+ * What the model thought before it answered: `∴ Thought for 12s` (`∴ Thought` when the time is
+ * not known, as in a resumed session; `∴ Thinking` while it goes on), and `expanded`, the text
+ * under it in muted italics, wrapped to `width`.
+ */
+export function reasoningLines(
+  theme: Theme,
+  text: string,
+  opts: { durationMs?: number; thinking?: boolean; expanded?: boolean },
+  width: number,
+): string[] {
+  const time = opts.durationMs === undefined ? "" : ` for ${formatElapsed(Math.max(1000, opts.durationMs))}`
+  const head = `${theme.muted(glyphs.thought)} ${theme.muted(opts.thinking ? "Thinking" : `Thought${time}`)}`
+  const body = text.trim()
+  const lines = [truncateToWidth(head, Math.max(1, width), glyphs.more)]
+  if (!opts.expanded || !body) return lines
+  const style = (s: string) => theme.muted(italic(s))
+  const room = Math.max(10, width - 2)
+  for (const l of body.split("\n")) {
+    if (!l.trim()) lines.push("")
+    else for (const r of wrapText(l, room)) lines.push(`  ${style(r)}`)
+  }
+  return lines
 }
 
 /** A user message's content as text, with images as placeholders. */

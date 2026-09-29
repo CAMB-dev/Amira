@@ -67,6 +67,7 @@ import { statusLine } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
 import { TerminalStatus } from "./terminal-status.ts"
 import { formatElapsed, type PresenterSource } from "./tool-view.ts"
+import { INTERRUPTED_NOTICE, modelErrorNotice } from "./transcript.ts"
 import { detailCommand, nextDetail } from "./verbose.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
@@ -737,6 +738,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           streamedChars += e.data.text.length
         } else if (e.data.kind === "thinking") {
           thinking = true
+          view.reasoningDelta(e.data.text)
           streamedChars += e.data.text.length
         } else {
           streamedChars += e.data.argsDelta.length
@@ -777,9 +779,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
-        if (e.data.reason === "error") view.notice("error", e.data.error ?? "error")
-        else if (e.data.reason === "aborted") view.notice("interrupted", "Interrupted.")
-        else if (!turnShowedOutput) view.notice("info", "(no reply)")
+        if (e.data.reason === "error") view.notice("error", modelErrorNotice(e.data.error))
+        else if (e.data.reason === "aborted") view.notice("interrupted", INTERRUPTED_NOTICE)
+        else if (!turnShowedOutput) view.notice("info", "No reply")
         termStatus.turnEnded(e.data.reason)
         if (queued.length) {
           const next = queued.splice(0, queued.length)

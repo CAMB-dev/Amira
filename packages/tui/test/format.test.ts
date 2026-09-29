@@ -172,7 +172,7 @@ test("a resumed history uses the transcript's blocks, the tool presenters and a 
     "",
     "  Done.",
     "",
-    "── resumed s_42 · 2026-09-29 14:05 ──",
+    `── resumed s_42 · 2026-09-29 14:05 ${"─".repeat(25)}`,
   ])
 })
 
@@ -203,7 +203,8 @@ test("a resumed reply renders as Markdown inside the assistant's gutter", () => 
     expect(r).toStartWith("  ")
     expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
   }
-  expect(rows.at(-1)).toBe("── resumed ──")
+  // The separator runs across the width.
+  expect(rows.at(-1)).toBe(`── resumed ${"─".repeat(19)}`)
   expect(rows).toContain("● read a.ts")
 })
 
@@ -308,7 +309,7 @@ test("a resumed message with a display shows it and its note, not its content", 
     // A blank display falls back to the content.
     "› own text",
     "",
-    "── resumed ──",
+    `── resumed ${"─".repeat(49)}`,
   ])
 })
 

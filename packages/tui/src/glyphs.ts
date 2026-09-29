@@ -33,6 +33,8 @@ export const glyphs = {
   subagentDone: "✓",
   subagentFailed: "✗",
   subagentAborted: "⊘",
+  /** What the model thought before it answered. */
+  thought: "∴",
   /** Dialog questions and their answers. */
   question: "?",
   /**

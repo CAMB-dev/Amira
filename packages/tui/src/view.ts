@@ -106,6 +106,11 @@ export interface TranscriptView {
   banner(line: string): void
   user(message: UserMessage): void
   replyDelta(text: string): void
+  /**
+   * The reply's reasoning streamed in (a thinking delta): it shows as "∴ Thought for 12s" once
+   * the reply goes on, and counts as something the reply showed.
+   */
+  reasoningDelta(text: string): void
   /** The reply ended and asked for these tool calls; true when it showed anything. */
   replyEnd(calls: CallRef[]): boolean
   toolStart(id: string, name: string, args: Record<string, unknown>, at: number): void

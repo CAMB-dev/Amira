@@ -12,6 +12,8 @@ export type BlockKind =
   | "command-output"
   | "dialog"
   | "history"
+  /** What the model thought before it answered: "∴ Thought for 12s", unfolded to the text. */
+  | "reasoning"
 
 /** Blocks that follow one of the given kind with no blank line between them. */
 const JOINS: Partial<Record<BlockKind, BlockKind>> = {
@@ -72,6 +74,30 @@ export class Transcript {
 }
 
 export type NoticeLevel = "info" | "success" | "warning" | "error" | "interrupted"
+
+/** The notice after a turn the user interrupted. */
+export const INTERRUPTED_NOTICE = "Interrupted"
+
+/**
+ * The notice after a turn that failed: what went wrong, then what to do next. The error says
+ * itself what failed (a request, a missing model), so nothing is put in front of it.
+ */
+export function modelErrorNotice(error: string | undefined): string {
+  const said = error?.trim() || "The model request failed"
+  return `${said}\n↑ recalls the prompt · /model switches models`
+}
+
+/**
+ * The notice a reply of a resumed session ends with when it did not end well, as the live
+ * transcript showed it: interrupted, or failed (the error itself is not kept).
+ */
+export function replyEndNotice(message: {
+  stopReason?: string
+}): { level: NoticeLevel; text: string } | undefined {
+  if (message.stopReason === "aborted") return { level: "interrupted", text: INTERRUPTED_NOTICE }
+  if (message.stopReason === "error") return { level: "error", text: "Model request failed" }
+  return undefined
+}
 
 /**
  * A system notice (interrupted, compacted, an extension error, ...): a symbol by level, then

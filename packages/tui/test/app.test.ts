@@ -391,9 +391,10 @@ test("Esc interrupting a running tool marks it interrupted, muted, not failed", 
   terminal.send("go\r")
   await waitFor(() => live().includes("● hang sleep 100"), "running")
   terminal.send("\x1b[27u")
-  await shows("Interrupted.")
+  await shows("⊘ Interrupted")
   await idle()
-  expect(all()).toContain("⊘ hang sleep 100\n  └ interrupted\n\n⊘ Interrupted.")
+  // What it printed before it was stopped stays under it.
+  expect(all()).toContain("⊘ hang sleep 100\n  └ interrupted\n    Command was aborted.\n\n⊘ Interrupted")
   expect(all()).not.toContain("✗")
   terminal.send("\x03")
   await exited
@@ -472,8 +473,52 @@ test("the built-in presenters: an edit shows its diff with line numbers", async 
   await shows("ok")
   await idle()
   expect(all()).toContain(
-    ["● edit src/a.ts", "  └ +1 −1", "    11   keep", "    12 - old", "    12 + new", "", "  ok"].join("\n"),
+    ["● edit src/a.ts", "  └ +1 -1", "    11   keep", "    12 - old", "    12 + new", "", "  ok"].join("\n"),
   )
+  terminal.send("\x03")
+  await exited
+})
+
+test("successful reads in a row, over steps too, go to the scrollback as one Explored row", async () => {
+  const { terminal, all, shows, idle, exited } = await setup(
+    [
+      {
+        toolCalls: [
+          { name: "read", args: { path: "a.ts" } },
+          { name: "read", args: { path: "b.ts" } },
+        ],
+      },
+      { toolCalls: [{ name: "read", args: { path: "c.ts" } }] },
+      { text: "done" },
+    ],
+    { presenters: true },
+  )
+  terminal.send("go\r")
+  await shows("done")
+  await idle()
+  expect(all()).toContain("● Explored · Read a.ts, b.ts, c.ts\n\n  done")
+  expect(all()).not.toContain("● read a.ts")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a resumed session shows its thinking folded and marks a reply that was interrupted", async () => {
+  const { terminal, all, exited } = await setup([], {
+    history: [
+      { role: "user", content: [{ type: "text", text: "go" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", text: "let me see" },
+          { type: "text", text: "Half an ans" },
+        ],
+        model: { provider: "mock", model: "m1" },
+        stopReason: "aborted",
+      },
+    ],
+  })
+  await waitFor(() => all().includes("── resumed"), "history")
+  expect(all()).toContain("› go\n\n\n∴ Thought\n\n  Half an ans\n\n⊘ Interrupted\n\n── resumed")
   terminal.send("\x03")
   await exited
 })
@@ -631,7 +676,7 @@ test("Esc interrupts a running turn, keeps the partial text and sends queued mes
   terminal.send(`follow up${ALT_ENTER}`)
   await shows("queued › follow up")
   terminal.send("\x1b[27u")
-  await shows("Interrupted.")
+  await shows("⊘ Interrupted")
   await shows("second answer")
   await idle()
   const text = all()
@@ -941,10 +986,24 @@ test("a long draft scrolls inside the input box instead of growing past the scre
   await exited
 })
 
-test("a reply with only thinking says so instead of showing nothing", async () => {
-  const { terminal, shows, exited } = await setup([{ thinking: "hmm" }])
+test("a reply with only thinking shows that it thought, not that there was no reply", async () => {
+  const { terminal, shows, idle, all, exited } = await setup([{ thinking: "hmm" }])
   terminal.send("go\r")
-  await shows("(no reply)")
+  await shows("∴ Thought for 1s")
+  await idle()
+  expect(all()).not.toContain("No reply")
+  // Folded: the thinking itself is not shown at the summary level.
+  expect(all()).not.toContain("hmm")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a reply's thinking goes before its text", async () => {
+  const { terminal, shows, idle, all, exited } = await setup([{ thinking: "first idea", text: "Answer." }])
+  terminal.send("go\r")
+  await shows("Answer.")
+  await idle()
+  expect(all()).toMatch(/∴ Thought for 1s\n\n {2}Answer\./)
   terminal.send("\x03")
   await exited
 })
@@ -1142,7 +1201,7 @@ test("a steering message an interrupt drops goes back into the editor", async ()
   terminal.send("keep this\r")
   await waitFor(() => live().includes("steering › keep this"), "steering line")
   terminal.send("\x1b[27u")
-  await shows("Interrupted.")
+  await shows("⊘ Interrupted")
   await idle()
   expect(live()).toContain("› keep this")
   expect(live()).not.toContain("steering ›")
@@ -1205,7 +1264,7 @@ test("a background result an interrupt kept waiting shows as pending and joins t
   agent.expectNotice().deliver(subagentNotice("C"))
   await waitFor(() => live().includes("◆ explorer finished · 41s · 12.3k tok · pending"), "pending line")
   terminal.send("\x1b[27u")
-  await shows("Interrupted.")
+  await shows("⊘ Interrupted")
   await idle()
   expect(live()).toContain("· pending")
   terminal.send("next\r")
@@ -1248,7 +1307,7 @@ test("a held background result woken by a later one leaves no pending line behin
   agent.expectNotice().deliver(subagentNotice("first"))
   await waitFor(() => live().includes("· pending"), "pending line")
   terminal.send("\x1b[27u")
-  await shows("Interrupted.")
+  await shows("⊘ Interrupted")
   await idle()
   agent.expectNotice().deliver(subagentNotice("second"))
   await shows("both seen")
@@ -1943,7 +2002,7 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   terminal.send("go\r")
   await waitFor(() => live().includes("◆ Stop me · explorer"), "both running")
   terminal.send("\x1b[27u")
-  await shows("Interrupted.")
+  await shows("⊘ Interrupted")
   await survivor!.result()
   await idle()
   await bus.flush()
