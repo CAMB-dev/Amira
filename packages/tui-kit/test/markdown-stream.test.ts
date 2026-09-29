@@ -73,8 +73,8 @@ test("lists hang their wrapped rows under the text, nest, number and check", () 
     "  ◦ nested",
     "    item here",
     "    more of it",
-    "• ☐ open",
-    "• ☑ done",
+    "• [ ] open",
+    "• [✓] done",
     "10. ten",
   ])
   // A line right after an item continues it; after a blank line it must be indented to.
