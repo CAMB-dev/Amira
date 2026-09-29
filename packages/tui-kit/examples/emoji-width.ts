@@ -76,7 +76,9 @@ for (const [title, chars] of groups) {
     const text = [...c].length === 1 && /\p{Emoji}/u.test(c) ? c + VS15 : c
     const asText = cell(text, textWidth(text))
     const widths = `${Bun.stringWidth(c)}→${textWidth(c)}`
-    console.log(`    ${code(c).slice(0, 23).padEnd(24)}${before} ${widths.padEnd(5)}${now} ${"".padEnd(5)}${asText}`)
+    console.log(
+      `    ${code(c).slice(0, 23).padEnd(24)}${before} ${widths.padEnd(5)}${now} ${"".padEnd(5)}${asText}`,
+    )
   }
 }
 
