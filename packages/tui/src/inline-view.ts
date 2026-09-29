@@ -7,6 +7,7 @@ import {
   type Theme,
   truncateToWidth,
   visibleWidth,
+  wrapText,
 } from "@amira/tui-kit"
 import { formatElapsed, isLastSibling, replyRows, subagentEndLine, userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
@@ -373,7 +374,11 @@ export function createInlineView(host: ViewHost): TranscriptView {
         commitBlock("command-output", commandOutputLines(style, theme.muted, text, terminal.columns))
       } else commitBlock("notice", note(level, text))
     },
-    dialogEcho: (line) => commitBlock("dialog", [line]),
+    dialogEcho: (lines) =>
+      commitBlock(
+        "dialog",
+        lines.flatMap((l) => wrapText(l, Math.max(1, terminal.columns))),
+      ),
     history(messages: Message[], session) {
       commit(
         historyLines(theme, messages, {

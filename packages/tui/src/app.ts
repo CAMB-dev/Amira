@@ -42,7 +42,7 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
-import { Dialog, type DialogAnswer } from "./dialog.ts"
+import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
 import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
@@ -916,20 +916,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const i = dialogs.indexOf(dialog)
     if (i !== -1) dialogs.splice(i, 1)
     termStatus.setWaiting(dialogs.length > 0)
-    const { requestId, title } = dialog.request
-    if (answer === undefined || ui.respond(requestId, answer) !== undefined) ui.cancel(requestId)
-    const secret = dialog.request.kind === "input" && dialog.request.secret
-    const shown =
-      answer === undefined
-        ? "cancelled"
-        : secret
-          ? "(hidden)"
-          : answer === true
-            ? "yes"
-            : answer === false
-              ? "no"
-              : answer
-    view.dialogEcho(`${theme.accent(glyphs.question)} ${title} ${theme.muted(`› ${shown}`)}`)
+    const { requestId } = dialog.request
+    const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
+    if (answer === undefined || refused) ui.cancel(requestId)
+    view.dialogEcho(dialogEchoLines(dialog.request, refused ? undefined : answer, theme))
     view.requestRender()
     openNextForm()
   }

@@ -18,6 +18,7 @@ import {
   type Block,
   type BlockEnv,
   fixedLine,
+  fixedLines,
   LinesBlock,
   ReplyBlock,
   SubagentGroupBlock,
@@ -507,7 +508,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         ),
       )
     },
-    dialogEcho: (line) => add(fixedLine("dialog", line)),
+    dialogEcho: (lines) => add(fixedLines("dialog", lines)),
     history(messages: Message[], session) {
       const results = new Map<string, ToolResult>()
       for (const m of messages) {

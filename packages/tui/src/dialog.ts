@@ -1,4 +1,4 @@
-import type { EventMap } from "@amira/api"
+import type { AskAnswer, ConfirmAnswer, EventMap } from "@amira/api"
 import { rankMatches } from "@amira/core"
 import {
   type Component,
@@ -6,7 +6,10 @@ import {
   type InputEvent,
   LineInput,
   type RenderContext,
+  type StyleFn,
+  type Theme,
   truncateToWidth,
+  visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { parseUnifiedDiff, renderToolLines } from "./diff-view.ts"
@@ -16,40 +19,80 @@ import { type Action, defaultKeybindings, type Keybindings } from "./keybindings
 
 export type DialogRequest = EventMap["ui.request"]
 
-/**
- * Lines cut to `rows`: the start and the end, with a marker in the middle saying how many
- * were left out. The start (file names, first hunk) gets the extra row.
- */
-function cutMiddle(lines: string[], rows: number, ctx: RenderContext): string[] {
-  if (lines.length <= rows) return lines
-  if (rows <= 0) return []
-  const keep = rows - 1
-  const head = Math.ceil(keep / 2)
-  const tail = keep - head
-  const marker = ctx.theme.muted(`${glyphs.more} ${lines.length - keep} more lines ${glyphs.more}`)
-  return [...lines.slice(0, head), marker, ...lines.slice(lines.length - tail)]
-}
+/** How a dialog was answered; undefined cancels it. */
+export type DialogAnswer = string | ConfirmAnswer | AskAnswer[] | undefined
 
-/** undefined cancels the dialog. */
-export type DialogAnswer = string | boolean | undefined
-
-/** Options of a select shown at once; longer lists scroll with the selection. */
+/** Options of a list shown at once; longer lists scroll with the selection. */
 const MAX_OPTIONS = 10
 
+/** Where a dialog's bar and title start: "┃ ". */
+const BAR_WIDTH = 2
+
+/** The labels of a confirm's choices, which its echo repeats. */
+export const CONFIRM_LABELS = {
+  yes: "Yes",
+  always: "Yes, and don't ask again this session",
+  no: "No",
+} as const
+
+const OTHER_LABEL = `Other${glyphs.more}`
+
+/** One choice of a list: what it reads and what choosing it answers. */
+interface Choice {
+  label: string
+  description?: string
+  /** The answer of a confirm's or a list's choice; an ask's choices answer with their label. */
+  value?: DialogAnswer
+  /** The free-text choice: choosing it opens a text field in its row. */
+  other?: boolean
+}
+
+/** One question of the dialog: a confirm, a list, or one of an ask's questions. */
+interface Page {
+  question: string
+  header?: string
+  choices: Choice[]
+  multi: boolean
+  selected: number
+  /** Checked choices of a multi-select, by index. */
+  checked: Set<number>
+  /** The text last typed for the free-text choice. */
+  other?: string
+  answer?: AskAnswer
+}
+
+/** How much of a dialog is shown, given back row by row when the rows run short. */
+interface Fit {
+  blanks: number
+  /** Option descriptions on the label's row, cut to fit, rather than wrapped under it. */
+  inlineDescriptions: boolean
+  message: number
+  options: number
+  title: number
+  indicator: boolean
+}
+
 /**
- * An inline prompt for one ui.request: y/n for confirm, a list for select and diff-review, and
- * a one-line editor for input. Esc cancels. Calls `onDone` once. Typing in a select filters its
- * options, which matters for long lists such as every model of the catalog. It fits `maxRows`:
- * the title, the options and the keys always show, and a diff gives up rows from its middle.
+ * The one component for every question the user answers inline (ui.request): a confirm, a
+ * select (typing filters it), a diff review, an input (plain or secret) and the questions of
+ * ask_user. It is a block with a bar down its left: the question, a muted message or diff, the
+ * options as a list (❯ marks the selected one; digits choose in short lists; a multi-select
+ * checks them with Space), and the keys at the bottom. A free-text choice ("Other…") opens a
+ * text field in its row, which Esc closes again; Esc elsewhere cancels. Several questions are
+ * asked one after another in the same block and answered together. Calls `onDone` once. It
+ * fits `maxRows`: the title, the selected option and the keys always show.
  */
 export class Dialog implements Component {
   /** Rows the dialog may take; set by the app before each render. */
   maxRows = Number.POSITIVE_INFINITY
-  #selected = 0
+  #pages: Page[]
+  #page = 0
   #filter = ""
   #editor: Editor | undefined
   /** A secret input: masked, one line, never shown. */
   #secret: LineInput | undefined
+  /** The free-text choice's field while it is open. */
+  #field: LineInput | undefined
   #done = false
 
   constructor(
@@ -57,6 +100,7 @@ export class Dialog implements Component {
     private onDone: (answer: DialogAnswer) => void,
     private keys: Keybindings = defaultKeybindings(),
   ) {
+    this.#pages = pagesOf(request)
     if (request.kind === "input" && request.secret) {
       this.#secret = new LineInput({ mask: "*", accept: (g) => !/\s/.test(g) })
     } else if (request.kind === "input") {
@@ -74,149 +118,356 @@ export class Dialog implements Component {
   handleInput(e: InputEvent): boolean {
     if (this.#done) return false
     const keys = this.keys
+    if (this.#field) return this.#fieldKey(e)
     if (keys.is(e, "dialog.cancel")) return this.#finish(undefined)
     const r = this.request
-    if (r.kind === "confirm") {
-      if (keys.is(e, "dialog.yes") || keys.is(e, "dialog.choose")) return this.#finish(true)
-      if (keys.is(e, "dialog.no")) return this.#finish(false)
+    if (r.kind === "input") {
+      if (this.#secret) {
+        if (keys.is(e, "dialog.choose")) return this.#finish(this.#secret.value)
+        return this.#secret.handleInput(e)
+      }
+      // An empty input is still an answer; the editor leaves Enter on empty text to us.
+      if (this.#editor!.handleInput(e)) return true
+      if (keys.is(e, "dialog.choose")) return this.#finish("")
       return false
     }
-    if (r.kind === "select" || r.kind === "diff-review") {
-      const options = this.#options()
-      const n = options.length
-      if (keys.is(e, "dialog.up")) this.#selected = n ? (this.#selected - 1 + n) % n : 0
-      else if (keys.is(e, "dialog.down")) this.#selected = n ? (this.#selected + 1) % n : 0
-      else if (keys.is(e, "dialog.choose")) return n ? this.#finish(options[this.#selected]!) : true
-      else if (
-        this.#digitsPick &&
-        e.type === "key" &&
-        e.text &&
-        /^[1-9]$/.test(e.text) &&
-        Number(e.text) <= n
-      ) {
-        return this.#finish(options[Number(e.text) - 1]!)
-      } else if (r.kind === "select" && e.type === "key" && e.name === "backspace" && this.#filter) {
-        this.#setFilter(this.#filter.slice(0, -1))
-      } else if (r.kind === "select" && e.type === "key" && e.text && !e.ctrl && !e.alt) {
-        this.#setFilter(this.#filter + e.text)
-      } else return false
+    if (r.kind === "form") return false
+    const page = this.#current
+    const choices = this.#choices()
+    const n = choices.length
+    if (this.#pages.length > 1 && keys.is(e, "dialog.prev-question")) {
+      if (this.#page > 0) this.#goTo(this.#page - 1)
       return true
     }
-    if (this.#secret) {
-      if (keys.is(e, "dialog.choose")) return this.#finish(this.#secret.value)
-      return this.#secret.handleInput(e)
+    if (this.#pages.length > 1 && keys.is(e, "dialog.next-question")) {
+      if (this.#page < this.#frontier()) this.#goTo(this.#page + 1)
+      return true
     }
-    // An empty input is still an answer; the editor leaves Enter on empty text to us.
-    if (this.#editor!.handleInput(e)) return true
-    if (keys.is(e, "dialog.choose")) return this.#finish("")
-    return false
+    if (keys.is(e, "dialog.up")) page.selected = n ? (page.selected - 1 + n) % n : 0
+    else if (keys.is(e, "dialog.down")) page.selected = n ? (page.selected + 1) % n : 0
+    else if (r.kind === "confirm" && keys.is(e, "dialog.yes")) return this.#finish(true)
+    else if (r.kind === "confirm" && keys.is(e, "dialog.no")) return this.#finish(false)
+    else if (page.multi && keys.is(e, "dialog.toggle")) this.#toggle(page.selected)
+    else if (keys.is(e, "dialog.choose")) {
+      if (!n) return true
+      if (!page.multi) return this.#choose(page.selected)
+      // Enter on an empty free-text choice opens it rather than submitting without it.
+      const at = choices[page.selected]
+      if (at?.other && !page.checked.has(page.selected)) return this.#openField(page)
+      return this.#submitPage()
+    } else if (this.#digits && e.type === "key" && e.text && /^[1-9]$/.test(e.text) && Number(e.text) <= n) {
+      const i = Number(e.text) - 1
+      page.selected = i
+      if (page.multi) this.#toggle(i)
+      else return this.#choose(i)
+    } else if (r.kind === "select" && e.type === "key" && e.name === "backspace" && this.#filter) {
+      this.#setFilter(this.#filter.slice(0, -1))
+    } else if (r.kind === "select" && e.type === "key" && e.text && !e.ctrl && !e.alt) {
+      this.#setFilter(this.#filter + e.text)
+    } else return false
+    return true
   }
 
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
+    const bar = barStyle(this.request, theme)(glyphs.dialogBar)
+    const inner = Math.max(1, width - BAR_WIDTH)
+    const rows = this.request.kind === "input" ? this.#renderInput(inner, ctx) : this.#renderList(inner, ctx)
+    return rows.map((l) => (l ? `${bar} ${l}` : bar))
+  }
+
+  #renderInput(width: number, ctx: RenderContext): string[] {
+    const { theme } = ctx
+    const r = this.request as Extract<DialogRequest, { kind: "input" }>
+    const hint = theme.muted(
+      fitHint([this.#hint("dialog.choose", "submit", 5), this.#hint("dialog.cancel", "cancel", 3)], width),
+    )
+    const body = this.#secret
+      ? [
+          `${glyphs.pointer} ${this.#secret.render(Math.max(4, width - 2), theme, { focused: true, placeholder: r.placeholder ?? "" })}`,
+        ]
+      : this.#editor!.render(width, ctx)
+    const title = this.#titleRows(width, theme)
+    // A blank row before the keys goes first, then the title gives way, never all of it.
+    const blank = title.length + body.length + 2 <= this.maxRows ? [""] : []
+    const room = Math.max(1, this.maxRows - 1 - blank.length)
+    const lines = [...fitTitle(title, Math.max(1, room - body.length)), ...body]
+    return [...lines.slice(0, room), ...blank, hint]
+  }
+
+  #renderList(width: number, ctx: RenderContext): string[] {
+    const { theme } = ctx
+    const r = this.request
+    const page = this.#current
+    const choices = this.#choices()
+    const title = this.#titleRows(width, theme)
+    const message =
+      r.kind === "confirm" && r.message
+        ? r.message
+            .split("\n")
+            .flatMap((l) => wrapText(theme.muted(l), Math.max(1, width - 2)).map((w) => `  ${w}`))
+        : []
+    const diff = r.kind === "diff-review" ? renderToolLines(parseUnifiedDiff(r.diff), theme, width) : []
+    const indicator =
+      this.#pages.length > 1
+        ? theme.muted(
+            truncateToWidth(
+              `${this.#page + 1}/${this.#pages.length}${page.header ? ` ${glyphs.separator} ${page.header}` : ""}`,
+              width,
+              glyphs.more,
+            ),
+          )
+        : undefined
+    const filter = this.#filter ? [`${theme.muted(`filter ${glyphs.pointer}`)} ${this.#filter}`] : []
+    const hint = theme.muted(fitHint(this.#footer(), width))
+    const fit: Fit = {
+      blanks: 2,
+      inlineDescriptions: false,
+      message: message.length,
+      options: Math.min(MAX_OPTIONS, Math.max(1, choices.length)),
+      title: title.length,
+      indicator: indicator !== undefined,
+    }
+    const layout = (diffRows: number) => {
+      const out: string[] = []
+      if (fit.indicator && indicator) out.push(indicator)
+      out.push(...fitTitle(title, fit.title))
+      out.push(...cutEnd(message, fit.message, theme))
+      if (diffRows > 0) out.push(...cutMiddle(diff, diffRows, theme))
+      if (fit.blanks > 1) out.push("")
+      out.push(...filter, ...this.#optionRows(choices, width, fit, theme))
+      if (fit.blanks > 0) out.push("")
+      out.push(hint)
+      return out
+    }
+    // The diff takes what the rest leaves, and a diff cut short is worth more than blank rows.
+    // The rest gives rows back in this order.
+    if (diff.length && layout(0).length + diff.length > this.maxRows) fit.blanks = 0
+    const fits = () => layout(0).length <= this.maxRows
+    // Each step gives up a row (or a way of drawing) while it can.
+    const steps: [can: () => boolean, take: () => void][] = [
+      [() => fit.blanks > 0, () => fit.blanks--],
+      [() => !fit.inlineDescriptions, () => (fit.inlineDescriptions = true)],
+      [() => fit.message > 1, () => fit.message--],
+      [() => fit.options > 1, () => fit.options--],
+      [() => fit.message > 0, () => fit.message--],
+      [() => fit.title > 1, () => fit.title--],
+      [() => fit.indicator, () => (fit.indicator = false)],
+    ]
+    for (const [can, take] of steps) {
+      while (!fits() && can()) take()
+    }
+    const room = this.maxRows - layout(0).length
+    return layout(Number.isFinite(room) ? Math.max(0, room) : diff.length)
+  }
+
+  /** The options around the selected one, as many as `fit` allows, then where the window is. */
+  #optionRows(choices: Choice[], width: number, fit: Fit, theme: Theme): string[] {
+    const page = this.#current
+    if (!choices.length) return [theme.muted("  no match")]
+    const shown = Math.min(fit.options, choices.length)
+    const start = Math.min(Math.max(0, page.selected - shown + 1), Math.max(0, choices.length - shown))
+    const digits = this.#digits
+    const items = choices.slice(start, start + shown).map((c, j) => {
+      const i = start + j
+      const selected = i === page.selected
+      const marker = selected ? theme.accent(glyphs.choice) : " "
+      const digit = digits ? `${theme.muted(String(i + 1))} ` : ""
+      const box = page.multi ? `${page.checked.has(i) ? glyphs.checked : glyphs.unchecked} ` : ""
+      const lead = `${marker} ${digit}${box}`
+      // An option numbered as its digit ("1. explorer", for frontends without digits) shows once.
+      const label = digits && c.label.startsWith(`${i + 1}. `) ? c.label.slice(`${i + 1}. `.length) : c.label
+      const typed = c.other && page.other ? `${label} ${theme.muted(JSON.stringify(page.other))}` : label
+      const description = c.description?.replace(/\s+/g, " ").trim() ?? ""
+      return { c, selected, lead, typed, description }
+    })
+    // Descriptions line up in a column after the labels when every one fits there; else each
+    // goes under its label, unless the rows are too few for that.
+    const described = items.filter((it) => it.description && !it.c.other)
+    const column = Math.max(0, ...described.map((it) => visibleWidth(it.lead) + visibleWidth(it.typed)))
+    const inline =
+      fit.inlineDescriptions || described.every((it) => column + 2 + visibleWidth(it.description) <= width)
+    const rows: string[] = []
+    for (const { c, selected, lead, typed, description } of items) {
+      const leadWidth = visibleWidth(lead)
+      if (c.other && this.#field && selected) {
+        const field = this.#field.render(Math.max(4, width - leadWidth), theme, {
+          focused: true,
+          placeholder: "Type your answer",
+        })
+        rows.push(`${lead}${field}`)
+        continue
+      }
+      const head = `${lead}${selected ? theme.accent(typed) : typed}`
+      if (!description) {
+        rows.push(truncateToWidth(head, width, glyphs.more))
+      } else if (inline) {
+        const pad = " ".repeat(Math.max(0, column - visibleWidth(head)))
+        rows.push(truncateToWidth(`${head}${pad}  ${theme.muted(description)}`, width, glyphs.more))
+      } else {
+        rows.push(truncateToWidth(head, width, glyphs.more))
+        const indent = " ".repeat(leadWidth)
+        for (const l of wrapText(description, Math.max(1, width - leadWidth)))
+          rows.push(`${indent}${theme.muted(l)}`)
+      }
+    }
+    if (shown < choices.length) rows.push(theme.muted(`  ${page.selected + 1}/${choices.length}`))
+    return rows
+  }
+
+  /** The question with its "?", and who asked in muted text; wrapped under itself. */
+  #titleRows(width: number, theme: Theme): string[] {
     const r = this.request
     const from = r.source ? theme.muted(` (${r.source})`) : ""
-    const title = wrapText(`${theme.accent(glyphs.question)} ${r.title}${from}`, width)
-    const muted = (items: Parameters<typeof fitHint>[0]) => theme.muted(fitHint(items, width))
-    const cancel = this.#hint("dialog.cancel", "cancel", 3)
-    let body: string[]
-    let footer: string[]
-    if (r.kind === "confirm") {
-      body = r.message ? wrapText(theme.muted(r.message), width) : []
-      // Choosing answers yes too, which is the key to show when yes has none of its own.
-      const yes = this.#hint("dialog.yes", "yes", 5) ?? this.#hint("dialog.choose", "yes", 5)
-      footer = [muted([yes, this.#hint("dialog.no", "no", 5), cancel])]
-    } else if (r.kind === "select" || r.kind === "diff-review") {
-      return this.#renderList(title, width, ctx)
-    } else if (this.#secret) {
-      const placeholder = r.kind === "input" ? (r.placeholder ?? "") : ""
-      body = [
-        `${glyphs.pointer} ${this.#secret.render(Math.max(4, width - 2), theme, { focused: true, placeholder })}`,
-      ]
-      footer = [muted([this.#hint("dialog.choose", "submit", 5), cancel])]
-    } else {
-      body = this.#editor!.render(width, ctx)
-      footer = [muted([this.#hint("dialog.choose", "submit", 5), cancel])]
-    }
-    // The title gives way last, and never all of it.
-    const room = Math.max(1, this.maxRows - footer.length)
-    const lines = [...fitTitle(title, Math.max(1, room - body.length)), ...body]
-    return [...lines.slice(0, Math.max(room, 1)), ...footer]
+    const question = this.#current?.question ?? r.title
+    const rows = wrapText(`${question}${from}`, Math.max(1, width - 2))
+    return rows.map((l, i) => (i === 0 ? `${theme.accent(glyphs.question)} ${l}` : `  ${l}`))
   }
 
-  #renderList(title: string[], width: number, ctx: RenderContext): string[] {
-    const { theme } = ctx
-    const r = this.request as Extract<DialogRequest, { kind: "select" | "diff-review" }>
-    const move = this.keys.pairLabel("dialog.up", "dialog.down")
-    const options = this.#options()
-    const filter = this.#filter ? [`${theme.muted(`filter ${glyphs.pointer}`)} ${this.#filter}`] : []
-    const help = theme.muted(
-      fitHint(
-        [
-          move && { text: `${move} move`, priority: 2 },
-          // Only a select filters; a diff review's options are few and fixed.
-          r.kind === "select" && { text: "type to filter", priority: 1 },
-          this.#hint("dialog.choose", "choose", 4),
-          this.#hint("dialog.cancel", "cancel", 3),
-        ],
-        width,
-      ),
-    )
-    // Rows for everything but the diff; the options shrink to what is left, down to one.
-    let shown = Math.min(MAX_OPTIONS, options.length)
-    const fixed = (n: number) =>
-      title.length + filter.length + Math.max(1, n) + (n < options.length ? 1 : 0) + 1
-    while (shown > 1 && fixed(shown) > this.maxRows) shown--
-    const start = Math.min(Math.max(0, this.#selected - shown + 1), Math.max(0, options.length - shown))
-    const rows = options.slice(start, start + shown).map((o, j) => {
-      const i = start + j
-      const selected = i === this.#selected
-      const digits = i < 9 && this.#digitsPick
-      const digit = digits ? `${theme.muted(String(i + 1))} ` : ""
-      // An option numbered as its digit ("1. explorer", for frontends without digits) shows once.
-      const text = digits && o.startsWith(`${i + 1}. `) ? o.slice(`${i + 1}. `.length) : o
-      const marker = selected ? theme.accent(glyphs.pointer) : " "
-      return truncateToWidth(`${marker} ${digit}${selected ? theme.accent(text) : text}`, width, glyphs.more)
-    })
-    if (!options.length) rows.push(theme.muted("  no match"))
-    else if (shown < options.length) rows.push(theme.muted(`  ${this.#selected + 1}/${options.length}`))
-    const below = [...filter, ...rows, help]
-    const titleRows = fitTitle(title, Math.max(1, this.maxRows - below.length))
-    const diffRoom = this.maxRows - titleRows.length - below.length
-    // The diff styled like a tool's (the presenters' diff lines), cut in the middle to the rows
-    // left (a tall terminal shows more of a long one; the full-screen review comes later, D8).
-    const diff =
-      r.kind === "diff-review"
-        ? cutMiddle(renderToolLines(parseUnifiedDiff(r.diff), theme, width), diffRoom, ctx)
-        : []
-    return [...titleRows, ...diff, ...below]
-  }
-
-  /** The select's options that match the filter, best first. */
-  #options(): string[] {
+  /** The keys at the bottom, the most useful kept longest as the width shrinks. */
+  #footer(): Parameters<typeof fitHint>[0] {
     const r = this.request
-    if (r.kind === "diff-review") return r.options
-    return r.kind === "select" ? rankMatches(this.#filter, r.options, (o) => o) : []
+    const page = this.#current
+    if (this.#field) {
+      return [this.#hint("dialog.choose", "submit", 5), this.#hint("dialog.cancel", "back", 4)]
+    }
+    const move = this.keys.pairLabel("dialog.up", "dialog.down")
+    const questions = this.keys.pairLabel("dialog.prev-question", "dialog.next-question")
+    const yes = this.keys.label("dialog.yes")
+    const no = this.keys.label("dialog.no")
+    return [
+      this.#pages.length > 1 && questions && { text: `${questions} question`, priority: 1 },
+      move && { text: `${move} move`, priority: 2 },
+      page.multi && this.#hint("dialog.toggle", "toggle", 4),
+      // Only a select filters; the other lists are few and fixed.
+      r.kind === "select" && { text: "type to filter", priority: 1 },
+      r.kind === "confirm" && yes && no && { text: `${yes}/${no}`, priority: 1 },
+      this.#hint("dialog.choose", page.multi ? "submit" : "choose", 5),
+      this.#hint("dialog.cancel", "cancel", 3),
+    ]
   }
 
-  /**
-   * Digits choose an option in a short unfiltered list. A longer list needs them for its
-   * filter: model ids like gpt-4o start with or turn on a digit.
-   */
   /** A footer item for an action's key; none when the action has no key bound. */
   #hint(action: Action, what: string, priority: number) {
     const key = this.keys.label(action)
     return key ? { text: `${key} ${what}`, priority } : undefined
   }
 
-  get #digitsPick(): boolean {
+  get #current(): Page {
+    return this.#pages[this.#page]!
+  }
+
+  /** The current page's choices: a select's are those matching the filter, best first. */
+  #choices(): Choice[] {
     const r = this.request
-    return (r.kind === "select" || r.kind === "diff-review") && r.options.length <= 9 && !this.#filter
+    const choices = this.#current?.choices ?? []
+    return r.kind === "select" && this.#filter ? rankMatches(this.#filter, choices, (c) => c.label) : choices
+  }
+
+  /**
+   * Digits choose (or check) an option of a short unfiltered list. A longer list needs them for
+   * its filter: model ids like gpt-4o start with or turn on a digit. A confirm has y and n.
+   */
+  get #digits(): boolean {
+    const r = this.request
+    return r.kind !== "confirm" && r.kind !== "input" && this.#choices().length <= 9 && !this.#filter
+  }
+
+  #choose(i: number): true {
+    const page = this.#current
+    const c = this.#choices()[i]
+    if (!c) return true
+    page.selected = i
+    if (c.other) return this.#openField(page)
+    if (this.request.kind !== "ask") return this.#finish(c.value ?? c.label)
+    return this.#answerPage({ selected: [c.label] })
+  }
+
+  #toggle(i: number) {
+    const page = this.#current
+    const c = page.choices[i]
+    if (!c) return
+    if (page.checked.has(i)) page.checked.delete(i)
+    else if (c.other) this.#openField(page)
+    else page.checked.add(i)
+  }
+
+  #openField(page: Page): true {
+    this.#field = new LineInput()
+    if (page.other) this.#field.value = page.other
+    return true
+  }
+
+  /** Keys while the free-text field is open: it edits; Enter keeps the text, Esc closes it. */
+  #fieldKey(e: InputEvent): boolean {
+    const field = this.#field!
+    if (this.keys.is(e, "dialog.cancel")) {
+      // What was typed stays with the choice, for when it is chosen again.
+      const draft = field.value.trim()
+      if (draft) this.#current.other = draft
+      this.#field = undefined
+      return true
+    }
+    if (this.keys.is(e, "dialog.choose")) {
+      const text = field.value.trim()
+      if (!text) return true
+      const page = this.#current
+      this.#field = undefined
+      page.other = text
+      if (page.multi) {
+        page.checked.add(page.selected)
+        return true
+      }
+      if (this.request.kind === "confirm") return this.#finish({ other: text })
+      return this.#answerPage({ selected: [], other: text })
+    }
+    return field.handleInput(e)
+  }
+
+  #submitPage(): true {
+    const page = this.#current
+    const selected: string[] = []
+    let other: string | undefined
+    for (const [i, c] of page.choices.entries()) {
+      if (!page.checked.has(i)) continue
+      if (c.other) other = page.other
+      else selected.push(c.label)
+    }
+    return this.#answerPage({ selected, ...(other ? { other } : {}) })
+  }
+
+  /** Keeps a question's answer and goes on to the first one not answered; the last one answers all. */
+  #answerPage(answer: AskAnswer): true {
+    this.#current.answer = answer
+    const next = this.#pages.findIndex((p) => !p.answer)
+    if (next === -1) return this.#finish(this.#pages.map((p) => p.answer!))
+    this.#goTo(next)
+    return true
+  }
+
+  /** The furthest question one may go to: the first not answered yet. */
+  #frontier(): number {
+    const i = this.#pages.findIndex((p) => !p.answer)
+    return i === -1 ? this.#pages.length - 1 : i
+  }
+
+  #goTo(i: number) {
+    this.#page = i
+    const page = this.#current
+    // Back on an answered question, the cursor is on its answer.
+    const a = page.answer
+    if (a && !page.multi) {
+      const at =
+        a.other !== undefined
+          ? page.choices.findIndex((c) => c.other)
+          : page.choices.findIndex((c) => c.label === a.selected[0])
+      if (at !== -1) page.selected = at
+    }
   }
 
   #setFilter(filter: string) {
     this.#filter = filter
-    this.#selected = 0
+    this.#current.selected = 0
   }
 
   #finish(answer: DialogAnswer): true {
@@ -228,10 +479,120 @@ export class Dialog implements Component {
   }
 }
 
+/** The questions of a request, each with its choices. */
+function pagesOf(r: DialogRequest): Page[] {
+  const page = (question: string, choices: Choice[], extra: Partial<Page> = {}): Page => ({
+    question,
+    choices,
+    multi: false,
+    selected: 0,
+    checked: new Set(),
+    ...extra,
+  })
+  switch (r.kind) {
+    case "confirm":
+      return [
+        page(r.title, [
+          { label: CONFIRM_LABELS.yes, value: true },
+          ...(r.always ? [{ label: CONFIRM_LABELS.always, value: "always" as const }] : []),
+          { label: CONFIRM_LABELS.no, value: false },
+          ...(r.other ? [{ label: OTHER_LABEL, other: true }] : []),
+        ]),
+      ]
+    case "select":
+    case "diff-review":
+      return [
+        page(
+          r.title,
+          r.options.map((o) => ({ label: o, value: o })),
+        ),
+      ]
+    case "ask":
+      return r.questions.map((q) =>
+        page(
+          q.question,
+          [
+            ...q.options.map((o) => ({
+              label: o.label,
+              ...(o.description ? { description: o.description } : {}),
+            })),
+            { label: OTHER_LABEL, other: true },
+          ],
+          { multi: q.multiSelect === true, ...(q.header ? { header: q.header } : {}) },
+        ),
+      )
+    default:
+      return [page(r.title, [])]
+  }
+}
+
+/** The bar's color: approvals of tool calls in the warning color, other questions in the accent. */
+function barStyle(r: DialogRequest, theme: Theme): StyleFn {
+  return r.source === "approval" ? theme.warning : theme.accent
+}
+
+/**
+ * What stays in the transcript once a dialog is answered: a line per question under the same
+ * bar, "┃ ? Allow bash? › Yes". A secret answer is never shown.
+ */
+export function dialogEchoLines(r: DialogRequest, answer: DialogAnswer, theme: Theme): string[] {
+  const bar = barStyle(r, theme)(glyphs.dialogBar)
+  const line = (question: string, shown: string) =>
+    `${bar} ${theme.accent(glyphs.question)} ${question} ${theme.muted(`${glyphs.pointer} ${shown}`)}`
+  if (answer === undefined) return [line(r.title, "cancelled")]
+  if (r.kind === "ask" && Array.isArray(answer)) {
+    return r.questions.map((q, i) => line(q.question, answer[i] ? askAnswerText(answer[i]) : "(no answer)"))
+  }
+  if (r.kind === "input" && r.secret) return [line(r.title, "(hidden)")]
+  if (r.kind === "confirm") {
+    const shown =
+      answer === true
+        ? CONFIRM_LABELS.yes
+        : answer === false
+          ? CONFIRM_LABELS.no
+          : answer === "always"
+            ? CONFIRM_LABELS.always
+            : typeof answer === "object" && "other" in answer
+              ? JSON.stringify(answer.other)
+              : String(answer)
+    return [line(r.title, shown)]
+  }
+  return [line(r.title, String(answer))]
+}
+
+/** An ask answer in words: the labels chosen, then the text typed, quoted. */
+function askAnswerText(a: AskAnswer): string {
+  const parts = [...a.selected, ...(a.other !== undefined ? [JSON.stringify(a.other)] : [])]
+  return parts.length ? parts.join(", ") : "(none)"
+}
+
 /** A wrapped title cut to `rows`, its last row ending in an ellipsis when cut. */
 function fitTitle(title: string[], rows: number): string[] {
   if (title.length <= rows) return title
   const kept = title.slice(0, Math.max(1, rows))
   kept[kept.length - 1] = `${kept[kept.length - 1]}${glyphs.more}`
   return kept
+}
+
+/** Lines cut to `rows` from the end, the last kept one marking the cut. */
+function cutEnd(lines: string[], rows: number, theme: Theme): string[] {
+  if (lines.length <= rows) return lines
+  if (rows <= 0) return []
+  const kept = lines.slice(0, rows)
+  kept[rows - 1] = `${kept[rows - 1]}${theme.muted(` ${glyphs.more}`)}`
+  return kept
+}
+
+/**
+ * Lines cut to `rows`: the start and the end, with a marker in the middle saying how many
+ * were left out. The start (file names, first hunk) gets the extra row.
+ */
+function cutMiddle(lines: string[], rows: number, theme: Theme): string[] {
+  if (lines.length <= rows) return lines
+  if (rows <= 0) return []
+  const keep = rows - 1
+  const head = Math.ceil(keep / 2)
+  const tail = keep - head
+  const marker = theme.muted(`${glyphs.more} ${lines.length - keep} more lines ${glyphs.more}`)
+  return [...lines.slice(0, head), marker, ...lines.slice(lines.length - tail)]
 }

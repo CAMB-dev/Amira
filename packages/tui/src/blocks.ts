@@ -103,7 +103,16 @@ export class LinesBlock extends Block {
 
 /** A line drawn as it is, wrapped when the screen is narrower. */
 export function fixedLine(kind: BlockKind, line: string): LinesBlock {
-  return new LinesBlock(kind, (width) => wrapText(line, Math.max(1, width)), stripAnsi(line))
+  return fixedLines(kind, [line])
+}
+
+/** Lines drawn as they are, each wrapped when the screen is narrower. */
+export function fixedLines(kind: BlockKind, lines: string[]): LinesBlock {
+  return new LinesBlock(
+    kind,
+    (width) => lines.flatMap((l) => wrapText(l, Math.max(1, width))),
+    stripAnsi(lines.join("\n")),
+  )
 }
 
 export function userBlock(message: UserMessage): LinesBlock {
