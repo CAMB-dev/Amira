@@ -134,7 +134,7 @@ export class ScreenImage {
       // Not wanted lately: left for when it is. Those waiting hear of it, so a view that still
       // shows it (idle for a while) wants it again.
       this.state = "idle"
-    } else if (prepared && validPayload(prepared, this.protocol)) {
+    } else if (prepared && validPayload(prepared, this.protocol, this.fit)) {
       this.prepared = prepared
       this.state = "ready"
       this.hold(preparedChars(prepared))

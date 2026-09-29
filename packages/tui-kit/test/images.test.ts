@@ -92,6 +92,15 @@ test("a provider's payload is drawn only when it is what it says, and can carry 
   expect(validPayload({ protocol: "iterm2", data: "AAAA", size: 3 }, "iterm2")).toBe(true)
   expect(validPayload({ protocol: "iterm2", data: "AAAA\x1b\\", size: 3 }, "iterm2")).toBe(false)
   expect(validPayload(null, "sixel")).toBe(false)
+  // No more than was reserved: bands without a band break of their own, not more of them than
+  // the height has, and no larger than the size it was fitted to.
+  expect(validPayload(sixel, "sixel", fit)).toBe(true)
+  expect(validPayload({ ...sixel, phases: { 0: ["~~-~~-~~-~~", "~", "~"] } }, "sixel")).toBe(false)
+  expect(validPayload({ ...sixel, phases: { 0: ["~", "~", "~"] } }, "sixel")).toBe(false)
+  expect(validPayload({ ...sixel, phases: { 0: ['"1;1;9;999~'] } }, "sixel")).toBe(false)
+  expect(validPayload({ ...sixel, palette: "#0;2;1;1;1~~~" }, "sixel")).toBe(false)
+  expect(validPayload({ ...sixel, height: 13 }, "sixel", fit)).toBe(false)
+  expect(validPayload({ protocol: "kitty", width: 99, height: 1, data: "AAAA" }, "kitty", fit)).toBe(false)
 })
 
 test("the store: opened once per source, fitted here, encoded by the provider, failures remembered", async () => {
@@ -125,11 +134,59 @@ test("the store: opened once per source, fitted here, encoded by the provider, f
   expect(img.ready).toBe(true)
   expect(p.encoded.at(-1)).toMatchObject({ whole: false, fit: { cols: 4, rows: 3 } })
   expect(s.image(30, 5)).toBe(img)
-  // Bytes are told apart by what they are, not what they hold.
+  // Bytes are told apart by what they hold: a diagram rendered again is the same image.
   const data = new TextEncoder().encode("20x20")
   expect(await store.inline({ data }, 30)).toMatchObject({ cols: 2, rows: 1 })
-  expect(await store.inline({ data }, 30)).toMatchObject({ cols: 2, rows: 1 })
+  expect(await store.inline({ data: new TextEncoder().encode("20x20") }, 30)).toMatchObject({ cols: 2 })
+  expect(store.screen({ data: new TextEncoder().encode("20x20") })).toBe(store.screen({ data }))
   expect(p.opened.filter((o) => o === "<data>")).toHaveLength(1)
+})
+
+test("the store: what only ran out of time is not remembered, and is asked for again", async () => {
+  let delay = 80
+  const p = fakeProvider()
+  const slow = {
+    ...p,
+    open: async (...a: Parameters<typeof p.open>) => {
+      await Bun.sleep(delay)
+      return p.open(...a)
+    },
+  }
+  const store = new ImageStore({
+    support: { protocol: "sixel", cell: { width: 10, height: 20 } },
+    open: slow.open,
+    cwd: "/work",
+    maxRows: () => 5,
+    timeoutMs: 30,
+    openLimitMs: 200,
+  })
+  // Its turn came late: alt text this time, the image when asked again.
+  expect(await store.load("cat-40x60.png", 30)).toBeUndefined()
+  await Bun.sleep(100)
+  delay = 0
+  expect(await store.load("cat-40x60.png", 30)).toMatchObject({ cols: 4, rows: 3 })
+  // A provider that never answers is given up on (its signal aborts); the full screen asks again later.
+  let signal: AbortSignal | undefined
+  const hanging = new ImageStore({
+    support: { protocol: "sixel", cell: { width: 10, height: 20 } },
+    open: (_input, ctx) => {
+      signal = ctx.signal
+      return new Promise(() => {})
+    },
+    cwd: "/work",
+    maxRows: () => 5,
+    openLimitMs: 40,
+  })
+  const s = hanging.screen({ url: "x-10x10.png" })
+  let settled = false
+  s.onSettled(() => {
+    settled = true
+  })
+  await Bun.sleep(80)
+  expect(settled).toBe(true)
+  expect(s.state).toBe("failed")
+  expect(signal?.aborted).toBe(true)
+  expect(hanging.screen({ url: "x-10x10.png" })).not.toBe(s)
 })
 
 test("the store: a provider that answers with something that is not a payload draws nothing", async () => {

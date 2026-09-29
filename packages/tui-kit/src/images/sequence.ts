@@ -39,28 +39,39 @@ export function inlineImage(p: ImagePayload, fit: Fit): ImageBlock {
 }
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
-/** Sixel data: printable ASCII only, so nothing in it can end the image or start another sequence. */
-const SIXEL = /^[ -~]*$/
+/** Sixel color registers: `#i;2;r;g;b`, nothing else. */
+const PALETTE = /^[#0-9;]*$/
+/**
+ * One band of Sixel data: sixels `?`–`~`, repeats `!n`, colors `#n` (`;` in a definition),
+ * carriage returns `$`. No band break, raster attributes or anything that ends the image.
+ */
+const BAND = /^[?-~!#$0-9;]*$/
 
 /**
- * Whether a payload from a provider is what it says: the right protocol, sizes that are whole
- * numbers, and data that cannot carry escape sequences (Sixel printable ASCII, base64 for the
- * others). What fails is not drawn.
+ * Whether a payload from a provider is what it says and draws no more than was reserved for
+ * it: the right protocol; whole sizes, within `fit` when given; data that cannot carry escape
+ * sequences (base64 for kitty and iTerm2; for Sixel, color registers only in the palette, and
+ * bands of sixel data without a band break `-` or raster attributes `"`, no more of them than
+ * the height has). What fails is not drawn.
  */
-export function validPayload(p: unknown, protocol: string): p is ImagePayload {
+export function validPayload(p: unknown, protocol: string, fit?: Fit): p is ImagePayload {
   if (!p || typeof p !== "object") return false
   const v = p as Record<string, unknown>
   if (v.protocol !== protocol) return false
   const size = (n: unknown) => Number.isInteger(n) && (n as number) >= 1
   if (v.protocol === "iterm2") return size(v.size) && typeof v.data === "string" && BASE64.test(v.data)
   if (!size(v.width) || !size(v.height)) return false
+  const width = v.width as number
+  const height = v.height as number
+  if (fit && (width > fit.width || height > fit.height)) return false
   if (v.protocol === "kitty") return typeof v.data === "string" && BASE64.test(v.data)
-  if (typeof v.palette !== "string" || !SIXEL.test(v.palette)) return false
+  if (typeof v.palette !== "string" || !PALETTE.test(v.palette)) return false
   const phases = v.phases as Record<string, unknown> | undefined
   if (!phases || typeof phases !== "object" || !Array.isArray(phases[0])) return false
   for (const [k, bands] of Object.entries(phases)) {
     if (!/^[0-5]$/.test(k) || !Array.isArray(bands)) return false
-    for (const b of bands) if (typeof b !== "string" || !SIXEL.test(b)) return false
+    if (bands.length > Math.ceil((height - Number(k)) / 6)) return false
+    for (const b of bands) if (typeof b !== "string" || !BAND.test(b)) return false
   }
   return true
 }

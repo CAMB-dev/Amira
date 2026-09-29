@@ -14,6 +14,8 @@ export interface ImageStoreOptions {
   maxRows: () => number
   /** How long opening and encoding an image for the inline transcript may take. Default 10 s. */
   timeoutMs?: number
+  /** How long a provider may take to open an image at all before it is given up on. Default 60 s. */
+  openLimitMs?: number
 }
 
 /** Opened images remembered (failures too), by source; the providers decide what they keep of each. */
@@ -30,12 +32,11 @@ const INLINE_CHARS = 32 * 1024 * 1024
  */
 export class ImageStore {
   readonly timeoutMs: number
-  private opened = new Map<string, Promise<OpenedImage | undefined>>()
+  private opened = new Map<string, Promise<OpenedImage | undefined | typeof LATE>>()
   private inlines = new Map<string, { block: Promise<ImageBlock | undefined>; chars: number }>()
   private inlineChars = 0
   private screens = new Map<string, ScreenSource>()
-  private dataIds = new WeakMap<Uint8Array, number>()
-  private nextData = 1
+  private dataHashes = new WeakMap<Uint8Array, string>()
 
   constructor(private opts: ImageStoreOptions) {
     this.timeoutMs = opts.timeoutMs ?? 10_000
@@ -67,22 +68,31 @@ export class ImageStore {
       return hit.block
     }
     const { protocol, cell } = this.opts.support
-    const block = (async () => {
-      const image = await this.open(input, source)
-      const fit = image && fitImage(image, maxCols, maxRows, cell)
+    const started = performance.now()
+    const done = (async (): Promise<ImageBlock | undefined | typeof LATE> => {
+      const image = await withTimeout(this.open(input, source), this.timeoutMs)
+      if (image === LATE || image === undefined) return image
+      const fit = fitImage(image, maxCols, maxRows, cell)
       if (!fit) return undefined
       // Encoding is slow: let the frame that shows the fallback be drawn first.
       await new Promise((r) => setTimeout(r, 0))
       const payload = await withTimeout(
         image.encode({ protocol, fit, cellHeight: cell.height, whole: true }),
-        this.timeoutMs,
+        Math.max(1, this.timeoutMs - (performance.now() - started)),
       )
-      return payload && validPayload(payload, protocol) ? inlineImage(payload, fit) : undefined
+      if (payload === LATE) return LATE
+      return payload && validPayload(payload, protocol, fit) ? inlineImage(payload, fit) : undefined
     })().catch(() => undefined)
+    const block = done.then((b) => (b === LATE ? undefined : b))
     const entry = { block, chars: 0 }
     this.inlines.set(key, entry)
-    block.then((b) => {
+    done.then((b) => {
       if (this.inlines.get(key) !== entry) return
+      // Out of time (its turn came late, say): not remembered, so it can be tried again.
+      if (b === LATE) {
+        this.inlines.delete(key)
+        return
+      }
       entry.chars = b?.seq.length ?? 0
       this.inlineChars += entry.chars
       this.trimInline()
@@ -115,7 +125,11 @@ export class ImageStore {
     const s = new ScreenSource(this.opts.support)
     this.screens.set(source, s)
     this.open(input, source).then(
-      (image) => s.settle(image),
+      (image) => {
+        // Given up on (a provider that never answered): shown as its alt text, asked again later.
+        if (image === LATE && this.screens.get(source) === s) this.screens.delete(source)
+        s.settle(image === LATE ? undefined : image)
+      },
       () => s.settle(undefined),
     )
     for (const k of this.screens.keys()) {
@@ -125,22 +139,31 @@ export class ImageStore {
     return s
   }
 
-  /** The image opened, once per source: a failure is remembered too, unless it only ran out of time. */
-  private open(input: ImageInput, source: string): Promise<OpenedImage | undefined> {
+  /**
+   * The image opened, once per source: a failure is remembered too. The providers keep their
+   * own time for the work (a download's starts when it gets its turn); one that has not answered
+   * after OPEN_LIMIT_MS is given up on (its signal aborts), and that is not remembered.
+   */
+  private open(input: ImageInput, source: string): Promise<OpenedImage | undefined | typeof LATE> {
     const hit = this.opened.get(source)
     if (hit) {
       this.opened.delete(source)
       this.opened.set(source, hit)
       return hit
     }
-    const signal = AbortSignal.timeout(this.timeoutMs)
-    const opened = this.opts
-      .open(input, { protocol: this.opts.support.protocol, cwd: this.cwd(), signal })
-      .catch(() => undefined)
-      .then((image) => {
-        if (!image && signal.aborted && this.opened.get(source) === opened) this.opened.delete(source)
-        return image
-      })
+    const abort = new AbortController()
+    const opened: Promise<OpenedImage | undefined | typeof LATE> = withTimeout(
+      this.opts
+        .open(input, { protocol: this.opts.support.protocol, cwd: this.cwd(), signal: abort.signal })
+        .catch(() => undefined),
+      this.opts.openLimitMs ?? OPEN_LIMIT_MS,
+    ).then((image) => {
+      if (image === LATE) {
+        abort.abort()
+        if (this.opened.get(source) === opened) this.opened.delete(source)
+      }
+      return image
+    })
     this.opened.set(source, opened)
     for (const k of this.opened.keys()) {
       if (this.opened.size <= OPENED_KEPT) break
@@ -154,22 +177,31 @@ export class ImageStore {
     return typeof cwd === "string" ? cwd : cwd()
   }
 
-  /** What tells images apart: a URL (a relative one with the directory it is found from), or the bytes. */
+  /**
+   * What tells images apart: a URL (a relative one with the directory it is found from), or
+   * what the bytes hold (a diagram rendered again for another width is the same image).
+   */
   private key(input: ImageInput): string {
     if ("url" in input)
       return /^[a-z][a-z0-9+.-]*:\/\//i.test(input.url) ? input.url : `${this.cwd()}\0${input.url}`
-    let id = this.dataIds.get(input.data)
-    if (id === undefined) {
-      id = this.nextData++
-      this.dataIds.set(input.data, id)
+    let hash = this.dataHashes.get(input.data)
+    if (hash === undefined) {
+      hash = `${Bun.hash(input.data).toString(36)}:${input.data.length}`
+      this.dataHashes.set(input.data, hash)
     }
-    return `\0data:${id}`
+    return `\0data:${hash}`
   }
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+/** A provider that has not opened an image after this long is given up on. */
+const OPEN_LIMIT_MS = 60_000
+
+/** What a promise that took too long resolves to. */
+const LATE = Symbol("late")
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof LATE> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => resolve(undefined), ms)
+    const timer = setTimeout(() => resolve(LATE), ms)
     ;(timer as { unref?: () => void }).unref?.()
     p.then(
       (v) => {

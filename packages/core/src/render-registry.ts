@@ -24,6 +24,8 @@ interface RendererEntry {
 
 const DEFAULT_WAIT_MS = 3000
 const MAX_WAIT_MS = 15_000
+/** Rows a rendering may take: more are cut (and reported), so a runaway one cannot flood the transcript. */
+const MAX_LINES = 2000
 
 const KINDS = new Set<ViewLine["kind"]>([
   "text",
@@ -113,9 +115,11 @@ export class MarkdownRendererRegistry {
 
   /** How long the inline transcript waits for the node's async result: the longest its renderers ask. */
   waitMs(node: MarkdownNode): number {
-    let ms = 0
-    for (const e of this.#matching(node)) ms = Math.max(ms, e.def.waitMs ?? DEFAULT_WAIT_MS)
-    return Math.min(MAX_WAIT_MS, Math.max(0, ms || DEFAULT_WAIT_MS))
+    const asked = this.#matching(node).map((e) => {
+      const ms = e.def.waitMs
+      return typeof ms === "number" && Number.isFinite(ms) ? Math.max(0, ms) : DEFAULT_WAIT_MS
+    })
+    return asked.length ? Math.min(MAX_WAIT_MS, Math.max(...asked)) : DEFAULT_WAIT_MS
   }
 
   /**
@@ -179,6 +183,11 @@ export class MarkdownRendererRegistry {
           .replace(/\t/g, "  ")
         for (const row of text.split("\n"))
           lines.push({ kind, text: row.replace(ESCAPES, "").replace(CONTROLS, "") })
+        if (lines.length > MAX_LINES) break
+      }
+      if (lines.length > MAX_LINES) {
+        this.#fail(entry, new Error(`render returned more than ${MAX_LINES} lines; the rest were left out`))
+        lines.length = MAX_LINES
       }
       return { lines }
     }

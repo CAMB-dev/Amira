@@ -2697,6 +2697,35 @@ test("inline: a rendering on its way holds what follows; one that takes too long
   await slow.exited
 })
 
+test("inline: a resumed history renders its blocks through extensions too, in order, waiting for late ones", async () => {
+  const calls: { code: string; width: number }[] = []
+  const reply = (text: string): Message => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    model: { provider: "mock", model: "m1" },
+  })
+  const { terminal, all, exited } = await setup([], {
+    rows: 40,
+    markdown: [boxRenderer(calls, 60)],
+    history: [
+      { role: "user", content: [{ type: "text", text: "draw" }] },
+      reply("First:\n\n```box\nA\n```\n\nafter A"),
+      reply("```box\nB\n```\n\nafter B"),
+    ],
+  })
+  await waitFor(() => all().includes("── resumed"), "history")
+  // Meanwhile what waits for them shows below as it is, the blocks as code.
+  await waitFor(() => all().includes("│ B │"), "the renderings")
+  await Bun.sleep(50)
+  const text = all()
+  expect(text).toContain("  First:\n\n  ┌───┐\n  │ A │\n  └───┘\n\n  after A")
+  expect(text).toContain("  ┌───┐\n  │ B │\n  └───┘\n\n  after B")
+  expect(text).not.toContain("╭─ box")
+  expect(calls.map((c) => c.code)).toEqual(["A", "B"])
+  terminal.send("\x03")
+  await exited
+})
+
 test("inline: a renderer's image goes to the image providers; a renderer that throws leaves the code", async () => {
   const opened: string[] = []
   const errors: string[] = []

@@ -66,8 +66,11 @@ export interface MarkdownRendererDefinition {
    */
   waitMs?: number
   /**
-   * Renders a node. Called once per node, text and width (results are kept), when the node is
-   * complete: a code block once it closes. May be async; Amira's own rendering shows meanwhile.
+   * Renders a node, once it is complete (a code block once it closes). Results are kept by the
+   * node's text and the context, so it is asked again only for another width, another answer
+   * of `images` or `maxImageRows`, after the renderers changed, or once a result was let go of
+   * (keep expensive work cached yourself, by the source). May be async; Amira's own rendering
+   * shows meanwhile. Lines past 2000 are cut.
    */
   render(
     node: MarkdownNode,

@@ -1,6 +1,7 @@
 import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
 import {
   type MarkdownNodes,
+  MarkdownStream,
   type MarkdownStreamOptions,
   renderMarkdown,
   type Theme,
@@ -52,12 +53,10 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
       for (const b of m.content) {
         if (b.type === "text" && b.text.trim()) {
           // Markdown, as the reply showed when it streamed in.
-          const rows = renderMarkdown(
-            b.text,
-            Math.max(1, opts.width - visibleWidth(gutter)),
-            theme,
-            markdownOptions(opts),
-          )
+          const width = Math.max(1, opts.width - visibleWidth(gutter))
+          const rows = opts.nodes
+            ? committedMarkdown(b.text, width, theme, markdownOptions(opts))
+            : renderMarkdown(b.text, width, theme, markdownOptions(opts))
           out.push(...t.block("assistant", replyRows(rows)))
         } else if (b.type === "toolCall") {
           const result = results.get(b.id) ?? { content: [], isError: true }
@@ -83,6 +82,20 @@ export function historySeparator(theme: Theme, s?: { id: string; updatedAt?: num
     ? ` resumed ${s.id}${s.updatedAt !== undefined ? ` · ${localTime(s.updatedAt)}` : ""} `
     : " resumed "
   return theme.muted(`${glyphs.rule.repeat(2)}${label}${glyphs.rule.repeat(2)}`)
+}
+
+/**
+ * A whole Markdown text as rows to commit, as the live transcript commits a reply: images and
+ * what extensions render go as they are ready, or as markers the renderer resolves in order.
+ */
+function committedMarkdown(text: string, width: number, theme: Theme, opts: MarkdownStreamOptions): string[] {
+  const m = new MarkdownStream(opts)
+  const rows: string[] = []
+  m.append(text)
+  m.render(width, { theme, color: true, rows: Number.POSITIVE_INFINITY, commit: (r) => rows.push(...r) })
+  rows.push(...m.take(width))
+  while (rows.length > 0 && rows[rows.length - 1]!.trim() === "") rows.pop()
+  return rows
 }
 
 function markdownOptions(opts: HistoryOptions): MarkdownStreamOptions {

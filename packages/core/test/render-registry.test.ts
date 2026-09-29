@@ -128,6 +128,25 @@ test("results are checked: plain text only, a row per line, known kinds; images 
   expect(r.render(code("x"), ctx)).toBeUndefined()
 })
 
+test("wait times as asked (0 too, nonsense as the default); a runaway rendering is cut and reported", () => {
+  const errors: string[] = []
+  const r = new MarkdownRendererRegistry((_s, e) => errors.push(e))
+  r.register({ id: "now", match: { codeLang: ["a"] }, waitMs: 0, render: () => undefined })
+  r.register({ id: "odd", match: { codeLang: ["b"] }, waitMs: Number.NaN, render: () => undefined })
+  expect(r.waitMs(code("a"))).toBe(0)
+  expect(r.waitMs(code("b"))).toBe(3000)
+  r.register({
+    id: "flood",
+    match: { codeLang: ["c"] },
+    render: () => ({ lines: Array.from({ length: 5000 }, () => ({ kind: "text" as const, text: "x" })) }),
+  })
+  const out = r.render(code("c"), ctx) as { lines: unknown[] }
+  expect(out.lines).toHaveLength(2000)
+  expect(errors).toEqual([
+    'markdown renderer "flood" failed: render returned more than 2000 lines; the rest were left out',
+  ])
+})
+
 test("renderers need an id, a match and a function; unregistering bumps the version", () => {
   const r = new MarkdownRendererRegistry()
   const render = () => undefined
