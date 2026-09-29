@@ -11,6 +11,7 @@ import {
   loadIndex,
   PackageError,
   packageScope,
+  readLock,
   removePackage,
   restorePackages,
   searchIndex,
@@ -116,23 +117,26 @@ export async function runExtCommand(
       }
       case "update":
       case "upgrade": {
-        const installed = listInstalled({ home, cwd })
-        for (const name of rest) {
-          if (installed.some((p) => p.name === name && p.scope === scope.kind)) continue
-          const other = installed.find((p) => p.name === name)
-          const hint = other
-            ? `; it is in the ${other.scope} scope${other.scope === "project" ? " (use --project)" : " (leave out --project)"}`
+        const mine = readLock(scope.lockFile).packages
+        const otherKind = scope.kind === "user" ? "project" : "user"
+        // Only for hints: a broken lock file in the other scope does not stop this update.
+        let others: string[] = []
+        try {
+          others = Object.keys(readLock(packageScope(otherKind, { home, cwd }).lockFile).packages)
+        } catch {}
+        const unknown = rest.filter((name) => !mine[name])
+        for (const name of unknown) {
+          const hint = others.includes(name)
+            ? `; it is in the ${otherKind} scope${otherKind === "project" ? " (use --project)" : " (leave out --project)"}`
             : ""
           io.stderr(`amira: ${name} is not installed in the ${scope.kind} scope${hint}\n`)
-          return 1
         }
+        if (unknown.length) return 1
         const results = await updatePackages(install, rest)
         if (!results.length) io.stdout(`No packages in the ${scope.kind} scope.\n`)
-        const otherKind = scope.kind === "user" ? "project" : "user"
-        const others = rest.length ? [] : installed.filter((p) => p.scope === otherKind)
-        if (others.length) {
+        if (!rest.length && others.length) {
           io.stderr(
-            `amira: the ${otherKind} scope's packages (${others.map((p) => p.name).join(", ")}) are updated with amira ext update${otherKind === "project" ? " --project" : ""}\n`,
+            `amira: the ${otherKind} scope's packages (${others.join(", ")}) are updated with amira ext update${otherKind === "project" ? " --project" : ""}\n`,
           )
         }
         let code = 0

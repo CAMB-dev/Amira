@@ -191,9 +191,17 @@ test("ext update names the scope a package is in, and the other scope's packages
   )
   const project = await ext(["update", "--project", "mine"])
   expect(project.io.err).toContain("it is in the user scope (leave out --project)")
-  expect((await ext(["update", "nowhere"])).io.err).toBe(
-    "amira: nowhere is not installed in the user scope\n",
+  expect((await ext(["update", "nowhere", "theirs"])).io.err).toBe(
+    "amira: nowhere is not installed in the user scope\namira: theirs is not installed in the user scope; it is in the project scope (use --project)\n",
   )
+  // A broken lock file in the other scope does not stop an update of this one.
+  const projectLock = path.join(cwd, ".amira", "packages.lock")
+  const saved = await Bun.file(projectLock).text()
+  writeFileSync(projectLock, "{ not json")
+  const broken = await ext(["update", "mine"])
+  expect(broken.code).toBe(0)
+  expect(broken.io.out).toBe("mine is up to date (1.0.0 (local copy))\n")
+  writeFileSync(projectLock, saved)
   const all = await ext(["update"])
   expect(all.code).toBe(0)
   expect(all.io.out).toBe("mine is up to date (1.0.0 (local copy))\n")
