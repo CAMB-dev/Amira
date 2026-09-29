@@ -15,6 +15,8 @@ interface Drawn {
   frame: number
   lines: string[]
   plain?: string[]
+  /** The find bar's matches in these lines, for the query (as searched) they were found for. */
+  found?: { query: string; matches: Match[][] }
 }
 
 /** What a row of the last frame showed: a line of a block, or the gap before one (`line` -1). */
@@ -781,50 +783,17 @@ export class TranscriptPane {
     const exact = this.findQuery !== this.findQuery.toLowerCase()
     const q = exact ? this.findQuery : this.findQuery.toLowerCase()
     for (const block of this.blocks) {
-      const plain = this.plain(block, env)
-      let text = ""
-      /** The line and column of each character of `text`; -1 for what joins lines. */
-      const lineOf: number[] = []
-      const colOf: number[] = []
-      for (let line = 0; line < plain.length; line++) {
-        const raw = plain[line]!
-        const start = raw.length - raw.trimStart().length
-        const body = raw.slice(start).trimEnd()
-        // Text wraps after a wide (CJK) character without dropping a space: those rows join as is.
-        const joint = !text ? "" : !body ? "\n" : endsWide(text) ? "" : " "
-        if (joint) {
-          text += joint
-          lineOf.push(-1)
-          colOf.push(-1)
+      // Found again only in blocks drawn anew (streaming, changed): rerunning stays cheap.
+      const d = this.draw(block, env)
+      if (d.found?.query !== q) d.found = { query: q, matches: findIn(block, this.plain(block, env), q, exact) }
+      for (const match of d.found.matches) {
+        this.matches.push(match)
+        let byLine = this.matchIndex.get(block)
+        if (!byLine) {
+          byLine = new Map()
+          this.matchIndex.set(block, byLine)
         }
-        for (let k = 0; k < body.length; k++) {
-          lineOf.push(line)
-          colOf.push(start + k)
-        }
-        text += body
-      }
-      const lower = exact ? text : text.toLowerCase()
-      const hay = lower.length === text.length ? lower : text
-      let at = hay.indexOf(q)
-      while (at !== -1) {
-        const match: Match[] = []
-        for (let k = at; k < at + q.length; k++) {
-          const line = lineOf[k]!
-          if (line < 0) continue
-          const last = match[match.length - 1]
-          if (last?.line === line) last.len = colOf[k]! + 1 - last.col
-          else match.push({ block, line, col: colOf[k]!, len: 1 })
-        }
-        if (match.length) {
-          this.matches.push(match)
-          let byLine = this.matchIndex.get(block)
-          if (!byLine) {
-            byLine = new Map()
-            this.matchIndex.set(block, byLine)
-          }
-          for (const m of match) byLine.set(m.line, [...(byLine.get(m.line) ?? []), m])
-        }
-        at = hay.indexOf(q, at + Math.max(1, q.length))
+        for (const m of match) byLine.set(m.line, [...(byLine.get(m.line) ?? []), m])
       }
     }
     if (was) {
@@ -1021,6 +990,48 @@ export class TranscriptPane {
   private reindex(from: number): void {
     for (let i = from; i < this.blocks.length; i++) this.blocks[i]!.index = i
   }
+}
+
+/** The matches of `q` in a block's rows `plain`, as `runFind` finds them. */
+function findIn(block: Block, plain: readonly string[], q: string, exact: boolean): Match[][] {
+  let text = ""
+  /** The line and column of each character of `text`; -1 for what joins lines. */
+  const lineOf: number[] = []
+  const colOf: number[] = []
+  for (let line = 0; line < plain.length; line++) {
+    const raw = plain[line]!
+    const start = raw.length - raw.trimStart().length
+    const body = raw.slice(start).trimEnd()
+    // Text wraps after a wide (CJK) character without dropping a space: those rows join as is.
+    const joint = !text ? "" : !body ? "\n" : endsWide(text) ? "" : " "
+    if (joint) {
+      text += joint
+      lineOf.push(-1)
+      colOf.push(-1)
+    }
+    for (let k = 0; k < body.length; k++) {
+      lineOf.push(line)
+      colOf.push(start + k)
+    }
+    text += body
+  }
+  const lower = exact ? text : text.toLowerCase()
+  const hay = lower.length === text.length ? lower : text
+  const out: Match[][] = []
+  let at = hay.indexOf(q)
+  while (at !== -1) {
+    const match: Match[] = []
+    for (let k = at; k < at + q.length; k++) {
+      const line = lineOf[k]!
+      if (line < 0) continue
+      const last = match[match.length - 1]
+      if (last?.line === line) last.len = colOf[k]! + 1 - last.col
+      else match.push({ block, line, col: colOf[k]!, len: 1 })
+    }
+    if (match.length) out.push(match)
+    at = hay.indexOf(q, at + Math.max(1, q.length))
+  }
+  return out
 }
 
 /** Whether `text` ends with a wide (two-cell) character, after which text wraps without a space. */

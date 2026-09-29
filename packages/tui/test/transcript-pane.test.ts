@@ -346,6 +346,14 @@ test("performance: long sessions scroll and stream with per-frame cost bounded b
   expect(p.matchCount).toBe(5000)
   console.log("find over 200k lines:", `${find.toFixed(1)} ms`)
   expect(find).toBeLessThan(3000)
+  // Found again as the transcript grows (as while a reply streams): only the new block is read.
+  const drawn = all.reduce((n, b) => n + b.draws, 0)
+  p.add(new ReplyBlock("l39 once more", false, false))
+  const again = time(() => p.render(e, 40))
+  expect(p.matchCount).toBe(5001)
+  expect(all.reduce((n, b) => n + b.draws, 0)).toBe(drawn)
+  console.log("find again after a block came:", `${again.toFixed(1)} ms`)
+  expect(again).toBeLessThan(Math.max(50, find / 2))
 })
 
 test("a streaming reply folded and unfolded lays its image out again", async () => {
