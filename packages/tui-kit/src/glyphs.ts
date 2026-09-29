@@ -5,7 +5,10 @@
 export interface Glyphs {
   /** List bullets by nesting depth; deeper levels repeat the last one. */
   bullets: string[]
-  /** Task list items: `- [ ]` and `- [x]`. */
+  /**
+   * Task list items: `- [ ]` and `- [x]`. Plain text, not ☐/☑: Windows Terminal draws ☑ as a
+   * two-cell emoji, which ran into the text after it.
+   */
   taskOpen: string
   taskDone: string
   /** Drawn left of each blockquote row, once per nesting level. */
@@ -26,8 +29,8 @@ export interface Glyphs {
 
 export const defaultGlyphs: Glyphs = {
   bullets: ["•", "◦", "▪"],
-  taskOpen: "☐",
-  taskDone: "☑",
+  taskOpen: "[ ]",
+  taskDone: "[✓]",
   quoteBar: "▎",
   rule: "─",
   codeTop: "╭─",
