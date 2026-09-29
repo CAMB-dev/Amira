@@ -36,3 +36,30 @@ export interface RunCommandResult {
   /** False when the process tree could not be contained, so kills may have missed processes. */
   contained: boolean
 }
+
+/** What a process started with ExtensionAPI.openPipe reports, in order. */
+export type PipeEvent =
+  | { type: "spawned"; pid: number }
+  | { type: "stdout"; data: string }
+  | { type: "stderr"; data: string }
+  /**
+   * The last event. `error`: the process failed to start (then no "spawned" came before), or
+   * the host lost track of it (it may still run).
+   */
+  | { type: "exit"; code: number | null; error?: string }
+
+export interface OpenPipeOptions {
+  cwd: string
+  /** The whole environment of the process. Default: Amira's own. */
+  env?: Record<string, string | undefined>
+  /** Called with each event; a throw is ignored and does not stop later events. */
+  onEvent(event: PipeEvent): void
+}
+
+/** A long-lived process with piped stdio, e.g. a language server (ExtensionAPI.openPipe). */
+export interface PipeProcess {
+  /** Writes to its stdin; ignored once it has exited. Writes before "spawned" are kept for it. */
+  write(data: string): void
+  /** Ends its stdin, then kills its process tree if it has not exited after `graceMs`. */
+  close(graceMs: number): void
+}

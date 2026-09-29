@@ -139,7 +139,7 @@ test("tool.call.after can add to a result before the model and tool.execute.end 
   agent.tools.register(echo, "test")
   const seen: string[] = []
   agent.interceptors.add("tool.call.after", (v) => {
-    seen.push(`${v.name}:${String(v.args.text)}`)
+    seen.push(`${v.name}:${String(v.args.text)}:${v.rejected ?? "ran"}`)
     if (v.args.text !== "a") return { action: "block", reason: "ignored" }
     return {
       action: "modify",
@@ -159,8 +159,8 @@ test("tool.call.after can add to a result before the model and tool.execute.end 
   }))
   await agent.prompt("go")
   await bus.flush()
-  // Only calls that ran reach it: not the unknown tool.
-  expect(seen).toEqual(["echo:a", "echo:b"])
+  // Rejected calls reach it too, marked as such.
+  expect(seen.toSorted()).toEqual(["echo:a:ran", "echo:b:ran", "nope:undefined:unknownTool"])
   const results = mock.requests[1]!.messages.filter((m) => m.role === "toolResult")
   expect(results[0]!.content).toEqual([
     { type: "text", text: "echo: a" },

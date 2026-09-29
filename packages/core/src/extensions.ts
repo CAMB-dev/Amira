@@ -15,6 +15,7 @@ import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { PanelRegistry } from "./panel-registry.ts"
+import { openExtensionPipe } from "./pipes.ts"
 import { SkillRegistry } from "./skills.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
@@ -286,6 +287,7 @@ export class ExtensionHost {
         })
       },
       registerToolRenderer: (toolName, presenter) => track(this.renderers.register(toolName, presenter)),
+      decorateToolRenderer: (toolName, decorate) => track(this.renderers.decorate(toolName, decorate)),
       // A kind that cannot be taken skips only that view.
       registerView: (view) => {
         try {
@@ -297,6 +299,7 @@ export class ExtensionHost {
       },
       requestRender: () => this.#requestRender(),
       runCommand: (argv, options) => runExtensionCommand(argv, options),
+      openPipe: (argv, options) => openExtensionPipe(argv, options),
       ui: this.#uiFor(source, track),
     }
   }

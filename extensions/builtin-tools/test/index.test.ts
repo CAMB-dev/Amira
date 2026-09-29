@@ -24,6 +24,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
       renderers.push(name)
       return () => {}
     },
+    decorateToolRenderer: () => () => {},
     registerView: () => () => {},
     registerPanel: () => () => {},
     requestRender: () => {},
@@ -31,6 +32,9 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     on: () => () => {},
     intercept: () => () => {},
     runCommand: () => Promise.reject(new Error("not used")),
+    openPipe: () => {
+      throw new Error("not used")
+    },
     ui: {
       select: async () => undefined,
       confirm: async () => false,

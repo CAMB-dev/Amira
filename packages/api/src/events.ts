@@ -244,17 +244,26 @@ export interface InterceptorMap {
   /** Runs before a tool executes. Only `args` may be modified; block returns an error result to the model. */
   "tool.call.before": { readonly toolCallId: string; readonly name: string; args: Record<string, unknown> }
   /**
-   * Runs after a tool ran, before its result reaches the model and tool.execute.end is
-   * emitted; not for calls that were rejected, blocked or aborted first. Only `result` may be
-   * modified, e.g. to add a formatter's complaints or a language server's diagnostics to what
-   * the model reads. block counts as pass. Failures pass, and the result stays as it was, as it
-   * does when the modified result has no `content`.
+   * Runs once a tool call has its result, before the result reaches the model or the history
+   * and before tool.execute.end: for calls that ran, and for rejected ones (`rejected` says
+   * why: "blocked" (also not approved), "unknownTool" or "invalidArgs"), not for calls cut off by an
+   * interrupt. Only `result` may be modified, e.g. to add a formatter's complaints or a
+   * language server's diagnostics for the file an edit touched. block counts as pass. Failures
+   * pass, and the result stays as it was, as it does when the modified result has no `content`.
+   * `pending` lists the other calls of the same model reply that have no result yet (running
+   * or still to start), so a handler can wait for the last of several edits and act once.
+   * Handlers that change files (formatters) should use a lower `priority` than ones that
+   * read them (diagnostics), so the readers see the final contents.
    */
   "tool.call.after": {
     readonly toolCallId: string
     readonly name: string
-    /** The arguments the tool ran with. */
+    /** The arguments the tool ran with (after tool.call.before), or was called with if rejected first. */
     readonly args: Readonly<Record<string, unknown>>
+    /** The calling session's working directory, which relative paths in `args` are relative to. */
+    readonly cwd: string
+    readonly rejected?: ToolRejection
+    readonly pending: readonly { readonly toolCallId: string; readonly name: string }[]
     result: ToolResult
   }
   /**
