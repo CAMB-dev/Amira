@@ -1167,10 +1167,9 @@ test("/clear starts the transcript afresh: find, copying, selecting and the prin
     api.registerCommand({
       name: "clear",
       description: "",
-      run: async (_a, ctx) => {
+      run: async () => {
         next = new Agent({ ai, model: ai.model("mock/m1"), cwd: "/work/proj", systemPrompt: "", bus })
         commands!.switchTo(next)
-        ctx.print(`Started a new session (${next.sessionId}).`)
       },
     })
   }, "test-clear")
@@ -1180,6 +1179,8 @@ test("/clear starts the transcript afresh: find, copying, selecting and the prin
   terminal.send("/clear\r")
   await waitFor(() => next !== undefined && view().includes("── new session"), "the new session")
   expect(view()).toContain(`── new session ${next!.sessionId} `)
+  // The boundary is the one place that names it.
+  expect(view().split(next!.sessionId)).toHaveLength(2)
   expect(view()).toContain("Amira · mock/m1")
   expect(view()).not.toContain("old question")
   expect(view()).not.toContain("old answer")

@@ -177,7 +177,8 @@ export default defineExtension((api: ExtensionAPI) => {
     description: "Start a new session with an empty conversation",
     async run(_args, ctx) {
       await ctx.session.newSession()
-      ctx.print(`Started a new session (${ctx.session.info().id}).`)
+      // The TUI names the new session in the boundary line it starts the transcript with.
+      if (ctx.frontend !== "tui") ctx.print(`Started a new session (${ctx.session.info().id}).`)
     },
   })
 
