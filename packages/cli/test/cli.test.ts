@@ -484,7 +484,12 @@ test("an approval may be given for the rest of the session, or refused with what
     approved: false,
     reason: "the user said no: use trash instead",
   })
-  expect(asked[0]).toMatchObject({ kind: "confirm", always: true, other: true, source: "approval" })
+  expect(asked[0]).toMatchObject({
+    kind: "confirm",
+    always: "this session for bash (policy)",
+    other: true,
+    source: "approval",
+  })
   expect(await approve(request, signal)).toEqual({ approved: true })
   // Not asked again for the same tool and reason; asked for another reason.
   expect(await approve({ ...request, args: { command: "rm y" } }, signal)).toEqual({ approved: true })

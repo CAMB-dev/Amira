@@ -141,6 +141,27 @@ test("Other opens a text field in its row; Esc closes the field, then cancels th
   const cancel = approval()
   cancel.press("up", "enter", "escape", "escape")
   expect(cancel.answers).toEqual([undefined])
+  // Ctrl+C in the field bails out of the whole dialog at once.
+  const bail = approval()
+  bail.press("up", "enter")
+  bail.dialog.handleInput(key("c", { ctrl: true }))
+  expect(bail.answers).toEqual([undefined])
+})
+
+test("a confirm's always choice says how far it reaches when the asker says so", () => {
+  const r: DialogRequest = {
+    kind: "confirm",
+    requestId: "c",
+    title: "Allow bash?",
+    always: "for bash (policy)",
+  }
+  const { rows, press, answers } = open(r)
+  expect(rows()[3]).toBe("  Yes, and don't ask again for bash (policy)")
+  press("down", "enter")
+  expect(answers).toEqual(["always"])
+  expect(dialogEchoLines(r, "always", plain.theme)).toEqual([
+    "┃ ? Allow bash? › Yes, and don't ask again for bash (policy)",
+  ])
 })
 
 test("a digit chooses an option of a short list; it shows before the option", () => {

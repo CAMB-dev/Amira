@@ -272,8 +272,11 @@ export function userApprover(ui: UiRequests): Approver {
     if (allowed.has(key)) return { approved: true }
     const args = JSON.stringify(request.args)
     const detail = `${request.reason}\n${args.length > 300 ? `${args.slice(0, 297)}...` : args}`
+    // "Always" covers this tool asked about for this reason, and the choice says so.
+    const reason = request.reason.length > 40 ? `${request.reason.slice(0, 39)}…` : request.reason
+    const always = `this session for ${request.name} (${reason})`
     const answer = await ui.ask(
-      { kind: "confirm", title: `Allow ${request.name}?`, message: detail, always: true, other: true },
+      { kind: "confirm", title: `Allow ${request.name}?`, message: detail, always, other: true },
       { signal, source: "approval" },
     )
     if (answer === "always") allowed.add(key)

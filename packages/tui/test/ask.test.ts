@@ -77,7 +77,7 @@ async function setup(steps: MockStep[], o: Options) {
     dialects: [createMockDialect(steps)],
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
   })
-  // As the CLI wires them (userAsker, userApprover): questions and approvals go to the user.
+  // Like the CLI's userAsker and userApprover (which key "always" by tool and reason, not tool alone).
   const ask: Asker = async (req, signal) => {
     const answers = await host.ui.api().ask(req.questions, { signal })
     return answers ? { answers } : { declined: true }

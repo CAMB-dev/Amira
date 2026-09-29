@@ -37,6 +37,12 @@ export const CONFIRM_LABELS = {
 
 const OTHER_LABEL = `Other${glyphs.more}`
 
+/** The "don't ask again" choice, saying how far it reaches when the asker says so. */
+const alwaysLabel = (always: boolean | string) =>
+  typeof always === "string" && always.trim()
+    ? `Yes, and don't ask again ${always.trim()}`
+    : CONFIRM_LABELS.always
+
 /** One choice of a list: what it reads and what choosing it answers. */
 interface Choice {
   label: string
@@ -80,7 +86,7 @@ interface Fit {
  * checks them with Space), and the keys at the bottom. A free-text choice ("Other…") opens a
  * text field in its row, which Esc closes again; Esc elsewhere cancels. Several questions are
  * asked one after another in the same block and answered together. Calls `onDone` once. It
- * fits `maxRows`: the title, the selected option and the keys always show.
+ * fits `maxRows`: the title, the selected option and the keys always show, given three rows.
  */
 export class Dialog implements Component {
   /** Rows the dialog may take; set by the app before each render. */
@@ -218,7 +224,9 @@ export class Dialog implements Component {
             ),
           )
         : undefined
-    const filter = this.#filter ? [`${theme.muted(`filter ${glyphs.pointer}`)} ${this.#filter}`] : []
+    const filter = this.#filter
+      ? [truncateToWidth(`${theme.muted(`filter ${glyphs.pointer}`)} ${this.#filter}`, width, glyphs.more)]
+      : []
     const hint = theme.muted(fitHint(this.#footer(), width))
     const fit: Fit = {
       blanks: 2,
@@ -401,8 +409,12 @@ export class Dialog implements Component {
   /** Keys while the free-text field is open: it edits; Enter keeps the text, Esc closes it. */
   #fieldKey(e: InputEvent): boolean {
     const field = this.#field!
+    if (this.keys.is(e, "dialog.cancel") && !(e.type === "key" && e.name === "escape")) {
+      // Ctrl+C (or another cancel key but Esc) bails out of the whole dialog, as elsewhere.
+      return this.#finish(undefined)
+    }
     if (this.keys.is(e, "dialog.cancel")) {
-      // What was typed stays with the choice, for when it is chosen again.
+      // Esc closes the field; what was typed stays with the choice, for when it is chosen again.
       const draft = field.value.trim()
       if (draft) this.#current.other = draft
       this.#field = undefined
@@ -494,7 +506,7 @@ function pagesOf(r: DialogRequest): Page[] {
       return [
         page(r.title, [
           { label: CONFIRM_LABELS.yes, value: true },
-          ...(r.always ? [{ label: CONFIRM_LABELS.always, value: "always" as const }] : []),
+          ...(r.always ? [{ label: alwaysLabel(r.always), value: "always" as const }] : []),
           { label: CONFIRM_LABELS.no, value: false },
           ...(r.other ? [{ label: OTHER_LABEL, other: true }] : []),
         ]),
@@ -562,7 +574,7 @@ export function dialogEchoLines(
         : answer === false
           ? CONFIRM_LABELS.no
           : answer === "always"
-            ? CONFIRM_LABELS.always
+            ? alwaysLabel(r.always ?? true)
             : typeof answer === "object" && "other" in answer
               ? JSON.stringify(answer.other)
               : String(answer)

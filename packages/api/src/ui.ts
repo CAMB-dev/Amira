@@ -27,10 +27,12 @@ export type UiRequest =
   | { kind: "select"; title: string; options: string[] }
   /**
    * A yes/no question. `always` offers "Yes, and don't ask again this session" as well
-   * (answered with "always"); `other` offers a free-text choice (answered with `{ other: text }`)
-   * meaning no, and what to do instead. A client that knows neither may still answer a boolean.
+   * (answered with "always"); a string says what that covers instead of "this session", e.g.
+   * "this session for bash (policy)", so the user knows how far it reaches. `other` offers a
+   * free-text choice (answered with `{ other: text }`) meaning no, and what to do instead. A
+   * client that knows neither may still answer a boolean.
    */
-  | { kind: "confirm"; title: string; message?: string; always?: boolean; other?: boolean }
+  | { kind: "confirm"; title: string; message?: string; always?: boolean | string; other?: boolean }
   /** `secret` masks what is typed; the answer is never echoed, persisted or sent in ui.resolved. */
   | { kind: "input"; title: string; placeholder?: string; initial?: string; secret?: boolean }
   /** A unified diff to look over, answered with one of `options` (D16, D38). */
@@ -125,7 +127,7 @@ export interface UiApi {
   ): Promise<string | undefined>
   /**
    * Asks one to four questions with a few options each, plus free text ("Other"); resolves
-   * with one answer per question, in order. `title` defaults to the first question.
+   * with one answer per question, in order. `title` defaults to the question when there is one, else "N questions".
    */
   ask(
     questions: AskQuestion[],

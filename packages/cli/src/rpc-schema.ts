@@ -265,7 +265,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "ui.resolved": obj({
     requestId: str,
     cancelled: bool,
-    "value?": { type: ["string", "boolean"], description: "Left out for forms and secret inputs." },
+    "value?": {
+      type: ["string", "boolean"],
+      description: "Left out for forms, secret inputs, ask answers and a confirm's free text.",
+    },
   }),
   "ui.progress": obj({ requestId: str, action: str, text: str }),
   "model.changed": obj({ from: modelRef, to: modelRef }),
@@ -473,8 +476,8 @@ export function rpcSchema(): Schema {
           title: str,
           "message?": str,
           "always?": {
-            ...bool,
-            description: `Also offer "Yes, and don't ask again this session"; answered with "always".`,
+            type: ["boolean", "string"],
+            description: `Also offer "Yes, and don't ask again this session"; answered with "always". A string says what it covers instead of "this session", e.g. "this session for bash (policy)".`,
           },
           "other?": {
             ...bool,
