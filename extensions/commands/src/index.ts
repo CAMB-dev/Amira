@@ -9,10 +9,20 @@ import {
   type ShellMode,
   type StoredSessionInfo,
 } from "@amira/api"
-import { contextReport, costByModel, costReport, formatCost, formatTokens, table } from "./format.ts"
+import {
+  cacheHitRate,
+  contextReport,
+  costByModel,
+  costReport,
+  formatCost,
+  formatTokens,
+  table,
+  tokensPerSecond,
+} from "./format.ts"
 import { providerCommand } from "./provider-command.ts"
 
 export {
+  cacheHitRate,
   contextReport,
   costByModel,
   costReport,
@@ -20,6 +30,7 @@ export {
   formatCost,
   formatTokens,
   table,
+  tokensPerSecond,
 } from "./format.ts"
 export {
   draftFromValues,
@@ -92,6 +103,22 @@ export default defineExtension((api: ExtensionAPI) => {
     }
     return workspace.get(sessionId)
   }
+
+  // For /status: the speed of each top-level session's last reply, timed from its first
+  // streamed piece. Sub-agents (their events carry parentSessionId) are left out.
+  const firstDeltaAt = new Map<string, number>()
+  const speed = new Map<string, number>()
+  api.on("message.start", (e) => void firstDeltaAt.delete(e.sessionId))
+  api.on("message.delta", (e) => {
+    if (e.parentSessionId === undefined && !firstDeltaAt.has(e.sessionId)) firstDeltaAt.set(e.sessionId, e.ts)
+  })
+  api.on("message.end", (e) => {
+    const start = firstDeltaAt.get(e.sessionId)
+    firstDeltaAt.delete(e.sessionId)
+    const out = e.data.message.usage?.output ?? 0
+    const tps = start === undefined ? undefined : tokensPerSecond(out, start, e.ts)
+    if (tps !== undefined) speed.set(e.sessionId, tps)
+  })
 
   const add = (c: CommandDefinition) => api.registerCommand(c)
 
@@ -191,19 +218,42 @@ export default defineExtension((api: ExtensionAPI) => {
 
   add({
     name: "status",
-    description: "Show the model, session, context use, cost and workspace",
+    description: "Show the model, session, context use, output, cache, speed, cost and workspace",
     async run(_args, ctx) {
       const info = ctx.session.info()
       const ws = await workspaceOf(info.id, ctx.signal)
       const rows = costByModel(ctx.session.replies())
-      const priced = rows.filter((r) => r.cost !== undefined)
-      const cost = priced.length ? formatCost(priced.reduce((n, r) => n + (r.cost ?? 0), 0)) : "unknown"
       const provider = ctx.session.providers().find((p) => p.id === info.model.provider)
       const git = !ws
         ? "unknown"
         : ws.repoRoot
-          ? `${ws.branch ?? (ws.head ? `detached at ${ws.head.slice(0, 7)}` : "no branch")}${ws.isWorktree ? " (worktree)" : ""} in ${ws.repoRoot}`
+          ? `${ws.branch ?? (ws.head ? `detached at ${ws.head.slice(0, 7)}` : "no branch")}${ws.isWorktree ? " (worktree)" : ""} in ${ws.repoRoot}${ws.dirty ? ", with uncommitted changes" : ""}`
           : "not a git repository"
+      // This session's own replies, and with its sub-agents' (the status bar shows the latter,
+      // as spent since this run started). Both count earlier runs of a resumed session.
+      const priced = rows.filter((r) => r.cost !== undefined)
+      const own = priced.length ? priced.reduce((n, r) => n + (r.cost ?? 0), 0) : undefined
+      const subs = ctx.session.subagents().filter((s) => s.usage.cost !== undefined)
+      const withSubs = subs.length
+        ? (own ?? 0) + subs.reduce((n, s) => n + (s.usage.cost ?? 0), 0)
+        : undefined
+      const cost =
+        withSubs !== undefined
+          ? `${formatCost(withSubs)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${formatCost(own)}` : ""}`
+          : own !== undefined
+            ? `${formatCost(own)} (this session; no sub-agents)`
+            : "unknown"
+      const usage = rows.reduce(
+        (t, r) => ({
+          input: t.input + r.usage.input,
+          output: t.output + r.usage.output,
+          cacheRead: t.cacheRead + r.usage.cacheRead,
+          cacheWrite: t.cacheWrite + r.usage.cacheWrite,
+        }),
+        { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      )
+      const cacheRate = cacheHitRate(usage.input, usage.cacheRead, usage.cacheWrite)
+      const tps = speed.get(info.id)
       const context =
         info.contextTokens !== undefined
           ? `${formatTokens(info.contextTokens)} of ${formatTokens(info.contextWindow)} tokens (${Math.round((info.contextTokens / info.contextWindow) * 100)}%)`
@@ -220,6 +270,19 @@ export default defineExtension((api: ExtensionAPI) => {
           ["Session", `${info.id}${info.busy ? " (turn running)" : ""}`],
           ...(info.file ? [["Session file", info.file]] : []),
           ["Context", info.model.provider ? context : "no model yet"],
+          ["Output", `${formatTokens(usage.output)} tokens written by this session's replies`],
+          [
+            "Cache",
+            cacheRate === undefined
+              ? "nothing sent yet"
+              : `${Math.round(cacheRate * 100)}% of this session's prompt tokens read from the cache`,
+          ],
+          [
+            "Speed",
+            tps === undefined
+              ? "not measured yet"
+              : `${tps < 10 ? tps.toFixed(1) : Math.round(tps)} tokens/s in this session's last reply`,
+          ],
           ["Cost", cost],
           ["Shell", info.shell],
           ["Directory", info.cwd],

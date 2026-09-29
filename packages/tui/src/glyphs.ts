@@ -68,7 +68,11 @@ export const glyphs = {
   searchPrompt: "›",
   /** Marks the terminal title while a turn runs. */
   working: "●",
-  /** Before the branch in the terminal title. */
+  /**
+   * Before the branch in the terminal title, which the title bar draws in the system's font.
+   * Not for the grid: Cascadia Code and Mono lack "⎇" (U+2387) and the fallback font draws it
+   * out of line, so the status shows the branch without a symbol.
+   */
   branch: "⎇",
   /** Between items of a hint or the title. */
   separator: "·",

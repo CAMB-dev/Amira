@@ -410,7 +410,6 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const cycle = host.keys.label("tool-output")
       return `Tool output: ${level} (applies to tool results from now on${cycle ? `; ${cycle} cycles` : ""})`
     },
-    hints: () => [],
     handleInput: () => false,
   }
 }

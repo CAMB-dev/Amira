@@ -4,12 +4,23 @@ import type { AssistantMessage, SessionControl, SessionInfo } from "@amira/api"
 import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import commandsExtension, {
   ago,
+  cacheHitRate,
   contextReport,
   costReport,
   formatTokens,
   sessionLabel,
   table,
+  tokensPerSecond,
 } from "../src/index.ts"
+
+test("speed is timed from the first delta; the cache rate is the share of prompt tokens from cache", () => {
+  expect(tokensPerSecond(84, 1000, 3000)).toBe(42)
+  expect(tokensPerSecond(10, 1000, 1100)).toBeUndefined()
+  expect(tokensPerSecond(0, 1000, 5000)).toBeUndefined()
+  expect(cacheHitRate(0, 0, 0)).toBeUndefined()
+  expect(cacheHitRate(200, 800, 0)).toBe(0.8)
+  expect(cacheHitRate(100, 0, 300)).toBe(0)
+})
 
 const reply = (model: string, input: number, output: number, cost?: number): AssistantMessage => {
   const [provider, id] = model.split("/") as [string, string]
@@ -291,9 +302,63 @@ test("/status shows model, provider, session, context, cost, cwd and git", async
   expect(text).toContain("deepseek (openai-chat, https://api.deepseek.com)")
   expect(text).toMatch(/Session\s+s1/)
   expect(text).toContain("32k of 128k tokens (25%)")
-  expect(text).toMatch(/Cost\s+\$0\.0020/)
+  expect(text).toMatch(/Cost\s+\$0\.0020 \(this session; no sub-agents\)/)
+  expect(text).toMatch(/Output\s+100 tokens written by this session's replies/)
+  expect(text).toMatch(/Cache\s+0% of this session's prompt tokens read from the cache/)
+  expect(text).toMatch(/Speed\s+not measured yet/)
   expect(text).toMatch(/Directory\s+\/work/)
-  expect(text).toMatch(/Git\s+main in \/work/)
+  expect(text).toMatch(/Git\s+main in \/work$/m)
+})
+
+test("/status names the scope of each number: the session's output, cache and speed, the tree's cost", async () => {
+  const cached: AssistantMessage = {
+    ...reply("deepseek/deepseek-flash", 200, 300, 0.01),
+    usage: { input: 200, output: 300, cacheRead: 800, cacheWrite: 0, cost: 0.01 },
+  }
+  const child = {
+    id: "c1",
+    parentSessionId: "s1",
+    depth: 1,
+    role: "agent",
+    title: "x",
+    task: "x",
+    status: "done" as const,
+    usage: { input: 50, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.004 },
+  }
+  const { run, bus } = await setup({ replies: () => [cached], subagents: () => [child] })
+  bus.emit(
+    "workspace.changed",
+    { cwd: "/work", repoRoot: "/work", branch: "main", dirty: true },
+    { sessionId: "s1" },
+  )
+  const meta = { sessionId: "s1" }
+  const model = { provider: "deepseek", model: "deepseek-flash" }
+  bus.emit("message.start", { model }, meta)
+  bus.emit("message.delta", { kind: "text", text: "a" }, meta)
+  await Bun.sleep(250)
+  bus.emit("message.end", { message: cached }, meta)
+  await bus.flush()
+  const { text } = await run("/status")
+  expect(text).toMatch(/Output\s+300 tokens written by this session's replies/)
+  expect(text).toMatch(/Cache\s+80% of this session's prompt tokens read from the cache/)
+  expect(text).toMatch(/Speed\s+\d+(\.\d)? tokens\/s in this session's last reply/)
+  // The sub-agents' replies count in the cost the status shows; this session's own is named too.
+  expect(text).toMatch(/Cost\s+\$0\.014 with sub-agents; this session alone \$0\.010/)
+  expect(text).toMatch(/Git\s+main in \/work, with uncommitted changes/)
+})
+
+test("/status names only the session's cost when it had no sub-agents, and a sub-agent's speed is not its own", async () => {
+  const { run, bus } = await setup({ replies: () => [reply("deepseek/deepseek-flash", 1000, 100, 0.042)] })
+  const child = { sessionId: "c1", parentSessionId: "s1" }
+  const model = { provider: "deepseek", model: "deepseek-flash" }
+  bus.emit("message.start", { model }, child)
+  bus.emit("message.delta", { kind: "text", text: "a" }, child)
+  await Bun.sleep(250)
+  bus.emit("message.end", { message: reply("deepseek/deepseek-flash", 10, 100) }, child)
+  await bus.flush()
+  const { text } = await run("/status")
+  expect(text).toMatch(/Cost\s+\$0\.042 \(this session; no sub-agents\)/)
+  expect(text).toMatch(/Speed\s+not measured yet/)
 })
 
 test("/clear starts a new session; /resume switches, or asks among the other sessions", async () => {

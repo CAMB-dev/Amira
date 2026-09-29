@@ -16,6 +16,26 @@ export function formatCost(usd: number): string {
   return usd < 0.00005 ? "<$0.0001" : `$${usd.toFixed(4)}`
 }
 
+/**
+ * Output tokens per second of one reply, timed from its first streamed piece to its end.
+ * Undefined when the reply was too short to time meaningfully.
+ */
+export function tokensPerSecond(
+  outputTokens: number,
+  firstDeltaAt: number,
+  endAt: number,
+): number | undefined {
+  const seconds = (endAt - firstDeltaAt) / 1000
+  if (outputTokens <= 0 || seconds < 0.2) return undefined
+  return outputTokens / seconds
+}
+
+/** Share of prompt tokens served from the provider's cache; undefined before any prompt tokens. */
+export function cacheHitRate(input: number, cacheRead: number, cacheWrite: number): number | undefined {
+  const prompt = input + cacheRead + cacheWrite
+  return prompt > 0 ? cacheRead / prompt : undefined
+}
+
 const percent = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "")
 
 /** Rows of cells as aligned columns, two spaces apart; the last column is not padded. */

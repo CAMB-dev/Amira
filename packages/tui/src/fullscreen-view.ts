@@ -163,13 +163,12 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         ? "no matches"
         : ""
     const next = keys.label("find.next")
-    const prev = keys.label("find.prev")
     const close = keys.label("find.close")
+    // The newer-match key is in the key reference (the help key).
     const hint = fitHint(
       [
         count && { text: count, priority: 5 },
         next && { text: `${next} older`, priority: 3 },
-        prev && { text: `${prev} newer`, priority: 2 },
         close && { text: `${close} close`, priority: 4 },
       ],
       Math.max(10, Math.floor(width / 2)),
@@ -185,15 +184,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     const b = pane.selected!
     const fold = keys.label("select.toggle")
     const copy = keys.label("select.copy")
-    const move = keys.pairLabel("select.prev", "select.next")
     const back = keys.label("select.exit")
     const foldable = b.foldable(env(width))
+    // Moving between blocks is in the key reference (the help key).
     const hint = fitHint(
       [
         { text: `${glyphs.pointer} ${b.kind} block ${b.index + 1} of ${pane.blocks.length}`, priority: 6 },
         foldable && fold && { text: `${fold} fold`, priority: 5 },
         copy && { text: `${copy} copy`, priority: 4 },
-        move && { text: `${move} move`, priority: 2 },
         back && { text: `${back} back`, priority: 3 },
       ],
       width,
@@ -668,14 +666,6 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       settleStep()
       reply?.finish()
       reply = undefined
-    },
-    hints() {
-      const find = keys.label("find")
-      const select = keys.label("select.start")
-      return [
-        ...(find ? [{ text: `${find} find`, priority: 0.5 }] : []),
-        ...(select ? [{ text: `${select} select`, priority: 0.4 }] : []),
-      ]
     },
     detailNote(level: ToolDetailLevel) {
       const cycle = keys.label("tool-output")

@@ -230,8 +230,17 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     model: modelRef,
     "sessionFile?": str,
     "resume?": arrayOf(str),
+    "contextTokens?": num,
+    "contextWindow?": num,
   }),
-  "workspace.changed": obj({ cwd: str, "repoRoot?": str, "branch?": str, "head?": str, "isWorktree?": bool }),
+  "workspace.changed": obj({
+    cwd: str,
+    "repoRoot?": str,
+    "branch?": str,
+    "head?": str,
+    "isWorktree?": bool,
+    "dirty?": bool,
+  }),
   "session.end": obj({ reason: strings("exit", "error") }),
   "status.changed": obj({
     status: strings("idle", "working", "blocked", "error"),

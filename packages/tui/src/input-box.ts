@@ -1,4 +1,5 @@
 import { Box, type Component, type Editor, type RenderContext } from "@amira/tui-kit"
+import { type StatusEntry, statusBorder } from "./status-bar.ts"
 
 /** Most rows of text the input box shows before it scrolls. */
 export const MAX_INPUT_ROWS = 10
@@ -12,20 +13,36 @@ export function inputRows(rows: number): number {
 }
 
 /**
- * The editor in a rounded frame. Longer text scrolls inside it; the border says how many
- * rows are out of view above and below.
+ * The editor in a rounded frame, with the status in its bottom border. Longer text scrolls
+ * inside it; the border says how many rows are out of view above and below (the rows below at
+ * the right end of the status, which gives way before that count does).
  */
 export class InputBox implements Component {
   private box: Box
 
-  constructor(private editor: Editor) {
+  constructor(
+    private editor: Editor,
+    status: () => readonly StatusEntry[] = () => [],
+  ) {
     this.box = new Box(editor, {
       labels: () => {
-        const { above, below } = this.editor.hidden
-        return {
-          ...(above > 0 ? { top: `↑ ${above} more` } : {}),
-          ...(below > 0 ? { bottom: `↓ ${below} more` } : {}),
-        }
+        const { above } = this.editor.hidden
+        return above > 0 ? { top: `↑ ${above} more` } : {}
+      },
+      bottom: (width, ctx) => {
+        const { below } = this.editor.hidden
+        const more: StatusEntry[] = below
+          ? [
+              {
+                id: "input.below",
+                align: "right",
+                tone: "muted",
+                priority: Number.POSITIVE_INFINITY,
+                text: `↓ ${below} more`,
+              },
+            ]
+          : []
+        return statusBorder([...status(), ...more], width, ctx)
       },
     })
   }

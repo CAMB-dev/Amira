@@ -3,11 +3,11 @@ import { createAi, createMockDialect, NO_MODEL } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
 import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import statusExtension, {
-  cacheHitRate,
+  contextTone,
   formatContext,
   formatCost,
   formatTokens,
-  tokensPerSecond,
+  placeLabel,
 } from "../src/index.ts"
 
 test("formats token counts compactly, rounding before picking the unit", () => {
@@ -33,42 +33,48 @@ function setup() {
 }
 
 const texts = (host: ExtensionHost) => host.status.snapshot().map((i) => [i.id, i.align, i.text])
+const item = (host: ExtensionHost, id: string) => host.status.snapshot().find((i) => i.id === id)
 
 test("shows (no model) until one is picked, and follows a model switch at once", async () => {
   const { bus, host, agent, ai } = setup()
   await host.load(statusExtension, "builtin:status")
-  const model = () => host.status.snapshot().find((i) => i.id === "model")?.text
+  const model = () => item(host, "model")?.text
   agent.setModel(NO_MODEL)
   agent.start("startup")
   await bus.flush()
   expect(model()).toBe("(no model)")
   agent.setModel(ai.model("mock/m2"))
   await bus.flush()
-  expect(model()).toBe("mock/m2")
+  // The provider is left out; /status names it.
+  expect(model()).toBe("m2")
 })
 
-test("fills the status bar from session and workspace events", async () => {
+test("fills the status from session and workspace events, built-ins first by priority", async () => {
   const { bus, host, agent } = setup()
   expect(await host.load(statusExtension, "builtin:status")).toBe(true)
   agent.start("startup")
   await bus.flush()
   expect(texts(host)).toEqual([
-    ["model", "left", "mock/m1"],
+    ["model", "left", "m1"],
     ["place", "right", "proj"],
   ])
 
   bus.emit(
     "workspace.changed",
-    { cwd: "/work/proj", repoRoot: "/work/proj", branch: "main" },
+    { cwd: "/work/proj", repoRoot: "/work/proj", branch: "main", dirty: true },
     { sessionId: "s" },
   )
   await agent.prompt("go")
   await bus.flush()
   expect(texts(host)).toEqual([
-    ["model", "left", "mock/m1"],
-    ["tokens", "right", "ctx 2.0k/128k (2%) · out 30"],
-    ["cache", "right", "cache 40%"],
-    ["place", "right", "proj ⎇ main"],
+    ["model", "left", "m1"],
+    ["context", "right", "ctx 2.0k/128k (2%)"],
+    ["place", "right", "main*"],
+  ])
+  expect(host.status.snapshot().map((i) => [i.id, i.priority])).toEqual([
+    ["model", 40],
+    ["context", 30],
+    ["place", 10],
   ])
 
   bus.emit(
@@ -77,26 +83,146 @@ test("fills the status bar from session and workspace events", async () => {
     { sessionId: "s" },
   )
   await bus.flush()
-  expect(host.status.snapshot().find((i) => i.id === "place")?.text).toBe("proj ⎇ @abc1234")
+  expect(item(host, "place")?.text).toBe("@abc1234")
 })
 
-test("shows activity while working or blocked, and resets counters on clear", async () => {
+test("the place is the branch, marked when dirty or a worktree; the folder outside a repository", () => {
+  expect(placeLabel({ cwd: "/w/proj" })).toBe("proj")
+  expect(placeLabel({ cwd: "/w/proj/sub", repoRoot: "/w/proj" })).toBe("proj")
+  expect(placeLabel({ cwd: "/w/proj", repoRoot: "/w/proj", branch: "main", dirty: false })).toBe("main")
+  expect(placeLabel({ cwd: "/w/proj", repoRoot: "/w/proj", branch: "feat/x", dirty: true })).toBe("feat/x*")
+  expect(placeLabel({ cwd: "/w/wt", repoRoot: "/w/wt", branch: "side", isWorktree: true })).toBe(
+    "side (worktree)",
+  )
+  expect(placeLabel({ cwd: "/w/proj", repoRoot: "/w/proj", head: "abc1234", dirty: true })).toBe("@abc1234*")
+})
+
+test("the context turns to a warning above 70% of the window, and an error above 90%", async () => {
+  expect([0, 70, 71, 90, 91].map((pct) => contextTone(pct * 1000, 100_000))).toEqual([
+    "muted",
+    "muted",
+    "warning",
+    "warning",
+    "error",
+  ])
+  expect(contextTone(5000, undefined)).toBe("muted")
+
+  const bus = new EventBus()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  await host.load(statusExtension, "builtin:status")
+  const meta = { sessionId: "s" }
+  const model = { provider: "p", model: "m" }
+  const reply = (input: number) =>
+    bus.emit(
+      "message.end",
+      {
+        message: {
+          role: "assistant",
+          content: [],
+          model,
+          usage: { input, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      meta,
+    )
+  bus.emit("message.start", { model, contextWindow: 100_000 }, meta)
+  reply(85_000)
+  await bus.flush()
+  expect(item(host, "context")).toMatchObject({ text: "ctx 85k/100k (85%)", tone: "warning" })
+  reply(95_000)
+  await bus.flush()
+  expect(item(host, "context")).toMatchObject({ text: "ctx 95k/100k (95%)", tone: "error" })
+})
+
+test("an interrupted reply without usage keeps the last known context", async () => {
+  const bus = new EventBus()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  await host.load(statusExtension, "builtin:status")
+  const meta = { sessionId: "s" }
+  const model = { provider: "p", model: "m" }
+  const end = (input: number, stopReason?: "aborted") =>
+    bus.emit(
+      "message.end",
+      {
+        message: {
+          role: "assistant",
+          content: [],
+          model,
+          ...(stopReason ? { stopReason } : {}),
+          usage: { input, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      meta,
+    )
+  bus.emit("message.start", { model, contextWindow: 128_000 }, meta)
+  end(29_400)
+  end(0, "aborted")
+  await bus.flush()
+  expect(item(host, "context")?.text).toBe("ctx 29k/128k (23%)")
+})
+
+test("a resumed session shows its own context at once, and its cost counts from there", async () => {
+  const { bus, host } = setup()
+  await host.load(statusExtension, "builtin:status")
+  const meta = { sessionId: "s1" }
+  const model = { provider: "p", model: "m" }
+  bus.emit("message.start", { model, contextWindow: 128_000 }, meta)
+  bus.emit(
+    "message.end",
+    {
+      message: {
+        role: "assistant",
+        content: [],
+        model,
+        usage: { input: 50_000, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5 },
+      },
+    },
+    meta,
+  )
+  await bus.flush()
+  expect(item(host, "cost")?.text).toBe("$0.500")
+  // /resume switches to another stored session.
+  bus.emit(
+    "session.start",
+    { reason: "resume", cwd: "/w", model, contextTokens: 29_400, contextWindow: 128_000 },
+    { sessionId: "s2" },
+  )
+  await bus.flush()
+  expect(item(host, "context")?.text).toBe("ctx 29k/128k (23%)")
+  expect(item(host, "cost")).toBeUndefined()
+  // Resumed before any reply: nothing to show yet.
+  bus.emit("session.start", { reason: "resume", cwd: "/w", model }, { sessionId: "s3" })
+  await bus.flush()
+  expect(item(host, "context")).toBeUndefined()
+})
+
+test("Agent.start tells a resumed session's context", async () => {
   const { bus, host, agent } = setup()
   await host.load(statusExtension, "builtin:status")
-  const activity = () => host.status.snapshot().find((i) => i.id === "activity")?.text
-  bus.emit("status.changed", { status: "blocked", reason: "approve bash" }, { sessionId: "s" })
+  await agent.prompt("go")
+  agent.start("resume")
   await bus.flush()
-  expect(activity()).toBe("waiting: approve bash")
-  bus.emit("status.changed", { status: "working" }, { sessionId: "s" })
-  await bus.flush()
-  expect(activity()).toBe("working")
+  expect(item(host, "context")?.text).toBe("ctx 2.0k/128k (2%)")
+})
 
+test("resets the counters on clear", async () => {
+  const { bus, host, agent } = setup()
+  await host.load(statusExtension, "builtin:status")
   await agent.prompt("go")
   await bus.flush()
-  expect(host.status.snapshot().some((i) => i.id === "tokens")).toBe(true)
+  expect(item(host, "context")).toBeDefined()
   agent.start("clear")
   await bus.flush()
-  expect(host.status.snapshot().some((i) => i.id === "tokens")).toBe(false)
+  expect(item(host, "context")).toBeUndefined()
+})
+
+test("the activity, sub-agents, output tokens, cache and speed are not in the status", async () => {
+  const { bus, host, agent } = setup()
+  await host.load(statusExtension, "builtin:status")
+  bus.emit("status.changed", { status: "working", reason: "retrying (2/3)" }, { sessionId: "s" })
+  await agent.prompt("go")
+  await bus.flush()
+  expect(host.status.snapshot().map((i) => i.id)).toEqual(["model", "context"])
 })
 
 test("a user extension can override a single built-in item, and unloading restores it", async () => {
@@ -109,16 +235,39 @@ test("a user extension can override a single built-in item, and unloading restor
       api.registerStatusItem({ id: "model", override: true, tone: "warning", text: () => "custom" })
     }, "user"),
   ).toBe(true)
-  expect(host.status.snapshot()[0]).toEqual({ id: "model", align: "left", tone: "warning", text: "custom" })
+  expect(item(host, "model")).toEqual({
+    id: "model",
+    align: "left",
+    tone: "warning",
+    priority: 0,
+    text: "custom",
+  })
   host.unload("user")
-  expect(host.status.snapshot()[0]?.text).toBe("mock/m1")
+  expect(host.status.snapshot()[0]?.text).toBe("m1")
   // Without override: true, a duplicate id fails that extension only.
   expect(
     await host.load((api) => {
       api.registerStatusItem({ id: "model", text: () => "clash" })
     }, "clash"),
   ).toBe(false)
-  expect(host.status.snapshot()[0]?.text).toBe("mock/m1")
+  expect(host.status.snapshot()[0]?.text).toBe("m1")
+})
+
+test("other extensions' items follow the built-in ones on their side and have the lowest priority", async () => {
+  const { bus, host, agent } = setup()
+  await host.load(statusExtension, "builtin:status")
+  await host.load((api) => {
+    api.registerStatusItem({ id: "mine", align: "right", text: () => "mine" })
+    api.registerStatusItem({ id: "first", align: "left", text: () => "first" })
+  }, "user")
+  agent.start("startup")
+  await bus.flush()
+  expect(host.status.snapshot().map((i) => [i.id, i.priority])).toEqual([
+    ["model", 40],
+    ["place", 10],
+    ["mine", 0],
+    ["first", 0],
+  ])
 })
 
 test("render requests are coalesced, and unload triggers a redraw", async () => {
@@ -139,12 +288,14 @@ test("render requests are coalesced, and unload triggers a redraw", async () => 
   expect(renders).toHaveLength(2)
 })
 
-test("bad item texts are skipped or sanitized, and defaults apply", async () => {
+test("bad item texts, tones and priorities are skipped or sanitized, and defaults apply", async () => {
   const { host } = setup()
+  let tone: unknown = "error"
   await host.load((api) => {
     api.registerStatusItem({ id: "num", text: () => 42 as never })
-    api.registerStatusItem({ id: "nl", order: 5, text: () => "two\nlines\x1b[31m" })
-    api.registerStatusItem({ id: "first", order: -1, text: () => "x" })
+    api.registerStatusItem({ id: "nl", order: 5, priority: Number.NaN, text: () => "two\nlines\x1b[31m" })
+    api.registerStatusItem({ id: "first", order: -1, priority: 3, text: () => "x" })
+    api.registerStatusItem({ id: "live", order: 9, tone: () => tone as never, text: () => "y" })
     api.registerStatusItem({
       id: "throws",
       text: () => {
@@ -153,50 +304,22 @@ test("bad item texts are skipped or sanitized, and defaults apply", async () => 
     })
   }, "t")
   expect(host.status.snapshot()).toEqual([
-    { id: "first", align: "left", tone: "default", text: "x" },
-    { id: "nl", align: "left", tone: "default", text: "two lines [31m" },
+    { id: "first", align: "left", tone: "default", priority: 3, text: "x" },
+    { id: "nl", align: "left", tone: "default", priority: 0, text: "two lines [31m" },
+    { id: "live", align: "left", tone: "error", priority: 0, text: "y" },
   ])
+  tone = "blinking"
+  expect(host.status.snapshot().at(-1)?.tone).toBe("default")
+  tone = () => {
+    throw new Error("x")
+  }
+  expect(host.status.snapshot().at(-1)?.tone).toBe("default")
 })
 
-test("context shows use against the window, and speed is timed from the first delta", () => {
+test("context shows use against the window", () => {
   expect(formatContext(12_300, 128_000)).toBe("12k/128k (10%)")
+  expect(formatContext(29_400, 128_000)).toBe("29k/128k (23%)")
   expect(formatContext(500, undefined)).toBe("500")
-  expect(tokensPerSecond(84, 1000, 3000)).toBe(42)
-  expect(tokensPerSecond(10, 1000, 1100)).toBeUndefined()
-  expect(tokensPerSecond(0, 1000, 5000)).toBeUndefined()
-})
-
-test("the status bar shows the speed of the last reply", async () => {
-  const bus = new EventBus()
-  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
-  await host.load(statusExtension, "builtin:status")
-  const meta = { sessionId: "s" }
-  const model = { provider: "p", model: "m" }
-  bus.emit("message.start", { model, contextWindow: 1_000_000 }, meta)
-  bus.emit("message.delta", { kind: "text", text: "a" }, meta)
-  await Bun.sleep(250)
-  bus.emit(
-    "message.end",
-    {
-      message: {
-        role: "assistant",
-        content: [],
-        model,
-        usage: { input: 1000, output: 100, cacheRead: 0, cacheWrite: 0 },
-      },
-    },
-    meta,
-  )
-  await bus.flush()
-  const items = Object.fromEntries(host.status.snapshot().map((i) => [i.id, i.text]))
-  expect(items.tokens).toBe("ctx 1.1k/1.0M (0%) · out 100")
-  expect(items.speed).toMatch(/tok\/s$/)
-})
-
-test("cache hit rate is the share of prompt tokens read from cache", () => {
-  expect(cacheHitRate(0, 0, 0)).toBeUndefined()
-  expect(cacheHitRate(200, 800, 0)).toBe(0.8)
-  expect(cacheHitRate(100, 0, 300)).toBe(0)
 })
 
 test("formats costs with more digits for small amounts", () => {
@@ -211,7 +334,7 @@ test("formats costs with more digits for small amounts", () => {
   ])
 })
 
-test("the session cost adds up the replies that have one, and a retry shows as activity", async () => {
+test("the cost adds up the replies that have one", async () => {
   const bus = new EventBus()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
   await host.load(statusExtension, "builtin:status")
@@ -230,27 +353,23 @@ test("the session cost adds up the replies that have one, and a retry shows as a
       },
       meta,
     )
-  const item = (id: string) => host.status.snapshot().find((i) => i.id === id)?.text
   end()
   await bus.flush()
-  expect(item("tokens")).toBe("ctx 1.1k · out 100")
+  expect(item(host, "context")?.text).toBe("ctx 1.1k")
+  expect(item(host, "cost")).toBeUndefined()
   end(0.004)
   end(0.008)
   await bus.flush()
-  expect(item("tokens")).toBe("ctx 1.1k · out 300 · $0.012")
-
-  bus.emit("status.changed", { status: "working", reason: "retrying (2/3)" }, meta)
-  await bus.flush()
-  expect(item("activity")).toBe("retrying (2/3)")
+  expect(item(host, "cost")?.text).toBe("$0.012")
 })
 
-test("sub-agents add to the cost and are counted, but do not change the rest of the bar", async () => {
+test("sub-agents add to the cost, but do not change the rest of the status", async () => {
   const bus = new EventBus()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
   await host.load(statusExtension, "builtin:status")
   const root = { sessionId: "s" }
   const child = { sessionId: "c", parentSessionId: "s" }
-  const item = (id: string) => host.status.snapshot().find((i) => i.id === id)?.text
+  const text = (id: string) => item(host, id)?.text
   const usage = (input: number, cost: number) => ({ input, output: 10, cacheRead: 0, cacheWrite: 0, cost })
   bus.emit("message.start", { model: { provider: "p", model: "big" } }, root)
   bus.emit(
@@ -265,20 +384,6 @@ test("sub-agents add to the cost and are counted, but do not change the rest of 
     },
     root,
   )
-  bus.emit(
-    "subagent.start",
-    {
-      childSessionId: "c",
-      prompt: "x",
-      model: { provider: "p", model: "small" },
-      depth: 1,
-      cwd: "/",
-      context: "fresh",
-      queued: false,
-    },
-    root,
-  )
-  bus.emit("status.changed", { status: "working" }, child)
   bus.emit("message.start", { model: { provider: "p", model: "small" } }, child)
   bus.emit(
     "message.end",
@@ -293,19 +398,11 @@ test("sub-agents add to the cost and are counted, but do not change the rest of 
     child,
   )
   await bus.flush()
-  expect(item("model")).toBe("p/big")
-  expect(item("activity")).toBeUndefined()
-  expect(item("subagents")).toBe("1 sub-agent")
-  expect(item("tokens")).toBe("ctx 1.0k · out 10 · $0.011")
-  bus.emit(
-    "subagent.end",
-    { childSessionId: "c", status: "done", usage: usage(50, 0.001), durationMs: 5 },
-    root,
-  )
-  await bus.flush()
-  expect(item("subagents")).toBeUndefined()
+  expect(text("model")).toBe("big")
+  expect(text("context")).toBe("ctx 1.0k")
+  expect(text("cost")).toBe("$0.011")
   // The tree's total also has what was spent outside any reply, e.g. asking the commander to approve.
   bus.emit("budget.update", { tokens: 2000, costUsd: 0.02 }, root)
   await bus.flush()
-  expect(item("tokens")).toBe("ctx 1.0k · out 10 · $0.020")
+  expect(text("cost")).toBe("$0.020")
 })

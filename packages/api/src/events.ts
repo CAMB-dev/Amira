@@ -42,6 +42,12 @@ export interface EventMap {
     sessionFile?: string
     /** Command line that resumes this session, e.g. ["amira", "--resume", "s_01"]. */
     resume?: string[]
+    /**
+     * Tokens the context held at the last reply of a resumed conversation, and its model's
+     * window; unset before any reply (and right after a compaction).
+     */
+    contextTokens?: number
+    contextWindow?: number
   }
   /** Facts about the working directory. Sent after session.start and again whenever they change. */
   "workspace.changed": {
@@ -51,6 +57,12 @@ export interface EventMap {
     /** Short commit hash, useful when HEAD is detached. */
     head?: string
     isWorktree?: boolean
+    /**
+     * The working tree has changes not committed yet (staged, unstaged or untracked files). It
+     * is checked at the end of turns that ran tools which may write files, and of any turn once
+     * the last check is a minute old, so edits made outside Amira show after a while.
+     */
+    dirty?: boolean
   }
   "session.end": { reason: "exit" | "error" }
   "status.changed": { status: SessionStatus; reason?: string; pending?: number }

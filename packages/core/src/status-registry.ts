@@ -1,11 +1,13 @@
-import type { StatusItem } from "@amira/api"
+import type { StatusItem, StatusTone } from "@amira/api"
 
 export class StatusConflictError extends Error {}
 
 export interface ResolvedStatusItem {
   id: string
   align: "left" | "right"
-  tone: NonNullable<StatusItem["tone"]>
+  tone: StatusTone
+  /** Higher stays longer when the bar is too narrow (StatusItem.priority). */
+  priority: number
   text: string
 }
 
@@ -14,6 +16,8 @@ interface Entry {
   order: number
   seq: number
 }
+
+const TONES = new Set<string>(["default", "muted", "accent", "success", "warning", "error"])
 
 /**
  * Status bar items registered by extensions; frontends call snapshot() when they redraw.
@@ -43,7 +47,8 @@ export class StatusRegistry {
 
   /**
    * Visible items in display order. Items that throw or return non-strings are skipped,
-   * and control characters are stripped, so one bad item cannot break a frontend.
+   * and control characters are stripped, so one bad item cannot break a frontend. A tone
+   * function that throws or returns something unknown gives the default tone.
    */
   snapshot(): ResolvedStatusItem[] {
     const out: (ResolvedStatusItem & { order: number; seq: number })[] = []
@@ -59,9 +64,22 @@ export class StatusRegistry {
       // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
       const text = raw.replace(/[\x00-\x1f\x7f]+/g, " ").trim()
       if (!text) continue
-      out.push({ id: item.id, align: item.align ?? "left", tone: item.tone ?? "default", text, order, seq })
+      const priority = typeof item.priority === "number" && Number.isFinite(item.priority) ? item.priority : 0
+      out.push({ id: item.id, align: item.align ?? "left", tone: toneOf(item), priority, text, order, seq })
     }
     out.sort((a, b) => a.order - b.order || a.seq - b.seq)
-    return out.map(({ id, align, tone, text }) => ({ id, align, tone, text }))
+    return out.map(({ id, align, tone, priority, text }) => ({ id, align, tone, priority, text }))
   }
+}
+
+function toneOf(item: StatusItem): StatusTone {
+  let tone: unknown = item.tone
+  if (typeof tone === "function") {
+    try {
+      tone = tone()
+    } catch {
+      tone = undefined
+    }
+  }
+  return typeof tone === "string" && TONES.has(tone) ? (tone as StatusTone) : "default"
 }

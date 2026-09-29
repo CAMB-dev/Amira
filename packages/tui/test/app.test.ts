@@ -271,7 +271,7 @@ test("without providers the UI starts, says how to add one, and a message explai
   })
   await shows(notice)
   expect(all()).toContain("Amira · (no model) · /work/proj")
-  await waitFor(() => live().includes("(no model)  "), "the status bar's (no model)")
+  await waitFor(() => live().includes("╰─ (no model) ─"), "the status's (no model)")
   terminal.send("hello\r")
   await shows("no providers configured; add one with /provider add, then pick a model with /model")
   await idle()
@@ -520,17 +520,18 @@ test("a resumed session shows its history like the live transcript, then a separ
   await exited
 })
 
-test("the activity line shows what the turn does, its time, output tokens and how to interrupt", async () => {
+test("the activity line shows what the turn does, its time and output tokens; the hint how to interrupt", async () => {
   const { terminal, live, idle, exited } = await setup([{ text: "x".repeat(200), delayMs: 20 }])
   terminal.send("go\r")
-  await waitFor(() => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working · 0s · ↓ \d+ tokens · Esc interrupt/.test(live()), "activity")
+  await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working · 0s · ↓ \d+ tokens$/m.test(live()), "activity")
+  expect(live()).toContain(`Enter steer · ${QUEUE_HINT} queue · Esc interrupt`)
   await idle()
   expect(live()).not.toContain("Esc interrupt")
   terminal.send("\x03")
   await exited
 })
 
-test("while tools run the activity line names them and keeps its spinner, time and interrupt hint", async () => {
+test("while tools run the activity line names them and keeps its spinner and time", async () => {
   const { terminal, live, idle, exited, agent } = await setup(
     [
       {
@@ -559,8 +560,7 @@ test("while tools run the activity line names them and keeps its spinner, time a
       "test",
     )
   }
-  const activity = (label: string) =>
-    new RegExp(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ${label} · \\d+s · (↓ \\d+ tokens · )?Esc interrupt$`, "m")
+  const activity = (label: string) => new RegExp(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ${label} · \\d+s( · ↓ \\d+ tokens)?$`, "m")
   terminal.send("go\r")
   await waitFor(() => activity("running 2 tools").test(live()), "two tools")
   // The rows keep their own spinners.
@@ -609,7 +609,8 @@ test("a message sent during /compact counts its own time and tokens, not the las
   terminal.send("q2\r")
   await waitFor(() => /› q2|Enter steer/.test(live()), "sent")
   // The prompt waits for the compaction; its activity line starts from zero meanwhile.
-  expect(live()).toMatch(/compacting the conversation · 0s · Esc interrupt/)
+  expect(live()).toMatch(/compacting the conversation · 0s$/m)
+  expect(live()).toContain("Esc interrupt")
   expect(live()).not.toContain("↓")
   expect(await compacted).toBe(true)
   await shows("second answer")
@@ -655,7 +656,8 @@ test("Ctrl+C clears a non-empty editor before quitting; Ctrl+D quits on an empty
   const { terminal, live, exited } = await setup([])
   terminal.send("draft")
   await waitFor(() => live().includes("draft"), "draft")
-  expect(live()).toContain("Ctrl+C clear")
+  // With text in the input the hint says how to break a line, not how to see the keys.
+  expect(live()).toContain("Enter send · Shift+Enter newline")
   terminal.send("\x03")
   await waitFor(() => !live().includes("draft"), "cleared")
   terminal.send("\x04")
@@ -889,7 +891,7 @@ test("a draft typed while a long reply streams does not cut the reply either", a
   await exited
 })
 
-test("the editor sits in a rounded box above the status bar, with the caret inside", async () => {
+test("the editor sits in a rounded box with the status in its border, and the caret inside", async () => {
   const { terminal, screen, live, exited } = await setup([], { cols: 30, rows: 12 })
   await waitFor(() => live().includes("Message Amira"), "input box")
   terminal.send("héllo 你好")
@@ -899,9 +901,9 @@ test("the editor sits in a rounded box above the status bar, with the caret insi
   expect(rows.slice(top, top + 3)).toEqual([
     `╭${"─".repeat(28)}╮`,
     "│ › héllo 你好               │",
-    `╰${"─".repeat(28)}╯`,
+    "╰─ m1 ──────────────── proj ─╯",
   ])
-  expect(rows[top + 3]).toContain("mock/m1")
+  expect(rows[top + 3]).toBe("Enter send")
   // Border, space, prompt, "héllo " and two wide characters.
   expect({ x: screen.x, y: screen.y }).toEqual({ x: 2 + 2 + 6 + 4, y: top + 1 })
   terminal.send("\x03")
@@ -925,13 +927,13 @@ test("a long draft scrolls inside the input box instead of growing past the scre
     "row 19",
     "row 20",
   ])
-  expect(rows[top + 5]!.startsWith("╰")).toBe(true)
-  expect(rows[top + 6]).toContain("mock/m1")
+  expect(rows[top + 5]).toBe("╰─ m1 ──────────────── proj ─╯")
   // The start of the transcript is still in view: the box did not push it off.
   expect(rows[0]).toContain("Amira")
   // Moving up past the shown rows scrolls, and the border says what is below.
   for (let i = 0; i < 6; i++) terminal.send("\x1b[A")
-  await waitFor(() => live().includes("↓ 3 more"), "scrolled up")
+  // The count of rows below goes into the border after the status.
+  await waitFor(() => live().includes("╰─ m1 ───── proj · ↓ 3 more ─╯"), "scrolled up")
   expect(live()).toContain("↑ 13 more")
   expect(screen.y).toBe(top + 1)
   terminal.send("\x03")
@@ -989,9 +991,9 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   await shows("● block")
   await idle()
   // The running tool is drawn as its own line with a spinner and its time on the right, and the
-  // activity line under it keeps its spinner, says what runs, the turn's time and how to interrupt.
+  // activity line under it keeps its spinner, says what runs and the turn's time.
   expect(seenWhileRunning).toMatch(/● block +[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 0s/)
-  expect(seenWhileRunning).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running block · 0s · (↓ \d+ tokens · )?Esc interrupt$/m)
+  expect(seenWhileRunning).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running block · 0s( · ↓ \d+ tokens)?$/m)
   terminal.send("\x03")
   await exited
 })
@@ -1332,7 +1334,7 @@ test("typing a slash opens the command list below the editor; Tab and Enter comp
   expect(editorRow).toBeGreaterThan(-1)
   expect(popupRow).toBeGreaterThan(editorRow)
   // The list takes the place of the status bar and the hint, and ends with its own hint.
-  expect(rows.filter((l) => l.trim()).at(-1)).toContain("↑↓ select · Tab complete · Enter run · Esc close")
+  expect(rows.filter((l) => l.trim()).at(-1)).toContain("Tab complete · Enter run · Esc close")
   expect(rows.slice(editorRow).join("\n")).not.toContain("mock/m1")
   expect(live()).not.toContain("Enter send")
   // Prefix first: "/he" puts help on top; Tab completes it, Enter runs it.
@@ -1361,7 +1363,7 @@ test("typing a command: the input box stays put and each key draws one frame wit
   /** The rows between the box's bottom edge and the popup's hint. */
   const list = (lines: string[]) => {
     const start = lines.findIndex((l) => l.startsWith("╰")) + 1
-    const end = lines.findIndex((l) => l.startsWith("↑↓ select"))
+    const end = lines.findIndex((l) => l.startsWith("Tab complete"))
     return end === -1 ? [] : lines.slice(start, end).map((l) => l.trimEnd())
   }
   const steps: [string, string[]][] = [
@@ -1602,7 +1604,7 @@ test("typing $ opens the skill list; Enter runs the skill, shown as typed with i
   expect(live()).toContain("Review a pull request")
   // Skills are not commands: the "/" list leaves them out.
   expect(live()).not.toContain("/help")
-  expect(live()).toContain("↑↓ select · Tab complete · Enter run · Esc close")
+  expect(live()).toContain("Tab complete · Enter run · Esc close")
   terminal.send("rev")
   await waitFor(() => live().includes("› $review-pr"), "review-pr selected")
   terminal.send("\t")
@@ -2451,14 +2453,13 @@ test("a narrow hint drops whole items instead of cutting one", async () => {
   })
   terminal.send("go\r")
   await waitFor(() => agent.status === "working", "working")
-  // Esc interrupt is on the activity line; the hint keeps its most useful items whole.
-  await waitFor(() => live().includes(`Enter steer · ${QUEUE_HINT} queue`), "working hint")
-  expect(live()).toContain("· Esc interrupt")
+  // The hint keeps its most useful items whole: the queue key goes first.
+  await waitFor(() => /^Enter steer · Esc interrupt$/m.test(live()), "working hint")
+  expect(live()).not.toContain(" queue")
   expect(live()).not.toContain("interr…")
-  expect(live()).not.toContain("newl")
   await shows("slow answer")
   await idle()
-  await waitFor(() => live().includes("Enter send · Ctrl+C quit"), "idle hint")
+  await waitFor(() => /^Enter send · \? keys$/m.test(live()), "idle hint")
   terminal.send("\x03")
   await exited
 })
@@ -2469,15 +2470,19 @@ test("keybindings replace the default keys, and the hints name them", async () =
     queue: ["ctrl+t"],
     cancel: ["ctrl+x"],
     newline: ["ctrl+j"],
+    interrupt: ["ctrl+g"],
+    help: ["f1"],
   })
   const { terminal, live, agent, shows, idle, exited } = await setup(
     [{ text: "first", delayMs: 40 }, { text: "later" }],
     { keybindings: keys, cols: 100 },
   )
-  await waitFor(() => live().includes("Enter send · Ctrl+J newline · Ctrl+X quit"), "idle hint")
-  terminal.send("go\r")
+  await waitFor(() => live().includes("Enter send · F1 keys"), "idle hint")
+  terminal.send("go")
+  await waitFor(() => live().includes("Enter send · Ctrl+J newline"), "hint with text")
+  terminal.send("\r")
   await waitFor(() => agent.status === "working", "working")
-  await waitFor(() => live().includes("Ctrl+T queue"), "queue hint")
+  await waitFor(() => live().includes("Enter steer · Ctrl+T queue · Ctrl+G interrupt"), "working hint")
   terminal.send("next\x14")
   await shows("queued › next")
   await shows("later")
@@ -2530,7 +2535,7 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   expect(live()).not.toContain("› old prompt")
   terminal.send("\x06")
   await waitFor(() => live().includes("search history"), "search line")
-  expect(live()).toContain("Enter accept · Ctrl+R older · Ctrl+S newer · Ctrl+X cancel")
+  expect(live()).toContain("Enter accept · Ctrl+R older · Ctrl+X cancel")
   terminal.send("\x18")
   await waitFor(() => !live().includes("search history"), "search closed")
   terminal.send("\x10")
@@ -2539,7 +2544,7 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   terminal.send("@src")
   // The directory named as typed first, then its file.
   await waitFor(() => live().includes("› src/\n  src/app.ts"), "file list")
-  expect(live()).toContain("↑↓ select · Tab/Enter insert · Ctrl+X close")
+  expect(live()).toContain("Tab/Enter insert · Ctrl+X close")
   terminal.send("\x18")
   await waitFor(() => !live().includes("src/app.ts"), "file list closed")
   terminal.send("\x03\x14")
@@ -2897,11 +2902,11 @@ test("live panels sit above the input in both modes, fold with Ctrl+T and follow
     // The panel, then a blank line, then the input box.
     expect(boxRow).toBe(panelRow + 5)
     expect(seen?.hasData).toBe(true)
-    expect(live()).toContain("fold panels")
+    // How to fold them is in the key reference, not the hint.
+    expect(live()).not.toContain("fold panels")
     terminal.send("\x14")
     await waitFor(() => !live().includes("› test it"), `${mode}: folded`)
     expect(live()).toContain("Todos 1/3")
-    expect(live()).toContain("unfold panels")
     terminal.send("\x14")
     items = ["✓ write the parser", "✓ test it", "› ship it"]
     // A change shows at the next redraw the extension asks for.
@@ -2937,7 +2942,7 @@ test("live panels give way on a short screen: folded, then cut, the input box al
     // Folded to its header, since the whole list does not fit; the input box and hints stay.
     expect(live()).not.toContain("step 1")
     expect(rows.some((r) => r.startsWith("╰"))).toBe(true)
-    expect(rows.some((r) => r.includes("Ctrl+C quit"))).toBe(true)
+    expect(rows.some((r) => r.includes("Enter send · ? keys"))).toBe(true)
     terminal.send("\x04")
     await exited
   }
@@ -2949,4 +2954,117 @@ test("an extension's notice shows in the transcript", async () => {
   await shows("✓ hook prettier · a.ts · ok")
   terminal.send("\x03")
   await exited
+})
+
+const BORDER = /^╰─.*─╯$/m
+
+test("the status goes under a dialog that takes the input box's place, and back into the border", async () => {
+  for (const mode of ["inline", "fullscreen"] as const) {
+    const { terminal, live, host, bus, exited } = await setup([], { settings: { mode } })
+    bus.emit(
+      "workspace.changed",
+      { cwd: "/work/proj", repoRoot: "/work/proj", branch: "main", dirty: true },
+      {
+        sessionId: "host",
+      },
+    )
+    await waitFor(() => /^╰─ m1 ─+ main\* ─╯$/m.test(live()), `${mode}: the status in the border`)
+    const answer = host.ui.api("x").confirm("Proceed?")
+    await waitFor(() => live().includes("Proceed?"), `${mode}: the dialog`)
+    const rows = live().split("\n")
+    // No input box: the status is a line of its own under the dialog, the hint is gone.
+    expect(rows.some((r) => r.startsWith("╰"))).toBe(false)
+    const status = rows.findIndex((r) => /^m1 {2,}main\*$/.test(r))
+    expect(status).toBeGreaterThan(rows.findIndex((r) => r.includes("Proceed?")))
+    expect(live()).not.toContain("? keys")
+    terminal.send("\x1b[27u")
+    expect(await answer).toBeUndefined()
+    await waitFor(() => BORDER.test(live()) && live().includes("main* ─╯"), `${mode}: back in the border`)
+    expect(live()).not.toMatch(/^m1 {2,}main\*$/m)
+    terminal.send("\x03")
+    await exited
+  }
+})
+
+test("a command list below the input box leaves the status in the border", async () => {
+  const { terminal, live, exited } = await setup([], { commands: testCommands([]) })
+  terminal.send("/")
+  await waitFor(() => live().includes("Tab complete · Enter run · Esc close"), "the list")
+  expect(live()).toMatch(/^╰─ m1 ─+ proj ─╯$/m)
+  terminal.send("\x03\x03")
+  await exited
+})
+
+test("the status in the border keeps to the width and drops items by priority, in both modes", async () => {
+  for (const mode of ["inline", "fullscreen"] as const) {
+    for (const cols of [100, 44, 34, 12]) {
+      const { terminal, live, agent, bus, idle, exited } = await setup(
+        [{ text: "ok", usage: { input: 108_800, output: 0, cost: 0.042 } }],
+        { cols, settings: { mode } },
+      )
+      bus.emit(
+        "workspace.changed",
+        { cwd: "/work/proj", repoRoot: "/work/proj", branch: "feat/x", dirty: true },
+        {
+          sessionId: agent.sessionId,
+        },
+      )
+      terminal.send("go\r")
+      await idle()
+      const border = () =>
+        live()
+          .split("\n")
+          .find((r) => r.startsWith("╰")) ?? ""
+      await waitFor(() => border().includes("m1") || cols < 16, `${mode} ${cols}: the status`)
+      const line = border()
+      expect([mode, cols, line.length]).toEqual([mode, cols, cols])
+      expect(line.endsWith("╯")).toBe(true)
+      for (const row of live().split("\n")) expect(row.length).toBeLessThanOrEqual(cols)
+      const shown = ["m1", "ctx 109k/128k (85%)", "$0.042", "feat/x*"].filter((t) => line.includes(t))
+      // Whole items only, the lowest priority gone first.
+      expect([mode, cols, shown]).toEqual([
+        mode,
+        cols,
+        ["m1", "ctx 109k/128k (85%)", "$0.042", "feat/x*"].slice(
+          0,
+          cols >= 100 ? 4 : cols >= 44 ? 3 : cols >= 34 ? 2 : 1,
+        ),
+      ])
+      terminal.send("\x03")
+      await exited
+    }
+  }
+})
+
+test("? opens the key reference on an empty input; it lists every action with its keys and Esc closes it", async () => {
+  for (const mode of ["inline", "fullscreen"] as const) {
+    const keys = new Keybindings({ ...defaultKeys({ vscode: false }), queue: ["ctrl+t"] })
+    const { terminal, live, exited } = await setup([], { settings: { mode }, keybindings: keys, rows: 20 })
+    await waitFor(() => live().includes("Enter send · ? keys"), `${mode}: the hint`)
+    terminal.send("?")
+    await waitFor(() => live().includes("? Keys"), `${mode}: the reference`)
+    const text = live()
+    expect(text).toContain("To change a key, map the action name")
+    expect(text).toMatch(/^Input$/m)
+    // The keys bound now, all of them, next to what they do.
+    expect(text).toMatch(/^ {2}Enter +Send the message/m)
+    expect(text).toMatch(/^ {2}Ctrl\+T +While a turn runs, send the message/m)
+    // Keys that do not fit the column go on under it; the action's name follows its description.
+    expect(text).toMatch(/^ {2}Shift\+Enter, +Insert a line break · newline\n {2}Ctrl\+Enter$/m)
+    expect(text).toMatch(/↑↓ PgUp PgDn Home End scroll · Esc close$/m)
+    // It scrolls to the end, where the last group is.
+    terminal.send("\x1b[F")
+    await waitFor(() => /^end · /m.test(live()), `${mode}: scrolled to the end`)
+    // The transcript's keys are listed only where the full-screen view has them.
+    expect(live().includes("Text selected with the mouse")).toBe(mode === "fullscreen")
+    terminal.send("\x1b[27u")
+    await waitFor(() => live().includes("Enter send · ? keys"), `${mode}: closed`)
+    expect(live()).not.toContain("? Keys")
+    // With text in the input, ? is typed.
+    terminal.send("a?")
+    await waitFor(() => live().includes("› a?"), `${mode}: typed`)
+    expect(live()).not.toContain("? Keys")
+    terminal.send("\x03\x03")
+    await exited
+  }
 })
