@@ -158,7 +158,7 @@ test("each protocol's encoding, sized to fit", () => {
     `\x1b]1337;File=inline=1;size=${png.length};width=2;height=1;preserveAspectRatio=1:iVBOR`,
   )
   const kitty = encodeImage(png, { ...opts, protocol: "kitty" })!
-  expect(kitty.seq).toStartWith("\x1b_Ga=T,f=32,s=18,v=18,o=z,C=1,q=2,m=0;")
+  expect(kitty.seq).toStartWith("\x1b_Ga=T,f=32,s=18,v=18,c=2,r=1,o=z,C=1,q=2,m=0;")
   // Big payloads go in chunks of 4096 base64 characters.
   const noisy = bitmap(
     64,

@@ -41,7 +41,7 @@ export function encodeImage(bytes: Uint8Array, opts: EncodeOptions): ImageBlock 
   if (!fit) return undefined
   if (opts.protocol === "iterm2") return { seq: iterm2Image(bytes, fit), cols: fit.cols, rows: fit.rows }
   const bmp = resizeBitmap(decodeImage(bytes), fit.width, fit.height)
-  const seq = opts.protocol === "sixel" ? encodeSixel(bmp) : kittyImage(bmp)
+  const seq = opts.protocol === "sixel" ? encodeSixel(bmp) : kittyImage(bmp, fit)
   return { seq, cols: fit.cols, rows: fit.rows }
 }
 
@@ -52,13 +52,16 @@ export function iterm2Image(bytes: Uint8Array, fit: Fit): string {
 }
 
 /** kitty's graphics protocol: RGBA pixels, zlib-compressed, in chunks; the cursor does not move. */
-export function kittyImage(bmp: Bitmap): string {
+export function kittyImage(bmp: Bitmap, fit?: Fit): string {
+  // Scaled into the cells reserved for it, whatever the real cell size turns out to be.
+  const box = fit ? `c=${fit.cols},r=${fit.rows},` : ""
   const b64 = Buffer.from(deflateSync(bmp.data)).toString("base64")
   const CHUNK = 4096
   let out = ""
   for (let at = 0; at < b64.length || at === 0; at += CHUNK) {
     const more = at + CHUNK < b64.length ? 1 : 0
-    const head = at === 0 ? `a=T,f=32,s=${bmp.width},v=${bmp.height},o=z,C=1,q=2,m=${more}` : `m=${more}`
+    const head =
+      at === 0 ? `a=T,f=32,s=${bmp.width},v=${bmp.height},${box}o=z,C=1,q=2,m=${more}` : `m=${more}`
     out += `\x1b_G${head};${b64.slice(at, at + CHUNK)}\x1b\\`
     if (!more) break
   }

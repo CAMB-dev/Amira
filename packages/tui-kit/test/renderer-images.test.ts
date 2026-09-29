@@ -126,6 +126,15 @@ test("an image wider than the terminal when it is ready goes as its fallback; st
   expect(term.output).not.toContain("tk:img")
 })
 
+test("an image as tall as the screen when it is ready goes as its fallback", async () => {
+  const { screen, r } = setup(30, 6)
+  r.commit([pendingImage(Promise.resolve(sixel(3, 6)), ["🖼 tall"]), "next"])
+  await Bun.sleep(20)
+  r.render()
+  expect(screen.images).toEqual([])
+  expect(screen.lines.slice(0, 3)).toEqual(["🖼 tall", "next", "> live"])
+})
+
 test("an image marker is honored only as registered; content cannot forge or carry one", () => {
   const { screen, r, term } = setup()
   const marker = pendingImage(Promise.resolve(undefined), ["x"])

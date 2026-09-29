@@ -1,4 +1,4 @@
-import { guardedFetch, NetError, type Resolver, readCapped } from "@amira/net"
+import { guardedFetch, NetError, parseHttpUrl, type Resolver, readCapped } from "@amira/net"
 import type { RemoteImageFetch } from "@amira/tui-kit"
 
 /** Types the terminal protocols can show; the loader checks the file's signature too. */
@@ -11,8 +11,9 @@ const IMAGE_TYPE = /^image\/(png|jpeg|jpg|gif|webp)\b/i
  */
 export function remoteImageFetch(opts: { fetch?: typeof fetch; resolve?: Resolver } = {}): RemoteImageFetch {
   return async (url, { maxBytes, signal }) => {
+    // Plain http(s) only, without credentials, as web_fetch takes them.
     const { response } = await guardedFetch(
-      url,
+      parseHttpUrl(url.href),
       {
         headers: { accept: "image/png,image/jpeg,image/gif,image/webp;q=0.9" },
         ...(opts.fetch ? { fetch: opts.fetch } : {}),

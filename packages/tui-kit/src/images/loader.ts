@@ -28,9 +28,12 @@ export interface ImageLoaderOptions {
 }
 
 const MB = 1024 * 1024
+/** Results kept at most, failures included (they weigh nothing in characters). */
+const MAX_ENTRIES = 500
 
 /** Content types that are images this can show (the signature is checked as well). */
 const IMAGE_TYPES = /^image\/(png|jpeg|jpg|gif|webp)\b/i
+const REMOTE = /^https?:\/\//i
 
 /**
  * Loads the images a Markdown reply shows, for one session: from local files (relative to the
@@ -42,7 +45,7 @@ export class ImageLoader {
   readonly timeoutMs: number
   private readonly maxBytes: number
   private cache = new Map<string, Promise<ImageBlock | undefined>>()
-  /** Sizes of the cached sequences, oldest first, for dropping the oldest past the limit. */
+  /** Sizes of the cached sequences, oldest first, for dropping the oldest past the limits. */
   private sizes = new Map<string, number>()
   private chars = 0
   private files = new Map<string, Promise<Uint8Array>>()
@@ -55,7 +58,12 @@ export class ImageLoader {
   /** The image at `src`, fitted to `maxCols` columns; undefined when it cannot be shown. */
   load(src: string, maxCols: number): Promise<ImageBlock | undefined> {
     const maxRows = this.opts.maxRows()
-    const key = `${maxCols}x${maxRows} ${src}`
+    const remote = REMOTE.test(src)
+    // A local file by where it is now: the working directory may change.
+    const cwd = this.opts.cwd
+    const source = remote ? src : localPath(src, typeof cwd === "string" ? cwd : cwd())
+    if (source === undefined) return Promise.resolve(undefined)
+    const key = `${maxCols}x${maxRows} ${source}`
     let hit = this.cache.get(key)
     if (hit) {
       // Used again: it becomes the newest.
@@ -66,7 +74,7 @@ export class ImageLoader {
       }
       return hit
     }
-    hit = this.encode(src, maxCols, maxRows).then(
+    hit = this.encode(source, remote, maxCols, maxRows).then(
       (block) => {
         this.remember(key, block?.seq.length ?? 0)
         return block
@@ -86,15 +94,20 @@ export class ImageLoader {
     this.chars += size
     const limit = this.opts.cacheChars ?? 64 * MB
     for (const [k, n] of this.sizes) {
-      if (this.chars <= limit) break
+      if (this.chars <= limit && this.sizes.size <= MAX_ENTRIES) break
       this.sizes.delete(k)
       this.cache.delete(k)
       this.chars -= n
     }
   }
 
-  private async encode(src: string, maxCols: number, maxRows: number): Promise<ImageBlock | undefined> {
-    const bytes = await this.bytes(src)
+  private async encode(
+    source: string,
+    remote: boolean,
+    maxCols: number,
+    maxRows: number,
+  ): Promise<ImageBlock | undefined> {
+    const bytes = await this.bytes(source, remote)
     const size = imageSize(bytes)
     if (!size || !canShow(this.opts.support.protocol, size.format)) return undefined
     // Decoding is synchronous: let the frame that shows the fallback be drawn first.
@@ -108,52 +121,63 @@ export class ImageLoader {
   }
 
   /** The file's bytes, read or downloaded once however many sizes it is shown at. */
-  private bytes(src: string): Promise<Uint8Array> {
-    let hit = this.files.get(src)
+  private bytes(source: string, remote: boolean): Promise<Uint8Array> {
+    let hit = this.files.get(source)
     if (!hit) {
-      hit = this.read(src)
-      this.files.set(src, hit)
+      hit = remote ? this.download(source) : this.read(source)
+      this.files.set(source, hit)
       // Only while in flight: the encoded images are what is kept.
-      const done = () => this.files.delete(src)
+      const done = () => this.files.delete(source)
       hit.then(done, done)
     }
     return hit
   }
 
-  private async read(src: string): Promise<Uint8Array> {
-    if (/^https?:\/\//i.test(src)) {
-      if (!this.opts.fetchRemote) throw new Error("remote images are not fetched")
-      const { bytes, contentType } = await this.opts.fetchRemote(new URL(src), {
-        maxBytes: this.maxBytes,
-        signal: AbortSignal.timeout(this.timeoutMs),
-      })
-      if (!IMAGE_TYPES.test(contentType)) throw new Error(`not an image: ${contentType || "no content type"}`)
-      return bytes
-    }
-    const cwd = this.opts.cwd
-    const path = localPath(src, typeof cwd === "string" ? cwd : cwd())
-    if (!path) throw new Error(`not a file: ${src}`)
+  private async download(url: string): Promise<Uint8Array> {
+    if (!this.opts.fetchRemote) throw new Error("remote images are not fetched")
+    const { bytes, contentType } = await this.opts.fetchRemote(new URL(url), {
+      maxBytes: this.maxBytes,
+      signal: AbortSignal.timeout(this.timeoutMs),
+    })
+    if (!IMAGE_TYPES.test(contentType)) throw new Error(`not an image: ${contentType || "no content type"}`)
+    return bytes
+  }
+
+  private async read(path: string): Promise<Uint8Array> {
     const info = await stat(path)
-    if (!info.isFile()) throw new Error(`not a file: ${src}`)
+    if (!info.isFile()) throw new Error(`not a file: ${path}`)
     if (info.size > this.maxBytes) throw new Error(`image too large: ${info.size} bytes`)
     return new Uint8Array(await readFile(path))
   }
 }
 
-/** Where a local image is: a file: URL, or a path (percent-escapes decoded) from `cwd`. */
+/** A path that goes to another machine: \\host\share, //host/share, \\?\UNC\..., \\.\device. */
+const NETWORK_PATH = /^[\\/]{2}/
+
+/**
+ * Where a local image is: a file: URL on this machine, or a path (percent-escapes decoded) from
+ * `cwd`. Never a network path: opening one has Windows connect to that host with the user's
+ * credentials, before anything could tell it is not an image.
+ */
 export function localPath(src: string, cwd: string): string | undefined {
+  let path: string
   if (/^file:/i.test(src)) {
     try {
-      return fileURLToPath(src)
+      const url = new URL(src)
+      if (url.host !== "" && url.host.toLowerCase() !== "localhost") return undefined
+      path = fileURLToPath(url)
     } catch {
       return undefined
     }
+  } else {
+    // Another scheme (data:, ftp:, ...), but not a Windows drive letter.
+    if (/^[a-z][a-z0-9+.-]+:/i.test(src) && !/^[a-z]:[\\/]/i.test(src)) return undefined
+    path = src
+    try {
+      path = decodeURI(src)
+    } catch {}
   }
-  // Another scheme (data:, ftp:, ...), but not a Windows drive letter.
-  if (/^[a-z][a-z0-9+.-]+:/i.test(src) && !/^[a-z]:[\\/]/i.test(src)) return undefined
-  let path = src.split(/[?#]/)[0]!
-  try {
-    path = decodeURI(path)
-  } catch {}
-  return isAbsolute(path) ? path : resolve(cwd, path)
+  if (NETWORK_PATH.test(path)) return undefined
+  const full = isAbsolute(path) ? path : resolve(cwd, path)
+  return NETWORK_PATH.test(full) ? undefined : full
 }

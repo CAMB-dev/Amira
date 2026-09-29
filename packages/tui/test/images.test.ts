@@ -51,4 +51,5 @@ test("only image types, within the size limit", async () => {
   await expect(get(new URL("https://cdn.test/page"), opts())).rejects.toThrow("not an image (text/html)")
   await expect(get(new URL("https://cdn.test/huge.png"), opts())).rejects.toThrow("too large")
   await expect(get(new URL("https://cdn.test/missing.png"), opts())).rejects.toThrow("HTTP 404")
+  await expect(get(new URL("https://u:p@cdn.test/a.png"), opts())).rejects.toThrow("credentials")
 })

@@ -299,8 +299,8 @@ export class LiveRenderer {
         releaseImage(m.id)
         force = release
         const fallback = fallbackRows(m.prefix, state.fallback)
-        if (state.kind === "image" && visibleWidth(m.prefix) + state.block.cols <= width)
-          out.push({ prefix: m.prefix, block: state.block, fallback })
+        if (state.kind === "image")
+          out.push(...fitScreen({ prefix: m.prefix, block: state.block, fallback }, width, height))
         else out.push(...fallback)
       }
       const rest = lines.slice(i)
@@ -370,7 +370,7 @@ export class LiveRenderer {
     const shown: Line[][] = []
     for (let i = this.history.length - 1; i >= 0 && room > 0; i--) {
       // Images too wide for the screen now are drawn as their fallback.
-      const block = this.history[i]!.flatMap((l) => fitWidth(l, width))
+      const block = this.history[i]!.flatMap((l) => fitScreen(l, width, this.terminal.rows))
       const need = rows(block)
       if (need <= room) {
         shown.unshift(block)
@@ -397,13 +397,19 @@ export class LiveRenderer {
     return out
   }
 
-  /** Keeps committed lines for `redraw()`, dropping the oldest blocks past the limit. */
+  /**
+   * Keeps committed lines for `redraw()`, dropping the oldest blocks past the limit. An image
+   * counts as its rows plus one line per 10,000 characters of its sequence, so big images do
+   * not pile up.
+   */
   private remember(committed: Line[]): void {
     if (!committed.length || !this.historyLimit) return
     const block = committed.slice(-this.historyLimit)
+    const weigh = (lines: Line[]) => lines.reduce((n, l) => n + historyWeight(l), 0)
     this.history.push(block)
-    this.historyCount += block.length
-    while (this.historyCount > this.historyLimit) this.historyCount -= this.history.shift()!.length
+    this.historyCount += weigh(block)
+    while (this.historyCount > this.historyLimit && this.history.length)
+      this.historyCount -= weigh(this.history.shift()!)
   }
 
   private diffBody(frame: Frame): string | undefined {
@@ -472,10 +478,20 @@ function lineRows(line: Line, width: number): number {
   return typeof line === "string" ? rowsFor(visibleWidth(line), width) : line.block.rows
 }
 
-/** An image line, or its fallback rows when the image is wider than `width` now. */
-function fitWidth(line: Line, width: number): Line[] {
-  if (typeof line === "string" || visibleWidth(line.prefix) + line.block.cols <= width) return [line]
+/**
+ * An image line, or its fallback rows when the image does not fit the screen now: wider than
+ * `width`, or not leaving a row below it in `height` (its rows are made by scrolling first, and
+ * the cursor is restored to its top afterwards, which must still be on the screen).
+ */
+function fitScreen(line: Line, width: number, height: number): Line[] {
+  if (typeof line === "string") return [line]
+  if (visibleWidth(line.prefix) + line.block.cols <= width && line.block.rows < height) return [line]
   return line.fallback
+}
+
+/** How much of the history's line budget a committed line uses: an image by its size too. */
+function historyWeight(line: Line): number {
+  return typeof line === "string" ? 1 : line.block.rows + Math.ceil(line.block.seq.length / 10_000)
 }
 
 /** Lines to commit, made safe to print: an image marker is kept as it is. */

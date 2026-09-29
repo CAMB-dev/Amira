@@ -256,8 +256,9 @@ export interface ImageSupport {
  * (the image addon of `terminal.integrated.enableImages` does both, and this keeps full color);
  * Sixel wherever DA1 lists it, which Windows Terminal does from 1.22. "on" guesses where the
  * probe found nothing; tmux and screen get none on "auto", since they would need passthrough.
- * Windows Terminal draws Sixel at a fixed virtual cell of 10×20 pixels; elsewhere the reported
- * cell size is used, or 10×20 (VS Code) or 8×16 when none came.
+ * Windows Terminal (also under WSL) draws Sixel at a fixed virtual cell of 10×20 pixels;
+ * elsewhere the reported cell size is used. Without one, Sixel is left out on "auto"; otherwise
+ * 10×20 (VS Code) or 8×16 is assumed.
  */
 export function chooseImageSupport(
   setting: ImageSetting,
@@ -281,7 +282,12 @@ export function chooseImageSupport(
           : "sixel"
   }
   if (!protocol) return undefined
-  const fallback = info.windowsTerminal || info.vscode ? { width: 10, height: 20 } : { width: 8, height: 16 }
-  const cell = protocol === "sixel" && info.windowsTerminal ? fallback : (graphics?.cell ?? fallback)
-  return { protocol, cell }
+  // Windows Terminal also behind WSL, which gets WT_SESSION too (not VS Code: it uses iTerm2's).
+  const wt = !!env.WT_SESSION && !info.vscode
+  const virtual = { width: 10, height: 20 }
+  if (protocol === "sixel" && wt) return { protocol, cell: virtual }
+  if (graphics?.cell) return { protocol, cell: graphics.cell }
+  // Sixel at a guessed cell size would reserve the wrong number of rows: only when asked for.
+  if (protocol === "sixel" && setting === "auto") return undefined
+  return { protocol, cell: info.vscode ? virtual : { width: 8, height: 16 } }
 }

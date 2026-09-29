@@ -179,7 +179,18 @@ test("remote images go through the fetcher, which must answer with an image type
 
 test("local paths: relative to the working directory, absolute, file: URLs, escapes decoded", () => {
   const cwd = process.platform === "win32" ? "C:\\work" : "/work"
-  expect(localPath("img/a%20b.png?x=1", cwd)).toBe(join(cwd, "img", "a b.png"))
+  expect(localPath("img/a%20b.png", cwd)).toBe(join(cwd, "img", "a b.png"))
+  // A file may have # or ? in its name.
+  expect(localPath("c#1.png", cwd)).toBe(join(cwd, "c#1.png"))
+  // Never a network path, which Windows would open with the user's credentials.
+  for (const unc of [
+    "\\\\evil.test\\share\\a.png",
+    "//evil.test/share/a.png",
+    "file://evil.test/share/a.png",
+    "\\\\?\\UNC\\evil.test\\share\\a.png",
+    "%5C%5Cevil.test%5Cshare%5Ca.png",
+  ])
+    expect([unc, localPath(unc, cwd)]).toEqual([unc, undefined])
   if (process.platform === "win32") {
     expect(localPath("D:\\pics\\a.png", cwd)).toBe("D:\\pics\\a.png")
     expect(localPath("file:///D:/pics/a.png", cwd)).toBe("D:\\pics\\a.png")

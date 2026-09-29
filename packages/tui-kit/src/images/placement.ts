@@ -1,4 +1,5 @@
 import { cursor } from "../ansi.ts"
+import { sanitize } from "../width.ts"
 import type { ImageBlock } from "./encode.ts"
 
 /**
@@ -10,7 +11,10 @@ const NONCE = Math.random().toString(36).slice(2, 10)
 const MARKER_START = `\x1b_tk:img:${NONCE}:`
 const MARKER = new RegExp(`\\x1b_tk:img:${NONCE}:(\\d+)\\x07$`)
 
-/** How long a marker stays known after its deadline, for a line held back (suspended) meanwhile. */
+/**
+ * How long a marker keeps its image after its deadline, for a line held back (suspended)
+ * meanwhile; after that only its fallback rows are kept until it is committed.
+ */
 const KEEP_MS = 60_000
 
 interface Pending {
@@ -38,6 +42,8 @@ export function pendingImage(
   now = performance.now(),
 ): string {
   const id = nextId++
+  // Printed as they are later: only styles and links may stay in them.
+  fallback = fallback.flatMap((r) => sanitize(r).split("\n"))
   const entry: Pending = { state: "loading", fallback, deadline: now + timeoutMs, listeners: new Set() }
   pending.set(id, entry)
   const settle = (block: ImageBlock | undefined) => {
@@ -50,7 +56,14 @@ export function pendingImage(
     entry.listeners.clear()
   }
   load.then(settle, () => settle(undefined))
-  const forget = setTimeout(() => pending.delete(id), timeoutMs + KEEP_MS)
+  // Not committed long after its time (held back while a full-screen view is open): the image
+  // is let go, but the fallback stays, so the line still shows something when it goes out.
+  const forget = setTimeout(() => {
+    if (!pending.has(id)) return
+    entry.block = undefined
+    entry.state = "failed"
+    entry.listeners.clear()
+  }, timeoutMs + KEEP_MS)
   ;(forget as { unref?: () => void }).unref?.()
   return `${MARKER_START}${id}\x07`
 }

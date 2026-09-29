@@ -181,10 +181,23 @@ test("the image protocol follows the terminal's answers and the setting", () => 
   expect(
     chooseImageSupport("auto", { ...g({ kitty: true, sixel: true }), cell: { width: 9, height: 18 } }, {}),
   ).toEqual({ protocol: "kitty", cell: { width: 9, height: 18 } })
-  expect(chooseImageSupport("auto", g({ sixel: true }), { TERM: "xterm" })).toEqual({
+  // Sixel elsewhere needs the cell size: a guess would reserve the wrong rows.
+  expect(chooseImageSupport("auto", g({ sixel: true }), { TERM: "xterm" })).toBeUndefined()
+  expect(chooseImageSupport("on", g({ sixel: true }), { TERM: "xterm" })).toEqual({
     protocol: "sixel",
     cell: { width: 8, height: 16 },
   })
+  expect(
+    chooseImageSupport("auto", { ...g({ sixel: true }), cell: { width: 7, height: 14 } }, { TERM: "xterm" }),
+  ).toEqual({ protocol: "sixel", cell: { width: 7, height: 14 } })
+  // Windows Terminal behind WSL still draws Sixel in its virtual cells.
+  expect(
+    chooseImageSupport(
+      "auto",
+      { ...g({ sixel: true }), cell: { width: 9, height: 19 } },
+      { WT_SESSION: "1", WSL_DISTRO_NAME: "Ubuntu" },
+    ),
+  ).toEqual({ protocol: "sixel", cell: { width: 10, height: 20 } })
   expect(chooseImageSupport("auto", g({ sixel: true }), { TMUX: "/tmp/t" })).toBeUndefined()
   expect(chooseImageSupport("auto", undefined, wt)).toBeUndefined()
 })

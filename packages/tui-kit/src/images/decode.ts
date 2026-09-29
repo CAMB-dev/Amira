@@ -11,8 +11,8 @@ export interface Bitmap {
   data: Uint8Array
 }
 
-/** Images with more pixels than this are not decoded (a 4000×3000 photo has 12 M). */
-export const MAX_PIXELS = 40_000_000
+/** Images with more pixels than this are not decoded (a 4000×3000 photo has 12 M): decoding is synchronous, and 16 M pixels are 64 MB of RGBA. */
+export const MAX_PIXELS = 16_000_000
 
 /** What the bytes are, by their signature; undefined for anything else (SVG, BMP, ...). */
 export function sniffFormat(b: Uint8Array): ImageFormat | undefined {
