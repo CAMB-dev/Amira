@@ -10,6 +10,8 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     cwd: process.cwd(),
     home: process.cwd(),
     reportError: () => {},
+    notify: () => {},
+    onExit: () => () => {},
     registerTool: (t) => {
       tools.push(t)
       return () => {}

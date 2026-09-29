@@ -75,6 +75,13 @@ export interface ExtensionAPI {
    * short, and name what it is about, since the extension's name is not shown. Default "info".
    */
   notify(text: string, level?: NoticeLevel): void
+  /**
+   * Runs `handler` when Amira exits, after session.end. The process waits for the handlers,
+   * but only a few seconds: then `signal` aborts and Amira exits anyway. For short work that
+   * must not be cut off, such as a command the user configured for the end of a session.
+   * Returns a function that removes it; unloading the extension removes it too.
+   */
+  onExit(handler: (signal: AbortSignal) => void | Promise<void>): () => void
   /** Asks the user through whichever frontend is attached (select, confirm, input). */
   readonly ui: UiApi
   on<K extends keyof EventMap>(type: K, handler: (event: EventEnvelope<K>) => void): () => void

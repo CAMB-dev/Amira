@@ -115,3 +115,40 @@ test("notify sends an extension.notice, info by default", async () => {
     { source: "ext:hooks", text: "tests failed", level: "error" },
   ])
 })
+
+test("exit handlers run together; a slow one is cut off, a failing one reported, a removed one skipped", async () => {
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  const ran: string[] = []
+  let slowAborted = false
+  await host.load((api) => {
+    api.onExit(async () => {
+      await Bun.sleep(10)
+      ran.push("quick")
+    })
+    api.onExit(
+      (signal) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => {
+            slowAborted = true
+            resolve()
+          })
+        }),
+    )
+    api.onExit(() => {
+      throw new Error("boom")
+    })
+    api.onExit(() => void ran.push("removed"))()
+  }, "ext:a")
+  await host.load((api) => void api.onExit(() => void ran.push("unloaded")), "ext:b")
+  host.unload("ext:b")
+  const started = Date.now()
+  await host.runExitHandlers(100)
+  expect(Date.now() - started).toBeLessThan(2000)
+  expect(ran).toEqual(["quick"])
+  expect(slowAborted).toBe(true)
+  await bus.flush()
+  expect(events.some((e) => e.type === "extension.error" && e.data.error.includes("boom"))).toBe(true)
+})

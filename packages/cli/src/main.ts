@@ -182,11 +182,13 @@ async function run(argv: string[]): Promise<number> {
     const last = agentRef ?? agent
     last.cancelNoticeRetry()
     last.bus.emit("session.end", { reason: "exit" }, { sessionId: last.sessionId })
+    // Extensions' exit handlers (e.g. a hook for the session's end) get the same few seconds.
+    const exiting = host.runExitHandlers(5000)
     // Sub-agents still running (in the background) end with the session; give them a moment
     // to stop cleanly. Give a catalog download a moment to reach the cache, so short runs still fill it.
     session.tree.abortAll("the session ended")
     const children = Promise.all(session.tree.children.map((c) => c.result()))
-    await Promise.race([Promise.all([children, catalogRefresh]), Bun.sleep(5000)])
+    await Promise.race([Promise.all([children, catalogRefresh, exiting]), Bun.sleep(5000)])
   }
 }
 

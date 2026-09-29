@@ -70,6 +70,7 @@ export interface ExtensionHostOptions {
 export class ExtensionHost {
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
+  #exitHandlers = new Set<{ source: string; run: (signal: AbortSignal) => void | Promise<void> }>()
   #renderPending = false
   /** Extension files imported before, which a reload must import anew. */
   #imported = new Set<string>()
@@ -143,6 +144,36 @@ export class ExtensionHost {
     for (const source of this.loaded.reverse()) this.unload(source)
   }
 
+  /**
+   * Runs the extensions' exit handlers (ExtensionAPI.onExit) together and resolves once all
+   * finished, or after `timeoutMs`, when their signal aborts. Failures are reported as
+   * extension.error. Never rejects.
+   */
+  async runExitHandlers(timeoutMs = 5000): Promise<void> {
+    const handlers = [...this.#exitHandlers]
+    if (!handlers.length) return
+    const abort = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        abort.abort()
+        resolve()
+      }, timeoutMs)
+    })
+    const runs = handlers.map(async (h) => {
+      try {
+        await h.run(abort.signal)
+      } catch (err) {
+        this.#fail(h.source, `exit handler failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })
+    try {
+      await Promise.race([Promise.all(runs), late])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** Coalesces render requests into one ui.render per macrotask. */
   #requestRender() {
     if (this.#renderPending) return
@@ -181,6 +212,11 @@ export class ExtensionHost {
       reportError: (error) => void this.#fail(source, error),
       notify: (text, level = "info") =>
         void bus.emit("extension.notice", { source, text: String(text), level }, this.#meta()),
+      onExit: (run) => {
+        const entry = { source, run }
+        this.#exitHandlers.add(entry)
+        return track(() => void this.#exitHandlers.delete(entry))
+      },
       registerTool: (tool) => track(tools.register(tool, source)),
       // A taken name skips only this command, not the whole extension.
       registerCommand: (command) => {
