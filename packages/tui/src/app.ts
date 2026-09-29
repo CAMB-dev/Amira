@@ -600,6 +600,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             source: commands.control,
             waiting: waitingTitles,
             onClose: closeView,
+            // p: back to the conversation, with a snapshot of the one shown printed into it.
+            onPrint: (id) => {
+              closeView()
+              runCommand(`/agents ${id}`)
+            },
             ...(presenters ? { presenters } : {}),
           }),
         )

@@ -127,10 +127,10 @@ function nested(req: ModelRequest): MockReply {
   return { text: "Used in b.ts." }
 }
 
-test("/agents lists the sub-agents and prints a finished one's transcript compactly", async () => {
+test("/agents lists the sub-agents; where the frontend has no live view, it prints the one chosen", async () => {
   const { root, run, host, bus } = await setup(nested)
   await root.prompt("go")
-  const picking = run("/agents")
+  const picking = run("/agents", "rpc")
   await bus.flush()
   const request = host.ui.pending[0]!
   expect(request.kind).toBe("select")
@@ -140,7 +140,7 @@ test("/agents lists the sub-agents and prints a finished one's transcript compac
     /^1\. Fix the bug · coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021 · fix the bug in a\.ts$/,
   )
   expect(options[1]).toMatch(/^2\. {3}Find its uses · explorer · s_\w+ · done · /)
-  expect(options[2]).toBe("Open the live view")
+  expect(options).toHaveLength(2)
   host.ui.respond(request.requestId, options[0]!)
   const { text, ok } = await picking
   expect(ok).toBe(true)
@@ -164,6 +164,21 @@ test("/agents lists the sub-agents and prints a finished one's transcript compac
     "Fixed the bug.",
     "All tests pass.",
   ])
+})
+
+test("/agents in the TUI opens the live view on the one chosen", async () => {
+  const { root, run, host, bus, views, control } = await setup(nested)
+  await root.prompt("go")
+  const picking = run("/agents")
+  await bus.flush()
+  const request = host.ui.pending[0]!
+  expect(request.title).toContain("Enter opens the live view")
+  const options = request.kind === "select" ? request.options : []
+  host.ui.respond(request.requestId, options[1]!)
+  const { text, ok } = await picking
+  expect(ok).toBe(true)
+  expect(text).toBe("")
+  expect(views).toEqual([{ kind: "subagent", sessionId: control.subagents()[1]!.id }])
 })
 
 test("/agents <n|id> prints one directly; unknown ones are an error", async () => {

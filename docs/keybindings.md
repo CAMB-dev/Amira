@@ -230,7 +230,8 @@ VS Code keeps Ctrl+F, Ctrl+Home, Ctrl+End and Ctrl+↑↓ for its terminal (they
 first and the key reference (`?`) lists them first.
 
 Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
-the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for
+the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `p` closes it and prints a
+snapshot of the one shown, `q`/Esc close) are fixed for
 now.
 
 ## Terminal settings

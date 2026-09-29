@@ -33,6 +33,8 @@ export interface SubagentViewerOptions {
   onClose?: () => void
   /** Presents tool calls like the main transcript does. */
   presenters?: PresenterSource
+  /** Prints a snapshot of the one shown into the conversation (p); the viewer offers p when given. */
+  onPrint?: (id: string) => void
 }
 
 function compactTokens(n: number): string {
@@ -186,6 +188,7 @@ export class SubagentViewer implements Component {
   #now: () => number
   #onClose: () => void
   #presenters: PresenterSource | undefined
+  #onPrint: ((id: string) => void) | undefined
   #current: string
   #views = new Map<string, ScrollView>()
   #streams = new Map<string, Streaming>()
@@ -203,6 +206,7 @@ export class SubagentViewer implements Component {
     this.#now = opts.now ?? Date.now
     this.#onClose = opts.onClose ?? (() => {})
     this.#presenters = opts.presenters
+    this.#onPrint = opts.onPrint
   }
 
   /** The sub-agent shown. */
@@ -259,6 +263,10 @@ export class SubagentViewer implements Component {
     }
     if (matchesKey(e, "x") && this.#canStop()) {
       this.#confirming = this.#current
+      return true
+    }
+    if (matchesKey(e, "p") && this.#onPrint) {
+      this.#onPrint(this.#current)
       return true
     }
     if (matchesKey(e, "escape") || matchesKey(e, "q") || matchesKey(e, "c", { ctrl: true })) {
@@ -346,7 +354,8 @@ export class SubagentViewer implements Component {
       ? "following"
       : `${Math.min(p.total, p.top + 1)}–${Math.min(p.total, p.top + p.height)} of ${p.total}`
     const stop = this.#canStop() ? " · x stop" : ""
-    const keys = `↑↓ PgUp PgDn Home End scroll · ←→ switch${stop} · Esc back`
+    const print = this.#onPrint ? " · p print" : ""
+    const keys = `↑↓ PgUp PgDn Home End scroll · ←→ switch${stop}${print} · Esc back`
     return theme.muted(truncateToWidth(`${where} · ${keys}`, width, "…"))
   }
 

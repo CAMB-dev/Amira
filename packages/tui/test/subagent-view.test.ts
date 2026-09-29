@@ -235,7 +235,7 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   await waitFor(s.isWaiting, "the child to block")
   s.terminal.send("/agents view\r")
   await waitFor(() => s.view().includes("● wait"), "the viewer")
-  expect(s.screen.lines.at(-1)).toContain("←→ switch · x stop · Esc back")
+  expect(s.screen.lines.at(-1)).toContain("←→ switch · x stop · p print · Esc back")
   s.terminal.send("x")
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer (explorer s_"), "the question")
   expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")
@@ -383,7 +383,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await s.exited
 })
 
-test("/agents picks a sub-agent in an inline dialog and prints its transcript into the scrollback", async () => {
+test("/agents picks a sub-agent in an inline dialog and opens the live view on it; p there prints it", async () => {
   const s = await setup([
     { toolCalls: [{ name: "delegate", args: { roles: ["explorer"] } }] },
     { toolCalls: [{ name: "read", args: { path: "b.ts" } }] },
@@ -395,9 +395,13 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   s.terminal.send("/agents\r")
   await waitFor(() => s.view().includes("? Sub-agents"), "the picker")
   // The digit in front is the option's own number, shown once.
-  expect(s.view()).toContain("  2 Open the live view")
+  expect(s.view()).not.toContain("Open the live view")
   expect(s.view()).toMatch(/❯ 1 Check explorer · explorer · s_\w+ · done/)
   s.terminal.send("1")
+  await waitFor(() => s.screen.inAltScreen, "the viewer")
+  await waitFor(() => s.view().includes("task: task for the explorer"), "the viewer drawn")
+  // p leaves it with a snapshot of the one shown printed into the scrollback.
+  s.terminal.send("p")
   await waitFor(() => s.screen.mainText.includes("● read b.ts"), "the transcript")
   const main = s.screen.mainText
   expect(main).toMatch(/◆ Check explorer · explorer · s_\w+ · done · \d+s/)
@@ -405,13 +409,6 @@ test("/agents picks a sub-agent in an inline dialog and prints its transcript in
   expect(main).toContain("  └ contents of b.ts (+2 lines)")
   expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("● read b.ts"))
   expect(s.screen.inAltScreen).toBe(false)
-  // The last entry opens the live view.
-  s.terminal.send("/agents\r")
-  await waitFor(() => s.view().includes("? Sub-agents"), "the picker again")
-  s.terminal.send("2")
-  await waitFor(() => s.screen.inAltScreen, "the viewer")
-  s.terminal.send(ESC)
-  await waitFor(() => !s.screen.inAltScreen, "closed")
   s.terminal.send("\x03")
   await s.exited
 })
