@@ -1,6 +1,7 @@
 import type { ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
 import { toolResultText } from "@amira/api"
 import {
+  defaultGlyphs,
   type ImageLoader,
   MarkdownStream,
   type MarkdownStreamOptions,
@@ -8,6 +9,7 @@ import {
   renderMarkdown,
   type ScreenImage,
   stripAnsi,
+  TAB_WIDTH,
   type Theme,
   truncateToWidth,
   visibleWidth,
@@ -16,6 +18,7 @@ import {
 import { replyRows, userLines, userText } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { childrenOf, isActive, type SpawnGroups, type SubagentNode, subtree, treeRows } from "./subagents.ts"
+import { type CopyRow, chromeRows, gutterRows } from "./text-selection.ts"
 import { type FinishedCall, finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
 import type { BlockKind } from "./transcript.ts"
 
@@ -96,6 +99,15 @@ export abstract class Block {
   /** The text "copy selected block" puts on the clipboard. */
   abstract copyText(): string
 
+  /**
+   * How each of its lines copies when text is selected with the mouse: `lines` as `lines`
+   * returned them, `plain` the same without styles. By default the symbols in front of rows
+   * (bullets, trees, result marks) are chrome.
+   */
+  copyRows(plain: readonly string[], _lines: readonly string[]): CopyRow[] {
+    return chromeRows(plain)
+  }
+
   /** Whether folding it shows less; folding does nothing to other blocks. */
   foldable(_env: BlockEnv): boolean {
     return false
@@ -135,6 +147,22 @@ export class LinesBlock extends Block {
 
   copyText(): string {
     return this.copy ?? ""
+  }
+
+  override copyRows(plain: readonly string[]): CopyRow[] {
+    if (this.kind !== "user" && this.kind !== "command") return chromeRows(plain)
+    // A message sits behind "› ", its rows lined up after it; a command echo wraps under it.
+    const gutter = visibleWidth(glyphs.user) + 1
+    const rows: CopyRow[] =
+      this.kind === "user"
+        ? gutterRows(plain, gutter)
+        : plain.map((p) => ({ from: p.startsWith(`${glyphs.user} `) ? gutter : 0 }))
+    // On the band behind them its blank rows above and below are chrome too (and the fill
+    // that runs each row to the edge is trailing blanks, which never copy).
+    const last = plain.length - 1
+    if (last > 0 && !plain[0]!.trim()) rows[0] = { from: 0, skip: true }
+    if (last > 0 && !plain[last]!.trim()) rows[last] = { from: 0, skip: true }
+    return rows
   }
 }
 
@@ -370,6 +398,50 @@ export class ReplyBlock extends Block {
     return this.source.trim()
   }
 
+  /**
+   * Its rows copy without the reply's indent. Code blocks copy as their code: the frame rows
+   * are left out, the side before each row too, and a line of code wrapped over rows is one
+   * line again (matched against the source; if they do not match, its rows stay lines). An
+   * image copies as its alt text, once.
+   */
+  override copyRows(plain: readonly string[], lines: readonly string[]): CopyRow[] {
+    const indent = visibleWidth(glyphs.assistant)
+    const rows: CopyRow[] = plain.map(() => ({ from: indent }))
+    // A quote's bars are chrome too.
+    const bars = new RegExp(`^ {${indent}}((?:${defaultGlyphs.quoteBar} ?)+)`)
+    for (const [i, p] of plain.entries()) {
+      const m = bars.exec(p)
+      if (m) rows[i] = { from: indent + visibleWidth(m[1]!) }
+    }
+    const fences = fencedCode(foldMarkdown(this.source, this.folded).text)
+    // Frames are matched to the fences of the source in order; one that matches none (a fence
+    // the source is not read for, say in a nested list) copies row by row.
+    let next = 0
+    for (const f of codeFrames(plain)) {
+      rows[f.top] = { from: 0, skip: true }
+      if (f.bottom !== undefined) rows[f.bottom] = { from: 0, skip: true }
+      const shown = f.rows.map((r) => plain[r]!.slice(f.col))
+      let at: number[] | undefined
+      for (let q = next; q < fences.length && !at; q++) {
+        at = linesOf(shown, fences[q]!.shown)
+        if (at) next = q + 1
+      }
+      const fence = at && fences[next - 1]!
+      for (const [k, r] of f.rows.entries()) {
+        const line = at?.[k]
+        if (line === undefined) rows[r] = { from: f.col }
+        else if (k > 0 && at![k - 1] === line) rows[r] = { from: f.col, joins: true }
+        else rows[r] = { from: f.col, exact: fence!.exact[line]! }
+      }
+    }
+    for (const im of imagesIn(lines) ?? []) {
+      const text = stripAnsi(im.alt).trim()
+      for (let k = 0; k < im.image.rows && im.line + k < rows.length; k++)
+        rows[im.line + k] = k ? { from: 0, text, repeats: true } : { from: 0, text }
+    }
+    return rows
+  }
+
   override foldable(): boolean {
     // Folded, its images are their alt text.
     return this.#hasImages || foldMarkdown(this.source, false).foldable
@@ -393,6 +465,111 @@ export class ReplyBlock extends Block {
       this.folded = folded
     }
   }
+}
+
+/** A code block's frame in a reply's rows: its top and bottom rows, its code rows, and the column its code starts at. */
+interface CodeFrame {
+  top: number
+  bottom?: number
+  rows: number[]
+  col: number
+}
+
+/** The frames of code blocks in rows of rendered Markdown (without styles). */
+function codeFrames(plain: readonly string[]): CodeFrame[] {
+  const { codeTop, codeSide, codeBottom } = defaultGlyphs
+  const out: CodeFrame[] = []
+  for (let i = 0; i < plain.length; i++) {
+    const col = /^ */.exec(plain[i]!)![0].length
+    if (!plain[i]!.startsWith(codeTop, col)) continue
+    const frame: CodeFrame = { top: i, rows: [], col: col + visibleWidth(codeSide) + 1 }
+    out.push(frame)
+    const pad = " ".repeat(col)
+    while (i + 1 < plain.length) {
+      const row = plain[i + 1]!
+      if (row.startsWith(pad + codeBottom)) {
+        frame.bottom = ++i
+        break
+      }
+      if (!row.startsWith(pad + codeSide)) break
+      frame.rows.push(++i)
+    }
+  }
+  return out
+}
+
+/** A fence at any indent: the source is read for more fences than there are, not fewer. */
+const ANY_FENCE = /^ *(`{3,}|~{3,})/
+
+/** A fenced code block of Markdown: its lines as drawn (tabs as spaces) and as written. */
+interface Fence {
+  shown: string[]
+  exact: string[]
+}
+
+/** The fenced code blocks of Markdown, in order (the last one maybe still open). */
+function fencedCode(markdown: string): Fence[] {
+  const out: Fence[] = []
+  let open: { mark: string; indent: number; fence: Fence } | undefined
+  for (const line of markdown.split("\n")) {
+    if (open) {
+      const close = ANY_FENCE.exec(line)
+      if (
+        close &&
+        close[1]![0] === open.mark[0] &&
+        close[1]!.length >= open.mark.length &&
+        !line.trim().slice(close[1]!.length).trim()
+      ) {
+        open = undefined
+        continue
+      }
+      // The fence's indent goes, as much of it as the line has.
+      const cut = (s: string) => {
+        let start = 0
+        while (start < open!.indent && s[start] === " ") start++
+        return s.slice(start)
+      }
+      open.fence.shown.push(cut(expandTabs(line)))
+      open.fence.exact.push(cut(line))
+      continue
+    }
+    const start = ANY_FENCE.exec(line)
+    if (start) {
+      open = { mark: start[1]!, indent: /^ */.exec(line)![0].length, fence: { shown: [], exact: [] } }
+      out.push(open.fence)
+    }
+  }
+  return out
+}
+
+/**
+ * The line of a code block's source each of its rows shows (a line wrapped over rows is shown
+ * by several), found by matching the rows to the lines. Undefined when they do not match.
+ */
+function linesOf(rows: string[], source: string[]): number[] | undefined {
+  const out: number[] = []
+  let r = 0
+  for (const [i, line] of source.entries()) {
+    if (r >= rows.length) break
+    let text = rows[r++]!
+    out.push(i)
+    while (r < rows.length && text.length < line.length && rows[r] && line.startsWith(text + rows[r])) {
+      text += rows[r++]
+      out.push(i)
+    }
+    if (text.trimEnd() !== line.trimEnd()) return undefined
+  }
+  return r === rows.length ? out : undefined
+}
+
+/** Tabs as spaces to the next multiple of TAB_WIDTH, as Markdown is drawn. */
+function expandTabs(line: string): string {
+  if (!line.includes("\t")) return line
+  let out = ""
+  for (const part of line.split(/(\t)/)) {
+    out += part === "\t" ? " ".repeat(TAB_WIDTH - (Bun.stringWidth(out) % TAB_WIDTH)) : part
+  }
+  return out
 }
 
 /** A tool call: its head, its output while it runs, then its result, with its sub-agents under it. */

@@ -4,9 +4,10 @@ import { detectEnv, type InputEvent, type TerminalEnv } from "@amira/tui-kit"
 /**
  * Where an action applies: the input box, a completion list below it while open (commands
  * or files), the history search while it runs, or a dialog; in full-screen mode also the
- * transcript (keys taken before the input's), a block selection, and the find bar.
+ * transcript (keys taken before the input's), a block selection, the find bar, and text
+ * selected with the mouse.
  */
-export type KeyScope = "input" | "popup" | "search" | "dialog" | "transcript" | "select" | "find"
+export type KeyScope = "input" | "popup" | "search" | "dialog" | "transcript" | "select" | "find" | "text"
 
 interface ActionInfo {
   scope: KeyScope
@@ -95,6 +96,7 @@ export const ACTIONS = {
   "find.next": { scope: "find", description: "Go to the next match up (older)" },
   "find.prev": { scope: "find", description: "Go to the next match down (newer)" },
   "find.close": { scope: "find", description: "Close the find bar, staying where the match is" },
+  "text.clear": { scope: "text", description: "Clear the text selected with the mouse" },
 } satisfies Record<string, ActionInfo>
 
 export type Action = keyof typeof ACTIONS
@@ -160,6 +162,7 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "find.next": ["enter", "up", "f3"],
     "find.prev": ["shift+enter", "down", "shift+f3"],
     "find.close": ["escape", "ctrl+c", "ctrl+g"],
+    "text.clear": ["escape"],
   }
   return keys
 }

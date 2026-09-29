@@ -11,6 +11,8 @@ export interface MockReply {
   error?: { message: string; retryable?: boolean; status?: number }
   /** Milliseconds to wait before each streamed chunk. */
   delayMs?: number
+  /** Stops the text after its first `chunks` chunks (8 characters each) until `until` settles. */
+  hold?: { chunks: number; until: Promise<unknown> }
   usage?: Partial<Usage>
 }
 
@@ -64,7 +66,8 @@ export function createMockDialect(steps: MockStep[] = []) {
         if (reply.text) {
           const block = { type: "text" as const, text: "" }
           message.content.push(block)
-          for (const chunk of reply.text.match(/.{1,8}/gs) ?? []) {
+          for (const [i, chunk] of (reply.text.match(/.{1,8}/gs) ?? []).entries()) {
+            if (reply.hold && i === reply.hold.chunks) await reply.hold.until
             await wait()
             block.text += chunk
             yield { type: "text.delta", text: chunk }
