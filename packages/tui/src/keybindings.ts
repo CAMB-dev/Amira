@@ -35,7 +35,11 @@ export const ACTIONS = {
     scope: "input",
     description: "Send the message; while a turn runs, always send it after the turn",
   },
-  interrupt: { scope: "input", description: "Stop the running turn" },
+  interrupt: {
+    scope: "input",
+    description:
+      "Stop the running turn, sending the steering and queued messages at once as one; twice in a row, rewind the conversation",
+  },
   cancel: { scope: "input", description: "Stop the running turn, else clear the input, else quit" },
   exit: { scope: "input", description: "Quit when the input is empty and nothing runs" },
   redraw: { scope: "input", description: "Clear the screen and draw it again" },

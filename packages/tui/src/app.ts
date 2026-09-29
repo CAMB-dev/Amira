@@ -42,10 +42,11 @@ import {
   type Terminal,
   type Theme,
   truncateToWidth,
+  visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { CommandPopup } from "./command-popup.ts"
-import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
+import { Dialog, type DialogAnswer, type DialogRequest, dialogEchoLines } from "./dialog.ts"
 import { renderToolLines } from "./diff-view.ts"
 import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
@@ -148,6 +149,8 @@ interface Outgoing {
   text: string
   /** The text with folded pastes as their placeholders. */
   display?: string
+  /** When it was typed, among the messages of this run: steering and queued ones merge in this order. */
+  seq?: number
 }
 
 function outgoing(text: string, display: string | undefined): Outgoing {
@@ -180,12 +183,64 @@ const HOST_EVENTS = new Set<string>([
 /** How long a note such as "Tool output: full" replaces the key hints. */
 const HINT_NOTE_MS = 4000
 
+/** Two presses of the interrupt key (Esc) within this many ms are a double press: rewind. */
+const DOUBLE_ESC_MS = 500
+
+/** Messages waiting above the input box (steering, queued) shown at most; the rest are counted. */
+const PENDING_SHOWN = 3
+/** Rows each of them takes at most. */
+const PENDING_ROWS = 2
+
+/**
+ * The rows of messages waiting above the input box: "steering › …" and "queued › …", each on
+ * at most two rows (the second under the text, cut with "…"), at most three of them, then how
+ * many more wait. They stay a few rows, however long the messages, so the input box keeps its
+ * place on the screen.
+ */
+export function pendingMessageRows(
+  items: readonly { label: string; text: string }[],
+  width: number,
+  theme: Theme,
+): string[] {
+  const out: string[] = []
+  for (const { label, text } of items.slice(0, PENDING_SHOWN)) {
+    const head = `${label} ${glyphs.pointer} `
+    const indent = visibleWidth(head)
+    const flat = text.replace(/\s+/g, " ").trim()
+    const rows = wrapText(flat, Math.max(8, width - indent))
+    const shown = rows.slice(0, PENDING_ROWS)
+    if (rows.length > PENDING_ROWS) {
+      const last = shown.length - 1
+      shown[last] = truncateToWidth(
+        `${shown[last]} ${rows.slice(PENDING_ROWS).join(" ")}`,
+        Math.max(8, width - indent),
+        glyphs.more,
+      )
+    }
+    shown.forEach((r, i) => {
+      out.push(truncateToWidth(theme.muted(`${i === 0 ? head : " ".repeat(indent)}${r}`), width, glyphs.more))
+    })
+  }
+  const more = items.length - PENDING_SHOWN
+  if (more > 0) out.push(theme.muted(`+${more} more waiting`))
+  return out
+}
+
 /**
  * How a user message reads while queued, or back in the editor once dropped: its display text,
  * if any. That is what the user typed (e.g. "/review-pr 123"), so sending it again re-runs it.
  */
 function messageText(m: UserMessage): string {
   return m.display?.text.trim() || userText(m)
+}
+
+/** The start of the rewind picker's request id, which the UI asks itself rather than an extension. */
+const REWIND_ID = "tui-rewind-"
+
+/** A message on one line, cut for a list of them. */
+const oneLine = (s: string, max = 100) => {
+  const flat = s.replace(/\s+/g, " ").trim()
+  return flat.length > max ? `${[...flat].slice(0, max - 1).join("")}…` : flat
 }
 
 /** Output tokens a streamed text is worth, until the reply's usage says. */
@@ -296,6 +351,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let mergedQueue: string[] | undefined
   /** Messages steering the running turn that have not reached the model yet. */
   const steering: string[] = []
+  /** Counts the messages typed, so that steering and queued ones merge in the order they were. */
+  let typed = 0
+  /** When each recent steering message was typed, by its text. */
+  const steerSeq = new Map<string, number>()
+  /**
+   * Set when the user stopped a turn while messages waited: the steering it drops is collected
+   * here, to go out with the queued messages at turn.end (or back into the editor to rewind).
+   */
+  let flush: { dropped: Outgoing[]; rewind: boolean } | undefined
+  /** The merged messages about to go, while a second Esc may still turn the stop into a rewind. */
+  let flushTimer: { next: Outgoing[]; timer: ReturnType<typeof setTimeout> } | undefined
+  /** When the interrupt key was last pressed, to tell a double press. */
+  let lastInterruptAt = 0
   /** Lines of notices (background results) waiting to reach the model. */
   const pendingNotices: string[] = []
   /** When held notices are sent again after a failed turn (notice.retry); redrawn each second. */
@@ -485,9 +553,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }),
     new View((width, ctx) => [
       ...pendingNoticeLines(ctx.theme).map((l) => truncateToWidth(l, width, "…")),
-      ...steering.flatMap((s) => wrapText(ctx.theme.muted(`steering › ${s.replace(/\s+/g, " ")}`), width)),
-      ...queued.flatMap((q) =>
-        wrapText(ctx.theme.muted(`queued › ${(q.display ?? q.text).replace(/\s+/g, " ")}`), width),
+      ...pendingMessageRows(
+        [
+          ...steering.map((text) => ({ label: "steering", text })),
+          ...queued.map((q) => ({ label: "queued", text: q.display ?? q.text })),
+        ],
+        width,
+        ctx.theme,
       ),
     ]),
     // The input box carries the status in its bottom border. A dialog takes the box's place;
@@ -547,10 +619,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const submitKey = keys.label("submit")
     const interruptKey = keys.label("interrupt")
     if (working) {
+      // Esc stops the turn; with messages waiting it sends them at once, merged.
+      const waiting = queued.length > 0 || steering.length > 0
       return [
         submitKey && { text: `${submitKey} ${enterDoes}`, priority: 5 },
         queueKey && { text: `${queueKey} ${otherWay(enterDoes)}`, priority: 3 },
-        interruptKey && { text: `${interruptKey} interrupt`, priority: 4 },
+        interruptKey && { text: `${interruptKey} ${waiting ? "send queued" : "interrupt"}`, priority: 4 },
+        interruptKey && canRewind() && { text: `${interruptKey} ${interruptKey} rewind`, priority: 1 },
       ]
     }
     const helpKey = keys.label("help")
@@ -832,13 +907,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         else if (e.data.reason === "aborted") view.notice("interrupted", "Interrupted.")
         else if (!turnShowedOutput) view.notice("info", "(no reply)")
         termStatus.turnEnded(e.data.reason)
-        if (queued.length) {
+        if (flush) {
+          // Stopped with Esc: the steering the turn dropped and the queued messages go out as
+          // one, in the order they were typed; unless a second Esc asked to rewind instead.
+          const next = [...flush.dropped, ...queued.splice(0)].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+          const rewind = flush.rewind
+          flush = undefined
+          if (rewind) {
+            putBack(next)
+            queueMicrotask(openRewind)
+          } else if (next.length) {
+            // Wait out the rest of a double press: a second Esc still means rewind.
+            const wait = Math.max(0, DOUBLE_ESC_MS - (Date.now() - lastInterruptAt))
+            flushTimer = { next, timer: setTimeout(() => sendMerged(next), wait) }
+          }
+        } else if (queued.length) {
           const next = queued.splice(0, queued.length)
-          const text = next.map((q) => q.text).join("\n\n")
-          const shown = next.map((q) => q.display ?? q.text)
-          const display = next.some((q) => q.display) ? shown.join("\n\n") : undefined
-          mergedQueue = next.length > 1 ? shown : undefined
-          queueMicrotask(() => send(outgoing(text, display)))
+          queueMicrotask(() => sendMerged(next))
         }
         break
       case "notice.retry":
@@ -897,6 +982,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
         if (e.data.state === "injected") view.user(e.data.message)
+        // Stopped with Esc while messages waited: it goes out again at once, with the queued ones.
+        else if (e.data.state === "dropped" && flush) {
+          const m = e.data.message
+          flush.dropped.push({
+            ...outgoing(userText(m), m.display?.text),
+            seq: steerSeq.get(userText(m)) ?? 0,
+          })
+        }
         // Put a message the turn dropped back into the editor rather than losing it.
         else if (e.data.state === "dropped") {
           // A message with folded pastes comes back folded.
@@ -980,13 +1073,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     editor.clear()
     history.add(parts)
     historyNav.reset()
-    const message = outgoing(trimmed, display)
+    const message: Outgoing = { ...outgoing(trimmed, display), seq: ++typed }
     remember(message, parts)
     if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
     else if (commands?.skillLine(trimmed)) runSkill(trimmed)
     else if (commands?.inputLine(trimmed)) runInput(trimmed, display)
-    else if (working && how === "steer") agent.steer(toPrompt(message))
-    else if (working) queued.push(message)
+    else if (working && how === "steer") {
+      steerSeq.set(message.text, message.seq!)
+      for (const k of steerSeq.keys()) {
+        if (steerSeq.size <= 16) break
+        steerSeq.delete(k)
+      }
+      agent.steer(toPrompt(message))
+    } else if (working) queued.push(message)
     else send(message)
     view.requestRender()
   }
@@ -1062,10 +1161,127 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
-  /** Esc or Ctrl+C while working. */
+  /** Sends messages as one prompt that the transcript still shows one by one. */
+  function sendMerged(next: Outgoing[]) {
+    if (flushTimer?.next === next) flushTimer = undefined
+    if (!next.length) return
+    const text = next.map((q) => q.text).join("\n\n")
+    const shown = next.map((q) => q.display ?? q.text)
+    const display = next.some((q) => q.display) ? shown.join("\n\n") : undefined
+    mergedQueue = next.length > 1 ? shown : undefined
+    send(outgoing(text, display))
+  }
+
+  /** Puts messages that were about to go back into the editor, before what it holds. */
+  function putBack(next: Outgoing[]) {
+    if (!next.length) return
+    const parts: EditorPart[] = []
+    for (const q of next) {
+      if (parts.length) parts.push("\n\n")
+      parts.push(...(sentParts.get(q.text) ?? [q.text]))
+    }
+    if (!editor.isEmpty) parts.push("\n\n", ...editor.getParts())
+    editor.setParts(parts)
+  }
+
+  /**
+   * Esc or Ctrl+C while working. With steering or queued messages waiting, the turn stops and
+   * they go out at once, merged in the order they were typed (on turn.end).
+   */
   function interrupt() {
     interrupted = true
+    if (working && !flush && (queued.length || steering.length)) flush = { dropped: [], rewind: false }
     agent.abort()
+  }
+
+  /** Whether the conversation can be rewound: the host keeps a session file. */
+  function canRewind(): boolean {
+    return commands?.control.rewind !== undefined
+  }
+
+  /**
+   * The interrupt key (Esc). Once: stops the turn (sending what waits, see interrupt). Twice in
+   * a row: stops it and opens the rewind picker, the waiting messages back in the editor.
+   */
+  function pressInterrupt() {
+    const now = Date.now()
+    const double = now - lastInterruptAt < DOUBLE_ESC_MS
+    lastInterruptAt = double ? 0 : now
+    if (!double) {
+      if (working || compacting) interrupt()
+      return
+    }
+    if (!canRewind()) {
+      if (working || compacting) interrupt()
+      return
+    }
+    // The merged send was waiting out the double press: hold it in the editor instead.
+    if (flushTimer) {
+      clearTimeout(flushTimer.timer)
+      putBack(flushTimer.next)
+      flushTimer = undefined
+    }
+    if (working) {
+      if (!flush) flush = { dropped: [], rewind: true }
+      else flush.rewind = true
+      interrupt()
+    } else if (!compacting) openRewind()
+  }
+
+  /**
+   * The rewind picker: the user's messages, newest first. Picking one cuts the conversation
+   * back to just before it and puts it in the editor to change and send again. Files stay as
+   * they are: the conversation is what is rewound.
+   */
+  function openRewind() {
+    const control = commands?.control
+    if (!control?.rewind || working || dialogs.some((d) => d.request.requestId.startsWith(REWIND_ID))) return
+    const picks = agent.messages
+      .map((m, index) => ({ m, index }))
+      .filter((p): p is { m: UserMessage; index: number } => p.m.role === "user" && !p.m.display?.origin)
+      .reverse()
+    if (!picks.length) {
+      showNote("Nothing to rewind to yet")
+      return
+    }
+    const labels = picks.map((p, i) => `${i + 1}. ${oneLine(messageText(p.m))}`)
+    const request: Extract<DialogRequest, { kind: "select" }> = {
+      kind: "select",
+      requestId: `${REWIND_ID}${Date.now()}`,
+      title: "Rewind the conversation to before which message?",
+      options: labels,
+    }
+    const dialog: Dialog = new Dialog(
+      request,
+      (answer) => {
+        const i = dialogs.indexOf(dialog)
+        if (i !== -1) dialogs.splice(i, 1)
+        const at = typeof answer === "string" ? labels.indexOf(answer) : -1
+        if (at !== -1) void rewindTo(control.rewind!, picks[at]!)
+        view.requestRender()
+      },
+      keys,
+    )
+    dialogs.unshift(dialog)
+    view.requestRender()
+  }
+
+  async function rewindTo(rewind: (index: number) => Promise<void>, pick: { m: UserMessage; index: number }) {
+    const text = messageText(pick.m)
+    try {
+      await rewind(pick.index)
+    } catch (err) {
+      view.notice("warning", `Cannot rewind: ${err instanceof Error ? err.message : String(err)}`)
+      view.requestRender()
+      return
+    }
+    const back = sentParts.get(userText(pick.m)) ?? [text]
+    editor.setParts(editor.isEmpty ? back : [...back, "\n\n", ...editor.getParts()])
+    view.notice(
+      "info",
+      "Rewound the conversation to before that message, now back in the input. Files were not restored.",
+    )
+    redraw()
   }
 
   function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
@@ -1098,6 +1314,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     offSwitch?.()
     offCommand?.()
     clearTimeout(hintTimer)
+    if (flushTimer) clearTimeout(flushTimer.timer)
     filePicker.dispose()
     ownFiles?.dispose()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
@@ -1191,8 +1408,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // Lists open only on text, so an empty input has none; a dialog took the key above.
       return openKeyReference()
     } else if (keys.is(e, "interrupt")) {
-      // A /compact runs without a turn; interrupt stops it too.
-      if (working || compacting) interrupt()
+      // A /compact runs without a turn; interrupt stops it too. Twice in a row: rewind.
+      pressInterrupt()
     } else {
       editor.handleInput(e)
     }

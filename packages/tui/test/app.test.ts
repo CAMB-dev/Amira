@@ -30,9 +30,16 @@ import {
 } from "@amira/core"
 import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
+import { plain } from "../../tui-kit/test/context.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
-import { activityLabel, lastReasoningLine, retryLabel, runInteractive } from "../src/app.ts"
+import {
+  activityLabel,
+  lastReasoningLine,
+  pendingMessageRows,
+  retryLabel,
+  runInteractive,
+} from "../src/app.ts"
 import { FileIndex, type FileSource, fileList } from "../src/file-index.ts"
 
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
@@ -1169,20 +1176,99 @@ test("steering the final reply becomes the next turn, not editor text", async ()
   await exited
 })
 
-test("a steering message an interrupt drops goes back into the editor", async () => {
+test("Esc with a steering message waiting stops the turn and sends the message at once", async () => {
   const { terminal, live, agent, shows, idle, exited } = await setup([
     { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    (req) => ({ text: `saw ${lastUserText(req)}` }),
   ])
   terminal.send("go\r")
   await shows("01234567")
   terminal.send("keep this\r")
   await waitFor(() => live().includes("steering › keep this"), "steering line")
+  expect(live()).toContain("Esc send queued")
   terminal.send("\x1b[27u")
   await shows("Interrupted.")
+  await shows("saw keep this")
   await idle()
-  expect(live()).toContain("› keep this")
   expect(live()).not.toContain("steering ›")
-  expect(agent.messages.filter((m) => m.role === "user").length).toBe(1)
+  expect(agent.messages.filter((m) => m.role === "user").length).toBe(2)
+  terminal.send("\x03")
+  await exited
+})
+
+test("Esc merges the steering and queued messages into one, in the order they were typed", async () => {
+  const { terminal, live, all, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    (req) => ({ text: `saw ${lastUserText(req).replace(/\n\n/g, " + ")}` }),
+  ])
+  terminal.send("go\r")
+  await shows("01234567")
+  terminal.send(`then summarize${ALT_ENTER}`)
+  await waitFor(() => live().includes("queued › then summarize"), "queued line")
+  terminal.send("also check b\r")
+  await waitFor(() => live().includes("steering › also check b"), "steering line")
+  terminal.send("\x1b[27u")
+  await shows("saw then summarize + also check b")
+  await idle()
+  // One prompt, shown as the messages it was made of.
+  expect(agent.messages.filter((m) => m.role === "user").length).toBe(2)
+  expect(all()).toContain("› then summarize")
+  expect(all()).toContain("› also check b")
+  terminal.send("\x03")
+  await exited
+})
+
+test("waiting messages take at most two rows each, and a few of them, above the input", () => {
+  const long = "word ".repeat(40)
+  const rows = pendingMessageRows(
+    [
+      { label: "steering", text: long },
+      { label: "queued", text: "short" },
+      { label: "queued", text: "two" },
+      { label: "queued", text: "three" },
+      { label: "queued", text: "four" },
+    ],
+    40,
+    plain.theme,
+  )
+  expect(rows).toEqual([
+    "steering › word word word word word word",
+    "           word word word word word wor…",
+    "queued › short",
+    "queued › two",
+    "+2 more waiting",
+  ])
+})
+
+test("Esc twice opens the rewind picker; the message picked is cut off and back in the input", async () => {
+  const rewound: number[] = []
+  const { terminal, live, all, agent, shows, idle, exited } = await setup(
+    [{ text: "first answer" }, { text: "second answer" }],
+    {
+      commands: [],
+      control: {
+        rewind: async (index: number) => {
+          rewound.push(index)
+          agent.messages.splice(index)
+        },
+      },
+    },
+  )
+  terminal.send("first question\r")
+  await shows("first answer")
+  await idle()
+  terminal.send("second question\r")
+  await shows("second answer")
+  await idle()
+  terminal.send("\x1b[27u\x1b[27u")
+  await waitFor(() => live().includes("? Rewind the conversation"), "the picker")
+  // Newest first.
+  expect(live()).toMatch(/❯ 1 second question\n.*2 first question/)
+  terminal.send("\r")
+  await shows("Files were not restored")
+  expect(rewound).toEqual([2])
+  expect(live()).toContain("› second question")
+  expect(all()).toContain("Rewound the conversation")
   terminal.send("\x03")
   terminal.send("\x03")
   await exited

@@ -17,7 +17,8 @@ a key or a list of keys:
   terminal can report).
 - The hint line under the input shows only the few keys that matter now: `Enter send · ? keys`
   while idle (`Shift+Enter newline` in place of `? keys` once the input has text), and
-  `Enter steer · Alt+Enter queue · Esc interrupt` while a turn runs. The lists, the history
+  `Enter steer · Alt+Enter queue · Esc interrupt` while a turn runs (`Esc send queued` while
+  steering or queued messages wait, and `Esc Esc rewind` where the session is stored). The lists, the history
   search, the find bar and a block selection show their own. `?` (the `help` action) opens the
   key reference: every action with the keys bound to it now and its name for this file.
 - The file is read at startup. Unknown actions, keys that cannot be read and a key bound to two
@@ -53,7 +54,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it (steer it with `tui.submitWhileWorking: "queue"`) |
 | `submit.steer` | none | Send the message; while a turn runs, always steer it |
 | `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |
-| `interrupt` | `escape` | Stop the running turn |
+| `interrupt` | `escape` | Stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. Files are not restored |
 | `cancel` | `ctrl+c` | Stop the running turn, else clear the input, else quit |
 | `exit` | `ctrl+d` | Quit when the input is empty and nothing runs |
 | `redraw` | `ctrl+l` | Clear the screen and draw it again: the latest transcript and the input |
