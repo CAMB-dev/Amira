@@ -43,6 +43,7 @@ import {
   truncateToWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
 import { renderToolLines } from "./diff-view.ts"
@@ -1129,6 +1130,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       else return quit()
     } else if (keys.is(e, "exit") && !working && editor.isEmpty) {
       return quit()
+    } else if (keys.is(e, "copy.reply")) {
+      // In both modes: from the session's messages, so a new session (/clear) has none yet.
+      const fallback = mode === "fullscreen" ? "Shift+drag selects text." : "Select it with the mouse."
+      copyToClipboard(terminal, lastReplyText(agent.messages), "the last reply", showNote, fallback)
     } else if (keys.is(e, "tool-output")) {
       showNote(setDetail(nextDetail(detail)))
     } else if (keys.is(e, "panels.toggle") && panelsShown) {

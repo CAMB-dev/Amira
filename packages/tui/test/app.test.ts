@@ -918,7 +918,7 @@ test("a long draft scrolls inside the input box instead of growing past the scre
   ])
   expect(rows[top + 5]).toBe("╰─ m1 ──────────────── proj ─╯")
   // The start of the transcript is still in view: the box did not push it off.
-  expect(rows[0]).toContain("Amira")
+  expect(rows[1]).toContain("Amira")
   // Moving up past the shown rows scrolls, and the border says what is below.
   for (let i = 0; i < 6; i++) terminal.send("\x1b[A")
   // The count of rows below goes into the border after the status.
@@ -2115,6 +2115,40 @@ test("the UI follows the session a command switches to, and /quit leaves", async
   expect(await exited).toBe(0)
 })
 
+test("inline: a blank line sets the conversation apart from the shell, above the banner and after /quit", async () => {
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: "the answer" }], {
+    commands: testCommands([]),
+  })
+  expect(screen.lines[0]).toBe("")
+  expect(screen.lines[1]).toContain("Amira")
+  terminal.send("hello\r")
+  await shows("the answer")
+  await idle()
+  terminal.send("/quit\r")
+  expect(await exited).toBe(0)
+  // The cursor, where the shell's prompt goes, is a blank line under the last of it.
+  expect(screen.lines[screen.y]).toBe("")
+  expect(screen.lines[screen.y - 1]).toBe("")
+  // (The row between is the band behind the echo.)
+  expect(screen.lines[screen.y - 3]).toContain("/quit")
+})
+
+test("inline: Alt+C copies the last reply; a key of the full-screen view says so once", async () => {
+  const { terminal, live, shows, idle, exited } = await setup([{ text: "Use **bold** here." }])
+  terminal.send("\x1bc")
+  await shows("Nothing to copy in the last reply.")
+  terminal.send("go\r")
+  await shows("Use bold here.")
+  await idle()
+  terminal.send("\x1bc")
+  await shows("Copied the last reply")
+  expect(terminal.output).toContain(`\x1b]52;c;${Buffer.from("Use **bold** here.").toString("base64")}\x07`)
+  terminal.send("\x1b[5~")
+  await shows("PgUp is for full-screen mode")
+  terminal.send("\x03\x03")
+  await exited
+})
+
 test("a diff review shows the diff above its options", async () => {
   const { host, terminal, live, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "review", args: {} }] },
@@ -2308,7 +2342,7 @@ test("Ctrl+L clears the screen and draws the latest transcript and the live regi
   expect(live()).toContain("› hello")
   expect(live()).toContain("the answer")
   expect(live()).toContain("› draft")
-  expect(screen.lines[0]).toContain("Amira")
+  expect(screen.lines[1]).toContain("Amira")
   terminal.send("\x03\x03")
   await exited
 })

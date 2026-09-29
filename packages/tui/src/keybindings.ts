@@ -92,7 +92,7 @@ export const ACTIONS = {
   },
   "select.start": { scope: "transcript", description: "Select the newest block of the transcript" },
   find: { scope: "transcript", description: "Find text in the transcript" },
-  "copy.reply": { scope: "transcript", description: "Copy the last reply (its Markdown) to the clipboard" },
+  "copy.reply": { scope: "input", description: "Copy the last reply (its Markdown) to the clipboard" },
   "select.prev": { scope: "select", description: "Select the block before" },
   "select.next": { scope: "select", description: "Select the block after" },
   "select.toggle": {

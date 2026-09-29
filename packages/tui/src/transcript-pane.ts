@@ -1073,15 +1073,6 @@ export function highlight(line: string, ranges: { col: number; len: number; curr
   return out
 }
 
-/** The newest reply in the transcript, if any. */
-export function lastReply(pane: TranscriptPane): ReplyBlock | undefined {
-  for (let i = pane.blocks.length - 1; i >= 0; i--) {
-    const b = pane.blocks[i]
-    if (b instanceof ReplyBlock && b.source.trim()) return b
-  }
-  return undefined
-}
-
 /** A one-line bar under the transcript, fitted to `width`. */
 export function barLine(text: string, width: number): string {
   return truncateToWidth(text, width, "…")

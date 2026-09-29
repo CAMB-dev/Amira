@@ -29,7 +29,8 @@ import {
   ToolBlock,
   userBlock,
 } from "./blocks.ts"
-import { commandEchoLines, compactTokens } from "./format.ts"
+import { copyToClipboard } from "./clipboard.ts"
+import { commandEchoLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { sessionBoundary, summaryText } from "./history.ts"
@@ -44,7 +45,7 @@ import {
   updateNode,
 } from "./subagents.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
-import { lastReply, TranscriptPane } from "./transcript-pane.ts"
+import { TranscriptPane } from "./transcript-pane.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
 /** The renderer's shortest time between frames. */
@@ -275,24 +276,17 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
 
   /**
    * The text of the rows as they stay on the normal screen: styles closed, colors as allowed,
-   * and emoji asked for as they were measured, as the renderers write them.
+   * and emoji asked for as they were measured, as the renderers write them. A blank line
+   * sets it apart from the command that started Amira above it and the shell's prompt below.
    */
   function printout(): string {
     const color = isColorEnabled()
     const lines = pane.printout(env(terminal.columns))
-    return lines.map((l) => `${presentEmoji(closeStyles(color ? l : stripColors(l)))}\r\n`).join("")
+    const rows = lines.map((l) => `${presentEmoji(closeStyles(color ? l : stripColors(l)))}\r\n`).join("")
+    return `\r\n${rows}\r\n`
   }
 
-  function copy(text: string, what: string): void {
-    if (!text.trim()) {
-      host.showNote(`Nothing to copy in ${what}.`)
-      return
-    }
-    terminal.write(osc.clipboard(text))
-    host.showNote(
-      `Copied ${what} (${compactTokens(text.length)} characters) to the clipboard. Not there? Shift+drag selects text.`,
-    )
-  }
+  const copy = (text: string, what: string) => copyToClipboard(terminal, text, what, host.showNote)
 
   /** The transcript starts afresh for another session: only the banner stays. */
   function clearTranscript(): void {
@@ -511,8 +505,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       finding = true
       pane.select(undefined)
       findInput.value = ""
-    } else if (keys.is(e, "copy.reply")) copy(lastReply(pane)?.copyText() ?? "", "the last reply")
-    else return false
+    } else return false
     return true
   }
 

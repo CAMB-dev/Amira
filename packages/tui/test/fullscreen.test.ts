@@ -199,8 +199,12 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   expect(await exited).toBe(0)
   expect(screen.inAltScreen).toBe(false)
   expect(terminal.output).toContain("\x1b[?1006l\x1b[?1000l")
-  // The normal screen holds the conversation as the inline UI would have left it, no input box.
-  expect(screen.mainText).toBe(conversation)
+  // The normal screen holds the conversation as the inline UI would have left it, no input box,
+  // a blank line before it (under the command that started Amira) and after it (above the prompt).
+  expect(screen.mainText).toBe(`\n${conversation}`)
+  expect(screen.lines[screen.y]).toBe("")
+  expect(screen.lines[screen.y - 1]).toBe("")
+  expect(screen.lines[screen.y - 2]).toBe("  The file has three lines.")
   expect(screen.altSwitches).toEqual([true, false])
 })
 

@@ -18,6 +18,7 @@ import {
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { historyLines } from "./history.ts"
+import { ACTIONS, type Action } from "./keybindings.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
 import {
   childrenOf,
@@ -47,6 +48,10 @@ import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
 /** The renderer's shortest time between frames. */
 const FRAME_MS = 16
+
+/** Keys of the full-screen view that do nothing inline; the first press says so. */
+const FULLSCREEN_KEYS = ["find", "scroll.page-up", "scroll.page-down", "select.start"] as const
+const INPUT_ACTIONS = (Object.keys(ACTIONS) as Action[]).filter((a) => ACTIONS[a].scope === "input")
 
 /**
  * The inline view: finished messages and tool calls are committed to the terminal's
@@ -316,6 +321,9 @@ export function createInlineView(host: ViewHost): TranscriptView {
     return true
   }
 
+  /** Whether a key of the full-screen view was pressed here and the note said so. */
+  let fullscreenNoted = false
+
   return {
     get runningTools() {
       return toolCalls.running
@@ -343,9 +351,12 @@ export function createInlineView(host: ViewHost): TranscriptView {
       // What was committed but not drawn yet still belongs in the scrollback.
       if (pendingCommits.length) renderer.render()
       renderer.stop({ clear: true })
+      // A blank line between the last of the conversation and the shell's prompt.
+      terminal.write("\r\n")
     },
 
-    banner: (line) => commitBlock("banner", [line]),
+    // A blank line between the command that started Amira and its first line.
+    banner: (line) => commit(["", ...transcript.block("banner", [line])]),
     user: (m) => commitBlock("user", userLines(theme, m, terminal.columns)),
     replyDelta: (text) => streaming.append(text),
     replyEnd(calls) {
@@ -411,6 +422,18 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const cycle = host.keys.label("tool-output")
       return `Tool output: ${level} (applies to tool results from now on${cycle ? `; ${cycle} cycles` : ""})`
     },
-    handleInput: () => false,
+    handleInput(e) {
+      // Find, the page keys and block selection are the full-screen view's: said once, not
+      // ignored without a word.
+      if (fullscreenNoted || e.type !== "key") return false
+      const action = FULLSCREEN_KEYS.find((a) => host.keys.is(e, a))
+      // A key the input has an action for too (bound to both) is the input's.
+      if (!action || INPUT_ACTIONS.some((a) => host.keys.is(e, a))) return false
+      fullscreenNoted = true
+      host.showNote(
+        `${host.keys.label(action) ?? "That key"} is for full-screen mode (--fullscreen, or tui.mode "fullscreen"). Inline, the terminal's own scrollback and find work.`,
+      )
+      return true
+    },
   }
 }

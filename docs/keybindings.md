@@ -62,6 +62,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `history.search` | `ctrl+r` | Search the prompt history |
 | `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
 | `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as an extension's todo list) to one line each, or unfold them |
+| `copy.reply` | `alt+c` | Copy the last reply of the session, as Markdown, to the clipboard (both modes) |
 | `help` | `?` | Open the key reference, while the input is empty and no dialog or list is open (with text, `?` is typed). It scrolls with ↑↓, PgUp/PgDn, Home/End; Esc, `q` or `?` close it |
 
 ### Completion lists
@@ -121,7 +122,9 @@ scrolls it itself. These keys act on the transcript before the input gets them. 
 plain characters act on the transcript only while the input is empty; otherwise the input
 uses them. The mouse wheel scrolls three rows a notch, and dragging selects text (see
 [Text selection](#text-selection)); a click does nothing else, so the keyboard stays with the
-input. Blocks are selected with the keyboard (`select.start`).
+input. Blocks are selected with the keyboard (`select.start`). In inline mode the terminal
+keeps the scrollback: the first press of `find`, a page key or `select.start` says they are
+for full-screen mode, and the terminal's own scrollback and find work there.
 
 The view follows the newest output. Scrolled up, it stays where it is while the conversation
 grows, and the row under it says how many rows are below (`↓ 124 rows below`), and
@@ -137,7 +140,6 @@ grows, and the row under it says how many rows are below (`↓ 124 rows below`),
 | `scroll.bottom` | `ctrl+end`, `end`, `alt+end` (VS Code: `alt+end` first) | Go to the end and follow it again |
 | `select.start` | `ctrl+up`, `alt+up` (VS Code: `alt+up` first) | Select the newest block (a message, a reply, a tool call, a notice) |
 | `find` | `ctrl+f`, `alt+f` (VS Code: `alt+f` first) | Open the find bar |
-| `copy.reply` | `alt+c` | Copy the last reply, as Markdown, to the clipboard |
 
 ### Block selection
 
@@ -198,9 +200,12 @@ Holding Shift while dragging still selects with the terminal's own selection ins
 
 ### Find
 
-The find bar searches the text of the whole transcript as you type. It ignores case unless
-the text has capitals. Matches are highlighted, the current one also underlined; the bar
-says which one of how many it is. It starts from the newest match.
+The find bar searches the text of the whole transcript as you type, and again as the
+conversation goes on. It ignores case unless the text has capitals. Text wrapped over rows
+is found as one line (a row break counts as a space), so what matches does not depend on the
+width. Matches are highlighted, the current one also underlined; the bar says which one of
+how many it is. It starts from the newest match. `/clear` and `/resume` start the transcript
+afresh: find, copying and the exit printout see only the session shown.
 
 | Action | Default | What it does |
 | --- | --- | --- |
