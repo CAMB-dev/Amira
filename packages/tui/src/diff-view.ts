@@ -1,19 +1,29 @@
 import type { ToolLine } from "@amira/api"
 import {
   type Component,
+  graphemes,
   type RenderContext,
   type StyleFn,
   stripAnsi,
   type Theme,
+  themeToken,
   truncateToWidth,
+  visibleWidth,
 } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
+import { type Range, wordDiff } from "./word-diff.ts"
 
 const SIGNS: Partial<Record<ToolLine["kind"], string>> = {
   "diff-add": "+",
   "diff-remove": "-",
   "diff-context": " ",
 }
+
+/** Rows a long diff line wraps to at most; the last one ends in "…" when there is more. */
+export const MAX_DIFF_LINE_ROWS = 6
+
+/** Marks the gap between two hunks, in the line number column. */
+export const HUNK_GAP = "⋯"
 
 function styleOf(kind: ToolLine["kind"], theme: Theme): StyleFn {
   switch (kind) {
@@ -23,7 +33,6 @@ function styleOf(kind: ToolLine["kind"], theme: Theme): StyleFn {
     case "diff-remove":
     case "error":
       return theme.error
-    case "diff-hunk":
     case "accent":
       return theme.accent
     case "warning":
@@ -31,47 +40,243 @@ function styleOf(kind: ToolLine["kind"], theme: Theme): StyleFn {
     case "text":
       return theme.text
     default:
-      // Output, file content and context recede behind the conversation.
+      // Output, file content, context and hunk gaps recede behind the conversation.
       return theme.muted
   }
 }
 
+const FILE_HEADER = /^(?:--- |\+\+\+ |diff )/
+
+function cleanText(text: string): string {
+  return stripAnsi(text)
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\t/g, "  ")
+}
+
 /**
- * Presenter lines as terminal rows, one row each, cut to `width` after `indent`. Diff lines
- * get their sign and, when numbered, a gutter as wide as the largest number.
+ * Presenter lines as terminal rows, each fitted to `width` after `indent`.
+ *
+ * Diff lines get a gutter as wide as the largest line number (muted), their sign, and wrap
+ * rather than being cut, their continued rows keeping the gutter. When the theme has the diff
+ * surface colors, added and removed lines are on their background to the right edge, and in a
+ * removed line followed by the added line that replaced it, the words that changed are on a
+ * stronger one; otherwise they are colored as text, the signs saying what they are (so they
+ * read without colors too). A hunk gap shows as "⋯" in the number column. Other lines take
+ * one row each, cut to the width.
  */
 export function renderToolLines(lines: ToolLine[], theme: Theme, width: number, indent = ""): string[] {
   const numbered = lines.filter((l) => l.lineNo !== undefined)
   const gutter = numbered.length ? Math.max(...numbered.map((l) => String(l.lineNo).length)) : 0
-  return lines.map((l) => {
-    const text = stripAnsi(l.text)
-      .replace(/[\r\n]+/g, " ")
-      .replace(/\t/g, "  ")
-    const sign = SIGNS[l.kind] ?? ""
-    const no = gutter
-      ? `${l.lineNo === undefined ? " ".repeat(gutter) : String(l.lineNo).padStart(gutter)} `
-      : ""
+  const texts = lines.map((l) => cleanText(l.text))
+  const words = changedWords(lines, texts)
+  const signed = lines.some((l) => SIGNS[l.kind] !== undefined)
+  const out: string[] = []
+  lines.forEach((l, i) => {
+    const text = texts[i]!
+    const sign = SIGNS[l.kind]
+    if (sign !== undefined) {
+      out.push(...diffRows(l, text, sign, words.get(i) ?? [], { theme, width, indent, gutter }))
+      return
+    }
+    if (l.kind === "diff-hunk" && (text === "⋮" || text === HUNK_GAP)) {
+      const at = gutter ? `${" ".repeat(Math.max(0, gutter - 1))}${HUNK_GAP}` : HUNK_GAP
+      out.push(`${indent}${theme.muted(truncateToWidth(at, Math.max(1, width - indent.length)))}`)
+      return
+    }
+    // A file's header starts at the edge, above the numbers of its lines; other lines (a note
+    // such as "… 12 more lines") line up with the text of the diff lines around them.
+    const header = l.kind === "muted" && FILE_HEADER.test(text)
+    const no = header ? "" : `${gutter ? `${" ".repeat(gutter)} ` : ""}${signed ? "  " : ""}`
+    const row = truncateToWidth(`${indent}${no}${text}`, width, glyphs.more)
+    out.push(`${indent}${theme.muted(no)}${styleOf(l.kind, theme)(row.slice(indent.length + no.length))}`)
+  })
+  // Narrower than the indent and the gutter: cut, as the terminal would otherwise wrap them.
+  return out.map((r) => (visibleWidth(r) > width ? truncateToWidth(r, Math.max(0, width)) : r))
+}
+
+/**
+ * The changed words of removed lines and the added lines right after them, paired in order:
+ * the first removed line with the first added one, and so on.
+ */
+function changedWords(lines: ToolLine[], texts: string[]): Map<number, Range[]> {
+  const out = new Map<number, Range[]>()
+  for (let i = 0; i < lines.length; ) {
+    if (lines[i]!.kind !== "diff-remove") {
+      i++
+      continue
+    }
+    let j = i
+    while (j < lines.length && lines[j]!.kind === "diff-remove") j++
+    let k = j
+    while (k < lines.length && lines[k]!.kind === "diff-add") k++
+    for (let n = 0; n < Math.min(j - i, k - j); n++) {
+      const d = wordDiff(texts[i + n]!, texts[j + n]!)
+      if (!d) continue
+      out.set(i + n, d.before)
+      out.set(j + n, d.after)
+    }
+    i = k
+  }
+  return out
+}
+
+interface Layout {
+  theme: Theme
+  width: number
+  indent: string
+  gutter: number
+}
+
+/** A piece of a line's text, and whether it is a changed word. */
+interface Piece {
+  text: string
+  word: boolean
+}
+
+/** The rows of one diff line: gutter, sign and text, wrapped with the gutter continued. */
+function diffRows(l: ToolLine, text: string, sign: string, words: Range[], at: Layout): string[] {
+  const { theme, width, indent, gutter } = at
+  const add = l.kind === "diff-add"
+  const remove = l.kind === "diff-remove"
+  const bg = add ? themeToken(theme, "diffAddedBg") : remove ? themeToken(theme, "diffRemovedBg") : undefined
+  const wordBg = add
+    ? themeToken(theme, "diffAddedWordBg")
+    : remove
+      ? themeToken(theme, "diffRemovedWordBg")
+      : undefined
+  const no = gutter
+    ? `${l.lineNo === undefined ? " ".repeat(gutter) : String(l.lineNo).padStart(gutter)} `
+    : ""
+  const head = `${sign} `
+  const lead = visibleWidth(no) + head.length
+  const room = width - visibleWidth(indent) - lead
+  if (room < 4) {
+    // Too narrow to wrap in: one row cut to the width, as other lines.
     const row = truncateToWidth(`${indent}${no}${sign}${text}`, width, glyphs.more)
-    // The gutter stays muted; the sign and text take the line's style.
     const body = row.slice(indent.length + no.length)
-    return `${indent}${theme.muted(no)}${styleOf(l.kind, theme)(body)}`
+    return [`${indent}${theme.muted(no)}${styleOf(l.kind, theme)(body)}`]
+  }
+  const rows = wrapPieces(pieces(text, words), room)
+  const blankNo = " ".repeat(no.length)
+  return rows.map((pieceRow, r) => {
+    const gut = theme.muted(r === 0 ? no : blankNo)
+    const mark = r === 0 ? head : "  "
+    const used = pieceRow.reduce((n, p) => n + visibleWidth(p.text), 0)
+    if (bg) {
+      const body = pieceRow.map((p) => (p.word && wordBg ? wordBg(p.text) : p.text)).join("")
+      return `${indent}${bg(`${gut}${mark}${body}${" ".repeat(Math.max(0, room - used))}`)}`
+    }
+    const body = pieceRow.map((p) => p.text).join("")
+    return `${indent}${gut}${styleOf(l.kind, theme)(`${mark}${body}`)}`
   })
 }
 
-/** A unified diff as presenter lines: file headers muted, hunk headers, then +, - and context. */
+/** `text` cut into pieces at the changed words' ranges. */
+function pieces(text: string, words: Range[]): Piece[] {
+  const out: Piece[] = []
+  let at = 0
+  for (const [start, end] of words) {
+    if (start > at) out.push({ text: text.slice(at, start), word: false })
+    if (end > start) out.push({ text: text.slice(start, end), word: true })
+    at = Math.max(at, end)
+  }
+  if (at < text.length || out.length === 0) out.push({ text: text.slice(at), word: false })
+  return out
+}
+
+/**
+ * Pieces wrapped to rows of `room` cells, breaking anywhere (code, not prose) but never inside
+ * a character: a wide one that does not fit goes to the next row. More than
+ * MAX_DIFF_LINE_ROWS rows are cut, the last one ending in "…".
+ */
+function wrapPieces(list: Piece[], room: number): Piece[][] {
+  const rows: Piece[][] = [[]]
+  let used = 0
+  const put = (g: string, word: boolean) => {
+    const row = rows[rows.length - 1]!
+    const last = row[row.length - 1]
+    if (last && last.word === word) last.text += g
+    else row.push({ text: g, word })
+  }
+  for (const p of list) {
+    for (const g of graphemes(p.text)) {
+      const w = Bun.stringWidth(g)
+      if (used + w > room && used > 0) {
+        rows.push([])
+        used = 0
+      }
+      put(g, p.word)
+      used += w
+    }
+  }
+  if (rows.length <= MAX_DIFF_LINE_ROWS) return rows
+  const kept = rows.slice(0, MAX_DIFF_LINE_ROWS)
+  // The last row kept, cut to leave a cell for the ellipsis.
+  const last = kept[kept.length - 1]!
+  const cut: Piece[] = []
+  let left = room - 1
+  for (const p of last) {
+    let text = ""
+    for (const g of graphemes(p.text)) {
+      const w = Bun.stringWidth(g)
+      if (w > left) break
+      text += g
+      left -= w
+    }
+    if (text) cut.push({ text, word: p.word })
+    if (text.length < p.text.length) break
+  }
+  cut.push({ text: glyphs.more, word: false })
+  kept[kept.length - 1] = cut
+  return kept
+}
+
+/**
+ * A unified diff as presenter lines: file headers muted, then +, - and context lines numbered
+ * from the hunk headers (the new file's numbers, the old one's for removed lines), with "⋯"
+ * between the hunks of a file in place of their headers.
+ */
 export function parseUnifiedDiff(diff: string): ToolLine[] {
-  return diff
-    .replace(/\n$/, "")
-    .split("\n")
-    .map((line): ToolLine => {
-      if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff "))
-        return { kind: "muted", text: line }
-      if (line.startsWith("@@")) return { kind: "diff-hunk", text: line }
-      if (line.startsWith("+")) return { kind: "diff-add", text: line.slice(1) }
-      if (line.startsWith("-")) return { kind: "diff-remove", text: line.slice(1) }
-      if (line.startsWith(" ")) return { kind: "diff-context", text: line.slice(1) }
-      return { kind: "text", text: line }
-    })
+  const out: ToolLine[] = []
+  let oldNo: number | undefined
+  let newNo: number | undefined
+  /** A hunk of the current file came before, so the next header is a gap. */
+  let inFile = false
+  for (const line of diff.replace(/\n$/, "").split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")) {
+      out.push({ kind: "muted", text: line })
+      inFile = false
+      oldNo = undefined
+      newNo = undefined
+      continue
+    }
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+    if (hunk) {
+      if (inFile) out.push({ kind: "diff-hunk", text: HUNK_GAP })
+      inFile = true
+      oldNo = Number(hunk[1])
+      newNo = Number(hunk[2])
+      continue
+    }
+    if (line.startsWith("@@")) {
+      out.push({ kind: "diff-hunk", text: line })
+      continue
+    }
+    const number = (n: number | undefined) => (n === undefined ? {} : { lineNo: n })
+    if (line.startsWith("+")) {
+      out.push({ kind: "diff-add", text: line.slice(1), ...number(newNo) })
+      if (newNo !== undefined) newNo++
+    } else if (line.startsWith("-")) {
+      out.push({ kind: "diff-remove", text: line.slice(1), ...number(oldNo) })
+      if (oldNo !== undefined) oldNo++
+    } else if (line.startsWith(" ")) {
+      out.push({ kind: "diff-context", text: line.slice(1), ...number(newNo) })
+      if (newNo !== undefined) newNo++
+      if (oldNo !== undefined) oldNo++
+    } else if (line.startsWith("\\")) out.push({ kind: "muted", text: line })
+    else out.push({ kind: "text", text: line })
+  }
+  return out
 }
 
 /** A diff cut to `maxLines`, with a line saying how many more there are. */

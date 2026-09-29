@@ -65,20 +65,20 @@ test("a diff review fits the rows it has: title, options and keys stay, the diff
   ])
   // 7 rows for the diff: 3 from the start, a marker, 3 from the end.
   expect(lines.slice(1, 8)).toEqual([
-    "+line 1",
-    "+line 2",
-    "+line 3",
+    "+ line 1",
+    "+ line 2",
+    "+ line 3",
     "… 48 more lines …",
-    "+line 52",
-    "+line 53",
-    "+line 54",
+    "+ line 52",
+    "+ line 53",
+    "+ line 54",
   ])
 })
 
 test("a short diff is shown whole, and a tall terminal shows more of a long one", () => {
   const short = review(5).dialog
   short.maxRows = 24
-  expect(short.render(60, plain)).toContain("+line 5")
+  expect(short.render(60, plain)).toContain("+ line 5")
   expect(short.render(60, plain).some((l) => l.includes("more lines"))).toBe(false)
   const long = review(54).dialog
   long.maxRows = 40

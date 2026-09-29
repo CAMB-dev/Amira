@@ -96,7 +96,7 @@ test("an edit shows +added −removed and a compact numbered diff, cut after 20 
       details: { path: "/p/src/a.ts", replacements: 1, added: 1, removed: 1, hunks: [hunk(9, 2)] },
     },
   })
-  expect(small).toEqual(["● edit src/a.ts", "  └ +1 −1", "    9 -line 9", "    9 +line 10"])
+  expect(small).toEqual(["● edit src/a.ts", "  └ +1 −1", "    9 - line 9", "    9 + line 10"])
   const big = show(builtinPresenters.edit, {
     name: "edit",
     args: { path: "a.ts", old_string: "x", new_string: "y" },
@@ -107,7 +107,7 @@ test("an edit shows +added −removed and a compact numbered diff, cut after 20 
   })
   expect(big).toHaveLength(2 + 20)
   // The note lines up with the text, past the gutter.
-  expect(big.at(-1)).toBe("       … 11 more lines")
+  expect(big.at(-1)).toBe("         … 11 more lines")
 })
 
 test("a presenter that throws falls back to the generic presentation", () => {
@@ -150,22 +150,36 @@ test("finished and running lines fit the width, the running one with spinner and
   expect(narrow.every((l) => visibleWidth(l) <= 30)).toBe(true)
 })
 
-test("diff lines: a unified diff keeps its signs; numbered lines share a gutter", () => {
+test("diff lines: a unified diff keeps its signs, numbered from its hunk headers", () => {
   const unified = plain(
-    renderToolLines(parseUnifiedDiff("--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n ctx\n"), theme, 40),
+    renderToolLines(
+      parseUnifiedDiff("--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n ctx\n@@ -40,2 +40,2 @@\n x\n-y\n"),
+      theme,
+      40,
+    ),
   )
-  expect(unified).toEqual(["--- a/f", "+++ b/f", "@@ -1 +1 @@", "-old", "+new", " ctx"])
+  // The first hunk's header gives way to the numbers, a later one to "⋯".
+  expect(unified).toEqual([
+    "--- a/f",
+    "+++ b/f",
+    " 1 - old",
+    " 1 + new",
+    " 2   ctx",
+    " ⋯",
+    "40   x",
+    "41 - y",
+  ])
   const gutter = plain(
     renderToolLines(
       [
         { kind: "diff-context", text: "a", lineNo: 9 },
         { kind: "diff-add", text: "b", lineNo: 10 },
-        { kind: "diff-hunk", text: "⋮" },
+        { kind: "diff-hunk", text: "⋯" },
       ],
       theme,
       40,
       "  ",
     ),
   )
-  expect(gutter).toEqual(["   9  a", "  10 +b", "     ⋮"])
+  expect(gutter).toEqual(["   9   a", "  10 + b", "   ⋯"])
 })

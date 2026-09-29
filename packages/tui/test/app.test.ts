@@ -446,7 +446,7 @@ test("the built-in presenters: an edit shows its diff with line numbers", async 
   await shows("ok")
   await idle()
   expect(all()).toContain(
-    ["● edit src/a.ts", "  └ +1 −1", "    11  keep", "    12 -old", "    12 +new", "", "  ok"].join("\n"),
+    ["● edit src/a.ts", "  └ +1 −1", "    11   keep", "    12 - old", "    12 + new", "", "  ok"].join("\n"),
   )
   terminal.send("\x03")
   await exited
@@ -2049,8 +2049,8 @@ test("a diff review shows the diff above its options", async () => {
   }, "reviewer")
   terminal.send("go\r")
   await waitFor(() => live().includes("? Merge?"), "review dialog")
-  expect(live()).toContain("-old")
-  expect(live()).toContain("+new")
+  expect(live()).toContain("1 - old")
+  expect(live()).toContain("1 + new")
   expect(live()).toContain("› 1 merge")
   terminal.send("2")
   await idle()
@@ -2109,8 +2109,8 @@ test("a diff review taller than the terminal keeps its title, options and keys i
   await waitFor(() => live().includes("? Merge the worktree?"), "review dialog")
   const rows = live().split("\n")
   expect(rows.some((l) => /… \d+ more lines …/.test(l))).toBe(true)
-  expect(live()).toContain("+line 1")
-  expect(live()).toContain("+line 54")
+  expect(live()).toContain("+ line 1")
+  expect(live()).toContain("+ line 54")
   expect(live()).toContain("› 1 merge")
   expect(live()).toContain("  2 keep")
   expect(live()).toContain("↑↓ move · Enter choose · Esc cancel")
