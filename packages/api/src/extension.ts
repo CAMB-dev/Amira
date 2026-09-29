@@ -1,6 +1,6 @@
 import type { CommandDefinition, InputHandler } from "./commands.ts"
 import type { EventEnvelope, EventMap, Intercept, InterceptorMap, InterceptorOptions } from "./events.ts"
-import type { RunCommandOptions, RunCommandResult } from "./process.ts"
+import type { OpenPipeOptions, PipeProcess, RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { Settings } from "./settings.ts"
 import type { SkillDefinition } from "./skills.ts"
 import type { ToolPresenter } from "./tool-renderers.ts"
@@ -45,6 +45,16 @@ export interface ExtensionAPI {
    */
   registerToolRenderer(toolName: string, presenter: ToolPresenter<any, any>): () => void
   /**
+   * Experimental: like registerToolRenderer, but builds on the presenter below it (the one
+   * that would be used without this registration, undefined when there is none), e.g. to add
+   * lines under the built-in edit presenter's diff. `decorate` is called again whenever the
+   * presenters below change, so it should only wrap `below`, not keep state of its own.
+   */
+  decorateToolRenderer(
+    toolName: string,
+    decorate: (below: ToolPresenter<any, any> | undefined) => ToolPresenter<any, any>,
+  ): () => void
+  /**
    * Experimental: adds a full-screen view kind that commands open with CommandContext.openView
    * and data of their own. Like presenters, the last view registered for a kind wins and
    * removing it restores the one before. The frontend's own kind ("subagent") is reported as
@@ -60,6 +70,16 @@ export interface ExtensionAPI {
    * whole process tree on abort, timeout and exit.
    */
   runCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult>
+  /**
+   * Starts a long-lived process with piped stdin, stdout and stderr (e.g. a language server
+   * or an MCP server) off the main thread. Events arrive asynchronously: "spawned" (or "exit"
+   * with an error when it cannot start), then output, then one "exit". The host kills its
+   * process tree when Amira exits; close it yourself when it is no longer needed (e.g. on
+   * session.end). `argv[0]` is looked up on PATH, on Windows including `.cmd` and `.bat`
+   * launchers (whose arguments may not contain cmd.exe's special characters). Throws for an
+   * empty `argv`; a command that cannot start reports "exit" with an error.
+   */
+  openPipe(argv: string[], options: OpenPipeOptions): PipeProcess
   /** Reports a failure that happened after loading (e.g. in background work) as extension.error. */
   reportError(error: string): void
   /** Asks the user through whichever frontend is attached (select, confirm, input). */

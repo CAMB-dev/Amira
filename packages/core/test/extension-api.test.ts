@@ -73,3 +73,87 @@ test("views: the last one registered for a kind wins, unloading restores the one
   host.unload("ext:a")
   expect(host.views.kinds()).toEqual([])
 })
+
+test("tool renderer decorators build on the presenter below, which may change later", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  await host.load(
+    (api) =>
+      void api.decorateToolRenderer("edit", (below) => ({
+        ...below,
+        summary: (args) => `${below?.summary?.(args) ?? "?"} +lint`,
+      })),
+    "ext:lint",
+  )
+  expect(host.renderers.get("edit")?.summary?.({})).toBe("? +lint")
+  // A presenter registered below it afterwards (e.g. its built-in) is picked up.
+  host.renderers.register("edit", { summary: () => "a.ts" })
+  // Registered last, so it sits on top and wins; the decorator is below it now.
+  expect(host.renderers.get("edit")?.summary?.({})).toBe("a.ts")
+  const built = host.renderers.get("edit")
+  expect(host.renderers.get("edit")).toBe(built!)
+  host.unload("ext:lint")
+  expect(host.renderers.get("edit")?.summary?.({})).toBe("a.ts")
+
+  const base = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  await base.load((api) => void api.registerToolRenderer("write", { summary: () => "b.ts" }), "builtin")
+  await base.load(
+    (api) =>
+      void api.decorateToolRenderer("write", (below) => ({
+        ...below,
+        result: () => "2 errors",
+      })),
+    "ext:lint",
+  )
+  expect(base.renderers.get("write")?.summary?.({})).toBe("b.ts")
+  expect(base.renderers.get("write")?.result?.({} as never)).toBe("2 errors")
+  // A decorator that throws is skipped.
+  await base.load(
+    (api) =>
+      void api.decorateToolRenderer("write", () => {
+        throw new Error("bad")
+      }),
+    "ext:bad",
+  )
+  expect(base.renderers.get("write")?.result?.({} as never)).toBe("2 errors")
+})
+
+test("openPipe starts a piped process whose events reach the extension", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let api: ExtensionAPI | undefined
+  await host.load((a) => {
+    api = a
+  }, "ext:pipe")
+  let out = ""
+  const exit = Promise.withResolvers<number | null>()
+  const pipe = api!.openPipe(
+    [process.execPath, "-e", "process.stdin.on('data', (d) => process.stdout.write('got ' + d))"],
+    {
+      cwd: process.cwd(),
+      onEvent: (e) => {
+        if (e.type === "stdout") out += e.data
+        if (e.type === "exit") exit.resolve(e.code)
+        // A throwing handler does not stop later events.
+        if (e.type === "spawned") throw new Error("ignored")
+      },
+    },
+  )
+  pipe.write("ping\n")
+  const deadline = Date.now() + 30_000
+  while (!out.includes("got ping") && Date.now() < deadline) await Bun.sleep(20)
+  expect(out).toContain("got ping")
+  pipe.close(2000)
+  expect(await exit.promise).toBe(0)
+  expect(() => api!.openPipe([], { cwd: process.cwd(), onEvent: () => {} })).toThrow()
+}, 60_000)
