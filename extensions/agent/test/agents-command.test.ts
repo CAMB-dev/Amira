@@ -153,7 +153,7 @@ test("/agents lists the sub-agents and prints a finished one's transcript compac
     "● read a.ts",
     "  └ contents of a.ts (+2 lines)",
     "",
-    "Let me ask an explorer.…",
+    "Let me ask an explorer. …",
     "",
     "● agent",
     expect.stringMatching(/^ {2}└ ## Find its uses · explorer · s_\w+ · done/),

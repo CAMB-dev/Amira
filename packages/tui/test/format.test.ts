@@ -223,11 +223,11 @@ test("a sub-agent's end line says how it ended, its time, tokens and the start o
         defaultTheme,
       ),
     )
-  expect(line("done")).toBe("  └ ◆ US market trend ✓ explorer · 41.0s · 12.3k tok · Found it in a.ts")
+  expect(line("done")).toBe("  └ ◆ US market trend ✓ explorer · 41.0s · 12k tok · Found it in a.ts")
   expect(line("error", "model failed")).toBe(
-    "  └ ◆ US market trend ✗ explorer · 41.0s · 12.3k tok · model failed",
+    "  └ ◆ US market trend ✗ explorer · 41.0s · 12k tok · model failed",
   )
-  expect(line("aborted")).toBe("  └ ◆ US market trend ⊘ explorer · 41.0s · 12.3k tok · stopped")
+  expect(line("aborted")).toBe("  └ ◆ US market trend ⊘ explorer · 41.0s · 12k tok · stopped")
 })
 
 test("a sub-agent's live rows: title, role, time and tokens, then its current tool cut to 40 characters", () => {

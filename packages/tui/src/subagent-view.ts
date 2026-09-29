@@ -1,5 +1,13 @@
 import { userMessage } from "@amira/ai"
-import type { AnyEvent, Message, SubagentInfo, ToolCallBlock, ToolResultMessage } from "@amira/api"
+import {
+  type AnyEvent,
+  formatElapsed,
+  formatTokens,
+  type Message,
+  type SubagentInfo,
+  type ToolCallBlock,
+  type ToolResultMessage,
+} from "@amira/api"
 import {
   type Component,
   type InputEvent,
@@ -35,16 +43,9 @@ export interface SubagentViewerOptions {
   presenters?: PresenterSource
 }
 
-function compactTokens(n: number): string {
-  if (n < 1000) return String(n)
-  return n < 100_000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`
-}
-
 function elapsed(info: SubagentInfo, now: number): string {
   const ms = info.durationMs ?? (info.startedAt !== undefined ? now - info.startedAt : undefined)
-  if (ms === undefined) return "queued"
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`
+  return ms === undefined ? "queued" : formatElapsed(ms)
 }
 
 function statusStyle(theme: Theme, info: SubagentInfo) {
@@ -65,7 +66,7 @@ function statusStyle(theme: Theme, info: SubagentInfo) {
 /** The one-line stats of a sub-agent: status, time, tokens and cost when known. */
 export function subagentStats(theme: Theme, info: SubagentInfo, now: number): string {
   const u = info.usage
-  const tokens = `${compactTokens(u.input + u.output + u.cacheRead + u.cacheWrite)} tok`
+  const tokens = `${formatTokens(u.input + u.output + u.cacheRead + u.cacheWrite)} tok`
   const cost = u.cost !== undefined ? ` · $${u.cost.toFixed(4)}` : ""
   const timed = info.durationMs !== undefined || info.startedAt !== undefined
   const when = info.status === "queued" || !timed ? "" : ` · ${elapsed(info, now)}`

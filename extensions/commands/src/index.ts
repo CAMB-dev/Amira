@@ -2,6 +2,7 @@ import {
   type CommandCandidate,
   type CommandContext,
   type CommandDefinition,
+  clip,
   defineExtension,
   type EventMap,
   type ExtensionAPI,
@@ -51,10 +52,8 @@ export function ago(ms: number, now = Date.now()): string {
   return new Date(ms).toISOString().slice(0, 10)
 }
 
-const oneLine = (s: string, max = 60) => {
-  const t = s.replace(/\s+/g, " ").trim()
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t
-}
+/** `s` on one line, cut to `max` terminal cells. */
+const oneLine = (s: string, max = 60) => clip(s.replace(/\s+/g, " ").trim(), max)
 
 /** How a stored session reads in a picker: "<id>  3m ago  12 msgs  first words". */
 export function sessionLabel(s: StoredSessionInfo, now = Date.now()): string {

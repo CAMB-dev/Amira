@@ -1,4 +1,11 @@
-import type { SpawnGroupInfo, UserMessage } from "@amira/api"
+import {
+  clip,
+  formatDuration,
+  formatElapsed,
+  formatTokens,
+  type SpawnGroupInfo,
+  type UserMessage,
+} from "@amira/api"
 import {
   RESET,
   type StyleFn,
@@ -19,10 +26,6 @@ function oneLine(v: unknown): string {
   return String(v).replace(/\s+/g, " ").trim()
 }
 
-function cut(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s
-}
-
 /**
  * One-line summary of the arguments of a tool without a presenter: the argument that says
  * what the call is about (a path, a command, a pattern, or else the first text), then the
@@ -38,17 +41,12 @@ export function summarizeArgs(args: Record<string, unknown>, max = 80): string {
   const parts: string[] = []
   if (lead !== -1) parts.push(oneLine(scalars[lead]![1]))
   for (const [i, [k, v]] of scalars.entries()) {
-    if (i !== lead) parts.push(`${k}=${cut(oneLine(v), MAX_LABELLED)}`)
+    if (i !== lead) parts.push(`${k}=${clip(oneLine(v), MAX_LABELLED)}`)
   }
-  return cut(parts.join(" · "), max)
+  return clip(parts.join(" · "), max)
 }
 
-/** A finished call's duration: "0.4s", "12.3s", "2m 05s". */
-export function formatDuration(ms: number): string {
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  const s = Math.round(ms / 1000)
-  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
-}
+export { formatDuration, formatElapsed }
 
 /**
  * Committed lines for the user's message, wrapped to `width` under the prompt symbol: its
@@ -145,10 +143,8 @@ export interface SubagentLine {
 /** Longest summary of a sub-agent's current tool on its row. */
 export const ACTIVITY_CHARS = 40
 
-export function compactTokens(n: number): string {
-  if (n < 1000) return String(n)
-  return n < 100_000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`
-}
+/** Token counts as every screen writes them: 999, 1.2k, 46k, 2.5M. */
+export const compactTokens = formatTokens
 
 /** A sub-agent's rows sit under its call like a result, one level deeper per nesting. */
 function subagentIndent(depth: number): string {
@@ -181,19 +177,12 @@ export function subagentRows(
   const head = `${indent}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${theme.muted(`${s} ${sub.role} ${s} ${stats}`)}`
   const rows = [truncateToWidth(head, width, glyphs.more)]
   if (sub.startedAt !== undefined && sub.activity && !sub.idle) {
-    const summary = cut(oneLine(sub.activity.summary), ACTIVITY_CHARS)
+    const summary = clip(oneLine(sub.activity.summary), ACTIVITY_CHARS)
     const tree = `${last ? " " : glyphs.output} ${glyphs.result}`
     const tool = `${indent}${theme.muted(tree)} ${theme.accent(glyphs.toolRunning)} ${theme.accent(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
     rows.push(truncateToWidth(tool, width, glyphs.more))
   }
   return rows
-}
-
-/** Elapsed time on a running row: "4s", "1m 05s". */
-export function formatElapsed(ms: number): string {
-  const sec = Math.max(0, Math.floor(ms / 1000))
-  if (sec < 60) return `${sec}s`
-  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`
 }
 
 /**
