@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs"
 import path from "node:path"
@@ -75,7 +76,13 @@ export function projectKey(root: string): string {
  */
 export async function createWorktree(
   git: RunGit,
-  opts: { cwd: string; home: string; name: string },
+  opts: {
+    cwd: string
+    home: string
+    name: string
+    /** Whose worktree it is, kept next to it for /agents should it be left behind. */
+    about?: { title: string; role: string }
+  },
 ): Promise<Worktree | { error: string }> {
   const top = await git(["rev-parse", "--show-toplevel"], opts.cwd, true)
   if (!top.ok || !top.output.trim()) return { error: "not a git repository" }
@@ -90,7 +97,35 @@ export async function createWorktree(
   if (!add.ok) return { error: `git worktree add failed: ${add.output.trim()}` }
   const rel = path.relative(root, path.resolve(opts.cwd))
   const cwd = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? path.join(dir, rel) : dir
+  const meta: WorktreeMeta = { ...opts.about, base }
+  try {
+    writeFileSync(metaFile(dir), JSON.stringify(meta))
+  } catch {}
   return { root, dir, cwd, base, patch: `${dir}.diff` }
+}
+
+/** What is known of a worktree besides its files, kept next to it as `<dir>.json`. */
+export interface WorktreeMeta {
+  /** The task's title and the role of the sub-agent that worked in it. */
+  title?: string
+  role?: string
+  /** The commit it started from. */
+  base?: string
+}
+
+const metaFile = (dir: string) => `${dir}.json`
+
+function readMeta(dir: string): WorktreeMeta {
+  try {
+    const m = JSON.parse(readFileSync(metaFile(dir), "utf8")) as Record<string, unknown>
+    const str = (v: unknown) => (typeof v === "string" && v ? v : undefined)
+    const title = str(m.title)
+    const role = str(m.role)
+    const base = str(m.base)
+    return { ...(title ? { title } : {}), ...(role ? { role } : {}), ...(base ? { base } : {}) }
+  } catch {
+    return {}
+  }
 }
 
 /** Records everything the child changed in its worktree (commits included) as a patch against the base. */
@@ -238,9 +273,11 @@ export async function removeWorktree(
     // Forgets the worktree once its directory, or at least the .git file in it, is gone.
     await git(["worktree", "prune"], wt.root)
   }
-  try {
-    rm(wt.patch, { force: true })
-  } catch {}
+  for (const file of [wt.patch, metaFile(wt.dir), expiringMark(wt.dir)]) {
+    try {
+      rm(file, { force: true })
+    } catch {}
+  }
   return problem
 }
 
@@ -250,7 +287,7 @@ export const STALE_WORKTREE_MS = 7 * 24 * 60 * 60 * 1000
 export const STALE_NOTICE_MS = 24 * 60 * 60 * 1000
 
 /** A sub-agent's worktree left behind with its changes (kept for review, or not removable). */
-export interface KeptWorktree {
+export interface KeptWorktree extends WorktreeMeta {
   name: string
   dir: string
   /** Its changes as a patch, when they were collected. */
@@ -259,10 +296,34 @@ export interface KeptWorktree {
   modifiedAt: number
   /** The user was told it is about to be deleted (the sweep deletes it after STALE_NOTICE_MS). */
   expiring: boolean
+  /**
+   * The earliest the sweep deletes it: a day after the user was told, or, not told yet, a day
+   * after it is old enough to be announced.
+   */
+  deleteAfter: number
 }
 
 /** Marks a worktree whose deletion the user was told about; it holds when that was. */
 const expiringMark = (dir: string) => `${dir}.expiring`
+
+/** A worktree of the sweep's directory as KeptWorktree describes it. */
+function keptWorktree(full: string, limits: { maxAgeMs?: number; noticeMs?: number } = {}): KeptWorktree {
+  const modifiedAt = statSync(full).mtimeMs
+  const mark = expiringMark(full)
+  const expiring = existsSync(mark)
+  const notice = limits.noticeMs ?? STALE_NOTICE_MS
+  return {
+    name: path.basename(full),
+    dir: full,
+    ...readMeta(full),
+    ...(existsSync(`${full}.diff`) ? { patch: `${full}.diff` } : {}),
+    modifiedAt,
+    expiring,
+    deleteAfter: expiring
+      ? statSync(mark).mtimeMs + notice
+      : modifiedAt + (limits.maxAgeMs ?? STALE_WORKTREE_MS) + notice,
+  }
+}
 
 /** The worktrees of `root` left behind under `home`, newest first. */
 export function listKeptWorktrees(home: string, root: string): KeptWorktree[] {
@@ -276,13 +337,7 @@ export function listKeptWorktrees(home: string, root: string): KeptWorktree[] {
     if (!e.isDirectory()) continue
     const full = path.join(dir, e.name)
     try {
-      out.push({
-        name: e.name,
-        dir: full,
-        ...(existsSync(`${full}.diff`) ? { patch: `${full}.diff` } : {}),
-        modifiedAt: statSync(full).mtimeMs,
-        expiring: existsSync(expiringMark(full)),
-      })
+      out.push(keptWorktree(full))
     } catch {}
   }
   return out.sort((a, b) => b.modifiedAt - a.modifiedAt)
@@ -337,27 +392,89 @@ export async function sweepWorktrees(
         }
         if (!existsSync(mark)) {
           writeFileSync(mark, new Date(now).toISOString())
-          out.expiring.push({
-            name: e.name,
-            dir: full,
-            ...(existsSync(`${full}.diff`) ? { patch: `${full}.diff` } : {}),
-            modifiedAt: statSync(full).mtimeMs,
-            expiring: true,
-          })
+          out.expiring.push(keptWorktree(full, opts))
           continue
         }
         if (statSync(mark).mtimeMs > told) continue
         await git(["worktree", "remove", "--force", full], opts.root)
         rm(full, { recursive: true, force: true })
         rm(`${full}.diff`, { force: true })
+        rm(metaFile(full), { force: true })
         rm(mark, { force: true })
         out.removed.push(e.name)
       } else if (statSync(full).mtimeMs < cutoff) {
-        const base = full.replace(/\.(diff|expiring)$/, "")
+        const base = full.replace(/\.(diff|expiring|json)$/, "")
         if (base !== full && !existsSync(base)) rm(full, { force: true })
       }
     } catch {}
   }
   await git(["worktree", "prune"], opts.root)
   return out
+}
+
+/** A kept worktree as the functions that take a Worktree want it. */
+function asWorktree(root: string, w: KeptWorktree): Worktree {
+  return { root, dir: w.dir, cwd: w.dir, base: w.base ?? "HEAD", patch: `${w.dir}.diff` }
+}
+
+/**
+ * The changes of a kept worktree as a patch, with their size. They are collected again when it
+ * is known what the worktree started from (someone may have changed it since); otherwise its
+ * patch is taken as it is, or, without one, the changes since its current commit.
+ */
+export async function keptChanges(
+  git: RunGit,
+  root: string,
+  w: KeptWorktree,
+): Promise<{ patch: string; stat: ChangeStat }> {
+  const wt = asWorktree(root, w)
+  if (w.base || !w.patch) return { stat: await collectChanges(git, wt), patch: readPatch(wt.patch) }
+  const num = await git(["apply", "--numstat", wt.patch], root, true)
+  return { patch: readPatch(wt.patch), stat: parseNumstat(num.output) }
+}
+
+export type KeptMerge =
+  | { outcome: "merged" | "empty"; stat: ChangeStat; cleanup?: string }
+  | { outcome: "conflict"; stat: ChangeStat; conflict: string }
+
+/**
+ * Applies a kept worktree's changes to the working tree of `root` and removes the worktree.
+ * Changes that do not apply cleanly are not applied at all: the worktree stays as it is.
+ */
+export async function mergeKept(git: RunGit, root: string, w: KeptWorktree, rm?: Remove): Promise<KeptMerge> {
+  const { stat } = await keptChanges(git, root, w)
+  const wt = asWorktree(root, w)
+  const cleanup = async () => {
+    const problem = await removeWorktree(git, wt, rm)
+    return problem ? { cleanup: problem } : {}
+  }
+  if (!stat.files.length) return { outcome: "empty", stat, ...(await cleanup()) }
+  const apply = (extra: string[] = []) =>
+    git(["apply", "--binary", "--whitespace=nowarn", ...extra, wt.patch], root)
+  const check = await apply(["--check"])
+  const done = check.ok ? await apply() : check
+  if (!done.ok)
+    return { outcome: "conflict", stat, conflict: done.output.trim() || "the patch does not apply" }
+  return { outcome: "merged", stat, ...(await cleanup()) }
+}
+
+/** Deletes a kept worktree with its patch; says why it stayed, if it did. */
+export function discardKept(
+  git: RunGit,
+  root: string,
+  w: KeptWorktree,
+  rm?: Remove,
+): Promise<string | undefined> {
+  return removeWorktree(git, asWorktree(root, w), rm)
+}
+
+/**
+ * Keeps a worktree as if it had just changed: it is no longer about to be deleted, and the
+ * sweep announces it again only once it is STALE_WORKTREE_MS old from now.
+ */
+export function extendKept(w: KeptWorktree, now = Date.now()): KeptWorktree {
+  const at = new Date(now)
+  utimesSync(w.dir, at, at)
+  rmSync(expiringMark(w.dir), { force: true })
+  return keptWorktree(w.dir)
 }

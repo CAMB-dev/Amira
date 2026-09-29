@@ -17,15 +17,18 @@ import {
   USER_STOP_REASON,
   type UserMessage,
 } from "@amira/api"
-import { agentsCommand, formatTokens } from "./agents-command.ts"
+import { agentsCommand, formatTokens, type KeptWorktreeInfo, type KeptWorktrees } from "./agents-command.ts"
 import { type Isolation, loadRoles, type Role, roleModel } from "./roles.ts"
 import {
   createWorktree,
+  discardKept,
+  extendKept,
   formatStat,
-  type KeptWorktree,
   keepChanges,
+  keptChanges,
   listKeptWorktrees,
   type MergeResult,
+  mergeKept,
   mergeWorktree,
   type RunGit,
   removeWorktree,
@@ -307,7 +310,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
       if (sweep.expiring.length) {
         const n = sweep.expiring.length
         api.notify(
-          `${n} sub-agent worktree${n === 1 ? "" : "s"} kept from earlier sessions ${n === 1 ? "is" : "are"} over ${days} days old and will be deleted from tomorrow on: ${sweep.expiring.map((w) => w.patch ?? w.dir).join(", ")}. Copy what you need first; /agents worktrees lists them.`,
+          `${n} sub-agent worktree${n === 1 ? "" : "s"} kept from earlier sessions ${n === 1 ? "is" : "are"} over ${days} days old and will be deleted from tomorrow on: ${sweep.expiring.map((w) => w.patch ?? w.dir).join(", ")}. /agents lists them to merge, keep or discard.`,
           "warning",
         )
       }
@@ -318,12 +321,33 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
         )
       }
     }
-    /** The worktrees of this repository that sub-agents left behind, not the ones in use. */
-    const keptWorktrees = async (): Promise<KeptWorktree[]> => {
+    /** The repository of the working directory, which kept worktrees merge back into. */
+    const repoRoot = async (): Promise<string | undefined> => {
       const top = await git(["rev-parse", "--show-toplevel"], api.cwd, true)
-      if (!top.ok || !top.output.trim()) return []
-      const all = listKeptWorktrees(api.home, path.normalize(top.output.trim()))
-      return all.filter((w) => !inUse.has(w.dir))
+      return top.ok && top.output.trim() ? path.normalize(top.output.trim()) : undefined
+    }
+    const inRepo = async <T>(work: (root: string) => Promise<T>): Promise<T> => {
+      const root = await repoRoot()
+      if (!root) throw new Error("not in a git repository")
+      return work(root)
+    }
+    /** The worktrees of this repository that sub-agents left behind (not the ones in use), for /agents. */
+    const keptWorktrees: KeptWorktrees = {
+      list: async () => {
+        const root = await repoRoot()
+        if (!root) return []
+        const kept = listKeptWorktrees(api.home, root).filter((w) => !inUse.has(w.dir))
+        return Promise.all(
+          kept.map(async (w): Promise<KeptWorktreeInfo> => {
+            const changes = await keptChanges(git, root, w).catch(() => undefined)
+            return changes ? { ...w, stat: changes.stat } : w
+          }),
+        )
+      },
+      changes: (w) => inRepo(async (root) => (await keptChanges(git, root, w)).patch),
+      merge: (w) => inRepo((root) => serialized(() => mergeKept(git, root, w))),
+      discard: (w) => inRepo((root) => discardKept(git, root, w)),
+      keep: async (w) => ({ ...extendKept(w), ...(w.stat ? { stat: w.stat } : {}) }),
     }
     let cached: { at: number; roles: Map<string, Role> } | undefined
 
@@ -349,6 +373,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
           cwd: ctx.cwd,
           home: api.home,
           name: `sa_${crypto.randomUUID().slice(0, 8)}`,
+          about: { title: titleOf(task), role: task.role ?? "agent" },
         })
         if ("error" in made) note = `No worktree (${made.error}); it worked in the shared directory.`
         else {
@@ -743,7 +768,7 @@ ${list.join("\n")}`
     api.registerTool(agentTool)
     api.registerTool(resultTool)
     api.registerToolRenderer(AGENT_TOOL, agentPresenter)
-    api.registerCommand(agentsCommand({ keptWorktrees }))
+    api.registerCommand(agentsCommand({ worktrees: keptWorktrees }))
   })
 }
 

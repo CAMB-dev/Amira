@@ -9,9 +9,13 @@ import {
   APPLY_PARTIAL,
   createWorktree,
   DISCARD,
+  discardKept,
+  extendKept,
   KEEP,
+  keptChanges,
   listKeptWorktrees,
   MERGE,
+  mergeKept,
   mergeWorktree,
   parseNumstat,
   projectKey,
@@ -248,6 +252,43 @@ test("outside a repository there is no worktree", async () => {
   const plain = await tempDir("amira-wt-plain-")
   const r = await createWorktree(git, { cwd: plain, home: plain, name: "x" })
   expect(r).toEqual({ error: "not a git repository" })
+})
+
+test("a kept worktree knows whose it is; one that no longer applies is not merged; kept, it starts over", async () => {
+  const { root, home } = await setup()
+  const wt = await createWorktree(git, {
+    cwd: root,
+    home,
+    name: "k",
+    about: { title: "Fix it", role: "coder" },
+  })
+  if ("error" in wt) throw new Error(wt.error)
+  writeFileSync(path.join(wt.dir, "f.txt"), "a\nB\nc\nd\ne\n")
+  const [kept] = listKeptWorktrees(home, root)
+  expect(kept).toMatchObject({ name: "k", title: "Fix it", role: "coder", base: wt.base, expiring: false })
+  expect(kept!.deleteAfter).toBe(kept!.modifiedAt + STALE_WORKTREE_MS + STALE_NOTICE_MS)
+  // Collected afresh against its base: the change made after the sub-agent ended counts.
+  const changes = await keptChanges(git, root, kept!)
+  expect(changes.stat).toEqual({ files: ["f.txt"], insertions: 1, deletions: 1 })
+  expect(changes.patch).toContain("+B")
+  // The working tree changed the same line meanwhile: nothing is applied, the worktree stays.
+  writeFileSync(path.join(root, "f.txt"), "a\nX\nc\nd\ne\n")
+  const r = await mergeKept(git, root, kept!)
+  expect(r.outcome).toBe("conflict")
+  expect(read(path.join(root, "f.txt"))).toBe("a\nX\nc\nd\ne\n")
+  expect(existsSync(wt.dir)).toBe(true)
+  // Kept: no longer announced, and old again only STALE_WORKTREE_MS from now.
+  const then = new Date(Date.now() - STALE_WORKTREE_MS - 60_000)
+  utimesSync(wt.dir, then, then)
+  writeFileSync(`${wt.dir}.expiring`, "")
+  const extended = extendKept(listKeptWorktrees(home, root)[0]!)
+  expect(extended.expiring).toBe(false)
+  expect(extended.modifiedAt).toBeGreaterThan(Date.now() - 60_000)
+  expect(await sweepWorktrees(git, { root, home })).toEqual({ removed: [], expiring: [] })
+  // Discarded: the worktree goes with its patch, its record and its mark.
+  expect(await discardKept(git, root, extended)).toBeUndefined()
+  for (const f of [wt.dir, wt.patch, `${wt.dir}.json`, `${wt.dir}.expiring`])
+    expect(existsSync(f)).toBe(false)
 })
 
 test("numstat parsing counts binary files without lines", () => {

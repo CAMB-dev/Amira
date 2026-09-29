@@ -1,9 +1,17 @@
 import { afterAll, expect, test } from "bun:test"
+import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type ModelRequest } from "@amira/ai"
-import { type AnyEvent, defineTool, type FrontendView, type SessionControl, textResult } from "@amira/api"
+import {
+  type AnyEvent,
+  defineTool,
+  type FrontendView,
+  type SessionControl,
+  textResult,
+  type UiRequest,
+} from "@amira/api"
 import {
   Agent,
   AgentTree,
@@ -14,7 +22,20 @@ import {
   listSubagents,
   ToolRegistry,
 } from "@amira/core"
-import { createAgentExtension, findSubagent, subagentSummary, transcriptText } from "../src/index.ts"
+import { runCommand } from "@amira/proc"
+import {
+  createAgentExtension,
+  createWorktree,
+  DISCARD_KEPT,
+  findSubagent,
+  hostGit,
+  KEEP_KEPT,
+  MERGE_KEPT,
+  type RunGit,
+  STALE_WORKTREE_MS,
+  subagentSummary,
+  transcriptText,
+} from "../src/index.ts"
 
 const dirs: string[] = []
 const savedHome = process.env.AMIRA_HOME
@@ -29,7 +50,10 @@ function who(req: ModelRequest): string {
   return m ? m[1]! : req.systemPrompt.includes("# Sub-agent") ? "agent" : "commander"
 }
 
-async function setup(reply: (req: ModelRequest) => MockReply | Promise<MockReply>) {
+async function setup(
+  reply: (req: ModelRequest) => MockReply | Promise<MockReply>,
+  opts: { git?: RunGit; cwd?: string } = {},
+) {
   const home = await mkdtemp(path.join(os.tmpdir(), "amira-agents-cmd-"))
   dirs.push(home)
   process.env.AMIRA_HOME = home
@@ -46,10 +70,10 @@ async function setup(reply: (req: ModelRequest) => MockReply | Promise<MockReply
   const tools = new ToolRegistry()
   // The commander waits for its sub-agents, so a finished prompt means finished sub-agents.
   const settings = { subagents: { background: false } }
-  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools, cwd: home, settings })
-  expect(
-    await host.load(createAgentExtension({ git: async () => ({ output: "", ok: false }) }), "builtin:agent"),
-  ).toBe(true)
+  const cwd = opts.cwd ?? home
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools, cwd, settings })
+  const git = opts.git ?? (async () => ({ output: "", ok: false }))
+  expect(await host.load(createAgentExtension({ git }), "builtin:agent")).toBe(true)
   tools.register(
     defineTool<{ path: string }>({
       name: "read",
@@ -64,7 +88,7 @@ async function setup(reply: (req: ModelRequest) => MockReply | Promise<MockReply
   const root = new Agent({
     ai,
     model: ai.model("mock/big"),
-    cwd: home,
+    cwd,
     systemPrompt: "commander",
     bus,
     tools,
@@ -81,14 +105,16 @@ async function setup(reply: (req: ModelRequest) => MockReply | Promise<MockReply
   } as Partial<SessionControl> as SessionControl
   const commands = new CommandHost({ registry: host.commands, bus, ui: host.ui, control, agent: root })
   const views: FrontendView[] = []
+  /** Whether the frontend can show the view now (a form may hold the screen). */
+  const screen = { free: true }
   const run = async (line: string, frontend: "tui" | "rpc" = "tui") => {
     const r = await commands.run(line, {
       frontend,
-      ...(frontend === "tui" ? { openView: (v: FrontendView) => void views.push(v) } : {}),
+      ...(frontend === "tui" ? { openView: (v: FrontendView) => screen.free && views.push(v) > 0 } : {}),
     })
     return { ...r, text: r.output.join("\n") }
   }
-  return { root, tree, tools, bus, events, host, commands, control, run, views }
+  return { root, tree, tools, bus, events, host, commands, control, run, views, screen, home }
 }
 
 /** The commander starts a coder that reads a file and starts an explorer of its own. */
@@ -128,10 +154,10 @@ function nested(req: ModelRequest): MockReply {
 }
 
 test("/agents lists the sub-agents; where the frontend has no live view, it prints the one chosen", async () => {
-  const { root, run, host, bus } = await setup(nested)
+  const { root, run, host } = await setup(nested)
   await root.prompt("go")
   const picking = run("/agents", "rpc")
-  await bus.flush()
+  while (!host.ui.pending.length) await Bun.sleep(1)
   const request = host.ui.pending[0]!
   expect(request.kind).toBe("select")
   const options = request.kind === "select" ? request.options : []
@@ -166,19 +192,35 @@ test("/agents lists the sub-agents; where the frontend has no live view, it prin
   ])
 })
 
-test("/agents in the TUI opens the live view on the one chosen", async () => {
-  const { root, run, host, bus, views, control } = await setup(nested)
+test("/agents in the TUI: Enter opens the live view on the one chosen, p prints it", async () => {
+  const { root, run, host, views, control, screen } = await setup(nested)
   await root.prompt("go")
-  const picking = run("/agents")
-  await bus.flush()
-  const request = host.ui.pending[0]!
-  expect(request.title).toContain("Enter opens the live view")
-  const options = request.kind === "select" ? request.options : []
-  host.ui.respond(request.requestId, options[1]!)
-  const { text, ok } = await picking
-  expect(ok).toBe(true)
-  expect(text).toBe("")
+  const pick = async (answer: (options: string[]) => unknown) => {
+    const picking = run("/agents")
+    while (!host.ui.pending.length) await Bun.sleep(1)
+    const request = host.ui.pending[0]!
+    const options = request.kind === "select" ? request.options : []
+    expect(host.ui.respond(request.requestId, answer(options))).toBeUndefined()
+    return { request, ...(await picking) }
+  }
+  const opened = await pick((options) => options[1])
+  expect(opened.request).toMatchObject({
+    kind: "select",
+    title: "Sub-agents",
+    sections: [{ at: 0, choose: "open", keys: [{ key: "p", label: "print" }] }],
+  })
+  expect(opened.ok).toBe(true)
+  expect(opened.text).toBe("")
   expect(views).toEqual([{ kind: "subagent", sessionId: control.subagents()[1]!.id }])
+  // p prints the transcript as it is now, as Enter used to.
+  const printed = await pick((options) => ({ option: options[1], key: "p" }))
+  expect(printed.text).toContain("› where is it used")
+  expect(views).toHaveLength(1)
+  // The view cannot be shown now: Enter prints instead.
+  screen.free = false
+  const fallback = await pick((options) => options[0])
+  expect(fallback.text).toContain("Fixed the bug.")
+  expect(views).toHaveLength(1)
 })
 
 test("/agents <n|id> prints one directly; unknown ones are an error", async () => {
@@ -324,6 +366,139 @@ test("/agents stop stops one running sub-agent, or all of them, and completes to
   await bus.flush()
   expect((await run("/agents stop all")).text).toBe("No sub-agent is running.")
 })
+
+/** A repository with one commit holding f.txt, outside the Amira home. */
+async function repository(git: RunGit) {
+  const repo = await mkdtemp(path.join(os.tmpdir(), "amira-agents-repo-"))
+  dirs.push(repo)
+  const run = async (...args: string[]) => {
+    const r = await git(args, repo)
+    if (!r.ok) throw new Error(`git ${args.join(" ")}: ${r.output}`)
+  }
+  await run("init", "-q")
+  writeFileSync(path.join(repo, "f.txt"), "a\nb\nc\n")
+  await run("add", ".")
+  await run(
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "-m",
+    "init",
+  )
+  return repo
+}
+
+test(
+  "/agents lists the worktrees sub-agents kept, to merge, keep or discard each over its diff",
+  async () => {
+    const git = hostGit({ runCommand })
+    const repo = await repository(git)
+    const { run, host, home } = await setup(nested, { git, cwd: repo })
+    const kept = async (name: string, title: string) => {
+      const wt = await createWorktree(git, { cwd: repo, home, name, about: { title, role: "coder" } })
+      if ("error" in wt) throw new Error(wt.error)
+      return wt
+    }
+    const fix = await kept("sa_fix", "Fix the parser")
+    writeFileSync(path.join(fix.dir, "f.txt"), "a\nB\nc\n")
+    const old = await kept("sa_old", "Tidy the docs")
+    writeFileSync(path.join(old.dir, "new.txt"), "new\n")
+    // Nine days old and announced: the cleanup deletes it from a day after the notice.
+    const then = new Date(Date.now() - STALE_WORKTREE_MS - 2 * 86_400_000)
+    utimesSync(old.dir, then, then)
+    writeFileSync(`${old.dir}.expiring`, "")
+    const next = async () => {
+      while (!host.ui.pending.length) await Bun.sleep(5)
+      return host.ui.pending[0]!
+    }
+    const answer = async (line: string, pick: (r: UiRequest) => unknown, review?: string) => {
+      const running = run(line)
+      const list = await next()
+      host.ui.respond(list.requestId, pick(list))
+      if (review) {
+        const diff = await next()
+        expect(diff.kind).toBe("diff-review")
+        host.ui.respond(diff.requestId, review)
+        return { list, diff, ...(await running) }
+      }
+      return { list, diff: undefined, ...(await running) }
+    }
+    const first = await answer("/agents", (r) => (r.kind === "select" ? r.options[1] : ""), KEEP_KEPT)
+    expect(first.list).toMatchObject({
+      kind: "select",
+      title: "Worktrees sub-agents left with their changes",
+      options: [
+        "Fix the parser · coder · 1 file, +1 -1 · changed today · cleanup in 8 days",
+        "Tidy the docs · coder · 1 file, +1 -0 · changed 9 days ago · deleted in 1 day (announced)",
+      ],
+      sections: [{ at: 0, choose: "review" }],
+    })
+    const descriptions = first.list.kind === "select" ? (first.list.descriptions ?? []) : []
+    expect(descriptions.map((d) => d.replaceAll("\\", "/").split("/").at(-1))).toEqual(["sa_fix", "sa_old"])
+    expect(first.diff).toMatchObject({
+      title: 'The changes "Tidy the docs" (coder) left in its worktree (1 file, +1 -0)',
+      options: [MERGE_KEPT, KEEP_KEPT, DISCARD_KEPT],
+    })
+    expect(first.text).toBe('Keeping the worktree of "Tidy the docs" (coder); cleanup in 8 days.')
+    expect(existsSync(`${old.dir}.expiring`)).toBe(false)
+    // Merged: the change is in the working tree, the worktree is gone.
+    const merged = await answer(
+      "/agents",
+      (r) => (r.kind === "select" ? r.options.find((o) => o.startsWith("Fix the parser")) : ""),
+      MERGE_KEPT,
+    )
+    expect(merged.text).toBe(
+      'Merged the changes of "Fix the parser" (coder) into the working tree: 1 file, +1 -1.',
+    )
+    expect(readFileSync(path.join(repo, "f.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("a\nB\nc\n")
+    expect(existsSync(fix.dir)).toBe(false)
+    expect(existsSync(`${fix.dir}.json`)).toBe(false)
+    expect((await run("/agents worktrees")).text).toContain(
+      "Tidy the docs · coder · 1 file, +1 -0 · changed today",
+    )
+    const discarded = await answer("/agents", (r) => (r.kind === "select" ? r.options[0] : ""), DISCARD_KEPT)
+    expect(discarded.text).toBe('Discarded the worktree of "Tidy the docs" (coder).')
+    expect(existsSync(old.dir)).toBe(false)
+    expect(existsSync(path.join(repo, "new.txt"))).toBe(false)
+    expect((await run("/agents")).text).toBe("No sub-agents in this session yet.")
+  },
+  { timeout: 60_000 },
+)
+
+test("with sub-agents too, the kept worktrees follow them under a heading of their own", async () => {
+  const git = hostGit({ runCommand })
+  const repo = await repository(git)
+  const { root, run, host, home } = await setup(nested, { git, cwd: repo })
+  const wt = await createWorktree(git, {
+    cwd: repo,
+    home,
+    name: "sa_x",
+    about: { title: "Fix it", role: "coder" },
+  })
+  if ("error" in wt) throw new Error(wt.error)
+  writeFileSync(path.join(wt.dir, "f.txt"), "x\n")
+  await root.prompt("go")
+  const running = run("/agents")
+  while (!host.ui.pending.length) await Bun.sleep(5)
+  const r = host.ui.pending[0]!
+  expect(r).toMatchObject({
+    title: "Sub-agents",
+    sections: [
+      { at: 0, choose: "open", keys: [{ key: "p", label: "print" }] },
+      { at: 2, title: "Worktrees kept with their changes", choose: "review" },
+    ],
+  })
+  expect(r.kind === "select" ? r.options[2] : "").toMatch(
+    /^Fix it · coder · 1 file, \+1 -3 · changed today · /,
+  )
+  host.ui.cancel(r.requestId)
+  expect((await running).text).toBe("")
+}, 60_000)
 
 test("findSubagent takes a number, an id or a unique start of one", () => {
   const info = (id: string) => ({
