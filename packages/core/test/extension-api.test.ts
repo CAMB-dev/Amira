@@ -108,11 +108,14 @@ test("notify sends an extension.notice, info by default", async () => {
   await host.load((api) => {
     api.notify("formatted a.ts")
     api.notify("tests failed", "error")
+    // An unknown level (a slip, or a JavaScript extension) is shown as information.
+    api.notify("odd", "loud" as never)
   }, "ext:hooks")
   await bus.flush()
   expect(events.filter((e) => e.type === "extension.notice").map((e) => e.data)).toEqual([
     { source: "ext:hooks", text: "formatted a.ts", level: "info" },
     { source: "ext:hooks", text: "tests failed", level: "error" },
+    { source: "ext:hooks", text: "odd", level: "info" },
   ])
 })
 
@@ -154,6 +157,19 @@ test("exit handlers run together; a slow one is cut off, a failing one reported,
   expect(slowAborted).toBe(true)
   await bus.flush()
   expect(events.some((e) => e.type === "extension.error" && e.data.error.includes("boom"))).toBe(true)
+})
+
+test("exit handlers run after the extensions got session.end", async () => {
+  const bus = new EventBus()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  const order: string[] = []
+  await host.load((api) => {
+    api.on("session.end", () => void order.push("session.end"))
+    api.onExit(() => void order.push("exit"))
+  }, "ext:a")
+  bus.emit("session.end", { reason: "exit" }, { sessionId: "s" })
+  await host.runExitHandlers(1000)
+  expect(order).toEqual(["session.end", "exit"])
 })
 
 test("tool renderer decorators build on the presenter below, which may change later", async () => {

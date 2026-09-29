@@ -1066,7 +1066,8 @@ export class Agent {
   async #runTool(turn: Turn, run: CallRun, batch: readonly CallRun[]): Promise<ToolResultMessage> {
     const call = run.call
     const started = performance.now()
-    // Every outcome goes through tool.call.after, then tool.execute.end.
+    // Every outcome goes through tool.call.after (skipped once the turn is interrupted), then
+    // tool.execute.end.
     const finish = async (
       args: Record<string, unknown>,
       first: ToolResult,

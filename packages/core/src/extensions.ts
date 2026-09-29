@@ -5,6 +5,7 @@ import {
   API_VERSION,
   type Extension,
   type ExtensionAPI,
+  type NoticeLevel,
   type RunCommandOptions,
   type RunCommandResult,
   type Settings,
@@ -159,6 +160,9 @@ export class ExtensionHost {
   async runExitHandlers(timeoutMs = 4000, graceMs = 1000): Promise<void> {
     const handlers = [...this.#exitHandlers]
     if (!handlers.length) return
+    // Only once the extensions got what was emitted before (session.end): the bus delivers
+    // asynchronously. A subscriber that is stuck holds this up for a moment at most.
+    await Promise.race([this.#opts.bus.flush(), Bun.sleep(500)])
     const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const late = new Promise<void>((resolve) => {
@@ -218,7 +222,11 @@ export class ExtensionHost {
       home: amiraHome(),
       reportError: (error) => void this.#fail(source, error),
       notify: (text, level = "info") =>
-        void bus.emit("extension.notice", { source, text: String(text), level }, this.#meta()),
+        void bus.emit(
+          "extension.notice",
+          { source, text: String(text), level: NOTICE_LEVELS.includes(level) ? level : "info" },
+          this.#meta(),
+        ),
       onExit: (run) => {
         const entry = { source, run }
         this.#exitHandlers.add(entry)
@@ -321,6 +329,8 @@ export function runExtensionCommand(argv: string[], options: RunCommandOptions):
     gateLine: stdin.endsWith("\n") ? stdin.slice(0, -1) : stdin,
   })
 }
+
+const NOTICE_LEVELS: readonly NoticeLevel[] = ["info", "success", "warning", "error"]
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {

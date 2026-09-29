@@ -246,12 +246,16 @@ export interface InterceptorMap {
   /**
    * Runs once a tool call has its result, before the result reaches the model or the history
    * and before tool.execute.end: for calls that ran, and for rejected ones (`rejected` says
-   * why: "blocked" (also not approved), "unknownTool" or "invalidArgs"), not for calls cut off by an
-   * interrupt. Only `result` may be modified, e.g. to add a formatter's complaints or a
-   * language server's diagnostics for the file an edit touched. block counts as pass. Failures
-   * pass, and the result stays as it was, as it does when the modified result has no `content`.
+   * why: "blocked", also for a call not approved or one that failed before running,
+   * "unknownTool" or "invalidArgs"). Not once the turn was interrupted ("aborted" never gets
+   * here): results from then on reach the model as they are. Only `result` may be modified,
+   * e.g. to add a formatter's complaints or a language server's diagnostics for the file an
+   * edit touched. block counts as pass. Failures pass, and the result stays as it was, as it
+   * does when the modified result has no `content`.
    * `pending` lists the other calls of the same model reply that have no result yet (running
-   * or still to start), so a handler can wait for the last of several edits and act once.
+   * or still to start), so a handler can leave the work to the last of several edits: act on
+   * the call whose `pending` has none of them. Do not wait inside a handler for pending calls:
+   * they may not start before it returns.
    * Handlers that change files (formatters) should use a lower `priority` than ones that
    * read them (diagnostics), so the readers see the final contents.
    */

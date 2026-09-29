@@ -94,6 +94,12 @@ export class InterceptorRegistry {
       try {
         result = await runHandler(entry, current, ctx)
       } catch (err) {
+        // The user interrupted the turn: not the handler's failure.
+        if (ctx.signal.aborted) {
+          return blocksOnFailure
+            ? { blocked: true, reason: "aborted", value: current }
+            : { blocked: false, value: current }
+        }
         const msg = err instanceof Error ? err.message : String(err)
         this.#onError(point, entry.source, msg)
         if (blocksOnFailure) {
