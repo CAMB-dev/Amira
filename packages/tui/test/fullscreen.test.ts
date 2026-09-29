@@ -43,6 +43,8 @@ const ESC = "\x1b[27u"
 /** The bar of a block selection: what is selected, and where it is among the blocks. */
 const SELECT_BAR = /(?:message|reply|tool call|notice|command|banner) \d+ of \d+/
 const CTRL_UP = "\x1b[1;5A"
+const RIGHT = "\x1b[C"
+const DOWN = "\x1b[B"
 const PAGE_UP = "\x1b[5~"
 const END = "\x1b[F"
 const CTRL_F = "\x06"
@@ -904,6 +906,82 @@ test("copying the last reply and a selected block goes through OSC 52", async ()
   terminal.send("y")
   await shows("Copied the message")
   expect(terminal.output).toContain(`\x1b]52;c;${b64("go")}\x07`)
+  terminal.send(ESC)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a selected reply opens into its code blocks: each is selected and copied on its own", async () => {
+  const text = "Two snippets:\n\n```ts\nconst a = 1\n```\n\nand\n\n```sh\necho hi\necho there\n```\n\nDone."
+  const { terminal, view, shows, idle, exited } = await setup([{ text }], { cols: 70, rows: 24 })
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64")
+  terminal.send("go\r")
+  await shows("Done.")
+  await idle()
+  terminal.send(CTRL_UP)
+  await waitFor(() => /reply \d+ of \d+ · → code blocks/.test(view()), "the reply selected")
+  terminal.send(RIGHT)
+  await shows("code block 1 of 2 in the reply")
+  terminal.send("y")
+  await shows("Copied the code block")
+  expect(terminal.output).toContain(`\x1b]52;c;${b64("const a = 1")}\x07`)
+  terminal.send(DOWN)
+  await shows("code block 2 of 2 in the reply")
+  // Only the code block's rows are marked.
+  expect(view()).toMatch(/▌ ╭[^\n]*\n▌ │ echo hi/)
+  expect(view()).not.toContain("▌ Two snippets")
+  terminal.send("c")
+  await waitFor(() => terminal.output.includes(b64("echo hi\necho there")), "the second copied")
+  // Esc goes back to the whole reply, Esc again stops selecting.
+  terminal.send(ESC)
+  await waitFor(() => /reply \d+ of \d+/.test(view()) && !/code block \d/.test(view()), "back to the reply")
+  terminal.send(ESC)
+  await waitFor(() => !SELECT_BAR.test(view()), "done selecting")
+  terminal.send("\x03")
+  await exited
+})
+
+test("a selected call opens the sub-agent viewer on its sub-agent", async () => {
+  let finish!: () => void
+  const gate = new Promise<void>((r) => {
+    finish = r
+  })
+  const reply = (req: { messages: { role: string; content: unknown }[] }) => {
+    const child = JSON.stringify(req.messages[0]?.content).includes('"scan"')
+    const answered = req.messages.at(-1)?.role === "toolResult"
+    if (child) return { text: "scanned" }
+    return answered ? { text: "started it" } : { toolCalls: [{ name: "launch", args: {} }] }
+  }
+  const { terminal, view, shows, idle, exited, agent } = await setup([reply, reply, reply], {
+    cols: 80,
+    commands: true,
+  })
+  agent.tools.register(
+    defineTool({
+      name: "launch",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        ctx.session!.spawn!({ role: "explorer", title: "Scan the logs", prompt: "scan" })
+        await gate
+        return textResult("Started")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("◆ Scan the logs")
+  finish()
+  await shows("started it")
+  await idle()
+  terminal.send(CTRL_UP)
+  terminal.send(CTRL_UP)
+  await waitFor(() => /tool call \d+ of \d+ · Enter unfold · → sub-agent/.test(view()), "the call selected")
+  terminal.send("o")
+  await waitFor(() => view().includes("Esc back") && !SELECT_BAR.test(view()), "the viewer")
+  expect(view()).toContain("Scan the logs")
+  terminal.send(ESC)
+  await waitFor(() => SELECT_BAR.test(view()), "back, still selected")
   terminal.send(ESC)
   terminal.send("\x03")
   await exited

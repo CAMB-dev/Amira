@@ -124,7 +124,8 @@ uses them. The mouse wheel scrolls three rows a notch, and dragging selects text
 input. Blocks are selected with the keyboard (`select.start`).
 
 The view follows the newest output. Scrolled up, it stays where it is while the conversation
-grows, and the row under it says `↓ new output`; scrolling to the end (or End) follows again.
+grows, and the row under it says how many rows are below (`↓ 124 rows below`), and
+`↓ new output` once more came; scrolling to the end (or End) follows again.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -140,17 +141,28 @@ grows, and the row under it says `↓ new output`; scrolling to the end (or End)
 
 ### Block selection
 
-While a block is selected it is marked with `▌` and the row above the input says what it is.
-Typing and pasting go back to the input; keys the selection does not use (Ctrl+C, Ctrl+O,
-Ctrl+D) do what they do in the input.
+While a block is selected its first column is marked (`▌` where it is blank, the character
+there in inverse video otherwise; the block keeps its width, so nothing moves) and the row
+above the input says what it is and where: `reply 3 of 9`. Selecting a block that is partly
+in view does not scroll. Typing and pasting go back to the input; keys the selection does not
+use (Ctrl+C, Ctrl+O, Ctrl+D) do what they do in the input.
+
+`select.open` goes into a reply with code blocks: the first code block is selected, `↑`/`↓`
+move between the reply's code blocks, `select.copy` copies the one selected (its code as
+written, without the frame), and `select.back` or Esc go back to the whole reply. A folded
+reply unfolds first, so its code shows whole. On a tool call with sub-agents (or a block of
+background sub-agents) `select.open` opens the sub-agent viewer on the one still running, else
+the latest; `←`/`→` there switch between them.
 
 | Action | Default | What it does |
 | --- | --- | --- |
 | `select.prev` | `up`, `ctrl+up`, `alt+up`, `k` | Select the block before |
 | `select.next` | `down`, `ctrl+down`, `alt+down`, `j` | Select the block after |
 | `select.toggle` | `enter`, `space` | Fold or unfold it: a tool call's output (and its sub-agents), long code blocks and `<details>` in a reply |
-| `select.copy` | `y`, `c` | Copy the block to the clipboard |
-| `select.exit` | `escape` | Stop selecting |
+| `select.copy` | `y`, `c` | Copy the block (or the selected code block) to the clipboard |
+| `select.open` | `right`, `o` | Go into a reply's code blocks; open the sub-agent viewer on a call's sub-agents |
+| `select.back` | `left` | Go back from a code block to its whole reply |
+| `select.exit` | `escape` | Stop selecting (from a code block: back to its reply) |
 
 `tool-output` (Ctrl+O) sets how much of every tool call shows; a call folded or unfolded by
 hand keeps its own level.
