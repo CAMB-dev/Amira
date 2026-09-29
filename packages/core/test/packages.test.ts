@@ -340,6 +340,37 @@ test("names resolve through the extensions index, including a subdirectory of a 
   )
 })
 
+test("update follows the index when a package moved to another directory of its repository", async () => {
+  const repo = path.join(dir, "exts")
+  makePackage(path.join(repo, "sub-pkg"), "sub-pkg", "0.3.0", "old place")
+  await gitRepo(repo)
+  const indexFile = path.join(dir, "index.json")
+  const indexAt = (where: string) => {
+    const index = fixtureIndex(pathToFileURL(repo).href)
+    index.extensions[0]!.source = { git: pathToFileURL(repo).href, path: where }
+    writeFileSync(indexFile, JSON.stringify(index))
+  }
+  indexAt("sub-pkg")
+  await installPackage("sub-pkg", { scope: user(), cwd, index: { url: indexFile } })
+  // The repository moves it under extensions/; the lock still names the old directory.
+  mkdirSync(path.join(repo, "extensions"))
+  await git(repo, "mv", "sub-pkg", path.join("extensions", "sub-pkg"))
+  writeFileSync(
+    path.join(repo, "extensions", "sub-pkg", "index.ts"),
+    "export default () => {} // new place\n",
+  )
+  await git(repo, "commit", "-q", "-am", "move")
+  const moved = await git(repo, "rev-parse", "HEAD")
+  indexAt("extensions/sub-pkg")
+  const [u] = await updatePackages({ scope: user(), cwd, index: { url: indexFile } })
+  expect(u).toMatchObject({ name: "sub-pkg", changed: true, to: { source: { path: "extensions/sub-pkg" } } })
+  expect(readLock(user().lockFile).packages["sub-pkg"]).toMatchObject({
+    source: { path: "extensions/sub-pkg" },
+    pinned: { commit: moved },
+  })
+  expect(readFileSync(path.join(home, "packages", "sub-pkg", "index.ts"), "utf8")).toContain("new place")
+})
+
 test("the index is cached with a TTL and the cache is used offline", async () => {
   const cacheFile = path.join(home, "cache", "extensions-index.json")
   const body = JSON.stringify(fixtureIndex("https://example.invalid/x.git"))

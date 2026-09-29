@@ -10,6 +10,8 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     cwd: process.cwd(),
     home: process.cwd(),
     reportError: () => {},
+    notify: () => {},
+    onExit: () => () => {},
     registerTool: (t) => {
       tools.push(t)
       return () => {}
@@ -22,12 +24,17 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
       renderers.push(name)
       return () => {}
     },
+    decorateToolRenderer: () => () => {},
     registerView: () => () => {},
+    registerPanel: () => () => {},
     requestRender: () => {},
     settings: {},
     on: () => () => {},
     intercept: () => () => {},
     runCommand: () => Promise.reject(new Error("not used")),
+    openPipe: () => {
+      throw new Error("not used")
+    },
     ui: {
       select: async () => undefined,
       confirm: async () => false,

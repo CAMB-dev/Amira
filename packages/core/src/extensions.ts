@@ -1,12 +1,22 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
-import { API_VERSION, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
+import {
+  API_VERSION,
+  type Extension,
+  type ExtensionAPI,
+  type NoticeLevel,
+  type RunCommandOptions,
+  type RunCommandResult,
+  type Settings,
+} from "@amira/api"
 import { runCommand } from "@amira/proc"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
+import { PanelRegistry } from "./panel-registry.ts"
+import { openExtensionPipe } from "./pipes.ts"
 import { SkillRegistry } from "./skills.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
@@ -38,6 +48,8 @@ export interface ExtensionHostOptions {
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
+  /** Where live panels go. Default: a new registry. */
+  panels?: PanelRegistry
   /** Where tool presenters go. Default: a new registry. */
   renderers?: ToolRendererRegistry
   /** Where full-screen view kinds go. Default: a new registry. */
@@ -63,10 +75,12 @@ export interface ExtensionHostOptions {
 export class ExtensionHost {
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
+  #exitHandlers = new Set<{ source: string; run: (signal: AbortSignal) => void | Promise<void> }>()
   #renderPending = false
   /** Extension files imported before, which a reload must import anew. */
   #imported = new Set<string>()
   readonly status: StatusRegistry
+  readonly panels: PanelRegistry
   readonly renderers: ToolRendererRegistry
   readonly views: ViewRegistry
   readonly commands: CommandRegistry
@@ -77,6 +91,7 @@ export class ExtensionHost {
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
     this.status = opts.status ?? new StatusRegistry()
+    this.panels = opts.panels ?? new PanelRegistry()
     this.renderers = opts.renderers ?? new ToolRendererRegistry()
     this.views = opts.views ?? new ViewRegistry()
     this.commands = opts.commands ?? new CommandRegistry()
@@ -136,6 +151,40 @@ export class ExtensionHost {
     for (const source of this.loaded.reverse()) this.unload(source)
   }
 
+  /**
+   * Runs the extensions' exit handlers (ExtensionAPI.onExit) together and resolves once all
+   * finished. After `timeoutMs` their signal aborts, and they get `graceMs` more to stop (e.g.
+   * for a command they started to be killed) before this resolves anyway. Failures are reported
+   * as extension.error. Never rejects.
+   */
+  async runExitHandlers(timeoutMs = 4000, graceMs = 1000): Promise<void> {
+    const handlers = [...this.#exitHandlers]
+    if (!handlers.length) return
+    // Only once the extensions got what was emitted before (session.end): the bus delivers
+    // asynchronously. A subscriber that is stuck holds this up for a moment at most.
+    await Promise.race([this.#opts.bus.flush(), Bun.sleep(500)])
+    const abort = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        abort.abort()
+        timer = setTimeout(resolve, graceMs)
+      }, timeoutMs)
+    })
+    const runs = handlers.map(async (h) => {
+      try {
+        await h.run(abort.signal)
+      } catch (err) {
+        this.#fail(h.source, `exit handler failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })
+    try {
+      await Promise.race([Promise.all(runs), late])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** Coalesces render requests into one ui.render per macrotask. */
   #requestRender() {
     if (this.#renderPending) return
@@ -172,6 +221,17 @@ export class ExtensionHost {
       cwd: this.#opts.cwd ?? process.cwd(),
       home: amiraHome(),
       reportError: (error) => void this.#fail(source, error),
+      notify: (text, level = "info") =>
+        void bus.emit(
+          "extension.notice",
+          { source, text: String(text), level: NOTICE_LEVELS.includes(level) ? level : "info" },
+          this.#meta(),
+        ),
+      onExit: (run) => {
+        const entry = { source, run }
+        this.#exitHandlers.add(entry)
+        return track(() => void this.#exitHandlers.delete(entry))
+      },
       registerTool: (tool) => track(tools.register(tool, source)),
       // A taken name skips only this command, not the whole extension.
       registerCommand: (command) => {
@@ -219,7 +279,23 @@ export class ExtensionHost {
           this.#requestRender()
         })
       },
+      // A taken id skips only this panel.
+      registerPanel: (panel) => {
+        let off: () => void
+        try {
+          off = this.panels.register(panel)
+        } catch (err) {
+          this.#fail(source, err instanceof Error ? err.message : String(err))
+          return () => {}
+        }
+        this.#requestRender()
+        return track(() => {
+          off()
+          this.#requestRender()
+        })
+      },
       registerToolRenderer: (toolName, presenter) => track(this.renderers.register(toolName, presenter)),
+      decorateToolRenderer: (toolName, decorate) => track(this.renderers.decorate(toolName, decorate)),
       // A kind that cannot be taken skips only that view.
       registerView: (view) => {
         try {
@@ -230,11 +306,31 @@ export class ExtensionHost {
         }
       },
       requestRender: () => this.#requestRender(),
-      runCommand: (argv, options) => runCommand(argv, options),
+      runCommand: (argv, options) => runExtensionCommand(argv, options),
+      openPipe: (argv, options) => openExtensionPipe(argv, options),
       ui: this.#uiFor(source, track),
     }
   }
 }
+
+/**
+ * ExtensionAPI.runCommand: `stdin` travels as the gate line, which is written once the process
+ * tree is contained and then closes stdin.
+ */
+export function runExtensionCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult> {
+  const { stdin, ...rest } = options
+  if (stdin === undefined) return runCommand(argv, rest)
+  if (rest.gated || rest.viaCmd) {
+    return Promise.reject(new Error("runCommand: stdin cannot be combined with gated or viaCmd"))
+  }
+  return runCommand(argv, {
+    ...rest,
+    gated: true,
+    gateLine: stdin.endsWith("\n") ? stdin.slice(0, -1) : stdin,
+  })
+}
+
+const NOTICE_LEVELS: readonly NoticeLevel[] = ["info", "success", "warning", "error"]
 
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {

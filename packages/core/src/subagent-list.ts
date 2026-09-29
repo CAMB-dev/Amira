@@ -11,6 +11,16 @@ export interface SubagentEntry {
   info: SubagentInfo
   /** Its conversation so far; a copy, so it does not change under the caller. */
   messages(): Message[]
+  /**
+   * Every message of its current branch, including ones a compaction has since replaced in
+   * what it sees (as SessionControl.readSession gives them); `messages()` where it keeps no file.
+   */
+  history(): Message[]
+}
+
+/** The messages of a store's current branch, oldest first, compacted ones included. */
+export function storedHistory(store: SessionStore): Message[] {
+  return store.branch().flatMap((e) => (e.type === "message" ? [e.message] : []))
 }
 
 /**
@@ -20,6 +30,18 @@ export interface SubagentEntry {
  * points at with its "subagent" entries.
  */
 export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
+  return subagentsOf(agent.sessionId, agent.session, tree)
+}
+
+/**
+ * Like listSubagents, for any session by id and store: e.g. a stored session read without
+ * resuming it. Sub-agents the tree knows (started by this process) come with their live state.
+ */
+export function subagentsOf(
+  sessionId: string,
+  session: SessionStore | undefined,
+  tree?: AgentTree,
+): SubagentEntry[] {
   const out: SubagentEntry[] = []
   const seen = new Set<string>()
   const visit = (parentId: string, store: SessionStore | undefined, depth: number) => {
@@ -42,6 +64,7 @@ export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
         out.push({
           info: { ...known.info, depth },
           messages: () => (kept ? [...kept] : own ? [...own.restore().messages] : []),
+          history: () => (own ? storedHistory(own) : kept ? [...kept] : []),
         })
         visit(id, own, depth + 1)
         continue
@@ -53,11 +76,12 @@ export function listSubagents(agent: Agent, tree?: AgentTree): SubagentEntry[] {
       out.push({
         info: storedInfo(id, parentId, depth, role, entry?.title, child),
         messages: () => (child ? [...child.restore().messages] : []),
+        history: () => (child ? storedHistory(child) : []),
       })
       if (child) visit(id, child, depth + 1)
     }
   }
-  visit(agent.sessionId, agent.session, 1)
+  visit(sessionId, session, 1)
   return out
 }
 

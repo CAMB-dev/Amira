@@ -196,6 +196,28 @@ export interface StoredSessionInfo {
   messageCount: number
 }
 
+/** A stored session read without switching to it (SessionControl.readSession). */
+export interface StoredSession {
+  id: string
+  cwd: string
+  /** When it was created, in ms since the epoch. */
+  createdAt: number
+  /** Last write, in ms since the epoch. */
+  updatedAt: number
+  /**
+   * Every message on its current branch, oldest first, including ones a compaction has since
+   * replaced in what the model sees: the conversation as it happened, not the context.
+   */
+  messages: readonly Message[]
+  /** Its sub-agents and theirs, each followed by its own (as SessionControl.subagents). */
+  subagents: SubagentInfo[]
+  /**
+   * A sub-agent's conversation as it happened (compacted parts included, as `messages`);
+   * undefined for an id not in `subagents`.
+   */
+  subagentMessages(id: string): readonly Message[] | undefined
+}
+
 export interface ToolInfo {
   name: string
   description: string
@@ -275,8 +297,24 @@ export interface SessionControl {
   newSession(): Promise<void>
   /** Stored sessions of this directory, most recent first. */
   sessions(): StoredSessionInfo[]
+  /**
+   * Reads a stored session of this directory without switching to it, e.g. to export it; the
+   * current one is read from memory, so it is up to date even before its file is. Undefined for an unknown id. Unset where the host keeps
+   * no session files.
+   */
+  readonly readSession?: (sessionId: string) => StoredSession | undefined
   /** Switches to a stored session of this directory. */
   resume(sessionId: string): Promise<void>
+  /**
+   * Cuts the conversation back to just before `messages()[index]`, which must be a user
+   * message: it and everything after it are gone from later turns, e.g. to go back to before a
+   * turn that went wrong. The session stays the same (also when going back to before its first
+   * message); the cut-off part stays in its file on a branch of its own.
+   * Frontends show the shortened conversation as they show a resumed one. Throws while a turn
+   * runs, for an index that is not a user message, and for a message a compaction has since
+   * summarized. Unset where the host keeps no session file.
+   */
+  readonly rewind?: (index: number) => Promise<void>
   /** Summarizes older history now; `instructions` steer the summary. Resolves false when nothing was compacted. */
   compact(instructions?: string): Promise<boolean>
   /**

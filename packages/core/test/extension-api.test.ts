@@ -73,3 +73,185 @@ test("views: the last one registered for a kind wins, unloading restores the one
   host.unload("ext:a")
   expect(host.views.kinds()).toEqual([])
 })
+
+test("runCommand writes stdin, adding the newline, and closes it", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let api: ExtensionAPI | undefined
+  await host.load((a) => {
+    api = a
+  }, "ext:stdin")
+  const read =
+    "let s = ''; for await (const c of process.stdin) s += c; process.stdout.write(JSON.stringify(s))"
+  const opts = {
+    cwd: process.cwd(),
+    timeoutMs: 20_000,
+    signal: new AbortController().signal,
+    stdoutOnly: true,
+  }
+  const r = await api!.runCommand([process.execPath, "-e", read], { ...opts, stdin: '{"a":1}' })
+  expect(r.exitCode).toBe(0)
+  expect(JSON.parse(r.output)).toBe('{"a":1}\n')
+  const same = await api!.runCommand([process.execPath, "-e", read], { ...opts, stdin: "x\n" })
+  expect(JSON.parse(same.output)).toBe("x\n")
+  await expect(api!.runCommand(["x"], { ...opts, stdin: "x", viaCmd: true })).rejects.toThrow("stdin")
+})
+
+test("notify sends an extension.notice, info by default", async () => {
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  await host.load((api) => {
+    api.notify("formatted a.ts")
+    api.notify("tests failed", "error")
+    // An unknown level (a slip, or a JavaScript extension) is shown as information.
+    api.notify("odd", "loud" as never)
+  }, "ext:hooks")
+  await bus.flush()
+  expect(events.filter((e) => e.type === "extension.notice").map((e) => e.data)).toEqual([
+    { source: "ext:hooks", text: "formatted a.ts", level: "info" },
+    { source: "ext:hooks", text: "tests failed", level: "error" },
+    { source: "ext:hooks", text: "odd", level: "info" },
+  ])
+})
+
+test("exit handlers run together; a slow one is cut off, a failing one reported, a removed one skipped", async () => {
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  const ran: string[] = []
+  let slowAborted = false
+  await host.load((api) => {
+    api.onExit(async () => {
+      await Bun.sleep(10)
+      ran.push("quick")
+    })
+    api.onExit(
+      (signal) =>
+        new Promise<void>((resolve) => {
+          // Stopping takes a moment, which the grace after the abort allows for.
+          signal.addEventListener("abort", () =>
+            setTimeout(() => {
+              slowAborted = true
+              resolve()
+            }, 50),
+          )
+        }),
+    )
+    api.onExit(() => {
+      throw new Error("boom")
+    })
+    api.onExit(() => void ran.push("removed"))()
+  }, "ext:a")
+  await host.load((api) => void api.onExit(() => void ran.push("unloaded")), "ext:b")
+  host.unload("ext:b")
+  const started = Date.now()
+  await host.runExitHandlers(100)
+  expect(Date.now() - started).toBeLessThan(2000)
+  expect(ran).toEqual(["quick"])
+  expect(slowAborted).toBe(true)
+  await bus.flush()
+  expect(events.some((e) => e.type === "extension.error" && e.data.error.includes("boom"))).toBe(true)
+})
+
+test("exit handlers run after the extensions got session.end", async () => {
+  const bus = new EventBus()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  const order: string[] = []
+  await host.load((api) => {
+    api.on("session.end", () => void order.push("session.end"))
+    api.onExit(() => void order.push("exit"))
+  }, "ext:a")
+  bus.emit("session.end", { reason: "exit" }, { sessionId: "s" })
+  await host.runExitHandlers(1000)
+  expect(order).toEqual(["session.end", "exit"])
+})
+
+test("tool renderer decorators build on the presenter below, which may change later", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  await host.load(
+    (api) =>
+      void api.decorateToolRenderer("edit", (below) => ({
+        ...below,
+        summary: (args) => `${below?.summary?.(args) ?? "?"} +lint`,
+      })),
+    "ext:lint",
+  )
+  expect(host.renderers.get("edit")?.summary?.({})).toBe("? +lint")
+  // A presenter registered below it afterwards (e.g. its built-in) is picked up.
+  host.renderers.register("edit", { summary: () => "a.ts" })
+  // Registered last, so it sits on top and wins; the decorator is below it now.
+  expect(host.renderers.get("edit")?.summary?.({})).toBe("a.ts")
+  const built = host.renderers.get("edit")
+  expect(host.renderers.get("edit")).toBe(built!)
+  host.unload("ext:lint")
+  expect(host.renderers.get("edit")?.summary?.({})).toBe("a.ts")
+
+  const base = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  await base.load((api) => void api.registerToolRenderer("write", { summary: () => "b.ts" }), "builtin")
+  await base.load(
+    (api) =>
+      void api.decorateToolRenderer("write", (below) => ({
+        ...below,
+        result: () => "2 errors",
+      })),
+    "ext:lint",
+  )
+  expect(base.renderers.get("write")?.summary?.({})).toBe("b.ts")
+  expect(base.renderers.get("write")?.result?.({} as never)).toBe("2 errors")
+  // A decorator that throws is skipped.
+  await base.load(
+    (api) =>
+      void api.decorateToolRenderer("write", () => {
+        throw new Error("bad")
+      }),
+    "ext:bad",
+  )
+  expect(base.renderers.get("write")?.result?.({} as never)).toBe("2 errors")
+})
+
+test("openPipe starts a piped process whose events reach the extension", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let api: ExtensionAPI | undefined
+  await host.load((a) => {
+    api = a
+  }, "ext:pipe")
+  let out = ""
+  const exit = Promise.withResolvers<number | null>()
+  const pipe = api!.openPipe(
+    [process.execPath, "-e", "process.stdin.on('data', (d) => process.stdout.write('got ' + d))"],
+    {
+      cwd: process.cwd(),
+      onEvent: (e) => {
+        if (e.type === "stdout") out += e.data
+        if (e.type === "exit") exit.resolve(e.code)
+        // A throwing handler does not stop later events.
+        if (e.type === "spawned") throw new Error("ignored")
+      },
+    },
+  )
+  pipe.write("ping\n")
+  const deadline = Date.now() + 30_000
+  while (!out.includes("got ping") && Date.now() < deadline) await Bun.sleep(20)
+  expect(out).toContain("got ping")
+  pipe.close(2000)
+  expect(await exit.promise).toBe(0)
+  expect(() => api!.openPipe([], { cwd: process.cwd(), onEvent: () => {} })).toThrow()
+}, 60_000)

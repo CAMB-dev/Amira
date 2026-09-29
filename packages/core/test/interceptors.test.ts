@@ -56,6 +56,36 @@ test("failure policy: tool.call.before blocks, context.build passes", async () =
   expect(errors).toEqual(["tool.call.before:slow-ext:timed out after 20 ms", "context.build:bad-ext:bad"])
 })
 
+test("a handler cut off by the user's interrupt is not reported as failing", async () => {
+  const errors: string[] = []
+  const r = new InterceptorRegistry({ onError: (p, s, e) => errors.push(`${p}:${s}:${e}`) })
+  const abort = new AbortController()
+  let started!: () => void
+  const running = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  r.add(
+    "tool.call.after",
+    () => {
+      started()
+      return new Promise(() => {})
+    },
+    {},
+    "slow-ext",
+  )
+  const value = {
+    ...call,
+    cwd: "/",
+    pending: [],
+    result: { content: [{ type: "text" as const, text: "ok" }] },
+  }
+  const out = r.run("tool.call.after", value, { sessionId: "s", signal: abort.signal })
+  await running
+  abort.abort()
+  expect(await out).toEqual({ blocked: false, value })
+  expect(errors).toEqual([])
+})
+
 test("tool registry requires override: true to replace, and restores on unregister", () => {
   const reg = new ToolRegistry()
   const base = defineTool({

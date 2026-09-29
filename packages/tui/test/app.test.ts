@@ -7,6 +7,7 @@ import {
   defineTool,
   type InputHandler,
   type Message,
+  type PanelDefinition,
   type SessionControl,
   type SkillDefinition,
   type SpawnGroup,
@@ -90,6 +91,8 @@ interface SetupOptions {
   graphics?: GraphicsReplies
   /** How images in replies are fetched from the web. */
   imageFetch?: RemoteImageFetch
+  /** Live panels extensions register. */
+  panels?: PanelDefinition[]
   /** Called with the options the UI sets the terminal up with. */
   onSetup?: (opts: { images?: boolean; background?: boolean } | undefined) => void
 }
@@ -161,10 +164,16 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   if (o.presenters) {
     for (const [name, p] of Object.entries(builtinPresenters)) host.renderers.register(name, p)
   }
+  if (o.panels) {
+    await host.load((api) => {
+      for (const p of o.panels!) api.registerPanel(p)
+    }, "test-panels")
+  }
   if (o.history) agent.messages.push(...o.history)
   const exited = runInteractive({
     agent,
     status: host.status,
+    panels: host.panels,
     ui: host.ui,
     ...(commands ? { commands } : {}),
     ...(o.tuiCommands ? { registerCommand: (c) => host.commands.register(c, "builtin:tui") } : {}),
@@ -2294,7 +2303,8 @@ test("outside Windows Terminal and friends no progress is sent; settings turn ti
   await exited
   expect(screen.oscs).toEqual([])
   expect(screen.bells).toBe(0)
-  expect(terminal.output).not.toContain("\x1b[?1004h")
+  // Focus reports stay on without the bell: extensions get them as ui.focus.
+  expect(terminal.output).toContain("\x1b[?1004h")
 })
 
 test("the bell rings when a turn ends in the background; focus reports never reach the editor", async () => {
@@ -2310,6 +2320,19 @@ test("the bell rings when a turn ends in the background; focus reports never rea
   expect(screen.bells).toBe(1)
   expect(live()).not.toContain("[O")
   expect(live()).not.toContain("[I")
+  terminal.send("\x03")
+  await exited
+})
+
+test("focus reports reach extensions as ui.focus, once per change", async () => {
+  const { terminal, agent, exited } = await setup([])
+  const seen: boolean[] = []
+  agent.bus.subscribe((e) => void (e.type === "ui.focus" && seen.push(e.data.focused)), {
+    types: ["ui.focus"],
+  })
+  terminal.send("\x1b[O\x1b[O\x1b[I\x1b[I\x1b[O")
+  await agent.bus.flush()
+  expect(seen).toEqual([false, true, false])
   terminal.send("\x03")
   await exited
 })
@@ -2555,3 +2578,89 @@ test("an image slower than its time is committed as its alt text, and what follo
   terminal.send("\x03")
   await exited
 }, 10_000)
+
+test("live panels sit above the input in both modes, fold with Ctrl+T and follow their state", async () => {
+  for (const mode of ["inline", "fullscreen"] as const) {
+    let items = ["✓ write the parser", "› test it", "• ship it"]
+    let seen: { sessionId: string; hasData: boolean } | undefined
+    const { terminal, live, host, exited } = await setup([], {
+      cols: 100,
+      settings: { mode },
+      panels: [
+        {
+          id: "todo",
+          render: (o) => {
+            seen = { sessionId: o.sessionId, hasData: !!o.data }
+            if (!items.length) return []
+            return [
+              {
+                kind: "muted",
+                text: `Todos ${items.filter((i) => i.startsWith("✓")).length}/${items.length}`,
+              },
+              ...items.map((text) => ({ kind: text.startsWith("›") ? "accent" : "text", text }) as const),
+            ]
+          },
+        },
+      ],
+    })
+    await waitFor(() => live().includes("› test it"), `${mode}: the panel`)
+    const rows = live().split("\n")
+    const panelRow = rows.findIndex((r) => r.startsWith("Todos 1/3"))
+    const boxRow = rows.findIndex((r) => r.startsWith("╭"))
+    expect(panelRow).toBeGreaterThan(-1)
+    // The panel, then a blank line, then the input box.
+    expect(boxRow).toBe(panelRow + 5)
+    expect(seen?.hasData).toBe(true)
+    expect(live()).toContain("fold panels")
+    terminal.send("\x14")
+    await waitFor(() => !live().includes("› test it"), `${mode}: folded`)
+    expect(live()).toContain("Todos 1/3")
+    expect(live()).toContain("unfold panels")
+    terminal.send("\x14")
+    items = ["✓ write the parser", "✓ test it", "› ship it"]
+    // A change shows at the next redraw the extension asks for.
+    await host.load((api) => api.requestRender(), `render-${mode}`)
+    await waitFor(() => live().includes("› ship it"), `${mode}: updated`)
+    items = []
+    await host.load((api) => api.requestRender(), `render2-${mode}`)
+    await waitFor(() => !live().includes("Todos"), `${mode}: hidden when empty`)
+    terminal.send("\x04")
+    await exited
+  }
+})
+
+test("live panels give way on a short screen: folded, then cut, the input box always shown", async () => {
+  for (const mode of ["fullscreen", "inline"] as const) {
+    const items = Array.from({ length: 9 }, (_, i) => `• step ${i + 1}`)
+    const { terminal, live, exited } = await setup([], {
+      cols: 70,
+      rows: 12,
+      settings: { mode },
+      panels: [
+        {
+          id: "todo",
+          render: () => [
+            { kind: "muted", text: "Todos 0/9" },
+            ...items.map((text) => ({ kind: "text" as const, text })),
+          ],
+        },
+      ],
+    })
+    await waitFor(() => live().includes("Todos 0/9"), `${mode}: the panel`)
+    const rows = live().split("\n")
+    // Folded to its header, since the whole list does not fit; the input box and hints stay.
+    expect(live()).not.toContain("step 1")
+    expect(rows.some((r) => r.startsWith("╰"))).toBe(true)
+    expect(rows.some((r) => r.includes("Ctrl+C quit"))).toBe(true)
+    terminal.send("\x04")
+    await exited
+  }
+})
+
+test("an extension's notice shows in the transcript", async () => {
+  const { host, shows, terminal, exited } = await setup([])
+  await host.load((api) => api.notify("hook prettier · a.ts · ok", "success"), "ext:hooks")
+  await shows("✓ hook prettier · a.ts · ok")
+  terminal.send("\x03")
+  await exited
+})

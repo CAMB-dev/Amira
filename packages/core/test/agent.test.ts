@@ -125,6 +125,52 @@ test("reports unknown tools, invalid JSON and blocked calls as tool errors", asy
   expect(texts[2]).toBe("Tool call blocked: not allowed")
 })
 
+test("tool.call.after can add to a result before the model and tool.execute.end see it", async () => {
+  const { agent, mock, bus, events } = setup([
+    {
+      toolCalls: [
+        { name: "echo", args: { text: "a" }, id: "c1" },
+        { name: "echo", args: { text: "b" }, id: "c2" },
+        { name: "nope", args: {}, id: "c3" },
+      ],
+    },
+    { text: "done" },
+  ])
+  agent.tools.register(echo, "test")
+  const seen: string[] = []
+  agent.interceptors.add("tool.call.after", (v) => {
+    seen.push(`${v.name}:${String(v.args.text)}:${v.rejected ?? "ran"}`)
+    if (v.args.text !== "a") return { action: "block", reason: "ignored" }
+    return {
+      action: "modify",
+      value: {
+        ...v,
+        result: { ...v.result, content: [...v.result.content, { type: "text", text: "lint: 1 problem" }] },
+      },
+    }
+  })
+  // A failing handler, or one that drops the content, leaves the result as it was.
+  agent.interceptors.add("tool.call.after", () => {
+    throw new Error("broken")
+  })
+  agent.interceptors.add("tool.call.after", (v) => ({
+    action: "modify",
+    value: { ...v, result: { isError: true } as unknown as typeof v.result },
+  }))
+  await agent.prompt("go")
+  await bus.flush()
+  // Rejected calls reach it too, marked as such.
+  expect(seen.toSorted()).toEqual(["echo:a:ran", "echo:b:ran", "nope:undefined:unknownTool"])
+  const results = mock.requests[1]!.messages.filter((m) => m.role === "toolResult")
+  expect(results[0]!.content).toEqual([
+    { type: "text", text: "echo: a" },
+    { type: "text", text: "lint: 1 problem" },
+  ])
+  expect(results[1]!.content).toEqual([{ type: "text", text: "echo: b" }])
+  const end = events.find((e) => e.type === "tool.execute.end" && e.data.toolCallId === "c1")
+  expect(end?.type === "tool.execute.end" && end.data.result.content).toHaveLength(2)
+})
+
 test("context.build can rewrite what the model receives", async () => {
   const { agent, mock } = setup([{ text: "x" }])
   agent.interceptors.add("context.build", (v) => ({

@@ -198,3 +198,21 @@ test("the rpc schema describes forms, ui.action and ui.progress", () => {
   const events = schema.$defs.Event.anyOf.flatMap((e: any) => e.properties.type.enum ?? [])
   expect(events).toContain("ui.progress")
 })
+
+test("rpc: ui.focus reaches extensions as a ui.focus event when it changes", async () => {
+  const seen: boolean[] = []
+  const rpc = await rpcWith([], (api) => {
+    api.on("ui.focus", (e) => void seen.push(e.data.focused))
+  })
+  expect((await rpc.call({ id: 1, cmd: "ui.focus", focused: false })).ok).toBe(true)
+  expect((await rpc.call({ id: 2, cmd: "ui.focus", focused: false })).ok).toBe(true)
+  expect((await rpc.call({ id: 3, cmd: "ui.focus", focused: true })).ok).toBe(true)
+  expect((await rpc.call({ id: 4, cmd: "ui.focus", focused: "yes" })).error.code).toBe("invalid_params")
+  await rpc.session.agent.bus.flush()
+  expect(seen).toEqual([false, true])
+  expect(rpc.out.filter((l) => l.type === "ui.focus").map((l) => l.data)).toEqual([
+    { focused: false },
+    { focused: true },
+  ])
+  expect(await rpc.end()).toBe(0)
+})

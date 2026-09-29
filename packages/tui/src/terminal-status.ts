@@ -72,8 +72,8 @@ export class TerminalStatus {
       (this.#progress ? osc.progress("none") : "") + (this.#title ? osc.title("") + osc.popTitle : "")
     this.#restore = off ? { on: this.#title ? osc.pushTitle : "", off } : undefined
     if (this.#restore) this.terminal.enableMode(this.#restore)
-    // Focus reports only serve the bell.
-    if (this.#bell) this.terminal.enableMode(focusReporting)
+    // Focus reports serve the bell, and extensions through ui.focus events (e.g. notifications).
+    this.terminal.enableMode(focusReporting)
     this.#sync()
   }
 
@@ -83,7 +83,7 @@ export class TerminalStatus {
     this.#started = false
     if (this.#restore) this.terminal.disableMode(this.#restore)
     this.#restore = undefined
-    if (this.#bell) this.terminal.disableMode(focusReporting)
+    this.terminal.disableMode(focusReporting)
     this.#shownProgress = "none"
     this.#shownTitle = undefined
   }

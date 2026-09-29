@@ -43,6 +43,10 @@ export const ACTIONS = {
   "history.next": { scope: "input", description: "Recall the next prompt, from the last line" },
   "history.search": { scope: "input", description: "Search the prompt history" },
   "tool-output": { scope: "input", description: "Cycle how much of tool results is shown" },
+  "panels.toggle": {
+    scope: "input",
+    description: "Fold or unfold the live panels above the activity line (e.g. a todo list)",
+  },
   "popup.up": { scope: "popup", description: "Select the previous command, argument or file" },
   "popup.down": { scope: "popup", description: "Select the next command, argument or file" },
   "popup.complete": {
@@ -125,6 +129,7 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "history.next": ["down"],
     "history.search": ["ctrl+r"],
     "tool-output": ["ctrl+o"],
+    "panels.toggle": ["ctrl+t"],
     "popup.up": ["up"],
     "popup.down": ["down"],
     "popup.complete": ["tab"],

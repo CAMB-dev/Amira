@@ -18,6 +18,9 @@ export interface EventEnvelope<K extends keyof EventMap = keyof EventMap> {
 
 export type AnyEvent = { [K in keyof EventMap]: EventEnvelope<K> }[keyof EventMap]
 
+/** How a notice reads: information, something that went well, or a problem. */
+export type NoticeLevel = "info" | "success" | "warning" | "error"
+
 export type SessionStatus = "idle" | "working" | "blocked" | "error"
 
 export type TurnEndReason = "done" | "error" | "aborted"
@@ -86,6 +89,11 @@ export interface EventMap {
   /** Something visible changed outside the event stream (e.g. status bar state); frontends should redraw. */
   "ui.render": Record<string, never>
   "extension.error": { source: string; error: string }
+  /**
+   * Something an extension tells the user (ExtensionAPI.notify), e.g. how a hook it ran went.
+   * Frontends show it as a notice in the transcript; `source` is the extension.
+   */
+  "extension.notice": { source: string; text: string; level: NoticeLevel }
   /** A slow subscriber's queue overflowed and events were dropped for it. */
   "events.lost": { dropped: number }
   /** The session switched models; later turns use `to`. */
@@ -121,6 +129,13 @@ export interface EventMap {
    * out for forms, secret inputs and answers that are objects (ask answers, a confirm's free text).
    */
   "ui.resolved": { requestId: string; cancelled: boolean; value?: string | boolean }
+  /**
+   * Whether the user's frontend has focus, as far as it can tell: the TUI passes on what the
+   * terminal reports (focus reporting), rpc clients send ui.focus. Sent with session id "host"
+   * when it changes. A frontend that cannot tell never sends it, so until the first one
+   * whether the user is looking is unknown. E.g. for notifying only a user who is away.
+   */
+  "ui.focus": { focused: boolean }
   /** Progress of a form action (a button such as "Fetch models") running on the host. */
   "ui.progress": { requestId: string; action: string; text: string }
   /** Text a slash command shows the user; `command` is its name, without the slash. */
@@ -228,6 +243,33 @@ export interface InterceptorMap {
   "context.build": { systemPrompt: string; messages: Message[] }
   /** Runs before a tool executes. Only `args` may be modified; block returns an error result to the model. */
   "tool.call.before": { readonly toolCallId: string; readonly name: string; args: Record<string, unknown> }
+  /**
+   * Runs once a tool call has its result, before the result reaches the model or the history
+   * and before tool.execute.end: for calls that ran, and for rejected ones (`rejected` says
+   * why: "blocked", also for a call not approved or one that failed before running,
+   * "unknownTool" or "invalidArgs"). Not once the turn was interrupted ("aborted" never gets
+   * here): results from then on reach the model as they are. Only `result` may be modified,
+   * e.g. to add a formatter's complaints or a language server's diagnostics for the file an
+   * edit touched. block counts as pass. Failures pass, and the result stays as it was, as it
+   * does when the modified result has no `content`.
+   * `pending` lists the other calls of the same model reply that have no result yet (running
+   * or still to start), so a handler can leave the work to the last of several edits: act on
+   * the call whose `pending` has none of them. Do not wait inside a handler for pending calls:
+   * they may not start before it returns.
+   * Handlers that change files (formatters) should use a lower `priority` than ones that
+   * read them (diagnostics), so the readers see the final contents.
+   */
+  "tool.call.after": {
+    readonly toolCallId: string
+    readonly name: string
+    /** The arguments the tool ran with (after tool.call.before), or was called with if rejected first. */
+    readonly args: Readonly<Record<string, unknown>>
+    /** The calling session's working directory, which relative paths in `args` are relative to. */
+    readonly cwd: string
+    readonly rejected?: ToolRejection
+    readonly pending: readonly { readonly toolCallId: string; readonly name: string }[]
+    result: ToolResult
+  }
   /**
    * Runs before every model call, ahead of context.build, with the system prompt's sections
    * in order ("identity", "environment", "project", "skills", "deferred-tools", "role").

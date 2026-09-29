@@ -126,6 +126,77 @@ test("/clear and /resume switch the active agent and announce it; a running turn
   expect(session.agent).toBe(first)
 })
 
+test("rewind cuts the conversation back to before a user message, on a branch of the same session", async () => {
+  const { host, announced } = await setup([
+    { text: "one", delayMs: 30 },
+    { text: "two" },
+    { text: "three" },
+    { text: "two again" },
+  ])
+  const first = host.agent
+  const turn = first.prompt("first")
+  await Bun.sleep(5)
+  await expect(host.control.rewind!(0)).rejects.toThrow(/a turn is running/)
+  await turn
+  await first.prompt("second")
+  await first.prompt("third")
+  expect(first.messages.map((m) => m.role)).toEqual([
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+  ])
+  await expect(host.control.rewind!(1)).rejects.toThrow(/not a user message/)
+  await expect(host.control.rewind!(99)).rejects.toThrow(/not a user message/)
+
+  await host.control.rewind!(2)
+  const cut = host.agent
+  expect(cut).not.toBe(first)
+  expect(cut.sessionId).toBe(first.sessionId)
+  expect(announced.at(-1)).toEqual(["resume", first.sessionId])
+  expect(cut.messages.map((m) => m.role === "user" && m.content)).toEqual([
+    [{ type: "text", text: "first" }],
+    false,
+  ])
+  // The conversation goes on from there, and a resume sees the new branch.
+  await cut.prompt("second, better")
+  const reopened = SessionStore.open(cut.session!.file).restore().messages
+  expect(
+    reopened.flatMap((m) => (m.role === "user" ? m.content.map((b) => b.type === "text" && b.text) : [])),
+  ).toEqual(["first", "second, better"])
+
+  // Back to before the first message: an empty conversation, still the same session.
+  await host.control.rewind!(0)
+  expect(host.agent.messages).toEqual([])
+  expect(announced.at(-1)).toEqual(["resume", first.sessionId])
+})
+
+test("rewind refuses a message a compaction summarized", async () => {
+  const { host } = await setup([{ text: "one" }, { text: "two" }, { text: "SUMMARY" }])
+  await host.agent.prompt("first")
+  await host.agent.prompt("second")
+  expect(await host.control.compact()).toBe(true)
+  const summary = host.agent.messages.findIndex((m) => m.role === "user")
+  await expect(host.control.rewind!(summary)).rejects.toThrow(/summarized by a compaction/)
+})
+
+test("rewind to the first message after a compaction keeps the summary", async () => {
+  const { host } = await setup([{ text: "one" }, { text: "two" }, { text: "SUMMARY" }, { text: "three" }])
+  await host.agent.prompt("first")
+  await host.agent.prompt("second")
+  expect(await host.control.compact()).toBe(true)
+  const before = host.agent.messages.length
+  await host.agent.prompt("third")
+  await host.control.rewind!(before)
+  const text = (m: { content: { type: string; text?: string }[] }) =>
+    m.content.map((b) => b.text ?? "").join("")
+  expect(host.agent.messages.map(text).join("\n")).toContain("SUMMARY")
+  expect(host.agent.messages.map(text)).not.toContain("third")
+  expect(host.agent.messages).toHaveLength(before)
+})
+
 test("send passes a display along, whether it starts a turn or steers the running one", async () => {
   const { host } = await setup([{ text: "first", delayMs: 30 }, { text: "second" }])
   const display = { text: "/x 1", note: "Loaded skill x (4 lines)" }
@@ -180,6 +251,27 @@ test("/cost counts replies a compaction replaced; /context previews the next req
   // The first reply is gone from the conversation, but it was paid for.
   expect(JSON.stringify(host.control.messages())).not.toContain('"text":"one"')
   expect(await run("/cost")).toMatch(/mock\/m\s+2 replies/)
+})
+
+test("readSession reads a stored session without switching to it, compacted messages included", async () => {
+  const { host } = await setup([{ text: "one" }, { text: "two" }, { text: "summary" }])
+  const first = host.agent
+  await first.prompt("a")
+  await first.prompt("b")
+  expect(await host.control.compact()).toBe(true)
+  await host.control.newSession()
+  const read = host.control.readSession!(first.sessionId)!
+  expect(host.agent).not.toBe(first)
+  expect(read.id).toBe(first.sessionId)
+  expect(read.cwd).toBe(here)
+  expect(read.createdAt).toBeLessThanOrEqual(read.updatedAt)
+  // The reply the compaction replaced is still part of the conversation as it happened.
+  const texts = read.messages.map((m) => m.content.map((b) => (b.type === "text" ? b.text : "")).join(""))
+  expect(texts).toEqual(["a", "one", "b", "two"])
+  expect(read.subagents).toEqual([])
+  expect(read.subagentMessages("s_nope")).toBeUndefined()
+  expect(host.control.readSession!("s_nope")).toBeUndefined()
+  expect(host.control.readSession!("../escape")).toBeUndefined()
 })
 
 test("/provider lists only the configured providers; an unknown one says how to add it", async () => {

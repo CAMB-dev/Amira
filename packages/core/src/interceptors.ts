@@ -19,6 +19,7 @@ export type FailurePolicy = "pass" | "block"
 export const FAILURE_POLICY: Record<keyof InterceptorMap, FailurePolicy> = {
   "context.build": "pass",
   "tool.call.before": "block",
+  "tool.call.after": "pass",
   "system.build": "pass",
   "compact.before": "pass",
 }
@@ -93,6 +94,12 @@ export class InterceptorRegistry {
       try {
         result = await runHandler(entry, current, ctx)
       } catch (err) {
+        // The user interrupted the turn: not the handler's failure.
+        if (ctx.signal.aborted) {
+          return blocksOnFailure
+            ? { blocked: true, reason: "aborted", value: current }
+            : { blocked: false, value: current }
+        }
         const msg = err instanceof Error ? err.message : String(err)
         this.#onError(point, entry.source, msg)
         if (blocksOnFailure) {
@@ -100,8 +107,20 @@ export class InterceptorRegistry {
         }
         continue
       }
+      // After the fact there is nothing left to block.
+      if (result.action === "block" && point === "tool.call.after") continue
       if (result.action === "block") return { blocked: true, reason: result.reason, value: current }
-      if (result.action === "modify") current = result.value
+      if (result.action === "modify") {
+        // A result without content (a handler's slip) would turn a call that worked into an error.
+        if (
+          point === "tool.call.after" &&
+          !Array.isArray((result.value as InterceptorMap["tool.call.after"])?.result?.content)
+        ) {
+          this.#onError(point, entry.source, "the modified result has no content; it was ignored")
+          continue
+        }
+        current = result.value
+      }
       if (result.action === "ask" && point === "tool.call.before") ask.push(result.reason)
     }
     return ask.length ? { blocked: false, value: current, ask } : { blocked: false, value: current }

@@ -6,7 +6,7 @@ a key or a list of keys:
 
 ```json
 {
-  "queue": "ctrl+t",
+  "queue": "ctrl+b",
   "newline": ["shift+enter", "ctrl+j"],
   "redraw": []
 }
@@ -56,6 +56,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `history.next` | `down` | Recall the next prompt (from the input's last line) |
 | `history.search` | `ctrl+r` | Search the prompt history |
 | `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
+| `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as an extension's todo list) to one line each, or unfold them |
 
 ### Completion lists
 

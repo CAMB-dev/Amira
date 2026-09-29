@@ -8,7 +8,7 @@ import { defineTool, fallbackTitle, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { SessionStore } from "../src/session-store.ts"
-import { listSubagents, subagentMessages } from "../src/subagent-list.ts"
+import { listSubagents, subagentMessages, subagentsOf } from "../src/subagent-list.ts"
 import { AgentTree } from "../src/subagents.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
 
@@ -212,4 +212,25 @@ test("without a session file, only this process's sub-agents are known", async (
   await tree.spawn(root, { prompt: "p" }).result()
   expect(listSubagents(root, tree).map((e) => e.info.task)).toEqual(["p"])
   expect(listSubagents(root)).toEqual([])
+})
+
+test("a stored sub-agent's history keeps what a compaction replaced; its messages are what it saw", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "amira-subagent-history-"))
+  const say = (role: "user" | "assistant", text: string) =>
+    (role === "user"
+      ? { role, content: [{ type: "text", text }] }
+      : { role, content: [{ type: "text", text }], model: { provider: "mock", model: "m" } }) as never
+  const child = SessionStore.create({ cwd: dir, id: "s_kid", dir: path.join(dir, "subagents") })
+  const first = child.append({ type: "message", message: say("user", "task") })
+  const second = child.append({ type: "message", message: say("assistant", "early work") })
+  child.append({ type: "compaction", summary: "did early work", replaces: [first, second] })
+  child.append({ type: "message", message: say("user", "go on") })
+  const parent = SessionStore.create({ cwd: dir, dir })
+  parent.append({ type: "message", message: say("user", "hi") })
+  parent.append({ type: "subagent", childSessionId: "s_kid", role: "explorer" })
+  const [kid] = subagentsOf(parent.id, SessionStore.open(parent.file))
+  const text = (m: { content: { type: string; text?: string }[] }) =>
+    m.content.map((b) => b.text ?? "").join("")
+  expect(kid!.history().map(text)).toEqual(["task", "early work", "go on"])
+  expect(kid!.messages().map(text)).not.toContain("early work")
 })

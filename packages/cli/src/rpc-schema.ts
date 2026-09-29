@@ -69,6 +69,11 @@ export const COMMAND_PARAMS = {
       'How this client wants forms: "native" (default) sends each as one ui.request of kind form; "dialogs" asks them one field at a time with select and input requests, for clients that only know those.',
     params: { forms: strings("native", "dialogs") },
   },
+  "ui.focus": {
+    description:
+      "Tells the host whether this client's window has focus, so extensions can tell whether the user is looking (e.g. to notify only a user who is away). Emitted as a ui.focus event when it changes.",
+    params: { focused: bool },
+  },
   "session.read": {
     description: "Reads the conversation: the last turn, or every message.",
     params: { what: strings("lastTurn", "messages") },
@@ -120,6 +125,7 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
   "ui.respond": {},
   "ui.action": { result: ref("FormActionResult") },
   "ui.configure": {},
+  "ui.focus": {},
   "session.read": {
     "messages?": arrayOf(ref("Message")),
     "turnId?": str,
@@ -259,6 +265,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   }),
   "extension.loaded": obj({ source: str }),
   "extension.error": obj({ source: str, error: str }),
+  "extension.notice": obj({ source: str, text: str, level: strings("info", "success", "warning", "error") }),
   "ui.render": obj({}),
   "events.lost": obj({ dropped: num }),
   "ui.request": { allOf: [ref("UiRequest"), obj({ requestId: str, "source?": str })] },
@@ -270,6 +277,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
       description: "Left out for forms, secret inputs, ask answers and a confirm's free text.",
     },
   }),
+  "ui.focus": obj(
+    { focused: bool },
+    "Whether the user's frontend has focus (from the TUI's terminal, or an rpc client's ui.focus); sent when it changes.",
+  ),
   "ui.progress": obj({ requestId: str, action: str, text: str }),
   "model.changed": obj({ from: modelRef, to: modelRef }),
   "compact.start": obj({
