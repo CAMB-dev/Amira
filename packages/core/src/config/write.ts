@@ -1,15 +1,6 @@
-import {
-  chmodSync,
-  closeSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs"
-import path from "node:path"
+import { chmodSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import type { ProviderSettings } from "@amira/api"
+import { type FileLock, tryFileLock } from "../file-lock.ts"
 import { readJsonFile } from "./load.ts"
 import { isPlainObject } from "./merge.ts"
 import { SettingsError } from "./schema.ts"
@@ -86,10 +77,14 @@ export function setAuthKey(file: string, id: string, apiKey: string | undefined)
 
 /** Holds `<file>.lock` while `fn` runs, so two writers cannot drop each other's change. */
 function withLock<T>(file: string, fn: () => T): T {
-  mkdirSync(path.dirname(file), { recursive: true })
   const lock = `${file}.lock`
-  const fd = acquireLock(file, lock) ?? (removeIfStale(lock) ? acquireLock(file, lock) : undefined)
-  if (fd === undefined) {
+  let held: FileLock | undefined
+  try {
+    held = tryFileLock(lock, STALE_LOCK_MS)
+  } catch (err) {
+    throw new SettingsError(file, [`cannot be locked: ${err instanceof Error ? err.message : String(err)}`])
+  }
+  if (!held) {
     throw new SettingsError(file, [
       `is being changed by another amira process; if none is running, delete ${lock}`,
     ])
@@ -97,34 +92,12 @@ function withLock<T>(file: string, fn: () => T): T {
   try {
     return fn()
   } finally {
-    closeSync(fd)
-    rmSync(lock, { force: true })
+    held.release()
   }
 }
 
 /** A write takes milliseconds, so an older lock was left by a process that died. */
 const STALE_LOCK_MS = 10_000
-
-/** The lock's descriptor, or undefined if another process holds it. */
-function acquireLock(file: string, lock: string): number | undefined {
-  try {
-    return openSync(lock, "wx")
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") return undefined
-    throw new SettingsError(file, [`cannot be locked: ${err instanceof Error ? err.message : String(err)}`])
-  }
-}
-
-function removeIfStale(lock: string): boolean {
-  try {
-    if (Date.now() - statSync(lock).mtimeMs < STALE_LOCK_MS) return false
-    rmSync(lock, { force: true })
-    return true
-  } catch {
-    // Released in the meantime.
-    return true
-  }
-}
 
 function writeJsonAtomic(file: string, value: unknown, mode?: number): void {
   const tmp = `${file}.${process.pid}.tmp`

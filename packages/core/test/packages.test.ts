@@ -29,6 +29,7 @@ setDefaultTimeout(60_000)
 let dir: string
 let home: string
 let cwd: string
+let savedHome: string | undefined
 
 beforeEach(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), "amira-packages-"))
@@ -36,9 +37,16 @@ beforeEach(() => {
   cwd = path.join(dir, "project")
   mkdirSync(home, { recursive: true })
   mkdirSync(cwd, { recursive: true })
+  // Git repositories are cached under the Amira home.
+  savedHome = process.env.AMIRA_HOME
+  process.env.AMIRA_HOME = home
 })
 
-afterEach(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }))
+afterEach(() => {
+  if (savedHome === undefined) delete process.env.AMIRA_HOME
+  else process.env.AMIRA_HOME = savedHome
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+})
 
 const user = () => packageScope("user", { home, cwd })
 const project = () => packageScope("project", { home, cwd })
