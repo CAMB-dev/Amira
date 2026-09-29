@@ -150,7 +150,7 @@ async function setup(steps: MockStep[], o: Options) {
   const dialog = () => {
     const lines = screen.lines.map((l) => l.trimEnd())
     // The open dialog is the last run of barred rows, ending with its keys (echoes have none).
-    const end = lines.findLastIndex((l) => l.startsWith("┃") && / cancel$| back$/.test(l))
+    const end = lines.findLastIndex((l) => l.startsWith("┃") && / cancel$| back$| deny$/.test(l))
     if (end === -1) return []
     let start = end
     while (start > 0 && lines[start - 1]!.startsWith("┃")) start--
@@ -185,7 +185,7 @@ for (const mode of MODES) {
       "┃   2 Patch                  Fix it in place",
       "┃   3 Other…",
       "┃",
-      "┃ ←→ question · ↑↓ move · Enter choose · Esc cancel",
+      "┃ ←→ question · ↑↓ move · Enter next · Esc cancel",
     ])
     s.terminal.send("2")
     await waitFor(() => s.dialog()[0] === "┃ 2/2 · Extras", "the second question")
@@ -325,17 +325,23 @@ for (const mode of MODES) {
       "┃ ? Allow wipe? (approval)",
       "┃   it deletes files",
       "┃",
-      "┃ ❯ Yes",
+      "┃   Yes",
       "┃   Yes, and don't ask again this session",
       "┃   No",
       "┃   Other…",
       "┃",
-      "┃ ↑↓ move · y/n · Enter choose · Esc cancel",
+      "┃ ↑↓ select · n no · Esc deny",
     ])
+    // Nothing is preselected: an Enter typed now does not answer it.
+    s.terminal.send("\r")
+    await Bun.sleep(30)
+    expect(s.host.ui.pending.length).toBe(1)
+    s.terminal.send(`${DOWN}${DOWN}`)
+    await waitFor(() => s.dialog().includes("┃ ❯ Yes, and don't ask again this session"), "moved")
     // The bar is drawn in the warning color (yellow), the ❯ in the accent (cyan).
     expect(s.terminal.output).toContain("\x1b[33m┃")
     expect(s.terminal.output).toContain("\x1b[36m❯")
-    s.terminal.send(`${DOWN}\r`)
+    s.terminal.send("\r")
     await s.shows("wiped twice")
     await s.idle()
     expect(s.host.ui.pending).toEqual([])

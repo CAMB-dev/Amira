@@ -375,7 +375,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   expect(s.host.ui.pending).toHaveLength(1)
   s.terminal.send(ESC)
   await waitFor(() => s.view().includes("? Allow bash? (approval)"), "the inline dialog")
-  s.terminal.send("y")
+  s.terminal.send("\x1b[B\r")
   expect(await answer).toBe(true)
   // Answered: the dialog is gone and leaves no echo.
   await waitFor(() => !s.view().includes("? Allow bash?"), "the dialog gone")

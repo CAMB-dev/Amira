@@ -100,7 +100,13 @@ question, the options and the keys. In a list of up to nine options (not a confi
 digit in front of an option chooses it, or checks it where several may be chosen. "Other…"
 opens a text field in its row for an answer in your own words; there Enter keeps the text and
 Esc closes the field (Esc again cancels the dialog). Several questions are asked one after
-another in the same block and answered together.
+another in the same block and answered together: Enter goes on to the next question, and Esc
+on a later question goes back to the one before, keeping the answers given.
+
+A confirmation (such as an approval) starts with nothing selected: Enter does nothing until
+an option is picked with the arrows, so keys typed into a message just as it shows up cannot
+answer it. There is no single key that says yes (`dialog.yes` is unbound unless you bind it).
+Esc on an approval denies the call and stops the turn.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -108,7 +114,7 @@ another in the same block and answered together.
 | `dialog.down` | `down`, `tab` | Select the next option |
 | `dialog.choose` | `enter` | Choose the selected option, or submit the input |
 | `dialog.cancel` | `escape`, `ctrl+c` | Cancel the dialog |
-| `dialog.yes` | `y` | Answer yes to a confirmation |
+| `dialog.yes` | none | Answer yes to a confirmation at once |
 | `dialog.no` | `n` | Answer no to a confirmation |
 | `dialog.toggle` | `space` | Check or uncheck the selected option where several may be chosen |
 | `dialog.prev-question` | `left` | Go back to the previous question of several |

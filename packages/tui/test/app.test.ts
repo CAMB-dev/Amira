@@ -1282,7 +1282,8 @@ test("extension dialogs are answered inline: confirm, select and input", async (
   terminal.send("go\r")
   await waitFor(() => live().includes("? Proceed? (asker)"), "confirm")
   expect(live()).toContain("It is safe")
-  terminal.send("y")
+  // Nothing is preselected: ↓ picks Yes, then Enter answers.
+  terminal.send("\x1b[B\r")
   await waitFor(() => live().includes("? Pick one"), "select")
   terminal.send("\x1b[B\r")
   await waitFor(() => live().includes("? Name"), "input")

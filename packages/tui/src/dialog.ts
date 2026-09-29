@@ -59,6 +59,7 @@ interface Page {
   header?: string
   choices: Choice[]
   multi: boolean
+  /** The selected choice; -1 while a confirm waits for the user to pick one (nothing preselected). */
   selected: number
   /** Checked choices of a multi-select, by index. */
   checked: Set<number>
@@ -76,6 +77,8 @@ interface Fit {
   options: number
   title: number
   indicator: boolean
+  /** The "3/12" row under options that scroll. */
+  position: boolean
 }
 
 /**
@@ -83,7 +86,9 @@ interface Fit {
  * select (typing filters it), a diff review, an input (plain or secret) and the questions of
  * ask_user. It is a block with a bar down its left: the question, a muted message or diff, the
  * options as a list (❯ marks the selected one; digits choose in short lists; a multi-select
- * checks them with Space), and the keys at the bottom. A free-text choice ("Other…") opens a
+ * checks them with Space), and the keys at the bottom. A confirm starts with nothing selected:
+ * Enter does nothing until the user has moved to a choice, so keys typed before it showed up
+ * (a message being written) cannot answer it. A free-text choice ("Other…") opens a
  * text field in its row, which Esc closes again; Esc elsewhere cancels. Several questions are
  * asked one after another in the same block and answered together. Calls `onDone` once. It
  * fits `maxRows`: the title, the selected option and the keys always show, given three rows.
@@ -125,7 +130,14 @@ export class Dialog implements Component {
     if (this.#done) return false
     const keys = this.keys
     if (this.#field) return this.#fieldKey(e)
-    if (keys.is(e, "dialog.cancel")) return this.#finish(undefined)
+    if (keys.is(e, "dialog.cancel")) {
+      // Esc on a later question of several goes back one, keeping the answers given so far.
+      if (this.#page > 0 && e.type === "key" && e.name === "escape") {
+        this.#goTo(this.#page - 1)
+        return true
+      }
+      return this.#finish(undefined)
+    }
     const r = this.request
     if (r.kind === "input") {
       if (this.#secret) {
@@ -149,13 +161,13 @@ export class Dialog implements Component {
       if (this.#page < this.#frontier()) this.#goTo(this.#page + 1)
       return true
     }
-    if (keys.is(e, "dialog.up")) page.selected = n ? (page.selected - 1 + n) % n : 0
+    if (keys.is(e, "dialog.up")) page.selected = n ? (Math.max(0, page.selected) - 1 + n) % n : 0
     else if (keys.is(e, "dialog.down")) page.selected = n ? (page.selected + 1) % n : 0
     else if (r.kind === "confirm" && keys.is(e, "dialog.yes")) return this.#finish(true)
     else if (r.kind === "confirm" && keys.is(e, "dialog.no")) return this.#finish(false)
     else if (page.multi && keys.is(e, "dialog.toggle")) this.#toggle(page.selected)
     else if (keys.is(e, "dialog.choose")) {
-      if (!n) return true
+      if (!n || page.selected < 0) return true
       if (!page.multi) return this.#choose(page.selected)
       // Enter on an empty free-text choice opens it rather than submitting without it.
       const at = choices[page.selected]
@@ -188,17 +200,27 @@ export class Dialog implements Component {
     const hint = theme.muted(
       fitHint([this.#hint("dialog.choose", "submit", 5), this.#hint("dialog.cancel", "cancel", 3)], width),
     )
-    const body = this.#secret
-      ? [
-          `${glyphs.pointer} ${this.#secret.render(Math.max(4, width - 2), theme, { focused: true, placeholder: r.placeholder ?? "" })}`,
-        ]
-      : this.#editor!.render(width, ctx)
     const title = this.#titleRows(width, theme)
-    // A blank row before the keys goes first, then the title gives way, never all of it.
+    const editor = this.#editor
+    // The whole text, to see whether it fits with the title.
+    if (editor) editor.maxRows = Number.POSITIVE_INFINITY
+    const render = () =>
+      this.#secret
+        ? [
+            `${glyphs.pointer} ${this.#secret.render(Math.max(4, width - 2), theme, { focused: true, placeholder: r.placeholder ?? "" })}`,
+          ]
+        : editor!.render(width, ctx)
+    let body = render()
+    // A blank row before the keys goes first, then the title gives way, then the text scrolls
+    // inside the rows left (the caret stays in view): a row of title stays while two are left.
     const blank = title.length + body.length + 2 <= this.maxRows ? [""] : []
     const room = Math.max(1, this.maxRows - 1 - blank.length)
-    const lines = [...fitTitle(title, Math.max(1, room - body.length)), ...body]
-    return [...lines.slice(0, room), ...blank, hint]
+    if (editor && body.length > room - 1) {
+      editor.maxRows = Math.max(1, room - (room > 1 ? 1 : 0))
+      body = render()
+    }
+    const titleRoom = room - body.length
+    return [...(titleRoom > 0 ? fitTitle(title, titleRoom) : []), ...body, ...blank, hint]
   }
 
   #renderList(width: number, ctx: RenderContext): string[] {
@@ -235,6 +257,7 @@ export class Dialog implements Component {
       options: Math.min(MAX_OPTIONS, Math.max(1, choices.length)),
       title: title.length,
       indicator: indicator !== undefined,
+      position: true,
     }
     const layout = (diffRows: number) => {
       const out: string[] = []
@@ -259,6 +282,7 @@ export class Dialog implements Component {
       [() => fit.message > 1, () => fit.message--],
       [() => fit.options > 1, () => fit.options--],
       [() => fit.message > 0, () => fit.message--],
+      [() => fit.position, () => (fit.position = false)],
       [() => fit.title > 1, () => fit.title--],
       [() => fit.indicator, () => (fit.indicator = false)],
     ]
@@ -319,7 +343,9 @@ export class Dialog implements Component {
           rows.push(`${indent}${theme.muted(l)}`)
       }
     }
-    if (shown < choices.length) rows.push(theme.muted(`  ${page.selected + 1}/${choices.length}`))
+    if (shown < choices.length && fit.position) {
+      rows.push(theme.muted(`  ${Math.max(0, page.selected) + 1}/${choices.length}`))
+    }
     return rows
   }
 
@@ -343,15 +369,24 @@ export class Dialog implements Component {
     const questions = this.keys.pairLabel("dialog.prev-question", "dialog.next-question")
     const yes = this.keys.label("dialog.yes")
     const no = this.keys.label("dialog.no")
+    const answerKeys =
+      r.kind === "confirm" && (yes && no ? `${yes}/${no}` : no ? `${no} no` : yes ? `${yes} yes` : "")
+    // Nothing chosen yet (a confirm): the arrows pick, and only then does Enter answer.
+    const picking = page.selected < 0
+    // Of several questions, Enter goes on to the next one not answered, until the last.
+    const more = this.#pages.some((p) => p !== page && !p.answer)
+    const choose = more ? "next" : page.multi ? "submit" : "choose"
+    // An approval's Esc denies the call (and stops the turn); a later question's goes back one.
+    const cancel = this.#page > 0 ? "back" : r.source === "approval" ? "deny" : "cancel"
     return [
-      this.#pages.length > 1 && questions && { text: `${questions} question`, priority: 1 },
-      move && { text: `${move} move`, priority: 2 },
+      this.#pages.length > 1 && questions && { text: `${questions} question`, priority: 4 },
+      move && { text: `${move} ${picking ? "select" : "move"}`, priority: picking ? 5 : 2 },
       page.multi && this.#hint("dialog.toggle", "toggle", 4),
       // Only a select filters; the other lists are few and fixed.
       r.kind === "select" && { text: "type to filter", priority: 1 },
-      r.kind === "confirm" && yes && no && { text: `${yes}/${no}`, priority: 1 },
-      this.#hint("dialog.choose", page.multi ? "submit" : "choose", 5),
-      this.#hint("dialog.cancel", "cancel", 3),
+      answerKeys && { text: answerKeys, priority: 1 },
+      !picking && this.#hint("dialog.choose", choose, 5),
+      this.#hint("dialog.cancel", cancel, 3),
     ]
   }
 
@@ -504,12 +539,17 @@ function pagesOf(r: DialogRequest): Page[] {
   switch (r.kind) {
     case "confirm":
       return [
-        page(r.title, [
-          { label: CONFIRM_LABELS.yes, value: true },
-          ...(r.always ? [{ label: alwaysLabel(r.always), value: "always" as const }] : []),
-          { label: CONFIRM_LABELS.no, value: false },
-          ...(r.other ? [{ label: OTHER_LABEL, other: true }] : []),
-        ]),
+        page(
+          r.title,
+          [
+            { label: CONFIRM_LABELS.yes, value: true },
+            ...(r.always ? [{ label: alwaysLabel(r.always), value: "always" as const }] : []),
+            { label: CONFIRM_LABELS.no, value: false },
+            ...(r.other ? [{ label: OTHER_LABEL, other: true }] : []),
+          ],
+          // Nothing preselected: an Enter typed before the dialog showed up does not answer it.
+          { selected: -1 },
+        ),
       ]
     case "select":
     case "diff-review":

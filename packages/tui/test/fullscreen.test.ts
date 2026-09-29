@@ -956,7 +956,7 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
   terminal.send(click(screen.lines.findIndex((l) => l.startsWith("› go"))))
   await Bun.sleep(30)
   expect(view()).not.toMatch(/block \d+ of/)
-  terminal.send("y")
+  terminal.send("\x1b[B\r")
   await shows("thanks")
   await idle()
   expect(view()).toContain("└ true")

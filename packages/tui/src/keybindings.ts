@@ -67,7 +67,10 @@ export const ACTIONS = {
   "dialog.down": { scope: "dialog", description: "Select the next option" },
   "dialog.choose": { scope: "dialog", description: "Choose the selected option, or submit the input" },
   "dialog.cancel": { scope: "dialog", description: "Cancel the dialog" },
-  "dialog.yes": { scope: "dialog", description: "Answer yes to a confirmation" },
+  "dialog.yes": {
+    scope: "dialog",
+    description: "Answer yes to a confirmation at once (unbound: a key typed early must not approve)",
+  },
   "dialog.no": { scope: "dialog", description: "Answer no to a confirmation" },
   "dialog.toggle": {
     scope: "dialog",
@@ -148,7 +151,8 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "dialog.down": ["down", "tab"],
     "dialog.choose": ["enter"],
     "dialog.cancel": ["escape", "ctrl+c"],
-    "dialog.yes": ["y"],
+    // Unbound: a "y" typed into a message just as an approval shows up must not allow the call.
+    "dialog.yes": [],
     "dialog.no": ["n"],
     "dialog.toggle": ["space"],
     "dialog.prev-question": ["left"],
