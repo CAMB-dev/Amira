@@ -62,6 +62,27 @@ test("tool.call.after can change a result: the model, the history and tool.execu
   })
 })
 
+test("a rejected call starts, goes through tool.call.after, then ends, once each", async () => {
+  const { agent, bus, events } = setup([
+    { toolCalls: [{ name: "nope", args: {}, id: "n1" }] },
+    { text: "ok" },
+  ])
+  const order: string[] = []
+  bus.subscribe((e) => {
+    if (e.type === "tool.execute.start" || e.type === "tool.execute.end") order.push(e.type)
+  })
+  agent.interceptors.add("tool.call.after", async (v) => {
+    // Events are delivered asynchronously: let the start reach the subscriber first.
+    await bus.flush()
+    order.push(`after:${v.rejected}`)
+    return { action: "pass" }
+  })
+  await agent.prompt("go")
+  await bus.flush()
+  expect(order).toEqual(["tool.execute.start", "after:unknownTool", "tool.execute.end"])
+  expect(events.filter((e) => e.type === "tool.execute.end")).toHaveLength(1)
+})
+
 test("tool.call.after lists the calls of the same reply still waiting for a result", async () => {
   const { agent } = setup([
     {

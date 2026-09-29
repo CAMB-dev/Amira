@@ -182,6 +182,21 @@ test("rewind refuses a message a compaction summarized", async () => {
   await expect(host.control.rewind!(summary)).rejects.toThrow(/summarized by a compaction/)
 })
 
+test("rewind to the first message after a compaction keeps the summary", async () => {
+  const { host } = await setup([{ text: "one" }, { text: "two" }, { text: "SUMMARY" }, { text: "three" }])
+  await host.agent.prompt("first")
+  await host.agent.prompt("second")
+  expect(await host.control.compact()).toBe(true)
+  const before = host.agent.messages.length
+  await host.agent.prompt("third")
+  await host.control.rewind!(before)
+  const text = (m: { content: { type: string; text?: string }[] }) =>
+    m.content.map((b) => b.text ?? "").join("")
+  expect(host.agent.messages.map(text).join("\n")).toContain("SUMMARY")
+  expect(host.agent.messages.map(text)).not.toContain("third")
+  expect(host.agent.messages).toHaveLength(before)
+})
+
 test("send passes a display along, whether it starts a turn or steers the running one", async () => {
   const { host } = await setup([{ text: "first", delayMs: 30 }, { text: "second" }])
   const display = { text: "/x 1", note: "Loaded skill x (4 lines)" }
