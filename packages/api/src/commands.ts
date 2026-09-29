@@ -2,7 +2,7 @@ import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef, U
 import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
-import type { SubagentStatus } from "./subagents.ts"
+import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
 import type { ToolExposure } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
 
@@ -95,8 +95,11 @@ export interface CommandContext extends CommandCompleteContext {
 /** A full-screen view a frontend can show: for now the live transcript of a sub-agent. */
 export type FrontendView = { kind: "subagent"; sessionId: string }
 
-/** Where a sub-agent is: waiting for a slot, working, or how it ended. */
-export type SubagentState = "queued" | "running" | SubagentStatus
+/**
+ * Where a sub-agent is: waiting for a slot, working, idle between turns (persistent ones
+ * only), or how it ended.
+ */
+export type SubagentState = "queued" | "running" | "idle" | SubagentStatus
 
 /** A sub-agent of the session, running or finished, as commands list it. */
 export interface SubagentInfo {
@@ -121,6 +124,14 @@ export interface SubagentInfo {
   /** Tokens and cost of its own replies so far, its sub-agents excluded. */
   usage: Usage
   error?: string
+  /** Why it ended early without failing (stopped, turn limit). */
+  note?: string
+  /** A long-lived child (SpawnOptions.persistent). */
+  persistent?: boolean
+  /** Turns started so far, for persistent children. */
+  turns?: number
+  /** The spawn group it counts against. */
+  groupId?: string
 }
 
 export interface SessionInfo {
@@ -198,6 +209,13 @@ export interface SessionControl {
    * result says it was stopped by the user. False when it is unknown or already ended.
    */
   stopSubagent(id: string): boolean
+  /**
+   * Creates a spawn group whose sub-agents are children of this session, e.g. for a command
+   * that runs a workflow. Unset where the host has no agent tree.
+   */
+  readonly createGroup?: (opts: SpawnGroupOptions) => SpawnGroup
+  /** The agent tree's spawn groups, active and ended, oldest first; unset without a tree. */
+  readonly groups?: () => SpawnGroupInfo[]
   /** "provider/model" refs to offer, from providers that have a key. */
   models(): string[]
   /** Switches the model for later turns; throws for an unknown one. */

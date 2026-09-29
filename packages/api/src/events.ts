@@ -1,6 +1,6 @@
 import type { AssistantMessage, Message, ModelRef, Usage, UserMessage } from "@amira/ai"
 import type { CommandOutputLevel } from "./commands.ts"
-import type { Budget, SpawnContext, SubagentStatus } from "./subagents.ts"
+import type { Budget, ChildState, SpawnContext, SpawnGroupInfo, SubagentStatus } from "./subagents.ts"
 import type { ToolResult } from "./tools.ts"
 import type { UiRequest } from "./ui.ts"
 
@@ -141,16 +141,42 @@ export interface EventMap {
     cwd: string
     context: SpawnContext
     queued: boolean
+    /** A long-lived child (SpawnOptions.persistent): it goes idle between turns. */
+    persistent?: boolean
+    /** The spawn group it counts against. */
+    groupId?: string
   }
-  /** A sub-agent finished; sent with the parent's session id. `usage` is the child's alone. */
+  /**
+   * A sub-agent finished; sent with the parent's session id. `usage` is the child's alone.
+   * `note` says why one that did not fail ended early (stopped, turn limit); `turns` is set
+   * for children that ran more than one.
+   */
   "subagent.end": {
     childSessionId: string
     toolCallId?: string
     status: SubagentStatus
     error?: string
+    note?: string
+    turns?: number
     usage: Usage
     durationMs: number
   }
+  /**
+   * A persistent sub-agent changed state: `working` when a turn starts (or it waits for a
+   * place to run one: `queued`), `idle` when a turn ended and it waits for a message. Its end
+   * is subagent.end. Sent with the parent's session id; `turns` counts the turns started.
+   */
+  "subagent.state": {
+    childSessionId: string
+    state: Exclude<ChildState, "ended">
+    turns: number
+  }
+  /** An extension created a spawn group (SpawnGroup); sent with the creating session's id. */
+  "group.start": { group: SpawnGroupInfo }
+  /** A spawn group's usage or its children's states changed. */
+  "group.update": { group: SpawnGroupInfo }
+  /** A spawn group ended: its owner ended it, or it went over its budget (`group.exceeded`). */
+  "group.end": { group: SpawnGroupInfo }
   /** What the whole agent tree has used so far, sent after each model reply. */
   "budget.update": { tokens: number; costUsd?: number; limit?: Budget }
   /** The tree went over its budget: running sub-agents are aborted and no new ones start. */

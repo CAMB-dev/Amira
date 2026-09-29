@@ -1,5 +1,5 @@
 import type { ImageBlock, JSONSchema, ModelRef, TextBlock, UserMessage } from "@amira/ai"
-import type { ChildSession, SpawnOptions } from "./subagents.ts"
+import type { ChildSession, SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SpawnOptions } from "./subagents.ts"
 
 export interface ToolResult {
   content: (TextBlock | ImageBlock)[]
@@ -46,6 +46,14 @@ export interface ToolSession {
    * tree's budget is spent or the model is unknown. Absent when the host has no agent tree.
    */
   spawn?(opts: SpawnOptions): ChildSession
+  /**
+   * Creates a spawn group under this session: sub-agents started through it share limits of
+   * their own (see SpawnGroup). Throws when the tree's budget is spent. Absent when the host
+   * has no agent tree.
+   */
+  createGroup?(opts: SpawnGroupOptions): SpawnGroup
+  /** The agent tree's spawn groups, active and ended, oldest first. Absent without a tree. */
+  groups?(): SpawnGroupInfo[]
   /**
    * Announces a message this session will get later, from outside its turns: e.g. the
    * result of a sub-agent running in the background. Until the handle is delivered or
