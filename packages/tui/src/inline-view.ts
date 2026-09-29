@@ -373,7 +373,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
         commitBlock("command-output", commandOutputLines(style, theme.muted, text, terminal.columns))
       } else commitBlock("notice", note(level, text))
     },
-    dialogEcho: (line) => commitBlock("dialog", [line]),
+    dialogEcho: (draw) => commitBlock("dialog", draw(Math.max(1, terminal.columns))),
     history(messages: Message[], session) {
       commit(
         historyLines(theme, messages, {

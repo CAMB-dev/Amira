@@ -10,6 +10,7 @@ import {
   type ToolPresenter,
   type WriteDetails,
 } from "@amira/api"
+import { askUserPresenter } from "./ask-user.ts"
 import type { BashParams } from "./bash.ts"
 import { fileDiff } from "./diff.ts"
 import type { EditParams } from "./edit.ts"
@@ -185,4 +186,5 @@ export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   powershell: shellPresenter,
   grep: grepPresenter,
   glob: globPresenter,
+  ask_user: askUserPresenter,
 }

@@ -9,6 +9,7 @@ import {
   modes,
   osc,
   ProcessTerminal,
+  stripAnsi,
   stripColors,
   truncateToWidth,
   visibleWidth,
@@ -518,7 +519,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         ),
       )
     },
-    dialogEcho: (line) => add(fixedLine("dialog", line)),
+    dialogEcho: (draw) =>
+      add(
+        new LinesBlock(
+          "dialog",
+          (width) => draw(width),
+          stripAnsi(draw(Number.POSITIVE_INFINITY).join("\n")),
+        ),
+      ),
     history(messages: Message[], session) {
       const results = new Map<string, ToolResult>()
       for (const m of messages) {
