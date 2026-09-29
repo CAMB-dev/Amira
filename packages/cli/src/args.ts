@@ -10,6 +10,8 @@ export interface CliArgs {
   cwd: string
   extensions: string[]
   noBuiltins: boolean
+  /** Load no extension packages this run (--no-packages). */
+  noPackages: boolean
   /** Resume the most recent session in cwd. */
   continue: boolean
   /** Resume this session id; "" means list the sessions to pick from. */
@@ -48,6 +50,7 @@ Options:
   -e, --extension <f>   Load an extension file (repeatable; relative to where
                         amira is run, not to --cwd)
       --no-builtins     Do not load the built-in tools
+      --no-packages     Do not load installed extension packages (for this run)
   -c, --continue        Resume the most recent session in this directory
   -r, --resume [id]     Resume a session; without an id, list them to pick one
       --shell <mode>    Shell tools on Windows: auto (bash and powershell, the
@@ -110,6 +113,7 @@ export function parseCliArgs(
     cwd: path.resolve(cwd, values.cwd ?? "."),
     extensions: (values.extension ?? []).map((e) => path.resolve(cwd, e)),
     noBuiltins: values["no-builtins"] ?? false,
+    noPackages: values["no-packages"] ?? false,
     continue: values.continue ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
@@ -204,6 +208,7 @@ function parse(argv: string[]) {
       model: { type: "string", short: "m" },
       extension: { type: "string", short: "e", multiple: true },
       "no-builtins": { type: "boolean" },
+      "no-packages": { type: "boolean" },
       shell: { type: "string" },
       "disable-tools": { type: "string", multiple: true },
       cwd: { type: "string", short: "C" },

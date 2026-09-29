@@ -237,7 +237,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     reloadExtensions: async () => {
       // Unloading drops tools and MCP connections a running tool call may still be using.
       idle("reload extensions")
-      await session.reload()
+      return session.reload()
     },
   }
 

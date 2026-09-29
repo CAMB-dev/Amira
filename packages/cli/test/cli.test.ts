@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import { mkdtempSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import { defineExtension, defineTool, type Extension, textResult } from "@amira/api"
@@ -300,20 +302,58 @@ test("a hung event handler does not keep print mode from finishing", async () =>
   expect(io.err).toContain("did not finish")
 })
 
-test("subscriber failures reach onSubscriberError", async () => {
+test("an extension's failing handler is its own failure: named once, then counted", async () => {
   const boom: Extension = (api) => {
     api.on("turn.start", () => {
       throw new Error("kaput")
     })
   }
   const seen: string[] = []
-  const { agent } = await mockSession([{ text: "hi" }], {
-    noBuiltins: false,
-    builtins: async () => [{ source: "boom", extension: boom }],
-    onSubscriberError: (err, ev) => void seen.push(`${ev.type}: ${(err as Error).message}`),
+  const { agent } = await mockSession(
+    Array.from({ length: 10 }, () => ({ text: "hi" })),
+    {
+      noBuiltins: false,
+      builtins: async () => [{ source: "boom", extension: boom }],
+      onSubscriberError: (err, ev) => void seen.push(`${ev.type}: ${(err as Error).message}`),
+    },
+  )
+  const errors: string[] = []
+  agent.bus.subscribe((e) => {
+    if (e.type === "extension.error") errors.push(`${e.data.source}: ${e.data.error}`)
   })
-  await runPrint(agent, "go", false, { io: capture() })
-  expect(seen).toEqual(["turn.start: kaput"])
+  for (let i = 0; i < 10; i++) await agent.prompt("go")
+  await agent.bus.flush()
+  expect(seen).toEqual([])
+  expect(errors).toEqual([
+    "boom: its turn.start handler failed: kaput",
+    "boom: its turn.start handler has failed 10 times now; the latest: kaput",
+  ])
+})
+
+test("a package's extension is named after the package, and its failures say how to turn it off", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-pkg-label-"))
+  const file = path.join(dir, "index.ts")
+  writeFileSync(file, `export default (api) => { api.on("turn.start", () => { throw new Error("nope") }) }\n`)
+  const pkg = {
+    name: "lint-hooks",
+    scope: "user" as const,
+    dir,
+    entry: { version: "1.0.0", source: { type: "path" as const, path: dir }, pinned: {}, installedAt: "" },
+    manifest: { name: "lint-hooks", version: "1.0.0", extensions: [file], skills: [], commands: {} },
+  }
+  const { agent, host } = await mockSession([{ text: "hi" }], {
+    packages: { packages: [pkg as never], problems: [], skipped: [] },
+  })
+  expect(host.loaded).toContain("lint-hooks")
+  const errors: string[] = []
+  agent.bus.subscribe((e) => {
+    if (e.type === "extension.error") errors.push(`${e.data.source}: ${e.data.error}`)
+  })
+  await agent.prompt("go")
+  await agent.bus.flush()
+  expect(errors).toEqual([
+    "lint-hooks: its turn.start handler failed: nope (user package; amira ext disable lint-hooks turns it off)",
+  ])
 })
 
 test("startup failures are reported: missing extension files and broken built-ins", async () => {

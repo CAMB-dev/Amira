@@ -332,6 +332,20 @@ export interface SessionControl {
   /** Adding, editing and removing providers and their keys; unset where the host cannot. */
   readonly providerAdmin?: ProviderAdmin
   preview(): Promise<ContextPreview>
-  /** Unloads every extension and loads them again. */
-  reloadExtensions(): Promise<void>
+  /**
+   * Unloads every extension and loads them again, with the packages as installed now. Says
+   * what changed where the host can tell.
+   */
+  reloadExtensions(): Promise<ReloadReport | undefined>
+}
+
+/** What /reload changed: extensions (by source) that came or went, and ones that failed. */
+export interface ReloadReport {
+  loaded: string[]
+  unloaded: string[]
+  failed: string[]
+  /** Extensions loaded now. */
+  extensions: number
+  skillsAdded: number
+  skillsRemoved: number
 }

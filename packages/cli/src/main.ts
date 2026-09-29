@@ -1,13 +1,6 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
-import {
-  type Agent,
-  activePackages,
-  amiraPath,
-  listSessions,
-  SessionStore,
-  trackWorkspace,
-} from "@amira/core"
+import { type Agent, amiraPath, listSessions, SessionStore, trackWorkspace } from "@amira/core"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
@@ -22,6 +15,7 @@ import { chooseStore, formatSessionList, pickSession } from "./resume.ts"
 import { runRpc } from "./rpc.ts"
 import { rpcSchema } from "./rpc-schema.ts"
 import { createSession } from "./session.ts"
+import { askProjectTrust, planPackages } from "./trust.ts"
 
 async function main(argv: string[]): Promise<number> {
   try {
@@ -107,6 +101,15 @@ async function run(argv: string[]): Promise<number> {
     }
   }
 
+  // The project's own packages load once the user trusts the project: asked here, once.
+  const plan = await planPackages({
+    cwd: args.cwd,
+    settings: config.settings,
+    noPackages: args.noPackages,
+    ...(interactive && process.stdin.isTTY && process.stdout.isTTY ? { ask: askProjectTrust } : {}),
+  })
+  if (plan.warning) config.warnings.push(plan.warning)
+
   choice ??= chooseStore({
     cwd: args.cwd,
     continue: args.continue,
@@ -119,7 +122,7 @@ async function run(argv: string[]): Promise<number> {
     requireModel: args.print,
     cwd: args.cwd,
     extensions: args.extensions,
-    packages: activePackages({ cwd: args.cwd }),
+    packages: plan.packages,
     noBuiltins: args.noBuiltins,
     store,
     disabledTools: config.disabledTools,

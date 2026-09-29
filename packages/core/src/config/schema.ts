@@ -173,6 +173,11 @@ const settings = object({
   mcpServers: record(anyObject),
   extensions: record(anyObject),
   mcpTrustedProjects: list(string),
+  packages: object({
+    disabled: list(string),
+    trustedProjects: list(string),
+    untrustedProjects: list(string),
+  }),
   skills: object({ dirs: list(string) }),
   web: object({
     search: object({

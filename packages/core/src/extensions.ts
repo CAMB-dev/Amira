@@ -80,6 +80,10 @@ export class ExtensionHost {
   #renderPending = false
   /** Extension files imported before, which a reload must import anew. */
   #imported = new Set<string>()
+  /** What to add to an extension's failures, by source: e.g. how to turn its package off. */
+  #hints = new Map<string, string>()
+  /** Failures of each extension's event handlers, by source and event type. */
+  #handlerFailures = new Map<string, number>()
   readonly status: StatusRegistry
   readonly panels: PanelRegistry
   readonly renderers: ToolRendererRegistry
@@ -114,6 +118,11 @@ export class ExtensionHost {
     return [...this.#disposers.keys()]
   }
 
+  /** The settings handed to extensions loaded from now on (e.g. on a reload, with new skill directories). */
+  setSettings(settings: Settings): void {
+    this.#opts = { ...this.#opts, settings }
+  }
+
   async load(ext: Extension, source: string): Promise<boolean> {
     if (this.#disposers.has(source)) return this.#fail(source, "already loaded")
     const disposers: (() => void)[] = []
@@ -129,9 +138,15 @@ export class ExtensionHost {
     return true
   }
 
-  async loadFile(file: string): Promise<boolean> {
+  /**
+   * Imports an extension file and loads it. `source` names it in errors, /help and the like
+   * (default: the file's path); `hint` is added to its failures, e.g. how to turn it off.
+   */
+  async loadFile(file: string, label: { source?: string; hint?: string } = {}): Promise<boolean> {
     installVirtualApi()
     const abs = path.resolve(file)
+    const source = label.source ?? abs
+    if (label.hint) this.#hints.set(source, label.hint)
     let mod: { default?: unknown }
     // The module cache would hand back the old code on a reload (Bun ignores a query on a file
     // URL, but drops an ES module from require.cache). Files the extension imports stay cached.
@@ -140,10 +155,11 @@ export class ExtensionHost {
     try {
       mod = await import(pathToFileURL(abs).href)
     } catch (err) {
-      return this.#fail(abs, `failed to import: ${err instanceof Error ? err.message : String(err)}`)
+      return this.#fail(source, `failed to import: ${err instanceof Error ? err.message : String(err)}`)
     }
-    if (typeof mod.default !== "function") return this.#fail(abs, "extension must default-export a function")
-    return this.load(mod.default as Extension, abs)
+    if (typeof mod.default !== "function")
+      return this.#fail(source, "extension must default-export a function")
+    return this.load(mod.default as Extension, source)
   }
 
   /** Removes every tool, listener and interceptor the extension registered. */
@@ -206,8 +222,28 @@ export class ExtensionHost {
   }
 
   #fail(source: string, error: string): false {
-    this.#opts.bus.emit("extension.error", { source, error }, this.#meta())
+    const hint = this.#hints.get(source)
+    this.#opts.bus.emit(
+      "extension.error",
+      { source, error: hint ? `${error} (${hint})` : error },
+      this.#meta(),
+    )
     return false
+  }
+
+  /**
+   * An extension's event handler threw: reported the first time for that extension and event,
+   * then counted, and reported again at 10, 100, 1000 failures, so a handler failing on every
+   * event does not flood the transcript.
+   */
+  #handlerFailed(source: string, type: string, err: unknown) {
+    const key = `${source}\0${type}`
+    const n = (this.#handlerFailures.get(key) ?? 0) + 1
+    this.#handlerFailures.set(key, n)
+    const message = err instanceof Error ? err.message : String(err)
+    if (n === 1) this.#fail(source, `its ${type} handler failed: ${message}`)
+    else if (n === 10 || n === 100 || n === 1000)
+      this.#fail(source, `its ${type} handler has failed ${n} times now; the latest: ${message}`)
   }
 
   #meta() {
@@ -285,11 +321,17 @@ export class ExtensionHost {
           return () => {}
         }
       },
+      // A handler that throws is reported as the extension's failure, not the host's.
       on: (type, handler) =>
         track(
           bus.subscribe(
-            (e) => {
-              if (e.type === type) return handler(e as never)
+            async (e) => {
+              if (e.type !== type) return
+              try {
+                await handler(e as never)
+              } catch (err) {
+                this.#handlerFailed(source, type, err)
+              }
             },
             { types: [type] },
           ),

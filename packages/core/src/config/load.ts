@@ -57,6 +57,7 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
     if (file !== userFile) {
       warnings.push(...dropProviderEndpoints(v.settings, file, userFile as string))
       warnings.push(...dropWebEndpoints(v.settings, file, userFile as string))
+      warnings.push(...dropPackageTrust(v.settings, file, userFile as string))
     }
     settings = deepMerge(settings, v.settings)
     files.push(file)
@@ -109,6 +110,19 @@ function dropWebEndpoints(settings: Settings, file: string, userFile: string): s
   drop(search?.tavily, "web.search.tavily", ["apiKeyEnv"])
   drop(search?.searxng, "web.search.searxng", ["url"])
   drop(settings.web?.fetch, "web.fetch", ["allowPrivateNetwork"])
+  return warnings
+}
+
+/** Nor may a project file say that projects are trusted to run their own packages. */
+function dropPackageTrust(settings: Settings, file: string, userFile: string): string[] {
+  const warnings: string[] = []
+  for (const key of ["trustedProjects", "untrustedProjects"] as const) {
+    if (settings.packages?.[key] === undefined) continue
+    delete settings.packages[key]
+    warnings.push(
+      `${file}: "packages.${key}" is ignored; a project file cannot decide which projects are trusted. Set it in ${userFile} instead`,
+    )
+  }
   return warnings
 }
 

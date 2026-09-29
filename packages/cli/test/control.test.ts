@@ -299,7 +299,7 @@ test("/reload unloads and loads the extensions again", async () => {
   const loads: string[] = []
   const { run, host } = await setup([], { loads })
   expect(loads).toHaveLength(1)
-  expect(await run("/reload")).toBe("Reloaded extensions.")
+  expect(await run("/reload")).toMatch(/^Reloaded [0-9]+ extensions · nothing changed$/)
   expect(loads).toHaveLength(2)
   expect(host.list().map((c) => c.name)).toContain("status")
 })
@@ -324,7 +324,7 @@ test("a running turn or compaction blocks /reload, /clear and /model", async () 
   expect(await run("/reload")).toContain("a compaction is running")
   expect(await compaction).toBe(true)
   expect(host.control.info().busy).toBe(false)
-  expect(await run("/reload")).toBe("Reloaded extensions.")
+  expect(await run("/reload")).toMatch(/^Reloaded [0-9]+ extensions · nothing changed$/)
 })
 
 test("print mode runs a slash command instead of a turn", async () => {

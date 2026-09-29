@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
-import { activePackages } from "@amira/core"
+import { activePackages, projectTrust } from "@amira/core"
 import { runExtCommand } from "../src/ext-command.ts"
 import { amiraArgv, runPackageCommand } from "../src/package-command.ts"
 import { createSession } from "../src/session.ts"
@@ -88,14 +88,101 @@ test("installed packages load at startup after the built-ins, project over user"
     .filter((e) => e.type === "extension.loaded")
     .map((e) => (e.data as { source: string }).source)
   expect(loaded[0]).toBe("builtin:x")
-  expect(loaded.slice(1)).toEqual([
-    path.join(home, "packages", "extra", "index.ts"),
-    path.join(cwd, ".amira", "packages", "shared", "index.ts"),
-  ])
+  // Named after their packages, not their files.
+  expect(loaded.slice(1)).toEqual(["extra", "shared"])
   const errors = events.filter((e) => e.type === "extension.error").map((e) => e.data)
-  expect(errors).toEqual([
-    { source: "package:ghost", error: expect.stringContaining("amira ext install --project") },
+  expect(errors).toEqual([{ source: "ghost", error: expect.stringContaining("amira ext install --project") }])
+})
+
+test("disabled packages and an untrusted project's packages do not load; a reload sees what changed", async () => {
+  expect((await ext(["install", makePackage("shared", "1.0.0", "user_tool")])).code).toBe(0)
+  expect((await ext(["install", makePackage("extra", "1.0.0", "extra_tool")])).code).toBe(0)
+  expect((await ext(["install", "--project", makePackage("shared", "2.0.0", "project_tool")])).code).toBe(0)
+  const untrusted = activePackages({ home, cwd }, { project: false })
+  // The user's own package of the same name loads in place of the project's.
+  expect(untrusted.packages.map((p) => `${p.scope}:${p.name}`)).toEqual(["user:extra", "user:shared"])
+  expect(untrusted.skipped).toEqual([{ name: "shared", scope: "project", why: "untrusted" }])
+  const disabled = activePackages({ home, cwd }, { disabled: ["extra"] })
+  expect(disabled.packages.map((p) => `${p.scope}:${p.name}`)).toEqual(["project:shared"])
+  expect(disabled.skipped).toEqual([{ name: "extra", scope: "user", why: "disabled" }])
+
+  const ai = createAi({
+    dialects: [createMockDialect([])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  let off: string[] = ["extra"]
+  const session = await createSession({
+    model: "mock/m",
+    cwd,
+    extensions: [],
+    packages: () => activePackages({ home, cwd }, { disabled: off, project: false }),
+    noBuiltins: true,
+    ai,
+  })
+  const notices = (session.startupEvents as AnyEvent[]).filter((e) => e.type === "extension.notice")
+  expect(notices.map((e) => (e.data as { text: string }).text)).toEqual([
+    expect.stringContaining("Not loading this project's extension packages (shared)"),
   ])
+  expect(session.agent.tools.all().map((t) => t.tool.name)).toEqual(["user_tool"])
+  off = []
+  const report = await session.reload()
+  expect(report).toMatchObject({ loaded: ["extra"], unloaded: [], failed: [], extensions: 2 })
+  expect(session.agent.tools.all().map((t) => t.tool.name)).toEqual(["extra_tool", "user_tool"])
+})
+
+test("ext disable, enable, trust and untrust change the user settings, never a lock file", async () => {
+  expect((await ext(["install", makePackage("quiet", "1.0.0", "q")])).code).toBe(0)
+  const lock = await Bun.file(path.join(home, "packages.lock")).text()
+  const off = await ext(["disable", "quiet"])
+  expect(off.code).toBe(0)
+  expect(off.io.out).toContain("quiet is disabled now.")
+  expect(off.io.out).toContain("/reload")
+  const settings = () => JSON.parse(readFileSync(path.join(home, "settings.json"), "utf8"))
+  expect(settings().packages).toEqual({ disabled: ["quiet"] })
+  expect((await ext(["list"])).io.out).toContain("[disabled: amira ext enable]")
+  expect((await ext(["disable", "quiet"])).io.out).toContain("quiet was already disabled.")
+  expect((await ext(["enable", "quiet"])).code).toBe(0)
+  expect(settings().packages).toBeUndefined()
+  expect(await Bun.file(path.join(home, "packages.lock")).text()).toBe(lock)
+  const unknown = await ext(["disable", "nothing"])
+  expect(unknown.code).toBe(1)
+  expect(unknown.io.err).toContain("nothing is not installed")
+
+  expect((await ext(["untrust"])).code).toBe(0)
+  expect(projectTrust(cwd, { packages: settings().packages })).toBe(false)
+  expect((await ext(["trust"])).code).toBe(0)
+  expect(settings().packages).toEqual({ trustedProjects: [path.resolve(cwd)] })
+  expect(projectTrust(path.join(cwd, "sub"), { packages: settings().packages })).toBe(true)
+})
+
+test("installing and removing say how to load the change", async () => {
+  const installed = await ext(["install", makePackage("fresh", "1.0.0", "f")])
+  expect(installed.io.out).toContain("run /reload in a running session")
+  const removed = await ext(["remove", "fresh"])
+  expect(removed.io.out).toContain("run /reload in a running session")
+  expect((await ext(["install", "-q", makePackage("fresh", "1.0.0", "f")])).io.out).not.toContain("/reload")
+})
+
+test("the first start in a project with packages asks once whether to trust it, and remembers", async () => {
+  const { planPackages } = await import("../src/trust.ts")
+  expect((await ext(["install", "--project", makePackage("local", "1.0.0", "local_tool")])).code).toBe(0)
+  const asked: string[][] = []
+  const ask = async (names: string[]) => {
+    asked.push(names)
+    return false
+  }
+  const first = await planPackages({ cwd, home, settings: {}, ask })
+  expect(asked).toEqual([["local"]])
+  expect(first.packages().skipped).toEqual([{ name: "local", scope: "project", why: "untrusted" }])
+  const settings = JSON.parse(readFileSync(path.join(home, "settings.json"), "utf8"))
+  expect(settings.packages.untrustedProjects).toEqual([path.resolve(cwd)])
+  // Next time the answer is known: nobody is asked.
+  const again = await planPackages({ cwd, home, settings: { packages: settings.packages }, ask })
+  expect(asked).toHaveLength(1)
+  expect(again.packages().packages).toEqual([])
+  // --no-packages: none at all.
+  const none = await planPackages({ cwd, home, settings: {}, noPackages: true, ask })
+  expect(none.packages()).toEqual({ packages: [], problems: [], skipped: [] })
 })
 
 test("package skill directories are added to the skills search", async () => {
@@ -165,7 +252,9 @@ test("ext list, search and remove", async () => {
   const wrongScope = await ext(["remove", "--project", "listed"])
   expect(wrongScope.code).toBe(1)
   expect(wrongScope.io.err).toContain("it is in the user scope")
-  expect((await ext(["remove", "listed"])).io.out).toBe("Removed listed from user scope.\n1 removed\n")
+  expect((await ext(["remove", "listed"])).io.out).toBe(
+    "Removed listed from user scope.\n1 removed\nStart amira again, or run /reload in a running session, to load the change.\n",
+  )
   expect((await ext(["list"])).io.out).not.toContain("listed")
 })
 

@@ -137,6 +137,21 @@ test("project files cannot choose web backends' endpoints or open the private ne
   expect(r.warnings.join("\n")).toContain('"web.fetch.allowPrivateNetwork" is ignored')
 })
 
+test("a project file may disable packages but cannot say which projects are trusted", () => {
+  writeFileSync(
+    path.join(home, "settings.json"),
+    JSON.stringify({ packages: { trustedProjects: ["/mine"], disabled: ["a"] } }),
+  )
+  writeFileSync(
+    path.join(cwd, ".amira", "settings.json"),
+    JSON.stringify({ packages: { trustedProjects: [cwd], untrustedProjects: [], disabled: ["b"] } }),
+  )
+  const r = loadSettings({ cwd, home })
+  expect(r.settings.packages).toEqual({ trustedProjects: ["/mine"], disabled: ["b"] })
+  expect(r.warnings).toHaveLength(2)
+  expect(r.warnings[0]).toContain('"packages.trustedProjects" is ignored')
+})
+
 test("web settings are checked", () => {
   expect(() => validateSettings({ web: { search: { backend: "bing" } } }, "f")).toThrow(
     '"web.search.backend" must be one of',

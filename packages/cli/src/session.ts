@@ -1,3 +1,4 @@
+import path from "node:path"
 import {
   type Ai,
   createAi,
@@ -7,7 +8,7 @@ import {
   type ProviderConfig,
   type RetryOptions,
 } from "@amira/ai"
-import type { AnyEvent, Extension, Settings, ToolLine, ToolPresenter } from "@amira/api"
+import type { AnyEvent, Extension, ReloadReport, Settings, ToolLine, ToolPresenter } from "@amira/api"
 import {
   type ActivePackages,
   Agent,
@@ -42,8 +43,11 @@ export interface SessionOptions {
   requireModel?: boolean
   cwd: string
   extensions: string[]
-  /** Installed packages (D24, D60): loaded after the built-ins and before `extensions`. */
-  packages?: ActivePackages
+  /**
+   * Installed packages (D24, D60): loaded after the built-ins and before `extensions`. A
+   * function is asked again on each reload, so packages installed or removed since load then.
+   */
+  packages?: ActivePackages | (() => ActivePackages)
   noBuiltins: boolean
   /** Tools hidden from the model. */
   disabledTools?: string[]
@@ -92,8 +96,11 @@ export interface Session {
    * (rpc session.resume). It starts with `model`, by default the current model.
    */
   resume(store: SessionStore, model?: ModelInfo): Agent
-  /** Unloads every extension and loads the same ones again (/reload); failures arrive as extension.error. */
-  reload(): Promise<void>
+  /**
+   * Unloads every extension and loads them again (/reload), with the packages and their skill
+   * directories as they are installed now; failures arrive as extension.error. Says what changed.
+   */
+  reload(): Promise<ReloadReport>
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -122,7 +129,9 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
-  const settings = withPackageSkills(opts.settings ?? {}, opts.packages)
+  const readPackages = () => (typeof opts.packages === "function" ? opts.packages() : opts.packages)
+  let packages = readPackages()
+  const settings = withPackageSkills(opts.settings ?? {}, packages)
   // AMIRA_TEST_MOCK (end-to-end tests only) adds a scripted "mock" provider and keeps the
   // catalog download out of the test run.
   const mock = testAiOptions()
@@ -153,28 +162,46 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const host = new ExtensionHost({ bus, interceptors, tools, settings, cwd: opts.cwd })
   const startupEvents: AnyEvent[] = []
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
-    types: ["extension.error", "extension.loaded"],
+    types: ["extension.error", "extension.loaded", "extension.notice"],
   })
   for (const error of opts.warnings ?? []) {
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
   }
 
-  const loadExtensions = async () => {
+  /** Loads everything; returns the sources that failed. */
+  const loadExtensions = async (): Promise<string[]> => {
+    const failed: string[] = []
     if (!opts.noBuiltins) {
       try {
-        for (const b of await (opts.builtins ?? defaultBuiltins)()) await host.load(b.extension, b.source)
+        for (const b of await (opts.builtins ?? defaultBuiltins)()) {
+          if (!(await host.load(b.extension, b.source))) failed.push(b.source)
+        }
       } catch (err) {
         const error = `failed to load built-in extensions: ${err instanceof Error ? err.message : String(err)}`
         bus.emit("extension.error", { source: "builtin", error }, { sessionId: "host" })
+        failed.push("builtin")
       }
     }
-    for (const p of opts.packages?.packages ?? []) {
-      for (const file of p.manifest.extensions) await host.loadFile(file)
+    for (const p of packages?.packages ?? []) {
+      for (const file of p.manifest.extensions) {
+        const label = packageLabel(p, file)
+        if (!(await host.loadFile(file, label))) failed.push(label.source)
+      }
     }
-    for (const file of opts.extensions) await host.loadFile(file)
+    for (const file of opts.extensions) {
+      const source = fileLabel(file, opts.cwd)
+      if (!(await host.loadFile(file, { source }))) failed.push(source)
+    }
+    for (const p of packages?.problems ?? []) {
+      bus.emit("extension.error", { source: p.name, error: p.error }, { sessionId: "host" })
+      failed.push(p.name)
+    }
+    return failed
   }
-  for (const p of opts.packages?.problems ?? []) {
-    bus.emit("extension.error", { source: `package:${p.name}`, error: p.error }, { sessionId: "host" })
+  const untrusted = packages?.skipped.filter((s) => s.why === "untrusted").map((s) => s.name) ?? []
+  if (untrusted.length) {
+    const text = `Not loading this project's extension packages (${untrusted.join(", ")}): the project is not trusted. amira ext trust loads them from the next start.`
+    bus.emit("extension.notice", { source: "packages", text, level: "warning" }, { sessionId: "host" })
   }
   await loadExtensions()
   const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
@@ -251,10 +278,41 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     tree,
     resume: (store, m) => newAgent(m ?? agent.model, store),
     reload: async () => {
+      const before = new Set(host.loaded)
+      const skillsBefore = new Set(host.skills.list().map((s) => s.name))
+      packages = readPackages()
+      host.setSettings(withPackageSkills(opts.settings ?? {}, packages))
       host.unloadAll()
-      await loadExtensions()
+      const failed = await loadExtensions()
+      const after = new Set(host.loaded)
+      const skillsAfter = new Set(host.skills.list().map((s) => s.name))
+      return {
+        loaded: [...after].filter((s) => !before.has(s)),
+        unloaded: [...before].filter((s) => !after.has(s)),
+        failed,
+        extensions: after.size,
+        skillsAdded: [...skillsAfter].filter((s) => !skillsBefore.has(s)).length,
+        skillsRemoved: [...skillsBefore].filter((s) => !skillsAfter.has(s)).length,
+      }
     },
   }
+}
+
+/**
+ * How a package's extension file is named in errors and /help: the package's name, and the
+ * file too when the package has several. Its failures say how to turn it off.
+ */
+function packageLabel(p: ActivePackages["packages"][number], file: string): { source: string; hint: string } {
+  const rel = path.relative(p.dir, file).split(path.sep).join("/")
+  const source = p.manifest.extensions.length > 1 ? `${p.name}/${rel}` : p.name
+  return { source, hint: `${p.scope} package; amira ext disable ${p.name} turns it off` }
+}
+
+/** An extension file given with --extension: its path relative to the working directory, if inside it. */
+function fileLabel(file: string, cwd: string): string {
+  const abs = path.resolve(cwd, file)
+  const rel = path.relative(cwd, abs)
+  return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.split(path.sep).join("/") : abs
 }
 
 /** Package skill directories are searched after the ones from settings. */
