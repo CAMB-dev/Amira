@@ -11,7 +11,7 @@ import {
 } from "node:fs"
 import path from "node:path"
 import { runCommand } from "@amira/proc"
-import { type IndexOptions, loadIndex } from "./index-file.ts"
+import { type IndexOptions, type LoadedIndex, loadIndex } from "./index-file.ts"
 import {
   type LockEntry,
   type PackageScope,
@@ -85,17 +85,22 @@ export async function restorePackages(opts: InstallOptions): Promise<InstallResu
   return out
 }
 
-export interface UpdateResult {
-  name: string
-  from: LockEntry
-  to: LockEntry
-  /** Whether a different commit or version was installed. */
-  changed: boolean
-}
+/** One package's update: what it moved to, or why it could not (the installed one is kept). */
+export type UpdateResult =
+  | {
+      name: string
+      from: LockEntry
+      to: LockEntry
+      /** Whether a different commit or version was installed. */
+      changed: boolean
+    }
+  | { name: string; from: LockEntry; error: string }
 
 /**
  * Fetches the newest files each source offers (a branch's head, the highest matching npm
- * version, a path's current contents; index entries are looked up again) and re-pins.
+ * version, a path's current contents; index entries are looked up again, bypassing the
+ * index cache) and re-pins. A package whose pin did not move is left as it is. A package
+ * that fails keeps its installed files and lock entry, and the others are still updated.
  */
 export async function updatePackages(opts: InstallOptions, names?: string[]): Promise<UpdateResult[]> {
   const lock = readLock(opts.scope.lockFile)
@@ -103,22 +108,51 @@ export async function updatePackages(opts: InstallOptions, names?: string[]): Pr
   for (const n of selected) {
     if (!lock.packages[n]) throw new PackageError(`"${n}" is not installed in the ${opts.scope.kind} scope`)
   }
+  /** Each index once per update, by URL; undefined when it could not be read. */
+  const indexes = new Map<string, Promise<LoadedIndex | undefined>>()
+  const readIndex = (url: string) => {
+    let p = indexes.get(url)
+    if (!p) {
+      p = loadIndex({ ...opts.index, refresh: true, url }).then(
+        (loaded) => {
+          for (const w of loaded.warnings) opts.log?.(`warning: ${w}`)
+          return loaded
+        },
+        (err) => {
+          opts.log?.(`cannot read the extensions index ${url} (${errorMessage(err)})`)
+          return undefined
+        },
+      )
+      indexes.set(url, p)
+    }
+    return p
+  }
   const out: UpdateResult[] = []
   for (const name of selected) {
     const from = lock.packages[name]!
-    let source = from.source
-    let index = from.index
-    if (from.index) {
-      const loaded = await loadIndex({ ...opts.index, url: from.index.url })
-      const e = loaded.index.extensions.find((x) => x.name === from.index!.name)
-      if (e) source = e.source
-      else opts.log?.(`${name}: no longer in the extensions index; updating from its recorded source`)
-      index = { name: from.index.name, url: loaded.url }
+    try {
+      let source = from.source
+      let index = from.index
+      if (from.index) {
+        const loaded = await readIndex(from.index.url)
+        const e = loaded?.index.extensions.find((x) => x.name === from.index!.name)
+        if (e) source = e.source
+        else if (loaded)
+          opts.log?.(`${name}: no longer in the extensions index; updating from its recorded source`)
+        else opts.log?.(`${name}: updating from its recorded source`)
+        if (loaded) index = { name: from.index.name, url: loaded.url }
+      }
+      const r = await install(source, { expectName: name, ...(index ? { index } : {}), current: from }, opts)
+      out.push({ name, from, to: r.entry, changed: pinKey(from) !== pinKey(r.entry) })
+    } catch (err) {
+      out.push({ name, from, error: errorMessage(err) })
     }
-    const r = await install(source, { expectName: name, ...(index ? { index } : {}) }, opts)
-    out.push({ name, from, to: r.entry, changed: pinKey(from) !== pinKey(r.entry) })
   }
   return out
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 /** Deletes the package's files and lock entry; false if it was not installed in this scope. */
@@ -141,6 +175,11 @@ interface InstallHow {
   index?: { name: string; url: string }
   /** Restoring: keep this entry's record rather than writing a new one. */
   keep?: LockEntry
+  /**
+   * Updating: the installed entry. When the fetched pin, version and source are the same and
+   * the files are there, nothing is swapped in and the lock is not rewritten.
+   */
+  current?: LockEntry
 }
 
 async function install(source: PackageSource, how: InstallHow, opts: InstallOptions): Promise<InstallResult> {
@@ -158,6 +197,17 @@ async function install(source: PackageSource, how: InstallHow, opts: InstallOpti
     }
     const mismatch = engineMismatch(manifest)
     if (mismatch) throw new PackageError(mismatch)
+    const current = how.current
+    if (
+      current &&
+      (pinned.commit || pinned.version) &&
+      pinKey(current) === pinKey({ ...current, version: manifest.version, pinned }) &&
+      sameJson(current.source, source) &&
+      sameJson(current.index, how.index) &&
+      existsSync(packageDir(opts.scope, manifest.name))
+    ) {
+      return { name: manifest.name, entry: current, previous: current, manifest, warnings: [] }
+    }
     const staged = path.join(work, "package")
     // The source may contain the scope itself (`amira ext install --project .` in a package's
     // own repository), so the scope directory is skipped rather than copied into itself.
@@ -245,6 +295,20 @@ function swapIn(staged: string, dest: string, work: string) {
     if (existsSync(old)) renameSync(old, dest)
     throw err
   }
+}
+
+/** Equal as JSON, whatever the key order (lock files are hand-edited). */
+function sameJson(a: unknown, b: unknown): boolean {
+  const norm = (v: unknown): unknown =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v)
+            .filter(([, x]) => x !== undefined)
+            .sort(([x], [y]) => x.localeCompare(y))
+            .map(([k, x]) => [k, norm(x)]),
+        )
+      : v
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b))
 }
 
 function pinKey(e: LockEntry): string {

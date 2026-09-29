@@ -169,6 +169,18 @@ test("ext list, search and remove", async () => {
   expect((await ext(["list"])).io.out).not.toContain("listed")
 })
 
+test("ext update reports each package; one that fails keeps its version and makes the exit code 1", async () => {
+  await ext(["install", makePackage("kept", "1.0.0", "k")])
+  const gone = makePackage("gone", "1.0.0", "g")
+  await ext(["install", gone])
+  rmSync(gone, { recursive: true, force: true })
+  const r = await ext(["update"])
+  expect(r.code).toBe(1)
+  expect(r.io.out).toBe("kept is up to date (1.0.0 (local copy))\n")
+  expect(r.io.err).toMatch(/^amira: gone: update failed, kept 1\.0\.0 \(local copy\): .* does not exist\n$/)
+  expect((await ext(["list"])).io.out).toContain("gone 1.0.0 (local copy)")
+})
+
 test("an install failure is reported without a stack", async () => {
   const r = await ext(["install", path.join(dir, "missing")])
   expect(r.code).toBe(1)
