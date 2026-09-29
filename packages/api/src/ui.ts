@@ -10,9 +10,19 @@ export type StatusTone = "default" | "muted" | "accent" | "success" | "warning" 
 export interface StatusItem {
   id: string
   align?: "left" | "right"
-  /** Lower comes first within its side. Default 0. */
+  /**
+   * Lower comes first within its side. Default 0; the built-in items use negative orders, so
+   * other items follow them.
+   */
   order?: number
-  tone?: StatusTone
+  /**
+   * How much the item matters when the bar is too narrow for all of them: the lowest goes
+   * first (of equals, the later one). Default 0; the built-in items use 10 to 40, so other
+   * items give way first.
+   */
+  priority?: number
+  /** A fixed tone, or one read at each redraw, e.g. a warning as a limit nears. */
+  tone?: StatusTone | (() => StatusTone | undefined)
   /** Must be true to replace an item with the same id registered earlier (e.g. a built-in one). */
   override?: boolean
   /** Returning undefined or "" hides the item. */

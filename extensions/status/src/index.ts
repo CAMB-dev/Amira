@@ -1,5 +1,5 @@
 import path from "node:path"
-import { defineExtension, modelLabel, type SessionStatus } from "@amira/api"
+import { defineExtension, type StatusTone } from "@amira/api"
 
 /** Compact token counts: 999, 1.2k, 46k, 2.5M. Rounds before picking the unit. */
 export function formatTokens(n: number): string {
@@ -24,110 +24,85 @@ export function formatCost(usd: number): string {
   return usd < 0.00005 ? "<$0.0001" : `$${usd.toFixed(4)}`
 }
 
+/** How the context use reads: a warning above 70% of the window, an error above 90%. */
+export function contextTone(used: number, window: number | undefined): StatusTone {
+  if (!window) return "muted"
+  const share = used / window
+  return share > 0.9 ? "error" : share > 0.7 ? "warning" : "muted"
+}
+
 /**
- * Output tokens per second of one reply, timed from its first streamed piece to its end.
- * Undefined when the reply was too short to time meaningfully.
+ * Where the session works, as the status reads it: the branch, "*" when the working tree has
+ * changes not committed yet, "@<hash>" for a detached HEAD; the folder outside a repository.
  */
-export function tokensPerSecond(
-  outputTokens: number,
-  firstDeltaAt: number,
-  endAt: number,
-): number | undefined {
-  const seconds = (endAt - firstDeltaAt) / 1000
-  if (outputTokens <= 0 || seconds < 0.2) return undefined
-  return outputTokens / seconds
-}
-
-/** Share of prompt tokens served from the provider's cache; undefined before any prompt tokens. */
-export function cacheHitRate(input: number, cacheRead: number, cacheWrite: number): number | undefined {
-  const prompt = input + cacheRead + cacheWrite
-  return prompt > 0 ? cacheRead / prompt : undefined
+export function placeLabel(ws: {
+  cwd: string
+  repoRoot?: string
+  branch?: string
+  head?: string
+  isWorktree?: boolean
+  dirty?: boolean
+}): string {
+  const ref = ws.branch ?? (ws.head ? `@${ws.head}` : "")
+  if (!ref) return path.basename(ws.repoRoot ?? ws.cwd)
+  return `${ref}${ws.dirty ? "*" : ""}${ws.isWorktree ? " (worktree)" : ""}`
 }
 
 /**
- * The default status bar: model, activity, context use against the model's window,
- * output tokens and session cost, the speed of the last reply, and the git branch or folder.
+ * The default status (drawn in the input box's border): the model, the context use against
+ * its window, the cost of the whole agent tree, and the git branch. They keep to the front
+ * (negative orders) and to the bar when it narrows (priorities 10 to 40, the model last to
+ * go), so other extensions' items follow them and give way first. The activity and running
+ * sub-agents are left to the activity line and the transcript; output tokens, the cache hit
+ * rate and the speed to /status.
  */
 export default defineExtension((api) => {
   let model = ""
-  let status: SessionStatus = "idle"
-  let statusReason = ""
   let context = 0
   let contextWindow: number | undefined
-  let output = 0
-  let promptInput = 0
-  let promptCacheRead = 0
-  let promptCacheWrite = 0
   let cost: number | undefined
   /** The agent tree's own total, which also counts calls made outside a turn (approvals). */
   let treeCost: number | undefined
-  let firstDeltaAt: number | undefined
-  let tps: number | undefined
   let place = ""
 
-  /** Sub-agents that are queued or running, by session id. */
-  const subagents = new Set<string>()
   // Sub-agents share the bus (their events carry parentSessionId). The bar describes the
   // top-level session, except the cost, which is the whole tree's (D37).
   const own = (e: { parentSessionId?: string }) => e.parentSessionId === undefined
+  const modelName = (m: { provider: string; model: string }) => (m.provider ? m.model : "(no model)")
 
-  api.on("subagent.start", (e) => {
-    subagents.add(e.data.childSessionId)
-    api.requestRender()
-  })
-  api.on("subagent.end", (e) => {
-    subagents.delete(e.data.childSessionId)
-    api.requestRender()
-  })
   api.on("session.start", (e) => {
     if (!own(e)) return
-    model = modelLabel(e.data.model)
+    model = modelName(e.data.model)
     if (e.data.reason !== "resume") {
       context = 0
-      output = 0
-      promptInput = 0
-      promptCacheRead = 0
-      promptCacheWrite = 0
       cost = undefined
       treeCost = undefined
-      tps = undefined
-      status = "idle"
-      statusReason = ""
     }
     place ||= path.basename(e.data.cwd)
     api.requestRender()
   })
   api.on("workspace.changed", (e) => {
-    const folder = path.basename(e.data.repoRoot ?? e.data.cwd)
-    const ref = e.data.branch ?? (e.data.head ? `@${e.data.head}` : "")
-    place = ref ? `${folder} ⎇ ${ref}${e.data.isWorktree ? " (worktree)" : ""}` : folder
+    place = placeLabel(e.data)
     api.requestRender()
   })
   api.on("message.start", (e) => {
     if (!own(e)) return
-    model = modelLabel(e.data.model)
+    model = modelName(e.data.model)
     if (e.data.contextWindow) contextWindow = e.data.contextWindow
-    firstDeltaAt = undefined
   })
   api.on("model.changed", (e) => {
     if (!own(e)) return
-    model = modelLabel(e.data.to)
+    model = modelName(e.data.to)
     api.requestRender()
-  })
-  api.on("message.delta", (e) => {
-    if (own(e)) firstDeltaAt ??= e.ts
   })
   api.on("message.end", (e) => {
     const u = e.data.message.usage
     if (!u) return
     if (u.cost !== undefined) cost = (cost ?? 0) + u.cost
     if (!own(e)) return api.requestRender()
-    context = u.input + u.cacheRead + u.cacheWrite + u.output
-    output += u.output
-    promptInput += u.input
-    promptCacheRead += u.cacheRead
-    promptCacheWrite += u.cacheWrite
-    if (firstDeltaAt !== undefined) tps = tokensPerSecond(u.output, firstDeltaAt, e.ts) ?? tps
+    // An interrupted reply may end with no usage counted; the context is still what it was.
+    const tokens = u.input + u.cacheRead + u.cacheWrite + u.output
+    if (tokens > 0) context = tokens
     api.requestRender()
   })
   api.on("budget.update", (e) => {
@@ -135,62 +110,40 @@ export default defineExtension((api) => {
     treeCost = e.data.costUsd
     api.requestRender()
   })
-  api.on("status.changed", (e) => {
-    if (!own(e)) return
-    status = e.data.status
-    statusReason = e.data.reason ?? ""
-    api.requestRender()
-  })
 
-  api.registerStatusItem({ id: "model", align: "left", order: 0, tone: "accent", text: () => model })
   api.registerStatusItem({
-    id: "activity",
+    id: "model",
     align: "left",
-    order: 10,
-    text: () =>
-      status === "idle"
-        ? ""
-        : status === "blocked" && statusReason
-          ? `waiting: ${statusReason}`
-          : status === "working" && statusReason
-            ? statusReason
-            : status,
-  })
-  api.registerStatusItem({
-    id: "subagents",
-    align: "left",
-    order: 20,
+    order: -40,
+    priority: 40,
     tone: "accent",
-    text: () => (subagents.size ? `${subagents.size} sub-agent${subagents.size === 1 ? "" : "s"}` : ""),
+    text: () => model,
   })
   api.registerStatusItem({
-    id: "tokens",
+    id: "context",
     align: "right",
-    order: 0,
+    order: -30,
+    priority: 30,
+    tone: () => contextTone(context, contextWindow),
+    text: () => (context ? `ctx ${formatContext(context, contextWindow)}` : ""),
+  })
+  api.registerStatusItem({
+    id: "cost",
+    align: "right",
+    order: -20,
+    priority: 20,
     tone: "muted",
     text: () => {
       const total = treeCost ?? cost
-      return context || output
-        ? `ctx ${formatContext(context, contextWindow)} · out ${formatTokens(output)}${total === undefined ? "" : ` · ${formatCost(total)}`}`
-        : ""
+      return total === undefined ? "" : formatCost(total)
     },
   })
   api.registerStatusItem({
-    id: "cache",
+    id: "place",
     align: "right",
-    order: 3,
+    order: -10,
+    priority: 10,
     tone: "muted",
-    text: () => {
-      const rate = cacheHitRate(promptInput, promptCacheRead, promptCacheWrite)
-      return rate === undefined ? "" : `cache ${Math.round(rate * 100)}%`
-    },
+    text: () => place,
   })
-  api.registerStatusItem({
-    id: "speed",
-    align: "right",
-    order: 5,
-    tone: "muted",
-    text: () => (tps === undefined ? "" : `${tps < 10 ? tps.toFixed(1) : Math.round(tps)} tok/s`),
-  })
-  api.registerStatusItem({ id: "place", align: "right", order: 10, tone: "muted", text: () => place })
 })
