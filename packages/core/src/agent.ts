@@ -1156,8 +1156,15 @@ export class Agent {
       }
       return await finish(args, result, Math.round(performance.now() - started))
     } catch (err) {
-      run.returned = true
       const text = `Tool call failed before running: ${err instanceof Error ? err.message : String(err)}`
+      // Like the other rejections, through tool.call.after (a handler waiting for the last
+      // call of the batch must see this one), unless finishing is what failed.
+      if (!run.returned) {
+        try {
+          return await reject("blocked", text)
+        } catch {}
+      }
+      run.returned = true
       this.#emitToolStart(turn, run, call.args)
       if (!run.finished) {
         this.#emitToolEnd(turn, call, { content: [{ type: "text", text }], isError: true }, 0, "blocked")

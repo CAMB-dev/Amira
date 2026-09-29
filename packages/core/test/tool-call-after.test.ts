@@ -136,3 +136,34 @@ test("an interrupt skips tool.call.after", async () => {
   expect((await turn).reason).toBe("aborted")
   expect(calls).toBe(0)
 })
+
+test("a call that fails before running passes through tool.call.after too, as blocked", async () => {
+  const { agent, mock } = setup([{ toolCalls: [{ name: "odd", args: {}, id: "o1" }] }, { text: "ok" }])
+  const odd = defineTool({ name: "odd", description: "", parameters: {}, execute: async () => textResult("ran") })
+  // Once the call is on its way, checking its arguments throws: it cannot run.
+  let armed = false
+  Object.defineProperty(odd, "parameters", {
+    get() {
+      if (armed) throw new Error("bad schema")
+      return {}
+    },
+  })
+  agent.tools.register(odd, "test")
+  agent.interceptors.add("tool.call.before", () => {
+    armed = true
+    return { action: "pass" }
+  })
+  const seen: (string | undefined)[] = []
+  agent.interceptors.add("tool.call.after", (v) => {
+    seen.push(v.rejected)
+    armed = false
+    const content = [...v.result.content, { type: "text" as const, text: "seen" }]
+    return { action: "modify", value: { ...v, result: { ...v.result, content } } }
+  })
+  await agent.prompt("go")
+  expect(seen).toEqual(["blocked"])
+  expect(mock.requests[1]!.messages.at(-1)).toMatchObject({
+    isError: true,
+    content: [{ text: "Tool call failed before running: bad schema" }, { text: "seen" }],
+  })
+})
