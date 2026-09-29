@@ -184,7 +184,9 @@ export class SessionStore {
         }
       } else if (e.type === "message") {
         items.push({ id: e.id, message: e.message })
-        if (e.message.role === "assistant" && e.message.usage) tokens = contextTokens(e.message.usage)
+        // An interrupted reply may carry no usage counted; the context is still the one before.
+        const used = e.message.role === "assistant" && e.message.usage ? contextTokens(e.message.usage) : 0
+        if (used > 0) tokens = used
       } else if (e.type === "model_change") model = e.model
       else if (e.type === "compaction") {
         tokens = undefined

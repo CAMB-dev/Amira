@@ -242,6 +242,28 @@ test("only usage reported after the last compaction is restored", async () => {
   expect(SessionStore.open(session.file).restore().contextTokens).toBe(900)
 })
 
+test("an interrupted reply without usage keeps the context of the reply before, also restored", async () => {
+  let release!: () => void
+  const until = new Promise<void>((r) => {
+    release = r
+  })
+  const { agent, session } = await setup([
+    { text: "r1", usage: { input: 400, output: 20, cacheRead: 0, cacheWrite: 0 } },
+    { text: "a long reply that is cut short", hold: { chunks: 1, until } },
+  ])
+  await agent.prompt("q1")
+  expect(agent.contextTokens).toBe(420)
+  const turn = agent.prompt("q2")
+  while (!agent.messages.some((m) => m.role === "user" && JSON.stringify(m).includes("q2")))
+    await Bun.sleep(5)
+  await Bun.sleep(20)
+  agent.abort()
+  release()
+  await turn
+  expect(agent.contextTokens).toBe(420)
+  expect(SessionStore.open(session.file).restore().contextTokens).toBe(420)
+})
+
 test("compact.before can supply the summary; failures fall back and never break the turn", async () => {
   const { agent, mock, bus, events } = await setup([{ text: "r1" }, { text: "r2" }, { text: "r3" }])
   agent.interceptors.add("compact.before", () => {

@@ -300,9 +300,10 @@ export class Agent {
 
     if (opts.messages || !opts.session) {
       this.messages = opts.messages ?? []
-      const last = this.messages.findLast((m) => m.role === "assistant" && m.usage) as
-        | AssistantMessage
-        | undefined
+      // An interrupted reply may carry no usage counted; the one before it tells the context.
+      const last = this.messages.findLast(
+        (m) => m.role === "assistant" && m.usage && contextTokens(m.usage) > 0,
+      ) as AssistantMessage | undefined
       if (last?.usage) this.#contextTokens = contextTokens(last.usage)
     } else {
       const restored = opts.session.restore()
@@ -958,7 +959,8 @@ export class Agent {
     if (aborted || error) message.content = message.content.filter((b) => b.type !== "toolCall")
     else message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
     if (message.content.length) this.#push(message)
-    if (message.usage) this.#noteContext(contextTokens(message.usage))
+    // An interrupted reply may end with no usage counted: the context is still what it was.
+    if (message.usage && contextTokens(message.usage) > 0) this.#noteContext(contextTokens(message.usage))
     this.#emit(turn, "message.end", { message })
     if (message.usage) this.tree?.recordUsage(this, message.usage)
 
