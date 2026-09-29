@@ -179,3 +179,44 @@ test("in dialogs mode a form is asked one field at a time", async () => {
   expect(kinds).toEqual(["input", "input", "select", "select"])
   expect(JSON.stringify(events)).not.toContain("sk-1")
 })
+
+test("ask questions are answered with one AskAnswer per question, checked against the options", async () => {
+  const { ui, next } = setup()
+  const questions = [
+    { question: "Which approach?", header: "Approach", options: [{ label: "A" }, { label: "B" }] },
+    { question: "Which extras?", options: [{ label: "x" }, { label: "y" }], multiSelect: true },
+  ]
+  const answered = ui.api("ext").ask(questions)
+  const req = await next()
+  expect(req.data).toMatchObject({ kind: "ask", title: "2 questions", questions, source: "ext" })
+  const id = req.data.requestId
+  expect(ui.respond(id, [{ selected: ["A"] }])).toContain("array of 2 answer(s)")
+  expect(ui.respond(id, [{ selected: ["C"] }, { selected: [] }])).toContain('"C" is not one of the options')
+  expect(ui.respond(id, [{ selected: ["A", "B"] }, { selected: [] }])).toContain("must choose one option")
+  expect(ui.respond(id, [{ selected: [], other: " " }, { selected: [] }])).toContain('"other" must be text')
+  const value = [{ selected: [], other: "neither" }, { selected: ["x", "y"] }]
+  expect(ui.respond(id, value)).toBeUndefined()
+  expect(await answered).toEqual(value)
+  // One question names the request.
+  void ui.api().ask([questions[0]!])
+  expect((await next()).data.title).toBe("Which approach?")
+})
+
+test("a confirm takes always and other text only when it offers them", async () => {
+  const { ui, next } = setup()
+  const plain = ui.ask({ kind: "confirm", title: "Go?" })
+  const id = (await next()).data.requestId
+  expect(ui.respond(id, "always")).toBe("value must be true or false")
+  expect(ui.respond(id, { other: "no" })).toBe("value must be true or false")
+  ui.respond(id, false)
+  expect(await plain).toBe(false)
+  const rich = ui.ask({ kind: "confirm", title: "Go?", always: true, other: true })
+  const id2 = (await next()).data.requestId
+  expect(ui.respond(id2, "sometimes")).toBe('value must be true or false, or "always", or {"other": text}')
+  expect(ui.respond(id2, { other: "use rm -i" })).toBeUndefined()
+  expect(await rich).toEqual({ other: "use rm -i" })
+  // The api's confirm stays a boolean: always is yes.
+  const api = ui.api().confirm("Sure?")
+  ui.respond((await next()).data.requestId, true)
+  expect(await api).toBe(true)
+})

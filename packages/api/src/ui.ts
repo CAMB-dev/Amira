@@ -25,11 +25,22 @@ export interface StatusItem {
  */
 export type UiRequest =
   | { kind: "select"; title: string; options: string[] }
-  | { kind: "confirm"; title: string; message?: string }
+  /**
+   * A yes/no question. `always` offers "Yes, and don't ask again this session" as well
+   * (answered with "always"); `other` offers a free-text choice (answered with `{ other: text }`)
+   * meaning no, and what to do instead. A client that knows neither may still answer a boolean.
+   */
+  | { kind: "confirm"; title: string; message?: string; always?: boolean; other?: boolean }
   /** `secret` masks what is typed; the answer is never echoed, persisted or sent in ui.resolved. */
   | { kind: "input"; title: string; placeholder?: string; initial?: string; secret?: boolean }
   /** A unified diff to look over, answered with one of `options` (D16, D38). */
   | { kind: "diff-review"; title: string; diff: string; options: string[] }
+  /**
+   * One to four questions with a few options each, as the ask_user tool asks them, answered
+   * together with one AskAnswer per question, in order. Every question also takes free text
+   * ("Other"). `title` names the whole request (the first question, or how many there are).
+   */
+  | { kind: "ask"; title: string; questions: AskQuestion[] }
   /**
    * A whole form (see FormSpec), answered with the values by field id. Actions run on the
    * host (rpc: ui.action); the answer is checked there and refused with the problems.
@@ -38,12 +49,51 @@ export type UiRequest =
 
 export type UiRequestKind = UiRequest["kind"]
 
+export interface AskOption {
+  label: string
+  /** What choosing it means, shown next to the label. */
+  description?: string
+}
+
+export interface AskQuestion {
+  question: string
+  /** A short name for the question (at most 12 characters), shown when there are several. */
+  header?: string
+  /** Two to four; the free-text "Other" choice is added by the frontend. */
+  options: AskOption[]
+  /** Several options may be chosen together. */
+  multiSelect?: boolean
+}
+
+/**
+ * The answer to one AskQuestion: the labels chosen (exactly one for a single-choice question
+ * unless `other` is given; any number for a multi-select one), and the text typed in "Other".
+ */
+export interface AskAnswer {
+  selected: string[]
+  other?: string
+}
+
+/**
+ * How questions a session put (ToolSession.askUser) ended: answered (`by` names who answered
+ * when it was not the user, such as the commander of a sub-agent), declined (cancelled), or
+ * never asked because nobody can answer here (print mode).
+ */
+export type AskOutcome =
+  | { answers: AskAnswer[]; by?: string }
+  | { declined: true; by?: string }
+  | { unavailable: string }
+
+/** A confirm's answer: yes or no, "always" (yes, for the rest of the session), or free text. */
+export type ConfirmAnswer = boolean | "always" | { other: string }
+
 /** The value each kind of dialog resolves with when answered. */
 export interface UiAnswer {
   select: string
-  confirm: boolean
+  confirm: ConfirmAnswer
   input: string
   "diff-review": string
+  ask: AskAnswer[]
   form: FormValues
 }
 
@@ -73,6 +123,14 @@ export interface UiApi {
     options: string[],
     opts?: UiRequestOptions,
   ): Promise<string | undefined>
+  /**
+   * Asks one to four questions with a few options each, plus free text ("Other"); resolves
+   * with one answer per question, in order. `title` defaults to the first question.
+   */
+  ask(
+    questions: AskQuestion[],
+    opts?: UiRequestOptions & { title?: string },
+  ): Promise<AskAnswer[] | undefined>
   /**
    * Shows a form and resolves with its values (hidden fields left out), or undefined when
    * cancelled. The TUI shows it full screen; rpc clients get its schema; where forms are not

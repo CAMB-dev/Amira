@@ -1,4 +1,6 @@
 import {
+  type AskAnswer,
+  type AskQuestion,
   checkForm,
   describeFormErrors,
   type EventMap,
@@ -53,6 +55,11 @@ export class UiRequests {
   #pending = new Map<string, Pending>()
   #seq = 0
   formMode: FormMode = "native"
+  /**
+   * Why no frontend can answer (e.g. "print mode"), set by a frontend that cancels every
+   * dialog. Askers that can say so without asking (ask_user) read it; dialogs are still sent.
+   */
+  unavailable: string | undefined
 
   constructor(bus: EventBus, opts: { sessionId?: string } = {}) {
     this.#bus = bus
@@ -198,8 +205,11 @@ export class UiRequests {
     const o = (opts?: UiRequestOptions) => ({ ...opts, ...(source ? { source } : {}) })
     return {
       select: (title, options, opts) => this.ask({ kind: "select", title, options: [...options] }, o(opts)),
-      confirm: (title, message, opts) =>
-        this.ask({ kind: "confirm", title, ...(message !== undefined ? { message } : {}) }, o(opts)),
+      confirm: async (title, message, opts) => {
+        const request = { kind: "confirm" as const, title, ...(message !== undefined ? { message } : {}) }
+        const answer = await this.ask(request, o(opts))
+        return answer === undefined ? undefined : answer === true || answer === "always"
+      },
       input: (title, opts = {}) => {
         const { placeholder, initial, secret, ...rest } = opts
         return this.ask(
@@ -216,6 +226,15 @@ export class UiRequests {
       },
       reviewDiff: (title, diff, options, opts) =>
         this.ask({ kind: "diff-review", title, diff, options: [...options] }, o(opts)),
+      ask: (questions, opts = {}) => {
+        const { title, ...rest } = opts
+        const request = {
+          kind: "ask" as const,
+          title: title ?? askTitle(questions),
+          questions: structuredClone(questions),
+        }
+        return this.ask(request, o(rest))
+      },
       form: (spec, opts) => this.form(spec, o(opts)),
     }
   }
@@ -263,10 +282,43 @@ function checkValue(request: UiRequest, value: unknown): string | undefined {
         ? undefined
         : `value must be one of the options: ${JSON.stringify(request.options)}`
     case "confirm":
-      return typeof value === "boolean" ? undefined : "value must be true or false"
+      if (typeof value === "boolean") return undefined
+      if (value === "always" && request.always) return undefined
+      if (request.other && isOther(value)) return undefined
+      return `value must be true or false${request.always ? ', or "always"' : ""}${request.other ? ', or {"other": text}' : ""}`
+    case "ask":
+      return checkAskAnswers(request.questions, value)
     case "input":
       return typeof value === "string" ? undefined : "value must be a string"
     case "form":
       return "value must be an object of field values"
   }
+}
+
+const isOther = (v: unknown): v is { other: string } =>
+  typeof v === "object" && v !== null && typeof (v as { other?: unknown }).other === "string"
+
+/** What names an ask request: its only question, or how many there are. */
+export function askTitle(questions: AskQuestion[]): string {
+  return questions.length === 1 ? (questions[0]?.question ?? "") : `${questions.length} questions`
+}
+
+/** Why `value` is no answer to `questions`: one AskAnswer each, its labels among the options. */
+function checkAskAnswers(questions: AskQuestion[], value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length !== questions.length)
+    return `value must be an array of ${questions.length} answer(s), one per question`
+  for (const [i, q] of questions.entries()) {
+    const a = value[i] as Partial<AskAnswer> | null
+    const at = `answer ${i + 1}`
+    if (typeof a !== "object" || a === null || !Array.isArray(a.selected))
+      return `${at} must be an object with "selected", an array of option labels`
+    if (a.other !== undefined && (typeof a.other !== "string" || !a.other.trim()))
+      return `${at}: "other" must be text`
+    const labels = new Set(q.options.map((o) => o.label))
+    const bad = a.selected.find((l) => typeof l !== "string" || !labels.has(l))
+    if (bad !== undefined) return `${at}: ${JSON.stringify(bad)} is not one of the options`
+    const count = a.selected.length + (a.other !== undefined ? 1 : 0)
+    if (!q.multiSelect && count !== 1) return `${at} must choose one option or give "other" text`
+  }
+  return undefined
 }
