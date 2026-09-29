@@ -30,6 +30,24 @@ export interface Run {
    * is shown as it is, the source going on at offset `resume`.
    */
   rest?: { url: true; head: string } | { url: false; resume: number }
+  /** The run stands for an image (`![alt](url)`), shown as its alt text. */
+  image?: ImageRef
+}
+
+/** An image in the text: where it points (unknown for a reference not defined yet) and its alt text. */
+export interface ImageRef {
+  url?: string
+  alt: string
+}
+
+/** A reference definition (`[label]: url`), looked up by its normalized label. */
+export interface LinkRef {
+  url: string
+}
+
+/** How reference labels are matched: case and runs of blanks do not matter. */
+export function normalizeLabel(label: string): string {
+  return label.trim().replace(/\s+/g, " ").toLowerCase()
 }
 
 /**
@@ -46,6 +64,10 @@ export interface InlineOptions {
   hyperlinks: boolean
   /** Style of the text around the spans, e.g. a heading's. */
   base?: StyleFn
+  /** Reference definitions seen so far, for `[text][label]` and `![alt][label]`. */
+  refs?: ReadonlyMap<string, LinkRef>
+  /** Drawn in front of an image's alt text. Default 🖼. */
+  imageGlyph?: string
   /** A run's rest at offset `leadAt`: for a bare URL, the source there; otherwise `len` source characters. */
   lead?: Lead
   leadAt?: number
@@ -82,11 +104,15 @@ interface Scope {
   styles: StyleFn[]
   carry: string
   link?: string
+  /** Inside a link's text, clickable or not. */
+  inLink?: boolean
 }
 
 /**
  * Renders inline Markdown: `code`, **strong**, *emphasis*, ~~strike~~, [links](url), <autolinks>,
- * bare URLs and backslash escapes. A delimiter without a match is shown as it is, so text that is
+ * bare URLs, backslash escapes, `[text][label]` references to definitions seen so far, and images
+ * (`![alt](url)`, `![alt][label]`), shown as a glyph and their alt text (or file name) linking to
+ * the image, or followed by its URL when links are not clickable. A delimiter without a match is shown as it is, so text that is
  * still streaming renders as plain until its span closes.
  */
 export function parseInline(s: string, opts: InlineOptions): Run[] {
@@ -168,15 +194,32 @@ function parse(s: string, start: number, end: number, scope: Scope, ctx: Context
       textStart = i
       continue
     }
-    if (c === "[" && !scope.link) {
-      const link = matchLink(s, i, end)
-      if (link === "open") mayOpen(i)
-      else if (link) {
+    if (c === "!" && s[i + 1] === "[") {
+      const image = matchLink(s, i + 1, end, opts.refs, true)
+      if (image === "open") {
+        mayOpen(i)
+        i++
+        continue
+      }
+      if (image) {
         flush(i)
+        if (image.open) mayOpen(i)
+        pushImage(s, i, image, scope, ctx)
+        i = image.end
+        textStart = i
+        continue
+      }
+    }
+    if (c === "[" && !scope.link && !scope.inLink) {
+      const link = matchLink(s, i, end, opts.refs)
+      if (link === "open") mayOpen(i)
+      else if (link?.url !== undefined) {
+        flush(i)
+        if (link.open) mayOpen(i)
         const linkStyles = [...scope.styles, opts.styles.link]
-        const inner: Scope = { styles: linkStyles, carry: `${scope.carry}[` }
+        const inner: Scope = { styles: linkStyles, carry: `${scope.carry}[`, inLink: true }
         if (opts.hyperlinks) inner.link = link.url
-        if (link.textEnd > i + 1) parse(s, i + 1, link.textEnd, inner, ctx)
+        if (link.textEnd > i + 1 || ctx.lead) parse(s, i + 1, link.textEnd, inner, ctx)
         const text = s.slice(i + 1, link.textEnd)
         if (!opts.hyperlinks && text !== link.url) {
           const url = styleOf([...scope.styles, opts.styles.linkUrl])
@@ -232,6 +275,11 @@ function parse(s: string, start: number, end: number, scope: Scope, ctx: Context
       continue
     }
     i++
+  }
+  // The rest of an image cut at the end of a link's text is still that text.
+  if (ctx.lead && !ctx.lead.url && ctx.leadAt === end && i === end) {
+    flush(end)
+    textStart = pushLead(s, end, end, scope, ctx)
   }
   flush(end)
 }
@@ -342,15 +390,28 @@ function matchEmphasis(
   return "open"
 }
 
+interface LinkMatch {
+  textEnd: number
+  /** Unknown only for an image referring to a label not defined (yet). */
+  url?: string
+  end: number
+  /** It may still turn into something else as the text goes on (`[label]` at the end). */
+  open?: boolean
+}
+
 /**
- * `[text](url)` or `[text](url "title")` at `s[i]`: where its text ends, its URL, and its end.
- * `"open"` when it may still be one once the text goes on after `end`.
+ * `[text](url)`, `[text](url "title")`, `[text][label]`, `[text][]` or `[label]` (the last three
+ * with a definition in `refs`) at `s[i]`: where its text ends, its URL, and its end. For an
+ * `image`, a `[label]` not defined still matches, without a URL. `"open"` when it may still be
+ * one once the text goes on after `end`.
  */
 function matchLink(
   s: string,
   i: number,
   end: number,
-): { textEnd: number; url: string; end: number } | "open" | undefined {
+  refs?: ReadonlyMap<string, LinkRef>,
+  image = false,
+): LinkMatch | "open" | undefined {
   let depth = 0
   let j = i
   for (; j < end; j++) {
@@ -359,12 +420,74 @@ function matchLink(
     else if (ch === "[") depth++
     else if (ch === "]" && --depth === 0) break
   }
-  if (j + 1 >= end) return "open"
-  if (s[j + 1] !== "(") return undefined
-  const close = s.indexOf(")", j + 2)
-  if (close === -1 || close >= end) return "open"
-  const target = s.slice(j + 2, close).trim()
-  const url = target.split(/\s+/)[0] ?? ""
-  if (url === "" || /[<>]/.test(url)) return undefined
-  return { textEnd: j, url: url.replace(/^<|>$/g, ""), end: close + 1 }
+  if (j >= end) return "open"
+  const after = s[j + 1]
+  const text = s.slice(i + 1, j)
+  if (after === "(") {
+    const close = s.indexOf(")", j + 2)
+    if (close === -1 || close >= end) return "open"
+    const target = s.slice(j + 2, close).trim()
+    const url = target.split(/\s+/)[0] ?? ""
+    if (url === "" || /[<>]/.test(url)) return undefined
+    return { textEnd: j, url: url.replace(/^<|>$/g, ""), end: close + 1 }
+  }
+  if (after === "[") {
+    const close = s.indexOf("]", j + 2)
+    if (close === -1 || close >= end) return "open"
+    const label = s.slice(j + 2, close)
+    if (label.includes("[")) return undefined
+    const ref = refs?.get(normalizeLabel(label || text))
+    if (ref) return { textEnd: j, url: ref.url, end: close + 1 }
+    return image ? { textEnd: j, end: close + 1 } : undefined
+  }
+  const ref = text.trim() ? refs?.get(normalizeLabel(text)) : undefined
+  if (ref) return { textEnd: j, url: ref.url, end: j + 1, ...(j + 1 >= end ? { open: true } : {}) }
+  return j + 1 >= end ? "open" : undefined
+}
+
+/** The last segment of a URL's path, as the name of an image without alt text. */
+export function fileName(url: string | undefined): string {
+  if (!url) return ""
+  const path = url.split(/[?#]/)[0]!.replace(/[/\\]+$/, "")
+  const last = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1)
+  try {
+    return decodeURIComponent(last)
+  } catch {
+    return last
+  }
+}
+
+/**
+ * An image at `s[i]`: its glyph and alt text (or file name), linking to the image when links
+ * are clickable (inside a link, to that link), or followed by its URL.
+ */
+function pushImage(s: string, i: number, image: LinkMatch, scope: Scope, ctx: Context) {
+  const { opts, out } = ctx
+  const alt = s
+    .slice(i + 2, image.textEnd)
+    .replace(/\\([!-/:-@[-`{-~])/g, "$1")
+    .trim()
+  const name = alt || fileName(image.url) || "image"
+  const clickable = !scope.inLink && opts.hyperlinks && image.url !== undefined
+  const style = styleOf([...scope.styles, clickable ? opts.styles.link : opts.styles.image])
+  // Added text, like a link's URL: it stands at the image's end, so the rest of it after a cut
+  // goes on there.
+  const r: Run = {
+    text: `${opts.imageGlyph ?? "🖼"} ${name}`,
+    src: image.end,
+    carry: scope.carry,
+    cuttable: false,
+    rest: { url: false, resume: image.end },
+    image: image.url !== undefined ? { url: image.url, alt } : { alt },
+  }
+  if (style) r.style = style
+  const link = scope.link ?? (clickable ? image.url : undefined)
+  if (link) r.link = link
+  out.push(r)
+  // Inside a link too: a link still open may close around it, and the rows stay the same then.
+  if (!opts.hyperlinks && image.url !== undefined) {
+    const u = run(` (${image.url})`, image.end, styleOf([...scope.styles, opts.styles.linkUrl]), scope, false)
+    u.rest = { url: false, resume: image.end }
+    out.push(u)
+  }
 }

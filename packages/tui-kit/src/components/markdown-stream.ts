@@ -170,6 +170,7 @@ export class MarkdownStream implements Component {
       glyphs: this.glyphs,
       hyperlinks: this.hyperlinks,
       highlight: this.highlight,
+      refs: this.state.refs,
     }
   }
 

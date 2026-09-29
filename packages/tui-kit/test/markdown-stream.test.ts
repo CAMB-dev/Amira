@@ -162,6 +162,39 @@ test("links are clickable with OSC 8 when supported, and show their URL otherwis
   expect(visibleWidth(row)).toBe(4)
 })
 
+test("images show as a glyph and their alt text (or file name), linking to the image", () => {
+  expect(md('![a cat](cat.png "Title") and ![](https://x.dev/img/dog%202.jpg?s=1)', 80)).toEqual([
+    "🖼 a cat (cat.png) and 🖼 dog 2.jpg (https://x.dev/img/dog%202.jpg?s=1)",
+  ])
+  const m = new MarkdownStream({ hyperlinks: true })
+  m.append("![a *cat*](cat.png)")
+  const row = m.render(40, plain)[0]!
+  expect(row).toBe("\x1b]8;;cat.png\x07🖼 a *cat*\x1b]8;;\x07")
+  // Inside a link it is that link's text; the link's URL follows it.
+  expect(md("[![CI](https://ci.x/badge.svg)](https://ci.x/run)", 80)).toEqual([
+    "🖼 CI (https://ci.x/badge.svg) (https://ci.x/run)",
+  ])
+  const linked = new MarkdownStream({ hyperlinks: true })
+  linked.append("[![CI](https://ci.x/badge.svg)](https://ci.x/run)")
+  expect(linked.render(40, plain)[0]).toBe("\x1b]8;;https://ci.x/run\x07🖼 CI\x1b]8;;\x07")
+  // Not an image: an empty target, or a lone `!`.
+  expect(md("![x]() and a ! [y]")).toEqual(["![x]() and a ! [y]"])
+})
+
+test("reference-style images and links use the definitions seen so far, which are not shown", () => {
+  const text = [
+    "[logo]: https://a.dev/logo.png",
+    "[Docs]: <https://a.dev/docs> 'The docs'",
+    "",
+    "![Our logo][logo], ![logo][], ![logo] and [the docs][docs], [docs][], [Docs].",
+    "![later][nope] and [text][nope] and [nope].",
+  ].join("\n")
+  expect(md(text, 200)).toEqual([
+    "🖼 Our logo (https://a.dev/logo.png), 🖼 logo (https://a.dev/logo.png), 🖼 logo (https://a.dev/logo.png) and the docs (https://a.dev/docs), docs (https://a.dev/docs), Docs (https://a.dev/docs).",
+    "🖼 later and [text][nope] and [nope].",
+  ])
+})
+
 test("a closed block is committed at once; the open one stays live", () => {
   const { ctx, committed } = committing()
   const m = new MarkdownStream()
@@ -389,9 +422,23 @@ const LINES = [
   "\\*escaped\\*",
 ]
 
-function randomDoc(rand: () => number, n: number): string {
+/** Lines with images, mixed with some of the above. */
+const IMAGE_LINES = [
+  "![a cat](cat.png) sits and ![dog](http://i.x/dog.jpg)",
+  "![cat](http://i.x/c.png)",
+  "[![badge](b.svg)](http://ci.x/y)",
+  "![pic][] and more",
+  "[pic]: http://r.x/pic.png",
+  "",
+  "plain words in a paragraph that is long enough to wrap around",
+  "- item **two**",
+  "> quoted *line* here",
+  "a [link](http://x.y/z) and https://q.r/s done",
+]
+
+function randomDoc(rand: () => number, n: number, lines = LINES): string {
   const out: string[] = []
-  for (let i = 0; i < n; i++) out.push(LINES[Math.floor(rand() * LINES.length)]!)
+  for (let i = 0; i < n; i++) out.push(lines[Math.floor(rand() * lines.length)]!)
   return out.join("\n")
 }
 
@@ -457,6 +504,36 @@ test("with a small live region nothing is lost or repeated, and rows fit the wid
       () => 1 + Math.floor(rand() * 5),
     )
     expect({ seed, text: letters(rows) }).toEqual({ seed, text: letters(md(text, width)) })
+    for (const r of [...rows, ...lives.flat()])
+      expect({ seed, r, w: visibleWidth(r) <= width }).toEqual({ seed, r, w: true })
+  }
+})
+
+test("text with images streams like the whole text, also with a small live region", () => {
+  for (let seed = 1; seed <= 150; seed++) {
+    const rand = rng(seed * 13)
+    const text = randomDoc(rand, 15, IMAGE_LINES)
+    const width = 6 + Math.floor(rand() * 40)
+    const whole = md(text, width)
+    expect({
+      seed,
+      rows: stream(
+        text,
+        rand,
+        () => width,
+        () => 1000,
+      ).rows.map(stripAnsi),
+    }).toEqual({
+      seed,
+      rows: whole,
+    })
+    const { rows, lives } = stream(
+      text,
+      rand,
+      () => width,
+      () => 1 + Math.floor(rand() * 5),
+    )
+    expect({ seed, text: letters(rows) }).toEqual({ seed, text: letters(whole) })
     for (const r of [...rows, ...lives.flat()])
       expect({ seed, r, w: visibleWidth(r) <= width }).toEqual({ seed, r, w: true })
   }

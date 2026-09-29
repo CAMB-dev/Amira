@@ -80,6 +80,8 @@ export const markdownTheme = {
   link: compose(underline, blue),
   /** The URL shown after a link's text when the terminal cannot make it clickable. */
   linkUrl: gray,
+  /** An image shown as its alt text, when it is not a clickable link. */
+  image: italic,
   quote: italic,
   quoteBar: gray,
   listMarker: cyan,
