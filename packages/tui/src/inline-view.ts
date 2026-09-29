@@ -162,7 +162,6 @@ export function createInlineView(host: ViewHost): TranscriptView {
   const rootCall = (n: SubagentNode) => rootCallOf(subagents, host.sessionId(), n)
   const isLiveCall = (id: string | undefined) => id !== undefined && toolCalls.live.some((c) => c.id === id)
 
-  /** The tool calls of the step, in call order: running ones with their output, held ones done. */
   /**
    * The tool calls of the step, in call order: running ones with their output, held ones done.
    * At most `max` rows: past that, running calls drop their output lines, and then the first
