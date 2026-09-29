@@ -89,6 +89,24 @@ describe("ProcessTerminal restores itself when the process goes away", () => {
     expect(readFileSync(file, "utf8")).toBe(`${modes.bracketedPaste.off}\x1b[0m\x1b[?25h`)
   })
 
+  test("after restoring, the emergency text is written once, below the alternate screen", () => {
+    term.start()
+    term.enterAltScreen()
+    let asked = 0
+    term.onEmergencyExit(() => {
+      asked++
+      return "the conversation\r\n"
+    })
+    const off = term.onEmergencyExit(() => "never")
+    off()
+    process.emit("uncaughtExceptionMonitor", new Error("x"), "uncaughtException")
+    process.emit("uncaughtExceptionMonitor", new Error("y"), "uncaughtException")
+    expect(readFileSync(file, "utf8")).toBe(
+      `${modes.altScreen.off}\x1b[0m\x1b[?25hthe conversation\r\n\x1b[0m\x1b[?25h`,
+    )
+    expect(asked).toBe(1)
+  })
+
   test("an uncaught exception the app handles leaves the terminal alone", () => {
     term.start()
     term.enableMode(modes.bracketedPaste)

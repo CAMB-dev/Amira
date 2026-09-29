@@ -99,6 +99,66 @@ In a list of up to nine options, the digit in front of an option chooses it.
 | `dialog.yes` | `y` | Answer yes to a confirmation |
 | `dialog.no` | `n` | Answer no to a confirmation |
 
+### Transcript (full-screen mode)
+
+In full-screen mode (the default, see `tui.mode` below) Amira keeps the conversation and
+scrolls it itself. These keys act on the transcript before the input gets them. Home, End and
+plain characters act on the transcript only while the input is empty; otherwise the input
+uses them. The mouse wheel scrolls three rows a notch, and a click selects the block under
+it (a second click on its first row folds it).
+
+The view follows the newest output. Scrolled up, it stays where it is while the conversation
+grows, and the row under it says `↓ new output`; scrolling to the end (or End) follows again.
+
+| Action | Default | What it does |
+| --- | --- | --- |
+| `scroll.up` | `shift+up` | Scroll up a line |
+| `scroll.down` | `shift+down` | Scroll down a line |
+| `scroll.page-up` | `pageup` | Scroll up a page |
+| `scroll.page-down` | `pagedown` | Scroll down a page |
+| `scroll.top` | `ctrl+home`, `home` | Go to the start of the conversation |
+| `scroll.bottom` | `ctrl+end`, `end` | Go to the end and follow it again |
+| `select.start` | `ctrl+up`, `alt+up` (VS Code: `alt+up` first) | Select the newest block (a message, a reply, a tool call, a notice) |
+| `find` | `ctrl+f` | Open the find bar |
+| `copy.reply` | `alt+c` | Copy the last reply, as Markdown, to the clipboard |
+
+### Block selection
+
+While a block is selected it is marked with `▌` and the row above the input says what it is.
+Typing goes back to the input.
+
+| Action | Default | What it does |
+| --- | --- | --- |
+| `select.prev` | `up`, `ctrl+up`, `alt+up`, `k` | Select the block before |
+| `select.next` | `down`, `ctrl+down`, `alt+down`, `j` | Select the block after |
+| `select.toggle` | `enter`, `space` | Fold or unfold it: a tool call's output (and its sub-agents), long code blocks and `<details>` in a reply |
+| `select.copy` | `y`, `c` | Copy the block to the clipboard |
+| `select.exit` | `escape` | Stop selecting |
+
+`tool-output` (Ctrl+O) sets how much of every tool call shows; a call folded or unfolded by
+hand keeps its own level.
+
+### Find
+
+The find bar searches the text of the whole transcript as you type. It ignores case unless
+the text has capitals. Matches are highlighted, the current one also underlined; the bar
+says which one of how many it is. It starts from the newest match.
+
+| Action | Default | What it does |
+| --- | --- | --- |
+| `find.next` | `enter`, `up`, `f3` | Go to the next match up (older) |
+| `find.prev` | `shift+enter`, `down`, `shift+f3` | Go to the next match down (newer) |
+| `find.close` | `escape`, `ctrl+c`, `ctrl+g` | Close the find bar, staying at the match |
+
+### Copying
+
+The copy keys send the text to the clipboard with OSC 52, which Windows Terminal, VS Code,
+iTerm2, kitty, WezTerm and others accept (tmux only with `set-clipboard on`); nothing tells
+Amira whether it arrived. Mouse reporting is on in full-screen mode, so to select text with
+the mouse hold Shift while dragging (Windows Terminal, VS Code on Windows and Linux, xterm);
+in VS Code on macOS hold Option, or set `terminal.integrated.macOptionClickForcesSelection`.
+In inline mode the terminal's own selection works as usual.
+
 Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
 the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `q`/Esc close) are fixed for
 now.
@@ -109,8 +169,9 @@ These live under `tui` in `settings.json`, the user's or a project's (`.amira/se
 
 | Setting | Default | What it does |
 | --- | --- | --- |
+| `tui.mode` | `"fullscreen"` | `"fullscreen"` draws on the alternate screen: Amira scrolls, finds, folds and copies the conversation, redraws all of it when the window changes size, and prints it to the normal screen when it exits (also after a crash). `"inline"` leaves finished output in the terminal's own scrollback, for SSH, tmux, or native scrolling and selection. The `--inline` and `--fullscreen` flags win |
 | `tui.title` | `true` | Set the terminal title to `Amira · <folder> ⎇ <branch>`, marked with `●` while a turn runs; the previous title comes back on exit |
 | `tui.progress` | `true` | Show a busy indicator on the tab and taskbar while a turn runs, and a paused one while a dialog waits (OSC 9;4: Windows Terminal, ConEmu, VS Code, Ghostty) |
 | `tui.bell` | `true` | Ring the bell when a turn ends or a dialog opens while the terminal is in the background; where the terminal does not report focus, only after a turn of 15 seconds or more |
-| `tui.reflow` | `"auto"` | `"off"` for terminals that do not re-wrap lines when they get narrower, so a resize does not erase the transcript above the input; `"auto"` and `"on"` assume they do |
+| `tui.reflow` | `"auto"` | Inline mode: `"off"` for terminals that do not re-wrap lines when they get narrower, so a resize does not erase the transcript above the input; `"auto"` and `"on"` assume they do |
 | `tui.submitWhileWorking` | `"steer"` | What `submit` (Enter) does while a turn runs: `"steer"` sends the message into the running turn, `"queue"` sends it after the turn. The `queue` key does the other one, and the hint line says which (`Enter queue · Ctrl+Q steer`). Slash commands run at once either way |
