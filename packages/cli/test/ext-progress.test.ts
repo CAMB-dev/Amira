@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { runExtCommand } from "../src/ext-command.ts"
-import { ExtProgress, progressMode } from "../src/ext-progress.ts"
+import { clean, ExtProgress, progressMode } from "../src/ext-progress.ts"
 
 setDefaultTimeout(60_000)
 
@@ -149,6 +149,41 @@ test("without a terminal: one line per phase on stderr, results and the summary 
     "amira: alpha: fetching o/r\namira: alpha: extracting\namira: beta: update failed\n",
   )
   expect(out.join("")).toBe("Updated alpha: 1 -> 2\n1 updated · 1 failed\n")
+})
+
+test("text from a server or an index cannot send terminal sequences", () => {
+  expect(clean("fatal: \x1b]0;pwned\x07remote \x1b[2Jerror\r\x1b[31mred\x1b[0m\ttab\nnext")).toBe(
+    "fatal: remote errorred\ttab\nnext",
+  )
+  const out: string[] = []
+  const progress = new ExtProgress({ mode: "plain", stdout: (s) => out.push(s), stderr: (s) => out.push(s) })
+  progress.update({ name: "a", phase: "fetching", detail: "x\x1b[2Jy" })
+  progress.finish("a", { kind: "failed", text: "", line: "amira: a: \x1b]8;;http://e\x07bad" })
+  progress.note("amira: warning: \x1b[Hhome")
+  expect(out.join("")).toBe("amira: a: fetching xy\namira: a: bad\namira: warning: home\n")
+})
+
+test("--json keeps stdout to JSON objects, also for messages that are not about one package", async () => {
+  const empty = capture()
+  expect(await runExtCommand(["update", "--json"], empty, { home, cwd })).toBe(0)
+  expect(
+    empty.out
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l)),
+  ).toEqual([{ type: "info", message: "No packages in the user scope." }])
+  const restore = capture()
+  await runExtCommand(["install", "--json"], restore, { home, cwd })
+  expect(JSON.parse(restore.out)).toMatchObject({
+    type: "info",
+    message: expect.stringMatching(/^Nothing to install/),
+  })
+  const unknown = capture()
+  expect(await runExtCommand(["update", "--json", "nope"], unknown, { home, cwd })).toBe(1)
+  expect(JSON.parse(unknown.out)).toEqual({
+    type: "error",
+    message: "nope is not installed in the user scope",
+  })
 })
 
 test("the mode follows --json, --quiet, the terminal and NO_COLOR", () => {

@@ -71,7 +71,7 @@ export class ExtProgress {
 
   /** A package that will be worked on, shown as waiting until its first event. */
   add(name: string, label = name): void {
-    this.row(name).label = label
+    this.row(name).label = clean(label)
     this.draw()
   }
 
@@ -80,7 +80,7 @@ export class ExtProgress {
     if (row.outcome) return
     const changed = row.phase !== p.phase || row.detail !== p.detail
     row.phase = p.phase
-    row.detail = p.detail
+    row.detail = p.detail === undefined ? undefined : clean(p.detail)
     row.percent = p.percent
     switch (this.opts.mode) {
       case "tty":
@@ -90,7 +90,9 @@ export class ExtProgress {
       case "plain":
         // Percentages would be a line each: only the phases.
         if (changed)
-          this.opts.stderr(`amira: ${row.label}: ${PHASE_TEXT[p.phase]}${p.detail ? ` ${p.detail}` : ""}\n`)
+          this.opts.stderr(
+            `amira: ${row.label}: ${PHASE_TEXT[p.phase]}${row.detail ? ` ${row.detail}` : ""}\n`,
+          )
         break
       case "json":
         this.json({ type: "progress", ...p })
@@ -100,6 +102,8 @@ export class ExtProgress {
 
   finish(name: string, outcome: Outcome): void {
     const row = this.row(name)
+    // Error texts carry what a git server or an index said: no terminal sequences from them.
+    outcome = { ...outcome, text: clean(outcome.text), line: clean(outcome.line) }
     row.outcome = outcome
     switch (this.opts.mode) {
       case "tty":
@@ -123,17 +127,29 @@ export class ExtProgress {
 
   /** A warning or hint, printed above the package lines. */
   note(line: string): void {
+    line = clean(line)
     if (this.opts.mode === "json") {
       this.json({ type: "warning", message: line.replace(/^amira: (warning: )?/, "") })
       return
     }
-    if (this.opts.mode !== "tty") {
+    if (this.opts.mode !== "tty" || this.closed) {
       this.opts.stderr(`${line}\n`)
       return
     }
     this.clear()
     this.opts.stderr(`${line}\n`)
     this.draw()
+  }
+
+  /**
+   * A line that is not about one package ("Nothing to install", an unknown name): printed as
+   * it is, or as a JSON object with --json.
+   */
+  message(line: string, level: "info" | "error"): void {
+    line = clean(line)
+    if (this.opts.mode === "json") this.json({ type: level, message: line.replace(/^amira: /, "") })
+    else if (level === "error") this.note(line)
+    else this.opts.stdout(`${line}\n`)
   }
 
   /** Stops the animation and prints the summary; returns it. */
@@ -252,6 +268,18 @@ export function progressMode(
   if (!tty || env.NO_COLOR || env.TERM === "dumb") return "plain"
   return "tty"
 }
+
+/**
+ * Text from outside (git's output, URLs, names from an index) without terminal escape sequences
+ * or control characters; newlines and tabs stay.
+ */
+export function clean(s: string): string {
+  return s.replace(UNSAFE_TEXT, "")
+}
+
+const UNSAFE_TEXT =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: these are what is removed
+  /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b.?|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g
 
 /** The first line of an error, short enough for a package's line. */
 export function shortReason(error: string): string {

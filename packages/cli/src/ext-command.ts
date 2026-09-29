@@ -31,7 +31,7 @@ import {
   updatePackages,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
-import { ExtProgress, type Outcome, progressMode, shortReason } from "./ext-progress.ts"
+import { clean, ExtProgress, type Outcome, progressMode, shortReason } from "./ext-progress.ts"
 import type { PrintIO } from "./print.ts"
 
 export const EXT_USAGE = `Usage:
@@ -130,7 +130,7 @@ export async function runExtCommand(
   }
   const done = (code: number) => {
     progress.close()
-    for (const f of failures) io.stderr(`${f}\n`)
+    for (const f of failures) io.stderr(`${clean(f)}\n`)
     return code
   }
   try {
@@ -140,7 +140,7 @@ export async function runExtCommand(
         if (!rest.length) {
           const missing = missingPackages(scope)
           if (!missing.length) {
-            io.stdout(`Nothing to install: every package in ${scope.lockFile} is present.\n`)
+            progress.message(`Nothing to install: every package in ${scope.lockFile} is present.`, "info")
             return 0
           }
           for (const name of missing) progress.add(name)
@@ -223,11 +223,11 @@ export async function runExtCommand(
           const hint = others.includes(name)
             ? `; it is in the ${otherKind} scope${otherKind === "project" ? " (use --project)" : " (leave out --project)"}`
             : ""
-          io.stderr(`amira: ${name} is not installed in the ${scope.kind} scope${hint}\n`)
+          progress.message(`amira: ${name} is not installed in the ${scope.kind} scope${hint}`, "error")
         }
         if (unknown.length) return 1
         const names = rest.length ? rest : Object.keys(mine)
-        if (!names.length) io.stdout(`No packages in the ${scope.kind} scope.\n`)
+        if (!names.length) progress.message(`No packages in the ${scope.kind} scope.`, "info")
         if (!rest.length && others.length) {
           progress.note(
             `amira: the ${otherKind} scope's packages (${others.join(", ")}) are updated with amira ext update${otherKind === "project" ? " --project" : ""}`,
@@ -274,13 +274,13 @@ export async function runExtCommand(
       const name = progress.active()
       if (name) progress.finish(name, { kind: "cancelled", text: "", line: `amira: ${name}: cancelled` })
       done(130)
-      io.stderr("amira: stopped\n")
+      progress.message("amira: stopped", "error")
       return 130
     }
     if (!(err instanceof PackageError)) throw err
     const name = progress.active()
     if (name) fail(name, err.message, `amira: ${err.message}`)
-    else io.stderr(`amira: ${err.message}\n`)
+    else progress.message(`amira: ${err.message}`, "error")
     return done(1)
   } finally {
     stopSigint()
