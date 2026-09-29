@@ -47,7 +47,7 @@ test("a streamed block gets its gap once, however many pieces it is committed in
 test("system notices lead with a symbol by level and indent their later lines", () => {
   const plain = (l: string[]) => l.map(stripAnsi)
   expect(plain(noticeLines(defaultTheme, "interrupted", "Interrupted."))).toEqual(["⊘ Interrupted."])
-  expect(plain(noticeLines(defaultTheme, "warning", "a\nb"))).toEqual(["▲ a", "  b"])
+  expect(plain(noticeLines(defaultTheme, "warning", "a\nb"))).toEqual(["⚠️ a", "   b"])
   expect(plain(noticeLines(defaultTheme, "success", "Compacted"))).toEqual(["✓ Compacted"])
   expect(plain(noticeLines(defaultTheme, "error", "boom"))).toEqual(["✗ boom"])
   expect(plain(noticeLines(defaultTheme, "info", "(no reply)"))).toEqual(["• (no reply)"])

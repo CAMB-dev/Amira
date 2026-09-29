@@ -10,15 +10,17 @@ function cells(table: object): [string, string][] {
 }
 
 test("no glyph is an emoji drawn without asking for it", () => {
-  // A non-ASCII character with an emoji form is only allowed with VS16, which makes it two cells.
+  // A non-ASCII character with an emoji form needs VS16 (two cells), unless it is one the
+  // terminals' fonts draw themselves in one cell (measured as one).
   const bare = [...cells(glyphs), ...cells(defaultGlyphs)].filter(
-    ([, g]) => g.codePointAt(0)! > 0x7f && /\p{Emoji}/u.test(g) && !g.includes("\uFE0F"),
+    ([, g]) =>
+      g.codePointAt(0)! > 0x7f && /\p{Emoji}/u.test(g) && !g.includes("\uFE0F") && textWidth(g) !== 1,
   )
   expect(bare).toEqual([])
 })
 
-test("the TUI's glyphs are one cell each, the markdown image glyph two", () => {
-  for (const [name, g] of cells(glyphs)) expect([name, g, textWidth(g)]).toEqual([name, g, 1])
-  for (const [name, g] of cells(defaultGlyphs))
-    expect([name, g, textWidth(g)]).toEqual([name, g, name === "image" ? 2 : 1])
+test("glyphs are one cell each, except the emoji ones: the warning and the image", () => {
+  const wide = new Set(["warning", "image"])
+  for (const [name, g] of [...cells(glyphs), ...cells(defaultGlyphs)])
+    expect([name, g, textWidth(g)]).toEqual([name, g, wide.has(name) ? 2 : 1])
 })

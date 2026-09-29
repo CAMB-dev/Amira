@@ -4,8 +4,8 @@
  */
 export interface Glyphs {
   /**
-   * List bullets by nesting depth; deeper levels repeat the last one. ▸, not ▪: ▪ has an emoji
-   * form, drawn two cells wide by terminals whose font lacks it.
+   * List bullets by nesting depth; deeper levels repeat the last one. ▪ is on the list of
+   * emoji-capable symbols the terminals' fonts draw themselves, in one cell.
    */
   bullets: string[]
   /**
@@ -36,7 +36,7 @@ export interface Glyphs {
 }
 
 export const defaultGlyphs: Glyphs = {
-  bullets: ["•", "◦", "▸"],
+  bullets: ["•", "◦", "▪"],
   taskOpen: "[ ]",
   taskDone: "[✓]",
   quoteBar: "▎",

@@ -49,12 +49,12 @@ export const glyphs = {
   checked: "[x]",
   unchecked: "[ ]",
   /**
-   * System notices by level. The warning is ▲, not ⚠: ⚠ has an emoji form, which Windows
-   * Terminal draws two cells wide.
+   * System notices by level. The warning is the ⚠️ emoji, two cells: VS16 asks for its emoji
+   * form, which is what terminals draw anyway, and is measured as such.
    */
   info: "•",
   success: "✓",
-  warning: "▲",
+  warning: "⚠\uFE0F",
   error: "✗",
   interrupted: "⊘",
   /** Marks text left out. */
