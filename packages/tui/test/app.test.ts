@@ -193,7 +193,7 @@ test("a conversation: user message, tool call and reply end up in the transcript
   const text = all()
   expect(text).toContain("› what is in a.ts?")
   expect(text).toContain("● read a.ts")
-  expect(text).toContain("⎿ contents of a.ts (+2 lines)")
+  expect(text).toContain("└ contents of a.ts (+2 lines)")
   expect(text.indexOf("● read")).toBeLessThan(text.indexOf("The file has three lines."))
   // One blank line between blocks, and the reply indented so it reads apart from the rest.
   expect(text).toContain(
@@ -203,7 +203,7 @@ test("a conversation: user message, tool call and reply end up in the transcript
       "› what is in a.ts?",
       "",
       "● read a.ts",
-      "  ⎿ contents of a.ts (+2 lines)",
+      "  └ contents of a.ts (+2 lines)",
       "",
       "  The file has three lines.",
       "",
@@ -287,7 +287,7 @@ test("parallel tool calls reach the transcript in call order, whichever finishes
   await shows("done")
   await idle()
   expect(all()).toContain(
-    ["● slow a.ts", "  ⎿ slow result", "● fast b.ts", "  ⎿ fast result", "", "  done"].join("\n"),
+    ["● slow a.ts", "  └ slow result", "● fast b.ts", "  └ fast result", "", "  done"].join("\n"),
   )
   terminal.send("\x03")
   await exited
@@ -320,7 +320,7 @@ test("a running tool shows the last lines of its output live, and only its resul
   release()
   await shows("built")
   await idle()
-  expect(all()).toContain("● stream make\n  ⎿ ok")
+  expect(all()).toContain("● stream make\n  └ ok")
   expect(all()).not.toContain("│ l5")
   terminal.send("\x03")
   await exited
@@ -346,7 +346,7 @@ test("Esc interrupting a running tool marks it interrupted, muted, not failed", 
   terminal.send("\x1b[27u")
   await shows("Interrupted.")
   await idle()
-  expect(all()).toContain("⊘ hang sleep 100\n  ⎿ interrupted\n\n⊘ Interrupted.")
+  expect(all()).toContain("⊘ hang sleep 100\n  └ interrupted\n\n⊘ Interrupted.")
   expect(all()).not.toContain("✗")
   terminal.send("\x03")
   await exited
@@ -367,7 +367,7 @@ test("failures show their output cut to 8 lines; Ctrl+O shows all of later ones 
   terminal.send("go\r")
   await shows("one")
   await idle()
-  expect(all()).toContain("✗ fail\n  ⎿ bad (+20 lines)\n    out 1\n")
+  expect(all()).toContain("✗ fail\n  └ bad (+20 lines)\n    out 1\n")
   expect(all()).toContain("    … 13 more lines\n")
   expect(all()).not.toContain("out 10")
   terminal.send("\x0f")
@@ -388,7 +388,7 @@ test("/verbose sets the tool output level, printed under the command", async () 
   await shows("Tool output: collapsed")
   // Wrapped to the width, hanging under the result mark.
   expect(all()).toContain(
-    "› /verbose collapsed\n  ⎿ Tool output: collapsed (applies to tool results from now\n    on; Ctrl+O cycles)",
+    "› /verbose collapsed\n  └ Tool output: collapsed (applies to tool results from now\n    on; Ctrl+O cycles)",
   )
   terminal.send("/verbose loud\r")
   await shows('Unknown level "loud"')
@@ -425,7 +425,7 @@ test("the built-in presenters: an edit shows its diff with line numbers", async 
   await shows("ok")
   await idle()
   expect(all()).toContain(
-    ["● edit src/a.ts", "  ⎿ +1 −1", "    11  keep", "    12 -old", "    12 +new", "", "  ok"].join("\n"),
+    ["● edit src/a.ts", "  └ +1 −1", "    11  keep", "    12 -old", "    12 +new", "", "  ok"].join("\n"),
   )
   terminal.send("\x03")
   await exited
@@ -457,7 +457,7 @@ test("a resumed session shows its history like the live transcript, then a separ
   })
   await waitFor(() => all().includes("── resumed"), "history")
   expect(all()).toContain(
-    ["› count", "", "● glob *.ts", "  ⎿ 2 files", "", "  Two.", "", `── resumed ${agent.sessionId} ──`].join(
+    ["› count", "", "● glob *.ts", "  └ 2 files", "", "  Two.", "", `── resumed ${agent.sessionId} ──`].join(
       "\n",
     ),
   )
@@ -891,7 +891,7 @@ test("running tools show as lines with their arguments and are replaced by the r
   terminal.send("go\r")
   await waitFor(() => live().includes("● slow bun test --watch"), "running line")
   release()
-  await shows("⎿ passed")
+  await shows("└ passed")
   await idle()
   // The live line was replaced by the committed one, not left behind as a duplicate.
   expect(all().split("● slow bun test --watch").length - 1).toBe(1)
@@ -1432,7 +1432,7 @@ test("a command that sends a long prompt shows as typed, with its note, while th
   await s.shows("Reviewing.")
   await s.idle()
   const text = s.all()
-  expect(text).toContain("› /review-pr 123\n  ⎿ Loaded skill review-pr (40 lines)")
+  expect(text).toContain("› /review-pr 123\n  └ Loaded skill review-pr (40 lines)")
   expect(text).not.toContain("instruction line")
   const sent = s.mock.requests[0]!.messages[0]!
   expect(sent).toEqual({ role: "user", content: [{ type: "text", text: long }] })
@@ -1484,7 +1484,7 @@ test("typing $ opens the skill list; Enter runs the skill, shown as typed with i
   terminal.send("123\r")
   await shows("Reviewing.")
   await idle()
-  expect(all()).toContain("› $review-pr 123\n  ⎿ Loaded skill review-pr (3 lines)")
+  expect(all()).toContain("› $review-pr 123\n  └ Loaded skill review-pr (3 lines)")
   expect(all()).not.toContain("SKILL review-pr BODY")
   expect(mock.requests[0]!.messages[0]).toEqual({
     role: "user",
@@ -1558,7 +1558,7 @@ test("the $ list takes its keys from the keybindings like the / list", async () 
   terminal.send("\x19")
   await shows("Deployed.")
   await idle()
-  expect(all()).toContain("› $deploy\n  ⎿ Loaded skill deploy (3 lines)")
+  expect(all()).toContain("› $deploy\n  └ Loaded skill deploy (3 lines)")
   terminal.send("\x03")
   await exited
 })
@@ -1617,7 +1617,7 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   // The first one runs its tool; the second waits for the slot.
   await waitFor(
     () =>
-      /● delegate +. \d+s\n {2}⎿ ◆ US market trend · explorer · \d+s · 4\.1k tok\n {2}│ {3}● read a\.ts\n {2}⎿ ◆ Add status bar test · coder · queued\n/.test(
+      /● delegate +. \d+s\n {2}├ ◆ US market trend · explorer · \d+s · 4\.1k tok\n {2}│ └ ● read a\.ts\n {2}└ ◆ Add status bar test · coder · queued\n/.test(
         live(),
       ),
     "rows under the call",
@@ -1629,7 +1629,7 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   const text = all()
   // Each one's rows became its end line, committed with the call right under its head, in order.
   expect(text).toMatch(
-    /● delegate\n {2}⎿ ◆ US market trend ✓ explorer · \d+\.\ds · 4\.1k tok · trend is up\n {2}⎿ ◆ Add status bar test ✓ coder · \d+\.\ds · 1\.2k tok · test added\n {2}⎿ trend is up/,
+    /● delegate\n {2}├ ◆ US market trend ✓ explorer · \d+\.\ds · 4\.1k tok · trend is up\n {2}├ ◆ Add status bar test ✓ coder · \d+\.\ds · 1\.2k tok · test added\n {2}└ trend is up/,
   )
   expect(text.match(/◆ US market trend/g)).toHaveLength(1)
   // Nothing is left of them in the live region below the transcript.
@@ -1670,7 +1670,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   terminal.send("go\r")
   // The child is done and so is its call, but both wait below the running slow call.
   await waitFor(
-    () => /● slow big\.log .*\n● delegate\n {2}⎿ ◆ Look around ✓ .*child answer/m.test(live()),
+    () => /● slow big\.log .*\n● delegate\n {2}└ ◆ Look around ✓ .*child answer/m.test(live()),
     "held",
   )
   release()
@@ -1678,7 +1678,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   await idle()
   const text = all()
   expect(text).toMatch(
-    /● slow big\.log\n {2}⎿ slow result\n● delegate\n {2}⎿ ◆ Look around ✓ [^\n]*child answer\n {2}⎿ child answer/,
+    /● slow big\.log\n {2}└ slow result\n● delegate\n {2}├ ◆ Look around ✓ [^\n]*child answer\n {2}└ child answer/,
   )
   expect(text.match(/◆ Look around ✓/g)).toHaveLength(1)
   terminal.send("\x03")
@@ -1703,13 +1703,13 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   agent.tools.register(delegateTool(), "test")
   terminal.send("go\r")
   await waitFor(
-    () => /● delegate .*\n {2}⎿ ◆ First pass · .*\n● delegate .*\n {2}⎿ ◆ Second pass · /.test(live()),
+    () => /● delegate .*\n {2}└ ◆ First pass · .*\n● delegate .*\n {2}└ ◆ Second pass · /.test(live()),
     "each under its own call",
   )
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /● delegate\n {2}⎿ ◆ First pass ✓ [^\n]*\n {2}⎿ \w+\n● delegate\n {2}⎿ ◆ Second pass ✓ [^\n]*\n {2}⎿ \w+/,
+    /● delegate\n {2}├ ◆ First pass ✓ [^\n]*\n {2}└ \w+\n● delegate\n {2}├ ◆ Second pass ✓ [^\n]*\n {2}└ \w+/,
   )
   terminal.send("\x03")
   await exited
@@ -1730,7 +1730,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   terminal.send("go\r")
   await waitFor(
     () =>
-      /● delegate +. \d+s\n {2}⎿ ◆ Outer task · explorer · \d+s · 0 tok\n {2}│ {3}● delegate\n {4}⎿ ◆ Inner check · explorer · \d+s · 0 tok\n/.test(
+      /● delegate +. \d+s\n {2}└ ◆ Outer task · explorer · \d+s · 0 tok\n {4}└ ● delegate\n {4}└ ◆ Inner check · explorer · \d+s · 0 tok\n/.test(
         live(),
       ),
     "nested rows",
@@ -1738,7 +1738,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /● delegate\n {2}⎿ ◆ Outer task ✓ explorer [^\n]*outer done\n {4}⎿ ◆ Inner check ✓ explorer [^\n]*inner done\n {2}⎿ outer done/,
+    /● delegate\n {2}├ ◆ Outer task ✓ explorer [^\n]*outer done\n {4}└ ◆ Inner check ✓ explorer [^\n]*inner done\n {2}└ outer done/,
   )
   terminal.send("\x03")
   await exited
@@ -1783,8 +1783,8 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   await survivor!.result()
   await idle()
   await bus.flush()
-  await waitFor(() => !live().includes("◆ background"), "the rows gone")
-  expect(all()).toMatch(/⎿ ◆ Stop me ⊘ explorer · [^\n]*stopped/)
+  await waitFor(() => !live().includes("running in background"), "the rows gone")
+  expect(all()).toMatch(/└ ◆ Stop me ⊘ explorer · [^\n]*stopped/)
   expect(all().match(/◆ Stop me ⊘/g)).toHaveLength(1)
   // The survivor's notice (the agent extension's) reports it; no line of its own here.
   expect(all()).not.toContain("◆ Keep going ✓")
@@ -1792,7 +1792,7 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   await exited
 })
 
-test("sub-agents that outlive their call run on under a background header, with no end line", async () => {
+test("sub-agents that outlive their call run on under a head shaped like the call, with no end line", async () => {
   let finish!: () => void
   // The child and the commander ask in no fixed order: each reply goes by who asks.
   const reply = (req: { messages: { role: string; content: unknown }[] }) => {
@@ -1840,15 +1840,15 @@ test("sub-agents that outlive their call run on under a background header, with 
   await shows("started it")
   await idle()
   // The call is committed; its sub-agent runs on in the live region.
-  expect(all()).toMatch(/● launch\n {2}⎿ Started in the background/)
+  expect(all()).toMatch(/● launch\n {2}└ Started in the background/)
   await waitFor(
     () =>
-      /◆ background\n {2}⎿ ◆ Scan the logs · explorer · \d+s · 0 tok\n {2}│ {3}● scan logs\/app\.log\n/.test(
+      /● launch · 1 sub-agent · running in background · \d+s\n {2}└ ◆ Scan the logs · explorer · \d+s · 0 tok\n {4}└ ● scan logs\/app\.log\n/.test(
         live(),
       ),
     "background rows",
   )
-  const committed = all().split("◆ background")[0]!
+  const committed = all().split("running in background")[0]!
   expect(committed).not.toContain("Scan the logs")
   finish()
   await child!.result()

@@ -113,21 +113,32 @@ function subagentIndent(depth: number): string {
 }
 
 /**
- * A queued or running sub-agent under its call: `⎿ ◆ title · role · 12s · 4.1k tok`
+ * A queued or running sub-agent under its call: `└ ◆ title · role · 12s · 4.1k tok`
  * ("queued" while it waits), and once it has called a tool, `│   ● grep "TODO"` below.
  */
-export function subagentRows(sub: SubagentLine, now: number, width: number, theme: Theme): string[] {
+/**
+ * `last`: no row of the same tree follows at this level, so this one closes it ("└", not "├")
+ * and its tool row below has no "│" to carry the tree on.
+ */
+export function subagentRows(
+  sub: SubagentLine,
+  now: number,
+  width: number,
+  theme: Theme,
+  last = true,
+): string[] {
   const s = glyphs.separator
   const indent = subagentIndent(sub.depth)
   const stats =
     sub.startedAt === undefined
       ? "queued"
       : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
-  const head = `${indent}${theme.muted(glyphs.result)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${theme.muted(`${s} ${sub.role} ${s} ${stats}`)}`
+  const head = `${indent}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${theme.muted(`${s} ${sub.role} ${s} ${stats}`)}`
   const rows = [truncateToWidth(head, width, glyphs.more)]
   if (sub.startedAt !== undefined && sub.activity) {
     const summary = cut(oneLine(sub.activity.summary), ACTIVITY_CHARS)
-    const tool = `${indent}${theme.muted(glyphs.output)}   ${theme.accent(glyphs.toolRunning)} ${theme.accent(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
+    const tree = `${last ? " " : glyphs.output} ${glyphs.result}`
+    const tool = `${indent}${theme.muted(tree)} ${theme.accent(glyphs.toolRunning)} ${theme.accent(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
     rows.push(truncateToWidth(tool, width, glyphs.more))
   }
   return rows
@@ -149,6 +160,7 @@ export function subagentEndLine(
   end: { status: "done" | "error" | "aborted"; error?: string; durationMs: number; tokens: number },
   width: number,
   theme: Theme,
+  last = true,
 ): string {
   const mark =
     end.status === "done"
@@ -164,6 +176,17 @@ export function subagentEndLine(
       : end.status === "aborted"
         ? theme.muted("stopped")
         : theme.muted(oneLine(sub.lastText ?? "") || "(no answer)")
-  const line = `${subagentIndent(sub.depth)}${theme.muted(glyphs.result)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${mark} ${theme.muted(`${stats} ${s}`)} ${said}`
+  const line = `${subagentIndent(sub.depth)}${theme.muted(last ? glyphs.result : glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${oneLine(sub.title)} ${mark} ${theme.muted(`${stats} ${s}`)} ${said}`
   return truncateToWidth(line, width, glyphs.more)
+}
+
+/** Whether `list[i]` (a depth-first list) has no later sibling: nothing after it at its depth before its parent's level ends. */
+export function isLastSibling(list: { depth: number }[], i: number): boolean {
+  const depth = list[i]!.depth
+  for (let j = i + 1; j < list.length; j++) {
+    const d = list[j]!.depth
+    if (d === depth) return false
+    if (d < depth) return true
+  }
+  return true
 }

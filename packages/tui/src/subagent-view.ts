@@ -150,7 +150,7 @@ export function transcriptLines(
               width,
               "…",
             ),
-            `  ${theme.muted(`⎿ ${finished ? "(no result)" : "running…"}`)}`,
+            `  ${theme.muted(`└ ${finished ? "(no result)" : "running…"}`)}`,
           )
         }
         if (b.name === "agent") for (const k of callKids(rest, b)) out.push(kidLine(k, "  "))
