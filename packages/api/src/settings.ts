@@ -68,6 +68,8 @@ export interface Settings {
   merge?: { reviewThreshold?: { lines?: number; files?: number } }
   /** The interactive terminal UI. */
   tui?: TuiSettings
+  /** The workflow extension (D81); its shape belongs to that extension. */
+  workflow?: Record<string, unknown>
 }
 
 export interface TuiSettings {

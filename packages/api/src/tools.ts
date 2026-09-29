@@ -106,6 +106,12 @@ export interface ToolDefinition<P = any> {
   concurrencyKey?(params: P, ctx: { cwd: string }): string | undefined
   /** Must be true to replace a tool of the same name registered earlier. */
   override?: boolean
+  /**
+   * Only top-level sessions get it: sub-agents, at any depth, never see or call it, whatever
+   * tools they were given. For tools that start work only the user's own session should
+   * start, such as a workflow or a swarm (D81).
+   */
+  mainOnly?: boolean
   execute(params: P, ctx: ToolContext): Promise<ToolResult>
 }
 

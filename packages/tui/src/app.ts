@@ -6,6 +6,7 @@ import {
   fallbackTitle,
   isSubagentView,
   modelLabel,
+  type SpawnGroupInfo,
   type ToolDetailLevel,
   type TuiSettings,
   type UserMessage,
@@ -54,6 +55,7 @@ import {
   isLastSibling,
   replyRows,
   type SubagentLine,
+  spawnGroupRow,
   subagentEndLine,
   subagentRows,
   userLines,
@@ -167,6 +169,8 @@ interface SubagentNode extends SubagentLine {
   parent: string
   /** The call of `parent` that started it. */
   toolCallId?: string
+  /** The spawn group it counts against. */
+  groupId?: string
   end?: { status: "done" | "error" | "aborted"; error?: string; durationMs: number; tokens: number }
   /**
    * Its call was committed while it ran: it returned at once (the sub-agent runs in the
@@ -304,6 +308,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * is committed with it; one whose call was committed already goes when it ends.
    */
   const subagents = new Map<string, SubagentNode>()
+  /** Spawn groups of this session's tree, as their latest event had them. */
+  const spawnGroups = new Map<string, SpawnGroupInfo>()
+  /** The group a sub-agent's row is folded into: one shown as a single line (SpawnGroupOptions.compact). */
+  const compactGroup = (n: SubagentNode): SpawnGroupInfo | undefined => {
+    const g = n.groupId !== undefined ? spawnGroups.get(n.groupId) : undefined
+    return g?.compact ? g : undefined
+  }
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tickSubagents = () => {
@@ -500,9 +511,27 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     return n.end ? [subagentEndLine(n, n.end, width, t, last)] : subagentRows(n, now, width, t, last)
   }
 
-  /** Rows of a depth-first list of sub-agents, each closing its level ("└") when it is the last. */
+  /**
+   * Rows of a depth-first list of sub-agents, each closing its level ("└") when it is the last.
+   * The members of a compact group (and theirs) are one row for the whole group, where its
+   * first member would be.
+   */
   function treeRows(list: SubagentNode[], now: number, width: number, t: Theme): string[] {
-    return list.flatMap((n, i) => nodeRows(n, now, width, t, isLastSibling(list, i)))
+    const items: (SubagentNode | { group: SpawnGroupInfo; depth: number })[] = []
+    const folded = new Set<string>()
+    for (const n of list) {
+      const g = compactGroup(n)
+      if (!g) items.push(n)
+      else if (!folded.has(g.id)) {
+        folded.add(g.id)
+        items.push({ group: g, depth: n.depth })
+      }
+    }
+    return items.flatMap((item, i) =>
+      "group" in item
+        ? [spawnGroupRow(item.group, item.depth, width, t, isLastSibling(items, i))]
+        : nodeRows(item, now, width, t, isLastSibling(items, i)),
+    )
   }
 
   /** The sub-agents `parent` started (through `callId`, when given), in start order. */
@@ -761,7 +790,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const ends: string[] = []
       const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
       for (const [i, n] of tree.entries()) {
-        if (n.end) {
+        if (n.end && compactGroup(n)) {
+          // A compact group's line tells how it goes; its members get no lines of their own.
+          subagents.delete(n.id)
+        } else if (n.end) {
           // The call's own result line comes after them, so only a nested one can close a level.
           const last = n.depth > 1 && isLastSibling(tree, i)
           ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last))
@@ -796,7 +828,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * reports it; a line here would say it twice.
    */
   function endsAlone(n: SubagentNode): boolean {
-    return n.detached !== "background" && n.end?.status === "aborted"
+    return n.detached !== "background" && n.end?.status === "aborted" && !compactGroup(n)
   }
 
   /** Keeps the sub-agent rows current; true when the event was about a sub-agent. */
@@ -809,6 +841,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           id: e.data.childSessionId,
           parent: e.sessionId,
           ...(e.data.toolCallId ? { toolCallId: e.data.toolCallId } : {}),
+          ...(e.data.groupId ? { groupId: e.data.groupId } : {}),
           title: e.data.title || fallbackTitle(e.data.prompt),
           role: e.data.role ?? "agent",
           depth: e.data.depth,
@@ -835,6 +868,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (isLiveCall(rootCall(node))) break
         subagents.delete(node.id)
         if (endsAlone(node)) commitBlock("tool", [subagentEndLine(node, node.end, terminal.columns, theme)])
+        break
+      }
+      case "group.start":
+      case "group.update":
+      case "group.end": {
+        if (!mine) return false
+        spawnGroups.set(e.data.group.id, e.data.group)
+        // Only a compact group's own line shows it.
+        if (!e.data.group.compact) return false
         break
       }
       case "budget.exceeded":

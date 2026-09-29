@@ -176,6 +176,11 @@ export interface SpawnGroupOptions {
   budget?: Budget
   /** Most turns each persistent child of the group runs (SpawnOptions.maxTurns can lower it). */
   maxTurnsPerAgent?: number
+  /**
+   * Frontends show the group's members as one line (its name, status and counts) rather than
+   * a row each, e.g. for a workflow that runs dozens of agents. Default false.
+   */
+  compact?: boolean
 }
 
 /**
@@ -192,7 +197,11 @@ export interface SpawnGroupInfo {
   parentSessionId: string
   state: SpawnGroupState
   /** The limits in effect (the budget after cutting it to what the tree had left). */
-  limits: Omit<SpawnGroupOptions, "name">
+  limits: Omit<SpawnGroupOptions, "name" | "compact">
+  /** Shown as one line by frontends (SpawnGroupOptions.compact). */
+  compact?: boolean
+  /** A short line about what the group is doing, from its owner (SpawnGroup.setStatus). */
+  status?: string
   /** Tokens and cost of its children and theirs so far. */
   usage: Usage
   /** All tokens of `usage`, as a token budget counts them. */
@@ -219,6 +228,11 @@ export interface SpawnGroup {
    */
   spawn(opts: SpawnOptions): ChildSession
   info(): SpawnGroupInfo
+  /**
+   * Sets a short line about what the group is doing ("Verify · 3/7 agents"), which frontends
+   * show with it; sent as group.update. An empty text clears it.
+   */
+  setStatus(text: string): void
   /** Live children of the group (its members' own included), oldest first. */
   children(): ChildSession[]
   /**

@@ -208,6 +208,8 @@ const spawnGroup = obj({
     "budget?": budget,
     "maxTurnsPerAgent?": num,
   }),
+  "compact?": bool,
+  "status?": str,
   usage,
   tokens: num,
   agents: obj({ total: num, queued: num, working: num, idle: num, ended: num }),

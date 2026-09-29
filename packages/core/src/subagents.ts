@@ -256,6 +256,8 @@ class Group implements SpawnGroup {
   readonly live = new Set<Child>()
   endReason: string | undefined
   exceeded = false
+  /** The owner's line about what the group is doing (setStatus). */
+  status: string | undefined
   #ended: Promise<SpawnGroupInfo>
   settle!: (info: SpawnGroupInfo) => void
 
@@ -264,7 +266,8 @@ class Group implements SpawnGroup {
     readonly parent: Agent,
     /** The group the creating session belongs to: this one's children count against it too. */
     readonly outer: Group | undefined,
-    readonly limits: Omit<SpawnGroupOptions, "name">,
+    readonly limits: Omit<SpawnGroupOptions, "name" | "compact">,
+    readonly compact: boolean,
     private tree: AgentTree,
     /** Set on the children it spawns, e.g. the tool call that created the group. */
     private defaults: { toolCallId?: string },
@@ -295,12 +298,21 @@ class Group implements SpawnGroup {
       parentSessionId: this.parent.sessionId,
       state: this.state,
       limits: structuredClone(this.limits),
+      ...(this.compact ? { compact: true } : {}),
+      ...(this.status ? { status: this.status } : {}),
       usage: { ...this.usage },
       tokens: usageTokens(this.usage),
       agents,
       ...(this.endReason !== undefined ? { endReason: this.endReason } : {}),
       ...(this.exceeded ? { exceeded: true } : {}),
     }
+  }
+
+  setStatus(text: string): void {
+    const line = text.replace(/\s+/g, " ").trim() || undefined
+    if (line === this.status || this.state === "ended") return
+    this.status = line
+    this.parent.bus.emit("group.update", { group: this.info() }, metaOf(this.parent))
   }
 
   children(): ChildSession[] {
@@ -426,7 +438,7 @@ export class AgentTree {
     if (this.#exceeded) throw new SpawnError(`the agent tree's budget is spent (${this.#exceeded})`)
     const outer = this.#live.get(parent.sessionId)?.groups[0]
     if (outer && outer.state !== "active") throw new SpawnError(`the group "${outer.name}" has ended`)
-    const limits: Omit<SpawnGroupOptions, "name"> = {}
+    const limits: Omit<SpawnGroupOptions, "name" | "compact"> = {}
     for (const key of ["maxConcurrent", "maxAgents", "maxTurnsPerAgent"] as const) {
       const n = opts[key]
       if (n !== undefined) limits[key] = Math.max(1, Math.floor(n))
@@ -434,7 +446,7 @@ export class AgentTree {
     const budget = this.#carve(opts.budget)
     if (budget) limits.budget = budget
     const name = opts.name.replace(/\s+/g, " ").trim() || "group"
-    const group = new Group(name, parent, outer, limits, this, defaults)
+    const group = new Group(name, parent, outer, limits, opts.compact === true, this, defaults)
     this.#groups.set(group.id, group)
     parent.bus.emit("group.start", { group: group.info() }, metaOf(parent))
     return group
@@ -522,7 +534,8 @@ export class AgentTree {
       interceptors: parent.interceptors,
       tools: ToolRegistry.view(
         parent.tools,
-        (n) => (allow?.has(n) ?? true) && !deny.has(n),
+        // Tools only top-level sessions get (ToolDefinition.mainOnly) never reach a child.
+        (n) => (allow?.has(n) ?? true) && !deny.has(n) && parent.tools.get(n)?.mainOnly !== true,
         spec ? [returnResultTool(spec, this.resultRetries)] : [],
       ),
       ...(store ? { session: store } : {}),

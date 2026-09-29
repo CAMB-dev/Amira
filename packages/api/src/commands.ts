@@ -3,7 +3,7 @@ import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
 import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
-import type { ToolExposure } from "./tools.ts"
+import type { PendingNotice, ToolExposure } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
 
 /** A suggestion for a command's argument text. */
@@ -237,6 +237,12 @@ export interface SessionControl {
   readonly createGroup?: (opts: SpawnGroupOptions) => SpawnGroup
   /** The agent tree's spawn groups, active and ended, oldest first; unset without a tree. */
   readonly groups?: () => SpawnGroupInfo[]
+  /**
+   * Announces a message the session gets later, as ToolSession.expectNotice does: e.g. the
+   * result of work a command started in the background. Unset where the host cannot wake the
+   * session.
+   */
+  readonly expectNotice?: () => PendingNotice
   /** "provider/model" refs to offer, from providers that have a key. */
   models(): string[]
   /** Switches the model for later turns; throws for an unknown one. */

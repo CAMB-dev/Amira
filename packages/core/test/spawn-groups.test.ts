@@ -499,3 +499,46 @@ test("a child that ends aborts the sub-agents it left running, persistent or not
   expect(await grandchild!.result()).toMatchObject({ status: "aborted", error: "its parent ended" })
   expect(tree.children).toHaveLength(0)
 })
+
+// ---- workflow support (D81) ----
+
+test("a mainOnly tool is offered to the top-level session only, never to sub-agents", async () => {
+  const seen: string[][] = []
+  const { tree, root, tools } = setup((req) => {
+    seen.push((req.tools ?? []).map((t) => t.name).sort())
+    return { text: "ok" }
+  })
+  const noop = { parameters: { type: "object" as const }, execute: async () => textResult("x") }
+  tools.register(defineTool({ name: "workflow", description: "w", mainOnly: true, ...noop }), "test")
+  tools.register(defineTool({ name: "read", description: "r", ...noop }), "test")
+  expect(root.tools.specs().map((t) => t.name)).toContain("workflow")
+  // Asking for it by name does not help a child either.
+  const child = tree.spawn(root, { prompt: "p", tools: ["read", "workflow"] })
+  const other = tree.spawn(root, { prompt: "q" })
+  await Promise.all([child.result(), other.result()])
+  expect(seen).toEqual([["read"], ["read"]])
+})
+
+test("a group's status and compact flag travel in its info and group.update", async () => {
+  const { tree, root, events } = setup(() => ({ text: "x" }))
+  const group = tree.createGroup(root, { name: "wf", compact: true, maxAgents: 3 })
+  expect(group.info()).toMatchObject({ compact: true, limits: { maxAgents: 3 } })
+  expect(group.info().limits).not.toHaveProperty("compact")
+  const updates = () => events.filter((e) => e.type === "group.update")
+  group.setStatus("  Verify ·  2/5 agents ")
+  // Subscribers get events a moment later.
+  await until(() => updates().length === 1)
+  const update = updates().at(-1)
+  expect(update?.type === "group.update" && update.data.group.status).toBe("Verify · 2/5 agents")
+  // The same line again is no change.
+  group.setStatus("Verify · 2/5 agents")
+  group.setStatus("")
+  expect(group.info().status).toBeUndefined()
+  await until(() => updates().length === 2)
+  group.end()
+  await group.ended()
+  group.setStatus("late")
+  await Bun.sleep(10)
+  expect(updates().length).toBe(2)
+  expect(tree.createGroup(root, { name: "plain" }).info()).not.toHaveProperty("compact")
+})
