@@ -18,6 +18,7 @@ import type {
   ApprovalRequest,
   EventMap,
   PendingNotice,
+  SessionData,
   SessionStatus,
   SpawnGroupOptions,
   SpawnOptions,
@@ -238,6 +239,26 @@ export class Agent {
   #endTurn: (() => boolean) | undefined
   /** The running turn's promise, for owners that wait for whatever turn runs. */
   #current: Promise<TurnResult> | undefined
+  /** Extension records of a session without a file (see `data`). */
+  #records: { key: string; data: unknown }[] = []
+
+  /**
+   * Records extensions keep in this session (SessionData): custom entries of its file, or
+   * kept in memory when it has none.
+   */
+  readonly data: SessionData = {
+    append: (key, data) => {
+      const copy = JSON.parse(JSON.stringify(data ?? null)) as unknown
+      if (this.session) this.#store({ type: "custom", ext: key, data: copy })
+      else this.#records.push({ key, data: copy })
+    },
+    read: (key) => {
+      const all = this.session
+        ? this.session.branch().flatMap((e) => (e.type === "custom" && e.ext === key ? [e.data] : []))
+        : this.#records.filter((r) => r.key === key).map((r) => r.data)
+      return all.map((d) => structuredClone(d))
+    },
+  }
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -287,6 +308,7 @@ export class Agent {
     const deferred = createToolSession(this.sessionId, this.tools, this.#loadedTools)
     this.#toolSession = {
       ...deferred,
+      data: this.data,
       // Recorded in the session, so resuming it offers the same tools again.
       loadTools: (names) => {
         const added = deferred.loadTools(names)

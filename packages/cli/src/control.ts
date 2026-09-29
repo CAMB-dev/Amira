@@ -94,6 +94,10 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       listSubagents(agent(), session.tree).some((e) => e.info.id === id) &&
       session.tree.stop(id, "stopped by the user"),
     createGroup: (groupOpts) => session.tree.createGroup(agent(), groupOpts),
+    data: {
+      append: (key, data) => agent().data.append(key, data),
+      read: (key) => agent().data.read(key),
+    },
     groups: () => session.tree.groups(),
     models: () => {
       const m = agent().model
