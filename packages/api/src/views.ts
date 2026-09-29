@@ -24,9 +24,18 @@ export interface ViewControl {
   close(): void
   /** Redraws it, e.g. after the handler changed the data. */
   requestRender(): void
+  /**
+   * Asks the user for one line of text at the bottom of the view, e.g. a message for an agent
+   * the view shows: Enter answers, Esc cancels. Resolves with the text as typed (trimmed), or
+   * undefined when cancelled or left empty. Asking again while one is open cancels that one.
+   */
+  prompt(title: string, opts?: { initial?: string }): Promise<string | undefined>
 }
 
-/** A key the view handles, shown in its footer, e.g. `{ key: "x", label: "stop" }`. */
+/**
+ * A key the view handles, shown in its footer, e.g. `{ key: "x", label: "stop" }`. While a
+ * prompt (ViewControl.prompt) is open, keys go to it instead.
+ */
 export interface ViewKey<D = unknown> {
   /** One printable character. Esc, q and the scrolling keys are the frontend's. */
   key: string

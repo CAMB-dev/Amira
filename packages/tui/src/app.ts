@@ -688,6 +688,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Puts `next` on the full screen, in place of the view open there if any. */
   function showFullScreen(next: SubagentViewer | ExtensionViewer) {
     const opened = viewer !== undefined
+    if (viewer instanceof ExtensionViewer) viewer.dispose()
     viewer = next
     if (opened) return
     renderer.suspend()
@@ -698,6 +699,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   function closeView() {
     if (!viewer) return
+    if (viewer instanceof ExtensionViewer) viewer.dispose()
     viewer = undefined
     clearInterval(viewerTimer)
     viewerTimer = undefined
