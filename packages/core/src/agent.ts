@@ -506,6 +506,14 @@ export class Agent {
     return [...this.#loadedTools]
   }
 
+  /**
+   * The session entry `message` (one of `messages`) was stored as; for a compaction's summary
+   * that is the compaction entry. Undefined without a session file or for an unknown message.
+   */
+  entryId(message: Message): string | undefined {
+    return this.#entryIds.get(message)
+  }
+
   get status(): SessionStatus {
     return this.#status
   }

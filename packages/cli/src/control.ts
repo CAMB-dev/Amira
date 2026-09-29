@@ -132,6 +132,27 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       if (!file) throw new Error(`no session ${id} in ${cwd}`)
       switchTo(session.resume(SessionStore.open(file), agent().model), "resume")
     },
+    rewind: async (index) => {
+      idle("rewind the conversation")
+      const a = agent()
+      const store = a.session
+      if (!store) throw new Error("this session is not stored, so it cannot be rewound")
+      const message = Number.isInteger(index) ? a.messages[index] : undefined
+      if (message?.role !== "user")
+        throw new Error(`message ${index} is not a user message of this conversation`)
+      const id = a.entryId(message)
+      const entry = id ? store.get(id) : undefined
+      if (entry?.type !== "message") {
+        throw new Error("that message was summarized by a compaction; only later ones can be rewound to")
+      }
+      // Nothing came before it: going back to before it is an empty conversation.
+      if (!entry.parentId) {
+        switchTo(session.resume(SessionStore.create({ cwd }), a.model), "clear")
+        return
+      }
+      store.append({ type: "checkout", target: entry.parentId })
+      switchTo(session.resume(store, a.model), "resume")
+    },
     compact: (instructions) => {
       idle("compact")
       return agent().compact(instructions)
