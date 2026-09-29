@@ -1129,6 +1129,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     historyNav.reset()
     const message: Outgoing = { ...outgoing(trimmed, display), seq: ++typed }
     remember(message, parts)
+    // Messages an Esc released still wait out a double press: they were typed first, so they go
+    // first, and this one joins the turn they start (or is queued after it).
+    if (flushTimer) {
+      clearTimeout(flushTimer.timer)
+      sendMerged(flushTimer.next)
+    }
     if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
     else if (commands?.skillLine(trimmed)) runSkill(trimmed)
     else if (commands?.inputLine(trimmed)) runInput(trimmed, display)

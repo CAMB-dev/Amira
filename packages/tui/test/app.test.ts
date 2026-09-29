@@ -1244,6 +1244,27 @@ test("Esc merges the steering and queued messages into one, in the order they we
   await exited
 })
 
+test("a message sent right after Esc goes after the messages Esc released, not before them", async () => {
+  const { terminal, live, agent, shows, idle, exited } = await setup([
+    { text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", delayMs: 30 },
+    (req) => ({ text: `saw ${lastUserText(req)}` }),
+    (req) => ({ text: `saw ${lastUserText(req)}` }),
+  ])
+  terminal.send("go\r")
+  await shows("01234567")
+  terminal.send(`then summarize${ALT_ENTER}`)
+  await waitFor(() => live().includes("queued › then summarize"), "queued line")
+  terminal.send("\x1b[27u")
+  await shows("Interrupted.")
+  // Typed while the released message still waited out a second Esc: it does not overtake it.
+  terminal.send("and then this\r")
+  await shows("saw and then this")
+  await idle()
+  expect(userTexts(agent)).toEqual(["go", "then summarize", "and then this"])
+  terminal.send("\x03")
+  await exited
+})
+
 test("waiting messages take at most two rows each, and a few of them, above the input", () => {
   const long = "word ".repeat(40)
   const rows = pendingMessageRows(
