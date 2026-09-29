@@ -35,6 +35,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
       confirm: async () => false,
       input: async () => undefined,
       reviewDiff: async () => undefined,
+      ask: async () => undefined,
       form: async () => undefined,
     },
   }
@@ -47,6 +48,8 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     ...(process.platform === "win32" ? { powershell: "parallel" } : {}),
     grep: "parallel",
     glob: "parallel",
+    // Questions for the user wait for each other and for everything else.
+    ask_user: undefined,
   })
   for (const t of tools) {
     expect(t.description.length).toBeGreaterThan(50)

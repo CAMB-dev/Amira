@@ -1,6 +1,6 @@
 import type { ToolDetailLevel } from "@amira/api"
-import { stripAnsi, truncateToWidth } from "@amira/tui-kit"
-import { type Block, type BlockEnv, ReplyBlock } from "./blocks.ts"
+import { type ImagePlacement, stripAnsi, truncateToWidth } from "@amira/tui-kit"
+import { type Block, type BlockEnv, imagesIn, ReplyBlock } from "./blocks.ts"
 import { gapBetween } from "./transcript.ts"
 
 /** Lines of a block drawn at one width, for one version of it. */
@@ -8,6 +8,8 @@ interface Drawn {
   width: number
   version: number
   detail: ToolDetailLevel
+  /** The most rows an image could take, and whether images were drawn at all. */
+  imageRows: number
   /** The frame it was drawn in, for live blocks, which are drawn once per frame. */
   frame: number
   lines: string[]
@@ -58,6 +60,8 @@ export class TranscriptPane {
   layout: PaneRow[] = []
   /** Rows of blank padding above the content in the last frame. */
   padding = 0
+  /** Images of the last frame, by rows of the viewport. */
+  placements: ImagePlacement[] = []
   private drawn = new WeakMap<Block, Drawn[]>()
   private anchor: Position | undefined
   /** The first row of the last frame. */
@@ -136,21 +140,85 @@ export class TranscriptPane {
     if (this.following) rows = this.fillTail(this.height)
     this.layout = rows!
     this.padding = this.height - this.layout.length
+    const alt = this.placeImages(env)
     const out: string[] = Array(this.padding).fill("")
-    for (const r of this.layout) out.push(this.drawRow(r, env))
+    for (let i = 0; i < this.layout.length; i++) out.push(this.drawRow(this.layout[i]!, env, alt.get(i)))
     return out
+  }
+
+  /**
+   * Works out where the images of the blocks in view go (`placements`, rows counted from the
+   * top of the viewport), cropped to the rows in view. One that cannot be drawn shows its alt
+   * text on its first row in view instead: while it gets ready, and when only part of it is in
+   * view and its protocol draws images whole ("scroll to view"). Returns those rows by index
+   * in the layout.
+   */
+  private placeImages(env: BlockEnv): Map<number, string> {
+    this.placements = []
+    const alt = new Map<number, string>()
+    if (!env.images) return alt
+    const layout = this.layout
+    for (let i = 0; i < layout.length; ) {
+      const block = layout[i]!.block
+      let j = i
+      while (j < layout.length && layout[j]!.block === block) j++
+      const selected = block === this.selected
+      const images = imagesIn(this.draw(block, env, selected).lines)
+      const first = layout[i]!.line
+      const last = layout[j - 1]!.line
+      for (const im of images ?? []) {
+        const top = Math.max(im.line, first)
+        const end = Math.min(im.line + im.image.rows, last + 1)
+        if (end <= top) continue
+        const from = top - im.line
+        const to = end - im.line
+        const at = i + (top - first)
+        const col = im.col + (selected ? 1 : 0)
+        const indent = " ".repeat(im.col)
+        if (from === 0 && to === im.image.rows ? false : !im.image.croppable) {
+          // Drawn whole only: said where to find it, when the view is tall enough to show it.
+          const note = im.image.rows <= this.height ? env.theme.muted(" (scroll to view)") : ""
+          alt.set(at, `${indent}${im.alt}${note}`)
+          continue
+        }
+        // In view: kept, and prepared if it is not ready.
+        im.image.want()
+        if (im.image.ready) {
+          this.placements.push({
+            image: im.image,
+            row: this.padding + at,
+            col,
+            from,
+            to,
+            key: `${block.id}:${im.line}`,
+          })
+          continue
+        }
+        if (!im.image.broken) im.image.whenReady(env.images.changed)
+        alt.set(at, `${indent}${im.alt}`)
+      }
+      i = j
+    }
+    return alt
   }
 
   /**
    * Every block at `width`, spaced like the inline transcript: what exiting prints. Blocks
    * folded or unfolded by hand print as the inline transcript shows them, so nothing folded
-   * away is lost.
+   * away is lost. Images print as their alt text: the normal screen is text.
    */
   printout(env: BlockEnv): string[] {
     const out: string[] = []
     let prev: Block | undefined
+    const { images: _, ...text } = env
     for (const b of this.blocks) {
-      const lines = b.refolded ? b.printLines(env) : this.lines(b, env, false)
+      let lines: string[]
+      if (b.refolded) lines = b.printLines(text)
+      else if (b instanceof ReplyBlock) {
+        // Laid out without images (none is loaded for it), unless its lines as shown have none.
+        const shown = this.cached(b, env)
+        lines = shown && !imagesIn(shown) ? shown : b.printLines(text)
+      } else lines = this.lines(b, env, false)
       if (!lines.length) continue
       if (prev && gapBetween(prev.kind, b.kind)) out.push("")
       out.push(...lines)
@@ -334,25 +402,48 @@ export class TranscriptPane {
 
   // --- drawing
 
+  /** A block's lines at the env's width if they were drawn and are still current. */
+  private cached(block: Block, env: BlockEnv): string[] | undefined {
+    const d = this.drawn.get(block)?.find((x) => x.width === env.width)
+    const imageRows = env.images ? env.images.loader.maxRows() : 0
+    if (
+      !d ||
+      block.live ||
+      d.version !== block.version ||
+      d.detail !== env.detail ||
+      d.imageRows !== imageRows
+    )
+      return undefined
+    return d.lines
+  }
+
   private draw(block: Block, env: BlockEnv, selected: boolean): Drawn {
     const width = selected ? Math.max(1, env.width - 1) : env.width
     const list = this.drawn.get(block) ?? []
     const hit = list.find((d) => d.width === width)
+    const imageRows = env.images ? env.images.loader.maxRows() : 0
     const fresh = block.live
       ? hit?.frame === this.frame
-      : hit?.version === block.version && hit.detail === env.detail
+      : hit?.version === block.version && hit.detail === env.detail && hit.imageRows === imageRows
     if (hit && fresh) return hit
     const lines = block.lines(width === env.width ? env : { ...env, width })
-    const d: Drawn = { width, version: block.version, detail: env.detail, frame: this.frame, lines }
+    const d: Drawn = {
+      width,
+      version: block.version,
+      detail: env.detail,
+      imageRows,
+      frame: this.frame,
+      lines,
+    }
     // One width, plus the narrower one while selected.
     this.drawn.set(block, [d, ...list.filter((x) => x.width !== width)].slice(0, 2))
     return d
   }
 
-  private drawRow(r: PaneRow, env: BlockEnv): string {
+  private drawRow(r: PaneRow, env: BlockEnv, alt?: string): string {
     if (r.line < 0) return ""
     const selected = r.block === this.selected
-    let line = this.lines(r.block, env, selected)[r.line] ?? ""
+    let line = alt ?? this.lines(r.block, env, selected)[r.line] ?? ""
     const found = this.matchIndex.get(r.block)?.get(r.line)
     if (found && !selected) {
       const current = this.matches[this.current]

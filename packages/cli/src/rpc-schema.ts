@@ -53,9 +53,9 @@ export const COMMAND_PARAMS = {
     params: {
       requestId: str,
       value: {
-        type: ["string", "boolean", "object", "null"],
+        type: ["string", "boolean", "object", "array", "null"],
         description:
-          "The answer: a string for select, input and diff-review, a boolean for confirm, an object for form.",
+          'The answer: a string for select, input and diff-review; for confirm a boolean, "always" when it offers always, or {"other": text} when it offers other; for ask an array with one AskAnswer per question; an object for form.',
       },
     },
   },
@@ -266,7 +266,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "ui.resolved": obj({
     requestId: str,
     cancelled: bool,
-    "value?": { type: ["string", "boolean"], description: "Left out for forms and secret inputs." },
+    "value?": {
+      type: ["string", "boolean"],
+      description: "Left out for forms, secret inputs, ask answers and a confirm's free text.",
+    },
   }),
   "ui.progress": obj({ requestId: str, action: str, text: str }),
   "model.changed": obj({ from: modelRef, to: modelRef }),
@@ -469,7 +472,20 @@ export function rpcSchema(): Schema {
       Message: oneOf(ref("UserMessage"), ref("AssistantMessage"), ref("ToolResultMessage")),
       UiRequest: oneOf(
         obj({ kind: strings("select"), title: str, options: arrayOf(str) }),
-        obj({ kind: strings("confirm"), title: str, "message?": str }),
+        obj({
+          kind: strings("confirm"),
+          title: str,
+          "message?": str,
+          "always?": {
+            type: ["boolean", "string"],
+            description: `Also offer "Yes, and don't ask again this session"; answered with "always". A string says what it covers instead of "this session", e.g. "this session for bash (policy)".`,
+          },
+          "other?": {
+            ...bool,
+            description:
+              'Also offer free text meaning no, and what to do instead; answered with {"other": text}.',
+          },
+        }),
         obj({
           kind: strings("input"),
           title: str,
@@ -482,6 +498,10 @@ export function rpcSchema(): Schema {
           "A unified diff to review; answer with one of the options.",
         ),
         obj(
+          { kind: strings("ask"), title: str, questions: arrayOf(ref("AskQuestion")) },
+          'Questions from the ask_user tool, shown one after another; answer with an array holding one AskAnswer per question, in order. Every question also takes free text ("Other").',
+        ),
+        obj(
           {
             kind: strings("form"),
             title: str,
@@ -492,6 +512,22 @@ export function rpcSchema(): Schema {
           },
           "A form; answer with an object of values by field id. Run its action fields with ui.action.",
         ),
+      ),
+      AskQuestion: obj({
+        question: str,
+        "header?": { ...str, description: "A short name for the question, at most 12 characters." },
+        options: arrayOf(obj({ label: str, "description?": str })),
+        "multiSelect?": { ...bool, description: "Several options may be chosen together." },
+      }),
+      AskAnswer: obj(
+        {
+          selected: { ...arrayOf(str), description: "Labels of the options chosen." },
+          "other?": {
+            ...str,
+            description: "Text typed instead of (or, when multiSelect, next to) an option.",
+          },
+        },
+        "A single-choice question takes exactly one label or other text; a multiSelect one any number.",
       ),
       FormOption: obj({ value: str, "label?": str, "description?": str }),
       FormField: oneOf(...formFields()),

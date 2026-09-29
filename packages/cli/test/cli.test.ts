@@ -460,6 +460,66 @@ test("the top-level session asks the user to approve, and nobody answering denie
   expect(asked[0]).toBe('Allow bash? | policy\n{"command":"rm x"}')
 })
 
+test("an approval may be given for the rest of the session, or refused with what to do instead", async () => {
+  const { userApprover } = await import("../src/session.ts")
+  const bus = new EventBus()
+  const ui = new UiRequests(bus)
+  const answers: unknown[] = [{ other: "use trash instead" }, "always"]
+  const asked: unknown[] = []
+  bus.subscribe((e) => {
+    if (e.type !== "ui.request") return
+    asked.push(e.data)
+    ui.respond(e.data.requestId, answers.shift())
+  })
+  const approve = userApprover(ui)
+  const request = {
+    sessionId: "s",
+    toolCallId: "t",
+    name: "bash",
+    args: { command: "rm x" },
+    reason: "policy",
+  }
+  const signal = new AbortController().signal
+  expect(await approve(request, signal)).toEqual({
+    approved: false,
+    reason: "the user said no: use trash instead",
+  })
+  expect(asked[0]).toMatchObject({
+    kind: "confirm",
+    always: "this session for bash (policy)",
+    other: true,
+    source: "approval",
+  })
+  expect(await approve(request, signal)).toEqual({ approved: true })
+  // Not asked again for the same tool and reason; asked for another reason.
+  expect(await approve({ ...request, args: { command: "rm y" } }, signal)).toEqual({ approved: true })
+  expect(asked).toHaveLength(2)
+  answers.push(false)
+  expect(await approve({ ...request, reason: "other policy" }, signal)).toEqual({
+    approved: false,
+    reason: "the user said no",
+  })
+  expect(asked).toHaveLength(3)
+})
+
+test("the top-level session's questions go to the user; print mode says nobody can answer", async () => {
+  const { userAsker } = await import("../src/session.ts")
+  const bus = new EventBus()
+  const ui = new UiRequests(bus)
+  const replies: unknown[] = [[{ selected: ["A"] }], null]
+  bus.subscribe((e) => {
+    if (e.type === "ui.request") ui.respond(e.data.requestId, replies.shift())
+  })
+  const ask = userAsker(ui)
+  const questions = [{ question: "Which?", options: [{ label: "A" }, { label: "B" }] }]
+  const request = { sessionId: "s", questions }
+  const signal = new AbortController().signal
+  expect(await ask(request, signal)).toEqual({ answers: [{ selected: ["A"] }] })
+  expect(await ask(request, signal)).toEqual({ declined: true })
+  ui.unavailable = "print mode"
+  expect(await ask(request, signal)).toEqual({ unavailable: "print mode" })
+})
+
 test("plain print mode shows extensions' notices on stderr, problems with their level", async () => {
   const { agent } = await mockSession([{ toolCalls: [{ name: "note", args: {} }] }, { text: "all done" }])
   agent.tools.register(

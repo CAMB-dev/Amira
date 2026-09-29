@@ -6,6 +6,7 @@ import type {
   SpawnGroupOptions,
   SpawnOptions,
 } from "./subagents.ts"
+import type { AskOutcome, AskQuestion } from "./ui.ts"
 
 export interface ToolResult {
   content: (TextBlock | ImageBlock)[]
@@ -74,6 +75,12 @@ export interface ToolSession {
   createGroup?(opts: SpawnGroupOptions): SpawnGroup
   /** The agent tree's spawn groups, active and ended, oldest first. Absent without a tree. */
   groups?(): SpawnGroupInfo[]
+  /**
+   * Puts questions to whoever answers for this session: the user in a top-level session, the
+   * commander (the parent's model, which may pass them on up) in a sub-agent. The session shows
+   * as blocked meanwhile. Absent when the host cannot ask anyone.
+   */
+  askUser?(questions: AskQuestion[], signal?: AbortSignal): Promise<AskOutcome>
   /**
    * Announces a message this session will get later, from outside its turns: e.g. the
    * result of a sub-agent running in the background. Until the handle is delivered or

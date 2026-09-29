@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { deflateSync } from "node:zlib"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import {
   type ChildSession,
@@ -23,7 +24,7 @@ import {
 } from "@amira/core"
 import { agentsCommand } from "@amira/ext-agent"
 import statusExtension from "@amira/ext-status"
-import { FakeTerminal } from "@amira/tui-kit"
+import { FakeTerminal, type GraphicsReplies, type RemoteImageFetch } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 
@@ -51,6 +52,11 @@ interface Options {
   settings?: TuiSettings
   /** /agents and a /quit, with the session control the viewer reads. */
   commands?: boolean
+  /** What the terminal says about graphics when asked (only when images are not off). */
+  graphics?: GraphicsReplies
+  env?: Record<string, string>
+  /** How images in replies are fetched from the web. */
+  imageFetch?: RemoteImageFetch
 }
 
 /** The UI in full-screen mode on a fake terminal, as the CLI starts it by default. */
@@ -115,18 +121,20 @@ async function setup(steps: MockStep[], o: Options = {}) {
     ...(commands ? { commands } : {}),
     terminal,
     mode: "fullscreen",
-    setup: async () => ({
+    setup: async (_t, _env, setupOpts) => ({
       capabilities: {
         win32InputMode: false,
         kittyKeyboard: true,
         synchronizedOutput: false,
         shiftEnter: true,
+        ...(setupOpts?.images && o.graphics ? { graphics: o.graphics } : {}),
       },
       leftoverInput: "",
     }),
+    ...(o.imageFetch ? { imageFetch: o.imageFetch } : {}),
     onReady: () => agent.start("startup"),
     files: { files: async () => [] },
-    env: {},
+    env: o.env ?? {},
     ...(o.settings ? { settings: o.settings } : {}),
   })
   /** What the alternate screen shows now. */
@@ -661,13 +669,13 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
   terminal.send("y")
   await shows("thanks")
   await idle()
-  expect(view()).toContain("? Proceed? › yes")
+  expect(view()).toContain("? Proceed? › Yes")
   // A form draws over the transcript on the same alternate screen.
   const form = host.ui.api("x").form(webhookForm)
   await shows("Where to send build results")
   terminal.send("https://ci.example\x13")
   expect(await form).toEqual({ url: "https://ci.example" })
-  await shows("? Proceed? › yes")
+  await shows("? Proceed? › Yes")
   // So does the sub-agent viewer.
   terminal.send("/agents view\r")
   await shows("No sub-agents")
@@ -707,6 +715,286 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
   expect(screen.mainText).toMatch(
     /› earlier question\n\n {2}Earlier answer\.\n\n● read old\.ts\n {2}└ old contents\n\n── resumed /,
   )
+})
+
+// --- images (D83)
+
+/** A PNG of `width`×`height` pixels of one color. */
+function png(width: number, height: number): Uint8Array {
+  const raw = Buffer.alloc((width * 4 + 1) * height)
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) raw.set([40, 120, 200, 255], y * (width * 4 + 1) + 1 + x * 4)
+  const chunk = (type: string, data: Uint8Array) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data])
+    const out = Buffer.alloc(body.length + 8)
+    out.writeUInt32BE(data.length, 0)
+    body.copy(out, 4)
+    out.writeUInt32BE(Bun.hash.crc32(body) >>> 0, body.length + 4)
+    return out
+  }
+  const head = Buffer.alloc(13)
+  head.writeUInt32BE(width, 0)
+  head.writeUInt32BE(height, 4)
+  head.set([8, 6, 0, 0, 0], 8)
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", head),
+    chunk("IDAT", deflateSync(raw)),
+    chunk("IEND", new Uint8Array()),
+  ])
+}
+
+/** 40×120 pixels: 4 columns and 6 rows of the 10×20 cells Windows Terminal draws Sixel in. */
+const TALL = png(40, 120)
+const SIXEL: GraphicsReplies = { answered: true, sixel: true, kitty: false }
+const KITTY: GraphicsReplies = { answered: true, sixel: false, kitty: true, cell: { width: 10, height: 20 } }
+const WT = { WT_SESSION: "1" }
+const imageFetch: RemoteImageFetch = async () => ({ bytes: TALL, contentType: "image/png" })
+const SHIFT_UP = "\x1b[1;2A"
+const SHIFT_DOWN = "\x1b[1;2B"
+
+/** A reply with the image between "top" and "bottom", and `after` lines under it. */
+const imageReply = (after = 0) =>
+  [
+    "top",
+    "",
+    "![chart](https://img.test/chart.png)",
+    "",
+    "bottom",
+    "",
+    ...Array.from({ length: after }, (_, i) => `line ${i + 1}`),
+  ].join("\n")
+
+/** Rows of the screen with image cells. */
+const imageRows = (screen: VirtualScreen) => screen.lines.flatMap((l, i) => (l.includes("▓") ? [i] : []))
+
+/**
+ * Where the image's cells must be, from where its neighbors "top" and "bottom" are: its six
+ * rows between them, cut to the transcript (which ends a row above the input box).
+ */
+function expectedImageRows(screen: VirtualScreen): number[] {
+  const lines = screen.lines
+  const top = lines.indexOf("  top")
+  const bottom = lines.indexOf("  bottom")
+  const paneEnd = lines.findIndex((l) => l.startsWith("╭")) - 1
+  let start: number
+  let end: number
+  if (top >= 0) {
+    start = top + 2
+    end = Math.min(top + 7, paneEnd - 1)
+  } else if (bottom >= 0) {
+    start = Math.max(0, bottom - 7)
+    end = bottom - 2
+  } else return []
+  return Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i)
+}
+
+test("an image in a reply is drawn in its rows of the transcript, once; exiting prints its alt text", async () => {
+  const { terminal, screen, view, shows, idle, exited } = await setup([{ text: imageReply() }], {
+    env: WT,
+    graphics: SIXEL,
+    imageFetch,
+  })
+  terminal.send("go\r")
+  await shows("bottom")
+  await idle()
+  await waitFor(() => screen.images.length > 0, "the image")
+  await Bun.sleep(40)
+  const top = screen.lines.indexOf("  top")
+  expect(screen.images).toEqual([
+    expect.objectContaining({ protocol: "sixel", screenRow: top + 2, col: 2, rows: 6, cols: 4 }),
+  ])
+  expect(screen.lines.slice(top, top + 10)).toEqual(["  top", "", ...Array(6).fill("  ▓▓▓▓"), "", "  bottom"])
+  expect(view()).not.toContain("🖼")
+  // Typing changes the input box only: the image is not drawn again.
+  terminal.send("abc")
+  await shows("abc")
+  await Bun.sleep(40)
+  expect(screen.images.length).toBe(1)
+  terminal.send("\x03")
+  terminal.send("\x03")
+  expect(await exited).toBe(0)
+  expect(screen.mainText).toContain("  top\n\n  🖼 chart\n\n  bottom")
+  expect(screen.mainText).not.toContain("▓")
+})
+
+test("scrolling moves the image row by row: cropped at either edge, cleared once off screen", async () => {
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: imageReply(30) }], {
+    env: WT,
+    graphics: SIXEL,
+    imageFetch,
+  })
+  terminal.send("go\r")
+  await shows("line 30")
+  await idle()
+  // Following the end: the image is far above, nothing drawn.
+  expect(imageRows(screen)).toEqual([])
+  const seen = new Set<string>()
+  for (let step = 0; step < 45; step++) {
+    terminal.send(SHIFT_UP)
+    await Bun.sleep(25)
+    const rows = imageRows(screen)
+    expect(rows).toEqual(expectedImageRows(screen))
+    seen.add(rows.length === 0 ? "off" : rows.length < 6 ? "cropped" : "whole")
+    if (screen.lines[0] === "Amira · mock/m1 · /work/proj") break
+  }
+  // Down again, past it: every row it covered is erased.
+  for (let step = 0; step < 45 && screen.lines.indexOf("  line 30") === -1; step++) {
+    terminal.send(SHIFT_DOWN)
+    await Bun.sleep(25)
+    expect(imageRows(screen)).toEqual(expectedImageRows(screen))
+  }
+  expect(imageRows(screen)).toEqual([])
+  expect([...seen].sort()).toEqual(["cropped", "off", "whole"])
+  terminal.send("\x03")
+  await exited
+})
+
+test("kitty: the image is sent once, placed as it scrolls, removed off screen and freed on exit", async () => {
+  const { terminal, screen, shows, idle, exited } = await setup([{ text: imageReply(12) }], {
+    env: { TERM: "xterm-kitty" },
+    graphics: KITTY,
+    imageFetch,
+  })
+  terminal.send("go\r")
+  await shows("line 12")
+  await idle()
+  const placed = () => [...screen.kittyPlacements.values()]
+  // Following the end, the image is above the view.
+  expect(placed()).toEqual([])
+  terminal.send(PAGE_UP)
+  await waitFor(() => placed().length > 0, "the placement")
+  const { id, pid } = placed()[0]!
+  expect(placed()[0]!.row).toBe(screen.lines.indexOf("  top") + 2)
+  // A row at a time: the same placement, moved (or cropped by the terminal).
+  terminal.send(SHIFT_DOWN)
+  await Bun.sleep(30)
+  expect(placed()).toEqual([expect.objectContaining({ id, pid })])
+  // Following the end again: out of view, its placement goes; the pixels stay.
+  terminal.send(END)
+  await waitFor(() => placed().length === 0, "removed")
+  expect(screen.kittyLog).toContain(`d:i i=${id} p=${pid}`)
+  terminal.send(PAGE_UP)
+  await waitFor(() => placed().length > 0, "placed again")
+  expect(screen.kittyLog.filter((l) => l.startsWith("t "))).toEqual([`t i=${id}`])
+  terminal.send("\x03")
+  await exited
+  expect(screen.kittyLog.at(-1)).toBe(`d:I i=${id}`)
+  expect(screen.kittyImages.size).toBe(0)
+})
+
+test("a form over the transcript hides the image; closing it draws the image again", async () => {
+  const { host, terminal, screen, shows, idle, exited } = await setup([{ text: imageReply() }], {
+    env: WT,
+    graphics: SIXEL,
+    imageFetch,
+  })
+  terminal.send("go\r")
+  await shows("bottom")
+  await idle()
+  await waitFor(() => imageRows(screen).length === 6, "the image")
+  const form = host.ui.api("x").form(webhookForm)
+  await shows("Where to send build results")
+  expect(imageRows(screen)).toEqual([])
+  terminal.send(ESC)
+  await form
+  await waitFor(() => imageRows(screen).length === 6, "the image again")
+  expect(imageRows(screen)).toEqual(expectedImageRows(screen))
+  expect(screen.images.length).toBe(2)
+  terminal.send("\x03")
+  await exited
+})
+
+test("a resize fits the image again: fewer rows on a lower screen", async () => {
+  const { terminal, screen, shows, idle, resize, exited } = await setup([{ text: imageReply() }], {
+    env: WT,
+    graphics: SIXEL,
+    imageFetch,
+    rows: 24,
+  })
+  terminal.send("go\r")
+  await shows("bottom")
+  await idle()
+  await waitFor(() => imageRows(screen).length === 6, "the image")
+  // 40% of 12 rows is 4.
+  resize(60, 12)
+  await waitFor(() => screen.images.at(-1)!.rows === 4, "the image at 4 rows")
+  await Bun.sleep(30)
+  expect(screen.images.at(-1)).toMatchObject({ rows: 4, cols: 3 })
+  expect(imageRows(screen)).toHaveLength(4)
+  expect(imageRows(screen)).toEqual(expectedImageRows(screen).slice(0, 4))
+  // Back to the first size: the size drawn before is still there, drawn again at once.
+  const drawn = screen.images.length
+  resize(60, 24)
+  await waitFor(() => screen.images.length > drawn, "the image at 6 rows")
+  expect(screen.images.at(-1)).toMatchObject({ rows: 6, cols: 4 })
+  terminal.send("\x03")
+  await exited
+})
+
+test("a folded reply shows its image as alt text; tui.images off shows alt text only", async () => {
+  const { terminal, screen, view, shows, idle, exited } = await setup([{ text: imageReply() }], {
+    env: WT,
+    graphics: SIXEL,
+    imageFetch,
+  })
+  terminal.send("go\r")
+  await shows("bottom")
+  await idle()
+  await waitFor(() => imageRows(screen).length === 6, "the image")
+  terminal.send(CTRL_UP)
+  await waitFor(() => /assistant block/.test(view()), "selected")
+  // Selected, the block is drawn a column further right: so is the image.
+  await waitFor(() => screen.lines.some((l) => l.startsWith("▌  ▓▓▓▓")), "the image moved")
+  terminal.send("\r")
+  await shows("🖼 chart")
+  expect(imageRows(screen)).toEqual([])
+  terminal.send("\r")
+  await waitFor(() => imageRows(screen).length === 6, "unfolded")
+  terminal.send("\x03")
+  await exited
+
+  const off = await setup([{ text: imageReply() }], {
+    env: WT,
+    graphics: SIXEL,
+    imageFetch,
+    settings: { images: "off" },
+  })
+  off.terminal.send("go\r")
+  await off.shows("bottom")
+  await off.idle()
+  expect(off.view()).toContain("  top\n\n  🖼 chart\n\n  bottom")
+  expect(off.screen.images).toEqual([])
+  off.terminal.send("\x03")
+  await off.exited
+})
+
+test("iTerm2 draws images whole: partly in view, the image is its alt text, to scroll to", async () => {
+  const { terminal, screen, view, shows, idle, exited } = await setup([{ text: imageReply(30) }], {
+    env: { TERM_PROGRAM: "WezTerm" },
+    graphics: { answered: true, sixel: false, kitty: false, cell: { width: 10, height: 20 } },
+    imageFetch,
+  })
+  terminal.send("go\r")
+  await shows("line 30")
+  await idle()
+  let partial = false
+  for (let step = 0; step < 45 && !screen.lines.includes("  top"); step++) {
+    terminal.send(SHIFT_UP)
+    await Bun.sleep(25)
+    const bottom = screen.lines.indexOf("  bottom")
+    if (bottom >= 2 && bottom < 7) {
+      partial = true
+      expect(imageRows(screen)).toEqual([])
+      expect(view()).toContain("🖼 chart (scroll to view)")
+    }
+  }
+  expect(partial).toBe(true)
+  await waitFor(() => imageRows(screen).length === 6, "whole")
+  expect(screen.images.at(-1)).toMatchObject({ protocol: "iterm2", rows: 6 })
+  expect(view()).not.toContain("scroll to view")
+  terminal.send("\x03")
+  await exited
 })
 
 test("an extension's notice shows in the transcript", async () => {
