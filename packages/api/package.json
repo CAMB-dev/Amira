@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@amira/ai": "workspace:*",
+    "@amira/net": "workspace:*",
     "@amira/tui-kit": "workspace:*"
   }
 }
