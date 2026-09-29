@@ -251,6 +251,8 @@ const CANCEL = "\0cancel"
 /** List rows shown at once; longer lists scroll with the highlight. */
 const LIST_ROWS = 8
 const INDENT = "   "
+/** Before the focused field, the highlighted option and the focused button: the selection marker everywhere. */
+const POINTER = "❯"
 
 /**
  * A full-screen form: a title, a scrolling body of fields and buttons, and a footer with
@@ -755,7 +757,7 @@ export class Form implements Component {
     const { theme } = ctx
     let active = 0
     const focused = this.focus === f.def.id
-    const mark = focused ? theme.accent("›") : " "
+    const mark = focused ? theme.accent(POINTER) : " "
     const name = focused ? theme.accent(f.def.label) : f.def.label
     const star = f.def.required ? theme.muted(" *") : ""
     const out: string[] = []
@@ -885,7 +887,11 @@ export class Form implements Component {
       const box = boxes ? `${on(o) ? "[x]" : "[ ]"} ` : on(o) ? "● " : "  "
       const text = `${box}${o.label ?? o.value}`
       const desc = o.description ? theme.muted(`  ${o.description}`) : ""
-      return truncateToWidth(`${INDENT}${hl ? theme.accent(`› ${text}`) : `  ${text}`}${desc}`, width, "…")
+      return truncateToWidth(
+        `${INDENT}${hl ? theme.accent(`${POINTER} ${text}`) : `  ${text}`}${desc}`,
+        width,
+        "…",
+      )
     })
     if (rows.length > LIST_ROWS) out.push(INDENT + theme.muted(`  ${f.highlight + 1}/${rows.length}`))
     return out
@@ -903,7 +909,7 @@ export class Form implements Component {
       out.push(toneStyle(theme, this.status.tone)(truncateToWidth(this.status.text, width, "…")))
     const save = button(this.opts.submitLabel ?? "Save", this.focus === SUBMIT, ctx)
     const cancel = button("Cancel", this.focus === CANCEL, ctx)
-    const mark = (on: boolean) => (on ? theme.accent("›") : " ")
+    const mark = (on: boolean) => (on ? theme.accent(POINTER) : " ")
     out.push(
       truncateToWidth(
         `${mark(this.focus === SUBMIT)} ${save}  ${mark(this.focus === CANCEL)} ${cancel}`,

@@ -1055,8 +1055,8 @@ test("startup extension errors are shown in the transcript", async () => {
     },
   ]
   const { shows, terminal, exited } = await setup([], { startupEvents })
-  await shows("[extension x.ts] boom")
-  await shows('warning: f: unknown setting "colour" (ignored)')
+  await shows("Extension x.ts: boom")
+  await shows('Settings: f: unknown setting "colour" (ignored)')
   terminal.send("\x03")
   await exited
 })
@@ -1387,8 +1387,8 @@ test("extension dialogs are answered inline: confirm, select and input", async (
   await idle()
   const result = agent.messages.find((m) => m.role === "toolResult")
   expect(result?.content[0]).toEqual({ type: "text", text: "true green Ada undefined" })
-  expect(all()).toContain("? Pick one › green")
-  expect(all()).toContain("? Skip me › cancelled")
+  expect(all()).toContain("? Pick one ❯ green")
+  expect(all()).toContain("? Skip me ❯ cancelled")
   expect(host.ui.pending).toEqual([])
   terminal.send("\x03")
   await exited
@@ -1433,7 +1433,7 @@ test("typing a slash opens the command list below the editor; Tab and Enter comp
   expect(live()).not.toContain("Enter send")
   // Prefix first: "/he" puts help on top; Tab completes it, Enter runs it.
   terminal.send("he")
-  await waitFor(() => live().includes("› /help"), "help selected")
+  await waitFor(() => live().includes("❯ /help"), "help selected")
   terminal.send("\t")
   await waitFor(() => live().includes("› /help "), "completed")
   terminal.send("\r")
@@ -1464,20 +1464,20 @@ test("typing a command: the input box stays put and each key draws one frame wit
     [
       "/",
       [
-        "› /clear   Start a new session",
+        "❯ /clear   Start a new session",
         "  /help    List the slash commands",
         "  /model   Switch the model",
         "  /quit    Leave Amira",
         "  /status  Show the status",
       ],
     ],
-    ["m", ["› /model  Switch the model"]],
-    ["o", ["› /model  Switch the model"]],
-    ["d", ["› /model  Switch the model"]],
-    ["e", ["› /model  Switch the model"]],
-    ["l", ["› /model  Switch the model"]],
-    [" ", ["› deepseek/deepseek-flash", "  deepseek/deepseek-pro", "  openai/gpt-5"]],
-    ["d", ["› deepseek/deepseek-flash", "  deepseek/deepseek-pro"]],
+    ["m", ["❯ /model  Switch the model"]],
+    ["o", ["❯ /model  Switch the model"]],
+    ["d", ["❯ /model  Switch the model"]],
+    ["e", ["❯ /model  Switch the model"]],
+    ["l", ["❯ /model  Switch the model"]],
+    [" ", ["❯ deepseek/deepseek-flash", "  deepseek/deepseek-pro", "  openai/gpt-5"]],
+    ["d", ["❯ deepseek/deepseek-flash", "  deepseek/deepseek-pro"]],
   ]
   for (const [k, expected] of steps) {
     const before = frames.length
@@ -1512,14 +1512,14 @@ test("async argument candidates get a frame to arrive, so the key still draws on
     onWrite: (screen) => void frames.push([...screen.lines]),
   })
   terminal.send("/pick")
-  await waitFor(() => live().includes("› /pick"), "popup")
+  await waitFor(() => live().includes("❯ /pick"), "popup")
   await Bun.sleep(40)
   const before = frames.length
   terminal.send(" ")
   await Bun.sleep(80)
   const drawn = frames.slice(before)
   expect(drawn).toHaveLength(1)
-  expect(drawn[0]!.join("\n")).toContain("› alpha")
+  expect(drawn[0]!.join("\n")).toContain("❯ alpha")
   terminal.send("\x03")
   terminal.send("\x03")
   await exited
@@ -1541,7 +1541,7 @@ test("a command's echo and everything it prints reach the screen in one frame", 
     onWrite: (screen) => void writes.push(screen.lines.join("\n")),
   })
   terminal.send("/chatty")
-  await waitFor(() => live().includes("› /chatty"), "popup")
+  await waitFor(() => live().includes("❯ /chatty"), "popup")
   await Bun.sleep(40)
   const before = writes.length
   terminal.send("\r")
@@ -1560,12 +1560,12 @@ test("arguments complete after the name, ↑↓ pick one and Enter runs with it"
   terminal.send("/model ")
   await waitFor(() => live().includes("openai/gpt-5"), "model candidates")
   terminal.send("\x1b[B\x1b[B")
-  await waitFor(() => live().includes("› openai/gpt-5"), "selection moved")
+  await waitFor(() => live().includes("❯ openai/gpt-5"), "selection moved")
   terminal.send("\r")
   await shows("Model: openai/gpt-5")
   // Part of a candidate typed: Enter takes the best match.
   terminal.send("/model flash")
-  await waitFor(() => live().includes("› deepseek/deepseek-flash"), "filtered")
+  await waitFor(() => live().includes("❯ deepseek/deepseek-flash"), "filtered")
   terminal.send("\r")
   await shows("Model: deepseek/deepseek-flash")
   expect(log).toEqual(["model openai/gpt-5", "model deepseek/deepseek-flash"])
@@ -1577,7 +1577,7 @@ test("keys arriving in one chunk are not answered by the popup of the previous f
   const log: string[] = []
   const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
   terminal.send("/model deep")
-  await waitFor(() => live().includes("› deepseek/deepseek-flash"), "candidates for deep")
+  await waitFor(() => live().includes("❯ deepseek/deepseek-flash"), "candidates for deep")
   terminal.send("seek/deepseek-pro\r")
   await shows("Model: deepseek/deepseek-pro")
   expect(log).toEqual(["model deepseek/deepseek-pro"])
@@ -1589,11 +1589,11 @@ test("a command's picker is a select dialog that filters as you type", async () 
   const log: string[] = []
   const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
   terminal.send("/model")
-  await waitFor(() => live().includes("› /model"), "popup")
+  await waitFor(() => live().includes("❯ /model"), "popup")
   terminal.send("\r")
   await waitFor(() => live().includes("? Model"), "picker")
   terminal.send("gpt")
-  await waitFor(() => live().includes("filter › gpt") && !live().includes("deepseek-pro"), "filtered")
+  await waitFor(() => live().includes("filter ❯ gpt") && !live().includes("deepseek-pro"), "filtered")
   terminal.send("\r")
   await shows("Model: openai/gpt-5")
   terminal.send("\x03")
@@ -1604,7 +1604,7 @@ test("Esc closes the popup without leaving the text; Enter then runs what was ty
   const log: string[] = []
   const { terminal, live, all, shows, exited } = await setup([], { commands: testCommands(log) })
   terminal.send("/sta")
-  await waitFor(() => live().includes("› /status"), "popup")
+  await waitFor(() => live().includes("❯ /status"), "popup")
   terminal.send("\x1b[27u")
   await waitFor(() => !live().includes("Show the status"), "closed")
   expect(live()).toContain("› /sta")
@@ -1700,7 +1700,7 @@ test("typing $ opens the skill list; Enter runs the skill, shown as typed with i
   expect(live()).not.toContain("/help")
   expect(live()).toContain("Tab complete · Enter run · Esc close")
   terminal.send("rev")
-  await waitFor(() => live().includes("› $review-pr"), "review-pr selected")
+  await waitFor(() => live().includes("❯ $review-pr"), "review-pr selected")
   terminal.send("\t")
   await waitFor(() => live().includes("$review-pr [arguments]"), "usage")
   terminal.send("123\r")
@@ -1780,7 +1780,7 @@ test("text that starts with $ but names no skill is sent as a message", async ()
   await idle()
   // "$HOME" lists home-assistant, but only its case-exact start would run it: Enter sends it.
   terminal.send("$HOME")
-  await waitFor(() => live().includes("› $home-assistant"), "listed")
+  await waitFor(() => live().includes("❯ $home-assistant"), "listed")
   terminal.send("\r")
   await shows("Sure.")
   await idle()
@@ -1803,16 +1803,16 @@ test("the $ list takes its keys from the keybindings like the / list", async () 
     cols: 100,
   })
   terminal.send("$")
-  await waitFor(() => live().includes("› $deploy"), "skill popup")
+  await waitFor(() => live().includes("❯ $deploy"), "skill popup")
   expect(live()).toContain("Ctrl+Y run · Ctrl+G close")
   terminal.send("\x0e")
-  await waitFor(() => live().includes("› $review-pr"), "moved down")
+  await waitFor(() => live().includes("❯ $review-pr"), "moved down")
   terminal.send("\x0e")
-  await waitFor(() => live().includes("› $deploy"), "wrapped")
+  await waitFor(() => live().includes("❯ $deploy"), "wrapped")
   terminal.send("\x07")
   await waitFor(() => !live().includes("Ship it"), "closed")
   terminal.send("d")
-  await waitFor(() => live().includes("› $deploy"), "open again")
+  await waitFor(() => live().includes("❯ $deploy"), "open again")
   terminal.send("\x19")
   await shows("Deployed.")
   await idle()
@@ -2423,11 +2423,11 @@ test("typing @ offers project files; Tab inserts the path and the message keeps 
     files: ["src/app.ts", "src/format.ts", "README.md"],
   })
   terminal.send("look at @form")
-  await waitFor(() => live().includes("› src/format.ts"), "file list")
+  await waitFor(() => live().includes("❯ src/format.ts"), "file list")
   expect(live()).toContain("Tab/Enter insert")
   // Like the command list, it opens below the input box, in place of the status bar.
   const rows = live().split("\n")
-  expect(rows.findIndex((l) => l.includes("› src/format.ts"))).toBeGreaterThan(
+  expect(rows.findIndex((l) => l.includes("❯ src/format.ts"))).toBeGreaterThan(
     rows.findIndex((l) => l.startsWith("╰")),
   )
   terminal.send("\t")
@@ -2462,12 +2462,12 @@ test("typing @ while the project is still listed shows a status row at once, the
   )
   emit(Array.from({ length: 12_345 }, (_, i) => `gen/f${i}.ts`).concat("src/app.ts"))
   await waitFor(
-    () => /› src\/app\.ts/.test(live()) && live().includes("indexing… 12,346 files"),
+    () => /❯ src\/app\.ts/.test(live()) && live().includes("indexing… 12,346 files"),
     "first files",
   )
   finish()
   await waitFor(() => !live().includes("indexing…"), "indexed")
-  expect(live()).toMatch(/› src\/app\.ts/)
+  expect(live()).toMatch(/❯ src\/app\.ts/)
   terminal.send("\t")
   await waitFor(() => live().includes("› see @src/app.ts"), "inserted")
   terminal.send("\x03\x03")
@@ -2637,7 +2637,7 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   terminal.send("\x03")
   terminal.send("@src")
   // The directory named as typed first, then its file.
-  await waitFor(() => live().includes("› src/\n  src/app.ts"), "file list")
+  await waitFor(() => live().includes("❯ src/\n  src/app.ts"), "file list")
   expect(live()).toContain("Tab/Enter insert · Ctrl+X close")
   terminal.send("\x18")
   await waitFor(() => !live().includes("src/app.ts"), "file list closed")

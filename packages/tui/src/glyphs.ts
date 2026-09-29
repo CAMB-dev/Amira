@@ -1,9 +1,12 @@
 /**
  * Every symbol the TUI draws, in one place, so a styling pass can swap them without touching
- * the layout code. Colors come from the theme (tokens such as accent and muted). Each must be
- * one cell wide in the terminals Amira supports (Windows Terminal, VS Code, and common Unix ones),
- * so none has an emoji form (the Unicode Emoji property): terminals draw those from the emoji
- * font, two cells wide (see `textWidth` in tui-kit). A test checks that.
+ * the layout code. Colors come from the theme (tokens such as accent and muted). Each is one
+ * cell wide in the terminals Amira supports (Windows Terminal, VS Code, and common Unix ones),
+ * so none has an emoji form (the Unicode Emoji property) that terminals would draw from the
+ * emoji font, two cells wide (see `textWidth` in tui-kit), with one exception: the warning is
+ * the ⚠️ emoji, asked for with VS16 and two cells wide. Layouts measure a glyph with
+ * `textWidth` (rows hanging under a warning start a cell further in) rather than assuming one
+ * cell. A test checks both.
  */
 export const glyphs = {
   /** In front of the user's messages and echoed commands. */
@@ -64,7 +67,7 @@ export const glyphs = {
   /** The rule of separators such as the one after a resumed history. */
   rule: "─",
   /** Before the selected row of a list (dialogs, completion lists), and a dialog's echo. */
-  pointer: "›",
+  pointer: "❯",
   /** Starts the history search line, and sits between its label and the query. */
   search: "⌕",
   searchPrompt: "›",

@@ -955,7 +955,7 @@ test("copying the last reply and a selected block goes through OSC 52", async ()
   terminal.send(CTRL_UP)
   await waitFor(() => view().includes("user block"), "the user message selected")
   // The selection's bar keeps its essential keys; moving is in the key reference.
-  expect(view()).toMatch(/› user block \d+ of \d+ · (Enter fold · )?y copy · Esc back$/m)
+  expect(view()).toMatch(/❯ user block \d+ of \d+ · (Enter fold · )?y copy · Esc back$/m)
   expect(view()).not.toContain(" move")
   terminal.send("y")
   await shows("Copied the user block")

@@ -211,7 +211,7 @@ for (const mode of MODES) {
       ].join("\n"),
     )
     // No echo of the dialog: the tool call's result shows the answers.
-    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ›")
+    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ❯")
     expect(s.all()).toContain("Approach › Patch")
     expect(s.dialog()).toEqual([])
     s.terminal.send("\x03")
@@ -251,7 +251,7 @@ for (const mode of MODES) {
     await s.idle()
     const results = s.agent.messages.filter((m) => m.role === "toolResult")
     expect(JSON.stringify(results.at(-1))).toContain("The user declined to answer.")
-    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ›")
+    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ❯")
     s.terminal.send("\x03")
     await s.exited
   })
@@ -339,7 +339,7 @@ for (const mode of MODES) {
     await s.shows("wiped twice")
     await s.idle()
     expect(s.host.ui.pending).toEqual([])
-    expect(s.all()).not.toContain("┃ ? Allow wipe? ›")
+    expect(s.all()).not.toContain("┃ ? Allow wipe? ❯")
     // Asked once for both calls.
     expect(s.all().split("? Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
     s.terminal.send("\x03")

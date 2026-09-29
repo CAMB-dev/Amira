@@ -622,7 +622,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           waiting: waitingTitles,
           onClose: closeView,
           requestRender: () => view.requestOverlayRender(),
-          onError: (error) => view.notice("warning", `[view ${v.kind}] ${error}`),
+          onError: (error) => view.notice("warning", `View ${v.kind}: ${error}`),
         }),
       )
     }
@@ -818,9 +818,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // Settings warnings travel as extension.error from "settings" but are not extension failures.
         view.notice(
           "warning",
+          // The glyph says it is a warning; the text says where from.
           e.data.source === "settings"
-            ? `warning: ${e.data.error}`
-            : `[extension ${e.data.source}] ${e.data.error}`,
+            ? `Settings: ${e.data.error}`
+            : `Extension ${e.data.source}: ${e.data.error}`,
         )
         break
       case "extension.notice":

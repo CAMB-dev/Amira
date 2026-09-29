@@ -227,7 +227,7 @@ test("a view that throws shows the error in place and reports it once", async ()
   await waitFor(() => calls > 2, "more redraws")
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "closed")
-  await waitFor(() => s.screen.text.includes("[view progress] render failed: no data yet"), "the report")
+  await waitFor(() => s.screen.text.includes("View progress: render failed: no data yet"), "the report")
   expect(s.screen.text.split("render failed").length).toBe(2)
   s.terminal.send("\x03")
   await s.exited
