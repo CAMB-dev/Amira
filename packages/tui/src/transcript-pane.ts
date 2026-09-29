@@ -785,7 +785,8 @@ export class TranscriptPane {
     for (const block of this.blocks) {
       // Found again only in blocks drawn anew (streaming, changed): rerunning stays cheap.
       const d = this.draw(block, env)
-      if (d.found?.query !== q) d.found = { query: q, matches: findIn(block, this.plain(block, env), q, exact) }
+      if (d.found?.query !== q)
+        d.found = { query: q, matches: findIn(block, this.plain(block, env), q, exact) }
       for (const match of d.found.matches) {
         this.matches.push(match)
         let byLine = this.matchIndex.get(block)
