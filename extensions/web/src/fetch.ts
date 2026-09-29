@@ -1,4 +1,4 @@
-import { assertPublicHost, dnsResolver, type Resolver } from "./address.ts"
+import { guardedFetch, NetError, parseHttpUrl, type Resolver, readCapped } from "@amira/net"
 import { htmlTitle, htmlToMarkdown } from "./html.ts"
 
 export interface FetchOptions {
@@ -23,25 +23,16 @@ export interface Page {
   bodyTruncated: boolean
 }
 
-export const USER_AGENT = "Mozilla/5.0 (compatible; Amira/0.1; +https://github.com/CAMB-dev/Amira)"
-const MAX_REDIRECTS = 10
-
 /** A request failure the model should see as is. */
 export class FetchError extends Error {}
 
 /** Checks a URL the model gave; plain http(s) only. */
 export function parseUrl(raw: string): URL {
-  let url: URL
   try {
-    url = new URL(raw.trim())
-  } catch {
-    throw new FetchError(`not a valid URL: ${raw}`)
+    return parseHttpUrl(raw)
+  } catch (err) {
+    throw new FetchError((err as Error).message)
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:")
-    throw new FetchError(`only http and https URLs can be fetched, got ${url.protocol}`)
-  if (url.username || url.password) throw new FetchError("URLs with credentials are not fetched")
-  url.hash = ""
-  return url
 }
 
 function charsetOf(contentType: string): string | undefined {
@@ -55,39 +46,6 @@ function decode(bytes: Uint8Array, charset: string | undefined): string {
   } catch {
     return new TextDecoder("utf-8").decode(bytes)
   }
-}
-
-/** Reads at most `max` bytes of a body, cancelling the rest. */
-async function readCapped(res: Response, max: number): Promise<{ bytes: Uint8Array; truncated: boolean }> {
-  if (!res.body) return { bytes: new Uint8Array(), truncated: false }
-  const reader = res.body.getReader()
-  const chunks: Uint8Array[] = []
-  let size = 0
-  let truncated = false
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (size + value.byteLength > max) {
-        chunks.push(value.subarray(0, max - size))
-        size = max
-        truncated = true
-        break
-      }
-      chunks.push(value)
-      size += value.byteLength
-    }
-  } finally {
-    if (truncated) await reader.cancel().catch(() => {})
-    reader.releaseLock()
-  }
-  const bytes = new Uint8Array(size)
-  let at = 0
-  for (const c of chunks) {
-    bytes.set(c, at)
-    at += c.byteLength
-  }
-  return { bytes, truncated }
 }
 
 /**
@@ -158,55 +116,27 @@ function toText(kind: Kind, body: string, base: string): string {
  * private-network rule, and converts the body to text.
  */
 export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSignal): Promise<Page> {
-  const doFetch = opts.fetch ?? fetch
-  const resolve = opts.resolve ?? dnsResolver
   const timeout = AbortSignal.timeout(opts.timeoutMs)
   const all = AbortSignal.any([signal, timeout])
   const start = parseUrl(raw)
   let url = start
-  let res: Response
   try {
-    for (let hop = 0; ; hop++) {
-      let target = url
-      const headers: Record<string, string> = {
-        "user-agent": USER_AGENT,
-        accept: "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5",
-        "accept-language": "en-US,en;q=0.9",
-      }
-      let tls: { serverName: string } | undefined
-      if (!opts.allowPrivateNetwork) {
-        const addresses = await assertPublicHost(url, resolve, all).catch((err: Error) => {
-          throw all.aborted ? err : new FetchError(err.message)
-        })
-        // Connect to the address just checked, so a second DNS answer (rebinding) cannot
-        // send the request elsewhere; Host and TLS server name keep the original name.
-        const ip = addresses?.find((a) => !a.includes(":")) ?? addresses?.[0]
-        if (ip) {
-          target = new URL(url.href)
-          target.hostname = ip.includes(":") ? `[${ip}]` : ip
-          headers.host = url.host
-          if (url.protocol === "https:") tls = { serverName: url.hostname }
-        }
-      }
-      all.throwIfAborted()
-      res = await doFetch(target.href, {
-        redirect: "manual",
-        signal: all,
-        headers,
-        ...(tls ? { tls } : {}),
-      } as RequestInit)
-      const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null
-      if (!location) break
-      await res.body?.cancel().catch(() => {})
-      if (hop >= MAX_REDIRECTS) throw new FetchError(`too many redirects (more than ${MAX_REDIRECTS})`)
-      let next: URL
-      try {
-        next = parseUrl(new URL(location, url).href)
-      } catch (err) {
-        throw new FetchError(`${url.href} redirected to an unusable URL: ${(err as Error).message}`)
-      }
-      url = next
-    }
+    const got = await guardedFetch(
+      start,
+      {
+        allowPrivateNetwork: opts.allowPrivateNetwork,
+        privateHint: "set web.fetch.allowPrivateNetwork in your user settings to allow",
+        headers: {
+          accept: "text/html,application/xhtml+xml,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.5",
+          "accept-language": "en-US,en;q=0.9",
+        },
+        ...(opts.fetch ? { fetch: opts.fetch } : {}),
+        ...(opts.resolve ? { resolve: opts.resolve } : {}),
+      },
+      all,
+    )
+    const res = got.response
+    url = got.url
     const contentType = res.headers.get("content-type") ?? ""
     const declared = headerKind(contentType)
     if (res.ok && (declared === "pdf" || declared === "binary")) {
@@ -238,6 +168,7 @@ export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSi
     if (signal.aborted) throw signal.reason ?? new Error("aborted")
     if (timeout.aborted) throw new FetchError(`timed out after ${opts.timeoutMs} ms fetching ${url.href}`)
     if (err instanceof FetchError) throw err
+    if (err instanceof NetError) throw new FetchError(err.message)
     throw new FetchError(`fetching ${url.href} failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 }

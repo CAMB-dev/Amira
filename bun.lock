@@ -80,6 +80,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@amira/api": "workspace:*",
+        "@amira/net": "workspace:*",
         "turndown": "^7.2.4",
       },
       "devDependencies": {
@@ -130,6 +131,10 @@
         "@amira/proc": "workspace:*",
       },
     },
+    "packages/net": {
+      "name": "@amira/net",
+      "version": "0.0.0",
+    },
     "packages/proc": {
       "name": "@amira/proc",
       "version": "0.0.0",
@@ -175,6 +180,8 @@
     "@amira/ext-status": ["@amira/ext-status@workspace:extensions/status"],
 
     "@amira/ext-web": ["@amira/ext-web@workspace:extensions/web"],
+
+    "@amira/net": ["@amira/net@workspace:packages/net"],
 
     "@amira/proc": ["@amira/proc@workspace:packages/proc"],
 

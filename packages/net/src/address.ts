@@ -117,6 +117,8 @@ export async function assertPublicHost(
   url: URL,
   resolve: Resolver,
   signal?: AbortSignal,
+  /** Added to the refusal in parentheses, e.g. the setting that allows such addresses. */
+  hint?: string,
 ): Promise<string[] | undefined> {
   const host = url.hostname
     .replace(/^\[|\]$/g, "")
@@ -124,7 +126,7 @@ export async function assertPublicHost(
     .toLowerCase()
   const blocked = () =>
     new Error(
-      `refusing to fetch ${url.host}: it is a local or private-network address (set web.fetch.allowPrivateNetwork in your user settings to allow)`,
+      `refusing to fetch ${url.host}: it is a local or private-network address${hint ? ` (${hint})` : ""}`,
     )
   if (!host || host === "localhost" || host.endsWith(".localhost")) throw blocked()
   if (isIP(host)) {

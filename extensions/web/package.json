@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@amira/api": "workspace:*",
+    "@amira/net": "workspace:*",
     "turndown": "^7.2.4"
   },
   "devDependencies": {
