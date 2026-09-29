@@ -7,6 +7,7 @@ import {
   type FormSpec,
   type Message,
   type SessionControl,
+  type SpawnGroup,
   type TuiSettings,
   textResult,
 } from "@amira/api"
@@ -313,6 +314,71 @@ test("sub-agents stay under their call, also running in the background after the
       ),
     "end line under the call",
   )
+  terminal.send("\x03")
+  await exited
+})
+
+test("a compact spawn group is one line under its call, with its owner's status, also once it ended", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const reply = (req: { messages: { role: string; content: unknown }[] }) => {
+    const task = JSON.stringify(req.messages[0]?.content)
+    const answered = req.messages.at(-1)?.role === "toolResult"
+    if (task.includes("step"))
+      return answered ? { text: "step done" } : { toolCalls: [{ name: "hold", args: {} }] }
+    return answered ? { text: "running it" } : { toolCalls: [{ name: "flow", args: {} }] }
+  }
+  const { terminal, view, shows, idle, exited, agent, bus } = await setup(Array(8).fill(reply), {
+    cols: 80,
+    tree: true,
+  })
+  agent.tools.register(
+    defineTool({
+      name: "hold",
+      ...parallel,
+      execute: async () => {
+        await gate
+        return textResult("held")
+      },
+    }),
+    "test",
+  )
+  let group: SpawnGroup | undefined
+  agent.tools.register(
+    defineTool({
+      name: "flow",
+      description: "",
+      parameters: {},
+      execute: async (_p, ctx) => {
+        group = ctx.session!.createGroup!({ name: "workflow demo", compact: true })
+        group.setStatus("Explore · 0/3 agents")
+        const kids = ["Scan api", "Scan core", "Scan tui"].map((title) =>
+          group!.spawn({ role: "explorer", title, prompt: `step ${title}` }),
+        )
+        void Promise.all(kids.map((k) => k.result())).then(() => group!.end())
+        return textResult("Started in the background")
+      },
+    }),
+    "test",
+  )
+  terminal.send("go\r")
+  await shows("running it")
+  await idle()
+  await waitFor(
+    () =>
+      /● flow\n {2}├ ◆ workflow demo · Explore · 0\/3 agents\n {2}└ Started in the background/.test(view()),
+    "one line for the group under its call",
+  )
+  expect(view()).not.toContain("Scan api")
+  group!.setStatus("Verify · 2/3 agents")
+  await shows("◆ workflow demo · Verify · 2/3 agents")
+  release()
+  await group!.ended()
+  await bus.flush()
+  // Its members never get rows of their own; the group's line stays with its last status.
+  await waitFor(() => !/Scan (api|core|tui)/.test(view()) && view().includes("workflow demo"), "ended")
   terminal.send("\x03")
   await exited
 })
