@@ -55,7 +55,7 @@ export const COMMAND_PARAMS = {
       value: {
         type: ["string", "boolean", "object", "array", "null"],
         description:
-          'The answer: a string for select, input and diff-review; for confirm a boolean, "always" when it offers always, or {"other": text} when it offers other; for ask an array with one AskAnswer per question; an object for form.',
+          'The answer: a string for select, input and diff-review (a select with sections also takes {"option": option, "key": key}); for confirm a boolean, "always" when it offers always, or {"other": text} when it offers other; for ask an array with one AskAnswer per question; an object for form.',
       },
     },
   },
@@ -519,7 +519,23 @@ export function rpcSchema(): Schema {
       }),
       Message: oneOf(ref("UserMessage"), ref("AssistantMessage"), ref("ToolResultMessage")),
       UiRequest: oneOf(
-        obj({ kind: strings("select"), title: str, options: arrayOf(str) }),
+        obj({
+          kind: strings("select"),
+          title: str,
+          options: arrayOf(str),
+          "sections?": {
+            ...arrayOf(
+              obj({
+                at: num,
+                "title?": str,
+                "choose?": str,
+                "keys?": arrayOf(obj({ key: str, label: str })),
+              }),
+            ),
+            description:
+              'Parts of the list, each from option index `at` to the next: a heading, what Enter does there, and keys besides Enter. A key pressed on an option answers {"option": option, "key": key}; the option alone answers as Enter.',
+          },
+        }),
         obj({
           kind: strings("confirm"),
           title: str,

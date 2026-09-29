@@ -1,4 +1,4 @@
-import type { AskAnswer, ConfirmAnswer, EventMap } from "@amira/api"
+import { type AskAnswer, type ConfirmAnswer, type EventMap, type SelectChoice, sectionOf } from "@amira/api"
 import { rankMatches } from "@amira/core"
 import {
   type Component,
@@ -20,7 +20,7 @@ import { type Action, defaultKeybindings, type Keybindings } from "./keybindings
 export type DialogRequest = EventMap["ui.request"]
 
 /** How a dialog was answered; undefined cancels it. */
-export type DialogAnswer = string | ConfirmAnswer | AskAnswer[] | undefined
+export type DialogAnswer = string | ConfirmAnswer | AskAnswer[] | SelectChoice | undefined
 
 /** Options of a list shown at once; longer lists scroll with the selection. */
 const MAX_OPTIONS = 10
@@ -86,7 +86,8 @@ interface Fit {
  * select (typing filters it), a diff review, an input (plain or secret) and the questions of
  * ask_user. It is a block with a bar down its left: the question, a muted message or diff, the
  * options as a list (❯ marks the selected one; digits choose in short lists; a multi-select
- * checks them with Space), and the keys at the bottom. A confirm starts with nothing selected:
+ * checks them with Space), and the keys at the bottom. A select's sections put a heading over
+ * their options and add keys of their own, shown while one of them is selected. A confirm starts with nothing selected:
  * Enter does nothing until the user has moved to a choice, so keys typed before it showed up
  * (a message being written) cannot answer it. A free-text choice ("Other…") opens a
  * text field in its row, which Esc closes again; Esc elsewhere cancels. Several questions are
@@ -178,6 +179,18 @@ export class Dialog implements Component {
       page.selected = i
       if (page.multi) this.#toggle(i)
       else return this.#choose(i)
+    } else if (
+      r.kind === "select" &&
+      e.type === "key" &&
+      e.text &&
+      !e.ctrl &&
+      !e.alt &&
+      this.#isSectionKey(e.text)
+    ) {
+      // A section's key answers on the selected option; where it does nothing it is not typed either.
+      const c = choices[page.selected]
+      if (c && this.#sectionKeys(c).some((k) => k.key === e.text))
+        return this.#finish({ option: c.label, key: e.text })
     } else if (r.kind === "select" && e.type === "key" && e.name === "backspace" && this.#filter) {
       this.#setFilter(this.#filter.slice(0, -1))
     } else if (r.kind === "select" && e.type === "key" && e.text && !e.ctrl && !e.alt) {
@@ -327,6 +340,8 @@ export class Dialog implements Component {
       fit.inlineDescriptions || described.every((it) => column + 2 + visibleWidth(it.description) <= width)
     const rows: string[] = []
     for (const { c, selected, lead, typed, description } of items) {
+      const heading = this.#heading(c)
+      if (heading) rows.push(truncateToWidth(`  ${theme.muted(heading)}`, width, glyphs.more))
       const leadWidth = visibleWidth(lead)
       if (c.other && this.#field && selected) {
         const field = this.#field.render(Math.max(4, width - leadWidth), theme, {
@@ -381,7 +396,8 @@ export class Dialog implements Component {
     const picking = page.selected < 0
     // Of several questions, Enter goes on to the next one not answered, until the last.
     const more = this.#pages.some((p) => p !== page && !p.answer)
-    const choose = more ? "next" : page.multi ? "submit" : "choose"
+    const section = this.#section(this.#choices()[page.selected])
+    const choose = more ? "next" : page.multi ? "submit" : (section?.choose ?? "choose")
     // An approval's Esc denies the call (and stops the turn); a later question's goes back one.
     const cancel = this.#page > 0 ? "back" : r.source === "approval" ? "deny" : "cancel"
     return [
@@ -392,6 +408,7 @@ export class Dialog implements Component {
       r.kind === "select" && { text: "type to filter", priority: 1 },
       answerKeys && { text: answerKeys, priority: 1 },
       !picking && this.#hint("dialog.choose", choose, 5),
+      ...(section?.keys ?? []).map((k) => ({ text: `${k.key} ${k.label}`, priority: 4 })),
       this.#hint("dialog.cancel", cancel, 3),
     ]
   }
@@ -400,6 +417,31 @@ export class Dialog implements Component {
   #hint(action: Action, what: string, priority: number) {
     const key = this.keys.label(action)
     return key ? { text: `${key} ${what}`, priority } : undefined
+  }
+
+  /** The section of a select that a choice is in, by its place in the whole list. */
+  #section(c: Choice | undefined) {
+    const r = this.request
+    if (r.kind !== "select" || !r.sections || !c) return undefined
+    return sectionOf(r.sections, r.options.indexOf(c.label))
+  }
+
+  #sectionKeys(c: Choice) {
+    return this.#section(c)?.keys ?? []
+  }
+
+  /** Whether `text` is a key of some section: it answers rather than filters. */
+  #isSectionKey(text: string): boolean {
+    const r = this.request
+    return r.kind === "select" && (r.sections ?? []).some((s) => s.keys?.some((k) => k.key === text))
+  }
+
+  /** The heading shown above a choice: its section's title, when it starts there and nothing is typed. */
+  #heading(c: Choice): string | undefined {
+    const r = this.request
+    if (r.kind !== "select" || this.#filter) return undefined
+    const i = r.options.indexOf(c.label)
+    return r.sections?.find((s) => s.at === i)?.title
   }
 
   get #current(): Page {
@@ -611,6 +653,12 @@ export function dialogEchoLines(
     return r.questions.flatMap((q, i) =>
       line(q.question, answer[i] ? askAnswerText(answer[i]) : "(no answer)"),
     )
+  }
+  if (r.kind === "select" && typeof answer === "object" && "option" in answer) {
+    const key =
+      answer.key &&
+      sectionOf(r.sections, r.options.indexOf(answer.option))?.keys?.find((k) => k.key === answer.key)
+    return line(r.title, key ? `${answer.option} ${glyphs.separator} ${key.label}` : answer.option)
   }
   if (r.kind === "input" && r.secret) return line(r.title, "(hidden)")
   if (r.kind === "input" && answer === "") return line(r.title, "(empty)")

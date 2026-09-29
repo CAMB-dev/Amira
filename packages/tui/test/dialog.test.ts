@@ -448,3 +448,56 @@ test("an input answered with nothing echoes as (empty), not as a bare question",
   const r: DialogRequest = { kind: "input", requestId: "e", title: "Note" }
   expect(dialogEchoLines(r, "", plain.theme)).toEqual(["┃ ? Note ❯ (empty)"])
 })
+
+const sectioned = () =>
+  open({
+    kind: "select",
+    requestId: "s1",
+    title: "Sub-agents",
+    options: ["1. Fix the parser · coder", "2. Scan the logs · explorer", "sa_1 · 3 files"],
+    sections: [
+      { at: 0, choose: "open", keys: [{ key: "p", label: "print" }] },
+      { at: 2, title: "Kept worktrees", choose: "review" },
+    ],
+  })
+
+test("a select's sections: a heading over their options, and their own Enter label and keys", () => {
+  const { rows, press } = sectioned()
+  expect(rows()).toEqual([
+    "? Sub-agents",
+    "",
+    "❯ 1 Fix the parser · coder",
+    "  2 Scan the logs · explorer",
+    "  Kept worktrees",
+    "  3 sa_1 · 3 files",
+    "",
+    "↑↓ move · Enter open · p print · Esc cancel",
+  ])
+  press("down", "down")
+  expect(rows().at(-1)).toBe("↑↓ move · type to filter · Enter review · Esc cancel")
+})
+
+test("a section's key answers with the option it was pressed on; elsewhere it does nothing", () => {
+  const a = sectioned()
+  a.press("down")
+  a.type("p")
+  expect(a.answers).toEqual([{ option: "2. Scan the logs · explorer", key: "p" }])
+  const b = sectioned()
+  b.press("down", "down")
+  b.type("p")
+  // Not typed into the filter either.
+  expect(b.answers).toEqual([])
+  expect(b.rows().join("\n")).not.toContain("filter ❯")
+  b.press("enter")
+  expect(b.answers).toEqual(["sa_1 · 3 files"])
+})
+
+test("a filtered sectioned list has no headings; the echo names the key's label", () => {
+  const { rows, type } = sectioned()
+  type("sa")
+  expect(rows().join("\n")).not.toContain("Kept worktrees")
+  const r = sectioned().dialog.request
+  expect(dialogEchoLines(r, { option: "1. Fix the parser · coder", key: "p" }, plain.theme)).toEqual([
+    "┃ ? Sub-agents ❯ 1. Fix the parser · coder · print",
+  ])
+})
