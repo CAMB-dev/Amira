@@ -143,6 +143,8 @@ export class ImageLoader {
     }, false).then(
       ({ bytes, size }) => {
         s.settle(bytes, size)
+        // Counted while it is kept: one let go of meanwhile keeps its bytes only for its holders.
+        if (this.screens.get(source) !== s) return
         this.keptBytes += bytes.length
         this.trimScreens()
       },

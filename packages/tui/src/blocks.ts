@@ -242,6 +242,7 @@ export class ReplyBlock extends Block {
   private streamWidth = 0
   /** The images the stream was made to draw with, if any. */
   private streamImages: BlockImages | undefined
+  private streamImageRows = 0
   /** Images laid out by their marks' ids, with their alt text. */
   private marks = new Map<number, { image: ScreenImage; alt: string }>()
   #hasImages = false
@@ -291,18 +292,28 @@ export class ReplyBlock extends Block {
     this.lastImages = images
     const opts: MarkdownStreamOptions = { hyperlinks: this.hyperlinks }
     if (images) opts.imageRows = (image, fallback, col, w) => this.imageRows(images, image, fallback, col, w)
+    const imageRows = images ? images.loader.maxRows() : 0
     let rows: string[]
     if (this.#streaming && !this.folded) {
-      if (!this.stream || this.streamWidth !== width || this.streamImages !== images) {
+      if (
+        !this.stream ||
+        this.streamWidth !== width ||
+        this.streamImages !== images ||
+        this.streamImageRows !== imageRows
+      ) {
+        // Images are laid out afresh with it: only those of its rows are kept.
+        this.marks.clear()
         this.stream = new MarkdownStream(opts)
         this.stream.append(this.source)
         this.streamWidth = width
         this.streamImages = images
+        this.streamImageRows = imageRows
       }
       const ctx: RenderContext = { theme: env.theme, color: true, rows: Number.POSITIVE_INFINITY }
       rows = this.stream.render(width, ctx)
       while (rows.length && rows[rows.length - 1]!.trim() === "") rows = rows.slice(0, -1)
     } else {
+      this.marks.clear()
       const { text } = foldMarkdown(this.source, this.folded)
       rows = renderMarkdown(text, width, env.theme, opts)
     }
@@ -322,9 +333,11 @@ export class ReplyBlock extends Block {
     if (source.state === "loading") source.onSettled(this.imageLoaded)
     const image = source.image(Math.max(1, width - col), images.loader.maxRows())
     if (!image) return fallback
-    const alt = fallback[0]?.slice(col) ?? ""
+    const indent = " ".repeat(col)
+    const first = fallback[0] ?? ""
+    const alt = first.startsWith(indent) ? first.slice(col) : first
     this.marks.set(image.id, { image, alt })
-    return Array.from({ length: image.rows }, (_, k) => " ".repeat(col) + mark(image.id, k))
+    return Array.from({ length: image.rows }, (_, k) => indent + mark(image.id, k))
   }
 
   /** Blanks the rows of images, noting where each starts. */
