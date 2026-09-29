@@ -127,8 +127,9 @@ keeps the scrollback: the first press of `find`, a page key or `select.start` sa
 for full-screen mode, and the terminal's own scrollback and find work there.
 
 The view follows the newest output. Scrolled up, it stays where it is while the conversation
-grows, and the row under it says how many rows are below (`↓ 124 rows below`), and
-`↓ new output` once more came; scrolling to the end (or End) follows again.
+grows, and the row under it says how many rows are below (`↓ 124 rows below`, or
+`↓ new output · 124 rows below` once more has come); scrolling to the end (or End) follows
+again.
 
 | Action | Default | What it does |
 | --- | --- | --- |
