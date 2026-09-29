@@ -12,7 +12,7 @@ test("one blank line between blocks, none between the tool calls of a step or a 
     ...t.block("tool", ["● read b"]),
     ...t.block("assistant", ["  reply"]),
     ...t.block("command", ["› /status"]),
-    ...t.block("command-output", ["  ⎿ ok"]),
+    ...t.block("command-output", ["  └ ok"]),
     ...t.block("notice", ["• note"]),
   ]
   expect(out).toEqual([
@@ -26,7 +26,7 @@ test("one blank line between blocks, none between the tool calls of a step or a 
     "  reply",
     "",
     "› /status",
-    "  ⎿ ok",
+    "  └ ok",
     "",
     "• note",
   ])
@@ -52,7 +52,7 @@ test("system notices lead with a symbol by level and indent their later lines", 
   expect(plain(noticeLines(defaultTheme, "error", "boom"))).toEqual(["✗ boom"])
   expect(plain(noticeLines(defaultTheme, "info", "(no reply)"))).toEqual(["• (no reply)"])
   expect(plain(commandOutputLines(defaultTheme.text, defaultTheme.muted, "one\ntwo"))).toEqual([
-    "  ⎿ one",
+    "  └ one",
     "    two",
   ])
 })

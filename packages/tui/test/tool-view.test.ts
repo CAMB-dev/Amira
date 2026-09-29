@@ -24,13 +24,13 @@ test("a tool without a presenter: its main argument, the first result line and h
       result: textResult("a\nb\nc"),
       durationMs: 1500,
     }),
-  ).toEqual(["● mcp_x q · limit=3", "  ⎿ a (+2 lines) · 1.5s"])
+  ).toEqual(["● mcp_x q · limit=3", "  └ a (+2 lines) · 1.5s"])
 })
 
 test("a failure shows its output under the result, its start and end when it is long", () => {
   const call = { name: "mcp_x", args: {}, result: textResult(`boom\n${numbered(20)}`, true) }
   const lines = show(undefined, call)
-  expect(lines.slice(0, 2)).toEqual(["✗ mcp_x", "  ⎿ boom (+20 lines)"])
+  expect(lines.slice(0, 2)).toEqual(["✗ mcp_x", "  └ boom (+20 lines)"])
   expect(lines.slice(2)).toEqual([
     "    out 1",
     "    out 2",
@@ -53,14 +53,14 @@ test("calls that did not run to completion are muted with their own marker, neve
     result: textResult("Aborted by the user before this tool finished.", true),
     rejected: "aborted",
   })
-  expect(aborted).toEqual(["⊘ bash sleep 9", "  ⎿ interrupted"])
+  expect(aborted).toEqual(["⊘ bash sleep 9", "  └ interrupted"])
   const blocked = show(undefined, {
     name: "edit",
     args: { path: "a" },
     result: textResult("Tool call blocked: read-only mode", true),
     rejected: "blocked",
   })
-  expect(blocked).toEqual(["⊘ edit a", "  ⎿ Tool call blocked: read-only mode"])
+  expect(blocked).toEqual(["⊘ edit a", "  └ Tool call blocked: read-only mode"])
   // A tool that failed because the user interrupted the turn reads as interrupted too.
   const cut = show(undefined, {
     name: "bash",
@@ -68,7 +68,7 @@ test("calls that did not run to completion are muted with their own marker, neve
     result: textResult("Command was aborted.", true),
     interrupted: true,
   })
-  expect(cut).toEqual(["⊘ bash x", "  ⎿ interrupted"])
+  expect(cut).toEqual(["⊘ bash x", "  └ interrupted"])
   // Nothing of it is red.
   const colored = finishedToolLines(
     theme,
@@ -96,7 +96,7 @@ test("an edit shows +added −removed and a compact numbered diff, cut after 20 
       details: { path: "/p/src/a.ts", replacements: 1, added: 1, removed: 1, hunks: [hunk(9, 2)] },
     },
   })
-  expect(small).toEqual(["● edit src/a.ts", "  ⎿ +1 −1", "    9 -line 9", "    9 +line 10"])
+  expect(small).toEqual(["● edit src/a.ts", "  └ +1 −1", "    9 -line 9", "    9 +line 10"])
   const big = show(builtinPresenters.edit, {
     name: "edit",
     args: { path: "a.ts", old_string: "x", new_string: "y" },
@@ -121,7 +121,7 @@ test("a presenter that throws falls back to the generic presentation", () => {
   }
   expect(show(broken, { name: "t", args: { path: "p" }, result: textResult("ok") })).toEqual([
     "● t p",
-    "  ⎿ ok",
+    "  └ ok",
   ])
 })
 
