@@ -2134,7 +2134,7 @@ test("inline: a blank line sets the conversation apart from the shell, above the
 })
 
 test("inline: Alt+C copies the last reply; a key of the full-screen view says so once", async () => {
-  const { terminal, live, shows, idle, exited } = await setup([{ text: "Use **bold** here." }])
+  const { terminal, shows, idle, exited } = await setup([{ text: "Use **bold** here." }])
   terminal.send("\x1bc")
   await shows("Nothing to copy in the last reply.")
   terminal.send("go\r")
