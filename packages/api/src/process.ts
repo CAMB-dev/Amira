@@ -13,6 +13,13 @@ export interface RunCommandOptions {
    * once the process tree is contained, so nothing it starts can escape a kill.
    */
   gated?: boolean
+  /**
+   * Text for the command's stdin, e.g. JSON describing what a hook runs for. It is written once
+   * the process tree is contained, followed by a newline (unless it ends with one), and then
+   * stdin is closed. Without it the command gets no stdin (or only the gate line). Cannot be
+   * combined with `gated` or `viaCmd`.
+   */
+  stdin?: string
   /** Windows: start through cmd.exe, which avoids the long spawn stalls some machines have with git. */
   viaCmd?: boolean
 }

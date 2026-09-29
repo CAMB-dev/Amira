@@ -18,6 +18,9 @@ export interface EventEnvelope<K extends keyof EventMap = keyof EventMap> {
 
 export type AnyEvent = { [K in keyof EventMap]: EventEnvelope<K> }[keyof EventMap]
 
+/** How a notice reads: information, something that went well, or a problem. */
+export type NoticeLevel = "info" | "success" | "warning" | "error"
+
 export type SessionStatus = "idle" | "working" | "blocked" | "error"
 
 export type TurnEndReason = "done" | "error" | "aborted"
@@ -86,6 +89,11 @@ export interface EventMap {
   /** Something visible changed outside the event stream (e.g. status bar state); frontends should redraw. */
   "ui.render": Record<string, never>
   "extension.error": { source: string; error: string }
+  /**
+   * Something an extension tells the user (ExtensionAPI.notify), e.g. how a hook it ran went.
+   * Frontends show it as a notice in the transcript; `source` is the extension.
+   */
+  "extension.notice": { source: string; text: string; level: NoticeLevel }
   /** A slow subscriber's queue overflowed and events were dropped for it. */
   "events.lost": { dropped: number }
   /** The session switched models; later turns use `to`. */
@@ -235,6 +243,20 @@ export interface InterceptorMap {
   "context.build": { systemPrompt: string; messages: Message[] }
   /** Runs before a tool executes. Only `args` may be modified; block returns an error result to the model. */
   "tool.call.before": { readonly toolCallId: string; readonly name: string; args: Record<string, unknown> }
+  /**
+   * Runs after a tool ran, before its result reaches the model and tool.execute.end is
+   * emitted; not for calls that were rejected, blocked or aborted first. Only `result` may be
+   * modified, e.g. to add a formatter's complaints or a language server's diagnostics to what
+   * the model reads. block counts as pass. Failures pass, and the result stays as it was, as it
+   * does when the modified result has no `content`.
+   */
+  "tool.call.after": {
+    readonly toolCallId: string
+    readonly name: string
+    /** The arguments the tool ran with. */
+    readonly args: Readonly<Record<string, unknown>>
+    result: ToolResult
+  }
   /**
    * Runs before every model call, ahead of context.build, with the system prompt's sections
    * in order ("identity", "environment", "project", "skills", "deferred-tools", "role").

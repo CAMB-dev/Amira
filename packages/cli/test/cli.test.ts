@@ -519,3 +519,32 @@ test("the top-level session's questions go to the user; print mode says nobody c
   ui.unavailable = "print mode"
   expect(await ask(request, signal)).toEqual({ unavailable: "print mode" })
 })
+
+test("plain print mode shows extensions' notices on stderr, problems with their level", async () => {
+  const { agent } = await mockSession([{ toolCalls: [{ name: "note", args: {} }] }, { text: "all done" }])
+  agent.tools.register(
+    defineTool({
+      name: "note",
+      description: "",
+      parameters: {},
+      execute: async () => {
+        agent.bus.emit(
+          "extension.notice",
+          { source: "x", text: "formatted a.ts", level: "success" },
+          { sessionId: "host" },
+        )
+        agent.bus.emit(
+          "extension.notice",
+          { source: "x", text: "tests failed", level: "error" },
+          { sessionId: "host" },
+        )
+        return textResult("ok")
+      },
+    }),
+    "test",
+  )
+  const io = capture()
+  expect(await runPrint(agent, "go", false, { io })).toBe(0)
+  expect(io.out).toBe("all done\n")
+  expect(io.err).toBe("● note \n● formatted a.ts\nerror: tests failed\n")
+})

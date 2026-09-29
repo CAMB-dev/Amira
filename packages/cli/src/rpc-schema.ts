@@ -265,6 +265,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   }),
   "extension.loaded": obj({ source: str }),
   "extension.error": obj({ source: str, error: str }),
+  "extension.notice": obj({ source: str, text: str, level: strings("info", "success", "warning", "error") }),
   "ui.render": obj({}),
   "events.lost": obj({ dropped: num }),
   "ui.request": { allOf: [ref("UiRequest"), obj({ requestId: str, "source?": str })] },

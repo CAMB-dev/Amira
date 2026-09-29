@@ -1,7 +1,14 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
-import { API_VERSION, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
+import {
+  API_VERSION,
+  type Extension,
+  type ExtensionAPI,
+  type RunCommandOptions,
+  type RunCommandResult,
+  type Settings,
+} from "@amira/api"
 import { runCommand } from "@amira/proc"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
@@ -66,6 +73,7 @@ export interface ExtensionHostOptions {
 export class ExtensionHost {
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
+  #exitHandlers = new Set<{ source: string; run: (signal: AbortSignal) => void | Promise<void> }>()
   #renderPending = false
   /** Extension files imported before, which a reload must import anew. */
   #imported = new Set<string>()
@@ -141,6 +149,37 @@ export class ExtensionHost {
     for (const source of this.loaded.reverse()) this.unload(source)
   }
 
+  /**
+   * Runs the extensions' exit handlers (ExtensionAPI.onExit) together and resolves once all
+   * finished. After `timeoutMs` their signal aborts, and they get `graceMs` more to stop (e.g.
+   * for a command they started to be killed) before this resolves anyway. Failures are reported
+   * as extension.error. Never rejects.
+   */
+  async runExitHandlers(timeoutMs = 4000, graceMs = 1000): Promise<void> {
+    const handlers = [...this.#exitHandlers]
+    if (!handlers.length) return
+    const abort = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        abort.abort()
+        timer = setTimeout(resolve, graceMs)
+      }, timeoutMs)
+    })
+    const runs = handlers.map(async (h) => {
+      try {
+        await h.run(abort.signal)
+      } catch (err) {
+        this.#fail(h.source, `exit handler failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })
+    try {
+      await Promise.race([Promise.all(runs), late])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** Coalesces render requests into one ui.render per macrotask. */
   #requestRender() {
     if (this.#renderPending) return
@@ -177,6 +216,13 @@ export class ExtensionHost {
       cwd: this.#opts.cwd ?? process.cwd(),
       home: amiraHome(),
       reportError: (error) => void this.#fail(source, error),
+      notify: (text, level = "info") =>
+        void bus.emit("extension.notice", { source, text: String(text), level }, this.#meta()),
+      onExit: (run) => {
+        const entry = { source, run }
+        this.#exitHandlers.add(entry)
+        return track(() => void this.#exitHandlers.delete(entry))
+      },
       registerTool: (tool) => track(tools.register(tool, source)),
       // A taken name skips only this command, not the whole extension.
       registerCommand: (command) => {
@@ -250,10 +296,27 @@ export class ExtensionHost {
         }
       },
       requestRender: () => this.#requestRender(),
-      runCommand: (argv, options) => runCommand(argv, options),
+      runCommand: (argv, options) => runExtensionCommand(argv, options),
       ui: this.#uiFor(source, track),
     }
   }
+}
+
+/**
+ * ExtensionAPI.runCommand: `stdin` travels as the gate line, which is written once the process
+ * tree is contained and then closes stdin.
+ */
+export function runExtensionCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult> {
+  const { stdin, ...rest } = options
+  if (stdin === undefined) return runCommand(argv, rest)
+  if (rest.gated || rest.viaCmd) {
+    return Promise.reject(new Error("runCommand: stdin cannot be combined with gated or viaCmd"))
+  }
+  return runCommand(argv, {
+    ...rest,
+    gated: true,
+    gateLine: stdin.endsWith("\n") ? stdin.slice(0, -1) : stdin,
+  })
 }
 
 function deepFreeze<T>(value: T): T {

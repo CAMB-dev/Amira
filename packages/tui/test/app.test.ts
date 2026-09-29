@@ -2639,3 +2639,11 @@ test("live panels give way on a short screen: folded, then cut, the input box al
     await exited
   }
 })
+
+test("an extension's notice shows in the transcript", async () => {
+  const { host, shows, terminal, exited } = await setup([])
+  await host.load((api) => api.notify("hook prettier · a.ts · ok", "success"), "ext:hooks")
+  await shows("✓ hook prettier · a.ts · ok")
+  terminal.send("\x03")
+  await exited
+})

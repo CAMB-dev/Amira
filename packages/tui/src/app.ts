@@ -166,6 +166,7 @@ const otherWay = (w: WhileWorking): WhileWorking => (w === "steer" ? "queue" : "
 /** Events without a turn that the UI shows whatever session emitted them. */
 const HOST_EVENTS = new Set<string>([
   "extension.error",
+  "extension.notice",
   "ui.render",
   "extension.loaded",
   "ui.request",
@@ -778,6 +779,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             ? `warning: ${e.data.error}`
             : `[extension ${e.data.source}] ${e.data.error}`,
         )
+        break
+      case "extension.notice":
+        view.notice(e.data.level, e.data.text)
         break
       case "turn.steer": {
         const text = messageText(e.data.message)
