@@ -1,9 +1,12 @@
 import type { ToolDetailLevel, ToolRejection, ToolResult, UserMessage } from "@amira/api"
 import { toolResultText } from "@amira/api"
 import {
+  type ImageLoader,
   MarkdownStream,
+  type MarkdownStreamOptions,
   type RenderContext,
   renderMarkdown,
+  type ScreenImage,
   stripAnsi,
   type Theme,
   truncateToWidth,
@@ -31,7 +34,41 @@ export interface BlockEnv {
   nodes: Map<string, SubagentNode>
   /** Spawn groups by id; a compact one's members show as one line. */
   groups?: SpawnGroups
+  /** Where replies get their images, when the terminal draws them; without it, alt text. */
+  images?: BlockImages
 }
+
+/** What replies need to show their images (D83): the same object for every frame. */
+export interface BlockImages {
+  loader: ImageLoader
+  /** Something a block shows changed by itself (an image came in): a frame is wanted. */
+  changed: () => void
+}
+
+/** An image in a block's lines: from `line`, its rows blank, drawn at `col` over them. */
+export interface ImageRow {
+  line: number
+  col: number
+  image: ScreenImage
+  /** What shows in its place when it cannot be drawn: its alt text, as a row. */
+  alt: string
+}
+
+/** The images in lines a block returned, by those lines. */
+const lineImages = new WeakMap<readonly string[], ImageRow[]>()
+
+/** The images in lines a block returned, if any. */
+export function imagesIn(lines: readonly string[]): ImageRow[] | undefined {
+  return lineImages.get(lines)
+}
+
+/**
+ * Rows that stand for rows of an image while a reply is laid out (content cannot make one: the
+ * nonce is not known, and escape sequences are taken out of replies); blank once laid out.
+ */
+const NONCE = Math.random().toString(36).slice(2, 10)
+const MARK = new RegExp(`^( *)\\x1b_amira:img:${NONCE}:(\\d+):(\\d+)\\x07$`)
+const mark = (id: number, row: number) => `\x1b_amira:img:${NONCE}:${id}:${row}\x07`
 
 let nextId = 1
 
@@ -203,7 +240,19 @@ export class ReplyBlock extends Block {
   folded = false
   private stream: MarkdownStream | undefined
   private streamWidth = 0
+  /** The images the stream was made to draw with, if any. */
+  private streamImages: BlockImages | undefined
+  /** Images laid out by their marks' ids, with their alt text. */
+  private marks = new Map<number, { image: ScreenImage; alt: string }>()
+  #hasImages = false
   #streaming: boolean
+  private lastImages: BlockImages | undefined
+  /** An image file came in (or failed): its rows change. */
+  private readonly imageLoaded = () => {
+    this.stream = undefined
+    this.touch()
+    this.lastImages?.changed()
+  }
 
   constructor(
     source: string,
@@ -237,21 +286,69 @@ export class ReplyBlock extends Block {
 
   lines(env: BlockEnv): string[] {
     const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
+    // Folded, images are their alt text.
+    const images = this.folded ? undefined : env.images
+    this.lastImages = images
+    const opts: MarkdownStreamOptions = { hyperlinks: this.hyperlinks }
+    if (images) opts.imageRows = (image, fallback, col, w) => this.imageRows(images, image, fallback, col, w)
     let rows: string[]
     if (this.#streaming && !this.folded) {
-      if (!this.stream || this.streamWidth !== width) {
-        this.stream = new MarkdownStream({ hyperlinks: this.hyperlinks })
+      if (!this.stream || this.streamWidth !== width || this.streamImages !== images) {
+        this.stream = new MarkdownStream(opts)
         this.stream.append(this.source)
         this.streamWidth = width
+        this.streamImages = images
       }
       const ctx: RenderContext = { theme: env.theme, color: true, rows: Number.POSITIVE_INFINITY }
       rows = this.stream.render(width, ctx)
       while (rows.length && rows[rows.length - 1]!.trim() === "") rows = rows.slice(0, -1)
     } else {
       const { text } = foldMarkdown(this.source, this.folded)
-      rows = renderMarkdown(text, width, env.theme, { hyperlinks: this.hyperlinks })
+      rows = renderMarkdown(text, width, env.theme, opts)
     }
-    return replyRows(rows)
+    return this.layOut(replyRows(rows), images !== undefined)
+  }
+
+  /** The rows an image takes: its marks, once its size is known; its alt text until then. */
+  private imageRows(
+    images: BlockImages,
+    ref: { url: string; alt: string },
+    fallback: string[],
+    col: number,
+    width: number,
+  ): string[] {
+    const source = images.loader.screen(ref.url)
+    if (!source) return fallback
+    if (source.state === "loading") source.onSettled(this.imageLoaded)
+    const image = source.image(Math.max(1, width - col), images.loader.maxRows())
+    if (!image) return fallback
+    const alt = fallback[0]?.slice(col) ?? ""
+    this.marks.set(image.id, { image, alt })
+    return Array.from({ length: image.rows }, (_, k) => " ".repeat(col) + mark(image.id, k))
+  }
+
+  /** Blanks the rows of images, noting where each starts. */
+  private layOut(lines: string[], drawing: boolean): string[] {
+    if (!drawing) return lines
+    const found: ImageRow[] = []
+    for (let i = 0; i < lines.length; i++) {
+      const m = MARK.exec(
+        lines[i]!.startsWith(glyphs.assistant) ? lines[i]!.slice(glyphs.assistant.length) : lines[i]!,
+      )
+      if (!m) continue
+      lines[i] = ""
+      const at = this.marks.get(Number(m[2]))
+      if (at && m[3] === "0")
+        found.push({
+          line: i,
+          col: visibleWidth(glyphs.assistant) + m[1]!.length,
+          image: at.image,
+          alt: at.alt,
+        })
+    }
+    this.#hasImages = found.length > 0
+    if (found.length) lineImages.set(lines, found)
+    return lines
   }
 
   copyText(): string {
@@ -259,7 +356,8 @@ export class ReplyBlock extends Block {
   }
 
   override foldable(): boolean {
-    return foldMarkdown(this.source, false).foldable
+    // Folded, its images are their alt text.
+    return this.#hasImages || foldMarkdown(this.source, false).foldable
   }
 
   override toggleFold(): void {

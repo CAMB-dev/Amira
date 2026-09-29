@@ -17,6 +17,7 @@ import {
 import {
   type Block,
   type BlockEnv,
+  type BlockImages,
   fixedLine,
   LinesBlock,
   ReplyBlock,
@@ -79,6 +80,12 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Rows of the transcript in the last frame, for mouse clicks. */
   let paneRows = 0
 
+  /** Images of replies, drawn in the transcript where the terminal can (D83). */
+  const images: BlockImages | undefined = host.images && {
+    loader: host.images,
+    changed: () => renderer.requestRender(),
+  }
+
   const env = (width: number): BlockEnv => ({
     theme,
     width,
@@ -89,15 +96,19 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     hyperlinks: host.hyperlinks,
     nodes,
     groups,
+    ...(images ? { images } : {}),
   })
 
   const root = new View((width, ctx) => {
+    // Covered by a full-screen overlay, the transcript's images are not placed: they are cleared.
     if (overlay) return host.overlay.render(width, ctx)
     const bar = finding ? [findBar(width)] : pane.selected ? [selectBar(width)] : []
     const budget = Math.max(1, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - bar.length)
     const bottom = host.bottom(width, ctx, budget)
     paneRows = Math.max(1, ctx.rows - bottom.length - bar.length - 1)
     const rows = pane.render(env(width), paneRows)
+    // The transcript is at the top of the screen: its rows are the screen's.
+    for (const p of pane.placements) ctx.place?.(p)
     // The row under the transcript says when there is more below.
     const below = pane.following
       ? ""
