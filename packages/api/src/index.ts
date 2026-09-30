@@ -3,6 +3,7 @@ export const API_VERSION = "0.1.5"
 
 export type {
   AssistantMessage,
+  ContextWindowSource,
   ImageBlock,
   JSONSchema,
   Message,

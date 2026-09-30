@@ -45,9 +45,11 @@ import {
   splitHistory,
   summarize,
   summaryMessages,
+  windowGuessNotice,
 } from "./compaction.ts"
 import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
+import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { newSessionId, type SessionEntryData, type SessionStore } from "./session-store.ts"
@@ -233,6 +235,8 @@ export class Agent {
   #contextTokens: number | undefined
   /** The next reply's context size tells whether the last compaction shrank the context enough. */
   #checkCompaction = false
+  /** The notice that the context window is a guess was shown (once a session). */
+  #windowGuessNoted = false
   /** Automatic compaction waits until the context passes this, after one that did not help. */
   #compactFloor: number | undefined
   #storeFailed = false
@@ -811,6 +815,7 @@ export class Agent {
     let result: TurnResult = { reason: "done", steps: 0 }
     this.#emit(turn, "turn.start", { prompt: user })
     this.#setStatus(turn, "working")
+    this.#noteWindowGuess(turn)
     try {
       this.#push(user)
       let compactFailed = false
@@ -1406,6 +1411,20 @@ export class Agent {
 
   #overThreshold(tokens: number): boolean {
     return tokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
+  }
+
+  /**
+   * Once a session, when automatic compaction goes by a context window that is only a guess
+   * (no settings or catalog entry for the model): a notice on where to set it. Sub-agents
+   * leave it to their commander's session.
+   */
+  #noteWindowGuess(turn: Turn) {
+    if (this.#windowGuessNoted || this.parentSessionId !== undefined) return
+    if (this.#compaction.auto === false || this.model.contextWindowSource !== "default") return
+    if (isNoModel(this.model)) return
+    this.#windowGuessNoted = true
+    const text = windowGuessNotice(this.model, amiraPath("settings.json"))
+    this.#emit(turn, "extension.notice", { source: "compaction", text, level: "info" })
   }
 
   #needsCompaction(): boolean {

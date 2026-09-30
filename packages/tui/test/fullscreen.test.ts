@@ -81,7 +81,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
   await host.load(statusExtension, "builtin:status")
   const ai = createAi({
     dialects: [createMockDialect(steps)],
-    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { contextWindow: 128_000 } }],
   })
   const tree = o.tree || o.commands ? new AgentTree({ ai, sections: () => [] }) : undefined
   const agent = new Agent({

@@ -316,6 +316,32 @@ test("/status shows model, provider, session, context, cost, cwd and git", async
   expect(text).toMatch(/Speed\s+not measured yet/)
   expect(text).toMatch(/Directory\s+\/work/)
   expect(text).toMatch(/Git\s+main in \/work$/m)
+  // Where the window came from is unknown here: the size alone.
+  expect(text).toMatch(/Window\s+128k$/m)
+})
+
+test("/status says where the context window came from, and when it is only a guess", async () => {
+  const windowRow = async (contextWindow: number, source?: SessionInfo["contextWindowSource"]) => {
+    const { run, bus } = await setup({
+      info: () => ({
+        id: "s1",
+        cwd: "/work",
+        model: { provider: "deepseek", model: "deepseek-flash" },
+        contextWindow,
+        ...(source ? { contextWindowSource: source } : {}),
+        busy: false,
+        shell: "auto",
+      }),
+    })
+    bus.emit("workspace.changed", { cwd: "/work" }, { sessionId: "s1" })
+    await bus.flush()
+    return (await run("/status")).text.split("\n").find((l) => l.startsWith("Window"))
+  }
+  expect(await windowRow(128_000, "default")).toMatch(
+    /^Window\s+128k \(default guess — set contextWindow for this model\)$/,
+  )
+  expect(await windowRow(1_050_000, "catalog")).toMatch(/^Window\s+1\.1M \(from the model catalog\)$/)
+  expect(await windowRow(256_000, "settings")).toMatch(/^Window\s+256k \(your settings\)$/)
 })
 
 test("/status names the scope of each number: the session's output, cache and speed, the tree's cost", async () => {

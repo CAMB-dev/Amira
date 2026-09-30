@@ -7,6 +7,7 @@ import { type AnyEvent, defineTool, textResult } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
 import { splitHistory, summaryMessages } from "../src/compaction.ts"
 import { EventBus } from "../src/event-bus.ts"
+import { amiraHome } from "../src/home.ts"
 import { SessionStore } from "../src/session-store.ts"
 
 async function setup(steps: MockStep[], extra: Partial<AgentOptions> = {}) {
@@ -219,6 +220,31 @@ test("compacts before the next model call once the context passes the threshold"
   expect(agent.compactionInfo(agent.messages[1]!)).toBeUndefined()
   const resumed = new Agent({ ai, model: agent.model, cwd: "/proj", session: reopened })
   expect(resumed.compactionInfo(resumed.messages[0]!)).toEqual({ ...why, tokensAfter: after })
+})
+
+test("a guessed context window is noted once a session, only when compaction is automatic", async () => {
+  const notes = async (model: string, extra: Partial<AgentOptions> = {}) => {
+    const { agent, ai, bus, events } = await setup([{ text: "r1" }, { text: "r2" }], extra)
+    agent.setModel(ai.model(model))
+    await agent.prompt("q1")
+    await agent.prompt("q2")
+    await bus.flush()
+    return events
+      .filter((e) => e.type === "extension.notice")
+      .map((e) => e.data as { source: string; text: string })
+  }
+  const guessed = await notes("other/x")
+  expect(guessed.length).toBe(1)
+  expect(guessed[0]!.source).toBe("compaction")
+  expect(guessed[0]!.text).toContain("The context window of other/x is not known")
+  expect(guessed[0]!.text).toContain("assumes 128k tokens")
+  expect(guessed[0]!.text).toContain(
+    `Set "contextWindow" for this model in ${path.join(amiraHome(), "settings.json")}`,
+  )
+  expect(guessed[0]!.text).toContain("(providers.other.models)")
+  // The provider's settings give the window; with automatic compaction off it does not matter.
+  expect(await notes("mock/m")).toEqual([])
+  expect(await notes("other/x", { compaction: { auto: false } })).toEqual([])
 })
 
 test("a manual compaction says so; a summary an interceptor wrote names no model", async () => {

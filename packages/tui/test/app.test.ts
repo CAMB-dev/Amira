@@ -129,7 +129,10 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
   const mock = createMockDialect(steps)
   const ai = createAi({
     dialects: [mock],
-    providers: o.noModel === "none" ? [] : [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    providers:
+      o.noModel === "none"
+        ? []
+        : [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { contextWindow: 128_000 } }],
   })
   const tree = o.tree
     ? {

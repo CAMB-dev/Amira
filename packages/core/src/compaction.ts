@@ -1,4 +1,5 @@
 import type { Ai, AssistantMessage, Message, ModelInfo, ModelRef, Usage } from "@amira/ai"
+import { formatTokens } from "@amira/api"
 
 export interface CompactionOptions {
   /** Compact once the context passes this fraction of the model's window. Default 0.8. */
@@ -14,6 +15,18 @@ export interface CompactionOptions {
   model?: ModelInfo
   /** Set false to never compact automatically. agent.compact() still works. */
   auto?: boolean
+}
+
+/**
+ * What to tell the user when automatic compaction goes by a context window that is only a
+ * guess (ModelInfo.contextWindowSource "default"): where to set the real one.
+ */
+export function windowGuessNotice(model: ModelInfo, settingsFile: string): string {
+  return (
+    `The context window of ${model.provider}/${model.id} is not known, so automatic compaction assumes ${formatTokens(model.contextWindow)} tokens ` +
+    `and may start too early or too late. Set "contextWindow" for this model in ${settingsFile} ` +
+    `(providers.${model.provider}.models).`
+  )
 }
 
 /** Tokens the context held at the time of a reply. */
