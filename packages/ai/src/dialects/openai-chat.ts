@@ -59,7 +59,7 @@ export const openaiChat: Dialect = {
       yield { type: "start" }
       let parsed = 0
       let sawDone = false
-      for await (const sse of parseSSE(body)) {
+      for await (const sse of parseSSE(body, ctx.signal)) {
         if (sse.data === "[DONE]") {
           sawDone = true
           break

@@ -63,9 +63,10 @@ function effortOf(e: ReasoningEffort): "low" | "medium" | "high" {
 async function* readSSE(
   body: ReadableStream<Uint8Array>,
   acc: ResponsesAccumulator,
+  signal: AbortSignal,
 ): AsyncGenerator<StreamEvent> {
   yield { type: "start" }
-  for await (const sse of parseSSE(body)) {
+  for await (const sse of parseSSE(body, signal)) {
     if (sse.data === "[DONE]") break
     const ev = parseJSON(sse.data)
     if (!ev) continue

@@ -72,10 +72,11 @@ export function geminiBody(req: ModelRequest): Record<string, unknown> {
 async function* readSSE(
   body: ReadableStream<Uint8Array>,
   acc: GeminiAccumulator,
+  signal: AbortSignal,
 ): AsyncGenerator<StreamEvent> {
   yield { type: "start" }
   let parsed = 0
-  for await (const sse of parseSSE(body)) {
+  for await (const sse of parseSSE(body, signal)) {
     const chunk = parseJSON(sse.data)
     if (!chunk) continue
     parsed++

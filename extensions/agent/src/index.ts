@@ -445,14 +445,17 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
         if (wt) {
           const tree = wt
           // Only a child that finished its task is merged; half-done work is kept for review.
-          const unfinished = job.cancelled
-            ? "was stopped along with its commander"
-            : r.status !== "done"
-              ? `ended with status ${r.status}`
-              : undefined
+          let unfinished: string | undefined
           try {
-            const merged = await serialized(() =>
-              unfinished
+            const merged = await serialized(() => {
+              // Decided when its turn to merge comes: its commander may have stopped it while
+              // it waited in line behind another merge.
+              unfinished = job.cancelled
+                ? "was stopped along with its commander"
+                : r.status !== "done"
+                  ? `ended with status ${r.status}`
+                  : undefined
+              return unfinished
                 ? keepChanges(git, tree)
                 : mergeWorktree(git, tree, {
                     ...(api.settings.merge?.reviewThreshold
@@ -460,8 +463,8 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
                       : {}),
                     who: `"${job.title}" (${job.role})`,
                     review: (title, diff, options) => api.ui.reviewDiff(title, diff, options),
-                  }),
-            )
+                  })
+            })
             changes = mergeLine(merged, tree, unfinished)
             leftBehind = merged.outcome === "kept" || merged.outcome === "partial"
             if (leftBehind) job.kept = { files: merged.stat.files.length, patch: tree.patch }

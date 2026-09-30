@@ -6,8 +6,15 @@ export interface SSEMessage {
 /**
  * Parses a text/event-stream body into messages. Handles chunks split anywhere and
  * CRLF, LF or CR line endings. Stopping iteration early cancels the body.
+ *
+ * With a signal, an abort ends the stream with its reason before the next message, even one
+ * already read: one chunk can hold the rest of a reply, success included, and nothing may
+ * follow the message during which the consumer aborted.
  */
-export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEMessage> {
+export async function* parseSSE(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncGenerator<SSEMessage> {
   const decoder = new TextDecoder()
   let buf = ""
   let event: string | undefined
@@ -55,7 +62,10 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
           break
         }
         const msg = onLine(buf.slice(start, m.index))
-        if (msg) yield msg
+        if (msg) {
+          yield msg
+          signal?.throwIfAborted()
+        }
         start = eol.lastIndex
       }
       buf = buf.slice(start)
@@ -68,6 +78,8 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
     }
     const msg = flush()
     if (msg) yield msg
+    // The last message too: the consumer may have aborted during it.
+    signal?.throwIfAborted()
     finished = true
   } finally {
     if (!finished) await reader.cancel().catch(() => {})

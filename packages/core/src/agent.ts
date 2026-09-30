@@ -994,6 +994,12 @@ export class Agent {
             break
           case "done":
             final = ev.message
+            // A reply that ends well after the turn was interrupted is still an interrupted
+            // one: a dialect may finish what it had already read without looking at the signal.
+            if (turn.signal.aborted) {
+              aborted = true
+              final = { ...ev.message, stopReason: "aborted" }
+            }
             break
           case "error":
             final = ev.message

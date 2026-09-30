@@ -1080,11 +1080,15 @@ export class AgentTree {
     // The next in line still waits for this one's model call to end, not only its abort.
     const tail = inLine.catch(() => {})
     this.#asking.set(parent.sessionId, tail)
+    // The line ends when its last one is really done: one that left early (aborted) is still
+    // waiting on those before it, and whoever asks next must too.
+    void tail.then(() => {
+      if (this.#asking.get(parent.sessionId) === tail) this.#asking.delete(parent.sessionId)
+    })
     try {
       return await mine
     } finally {
       signal.removeEventListener("abort", onAbort!)
-      if (this.#asking.get(parent.sessionId) === tail) this.#asking.delete(parent.sessionId)
     }
   }
 
