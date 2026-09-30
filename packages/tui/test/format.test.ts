@@ -475,6 +475,10 @@ test("a compaction says why it happened, in its notice and on its summary", () =
     "Compacted after the model rejected the request as too long",
   )
   expect(compactionReason({ reason: "threshold" })).toBe("Compacted automatically")
+  // The size before an overflow is the last reply's, not the rejected request's: left out.
+  expect(compactionNotice(3, { ...auto, reason: "overflow" })).toBe(
+    "Compacted after the model rejected the request as too long: 3 older messages into a summary.",
+  )
   expect(compactionReason(undefined)).toBe("Compacted")
   expect(summaryLines(defaultTheme, "Did A.", 90, true, auto).map(stripAnsi)).toEqual([
     "▸ Compacted automatically at 82% of 128k · summary of earlier messages · 1 line",

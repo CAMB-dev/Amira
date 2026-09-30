@@ -267,7 +267,7 @@ export default defineExtension((api: ExtensionAPI) => {
       const context =
         info.contextTokens !== undefined
           ? `${formatTokens(info.contextTokens)} of ${formatTokens(info.contextWindow)} tokens (${Math.round((info.contextTokens / info.contextWindow) * 100)}%)`
-          : `window ${formatTokens(info.contextWindow)} tokens; nothing sent yet`
+          : "nothing sent yet"
       ctx.print(
         table([
           ["Model", modelRef(info.model)],

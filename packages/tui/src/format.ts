@@ -228,9 +228,13 @@ export function compactionReason(info: CompactionInfo | undefined): string {
   }
 }
 
-/** The context before and (estimated) after a compaction, "105k → ~12k tokens", when known. */
+/**
+ * The context before and (estimated) after a compaction, "105k → ~12k tokens", when known.
+ * Not for `overflow`: the size before is the last reply's, smaller than the rejected request.
+ */
 export function compactionSizes(info: CompactionInfo | undefined): string | undefined {
   if (info?.tokensBefore === undefined || info.tokensAfter === undefined) return undefined
+  if (info.reason === "overflow") return undefined
   return `${compactTokens(info.tokensBefore)} → ~${compactTokens(info.tokensAfter)} tokens`
 }
 
