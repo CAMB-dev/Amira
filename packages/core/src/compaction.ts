@@ -21,6 +21,20 @@ export function contextTokens(u: Usage): number {
   return u.input + u.cacheRead + u.cacheWrite + u.output
 }
 
+/** Rough tokens messages take: about four characters a token; an image counts as 1000. */
+export function estimateTokens(messages: Message[]): number {
+  let chars = 0
+  let images = 0
+  for (const m of messages) {
+    for (const b of m.content) {
+      if (b.type === "text" || b.type === "thinking") chars += b.text.length
+      else if (b.type === "toolCall") chars += b.name.length + JSON.stringify(b.args).length
+      else images++
+    }
+  }
+  return Math.ceil(chars / 4) + images * 1000
+}
+
 const SUMMARY_PREFIX = "The earlier part of this conversation was compacted. Summary:"
 
 /**

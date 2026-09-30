@@ -327,7 +327,16 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     kept: num,
     "tokens?": num,
   }),
-  "compact.end": obj({ summary: str, replaced: num, kept: num }),
+  "compact.end": obj({
+    summary: str,
+    replaced: num,
+    kept: num,
+    reason: strings("threshold", "manual", "overflow"),
+    "tokensBefore?": num,
+    "tokensAfter?": { ...num, description: "Estimated; the next reply reports the real size." },
+    "contextWindow?": num,
+    "model?": { ...modelRef, description: "The model that wrote the summary." },
+  }),
   "compact.failed": obj({ error: str, "blocked?": bool, "empty?": bool }),
   "command.output": obj({
     command: { ...str, description: 'The command that printed it, or "$<name>" for a skill.' },

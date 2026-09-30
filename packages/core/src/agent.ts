@@ -23,6 +23,8 @@ import type {
   AskOutcome,
   AskQuestion,
   AskRequest,
+  CompactionInfo,
+  CompactionReason,
   EventMap,
   PendingNotice,
   SessionData,
@@ -39,6 +41,7 @@ import type {
 import {
   type CompactionOptions,
   contextTokens,
+  estimateTokens,
   splitHistory,
   summarize,
   summaryMessages,
@@ -224,6 +227,8 @@ export class Agent {
   #compaction: CompactionOptions
   /** The session entry each message was stored as. */
   #entryIds = new Map<Message, string>()
+  /** Why each compaction in `messages` happened, by its summary's user message. */
+  #compactions = new WeakMap<Message, CompactionInfo>()
   /** Context size reported with the last reply; unknown right after a compaction. */
   #contextTokens: number | undefined
   /** The next reply's context size tells whether the last compaction shrank the context enough. */
@@ -322,6 +327,7 @@ export class Agent {
       const restored = opts.session.restore()
       this.messages = restored.messages
       this.#entryIds = restored.entryIds
+      for (const [m, info] of restored.compactions) this.#compactions.set(m, info)
       this.#contextTokens = restored.contextTokens
       for (const name of restored.loadedTools) this.#loadedTools.add(name)
       if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
@@ -555,6 +561,14 @@ export class Agent {
    */
   entryId(message: Message): string | undefined {
     return this.#entryIds.get(message)
+  }
+
+  /**
+   * Why and how the compaction whose summary `message` is happened (its user message; see
+   * isSummaryMessage). Undefined for other messages and for compactions stored without it.
+   */
+  compactionInfo(message: Message): CompactionInfo | undefined {
+    return this.#compactions.get(message)
   }
 
   get status(): SessionStatus {
@@ -1420,7 +1434,7 @@ export class Agent {
    * there was nothing to compact yet (a long turn may have enough a few steps later).
    */
   async #compact(
-    reason: "threshold" | "manual" | "overflow",
+    reason: CompactionReason,
     signal: AbortSignal,
     turn: Turn | undefined,
     instructions?: string,
@@ -1452,22 +1466,33 @@ export class Agent {
         kept: split.kept.length,
         ...(this.#contextTokens !== undefined ? { tokens: this.#contextTokens } : {}),
       })
+      const supplied = gate.value.summary?.trim()
+      const writer = this.#compaction.model ?? this.model
       const summary =
-        gate.value.summary?.trim() ||
-        (await summarize(
-          this.#ai,
-          this.#compaction.model ?? this.model,
-          split.older,
-          signal,
-          instructions,
-          split.prompt,
-        ))
+        supplied || (await summarize(this.#ai, writer, split.older, signal, instructions, split.prompt))
       if (signal.aborted) throw new Error("aborted")
       const replaces = [
         ...new Set(split.older.flatMap((m) => (this.#entryIds.has(m) ? [this.#entryIds.get(m)!] : []))),
       ]
-      const entryId = this.#store({ type: "compaction", summary, replaces })
       const replacement = summaryMessages(summary, modelRef(this.model))
+      const before = this.#contextTokens
+      const info: CompactionInfo = {
+        reason,
+        ...(before !== undefined
+          ? {
+              tokensBefore: before,
+              // The system prompt and tools stay: only what the summary replaced goes.
+              tokensAfter: Math.max(
+                estimateTokens([...replacement, ...split.kept]),
+                before - estimateTokens(split.older) + estimateTokens(replacement),
+              ),
+            }
+          : {}),
+        ...(isNoModel(this.model) ? {} : { contextWindow: this.model.contextWindow }),
+        ...(supplied ? {} : { model: modelRef(writer) }),
+      }
+      const entryId = this.#store({ type: "compaction", summary, replaces, ...info })
+      this.#compactions.set(replacement[0]!, info)
       for (const m of replacement) if (entryId) this.#entryIds.set(m, entryId)
       for (const m of split.older) this.#entryIds.delete(m)
       // The summary goes first; everything it does not replace keeps its order after it (in a
@@ -1477,7 +1502,12 @@ export class Agent {
       this.messages.splice(0, this.messages.length, ...replacement, ...rest)
       this.#contextTokens = undefined
       this.#checkCompaction = true
-      this.#emit(turn, "compact.end", { summary, replaced: split.older.length, kept: split.kept.length })
+      this.#emit(turn, "compact.end", {
+        summary,
+        replaced: split.older.length,
+        kept: split.kept.length,
+        ...info,
+      })
       return true
     } catch (err) {
       this.#emit(turn, "compact.failed", { error: err instanceof Error ? err.message : String(err) })

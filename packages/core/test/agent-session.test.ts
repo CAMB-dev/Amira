@@ -173,7 +173,7 @@ test("system.build can edit sections before every model call", async () => {
 const big = { usage: { input: 900 } }
 
 test("compacts before the next model call once the context passes the threshold", async () => {
-  const { agent, mock, session, bus, events } = await setup([
+  const { agent, ai, mock, session, bus, events } = await setup([
     { text: "r1" },
     { text: "r2", ...big },
     { text: "SUMMARY OF r1" },
@@ -201,6 +201,37 @@ test("compacts before the next model call once the context passes the threshold"
   const reopened = SessionStore.open(session.file)
   expect(reopened.entries.filter((e) => e.type === "message").length).toBe(6)
   expect(reopened.restore().messages).toEqual(agent.messages)
+
+  // Why it happened goes with the event, the entry and the summary's message.
+  const why = {
+    reason: "threshold",
+    tokensBefore: 900,
+    contextWindow: 1000,
+    model: { provider: "mock", model: "m" },
+  }
+  const end = events.find((e) => e.type === "compact.end")!
+  expect(end.data).toMatchObject({ ...why, replaced: 2 })
+  const after = (end.data as { tokensAfter: number }).tokensAfter
+  // The mock reports 900 for a tiny history: the summary pair makes it a little larger.
+  expect(after).toBeGreaterThan(900)
+  expect(reopened.entries.find((e) => e.type === "compaction")).toMatchObject({ ...why, tokensAfter: after })
+  expect(agent.compactionInfo(agent.messages[0]!)).toMatchObject({ ...why, tokensAfter: after })
+  expect(agent.compactionInfo(agent.messages[1]!)).toBeUndefined()
+  const resumed = new Agent({ ai, model: agent.model, cwd: "/proj", session: reopened })
+  expect(resumed.compactionInfo(resumed.messages[0]!)).toEqual({ ...why, tokensAfter: after })
+})
+
+test("a manual compaction says so; a summary an interceptor wrote names no model", async () => {
+  const { agent, events, bus } = await setup([{ text: "r1" }, { text: "r2" }])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  agent.interceptors.add("compact.before", (v) => ({ action: "modify", value: { ...v, summary: "MINE" } }))
+  expect(await agent.compact()).toBe(true)
+  await bus.flush()
+  const end = events.find((e) => e.type === "compact.end")!
+  expect(end.data).toMatchObject({ reason: "manual", contextWindow: 1000 })
+  expect(end.data).not.toHaveProperty("model")
+  expect(agent.compactionInfo(agent.messages[0]!)?.reason).toBe("manual")
 })
 
 test("resuming right after a compaction does not compact again", async () => {

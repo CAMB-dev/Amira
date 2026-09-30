@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import type { Message, ModelRef } from "@amira/ai"
+import type { CompactionInfo, CompactionReason } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import { amiraPath } from "./home.ts"
 
@@ -18,8 +19,11 @@ export interface SessionHeader {
 export type SessionEntryData =
   | { type: "message"; message: Message }
   | { type: "model_change"; model: ModelRef }
-  /** `summary` stands in for the entries in `replaces`; they stay in the file. */
-  | { type: "compaction"; summary: string; replaces: string[] }
+  /**
+   * `summary` stands in for the entries in `replaces`; they stay in the file. Why and how it
+   * was compacted (CompactionInfo) is missing from entries written before it was kept.
+   */
+  | ({ type: "compaction"; summary: string; replaces: string[] } & Partial<CompactionInfo>)
   /** Makes `target` the tip of the current branch; null goes back to before the first entry. */
   | { type: "checkout"; target: string | null }
   | { type: "subagent"; childSessionId: string; role: string; title?: string }
@@ -38,6 +42,8 @@ export interface RestoredSession {
   contextTokens?: number
   /** Deferred tools loaded on this branch, in load order. */
   loadedTools: string[]
+  /** Why each compaction happened, by its summary's user message; none for old entries. */
+  compactions: Map<Message, CompactionInfo>
 }
 
 /**
@@ -177,6 +183,7 @@ export class SessionStore {
     let model: ModelRef | undefined
     let tokens: number | undefined
     const loadedTools = new Set<string>()
+    const compactions = new Map<Message, CompactionInfo>()
     for (const e of this.branch()) {
       if (e.type === "tools_loaded") {
         for (const name of Array.isArray(e.names) ? e.names : []) {
@@ -194,6 +201,8 @@ export class SessionStore {
         // order: in a long turn that is the turn's prompt and its latest steps.
         const gone = new Set(e.replaces)
         const summary = summaryMessages(e.summary, model).map((message) => ({ id: e.id, message }))
+        const info = compactionInfo(e)
+        if (info && summary[0]) compactions.set(summary[0].message, info)
         items = [...summary, ...items.filter((i) => !gone.has(i.id))]
       }
     }
@@ -205,6 +214,7 @@ export class SessionStore {
       ...(model ? { model } : {}),
       ...(tokens !== undefined ? { contextTokens: tokens } : {}),
       loadedTools: [...loadedTools],
+      compactions,
     }
   }
 
@@ -278,6 +288,26 @@ function parseLine(line: string): unknown {
   } catch {
     return undefined
   }
+}
+
+const REASONS = new Set<unknown>(["threshold", "manual", "overflow"] satisfies CompactionReason[])
+
+/** What a compaction entry says about why it happened; undefined for entries without it. */
+function compactionInfo(e: Partial<CompactionInfo>): CompactionInfo | undefined {
+  if (!REASONS.has(e.reason)) return undefined
+  const count = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : undefined)
+  const out: CompactionInfo = { reason: e.reason as CompactionReason }
+  const before = count(e.tokensBefore)
+  const after = count(e.tokensAfter)
+  const window = count(e.contextWindow)
+  if (before !== undefined) out.tokensBefore = before
+  if (after !== undefined) out.tokensAfter = after
+  if (window) out.contextWindow = window
+  const m = e.model as Partial<ModelRef> | undefined
+  if (typeof m?.provider === "string" && typeof m.model === "string") {
+    out.model = { provider: m.provider, model: m.model }
+  }
+  return out
 }
 
 function isHeader(v: unknown): v is SessionHeader {
