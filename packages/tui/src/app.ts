@@ -278,6 +278,8 @@ export function retryLabel(r: RetryState, now = Date.now()): string {
  */
 export function activityLabel(s: {
   compacting: boolean
+  /** The compaction runs on the provider's server (compact.start `native`). */
+  onServer?: boolean
   running: readonly string[]
   preparing: string | undefined
   thinking: boolean
@@ -290,7 +292,7 @@ export function activityLabel(s: {
 }): string {
   // Once the wait is over the request is on its way again: the other activities apply.
   if (s.retry && s.retry.at > Date.now()) return retryLabel(s.retry)
-  if (s.compacting) return "compacting the conversation"
+  if (s.compacting) return s.onServer ? "compacting on the server" : "compacting the conversation"
   if (s.waiting) return "waiting for you"
   // model.retry says when the wait is over; the status's own retry words only stand in for it.
   if (s.retrying && !s.retry) return s.retrying
@@ -433,6 +435,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** The model request is being tried again, as the activity line says (status.changed). */
   let retrying: string | undefined
   let compacting = false
+  let compactingOnServer = false
   /** A failed model request waiting to be sent again (model.retry), until the next reply starts. */
   let retry: RetryState | undefined
   /** Tool the model is currently writing a call for, before it runs. */
@@ -580,6 +583,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (!working && !compacting) return []
       const label = activityLabel({
         compacting,
+        onServer: compactingOnServer,
         running: view.runningTools,
         preparing,
         thinking,
@@ -1028,6 +1032,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "compact.start":
         compacting = true
+        compactingOnServer = e.data.native === true
         compactStartedAt = Date.now()
         spinner.start(() => view.requestRender())
         break

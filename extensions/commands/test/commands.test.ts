@@ -463,6 +463,28 @@ test("/cost breaks the session cost down by model", async () => {
   expect(costReport([])).toContain("No model replies")
 })
 
+test("/status and /cost count compactions and name their share", async () => {
+  const usage = (input: number, output: number, cost: number) => ({
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost,
+  })
+  const { run } = await setup({
+    replies: () => [reply("openai/gpt-5", 1000, 100, 0.01)],
+    compactions: () => [
+      { model: { provider: "openai", model: "gpt-5" }, usage: usage(4000, 300, 0.004), native: true },
+      { model: { provider: "openai", model: "gpt-5" }, usage: usage(2000, 100, 0.002) },
+    ],
+  })
+  const status = (await run("/status")).text
+  expect(status).toMatch(/Cost\s+\$0\.016 \(this session; no sub-agents\); of which compaction \$0\.0060/)
+  const cost = (await run("/cost")).text
+  expect(cost).toMatch(/openai\/gpt-5 \(compaction\)\s+2 compactions\s+in 6\.0k\s+out 400\s+\$0\.0060/)
+  expect(cost).toMatch(/total\s+in 7\.0k\s+out 500\s+\$0\.016/)
+})
+
 test("/context estimates the system prompt, tools and messages against the window", async () => {
   const { run } = await setup()
   const { text } = await run("/context")

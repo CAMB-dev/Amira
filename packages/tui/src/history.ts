@@ -164,20 +164,40 @@ export function summaryLines(
   info?: CompactionInfo,
 ): string[] {
   const n = summary ? summary.split("\n").length : 0
+  // A server's checkpoint may have no readable text (OpenAI's is encrypted).
+  const unreadable = !summary.trim()
   const what = info
-    ? `${compactionReason(info)} · summary of earlier messages`
-    : "Compacted summary of earlier messages"
-  const title = `${what}${folded ? ` · ${n} line${n === 1 ? "" : "s"}` : ""}`
+    ? `${compactionReason(info)} · ${unreadable ? "no readable summary" : "summary of earlier messages"}`
+    : unreadable
+      ? "Compacted · no readable summary"
+      : "Compacted summary of earlier messages"
+  const title = `${what}${folded && !unreadable ? ` · ${n} line${n === 1 ? "" : "s"}` : ""}`
   const head = truncateToWidth(
     `${theme.accent(folded ? "▸" : "▾")} ${theme.muted(title)}`,
     width,
     glyphs.more,
   )
   if (folded) return [head]
+  const native = info?.native
+  const writer = info?.model
   const facts = [
     compactionSizes(info),
-    info?.model ? `written by ${info.model.provider}/${info.model.model}` : undefined,
+    native ? `compacted by ${native.provider}'s server for ${native.model}` : undefined,
+    // For a server-side one, the model named is the one that wrote a text summary for it later.
+    writer && (!native || writer.provider !== native.provider || writer.model !== native.model)
+      ? `${native ? "text summary " : ""}written by ${writer.provider}/${writer.model}`
+      : undefined,
   ].filter((f): f is string => f !== undefined)
+  if (unreadable) {
+    const note =
+      "The server keeps this summary encrypted, so it cannot be shown. Only the model it was made for can read it; for another one Amira writes a text summary when it needs one. /compact with instructions writes a readable summary now."
+    const indent = " ".repeat(visibleWidth(glyphs.assistant))
+    const body = renderMarkdown(note, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)
+    const detail = facts.length
+      ? [truncateToWidth(`${indent}${theme.muted(facts.join(" · "))}`, width, glyphs.more)]
+      : []
+    return [head, ...detail, "", ...replyRows(body)]
+  }
   const detail = facts.length
     ? [
         truncateToWidth(
