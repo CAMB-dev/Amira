@@ -75,7 +75,8 @@ export class ResponsesAccumulator {
       case "response.reasoning_text.delta":
         yield* this.#thinking(itemKey(ev), ev.delta, ev.content_index)
         break
-      // A hosted web search runs on the server; the reply goes on after it completes.
+      // A hosted web search runs on the server, inside the response: its completion is not the
+      // response's, which goes on (the answer follows) until response.completed.
       case "response.web_search_call.in_progress":
       case "response.web_search_call.searching":
       case "response.web_search_call.completed":

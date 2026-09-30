@@ -7,6 +7,7 @@ import { createAi } from "../src/client.ts"
 import { openaiResponses, responsesBody } from "../src/dialects/openai-responses.ts"
 import { toResponsesInput } from "../src/dialects/openai-responses-input.ts"
 import { resolveModelInfo } from "../src/providers.ts"
+import { withRetry } from "../src/retry.ts"
 import {
   adaptServerTools,
   describeServerTool,
@@ -247,12 +248,14 @@ test("a search goes back as its own item, never as a function call with an outpu
 
 test("server tool items replay only to the same dialect, provider and host; elsewhere as a note", () => {
   const msgs = history(block("api.openai.com"))
-  const same = { dialect: "openai-responses", provider: "openai", host: "api.openai.com" }
+  const same = { dialect: "openai-responses", provider: "openai", host: "api.openai.com", webSearch: true }
   expect(adaptServerTools(msgs, same)).toBe(msgs)
   for (const target of [
     { ...same, host: "localhost:8317" },
     { ...same, provider: "proxy" },
     { ...same, dialect: "anthropic-messages" },
+    // The same endpoint, but the request no longer offers the hosted search.
+    { ...same, webSearch: false },
   ]) {
     const out = adaptServerTools(msgs, target)
     const content = (out[1] as AssistantMessage).content
@@ -266,6 +269,96 @@ test("server tool items replay only to the same dialect, provider and host; else
   // No host recorded: it cannot be told where it came from, so it goes as a note.
   const unstamped = adaptServerTools(history(block()), same)
   expect((unstamped[1] as AssistantMessage).content[0]!.type).toBe("text")
+})
+
+test("a search as a note joins the plain text around it in one assistant message", () => {
+  const note = { ...block(), signature: undefined }
+  const input = toResponsesInput(history(note))
+  expect(input[1]).toEqual({
+    role: "assistant",
+    content: `[Web search: "node.js latest lts"]\nSources:\n- Download: https://nodejs.org/en/download\n\n${TEXT}`,
+  })
+  expect(input).toHaveLength(3)
+})
+
+test("a turn cut short around a search: reasoning before it stays, reasoning last is dropped", () => {
+  const reasoning = {
+    type: "thinking" as const,
+    text: "",
+    redacted: true,
+    signature: { dialect: "openai-responses", value: JSON.stringify({ id: "rs_1", encrypted_content: "e" }) },
+  }
+  const turn = (content: AssistantMessage["content"]): Message[] => [
+    { role: "user", content: [{ type: "text", text: "search" }] },
+    { role: "assistant", model: { provider: "openai", model: "gpt" }, content },
+  ]
+  const types = (m: Message[]) => toResponsesInput(m).map((i) => ("type" in i ? i.type : "assistant"))
+  expect(types(turn([reasoning, block("h")]))).toEqual(["message", "reasoning", "web_search_call"])
+  expect(types(turn([block("h"), reasoning]))).toEqual(["message", "web_search_call"])
+})
+
+test("only a completed search is kept to replay; a failed or unfinished one goes as a note", async () => {
+  const failed = { ...searchItem, status: "failed" }
+  const cutShort = [
+    ...searchEvents(failed, 0),
+    // Status events for a search whose added item never came: it starts from them.
+    { type: "response.web_search_call.in_progress", item_id: "ws_9", output_index: 1 },
+    { type: "response.completed", response: { status: "completed" } },
+  ]
+  const { last } = await run(openaiResponses, req("openai-responses", {}, webModel), sse(namedSSE(cutShort)))
+  if (last.type !== "done") throw new Error("expected done")
+  const [a, b] = last.message.content as ServerToolBlock[]
+  expect(a!.status).toBe("failed")
+  expect(a!.signature).toBeUndefined()
+  expect(b).toMatchObject({ id: "ws_9", status: "running" })
+  expect(b!.signature).toBeUndefined()
+  expect(serverToolText(b!)).toBe("[Web search (did not finish)]")
+})
+
+test("events without item ids are matched by output index", async () => {
+  const anonymous = [
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { type: "web_search_call", status: "in_progress" },
+    },
+    { type: "response.web_search_call.searching", output_index: 0 },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { type: "web_search_call", status: "completed", action: { type: "search", query: "q" } },
+    },
+    { type: "response.completed", response: { status: "completed" } },
+  ]
+  const { last } = await run(openaiResponses, req("openai-responses", {}, webModel), sse(namedSSE(anonymous)))
+  if (last.type !== "done") throw new Error("expected done")
+  expect(last.message.content).toHaveLength(1)
+  expect(last.message.content[0]).toMatchObject({ type: "serverTool", status: "done", input: { query: "q" } })
+})
+
+test("citations over several parts of a message count from the start of the block's text", async () => {
+  const parts = [
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        id: "msg_1",
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [
+          { type: "output_text", text: "abc", annotations: [] },
+          { type: "output_text", text: "def", annotations: [{ ...citation, start_index: 0, end_index: 3 }] },
+        ],
+      },
+    },
+    { type: "response.completed", response: { status: "completed" } },
+  ]
+  const { last } = await run(openaiResponses, req("openai-responses", {}, webModel), sse(namedSSE(parts)))
+  if (last.type !== "done") throw new Error("expected done")
+  const text = last.message.content[0] as TextBlock
+  expect(text.text).toBe("abcdef")
+  expect(text.citations?.[0]).toMatchObject({ start: 3, end: 6 })
 })
 
 test("the client stamps the host on server tool blocks and replays them to that host only", async () => {
@@ -376,4 +469,22 @@ test("descriptions and citations for frontends", () => {
     { url: "https://x", title: "X" },
     { url: "https://y", title: "Y" },
   ])
+})
+
+test("a failure after a search was shown is not retried: it would search again", async () => {
+  let opened = 0
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    opened++
+    yield { type: "start" }
+    yield { type: "serverTool", block: { ...block(), status: "running" } }
+    yield {
+      type: "error",
+      error: { message: "overloaded", status: 503 },
+      retryable: true,
+      message: { role: "assistant", content: [], model: { provider: "p", model: "m" } },
+    }
+  }
+  const evs = await events(withRetry(attempt, new AbortController().signal, { baseDelayMs: 1 }))
+  expect(opened).toBe(1)
+  expect(evs.at(-1)?.type).toBe("error")
 })

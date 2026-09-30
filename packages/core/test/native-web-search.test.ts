@@ -58,11 +58,11 @@ function message(index: number, text: string, annotations: unknown[] = []) {
   ]
 }
 
-const call = (index: number) => [
+const call = (index: number, name = "echo") => [
   {
     type: "response.output_item.done",
     output_index: index,
-    item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "echo", arguments: '{"text":"a"}' },
+    item: { id: "fc_1", type: "function_call", call_id: "call_1", name, arguments: '{"text":"a"}' },
   },
 ]
 
@@ -165,6 +165,28 @@ test("a local tool call next to a hosted search still runs, and only it gets an 
     "function_call_output",
   ])
   expect(input.at(-1)?.call_id).toBe("call_1")
+})
+
+test("a call to the hidden client web_search is an unknown tool, never run", async () => {
+  const { agent, ran } = setup([
+    [...call(0, "web_search"), completed],
+    [...message(0, "ok"), completed],
+  ])
+  await agent.prompt("search")
+  expect(ran).toEqual([])
+  const result = agent.messages.find((m) => m.role === "toolResult")
+  expect(result?.role === "toolResult" && result.isError).toBe(true)
+  const text = result?.content[0]?.type === "text" ? result.content[0].text : ""
+  expect(text).toStartWith('Unknown tool "web_search"')
+  expect(text).not.toContain("web_search,")
+})
+
+test("a deferred client web_search is not named to a model with the hosted search", async () => {
+  const { agent } = setup([])
+  const tool = agent.tools.get("web_search")!
+  agent.tools.register({ ...tool, exposure: "deferred", override: true }, "test")
+  const preview = await agent.preview()
+  expect(preview.systemPrompt).not.toContain("web_search")
 })
 
 test("models without the hosted search get the client web_search tool", async () => {

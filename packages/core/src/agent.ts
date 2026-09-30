@@ -951,12 +951,18 @@ export class Agent {
     }
   }
 
+  /** Deferred tools this model may load: not those its hosted web search stands in for. */
+  #offeredDeferred() {
+    const native = hasNativeWebSearch(this.model)
+    return this.tools.deferred().filter((t) => !(native && t.supersededBy === "webSearch"))
+  }
+
   /** The system prompt and history for a model call, through the system.build and context.build interceptors. */
   async #buildContext(signal: AbortSignal) {
     // The core owns the "deferred-tools" section: interceptors see it filled in, and it is
     // listed again afterwards so tools registered while they waited (e.g. MCP servers that
     // were still connecting) are included, unless an interceptor rewrote the section.
-    const listed = deferredToolsSection(this.tools.deferred())
+    const listed = deferredToolsSection(this.#offeredDeferred())
     const built = await this.interceptors.run(
       "system.build",
       { sections: setSection(this.#sections, "deferred-tools", listed).map((s) => ({ ...s })) },
@@ -964,7 +970,7 @@ export class Agent {
     )
     let sections = built.value.sections
     if (sections.find((s) => s.name === "deferred-tools")?.text === listed) {
-      sections = setSection(sections, "deferred-tools", deferredToolsSection(this.tools.deferred()))
+      sections = setSection(sections, "deferred-tools", deferredToolsSection(this.#offeredDeferred()))
     }
     return this.interceptors.run(
       "context.build",
@@ -1215,9 +1221,13 @@ export class Agent {
         )
       }
       const tool = this.tools.get(call.name)
-      if (!tool) {
+      // A tool hidden from this model (it searches on the provider's side) is not there for it.
+      const native = hasNativeWebSearch(this.model)
+      const hidden = (t: { supersededBy?: string }) => native && t.supersededBy === "webSearch"
+      if (!tool || hidden(tool)) {
         const names = this.tools
           .active()
+          .filter((t) => !hidden(t))
           .map((t) => t.name)
           .join(", ")
         return await reject("unknownTool", `Unknown tool "${call.name}". Available tools: ${names}`)

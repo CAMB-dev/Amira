@@ -117,6 +117,8 @@ export async function runPrint(
       const prefix = `${sub?.indent ?? "  "}↳ ${sub?.role ?? "agent"}`
       if (e.type === "tool.execute.start")
         io.stderr(`${prefix} ● ${e.data.name} ${summarizeArgs(e.data.args)}\n`)
+      if (e.type === "message.delta" && e.data.kind === "serverTool" && e.data.block.status !== "running")
+        io.stderr(`${prefix} ● ${describeServerTool(e.data.block)}\n`)
       if (e.type === "tool.execute.end" && e.data.result.isError) {
         io.stderr(`${prefix}   ✗ ${firstLine(e.data.result.content)}\n`)
       }

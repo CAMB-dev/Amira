@@ -1,6 +1,6 @@
 import type { AssistantContent, Citation, Message, ModelInfo, ServerToolBlock, StreamEvent } from "./types.ts"
 
-/** Dialects with a hosted web search the provider runs itself. */
+/** Dialects with a hosted web search the provider runs itself (ids spelled out: the dialects import this file). */
 const WEB_SEARCH_DIALECTS = new Set(["openai-responses"])
 
 /** The name a hosted web search goes by, in blocks and in frontends. */
@@ -52,11 +52,16 @@ export interface ServerToolTarget {
   dialect: string
   provider: string
   host: string
+  /**
+   * The request offers the hosted web search (hasNativeWebSearch). Without it a search item
+   * goes as a note too: nothing says a server takes one for a tool it was not given.
+   */
+  webSearch: boolean
 }
 
 /**
- * History as `target` may receive it: server-tool blocks that did not come from the same
- * dialect, provider and host become text notes (serverToolText), so the model still knows
+ * History as `target` may receive it: server-tool blocks it cannot take as they are
+ * (canReplayServerTool) become text notes (serverToolText), so the model still knows
  * what was searched. Unchanged messages are kept; changed ones are copies.
  */
 export function adaptServerTools(messages: Message[], target: ServerToolTarget): Message[] {
@@ -76,10 +81,14 @@ export function adaptServerTools(messages: Message[], target: ServerToolTarget):
   return changed ? out : messages
 }
 
-/** A block goes back as it is only to the dialect, provider and host that produced it. */
+/**
+ * A block goes back as it is only to the dialect, provider and host that produced it, and
+ * only while the request still offers the tool.
+ */
 export function canReplayServerTool(b: ServerToolBlock, target: ServerToolTarget, producer: string): boolean {
   const sig = b.signature
   return (
+    target.webSearch &&
     sig !== undefined &&
     sig.dialect === target.dialect &&
     sig.host !== undefined &&

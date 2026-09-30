@@ -25,8 +25,10 @@ export const webSearchPresenter: ToolPresenter<
   WebSearchDetails & { native?: boolean }
 > = {
   summary(args) {
-    if (args.query !== undefined || !str(args.url)) return `"${str(args.query)}"`
-    return str(args.pattern) ? `"${str(args.pattern)}" in ${str(args.url)}` : str(args.url)
+    if (args.query !== undefined) return `"${str(args.query)}"`
+    if (str(args.url)) return str(args.pattern) ? `"${str(args.pattern)}" in ${str(args.url)}` : str(args.url)
+    // A hosted search may not say what it looked for.
+    return ""
   },
   result(call) {
     if (call.result.isError) return undefined

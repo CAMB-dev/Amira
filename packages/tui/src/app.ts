@@ -452,8 +452,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let compactStartedAt = 0
   /** Characters of the reply streaming now: its tokens until its usage arrives. */
   let streamedChars = 0
-  /** The provider's own tool calls (hosted web search) shown as rows this turn: when each started, and whether it ended. */
+  /**
+   * The provider's own tool calls (hosted web search) shown as rows this turn: when each
+   * started, and whether it ended.
+   */
   const serverRows = new Map<string, { startedAt: number; ended: boolean }>()
+  /** Reply text streamed since the last such row started. */
+  let textSinceRow = true
   /** The user interrupted this turn: the failures of calls it cut short are not the tools'. */
   let interrupted = false
   /** How much of each finished tool call is shown; Ctrl+O and /verbose change it. */
@@ -909,6 +914,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       row = { startedAt: Date.now(), ended: false }
       serverRows.set(b.id, row)
       if (view.replyEnd([])) turnShowedOutput = true
+      textSinceRow = false
     }
     view.toolStart(b.id, call.name, call.args, row.startedAt)
     if (b.status === "running" && !final) return
@@ -968,6 +974,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (e.data.kind === "text") {
           thinking = false
           view.replyDelta(e.data.text)
+          textSinceRow = true
           streamedChars += e.data.text.length
         } else if (e.data.kind === "thinking") {
           thinking = true
@@ -991,7 +998,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // Searches the provider left unfinished end with the reply; the sources it cited follow it.
         for (const b of message.content) if (b.type === "serverTool") serverRow(b, true)
         const sources = replyCitations(message.content)
-        if (sources) view.replyDelta(sources)
+        // Right after a search row the list starts a block of its own: no blank rows first.
+        if (sources) view.replyDelta(textSinceRow ? sources : sources.trimStart())
+        textSinceRow = true
         const calls = message.content.flatMap((b) => (b.type === "toolCall" ? [b] : []))
         if (view.replyEnd(calls)) turnShowedOutput = true
         turnTokens += message.usage?.output ?? estimateTokens(streamedChars)

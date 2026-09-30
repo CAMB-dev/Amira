@@ -129,7 +129,9 @@ function assistantItems(m: AssistantMessage, out: ResponsesItem[]): FunctionCall
       b.type === "text" && b.signature?.dialect === RESPONSES_DIALECT
         ? decodeMessage(b.signature.value)
         : undefined
-    if (b.type !== "text" || known) plain = undefined
+    // A search that goes as a note joins the plain text around it.
+    const note = b.type === "serverTool" && !serverToolItem(b)
+    if ((b.type !== "text" && !note) || known) plain = undefined
     if (b.type === "text") {
       if (!b.text) continue
       if (known) {
@@ -151,7 +153,14 @@ function assistantItems(m: AssistantMessage, out: ResponsesItem[]): FunctionCall
       const item = reasoningItem(b)
       if (item) items.push(item)
     } else if (b.type === "serverTool") {
-      items.push(serverToolItem(b))
+      const item = serverToolItem(b)
+      const text = `${serverToolText(b)}\n\n`
+      if (item) items.push(item)
+      else if (plain) plain.content += `\n\n${text}`
+      else {
+        plain = { role: "assistant", content: text }
+        items.push(plain)
+      }
     } else {
       items.push({ type: "function_call", call_id: b.id, name: b.name, arguments: JSON.stringify(b.args) })
     }
@@ -168,16 +177,16 @@ function itemType(item: ResponsesItem | undefined): string | undefined {
 /**
  * A hosted tool's call (a web_search_call) goes back as the item it came as: the server takes
  * it inline with `store: false`. The ai client leaves the item only on blocks from this
- * provider and host (adaptServerTools); a block without one goes as a text note.
+ * provider and host (adaptServerTools); without one there is no item and the block goes as
+ * a text note.
  */
-function serverToolItem(b: ServerToolBlock): ResponsesItem {
-  if (b.signature?.dialect === RESPONSES_DIALECT) {
-    try {
-      const item = JSON.parse(b.signature.value)
-      if (typeof item?.type === "string") return item
-    } catch {}
-  }
-  return { role: "assistant", content: serverToolText(b) }
+function serverToolItem(b: ServerToolBlock): ResponsesItem | undefined {
+  if (b.signature?.dialect !== RESPONSES_DIALECT) return undefined
+  try {
+    const item = JSON.parse(b.signature.value)
+    if (item?.type === "web_search_call") return item
+  } catch {}
+  return undefined
 }
 
 /** Only signed reasoning can be replayed, under the id it was given. */

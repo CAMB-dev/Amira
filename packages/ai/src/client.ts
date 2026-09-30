@@ -5,7 +5,7 @@ import { BUILTIN_DIALECTS } from "./dialects/index.ts"
 import { modelErrorKind } from "./errors.ts"
 import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import { type RetryOptions, withRetry } from "./retry.ts"
-import { adaptServerTools, withServerToolHost } from "./server-tools.ts"
+import { adaptServerTools, hasNativeWebSearch, withServerToolHost } from "./server-tools.ts"
 import { withTextTools } from "./text-tools.ts"
 import { type ModelInfo, type ModelRequest, type StreamEvent, withoutDisplay } from "./types.ts"
 
@@ -121,7 +121,12 @@ export function createAi(opts: AiOptions = {}): Ai {
       }
       // A server tool's item goes back only where it came from; elsewhere it is a text note.
       const host = hostOf(p.baseUrl)
-      const target = { dialect: req.model.dialect, provider: p.id, host }
+      const target = {
+        dialect: req.model.dialect,
+        provider: p.id,
+        host,
+        webSearch: hasNativeWebSearch(req.model),
+      }
       const messages = adaptServerTools(req.messages, target)
       const sendable = messages === req.messages ? req : { ...req, messages }
       const attempt = () => withTextTools(sendable, (r) => dialect.stream(r, ctx))

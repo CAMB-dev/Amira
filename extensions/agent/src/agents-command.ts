@@ -126,6 +126,13 @@ export function transcriptText(
           const first = text.split("\n")[0]!
           out.push(text.includes("\n") ? `${oneLine(first, 98)} …` : oneLine(first, 100), "")
         }
+      } else if (b.type === "serverTool") {
+        // A search the provider ran: what it searched or opened, and how it ended.
+        const what = [b.input.query, b.input.url].find((v) => typeof v === "string" && v) as
+          | string
+          | undefined
+        out.push(`${b.status === "failed" ? "✗" : "●"} ${b.name}${what ? ` ${oneLine(what, 80)}` : ""}`)
+        out.push(`  └ ${b.status === "running" ? (finished ? "did not finish" : "running") : b.status}`, "")
       } else if (b.type === "toolCall") {
         const r = results.get(b.id)
         out.push(toolHead(b, r?.isError === true))

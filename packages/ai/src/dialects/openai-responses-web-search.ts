@@ -26,7 +26,10 @@ export class ResponsesWebSearch {
         if (found.length) block.sources = found
       }
       block.status = item?.status === "failed" ? "failed" : "done"
-      block.signature = { dialect: RESPONSES_DIALECT, value: JSON.stringify(item) }
+      // Only a completed item is known to go back as it is; others go as a note.
+      if (item?.status === "completed") {
+        block.signature = { dialect: RESPONSES_DIALECT, value: JSON.stringify(item) }
+      }
     } else if (item?.status === "failed") block.status = "failed"
     yield snapshot(block)
   }
