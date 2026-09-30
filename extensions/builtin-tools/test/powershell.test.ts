@@ -210,6 +210,43 @@ for (const path of editions) {
       ).toMatch(/^default\r?\nend\n\nExit code: 0$/)
     })
 
+    test("errors name their own line and column and show only the command's text", async () => {
+      // A terminating error on the first line: the wrapper adds nothing before it.
+      const first = textOf(await run("Write-Output a; throw 'boom'"))
+      expect(first).toMatch(
+        /^a\r?\nboom\r?\n[^\n]*:1 \S+:\s*17\r?\n\+ Write-Output a; throw 'boom'\r?\n\+ {17}~{12}\n\nExit code: 1$/,
+      )
+      // Nor after the last one.
+      const last = textOf(await run("Write-Output a\n$null.Foo()"))
+      expect(last).toMatch(/:2 \S+:\s*1\r?\n\+ \$null\.Foo\(\)\r?\n\+ ~{11}\n\nExit code: 1$/)
+      for (const text of [first, last]) expect(text).not.toContain("__amira")
+    })
+
+    test("declarations and dot-sourced state work as natively", async () => {
+      const legacy = powershellEdition(path) === "Windows PowerShell 5.1"
+      for (const command of [
+        "using namespace System.Text\n[StringBuilder]::new('sb').ToString()",
+        "using module @{ ModuleName = 'Microsoft.PowerShell.Utility'; ModuleVersion = '1.0' }\nWrite-Output ok",
+        "class Foo { [int]$A = 3 }\nfunction g { [Foo]::new().A + 1 }\ng",
+        "enum Color { Red; Green }\n[Color]::Green",
+        "[CmdletBinding()] param([int]$n = 2) dynamicparam { } begin { $x = $n } process { } end { Write-Output ($x * 2) }",
+        "data d { 'x' }; $d",
+        "$a = 1; & { $a + 1 }; function h { $a + 2 }; h",
+        "trap { Write-Output trapped; continue }; throw 'bad'; Write-Output after",
+        "$input.GetType().Name.Length -gt 0; @($input).Count",
+        ...(legacy ? [] : ["end { Write-Output e } clean { Write-Output c }"]),
+      ]) {
+        const expected = await native(command)
+        expect(textOf(await run(command)).replaceAll("\r\n", "\n")).toBe(
+          `${expected.output}\n\nExit code: ${expected.code}`,
+        )
+      }
+      if (!legacy) {
+        const clean = textOf(await run("end { Write-Output e } clean { Write-Error bad }"))
+        expect(clean.replaceAll("\r\n", "\n")).toBe("e\nbad\n\nExit code: 1")
+      }
+    })
+
     test("quotes survive: double quotes, $ and backticks", async () => {
       expect(textOf(await run("Write-Output 'a \"b\" $c `d'"))).toContain('a "b" $c `d')
     })

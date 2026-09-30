@@ -59,10 +59,12 @@ export const POWERSHELL_SCRIPT = [
   "}",
   "filter __amira_errors { if ($_ -is [System.Management.Automation.ErrorRecord]) { __amira_error $_ } else { $_ } }",
   "filter __amira_trim { $_.TrimEnd() }",
-  // Capture $? in a finally around each script-level block: it runs after the user's finally
-  // blocks and after traps unwind (whose return status differs between 5.1 and 7). Keep param,
-  // using and named-block declarations outside the try. Added text has no line breaks, so
-  // errors still name their original line.
+  // The exit status is $? once the command has run: read in a finally around each script-level
+  // block, which runs after the command's own finally blocks and after traps unwind (whose
+  // return status differs between 5.1 and 7). The finally is added to the AST, not the text
+  // (__amira_wrap), so every error still names its own line and column and shows only the
+  // command's text. A top-level `return` is the exception: it is rewritten in the text, with
+  // no line break, so an error after it on the same line names its line but not its column.
   "function __amira_top($r) {",
   "  if ($r.Parent -isnot [System.Management.Automation.Language.NamedBlockAst] -and $r.Parent -isnot [System.Management.Automation.Language.StatementBlockAst]) { return $false }",
   "  for ($p = $r.Parent; $p; $p = $p.Parent) {",
@@ -73,31 +75,60 @@ export const POWERSHELL_SCRIPT = [
   "  }",
   "  $false",
   "}",
+  // UsingStatementAst.Copy() shares its children with the original, which no other tree accepts.
+  "function __amira_using($u) {",
+  "  if ($u.ModuleSpecification) {",
+  "    if ($u.Alias) { return [System.Management.Automation.Language.UsingStatementAst]::new($u.Extent, $u.Alias.Copy(), $u.ModuleSpecification.Copy()) }",
+  "    return [System.Management.Automation.Language.UsingStatementAst]::new($u.Extent, $u.ModuleSpecification.Copy())",
+  "  }",
+  "  if ($u.Alias) { return [System.Management.Automation.Language.UsingStatementAst]::new($u.Extent, $u.UsingStatementKind, $u.Alias.Copy(), $u.Name.Copy()) }",
+  "  [System.Management.Automation.Language.UsingStatementAst]::new($u.Extent, $u.UsingStatementKind, $u.Name.Copy())",
+  "}",
+  // The block's statements and traps inside `try { } finally { $script:__amira_ok = $? }`.
+  "function __amira_block($b, $ok) {",
+  "  if (-not $b) { return $null }",
+  "  $ss = [System.Management.Automation.Language.StatementAst[]]@(foreach ($s in $b.Statements) { $s.Copy() })",
+  "  $ts = [System.Management.Automation.Language.TrapStatementAst[]]@(foreach ($t in $b.Traps) { $t.Copy() })",
+  "  if (-not $ss.Count -and -not $ts.Count) { return $b.Copy() }",
+  "  $body = [System.Management.Automation.Language.StatementBlockAst]::new($b.Extent, $ss, $ts)",
+  "  $fin = [System.Management.Automation.Language.StatementBlockAst]::new($b.Extent, [System.Management.Automation.Language.StatementAst[]]@($ok.Copy()), $null)",
+  "  $try = [System.Management.Automation.Language.TryStatementAst]::new($b.Extent, $body, [System.Management.Automation.Language.CatchClauseAst[]]@(), $fin)",
+  "  $outer = [System.Management.Automation.Language.StatementBlockAst]::new($b.Extent, [System.Management.Automation.Language.StatementAst[]]@($try), $null)",
+  "  [System.Management.Automation.Language.NamedBlockAst]::new($b.Extent, $b.BlockKind, $outer, $b.Unnamed)",
+  "}",
+  // The same script block with each named block wrapped; using, attributes and param stay as
+  // they are. Extents still point into the command's text, so positions are unchanged.
+  "function __amira_wrap($sb) {",
+  "  $a = $sb.Ast",
+  "  $ok = [System.Management.Automation.Language.Parser]::ParseInput('$script:__amira_ok = $?', [ref]$null, [ref]$null).EndBlock.Statements[0]",
+  "  $us = [System.Management.Automation.Language.UsingStatementAst[]]@(foreach ($u in $a.UsingStatements) { __amira_using $u })",
+  "  $at = [System.Management.Automation.Language.AttributeAst[]]@(foreach ($x in $a.Attributes) { $x.Copy() })",
+  "  $pb = if ($a.ParamBlock) { $a.ParamBlock.Copy() } else { $null }",
+  "  $begin = __amira_block $a.BeginBlock $ok; $process = __amira_block $a.ProcessBlock $ok",
+  "  $end = __amira_block $a.EndBlock $ok; $dynamic = __amira_block $a.DynamicParamBlock $ok",
+  // The clean block, and the constructor taking one, exist from 7.3 on.
+  "  if ($a.PSObject.Properties['CleanBlock'] -and $a.CleanBlock) {",
+  "    $ast = [System.Management.Automation.Language.ScriptBlockAst]::new($a.Extent, $us, $at, $pb, $begin, $process, $end, (__amira_block $a.CleanBlock $ok), $dynamic)",
+  "  } else {",
+  "    $ast = [System.Management.Automation.Language.ScriptBlockAst]::new($a.Extent, $us, $at, $pb, $begin, $process, $end, $dynamic)",
+  "  }",
+  "  $ast.GetScriptBlock()",
+  "}",
   "function __amira_compile($text) {",
   "  $sb = [scriptblock]::Create($text)",
-  "  $edits = [System.Collections.Generic.List[object]]::new()",
-  "  foreach ($b in @($sb.Ast.DynamicParamBlock, $sb.Ast.BeginBlock, $sb.Ast.ProcessBlock, $sb.Ast.EndBlock, $sb.Ast.CleanBlock)) {",
-  "    if (-not $b) { continue }",
-  "    $ss = @(@($b.Statements) + @($b.Traps) | Where-Object { $null -ne $_ } | Sort-Object { $_.Extent.StartOffset })",
-  "    if (-not $ss.Count) { continue }",
-  "    $start = $ss[0].Extent.StartOffset; $end = $ss[-1].Extent.EndOffset",
-  "    $edits.Add(@{ Start = $start; End = $start; Text = 'try { ' })",
-  "    $edits.Add(@{ Start = $end; End = $end; Text = ' } finally { $script:__amira_ok = $? }' })",
-  "  }",
-  "  $rs = @($sb.Ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.ReturnStatementAst] -and (__amira_top $a) }, $true))",
+  // Sorted: FindAll visits named blocks in begin, process, end order, whatever their order in the text.
+  "  $rs = @($sb.Ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.ReturnStatementAst] -and (__amira_top $a) }, $true) | Sort-Object { $_.Extent.StartOffset } -Descending)",
   // A value-only return leaves $? unchanged natively, but our output filters can change it.
-  // Restore it before evaluating the value (try resets it) and before any user finally runs.
-  // Clear-Variable succeeds or fails silently according to the saved status.
+  // Restore it before evaluating the value (the assignment that saved it set $? to true) and
+  // before any user finally runs. Clear-Variable succeeds or fails silently according to the
+  // saved status.
+  "  $restore = \"Clear-Variable ('__amira_nx', '__amira_restore')[[int]`$script:__amira_return] -Scope Script -ErrorAction Ignore\"",
   "  foreach ($r in $rs) {",
   "    if ($r.Pipeline -and $r.Pipeline.Find({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true)) { continue }",
-  "    $restore = \"Clear-Variable ('__amira_nx', '__amira_restore')[[int]`$script:__amira_return] -Scope Script -ErrorAction Ignore\"",
-  '    $new = "`$script:__amira_return = `$?; try { $restore; $($r.Extent.Text) } finally { $restore }"',
-  "    $edits.Add(@{ Start = $r.Extent.StartOffset; End = $r.Extent.EndOffset; Text = $new })",
+  '    $text = $text.Substring(0, $r.Extent.StartOffset) + "`$script:__amira_return = `$?; try { $restore; $($r.Extent.Text) } finally { $restore }" + $text.Substring($r.Extent.EndOffset)',
   "  }",
-  "  foreach ($e in ($edits | Sort-Object { $_.Start }, { $_.End } -Descending)) {",
-  "    $text = $text.Substring(0, $e.Start) + $e.Text + $text.Substring($e.End)",
-  "  }",
-  "  [scriptblock]::Create($text)",
+  "  if ($rs.Count) { $sb = [scriptblock]::Create($text) }",
+  "  __amira_wrap $sb",
   "}",
   // Reads the gate line, `<base64 directory> <base64 command>`, and enters the directory for
   // cmdlets (Set-Location) and for .NET methods and native programs (the process directory).
