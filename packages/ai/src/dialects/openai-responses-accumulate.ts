@@ -12,6 +12,8 @@ import { emptyUsage } from "../types.ts"
 import type { ErrorEvent } from "./http-stream.ts"
 import { responsesError } from "./openai-responses-errors.ts"
 import {
+  type CompactionItem,
+  decodeCompaction,
   encodeMessage,
   encodeReasoning,
   type MessageSignature,
@@ -44,10 +46,15 @@ export class ResponsesAccumulator {
   readonly #reasoning = new Map<string, Reasoning>()
   readonly #texts = new Map<string, TextBlock>()
   readonly #messages = new Map<string, MessageSignature>()
+  /** Compaction items the response produced (a compaction_trigger request should make one). */
+  readonly compactions: CompactionItem[] = []
+  readonly #onProgress: (() => void) | undefined
   #terminal: StreamEvent | undefined
 
-  constructor(model: ModelRef) {
+  /** `onProgress` is called for the server's compaction progress events. */
+  constructor(model: ModelRef, onProgress?: () => void) {
     this.message = { role: "assistant", content: [], model, usage: emptyUsage() }
+    this.#onProgress = onProgress
   }
 
   /** The done or error event once the response has finished. */
@@ -61,7 +68,17 @@ export class ResponsesAccumulator {
         yield* this.#added(ev.item, ev.output_index)
         break
       case "response.output_item.done":
+        if (ev.item?.type === "compaction") {
+          // Only the done event carries the final encrypted content.
+          const item = decodeCompaction(JSON.stringify(ev.item))
+          if (item) this.compactions.push(item)
+          break
+        }
         yield* this.#itemDone(ev.item, ev.output_index)
+        break
+      // At most every 30 s while compacting; it carries no summary content.
+      case "response.compaction.compacting":
+        this.#onProgress?.()
         break
       case "response.output_text.delta":
       case "response.refusal.delta":
@@ -280,7 +297,7 @@ function itemKey(ev: any): string {
   return `#${typeof ev?.output_index === "number" ? ev.output_index : 0}`
 }
 
-function mapUsage(u: any): Usage {
+export function mapUsage(u: any): Usage {
   const cached = u.input_tokens_details?.cached_tokens ?? 0
   const written = u.input_tokens_details?.cache_write_tokens ?? 0
   return {
