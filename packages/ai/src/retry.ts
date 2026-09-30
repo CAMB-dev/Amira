@@ -68,7 +68,7 @@ function retried(ev: ErrorEvent, retries: number): ErrorEvent {
 }
 
 /** Resolves true after ms, or false as soon as the signal aborts. */
-function sleep(ms: number, signal: AbortSignal): Promise<boolean> {
+export function sleep(ms: number, signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve(false)
     const done = (ok: boolean) => {
