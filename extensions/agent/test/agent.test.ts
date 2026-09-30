@@ -1019,7 +1019,7 @@ test("in the main session agent_result does not wait: the result still comes onc
   await root.prompt("go")
   // The call came back at once, while the sub-agent was still running.
   expect(agentResult(root, "agent_result")).not.toContain("awaited answer")
-  await Bun.sleep(400)
+  await until(() => replied(root, "got the notice"))
   await bus.flush()
   expect(
     notices(root)
@@ -1050,7 +1050,7 @@ test("the main session runs sub-agents in the background even when the model ask
   )
   await root.prompt("go")
   expect(agentResult(root, "agent")).toContain("Started in the background")
-  await Bun.sleep(400)
+  await until(() => replied(root, "summarized"))
   await bus.flush()
   expect(
     notices(root)
