@@ -1,3 +1,4 @@
+import { serverToolText } from "../server-tools.ts"
 import { adaptThinking } from "../thinking.ts"
 import type {
   AssistantMessage,
@@ -98,6 +99,9 @@ function assistantBlocks(m: AssistantMessage, tools: boolean): AnthropicBlock[] 
       else if (b.text.trim()) out.push({ type: "text", text: `<thinking>\n${b.text}\n</thinking>` })
     } else if (b.type === "text") {
       if (b.text.trim()) out.push({ type: "text", text: b.text })
+    } else if (b.type === "serverTool") {
+      // Another provider's hosted tool; the ai client turns these into text before they get here.
+      out.push({ type: "text", text: serverToolText(b) })
     } else if (tools) {
       out.push({ type: "tool_use", id: wireToolId(b.id), name: b.name, input: b.args })
     } else {

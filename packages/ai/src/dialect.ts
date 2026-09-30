@@ -19,6 +19,13 @@ export interface ProviderCompat {
    * and for compatible servers such as DeepSeek.
    */
   thinking?: "adaptive" | "budget"
+  /**
+   * Offer the provider's hosted web search (openai-responses: the `web_search` tool) to this
+   * provider's models; a model's `caps.webSearch` wins. By default only on the vendor's own
+   * endpoints (api.openai.com and Azure OpenAI hosts). The client web_search tool is then
+   * hidden from that model; web_fetch stays.
+   */
+  webSearch?: boolean
 }
 
 export interface DialectContext {

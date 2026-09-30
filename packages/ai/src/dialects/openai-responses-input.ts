@@ -1,4 +1,12 @@
-import type { AssistantMessage, ImageBlock, Message, ThinkingBlock, UserContent } from "../types.ts"
+import { serverToolText } from "../server-tools.ts"
+import type {
+  AssistantMessage,
+  ImageBlock,
+  Message,
+  ServerToolBlock,
+  ThinkingBlock,
+  UserContent,
+} from "../types.ts"
 import { MISSING_RESULT, resultText, ToolResults } from "./tool-results.ts"
 
 export const RESPONSES_DIALECT = "openai-responses"
@@ -28,6 +36,8 @@ export type ResponsesItem =
     }
   | FunctionCallItem
   | { type: "function_call_output"; call_id: string; output: string }
+  /** A hosted tool's item as the server sent it, e.g. a web_search_call. */
+  | { type: "web_search_call"; [key: string]: unknown }
 
 export interface ResponsesInputOptions {
   /** Whether the model accepts images; tool-result images then follow as a user message. */
@@ -140,6 +150,8 @@ function assistantItems(m: AssistantMessage, out: ResponsesItem[]): FunctionCall
     } else if (b.type === "thinking") {
       const item = reasoningItem(b)
       if (item) items.push(item)
+    } else if (b.type === "serverTool") {
+      items.push(serverToolItem(b))
     } else {
       items.push({ type: "function_call", call_id: b.id, name: b.name, arguments: JSON.stringify(b.args) })
     }
@@ -151,6 +163,21 @@ function assistantItems(m: AssistantMessage, out: ResponsesItem[]): FunctionCall
 
 function itemType(item: ResponsesItem | undefined): string | undefined {
   return item && "type" in item ? item.type : undefined
+}
+
+/**
+ * A hosted tool's call (a web_search_call) goes back as the item it came as: the server takes
+ * it inline with `store: false`. The ai client leaves the item only on blocks from this
+ * provider and host (adaptServerTools); a block without one goes as a text note.
+ */
+function serverToolItem(b: ServerToolBlock): ResponsesItem {
+  if (b.signature?.dialect === RESPONSES_DIALECT) {
+    try {
+      const item = JSON.parse(b.signature.value)
+      if (typeof item?.type === "string") return item
+    } catch {}
+  }
+  return { role: "assistant", content: serverToolText(b) }
 }
 
 /** Only signed reasoning can be replayed, under the id it was given. */

@@ -144,6 +144,7 @@ export function estimateTokens(value: string | Message): number {
   for (const b of value.content) {
     if (b.type === "image") n += 1000
     else if (b.type === "toolCall") n += estimateTokens(b.name + JSON.stringify(b.args))
+    else if (b.type === "serverTool") n += estimateTokens(b.signature?.value ?? JSON.stringify(b.input))
     else n += estimateTokens(b.text)
   }
   return n + 4

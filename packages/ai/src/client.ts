@@ -5,6 +5,7 @@ import { BUILTIN_DIALECTS } from "./dialects/index.ts"
 import { modelErrorKind } from "./errors.ts"
 import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import { type RetryOptions, withRetry } from "./retry.ts"
+import { adaptServerTools, withServerToolHost } from "./server-tools.ts"
 import { withTextTools } from "./text-tools.ts"
 import { type ModelInfo, type ModelRequest, type StreamEvent, withoutDisplay } from "./types.ts"
 
@@ -19,6 +20,8 @@ export interface AiOptions {
   catalog?: ModelCatalog
   /** Retrying failed requests (D52); by default 3 retries, backing off from 1 s. */
   retry?: RetryOptions
+  /** false turns every provider's hosted web search off (settings web.nativeSearch). */
+  webSearch?: boolean
 }
 
 export interface Ai {
@@ -82,7 +85,9 @@ export function createAi(opts: AiOptions = {}): Ai {
       const p = provider(ref.slice(0, slash))
       const id = ref.slice(slash + 1)
       const catalogId = catalogProviderId(p)
-      return resolveModelInfo(p, id, catalogId ? catalog?.find(catalogId, id) : undefined)
+      const info = resolveModelInfo(p, id, catalogId ? catalog?.find(catalogId, id) : undefined)
+      if (opts.webSearch === false) info.caps.webSearch = false
+      return info
     },
     stream(full, signal) {
       // A message's display is for frontends; the model only ever sees its content.
@@ -114,8 +119,14 @@ export function createAi(opts: AiOptions = {}): Ai {
         fetch: doFetch,
         ...(p.compat ? { compat: p.compat } : {}),
       }
-      const attempt = () => withTextTools(req, (r) => dialect.stream(r, ctx))
-      return withErrorFacts(withCost(withRetry(attempt, sig, opts.retry), req.model), hostOf(p.baseUrl))
+      // A server tool's item goes back only where it came from; elsewhere it is a text note.
+      const host = hostOf(p.baseUrl)
+      const target = { dialect: req.model.dialect, provider: p.id, host }
+      const messages = adaptServerTools(req.messages, target)
+      const sendable = messages === req.messages ? req : { ...req, messages }
+      const attempt = () => withTextTools(sendable, (r) => dialect.stream(r, ctx))
+      const events = withServerToolHost(withRetry(attempt, sig, opts.retry), host)
+      return withErrorFacts(withCost(events, req.model), host)
     },
     registerProvider: (p) => void providers.set(p.id, p),
     registerDialect: (d) => void dialects.set(d.id, d),
