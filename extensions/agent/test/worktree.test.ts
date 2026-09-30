@@ -11,6 +11,7 @@ import {
   DISCARD,
   discardKept,
   extendKept,
+  inUseElsewhere,
   KEEP,
   keptChanges,
   listKeptWorktrees,
@@ -20,6 +21,7 @@ import {
   parseNumstat,
   projectKey,
   type RunGit,
+  releaseWorktree,
   STALE_NOTICE_MS,
   STALE_WORKTREE_MS,
   sweepWorktrees,
@@ -289,6 +291,68 @@ test("a kept worktree knows whose it is; one that no longer applies is not merge
   expect(await discardKept(git, root, extended)).toBeUndefined()
   for (const f of [wt.dir, wt.patch, `${wt.dir}.json`, `${wt.dir}.expiring`])
     expect(existsSync(f)).toBe(false)
+})
+
+test("a worktree another process's sub-agent works in is not listed, merged, discarded or swept", async () => {
+  const { root, home } = await setup()
+  const wt = await worktree(root, home)
+  const lock = `${wt.dir}.lock`
+  // Made by this process: its lock names this process, which knows its own worktrees.
+  expect(readFileSync(lock, "utf8")).toBe(String(process.pid))
+  expect(inUseElsewhere(wt.dir)).toBe(false)
+  // The parent of the test runner is alive: as if another Amira ran the sub-agent.
+  writeFileSync(lock, String(process.ppid))
+  expect(inUseElsewhere(wt.dir)).toBe(true)
+  expect(listKeptWorktrees(home, root)).toEqual([])
+  const then = new Date(Date.now() - STALE_WORKTREE_MS - STALE_NOTICE_MS - 60_000)
+  utimesSync(wt.dir, then, then)
+  expect(await sweepWorktrees(git, { root, home })).toEqual({ removed: [], expiring: [] })
+  const kept = { name: "child", dir: wt.dir, modifiedAt: 0, expiring: false, deleteAfter: 0 }
+  await expect(discardKept(git, root, kept)).rejects.toThrow("another Amira session")
+  await expect(mergeKept(git, root, kept)).rejects.toThrow("another Amira session")
+  expect(existsSync(wt.dir)).toBe(true)
+  // A lock of a process that is gone (killed mid-run) no longer counts; released, there is none.
+  writeFileSync(lock, "999999999")
+  expect(listKeptWorktrees(home, root).map((w) => w.name)).toEqual(["child"])
+  releaseWorktree(wt.dir)
+  expect(existsSync(lock)).toBe(false)
+})
+
+test("a kept worktree without a record is diffed from its first commit, its commits included", async () => {
+  const { root, home } = await setup()
+  const wt = await worktree(root, home)
+  // Made before worktrees kept a record of their base.
+  rmSync(`${wt.dir}.json`)
+  writeFileSync(path.join(wt.dir, "f.txt"), "a\nB\nc\nd\ne\n")
+  await run(
+    wt.dir,
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@t",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qam",
+    "b",
+  )
+  writeFileSync(path.join(wt.dir, "new.txt"), "new\n")
+  const [kept] = listKeptWorktrees(home, root)
+  expect(kept?.base).toBeUndefined()
+  expect((await keptChanges(git, root, kept!)).stat).toEqual({
+    files: ["f.txt", "new.txt"],
+    insertions: 2,
+    deletions: 1,
+  })
+  // Half deleted (its .git gone): not collected, or git would take the enclosing repository;
+  // its last patch is what there is.
+  rmSync(path.join(wt.dir, ".git"))
+  const again = await keptChanges(git, root, listKeptWorktrees(home, root)[0]!)
+  expect(again.stat.files).toEqual(["f.txt", "new.txt"])
+  rmSync(wt.patch)
+  await expect(keptChanges(git, root, listKeptWorktrees(home, root)[0]!)).rejects.toThrow(
+    "no longer a git worktree",
+  )
 })
 
 test("numstat parsing counts binary files without lines", () => {

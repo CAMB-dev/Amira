@@ -232,8 +232,8 @@ export type KeptWorktreeInfo = KeptWorktree & { stat?: ChangeStat }
 export interface KeptWorktrees {
   /** Newest first; the ones sub-agents work in now are left out. */
   list(): Promise<KeptWorktreeInfo[]>
-  /** Its changes as a patch, to review. */
-  changes(w: KeptWorktreeInfo): Promise<string>
+  /** Its changes collected now, as a patch to review; merge applies this patch. */
+  changes(w: KeptWorktreeInfo): Promise<{ patch: string; stat: ChangeStat }>
   /** Applies its changes to the working tree and removes it; nothing is applied on a conflict. */
   merge(w: KeptWorktreeInfo): Promise<KeptMerge>
   /** Removes it with its changes; says why it stayed, if it did. */
@@ -249,7 +249,7 @@ export interface AgentsCommandOptions {
 }
 
 export const MERGE_KEPT = "Merge into the working tree"
-export const KEEP_KEPT = `Keep it (cleanup starts over: ${days(STALE_WORKTREE_MS + STALE_NOTICE_MS)})`
+export const KEEP_KEPT = `Keep it (not deleted for ${days(STALE_WORKTREE_MS + STALE_NOTICE_MS)} at least)`
 export const DISCARD_KEPT = "Discard"
 
 function days(ms: number): string {
@@ -257,12 +257,23 @@ function days(ms: number): string {
   return `${n} day${n === 1 ? "" : "s"}`
 }
 
-/** "in 5 days", "in 3h", "in under an hour"; "at the next cleanup" once it is due. */
-function until(ms: number): string {
-  if (ms <= 0) return "at the next cleanup"
-  if (ms < 3_600_000) return "in under an hour"
+/** "5 days", "3h", "under an hour". */
+function span(ms: number): string {
+  if (ms < 3_600_000) return "under an hour"
   const hours = Math.round(ms / 3_600_000)
-  return hours < 24 ? `in ${hours}h` : `in ${days(ms)}`
+  return hours < 24 ? `${hours}h` : days(ms)
+}
+
+/**
+ * When the cleanup deletes a kept worktree. It is always announced first and deleted a day
+ * later at the earliest; the cleanup runs when a sub-agent next gets a worktree here.
+ */
+function whenDeleted(w: KeptWorktreeInfo, now: number): string {
+  const left = w.deleteAfter - now
+  if (w.expiring)
+    return left > 0 ? `deleted in ${span(left)} (announced)` : "deleted at the next cleanup (announced)"
+  const announce = left - STALE_NOTICE_MS
+  return announce > 0 ? `deleted in ${span(left)} at the earliest` : "the next cleanup announces its deletion"
 }
 
 /** Whose worktree it is: `"Fix the parser" (coder)`, or its directory's name when not known. */
@@ -276,12 +287,11 @@ function keptHead(w: KeptWorktreeInfo): string {
   return `${whose} · ${w.stat ? formatStat(w.stat) : "changes not collected"}`
 }
 
-/** How old a kept worktree is and when the cleanup deletes it (always announced first). */
+/** How old a kept worktree is and when the cleanup deletes it. */
 function keptWhen(w: KeptWorktreeInfo, now: number): string {
   const age = Math.floor((now - w.modifiedAt) / 86_400_000)
   const changed = age < 1 ? "changed today" : `changed ${days(age * 86_400_000)} ago`
-  const left = w.deleteAfter - now
-  return `${changed} · ${w.expiring ? `deleted ${until(left)} (announced)` : `cleanup ${until(left)}`}`
+  return `${changed} · ${whenDeleted(w, now)}`
 }
 
 /** One line about a kept worktree: whose, how much it changed, how old it is and when it goes. */
@@ -289,10 +299,14 @@ export function keptSummary(w: KeptWorktreeInfo, now: number): string {
   return `${keptHead(w)} · ${keptWhen(w, now)}`
 }
 
-/** A path under the home directory as `~/…`. */
+/**
+ * A path under the home directory as `~/…`. On Windows paths stay as they are, so they can be
+ * pasted into Explorer or a prompt.
+ */
 function shortPath(p: string, home: string): string {
+  if (process.platform === "win32") return p
   const rel = path.relative(home, p)
-  return home && rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? `~/${rel.replaceAll("\\", "/")}` : p
+  return home && rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? `~/${rel}` : p
 }
 
 /** The kept worktrees as /agents worktrees lists them. */
@@ -302,20 +316,32 @@ export function keptWorktreesText(list: KeptWorktreeInfo[], now = Date.now(), ho
     (w) =>
       `${keptSummary(w, now)}\n  ${shortPath(w.dir, home)}${w.patch ? `\n  patch: ${shortPath(w.patch, home)}` : ""}`,
   )
-  return `Sub-agent worktrees kept with their changes (/agents in the TUI merges, discards or keeps them; git apply <patch> takes them over):\n${rows.join("\n")}`
+  return `Sub-agent worktrees kept with their changes (the /agents list merges, keeps or discards them; git apply <patch> takes them over):\n${rows.join("\n")}`
 }
 
 /** Asks what to do with a kept worktree, over its diff, and does it; says what it did. */
 async function reviewKept(ctx: CommandContext, worktrees: KeptWorktrees, w: KeptWorktreeInfo) {
   const who = keptWho(w)
-  const patch = await worktrees.changes(w)
-  const size = w.stat ? ` (${formatStat(w.stat)})` : ""
-  const choice = await ctx.ui.reviewDiff(
-    `The changes ${who} left in its worktree${size}`,
-    patch,
-    [MERGE_KEPT, KEEP_KEPT, DISCARD_KEPT],
-    { signal: ctx.signal },
-  )
+  let choice: string | undefined
+  try {
+    const { patch, stat } = await worktrees.changes(w)
+    choice = await ctx.ui.reviewDiff(
+      `The changes ${who} left in its worktree (${formatStat(stat)})`,
+      patch,
+      [MERGE_KEPT, KEEP_KEPT, DISCARD_KEPT],
+      { signal: ctx.signal },
+    )
+  } catch (err) {
+    // Its changes cannot be read: it can still be kept or deleted.
+    const why = err instanceof Error ? err.message : String(err)
+    choice = await ctx.ui.select(
+      `The changes ${who} left cannot be read (${why}). What now?`,
+      [KEEP_KEPT, DISCARD_KEPT],
+      {
+        signal: ctx.signal,
+      },
+    )
+  }
   if (choice === MERGE_KEPT) {
     const r = await worktrees.merge(w)
     if (r.outcome === "conflict") {
@@ -339,7 +365,7 @@ async function reviewKept(ctx: CommandContext, worktrees: KeptWorktrees, w: Kept
     )
   } else if (choice === KEEP_KEPT) {
     const kept = await worktrees.keep(w)
-    ctx.print(`Keeping the worktree of ${who}; cleanup ${until(kept.deleteAfter - Date.now())}.`)
+    ctx.print(`Keeping the worktree of ${who}; ${whenDeleted(kept, Date.now())}.`)
   }
 }
 
@@ -430,7 +456,9 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
       // What matters most comes first: the rest (and the path) wraps under it when narrow.
       const summaries = kept.map((w) => keptHead(w))
       const keptRows = summaries.map((row, i) =>
-        summaries.indexOf(row) === summaries.lastIndexOf(row) ? row : `${row} · ${kept[i]!.name}`,
+        summaries.indexOf(row) === summaries.lastIndexOf(row) && !agentRows.includes(row)
+          ? row
+          : `${row} · ${kept[i]!.name}`,
       )
       const sections: SelectSection[] = []
       if (list.length) {

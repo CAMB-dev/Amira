@@ -26,11 +26,13 @@ import {
   formatStat,
   keepChanges,
   keptChanges,
+  keptStat,
   listKeptWorktrees,
   type MergeResult,
   mergeKept,
   mergeWorktree,
   type RunGit,
+  releaseWorktree,
   removeWorktree,
   STALE_WORKTREE_MS,
   type SweepResult,
@@ -337,14 +339,15 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
         const root = await repoRoot()
         if (!root) return []
         const kept = listKeptWorktrees(api.home, root).filter((w) => !inUse.has(w.dir))
-        return Promise.all(
-          kept.map(async (w): Promise<KeptWorktreeInfo> => {
-            const changes = await keptChanges(git, root, w).catch(() => undefined)
-            return changes ? { ...w, stat: changes.stat } : w
-          }),
-        )
+        // Sizes as last collected: collecting them all again would take long in a big repository.
+        const out: KeptWorktreeInfo[] = []
+        for (const w of kept) {
+          const stat = await keptStat(git, root, w).catch(() => undefined)
+          out.push(stat ? { ...w, stat } : w)
+        }
+        return out
       },
-      changes: (w) => inRepo(async (root) => (await keptChanges(git, root, w)).patch),
+      changes: (w) => inRepo((root) => keptChanges(git, root, w)),
       merge: (w) => inRepo((root) => serialized(() => mergeKept(git, root, w))),
       discard: (w) => inRepo((root) => discardKept(git, root, w)),
       keep: async (w) => ({ ...extendKept(w), ...(w.stat ? { stat: w.stat } : {}) }),
@@ -394,6 +397,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
       if (ctx.signal.aborted) {
         if (wt) {
           inUse.delete(wt.dir)
+          releaseWorktree(wt.dir)
           await removeWorktree(git, wt)
         }
         throw new Error("the commander's turn was interrupted")
@@ -417,6 +421,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
       } catch (err) {
         if (wt) {
           inUse.delete(wt.dir)
+          releaseWorktree(wt.dir)
           await removeWorktree(git, wt)
         }
         throw err
@@ -466,6 +471,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
             job.kept = { files: 0, patch: tree.patch }
           } finally {
             inUse.delete(tree.dir)
+            releaseWorktree(tree.dir)
           }
         }
         const text = reportOf(job, r, changes, note)

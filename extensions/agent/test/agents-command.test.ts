@@ -30,6 +30,7 @@ import {
   findSubagent,
   hostGit,
   KEEP_KEPT,
+  keepChanges,
   MERGE_KEPT,
   type RunGit,
   STALE_WORKTREE_MS,
@@ -408,6 +409,9 @@ test(
     writeFileSync(path.join(fix.dir, "f.txt"), "a\nB\nc\n")
     const old = await kept("sa_old", "Tidy the docs")
     writeFileSync(path.join(old.dir, "new.txt"), "new\n")
+    // As the sub-agents left them: their changes collected into a patch.
+    await keepChanges(git, fix)
+    await keepChanges(git, old)
     // Nine days old and announced: the cleanup deletes it from a day after the notice.
     const then = new Date(Date.now() - STALE_WORKTREE_MS - 2 * 86_400_000)
     utimesSync(old.dir, then, then)
@@ -438,24 +442,37 @@ test(
     // Under each: how old it is, when the cleanup deletes it, and where it is.
     const descriptions = first.list.kind === "select" ? (first.list.descriptions ?? []) : []
     expect(descriptions.map((d) => d.replaceAll("\\", "/"))).toEqual([
-      expect.stringMatching(/^changed today · cleanup in 8 days · .*\/sa_fix$/),
+      expect.stringMatching(/^changed today · deleted in 8 days at the earliest · .*\/sa_fix$/),
       expect.stringMatching(/^changed 9 days ago · deleted in 1 day \(announced\) · .*\/sa_old$/),
     ])
     expect(first.diff).toMatchObject({
       title: 'The changes "Tidy the docs" (coder) left in its worktree (1 file, +1 -0)',
       options: [MERGE_KEPT, KEEP_KEPT, DISCARD_KEPT],
     })
-    expect(first.text).toBe('Keeping the worktree of "Tidy the docs" (coder); cleanup in 8 days.')
+    expect(first.text).toBe(
+      'Keeping the worktree of "Tidy the docs" (coder); deleted in 8 days at the earliest.',
+    )
     expect(existsSync(`${old.dir}.expiring`)).toBe(false)
-    // Merged: the change is in the working tree, the worktree is gone.
-    const merged = await answer(
-      "/agents",
-      (r) => (r.kind === "select" ? r.options.find((o) => o.startsWith("Fix the parser")) : ""),
-      MERGE_KEPT,
+    const fixRow = (r: UiRequest) =>
+      r.kind === "select" ? r.options.find((o) => o.startsWith("Fix the parser")) : ""
+    // Changed in the working tree meanwhile: nothing is merged, the worktree stays.
+    writeFileSync(path.join(repo, "f.txt"), "a\nX\nc\n")
+    const conflict = await answer("/agents", fixRow, MERGE_KEPT)
+    expect(conflict.output[0]).toStartWith(
+      'The changes of "Fix the parser" (coder) do not apply cleanly to the working tree, so nothing was merged; they stay in',
+    )
+    expect(existsSync(fix.dir)).toBe(true)
+    writeFileSync(path.join(repo, "f.txt"), "a\nb\nc\n")
+    // Changed in the worktree since the sub-agent ended: the review shows it as it is now.
+    writeFileSync(path.join(fix.dir, "g.txt"), "g\n")
+    const merged = await answer("/agents", fixRow, MERGE_KEPT)
+    expect(merged.diff?.title).toBe(
+      'The changes "Fix the parser" (coder) left in its worktree (2 files, +2 -1)',
     )
     expect(merged.text).toBe(
-      'Merged the changes of "Fix the parser" (coder) into the working tree: 1 file, +1 -1.',
+      'Merged the changes of "Fix the parser" (coder) into the working tree: 2 files, +2 -1.',
     )
+    expect(existsSync(path.join(repo, "g.txt"))).toBe(true)
     expect(readFileSync(path.join(repo, "f.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("a\nB\nc\n")
     expect(existsSync(fix.dir)).toBe(false)
     expect(existsSync(`${fix.dir}.json`)).toBe(false)
@@ -483,6 +500,7 @@ test("with sub-agents too, the kept worktrees follow them under a heading of the
   })
   if ("error" in wt) throw new Error(wt.error)
   writeFileSync(path.join(wt.dir, "f.txt"), "x\n")
+  await keepChanges(git, wt)
   await root.prompt("go")
   const running = run("/agents")
   while (!host.ui.pending.length) await Bun.sleep(5)
