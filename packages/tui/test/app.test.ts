@@ -2700,7 +2700,7 @@ test("Enter runs a recalled command; Ctrl+R still puts a command in the editor w
   terminal.send("\r")
   await shows("STATUS OK")
   terminal.send("\x12stat")
-  await waitFor(() => live().includes("› /status") && live().includes("search history"), "match")
+  await waitFor(() => /│ › \/status +│/.test(live()) && live().includes("search history"), "match")
   terminal.send("\r")
   await waitFor(() => !live().includes("search history") && live().includes("Esc close"), "the list")
   terminal.send("\x03\x03")
