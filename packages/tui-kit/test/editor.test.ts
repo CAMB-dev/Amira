@@ -375,6 +375,13 @@ test("only kills in a row join: a yank, undo or other change in between starts a
   ed.killWordBefore()
   ed.yank()
   expect(ed.getText()).toBe(" x")
+  // Text the app puts in (a history entry, a cleared prompt) ends the run too.
+  ed.setText("one two")
+  ed.killWordBefore()
+  ed.setText("three four")
+  ed.killWordBefore()
+  ed.yank()
+  expect(ed.getText()).toBe("three four")
 })
 
 test("a folded paste cut and yanked back stays folded", () => {

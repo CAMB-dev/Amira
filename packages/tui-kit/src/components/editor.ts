@@ -200,6 +200,8 @@ export class Editor implements Component {
     this.line = this.lines.length - 1
     this.col = this.current.length
     this.goalCol = undefined
+    // Not through changed(), which calls onChange; it ends a run of kills all the same.
+    this.lastKilled = false
     this.changes++
   }
 
