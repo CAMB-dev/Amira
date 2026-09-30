@@ -781,10 +781,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
 
-  function openView(v: FrontendView) {
+  /** Shows a full-screen view; false when it cannot be shown now (see CommandContext.openView). */
+  function openView(v: FrontendView): boolean {
     if (isSubagentView(v)) {
-      // A form owns the screen until it is answered.
-      if (!commands || form) return
+      // A form owns the screen until it is answered; a dumb terminal has no screen to show it on.
+      if (!commands || form || env.TERM === "dumb") return false
       if (viewer instanceof SubagentViewer) viewer.show(v.sessionId)
       else {
         showOverlay(
@@ -802,11 +803,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         )
       }
       view.renderOverlay()
-      return
+      return true
     }
     const definition = opts.views?.get(v.kind)
     if (!definition) throw new Error(`there is no "${v.kind}" view`)
-    if (form) return
+    if (form) return false
     if (viewer instanceof ExtensionViewer && viewer.kind === v.kind) viewer.show(v.data)
     else {
       showOverlay(
@@ -819,6 +820,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       )
     }
     view.renderOverlay()
+    return true
   }
 
   /** Opens the key reference over the conversation (the help key); a form keeps the screen. */

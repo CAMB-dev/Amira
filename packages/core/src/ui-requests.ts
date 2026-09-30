@@ -10,6 +10,9 @@ import {
   type FormValues,
   runFormAction,
   runFormDialogs,
+  type SelectChoice,
+  type SelectSection,
+  sectionOf,
   toFormSchema,
   type UiAnswer,
   type UiApi,
@@ -204,7 +207,24 @@ export class UiRequests {
   api(source?: string): UiApi {
     const o = (opts?: UiRequestOptions) => ({ ...opts, ...(source ? { source } : {}) })
     return {
-      select: (title, options, opts) => this.ask({ kind: "select", title, options: [...options] }, o(opts)),
+      select: async (title, options, opts) => {
+        const answer = await this.ask({ kind: "select", title, options: [...options] }, o(opts))
+        return typeof answer === "object" ? answer.option : answer
+      },
+      choose: async (title, options, opts) => {
+        const { sections, descriptions, ...rest } = opts
+        const problem = sectionProblem(options, sections)
+        if (problem) throw new Error(`ui.choose: ${problem}`)
+        const request = {
+          kind: "select" as const,
+          title,
+          options: [...options],
+          sections: structuredClone(sections),
+          ...(descriptions ? { descriptions: [...descriptions] } : {}),
+        }
+        const answer = await this.ask(request, o(rest))
+        return typeof answer === "string" ? { option: answer } : answer
+      },
       confirm: async (title, message, opts) => {
         const request = { kind: "confirm" as const, title, ...(message !== undefined ? { message } : {}) }
         const answer = await this.ask(request, o(opts))
@@ -277,6 +297,16 @@ function timeoutSignal(opts: UiRequestOptions): AbortSignal | undefined {
 function checkValue(request: UiRequest, value: unknown): string | undefined {
   switch (request.kind) {
     case "select":
+      if (isSelectChoice(value) && request.options.includes(value.option)) {
+        if (value.key === undefined) return undefined
+        const keys = sectionOf(request.sections, request.options.indexOf(value.option))?.keys ?? []
+        return keys.some((k) => k.key === value.key)
+          ? undefined
+          : `key must be one of the keys of the option's section: ${JSON.stringify(keys.map((k) => k.key))}`
+      }
+      return typeof value === "string" && request.options.includes(value)
+        ? undefined
+        : `value must be one of the options: ${JSON.stringify(request.options)}${request.sections ? ', or {"option": option, "key": key}' : ""}`
     case "diff-review":
       return typeof value === "string" && request.options.includes(value)
         ? undefined
@@ -294,6 +324,32 @@ function checkValue(request: UiRequest, value: unknown): string | undefined {
       return "value must be an object of field values"
   }
 }
+
+/**
+ * What is wrong with a select's sections, if anything. Options are told apart by their label,
+ * so they must differ; sections go in order within the list; a key is one printable character
+ * that is not a digit (digits pick options) and is not used twice in a section.
+ */
+function sectionProblem(options: readonly string[], sections: readonly SelectSection[]): string | undefined {
+  if (new Set(options).size !== options.length) return "options must differ"
+  let last = -1
+  for (const s of sections) {
+    if (!Number.isInteger(s.at) || s.at <= last || s.at >= options.length)
+      return `section at ${s.at}: sections start at increasing option indexes within the list`
+    last = s.at
+    const keys = s.keys ?? []
+    const bad = keys.find((k) => !/^[^\d\s]$/u.test(k.key))
+    if (bad) return `key ${JSON.stringify(bad.key)}: a key is one printable character, not a digit`
+    if (new Set(keys.map((k) => k.key)).size !== keys.length) return `section at ${s.at}: a key is used twice`
+  }
+  return undefined
+}
+
+const isSelectChoice = (v: unknown): v is SelectChoice =>
+  typeof v === "object" &&
+  v !== null &&
+  typeof (v as { option?: unknown }).option === "string" &&
+  ((v as { key?: unknown }).key === undefined || typeof (v as { key?: unknown }).key === "string")
 
 const isOther = (v: unknown): v is { other: string } =>
   typeof v === "object" && v !== null && typeof (v as { other?: unknown }).other === "string"

@@ -116,10 +116,11 @@ export interface CommandContext extends CommandCompleteContext {
   readonly keys?: () => readonly KeyHelp[]
   /**
    * Shows a full-screen view, on frontends that have them (the TUI does); unset elsewhere.
-   * Returns once the view is shown; the user leaves it when done. Throws for a view kind no
+   * Returns once the view is shown (the user leaves it when done): true, or false when it
+   * cannot be shown now, e.g. while a form holds the screen. Throws for a view kind no
    * extension registered (see ExtensionAPI.registerView).
    */
-  readonly openView?: (view: FrontendView) => void
+  readonly openView?: (view: FrontendView) => boolean
 }
 
 /**

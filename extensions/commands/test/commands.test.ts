@@ -370,15 +370,19 @@ test("/status names only the session's cost when it had no sub-agents, and a sub
 })
 
 test("/clear starts a new session; /resume switches, or asks among the other sessions", async () => {
-  const { run, calls, asked } = await setup({}, [undefined])
-  expect((await run("/clear")).text).toBe("Started a new session (s2).")
+  const { run, calls, asked, host } = await setup({}, [undefined])
+  // The TUI names the new session in its boundary line; elsewhere the command says it.
+  expect((await run("/clear")).text).toBe("")
+  expect((await host.run("/clear", { frontend: "print" })).output).toEqual([
+    expect.stringMatching(/^Started a new session \(s\d+\)\.$/),
+  ])
   expect((await run("/resume abc")).text).toContain("Resumed session abc")
   // The picker leaves out the current session (now abc); cancelling lists the recent ones.
   const listed = await run("/resume")
   expect(asked[0]).toContain("s1  just now  2 msgs  current")
   expect(asked[0]).toContain("old  3h ago  8 msgs  fix the build")
   expect(listed.text).toContain("Recent sessions:")
-  expect(calls).toEqual(["newSession", "resume abc"])
+  expect(calls).toEqual(["newSession", "newSession", "resume abc"])
 })
 
 test("/resume with a picked session resumes its id", async () => {

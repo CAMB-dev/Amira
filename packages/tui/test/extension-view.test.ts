@@ -75,7 +75,7 @@ async function setup(
     a.registerCommand({
       name: "progress",
       description: "shows the progress view",
-      run: (args, ctx) => ctx.openView?.({ kind: args.trim() || "progress", data }),
+      run: (args, ctx) => void ctx.openView?.({ kind: args.trim() || "progress", data }),
     })
     o.extra?.(a)
   }, "ext:workflow")

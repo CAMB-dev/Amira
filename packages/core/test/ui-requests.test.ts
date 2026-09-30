@@ -45,6 +45,63 @@ test("select, confirm and input round trip through events and respond()", async 
   expect(ui.respond("nope", 1)).toContain("no pending")
 })
 
+test("choose sends sections and takes a key of the option's section, or the option alone", async () => {
+  const { ui, next } = setup()
+  const api = ui.api("ext")
+  const sections = [
+    { at: 0, choose: "open", keys: [{ key: "p", label: "print" }] },
+    { at: 1, title: "Worktrees" },
+  ]
+  const first = api.choose("Pick", ["a", "b"], { sections })
+  const req = await next()
+  expect(req.data).toMatchObject({ kind: "select", options: ["a", "b"], sections })
+  // p is a key of a's section only.
+  expect(ui.respond(req.data.requestId, { option: "b", key: "p" })).toContain("keys of the option's section")
+  expect(ui.respond(req.data.requestId, { option: "a", key: "p" })).toBeUndefined()
+  expect(await first).toEqual({ option: "a", key: "p" })
+  // A client that answers with the option alone chose it with Enter.
+  const second = api.choose("Pick", ["a", "b"], { sections })
+  ui.respond((await next()).data.requestId, "b")
+  expect(await second).toEqual({ option: "b" })
+  // A plain select answered with a choice still resolves with the option.
+  const plain = api.select("Pick", ["a", "b"])
+  ui.respond((await next()).data.requestId, { option: "a" })
+  expect(await plain).toBe("a")
+  // A key on a select without sections is refused.
+  const keyless = api.select("Pick", ["a", "b"])
+  const req2 = await next()
+  expect(ui.respond(req2.data.requestId, { option: "a", key: "p" })).toContain("keys of the option's section")
+  ui.cancel(req2.data.requestId)
+  expect(await keyless).toBeUndefined()
+})
+
+test("choose refuses repeated options and malformed sections", async () => {
+  const api = setup().ui.api("ext")
+  const bad = (options: string[], sections: Parameters<typeof api.choose>[2]["sections"]) =>
+    api.choose("Pick", options, { sections })
+  await expect(bad(["a", "a"], [])).rejects.toThrow("options must differ")
+  await expect(bad(["a", "b"], [{ at: 1 }, { at: 0 }])).rejects.toThrow("increasing option indexes")
+  await expect(bad(["a", "b"], [{ at: 2 }])).rejects.toThrow("increasing option indexes")
+  await expect(bad(["a"], [{ at: 0, keys: [{ key: "1", label: "one" }] }])).rejects.toThrow("not a digit")
+  await expect(bad(["a"], [{ at: 0, keys: [{ key: "pp", label: "print" }] }])).rejects.toThrow(
+    "one printable",
+  )
+  await expect(
+    bad(
+      ["a"],
+      [
+        {
+          at: 0,
+          keys: [
+            { key: "p", label: "print" },
+            { key: "p", label: "paste" },
+          ],
+        },
+      ],
+    ),
+  ).rejects.toThrow("used twice")
+})
+
 test("null cancels; timeouts and abort signals cancel too", async () => {
   const { ui, next, events, bus } = setup()
   const api = ui.api()

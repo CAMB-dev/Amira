@@ -114,6 +114,12 @@ Esc closes the field (Esc again cancels the dialog). Several questions are asked
 another in the same block and answered together: Enter goes on to the next question, and Esc
 on a later question goes back to the one before, keeping the answers given.
 
+Some lists are split into sections with keys of their own, shown in the hint line while an
+option of that section is selected; such a key answers on the selected option. In the
+`/agents` list, Enter on a sub-agent opens the live viewer on it and `p` prints its transcript
+into the conversation instead; Enter on a worktree a sub-agent kept shows its diff, to merge,
+keep or discard it.
+
 A confirmation (such as an approval) starts with nothing selected: Enter does nothing until
 an option is picked with the arrows, so keys typed into a message just as it shows up cannot
 answer it. There is no single key that says yes (`dialog.yes` is unbound unless you bind it).
@@ -247,9 +253,9 @@ VS Code keeps Ctrl+F, Ctrl+Home, Ctrl+End and Ctrl+↑↓ for its terminal (they
 first and the key reference (`?`) lists them first.
 
 Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
-the keys of the `/agents` viewer (←/→ and Tab switch, `x` stops, `p` closes it and prints a
-snapshot of the one shown, `q`/Esc close) are fixed for
-now.
+the keys of the `/agents` list (`p` prints the selected sub-agent) and of its viewer (←/→ and
+Tab switch, `x` stops, `p` closes it and prints a snapshot of the one shown, `q`/Esc close) are
+fixed for now.
 
 ## Terminal settings
 

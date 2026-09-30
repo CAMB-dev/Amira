@@ -1058,6 +1058,29 @@ test("a selected call opens the sub-agent viewer on its sub-agent", async () => 
   await exited
 })
 
+test("a selected row of background sub-agents opens the viewer on them with →", async () => {
+  const { terminal, view, shows, exited, agent, tree, bus } = await setup([{ text: "scanned" }], {
+    cols: 80,
+    commands: true,
+  })
+  const group = tree!.createGroup(agent, { name: "workflow demo", compact: true })
+  const kid = group.spawn({ role: "explorer", title: "Scan api", prompt: "scan" })
+  await shows("◆ workflow demo")
+  await bus.flush()
+  terminal.send(CTRL_UP)
+  await waitFor(() => /background sub-agents \d+ of \d+ · .*→ sub-agent/.test(view()), "the row selected")
+  terminal.send(RIGHT)
+  await waitFor(() => view().includes("Esc back") && view().includes("Scan api"), "the viewer")
+  terminal.send(ESC)
+  await waitFor(() => /background sub-agents \d+ of \d+/.test(view()), "back, still selected")
+  terminal.send(ESC)
+  await kid.result()
+  group.end()
+  await group.ended()
+  terminal.send("\x03")
+  await exited
+})
+
 test("a resize reflows the whole transcript to the new width", async () => {
   const words = Array.from({ length: 30 }, (_, i) => `word${i}`).join(" ")
   const { terminal, view, shows, idle, resize, screen, exited } = await setup([{ text: words }], { cols: 80 })
@@ -1167,10 +1190,9 @@ test("/clear starts the transcript afresh: find, copying, selecting and the prin
     api.registerCommand({
       name: "clear",
       description: "",
-      run: async (_a, ctx) => {
+      run: async () => {
         next = new Agent({ ai, model: ai.model("mock/m1"), cwd: "/work/proj", systemPrompt: "", bus })
         commands!.switchTo(next)
-        ctx.print(`Started a new session (${next.sessionId}).`)
       },
     })
   }, "test-clear")
@@ -1180,6 +1202,8 @@ test("/clear starts the transcript afresh: find, copying, selecting and the prin
   terminal.send("/clear\r")
   await waitFor(() => next !== undefined && view().includes("── new session"), "the new session")
   expect(view()).toContain(`── new session ${next!.sessionId} `)
+  // The boundary is the one place that names it.
+  expect(view().split(next!.sessionId)).toHaveLength(2)
   expect(view()).toContain("Amira · mock/m1")
   expect(view()).not.toContain("old question")
   expect(view()).not.toContain("old answer")

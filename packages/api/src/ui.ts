@@ -35,7 +35,19 @@ export interface StatusItem {
  * it, and headless clients answer it with ui.respond.
  */
 export type UiRequest =
-  | { kind: "select"; title: string; options: string[] }
+  /**
+   * A choice among `options`. `sections` split the list into parts with a heading each and
+   * keys of their own besides Enter; a key answers with `{ option, key }` (SelectChoice) on
+   * the option it was pressed on. Clients that do not know sections answer with the option.
+   * `descriptions` go with the options of the same index, in muted text ("" for none).
+   */
+  | {
+      kind: "select"
+      title: string
+      options: string[]
+      sections?: SelectSection[]
+      descriptions?: string[]
+    }
   /**
    * A yes/no question. `always` offers "Yes, and don't ask again this session" as well
    * (answered with "always"); a string says what that covers instead of "this session", e.g.
@@ -69,6 +81,39 @@ export type UiRequest =
   | ({ kind: "form" } & FormSchema)
 
 export type UiRequestKind = UiRequest["kind"]
+
+/**
+ * A part of a select's list: the options from index `at` up to the next section. `title` is
+ * a heading shown above them (while nothing is typed to filter the list), `choose` says what
+ * Enter does on them ("open"; default "choose"), and `keys` answer on them too.
+ */
+export interface SelectSection {
+  at: number
+  title?: string
+  choose?: string
+  keys?: SelectKey[]
+}
+
+/** A key that answers a select on the highlighted option, e.g. `{ key: "p", label: "print" }`. */
+export interface SelectKey {
+  /** One printable character, not a digit (digits pick options). */
+  key: string
+  label: string
+}
+
+/** The section option `index` is in: the last one starting at or before it. */
+export function sectionOf(
+  sections: readonly SelectSection[] | undefined,
+  index: number,
+): SelectSection | undefined {
+  return sections?.findLast((s) => s.at <= index)
+}
+
+/** How a select with sections was answered: the option, and the key pressed on it if not Enter. */
+export interface SelectChoice {
+  option: string
+  key?: string
+}
 
 export interface AskOption {
   label: string
@@ -110,7 +155,8 @@ export type ConfirmAnswer = boolean | "always" | { other: string }
 
 /** The value each kind of dialog resolves with when answered. */
 export interface UiAnswer {
-  select: string
+  /** The option; a select with sections is answered with a SelectChoice when a key chose it. */
+  select: string | SelectChoice
   confirm: ConfirmAnswer
   input: string
   "diff-review": string
@@ -132,6 +178,17 @@ export interface UiRequestOptions {
  */
 export interface UiApi {
   select(title: string, options: string[], opts?: UiRequestOptions): Promise<string | undefined>
+  /**
+   * A select whose list is split into sections (headings, and keys besides Enter for each);
+   * resolves with the option chosen and the key that chose it (none for Enter). Frontends
+   * without sections answer with Enter only. Options must differ (they are told apart by their
+   * label) and sections must be well formed (see SelectSection, SelectKey), or it throws.
+   */
+  choose(
+    title: string,
+    options: string[],
+    opts: UiRequestOptions & { sections: SelectSection[]; descriptions?: string[] },
+  ): Promise<SelectChoice | undefined>
   confirm(title: string, message?: string, opts?: UiRequestOptions): Promise<boolean | undefined>
   input(
     title: string,

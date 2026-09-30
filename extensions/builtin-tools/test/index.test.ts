@@ -41,6 +41,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     },
     ui: {
       select: async () => undefined,
+      choose: async () => undefined,
       confirm: async () => false,
       input: async () => undefined,
       reviewDiff: async () => undefined,
