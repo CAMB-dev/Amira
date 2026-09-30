@@ -219,6 +219,10 @@ for (const path of editions) {
       // Nor after the last one.
       const last = textOf(await run("Write-Output a\n$null.Foo()"))
       expect(last).toMatch(/:2 \S+:\s*1\r?\n\+ \$null\.Foo\(\)\r?\n\+ ~{11}\n\nExit code: 1$/)
+      // An error made terminating by the preference lands on the wrapper's dot-source: left out.
+      expect(textOf(await run("$ErrorActionPreference = 'Stop'; Write-Error bad; Write-Output after"))).toBe(
+        "bad\n\nExit code: 1",
+      )
       for (const text of [first, last]) expect(text).not.toContain("__amira")
     })
 

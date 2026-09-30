@@ -50,12 +50,14 @@ export const POWERSHELL_SCRIPT = [
   "$ProgressPreference = 'SilentlyContinue'",
   "if (Get-Variable PSStyle -ErrorAction Ignore) { $PSStyle.OutputRendering = 'PlainText' }",
   // Errors as `Cmdlet: message`. The default views add positions inside this wrapper, and 5.1
-  // wraps each native stderr line in a record of its own; those keep just the line.
+  // wraps each native stderr line in a record of its own; those keep just the line. A position
+  // in this script's own text (an error made terminating by $ErrorActionPreference lands on the
+  // dot-source below) says nothing about the command, so it is left out.
   "function __amira_error($r, [switch]$At) {",
   "  if ($r.FullyQualifiedErrorId -like 'NativeCommandError*') { return $r.Exception.Message }",
   "  $c = $r.InvocationInfo.MyCommand",
   '  if ($c -is [System.Management.Automation.CmdletInfo]) { "$($c.Name): $($r.Exception.Message)" } else { $r.Exception.Message }',
-  "  if ($At -and $r.InvocationInfo.PositionMessage) { $r.InvocationInfo.PositionMessage }",
+  "  if ($At -and $r.InvocationInfo.PositionMessage -and $r.InvocationInfo.Line -notlike '*$__amira*') { $r.InvocationInfo.PositionMessage }",
   "}",
   "filter __amira_errors { if ($_ -is [System.Management.Automation.ErrorRecord]) { __amira_error $_ } else { $_ } }",
   "filter __amira_trim { $_.TrimEnd() }",
