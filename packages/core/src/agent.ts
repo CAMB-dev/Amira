@@ -41,7 +41,7 @@ import type {
 import {
   type CompactionOptions,
   contextTokens,
-  estimateTokens,
+  estimateAfter,
   splitHistory,
   summarize,
   summaryMessages,
@@ -815,7 +815,6 @@ export class Agent {
     let result: TurnResult = { reason: "done", steps: 0 }
     this.#emit(turn, "turn.start", { prompt: user })
     this.#setStatus(turn, "working")
-    this.#noteWindowGuess(turn)
     try {
       this.#push(user)
       let compactFailed = false
@@ -823,6 +822,7 @@ export class Agent {
       let overflowRetried = false
       let overflowCompacted: boolean | undefined
       while (true) {
+        this.#noteWindowGuess(turn)
         if (!compactFailed && this.#needsCompaction()) {
           compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
         }
@@ -845,6 +845,7 @@ export class Agent {
           const overflow = reply.model && isContextOverflow(reply.model)
           if (overflow && !overflowRetried && this.#compaction.auto !== false) {
             overflowRetried = true
+            this.#noteWindowGuess(turn, true)
             overflowCompacted = await this.#compact("overflow", abort.signal, turn)
             if (overflowCompacted === true) continue
           }
@@ -1415,13 +1416,17 @@ export class Agent {
 
   /**
    * Once a session, when automatic compaction goes by a context window that is only a guess
-   * (no settings or catalog entry for the model): a notice on where to set it. Sub-agents
-   * leave it to their commander's session.
+   * (no settings or catalog entry for the model): a notice on where to set it. Only once it
+   * starts to matter, when the context passes half the guessed window or the model rejects a
+   * request as too long (`overflow`), so short sessions stay quiet and a catalog still
+   * loading in the background can name the window first. Sub-agents leave it to their
+   * commander's session.
    */
-  #noteWindowGuess(turn: Turn) {
+  #noteWindowGuess(turn: Turn, overflow = false) {
     if (this.#windowGuessNoted || this.parentSessionId !== undefined) return
     if (this.#compaction.auto === false || this.model.contextWindowSource !== "default") return
     if (isNoModel(this.model)) return
+    if (!overflow && (this.#contextTokens ?? 0) <= this.model.contextWindow / 2) return
     this.#windowGuessNoted = true
     const text = windowGuessNotice(this.model, amiraPath("settings.json"))
     this.#emit(turn, "extension.notice", { source: "compaction", text, level: "info" })
@@ -1500,11 +1505,7 @@ export class Agent {
         ...(before !== undefined
           ? {
               tokensBefore: before,
-              // The system prompt and tools stay: only what the summary replaced goes.
-              tokensAfter: Math.max(
-                estimateTokens([...replacement, ...split.kept]),
-                before - estimateTokens(split.older) + estimateTokens(replacement),
-              ),
+              tokensAfter: estimateAfter(before, split.older, split.kept, replacement),
             }
           : {}),
         ...(isNoModel(this.model) ? {} : { contextWindow: this.model.contextWindow }),

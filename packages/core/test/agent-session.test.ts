@@ -223,28 +223,53 @@ test("compacts before the next model call once the context passes the threshold"
 })
 
 test("a guessed context window is noted once a session, only when compaction is automatic", async () => {
-  const notes = async (model: string, extra: Partial<AgentOptions> = {}) => {
-    const { agent, ai, bus, events } = await setup([{ text: "r1" }, { text: "r2" }], extra)
+  // Past half of the guessed 128k after the first reply.
+  const half = { usage: { input: 70_000 } }
+  const notes = async (model: string, extra: Partial<AgentOptions> = {}, steps: MockStep[] = []) => {
+    const { agent, ai, bus, events } = await setup(
+      steps.length
+        ? steps
+        : [
+            { text: "r1", ...half },
+            { text: "r2", ...half },
+            { text: "r3", ...half },
+          ],
+      extra,
+    )
     agent.setModel(ai.model(model))
     await agent.prompt("q1")
     await agent.prompt("q2")
+    await agent.prompt("q3")
     await bus.flush()
     return events
       .filter((e) => e.type === "extension.notice")
-      .map((e) => e.data as { source: string; text: string })
+      .map((e) => ({ ...(e.data as { source: string; text: string }), turnId: e.turnId }))
   }
   const guessed = await notes("other/x")
   expect(guessed.length).toBe(1)
   expect(guessed[0]!.source).toBe("compaction")
   expect(guessed[0]!.text).toContain("The context window of other/x is not known")
   expect(guessed[0]!.text).toContain("assumes 128k tokens")
+  expect(guessed[0]!.text).toContain("Set it with /provider edit other")
   expect(guessed[0]!.text).toContain(
-    `Set "contextWindow" for this model in ${path.join(amiraHome(), "settings.json")}`,
+    `"contextWindow" in the entry for "x" under providers.other.models in ${path.join(amiraHome(), "settings.json")}`,
   )
-  expect(guessed[0]!.text).toContain("(providers.other.models)")
+  // Quiet while the context is small.
+  expect(await notes("other/x", {}, [{ text: "r1" }, { text: "r2" }, { text: "r3" }])).toEqual([])
   // The provider's settings give the window; with automatic compaction off it does not matter.
   expect(await notes("mock/m")).toEqual([])
   expect(await notes("other/x", { compaction: { auto: false } })).toEqual([])
+  // Sub-agents leave it to their commander.
+  expect(await notes("other/x", { parentSessionId: "s_parent" })).toEqual([])
+  // A request rejected as too long says it at once, however small the context looked.
+  const rejected = await notes("other/x", {}, [
+    { text: "r1" },
+    { text: "r2" },
+    overflow,
+    { text: "S" },
+    { text: "r3" },
+  ])
+  expect(rejected.length).toBe(1)
 })
 
 test("a manual compaction says so; a summary an interceptor wrote names no model", async () => {
@@ -630,6 +655,10 @@ test("a request over the context window is compacted and sent again, once", asyn
   const start = events.find((e) => e.type === "compact.start")!
   expect(start.data).toMatchObject({ reason: "overflow" })
   expect((mock.requests[4]!.messages[0]!.content[0] as { text: string }).text).toContain("SUM")
+  expect(events.find((e) => e.type === "compact.end")!.data).toMatchObject({ reason: "overflow" })
+  expect(agent.compactionInfo(agent.messages[0]!)?.reason).toBe("overflow")
+  const entry = SessionStore.open(agent.session!.file).entries.find((e) => e.type === "compaction")
+  expect(entry).toMatchObject({ reason: "overflow" })
 })
 
 test("a request still over the window after compacting fails with what to do", async () => {

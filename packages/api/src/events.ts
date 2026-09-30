@@ -22,11 +22,14 @@ export type CompactionReason = "threshold" | "manual" | "overflow"
 /** Why and how a compaction happened; the session keeps it with the summary. */
 export interface CompactionInfo {
   reason: CompactionReason
-  /** Tokens the context held before, as the last reply reported; unknown before any reply. */
+  /**
+   * Tokens the context held before, as the last reply reported; unknown before any reply. For
+   * `overflow` the rejected request was larger (it held what came after that reply).
+   */
   tokensBefore?: number
   /**
-   * Tokens the context holds after, estimated (about four characters a token) from what the
-   * summary replaced and the summary itself; the next reply reports the real size.
+   * Tokens the context holds after, estimated: `tokensBefore` scaled by how much of the
+   * history's size the summary and the kept messages keep. The next reply reports the real size.
    */
   tokensAfter?: number
   /** The session model's context window at the time. */

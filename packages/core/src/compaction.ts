@@ -24,8 +24,8 @@ export interface CompactionOptions {
 export function windowGuessNotice(model: ModelInfo, settingsFile: string): string {
   return (
     `The context window of ${model.provider}/${model.id} is not known, so automatic compaction assumes ${formatTokens(model.contextWindow)} tokens ` +
-    `and may start too early or too late. Set "contextWindow" for this model in ${settingsFile} ` +
-    `(providers.${model.provider}.models).`
+    `and may start too early or too late. Set it with /provider edit ${model.provider}, or as "contextWindow" ` +
+    `in the entry for "${model.id}" under providers.${model.provider}.models in ${settingsFile}.`
   )
 }
 
@@ -46,6 +46,21 @@ export function estimateTokens(messages: Message[]): number {
     }
   }
   return Math.ceil(chars / 4) + images * 1000
+}
+
+/**
+ * The context size after a compaction, from the size before (as the model counted it) scaled
+ * by how much of the history's estimated size is left: the summary and the kept messages.
+ * Scaling by the model's own count keeps the estimate close for text of any script, where
+ * characters per token differ widely. Never more than before unless the summary is longer
+ * than what it replaced.
+ */
+export function estimateAfter(before: number, older: Message[], kept: Message[], summary: Message[]): number {
+  const was = estimateTokens([...older, ...kept])
+  const left = estimateTokens([...summary, ...kept])
+  if (was <= 0) return before
+  const after = Math.round((before * left) / was)
+  return left > was ? after : Math.min(before, after)
 }
 
 const SUMMARY_PREFIX = "The earlier part of this conversation was compacted. Summary:"
