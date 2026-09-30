@@ -37,8 +37,9 @@ for (const name of [
 // Amira's own variables (AMIRA_MODEL, AMIRA_BASH, ...) and its user directory: without this,
 // anything left to default reads the real ~/.amira (settings, AGENTS.md, keybindings,
 // providers). Each run gets an empty one; tests that need a particular home still set theirs.
+// AMIRA_LIVE_* stay: they turn on the live tests, which are skipped without them.
 for (const name of Object.keys(process.env)) {
-  if (name.startsWith("AMIRA_")) delete process.env[name]
+  if (name.startsWith("AMIRA_") && !name.startsWith("AMIRA_LIVE_")) delete process.env[name]
 }
 const home = mkdtempSync(path.join(os.tmpdir(), "amira-test-home-"))
 process.env.AMIRA_HOME = home
