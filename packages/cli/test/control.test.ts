@@ -327,6 +327,55 @@ test("a running turn or compaction blocks /reload, /clear and /model", async () 
   expect(await run("/reload")).toMatch(/^Reloaded [0-9]+ extensions · nothing changed$/)
 })
 
+test("a prompt or notice during /reload waits for the extensions to load again", async () => {
+  const dialect = createMockDialect([{ text: "before" }, { text: "during" }])
+  const ai = createAi({ dialects: [dialect], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
+  let release = () => {}
+  let entered = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  const atGate = new Promise<void>((r) => (entered = r))
+  let loads = 0
+  // Its second load (the reload) takes a while, as an extension's async setup may.
+  const slowTools: Extension = async (api) => {
+    if (++loads === 2) {
+      entered()
+      await gate
+    }
+    api.registerTool(
+      defineTool({ name: "fixture_read", description: "", parameters: {}, execute: async () => textResult("") }),
+    )
+  }
+  const session = await createSession({
+    model: "mock/m",
+    cwd: here,
+    extensions: [],
+    noBuiltins: false,
+    ai,
+    builtins: async () => [
+      { source: "builtin:commands", extension: commandsExtension },
+      { source: "slow", extension: slowTools },
+    ],
+  })
+  const host = createCommandHost({ session, cwd: here, home: mkdtempSync(path.join(os.tmpdir(), "amira-r-")) })
+  const notice = session.agent.expectNotice()
+  await session.agent.prompt("before")
+  const reload = host.run("/reload", { frontend: "print" })
+  await atGate
+  expect(host.control.info().busy).toBe(true)
+  expect(() => host.control.setModel("mock/other")).toThrow(/a reload is running/)
+  const turn = session.agent.prompt("during")
+  notice.deliver({ role: "user", content: [{ type: "text", text: "background result" }] })
+  await Bun.sleep(10)
+  expect(dialect.requests).toHaveLength(1)
+  release()
+  expect((await reload).error).toBeUndefined()
+  expect(await turn).toMatchObject({ reason: "done" })
+  expect(dialect.requests).toHaveLength(2)
+  expect(dialect.requests.map((r) => r.tools?.map((t) => t.name))).toEqual([["fixture_read"], ["fixture_read"]])
+  // The notice went along with the prompt.
+  expect(JSON.stringify(dialect.requests[1]!.messages.at(-1))).toContain("background result")
+})
+
 test("print mode runs a slash command instead of a turn", async () => {
   const { host, session } = await setup([{ text: "never" }])
   const out: string[] = []
