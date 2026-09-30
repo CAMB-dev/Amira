@@ -134,6 +134,7 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
       },
       leftoverInput: "",
     }),
+    env: {},
     onReady: () => agent.start("startup"),
   })
   const view = () => screen.lines.join("\n")
@@ -365,10 +366,11 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await s.idle()
   s.terminal.send("/agents view\r")
   await waitFor(() => s.view().includes("── done ──"), "the viewer")
-  s.terminal.clearWrites()
+  const bells = s.screen.bells
   const answer = s.host.ui.api("approval").confirm("Allow bash?", "rm -rf build")
   await waitFor(() => s.view().includes("⚠️ Waiting for you: Allow bash? · Esc to answer"), "the banner")
-  expect(s.terminal.output.split("\x07").length).toBe(2)
+  // Bells only: a BEL ending an OSC string (a title, the progress indicator) is not one.
+  expect(s.screen.bells - bells).toBe(1)
   expect(s.screen.inAltScreen).toBe(true)
   // Keys still go to the viewer: "y" does not answer the dialog.
   s.terminal.send("y")

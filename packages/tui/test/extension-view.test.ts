@@ -116,6 +116,7 @@ async function setup(
       },
       leftoverInput: "",
     }),
+    env: {},
     onReady: () => agent.start("startup"),
   })
   await waitFor(() => screen.text.includes("Amira"), "startup")
