@@ -265,6 +265,14 @@ test("json mode survives non-serializable tool details", async () => {
   const a: Record<string, unknown> = {}
   a.self = a
   expect(safeJson(a)).toBe('{"self":"[circular]"}')
+  // The same object under two keys (compact.end names one model as `model` and `native`) is no cycle.
+  const model = { provider: "p", model: "m" }
+  expect(safeJson({ model, native: model, list: [model, { deep: model }] })).toBe(
+    '{"model":{"provider":"p","model":"m"},"native":{"provider":"p","model":"m"},"list":[{"provider":"p","model":"m"},{"deep":{"provider":"p","model":"m"}}]}',
+  )
+  const b: Record<string, unknown> = { inner: { x: 1 } }
+  ;(b.inner as Record<string, unknown>).back = b
+  expect(safeJson(b)).toBe('{"inner":{"x":1,"back":"[circular]"}}')
 })
 
 test("model errors exit with code 1", async () => {

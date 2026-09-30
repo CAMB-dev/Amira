@@ -38,12 +38,15 @@ export function exitCode(r: TurnResult): number {
 /** JSON.stringify that never throws: BigInts become strings, cycles and failures are marked. */
 export function safeJson(value: unknown): string {
   try {
-    const seen = new WeakSet<object>()
-    return JSON.stringify(value, (_k, v) => {
+    // The objects being written, outermost first: a value among them is a cycle. One reached
+    // twice by different paths (e.g. one model named in two fields) is not, and is written both times.
+    const path: object[] = []
+    return JSON.stringify(value, function (this: unknown, _k, v) {
       if (typeof v === "bigint") return v.toString()
       if (v && typeof v === "object") {
-        if (seen.has(v)) return "[circular]"
-        seen.add(v)
+        while (path.length && path[path.length - 1] !== this) path.pop()
+        if (path.includes(v)) return "[circular]"
+        path.push(v)
       }
       return v
     })
