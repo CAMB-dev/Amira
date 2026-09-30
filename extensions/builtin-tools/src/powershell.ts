@@ -59,6 +59,34 @@ export const POWERSHELL_SCRIPT = [
   "}",
   "filter __amira_errors { if ($_ -is [System.Management.Automation.ErrorRecord]) { __amira_error $_ } else { $_ } }",
   "filter __amira_trim { $_.TrimEnd() }",
+  // The command ends with `$__amira_ok = $?`, which a top-level `return` skips, so each such
+  // return records $? itself: the value `pwsh -Command` exits on. A return leaves $? as it was,
+  // unless its pipeline runs commands, which set it; such a return runs in a try whose finally
+  // reads it (not after: this wrapper's own filters set it as the output passes), and the try's
+  // first line, a Clear-Variable that succeeds or fails silently, puts back the $? the try reset.
+  // A return nested in another is left alone.
+  "function __amira_top($r) {",
+  "  if ($r.Parent -isnot [System.Management.Automation.Language.NamedBlockAst] -and $r.Parent -isnot [System.Management.Automation.Language.StatementBlockAst]) { return $false }",
+  "  for ($p = $r.Parent; $p; $p = $p.Parent) {",
+  "    if ($p -is [System.Management.Automation.Language.ReturnStatementAst]) { return $false }",
+  "    if ($p -is [System.Management.Automation.Language.ScriptBlockAst]) { return $null -eq $p.Parent }",
+  "  }",
+  "  $false",
+  "}",
+  "function __amira_compile($text) {",
+  "  $sb = [scriptblock]::Create($text)",
+  "  $rs = @($sb.Ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.ReturnStatementAst] -and (__amira_top $a) }, $true))",
+  "  if (-not $rs.Count) { return $sb }",
+  "  for ($i = $rs.Count - 1; $i -ge 0; $i--) {",
+  "    $r = $rs[$i]",
+  "    $new = '$__amira_ok = $?; ' + $r.Extent.Text",
+  "    if ($r.Pipeline -and $r.Pipeline.Find({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true)) {",
+  "      $new = \"`$__amira_ok = `$?; try { Clear-Variable ('__amira_nx', '__amira_ok')[[int]`$__amira_ok] -ErrorAction Ignore`n$($r.Extent.Text)`n} finally { `$__amira_ok = `$? }\"",
+  "    }",
+  "    $text = $text.Substring(0, $r.Extent.StartOffset) + $new + $text.Substring($r.Extent.EndOffset)",
+  "  }",
+  "  [scriptblock]::Create($text)",
+  "}",
   // Reads the gate line, `<base64 directory> <base64 command>`, and enters the directory for
   // cmdlets (Set-Location) and for .NET methods and native programs (the process directory).
   // Returns the compiled command, or the message to fail with. Warnings go straight out.
@@ -67,7 +95,7 @@ export const POWERSHELL_SCRIPT = [
   // Ordinal: IndexOf(string) compares by culture, and loading culture data costs ~25 ms.
   "    $at = $line.IndexOf([char]' ')",
   "    $dir = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Substring(0, $at)))",
-  '    $command = [scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Substring($at + 1))) + "`n`$__amira_ok = `$?")',
+  '    $command = __amira_compile ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Substring($at + 1))) + "`n`$__amira_ok = `$?")',
   "  } catch {",
   "    $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
   "    return $e.Message",
@@ -92,8 +120,8 @@ export const POWERSHELL_SCRIPT = [
   "}",
   "$null = [scriptblock]::Create('$null')",
   ". { $null } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim",
-  // A dry run on the start directory, so the real one reuses the compiled function.
-  "$null = __amira_open ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PWD.ProviderPath)) + ' JG51bGw=')",
+  // A dry run on the start directory (compiling `return`), so the real one reuses the compiled functions.
+  "$null = __amira_open ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PWD.ProviderPath)) + ' cmV0dXJu')",
   "$__amira = [Console]::In.ReadLine()",
   "if ($null -eq $__amira) { exit 125 }",
   "$__amira = __amira_open $__amira",
@@ -105,7 +133,7 @@ export const POWERSHELL_SCRIPT = [
   // $? after the dot-source is always true, so the command's own last line records it.
   "try { . { . $__amira } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim }",
   "catch { $__amira_threw = $true; __amira_error $_ -At | Out-String -Stream -Width 300 | __amira_trim }",
-  // A top-level `return` skipped that line: failed if the latest error came from the command.
+  // A return __amira_compile left alone skipped that line: failed if the latest error came from the command.
   "if ($null -eq $__amira_ok) { $__amira_ok = -not ($Error.Count -gt $__amira_errs -and \"$($Error[0].FullyQualifiedErrorId)\" -notlike 'NativeCommandError*') }",
   // 5.1 marks a native command that wrote to stderr as failed even when it exited 0.
   "if (-not $__amira_ok -and -not $global:LASTEXITCODE -and \"$($Error[0].FullyQualifiedErrorId)\" -like 'NativeCommandError*') { $__amira_ok = $true }",
