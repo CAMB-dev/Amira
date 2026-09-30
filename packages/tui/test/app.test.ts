@@ -2647,6 +2647,66 @@ test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty",
   await exited
 })
 
+for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: ↑/↓ walk past recalled commands, skills and @files without opening their lists`, async () => {
+    const history = new PromptHistory()
+    for (const t of ["look at @src", "oldest", "/status", "$deploy", "newest"]) history.add([t])
+    const { terminal, live, exited } = await skillSetup([], {
+      promptHistory: history,
+      files: ["src/app.ts", "src/format.ts"],
+      settings: { mode },
+    })
+    const UP = "\x1b[A"
+    const DOWN = "\x1b[B"
+    const shown = async (text: string, what: string) => {
+      await waitFor(() => live().includes(`› ${text}`), what)
+      await Bun.sleep(20)
+      // No list opened for the recalled text.
+      expect(live()).not.toContain("Esc close")
+    }
+    for (const t of ["newest", "$deploy", "/status", "oldest", "look at @src"]) {
+      terminal.send(UP)
+      await shown(t, `${mode}: up to ${t}`)
+    }
+    for (const t of ["oldest", "/status", "$deploy", "newest"]) {
+      terminal.send(DOWN)
+      await shown(t, `${mode}: down to ${t}`)
+    }
+    terminal.send(DOWN)
+    await waitFor(() => live().includes("Message Amira"), `${mode}: empty again`)
+    // Once the recalled text is edited, its list opens as usual and takes ↑/↓.
+    terminal.send(`${UP}${UP}${UP}`)
+    await shown("/status", `${mode}: /status again`)
+    terminal.send("\x7fs")
+    await waitFor(() => live().includes("Esc close"), `${mode}: the command list`)
+    terminal.send(UP)
+    await Bun.sleep(30)
+    expect(live()).toContain("› /status")
+    expect(live()).toContain("Esc close")
+    terminal.send("\x03\x03")
+    await exited
+  })
+}
+
+test("Enter runs a recalled command; Ctrl+R still puts a command in the editor with its list", async () => {
+  const history = new PromptHistory()
+  for (const t of ["/status", "newest"]) history.add([t])
+  const { terminal, live, shows, exited } = await setup([], {
+    promptHistory: history,
+    commands: testCommands([]),
+  })
+  terminal.send("\x1b[A\x1b[A")
+  await waitFor(() => live().includes("› /status"), "recalled")
+  terminal.send("\r")
+  await shows("STATUS OK")
+  terminal.send("\x12stat")
+  await waitFor(() => live().includes("› /status") && live().includes("search history"), "match")
+  terminal.send("\r")
+  await waitFor(() => !live().includes("search history") && live().includes("Esc close"), "the list")
+  terminal.send("\x03\x03")
+  await exited
+})
+
 test("messages queued together are sent as one turn but shown one by one", async () => {
   const { terminal, all, shows, idle, agent, exited } = await setup([
     { text: "first answer", delayMs: 40 },
