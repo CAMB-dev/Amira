@@ -237,11 +237,13 @@ export function removePackage(name: string, scope: PackageScope): boolean {
   const lock = readLock(scope.lockFile)
   const dir = packageDir(scope, name)
   const known = !!lock.packages[name] || existsSync(dir)
-  rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+  // The lock first: files it no longer records are inert (nothing loads them), and a second
+  // remove deletes them; files it still records but that are gone would be restored.
   if (lock.packages[name]) {
     delete lock.packages[name]
     writeLock(scope.lockFile, lock)
   }
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
   return known
 }
 

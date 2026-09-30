@@ -530,6 +530,14 @@ test("an install or update whose lock file cannot be written puts the previous f
   await expect(installPackage(other, { scope: user(), cwd })).rejects.toThrow()
   expect(readdirSync(path.join(home, "packages"))).toEqual(["lock-pkg"])
   expect(readFileSync(lockFile, "utf8")).toBe(before)
+
+  // A removal that cannot be recorded keeps the files: the lock would otherwise restore them.
+  expect(() => removePackage("lock-pkg", user())).toThrow()
+  expect(readManifest(installed).version).toBe("1.0.0")
+  expect(readFileSync(lockFile, "utf8")).toBe(before)
+  rmSync(`${lockFile}.${process.pid}.tmp`, { recursive: true })
+  expect(removePackage("lock-pkg", user())).toBe(true)
+  expect(existsSync(installed)).toBe(false)
 })
 
 test("update reads the index afresh, and updates from the recorded source when the index is out of reach", async () => {
