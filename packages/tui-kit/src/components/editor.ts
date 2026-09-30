@@ -145,7 +145,7 @@ export class Editor implements Component {
   private lastEdit: EditKind | undefined
   /** Texts cut with the kill keys, newest last; each is the content as parts, pastes kept folded. */
   private killRing: EditorPart[][] = []
-  /** The last key killed text, so that kills in a row join into one. */
+  /** The last change killed text, so that kills in a row join into one; any other change or move ends the row. */
   private lastKilled = false
   /** Inside one change made of several (a yank of several parts): recorded once, before it. */
   private batching = false
@@ -514,6 +514,8 @@ export class Editor implements Component {
   }
 
   private changed(): void {
+    // Any change but a kill (which sets it again after) ends a run of kills.
+    this.lastKilled = false
     this.goalCol = undefined
     this.textCache = undefined
     this.changes++
@@ -791,8 +793,9 @@ export class Editor implements Component {
     this.line = pos.line
     this.col = pos.col
     this.goalCol = undefined
-    // Typing after the caret moved is a step of its own.
+    // Typing after the caret moved is a step of its own, and so is a kill.
     this.lastEdit = undefined
+    this.lastKilled = false
     return true
   }
 
