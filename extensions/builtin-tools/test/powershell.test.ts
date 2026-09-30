@@ -226,6 +226,19 @@ for (const path of editions) {
       for (const text of [first, last]) expect(text).not.toContain("__amira")
     })
 
+    test("a top-level break or continue ends the command with the status before it", async () => {
+      for (const flow of ["break", "continue"]) {
+        const ok = `Write-Output a; ${flow}; Write-Output b`
+        expect(await native(ok)).toEqual({ output: "a", code: 0 })
+        expect(textOf(await run(ok))).toBe("a\n\nExit code: 0")
+        const bad = `Write-Error bad; ${flow}; Write-Output b`
+        expect((await native(bad)).code).toBe(1)
+        const r = await run(bad)
+        expect(r.isError).toBe(true)
+        expect(textOf(r)).toBe("bad\n\nExit code: 1")
+      }
+    })
+
     test("declarations and dot-sourced state work as natively", async () => {
       const legacy = powershellEdition(path) === "Windows PowerShell 5.1"
       for (const command of [

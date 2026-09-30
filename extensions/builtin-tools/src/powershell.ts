@@ -181,8 +181,10 @@ export const POWERSHELL_SCRIPT = [
   "$global:LASTEXITCODE = 0",
   // $? after the dot-source is always true, so the command's own finally records it.
   // Like native -Command/-File, 5.1 gives process blocks no input; 7 invokes them once.
-  "try { . { if ($PSVersionTable.PSVersion.Major -lt 6) { @() | . $__amira } else { . $__amira } } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim }",
-  "catch { $__amira_threw = $true; __amira_error $_ -At | Out-String -Stream -Width 300 | __amira_trim }",
+  // A top-level `break` or `continue` ends the command, as natively; the loop keeps it from
+  // ending this script before the exit code is worked out.
+  "do { try { . { if ($PSVersionTable.PSVersion.Major -lt 6) { @() | . $__amira } else { . $__amira } } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim }",
+  "catch { $__amira_threw = $true; __amira_error $_ -At | Out-String -Stream -Width 300 | __amira_trim } } while ($false)",
   // An empty block, or a return nested in another, may not have recorded a status.
   "if ($null -eq $__amira_ok) { $__amira_ok = -not ($Error.Count -gt $__amira_errs -and \"$($Error[0].FullyQualifiedErrorId)\" -notlike 'NativeCommandError*') }",
   // 5.1 marks a native command that wrote to stderr as failed even when it exited 0.
