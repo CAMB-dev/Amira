@@ -3599,6 +3599,66 @@ test("the input's editing keys: Ctrl+W and Ctrl+U cut, Ctrl+Y pastes back, Ctrl+
   await exited
 })
 
+for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: regression: a yank ends the kill sequence before the next Ctrl+W`, async () => {
+    const { terminal, live, exited } = await setup([], { settings: { mode } })
+    const input = () =>
+      live()
+        .split("\n")
+        .find((line) => line.startsWith("│ › "))
+        ?.replace(/ *│$/, "")
+    try {
+      terminal.send("one two")
+      await waitFor(() => input() === "│ › one two", "typed input")
+      terminal.send("\x17") // Ctrl+W
+      await waitFor(() => input() === "│ › one", "first word cut")
+      terminal.send("\x19") // Ctrl+Y
+      await waitFor(() => input() !== "│ › one", "first yank rendered")
+      expect(input()).toBe("│ › one two")
+      terminal.send("\x17") // Ctrl+W
+      await waitFor(() => input() === "│ › one", "second word cut")
+      terminal.send("\x19") // Ctrl+Y
+      await waitFor(() => input() !== "│ › one", "second yank rendered")
+      expect(input()).toBe("│ › one two")
+    } finally {
+      terminal.send("\x03\x03")
+      await exited
+    }
+  })
+
+  test(`${mode}: regression: one Ctrl+Z restores the input before Tab file completion`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "amira-completion-undo-"))
+    const fileSource = new FileIndex(dir)
+    try {
+      writeFileSync(join(dir, "readme.md"), "Completion fixture\n")
+      const { terminal, live, exited } = await setup([], { settings: { mode }, fileSource })
+      const input = () =>
+        live()
+          .split("\n")
+          .find((line) => line.startsWith("│ › "))
+          ?.replace(/ *│$/, "")
+      try {
+        terminal.send("review @rea")
+        await waitFor(() => live().includes("❯ readme.md"), "fixture selected in the @ file list")
+        expect(input()).toBe("│ › review @rea")
+        expect(live()).toContain("Tab/Enter insert")
+        terminal.send("\t")
+        await waitFor(() => input() === "│ › review @readme.md", "file completion inserted")
+        expect(live()).not.toContain("Tab/Enter insert")
+        terminal.send("\x1a") // Ctrl+Z: undo the entire completion in one step.
+        await waitFor(() => input() !== "│ › review @readme.md", "undo rendered")
+        expect(input()).toBe("│ › review @rea")
+      } finally {
+        terminal.send("\x03\x03")
+        await exited
+      }
+    } finally {
+      fileSource.dispose()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
+
 test("Ctrl+G edits the message in $VISUAL and takes the text back", async () => {
   const dir = mkdtempSync(join(tmpdir(), "amira-editor-"))
   const script = join(dir, "fake-editor.ts")
