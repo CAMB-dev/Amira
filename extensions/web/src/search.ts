@@ -234,7 +234,6 @@ export const exa: Backend = async (q, ctx) => {
   const keyEnv = ctx.settings.exa?.apiKeyEnv
   const key = keyEnv ? ctx.env[keyEnv] : undefined
   if (keyEnv && !key) throw new SearchError(`Exa: the environment variable ${keyEnv} is not set`)
-  if (key) url.searchParams.set("exaApiKey", key)
   const scope = [
     q.allowedDomains.length ? `Only results from ${q.allowedDomains.join(", ")}.` : "",
     q.blockedDomains.length ? `No results from ${q.blockedDomains.join(", ")}.` : "",
@@ -244,6 +243,8 @@ export const exa: Backend = async (q, ctx) => {
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      // Exa documents the key as this header (a URL parameter would also end up in logs).
+      ...(key ? { "x-api-key": key } : {}),
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
