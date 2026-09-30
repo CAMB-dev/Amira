@@ -135,6 +135,13 @@ export interface ExtensionAPI {
   onExit(handler: (signal: AbortSignal) => void | Promise<void>): () => void
   /** Asks the user through whichever frontend is attached (select, confirm, input). */
   readonly ui: UiApi
+  /**
+   * Runs `handler` for every event of this type. An extension loaded by /reload gets, in the
+   * handlers it registers while loading, the events that say where the session already is
+   * (its session.start with the current model and context, the last workspace.changed and
+   * budget.update) before anything new: a handler that keeps such state needs no other way
+   * to recover it. Returns a function that removes the handler.
+   */
   on<K extends keyof EventMap>(type: K, handler: (event: EventEnvelope<K>) => void): () => void
   intercept<K extends keyof InterceptorMap>(
     point: K,

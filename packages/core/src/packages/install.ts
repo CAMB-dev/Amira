@@ -237,11 +237,13 @@ export function removePackage(name: string, scope: PackageScope): boolean {
   const lock = readLock(scope.lockFile)
   const dir = packageDir(scope, name)
   const known = !!lock.packages[name] || existsSync(dir)
-  rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+  // The lock first: files it no longer records are inert (nothing loads them), and a second
+  // remove deletes them; files it still records but that are gone would be restored.
   if (lock.packages[name]) {
     delete lock.packages[name]
     writeLock(scope.lockFile, lock)
   }
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
   return known
 }
 
@@ -269,6 +271,7 @@ async function install(
   removeStaleWork(opts.scope.dir)
   // Inside the scope directory so the final rename stays on one volume.
   const work = mkdtempSync(path.join(opts.scope.dir, `.work-${process.pid}-`))
+  let keepWork = false
   try {
     const current = how.current
     // Updating a package that stays where it was: a git source whose commit did not move need
@@ -341,12 +344,27 @@ async function install(
       pinned,
       installedAt: new Date().toISOString(),
     }
-    swapIn(staged, packageDir(opts.scope, manifest.name), work)
+    // The swap and the lock are one change: the previous files are kept in the work directory
+    // until the lock records the new ones, and put back if it cannot.
+    const undo = swapIn(staged, packageDir(opts.scope, manifest.name), work)
     lock.packages[manifest.name] = entry
-    writeLock(opts.scope.lockFile, lock)
+    try {
+      writeLock(opts.scope.lockFile, lock)
+    } catch (err) {
+      try {
+        undo()
+      } catch (undoErr) {
+        keepWork = true
+        throw new PackageError(
+          `${errorMessage(err)}; the previous files of ${manifest.name} could not be put back ` +
+            `(${errorMessage(undoErr)}) and are kept in ${path.join(work, "previous")}`,
+        )
+      }
+      throw err
+    }
     return { name: manifest.name, entry, ...(previous ? { previous } : {}), manifest, warnings: [] }
   } finally {
-    rmSync(work, { recursive: true, force: true, maxRetries: 3 })
+    if (!keepWork) rmSync(work, { recursive: true, force: true, maxRetries: 3 })
   }
 }
 
@@ -391,15 +409,24 @@ function removeStaleWork(scopeDir: string) {
   }
 }
 
-function swapIn(staged: string, dest: string, work: string) {
+/**
+ * Moves the staged files into place, the installed ones (if any) to `work/previous`. Returns
+ * what undoes it: the new files go back into the work directory and the previous ones return.
+ */
+function swapIn(staged: string, dest: string, work: string): () => void {
   mkdirSync(path.dirname(dest), { recursive: true })
   const old = path.join(work, "previous")
-  if (existsSync(dest)) renameSync(dest, old)
+  const hadOld = existsSync(dest)
+  if (hadOld) renameSync(dest, old)
   try {
     renameSync(staged, dest)
   } catch (err) {
-    if (existsSync(old)) renameSync(old, dest)
+    if (hadOld) renameSync(old, dest)
     throw err
+  }
+  return () => {
+    renameSync(dest, path.join(work, "undone"))
+    if (hadOld) renameSync(old, dest)
   }
 }
 

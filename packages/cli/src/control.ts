@@ -56,7 +56,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
   const idle = (what: string) => {
     const a = agent()
     if (!a.busy) return
-    const running = a.turnId ? "a turn" : "a compaction"
+    const running = a.turnId ? "a turn" : `a ${a.holdingFor ?? "compaction"}`
     throw new Error(`${running} is running; ${what} after it ends (or press Esc to stop it)`)
   }
   const switchTo = (next: Agent, reason: "resume" | "clear") => {
@@ -256,7 +256,10 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     reloadExtensions: async () => {
       // Unloading drops tools and MCP connections a running tool call may still be using.
       idle("reload extensions")
-      return session.reload()
+      // Held like a compaction: a prompt or notice meanwhile would reach the model with the
+      // tools half loaded, so it waits for the reload and starts its turn after.
+      const a = agent()
+      return a.hold("reload", () => session.reload(a))
     },
   }
 

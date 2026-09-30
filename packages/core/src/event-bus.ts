@@ -11,6 +11,8 @@ export interface SubscribeOptions {
   maxQueue?: number
   /** Only deliver these event types. */
   types?: (keyof EventMap)[]
+  /** Events emitted earlier, delivered to this subscriber first (the types it takes). */
+  replay?: AnyEvent[]
 }
 
 export interface EmitMeta {
@@ -52,6 +54,8 @@ export class EventBus {
       ...(opts.types ? { types: new Set(opts.types as string[]) } : {}),
     }
     this.#subs.add(sub)
+    for (const ev of opts.replay ?? []) if (!sub.types || sub.types.has(ev.type)) sub.queue.push(ev)
+    if (sub.queue.length) this.#drain(sub)
     return () => this.#subs.delete(sub)
   }
 
