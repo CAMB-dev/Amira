@@ -300,13 +300,12 @@ export function keptSummary(w: KeptWorktreeInfo, now: number): string {
 }
 
 /**
- * A path under the home directory as `~/…`. On Windows paths stay as they are, so they can be
- * pasted into Explorer or a prompt.
+ * A path under the home directory as `~/…` (`~\…` on Windows, which PowerShell takes), short
+ * enough for a narrow list; messages about a worktree give its full path.
  */
 function shortPath(p: string, home: string): string {
-  if (process.platform === "win32") return p
   const rel = path.relative(home, p)
-  return home && rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? `~/${rel}` : p
+  return home && rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? `~${path.sep}${rel}` : p
 }
 
 /** The kept worktrees as /agents worktrees lists them. */
