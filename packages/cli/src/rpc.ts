@@ -149,7 +149,10 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       const shown = display(p.display)
       if (agent.turnId) throw new RpcError("busy", "a turn is running; steer it or wait for turn.end")
       if (agent.busy)
-        throw new RpcError("busy", `a ${agent.holdingFor ?? "compaction"} is running; steer to queue the message`)
+        throw new RpcError(
+          "busy",
+          `a ${agent.holdingFor ?? "compaction"} is running; steer to queue the message`,
+        )
       const turnId = newTurnId()
       agent
         .prompt({ role: "user", content, ...(shown ? { display: shown } : {}) }, { turnId })
