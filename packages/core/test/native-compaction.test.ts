@@ -16,6 +16,7 @@ import type { AnyEvent, EventMap } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { SessionStore } from "../src/session-store.ts"
+import { AgentTree } from "../src/subagents.ts"
 
 type Script =
   | DialectCompactOutcome
@@ -63,6 +64,7 @@ async function setup(steps: MockStep[], outcomes: Script[] = [], extra: Partial<
   bus.subscribe((e) => void events.push(e))
   const dir = await mkdtemp(path.join(os.tmpdir(), "amira-native-compaction-"))
   const session = SessionStore.create({ cwd: "/proj", dir })
+  const tree = new AgentTree({ ai, sections: () => [{ name: "identity", text: "child" }] })
   const agent = new Agent({
     ai,
     model: ai.model("mock/m"),
@@ -70,9 +72,10 @@ async function setup(steps: MockStep[], outcomes: Script[] = [], extra: Partial<
     systemPrompt: "sys",
     bus,
     session,
+    tree,
     ...extra,
   })
-  return { agent, ai, mock, compactions, events, session, bus }
+  return { agent, ai, mock, compactions, events, session, bus, tree }
 }
 
 const big = { usage: { input: 900 } }
@@ -275,6 +278,33 @@ test("switching models writes a text summary of the checkpoint once; switching b
     [true, 2000],
     [false, 70],
   ])
+})
+
+test("a sub-agent forked onto another model writes a text summary from the parent's checkpoint", async () => {
+  const { agent, mock, tree } = await setup(
+    [{ text: "r1" }, { text: "r2" }, { text: "r3" }, { text: "FORK SUMMARY" }, { text: "child done" }],
+    [checkpoint],
+    { compaction: { auto: false } },
+  )
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  await agent.prompt("q3")
+  expect(await agent.compact()).toBe(true)
+  expect(sigOf(agent.messages[0])?.kind).toBe("checkpoint")
+  // The child has no session entries for the forked messages: the parent tells what they stood for.
+  const result = await tree.spawn(agent, { prompt: "child task", context: "fork", model: "other/x" }).result()
+  expect(result.text).toBe("child done")
+  expect(mock.requests).toHaveLength(5)
+  const summaryReq = mock.requests[3]!
+  expect(summaryReq.model.provider).toBe("other")
+  expect(textOf(summaryReq.messages[0])).toContain("q1")
+  expect(textOf(summaryReq.messages[0])).toContain("r1")
+  const onChild = mock.requests[4]!.messages
+  expect(textOf(onChild[0])).toContain("FORK SUMMARY")
+  expect(sigOf(onChild[0])).toBeUndefined()
+  expect(textOf(onChild.at(-1))).toBe("child task")
+  // The parent keeps its checkpoint.
+  expect(sigOf(agent.messages[0])?.kind).toBe("checkpoint")
 })
 
 test("a resumed session on another provider writes the summary from the session file", async () => {

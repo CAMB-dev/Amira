@@ -118,6 +118,12 @@ export interface AgentOptions {
    */
   noticeRetryMs?: number[]
   messages?: Message[]
+  /**
+   * Where `messages` come from (a fork of another agent): the history a compaction summary
+   * among them stands for (Agent.compactedHistory), for a model that cannot read its server
+   * checkpoint and needs a text summary written.
+   */
+  originals?: (summary: Message) => Message[] | undefined
   /** Sub-agent nesting depth; 0 (the default) for a top-level session. */
   depth?: number
   /** The agent tree this session belongs to: it spawns sub-agents and keeps the shared budget. */
@@ -292,6 +298,7 @@ export class Agent {
   #afterCompaction: AfterCompaction | undefined
   #onIdleNotice: (() => void) | undefined
   #endTurn: (() => boolean) | undefined
+  #originals: ((summary: Message) => Message[] | undefined) | undefined
   /** The running turn's promise, for owners that wait for whatever turn runs. */
   #current: Promise<TurnResult> | undefined
   /** Extension records of a session without a file (see `data`). */
@@ -338,6 +345,7 @@ export class Agent {
     this.#ask = opts.ask
     this.#onIdleNotice = opts.onIdleNotice
     this.#endTurn = opts.endTurn
+    this.#originals = opts.originals
 
     if (opts.messages || !opts.session) {
       this.messages = opts.messages ?? []
@@ -1572,6 +1580,8 @@ export class Agent {
       }
       let summary: string | undefined
       let checkpoint: Signature | undefined
+      /** Tokens the server wrote for the checkpoint: about what it takes up in the context. */
+      let checkpointTokens = 0
       let fallback: string | undefined
       let compacted: Message[] | undefined
       if (native) {
@@ -1598,6 +1608,7 @@ export class Agent {
           summary = r.summary ?? ""
           checkpoint = r.checkpoint
           compacted = input
+          checkpointTokens = r.usage.output
         } else fallback = r.error
       }
       const writer = this.#compaction.model ?? this.model
@@ -1616,7 +1627,9 @@ export class Agent {
           count(written.usage)
           summary = written.summary
         } catch (err) {
-          if (err instanceof SummaryError) this.#recordCompactionUsage(err.usage, modelRef(writer), false)
+          // What the failed compaction still cost: the server attempts before it, and its own.
+          if (err instanceof SummaryError) count(err.usage)
+          if (counted) this.#recordCompactionUsage(usage, modelRef(writer), false)
           throw err
         }
       }
@@ -1642,12 +1655,16 @@ export class Agent {
                 before,
                 replacedMessages.filter((m) => !retained.includes(m)),
                 keptMessages,
-                checkpoint ? [...replacement, checkpointStandIn(checkpoint)] : replacement,
+                // An opaque checkpoint (no readable text) takes up about what the server wrote.
+                checkpoint && !summary
+                  ? [...replacement, checkpointStandIn(checkpoint, checkpointTokens)]
+                  : replacement,
               ),
             }
           : {}),
         ...(isNoModel(this.model) ? {} : { contextWindow: this.model.contextWindow }),
-        ...(supplied ? {} : { model: nativeRef ?? modelRef(writer) }),
+        // Separate objects: a JSON writer that marks repeated references as cycles would drop one.
+        ...(supplied ? {} : { model: nativeRef ? { ...nativeRef } : modelRef(writer) }),
         ...(nativeRef ? { native: nativeRef, layout } : {}),
         ...(fallback ? { fallback } : {}),
       }
@@ -1722,7 +1739,15 @@ export class Agent {
     const known = this.#compacted.get(m)
     if (known) return known
     const id = this.#entryIds.get(m)
-    return id ? this.session?.compacted(id) : undefined
+    return (id ? this.session?.compacted(id) : undefined) ?? this.#originals?.(m)
+  }
+
+  /**
+   * The history a compaction's summary message (the user message of the pair) stands for, if
+   * it can still be found: for agents forked from this one (AgentOptions.originals).
+   */
+  compactedHistory(summary: Message): Message[] | undefined {
+    return this.#originalsOf(summary)
   }
 
   /**
@@ -1733,6 +1758,8 @@ export class Agent {
    * uses it again). Resolves an error message when that was not possible.
    */
   async #fillSummaries(turn: Turn | undefined, signal: AbortSignal): Promise<string | undefined> {
+    // Without a model nothing can be read or written; the request fails on its own terms.
+    if (isNoModel(this.model)) return undefined
     for (let i = 0; i < this.messages.length; i++) {
       const m = this.messages[i]!
       const cp = m.role === "user" && isSummaryMessage(m) ? checkpointOf(m) : undefined
@@ -1831,11 +1858,17 @@ function modelRef(model: ModelInfo): ModelRef {
   return { provider: model.provider, model: model.id }
 }
 
-/** A message about as large as a checkpoint's opaque value, for estimating the context after it. */
-function checkpointStandIn(sig: Signature): Message {
+/**
+ * A message about as large as an opaque checkpoint, for estimating the context after it: the
+ * tokens the server wrote for it (its summary, encrypted) when the compaction's usage said,
+ * else a guess from its size. The encrypted value is base64 of the summary and much larger
+ * than the summary's tokens, so a quarter of its length is taken (about a character a token).
+ */
+function checkpointStandIn(sig: Signature, written: number): Message {
+  const chars = written > 0 ? written * 4 : Math.ceil(sig.value.length / 4)
   return {
     role: "user",
-    content: [{ type: "text", text: " ".repeat(Math.min(sig.value.length, 4_000_000)) }],
+    content: [{ type: "text", text: " ".repeat(Math.min(chars, 4_000_000)) }],
   }
 }
 
