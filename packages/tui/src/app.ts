@@ -507,11 +507,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * Tells the completion lists what the editor holds; a promise while commands' candidates are
    * on their way. Cheap on any text: the command popup only looks at a single line, the file
    * picker at the caret's line up to the caret, and it never waits for the project's files.
+   * A prompt ↑/↓ recalled opens no list until it is edited: the list would take ↑/↓, and the
+   * walk would stop at the first "/status", "$skill" or "@file" in the history.
    */
   const syncCompletions = (): Promise<void> | undefined => {
-    const line = editor.lineCount === 1 ? editor.getText() : ""
+    const recalled = historyNav.recalling
+    const line = editor.lineCount === 1 && !recalled ? editor.getText() : ""
     const commandsPending = popups.map((p) => p.update(line)).find(Boolean)
-    filePicker.update(editor.textBeforeCaret())
+    filePicker.update(recalled ? "" : editor.textBeforeCaret())
     return commandsPending
   }
   /** The list shown below the input box, if any, with its key hint. */

@@ -145,7 +145,7 @@ export class PromptHistory {
  * (↑) or last row (↓), as drawn: a long line wraps over several. Walking past the newest entry empties the editor again.
  */
 export class HistoryNavigator {
-  /** Index of the recalled entry; `entries.length` when none is. */
+  /** Index of the recalled entry; -1 when none is. */
   #index = -1
   /** The editor's version right after the recall; any other version means it was edited. */
   #recalled = -1
