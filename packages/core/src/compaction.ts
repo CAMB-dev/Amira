@@ -243,9 +243,11 @@ export async function summarize(
   const request = `${current}Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>${extra}`
   let text = ""
   let usage: Usage | undefined
+  // The summary comes from the transcript alone: no tools, and no hosted web search either.
+  const writer: ModelInfo = { ...model, caps: { ...model.caps, webSearch: false } }
   for await (const ev of ai.stream(
     {
-      model,
+      model: writer,
       systemPrompt: SUMMARY_PROMPT,
       messages: [{ role: "user", content: [{ type: "text", text: request }] }],
       tools: [],

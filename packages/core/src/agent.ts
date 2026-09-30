@@ -1610,12 +1610,16 @@ export class Agent {
             : this.messages.filter((m) => olderSet.has(m) || m === split.prompt)
         const built = await this.#buildContext(signal).catch(() => undefined)
         const systemPrompt = built && !built.blocked ? built.value.systemPrompt : renderPrompt(this.#sections)
+        // The same tools a reply would get: the client web_search stays hidden from a model
+        // with the hosted search, which the dialect adds beside them as in every request.
         const r = await this.#ai.compact(
           {
             model: this.model,
             systemPrompt,
             messages: input,
-            tools: offeredTools(this.tools, this.#loadedTools),
+            tools: offeredTools(this.tools, this.#loadedTools, {
+              nativeWebSearch: hasNativeWebSearch(this.model),
+            }),
           },
           signal,
         )
