@@ -26,6 +26,7 @@ test("unlisted models get the provider defaults", () => {
     provider: "p",
     dialect: "openai-chat",
     contextWindow: 64_000,
+    contextWindowSource: "settings",
     maxOutput: 8_192,
     caps: { ...DEFAULT_CAPS, thinking: true },
     cost: { input: 1, output: 2 },
@@ -35,4 +36,19 @@ test("unlisted models get the provider defaults", () => {
 test("passes cost through, preferring the model's own", () => {
   expect(resolveModelInfo(provider, "cached").cost).toEqual({ input: 3, output: 4, cacheRead: 0.3 })
   expect(resolveModelInfo({ ...provider, defaultModel: {} }, "vision").cost).toBeUndefined()
+})
+
+test("says where the context window came from", () => {
+  const bare: ProviderConfig = { id: "b", dialect: "openai-chat", baseUrl: "http://b" }
+  const listed: ProviderConfig = { ...bare, models: [{ id: "m", contextWindow: 256_000 }] }
+  const guessed = resolveModelInfo(bare, "m")
+  expect([guessed.contextWindow, guessed.contextWindowSource]).toEqual([128_000, "default"])
+  const fromCatalog = resolveModelInfo(bare, "m", { contextWindow: 1_050_000 })
+  expect([fromCatalog.contextWindow, fromCatalog.contextWindowSource]).toEqual([1_050_000, "catalog"])
+  // The user's own entry for the model wins over the catalog; their defaultModel does not.
+  const mine = resolveModelInfo(listed, "m", { contextWindow: 1_050_000 })
+  expect([mine.contextWindow, mine.contextWindowSource]).toEqual([256_000, "settings"])
+  const byDefault = resolveModelInfo(provider, "other", { contextWindow: 1_050_000 })
+  expect(byDefault.contextWindowSource).toBe("catalog")
+  expect(resolveModelInfo(provider, "other").contextWindowSource).toBe("settings")
 })

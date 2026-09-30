@@ -1,6 +1,6 @@
 import type { CatalogModel } from "./catalog.ts"
 import type { ProviderCompat } from "./dialect.ts"
-import type { ModelCaps, ModelInfo } from "./types.ts"
+import type { ContextWindowSource, ModelCaps, ModelInfo } from "./types.ts"
 
 /** Model settings a provider overrides; caps are merged key by key over the defaults. */
 export type ModelOverrides = Partial<Omit<ModelInfo, "caps">> & { caps?: Partial<ModelCaps> }
@@ -65,11 +65,20 @@ export function resolveModelInfo(
   const known = provider.models?.find((m) => m.id === modelId)
   const d = provider.defaultModel
   const cost = known?.cost ?? catalog?.cost ?? d?.cost
+  const window: [number, ContextWindowSource] =
+    known?.contextWindow !== undefined
+      ? [known.contextWindow, "settings"]
+      : catalog?.contextWindow !== undefined
+        ? [catalog.contextWindow, "catalog"]
+        : d?.contextWindow !== undefined
+          ? [d.contextWindow, "settings"]
+          : [128_000, "default"]
   return {
     id: modelId,
     provider: provider.id,
     dialect: known?.dialect ?? d?.dialect ?? provider.dialect,
-    contextWindow: known?.contextWindow ?? catalog?.contextWindow ?? d?.contextWindow ?? 128_000,
+    contextWindow: window[0],
+    contextWindowSource: window[1],
     maxOutput: known?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? 8_192,
     caps: { ...DEFAULT_CAPS, ...d?.caps, ...catalog?.caps, ...known?.caps },
     ...(cost ? { cost } : {}),
