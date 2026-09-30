@@ -1,6 +1,7 @@
 import {
   type AssistantMessage,
   type ContextPreview,
+  type ContextWindowSource,
   formatTokens,
   type Message,
   padCells,
@@ -38,6 +39,18 @@ export function cacheHitRate(input: number, cacheRead: number, cacheWrite: numbe
 }
 
 const percent = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "")
+
+/**
+ * A context window and where it came from, for /status: "256k (your settings)", "1.1M (from
+ * the model catalog)", "128k (default guess — set contextWindow for this model)".
+ */
+export function windowLabel(tokens: number, source: ContextWindowSource | undefined): string {
+  const size = formatTokens(tokens)
+  if (source === "settings") return `${size} (your settings)`
+  if (source === "catalog") return `${size} (from the model catalog)`
+  if (source === "default") return `${size} (default guess — set contextWindow for this model)`
+  return size
+}
 
 /** Rows of cells as aligned columns, two spaces apart; the last column is not padded. */
 export function table(rows: string[][]): string {

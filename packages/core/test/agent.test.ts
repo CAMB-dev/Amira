@@ -14,7 +14,7 @@ function setup(steps: MockStep[]) {
   const mock = createMockDialect(steps)
   const ai = createAi({
     dialects: [mock],
-    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { contextWindow: 128_000 } }],
     retry: { retries: 0 },
   })
   const bus = new EventBus()

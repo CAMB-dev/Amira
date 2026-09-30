@@ -1,4 +1,12 @@
-import type { AnyEvent, Message, ToolDetailLevel, ToolResult, TuiSettings, UserMessage } from "@amira/api"
+import type {
+  AnyEvent,
+  CompactionInfo,
+  Message,
+  ToolDetailLevel,
+  ToolResult,
+  TuiSettings,
+  UserMessage,
+} from "@amira/api"
 import type {
   Capabilities,
   Component,
@@ -132,7 +140,13 @@ export interface TranscriptView {
    * starts afresh first (the banner stays), so finding, copying, selecting and the exit
    * printout see this session only; inline, the boundary follows what was committed.
    */
-  openSession(boundary: SessionBoundary, messages: Message[], switched: boolean): void
+  openSession(
+    boundary: SessionBoundary,
+    messages: Message[],
+    switched: boolean,
+    /** Why each compaction happened, by its summary's user message (Agent.compactionInfo). */
+    compactionInfo?: (message: Message) => CompactionInfo | undefined,
+  ): void
   /** The UI is about to follow another session: calls of this one end here. */
   leaveSession(): void
   /** The note shown when the tool output level changes. */

@@ -1,4 +1,4 @@
-import type { Message, ToolDetailLevel, ToolPresenter, ToolResult } from "@amira/api"
+import type { CompactionInfo, Message, ToolDetailLevel, ToolPresenter, ToolResult } from "@amira/api"
 import { isSummaryMessage } from "@amira/core"
 import {
   type MarkdownNodes,
@@ -9,7 +9,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
-import { reasoningLines, replyRows, userLines } from "./format.ts"
+import { compactionReason, compactionSizes, reasoningLines, replyRows, userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import {
   explorationOf,
@@ -34,6 +34,8 @@ export interface HistoryOptions {
   transcript?: Transcript
   /** Output lines a successful shell command shows at `summary` detail (tui.shellOutputLines). */
   outputLines?: number
+  /** Why a compaction happened, by its summary's user message (Agent.compactionInfo). */
+  compactionInfo?: (message: Message) => CompactionInfo | undefined
 }
 
 /** "2026-09-29 14:05", in local time. */
@@ -79,7 +81,9 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
   for (const m of messages) {
     if (isSummaryMessage(m)) {
       // The summary reads as what it is, not as a message of the user's; its reply goes with it.
-      if (m.role === "user") block("summary", summaryLines(theme, summaryText(m), opts.width, true))
+      if (m.role === "user") {
+        block("summary", summaryLines(theme, summaryText(m), opts.width, true, opts.compactionInfo?.(m)))
+      }
     } else if (m.role === "user") {
       block("user", userLines(theme, m, opts.width))
     } else if (m.role === "assistant") {
@@ -147,20 +151,44 @@ export function summaryText(m: Message): string {
 }
 
 /**
- * A compaction's summary: one line folded, `▸ Compacted summary of earlier messages · 12 lines`;
- * unfolded, the summary as Markdown under that head.
+ * A compaction's summary: one line folded, with why it happened when known,
+ * `▸ Compacted automatically at 82% of 128k · summary of earlier messages · 12 lines` (else
+ * `▸ Compacted summary of earlier messages · 12 lines`); unfolded, the sizes and the model
+ * that wrote it, then the summary as Markdown under that head.
  */
-export function summaryLines(theme: Theme, summary: string, width: number, folded: boolean): string[] {
+export function summaryLines(
+  theme: Theme,
+  summary: string,
+  width: number,
+  folded: boolean,
+  info?: CompactionInfo,
+): string[] {
   const n = summary ? summary.split("\n").length : 0
-  const title = `Compacted summary of earlier messages${folded ? ` · ${n} line${n === 1 ? "" : "s"}` : ""}`
+  const what = info
+    ? `${compactionReason(info)} · summary of earlier messages`
+    : "Compacted summary of earlier messages"
+  const title = `${what}${folded ? ` · ${n} line${n === 1 ? "" : "s"}` : ""}`
   const head = truncateToWidth(
     `${theme.accent(folded ? "▸" : "▾")} ${theme.muted(title)}`,
     width,
     glyphs.more,
   )
   if (folded) return [head]
+  const facts = [
+    compactionSizes(info),
+    info?.model ? `written by ${info.model.provider}/${info.model.model}` : undefined,
+  ].filter((f): f is string => f !== undefined)
+  const detail = facts.length
+    ? [
+        truncateToWidth(
+          `${" ".repeat(visibleWidth(glyphs.assistant))}${theme.muted(facts.join(" · "))}`,
+          width,
+          glyphs.more,
+        ),
+      ]
+    : []
   const body = renderMarkdown(summary, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)
-  return [head, "", ...replyRows(body)]
+  return [head, ...detail, "", ...replyRows(body)]
 }
 
 /**

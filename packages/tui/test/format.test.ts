@@ -5,6 +5,8 @@ import { defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-
 import {
   bandRows,
   commandEchoLines,
+  compactionNotice,
+  compactionReason,
   isLastSibling,
   subagentEndLine,
   subagentRows,
@@ -450,6 +452,46 @@ test("a compaction's summary in a history is one folded line; its reply is left 
   expect(lines.slice(2)).toEqual(["▸ Compacted summary of earlier messages · 2 lines", "", "› go on"])
   expect(summaryLines(defaultTheme, "Did A.", 60, false).map(stripAnsi)).toEqual([
     "▾ Compacted summary of earlier messages",
+    "",
+    "  Did A.",
+  ])
+})
+
+test("a compaction says why it happened, in its notice and on its summary", () => {
+  const auto = {
+    reason: "threshold" as const,
+    tokensBefore: 105_000,
+    tokensAfter: 12_400,
+    contextWindow: 128_000,
+    model: { provider: "p", model: "m" },
+  }
+  expect(compactionNotice(14, auto)).toBe(
+    "Compacted automatically at 82% of 128k: 14 older messages into a summary (105k → ~12k tokens).",
+  )
+  expect(compactionNotice(1, { reason: "manual" })).toBe(
+    "Compacted (you asked): 1 older message into a summary.",
+  )
+  expect(compactionReason({ reason: "overflow" })).toBe(
+    "Compacted after the model rejected the request as too long",
+  )
+  expect(compactionReason({ reason: "threshold" })).toBe("Compacted automatically")
+  // The size before an overflow is the last reply's, not the rejected request's: left out.
+  expect(compactionNotice(3, { ...auto, reason: "overflow" })).toBe(
+    "Compacted after the model rejected the request as too long: 3 older messages into a summary.",
+  )
+  expect(compactionReason(undefined)).toBe("Compacted")
+  expect(summaryLines(defaultTheme, "Did A.", 90, true, auto).map(stripAnsi)).toEqual([
+    "▸ Compacted automatically at 82% of 128k · summary of earlier messages · 1 line",
+  ])
+  expect(summaryLines(defaultTheme, "Did A.", 90, false, auto).map(stripAnsi)).toEqual([
+    "▾ Compacted automatically at 82% of 128k · summary of earlier messages",
+    "  105k → ~12k tokens · written by p/m",
+    "",
+    "  Did A.",
+  ])
+  // Kept without sizes or model (a manual one before any reply, a summary an extension wrote).
+  expect(summaryLines(defaultTheme, "Did A.", 90, false, { reason: "manual" }).map(stripAnsi)).toEqual([
+    "▾ Compacted (you asked) · summary of earlier messages",
     "",
     "  Did A.",
   ])

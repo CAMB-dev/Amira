@@ -111,11 +111,19 @@ export interface ModelCaps {
   parallelToolCalls: boolean
 }
 
+/** Where a model's context window came from (ModelInfo.contextWindowSource). */
+export type ContextWindowSource = "settings" | "catalog" | "default"
+
 export interface ModelInfo {
   id: string
   provider: string
   dialect: string
   contextWindow: number
+  /**
+   * Where `contextWindow` came from: the user's settings, the model catalog, or the built-in
+   * default (a guess). Unset for models not resolved from a provider.
+   */
+  contextWindowSource?: ContextWindowSource
   maxOutput: number
   caps: ModelCaps
   /** USD per million tokens. */

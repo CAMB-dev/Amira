@@ -57,6 +57,8 @@ interface Options {
   rows?: number
   tree?: boolean
   history?: Message[]
+  /** Runs on the agent once the history is in, before the UI starts (e.g. a compaction). */
+  prepare?: (agent: Agent) => Promise<unknown>
   settings?: TuiSettings
   /** /agents and a /quit, with the session control the viewer reads. */
   commands?: boolean
@@ -79,7 +81,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
   await host.load(statusExtension, "builtin:status")
   const ai = createAi({
     dialects: [createMockDialect(steps)],
-    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { contextWindow: 128_000 } }],
   })
   const tree = o.tree || o.commands ? new AgentTree({ ai, sections: () => [] }) : undefined
   const agent = new Agent({
@@ -110,6 +112,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     for (const [name, p] of Object.entries(builtinPresenters)) host.renderers.register(name, p)
   }
   if (o.history) agent.messages.push(...o.history)
+  await o.prepare?.(agent)
   let commands: CommandHost | undefined
   if (o.commands) {
     const quit: CommandDefinition = { name: "quit", description: "Leave", run: (_a, ctx) => ctx.quit() }
@@ -1221,6 +1224,25 @@ test("/clear starts the transcript afresh: find, copying, selecting and the prin
   await exited
   expect(screen.mainText).toContain("new answer")
   expect(screen.mainText).not.toContain("old answer")
+})
+
+test("a resumed compaction's summary block says why it happened", async () => {
+  const exchange = (text: string): Message[] => [
+    { role: "user", content: [{ type: "text", text }] },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: `re ${text}` }],
+      model: { provider: "mock", model: "m1" },
+    },
+  ]
+  const { terminal, shows, exited } = await setup([{ text: "Fixed the parser." }], {
+    cols: 100,
+    history: [...exchange("a"), ...exchange("b"), ...exchange("c")],
+    prepare: (agent) => agent.compact(),
+  })
+  await shows("▸ Compacted (you asked) · summary of earlier messages · 1 line")
+  terminal.send("\x03")
+  await exited
 })
 
 test("a compaction's summary in a resumed history is a folded block that unfolds", async () => {

@@ -751,7 +751,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           stripAnsi(draw(Number.POSITIVE_INFINITY).join("\n")),
         ),
       ),
-    openSession(boundary, messages: Message[], switched) {
+    openSession(boundary, messages: Message[], switched, compactionInfo) {
       if (switched) clearTranscript()
       add(new LinesBlock("history", (w, t) => [sessionBoundary(t, boundary, w)], ""))
       const results = new Map<string, ToolResult>()
@@ -762,7 +762,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       for (const m of messages) {
         // A compaction's summary is a folded block of its own; the reply that took it goes with it.
         if (isSummaryMessage(m)) {
-          if (m.role === "user") blocks.push(new SummaryBlock(summaryText(m)))
+          if (m.role === "user") blocks.push(new SummaryBlock(summaryText(m), compactionInfo?.(m)))
         } else if (m.role === "user") blocks.push(userBlock(m))
         else if (m.role === "assistant") {
           for (const b of m.content) {

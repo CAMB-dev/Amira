@@ -1,4 +1,5 @@
 import type { Ai, AssistantMessage, Message, ModelInfo, ModelRef, Usage } from "@amira/ai"
+import { formatTokens } from "@amira/api"
 
 export interface CompactionOptions {
   /** Compact once the context passes this fraction of the model's window. Default 0.8. */
@@ -16,9 +17,50 @@ export interface CompactionOptions {
   auto?: boolean
 }
 
+/**
+ * What to tell the user when automatic compaction goes by a context window that is only a
+ * guess (ModelInfo.contextWindowSource "default"): where to set the real one.
+ */
+export function windowGuessNotice(model: ModelInfo, settingsFile: string): string {
+  return (
+    `The context window of ${model.provider}/${model.id} is not known, so automatic compaction assumes ${formatTokens(model.contextWindow)} tokens ` +
+    `and may start too early or too late. Set it with /provider edit ${model.provider}, or as "contextWindow" ` +
+    `in the entry for "${model.id}" under providers.${model.provider}.models in ${settingsFile}.`
+  )
+}
+
 /** Tokens the context held at the time of a reply. */
 export function contextTokens(u: Usage): number {
   return u.input + u.cacheRead + u.cacheWrite + u.output
+}
+
+/** Rough tokens messages take: about four characters a token; an image counts as 1000. */
+export function estimateTokens(messages: Message[]): number {
+  let chars = 0
+  let images = 0
+  for (const m of messages) {
+    for (const b of m.content) {
+      if (b.type === "text" || b.type === "thinking") chars += b.text.length
+      else if (b.type === "toolCall") chars += b.name.length + JSON.stringify(b.args).length
+      else images++
+    }
+  }
+  return Math.ceil(chars / 4) + images * 1000
+}
+
+/**
+ * The context size after a compaction, from the size before (as the model counted it) scaled
+ * by how much of the history's estimated size is left: the summary and the kept messages.
+ * Scaling by the model's own count keeps the estimate close for text of any script, where
+ * characters per token differ widely. Never more than before unless the summary is longer
+ * than what it replaced.
+ */
+export function estimateAfter(before: number, older: Message[], kept: Message[], summary: Message[]): number {
+  const was = estimateTokens([...older, ...kept])
+  const left = estimateTokens([...summary, ...kept])
+  if (was <= 0) return before
+  const after = Math.round((before * left) / was)
+  return left > was ? after : Math.min(before, after)
 }
 
 const SUMMARY_PREFIX = "The earlier part of this conversation was compacted. Summary:"

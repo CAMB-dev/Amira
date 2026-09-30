@@ -1,8 +1,9 @@
 /** Public API for Amira extensions. Extensions may import only from this package. */
-export const API_VERSION = "0.1.5"
+export const API_VERSION = "0.1.6"
 
 export type {
   AssistantMessage,
+  ContextWindowSource,
   ImageBlock,
   JSONSchema,
   Message,

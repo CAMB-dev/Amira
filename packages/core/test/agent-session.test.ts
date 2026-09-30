@@ -7,6 +7,7 @@ import { type AnyEvent, defineTool, textResult } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
 import { splitHistory, summaryMessages } from "../src/compaction.ts"
 import { EventBus } from "../src/event-bus.ts"
+import { amiraHome } from "../src/home.ts"
 import { SessionStore } from "../src/session-store.ts"
 
 async function setup(steps: MockStep[], extra: Partial<AgentOptions> = {}) {
@@ -173,7 +174,7 @@ test("system.build can edit sections before every model call", async () => {
 const big = { usage: { input: 900 } }
 
 test("compacts before the next model call once the context passes the threshold", async () => {
-  const { agent, mock, session, bus, events } = await setup([
+  const { agent, ai, mock, session, bus, events } = await setup([
     { text: "r1" },
     { text: "r2", ...big },
     { text: "SUMMARY OF r1" },
@@ -201,6 +202,87 @@ test("compacts before the next model call once the context passes the threshold"
   const reopened = SessionStore.open(session.file)
   expect(reopened.entries.filter((e) => e.type === "message").length).toBe(6)
   expect(reopened.restore().messages).toEqual(agent.messages)
+
+  // Why it happened goes with the event, the entry and the summary's message.
+  const why = {
+    reason: "threshold" as const,
+    tokensBefore: 900,
+    contextWindow: 1000,
+    model: { provider: "mock", model: "m" },
+  }
+  const end = events.find((e) => e.type === "compact.end")!
+  expect(end.data).toMatchObject({ ...why, replaced: 2 })
+  const after = (end.data as { tokensAfter: number }).tokensAfter
+  // The mock reports 900 for a tiny history: the summary pair makes it a little larger.
+  expect(after).toBeGreaterThan(900)
+  expect(reopened.entries.find((e) => e.type === "compaction")).toMatchObject({ ...why, tokensAfter: after })
+  expect(agent.compactionInfo(agent.messages[0]!)).toMatchObject({ ...why, tokensAfter: after })
+  expect(agent.compactionInfo(agent.messages[1]!)).toBeUndefined()
+  const resumed = new Agent({ ai, model: agent.model, cwd: "/proj", session: reopened })
+  expect(resumed.compactionInfo(resumed.messages[0]!)).toEqual({ ...why, tokensAfter: after })
+})
+
+test("a guessed context window is noted once a session, only when compaction is automatic", async () => {
+  // Past half of the guessed 128k after the first reply.
+  const half = { usage: { input: 70_000 } }
+  const notes = async (model: string, extra: Partial<AgentOptions> = {}, steps: MockStep[] = []) => {
+    const { agent, ai, bus, events } = await setup(
+      steps.length
+        ? steps
+        : [
+            { text: "r1", ...half },
+            { text: "r2", ...half },
+            { text: "r3", ...half },
+          ],
+      extra,
+    )
+    agent.setModel(ai.model(model))
+    await agent.prompt("q1")
+    await agent.prompt("q2")
+    await agent.prompt("q3")
+    await bus.flush()
+    return events
+      .filter((e) => e.type === "extension.notice")
+      .map((e) => ({ ...(e.data as { source: string; text: string }), turnId: e.turnId }))
+  }
+  const guessed = await notes("other/x")
+  expect(guessed.length).toBe(1)
+  expect(guessed[0]!.source).toBe("compaction")
+  expect(guessed[0]!.text).toContain("The context window of other/x is not known")
+  expect(guessed[0]!.text).toContain("assumes 128k tokens")
+  expect(guessed[0]!.text).toContain("Set it with /provider edit other")
+  expect(guessed[0]!.text).toContain(
+    `"contextWindow" in the entry for "x" under providers.other.models in ${path.join(amiraHome(), "settings.json")}`,
+  )
+  // Quiet while the context is small.
+  expect(await notes("other/x", {}, [{ text: "r1" }, { text: "r2" }, { text: "r3" }])).toEqual([])
+  // The provider's settings give the window; with automatic compaction off it does not matter.
+  expect(await notes("mock/m")).toEqual([])
+  expect(await notes("other/x", { compaction: { auto: false } })).toEqual([])
+  // Sub-agents leave it to their commander.
+  expect(await notes("other/x", { parentSessionId: "s_parent" })).toEqual([])
+  // A request rejected as too long says it at once, however small the context looked.
+  const rejected = await notes("other/x", {}, [
+    { text: "r1" },
+    { text: "r2" },
+    overflow,
+    { text: "S" },
+    { text: "r3" },
+  ])
+  expect(rejected.length).toBe(1)
+})
+
+test("a manual compaction says so; a summary an interceptor wrote names no model", async () => {
+  const { agent, events, bus } = await setup([{ text: "r1" }, { text: "r2" }])
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  agent.interceptors.add("compact.before", (v) => ({ action: "modify", value: { ...v, summary: "MINE" } }))
+  expect(await agent.compact()).toBe(true)
+  await bus.flush()
+  const end = events.find((e) => e.type === "compact.end")!
+  expect(end.data).toMatchObject({ reason: "manual", contextWindow: 1000 })
+  expect(end.data).not.toHaveProperty("model")
+  expect(agent.compactionInfo(agent.messages[0]!)?.reason).toBe("manual")
 })
 
 test("resuming right after a compaction does not compact again", async () => {
@@ -573,6 +655,10 @@ test("a request over the context window is compacted and sent again, once", asyn
   const start = events.find((e) => e.type === "compact.start")!
   expect(start.data).toMatchObject({ reason: "overflow" })
   expect((mock.requests[4]!.messages[0]!.content[0] as { text: string }).text).toContain("SUM")
+  expect(events.find((e) => e.type === "compact.end")!.data).toMatchObject({ reason: "overflow" })
+  expect(agent.compactionInfo(agent.messages[0]!)?.reason).toBe("overflow")
+  const entry = SessionStore.open(agent.session!.file).entries.find((e) => e.type === "compaction")
+  expect(entry).toMatchObject({ reason: "overflow" })
 })
 
 test("a request still over the window after compacting fails with what to do", async () => {

@@ -12,6 +12,32 @@ import type { Budget, ChildState, SpawnContext, SpawnGroupInfo, SubagentStatus }
 import type { ToolResult } from "./tools.ts"
 import type { UiRequest } from "./ui.ts"
 
+/**
+ * Why history was compacted: `threshold` when the context passed the automatic threshold,
+ * `manual` when the user asked (/compact), `overflow` when the model rejected the request as
+ * longer than its context window.
+ */
+export type CompactionReason = "threshold" | "manual" | "overflow"
+
+/** Why and how a compaction happened; the session keeps it with the summary. */
+export interface CompactionInfo {
+  reason: CompactionReason
+  /**
+   * Tokens the context held before, as the last reply reported; unknown before any reply. For
+   * `overflow` the rejected request was larger (it held what came after that reply).
+   */
+  tokensBefore?: number
+  /**
+   * Tokens the context holds after, estimated: `tokensBefore` scaled by how much of the
+   * history's size the summary and the kept messages keep. The next reply reports the real size.
+   */
+  tokensAfter?: number
+  /** The session model's context window at the time. */
+  contextWindow?: number
+  /** The model that wrote the summary; unset when a compact.before interceptor supplied it. */
+  model?: ModelRef
+}
+
 /** Envelope shared by every event, whether seen by the TUI, headless clients or extensions. */
 export interface EventEnvelope<K extends keyof EventMap = keyof EventMap> {
   /** Monotonic within the process. */
@@ -149,12 +175,13 @@ export interface EventMap {
    */
   "compact.start": {
     /** `overflow`: the model said the request did not fit its context window; the call is retried once after. */
-    reason: "threshold" | "manual" | "overflow"
+    reason: CompactionReason
     replacing: number
     kept: number
     tokens?: number
   }
-  "compact.end": { summary: string; replaced: number; kept: number }
+  /** Older history was replaced by `summary`; the rest tells why and how (also stored with it). */
+  "compact.end": { summary: string; replaced: number; kept: number } & CompactionInfo
   /**
    * Compaction did not happen; the conversation continues uncompacted. `blocked` means a
    * compact.before interceptor cancelled it on purpose (`error` is its reason); no

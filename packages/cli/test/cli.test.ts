@@ -73,7 +73,7 @@ function capture(): PrintIO & { out: string; err: string } {
 async function mockSession(steps: MockStep[], extra: Partial<Parameters<typeof createSession>[0]> = {}) {
   const ai = createAi({
     dialects: [createMockDialect(steps)],
-    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { contextWindow: 128_000 } }],
   })
   const session = await createSession({
     model: "mock/m",
@@ -472,7 +472,7 @@ test("unknown names to disable are reported at startup, with where they came fro
     requestedDisabled: { names: ["glob", "nope"], from: "settings tools.disabled" },
     ai: createAi({
       dialects: [createMockDialect([])],
-      providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+      providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { contextWindow: 128_000 } }],
     }),
   })
   const errors = startupEvents.flatMap((e) => (e.type === "extension.error" ? [e.data.error] : []))

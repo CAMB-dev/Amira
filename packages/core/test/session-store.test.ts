@@ -189,6 +189,54 @@ test("compaction entries replace messages with a summary pair on restore", async
   expect(s.entries.filter((e) => e.type === "message").length).toBe(4)
 })
 
+test("a compaction's reason, sizes and model restore with its summary; old entries have none", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  const a = s.appendMessage(userMessage("a"))
+  // Written before compactions kept why they happened.
+  const c1 = s.append({ type: "compaction", summary: "S1", replaces: [a] })
+  const old = s.restore()
+  expect(old.compactions.size).toBe(0)
+  s.appendMessage(userMessage("b"))
+  s.append({
+    type: "compaction",
+    summary: "S2",
+    replaces: [c1],
+    reason: "threshold",
+    tokensBefore: 105_000,
+    tokensAfter: 12_000,
+    contextWindow: 128_000,
+    model: { provider: "p", model: "m" },
+  })
+  const { messages, compactions } = SessionStore.open(s.file).restore()
+  expect(compactions.get(messages[0]!)).toEqual({
+    reason: "threshold",
+    tokensBefore: 105_000,
+    tokensAfter: 12_000,
+    contextWindow: 128_000,
+    model: { provider: "p", model: "m" },
+  })
+  // Only the user message of the pair carries it.
+  expect(compactions.get(messages[1]!)).toBeUndefined()
+})
+
+test("a compaction entry with a broken reason or sizes still restores", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  const a = s.appendMessage(userMessage("a"))
+  appendFileSync(
+    s.file,
+    `${JSON.stringify({ type: "compaction", id: "e_c", parentId: s.entries.at(-1)!.id, ts: 0, summary: "S", replaces: [a], reason: "why not", tokensBefore: "lots" })}\n`,
+  )
+  appendFileSync(
+    s.file,
+    `${JSON.stringify({ type: "compaction", id: "e_d", parentId: "e_c", ts: 0, summary: "T", replaces: ["e_c"], reason: "manual", tokensBefore: -1, model: "m" })}\n`,
+  )
+  const { messages, compactions } = SessionStore.open(s.file).restore()
+  expect((messages[0]!.content[0] as { text: string }).text).toContain("T")
+  expect(compactions.get(messages[0]!)).toEqual({ reason: "manual" })
+})
+
 test("a second compaction can replace the first summary", async () => {
   const dir = await tmp()
   const s = SessionStore.create({ cwd: "/proj", dir })

@@ -505,7 +505,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       } else commitBlock("notice", note(level, text))
     },
     dialogEcho: (draw) => commitBlock("dialog", draw(Math.max(1, terminal.columns))),
-    openSession(boundary, messages: Message[]) {
+    openSession(boundary, messages: Message[], _switched, compactionInfo) {
       // The scrollback keeps what was committed: the boundary says where this session starts.
       flushExplored()
       commit(
@@ -518,6 +518,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
           hyperlinks: host.hyperlinks,
           nodes,
           ...toolOptions(),
+          ...(compactionInfo ? { compactionInfo } : {}),
         }),
       )
     },

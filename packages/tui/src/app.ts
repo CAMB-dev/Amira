@@ -61,7 +61,7 @@ import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
 import { FileIndex, type FileSource } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
 import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
-import { compactTokens, userLines, userText } from "./format.ts"
+import { compactionNotice, compactTokens, userLines, userText } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
@@ -1034,7 +1034,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "compact.end":
         compacting = false
         if (!working) spinner.stop()
-        view.notice("success", `Compacted ${e.data.replaced} older messages into a summary.`)
+        view.notice("success", compactionNotice(e.data.replaced, e.data))
         break
       case "compact.failed":
         compacting = false
@@ -1309,7 +1309,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       resumed: a.messages.length > 0,
       ...(updatedAt !== undefined ? { updatedAt } : {}),
     }
-    view.openSession(boundary, a.messages, switched)
+    view.openSession(boundary, a.messages, switched, (m) => a.compactionInfo(m))
   }
 
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */

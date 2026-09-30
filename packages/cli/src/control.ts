@@ -75,6 +75,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         cwd: a.cwd,
         model: { provider: a.model.provider, model: a.model.id },
         contextWindow: a.model.contextWindow,
+        ...(a.model.contextWindowSource ? { contextWindowSource: a.model.contextWindowSource } : {}),
         ...(a.contextTokens !== undefined ? { contextTokens: a.contextTokens } : {}),
         ...(file && existsSync(file) ? { file } : {}),
         busy: a.busy,

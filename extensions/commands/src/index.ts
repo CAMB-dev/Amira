@@ -20,6 +20,7 @@ import {
   formatTokens,
   table,
   tokensPerSecond,
+  windowLabel,
 } from "./format.ts"
 import { providerCommand } from "./provider-command.ts"
 
@@ -266,7 +267,7 @@ export default defineExtension((api: ExtensionAPI) => {
       const context =
         info.contextTokens !== undefined
           ? `${formatTokens(info.contextTokens)} of ${formatTokens(info.contextWindow)} tokens (${Math.round((info.contextTokens / info.contextWindow) * 100)}%)`
-          : `window ${formatTokens(info.contextWindow)} tokens; nothing sent yet`
+          : "nothing sent yet"
       ctx.print(
         table([
           ["Model", modelRef(info.model)],
@@ -279,6 +280,9 @@ export default defineExtension((api: ExtensionAPI) => {
           ["Session", `${info.id}${info.busy ? " (turn running)" : ""}`],
           ...(info.file ? [["Session file", info.file]] : []),
           ["Context", info.model.provider ? context : "no model yet"],
+          ...(info.model.provider
+            ? [["Window", windowLabel(info.contextWindow, info.contextWindowSource)]]
+            : []),
           ["Output", `${formatTokens(usage.output)} tokens written by this session's replies`],
           [
             "Cache",

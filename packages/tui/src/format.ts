@@ -1,8 +1,10 @@
 import {
+  type CompactionInfo,
   clip,
   formatDuration,
   formatElapsed,
   formatTokens,
+  plural,
   type SpawnGroupInfo,
   type UserMessage,
 } from "@amira/api"
@@ -204,6 +206,46 @@ export const ACTIVITY_CHARS = 40
 
 /** Token counts as every screen writes them: 999, 1.2k, 46k, 2.5M. */
 export const compactTokens = formatTokens
+
+/**
+ * Why a compaction happened: "Compacted automatically at 82% of 128k", "Compacted (you
+ * asked)", ...; plain "Compacted" when that is unknown (a compaction stored before it was kept).
+ */
+export function compactionReason(info: CompactionInfo | undefined): string {
+  switch (info?.reason) {
+    case "threshold": {
+      const { tokensBefore: t, contextWindow: w } = info
+      return t !== undefined && w
+        ? `Compacted automatically at ${Math.round((t / w) * 100)}% of ${compactTokens(w)}`
+        : "Compacted automatically"
+    }
+    case "manual":
+      return "Compacted (you asked)"
+    case "overflow":
+      return "Compacted after the model rejected the request as too long"
+    default:
+      return "Compacted"
+  }
+}
+
+/**
+ * The context before and (estimated) after a compaction, "105k → ~12k tokens", when known.
+ * Not for `overflow`: the size before is the last reply's, smaller than the rejected request.
+ */
+export function compactionSizes(info: CompactionInfo | undefined): string | undefined {
+  if (info?.tokensBefore === undefined || info.tokensAfter === undefined) return undefined
+  if (info.reason === "overflow") return undefined
+  return `${compactTokens(info.tokensBefore)} → ~${compactTokens(info.tokensAfter)} tokens`
+}
+
+/**
+ * The notice a compaction leaves: "Compacted automatically at 82% of 128k: 14 older messages
+ * into a summary (105k → ~12k tokens)."
+ */
+export function compactionNotice(replaced: number, info: CompactionInfo | undefined): string {
+  const sizes = compactionSizes(info)
+  return `${compactionReason(info)}: ${plural(replaced, "older message")} into a summary${sizes ? ` (${sizes})` : ""}.`
+}
 
 /**
  * The tree in front of a sub-agent's rows: under its call, then for each level above its own a

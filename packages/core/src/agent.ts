@@ -23,6 +23,8 @@ import type {
   AskOutcome,
   AskQuestion,
   AskRequest,
+  CompactionInfo,
+  CompactionReason,
   EventMap,
   PendingNotice,
   SessionData,
@@ -39,12 +41,15 @@ import type {
 import {
   type CompactionOptions,
   contextTokens,
+  estimateAfter,
   splitHistory,
   summarize,
   summaryMessages,
+  windowGuessNotice,
 } from "./compaction.ts"
 import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
+import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { newSessionId, type SessionEntryData, type SessionStore } from "./session-store.ts"
@@ -224,10 +229,14 @@ export class Agent {
   #compaction: CompactionOptions
   /** The session entry each message was stored as. */
   #entryIds = new Map<Message, string>()
+  /** Why each compaction in `messages` happened, by its summary's user message. */
+  #compactions = new WeakMap<Message, CompactionInfo>()
   /** Context size reported with the last reply; unknown right after a compaction. */
   #contextTokens: number | undefined
   /** The next reply's context size tells whether the last compaction shrank the context enough. */
   #checkCompaction = false
+  /** The notice that the context window is a guess was shown (once a session). */
+  #windowGuessNoted = false
   /** Automatic compaction waits until the context passes this, after one that did not help. */
   #compactFloor: number | undefined
   #storeFailed = false
@@ -325,6 +334,7 @@ export class Agent {
       const restored = opts.session.restore()
       this.messages = restored.messages
       this.#entryIds = restored.entryIds
+      for (const [m, info] of restored.compactions) this.#compactions.set(m, info)
       this.#contextTokens = restored.contextTokens
       for (const name of restored.loadedTools) this.#loadedTools.add(name)
       if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
@@ -558,6 +568,14 @@ export class Agent {
    */
   entryId(message: Message): string | undefined {
     return this.#entryIds.get(message)
+  }
+
+  /**
+   * Why and how the compaction whose summary `message` is happened (its user message; see
+   * isSummaryMessage). Undefined for other messages and for compactions stored without it.
+   */
+  compactionInfo(message: Message): CompactionInfo | undefined {
+    return this.#compactions.get(message)
   }
 
   get status(): SessionStatus {
@@ -825,6 +843,7 @@ export class Agent {
       let overflowRetried = false
       let overflowCompacted: boolean | undefined
       while (true) {
+        this.#noteWindowGuess(turn)
         if (!compactFailed && this.#needsCompaction()) {
           compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
         }
@@ -847,6 +866,7 @@ export class Agent {
           const overflow = reply.model && isContextOverflow(reply.model)
           if (overflow && !overflowRetried && this.#compaction.auto !== false) {
             overflowRetried = true
+            this.#noteWindowGuess(turn, true)
             overflowCompacted = await this.#compact("overflow", abort.signal, turn)
             if (overflowCompacted === true) continue
           }
@@ -1421,6 +1441,24 @@ export class Agent {
     return tokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
   }
 
+  /**
+   * Once a session, when automatic compaction goes by a context window that is only a guess
+   * (no settings or catalog entry for the model): a notice on where to set it. Only once it
+   * starts to matter, when the context passes half the guessed window or the model rejects a
+   * request as too long (`overflow`), so short sessions stay quiet and a catalog still
+   * loading in the background can name the window first. Sub-agents leave it to their
+   * commander's session.
+   */
+  #noteWindowGuess(turn: Turn, overflow = false) {
+    if (this.#windowGuessNoted || this.parentSessionId !== undefined) return
+    if (this.#compaction.auto === false || this.model.contextWindowSource !== "default") return
+    if (isNoModel(this.model)) return
+    if (!overflow && (this.#contextTokens ?? 0) <= this.model.contextWindow / 2) return
+    this.#windowGuessNoted = true
+    const text = windowGuessNotice(this.model, amiraPath("settings.json"))
+    this.#emit(turn, "extension.notice", { source: "compaction", text, level: "info" })
+  }
+
   #needsCompaction(): boolean {
     if (this.#compaction.auto === false || this.#contextTokens === undefined) return false
     if (this.#compactFloor !== undefined && this.#contextTokens <= this.#compactFloor) return false
@@ -1447,7 +1485,7 @@ export class Agent {
    * there was nothing to compact yet (a long turn may have enough a few steps later).
    */
   async #compact(
-    reason: "threshold" | "manual" | "overflow",
+    reason: CompactionReason,
     signal: AbortSignal,
     turn: Turn | undefined,
     instructions?: string,
@@ -1479,22 +1517,29 @@ export class Agent {
         kept: split.kept.length,
         ...(this.#contextTokens !== undefined ? { tokens: this.#contextTokens } : {}),
       })
+      const supplied = gate.value.summary?.trim()
+      const writer = this.#compaction.model ?? this.model
       const summary =
-        gate.value.summary?.trim() ||
-        (await summarize(
-          this.#ai,
-          this.#compaction.model ?? this.model,
-          split.older,
-          signal,
-          instructions,
-          split.prompt,
-        ))
+        supplied || (await summarize(this.#ai, writer, split.older, signal, instructions, split.prompt))
       if (signal.aborted) throw new Error("aborted")
       const replaces = [
         ...new Set(split.older.flatMap((m) => (this.#entryIds.has(m) ? [this.#entryIds.get(m)!] : []))),
       ]
-      const entryId = this.#store({ type: "compaction", summary, replaces })
       const replacement = summaryMessages(summary, modelRef(this.model))
+      const before = this.#contextTokens
+      const info: CompactionInfo = {
+        reason,
+        ...(before !== undefined
+          ? {
+              tokensBefore: before,
+              tokensAfter: estimateAfter(before, split.older, split.kept, replacement),
+            }
+          : {}),
+        ...(isNoModel(this.model) ? {} : { contextWindow: this.model.contextWindow }),
+        ...(supplied ? {} : { model: modelRef(writer) }),
+      }
+      const entryId = this.#store({ type: "compaction", summary, replaces, ...info })
+      this.#compactions.set(replacement[0]!, info)
       for (const m of replacement) if (entryId) this.#entryIds.set(m, entryId)
       for (const m of split.older) this.#entryIds.delete(m)
       // The summary goes first; everything it does not replace keeps its order after it (in a
@@ -1504,7 +1549,12 @@ export class Agent {
       this.messages.splice(0, this.messages.length, ...replacement, ...rest)
       this.#contextTokens = undefined
       this.#checkCompaction = true
-      this.#emit(turn, "compact.end", { summary, replaced: split.older.length, kept: split.kept.length })
+      this.#emit(turn, "compact.end", {
+        summary,
+        replaced: split.older.length,
+        kept: split.kept.length,
+        ...info,
+      })
       return true
     } catch (err) {
       this.#emit(turn, "compact.failed", { error: err instanceof Error ? err.message : String(err) })

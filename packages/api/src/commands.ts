@@ -1,4 +1,12 @@
-import type { AssistantMessage, JSONSchema, Message, MessageDisplay, ModelRef, Usage } from "@amira/ai"
+import type {
+  AssistantMessage,
+  ContextWindowSource,
+  JSONSchema,
+  Message,
+  MessageDisplay,
+  ModelRef,
+  Usage,
+} from "@amira/ai"
 import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
@@ -198,6 +206,8 @@ export interface SessionInfo {
   cwd: string
   model: ModelRef
   contextWindow: number
+  /** Where `contextWindow` came from; "default" means it is a guess. Unset without a model. */
+  contextWindowSource?: ContextWindowSource
   /** Tokens the context held at the last reply; unknown before one and right after a compaction. */
   contextTokens?: number
   /** Where the session is stored, once it has been written. */
