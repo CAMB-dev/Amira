@@ -326,9 +326,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     replacing: num,
     kept: num,
     "tokens?": num,
+    "native?": { ...bool, description: "The provider's server is asked to compact." },
   }),
   "compact.end": obj({
-    summary: str,
+    summary: { ...str, description: "Empty for a server-side compaction without readable text." },
     replaced: num,
     kept: num,
     reason: strings("threshold", "manual", "overflow"),
@@ -336,6 +337,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     "tokensAfter?": { ...num, description: "Estimated; the next reply reports the real size." },
     "contextWindow?": num,
     "model?": { ...modelRef, description: "The model that wrote the summary." },
+    "native?": { ...modelRef, description: "Set when the provider's server compacted it, for this model." },
+    "layout?": strings("tail", "recent-user"),
+    "fallback?": { ...str, description: "Why server-side compaction was not used though it is on." },
+    "usage?": { ...usage, description: "What the compaction's requests cost." },
   }),
   "compact.failed": obj({ error: str, "blocked?": bool, "empty?": bool }),
   "command.output": obj({

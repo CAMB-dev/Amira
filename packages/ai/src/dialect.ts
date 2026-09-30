@@ -80,6 +80,12 @@ export interface DialectCompaction {
   readonly methods: readonly string[]
   /** Layouts the dialect can replay the checkpoint in; the first is used when another is asked for. */
   readonly layouts: readonly CompactionLayout[]
+  /**
+   * Whether a "tail" checkpoint may cover the first steps of a long turn, with the turn's
+   * prompt sent again after it. False where the kept messages must follow exactly what was
+   * compacted (Anthropic); such compactions are then text summaries.
+   */
+  readonly midTurn: boolean
   /** Whether `baseUrl` is the vendor's own endpoint, where compaction is on by default. */
   official(baseUrl: string): boolean
   /**

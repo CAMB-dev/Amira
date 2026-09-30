@@ -91,6 +91,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         : a.messages
       return all.filter((m): m is AssistantMessage => m.role === "assistant")
     },
+    compactions: () => agent().compactionUsage,
     subagents: () => listSubagents(agent(), session.tree).map((e) => e.info),
     subagentMessages: (id) => subagentMessages(agent(), session.tree, id),
     stopSubagent: (id) =>

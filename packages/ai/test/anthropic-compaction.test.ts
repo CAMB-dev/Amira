@@ -75,6 +75,7 @@ test("on by default only for api.anthropic.com, and only in the tail layout", ()
     dialect: "anthropic-messages",
     methods: ["summarize"],
     layouts: ["tail"],
+    midTurn: false,
   })
   const compatible = setup(compacted, "https://api.deepseek.com/anthropic")
   expect(compatible.ai.nativeCompaction(compatible.ai.model("anthropic/claude-x"))).toBeUndefined()

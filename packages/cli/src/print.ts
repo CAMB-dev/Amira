@@ -145,7 +145,11 @@ export async function runPrint(
         io.stderr(`● compacting ${e.data.replacing} older messages\n`)
         break
       case "compact.end":
-        io.stderr(`● compacted ${e.data.replaced} older messages into a summary\n`)
+        io.stderr(
+          e.data.native
+            ? `● compacted ${e.data.replaced} older messages on the server (${e.data.native.provider})\n`
+            : `● compacted ${e.data.replaced} older messages into a summary\n`,
+        )
         break
       case "compact.failed":
         io.stderr(

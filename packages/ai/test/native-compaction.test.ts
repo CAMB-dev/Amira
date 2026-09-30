@@ -18,6 +18,7 @@ function fakeDialect(outcomes: DialectCompactOutcome[]) {
     compaction: {
       methods: ["first", "second"],
       layouts: ["tail", "recent-user"],
+      midTurn: true,
       official: (baseUrl) => baseUrl.startsWith("https://official."),
       async compact(method, req) {
         calls.push({ method, req })
@@ -83,6 +84,7 @@ test("on by default only on the vendor's own endpoints; compat.compaction decide
     dialect: "fake",
     methods: ["first", "second"],
     layouts: ["tail", "recent-user"],
+    midTurn: true,
   })
   const proxy = setup([], "http://proxy.local/v1")
   expect(proxy.ai.nativeCompaction(proxy.ai.model("p/m"))).toBeUndefined()

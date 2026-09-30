@@ -56,6 +56,7 @@ export function responsesCompaction(
   return {
     methods: ["trigger", "endpoint"],
     layouts: ["tail", "recent-user"],
+    midTurn: true,
     official: isOfficialResponsesUrl,
     compact(method, req, ctx, onProgress) {
       return method === "endpoint" ? viaEndpoint(req, ctx) : viaTrigger(req, ctx, body, readers, onProgress)

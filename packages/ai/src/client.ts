@@ -142,7 +142,7 @@ export function createAi(opts: AiOptions = {}): Ai {
     const skipped = failures.skipped(endpointKey(p.id, hostOf(p.baseUrl), model.id))
     const methods = native.methods.filter((m) => !skipped.has(m))
     if (!methods.length) return undefined
-    return { dialect: model.dialect, methods, layouts: [...native.layouts] }
+    return { dialect: model.dialect, methods, layouts: [...native.layouts], midTurn: native.midTurn }
   }
 
   /** Tries each way the provider has, in order, until one returns a checkpoint (Ai.compact). */

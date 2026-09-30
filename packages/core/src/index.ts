@@ -1,6 +1,7 @@
 export * from "./agent.ts"
 export * from "./commands.ts"
 export * from "./compaction.ts"
+export * from "./compaction-memory.ts"
 export * from "./config/index.ts"
 export * from "./deferred-tools.ts"
 export * from "./event-bus.ts"

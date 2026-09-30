@@ -23,11 +23,13 @@ import {
   AgentTree,
   type Approver,
   type Asker,
+  amiraPath,
   type CompactionOptions,
   commandAliasWarnings,
   defaultSections,
   EventBus,
   ExtensionHost,
+  fileCompactionMemory,
   InterceptorRegistry,
   instructionsSection,
   loadInstructions,
@@ -158,6 +160,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       apiKeys: opts.apiKeys ?? {},
       ...(cached?.catalog ? { catalog: cached.catalog } : {}),
       ...(retry ? { retry } : {}),
+      compactionMemory: fileCompactionMemory(amiraPath("cache", "native-compaction.json")),
     })
   const modelRef = opts.model ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
   const model = modelRef ? resolveModel(ai, modelRef) : NO_MODEL
@@ -534,6 +537,7 @@ function compactionFromSettings(ai: Ai, compact: Settings["compact"]): Compactio
   const out: CompactionOptions = {}
   if (compact.threshold !== undefined) out.threshold = compact.threshold
   if (compact.model) out.model = resolveModel(ai, compact.model)
+  if (compact.layout) out.layout = compact.layout
   return Object.keys(out).length ? out : undefined
 }
 

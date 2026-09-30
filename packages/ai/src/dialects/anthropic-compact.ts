@@ -55,6 +55,7 @@ const OWN_ERRORS =
 export const anthropicCompaction: DialectCompaction = {
   methods: ["summarize"],
   layouts: ["tail"],
+  midTurn: false,
   official(baseUrl) {
     try {
       return new URL(baseUrl).hostname.toLowerCase() === "api.anthropic.com"

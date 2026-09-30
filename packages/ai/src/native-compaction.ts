@@ -22,6 +22,8 @@ export interface NativeCompaction {
   /** Ways still worth trying, in order. */
   methods: string[]
   layouts: CompactionLayout[]
+  /** See DialectCompaction.midTurn. */
+  midTurn: boolean
 }
 
 /** One way that was tried and failed. */

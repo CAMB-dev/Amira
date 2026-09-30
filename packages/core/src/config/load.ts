@@ -85,6 +85,13 @@ function dropProviderEndpoints(settings: Settings, file: string, userFile: strin
         `${file}: "providers.${id}.${key}" is ignored; a project file cannot change where requests and API keys go. Set it in ${userFile} instead`,
       )
     }
+    // Server-side compaction sends the conversation to endpoints (and in forms) the user chose.
+    if (entry.compat?.compaction !== undefined) {
+      delete entry.compat.compaction
+      warnings.push(
+        `${file}: "providers.${id}.compat.compaction" is ignored; server-side compaction is only turned on or off in ${userFile}`,
+      )
+    }
   }
   return warnings
 }
