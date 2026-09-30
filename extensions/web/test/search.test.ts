@@ -87,7 +87,8 @@ test("exa: plain JSON answers, JSON-RPC errors, tool errors, rate limits and the
   expect(
     await exa(q(), backendCtx(ok.fetch, { exa: { apiKeyEnv: "EXA_KEY" } }, { EXA_KEY: "k1" })),
   ).toHaveLength(2)
-  expect(new URL(ok.calls[0]?.url as string).searchParams.get("exaApiKey")).toBe("k1")
+  expect((ok.calls[0]?.init.headers as Record<string, string> | undefined)?.["x-api-key"]).toBe("k1")
+  expect(new URL(ok.calls[0]?.url as string).search).toBe("")
   await expect(exa(q(), backendCtx(ok.fetch, { exa: { apiKeyEnv: "EXA_KEY" } }))).rejects.toThrow(
     "EXA_KEY is not set",
   )
