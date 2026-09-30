@@ -510,6 +510,28 @@ test("update keeps going past a package that fails, which keeps its files and pi
   expect(readManifest(path.join(home, "packages", "git-pkg")).version).toBe("2.0.0")
 })
 
+test("an install or update whose lock file cannot be written puts the previous files back", async () => {
+  const src = makePackage(path.join(dir, "src"), "lock-pkg", "1.0.0")
+  await installPackage(src, { scope: user(), cwd })
+  const lockFile = path.join(home, "packages.lock")
+  const before = readFileSync(lockFile, "utf8")
+  const installed = path.join(home, "packages", "lock-pkg")
+  // writeLock writes this temporary file first: a directory in its place makes the write fail.
+  mkdirSync(`${lockFile}.${process.pid}.tmp`)
+
+  makePackage(src, "lock-pkg", "2.0.0")
+  const [u] = await updatePackages({ scope: user(), cwd })
+  expect(u).toMatchObject({ name: "lock-pkg", error: expect.any(String) })
+  expect(readManifest(installed).version).toBe("1.0.0")
+  expect(readFileSync(lockFile, "utf8")).toBe(before)
+
+  // A first install that cannot be recorded leaves nothing behind.
+  const other = makePackage(path.join(dir, "other"), "new-pkg", "1.0.0")
+  await expect(installPackage(other, { scope: user(), cwd })).rejects.toThrow()
+  expect(readdirSync(path.join(home, "packages"))).toEqual(["lock-pkg"])
+  expect(readFileSync(lockFile, "utf8")).toBe(before)
+})
+
 test("update reads the index afresh, and updates from the recorded source when the index is out of reach", async () => {
   const repo = path.join(dir, "exts")
   makePackage(path.join(repo, "packages", "sub-pkg"), "sub-pkg", "0.3.0")
