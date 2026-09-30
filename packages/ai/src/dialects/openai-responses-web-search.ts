@@ -31,14 +31,13 @@ export class ResponsesWebSearch {
     yield snapshot(block)
   }
 
-  /** response.web_search_call.* status events; `completed` marks the search done before its item is. */
+  /**
+   * response.web_search_call.* status events. The search counts as done once its item is,
+   * which says what was searched; these only start it, for servers that skip the added item.
+   */
   *event(ev: any, key: string): Generator<StreamEvent> {
-    const known = this.#calls.has(key)
-    const block = this.#blockFor(key, { id: ev?.item_id })
-    if (ev?.type === "response.web_search_call.completed" && block.status === "running") {
-      block.status = "done"
-      yield snapshot(block)
-    } else if (!known) yield snapshot(block)
+    if (this.#calls.has(key)) return
+    yield snapshot(this.#blockFor(key, { id: ev?.item_id }))
   }
 
   /** An annotation streamed in for a text block. */

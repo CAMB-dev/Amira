@@ -14,8 +14,14 @@ export const TOOL_SEARCH = "tool_search"
 /**
  * What the model is offered on a call: active tools, then the deferred ones this session
  * loaded (in load order). tool_search itself is only offered while something is deferred.
+ * `nativeWebSearch`: the model searches on the provider's side, so tools that would do the
+ * same (supersededBy "webSearch") are left out.
  */
-export function offeredTools(registry: ToolRegistry, loaded: Iterable<string>): ToolSpec[] {
+export function offeredTools(
+  registry: ToolRegistry,
+  loaded: Iterable<string>,
+  opts: { nativeWebSearch?: boolean } = {},
+): ToolSpec[] {
   const deferred = registry.deferred()
   const active = registry.active().filter((t) => t.name !== TOOL_SEARCH || deferred.length > 0)
   const byName = new Map(deferred.map((t) => [t.name, t]))
@@ -24,11 +30,14 @@ export function offeredTools(registry: ToolRegistry, loaded: Iterable<string>): 
     const t = byName.get(name)
     if (t) extra.push(t)
   }
-  return [...active, ...extra].map((t) => ({
-    name: t.name,
-    description: t.description,
-    parameters: t.parameters,
-  }))
+  const superseded = (t: ToolDefinition) => opts.nativeWebSearch === true && t.supersededBy === "webSearch"
+  return [...active, ...extra]
+    .filter((t) => !superseded(t))
+    .map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    }))
 }
 
 /** The system prompt section naming every deferred tool; empty when there are none. */

@@ -4,6 +4,7 @@ import type {
   ModelErrorInfo,
   ModelErrorKind,
   ModelRef,
+  ServerToolBlock,
   Usage,
   UserMessage,
 } from "@amira/ai"
@@ -137,6 +138,11 @@ export interface EventMap {
         name?: string
         argsDelta: string
       }
+    /**
+     * A tool the provider runs itself (its hosted web search) started or changed state: the
+     * block as it is now, sent again on each change. Never executed locally; no tool events.
+     */
+    | { kind: "serverTool"; block: ServerToolBlock }
   "message.end": { message: AssistantMessage }
   "tool.execute.start": { toolCallId: string; name: string; args: Record<string, unknown> }
   "tool.execute.update": { toolCallId: string; name: string; partial: ToolResult }

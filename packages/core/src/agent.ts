@@ -2,6 +2,7 @@ import {
   type Ai,
   type AssistantMessage,
   describeModelError,
+  hasNativeWebSearch,
   invalidArgs,
   isContextOverflow,
   isNoModel,
@@ -716,7 +717,7 @@ export class Agent {
       systemPrompt: built.value.systemPrompt,
       // As sent: the ai client drops what only frontends read.
       messages: modelMessages(built.value.messages),
-      tools: offeredTools(this.tools, this.#loadedTools),
+      tools: offeredTools(this.tools, this.#loadedTools, { nativeWebSearch: hasNativeWebSearch(this.model) }),
     }
   }
 
@@ -992,7 +993,9 @@ export class Agent {
           model: this.model,
           systemPrompt: ctx.value.systemPrompt,
           messages: ctx.value.messages,
-          tools: offeredTools(this.tools, this.#loadedTools),
+          tools: offeredTools(this.tools, this.#loadedTools, {
+            nativeWebSearch: hasNativeWebSearch(this.model),
+          }),
           ...(this.#maxTokens ? { maxTokens: this.#maxTokens } : {}),
         },
         turn.signal,
@@ -1032,6 +1035,10 @@ export class Agent {
               ...(ev.index !== undefined ? { index: ev.index } : {}),
               ...(ev.name ? { name: ev.name } : {}),
             })
+            break
+          // The provider runs it: shown as it goes, never executed here.
+          case "serverTool":
+            this.#emit(turn, "message.delta", { kind: "serverTool", block: ev.block })
             break
           case "done":
             final = ev.message

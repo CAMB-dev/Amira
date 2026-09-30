@@ -143,6 +143,11 @@ export type WebSearchBackend = "exa" | "brave" | "tavily" | "searxng"
  * fetch.allowPrivateNetwork) are only taken from the user file.
  */
 export interface WebSettings {
+  /**
+   * false: never use a provider's hosted web search (providers.<id>.compat.webSearch), so
+   * every model gets the web_search tool. Default true.
+   */
+  nativeSearch?: boolean
   search?: {
     /** Default "exa" (Exa's hosted MCP server, no key needed). */
     backend?: WebSearchBackend
