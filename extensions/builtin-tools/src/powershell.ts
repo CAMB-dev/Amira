@@ -64,7 +64,8 @@ export const POWERSHELL_SCRIPT = [
   // unless its pipeline runs commands, which set it; such a return runs in a try whose finally
   // reads it (not after: this wrapper's own filters set it as the output passes), and the try's
   // first line, a Clear-Variable that succeeds or fails silently, puts back the $? the try reset.
-  // A return nested in another is left alone.
+  // What is added has no line break, so an error's position still names its line. A return
+  // nested in another is left alone.
   "function __amira_top($r) {",
   "  if ($r.Parent -isnot [System.Management.Automation.Language.NamedBlockAst] -and $r.Parent -isnot [System.Management.Automation.Language.StatementBlockAst]) { return $false }",
   "  for ($p = $r.Parent; $p; $p = $p.Parent) {",
@@ -81,7 +82,7 @@ export const POWERSHELL_SCRIPT = [
   "    $r = $rs[$i]",
   "    $new = '$__amira_ok = $?; ' + $r.Extent.Text",
   "    if ($r.Pipeline -and $r.Pipeline.Find({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true)) {",
-  "      $new = \"`$__amira_ok = `$?; try { Clear-Variable ('__amira_nx', '__amira_ok')[[int]`$__amira_ok] -ErrorAction Ignore`n$($r.Extent.Text)`n} finally { `$__amira_ok = `$? }\"",
+  "      $new = \"`$__amira_ok = `$?; try { Clear-Variable ('__amira_nx', '__amira_ok')[[int]`$__amira_ok] -ErrorAction Ignore; $($r.Extent.Text) } finally { `$__amira_ok = `$? }\"",
   "    }",
   "    $text = $text.Substring(0, $r.Extent.StartOffset) + $new + $text.Substring($r.Extent.EndOffset)",
   "  }",

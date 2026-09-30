@@ -132,6 +132,10 @@ for (const path of editions) {
       expect(await exit(`Write-Output a; return (${missing})`)).toBe("1")
       // Only the command's own top level: a return inside a script block or function is its own.
       expect(textOf(await run(`${missing}; & { return }; Write-Output z`))).toContain("z\n\nExit code: 0")
+      // What a return records does not move the lines after it: an error there names its own line.
+      expect(textOf(await run("if ($false) { return (Write-Output x) }\nthrow 'boom'"))).toMatch(
+        /:2 \S+:\s*1\r?\n\+ throw 'boom'/,
+      )
     })
 
     test("exit and throw inside the command are honoured", async () => {
