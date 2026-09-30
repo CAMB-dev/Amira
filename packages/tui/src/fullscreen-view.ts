@@ -38,6 +38,7 @@ import { commandEchoLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { sessionBoundary, summaryText } from "./history.ts"
+import { replyCitations, serverToolCall } from "./server-tools.ts"
 import {
   endNode,
   isActive,
@@ -765,12 +766,21 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           if (m.role === "user") blocks.push(new SummaryBlock(summaryText(m), compactionInfo?.(m)))
         } else if (m.role === "user") blocks.push(userBlock(m))
         else if (m.role === "assistant") {
-          for (const b of m.content) {
+          // The sources the reply cited follow its last text, as they did live.
+          const sources = replyCitations(m.content)
+          const lastText = m.content.findLastIndex((b) => b.type === "text" && b.text.trim() !== "")
+          for (const [i, b] of m.content.entries()) {
             if (b.type === "thinking" && (b.text.trim() || b.redacted))
               blocks.push(new ReasoningBlock(b.text, undefined))
             else if (b.type === "text" && b.text.trim())
-              blocks.push(new ReplyBlock(b.text, false, host.hyperlinks))
-            else if (b.type === "toolCall") {
+              blocks.push(new ReplyBlock(i === lastText ? b.text + sources : b.text, false, host.hyperlinks))
+            else if (b.type === "serverTool") {
+              // A search the provider ran shows as the tool row it was live.
+              const { rejected, ...call } = serverToolCall(b)
+              const row = new ToolBlock(b.id, call.name, call.args, host.sessionId())
+              row.end = { result: call.result, ...(rejected ? { rejected } : {}) }
+              blocks.push(row)
+            } else if (b.type === "toolCall") {
               const call = new ToolBlock(b.id, b.name, b.args, host.sessionId())
               const result = results.get(b.id)
               call.end = result ? { result } : { result: { content: [], isError: true }, rejected: "aborted" }

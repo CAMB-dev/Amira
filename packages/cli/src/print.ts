@@ -1,3 +1,4 @@
+import { describeServerTool, messageCitations } from "@amira/ai"
 import { type AnyEvent, fallbackTitle } from "@amira/api"
 import { type Agent, type CommandHost, parseCommandLine, type TurnResult, type UiRequests } from "@amira/core"
 
@@ -66,6 +67,8 @@ export async function runPrint(
   // Questions for the user (ask_user) are not even asked: nobody is there to answer.
   if (opts.ui) opts.ui.unavailable = "print mode"
   let endedWithNewline = true
+  /** Hosted web searches already printed, by id. */
+  const searched = new Set<string>()
   /** Name, role and line indent of each sub-agent, by session id. */
   const subagents = new Map<string, { title: string; role: string; indent: string }>()
   /** How the main session's latest turn ended. */
@@ -124,8 +127,27 @@ export async function runPrint(
         if (e.data.kind === "text") {
           io.stdout(e.data.text)
           endedWithNewline = e.data.text.endsWith("\n")
+        } else if (e.data.kind === "serverTool" && e.data.block.status !== "running") {
+          // The provider's own search: one line once it finished, as a tool call gets.
+          if (searched.has(e.data.block.id)) break
+          searched.add(e.data.block.id)
+          if (!endedWithNewline) {
+            io.stdout("\n")
+            endedWithNewline = true
+          }
+          const failed = e.data.block.status === "failed" ? " (failed)" : ""
+          io.stderr(`● ${describeServerTool(e.data.block)}${failed}\n`)
         }
         break
+      case "message.end": {
+        // The sources the reply cited, after it, with the reply.
+        const sources = messageCitations(e.data.message.content)
+        if (!sources.length) break
+        const list = sources.map((s) => `- ${s.title ? `${s.title}: ` : ""}${s.url}`).join("\n")
+        io.stdout(`${endedWithNewline ? "" : "\n"}\nSources:\n${list}\n`)
+        endedWithNewline = true
+        break
+      }
       case "tool.execute.start":
         // Finish an unterminated line of reply text so the tool line starts on its own row.
         if (!endedWithNewline) {

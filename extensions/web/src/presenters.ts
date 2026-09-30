@@ -16,13 +16,24 @@ function size(chars: number): string {
   return chars < 1000 ? `${chars} chars` : `${(chars / 1000).toFixed(1)}k chars`
 }
 
-export const webSearchPresenter: ToolPresenter<{ query: string }, WebSearchDetails> = {
-  summary: (args) => `"${str(args.query)}"`,
+/**
+ * Also shows the provider's hosted web search (the TUI's rows for it carry `native` details):
+ * it searches (`query`), opens a page (`url`) or looks for a `pattern` in one.
+ */
+export const webSearchPresenter: ToolPresenter<
+  { query?: string; url?: string; pattern?: string },
+  WebSearchDetails & { native?: boolean }
+> = {
+  summary(args) {
+    if (args.query !== undefined || !str(args.url)) return `"${str(args.query)}"`
+    return str(args.pattern) ? `"${str(args.pattern)}" in ${str(args.url)}` : str(args.url)
+  },
   result(call) {
     if (call.result.isError) return undefined
-    const d = detailsOf<WebSearchDetails>(call, "results")
+    const d = detailsOf<WebSearchDetails & { native?: boolean }>(call, "results")
     if (!d) return undefined
     const n = d.results.length
+    if (d.native) return n ? `${n} source${n === 1 ? "" : "s"} · ${d.backend}` : d.backend
     return `${n} result${n === 1 ? "" : "s"} · ${d.backend}`
   },
   body: (call, { detail }) => (detail === "full" && !call.result.isError ? textLines(call.text) : []),

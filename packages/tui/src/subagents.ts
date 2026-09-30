@@ -1,6 +1,7 @@
 import { type AnyEvent, type EventEnvelope, fallbackTitle, type SpawnGroupInfo } from "@amira/api"
 import type { Theme } from "@amira/tui-kit"
 import { type SubagentLine, spawnGroupRow, subagentEndLine, subagentRows, treeLayout } from "./format.ts"
+import { serverToolCall } from "./server-tools.ts"
 import { callSummary, type PresenterSource } from "./tool-view.ts"
 
 /** A sub-agent the UI follows: its row, where it hangs, and how it ended once it did. */
@@ -77,6 +78,10 @@ export function updateNode(node: SubagentNode, e: AnyEvent, presenters: Presente
   if (e.type === "session.start") node.startedAt ??= e.ts
   else if (e.type === "tool.execute.start") {
     node.activity = { name: e.data.name, summary: callSummary(presenters?.get(e.data.name), e.data.args) }
+  } else if (e.type === "message.delta" && e.data.kind === "serverTool") {
+    // The provider's own search, shown like a tool it runs.
+    const { name, args } = serverToolCall(e.data.block)
+    node.activity = { name, summary: callSummary(presenters?.get(name), args) }
   } else if (e.type === "message.end") {
     const u = e.data.message.usage
     if (u) node.tokens += u.input + u.output + u.cacheRead + u.cacheWrite

@@ -3668,3 +3668,64 @@ test("commands get the common keys as bound now, for /help; the transcript's onl
     await exited
   }
 })
+
+for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: a hosted web search shows as a row, then the reply and the sources it cited`, async () => {
+    const { ai, terminal, all, shows, idle, exited } = await setup([], {
+      settings: { mode },
+      cols: 80,
+      rows: 30,
+    })
+    const search = {
+      type: "serverTool" as const,
+      id: "ws_1",
+      name: "web_search",
+      input: { type: "search", query: "node lts" },
+      status: "done" as const,
+    }
+    const url = "https://nodejs.org/en/download"
+    let release!: () => void
+    const searched = new Promise<void>((r) => {
+      release = r
+    })
+    // The mock provider searching on its side: the row shows while the search runs.
+    ai.registerDialect({
+      id: "mock",
+      async *stream(req) {
+        yield { type: "start" }
+        yield { type: "text.delta", text: "Let me check." }
+        yield { type: "serverTool", block: { ...search, status: "running" } }
+        await searched
+        yield { type: "serverTool", block: search }
+        yield { type: "text.delta", text: "v24 is the LTS." }
+        yield {
+          type: "done",
+          message: {
+            role: "assistant",
+            model: { provider: req.model.provider, model: req.model.id },
+            content: [
+              { type: "text", text: "Let me check." },
+              search,
+              { type: "text", text: "v24 is the LTS.", citations: [{ url, title: "Download Node.js" }] },
+            ],
+            stopReason: "end",
+          },
+        }
+      },
+    })
+    terminal.send("which node?\r")
+    await shows("web_search node lts")
+    release()
+    await shows("1. Download Node.js")
+    await idle()
+    const text = all()
+    expect(text.indexOf("Let me check.")).toBeLessThan(text.indexOf("web_search"))
+    expect(text.indexOf("web_search")).toBeLessThan(text.indexOf("v24 is the LTS."))
+    expect(text.indexOf("v24 is the LTS.")).toBeLessThan(text.indexOf("Sources:"))
+    expect(text).toContain("● web_search")
+    // The row is shown once, not once per state.
+    expect(text.split("● web_search").length).toBe(2)
+    terminal.send("\x03")
+    await exited
+  })
+}

@@ -37,3 +37,21 @@ test("web_fetch: the URL as head, where it ended up and its size as result", () 
     "→ https://www.x.dev/ · 12.3k chars",
   )
 })
+
+test("web_search also shows the provider's hosted search rows: sources, pages opened", () => {
+  const native = {
+    backend: "provider search",
+    results: [{ title: "D", url: "https://d" }],
+    failures: [],
+    native: true,
+  }
+  expect(
+    webSearchPresenter.result!(view({ query: "node" }, { ...textResult("x"), details: native }) as never),
+  ).toBe("1 source · provider search")
+  const none = { ...native, results: [] }
+  expect(
+    webSearchPresenter.result!(view({ query: "node" }, { ...textResult("x"), details: none }) as never),
+  ).toBe("provider search")
+  expect(webSearchPresenter.summary!({ url: "https://a.b" })).toBe("https://a.b")
+  expect(webSearchPresenter.summary!({ url: "https://a.b", pattern: "v2" })).toBe('"v2" in https://a.b')
+})
