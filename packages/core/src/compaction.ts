@@ -1,4 +1,12 @@
-import type { Ai, AssistantMessage, Message, ModelInfo, ModelRef, Usage } from "@amira/ai"
+import {
+  type Ai,
+  type AssistantMessage,
+  type Message,
+  type ModelInfo,
+  type ModelRef,
+  serverToolText,
+  type Usage,
+} from "@amira/ai"
 import { formatTokens } from "@amira/api"
 
 export interface CompactionOptions {
@@ -42,6 +50,7 @@ export function estimateTokens(messages: Message[]): number {
     for (const b of m.content) {
       if (b.type === "text" || b.type === "thinking") chars += b.text.length
       else if (b.type === "toolCall") chars += b.name.length + JSON.stringify(b.args).length
+      else if (b.type === "serverTool") chars += (b.signature?.value ?? JSON.stringify(b.input)).length
       else images++
     }
   }
@@ -153,6 +162,7 @@ export function renderTranscript(messages: Message[], maxBlock = 2000): string {
       for (const b of m.content) {
         if (b.type === "text" && b.text.trim()) out.push(`[assistant]\n${clip(b.text)}`)
         else if (b.type === "toolCall") out.push(`[tool call: ${b.name}]\n${clip(JSON.stringify(b.args))}`)
+        else if (b.type === "serverTool") out.push(`[assistant]\n${serverToolText(b)}`)
       }
     } else {
       const text = m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n")

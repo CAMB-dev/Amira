@@ -11,6 +11,7 @@ import {
 } from "@amira/tui-kit"
 import { compactionReason, compactionSizes, reasoningLines, replyRows, userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { replyCitations, serverToolCall } from "./server-tools.ts"
 import {
   explorationOf,
   exploredLines,
@@ -87,16 +88,28 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     } else if (m.role === "user") {
       block("user", userLines(theme, m, opts.width))
     } else if (m.role === "assistant") {
-      for (const b of m.content) {
+      // The sources the reply cited follow its last text, as they did live.
+      const sources = replyCitations(m.content)
+      const lastText = m.content.findLastIndex((b) => b.type === "text" && b.text.trim() !== "")
+      for (const [i, b] of m.content.entries()) {
         if (b.type === "thinking" && (b.text.trim() || b.redacted)) {
           block("reasoning", reasoningLines(theme, b.text, { expanded: detail === "full" }, opts.width))
         } else if (b.type === "text" && b.text.trim()) {
           // Markdown, as the reply showed when it streamed in.
           const width = Math.max(1, opts.width - visibleWidth(gutter))
+          const text = i === lastText ? b.text + sources : b.text
           const rows = opts.nodes
-            ? committedMarkdown(b.text, width, theme, markdownOptions(opts))
-            : renderMarkdown(b.text, width, theme, markdownOptions(opts))
+            ? committedMarkdown(text, width, theme, markdownOptions(opts))
+            : renderMarkdown(text, width, theme, markdownOptions(opts))
           block("assistant", replyRows(rows))
+        } else if (b.type === "serverTool") {
+          // A search the provider ran shows as the tool row it was live.
+          const { rejected, ...call } = serverToolCall(b)
+          const finished: FinishedCall = { ...call, ...(rejected ? { rejected } : {}) }
+          block(
+            "tool",
+            finishedToolLines(theme, opts.presenters?.get(b.name), finished, detail, opts.width, toolOpts),
+          )
         } else if (b.type === "toolCall") {
           const result = results.get(b.id) ?? { content: [], isError: true }
           const presenter = opts.presenters?.get(b.name)

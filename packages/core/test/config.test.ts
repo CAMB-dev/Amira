@@ -163,6 +163,27 @@ test("web settings are checked", () => {
   expect(() => validateSettings({ web: { fetch: { maxChars: 0 } } }, "f")).toThrow("web.fetch.maxChars")
 })
 
+test("hosted web search settings: per provider and model, and a switch for all", () => {
+  const ok = {
+    web: { nativeSearch: false },
+    providers: {
+      p: {
+        dialect: "openai-responses",
+        baseUrl: "http://localhost:8317/v1",
+        compat: { webSearch: true },
+        models: [{ id: "m", caps: { webSearch: false } }],
+      },
+    },
+  }
+  const r = validateSettings(ok, "f")
+  expect(r.settings).toEqual(ok)
+  expect(r.warnings).toEqual([])
+  expect(() => validateSettings({ web: { nativeSearch: "yes" } }, "f")).toThrow("web.nativeSearch")
+  expect(() => validateSettings({ providers: { p: { compat: { webSearch: "on" } } } }, "f")).toThrow(
+    "providers.p.compat.webSearch",
+  )
+})
+
 test("command aliases are checked: alias names like command names, values command lines", () => {
   const ok = { commandAliases: { ds: "model deepseek/deepseek-flash", "?": "help", m: " model " } }
   expect(validateSettings(ok, "f").settings).toEqual(ok)

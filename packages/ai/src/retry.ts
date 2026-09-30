@@ -11,7 +11,8 @@ export interface RetryOptions {
   maxDelayMs?: number
 }
 
-const CONTENT = new Set<StreamEvent["type"]>(["text.delta", "thinking.delta", "toolCall.delta"])
+// A hosted search already shown (and paid for) counts too: sending again would search again.
+const CONTENT = new Set<StreamEvent["type"]>(["text.delta", "thinking.delta", "toolCall.delta", "serverTool"])
 
 /**
  * Sends a request again after a retryable failure, as long as nothing was streamed yet (D52):

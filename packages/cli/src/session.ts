@@ -158,6 +158,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       apiKeys: opts.apiKeys ?? {},
       ...(cached?.catalog ? { catalog: cached.catalog } : {}),
       ...(retry ? { retry } : {}),
+      // Hosted web search is per provider (compat.webSearch); this turns it off for all.
+      ...(settings.web?.nativeSearch === false ? { webSearch: false } : {}),
     })
   const modelRef = opts.model ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
   const model = modelRef ? resolveModel(ai, modelRef) : NO_MODEL

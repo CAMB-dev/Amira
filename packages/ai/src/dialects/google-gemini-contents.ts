@@ -1,3 +1,4 @@
+import { serverToolText } from "../server-tools.ts"
 import type { AssistantMessage, ImageBlock, Message, ToolCallBlock, ToolResultMessage } from "../types.ts"
 import { MISSING_RESULT, resultText, ToolResults } from "./tool-results.ts"
 
@@ -73,6 +74,9 @@ function modelParts(m: AssistantMessage): GeminiPart[] {
       if (b.text) parts.push({ text: b.text })
     } else if (b.type === "toolCall") {
       parts.push({ functionCall: { ...(isSynthetic(b.id) ? {} : { id: b.id }), name: b.name, args: b.args } })
+    } else if (b.type === "serverTool") {
+      // Another provider's hosted tool; the ai client turns these into text before they get here.
+      parts.push({ text: serverToolText(b) })
     } else if (b.signature?.dialect === GEMINI_DIALECT) {
       const sig = b.signature.value
       const prev = parts.at(-1)

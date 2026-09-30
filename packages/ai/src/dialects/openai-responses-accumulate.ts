@@ -17,6 +17,7 @@ import {
   type MessageSignature,
   RESPONSES_DIALECT,
 } from "./openai-responses-input.ts"
+import { ResponsesWebSearch } from "./openai-responses-web-search.ts"
 import { madeUpIdPrefix } from "./tool-results.ts"
 
 interface Call {
@@ -44,6 +45,7 @@ export class ResponsesAccumulator {
   readonly #reasoning = new Map<string, Reasoning>()
   readonly #texts = new Map<string, TextBlock>()
   readonly #messages = new Map<string, MessageSignature>()
+  readonly #webSearch = new ResponsesWebSearch(() => this.message)
   #terminal: StreamEvent | undefined
 
   constructor(model: ModelRef) {
@@ -72,6 +74,16 @@ export class ResponsesAccumulator {
         break
       case "response.reasoning_text.delta":
         yield* this.#thinking(itemKey(ev), ev.delta, ev.content_index)
+        break
+      // A hosted web search runs on the server, inside the response: its completion is not the
+      // response's, which goes on (the answer follows) until response.completed.
+      case "response.web_search_call.in_progress":
+      case "response.web_search_call.searching":
+      case "response.web_search_call.completed":
+        yield* this.#webSearch.event(ev, itemKey(ev))
+        break
+      case "response.output_text.annotation.added":
+        this.#webSearch.annotation(this.#texts.get(itemKey(ev)), ev.annotation)
         break
       case "response.function_call_arguments.delta":
         yield* this.#args(itemKey(ev), ev.delta)
@@ -129,6 +141,7 @@ export class ResponsesAccumulator {
     if (item?.type === "function_call") yield* this.#call(key, item)
     else if (item?.type === "reasoning") this.#reasoningFor(key)
     else if (item?.type === "message") this.#noteMessage(key, item)
+    else if (item?.type === "web_search_call") yield* this.#webSearch.item(key, item, false)
   }
 
   *#itemDone(item: any, outputIndex: unknown): Generator<StreamEvent> {
@@ -162,12 +175,16 @@ export class ResponsesAccumulator {
       }
     } else if (item?.type === "message") {
       this.#noteMessage(key, item)
-      if (this.#texts.has(key)) return
-      // Servers that skip the deltas still send the whole message here.
-      for (const part of item.content ?? []) {
-        if (part?.type === "output_text" && part.text) yield* this.#text(key, part.text)
-        else if (part?.type === "refusal" && part.refusal) yield* this.#text(key, part.refusal)
+      if (!this.#texts.has(key)) {
+        // Servers that skip the deltas still send the whole message here.
+        for (const part of item.content ?? []) {
+          if (part?.type === "output_text" && part.text) yield* this.#text(key, part.text)
+          else if (part?.type === "refusal" && part.refusal) yield* this.#text(key, part.refusal)
+        }
       }
+      this.#webSearch.message(this.#texts.get(key), item)
+    } else if (item?.type === "web_search_call") {
+      yield* this.#webSearch.item(key, item, true)
     }
   }
 

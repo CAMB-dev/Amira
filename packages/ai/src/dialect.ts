@@ -11,6 +11,13 @@ export interface Endpoint {
 export interface ProviderCompat {
   /** Field carrying the output token limit. Defaults to "max_tokens". */
   maxTokensField?: "max_tokens" | "max_completion_tokens"
+  /**
+   * Offer the provider's hosted web search (openai-responses: the `web_search` tool) to this
+   * provider's models; a model's `caps.webSearch` wins. By default only on the vendor's own
+   * endpoints (api.openai.com and Azure OpenAI hosts). The client web_search tool is then
+   * hidden from that model; web_fetch stays.
+   */
+  webSearch?: boolean
   /** Whether to ask for usage in the stream. Defaults to true. */
   streamUsage?: boolean
   /**

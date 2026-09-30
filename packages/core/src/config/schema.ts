@@ -114,6 +114,7 @@ const modelOverrides = (required: string[]) =>
         thinking: boolean,
         promptCache: boolean,
         parallelToolCalls: boolean,
+        webSearch: boolean,
       }),
       cost: object({ input: number, output: number, cacheRead: number, cacheWrite: number }, [
         "input",
@@ -133,6 +134,7 @@ const provider = object(
     catalogId: expect("a string or false", (v) => typeof v === "string" || v === false),
     compat: object({
       maxTokensField: oneOf("max_tokens", "max_completion_tokens"),
+      webSearch: boolean,
       streamUsage: boolean,
       thinking: oneOf("adaptive", "budget"),
     }),
@@ -180,6 +182,7 @@ const settings = object({
   }),
   skills: object({ dirs: list(string) }),
   web: object({
+    nativeSearch: boolean,
     search: object({
       backend: webBackend,
       fallback: list(webBackend),

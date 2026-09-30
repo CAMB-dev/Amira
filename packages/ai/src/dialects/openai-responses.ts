@@ -1,4 +1,5 @@
 import type { Dialect, DialectContext } from "../dialect.ts"
+import { hasNativeWebSearch } from "../server-tools.ts"
 import { parseSSE } from "../sse.ts"
 import { adaptThinking } from "../thinking.ts"
 import type { ModelRequest, ReasoningEffort, StreamEvent } from "../types.ts"
@@ -53,7 +54,21 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
     body.reasoning = { effort: effortOf(req.reasoning.effort), summary: "auto" }
     body.include = ["reasoning.encrypted_content"]
   }
+  addWebSearch(req, body)
   return body
+}
+
+/**
+ * The hosted web search, as a server tool beside the functions (never as a function of that
+ * name), when the model has it (hasNativeWebSearch); the model decides when to search. The
+ * sources it looked at are asked for, where the server lists them.
+ */
+function addWebSearch(req: ModelRequest, body: Record<string, unknown>) {
+  if (!hasNativeWebSearch(req.model)) return
+  const tools = (body.tools as Record<string, unknown>[] | undefined) ?? []
+  if (!tools.some((t) => t.type === "web_search")) tools.push({ type: "web_search" })
+  body.tools = tools
+  body.include = [...((body.include as string[] | undefined) ?? []), "web_search_call.action.sources"]
 }
 
 function effortOf(e: ReasoningEffort): "low" | "medium" | "high" {

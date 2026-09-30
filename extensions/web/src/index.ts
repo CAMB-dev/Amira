@@ -79,6 +79,8 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
       required: ["query"],
     },
     concurrency: "parallel",
+    // A model that searches on the provider's side (hosted web search) does not get this one.
+    supersededBy: "webSearch",
     async execute(p, ctx) {
       const query = typeof p.query === "string" ? p.query.trim() : ""
       if (!query) return textResult("web_search needs a non-empty query", true)

@@ -2,6 +2,7 @@ import {
   type Ai,
   type AssistantMessage,
   describeModelError,
+  hasNativeWebSearch,
   invalidArgs,
   isContextOverflow,
   isNoModel,
@@ -716,7 +717,7 @@ export class Agent {
       systemPrompt: built.value.systemPrompt,
       // As sent: the ai client drops what only frontends read.
       messages: modelMessages(built.value.messages),
-      tools: offeredTools(this.tools, this.#loadedTools),
+      tools: offeredTools(this.tools, this.#loadedTools, { nativeWebSearch: hasNativeWebSearch(this.model) }),
     }
   }
 
@@ -950,12 +951,18 @@ export class Agent {
     }
   }
 
+  /** Deferred tools this model may load: not those its hosted web search stands in for. */
+  #offeredDeferred() {
+    const native = hasNativeWebSearch(this.model)
+    return this.tools.deferred().filter((t) => !(native && t.supersededBy === "webSearch"))
+  }
+
   /** The system prompt and history for a model call, through the system.build and context.build interceptors. */
   async #buildContext(signal: AbortSignal) {
     // The core owns the "deferred-tools" section: interceptors see it filled in, and it is
     // listed again afterwards so tools registered while they waited (e.g. MCP servers that
     // were still connecting) are included, unless an interceptor rewrote the section.
-    const listed = deferredToolsSection(this.tools.deferred())
+    const listed = deferredToolsSection(this.#offeredDeferred())
     const built = await this.interceptors.run(
       "system.build",
       { sections: setSection(this.#sections, "deferred-tools", listed).map((s) => ({ ...s })) },
@@ -963,7 +970,7 @@ export class Agent {
     )
     let sections = built.value.sections
     if (sections.find((s) => s.name === "deferred-tools")?.text === listed) {
-      sections = setSection(sections, "deferred-tools", deferredToolsSection(this.tools.deferred()))
+      sections = setSection(sections, "deferred-tools", deferredToolsSection(this.#offeredDeferred()))
     }
     return this.interceptors.run(
       "context.build",
@@ -992,7 +999,9 @@ export class Agent {
           model: this.model,
           systemPrompt: ctx.value.systemPrompt,
           messages: ctx.value.messages,
-          tools: offeredTools(this.tools, this.#loadedTools),
+          tools: offeredTools(this.tools, this.#loadedTools, {
+            nativeWebSearch: hasNativeWebSearch(this.model),
+          }),
           ...(this.#maxTokens ? { maxTokens: this.#maxTokens } : {}),
         },
         turn.signal,
@@ -1032,6 +1041,10 @@ export class Agent {
               ...(ev.index !== undefined ? { index: ev.index } : {}),
               ...(ev.name ? { name: ev.name } : {}),
             })
+            break
+          // The provider runs it: shown as it goes, never executed here.
+          case "serverTool":
+            this.#emit(turn, "message.delta", { kind: "serverTool", block: ev.block })
             break
           case "done":
             final = ev.message
@@ -1208,9 +1221,13 @@ export class Agent {
         )
       }
       const tool = this.tools.get(call.name)
-      if (!tool) {
+      // A tool hidden from this model (it searches on the provider's side) is not there for it.
+      const native = hasNativeWebSearch(this.model)
+      const hidden = (t: { supersededBy?: string }) => native && t.supersededBy === "webSearch"
+      if (!tool || hidden(tool)) {
         const names = this.tools
           .active()
+          .filter((t) => !hidden(t))
           .map((t) => t.name)
           .join(", ")
         return await reject("unknownTool", `Unknown tool "${call.name}". Available tools: ${names}`)

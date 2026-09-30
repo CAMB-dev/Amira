@@ -23,6 +23,7 @@ import {
 import { summarizeArgs, userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
+import { serverToolCall } from "./server-tools.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
 
 /** What the viewer reads its sub-agents from. */
@@ -158,7 +159,12 @@ export function transcriptLines(
     if (m.role !== "assistant") continue
     for (const b of m.content) {
       if (b.type === "text" && b.text.trim()) out.push(...wrapText(b.text.trim(), width), "")
-      else if (b.type === "toolCall") {
+      else if (b.type === "serverTool") {
+        // A search the provider ran, as the main transcript shows it.
+        const { rejected, ...call } = serverToolCall(b)
+        const row = { ...call, ...(rejected ? { rejected } : {}) }
+        out.push(...finishedToolLines(theme, presenters?.get(b.name), row, "summary", width), "")
+      } else if (b.type === "toolCall") {
         const r = results.get(b.id)
         if (r) {
           const call = { name: b.name, args: b.args, result: { content: r.content, isError: r.isError } }

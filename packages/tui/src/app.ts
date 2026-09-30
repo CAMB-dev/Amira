@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process"
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { isNoModel } from "@amira/ai"
+import { isNoModel, type ServerToolBlock } from "@amira/ai"
 import {
   type AnyEvent,
   type CommandDefinition,
@@ -72,6 +72,7 @@ import { KeyReference } from "./key-reference.ts"
 import { ACTIONS, type Action, defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
 import { type ImageSource, type MarkdownRenderSource, ReplyRenderers } from "./markdown-nodes.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
+import { replyCitations, serverToolCall } from "./server-tools.ts"
 import { statusLine } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
 import { TerminalStatus } from "./terminal-status.ts"
@@ -451,6 +452,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let compactStartedAt = 0
   /** Characters of the reply streaming now: its tokens until its usage arrives. */
   let streamedChars = 0
+  /**
+   * The provider's own tool calls (hosted web search) shown as rows this turn: when each
+   * started, and whether it ended.
+   */
+  const serverRows = new Map<string, { startedAt: number; ended: boolean }>()
+  /** Reply text streamed since the last such row started. */
+  let textSinceRow = true
   /** The user interrupted this turn: the failures of calls it cut short are not the tools'. */
   let interrupted = false
   /** How much of each finished tool call is shown; Ctrl+O and /verbose change it. */
@@ -892,6 +900,34 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     resolveExit = r
   })
 
+  /**
+   * A tool the provider runs (its hosted web search) as a tool row: it starts when first seen,
+   * after what the reply said before it, and ends once the provider says it finished (or, at
+   * the reply's end, `final`, as it was left).
+   */
+  function serverRow(b: ServerToolBlock, final = false) {
+    const call = serverToolCall(b)
+    let row = serverRows.get(b.id)
+    if (row?.ended) return
+    if (!row) {
+      if (final && b.status === "running") return
+      row = { startedAt: Date.now(), ended: false }
+      serverRows.set(b.id, row)
+      if (view.replyEnd([])) turnShowedOutput = true
+      textSinceRow = false
+    }
+    view.toolStart(b.id, call.name, call.args, row.startedAt)
+    if (b.status === "running" && !final) return
+    row.ended = true
+    const end = {
+      result: call.result,
+      durationMs: Date.now() - row.startedAt,
+      interrupted,
+      ...(call.rejected ? { rejected: call.rejected } : {}),
+    }
+    if (view.toolEnd(b.id, end)) turnShowedOutput = true
+  }
+
   const onEvent = (e: AnyEvent) => {
     if (view.subagentEvent(e)) view.requestRender()
     // An extension's view may show anything: it is drawn again at each event (at most once a frame).
@@ -938,6 +974,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (e.data.kind === "text") {
           thinking = false
           view.replyDelta(e.data.text)
+          textSinceRow = true
           streamedChars += e.data.text.length
         } else if (e.data.kind === "thinking") {
           thinking = true
@@ -945,6 +982,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           // Only the end is shown; keep enough of it to hold a whole line.
           reasoning = (reasoning + e.data.text).slice(-2000)
           streamedChars += e.data.text.length
+        } else if (e.data.kind === "serverTool") {
+          thinking = false
+          serverRow(e.data.block)
         } else {
           streamedChars += e.data.argsDelta.length
           if (e.data.name) {
@@ -955,6 +995,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "message.end": {
         const { message } = e.data
+        // Searches the provider left unfinished end with the reply; the sources it cited follow it.
+        for (const b of message.content) if (b.type === "serverTool") serverRow(b, true)
+        const sources = replyCitations(message.content)
+        // Right after a search row the list starts a block of its own: no blank rows first.
+        if (sources) view.replyDelta(textSinceRow ? sources : sources.trimStart())
+        textSinceRow = true
         const calls = message.content.flatMap((b) => (b.type === "toolCall" ? [b] : []))
         if (view.replyEnd(calls)) turnShowedOutput = true
         turnTokens += message.usage?.output ?? estimateTokens(streamedChars)
@@ -984,6 +1030,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       }
       case "turn.end":
+        serverRows.clear()
         if (view.turnEnd()) turnShowedOutput = true
         working = false
         preparing = undefined

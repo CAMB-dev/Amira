@@ -4,6 +4,8 @@ import type { ModelErrorKind } from "./errors.ts"
 
 export interface TextBlock {
   type: "text"
+  /** Sources the provider cited for spans of the text (e.g. after a hosted web search). */
+  citations?: Citation[]
   text: string
   /** Opaque provider data about the text, such as its output item id; only its own dialect reads it. */
   signature?: { dialect: string; value: string }
@@ -33,7 +35,7 @@ export interface ToolCallBlock {
 }
 
 export type UserContent = TextBlock | ImageBlock
-export type AssistantContent = TextBlock | ThinkingBlock | ToolCallBlock
+export type AssistantContent = TextBlock | ThinkingBlock | ToolCallBlock | ServerToolBlock
 export type ToolResultContent = TextBlock | ImageBlock
 
 export interface Usage {
@@ -109,6 +111,11 @@ export interface ModelCaps {
   thinking: boolean
   promptCache: boolean
   parallelToolCalls: boolean
+  /**
+   * Offer the provider's own hosted web search (hasNativeWebSearch); resolved per provider
+   * and model from ProviderCompat.webSearch.
+   */
+  webSearch?: boolean
 }
 
 /** Where a model's context window came from (ModelInfo.contextWindowSource). */
@@ -179,6 +186,11 @@ export type StreamEvent =
       /** How long the server asked to wait before retrying (from Retry-After). */
       retryAfterMs?: number
     }
+  /**
+   * A server-hosted tool (a web search the provider runs) started or changed state: the block
+   * as it is now. It is not a tool call: nothing runs locally and no result is sent back.
+   */
+  | { type: "serverTool"; block: ServerToolBlock }
   /** A retryable failure before any content streamed; the request is sent again after delayMs. */
   | { type: "retry"; attempt: number; maxRetries: number; delayMs: number; error: ModelError }
 
@@ -219,4 +231,37 @@ export function modelMessages(messages: Message[]): Message[] {
 export function withoutDisplay(req: ModelRequest): ModelRequest {
   const messages = modelMessages(req.messages)
   return messages === req.messages ? req : { ...req, messages }
+}
+
+/** A source a reply cites, such as an OpenAI url_citation annotation. */
+export interface Citation {
+  url: string
+  title?: string
+  /** The cited span of the block's text, as the provider counts it (start inclusive). */
+  start?: number
+  end?: number
+}
+
+/**
+ * A tool the provider ran on its own servers during the reply, e.g. OpenAI's hosted web
+ * search: shown like a tool call, but never executed locally and never answered with a
+ * result. Its raw item goes back only to the dialect, provider and host that produced it;
+ * anywhere else it is sent as a short text note (server-tools.ts).
+ */
+export interface ServerToolBlock {
+  type: "serverTool"
+  /** The provider's item id. */
+  id: string
+  /** What ran, e.g. "web_search". */
+  name: string
+  /**
+   * What it was asked, as the provider reported it, e.g. `{ type: "search", query }`,
+   * `{ type: "open_page", url }` or `{ type: "find_in_page", url, pattern }`.
+   */
+  input: Record<string, unknown>
+  status: "running" | "done" | "failed"
+  /** Sources it looked at, when the provider lists them. */
+  sources?: { url: string; title?: string }[]
+  /** The provider's item as it came (`value`), and the host it came from, set by the ai client. */
+  signature?: { dialect: string; value: string; host?: string }
 }

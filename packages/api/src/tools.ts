@@ -137,6 +137,11 @@ export interface ToolDefinition<P = any> {
    * start, such as a workflow or a swarm (D81).
    */
   mainOnly?: boolean
+  /**
+   * "webSearch": hidden from models that search the web on the provider's side (the hosted
+   * web search, settings compat.webSearch), for a tool that would do the same.
+   */
+  supersededBy?: "webSearch"
   execute(params: P, ctx: ToolContext): Promise<ToolResult>
 }
 

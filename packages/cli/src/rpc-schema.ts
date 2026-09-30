@@ -285,6 +285,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     obj({ kind: strings("text"), text: str }),
     obj({ kind: strings("thinking"), text: str }),
     obj({ kind: strings("toolCall"), toolCallId: str, "index?": num, "name?": str, argsDelta: str }),
+    obj(
+      { kind: strings("serverTool"), block: ref("ServerToolBlock") },
+      "A tool the provider runs itself (its hosted web search) started or changed state; sent again on each change. Never executed locally: no tool.execute events.",
+    ),
   ),
   "message.end": obj({ message: ref("AssistantMessage") }),
   "tool.execute.start": obj({ toolCallId: str, name: str, args: { type: "object" } }),
@@ -482,7 +486,30 @@ export function rpcSchema(): Schema {
         anyOf: [...events, envelope(str, {})],
         description: "Known events first; newer versions may add event types.",
       },
-      TextBlock: obj({ type: strings("text"), text: str }),
+      TextBlock: obj({
+        type: strings("text"),
+        text: str,
+        "citations?": {
+          ...arrayOf(obj({ url: str, "title?": str, "start?": num, "end?": num })),
+          description:
+            "Sources the provider cited (e.g. url_citation annotations after a hosted web search); start and end are the cited span of text, as the provider counts it.",
+        },
+      }),
+      ServerToolBlock: obj(
+        {
+          type: strings("serverTool"),
+          id: str,
+          name: { ...str, description: 'What ran, e.g. "web_search".' },
+          input: {
+            type: "object",
+            description:
+              'What it was asked, as the provider said, e.g. {"type": "search", "query": "..."} or {"type": "open_page", "url": "..."}.',
+          },
+          status: strings("running", "done", "failed"),
+          "sources?": arrayOf(obj({ url: str, "title?": str })),
+        },
+        "A tool the provider ran on its own servers during the reply (its hosted web search). Not a tool call: it has no result message.",
+      ),
       ImageBlock: obj({ type: strings("image"), mimeType: str, data: { ...str, description: "base64" } }),
       UserMessage: obj({
         role: strings("user"),
@@ -514,6 +541,7 @@ export function rpcSchema(): Schema {
             ref("TextBlock"),
             obj({ type: strings("thinking"), text: str, "redacted?": bool }),
             obj({ type: strings("toolCall"), id: str, name: str, args: { type: "object" } }),
+            ref("ServerToolBlock"),
           ),
         ),
         model: modelRef,

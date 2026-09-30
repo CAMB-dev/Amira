@@ -1,5 +1,6 @@
 import type { CatalogModel } from "./catalog.ts"
 import type { ProviderCompat } from "./dialect.ts"
+import { defaultWebSearch } from "./server-tools.ts"
 import type { ContextWindowSource, ModelCaps, ModelInfo } from "./types.ts"
 
 /** Model settings a provider overrides; caps are merged key by key over the defaults. */
@@ -73,14 +74,23 @@ export function resolveModelInfo(
         : d?.contextWindow !== undefined
           ? [d.contextWindow, "settings"]
           : [128_000, "default"]
+  const dialect = known?.dialect ?? d?.dialect ?? provider.dialect
+  const caps: ModelCaps = { ...DEFAULT_CAPS, ...d?.caps, ...catalog?.caps, ...known?.caps }
+  // Hosted web search: the model's caps, then the provider's compat, then on only at the vendor.
+  if (
+    caps.webSearch === undefined &&
+    (provider.compat?.webSearch ?? defaultWebSearch(dialect, provider.baseUrl))
+  ) {
+    caps.webSearch = true
+  }
   return {
     id: modelId,
     provider: provider.id,
-    dialect: known?.dialect ?? d?.dialect ?? provider.dialect,
+    dialect,
     contextWindow: window[0],
     contextWindowSource: window[1],
     maxOutput: known?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? 8_192,
-    caps: { ...DEFAULT_CAPS, ...d?.caps, ...catalog?.caps, ...known?.caps },
+    caps,
     ...(cost ? { cost } : {}),
   }
 }
