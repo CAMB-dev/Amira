@@ -2,11 +2,39 @@ import type { ModelErrorKind } from "./errors.ts"
 // Unified message model. Amira's own format is the source of truth;
 // dialect adapters translate to and from the wire format at the edge.
 
+/**
+ * Opaque provider data carried with a block: signed or encrypted reasoning, an output item's id,
+ * or a server's compaction checkpoint. Only its own dialect reads `value`, and it is sent back
+ * only where it came from (canReplay): the same dialect, provider and host, and for a
+ * checkpoint the same model too. Anywhere else the block goes as plain text.
+ */
+export interface Signature {
+  dialect: string
+  value: string
+  /**
+   * Host of the endpoint that produced it, set by the ai client. Data stored before hosts were
+   * kept has none; it is then sent back by provider alone.
+   */
+  host?: string
+  /**
+   * Provider that produced it, where the message has no model to tell (the summary messages of
+   * a compaction checkpoint); otherwise the message's model says.
+   */
+  provider?: string
+  /** The only model it can be sent back to (compaction checkpoints). */
+  model?: string
+  /**
+   * "checkpoint": a server's compaction of earlier history (native compaction), carried by
+   * both messages of the summary pair; a dialect that can replay it sends it in their place.
+   */
+  kind?: "checkpoint"
+}
+
 export interface TextBlock {
   type: "text"
   text: string
   /** Opaque provider data about the text, such as its output item id; only its own dialect reads it. */
-  signature?: { dialect: string; value: string }
+  signature?: Signature
 }
 
 export interface ImageBlock {
@@ -19,8 +47,8 @@ export interface ImageBlock {
 export interface ThinkingBlock {
   type: "thinking"
   text: string
-  /** Opaque signature that can only be sent back to the dialect that produced it. */
-  signature?: { dialect: string; value: string }
+  /** Opaque signature that can only be sent back where it came from (Signature). */
+  signature?: Signature
   /** The provider hid the reasoning; `signature.value` holds its encrypted form and `text` is empty. */
   redacted?: boolean
 }

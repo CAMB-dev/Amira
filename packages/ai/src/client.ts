@@ -6,7 +6,14 @@ import { modelErrorKind } from "./errors.ts"
 import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import { type RetryOptions, withRetry } from "./retry.ts"
 import { withTextTools } from "./text-tools.ts"
-import { type ModelInfo, type ModelRequest, type StreamEvent, withoutDisplay } from "./types.ts"
+import { canReplay, forReplay, type ReplayTarget, withSignatureHost } from "./thinking.ts"
+import {
+  type ModelInfo,
+  type ModelRequest,
+  type Signature,
+  type StreamEvent,
+  withoutDisplay,
+} from "./types.ts"
 
 export interface AiOptions {
   providers?: ProviderConfig[]
@@ -43,6 +50,13 @@ export interface Ai {
   removeProvider?(id: string): void
   /** Sets or (undefined) forgets the stored key (auth.json) used for a provider when its variables are unset. */
   setStoredKey?(id: string, apiKey: string | undefined): void
+  /** Where a request for `model` goes: its dialect, provider, host and model (ReplayTarget). */
+  replayTarget(model: ModelInfo): ReplayTarget
+  /**
+   * Whether a request for `model` would send this signed data back as it is (canReplay);
+   * `producer` is the provider of the message that holds it. Requests drop what it cannot.
+   */
+  canReplay(sig: Signature, model: ModelInfo, producer?: string): boolean
 }
 
 export function createAi(opts: AiOptions = {}): Ai {
@@ -114,8 +128,23 @@ export function createAi(opts: AiOptions = {}): Ai {
         fetch: doFetch,
         ...(p.compat ? { compat: p.compat } : {}),
       }
-      const attempt = () => withTextTools(req, (r) => dialect.stream(r, ctx))
-      return withErrorFacts(withCost(withRetry(attempt, sig, opts.retry), req.model), hostOf(p.baseUrl))
+      // Signed reasoning and output items go back only where they came from (canReplay).
+      const host = hostOf(p.baseUrl)
+      const messages = forReplay(req.messages, targetOf(p, req.model))
+      const sendable = messages === req.messages ? req : { ...req, messages }
+      const attempt = () => withTextTools(sendable, (r) => dialect.stream(r, ctx))
+      const events = withSignatureHost(withRetry(attempt, sig, opts.retry), host)
+      return withErrorFacts(withCost(events, req.model), host)
+    },
+    replayTarget: (model) => {
+      const p = providers.get(model.provider)
+      return p
+        ? targetOf(p, model)
+        : { dialect: model.dialect, provider: model.provider, host: "", model: model.id }
+    },
+    canReplay(sig, model, producer) {
+      const p = providers.get(model.provider)
+      return p !== undefined && canReplay(sig, targetOf(p, model), producer)
     },
     registerProvider: (p) => void providers.set(p.id, p),
     registerDialect: (d) => void dialects.set(d.id, d),
@@ -152,6 +181,10 @@ function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>):
     if (value) return value
   }
   return undefined
+}
+
+function targetOf(p: ProviderConfig, model: ModelInfo): ReplayTarget {
+  return { dialect: model.dialect, provider: p.id, host: hostOf(p.baseUrl), model: model.id }
 }
 
 function hostOf(url: string): string {
