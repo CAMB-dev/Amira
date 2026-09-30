@@ -114,6 +114,30 @@ for (const path of editions) {
       expect(textOf(await run("Write-Output x; return; Write-Output y"))).toBe("x\n\nExit code: 0")
     })
 
+    test("a top-level return exits on $? as pwsh -Command does, not on errors handled before it", async () => {
+      const exit = async (command: string) => /Exit code: (\d+)$/.exec(textOf(await run(command)))?.[1]
+      const missing = String.raw`Get-Item C:\definitely\not\here`
+      const handled = await run(
+        "try { throw 'expected' } catch { Write-Output handled }; Write-Output done; return",
+      )
+      expect(handled.isError).toBeFalsy()
+      expect(textOf(handled)).toMatch(/^handled\r?\ndone\n\nExit code: 0$/)
+      expect(await exit(`${missing} -ErrorAction SilentlyContinue; Write-Output recovered; return`)).toBe("0")
+      expect(await exit(`${missing}; $x = 1; return`)).toBe("0")
+      expect(await exit(`function f { ${missing} }; f; return`)).toBe("0")
+      expect(await exit(`if ($true) { ${missing}; return }`)).toBe("1")
+      // A returned value leaves $? as it was; a returned pipeline sets it.
+      expect(await exit(`${missing}; return 'x'`)).toBe("1")
+      expect(await exit(`${missing}; return (Write-Output x)`)).toBe("0")
+      expect(await exit(`Write-Output a; return (${missing})`)).toBe("1")
+      // Only the command's own top level: a return inside a script block or function is its own.
+      expect(textOf(await run(`${missing}; & { return }; Write-Output z`))).toContain("z\n\nExit code: 0")
+      // What a return records does not move the lines after it: an error there names its own line.
+      expect(textOf(await run("if ($false) { return (Write-Output x) }\nthrow 'boom'"))).toMatch(
+        /:2 \S+:\s*1\r?\n\+ throw 'boom'/,
+      )
+    })
+
     test("exit and throw inside the command are honoured", async () => {
       expect(textOf(await run("Write-Output before; exit 7; Write-Output after"))).toBe(
         "before\n\nExit code: 7",

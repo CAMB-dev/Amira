@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
 import { defineTool, type GrepDetails, textResult } from "@amira/api"
+import { splitLines } from "./diff.ts"
 import { statOrNull, type WalkEntry, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
 import { decodeText, looksBinary } from "./text.ts"
@@ -90,7 +91,8 @@ export const grepTool = defineTool<GrepParams>({
       const text = await readText(f.abs)
       if (text === undefined) continue
       const shown = displayPath(ctx.cwd, f.abs)
-      const lines = text.split(/\r?\n/)
+      // Numbered as read numbers them: a final line break does not start another line.
+      const lines = splitLines(text)
       let count = 0
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!

@@ -145,7 +145,7 @@ export class Editor implements Component {
   private lastEdit: EditKind | undefined
   /** Texts cut with the kill keys, newest last; each is the content as parts, pastes kept folded. */
   private killRing: EditorPart[][] = []
-  /** The last key killed text, so that kills in a row join into one. */
+  /** The last change killed text, so that kills in a row join into one; any other change or move ends the row. */
   private lastKilled = false
   /** Inside one change made of several (a yank of several parts): recorded once, before it. */
   private batching = false
@@ -200,6 +200,8 @@ export class Editor implements Component {
     this.line = this.lines.length - 1
     this.col = this.current.length
     this.goalCol = undefined
+    // Not through changed(), which calls onChange; it ends a run of kills all the same.
+    this.lastKilled = false
     this.changes++
   }
 
@@ -247,13 +249,19 @@ export class Editor implements Component {
 
   /** Replaces the `count` UTF-16 units before the caret, on its line, with `text`. */
   replaceBeforeCaret(count: number, text: string): void {
+    // One change, undone at once: the insert does not record the text cut short.
     this.record("other")
-    this.lastEdit = "other"
-    const from = Math.max(0, this.col - count)
-    if (this.pastes.size) this.dropPastes({ line: this.line, col: from }, { line: this.line, col: this.col })
-    this.setLine(this.line, this.current.slice(0, from) + this.current.slice(this.col))
-    this.col = from
-    this.insert(text)
+    this.batching = true
+    try {
+      const from = Math.max(0, this.col - count)
+      if (this.pastes.size)
+        this.dropPastes({ line: this.line, col: from }, { line: this.line, col: this.col })
+      this.setLine(this.line, this.current.slice(0, from) + this.current.slice(this.col))
+      this.col = from
+      this.insert(text)
+    } finally {
+      this.batching = false
+    }
   }
 
   /**
@@ -514,6 +522,8 @@ export class Editor implements Component {
   }
 
   private changed(): void {
+    // Any change but a kill (which sets it again after) ends a run of kills.
+    this.lastKilled = false
     this.goalCol = undefined
     this.textCache = undefined
     this.changes++
@@ -791,8 +801,9 @@ export class Editor implements Component {
     this.line = pos.line
     this.col = pos.col
     this.goalCol = undefined
-    // Typing after the caret moved is a step of its own.
+    // Typing after the caret moved is a step of its own, and so is a kill.
     this.lastEdit = undefined
+    this.lastKilled = false
     return true
   }
 
