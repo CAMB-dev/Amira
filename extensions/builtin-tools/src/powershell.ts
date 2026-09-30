@@ -119,17 +119,20 @@ export const POWERSHELL_SCRIPT = [
   "function __amira_compile($text) {",
   "  $sb = [scriptblock]::Create($text)",
   // Sorted: FindAll visits named blocks in begin, process, end order, whatever their order in the text.
-  "  $rs = @($sb.Ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.ReturnStatementAst] -and (__amira_top $a) }, $true) | Sort-Object { $_.Extent.StartOffset } -Descending)",
+  "  $rs = @($sb.Ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.ReturnStatementAst] -and (__amira_top $a) }, $true) | Sort-Object { $_.Extent.StartOffset })",
   // A value-only return leaves $? unchanged natively, but our output filters can change it.
   // Restore it before evaluating the value (the assignment that saved it set $? to true) and
   // before any user finally runs. Clear-Variable succeeds or fails silently according to the
   // saved status.
   "  $restore = \"Clear-Variable ('__amira_nx', '__amira_restore')[[int]`$script:__amira_return] -Scope Script -ErrorAction Ignore\"",
+  // One pass over the text; Append(string, int, int) takes pwsh 7 a quarter of a millisecond.
+  "  $out = [System.Text.StringBuilder]::new(); $from = 0; $edited = $false",
   "  foreach ($r in $rs) {",
   "    if ($r.Pipeline -and $r.Pipeline.Find({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true)) { continue }",
-  '    $text = $text.Substring(0, $r.Extent.StartOffset) + "`$script:__amira_return = `$?; try { $restore; $($r.Extent.Text) } finally { $restore }" + $text.Substring($r.Extent.EndOffset)',
+  '    $null = $out.Append($text.Substring($from, $r.Extent.StartOffset - $from)).Append("`$script:__amira_return = `$?; try { $restore; $($r.Extent.Text) } finally { $restore }")',
+  "    $from = $r.Extent.EndOffset; $edited = $true",
   "  }",
-  "  if ($rs.Count) { $sb = [scriptblock]::Create($text) }",
+  "  if ($edited) { $sb = [scriptblock]::Create($out.Append($text.Substring($from)).ToString()) }",
   "  __amira_wrap $sb",
   "}",
   // Reads the gate line, `<base64 directory> <base64 command>`, and enters the directory for

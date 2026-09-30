@@ -251,6 +251,13 @@ for (const path of editions) {
       }
     })
 
+    test("a long script with a top-level return on every line compiles in linear time", async () => {
+      const command = `${Array.from({ length: 5000 }, (_, i) => `$v = ${i}; if ($v -lt 0) { return }`).join("\n")}\nWrite-Output done`
+      const started = performance.now()
+      expect(textOf(await run(command))).toBe("done\n\nExit code: 0")
+      expect(performance.now() - started).toBeLessThan(10_000)
+    })
+
     test("quotes survive: double quotes, $ and backticks", async () => {
       expect(textOf(await run("Write-Output 'a \"b\" $c `d'"))).toContain('a "b" $c `d')
     })
