@@ -606,6 +606,48 @@ test("a child aborted while its question waits behind another leaves the line at
   expect(statuses.at(-1)).not.toBe("working")
 })
 
+test("a question asked after a waiting one was aborted still waits for the one being answered", async () => {
+  let release!: () => void
+  const held = new Promise<void>((r) => (release = r))
+  let open = 0
+  let most = 0
+  const user: Asker = async () => {
+    open++
+    most = Math.max(most, open)
+    await held
+    open--
+    return { answers: [{ selected: ["Safe"] }, { selected: [] }] }
+  }
+  const s = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      const text = last?.content[0]?.type === "text" ? last.content[0].text : ""
+      if (text.includes("asks you these questions")) return { text: "ASK_USER" }
+      if (last?.role === "toolResult") return { text: "finished" }
+      return { toolCalls: [{ name: "ask", args: { questions: QUESTIONS } }] }
+    },
+    { ask: user },
+  )
+  s.tools.register(askTool, "t")
+  const blocked = (id: string) =>
+    s.events.some((e) => e.type === "status.changed" && e.sessionId === id && e.data.status === "blocked")
+  const first = s.tree.spawn(s.root, { prompt: "p" })
+  await waitUntil(() => open === 1)
+  const second = s.tree.spawn(s.root, { prompt: "p" })
+  await waitUntil(() => blocked(second.id))
+  second.abort()
+  expect((await second.result()).status).toBe("aborted")
+  const third = s.tree.spawn(s.root, { prompt: "p" })
+  await waitUntil(() => blocked(third.id))
+  await Bun.sleep(50)
+  // The first is still with the user; the third waits for its place.
+  expect(most).toBe(1)
+  release()
+  expect((await first.result()).status).toBe("done")
+  expect((await third.result()).status).toBe("done")
+  expect(most).toBe(1)
+})
+
 async function waitUntil(check: () => boolean, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
   while (!check()) {
