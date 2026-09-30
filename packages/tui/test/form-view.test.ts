@@ -49,6 +49,7 @@ async function setup(steps: MockStep[], cols = 60, rows = 22) {
     ui: host.ui,
     terminal,
     setup: noProbe,
+    env: {},
     onReady: () => agent.start("startup"),
   })
   const all = () => [...screen.scrollback, ...screen.lines].join("\n")
