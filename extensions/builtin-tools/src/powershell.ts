@@ -59,16 +59,15 @@ export const POWERSHELL_SCRIPT = [
   "}",
   "filter __amira_errors { if ($_ -is [System.Management.Automation.ErrorRecord]) { __amira_error $_ } else { $_ } }",
   "filter __amira_trim { $_.TrimEnd() }",
-  // The command ends with `$__amira_ok = $?`, which a top-level `return` skips, so each such
-  // return records $? itself: the value `pwsh -Command` exits on. A return leaves $? as it was,
-  // unless its pipeline runs commands, which set it; such a return runs in a try whose finally
-  // reads it (not after: this wrapper's own filters set it as the output passes), and the try's
-  // first line, a Clear-Variable that succeeds or fails silently, puts back the $? the try reset.
-  // What is added has no line break, so an error's position still names its line. A return
-  // nested in another is left alone.
+  // Capture $? in a finally around each script-level block: it runs after the user's finally
+  // blocks and after traps unwind (whose return status differs between 5.1 and 7). Keep param,
+  // using and named-block declarations outside the try. Added text has no line breaks, so
+  // errors still name their original line.
   "function __amira_top($r) {",
   "  if ($r.Parent -isnot [System.Management.Automation.Language.NamedBlockAst] -and $r.Parent -isnot [System.Management.Automation.Language.StatementBlockAst]) { return $false }",
   "  for ($p = $r.Parent; $p; $p = $p.Parent) {",
+  // 7 restores a trap's failure as it unwinds; 5.1 keeps the status at its return.
+  "    if ($p -is [System.Management.Automation.Language.TrapStatementAst] -and $PSVersionTable.PSVersion.Major -ge 6) { return $false }",
   "    if ($p -is [System.Management.Automation.Language.ReturnStatementAst]) { return $false }",
   "    if ($p -is [System.Management.Automation.Language.ScriptBlockAst]) { return $null -eq $p.Parent }",
   "  }",
@@ -76,15 +75,27 @@ export const POWERSHELL_SCRIPT = [
   "}",
   "function __amira_compile($text) {",
   "  $sb = [scriptblock]::Create($text)",
+  "  $edits = [System.Collections.Generic.List[object]]::new()",
+  "  foreach ($b in @($sb.Ast.DynamicParamBlock, $sb.Ast.BeginBlock, $sb.Ast.ProcessBlock, $sb.Ast.EndBlock, $sb.Ast.CleanBlock)) {",
+  "    if (-not $b) { continue }",
+  "    $ss = @(@($b.Statements) + @($b.Traps) | Where-Object { $null -ne $_ } | Sort-Object { $_.Extent.StartOffset })",
+  "    if (-not $ss.Count) { continue }",
+  "    $start = $ss[0].Extent.StartOffset; $end = $ss[-1].Extent.EndOffset",
+  "    $edits.Add(@{ Start = $start; End = $start; Text = 'try { ' })",
+  "    $edits.Add(@{ Start = $end; End = $end; Text = ' } finally { $script:__amira_ok = $? }' })",
+  "  }",
   "  $rs = @($sb.Ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.ReturnStatementAst] -and (__amira_top $a) }, $true))",
-  "  if (-not $rs.Count) { return $sb }",
-  "  for ($i = $rs.Count - 1; $i -ge 0; $i--) {",
-  "    $r = $rs[$i]",
-  "    $new = '$__amira_ok = $?; ' + $r.Extent.Text",
-  "    if ($r.Pipeline -and $r.Pipeline.Find({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true)) {",
-  "      $new = \"`$__amira_ok = `$?; try { Clear-Variable ('__amira_nx', '__amira_ok')[[int]`$__amira_ok] -ErrorAction Ignore; $($r.Extent.Text) } finally { `$__amira_ok = `$? }\"",
-  "    }",
-  "    $text = $text.Substring(0, $r.Extent.StartOffset) + $new + $text.Substring($r.Extent.EndOffset)",
+  // A value-only return leaves $? unchanged natively, but our output filters can change it.
+  // Restore it before evaluating the value (try resets it) and before any user finally runs.
+  // Clear-Variable succeeds or fails silently according to the saved status.
+  "  foreach ($r in $rs) {",
+  "    if ($r.Pipeline -and $r.Pipeline.Find({ param($a) $a -is [System.Management.Automation.Language.CommandAst] }, $true)) { continue }",
+  "    $restore = \"Clear-Variable ('__amira_nx', '__amira_restore')[[int]`$script:__amira_return] -Scope Script -ErrorAction Ignore\"",
+  '    $new = "`$script:__amira_return = `$?; try { $restore; $($r.Extent.Text) } finally { $restore }"',
+  "    $edits.Add(@{ Start = $r.Extent.StartOffset; End = $r.Extent.EndOffset; Text = $new })",
+  "  }",
+  "  foreach ($e in ($edits | Sort-Object { $_.Start }, { $_.End } -Descending)) {",
+  "    $text = $text.Substring(0, $e.Start) + $e.Text + $text.Substring($e.End)",
   "  }",
   "  [scriptblock]::Create($text)",
   "}",
@@ -96,7 +107,7 @@ export const POWERSHELL_SCRIPT = [
   // Ordinal: IndexOf(string) compares by culture, and loading culture data costs ~25 ms.
   "    $at = $line.IndexOf([char]' ')",
   "    $dir = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Substring(0, $at)))",
-  '    $command = __amira_compile ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Substring($at + 1))) + "`n`$__amira_ok = `$?")',
+  "    $command = __amira_compile ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line.Substring($at + 1))))",
   "  } catch {",
   "    $e = $_.Exception; if ($e.InnerException) { $e = $e.InnerException }",
   "    return $e.Message",
@@ -128,13 +139,15 @@ export const POWERSHELL_SCRIPT = [
   "$__amira = __amira_open $__amira",
   "if ($__amira -isnot [scriptblock]) { [Console]::Out.WriteLine($__amira); exit 1 }",
   "$__amira_ok = $null",
+  "$__amira_restore = $null",
   "$__amira_threw = $false",
   "$__amira_errs = $Error.Count",
   "$global:LASTEXITCODE = 0",
-  // $? after the dot-source is always true, so the command's own last line records it.
-  "try { . { . $__amira } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim }",
+  // $? after the dot-source is always true, so the command's own finally records it.
+  // Like native -Command/-File, 5.1 gives process blocks no input; 7 invokes them once.
+  "try { . { if ($PSVersionTable.PSVersion.Major -lt 6) { @() | . $__amira } else { . $__amira } } *>&1 | __amira_errors | Out-String -Stream -Width 300 | __amira_trim }",
   "catch { $__amira_threw = $true; __amira_error $_ -At | Out-String -Stream -Width 300 | __amira_trim }",
-  // A return __amira_compile left alone skipped that line: failed if the latest error came from the command.
+  // An empty block, or a return nested in another, may not have recorded a status.
   "if ($null -eq $__amira_ok) { $__amira_ok = -not ($Error.Count -gt $__amira_errs -and \"$($Error[0].FullyQualifiedErrorId)\" -notlike 'NativeCommandError*') }",
   // 5.1 marks a native command that wrote to stderr as failed even when it exited 0.
   "if (-not $__amira_ok -and -not $global:LASTEXITCODE -and \"$($Error[0].FullyQualifiedErrorId)\" -like 'NativeCommandError*') { $__amira_ok = $true }",
