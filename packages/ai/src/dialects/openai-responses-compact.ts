@@ -1,5 +1,6 @@
 import type { DialectCompaction, DialectCompactOutcome, DialectContext } from "../dialect.ts"
 import { isUnsupportedCompaction } from "../native-compaction.ts"
+import { isOpenAIVendorUrl } from "../server-tools.ts"
 import { adaptThinking } from "../thinking.ts"
 import type { ModelError, ModelRequest, StreamEvent, Usage } from "../types.ts"
 import { parseJSON, postStream, type StreamRequest } from "./http-stream.ts"
@@ -12,30 +13,8 @@ import {
   toResponsesInput,
 } from "./openai-responses-input.ts"
 
-/**
- * Hosts of the vendor's own Responses API: api.openai.com, and Azure OpenAI by the markers
- * Codex uses to tell an Azure base URL.
- */
-const AZURE_MARKERS = [
-  "openai.azure.",
-  "cognitiveservices.azure.",
-  "aoai.azure.",
-  "azure-api.",
-  "azurefd.",
-  "windows.net/openai",
-]
-
-export function isOfficialResponsesUrl(baseUrl: string): boolean {
-  let url: URL
-  try {
-    url = new URL(baseUrl)
-  } catch {
-    return false
-  }
-  if (url.hostname.toLowerCase() === "api.openai.com") return true
-  const where = `${url.hostname}${url.pathname}`.toLowerCase()
-  return AZURE_MARKERS.some((m) => where.includes(m))
-}
+/** The vendor's own Responses API (api.openai.com, Azure OpenAI), where compaction is on by default. */
+export const isOfficialResponsesUrl = isOpenAIVendorUrl
 
 /**
  * The Responses API's server-side compaction. Two ways, in order:
