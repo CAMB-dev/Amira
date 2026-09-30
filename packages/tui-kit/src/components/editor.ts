@@ -247,13 +247,19 @@ export class Editor implements Component {
 
   /** Replaces the `count` UTF-16 units before the caret, on its line, with `text`. */
   replaceBeforeCaret(count: number, text: string): void {
+    // One change, undone at once: the insert does not record the text cut short.
     this.record("other")
-    this.lastEdit = "other"
-    const from = Math.max(0, this.col - count)
-    if (this.pastes.size) this.dropPastes({ line: this.line, col: from }, { line: this.line, col: this.col })
-    this.setLine(this.line, this.current.slice(0, from) + this.current.slice(this.col))
-    this.col = from
-    this.insert(text)
+    this.batching = true
+    try {
+      const from = Math.max(0, this.col - count)
+      if (this.pastes.size)
+        this.dropPastes({ line: this.line, col: from }, { line: this.line, col: this.col })
+      this.setLine(this.line, this.current.slice(0, from) + this.current.slice(this.col))
+      this.col = from
+      this.insert(text)
+    } finally {
+      this.batching = false
+    }
   }
 
   /**
