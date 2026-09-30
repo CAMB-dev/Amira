@@ -1,4 +1,5 @@
 import {
+  type CompactionInfo,
   plural,
   type ToolApproval,
   type ToolDetailLevel,
@@ -392,12 +393,16 @@ export class SummaryBlock extends Block {
   readonly kind = "summary"
   folded = true
 
-  constructor(readonly summary: string) {
+  /** `info`: why the compaction happened, when the session kept it. */
+  constructor(
+    readonly summary: string,
+    readonly info?: CompactionInfo,
+  ) {
     super()
   }
 
   lines(env: BlockEnv): string[] {
-    return summaryLines(env.theme, this.summary, env.width, this.folded)
+    return summaryLines(env.theme, this.summary, env.width, this.folded, this.info)
   }
 
   copyText(): string {

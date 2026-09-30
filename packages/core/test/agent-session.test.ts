@@ -204,7 +204,7 @@ test("compacts before the next model call once the context passes the threshold"
 
   // Why it happened goes with the event, the entry and the summary's message.
   const why = {
-    reason: "threshold",
+    reason: "threshold" as const,
     tokensBefore: 900,
     contextWindow: 1000,
     model: { provider: "mock", model: "m" },

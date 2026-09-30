@@ -93,6 +93,8 @@ interface SetupOptions {
   tuiCommands?: boolean
   /** A conversation the session starts with, as if resumed. */
   history?: Message[]
+  /** Runs on the agent once the history is in, before the UI starts (e.g. a compaction). */
+  prepare?: (agent: Agent) => Promise<unknown>
   /** Prompts sent before, for ↑/↓ and Ctrl+R. */
   promptHistory?: PromptHistory
   /** The files the @ picker offers. */
@@ -198,6 +200,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
     }, "test-render")
   }
   if (o.history) agent.messages.push(...o.history)
+  await o.prepare?.(agent)
   const exited = runInteractive({
     agent,
     status: host.status,
@@ -814,6 +817,51 @@ test("a message sent during /compact counts its own time and tokens, not the las
   await shows("second answer")
   await idle()
   expect(all()).toContain("Compacted")
+  terminal.send("\x03")
+  await exited
+})
+
+/** A user message and its reply, for histories. */
+const exchange = (text: string): Message[] => [
+  { role: "user", content: [{ type: "text", text }] },
+  {
+    role: "assistant",
+    content: [{ type: "text", text: `re ${text}` }],
+    model: { provider: "mock", model: "m1" },
+  },
+]
+
+test("an automatic compaction's notice says it passed the threshold, and how far", async () => {
+  const { terminal, all, shows, idle, exited } = await setup(
+    [
+      // 105k of the default 128k window: the next call compacts first.
+      { text: "first answer", usage: { input: 105_000 } },
+      { text: "SUMMARY" },
+      { text: "second answer" },
+    ],
+    { cols: 120, history: [...exchange("a"), ...exchange("b")] },
+  )
+  terminal.send("q1\r")
+  await shows("first answer")
+  await idle()
+  terminal.send("q2\r")
+  await shows("second answer")
+  await idle()
+  expect(all()).toMatch(
+    /Compacted automatically at 82% of 128k: 4 older messages into a summary \(105k → ~\d+k tokens\)\./,
+  )
+  terminal.send("\x03")
+  await exited
+})
+
+test("a resumed compaction's summary line says why it happened", async () => {
+  const { terminal, all, shows, exited } = await setup([{ text: "Fixed the parser." }], {
+    cols: 100,
+    history: [...exchange("a"), ...exchange("b"), ...exchange("c")],
+    prepare: (agent) => agent.compact(),
+  })
+  await shows("▸ Compacted (you asked) · summary of earlier messages · 1 line")
+  expect(all()).not.toContain("Compacted summary of earlier messages")
   terminal.send("\x03")
   await exited
 })
