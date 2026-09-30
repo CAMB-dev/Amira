@@ -57,7 +57,7 @@ export const anthropicMessages: Dialect = {
       }
       yield { type: "start" }
       let parsed = 0
-      for await (const sse of parseSSE(body)) {
+      for await (const sse of parseSSE(body, ctx.signal)) {
         let ev: any
         try {
           ev = JSON.parse(sse.data)
