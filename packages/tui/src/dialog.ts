@@ -51,6 +51,8 @@ interface Choice {
   value?: DialogAnswer
   /** The free-text choice: choosing it opens a text field in its row. */
   other?: boolean
+  /** A select's option: its place in the request's options, which its section goes by. */
+  index?: number
 }
 
 /** One question of the dialog: a confirm, a list, or one of an ask's questions. */
@@ -87,12 +89,13 @@ interface Fit {
  * ask_user. It is a block with a bar down its left: the question, a muted message or diff, the
  * options as a list (❯ marks the selected one; digits choose in short lists; a multi-select
  * checks them with Space), and the keys at the bottom. A select's sections put a heading over
- * their options and add keys of their own, shown while one of them is selected. A confirm starts with nothing selected:
- * Enter does nothing until the user has moved to a choice, so keys typed before it showed up
- * (a message being written) cannot answer it. A free-text choice ("Other…") opens a
- * text field in its row, which Esc closes again; Esc elsewhere cancels. Several questions are
- * asked one after another in the same block and answered together. Calls `onDone` once. It
- * fits `maxRows`: the title, the selected option and the keys always show, given three rows.
+ * their options and add keys of their own, shown while one of them is selected; once a filter
+ * is typed, every key goes to it. A confirm starts with nothing selected: Enter does nothing
+ * until the user has moved to a choice, so keys typed before it showed up (a message being
+ * written) cannot answer it. A free-text choice ("Other…") opens a text field in its row,
+ * which Esc closes again; Esc elsewhere cancels. Several questions are asked one after another
+ * in the same block and answered together. Calls `onDone` once. It fits `maxRows`: the title,
+ * the selected option and the keys always show, given three rows.
  */
 export class Dialog implements Component {
   /** Rows the dialog may take; set by the app before each render. */
@@ -185,9 +188,11 @@ export class Dialog implements Component {
       e.text &&
       !e.ctrl &&
       !e.alt &&
+      !this.#filter &&
       this.#isSectionKey(e.text)
     ) {
-      // A section's key answers on the selected option; where it does nothing it is not typed either.
+      // A section's key answers on the selected option; where it does nothing it is not typed
+      // either. Once a filter is being typed, the key is part of it.
       const c = choices[page.selected]
       if (c && this.#sectionKeys(c).some((k) => k.key === e.text))
         return this.#finish({ option: c.label, key: e.text })
@@ -408,7 +413,11 @@ export class Dialog implements Component {
       r.kind === "select" && { text: "type to filter", priority: 1 },
       answerKeys && { text: answerKeys, priority: 1 },
       !picking && this.#hint("dialog.choose", choose, 5),
-      ...(section?.keys ?? []).map((k) => ({ text: `${k.key} ${k.label}`, priority: 4 })),
+      // Typed into a filter, the keys are part of it.
+      ...(this.#filter ? [] : (section?.keys ?? [])).map((k) => ({
+        text: `${k.key} ${k.label}`,
+        priority: 4,
+      })),
       this.#hint("dialog.cancel", cancel, 3),
     ]
   }
@@ -422,8 +431,8 @@ export class Dialog implements Component {
   /** The section of a select that a choice is in, by its place in the whole list. */
   #section(c: Choice | undefined) {
     const r = this.request
-    if (r.kind !== "select" || !r.sections || !c) return undefined
-    return sectionOf(r.sections, r.options.indexOf(c.label))
+    if (r.kind !== "select" || !r.sections || c?.index === undefined) return undefined
+    return sectionOf(r.sections, c.index)
   }
 
   #sectionKeys(c: Choice) {
@@ -439,9 +448,8 @@ export class Dialog implements Component {
   /** The heading shown above a choice: its section's title, when it starts there and nothing is typed. */
   #heading(c: Choice): string | undefined {
     const r = this.request
-    if (r.kind !== "select" || this.#filter) return undefined
-    const i = r.options.indexOf(c.label)
-    return r.sections?.find((s) => s.at === i)?.title
+    if (r.kind !== "select" || this.#filter || c.index === undefined) return undefined
+    return r.sections?.find((s) => s.at === c.index)?.title
   }
 
   get #current(): Page {
@@ -605,7 +613,7 @@ function pagesOf(r: DialogRequest): Page[] {
           r.title,
           r.options.map((o, i) => {
             const description = r.descriptions?.[i]
-            return { label: o, value: o, ...(description ? { description } : {}) }
+            return { label: o, value: o, index: i, ...(description ? { description } : {}) }
           }),
         ),
       ]

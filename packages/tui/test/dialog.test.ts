@@ -492,6 +492,18 @@ test("a section's key answers with the option it was pressed on; elsewhere it do
   expect(b.answers).toEqual(["sa_1 · 3 files"])
 })
 
+test("once a filter is typed, a section's key is part of it and leaves the hint", () => {
+  const { rows, type, answers, press } = sectioned()
+  type("ex")
+  expect(rows().at(-1)).not.toContain("p print")
+  type("p")
+  expect(answers).toEqual([])
+  expect(rows().join("\n")).toContain("filter ❯ exp")
+  expect(rows().join("\n")).toContain("Scan the logs · explorer")
+  press("enter")
+  expect(answers).toEqual(["2. Scan the logs · explorer"])
+})
+
 test("a filtered sectioned list has no headings; the echo names the key's label", () => {
   const { rows, type } = sectioned()
   type("sa")

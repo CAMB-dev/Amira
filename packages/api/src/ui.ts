@@ -181,7 +181,8 @@ export interface UiApi {
   /**
    * A select whose list is split into sections (headings, and keys besides Enter for each);
    * resolves with the option chosen and the key that chose it (none for Enter). Frontends
-   * without sections answer with Enter only.
+   * without sections answer with Enter only. Options must differ (they are told apart by their
+   * label) and sections must be well formed (see SelectSection, SelectKey), or it throws.
    */
   choose(
     title: string,

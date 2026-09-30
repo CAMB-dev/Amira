@@ -11,6 +11,7 @@ import {
   runFormAction,
   runFormDialogs,
   type SelectChoice,
+  type SelectSection,
   sectionOf,
   toFormSchema,
   type UiAnswer,
@@ -212,6 +213,8 @@ export class UiRequests {
       },
       choose: async (title, options, opts) => {
         const { sections, descriptions, ...rest } = opts
+        const problem = sectionProblem(options, sections)
+        if (problem) throw new Error(`ui.choose: ${problem}`)
         const request = {
           kind: "select" as const,
           title,
@@ -320,6 +323,26 @@ function checkValue(request: UiRequest, value: unknown): string | undefined {
     case "form":
       return "value must be an object of field values"
   }
+}
+
+/**
+ * What is wrong with a select's sections, if anything. Options are told apart by their label,
+ * so they must differ; sections go in order within the list; a key is one printable character
+ * that is not a digit (digits pick options) and is not used twice in a section.
+ */
+function sectionProblem(options: readonly string[], sections: readonly SelectSection[]): string | undefined {
+  if (new Set(options).size !== options.length) return "options must differ"
+  let last = -1
+  for (const s of sections) {
+    if (!Number.isInteger(s.at) || s.at <= last || s.at >= options.length)
+      return `section at ${s.at}: sections start at increasing option indexes within the list`
+    last = s.at
+    const keys = s.keys ?? []
+    const bad = keys.find((k) => !/^[^\d\s]$/u.test(k.key))
+    if (bad) return `key ${JSON.stringify(bad.key)}: a key is one printable character, not a digit`
+    if (new Set(keys.map((k) => k.key)).size !== keys.length) return `section at ${s.at}: a key is used twice`
+  }
+  return undefined
 }
 
 const isSelectChoice = (v: unknown): v is SelectChoice =>
