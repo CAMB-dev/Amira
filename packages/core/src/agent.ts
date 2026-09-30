@@ -258,8 +258,11 @@ export class Agent {
   #retries = 0
   /** A notice arrived during a manual compaction: it is sent once that ends. */
   #noticedDuringCompaction = false
-  /** A manual compaction is running (busy, but no turn). */
-  #compacting = false
+  /**
+   * What holds the session (busy, but no turn): "compaction" during a manual compaction, or
+   * the work hold() runs, e.g. "reload".
+   */
+  #holding: string | undefined
   /** Messages sent during a manual compaction; they start one turn when it ends. */
   #afterCompaction: AfterCompaction | undefined
   #onIdleNotice: (() => void) | undefined
@@ -410,8 +413,8 @@ export class Agent {
     this.#notices.push(message)
     const turn = this.#turn
     if (turn) this.#emit(turn, "turn.steer", { message, state: "queued" })
-    else if (this.#compacting) {
-      // A manual compaction runs: it is sent once that ends.
+    else if (this.#holding) {
+      // A manual compaction (or other held work) runs: it is sent once that ends.
       if (wake) this.#noticedDuringCompaction = true
       this.#emit(undefined, "turn.steer", { message, state: "queued" })
     } else if (!wake) {
@@ -426,7 +429,7 @@ export class Agent {
    * owners that passed `onIdleNotice`. Returns the turn, or undefined when none started.
    */
   wake(): Promise<TurnResult> | undefined {
-    if (this.#abort || this.#compacting || !this.#notices.length) return undefined
+    if (this.#abort || this.#holding || !this.#notices.length) return undefined
     return this.prompt(joinMessages(this.#notices.splice(0)))
   }
 
@@ -488,7 +491,7 @@ export class Agent {
         )
     // A turn cancels the timer, so only a manual compaction can be running: the message then
     // waits for it like any notice arriving meanwhile.
-    if (this.#compacting) {
+    if (this.#holding) {
       this.#notices.push(message)
       this.#noticedDuringCompaction = true
       this.#emit(undefined, "turn.steer", { message, state: "queued" })
@@ -598,23 +601,41 @@ export class Agent {
    * `dropped` and a waiting prompt() rejects with AgentAbortedError.
    */
   async compact(instructions?: string): Promise<boolean> {
+    return this.hold(
+      "compaction",
+      async (signal) => (await this.#compact("manual", signal, undefined, instructions)) === true,
+    )
+  }
+
+  /**
+   * Runs `work` with the session held, as during a manual compaction (busy, but no turn):
+   * prompts, steers and notices sent meanwhile wait, and start one turn once it ends; an abort
+   * drops the prompts and steers. For work no turn may overlap, such as /reload replacing the
+   * tools. `what` names it (holdingFor).
+   */
+  async hold<T>(what: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
     this.#abort = abort
-    this.#compacting = true
+    this.#holding = what
     try {
-      return (await this.#compact("manual", abort.signal, undefined, instructions)) === true
+      return await work(abort.signal)
     } finally {
       this.#abort = undefined
-      this.#compacting = false
+      this.#holding = undefined
       const noticed = this.#noticedDuringCompaction
       this.#noticedDuringCompaction = false
       // Held prompts and steers start their turn (an abort drops them); notices that came
       // meanwhile join it before its first model call. Notices are never dropped: without such
-      // a turn they start one, unless the compaction was aborted: then they wait for the next.
-      this.#startAfterCompaction(abort.signal.aborted)
+      // a turn they start one, unless the work was aborted: then they wait for the next.
+      this.#startAfterCompaction(abort.signal.aborted, what)
       if (noticed && !abort.signal.aborted) this.#wake()
     }
+  }
+
+  /** What holds the session while it is busy without a turn ("compaction", "reload"), if anything. */
+  get holdingFor(): string | undefined {
+    return this.#holding
   }
 
   /** Holds a message sent during a manual compaction for the turn that follows it. */
@@ -627,14 +648,14 @@ export class Agent {
   }
 
   /** Starts the turn held during a manual compaction, if anything was sent meanwhile. */
-  #startAfterCompaction(aborted: boolean) {
+  #startAfterCompaction(aborted: boolean, what: string) {
     const next = this.#afterCompaction
     this.#afterCompaction = undefined
     if (!next) return
     if (aborted) {
       for (const { message } of next.messages)
         this.#emit(undefined, "turn.steer", { message, state: "dropped" })
-      const err = new AgentAbortedError("the compaction was aborted before the message was sent")
+      const err = new AgentAbortedError(`the ${what} was aborted before the message was sent`)
       for (const w of next.waiters) w.reject(err)
       return
     }
@@ -745,7 +766,7 @@ export class Agent {
   steer(input: string | UserMessage): void {
     const message = typeof input === "string" ? userMessage(input) : input
     const turn = this.#turn
-    if (!turn && this.#compacting) {
+    if (!turn && this.#holding) {
       this.#holdForCompaction(message, true)
       this.#emit(undefined, "turn.steer", { message, state: "queued" })
       return
@@ -764,7 +785,7 @@ export class Agent {
    * starts when the compaction ends, together with anything steered meanwhile.
    */
   prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
-    if (this.#compacting && !this.#afterCompaction?.prompted) {
+    if (this.#holding && !this.#afterCompaction?.prompted) {
       const user = typeof input === "string" ? userMessage(input) : input
       const next = this.#holdForCompaction(user, false, opts.turnId)
       next.prompted = true
@@ -994,6 +1015,12 @@ export class Agent {
             break
           case "done":
             final = ev.message
+            // A reply that ends well after the turn was interrupted is still an interrupted
+            // one: a dialect may finish what it had already read without looking at the signal.
+            if (turn.signal.aborted) {
+              aborted = true
+              final = { ...ev.message, stopReason: "aborted" }
+            }
             break
           case "error":
             final = ev.message

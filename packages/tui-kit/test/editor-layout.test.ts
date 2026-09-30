@@ -138,6 +138,21 @@ test("textBeforeCaret and replaceBeforeCaret edit the word being typed", () => {
   expect(ed.cursor).toEqual({ line: 0, col: "see @src/app.ts".length })
 })
 
+test("a replaceBeforeCaret undoes and redoes as one change", () => {
+  const ed = new Editor()
+  ed.setText("see @sr and more")
+  for (let i = 0; i < " and more".length; i++) ed.handleInput(key("left"))
+  ed.replaceBeforeCaret(3, "@src/app.ts ")
+  ed.undo()
+  expect(ed.getText()).toBe("see @sr and more")
+  expect(ed.cursor).toEqual({ line: 0, col: "see @sr".length })
+  ed.redo()
+  expect(ed.getText()).toBe("see @src/app.ts  and more")
+  ed.undo()
+  ed.undo()
+  expect(ed.getText()).toBe("")
+})
+
 /** Milliseconds per call of `fn`, the median of `n` runs. */
 function perCall(n: number, fn: () => void): number {
   const times: number[] = []

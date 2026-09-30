@@ -2,6 +2,7 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import * as publicApi from "@amira/api"
 import {
+  type AnyEvent,
   API_VERSION,
   type Extension,
   type ExtensionAPI,
@@ -82,6 +83,8 @@ export class ExtensionHost {
   #imported = new Set<string>()
   /** What to add to an extension's failures, by source: e.g. how to turn its package off. */
   #hints = new Map<string, string>()
+  /** Events the extensions being loaded get first (replayOnLoad). */
+  #replay: AnyEvent[] | undefined
   /** Failures of each extension's event handlers, by source and event type. */
   #handlerFailures = new Map<string, number>()
   readonly status: StatusRegistry
@@ -160,6 +163,15 @@ export class ExtensionHost {
     if (typeof mod.default !== "function")
       return this.#fail(source, "extension must default-export a function")
     return this.load(mod.default as Extension, source)
+  }
+
+  /**
+   * Events the extensions loaded from now on get first, in their listeners registered while
+   * loading: on a reload, what tells them where the session is (the status its model, context,
+   * cost and branch). Undefined stops it.
+   */
+  replayOnLoad(events: AnyEvent[] | undefined): void {
+    this.#replay = events
   }
 
   /** Removes every tool, listener and interceptor the extension registered. */
@@ -335,7 +347,7 @@ export class ExtensionHost {
                 this.#handlerFailed(source, type, err)
               }
             },
-            { types: [type] },
+            { types: [type], ...(this.#replay ? { replay: this.#replay } : {}) },
           ),
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),

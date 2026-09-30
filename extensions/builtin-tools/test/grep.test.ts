@@ -94,3 +94,30 @@ test("head_limit applies in every output mode", async () => {
 test("a ./-prefixed glob works like the plain one", async () => {
   expect(textOf(await grep({ pattern: "TODO", glob: "./src/deep/**" }))).toBe("src/deep/b.ts")
 })
+
+test("a final line break ends the last line instead of starting another, as read counts lines", async () => {
+  const d = await tmp.make()
+  const files: Record<string, string> = {
+    "empty.txt": "",
+    "none.txt": "hello",
+    "lf.txt": "hello\n",
+    "crlf.txt": "hello\r\n",
+    "blank.txt": "\n",
+    "blanks.txt": "a\n\n\nb\r\n",
+  }
+  for (const [name, text] of Object.entries(files)) await writeFile(join(d, name), text)
+  const run = (params: GrepParams) => grepTool.execute(params, makeCtx(d))
+  expect(textOf(await run({ pattern: "^$", output_mode: "content" })).split("\n")).toEqual([
+    "blank.txt:1:",
+    "blanks.txt:2:",
+    "blanks.txt:3:",
+  ])
+  expect(textOf(await run({ pattern: "^", output_mode: "count" })).split("\n")).toEqual([
+    "blank.txt:1",
+    "blanks.txt:4",
+    "crlf.txt:1",
+    "lf.txt:1",
+    "none.txt:1",
+  ])
+  expect(textOf(await run({ pattern: "^$" })).split("\n")).toEqual(["blank.txt", "blanks.txt"])
+})

@@ -142,13 +142,15 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     if (typeof v !== "string") throw new RpcError("invalid_params", `"${key}" must be a string`)
     return v
   }
+  /** What keeps the agent busy, for the busy errors: "a turn", "a compaction", "a reload". */
+  const running = () => (agent.turnId ? "a turn" : `a ${agent.holdingFor ?? "compaction"}`)
 
   const handlers: Record<keyof typeof COMMAND_PARAMS, Handler> = {
     prompt: (p) => {
       const content: UserContent[] = [{ type: "text", text: text(p) }, ...attachments(p.attachments)]
       const shown = display(p.display)
       if (agent.turnId) throw new RpcError("busy", "a turn is running; steer it or wait for turn.end")
-      if (agent.busy) throw new RpcError("busy", "a compaction is running; steer to queue the message")
+      if (agent.busy) throw new RpcError("busy", `${running()} is running; steer to queue the message`)
       const turnId = newTurnId()
       agent
         .prompt({ role: "user", content, ...(shown ? { display: shown } : {}) }, { turnId })
@@ -220,8 +222,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     "model.set": (p) => {
       const ref = text(p, "model")
       // The running turn's history may carry state only its model understands.
-      if (agent.busy)
-        throw new RpcError("busy", "a turn or compaction is running; set the model after it ends")
+      if (agent.busy) throw new RpcError("busy", `${running()} is running; set the model after it ends`)
       try {
         agent.setModel(ai.model(ref))
       } catch (err) {
@@ -244,7 +245,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     },
     "session.resume": async (p) => {
       const sessionId = text(p, "sessionId")
-      if (agent.busy) throw new RpcError("busy", "a turn or compaction is running")
+      if (agent.busy) throw new RpcError("busy", `${running()} is running`)
       if (commands) {
         if (sessionId === agent.sessionId) return { sessionId }
         try {

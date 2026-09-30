@@ -1,5 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from "bun:test"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -593,6 +593,71 @@ test("an interrupt while worktrees are being made starts nothing further", async
   const ends = events.filter((e) => e.type === "subagent.end")
   expect(starts.length).toBe(1)
   expect(ends.map((e) => e.type === "subagent.end" && e.data.status)).toEqual(["aborted"])
+})
+
+test("a finished sub-agent whose merge waits in line is kept, not merged, when its commander is interrupted", async () => {
+  const repo = await gitRepo()
+  // The first merge holds the line in `git apply --check` until the test lets it go.
+  let checking: () => void = () => {}
+  const firstChecking = new Promise<void>((resolve) => {
+    checking = resolve
+  })
+  let letGo: () => void = () => {}
+  const released = new Promise<void>((resolve) => {
+    letGo = resolve
+  })
+  let checks = 0
+  const applied: string[] = []
+  const slowGit: typeof git = async (args, cwd, stdoutOnly) => {
+    if (args[0] === "apply" && args.includes("--check") && ++checks === 1) {
+      checking()
+      await released
+    }
+    if (args[0] === "apply" && !args.includes("--check")) applied.push(args.at(-1)!)
+    return git(args, cwd, stdoutOnly)
+  }
+  const { root, bus, events } = await setup(
+    (req) => {
+      const last = req.messages.at(-1)
+      if (who(req) === "coder") {
+        const file = JSON.stringify(req.messages).includes("write a.txt") ? "a.txt" : "b.txt"
+        return last?.role === "toolResult"
+          ? { text: `wrote ${file}` }
+          : { toolCalls: [{ name: "write", args: { path: file, content: "x\n" } }] }
+      }
+      return last?.role === "toolResult"
+        ? { text: "ok" }
+        : {
+            toolCalls: [
+              {
+                name: "agent",
+                args: {
+                  tasks: [
+                    { role: "coder", title: "Do a", prompt: "write a.txt", isolation: "worktree" },
+                    { role: "coder", title: "Do b", prompt: "write b.txt", isolation: "worktree" },
+                  ],
+                },
+              },
+            ],
+          }
+    },
+    { cwd: repo, git: slowGit },
+  )
+  const turn = root.prompt("go")
+  await firstChecking
+  // Both children are done: one is merging, the other waits for its turn to merge.
+  await until(() => events.filter((e) => e.type === "subagent.end").length === 2)
+  await Bun.sleep(50)
+  root.abort()
+  letGo()
+  await turn
+  await bus.flush()
+  const text = agentResult(root)
+  expect(text).toContain("Worktree: NOT merged because the sub-agent was stopped along with its commander")
+  // Only the merge that had started applied anything.
+  expect(applied.length).toBe(1)
+  const inRepo = ["a.txt", "b.txt"].filter((f) => existsSync(path.join(repo, f)))
+  expect(inRepo.length).toBe(1)
 })
 
 test("worktree isolation outside a repository falls back to the shared directory", async () => {

@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect, type Message, type MockStep, userMessage } from "@amira/ai"
+import {
+  type AssistantMessage,
+  createAi,
+  createMockDialect,
+  type Dialect,
+  type Message,
+  type MockStep,
+  userMessage,
+} from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
 import { Agent, AgentAbortedError } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
@@ -225,4 +233,50 @@ test("a steer during a manual compaction is not lost when the compaction fails",
   expect(await compacted).toBe(false)
   while (agent.busy) await Bun.sleep(5)
   expect(texts([mock.requests.at(-1)!.messages.at(-1)!])).toEqual(["user:keep me"])
+})
+
+test("a reply that still ends done after an abort ends the turn aborted and drops the steering", async () => {
+  // A dialect that does not look at its signal: it finishes the reply whatever happens.
+  let finish!: () => void
+  const finishing = new Promise<void>((r) => {
+    finish = r
+  })
+  let calls = 0
+  const stubborn: Dialect = {
+    id: "stubborn",
+    async *stream(req) {
+      calls++
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "first after" }],
+        model: { provider: req.model.provider, model: req.model.id },
+        stopReason: "end",
+      }
+      yield { type: "start" }
+      yield { type: "text.delta", index: 0, text: "first" }
+      await finishing
+      yield { type: "text.delta", index: 0, text: " after" }
+      yield { type: "done", message }
+    },
+  }
+  const ai = createAi({ dialects: [stubborn], providers: [{ id: "s", dialect: "stubborn", baseUrl: "" }] })
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((e) => void events.push(e))
+  const agent = new Agent({ ai, model: ai.model("s/m"), cwd: process.cwd(), systemPrompt: "", bus })
+  let interrupted = false
+  bus.subscribe((e) => {
+    if (e.type !== "message.delta" || interrupted) return
+    interrupted = true
+    agent.steer("queued follow-up")
+    agent.abort()
+    finish()
+  })
+  const r = await agent.prompt("go")
+  await bus.flush()
+  expect(r.reason).toBe("aborted")
+  expect(calls).toBe(1)
+  const steer = events.filter((e) => e.type === "turn.steer")
+  expect(steer.map((e) => e.type === "turn.steer" && e.data.state)).toEqual(["queued", "dropped"])
+  expect(agent.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" })
 })

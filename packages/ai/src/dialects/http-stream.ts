@@ -17,7 +17,7 @@ export interface StreamRequest<A extends Failable> {
   headers: Record<string, string>
   body: unknown
   /** Reads an event stream; must end with one done or error event. */
-  readSSE(body: ReadableStream<Uint8Array>, acc: A): AsyncGenerator<StreamEvent>
+  readSSE(body: ReadableStream<Uint8Array>, acc: A, signal: AbortSignal): AsyncGenerator<StreamEvent>
   /** Reads a 200 response that is not an event stream. */
   readPlain(text: string, contentType: string, acc: A): AsyncGenerator<StreamEvent>
   /** Maps an HTTP error body's `error` field; defaults to the OpenAI shape. */
@@ -63,7 +63,7 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
   try {
     const type = res.headers.get("content-type") ?? ""
     const events = type.includes("text/event-stream")
-      ? r.readSSE(body, acc)
+      ? r.readSSE(body, acc, ctx.signal)
       : r.readPlain(await res.text(), type || "no content-type", acc)
     // Exactly one terminal event, whatever the reader does.
     for await (const ev of events) {
