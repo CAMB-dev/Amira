@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
-import type { Message, ModelRef } from "@amira/ai"
+import type { Message, ModelRef, Signature, Usage } from "@amira/ai"
 import type { CompactionInfo, CompactionReason } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import { amiraPath } from "./home.ts"
@@ -21,15 +21,38 @@ export type SessionEntryData =
   | { type: "model_change"; model: ModelRef }
   /**
    * `summary` stands in for the entries in `replaces`; they stay in the file. Why and how it
-   * was compacted (CompactionInfo) is missing from entries written before it was kept.
+   * was compacted (CompactionInfo) is missing from entries written before it was kept, as are
+   * the optional fields of CompactionExtras.
    */
-  | ({ type: "compaction"; summary: string; replaces: string[] } & Partial<CompactionInfo>)
+  | ({ type: "compaction"; summary: string; replaces: string[] } & Partial<CompactionInfo> & CompactionExtras)
   /** Makes `target` the tip of the current branch; null goes back to before the first entry. */
   | { type: "checkout"; target: string | null }
   | { type: "subagent"; childSessionId: string; role: string; title?: string }
   /** Deferred tools the session loaded (via tool_search), offered to the model from then on. */
   | { type: "tools_loaded"; names: string[] }
   | { type: "custom"; ext: string; data: unknown }
+
+/** Optional fields of a compaction entry (no session format version depends on them). */
+export interface CompactionExtras {
+  /**
+   * The provider's checkpoint of a server-side compaction (Signature.kind "checkpoint", with
+   * its provider, host and model). `summary` is then the server's readable text, or empty.
+   */
+  checkpoint?: Signature
+  /**
+   * Entries kept verbatim before the summary, in order ("recent-user" layout). They are also
+   * in `replaces`, so an Amira that does not know this field drops them.
+   */
+  retained?: string[]
+  /** Tokens and cost of the compaction's requests. */
+  usage?: Usage
+  /**
+   * This entry writes a text summary for an earlier compaction entry, whose checkpoint a model
+   * switched to could not read: it replaces that entry (`replaces` holds only its id) and
+   * keeps its checkpoint, so the original model can still use it.
+   */
+  fills?: string
+}
 
 export type SessionEntry = SessionEntryData & { id: string; parentId: string | null; ts: number }
 
@@ -197,13 +220,21 @@ export class SessionStore {
       } else if (e.type === "model_change") model = e.model
       else if (e.type === "compaction") {
         tokens = undefined
-        // As in the agent, the summary goes first and what it does not replace follows in
-        // order: in a long turn that is the turn's prompt and its latest steps.
-        const gone = new Set(e.replaces)
-        const summary = summaryMessages(e.summary, model).map((message) => ({ id: e.id, message }))
+        // As in the agent, the summary goes first (after the user messages the "recent-user"
+        // layout keeps) and what it does not replace follows in order: in a long turn that is
+        // the turn's prompt and its latest steps.
+        const gone = new Set(Array.isArray(e.replaces) ? e.replaces : [])
+        const checkpoint = checkpointIn(e.checkpoint)
+        const summary = summaryMessages(
+          typeof e.summary === "string" ? e.summary : "",
+          model,
+          checkpoint,
+        ).map((message) => ({ id: e.id, message }))
         const info = compactionInfo(e)
         if (info && summary[0]) compactions.set(summary[0].message, info)
-        items = [...summary, ...items.filter((i) => !gone.has(i.id))]
+        const keep = new Set(Array.isArray(e.retained) ? e.retained : [])
+        const retained = items.filter((i) => keep.has(i.id))
+        items = [...retained, ...summary, ...items.filter((i) => !gone.has(i.id) && !keep.has(i.id))]
       }
     }
     const entryIds = new Map<Message, string>()
@@ -216,6 +247,27 @@ export class SessionStore {
       loadedTools: [...loadedTools],
       compactions,
     }
+  }
+
+  /**
+   * The history a compaction entry stands for, rebuilt from the file: the messages it
+   * replaced, with an earlier compaction among them standing as its summary when it has
+   * readable text, else as what it replaced in turn. Undefined for an unknown entry.
+   */
+  compacted(entryId: string): Message[] | undefined {
+    const e = this.#byId.get(entryId)
+    if (e?.type !== "compaction") return undefined
+    const seen = new Set<string>()
+    const expand = (c: Extract<SessionEntry, { type: "compaction" }>): Message[] =>
+      (Array.isArray(c.replaces) ? c.replaces : []).flatMap((id): Message[] => {
+        if (seen.has(id)) return []
+        seen.add(id)
+        const r = this.#byId.get(id)
+        if (r?.type === "message") return [r.message]
+        if (r?.type !== "compaction") return []
+        return typeof r.summary === "string" && r.summary.trim() ? summaryMessages(r.summary) : expand(r)
+      })
+    return expand(e)
   }
 
   /** The model most recently recorded on the current branch. */
@@ -307,7 +359,29 @@ function compactionInfo(e: Partial<CompactionInfo>): CompactionInfo | undefined 
   if (typeof m?.provider === "string" && typeof m.model === "string") {
     out.model = { provider: m.provider, model: m.model }
   }
+  const n = e.native as Partial<ModelRef> | undefined
+  if (typeof n?.provider === "string" && typeof n.model === "string") {
+    out.native = { provider: n.provider, model: n.model }
+  }
+  if (e.layout === "tail" || e.layout === "recent-user") out.layout = e.layout
+  if (typeof e.fallback === "string" && e.fallback) out.fallback = e.fallback
   return out
+}
+
+/** A stored checkpoint, if it is one (a damaged or foreign entry may hold anything). */
+function checkpointIn(v: unknown): Signature | undefined {
+  const s = v as Partial<Signature> | undefined
+  const str = (x: unknown) => typeof x === "string" && x.length > 0
+  if (s?.kind !== "checkpoint" || !str(s.dialect) || !str(s.value)) return undefined
+  if (!str(s.provider) || !str(s.host) || !str(s.model)) return undefined
+  return {
+    dialect: s.dialect!,
+    value: s.value!,
+    kind: "checkpoint",
+    provider: s.provider!,
+    host: s.host!,
+    model: s.model!,
+  }
 }
 
 function isHeader(v: unknown): v is SessionHeader {

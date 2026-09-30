@@ -5,6 +5,7 @@ import { adaptThinking } from "../thinking.ts"
 import type { ModelRequest, ReasoningEffort, StreamEvent } from "../types.ts"
 import { parseJSON, postStream } from "./http-stream.ts"
 import { ResponsesAccumulator } from "./openai-responses-accumulate.ts"
+import { responsesCompaction } from "./openai-responses-compact.ts"
 import { responsesError } from "./openai-responses-errors.ts"
 import { RESPONSES_DIALECT, toResponsesInput } from "./openai-responses-input.ts"
 
@@ -25,6 +26,8 @@ export const openaiResponses: Dialect = {
       readPlain,
     })
   },
+  // Function declarations below are hoisted, so they can be handed over here.
+  compaction: responsesCompaction((req) => responsesBody(req), { readSSE, readPlain }),
 }
 
 export function responsesBody(req: ModelRequest): Record<string, unknown> {

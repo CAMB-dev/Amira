@@ -241,17 +241,23 @@ export default defineExtension((api: ExtensionAPI) => {
           : "not a git repository"
       // This session's own replies, and with its sub-agents' (the status bar shows the latter,
       // as spent since this run started). Both count earlier runs of a resumed session.
+      // Compactions (the server's, or summaries the model wrote) count too, and are named.
+      const compacted = (ctx.session.compactions?.() ?? []).filter((c) => c.usage.cost !== undefined)
+      const compaction = compacted.length ? compacted.reduce((n, c) => n + (c.usage.cost ?? 0), 0) : undefined
       const priced = rows.filter((r) => r.cost !== undefined)
-      const own = priced.length ? priced.reduce((n, r) => n + (r.cost ?? 0), 0) : undefined
+      const replies = priced.length ? priced.reduce((n, r) => n + (r.cost ?? 0), 0) : undefined
+      const own =
+        replies !== undefined || compaction !== undefined ? (replies ?? 0) + (compaction ?? 0) : undefined
       const subs = ctx.session.subagents().filter((s) => s.usage.cost !== undefined)
       const withSubs = subs.length
         ? (own ?? 0) + subs.reduce((n, s) => n + (s.usage.cost ?? 0), 0)
         : undefined
+      const ofWhich = compaction !== undefined ? `; of which compaction ${formatCost(compaction)}` : ""
       const cost =
         withSubs !== undefined
-          ? `${formatCost(withSubs)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${formatCost(own)}` : ""}`
+          ? `${formatCost(withSubs)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${formatCost(own)}` : ""}${ofWhich}`
           : own !== undefined
-            ? `${formatCost(own)} (this session; no sub-agents)`
+            ? `${formatCost(own)} (this session; no sub-agents)${ofWhich}`
             : "unknown"
       const usage = rows.reduce(
         (t, r) => ({
@@ -425,7 +431,7 @@ export default defineExtension((api: ExtensionAPI) => {
     aliases: ["usage"],
     description: "Show this session's cost by model",
     run(_args, ctx) {
-      ctx.print(costReport(ctx.session.replies()))
+      ctx.print(costReport(ctx.session.replies(), ctx.session.compactions?.() ?? []))
     },
   })
 

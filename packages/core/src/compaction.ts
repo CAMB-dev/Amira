@@ -1,9 +1,11 @@
 import {
   type Ai,
   type AssistantMessage,
+  type CompactionLayout,
   type Message,
   type ModelInfo,
   type ModelRef,
+  type Signature,
   serverToolText,
   type Usage,
 } from "@amira/ai"
@@ -19,11 +21,25 @@ export interface CompactionOptions {
    * (a long single turn). Default 2.
    */
   keepSteps?: number
-  /** Model that writes the summary. Default: the session's model. */
+  /**
+   * Model that writes the summary. Default: the session's model. When set, compactions are
+   * always text summaries: a server-side checkpoint belongs to the session's model.
+   */
   model?: ModelInfo
   /** Set false to never compact automatically. agent.compact() still works. */
   auto?: boolean
+  /**
+   * Where a server-side checkpoint goes (CompactionLayout); "tail" by default until live
+   * tests pick one. Used when the provider's dialect can replay it there, else "tail". Text
+   * summaries always go at the tail.
+   */
+  layout?: CompactionLayout
+  /** Tokens of recent user messages the "recent-user" layout keeps. Default 64000 (as Codex). */
+  keepUserTokens?: number
 }
+
+/** How many tokens of recent user messages the "recent-user" layout keeps by default. */
+export const KEEP_USER_TOKENS = 64_000
 
 /**
  * What to tell the user when automatic compaction goes by a context window that is only a
@@ -78,14 +94,49 @@ const SUMMARY_PREFIX = "The earlier part of this conversation was compacted. Sum
  * How a compaction summary appears in the conversation: a user message with the summary
  * and a short assistant acknowledgement, so roles keep alternating for every provider.
  */
-export function summaryMessages(summary: string, model?: ModelRef): Message[] {
+export function summaryMessages(summary: string, model?: ModelRef, checkpoint?: Signature): Message[] {
+  // A server's checkpoint rides on both messages: a dialect that can replay it sends it in
+  // their place; any other gets the summary text.
+  const sig = checkpoint ? { signature: { ...checkpoint } } : {}
   const ack: AssistantMessage = {
     role: "assistant",
-    content: [{ type: "text", text: SUMMARY_ACK }],
+    content: [{ type: "text", text: SUMMARY_ACK, ...sig }],
     model: model ?? { provider: "amira", model: "compaction" },
     stopReason: "end",
   }
-  return [{ role: "user", content: [{ type: "text", text: `${SUMMARY_PREFIX}\n\n${summary.trim()}` }] }, ack]
+  const text = `${SUMMARY_PREFIX}\n\n${summary.trim()}`
+  return [{ role: "user", content: [{ type: "text", text, ...sig }] }, ack]
+}
+
+/** The server checkpoint a summary message carries, if any (see summaryMessages). */
+export function checkpointOf(m: Message): Signature | undefined {
+  const first = m.content[0]
+  return first?.type === "text" && first.signature?.kind === "checkpoint" ? first.signature : undefined
+}
+
+/** The summary text of a summary pair's user message, without its prefix. */
+export function summaryOf(m: Message): string {
+  const first = m.content[0]
+  return first?.type === "text" ? first.text.replace(`${SUMMARY_PREFIX}\n\n`, "").trim() : ""
+}
+
+/**
+ * The most recent user messages that fit in `budget` tokens (estimateTokens), oldest first,
+ * for the "recent-user" layout: real ones only, not earlier summaries. The latest is always
+ * kept, even when it alone is larger (it is in the context already).
+ */
+export function recentUserMessages(messages: Message[], budget: number): Message[] {
+  const out: Message[] = []
+  let used = 0
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!
+    if (m.role !== "user" || isSummaryMessage(m)) continue
+    const size = estimateTokens([m])
+    if (out.length && used + size > budget) break
+    out.unshift(m)
+    used += size
+  }
+  return out
 }
 
 const SUMMARY_ACK = "Understood. I will continue from this summary."
@@ -184,13 +235,14 @@ export async function summarize(
   signal: AbortSignal,
   instructions?: string,
   prompt?: Message,
-): Promise<string> {
+): Promise<{ summary: string; usage?: Usage }> {
   const extra = instructions?.trim() ? `\n\nThe user asked for this summary: ${instructions.trim()}` : ""
   const current = prompt
     ? `The transcript ends with steps taken for the user's current request, which stays in the conversation after the summary; say what has been done for it so far:\n\n<current_request>\n${renderTranscript([prompt])}\n</current_request>\n\n`
     : ""
   const request = `${current}Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>${extra}`
   let text = ""
+  let usage: Usage | undefined
   for await (const ev of ai.stream(
     {
       model,
@@ -200,11 +252,22 @@ export async function summarize(
     },
     signal,
   )) {
-    if (ev.type === "error") throw new Error(ev.error.message)
+    if (ev.type === "error") throw new SummaryError(ev.error.message, ev.message.usage)
     if (ev.type === "done") {
       text = ev.message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")
+      usage = ev.message.usage
     }
   }
-  if (!text.trim()) throw new Error("the model returned an empty summary")
-  return text.trim()
+  if (!text.trim()) throw new SummaryError("the model returned an empty summary", usage)
+  return { summary: text.trim(), ...(usage ? { usage } : {}) }
+}
+
+/** Writing a summary failed; `usage` is what the request still cost, when it said. */
+export class SummaryError extends Error {
+  constructor(
+    message: string,
+    readonly usage?: Usage,
+  ) {
+    super(message)
+  }
 }

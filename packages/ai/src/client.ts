@@ -1,13 +1,30 @@
 import { catalogProviderId, type ModelCatalog } from "./catalog.ts"
-import { withCost } from "./cost.ts"
-import type { Dialect } from "./dialect.ts"
+import { usageCost, withCost } from "./cost.ts"
+import type { Dialect, DialectContext } from "./dialect.ts"
 import { BUILTIN_DIALECTS } from "./dialects/index.ts"
 import { modelErrorKind } from "./errors.ts"
+import {
+  type CompactAttempt,
+  CompactionFailures,
+  type CompactionMemory,
+  type CompactResult,
+  endpointKey,
+  type NativeCompaction,
+} from "./native-compaction.ts"
 import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
-import { type RetryOptions, withRetry } from "./retry.ts"
-import { adaptServerTools, hasNativeWebSearch, withServerToolHost } from "./server-tools.ts"
+import { type RetryOptions, sleep, withRetry } from "./retry.ts"
+import { hasNativeWebSearch } from "./server-tools.ts"
 import { withTextTools } from "./text-tools.ts"
-import { type ModelInfo, type ModelRequest, type StreamEvent, withoutDisplay } from "./types.ts"
+import { canReplay, forReplay, type ReplayTarget, withSignatureHost } from "./thinking.ts"
+import {
+  emptyUsage,
+  type ModelInfo,
+  type ModelRequest,
+  type Signature,
+  type StreamEvent,
+  type Usage,
+  withoutDisplay,
+} from "./types.ts"
 
 export interface AiOptions {
   providers?: ProviderConfig[]
@@ -22,6 +39,8 @@ export interface AiOptions {
   retry?: RetryOptions
   /** false turns every provider's hosted web search off (settings web.nativeSearch). */
   webSearch?: boolean
+  /** Keeps the ways of server-side compaction that failed as unsupported between runs. */
+  compactionMemory?: CompactionMemory
 }
 
 export interface Ai {
@@ -46,6 +65,25 @@ export interface Ai {
   removeProvider?(id: string): void
   /** Sets or (undefined) forgets the stored key (auth.json) used for a provider when its variables are unset. */
   setStoredKey?(id: string, apiKey: string | undefined): void
+  /** Where a request for `model` goes: its dialect, provider, host and model (ReplayTarget). */
+  replayTarget(model: ModelInfo): ReplayTarget
+  /**
+   * Whether a request for `model` would send this signed data back as it is (canReplay);
+   * `producer` is the provider of the message that holds it. Requests drop what it cannot.
+   */
+  canReplay(sig: Signature, model: ModelInfo, producer?: string): boolean
+  /**
+   * The server-side compaction `model`'s provider offers now: its dialect has one, the provider
+   * turns it on (ProviderCompat.compaction; by default only on the vendor's own endpoints), and
+   * a way to ask is left that has not failed here as unsupported. Undefined otherwise.
+   */
+  nativeCompaction(model: ModelInfo): NativeCompaction | undefined
+  /**
+   * Compacts `req.messages` on the server, trying each way nativeCompaction lists in order
+   * and retrying transient failures. A way the endpoint turns out not to support is
+   * remembered (compactionMemory) and skipped from then on. Never throws.
+   */
+  compact(req: ModelRequest, signal?: AbortSignal, onProgress?: () => void): Promise<CompactResult>
 }
 
 export function createAi(opts: AiOptions = {}): Ai {
@@ -76,6 +114,101 @@ export function createAi(opts: AiOptions = {}): Ai {
     return p
   }
 
+  /** What a dialect needs to reach the provider, or why no request can be sent. */
+  const contextOf = (p: ProviderConfig, signal: AbortSignal): DialectContext | string => {
+    const apiKey = p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id]
+    if (p.apiKeyEnv && !apiKey) {
+      const names = [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])].join(" or ")
+      return `${names} is not set; export it to use provider ${p.id}`
+    }
+    return {
+      endpoint: {
+        baseUrl: p.baseUrl,
+        ...(apiKey ? { apiKey } : {}),
+        ...(p.headers ? { headers: p.headers } : {}),
+      },
+      signal,
+      fetch: doFetch,
+      ...(p.compat ? { compat: p.compat } : {}),
+    }
+  }
+
+  const failures = new CompactionFailures(opts.compactionMemory)
+
+  /** The provider's server-side compaction for `model`, if it is on and a way is left to try. */
+  const nativeCompaction = (model: ModelInfo): NativeCompaction | undefined => {
+    const p = providers.get(model.provider)
+    const native = dialects.get(model.dialect)?.compaction
+    if (!p || !native || isNoModel(model)) return undefined
+    const mode = p.compat?.compaction ?? "auto"
+    if (mode === "off" || (mode === "auto" && !native.official(p.baseUrl))) return undefined
+    const skipped = failures.skipped(endpointKey(p.id, hostOf(p.baseUrl), model.id))
+    const methods = native.methods.filter((m) => !skipped.has(m))
+    if (!methods.length) return undefined
+    return { dialect: model.dialect, methods, layouts: [...native.layouts], midTurn: native.midTurn }
+  }
+
+  /** Tries each way the provider has, in order, until one returns a checkpoint (Ai.compact). */
+  const compact = async (
+    full: ModelRequest,
+    signal: AbortSignal = new AbortController().signal,
+    onProgress?: () => void,
+  ): Promise<CompactResult> => {
+    const usage = emptyUsage()
+    const tried: CompactAttempt[] = []
+    const model = full.model
+    const support = nativeCompaction(model)
+    const p = providers.get(model.provider)
+    const native = dialects.get(model.dialect)?.compaction
+    if (!support || !p || !native) {
+      return { ok: false, error: `${model.provider}/${model.id} has no server-side compaction`, usage, tried }
+    }
+    const ctx = contextOf(p, signal)
+    if (typeof ctx === "string") return { ok: false, error: ctx, usage, tried }
+    const target = targetOf(p, model)
+    const key = endpointKey(p.id, target.host, model.id)
+    const req = withoutDisplay(full)
+    const sendable = { ...req, messages: forReplay(req.messages, target) }
+    const retries = opts.retry?.retries ?? 3
+    const base = opts.retry?.baseDelayMs ?? 1000
+    const aborted = (): CompactResult => ({ ok: false, error: "aborted", usage, tried, aborted: true })
+    for (const method of support.methods) {
+      for (let attempt = 0; ; attempt++) {
+        if (signal.aborted) return aborted()
+        const out = await native.compact(method, sendable, ctx, onProgress)
+        if (out.usage) addTo(usage, withPrice(out.usage, model))
+        if (signal.aborted) return aborted()
+        if (out.ok) {
+          const checkpoint: Signature = {
+            dialect: model.dialect,
+            value: out.value,
+            kind: "checkpoint",
+            provider: p.id,
+            host: target.host,
+            model: model.id,
+          }
+          return {
+            ok: true,
+            checkpoint,
+            ...(out.summary?.trim() ? { summary: out.summary.trim() } : {}),
+            usage,
+            method,
+            tried,
+          }
+        }
+        if (out.retryable && !out.unsupported && attempt < retries) {
+          if (!(await sleep(base * 2 ** attempt, signal))) return aborted()
+          continue
+        }
+        tried.push({ method, error: out.error.message, unsupported: out.unsupported })
+        if (out.unsupported) failures.remember(key, method)
+        break
+      }
+    }
+    const error = tried.map((t) => `${t.method}: ${t.error}`).join("; ")
+    return { ok: false, error, usage, tried }
+  }
+
   return {
     model(ref) {
       const slash = ref.indexOf("/")
@@ -103,35 +236,35 @@ export function createAi(opts: AiOptions = {}): Ai {
       if (!p) return failed(req, unknownProvider(req.model.provider), "unknown_provider")
       const dialect = dialects.get(req.model.dialect)
       if (!dialect) return failed(req, `unknown dialect "${req.model.dialect}"`, "unknown_dialect")
-      const apiKey = p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id]
-      if (p.apiKeyEnv && !apiKey) {
-        const names = [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])].join(" or ")
-        return failed(req, `${names} is not set; export it to use provider ${p.id}`, "missing_api_key")
-      }
       const sig = signal ?? new AbortController().signal
-      const ctx = {
-        endpoint: {
-          baseUrl: p.baseUrl,
-          ...(apiKey ? { apiKey } : {}),
-          ...(p.headers ? { headers: p.headers } : {}),
-        },
-        signal: sig,
-        fetch: doFetch,
-        ...(p.compat ? { compat: p.compat } : {}),
-      }
-      // A server tool's item goes back only where it came from; elsewhere it is a text note.
+      const ctx = contextOf(p, sig)
+      if (typeof ctx === "string") return failed(req, ctx, "missing_api_key")
+      // Signed reasoning, output items, checkpoints and server tools' items go back only where
+      // they came from (canReplay, canReplayServerTool); elsewhere they go as text.
       const host = hostOf(p.baseUrl)
-      const target = {
-        dialect: req.model.dialect,
-        provider: p.id,
-        host,
-        webSearch: hasNativeWebSearch(req.model),
-      }
-      const messages = adaptServerTools(req.messages, target)
+      const messages = forReplay(req.messages, targetOf(p, req.model))
       const sendable = messages === req.messages ? req : { ...req, messages }
       const attempt = () => withTextTools(sendable, (r) => dialect.stream(r, ctx))
-      const events = withServerToolHost(withRetry(attempt, sig, opts.retry), host)
+      const events = withSignatureHost(withRetry(attempt, sig, opts.retry), host)
       return withErrorFacts(withCost(events, req.model), host)
+    },
+    nativeCompaction,
+    compact,
+    replayTarget: (model) => {
+      const p = providers.get(model.provider)
+      return p
+        ? targetOf(p, model)
+        : {
+            dialect: model.dialect,
+            provider: model.provider,
+            host: "",
+            model: model.id,
+            webSearch: hasNativeWebSearch(model),
+          }
+    },
+    canReplay(sig, model, producer) {
+      const p = providers.get(model.provider)
+      return p !== undefined && canReplay(sig, targetOf(p, model), producer)
     },
     registerProvider: (p) => void providers.set(p.id, p),
     registerDialect: (d) => void dialects.set(d.id, d),
@@ -168,6 +301,30 @@ function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>):
     if (value) return value
   }
   return undefined
+}
+
+/** Usage with its cost at the model's prices, when they are known. */
+function withPrice(u: Usage, model: ModelInfo): Usage {
+  return model.cost ? { ...u, cost: usageCost(u, model.cost) } : u
+}
+
+function addTo(to: Usage, u: Usage) {
+  to.input += u.input
+  to.output += u.output
+  to.cacheRead += u.cacheRead
+  to.cacheWrite += u.cacheWrite
+  if (u.cost !== undefined) to.cost = (to.cost ?? 0) + u.cost
+}
+
+/** Where requests for `model` on `p` go, and what they offer, for canReplay and canReplayServerTool. */
+function targetOf(p: ProviderConfig, model: ModelInfo): ReplayTarget {
+  return {
+    dialect: model.dialect,
+    provider: p.id,
+    host: hostOf(p.baseUrl),
+    model: model.id,
+    webSearch: hasNativeWebSearch(model),
+  }
 }
 
 function hostOf(url: string): string {

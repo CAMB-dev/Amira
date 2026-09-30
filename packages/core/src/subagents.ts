@@ -547,6 +547,9 @@ export class AgentTree {
       cwd,
       sections: setSection(base, "role", opts.systemPrompt ?? ""),
       messages: context === "fork" ? forkHistory(parent.messages) : [],
+      // A forked history may hold a server checkpoint only the parent's model reads; a child on
+      // another model then writes a text summary from what the parent still knows it stood for.
+      ...(context === "fork" ? { originals: (m: Message) => parent.compactedHistory(m) } : {}),
       bus: parent.bus,
       interceptors: parent.interceptors,
       tools: ToolRegistry.view(

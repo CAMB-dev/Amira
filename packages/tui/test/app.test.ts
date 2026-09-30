@@ -720,6 +720,9 @@ test("the activity label names the most specific activity", () => {
   expect(activityLabel({ ...base, running: ["bash"], thinking: true })).toBe("1 tool running")
   expect(activityLabel({ ...base, running: ["bash", "read", "grep"] })).toBe("3 tools running")
   expect(activityLabel({ ...base, compacting: true, running: ["bash"] })).toBe("compacting the conversation")
+  expect(activityLabel({ ...base, compacting: true, onServer: true, running: [] })).toBe(
+    "compacting on the server",
+  )
   const retry = { attempt: 2, maxRetries: 3, status: 429, kind: "rate", at: Date.now() + 5500 }
   expect(activityLabel({ ...base, running: ["bash"], retry })).toBe("retrying in 6s (2/3) · 429")
   expect(retryLabel({ ...retry, status: undefined, at: 0 }, 1000)).toBe("retrying in 0s (2/3) · rate")

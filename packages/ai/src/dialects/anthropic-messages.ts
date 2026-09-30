@@ -31,6 +31,37 @@ export type AnthropicBlock =
       is_error?: boolean
       cache_control?: CacheControl
     }
+  | CompactionBlock
+
+/** The server's signed summary of compacted history (compaction on demand, beta). */
+export interface CompactionBlock {
+  type: "compaction"
+  /** Readable summary text. */
+  content: string
+  signature: string
+}
+
+/** The compaction block a checkpoint's value holds, or undefined for anything else. */
+export function decodeCompactionBlock(value: string): CompactionBlock | undefined {
+  try {
+    const v = JSON.parse(value)
+    if (v?.type === "compaction" && typeof v.content === "string" && typeof v.signature === "string") {
+      return { type: "compaction", content: v.content, signature: v.signature }
+    }
+  } catch {}
+  return undefined
+}
+
+/** The checkpoint a message of a summary pair carries for this dialect (canReplay kept it). */
+function checkpointOf(m: Message): CompactionBlock | undefined {
+  if (m.role === "toolResult") return undefined
+  for (const b of m.content) {
+    const sig = b.type === "text" ? b.signature : undefined
+    if (sig?.kind === "checkpoint" && sig.dialect === ANTHROPIC_DIALECT)
+      return decodeCompactionBlock(sig.value)
+  }
+  return undefined
+}
 
 export interface AnthropicMessage {
   role: "user" | "assistant"
@@ -57,6 +88,13 @@ export function toAnthropicMessages(
   }
   const results = indexResults(history)
   history.forEach((m, i) => {
+    // A server checkpoint goes as its compaction block, an assistant message of its own in
+    // place of the summary pair (the user message's text and the acknowledgement after it).
+    const checkpoint = checkpointOf(m)
+    if (checkpoint) {
+      if (m.role === "user") push("assistant", [checkpoint])
+      return
+    }
     if (m.role === "user") {
       push("user", m.content.flatMap(userBlock))
     } else if (m.role === "assistant") {

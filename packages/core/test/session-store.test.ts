@@ -174,6 +174,64 @@ test("a checkout to an entry missing from the file is ignored", async () => {
   expect(SessionStore.open(s.file).restore().messages).toEqual([userMessage("one")])
 })
 
+test("server checkpoints, retained messages and fills restore; damaged fields are ignored", async () => {
+  const dir = await tmp()
+  const s = SessionStore.create({ cwd: "/proj", dir })
+  const q1 = s.appendMessage(userMessage("q1"))
+  const r1 = s.appendMessage(reply("r1"))
+  const q2 = s.appendMessage(userMessage("q2"))
+  const checkpoint = {
+    dialect: "openai-responses",
+    value: '{"type":"compaction","encrypted_content":"E"}',
+    kind: "checkpoint" as const,
+    provider: "p",
+    host: "api.p.com",
+    model: "m",
+  }
+  // The "recent-user" layout: everything replaced, the user messages kept before the checkpoint.
+  const c = s.append({
+    type: "compaction",
+    summary: "",
+    replaces: [q1, r1, q2],
+    retained: [q1, q2],
+    checkpoint,
+    reason: "threshold",
+    native: { provider: "p", model: "m" },
+    layout: "recent-user",
+  })
+  let restored = SessionStore.open(s.file).restore()
+  expect(restored.messages.map((m) => (m.content[0] as { text: string }).text)).toEqual([
+    "q1",
+    "q2",
+    "The earlier part of this conversation was compacted. Summary:\n\n",
+    "Understood. I will continue from this summary.",
+  ])
+  expect((restored.messages[2]!.content[0] as { signature?: unknown }).signature).toEqual(checkpoint)
+  expect(restored.compactions.get(restored.messages[2]!)).toEqual({
+    reason: "threshold",
+    native: { provider: "p", model: "m" },
+    layout: "recent-user",
+  })
+  // A text summary written for it later replaces it in place and keeps the checkpoint.
+  s.append({ type: "compaction", summary: "TEXT", replaces: [c], retained: [q1, q2], checkpoint, fills: c })
+  restored = SessionStore.open(s.file).restore()
+  expect(restored.messages.map((m) => (m.content[0] as { text: string }).text)[2]).toContain("TEXT")
+  expect(restored.messages).toHaveLength(4)
+  const texts = SessionStore.open(s.file)
+    .compacted(c)
+    ?.map((m) => (m.content[0] as { text: string }).text)
+  expect(texts).toEqual(["q1", "r1", "q2"])
+
+  // A checkpoint that lacks its host (or is not one) is dropped, the summary kept.
+  const t = SessionStore.create({ cwd: "/proj", dir: await tmp() })
+  const a = t.appendMessage(userMessage("a"))
+  const { host: _, ...noHost } = checkpoint
+  t.append({ type: "compaction", summary: "S", replaces: [a], checkpoint: noHost, retained: "junk" as never })
+  const damaged = SessionStore.open(t.file).restore().messages
+  expect(damaged).toHaveLength(2)
+  expect((damaged[0]!.content[0] as { signature?: unknown }).signature).toBeUndefined()
+})
+
 test("compaction entries replace messages with a summary pair on restore", async () => {
   const dir = await tmp()
   const s = SessionStore.create({ cwd: "/proj", dir })

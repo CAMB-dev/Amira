@@ -1,5 +1,6 @@
 import {
   type AssistantMessage,
+  type CompactionUsage,
   type ContextPreview,
   type ContextWindowSource,
   formatTokens,
@@ -99,9 +100,19 @@ export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
   return [...out.values()]
 }
 
-/** The /cost report. */
-export function costReport(replies: readonly AssistantMessage[]): string {
-  const rows = costByModel(replies)
+/**
+ * The /cost report: replies by model, then compactions by model (as "compaction" rows;
+ * `replies` then counts compactions).
+ */
+export function costReport(
+  replies: readonly AssistantMessage[],
+  compactions: readonly CompactionUsage[] = [],
+): string {
+  const asReplies = compactions.map(
+    (c): AssistantMessage => ({ role: "assistant", content: [], model: c.model, usage: c.usage }),
+  )
+  const compactionRows = costByModel(asReplies).map((r) => ({ ...r, compaction: true }))
+  const rows: (ModelCost & { compaction?: boolean })[] = [...costByModel(replies), ...compactionRows]
   if (!rows.length) return "No model replies with usage in this session yet."
   const line = (r: Pick<ModelCost, "usage" | "cost">, label: string, count: string) => {
     const u = r.usage
@@ -115,7 +126,11 @@ export function costReport(replies: readonly AssistantMessage[]): string {
       r.cost === undefined ? "price unknown" : formatCost(r.cost),
     ]
   }
-  const body = rows.map((r) => line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`))
+  const body = rows.map((r) =>
+    r.compaction
+      ? line(r, `${r.model} (compaction)`, `${r.replies} ${r.replies === 1 ? "compaction" : "compactions"}`)
+      : line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`),
+  )
   if (rows.length > 1) {
     const total = rows.reduce(
       (t, r) => ({

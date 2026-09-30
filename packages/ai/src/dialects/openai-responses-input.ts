@@ -38,6 +38,44 @@ export type ResponsesItem =
   | { type: "function_call_output"; call_id: string; output: string }
   /** A hosted tool's item as the server sent it, e.g. a web_search_call. */
   | { type: "web_search_call"; [key: string]: unknown }
+  | CompactionItem
+  /** Asks the server to compact everything before it; must be the last input item. */
+  | { type: "compaction_trigger" }
+
+/** The server's opaque checkpoint of compacted history (not readable). */
+export interface CompactionItem {
+  type: "compaction"
+  id?: string
+  encrypted_content: string
+}
+
+/** The compaction item a checkpoint's value holds, or undefined for anything else. */
+export function decodeCompaction(value: string): CompactionItem | undefined {
+  try {
+    const v = JSON.parse(value)
+    if (v?.type === "compaction" && typeof v.encrypted_content === "string" && v.encrypted_content) {
+      return {
+        type: "compaction",
+        ...(typeof v.id === "string" && v.id ? { id: v.id } : {}),
+        encrypted_content: v.encrypted_content,
+      }
+    }
+  } catch {}
+  return undefined
+}
+
+/**
+ * The checkpoint a message of a summary pair carries for this dialect, if any. The ai client
+ * leaves one on a message only when it may be sent back here (canReplay).
+ */
+function checkpointOf(m: Message): CompactionItem | undefined {
+  if (m.role === "toolResult") return undefined
+  for (const b of m.content) {
+    const sig = b.type === "text" ? b.signature : undefined
+    if (sig?.kind === "checkpoint" && sig.dialect === RESPONSES_DIALECT) return decodeCompaction(sig.value)
+  }
+  return undefined
+}
 
 export interface ResponsesInputOptions {
   /** Whether the model accepts images; tool-result images then follow as a user message. */
@@ -88,6 +126,13 @@ export function toResponsesInput(messages: Message[], opts: ResponsesInputOption
   const out: ResponsesItem[] = []
   const results = new ToolResults(messages)
   messages.forEach((m, i) => {
+    // A server checkpoint goes as its compaction item, in place of the summary pair that
+    // carries it: the user message's text and the assistant's acknowledgement.
+    const checkpoint = checkpointOf(m)
+    if (checkpoint) {
+      if (m.role === "user") out.push(checkpoint)
+      return
+    }
     if (m.role === "user") {
       out.push({ type: "message", role: "user", content: m.content.map(inputPart) })
       return
@@ -177,8 +222,8 @@ function itemType(item: ResponsesItem | undefined): string | undefined {
 /**
  * A hosted tool's call (a web_search_call) goes back as the item it came as: the server takes
  * it inline with `store: false`. The ai client leaves the item only on blocks from this
- * provider and host (adaptServerTools); without one there is no item and the block goes as
- * a text note.
+ * provider and host, while the request offers the tool (forReplay, canReplayServerTool);
+ * without one there is no item and the block goes as a text note.
  */
 function serverToolItem(b: ServerToolBlock): ResponsesItem | undefined {
   if (b.signature?.dialect !== RESPONSES_DIALECT) return undefined
