@@ -1,3 +1,4 @@
+import { serverToolText } from "../server-tools.ts"
 import type { AssistantMessage, ImageBlock, Message, ToolResultMessage, UserContent } from "../types.ts"
 import { indexResults, MISSING_RESULT, takeResult } from "./tool-results.ts"
 
@@ -66,10 +67,12 @@ function userContent(blocks: UserContent[]): string | ChatPart[] {
 
 /** Returns nothing for an empty message, which strict servers reject. */
 function assistantMessage(m: AssistantMessage): Extract<ChatMessage, { role: "assistant" }> | undefined {
-  // Chat Completions has no way to send thinking back, so it is dropped here.
+  // Chat Completions has no way to send thinking back, so it is dropped here. A hosted
+  // search another provider ran goes as a text note, so the model knows what was looked up.
   const text = m.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
+    .flatMap((b) =>
+      b.type === "text" ? [b.text] : b.type === "serverTool" ? [`${serverToolText(b)}\n\n`] : [],
+    )
     .join("")
   const calls = m.content
     .filter((b) => b.type === "toolCall")

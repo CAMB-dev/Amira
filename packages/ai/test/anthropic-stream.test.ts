@@ -103,7 +103,7 @@ test("streams thinking and captures its signature", async () => {
     {
       type: "thinking",
       text: "Let me think.",
-      signature: { dialect: "anthropic-messages", value: "EqQBZz==" },
+      signature: { dialect: "anthropic-messages", value: "EqQBZz==", host: "anth" },
     },
     { type: "text", text: "Done." },
   ])
@@ -141,7 +141,7 @@ test("records redacted thinking with its encrypted data as the signature", async
       type: "thinking",
       text: "",
       redacted: true,
-      signature: { dialect: "anthropic-messages", value: "ENCRYPTED" },
+      signature: { dialect: "anthropic-messages", value: "ENCRYPTED", host: "anth" },
     },
     { type: "text", text: "hi" },
   ])
@@ -307,7 +307,11 @@ test("a whole JSON message with status 200 is replayed as a stream", async () =>
   ])
   const e = last(evs) as DoneEvent
   expect(e.message.content).toEqual([
-    { type: "thinking", text: "hmm", signature: { dialect: "anthropic-messages", value: "sig" } },
+    {
+      type: "thinking",
+      text: "hmm",
+      signature: { dialect: "anthropic-messages", value: "sig", host: "anth" },
+    },
     { type: "text", text: "Reading." },
     { type: "toolCall", id: "t1", name: "read", args: { path: "x" } },
   ])

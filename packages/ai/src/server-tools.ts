@@ -1,4 +1,4 @@
-import type { AssistantContent, Citation, Message, ModelInfo, ServerToolBlock, StreamEvent } from "./types.ts"
+import type { AssistantContent, Citation, ModelInfo, ServerToolBlock } from "./types.ts"
 
 /** Dialects with a hosted web search the provider runs itself (ids spelled out: the dialects import this file). */
 const WEB_SEARCH_DIALECTS = new Set(["openai-responses"])
@@ -47,57 +47,10 @@ export function defaultWebSearch(dialect: string, baseUrl: string): boolean {
   return WEB_SEARCH_DIALECTS.has(dialect) && isOpenAIVendorUrl(baseUrl)
 }
 
-/** Where a request goes, which decides whether a server tool's item may be sent back as it is. */
-export interface ServerToolTarget {
-  dialect: string
-  provider: string
-  host: string
-  /**
-   * The request offers the hosted web search (hasNativeWebSearch). Without it a search item
-   * goes as a note too: nothing says a server takes one for a tool it was not given.
-   */
-  webSearch: boolean
-}
-
 /**
- * History as `target` may receive it: server-tool blocks it cannot take as they are
- * (canReplayServerTool) become text notes (serverToolText), so the model still knows
- * what was searched. Unchanged messages are kept; changed ones are copies.
+ * A server tool's call as a short note, for a model that cannot take its item: another
+ * dialect, or one the ai client left no item for (forReplay, canReplayServerTool).
  */
-export function adaptServerTools(messages: Message[], target: ServerToolTarget): Message[] {
-  let changed = false
-  const out = messages.map((m): Message => {
-    if (m.role !== "assistant" || !m.content.some((b) => b.type === "serverTool")) return m
-    const stale = (b: AssistantContent) =>
-      b.type === "serverTool" && !canReplayServerTool(b, target, m.model.provider)
-    if (!m.content.some(stale)) return m
-    changed = true
-    const content = m.content.map(
-      (b): AssistantContent =>
-        b.type === "serverTool" && stale(b) ? { type: "text", text: serverToolText(b) } : b,
-    )
-    return { ...m, content }
-  })
-  return changed ? out : messages
-}
-
-/**
- * A block goes back as it is only to the dialect, provider and host that produced it, and
- * only while the request still offers the tool.
- */
-export function canReplayServerTool(b: ServerToolBlock, target: ServerToolTarget, producer: string): boolean {
-  const sig = b.signature
-  return (
-    target.webSearch &&
-    sig !== undefined &&
-    sig.dialect === target.dialect &&
-    sig.host !== undefined &&
-    sig.host === target.host &&
-    producer === target.provider
-  )
-}
-
-/** A server tool's call as a short note, for a model that cannot take its item. */
 export function serverToolText(b: ServerToolBlock): string {
   const what = describeServerTool(b)
   const sources = (b.sources ?? []).map((s) => `- ${s.title ? `${s.title}: ` : ""}${s.url}`)
@@ -133,22 +86,4 @@ export function messageCitations(content: readonly AssistantContent[]): Citation
     }
   }
   return [...seen.values()]
-}
-
-/**
- * Stamps the host a reply came from on its server-tool blocks, so their items are only sent
- * back there (adaptServerTools).
- */
-export async function* withServerToolHost(
-  stream: AsyncIterable<StreamEvent>,
-  host: string,
-): AsyncGenerator<StreamEvent> {
-  for await (const ev of stream) {
-    if ((ev.type === "done" || ev.type === "error") && host) {
-      for (const b of ev.message.content) {
-        if (b.type === "serverTool" && b.signature && b.signature.host === undefined) b.signature.host = host
-      }
-    }
-    yield ev
-  }
 }

@@ -7,6 +7,7 @@ import type {
   ModelRef,
   Usage,
 } from "@amira/ai"
+import type { CompactionUsage } from "./events.ts"
 import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
@@ -288,6 +289,11 @@ export interface SessionControl {
   messages(): readonly Message[]
   /** Every model reply of this session, including ones a compaction has since replaced. */
   replies(): readonly AssistantMessage[]
+  /**
+   * What this session's compactions cost, one entry each (server-side ones and summaries the
+   * model wrote), earlier runs of a resumed session included. Not among `replies`.
+   */
+  compactions?(): readonly CompactionUsage[]
   /**
    * This session's sub-agents and theirs, each followed by its own: the ones running or
    * queued now and the finished ones, also from earlier runs of a resumed session.

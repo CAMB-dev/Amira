@@ -210,21 +210,23 @@ export const compactTokens = formatTokens
 /**
  * Why a compaction happened: "Compacted automatically at 82% of 128k", "Compacted (you
  * asked)", ...; plain "Compacted" when that is unknown (a compaction stored before it was kept).
+ * A server-side one says so: "Compacted by the server (openai) automatically at 82% of 128k".
  */
 export function compactionReason(info: CompactionInfo | undefined): string {
+  const by = info?.native ? ` by the server (${info.native.provider})` : ""
   switch (info?.reason) {
     case "threshold": {
       const { tokensBefore: t, contextWindow: w } = info
       return t !== undefined && w
-        ? `Compacted automatically at ${Math.round((t / w) * 100)}% of ${compactTokens(w)}`
-        : "Compacted automatically"
+        ? `Compacted${by} automatically at ${Math.round((t / w) * 100)}% of ${compactTokens(w)}`
+        : `Compacted${by} automatically`
     }
     case "manual":
-      return "Compacted (you asked)"
+      return by ? `Compacted${by} as you asked` : "Compacted (you asked)"
     case "overflow":
-      return "Compacted after the model rejected the request as too long"
+      return `Compacted${by} after the model rejected the request as too long`
     default:
-      return "Compacted"
+      return `Compacted${by}`
   }
 }
 
@@ -244,7 +246,14 @@ export function compactionSizes(info: CompactionInfo | undefined): string | unde
  */
 export function compactionNotice(replaced: number, info: CompactionInfo | undefined): string {
   const sizes = compactionSizes(info)
-  return `${compactionReason(info)}: ${plural(replaced, "older message")} into a summary${sizes ? ` (${sizes})` : ""}.`
+  const what = info?.native
+    ? plural(replaced, "older message")
+    : `${plural(replaced, "older message")} into a summary`
+  const line = `${compactionReason(info)}: ${what}${sizes ? ` (${sizes})` : ""}.`
+  // The provider has server-side compaction on, but it did not work this time.
+  return info?.fallback
+    ? `${line}\nThe server could not compact, so the model wrote the summary: ${info.fallback}`
+    : line
 }
 
 /**

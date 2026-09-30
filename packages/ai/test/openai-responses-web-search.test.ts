@@ -9,13 +9,13 @@ import { toResponsesInput } from "../src/dialects/openai-responses-input.ts"
 import { resolveModelInfo } from "../src/providers.ts"
 import { withRetry } from "../src/retry.ts"
 import {
-  adaptServerTools,
   describeServerTool,
   hasNativeWebSearch,
   isOpenAIVendorUrl,
   messageCitations,
   serverToolText,
 } from "../src/server-tools.ts"
+import { forReplay, type ReplayTarget } from "../src/thinking.ts"
 import type { AssistantMessage, Message, ServerToolBlock, StreamEvent, TextBlock } from "../src/types.ts"
 import { namedSSE, req, run, sse } from "./dialect-helpers.ts"
 import { events, type Seen } from "./helpers.ts"
@@ -248,8 +248,17 @@ test("a search goes back as its own item, never as a function call with an outpu
 
 test("server tool items replay only to the same dialect, provider and host; elsewhere as a note", () => {
   const msgs = history(block("api.openai.com"))
-  const same = { dialect: "openai-responses", provider: "openai", host: "api.openai.com", webSearch: true }
-  expect(adaptServerTools(msgs, same)).toBe(msgs)
+  const same: ReplayTarget = {
+    dialect: "openai-responses",
+    provider: "openai",
+    host: "api.openai.com",
+    model: "gpt",
+    webSearch: true,
+  }
+  expect(forReplay(msgs, same)).toBe(msgs)
+  // Another model at the same endpoint takes the item: a search is not tied to a model.
+  expect(forReplay(msgs, { ...same, model: "gpt-mini" })).toBe(msgs)
+  const { signature: _, ...unsigned } = block("api.openai.com")
   for (const target of [
     { ...same, host: "localhost:8317" },
     { ...same, provider: "proxy" },
@@ -257,18 +266,20 @@ test("server tool items replay only to the same dialect, provider and host; else
     // The same endpoint, but the request no longer offers the hosted search.
     { ...same, webSearch: false },
   ]) {
-    const out = adaptServerTools(msgs, target)
+    const out = forReplay(msgs, target)
     const content = (out[1] as AssistantMessage).content
-    expect(content[0]).toEqual({
-      type: "text",
-      text: '[Web search: "node.js latest lts"]\nSources:\n- Download: https://nodejs.org/en/download',
+    // Without its item the dialect sends the block as a note.
+    expect(content[0]).toEqual(unsigned)
+    expect(toResponsesInput(out)[1]).toEqual({
+      role: "assistant",
+      content: `[Web search: "node.js latest lts"]\nSources:\n- Download: https://nodejs.org/en/download\n\n${TEXT}`,
     })
     // The original history is left alone.
-    expect((msgs[1] as AssistantMessage).content[0]!.type).toBe("serverTool")
+    expect((msgs[1] as AssistantMessage).content[0]!).toHaveProperty("signature")
   }
   // No host recorded: it cannot be told where it came from, so it goes as a note.
-  const unstamped = adaptServerTools(history(block()), same)
-  expect((unstamped[1] as AssistantMessage).content[0]!.type).toBe("text")
+  const unstamped = forReplay(history(block()), same)
+  expect((unstamped[1] as AssistantMessage).content[0]).toEqual(unsigned)
 })
 
 test("a search as a note joins the plain text around it in one assistant message", () => {

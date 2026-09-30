@@ -497,6 +497,53 @@ test("a compaction says why it happened, in its notice and on its summary", () =
   ])
 })
 
+test("a server-side compaction says so; without readable text its block says why", () => {
+  const openai = { provider: "openai", model: "gpt-x" }
+  const native = {
+    reason: "threshold" as const,
+    tokensBefore: 105_000,
+    tokensAfter: 12_400,
+    contextWindow: 128_000,
+    model: openai,
+    native: openai,
+    layout: "tail" as const,
+  }
+  expect(compactionNotice(14, native)).toBe(
+    "Compacted by the server (openai) automatically at 82% of 128k: 14 older messages (105k → ~12k tokens).",
+  )
+  expect(compactionReason({ reason: "manual", native: openai })).toBe(
+    "Compacted by the server (openai) as you asked",
+  )
+  // The provider has it on, but the server could not do it this time.
+  expect(compactionNotice(2, { reason: "manual", fallback: "trigger: HTTP 404" })).toBe(
+    "Compacted (you asked): 2 older messages into a summary.\nThe server could not compact, so the model wrote the summary: trigger: HTTP 404",
+  )
+  expect(summaryLines(defaultTheme, "", 120, true, native).map(stripAnsi)).toEqual([
+    "▸ Compacted by the server (openai) automatically at 82% of 128k · no readable summary",
+  ])
+  const open = summaryLines(defaultTheme, "", 200, false, native).map(stripAnsi)
+  expect(open[1]).toBe("  105k → ~12k tokens · compacted by openai's server for gpt-x")
+  expect(open.slice(3).join(" ")).toContain("cannot be shown")
+  // Anthropic's is readable; a text summary written later names its writer.
+  const anthropic = { provider: "anthropic", model: "claude-x" }
+  const readable = summaryLines(defaultTheme, "Did A.", 200, false, {
+    reason: "manual",
+    native: anthropic,
+    model: anthropic,
+  })
+  expect(readable.map(stripAnsi)).toEqual([
+    "▾ Compacted by the server (anthropic) as you asked · summary of earlier messages",
+    "  compacted by anthropic's server for claude-x",
+    "",
+    "  Did A.",
+  ])
+  const filled = summaryLines(defaultTheme, "Did A.", 200, false, {
+    ...native,
+    model: { provider: "ds", model: "flash" },
+  })
+  expect(stripAnsi(filled[1]!)).toContain("text summary written by ds/flash")
+})
+
 test("isLastSibling: a row closes its level when no later row sits at its depth before the level ends", () => {
   const list = [{ depth: 1 }, { depth: 2 }, { depth: 2 }, { depth: 1 }, { depth: 2 }]
   expect(list.map((_, i) => isLastSibling(list, i))).toEqual([false, false, true, true, true])

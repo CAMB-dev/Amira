@@ -2,6 +2,7 @@ import type { Dialect, DialectContext } from "../dialect.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
 import { MessagesAccumulator } from "./anthropic-accumulate.ts"
+import { anthropicCompaction, COMPACT_BETA, carriesCompaction, withBeta } from "./anthropic-compact.ts"
 import { anthropicError, isRetryableStatus } from "./anthropic-errors.ts"
 import { ANTHROPIC_DIALECT, toAnthropicMessages } from "./anthropic-messages.ts"
 import { requestBody } from "./anthropic-request.ts"
@@ -23,15 +24,18 @@ export const anthropicMessages: Dialect = {
     }
     let res: Response
     try {
+      const payload = requestBody(req, ctx.compat)
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        "anthropic-version": ANTHROPIC_VERSION,
+        ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
+        ...ctx.endpoint.headers,
+      }
       res = await ctx.fetch(messagesUrl(ctx.endpoint.baseUrl), {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "anthropic-version": ANTHROPIC_VERSION,
-          ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
-          ...ctx.endpoint.headers,
-        },
-        body: JSON.stringify(requestBody(req, ctx.compat)),
+        // Every request that carries a compaction block needs the beta that made it.
+        headers: carriesCompaction(payload.messages) ? withBeta(headers, COMPACT_BETA) : headers,
+        body: JSON.stringify(payload),
         signal: ctx.signal,
       })
     } catch (e) {
@@ -88,6 +92,7 @@ export const anthropicMessages: Dialect = {
       await body.cancel().catch(() => {})
     }
   },
+  compaction: anthropicCompaction,
 }
 
 /** `{baseUrl}/v1/messages`, tolerating a base URL that already ends in /v1. */

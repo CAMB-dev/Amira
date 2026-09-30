@@ -78,6 +78,29 @@ test("layers flags over local, project, user settings and defaults", () => {
   expect(loadSettings({ cwd, home, flags: { model: "f/m" } }).settings.model).toBe("f/m")
 })
 
+test("server-side compaction and its layout are settings; a project file cannot turn it on", () => {
+  put(userFile(), {
+    providers: {
+      proxy: {
+        dialect: "openai-responses",
+        baseUrl: "http://localhost:8317/v1",
+        compat: { compaction: "on" },
+      },
+    },
+    compact: { layout: "recent-user" },
+  })
+  put(projectFile(), { providers: { other: { compat: { compaction: "on", streamUsage: false } } } })
+  const r = loadSettings({ cwd, home })
+  expect(r.settings.providers?.proxy?.compat).toEqual({ compaction: "on" })
+  expect(r.settings.providers?.other?.compat).toEqual({ streamUsage: false })
+  expect(r.settings.compact).toEqual({ layout: "recent-user" })
+  expect(r.warnings).toEqual([
+    `${projectFile()}: "providers.other.compat.compaction" is ignored; server-side compaction is only turned on or off in ${userFile()}`,
+  ])
+  put(userFile(), { providers: { p: { compat: { compaction: "sometimes" } } } })
+  expect(() => loadSettings({ cwd, home })).toThrow(/compaction/)
+})
+
 test("project files cannot change where requests and API keys go", () => {
   put(userFile(), { providers: { mine: { dialect: "openai-chat", baseUrl: "http://mine" } } })
   put(projectFile(), {

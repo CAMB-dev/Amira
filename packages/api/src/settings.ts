@@ -44,7 +44,16 @@ export interface Settings {
   commandAliases?: Record<string, string>
   /** Most tool calls running at once (D71). */
   maxParallelTools?: number
-  compact?: { threshold?: number; model?: string }
+  /**
+   * Compaction (D19): `threshold` is the share of the context window that triggers it (0.8),
+   * `model` writes text summaries (default the session's model). `layout` places a
+   * server-side checkpoint (providers.<id>.compat.compaction): "tail" (the default for now)
+   * keeps the last turns verbatim after it; "recent-user" compacts everything and puts the
+   * most recent user messages (up to about 64k tokens) before it, as Codex does. Text
+   * summaries always use "tail". A set `model`, like /compact with instructions, always
+   * writes a text summary.
+   */
+  compact?: { threshold?: number; model?: string; layout?: "tail" | "recent-user" }
   /** Retrying failed model requests (D52): retries after the first try, first backoff, longest Retry-After waited. */
   retry?: { attempts?: number; baseDelayMs?: number; maxDelayMs?: number }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */

@@ -1,5 +1,6 @@
 import type {
   AssistantMessage,
+  CompactionLayout,
   Message,
   ModelErrorInfo,
   ModelErrorKind,
@@ -35,8 +36,35 @@ export interface CompactionInfo {
   tokensAfter?: number
   /** The session model's context window at the time. */
   contextWindow?: number
-  /** The model that wrote the summary; unset when a compact.before interceptor supplied it. */
+  /**
+   * The model that wrote the summary (for a server-side compaction, the model it was done
+   * for); unset when a compact.before interceptor supplied it.
+   */
   model?: ModelRef
+  /**
+   * Set when the provider's server compacted the history (native compaction) instead of the
+   * model writing a summary: the provider and model it was done for. The summary is then the
+   * server's readable one (Anthropic), or empty where the server gives none (OpenAI: its
+   * checkpoint is opaque) until a model that cannot use the checkpoint needs a text summary
+   * (then `model` is the one that wrote it).
+   */
+  native?: ModelRef
+  /** Where the summary went (CompactionLayout): "tail" (the default) or "recent-user". */
+  layout?: CompactionLayout
+  /**
+   * Why server-side compaction was not used although the provider has it on: each way that
+   * failed, in the order tried. The summary was written by the model instead.
+   */
+  fallback?: string
+}
+
+/** Tokens and cost of one compaction's requests (the server's, or the summary the model wrote). */
+export interface CompactionUsage {
+  /** The model the requests went to. */
+  model: ModelRef
+  usage: Usage
+  /** Done by the provider's server (native compaction). */
+  native?: boolean
 }
 
 /** Envelope shared by every event, whether seen by the TUI, headless clients or extensions. */
@@ -185,9 +213,14 @@ export interface EventMap {
     replacing: number
     kept: number
     tokens?: number
+    /** The provider's server is asked to compact (it may still fall back to a summary). */
+    native?: boolean
   }
-  /** Older history was replaced by `summary`; the rest tells why and how (also stored with it). */
-  "compact.end": { summary: string; replaced: number; kept: number } & CompactionInfo
+  /**
+   * Older history was replaced by `summary`; the rest tells why and how (also stored with it).
+   * `usage` is what the compaction's requests cost, failed server attempts included.
+   */
+  "compact.end": { summary: string; replaced: number; kept: number; usage?: Usage } & CompactionInfo
   /**
    * Compaction did not happen; the conversation continues uncompacted. `blocked` means a
    * compact.before interceptor cancelled it on purpose (`error` is its reason); no

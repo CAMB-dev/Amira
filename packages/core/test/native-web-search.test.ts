@@ -112,7 +112,7 @@ function setup(replies: Record<string, unknown>[][], baseUrl = "https://api.open
     }),
     "test",
   )
-  return { agent, bus, events, bodies, ran }
+  return { agent, ai, bus, events, bodies, ran }
 }
 
 const citation = { type: "url_citation", url, title: "Bun blog", start_index: 13, end_index: 45 }
@@ -187,6 +187,74 @@ test("a deferred client web_search is not named to a model with the hosted searc
   agent.tools.register({ ...tool, exposure: "deferred", override: true }, "test")
   const preview = await agent.preview()
   expect(preview.systemPrompt).not.toContain("web_search")
+})
+
+const compacted = [
+  { type: "response.output_item.added", output_index: 0, item: { type: "compaction", id: "cmp_1" } },
+  { type: "response.compaction.compacting", item_id: "cmp_1", output_index: 0 },
+  {
+    type: "response.output_item.done",
+    output_index: 0,
+    item: { type: "compaction", id: "cmp_1", encrypted_content: "ENC" },
+  },
+  completed,
+]
+
+test("a search, a local tool, then a server compaction; a model switch writes a summary, back it uses the checkpoint", async () => {
+  const { agent, ai, bodies, ran } = setup([
+    [...search(0), ...message(1, TEXT, [citation]), completed],
+    [...call(0), completed],
+    [...message(0, "echoed"), completed],
+    compacted,
+    [...message(0, "v2"), completed],
+    [...message(0, "SUMMARY OF THE SEARCH"), completed],
+    [...message(0, "from the summary"), completed],
+    [...message(0, "from the checkpoint"), completed],
+  ])
+  await agent.prompt("what is new in bun?")
+  await agent.prompt("echo a")
+  expect(ran).toEqual(["echo"])
+  expect(await agent.compact()).toBe(true)
+  // The trigger request offers what a reply's would: the local tool and the hosted search,
+  // never the client web_search; the search's item goes along, as it did in the replies.
+  const trigger = bodies[3]
+  const tools = trigger.tools as { type: string; name?: string }[]
+  expect(tools.map((t) => t.name ?? t.type)).toEqual(["echo", "web_search"])
+  const types = (body: any) => (body.input as { type?: string }[]).map((i) => i.type ?? "assistant")
+  // (The reply's text replays as the output message item it came as.)
+  expect(types(trigger)).toEqual(["message", "web_search_call", "message", "compaction_trigger"])
+  expect(trigger.input[1]).toEqual(searchItem)
+  // The checkpoint stands for the search turn; the citations stay in the session's history.
+  const first = agent.messages[0]!.content[0]!
+  const sig = first.type === "text" ? first.signature : undefined
+  expect(sig).toMatchObject({ kind: "checkpoint", provider: "oa", host: "api.openai.com", model: "gpt-5" })
+  expect(agent.messages.length).toBe(2 + 4)
+  await agent.prompt("which version?")
+  expect(types(bodies[4])).toEqual([
+    "compaction",
+    "message",
+    "function_call",
+    "function_call_output",
+    "message",
+    "message",
+  ])
+  expect(bodies[4].input[0]).toEqual({ type: "compaction", id: "cmp_1", encrypted_content: "ENC" })
+  // Another model at the same endpoint cannot read the checkpoint: a text summary is written
+  // from the history it stands for, search and citation included, and sent in its place.
+  agent.setModel(ai.model("oa/gpt-5-mini"))
+  await agent.prompt("and the LTS?")
+  const asked = JSON.stringify(bodies[5].input)
+  expect(asked).toContain('[Web search: \\"bun latest\\"]')
+  expect(asked).toContain(TEXT)
+  expect(bodies[5].tools).toBeUndefined()
+  expect(types(bodies[6])[0]).toBe("message")
+  expect(JSON.stringify(bodies[6].input)).toContain("SUMMARY OF THE SEARCH")
+  expect(JSON.stringify(bodies[6].input)).not.toContain("ENC")
+  // Back on the first model, the checkpoint is used again.
+  agent.setModel(ai.model("oa/gpt-5"))
+  await agent.prompt("thanks")
+  expect(types(bodies[7])[0]).toBe("compaction")
+  expect(bodies.length).toBe(8)
 })
 
 test("models without the hosted search get the client web_search tool", async () => {
