@@ -65,6 +65,15 @@ for (const path of editions) {
     const tool = createPowershellTool(path)
     const run = (command: string, signal?: AbortSignal) =>
       tool.execute({ command }, makeCtx(process.cwd(), signal))
+    const native = async (command: string) => {
+      const p = Bun.spawn([path, "-NoProfile", "-NonInteractive", "-Command", command], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "ignore",
+      })
+      const [output, code] = await Promise.all([new Response(p.stdout).text(), p.exited])
+      return { output: output.trimEnd().replaceAll("\r\n", "\n"), code }
+    }
 
     test("runs with UTF-8 output", async () => {
       const r = await run('Write-Output "你好 héllo"; $PSVersionTable.PSEdition')
@@ -146,6 +155,120 @@ for (const path of editions) {
       expect(thrown).toContain("stop here")
       expect(thrown).not.toContain("\nb\n")
       expect(thrown).toContain("Exit code: 1")
+    })
+
+    test("a returning try records the status after its finally blocks", async () => {
+      for (const [command, code] of [
+        ["try { Write-Error bad; return } finally { Write-Output cleanup }", 0],
+        ["try { return } finally { Write-Error bad }", 1],
+        ["try { Write-Error bad; return } finally {}", 1],
+        ["try { Write-Error bad; return 'value' } finally {}", 1],
+        ["try { return (Write-Output value) } finally { Write-Error bad }", 1],
+        ["try { return (Write-Error bad) } finally { Write-Output cleanup }", 0],
+        ["try { try { return } finally { Write-Output cleanup } } finally { Write-Error bad }", 1],
+        ["try { try { return } finally { Write-Error bad } } finally { Write-Output cleanup }", 0],
+        ["try { try { return } finally { Write-Error bad } } finally {}", 1],
+      ] as const) {
+        expect((await native(command)).code).toBe(code)
+        const r = await run(command)
+        expect(textOf(r)).toEndWith(`Exit code: ${code}`)
+        expect(r.isError).toBe(code !== 0)
+      }
+    })
+
+    test("a trap return preserves the edition's native status", async () => {
+      for (const body of [
+        "return",
+        "return 'handled'",
+        "Write-Output handled; return",
+        "return (Write-Output handled)",
+        "Write-Error again; return",
+      ]) {
+        const command = `trap { ${body} }; throw 'bad'; Write-Output unreachable`
+        const { output, code } = await native(command)
+        const r = await run(command)
+        expect(textOf(r)).toEndWith(`Exit code: ${code}`)
+        if (output) expect(textOf(r)).toContain(output)
+        expect(textOf(r)).not.toContain("unreachable")
+        expect(r.isError).toBe(code !== 0)
+      }
+    })
+
+    test("named blocks run and report their final status", async () => {
+      const legacy = powershellEdition(path) === "Windows PowerShell 5.1"
+      const command = "begin { Write-Output begin } process { Write-Output process } end { Write-Output end }"
+      const expected = await native(command)
+      expect(expected.code).toBe(0)
+      expect(expected.output).toBe(legacy ? "begin\nend" : "begin\nprocess\nend")
+      const r = await run(command)
+      expect(textOf(r).replaceAll("\r\n", "\n")).toBe(`${expected.output}\n\nExit code: ${expected.code}`)
+      expect(textOf(await run("end { Write-Error bad }"))).toEndWith("Exit code: 1")
+      expect(textOf(await run("begin { Write-Output begin }"))).toBe("begin\n\nExit code: 0")
+      expect(textOf(await run("process { Write-Error bad }"))).toEndWith(`Exit code: ${legacy ? 0 : 1}`)
+      expect(
+        textOf(await run("param($x = 'default') begin { Write-Output $x } end { return 'end' }")),
+      ).toMatch(/^default\r?\nend\n\nExit code: 0$/)
+    })
+
+    test("errors name their own line and column and show only the command's text", async () => {
+      // A terminating error on the first line: the wrapper adds nothing before it.
+      const first = textOf(await run("Write-Output a; throw 'boom'"))
+      expect(first).toMatch(
+        /^a\r?\nboom\r?\n[^\n]*:1 \S+:\s*17\r?\n\+ Write-Output a; throw 'boom'\r?\n\+ {17}~{12}\n\nExit code: 1$/,
+      )
+      // Nor after the last one.
+      const last = textOf(await run("Write-Output a\n$null.Foo()"))
+      expect(last).toMatch(/:2 \S+:\s*1\r?\n\+ \$null\.Foo\(\)\r?\n\+ ~{11}\n\nExit code: 1$/)
+      // An error made terminating by the preference lands on the wrapper's dot-source: left out.
+      expect(textOf(await run("$ErrorActionPreference = 'Stop'; Write-Error bad; Write-Output after"))).toBe(
+        "bad\n\nExit code: 1",
+      )
+      for (const text of [first, last]) expect(text).not.toContain("__amira")
+    })
+
+    test("a top-level break or continue ends the command with the status before it", async () => {
+      for (const flow of ["break", "continue"]) {
+        const ok = `Write-Output a; ${flow}; Write-Output b`
+        expect(await native(ok)).toEqual({ output: "a", code: 0 })
+        expect(textOf(await run(ok))).toBe("a\n\nExit code: 0")
+        const bad = `Write-Error bad; ${flow}; Write-Output b`
+        expect((await native(bad)).code).toBe(1)
+        const r = await run(bad)
+        expect(r.isError).toBe(true)
+        expect(textOf(r)).toBe("bad\n\nExit code: 1")
+      }
+    })
+
+    test("declarations and dot-sourced state work as natively", async () => {
+      const legacy = powershellEdition(path) === "Windows PowerShell 5.1"
+      for (const command of [
+        "using namespace System.Text\n[StringBuilder]::new('sb').ToString()",
+        "using module @{ ModuleName = 'Microsoft.PowerShell.Utility'; ModuleVersion = '1.0' }\nWrite-Output ok",
+        "class Foo { [int]$A = 3 }\nfunction g { [Foo]::new().A + 1 }\ng",
+        "enum Color { Red; Green }\n[Color]::Green",
+        "[CmdletBinding()] param([int]$n = 2) dynamicparam { } begin { $x = $n } process { } end { Write-Output ($x * 2) }",
+        "data d { 'x' }; $d",
+        "$a = 1; & { $a + 1 }; function h { $a + 2 }; h",
+        "trap { Write-Output trapped; continue }; throw 'bad'; Write-Output after",
+        "$input.GetType().Name.Length -gt 0; @($input).Count",
+        ...(legacy ? [] : ["end { Write-Output e } clean { Write-Output c }"]),
+      ]) {
+        const expected = await native(command)
+        expect(textOf(await run(command)).replaceAll("\r\n", "\n")).toBe(
+          `${expected.output}\n\nExit code: ${expected.code}`,
+        )
+      }
+      if (!legacy) {
+        const clean = textOf(await run("end { Write-Output e } clean { Write-Error bad }"))
+        expect(clean.replaceAll("\r\n", "\n")).toBe("e\nbad\n\nExit code: 1")
+      }
+    })
+
+    test("a long script with a top-level return on every line compiles in linear time", async () => {
+      const command = `${Array.from({ length: 5000 }, (_, i) => `$v = ${i}; if ($v -lt 0) { return }`).join("\n")}\nWrite-Output done`
+      const started = performance.now()
+      expect(textOf(await run(command))).toBe("done\n\nExit code: 0")
+      expect(performance.now() - started).toBeLessThan(10_000)
     })
 
     test("quotes survive: double quotes, $ and backticks", async () => {
