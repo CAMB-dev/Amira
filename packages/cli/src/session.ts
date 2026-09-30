@@ -8,7 +8,15 @@ import {
   type ProviderConfig,
   type RetryOptions,
 } from "@amira/ai"
-import type { AnyEvent, Extension, ReloadReport, Settings, ToolLine, ToolPresenter } from "@amira/api"
+import type {
+  AnyEvent,
+  EventEnvelope,
+  Extension,
+  ReloadReport,
+  Settings,
+  ToolLine,
+  ToolPresenter,
+} from "@amira/api"
 import {
   type ActivePackages,
   Agent,
@@ -99,8 +107,11 @@ export interface Session {
   /**
    * Unloads every extension and loads them again (/reload), with the packages and their skill
    * directories as they are installed now; failures arrive as extension.error. Says what changed.
+   * The extensions loaded again get the events that say where `agent` (default: the one this
+   * session started with) is, as they had them before: its session.start with the model and
+   * context as they are now, the last workspace.changed and budget.update.
    */
-  reload(): Promise<ReloadReport>
+  reload(agent?: Agent): Promise<ReloadReport>
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -220,6 +231,44 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   await bus.flush()
   stopCapture()
 
+  // What a reload hands the extensions it loads again: the top-level session's start, where it
+  // works and what it cost since (D37: the whole tree's).
+  const state: {
+    start?: EventEnvelope<"session.start">
+    workspace?: EventEnvelope<"workspace.changed">
+    budget?: EventEnvelope<"budget.update">
+  } = {}
+  bus.subscribe(
+    (e) => {
+      if (e.type === "session.start" && e.parentSessionId === undefined) {
+        state.start = e
+        // A cost counts from the start of its session.
+        delete state.budget
+      } else if (e.type === "workspace.changed") state.workspace = e
+      else if (e.type === "budget.update") state.budget = e
+    },
+    { types: ["session.start", "workspace.changed", "budget.update"] },
+  )
+  const reloadReplay = (a: Agent): AnyEvent[] => {
+    const out: AnyEvent[] = []
+    const start = state.start
+    if (start?.sessionId === a.sessionId) {
+      const { contextTokens: _t, contextWindow: _w, ...rest } = start.data
+      const tokens = a.contextTokens
+      out.push({
+        ...start,
+        data: {
+          ...rest,
+          model: { provider: a.model.provider, model: a.model.id },
+          ...(tokens !== undefined ? { contextTokens: tokens, contextWindow: a.model.contextWindow } : {}),
+        },
+      })
+    }
+    if (state.workspace) out.push(state.workspace)
+    if (state.budget) out.push(state.budget)
+    return out.sort((x, y) => x.seq - y.seq)
+  }
+
   const tree = new AgentTree({
     ai,
     ...(settings.subagents?.maxDepth !== undefined ? { maxDepth: settings.subagents.maxDepth } : {}),
@@ -277,13 +326,19 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ai,
     tree,
     resume: (store, m) => newAgent(m ?? agent.model, store),
-    reload: async () => {
+    reload: async (current = agent) => {
       const before = new Set(host.loaded)
       const skillsBefore = new Set(host.skills.list().map((s) => s.name))
       packages = readPackages()
       host.setSettings(withPackageSkills(opts.settings ?? {}, packages))
       host.unloadAll()
-      const failed = await loadExtensions()
+      host.replayOnLoad(reloadReplay(current))
+      let failed: string[]
+      try {
+        failed = await loadExtensions()
+      } finally {
+        host.replayOnLoad(undefined)
+      }
       const after = new Set(host.loaded)
       const skillsAfter = new Set(host.skills.list().map((s) => s.name))
       return {

@@ -6,6 +6,7 @@ import { createAi, createMockDialect, type MockStep, NO_MODEL } from "@amira/ai"
 import { defineTool, type Extension, textResult } from "@amira/api"
 import { type Agent, SessionStore } from "@amira/core"
 import commandsExtension from "@amira/ext-commands"
+import statusExtension from "@amira/ext-status"
 import { createCommandHost } from "../src/control.ts"
 import { runPrint } from "../src/print.ts"
 import { createSession } from "../src/session.ts"
@@ -342,7 +343,12 @@ test("a prompt or notice during /reload waits for the extensions to load again",
       await gate
     }
     api.registerTool(
-      defineTool({ name: "fixture_read", description: "", parameters: {}, execute: async () => textResult("") }),
+      defineTool({
+        name: "fixture_read",
+        description: "",
+        parameters: {},
+        execute: async () => textResult(""),
+      }),
     )
   }
   const session = await createSession({
@@ -356,7 +362,11 @@ test("a prompt or notice during /reload waits for the extensions to load again",
       { source: "slow", extension: slowTools },
     ],
   })
-  const host = createCommandHost({ session, cwd: here, home: mkdtempSync(path.join(os.tmpdir(), "amira-r-")) })
+  const host = createCommandHost({
+    session,
+    cwd: here,
+    home: mkdtempSync(path.join(os.tmpdir(), "amira-r-")),
+  })
   const notice = session.agent.expectNotice()
   await session.agent.prompt("before")
   const reload = host.run("/reload", { frontend: "print" })
@@ -371,9 +381,61 @@ test("a prompt or notice during /reload waits for the extensions to load again",
   expect((await reload).error).toBeUndefined()
   expect(await turn).toMatchObject({ reason: "done" })
   expect(dialect.requests).toHaveLength(2)
-  expect(dialect.requests.map((r) => r.tools?.map((t) => t.name))).toEqual([["fixture_read"], ["fixture_read"]])
+  expect(dialect.requests.map((r) => r.tools?.map((t) => t.name))).toEqual([
+    ["fixture_read"],
+    ["fixture_read"],
+  ])
   // The notice went along with the prompt.
   expect(JSON.stringify(dialect.requests[1]!.messages.at(-1))).toContain("background result")
+})
+
+test("the extensions a /reload loads again pick up the session where it is (the status keeps its items)", async () => {
+  const ai = createAi({
+    dialects: [createMockDialect([{ text: "ok", usage: { input: 2000, cost: 0.25 } }])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const session = await createSession({
+    model: "mock/m",
+    cwd: here,
+    extensions: [],
+    noBuiltins: false,
+    ai,
+    builtins: async () => [
+      { source: "builtin:commands", extension: commandsExtension },
+      { source: "builtin:status", extension: statusExtension },
+    ],
+  })
+  const host = createCommandHost({
+    session,
+    cwd: here,
+    home: mkdtempSync(path.join(os.tmpdir(), "amira-r-")),
+  })
+  const { agent } = session
+  agent.start("startup")
+  agent.bus.emit(
+    "workspace.changed",
+    { cwd: here, repoRoot: here, branch: "main" },
+    { sessionId: agent.sessionId },
+  )
+  await agent.prompt("hello")
+  await agent.bus.flush()
+  const items = () => session.host.status.snapshot().map((s) => [s.id, s.text])
+  const before = items()
+  expect(before).toEqual([
+    ["model", "m"],
+    ["context", expect.stringMatching(/^ctx 2\.0k/)],
+    ["cost", "$0.250"],
+    ["place", "main"],
+  ])
+  const seen: string[] = []
+  const off = agent.bus.subscribe((e) => void seen.push(e.type))
+  expect((await host.run("/reload", { frontend: "print" })).error).toBeUndefined()
+  await agent.bus.flush()
+  off()
+  expect(items()).toEqual(before)
+  // Handed to the reloaded extensions only: nothing on the bus says a session started.
+  expect(seen).not.toContain("session.start")
+  expect(seen).not.toContain("workspace.changed")
 })
 
 test("print mode runs a slash command instead of a turn", async () => {

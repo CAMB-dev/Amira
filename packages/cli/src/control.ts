@@ -258,7 +258,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       idle("reload extensions")
       // Held like a compaction: a prompt or notice meanwhile would reach the model with the
       // tools half loaded, so it waits for the reload and starts its turn after.
-      return agent().hold("reload", () => session.reload())
+      const a = agent()
+      return a.hold("reload", () => session.reload(a))
     },
   }
 
