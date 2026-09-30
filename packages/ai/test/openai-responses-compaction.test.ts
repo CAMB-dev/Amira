@@ -241,3 +241,132 @@ test("the checkpoint goes to the same provider, host and model only; elsewhere i
   expect(other).toContain("SUMMARY TEXT")
   expect(other).toContain("ACK")
 })
+
+const searchItem = {
+  id: "ws_1",
+  type: "web_search_call",
+  status: "completed",
+  action: { type: "search", query: "node lts", sources: [{ type: "url", url: "https://nodejs.org" }] },
+}
+
+/** A turn with a hosted search from `provider` at `host`, its reply citing a source. */
+const searched = (host: string, provider = "openai"): Message[] => [
+  { role: "user", content: [{ type: "text", text: "search it" }] },
+  {
+    role: "assistant",
+    model: { provider, model: "gpt-x" },
+    content: [
+      {
+        type: "serverTool",
+        id: "ws_1",
+        name: "web_search",
+        input: { type: "search", query: "node lts" },
+        status: "done",
+        sources: [{ url: "https://nodejs.org", title: "Node.js" }],
+        signature: { dialect: "openai-responses", value: JSON.stringify(searchItem), host },
+      },
+      { type: "text", text: "v24 is LTS", citations: [{ url: "https://nodejs.org", title: "Node.js" }] },
+    ],
+  },
+  { role: "user", content: [{ type: "text", text: "and now?" }] },
+]
+
+test("compacting a history with a hosted search: the item and the tool go along at its own endpoint", async () => {
+  const { ai, calls, req } = setup({ "/responses": triggered }, "https://api.openai.com/v1", {
+    webSearch: true,
+  })
+  const r = await ai.compact({ ...req(), messages: searched("api.openai.com") })
+  expect(r.ok).toBe(true)
+  const body = calls[0]!.body
+  // The trigger request offers what a reply's request would: the functions and the hosted search.
+  expect(body.tools.map((t: { type: string; name?: string }) => t.name ?? t.type)).toEqual([
+    "read",
+    "web_search",
+  ])
+  expect(body.input.map((i: { type?: string }) => i.type ?? "assistant")).toEqual([
+    "message",
+    "web_search_call",
+    "assistant",
+    "message",
+    "compaction_trigger",
+  ])
+  expect(body.input[1]).toEqual(searchItem)
+  // The cited text goes as it was; citations are Amira's, not the server's.
+  expect(body.input[2]).toEqual({ role: "assistant", content: "v24 is LTS" })
+})
+
+test("compacting a history with a search from elsewhere, or without the search on: a note goes instead", async () => {
+  for (const [host, compat] of [
+    ["api.openai.com", { compaction: "on" as const, webSearch: false }],
+    ["localhost:8317", { compaction: "on" as const, webSearch: true }],
+  ] as const) {
+    // The search was run by this provider at api.openai.com.
+    const { ai, calls, req } = setup({ "/responses": triggered }, `http://${host}/v1`, compat)
+    const r = await ai.compact({ ...req(), messages: searched("api.openai.com") })
+    expect(r.ok).toBe(true)
+    const body = calls[0]!.body
+    const text = JSON.stringify(body.input)
+    expect(text).not.toContain("web_search_call")
+    expect(text).toContain('[Web search: \\"node lts\\"]')
+    expect(text).toContain("https://nodejs.org")
+    expect(body.input.at(-1)).toEqual({ type: "compaction_trigger" })
+  }
+})
+
+test("after a search and a server compaction, both replay together only to the same endpoint and model", async () => {
+  const cp: Signature = {
+    dialect: "openai-responses",
+    value: JSON.stringify(compactionItem),
+    kind: "checkpoint",
+    provider: "openai",
+    host: "api.openai.com",
+    model: "gpt-x",
+  }
+  const messages: Message[] = [
+    { role: "user", content: [{ type: "text", text: "SUMMARY TEXT", signature: cp }] },
+    {
+      role: "assistant",
+      model: { provider: "amira", model: "compaction" },
+      content: [{ type: "text", text: "ACK", signature: cp }],
+    },
+    ...searched("api.openai.com"),
+  ]
+  const { calls, fetchImpl } = router({ "/responses": answered })
+  const ai = createAi({
+    fetch: fetchImpl,
+    retry: { retries: 0 },
+    providers: [
+      { id: "openai", dialect: "openai-responses", baseUrl: "https://api.openai.com/v1" },
+      {
+        id: "proxy",
+        dialect: "openai-responses",
+        baseUrl: "http://localhost:8317/v1",
+        compat: { webSearch: true },
+      },
+    ],
+  })
+  const send = async (model: string) => {
+    for await (const _ of ai.stream({ model: ai.model(model), systemPrompt: "", messages, tools: [] })) {
+    }
+    return calls.at(-1)!.body.input as { type?: string }[]
+  }
+  const types = (input: { type?: string }[]) => input.map((i) => i.type ?? "assistant")
+  expect(types(await send("openai/gpt-x"))).toEqual([
+    "compaction",
+    "message",
+    "web_search_call",
+    "assistant",
+    "message",
+  ])
+  // Another model at the same endpoint: the search item still goes, the checkpoint does not.
+  const other = await send("openai/gpt-y")
+  expect(types(other)).toEqual(["message", "assistant", "message", "web_search_call", "assistant", "message"])
+  expect(JSON.stringify(other)).toContain("SUMMARY TEXT")
+  // Another host: neither goes; the search is a note and the checkpoint its summary.
+  const elsewhere = await send("proxy/gpt-x")
+  expect(types(elsewhere)).toEqual(["message", "assistant", "message", "assistant", "message"])
+  const text = JSON.stringify(elsewhere)
+  expect(text).not.toContain("ENC")
+  expect(text).not.toContain("web_search_call")
+  expect(text).toContain('[Web search: \\"node lts\\"]')
+})
