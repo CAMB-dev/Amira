@@ -81,6 +81,9 @@
         "@amira/ai-shared": "workspace:*",
         "@amira/text-width": "workspace:*",
       },
+      "devDependencies": {
+        "@amira/ai": "workspace:*",
+      },
     },
     "packages/cli": {
       "name": "amira",
