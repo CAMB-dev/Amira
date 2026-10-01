@@ -162,6 +162,7 @@ test("every built-in command is registered with a description", async () => {
     "compact",
     "context",
     "cost",
+    "ext",
     "help",
     "model",
     "provider",
@@ -211,7 +212,7 @@ test("/help lists the settings aliases with what they run", async () => {
   const { text } = await run("/help")
   // /q is a built-in alias, so the settings one is left out.
   expect(text).toMatch(
-    /Aliases from settings \(commandAliases\):\n\/ds\s+→ \/model deepseek\/deepseek-flash\n\/m\s+→ \/model$/,
+    /Aliases from settings \(commandAliases\):\n\/ds\s+→ \/model deepseek\/deepseek-flash\n\/m\s+→ \/model\n\nExtensions:/,
   )
   expect((await run("/ds")).text).toBe("Model: deepseek/deepseek-flash")
 })

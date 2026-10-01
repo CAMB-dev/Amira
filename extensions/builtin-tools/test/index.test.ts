@@ -54,6 +54,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     read: "parallel",
     write: "parallel",
     edit: "parallel",
+    apply_patch: "serial",
     bash: "parallel",
     ...(process.platform === "win32" ? { powershell: "parallel" } : {}),
     grep: "parallel",

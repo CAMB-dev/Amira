@@ -12,6 +12,7 @@ import {
   type ShellMode,
   type StoredSessionInfo,
 } from "@amira/api"
+import { extensionCommand } from "./ext-command.ts"
 import {
   cacheHitRate,
   contextReport,
@@ -25,6 +26,7 @@ import {
 } from "./format.ts"
 import { providerCommand } from "./provider-command.ts"
 
+export { extensionCommand } from "./ext-command.ts"
 export {
   cacheHitRate,
   contextReport,
@@ -123,6 +125,8 @@ export default defineExtension((api: ExtensionAPI) => {
   })
 
   const add = (c: CommandDefinition) => api.registerCommand(c)
+  const extensions = extensionCommand(api)
+  add(extensions.command)
 
   add({
     name: "help",
@@ -160,6 +164,11 @@ export default defineExtension((api: ExtensionAPI) => {
         const rows = aliases.map((a) => [`/${a.name}`, `→ /${oneLine(a.expansion, 70)}`])
         groups.push(`Aliases from settings (commandAliases):\n${table(rows)}`)
       }
+      groups.push(
+        "Extensions: /ext opens installed and available packages.\n" +
+          "/ext install <name> [--project], update [name…], remove <name>, disable <name>, enable <name>, search <query>.\n" +
+          "Changes apply with /reload while idle.",
+      )
       ctx.print(groups.join("\n\n"))
     },
   })
@@ -456,6 +465,7 @@ export default defineExtension((api: ExtensionAPI) => {
     name: "reload",
     description: "Reload every extension",
     async run(_args, ctx) {
+      if (extensions.running()) throw new Error("Extension management is running; reload after it ends.")
       const report = await ctx.session.reloadExtensions()
       ctx.print(report ? reloadSummary(report) : "Reloaded extensions.")
     },

@@ -101,13 +101,16 @@ const modelRef = expect(
   (v) => typeof v === "string" && v.indexOf("/") > 0 && !v.endsWith("/"),
 )
 
-const modelOverrides = (required: string[]) =>
+const editingTools = object({ edit: oneOf("edit", "apply_patch", "both") })
+
+const modelOverrides = (required: string[], tools = false) =>
   object(
     {
       id: string,
       dialect: string,
       contextWindow: integer(1),
       maxOutput: integer(1),
+      ...(tools ? { tools: editingTools } : {}),
       caps: object({
         tools: oneOf("native", "none"),
         images: boolean,
@@ -139,7 +142,8 @@ const provider = object(
       thinking: oneOf("adaptive", "budget"),
       compaction: oneOf("auto", "on", "off"),
     }),
-    models: list(modelOverrides(["id"])),
+    tools: editingTools,
+    models: list(modelOverrides(["id"], true)),
     defaultModel: modelOverrides([]),
   },
   [],
