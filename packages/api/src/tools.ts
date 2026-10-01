@@ -48,6 +48,12 @@ export interface SessionData {
 
 export interface ToolSession {
   readonly sessionId: string
+  /**
+   * A directory for files that belong to this session, e.g. the logs of background jobs: next
+   * to its session file, named after it. Not created until something is written there; absent
+   * when the session has no file.
+   */
+  readonly dir?: string
   /** Records extensions keep in this session (see SessionData). */
   readonly data?: SessionData
   /**

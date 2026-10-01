@@ -29,7 +29,8 @@ export function formatSessionList(sessions: SessionSummary[], width = 100): stri
       const when = new Date(s.updatedAt).toLocaleString("sv").slice(0, 16)
       const head = `${String(i + 1).padStart(3)}. ${when}  ${String(s.messageCount).padStart(4)} msgs  ${s.id}  `
       const room = Math.max(10, width - head.length)
-      const text = s.firstUserText.length > room ? `${s.firstUserText.slice(0, room - 1)}…` : s.firstUserText
+      const label = s.title ?? s.firstUserText
+      const text = label.length > room ? `${label.slice(0, room - 1)}…` : label
       return `${head}${text}`
     })
     .join("\n")
@@ -49,7 +50,8 @@ export async function pickSession(sessions: SessionSummary[]): Promise<SessionSu
 }
 
 /**
- * What quitting the interactive UI prints last: sub-agents that are stopped now, and how to
+ * What quitting the interactive UI prints last: sub-agents and background jobs that are
+ * stopped now, and how to
  * continue the session, then a blank line before the shell's prompt. Both views already end
  * with a blank line after the transcript, so nothing goes before the note; with nothing to
  * say, nothing is printed and that blank line is the one before the prompt.
@@ -58,11 +60,16 @@ export function exitNote(
   a: { session?: { id: string } | undefined; messages: readonly unknown[] },
   running: number,
   cwd: string,
+  jobs = 0,
 ): string {
   const lines: string[] = []
   if (running)
     lines.push(
       `Stopping ${running} sub-agent${running === 1 ? "" : "s"} that ${running === 1 ? "was" : "were"} still running.`,
+    )
+  if (jobs)
+    lines.push(
+      `Stopping ${jobs} background job${jobs === 1 ? "" : "s"} that ${jobs === 1 ? "was" : "were"} still running.`,
     )
   const s = a.session
   if (s && a.messages.length) {

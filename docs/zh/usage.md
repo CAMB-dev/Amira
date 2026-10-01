@@ -26,6 +26,18 @@ amira --cwd /path/to/project "Explain this repository"
 
 Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会先取消该命令并保留输入框中的草稿。如果有等待中的引导或排队消息，它们会按输入顺序合并为一条消息并一起发送。后台子 agent 会继续工作，停止方法见[子 agent](subagents.md)。Ctrl+C 同样先取消正在运行的命令，其次停止轮次，空闲时先清空非空输入，输入为空则退出；也可以用 `/quit` 退出。
 
+## 图片
+
+两种终端模式中，消息都可以附带 PNG、JPEG、GIF 和 WebP 图片：
+
+- **粘贴或拖入路径。** 粘贴内容只包含现有图片文件的路径时（绝对路径或相对于工作目录的路径；含空格时加引号，或像 macOS 和 Linux 终端拖入时那样用反斜杠转义空格，也可以是 `file://` URI），这些图片会作为附件。其他内容（如普通文字或其他文件）按文本粘贴；无法附加的图片也按文本粘贴，并显示原因。
+- **在 `@` 文件列表中选择。** 选中图片会作为附件；选中其他文件仍插入 `@path`。
+- **从剪贴板粘贴**，按 Alt+V（`paste.image`，其他按键见[快捷键](keybindings.md)）。剪贴板有文本时优先粘贴文本。Windows 使用 PowerShell，macOS 使用 `osascript`（已安装时使用 `pngpaste`），Linux 使用 `wl-paste` 或 `xclip`；缺少这些工具时会提示缺少什么，粘贴路径仍可使用。
+
+附件在输入框和已发送消息中显示为一个占位符，如 `[image 1: screen.png 120 KB]`。Backspace 或 Delete 整体删除占位符；撤销、剪切和粘贴回剪切内容时保留附件。用外部编辑器（Ctrl+G）编辑消息前需先删除附件。带图片的消息不会作为斜杠命令或 skill 执行。
+
+一条消息中的图片合计不超过 **5 MB**。发送图片需要支持图片输入的模型；否则显示警告，消息保留在输入框中。图片以 base64 内联保存在会话文件中，恢复会话不依赖原文件。带图片的提示词在本次运行中可以用 ↑ 调出，但不会写入项目的提示词历史文件。
+
 ## 工具与审批
 
 内置工具可以读取、搜索、写入和编辑文件，运行 shell 命令，搜索网页并分派任务。具体可用工具取决于平台、模型和加载的扩展。`/tools` 列出当前工具；`/tools disable <name>` 和 `/tools enable <name>` 修改本次会话的工具可用性。启动时可用 `--disable-tools` 传入逗号分隔的工具名。持久配置见[设置](settings.md)与[扩展](extensions.md)。
@@ -48,13 +60,22 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 | 不打开界面，列出会话 | `amira -p -r` |
 | 在界面中选择或切换会话 | `/resume` 或 `/resume <session-id>` |
 | 开始空白对话 | `/clear` |
+| 为当前会话命名 | `/rename <title>` |
+| 在当前会话的副本中继续 | `/fork` |
+| 不打开界面删除已保存的会话 | `amira sessions rm <session-id>`（其他目录加 `-C <dir>`） |
 | 立即压缩较早的上下文 | `/compact` 或 `/compact <instructions>` |
 
 `-c` 与 `-r` 不能同时使用。会话 ID 以 `s_` 开头，请使用列表中的实际 ID。`/clear` 创建新会话，原会话仍可恢复。`/resume` 保留当前选中的模型；如果尚未选择模型，可以使用会话原来的模型。切换会话会停止旧对话的后台任务。
 
+会话第一轮成功结束后，Amira 在后台请模型生成一个简短标题（不超过六个词和 60 个字符，使用对话的语言）；设置了 `compact.model` 时使用它，否则使用当前模型，不会阻塞对话。打印模式和子 agent 不生成标题。这次请求的费用计入 `/cost` 和 `/status`。`/rename` 设置的名称总是优先于自动标题。在用户或项目设置中写 `"sessions": { "autoTitle": false }` 可以关闭。标题显示在 `/status`、`/resume`、`amira -r` 和终端标题中。
+
+在 `/resume` 选择器中直接输入，会搜索标题以及整个对话中用户和助手的文字，包括已压缩的历史；按不区分大小写的子串匹配，中文、日文无需空格，匹配的文字显示在该行下方。Ctrl+D 在确认后删除选中的会话；当前会话不会列出。删除会移除会话文件及其启动的子 agent 会话，但仍被某个分支会话使用的除外。
+
+`/fork` 把对话复制到一个记录来源的新会话，命名为 `<title> (fork)`，并切换过去；原会话保持不变。
+
 自动压缩默认在达到模型上下文窗口的 80% 时触发，缩减较早的内容并保留近期对话。兼容的 provider 可以使用原生压缩，否则 Amira 生成文字摘要。给 `/compact` 提供额外指令时会强制使用文字摘要。条件和配置见[Provider](providers.md)与[设置](settings.md)；`/context` 可以查看上下文窗口的内容分布。
 
-连续按两次 Esc 打开回退选择器。选中较早的用户消息后，该消息及其后续内容会从当前对话中移除，选中的提示词回到编辑器，可修改后重新发送。**回退不会恢复文件，也不会撤销 shell 命令。** 只能回退到压缩后仍保留的消息，而且会话必须已保存。补全列表、选区或对话框可能先处理 Esc，请以当前提示栏为准。
+连续按两次 Esc 打开回退选择器。选中较早的用户消息后，该消息及其后续内容会从当前对话中移除，选中的提示词回到编辑器，可修改后重新发送。在选择器中按 F 则改为分支：新会话截止到选中消息之前，当前会话保持完整。**回退不会恢复文件，也不会撤销 shell 命令。** 只能回退到压缩后仍保留的消息，而且会话必须已保存。补全列表、选区或对话框可能先处理 Esc，请以当前提示栏为准。
 
 ## 上下文管理
 
@@ -139,6 +160,8 @@ RPC 在 stdin 和 stdout 使用 JSON Lines，不能与 `-p` 或命令行提示�
 | `state` | 获取状态、模型、会话和待回答的界面请求 |
 | `session.read` | 用 `what` 参数选择 `messages` 或 `lastTurn` |
 | `session.resume` | 用 `sessionId` 切换到已有会话 |
+| `session.rename` | 用 `title` 为当前会话命名；随后发出 `session.title` 事件，自动标题也会发出该事件 |
+| `session.fork` | 分支到新会话，可用 `index` 指定在哪条用户消息之前；随后发出原因为 `fork` 的 `session.start` |
 | `model.set` | 用 `model` 指定 provider/model，切换模型 |
 | `command.list`、`command.complete`、`command.run` | 查询、补全和执行斜杠命令 |
 | `skill.list`、`skill.run` | 查询和运行 skill |
@@ -151,8 +174,8 @@ RPC 在 stdin 和 stdout 使用 JSON Lines，不能与 `-p` 或命令行提示�
 
 ## 状态与费用
 
-`/status` 显示模型、provider、会话 ID 与文件、上下文用量和窗口、输出 token、缓存命中率、最近回复速度、已知费用、shell 与 Git 工作区。恢复的会话会包含之前运行的用量。状态栏显示本次运行以来的 agent 树用量；`/status` 可以包含已保存会话及其子 agent 的费用。
+`/status` 显示模型、provider、会话 ID 与文件、上下文用量和窗口、输出 token、缓存命中率、最近回复速度、已知费用、shell 与 Git 工作区。速度分别显示回复和思考每秒的 token 数；`~` 表示估算值：provider 没有单独上报推理 token 数时按文字估算 token 数，只流式输出了推理摘要时思考速度从发出请求开始计时。`(hidden reasoning)` 表示模型进行了推理但没有流式输出思考内容。恢复的会话会包含之前运行的用量。状态栏显示本次运行以来的 agent 树用量；`/status` 可以包含已保存会话及其子 agent 的费用。
 
-`/cost` 按模型列出当前会话回复的费用，并单独列出压缩用量，不合计子 agent 费用；子 agent 信息见 `/status` 与 `/agents`。费用依赖已知模型定价和上报用量：未知价格会明确标出，含未知价格行的合计只是部分估算。实际收费以 provider 账单为准。
+`/cost` 按模型列出当前会话回复的费用，并单独列出压缩和会话标题请求的用量，不合计子 agent 费用；子 agent 信息见 `/status` 与 `/agents`。费用依赖已知模型定价和上报用量：未知价格会明确标出，含未知价格行的合计只是部分估算。实际收费以 provider 账单为准。
 
 相关文档：[快速开始](getting-started.md) · [Provider](providers.md) · [子 agent](subagents.md) · [扩展](extensions.md) · [设置](settings.md) · [快捷键](keybindings.md)。

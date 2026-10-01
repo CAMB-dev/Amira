@@ -47,6 +47,8 @@ export type UiRequest =
       options: string[]
       sections?: SelectSection[]
       descriptions?: string[]
+      /** Full conversation text: substring filtering and matching snippets; section keys use Ctrl. */
+      searchTexts?: string[]
     }
   /**
    * A yes/no question. `always` offers "Yes, and don't ask again this session" as well
@@ -187,7 +189,7 @@ export interface UiApi {
   choose(
     title: string,
     options: string[],
-    opts: UiRequestOptions & { sections: SelectSection[]; descriptions?: string[] },
+    opts: UiRequestOptions & { sections: SelectSection[]; descriptions?: string[]; searchTexts?: string[] },
   ): Promise<SelectChoice | undefined>
   confirm(title: string, message?: string, opts?: UiRequestOptions): Promise<boolean | undefined>
   input(

@@ -308,6 +308,20 @@ test("artifacts are found again after a resume, through the tool session", async
   await rm(dir, { recursive: true, force: true })
 })
 
+test("a session forked from another finds the artifacts its copied history names", async () => {
+  const dir = await tempDir()
+  const session = SessionStore.create({ cwd: dir, dir })
+  const { agent } = setup({
+    session,
+    steps: [{ toolCalls: [{ name: "big", args: { n: 4, size: 20_000 }, id: "c1" }] }, { text: "done" }],
+  })
+  await agent.prompt("go")
+  const id = ARTIFACT_HEADER.exec(textOf(results(agent.messages)[0]))![1]!
+  const forked = setup({ session: SessionStore.open(session.file).fork() })
+  expect(forked.agent.artifacts.find(id)?.sessionId).toBe(session.id)
+  await rm(dir, { recursive: true, force: true })
+})
+
 // ---- A2: repeated reads ----
 
 /** A file long enough that a note about it is shorter than its text. */

@@ -1,3 +1,4 @@
+import path from "node:path"
 import {
   type Ai,
   type AssistantMessage,
@@ -130,6 +131,7 @@ export interface AgentOptions {
   compaction?: CompactionOptions
   /** Context management: large outputs, repeated reads, aging (settings `context`). */
   context?: ContextOptions
+  autoTitle?: { model?: ModelInfo }
   sessionId?: string
   parentSessionId?: string
   bus?: EventBus
@@ -204,6 +206,10 @@ export interface PromptOptions {
   turnId?: string
 }
 
+/** Output budget for an automatic session title from a reasoning model. */
+const TITLE_THINKING_TOKENS = 2048
+const TITLE_MAX_CHARS = 60
+
 export class AgentBusyError extends Error {}
 
 /** A message sent during a manual compaction was dropped because the compaction was aborted. */
@@ -273,6 +279,8 @@ export class Agent {
   model: ModelInfo
 
   #ai: Ai
+  #autoTitle: AgentOptions["autoTitle"]
+  #titleStarted = false
   #approve: Approver | undefined
   #ask: Asker | undefined
   /** Tool calls waiting for approval or for an answer right now. */
@@ -389,6 +397,9 @@ export class Agent {
     this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
     this.#compaction = opts.compaction ?? {}
     this.#context = opts.context ?? {}
+    this.#autoTitle = opts.autoTitle
+    this.#titleStarted =
+      opts.session?.entries.some((e) => e.type === "message" && e.message.role === "assistant") ?? false
     this.#ai = opts.ai
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
@@ -430,6 +441,16 @@ export class Agent {
       if (v.kind === "aged") this.#agingEpoch = Math.max(this.#agingEpoch, v.epoch)
     }
     this.#epochAtReply = this.#agingEpoch
+    // A session forked from another (beside it) still finds the artifacts its copied history names.
+    const forkedFrom = opts.session?.header.parent
+    const outputsParent =
+      opts.outputsParent ??
+      (forkedFrom && opts.session
+        ? new ArtifactStore({
+            dir: artifactDir(path.join(path.dirname(opts.session.file), `${forkedFrom}.jsonl`), forkedFrom),
+            sessionId: forkedFrom,
+          })
+        : undefined)
     this.artifacts = new ArtifactStore({
       dir: artifactDir(opts.session?.file, this.sessionId),
       sessionId: this.sessionId,
@@ -438,7 +459,7 @@ export class Agent {
         ...(this.#context.previewChars !== undefined ? { previewChars: this.#context.previewChars } : {}),
       },
       ...(this.#context.quotaBytes !== undefined ? { quotaBytes: this.#context.quotaBytes } : {}),
-      ...(opts.outputsParent ? { parent: opts.outputsParent } : {}),
+      ...(outputsParent ? { parent: outputsParent } : {}),
     })
     const stored = opts.session?.model()
     // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
@@ -453,6 +474,7 @@ export class Agent {
     )
     this.#toolSession = {
       ...deferred,
+      ...(opts.session ? { dir: opts.session.file.replace(/\.jsonl$/, "") } : {}),
       data: this.data,
       outputs: this.artifacts,
       // Recorded in the session, so resuming it offers the same tools again.
@@ -1105,6 +1127,7 @@ export class Agent {
         ...(result.failure ? { failure: result.failure } : {}),
       })
       this.#setStatus(turn, "idle")
+      if (result.reason === "done") this.#startTitle()
       // A success resets the notice retries; after an interrupt the user decides when to go on.
       if (result.reason !== "error") this.#retries = 0
       else if (turn.unanswered || this.#notices.length) this.#scheduleRetry(result.error)
@@ -1113,6 +1136,76 @@ export class Agent {
       }
     }
     return result
+  }
+
+  #startTitle(): void {
+    const store = this.session
+    if (!this.#autoTitle || this.depth || this.parentSessionId || this.#titleStarted || !store || store.title)
+      return
+    this.#titleStarted = true
+    const model = this.#autoTitle.model ?? this.model
+    const messages = this.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      // Images stay out of the title request (its model may not take them); their names still
+      // tell it something when a message is only an image.
+      .map(
+        (m) =>
+          `${m.role}: ${m.content
+            .flatMap((b) =>
+              b.type === "text"
+                ? [b.text]
+                : b.type === "image"
+                  ? [`[image${b.name ? `: ${b.name}` : ""}]`]
+                  : [],
+            )
+            .join("")}`,
+      )
+      .join("\n")
+      .slice(0, 8000)
+    void (async () => {
+      try {
+        for await (const e of this.#ai.stream(
+          {
+            model: { ...model, caps: { ...model.caps, webSearch: false } },
+            systemPrompt:
+              "Give this conversation a short title, at most six words, in the user's language. Return only the title, without quotes or punctuation around it.",
+            messages: [userMessage(messages)],
+            tools: [],
+            // A reasoning model spends its output budget thinking first; 64 tokens would end it
+            // before any title.
+            maxTokens: model.caps.thinking
+              ? Math.min(TITLE_THINKING_TOKENS, model.maxOutput || Infinity)
+              : 64,
+          },
+          AbortSignal.timeout(30_000),
+        )) {
+          if (e.type !== "done" && e.type !== "error") continue
+          const usage = e.message.usage
+          if (usage) {
+            this.tree?.recordUsage(this, usage)
+            this.#store({ type: "side_usage", model: modelRef(model), usage })
+          }
+          if (e.type === "error") return
+          const title = e.message.content
+            .flatMap((b) => (b.type === "text" ? [b.text] : []))
+            .join("")
+            .trim()
+            .replace(/^["'`]+|["'`]+$/g, "")
+            .split(/\s+/)
+            .slice(0, 6)
+            .join(" ")
+          // Six words of a language without spaces can be a whole paragraph.
+          const short = [...title].slice(0, TITLE_MAX_CHARS).join("")
+          if (short) {
+            store.rename(short, "auto")
+            this.#emit(undefined, "session.title", { title: store.title! })
+          }
+          return
+        }
+      } catch {
+        // Naming is optional; a failed side request never interrupts the conversation.
+      }
+    })()
   }
 
   #injectSteering(turn: Turn) {

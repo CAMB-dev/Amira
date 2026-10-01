@@ -19,6 +19,12 @@ import {
 const KEEP_OUTPUT_MS = 24 * 60 * 60 * 1000
 
 /**
+ * Most characters a tool that pages its own output (job_output) returns per call: under the
+ * default size limit for large outputs, so a page is not saved as an artifact again.
+ */
+export const MAX_OUTPUT_CHARS = DEFAULT_SAVE_ABOVE - 1000
+
+/**
  * The note older versions left where they cut oversized output; frontends still show it
  * shorter in sessions saved then. The groups: the lines left out, and where the full output is.
  */

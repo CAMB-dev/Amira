@@ -6,12 +6,16 @@ import { bashTool, powershellTool } from "./bash.ts"
 import { editTool } from "./edit.ts"
 import { globTool } from "./glob.ts"
 import { grepTool } from "./grep.ts"
+import { jobListTool, jobOutputTool, jobStopTool, jobTools } from "./jobs.ts"
+import { registerJobs } from "./jobs-ui.ts"
 import { outputReadTool } from "./output-read.ts"
 import { builtinPresenters } from "./presenters.ts"
 import { readTool } from "./read.ts"
 import { warmUpShell } from "./shell.ts"
 import { writeTool } from "./write.ts"
 
+export { configureJobs, jobsConfig } from "./jobs.ts"
+export { jobsCommand, jobsPanel, jobView, registerJobs } from "./jobs-ui.ts"
 export {
   applyPatchTool,
   askUserPresenter,
@@ -21,6 +25,9 @@ export {
   editTool,
   globTool,
   grepTool,
+  jobListTool,
+  jobOutputTool,
+  jobStopTool,
   outputReadTool,
   powershellTool,
   readTool,
@@ -39,11 +46,13 @@ export const builtinTools = [
   globTool,
   outputReadTool,
   askUserTool,
+  ...jobTools,
 ]
 
 export default defineExtension((api) => {
   for (const tool of builtinTools) api.registerTool(tool)
   for (const [name, presenter] of Object.entries(builtinPresenters)) api.registerToolRenderer(name, presenter)
+  registerJobs(api)
   // Not awaited: loading must not wait for shell discovery or the Win32 bindings.
   setTimeout(() => {
     warmUpShell()
