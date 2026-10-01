@@ -51,6 +51,14 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
     },
     keys: ["providers"],
   },
+  {
+    title: { en: "Permissions", zh: "权限" },
+    intro: {
+      en: "What the model may do without asking; see [Permissions](usage.md#permissions). A project file can only tighten them: its `mode` counts when it is stricter than the user's, its `ask` and `deny` rules always apply, and its `allow` rules only once the project is trusted (`amira ext trust`).",
+      zh: "模型无需询问即可执行的操作，详见[权限](usage.md#权限)。项目文件只能收紧这些设置：它的 `mode` 只在比用户设置更严格时生效，它的 `ask` 和 `deny` 规则总是生效，`allow` 规则则要等项目受信任后（`amira ext trust`）才生效。",
+    },
+    keys: ["permissions"],
+  },
   { title: { en: "Compaction and retries", zh: "压缩与重试" }, keys: ["compact", "retry"] },
   {
     title: { en: "Web tools", zh: "网页工具" },
@@ -141,6 +149,31 @@ export const annotations: Record<string, Annotation> = {
     default: "`true`",
     en: "Ask the model for a short session title in the background after the first turn (`compact.model` when set). `/rename` always wins.",
     zh: "第一个轮次结束后，在后台请模型为会话起一个简短标题（设置了 `compact.model` 时用它）。`/rename` 设置的名称始终优先。",
+  },
+  "permissions.mode": {
+    default: '`"auto"`',
+    en: '`"auto"` runs everything without asking, except what rules and protected paths say; `"edits"` changes files without asking and asks before shell commands; `"plan"` is read-only. Shift+Tab cycles it in the UI; `--permission-mode` wins.',
+    zh: '`"auto"` 除规则和受保护路径要求的以外，一律不询问直接执行；`"edits"` 修改文件不询问，执行 shell 命令前询问；`"plan"` 为只读。界面中按 Shift+Tab 切换；`--permission-mode` 优先。',
+  },
+  "permissions.rules": {
+    default: "`[]`",
+    en: 'Rules for shell commands, matched against each command\'s words. When several match, `deny` wins over `ask` and `ask` over `allow`; `allow` only means "do not ask" and never lifts the mode or a protected path.',
+    zh: "针对 shell 命令的规则，按每条命令的单词匹配。多条规则匹配时，`deny` 优先于 `ask`，`ask` 优先于 `allow`；`allow` 只表示“不询问”，不会解除模式或受保护路径的限制。",
+  },
+  "permissions.rules[].command": {
+    default: { en: "required", zh: "必填" },
+    en: 'The first words of the command, e.g. `["git", "push"]`. An `allow` rule must match the start of the command exactly; `ask` and `deny` rules also match with other words in between and ignore case.',
+    zh: '命令开头的若干单词，例如 `["git", "push"]`。`allow` 规则必须与命令开头完全一致；`ask` 和 `deny` 规则在中间夹有其他单词时也能匹配，且不区分大小写。',
+  },
+  "permissions.rules[].decision": {
+    default: { en: "required", zh: "必填" },
+    en: '`"allow"` runs it without asking, `"ask"` asks first, `"deny"` never runs it.',
+    zh: '`"allow"` 不询问直接执行，`"ask"` 先询问，`"deny"` 永不执行。',
+  },
+  "permissions.rules[].reason": {
+    default: none,
+    en: "Shown with the question or the refusal.",
+    zh: "随询问或拒绝一起显示。",
   },
   providers: {
     default: none,

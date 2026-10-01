@@ -156,6 +156,18 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `providers.<id>.models[].tools.edit` | `"edit" \| "apply_patch" \| "both"` | 沿用 provider 的 `tools.edit` | 仅针对该模型的编辑工具设置。 |  |
 | `providers.<id>.defaultModel` | `object` | 无 | 既不在 `models` 中、模型目录也不认识的模型所用的值：键与 `models[]` 相同，但没有 `id` 和 `tools`。 |  |
 
+## 权限
+
+模型无需询问即可执行的操作，详见[权限](usage.md#权限)。项目文件只能收紧这些设置：它的 `mode` 只在比用户设置更严格时生效，它的 `ask` 和 `deny` 规则总是生效，`allow` 规则则要等项目受信任后（`amira ext trust`）才生效。
+
+| 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
+| --- | --- | --- | --- | --- |
+| `permissions.mode` | `"plan" \| "edits" \| "auto"` | `"auto"` | `"auto"` 除规则和受保护路径要求的以外，一律不询问直接执行；`"edits"` 修改文件不询问，执行 shell 命令前询问；`"plan"` 为只读。界面中按 Shift+Tab 切换；`--permission-mode` 优先。 |  |
+| `permissions.rules` | `object[]` | `[]` | 针对 shell 命令的规则，按每条命令的单词匹配。多条规则匹配时，`deny` 优先于 `ask`，`ask` 优先于 `allow`；`allow` 只表示“不询问”，不会解除模式或受保护路径的限制。 |  |
+| `permissions.rules[].command` | `string[]` | 必填 | 命令开头的若干单词，例如 `["git", "push"]`。`allow` 规则必须与命令开头完全一致；`ask` 和 `deny` 规则在中间夹有其他单词时也能匹配，且不区分大小写。 |  |
+| `permissions.rules[].decision` | `"allow" \| "ask" \| "deny"` | 必填 | `"allow"` 不询问直接执行，`"ask"` 先询问，`"deny"` 永不执行。 |  |
+| `permissions.rules[].reason` | `string` | 无 | 随询问或拒绝一起显示。 |  |
+
 ## 压缩与重试
 
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |

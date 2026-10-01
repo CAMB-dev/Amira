@@ -156,6 +156,18 @@ Amira has no built-in providers: an entry needs `dialect` and `baseUrl`, and `ba
 | `providers.<id>.models[].tools.edit` | `"edit" \| "apply_patch" \| "both"` | the provider's `tools.edit` | Editing tools for this model only. |  |
 | `providers.<id>.defaultModel` | `object` | none | Values for models neither `models` nor the catalog describes: the keys of `models[]` except `id` and `tools`. |  |
 
+## Permissions
+
+What the model may do without asking; see [Permissions](usage.md#permissions). A project file can only tighten them: its `mode` counts when it is stricter than the user's, its `ask` and `deny` rules always apply, and its `allow` rules only once the project is trusted (`amira ext trust`).
+
+| Key | Type | Default | Description | User file only |
+| --- | --- | --- | --- | --- |
+| `permissions.mode` | `"plan" \| "edits" \| "auto"` | `"auto"` | `"auto"` runs everything without asking, except what rules and protected paths say; `"edits"` changes files without asking and asks before shell commands; `"plan"` is read-only. Shift+Tab cycles it in the UI; `--permission-mode` wins. |  |
+| `permissions.rules` | `object[]` | `[]` | Rules for shell commands, matched against each command's words. When several match, `deny` wins over `ask` and `ask` over `allow`; `allow` only means "do not ask" and never lifts the mode or a protected path. |  |
+| `permissions.rules[].command` | `string[]` | required | The first words of the command, e.g. `["git", "push"]`. An `allow` rule must match the start of the command exactly; `ask` and `deny` rules also match with other words in between and ignore case. |  |
+| `permissions.rules[].decision` | `"allow" \| "ask" \| "deny"` | required | `"allow"` runs it without asking, `"ask"` asks first, `"deny"` never runs it. |  |
+| `permissions.rules[].reason` | `string` | none | Shown with the question or the refusal. |  |
+
 ## Compaction and retries
 
 | Key | Type | Default | Description | User file only |

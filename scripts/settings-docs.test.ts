@@ -24,8 +24,8 @@ const sources = () => typeFiles.map((file) => read(file))
 
 /**
  * A settings object holding every key of the rows, each set to a value of its type. Rows for
- * records and lists of objects are filled by the rows under them; a list gets one item, with
- * the `id` that `models[]` requires.
+ * records and lists of objects are filled by the rows under them; a list gets one item (in
+ * `models[]`, with the `id` it requires).
  */
 function sample(rows: Row[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}
@@ -35,7 +35,7 @@ function sample(rows: Row[]): Record<string, unknown> {
     let at = out
     for (const part of parts.slice(0, -1)) {
       const name = part.replace(/^<\w+>$/, "a").replace(/\[\]$/, "")
-      at[name] ??= part.endsWith("[]") ? [{ id: "a" }] : {}
+      at[name] ??= part.endsWith("[]") ? [part === "models[]" ? { id: "a" } : {}] : {}
       const next = at[name]
       at = (Array.isArray(next) ? next[0] : next) as Record<string, unknown>
     }
