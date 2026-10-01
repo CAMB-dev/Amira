@@ -214,6 +214,9 @@ elseif ([System.Windows.Forms.Clipboard]::ContainsImage()) {
     }
     throw new Error(`Image paste is unavailable on ${platform}. Paste an image file path instead.`)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    // A tool still exiting after a timeout can hold the file on Windows; keep its error instead.
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+    } catch {}
   }
 }
