@@ -199,12 +199,12 @@ What model requests carry of the history; the session file always keeps everythi
 
 ## File rewind
 
-Bytes the file tools change, kept so rewind can restore them. See [Sessions](usage.md).
+Bytes the file tools change, kept so that rewind can restore them; see [Sessions](usage.md).
 
 | Key | Type | Default | Description | User file only |
 | --- | --- | --- | --- | --- |
-| `fileRewind.enabled` | `boolean` | `true` | Capture `write`, `edit` and `apply_patch` changes. Off: the picker says files will not be restored. |  |
-| `fileRewind.maxFileBytes` | `number` | `10485760` | Largest file (before or after a change) that can be captured; a larger write is refused while capture is on. |  |
+| `fileRewind.enabled` | `boolean` | `true` | Capture `write`, `edit` and `apply_patch` changes so rewind can restore them. Off: the rewind picker says files will not be restored. |  |
+| `fileRewind.maxFileBytes` | `number` | `10485760` | Largest file, before or after a change, that can be captured; a larger write is refused while capture is on. |  |
 | `fileRewind.quotaBytes` | `number` | `268435456` | Most bytes of unique file images one session keeps; past it, writes are refused until `/rewind-prune`. |  |
 
 ## Web tools

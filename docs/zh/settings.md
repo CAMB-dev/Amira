@@ -199,11 +199,11 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 
 ## 文件回退
 
-文件工具改动的字节内容，供回退时恢复。详见[会话](usage.md)。
+文件工具改动的字节内容，供回退时恢复，详见[会话](usage.md)。
 
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
 | --- | --- | --- | --- | --- |
-| `fileRewind.enabled` | `boolean` | `true` | 记录 `write`、`edit` 和 `apply_patch` 的改动。关闭后选择器会提示不会恢复文件。 |  |
+| `fileRewind.enabled` | `boolean` | `true` | 记录 `write`、`edit` 和 `apply_patch` 的改动，供回退时恢复。关闭后回退选择器会提示不会恢复文件。 |  |
 | `fileRewind.maxFileBytes` | `number` | `10485760` | 可记录的最大文件（改动前或改动后）；启用记录时，超过它的写入会被拒绝。 |  |
 | `fileRewind.quotaBytes` | `number` | `268435456` | 每个会话最多保存的去重文件镜像字节数；超出后写入会被拒绝，直到执行 `/rewind-prune`。 |  |
 

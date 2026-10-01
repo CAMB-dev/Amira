@@ -69,6 +69,14 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
     keys: ["context"],
   },
   {
+    title: { en: "File rewind", zh: "文件回退" },
+    intro: {
+      en: "Bytes the file tools change, kept so that rewind can restore them; see [Sessions](usage.md).",
+      zh: "文件工具改动的字节内容，供回退时恢复，详见[会话](usage.md)。",
+    },
+    keys: ["fileRewind"],
+  },
+  {
     title: { en: "Web tools", zh: "网页工具" },
     intro: {
       en: "Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tools.disabled`.",
@@ -360,6 +368,21 @@ export const annotations: Record<string, Annotation> = {
     default: '`"tail"`',
     en: 'Where a server-side checkpoint goes: `"tail"` keeps the last turns verbatim after it; `"recent-user"` compacts everything and puts the most recent user messages (up to about 64k tokens) before it, as Codex does. Text summaries always use `"tail"`.',
     zh: '服务端压缩检查点的位置：`"tail"` 在检查点之后原样保留最近几个轮次；`"recent-user"` 压缩全部历史，把最近的用户消息（约 64k token 以内）放在检查点之前，与 Codex 的做法相同。文字摘要始终使用 `"tail"`。',
+  },
+  "fileRewind.enabled": {
+    default: "`true`",
+    en: "Capture `write`, `edit` and `apply_patch` changes so rewind can restore them. Off: the rewind picker says files will not be restored.",
+    zh: "记录 `write`、`edit` 和 `apply_patch` 的改动，供回退时恢复。关闭后回退选择器会提示不会恢复文件。",
+  },
+  "fileRewind.maxFileBytes": {
+    default: "`10485760`",
+    en: "Largest file, before or after a change, that can be captured; a larger write is refused while capture is on.",
+    zh: "可记录的最大文件（改动前或改动后）；启用记录时，超过它的写入会被拒绝。",
+  },
+  "fileRewind.quotaBytes": {
+    default: "`268435456`",
+    en: "Most bytes of unique file images one session keeps; past it, writes are refused until `/rewind-prune`.",
+    zh: "每个会话最多保存的去重文件镜像字节数；超出后写入会被拒绝，直到执行 `/rewind-prune`。",
   },
   "context.outputs.saveAbove": {
     default: "`16000`",
