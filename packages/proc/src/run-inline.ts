@@ -241,13 +241,13 @@ async function collect(
 }
 
 /** An inherited gate variable would let a directly started program skip its gate. */
-function withoutGateVar(env: Record<string, string | undefined>): Record<string, string | undefined> {
+export function withoutGateVar(env: Record<string, string | undefined>): Record<string, string | undefined> {
   const out = { ...env }
   for (const k of Object.keys(out)) if (k.toUpperCase() === CMD_GATE_VAR) delete out[k]
   return out
 }
 
-function releaseGate(stdin: Bun.FileSink | undefined, line: string): void {
+export function releaseGate(stdin: Bun.FileSink | undefined, line: string): void {
   if (!stdin) return
   try {
     stdin.write(`${line}\n`)
