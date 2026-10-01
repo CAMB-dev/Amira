@@ -204,6 +204,7 @@ export interface SubagentInfo {
 
 export interface SessionInfo {
   id: string
+  title?: string
   cwd: string
   model: ModelRef
   contextWindow: number
@@ -221,6 +222,8 @@ export interface SessionInfo {
 
 export interface StoredSessionInfo {
   id: string
+  title?: string
+  searchText?: string
   /** Last write, in ms since the epoch. */
   updatedAt: number
   firstUserText: string
@@ -294,6 +297,7 @@ export interface SessionControl {
    * model wrote), earlier runs of a resumed session included. Not among `replies`.
    */
   compactions?(): readonly CompactionUsage[]
+  sideRequests?(): readonly CompactionUsage[]
   /**
    * This session's sub-agents and theirs, each followed by its own: the ones running or
    * queued now and the finished ones, also from earlier runs of a resumed session.
@@ -341,6 +345,9 @@ export interface SessionControl {
   readonly readSession?: (sessionId: string) => StoredSession | undefined
   /** Switches to a stored session of this directory. */
   resume(sessionId: string): Promise<void>
+  readonly rename?: (title: string) => void
+  readonly deleteSession?: (sessionId: string) => Promise<void>
+  readonly fork?: (index?: number) => Promise<void>
   /**
    * Cuts the conversation back to just before `messages()[index]`, which must be a user
    * message: it and everything after it are gone from later turns, e.g. to go back to before a

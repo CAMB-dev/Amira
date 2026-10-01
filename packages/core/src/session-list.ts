@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs"
+import { existsSync, lstatSync, readdirSync, statSync, unlinkSync } from "node:fs"
 import path from "node:path"
 import { SessionStore, sessionsDir } from "./session-store.ts"
 
@@ -13,6 +13,8 @@ export interface SessionSummary {
   firstUserText: string
   /** Messages on the current branch. */
   messageCount: number
+  title?: string
+  searchText: string
 }
 
 /**
@@ -65,6 +67,67 @@ function summarize(file: string, updatedAt: number): SessionSummary {
     updatedAt,
     firstUserText: text.replace(/\s+/g, " ").trim(),
     messageCount: messages.length,
+    ...(store.title ? { title: store.title } : {}),
+    searchText: messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => m.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join(" "))
+      .join("\n"),
+  }
+}
+
+/** Substring search also works for languages without word separators. */
+export function sessionSnippet(
+  text: string,
+  query: string,
+  radius = 45,
+  lowerText = text.toLowerCase(),
+): string | undefined {
+  const at = lowerText.indexOf(query.toLowerCase())
+  if (at < 0) return undefined
+  const start = Math.max(0, at - radius)
+  const end = Math.min(text.length, at + query.length + radius)
+  return `${start ? "…" : ""}${text.slice(start, end).replace(/\s+/g, " ")}${end < text.length ? "…" : ""}`
+}
+
+/** Deletes only owned files; a fork may still reference the same sub-agent history. */
+export function deleteSession(cwd: string, id: string, currentId?: string, dir = sessionsDir(cwd)): void {
+  if (id === currentId) throw new Error("the current session cannot be deleted")
+  const file = findSession(cwd, id, dir)
+  if (!file) throw new Error(`no session ${id}`)
+  const owned = (root: string): Set<string> => {
+    const out = new Set<string>()
+    const visit = (name: string) => {
+      if (out.has(name)) return
+      // Every path component stays within the session directory and must not be a symlink.
+      const rel = path.relative(path.resolve(dir), path.resolve(name))
+      if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error("unsafe session path")
+      let part = path.resolve(dir)
+      if (lstatSync(part).isSymbolicLink()) throw new Error("unsafe session directory")
+      for (const component of rel.split(path.sep)) {
+        part = path.join(part, component)
+        if (lstatSync(part).isSymbolicLink()) throw new Error("unsafe session symlink")
+      }
+      out.add(name)
+      for (const e of SessionStore.open(name).entries) {
+        if (e.type !== "subagent") continue
+        if (!/^[\w-]+$/.test(e.childSessionId)) throw new Error("unsafe sub-agent id")
+        const child = path.join(path.dirname(name), "subagents", `${e.childSessionId}.jsonl`)
+        if (existsSync(child)) visit(child)
+      }
+    }
+    visit(root)
+    return out
+  }
+  const files = owned(file)
+  for (const name of readdirSync(dir).filter((n) => n.endsWith(".jsonl"))) {
+    const other = path.join(dir, name)
+    if (other === file) continue
+    for (const shared of owned(other)) files.delete(shared)
+  }
+  // Attachments are inline in message entries; there are no separate attachment files.
+  for (const name of [...files].reverse()) {
+    unlinkSync(name)
+    summaries.delete(name)
   }
 }
 

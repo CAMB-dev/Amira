@@ -54,6 +54,8 @@ export interface Settings {
    * writes a text summary.
    */
   compact?: { threshold?: number; model?: string; layout?: "tail" | "recent-user" }
+  /** Generate a short name in the background after the first turn. Default true. */
+  sessions?: { autoTitle?: boolean }
   /** Retrying failed model requests (D52): retries after the first try, first backoff, longest Retry-After waited. */
   retry?: { attempts?: number; baseDelayMs?: number; maxDelayMs?: number }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */

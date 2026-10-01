@@ -1484,6 +1484,89 @@ test("waiting messages take at most two rows each, and a few of them, above the 
   ])
 })
 
+for (const mode of ["fullscreen", "inline"] as const) {
+  for (const cols of [120, 60]) {
+    test(`rewind picker offers fork from here at ${cols} columns in ${mode}`, async () => {
+      const forks: number[] = []
+      const rewinds: number[] = []
+      const history = [
+        userMessage("first question"),
+        {
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "answer" }],
+          model: { provider: "mock", model: "m1" },
+        },
+        userMessage("second question"),
+      ]
+      const { terminal, live, shows, exited } = await setup([], {
+        cols,
+        settings: { mode },
+        history,
+        commands: [],
+        control: {
+          rewind: async (i) => {
+            rewinds.push(i)
+          },
+          fork: async (i) => {
+            forks.push(i!)
+          },
+        },
+      })
+      terminal.send("\x1b[27u\x1b[27u")
+      await waitFor(() => live().includes("Rewind the conversation"), "rewind picker")
+      expect(live()).toContain("fork from here")
+      expect(live()).toContain("second question")
+      terminal.send("f")
+      await shows("Forked the conversation")
+      expect(forks).toEqual([2])
+      expect(rewinds).toEqual([])
+      expect(history).toHaveLength(3)
+      terminal.send("\x03\x03")
+      await exited
+    })
+
+    test(`resume content picker deletes with confirmation at ${cols} columns in ${mode}`, async () => {
+      const deleted: string[] = []
+      const { terminal, live, exited } = await setup([], {
+        cols,
+        settings: { mode },
+        commands: [
+          {
+            name: "sessions",
+            description: "Sessions",
+            async run(_args, ctx) {
+              const choice = await ctx.ui.choose(
+                "Resume which session?",
+                ["s_a Unrelated", "s_b Database repair"],
+                {
+                  sections: [{ at: 0, choose: "resume", keys: [{ key: "d", label: "delete" }] }],
+                  searchTexts: ["other content", "Assistant text: 数据库连接"],
+                },
+              )
+              if (choice?.key === "d" && (await ctx.ui.confirm("Delete this session?", choice.option)))
+                deleted.push(choice.option)
+            },
+          },
+        ],
+      })
+      terminal.send("/sessions\r")
+      await waitFor(() => live().includes("Resume which session?"), "resume picker")
+      terminal.send("数据库")
+      await waitFor(() => live().includes("Assistant text:"), "matching snippet")
+      expect(live()).not.toContain("s_a Unrelated")
+      expect(live()).toContain("s_b Database repair")
+      terminal.send("\x1b[100;5u")
+      await waitFor(() => live().includes("Delete this session?"), "delete confirmation")
+      expect(deleted).toEqual([])
+      terminal.send("n")
+      await waitFor(() => !live().includes("Delete this session?"), "confirmation cancelled")
+      expect(deleted).toEqual([])
+      terminal.send("\x03\x03")
+      await exited
+    })
+  }
+}
+
 test("Esc twice opens the rewind picker; the message picked is cut off and back in the input", async () => {
   const rewound: number[] = []
   const { terminal, live, all, agent, shows, idle, exited } = await setup(

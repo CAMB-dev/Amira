@@ -51,6 +51,7 @@ export interface SessionOptions {
   model?: string
   /** Throw a UsageError instead of starting without a model (print mode cannot pick one). */
   requireModel?: boolean
+  autoTitle?: boolean
   cwd: string
   extensions: string[]
   /**
@@ -304,6 +305,9 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       interceptors,
       tools,
       ...(store ? { session: store } : {}),
+      ...(opts.autoTitle && settings.sessions?.autoTitle !== false
+        ? { autoTitle: { ...(settings.compact?.model ? { model: ai.model(settings.compact.model) } : {}) } }
+        : {}),
       ...(compaction ? { compaction } : {}),
       ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
       ...(opts.noticeRetryMs ? { noticeRetryMs: opts.noticeRetryMs } : {}),

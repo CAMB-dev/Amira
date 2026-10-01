@@ -940,6 +940,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
+      case "session.title":
+        termStatus.setSessionTitle(e.data.title)
+        break
       case "turn.start": {
         const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting.
@@ -1371,6 +1374,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     pendingNotices.length = 0
     setRetry(undefined)
     termStatus.setFolder(next.cwd)
+    termStatus.setSessionTitle(next.session?.title)
     showSession(next, true)
     view.requestRender()
   }
@@ -1481,14 +1485,24 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       requestId: `${REWIND_ID}${Date.now()}`,
       title: "Rewind the conversation to before which message?",
       options: labels,
+      ...(control.fork
+        ? { sections: [{ at: 0, choose: "rewind", keys: [{ key: "f", label: "fork from here" }] }] }
+        : {}),
     }
     const dialog: Dialog = new Dialog(
       request,
       (answer) => {
         const i = dialogs.indexOf(dialog)
         if (i !== -1) dialogs.splice(i, 1)
-        const at = typeof answer === "string" ? labels.indexOf(answer) : -1
-        if (at !== -1) void rewindTo(control.rewind!, picks[at]!)
+        const label =
+          typeof answer === "string"
+            ? answer
+            : answer && typeof answer === "object" && "option" in answer
+              ? answer.option
+              : undefined
+        const fork = answer && typeof answer === "object" && "key" in answer && answer.key === "f"
+        const at = label ? labels.indexOf(label) : -1
+        if (at !== -1) void rewindTo(fork ? control.fork! : control.rewind!, picks[at]!, !!fork)
         view.requestRender()
       },
       keys,
@@ -1497,7 +1511,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     view.requestRender()
   }
 
-  async function rewindTo(rewind: (index: number) => Promise<void>, pick: { m: UserMessage; index: number }) {
+  async function rewindTo(
+    rewind: (index: number) => Promise<void>,
+    pick: { m: UserMessage; index: number },
+    fork = false,
+  ) {
     const text = messageText(pick.m)
     try {
       await rewind(pick.index)
@@ -1510,7 +1528,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     editor.setParts(editor.isEmpty ? back : [...back, "\n\n", ...editor.getParts()])
     view.notice(
       "info",
-      "Rewound the conversation to before that message, now back in the input. Files were not restored.",
+      fork
+        ? "Forked the conversation to before that message, now back in the input."
+        : "Rewound the conversation to before that message, now back in the input. Files were not restored.",
     )
     redraw()
   }
@@ -1761,6 +1781,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
+  termStatus.setSessionTitle(agent.session?.title)
   termStatus.start()
   view.banner(
     `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${tildePath(agent.cwd, env)}`)}`,

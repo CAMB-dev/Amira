@@ -107,12 +107,22 @@ export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
 export function costReport(
   replies: readonly AssistantMessage[],
   compactions: readonly CompactionUsage[] = [],
+  sideRequests: readonly CompactionUsage[] = [],
 ): string {
   const asReplies = compactions.map(
     (c): AssistantMessage => ({ role: "assistant", content: [], model: c.model, usage: c.usage }),
   )
   const compactionRows = costByModel(asReplies).map((r) => ({ ...r, compaction: true }))
-  const rows: (ModelCost & { compaction?: boolean })[] = [...costByModel(replies), ...compactionRows]
+  const sideRows = costByModel(
+    sideRequests.map(
+      (c): AssistantMessage => ({ role: "assistant", content: [], model: c.model, usage: c.usage }),
+    ),
+  ).map((r) => ({ ...r, side: true }))
+  const rows: (ModelCost & { compaction?: boolean; side?: boolean })[] = [
+    ...costByModel(replies),
+    ...compactionRows,
+    ...sideRows,
+  ]
   if (!rows.length) return "No model replies with usage in this session yet."
   const line = (r: Pick<ModelCost, "usage" | "cost">, label: string, count: string) => {
     const u = r.usage
@@ -129,7 +139,9 @@ export function costReport(
   const body = rows.map((r) =>
     r.compaction
       ? line(r, `${r.model} (compaction)`, `${r.replies} ${r.replies === 1 ? "compaction" : "compactions"}`)
-      : line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`),
+      : r.side
+        ? line(r, `${r.model} (session title)`, `${r.replies} requests`)
+        : line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`),
   )
   if (rows.length > 1) {
     const total = rows.reduce(
