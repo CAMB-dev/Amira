@@ -44,6 +44,8 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 
 修改文件有两种编辑工具。`edit` 在单个文件中替换一段确切的文本。`apply_patch` 接收 Codex 格式的补丁（`*** Begin Patch` … `*** End Patch`），一次可以新增、删除、修改和移动多个文件；它在写入前校验所有 hunk，写入中途失败时回滚已写入的部分。除非 provider 设置另有选择，每个模型默认使用 `edit`，详见[编辑工具](providers.md#编辑工具)。`write` 始终可用。当前模型不使用的那个编辑工具会在 `/tools` 中显示为禁用并附上原因，`/tools enable` 也无法启用它，需要修改设置。
 
+`grep` 和 `glob` 会跳过 git 也会忽略的内容：`.git`、`node_modules`、被 `.gitignore`、`.git/info/exclude` 或全局 excludes 文件排除的文件，以及包含另一个仓库或 linked worktree 的目录（例如 checkout 里的 `.claude/worktrees/*`）。被搜索仓库自己的子模块仍会被搜索。显式传入的路径即使本身被忽略也会被搜索。工作目录之外的结果显示为绝对路径，并标注 `[outside working directory]`。
+
 审批请求来自[权限策略](#权限)和扩展；扩展可以拦截工具调用，拒绝执行或要求用户批准。审批界面显示工具名、原因（包括引起询问的模式或规则），以及预览或参数。用方向键选项，再按 Enter；确认框初始没有选中项。Esc 拒绝该调用并停止轮次。
 
 如果界面提供 `Don't ask again`，它只允许**该工具因同一原因**提出的调用，在当前会话剩余时间内生效，不会保存持久权限。子 agent 的权限询问直接交给你，而不是交给父 agent；扩展为子 agent 提出的审批仍由父 agent 的模型决定。打印模式无法回答对话框，因此需要审批的调用会被拒绝，问题会被取消；RPC 客户端必须显式回答界面请求，客户端关闭 stdin 后，审批一律拒绝。
@@ -178,11 +180,14 @@ checkpoints 扩展可以通过 `api.registerFileRestoration({ label, restore: as
 amira -p "Summarize the changes in this repository"
 amira -p -c "Continue the review"
 amira -p --json "Explain the failing test"
+amira -p --json --json-coalesce "Explain the failing test"
 amira -p --json-out events.json "Explain the failing test"
 amira -p -- "-v means verbose?"
 ```
 
 `-p` / `--print` 不打开交互界面。除用不带 ID 的 `-r` 列出会话外，必须提供提示词。普通模式把回复文本流式写入 stdout，把工具执行情况、警告和错误写入 stderr。`--json` 必须与打印模式一起使用，将每个事件作为一行只含 ASCII 的 JSON 写入 stdout；非 ASCII 字符会转义为 `\uXXXX`，因此 Windows 父进程不会因代码页差异而解码错误。`--json-out <path>` 会隐含 `--json`，把相同的 JSONL 事件流写入文件而不是 stdout；相对路径按 Amira 的启动目录解析。输出包含会话、轮次、消息、工具与子 agent 事件，并非只输出一个最终 JSON 答案。
+
+JSON 打印输出会省略没有信息的空 `ui.render` 事件，并且每个工具调用只在第一个 delta 中带工具名，除非 provider 在流式过程中更改了工具名。`--json-coalesce` 会把连续的文本、思考和同一工具调用参数 delta 合并成更大的 JSONL 块，每块达到 4,096 个字符或 100 毫秒时写出；不使用它时，其余事件仍各占一行。使用 `--json-out` 的运行失败时，事件文件仍会保留已有流，并在 stderr 输出简短失败摘要。
 
 带引号的命令，例如 `amira -p "/status"`，直接执行命令，不发送模型提示词；已加载的 skill 也可以这样运行。需要选择器的命令无法获得交互回答，支持显式参数时请直接传入参数。
 

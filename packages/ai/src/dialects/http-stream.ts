@@ -1,6 +1,6 @@
 import type { DialectContext } from "../dialect.ts"
 import type { ModelError, StreamEvent } from "../types.ts"
-import { bodyError, isRetryableStatus } from "./openai-chat-errors.ts"
+import { bodyError, isRetryableBodyError, isRetryableStatus } from "./openai-chat-errors.ts"
 import { withRetryAfter } from "./retry-after.ts"
 
 export type ErrorEvent = Extract<StreamEvent, { type: "error" }>
@@ -87,15 +87,18 @@ function httpError(
   errorOf: NonNullable<StreamRequest<Failable>["errorOf"]>,
 ): [ModelError, boolean] {
   const error: ModelError = { message: `HTTP ${status}: ${detail.slice(0, 500)}`, status }
+  let bodyRetryable = isRetryableBodyError(error)
   try {
     const parsed = JSON.parse(detail)
     const raw = Array.isArray(parsed) ? parsed[0]?.error : parsed?.error
     if (raw !== undefined) {
-      const code = errorOf(raw).error.code
+      const mapped = errorOf(raw)
+      bodyRetryable ||= isRetryableBodyError({ ...mapped.error, status })
+      const code = mapped.error.code
       if (code) error.code = code
     }
   } catch {}
-  return [error, isRetryableStatus(status)]
+  return [error, isRetryableStatus(status) || bodyRetryable]
 }
 
 /** Parses an SSE data field as JSON, or returns undefined for junk. */

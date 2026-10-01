@@ -39,6 +39,18 @@ test("reports no matches and missing directories", async () => {
   expect((await glob("*", "missing")).isError).toBe(true)
 })
 
+test("reports cancellation instead of no matches when the walk stops", async () => {
+  let checks = 0
+  const signal = {
+    get aborted() {
+      return ++checks > 2
+    },
+  } as AbortSignal
+  const result = await globTool.execute({ pattern: "**/*.does-not-exist" }, makeCtx(dir, signal))
+  expect(result.isError).toBe(true)
+  expect(textOf(result)).toBe("Aborted")
+})
+
 test("accepts ./-prefixed, ../ and absolute patterns", async () => {
   expect(textOf(await glob("./src/**/*.ts")).split("\n")).toEqual(["src/lib/b.ts", "src/a.ts"])
   expect(textOf(await glob("../lib/*.ts", "src/lib/../lib/../lib"))).toBe("src/lib/b.ts")
@@ -50,10 +62,14 @@ test("accepts ./-prefixed, ../ and absolute patterns", async () => {
 test("a wildcard-free parent or home pattern lists that directory instead of walking the drive", async () => {
   const started = performance.now()
   const up = textOf(await globTool.execute({ pattern: ".." }, makeCtx(join(dir, "src", "lib"))))
-  // Paths outside cwd are shown absolute.
-  const names = up.split("\n").map((p) => p.split("/").slice(-2).join("/"))
+  // Paths outside cwd remain absolute; one line above them says so.
+  const [note, ...lines] = up.split("\n")
+  expect(note).toBe("[outside working directory] paths below are absolute")
+  expect(lines.every((p) => !p.includes("[outside"))).toBe(true)
+  const names = lines.map((p) => p.split("/").slice(-2).join("/"))
   expect(names.sort()).toEqual(["src/a.ts", "src/c.js"])
   expect(performance.now() - started).toBeLessThan(2000)
   const one = textOf(await globTool.execute({ pattern: "../a.ts" }, makeCtx(join(dir, "src", "lib"))))
+  expect(one).toContain("[outside working directory]")
   expect(one.endsWith("/src/a.ts")).toBe(true)
 })

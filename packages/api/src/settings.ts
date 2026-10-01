@@ -88,8 +88,17 @@ export interface Settings {
   context?: ContextSettings
   /** Generate a short name in the background after the first turn. Default true. */
   sessions?: { autoTitle?: boolean }
-  /** Retrying failed model requests (D52): retries after the first try, first backoff, longest Retry-After waited. */
-  retry?: { attempts?: number; baseDelayMs?: number; maxDelayMs?: number }
+  /**
+   * Retrying failed model requests (D52): retries after the first try, backoff, Retry-After and
+   * content/idle timeouts in milliseconds.
+   */
+  retry?: {
+    attempts?: number
+    baseDelayMs?: number
+    maxDelayMs?: number
+    firstContentTimeoutMs?: number
+    idleTimeoutMs?: number
+  }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */
   mcpServers?: Record<string, Record<string, unknown>>
   /**
