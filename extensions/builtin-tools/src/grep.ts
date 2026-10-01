@@ -3,6 +3,7 @@ import { basename } from "node:path"
 import { defineTool, type GrepDetails, MAX_ARTIFACT_CHARS, outputSize, textResult } from "@amira/api"
 import { splitLines } from "./diff.ts"
 import { statOrNull, type WalkEntry, walkFiles } from "./files.ts"
+import { grepMatcher } from "./grep-matcher.ts"
 import { displayPath, resolvePath } from "./paths.ts"
 import { decodeText, looksBinary } from "./text.ts"
 import { keepOutput, outputLimits } from "./truncate.ts"
@@ -10,8 +11,6 @@ import { keepOutput, outputLimits } from "./truncate.ts"
 export const DEFAULT_HEAD_LIMIT = 250
 export const MAX_GREP_FILE_BYTES = 5 * 1024 * 1024
 const MAX_MATCH_LINE_CHARS = 2000
-/** Longer lines are only searched up to here, which bounds the cost of a pathological pattern per line. */
-const MAX_TESTED_LINE_CHARS = 10_000
 
 export type GrepOutputMode = "files_with_matches" | "content" | "count"
 
@@ -72,6 +71,7 @@ export const grepTool = defineTool<GrepParams>({
       return textResult(`Invalid regular expression: ${(err as Error).message}`, true)
     }
 
+    if (ctx.signal.aborted) return textResult("Aborted", true)
     const root = resolvePath(ctx.cwd, params.path ?? ".")
     const st = await statOrNull(root)
     if (!st) return textResult(`Path not found: ${root}`, true)
@@ -96,34 +96,38 @@ export const grepTool = defineTool<GrepParams>({
     let total = 0
     let matchedFiles = 0
     let matches = 0
-    for await (const f of files) {
-      if (ctx.signal.aborted) return textResult("Aborted", true)
-      if (!filter(f.rel)) continue
-      const text = await readText(f.abs)
-      if (text === undefined) continue
-      const shown = displayPath(ctx.cwd, f.abs)
-      // Numbered as read numbers them: a final line break does not start another line.
-      const lines = splitLines(text)
-      let count = 0
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i]!
-        if (!re.test(line.length > MAX_TESTED_LINE_CHARS ? line.slice(0, MAX_TESTED_LINE_CHARS) : line))
-          continue
-        count++
-        if (mode === "files_with_matches") break
+    const matcher = grepMatcher(re, ctx.signal)
+    try {
+      for await (const f of files) {
+        if (ctx.signal.aborted) return textResult("Aborted", true)
+        if (!filter(f.rel)) continue
+        const text = await readText(f.abs)
+        if (text === undefined) continue
+        const shown = displayPath(ctx.cwd, f.abs)
+        // Numbered as read numbers them: a final line break does not start another line.
+        const lines = splitLines(text)
+        const indices = await matcher.match(lines, mode === "files_with_matches")
+        const count = indices.length
+        if (count === 0) continue
+        matchedFiles++
+        matches += count
         if (mode === "content") {
-          total++
-          add(`${shown}:${i + 1}:${clip(lines[i]!)}`)
+          for (const i of indices) {
+            total++
+            add(`${shown}:${i + 1}:${clip(lines[i]!)}`)
+          }
+          continue
         }
+        total++
+        add(mode === "count" ? `${shown}:${count}` : shown)
       }
-      if (count === 0) continue
-      matchedFiles++
-      matches += count
-      if (mode === "content") continue
-      total++
-      add(mode === "count" ? `${shown}:${count}` : shown)
+    } catch (err) {
+      return textResult((err as Error).message, true)
+    } finally {
+      matcher.close()
     }
 
+    if (ctx.signal.aborted) return textResult("Aborted", true)
     if (total === 0) return textResult(`No matches for /${pattern}/ in ${displayPath(ctx.cwd, root)}`)
     const head = out.slice(0, limit).join("\n")
     const all = out.join("\n")
