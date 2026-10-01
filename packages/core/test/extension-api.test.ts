@@ -1,11 +1,5 @@
 import { expect, test } from "bun:test"
-import {
-  type AnyEvent,
-  type ExtensionAPI,
-  TEMPORARY_DEFAULT_BUFFER_CHARS,
-  TEMPORARY_DEFAULT_MAX_RUNNING,
-} from "@amira/api"
-import { DEFAULT_BUFFER_CHARS, DEFAULT_MAX_RUNNING } from "@amira/proc"
+import type { AnyEvent, ExtensionAPI } from "@amira/api"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { amiraHome } from "../src/home.ts"
@@ -338,8 +332,3 @@ test("openPipe starts a piped process whose events reach the extension", async (
   expect(await exit.promise).toBe(0)
   expect(() => api!.openPipe([], { cwd: process.cwd(), onEvent: () => {} })).toThrow()
 }, 60_000)
-
-test("the temporary background-jobs defaults match the host registry's", () => {
-  expect(TEMPORARY_DEFAULT_BUFFER_CHARS).toBe(DEFAULT_BUFFER_CHARS)
-  expect(TEMPORARY_DEFAULT_MAX_RUNNING).toBe(DEFAULT_MAX_RUNNING)
-})

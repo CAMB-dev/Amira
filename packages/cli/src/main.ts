@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
 import { type Agent, amiraPath, listSessions, SessionStore, trackWorkspace } from "@amira/core"
-import { backgroundJobs } from "@amira/proc"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
@@ -182,7 +181,7 @@ async function run(argv: string[]): Promise<number> {
         onReady,
         ui: host.ui,
         commands,
-        backgroundJobs,
+        backgroundJobs: host.backgroundJobs,
         ...(config.settings.backgroundJobs?.printWaitMs !== undefined
           ? { backgroundJobTimeoutMs: config.settings.backgroundJobs.printWaitMs }
           : {}),
@@ -210,9 +209,11 @@ async function run(argv: string[]): Promise<number> {
       ...(config.settings.tui ? { settings: config.settings.tui } : {}),
       // Full screen unless a flag or tui.mode says inline (D84).
       mode: args.mode ?? config.settings.tui?.mode ?? "fullscreen",
-      runningJobs: () => backgroundJobs.running().length,
+      runningJobs: () => host.backgroundJobs.running().length,
     })
-    process.stdout.write(exitNote(agentRef ?? agent, running(), args.cwd, backgroundJobs.running().length))
+    process.stdout.write(
+      exitNote(agentRef ?? agent, running(), args.cwd, host.backgroundJobs.running().length),
+    )
     return code
   } finally {
     stopWorkspace()

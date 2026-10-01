@@ -68,7 +68,11 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
   }
   const switchTo = (next: Agent, reason: "resume" | "clear" | "fork") => {
     // Nobody reads the old conversation any more: no resend of its held notices.
-    agent().cancelNoticeRetry()
+    const old = agent()
+    old.cancelNoticeRetry()
+    // A session switch abandons the old conversation's background work, including jobs owned
+    // by its sub-agents. The host keeps the ended records for the short-lived UI history.
+    void session.host.backgroundJobs.closeRoot(old.sessionId)
     host.switchTo(next)
     opts.announce?.(next, reason)
   }

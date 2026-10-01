@@ -354,6 +354,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       bus,
       interceptors,
       tools,
+      backgroundJobs: host.backgroundJobs,
       ...(store ? { session: store } : {}),
       ...(opts.autoTitle && settings.sessions?.autoTitle !== false
         ? { autoTitle: { ...(settings.compact?.model ? { model: ai.model(settings.compact.model) } : {}) } }

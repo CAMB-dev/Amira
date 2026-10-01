@@ -154,12 +154,17 @@ export class JobRegistry {
 
   /** Changes the limits for jobs started from now on (settings). */
   configure(limits: JobLimits): void {
-    if (limits.maxRunning !== undefined) this.#maxRunning = Math.max(1, Math.floor(limits.maxRunning))
-    if (limits.bufferChars !== undefined) this.#bufferChars = Math.max(1000, Math.floor(limits.bufferChars))
+    this.#maxRunning = Math.max(1, Math.floor(limits.maxRunning ?? DEFAULT_MAX_RUNNING))
+    this.#bufferChars = Math.max(1000, Math.floor(limits.bufferChars ?? DEFAULT_BUFFER_CHARS))
   }
 
   get maxRunning(): number {
     return this.#maxRunning
+  }
+
+  /** Whether an error came from this registry refusing a live job at its limit. */
+  isLimitError(error: unknown): error is JobLimitError {
+    return error instanceof JobLimitError
   }
 
   /**

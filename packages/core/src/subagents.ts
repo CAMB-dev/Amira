@@ -575,6 +575,7 @@ export class AgentTree {
       parentSessionId: parent.sessionId,
       depth,
       tree: this,
+      ...(parent.backgroundJobsHost ? { backgroundJobs: parent.backgroundJobsHost } : {}),
       // The parent's permission policy, mode and rules, with the user who answers its questions:
       // the policy's questions skip the parent's model and go to the user (Agent).
       permissions: parent.permissions,
@@ -1050,6 +1051,9 @@ export class AgentTree {
       },
       child.parentMeta,
     )
+    // The end event is delivered before cleanup so observers can still inspect the final live
+    // state; no job owned by the child may survive the end of its session.
+    void child.agent.backgroundJobsHost?.closeSession(child.id)
     child.ended = result
     // Keep what it did, not the session: one with a file is read back from it when asked for.
     const done = this.subagent(child.id) as SpawnedSubagent

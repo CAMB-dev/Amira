@@ -1,4 +1,4 @@
-import type { BackgroundJobInfo as JobInfo, TemporaryBackgroundJobRegistry as JobRegistry } from "@amira/api"
+import type { BackgroundJobInfo as JobInfo, BackgroundJobRegistry as JobRegistry } from "@amira/api"
 import {
   type BackgroundJobDetails,
   type CommandCandidate,
@@ -20,7 +20,6 @@ import {
   endText,
   type JobOutputParams,
   type JobStopParams,
-  jobsConfig,
   STOP_GRACE_MS,
   watchJobEnds,
 } from "./jobs.ts"
@@ -320,7 +319,7 @@ const unsubscribe: (() => void)[] = []
  * Adds everything above to the extension's registrations and starts the clean-up, for the
  * jobs in `registry` (the tools' own by default; tests pass another without changing the tools').
  */
-export function registerJobs(api: ExtensionAPI, registry: JobRegistry = jobsConfig.registry): void {
+export function registerJobs(api: ExtensionAPI, registry: JobRegistry = api.backgroundJobs): void {
   for (const off of unsubscribe.splice(0)) off()
   configureJobs(api.settings.backgroundJobs, registry)
   let lastOutputRender = 0
@@ -342,12 +341,7 @@ export function registerJobs(api: ExtensionAPI, registry: JobRegistry = jobsConf
   api.registerPanel(jobsPanel(registry))
   api.registerCommand(jobsCommand(registry))
   api.registerView(jobView(registry))
-  // A sub-agent's jobs end with it: nothing could read or stop them afterwards.
-  api.on("subagent.end", (e) => {
-    const owner = e.data.childSessionId
-    if (registry.running().some((j) => j.owner === owner))
-      void registry.stopAll((j) => j.owner === owner, STOP_GRACE_MS)
-  })
+  // The session host stops a sub-agent's jobs when its owner ends.
   // Every job ends with Amira: asked to stop first, killed when the exit cannot wait longer.
   api.onExit(async (signal) => {
     if (!registry.running().length) return

@@ -1,4 +1,5 @@
 import type { ImageBlock, JSONSchema, ModelRef, TextBlock, UserMessage } from "@amira/ai"
+import type { BackgroundJobSession } from "./background-jobs.ts"
 import type { MutateFiles } from "./file-rewind.ts"
 import type { OutputStore } from "./outputs.ts"
 import type {
@@ -18,6 +19,8 @@ export interface ToolResult {
 }
 
 export interface ToolContext {
+  /** Background jobs visible to this caller; top-level sessions see their sub-agents too. */
+  backgroundJobs?: BackgroundJobSession
   /** Shared mutation boundary for built-in file tools; absent outside an agent. */
   mutateFiles?: MutateFiles
   cwd: string

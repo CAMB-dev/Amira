@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
-import "../../../packages/core/src/index.ts"
 import { existsSync, readFileSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type {
   BackgroundJobDetails,
+  BackgroundJobHost,
   EventEnvelope,
   ExtensionAPI,
   NoticeLevel,
@@ -13,6 +13,8 @@ import type {
   ToolSession,
   UserMessage,
 } from "@amira/api"
+import { hostBackgroundJobs } from "@amira/api"
+import { SessionBackgroundJobHost } from "../../../packages/core/src/index.ts"
 import {
   backgroundJobs,
   JobRegistry,
@@ -38,6 +40,7 @@ setDefaultTimeout(60_000)
 
 const tmp = tempDirs()
 let dir: string
+let jobRegistry: BackgroundJobHost = hostBackgroundJobs()
 const hasBash = (await resolveShell()).kind === "bash"
 const onWindows = process.platform === "win32"
 const bun = JSON.stringify(process.execPath.replaceAll("\\", "/"))
@@ -60,8 +63,8 @@ beforeAll(async () => {
   )
 }, 60_000)
 afterEach(async () => {
-  await jobsConfig.registry.stopAll(() => true, 0)
-  jobsConfig.registry = backgroundJobs
+  await jobRegistry.stopAll(() => true, 0)
+  jobRegistry = hostBackgroundJobs()
 })
 afterAll(() => tmp.cleanup())
 
@@ -94,6 +97,11 @@ function session(sessionId: string, depth = 0, delivered?: Delivered[]): ToolSes
 
 const ctxIn = (s?: ToolSession, signal?: AbortSignal) => ({
   ...makeCtx(dir, signal),
+  backgroundJobs: jobRegistry.forSession({
+    sessionId: s?.sessionId ?? "-",
+    depth: s?.depth ?? 0,
+    ...(s && s.depth > 0 ? { parentSessionId: "s_main" } : {}),
+  }),
   ...(s ? { session: s } : {}),
 })
 const detailsOf = (r: { details?: unknown }) => r.details as BackgroundJobDetails
@@ -251,10 +259,10 @@ test.if(hasBash)("a sub-agent sees only its own jobs, which stop when it ends", 
   expect(textOf(other)).toStartWith(`No background job "${jobId}".`)
   expect(textOf(await jobListTool.execute({}, ctxIn(session("s_other", 1))))).toBe("No background jobs.")
 
-  // The extension stops a sub-agent's jobs when it ends.
+  // The session-scoped host stops a sub-agent's jobs when it ends.
   const api = fakeApi()
   registerJobs(api.api)
-  await api.emit("subagent.end", { childSessionId: "s_child" })
+  await jobRegistry.closeSession("s_child", 0)
   await waitUntil(() => backgroundJobs.get(jobId)!.status === "stopped", "the sub-agent's job to stop")
   await waitUntil(() => !alive(pid!), "its process to end")
   expect(api.notices).toEqual([])
@@ -313,8 +321,29 @@ test.if(hasBash)("job_output says so when it is polled without waiting", async (
   expect(detailsOf(timed).waited).toBe("timeout")
 })
 
+test("forgetting ended jobs keeps what job_output knows about live ones", async () => {
+  // Jobs that never print or end, without spawning anything.
+  jobRegistry = new SessionBackgroundJobHost(
+    new JobRegistry({
+      start: (_spec, onEvent) => {
+        onEvent({ type: "spawned", pid: 1, contained: true })
+        return { stop: () => onEvent({ type: "exit", code: null, signal: null }) }
+      },
+    }),
+  )
+  registerJobs(fakeApi({ backgroundJobs: { maxRunning: 300 } }).api, jobRegistry)
+  const s = session("s_main")
+  const start = () => ctxIn(s).backgroundJobs.start({ command: "idle", argv: ["idle"], cwd: dir }).id
+  const first = start()
+  await jobOutputTool.execute({ job_id: first }, ctxIn(s))
+  // Enough other reads to make the tools forget the jobs the registry no longer keeps.
+  for (let i = 0; i < 200; i++) await jobOutputTool.execute({ job_id: start() }, ctxIn(s))
+  const again = await jobOutputTool.execute({ job_id: first }, ctxIn(s))
+  expect(textOf(again)).toContain("Do not poll: pass wait_for")
+})
+
 test.if(hasBash)("the number of running jobs is capped", async () => {
-  jobsConfig.registry = new JobRegistry({ start: startJob, maxRunning: 1 })
+  jobRegistry = new SessionBackgroundJobHost(new JobRegistry({ start: startJob, maxRunning: 1 }))
   const s = session("s_main")
   const first = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(s))
   expect(first.isError).toBe(false)
@@ -335,7 +364,7 @@ test.if(hasBash)("an interrupted start stops the job", async () => {
   )
   expect(r.isError).toBe(true)
   expect(textOf(r)).toBe("Aborted while the background job was starting; it was stopped.")
-  expect(backgroundJobs.running()).toEqual([])
+  expect(jobRegistry.running()).toEqual([])
 })
 
 test("unknown jobs and bad patterns", async () => {
@@ -356,8 +385,6 @@ test("settings set the limits of the registry the extension serves; removed ones
   registerJobs(fakeApi().api, registry)
   expect(registry.maxRunning).toBe(8)
   expect(jobsConfig.maxLogBytes).toBeUndefined()
-  // The tools' registry is not swapped by registering the UI for another.
-  expect(jobsConfig.registry).toBe(backgroundJobs)
 })
 
 test("Amira's exit stops every job; the exit handler kills them when it cannot wait", async () => {
@@ -444,6 +471,7 @@ function fakeApi(settings: Settings = {}) {
   const panels: PanelDefinition[] = []
   const api = {
     settings,
+    backgroundJobs: jobRegistry,
     notify: (text: string, level?: NoticeLevel) => void notices.push({ text, level }),
     requestRender: () => {},
     registerPanel: (p: PanelDefinition) => {
