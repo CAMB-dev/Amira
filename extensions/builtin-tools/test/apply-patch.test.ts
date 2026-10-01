@@ -336,7 +336,7 @@ for (const moving of [false, true]) {
     if (moving) expect(await readFile(join(dir, "b"), "utf8")).toBe("new\n")
   })
 
-  test(`failure after hard-linked ${moving ? "move" : "delete"} unlinks the source restores its inode`, async () => {
+  test(`failure after hard-linked ${moving ? "move" : "delete"} still restores the source inode`, async () => {
     const dir = await tmp.make()
     await writeFile(join(dir, "a"), "old\n")
     await link(join(dir, "a"), join(dir, "alias"))
@@ -379,6 +379,29 @@ test("post-commit backup cleanup errors explicitly report that the patch was app
     "Patch applied, but temporary backup cleanup failed",
   )
   expect(await Bun.file(join(dir, "a")).exists()).toBe(false)
+})
+
+test("delete without hard-link support still applies and rolls back by rewriting bytes", async () => {
+  const dir = await tmp.make()
+  await writeFile(join(dir, "a"), "old\n")
+  const noLinks = (fail: boolean): PatchIO => ({
+    async write(handle, bytes) {
+      if (fail && Buffer.from(bytes).toString() === "fail\n") throw new Error("injected failure")
+      await writeHandle(handle, bytes)
+    },
+    remove: unlink,
+    async link() {
+      throw Object.assign(new Error("hard links not supported"), { code: "ENOTSUP" })
+    },
+  })
+  const patch = envelope("*** Delete File: a\n*** Add File: failure\n+fail")
+  await expect(applyPatch(dir, patch, makeCtx(dir).signal, noLinks(true))).rejects.toThrow(
+    "All patch changes rolled back",
+  )
+  expect(await readdir(dir)).toEqual(["a"])
+  expect(await readFile(join(dir, "a"), "utf8")).toBe("old\n")
+  await applyPatch(dir, envelope("*** Delete File: a"), makeCtx(dir).signal, noLinks(false))
+  expect(await readdir(dir)).toEqual([])
 })
 
 test("a stale later file is preserved while earlier writes roll back", async () => {

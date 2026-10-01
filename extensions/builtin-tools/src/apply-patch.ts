@@ -39,6 +39,8 @@ interface Change {
 export interface PatchIO {
   write(handle: FileHandle, bytes: Uint8Array): Promise<void>
   remove(path: string): Promise<void>
+  /** Keeps a deleted file's inode reachable for rollback; defaults to a hard link on disk. */
+  link?(existing: string, backup: string): Promise<void>
 }
 
 const disk: PatchIO = {
@@ -271,10 +273,15 @@ export async function applyPatch(
         }
       } else {
         // Keep the inode alive so rollback can restore the name and all hard-link relationships.
-        const directory = await mkdtemp(join(dirname(change.before.path), ".amira-patch-"))
-        backups.push(directory)
-        const backup = join(directory, "original")
-        await link(change.before.path, backup)
+        let backup: string | undefined
+        try {
+          const directory = await mkdtemp(join(dirname(change.before.path), ".amira-patch-"))
+          backups.push(directory)
+          await (io.link ?? link)(change.before.path, join(directory, "original"))
+          backup = join(directory, "original")
+        } catch {
+          // No hard links here (FAT, exFAT, some network shares): rollback rewrites the saved bytes.
+        }
         journal.push({ ...change, owned: change.before, backup })
         await io.remove(change.before.path)
         currentState.set(key, { path: change.before.path })
