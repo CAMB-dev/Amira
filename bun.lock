@@ -16,18 +16,12 @@
       "dependencies": {
         "@amira/api": "workspace:*",
       },
-      "devDependencies": {
-        "@amira/ai": "workspace:*",
-        "@amira/core": "workspace:*",
-        "@amira/proc": "workspace:*",
-      },
     },
     "extensions/builtin-tools": {
       "name": "@amira/builtin-tools",
       "version": "0.0.0",
       "dependencies": {
         "@amira/api": "workspace:*",
-        "@amira/proc": "workspace:*",
       },
     },
     "extensions/commands": {
@@ -36,21 +30,12 @@
       "dependencies": {
         "@amira/api": "workspace:*",
       },
-      "devDependencies": {
-        "@amira/ai": "workspace:*",
-        "@amira/core": "workspace:*",
-      },
     },
     "extensions/mcp": {
       "name": "@amira/ext-mcp",
       "version": "0.0.0",
       "dependencies": {
         "@amira/api": "workspace:*",
-        "@amira/proc": "workspace:*",
-      },
-      "devDependencies": {
-        "@amira/ai": "workspace:*",
-        "@amira/core": "workspace:*",
       },
     },
     "extensions/skills": {
@@ -59,10 +44,6 @@
       "dependencies": {
         "@amira/api": "workspace:*",
       },
-      "devDependencies": {
-        "@amira/ai": "workspace:*",
-        "@amira/core": "workspace:*",
-      },
     },
     "extensions/status": {
       "name": "@amira/ext-status",
@@ -70,22 +51,15 @@
       "dependencies": {
         "@amira/api": "workspace:*",
       },
-      "devDependencies": {
-        "@amira/ai": "workspace:*",
-        "@amira/core": "workspace:*",
-      },
     },
     "extensions/web": {
       "name": "@amira/ext-web",
       "version": "0.0.0",
       "dependencies": {
         "@amira/api": "workspace:*",
-        "@amira/net": "workspace:*",
         "turndown": "^7.2.4",
       },
       "devDependencies": {
-        "@amira/ai": "workspace:*",
-        "@amira/core": "workspace:*",
         "@types/turndown": "^5.0.5",
       },
     },
@@ -111,14 +85,7 @@
       "dependencies": {
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
-        "@amira/builtin-tools": "workspace:*",
         "@amira/core": "workspace:*",
-        "@amira/ext-agent": "workspace:*",
-        "@amira/ext-commands": "workspace:*",
-        "@amira/ext-mcp": "workspace:*",
-        "@amira/ext-skills": "workspace:*",
-        "@amira/ext-status": "workspace:*",
-        "@amira/ext-web": "workspace:*",
         "@amira/proc": "workspace:*",
         "@amira/tui": "workspace:*",
         "@amira/tui-kit": "workspace:*",
@@ -151,12 +118,6 @@
         "@amira/net": "workspace:*",
         "@amira/proc": "workspace:*",
         "@amira/tui-kit": "workspace:*",
-      },
-      "devDependencies": {
-        "@amira/builtin-tools": "workspace:*",
-        "@amira/ext-agent": "workspace:*",
-        "@amira/ext-commands": "workspace:*",
-        "@amira/ext-status": "workspace:*",
       },
     },
     "packages/tui-kit": {
