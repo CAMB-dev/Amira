@@ -382,6 +382,7 @@ export class Agent {
     )
     this.#toolSession = {
       ...deferred,
+      ...(opts.session ? { dir: opts.session.file.replace(/\.jsonl$/, "") } : {}),
       data: this.data,
       // Recorded in the session, so resuming it offers the same tools again.
       loadTools: (names) => {

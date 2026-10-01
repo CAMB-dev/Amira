@@ -120,7 +120,13 @@ export {
   white,
   yellow,
 } from "./style.ts"
-export { BaseTerminal, FakeTerminal, ProcessTerminal, type Terminal } from "./terminal.ts"
+export {
+  BaseTerminal,
+  FakeTerminal,
+  PASSIVE_SIGNAL_LISTENER,
+  ProcessTerminal,
+  type Terminal,
+} from "./terminal.ts"
 export {
   closeStyles,
   graphemes,
