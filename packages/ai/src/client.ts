@@ -17,6 +17,7 @@ import { hasNativeWebSearch } from "./server-tools.ts"
 import { withTextTools } from "./text-tools.ts"
 import { canReplay, forReplay, type ReplayTarget, withSignatureHost } from "./thinking.ts"
 import {
+  addUsage,
   emptyUsage,
   type ModelInfo,
   type ModelRequest,
@@ -242,7 +243,7 @@ export function createAi(opts: AiOptions = {}): Ai {
       // Signed reasoning, output items, checkpoints and server tools' items go back only where
       // they came from (canReplay, canReplayServerTool); elsewhere they go as text.
       const host = hostOf(p.baseUrl)
-      const messages = forReplay(req.messages, targetOf(p, req.model))
+      const messages = forReplay(req.messages, targetOf(p, req.model, req.tools.length > 0))
       const sendable = messages === req.messages ? req : { ...req, messages }
       const attempt = () => withTextTools(sendable, (r) => dialect.stream(r, ctx))
       const events = withSignatureHost(withRetry(attempt, sig, opts.retry), host)
@@ -305,25 +306,32 @@ function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>):
 
 /** Usage with its cost at the model's prices, when they are known. */
 function withPrice(u: Usage, model: ModelInfo): Usage {
-  return model.cost ? { ...u, cost: usageCost(u, model.cost) } : u
+  if (!model.cost) return u
+  const cost = usageCost(u, model.cost)
+  return {
+    ...u,
+    ...(cost !== undefined ? { cost } : {}),
+    ...(u.webSearchRequests !== undefined && model.cost.webSearch !== undefined
+      ? { webSearchCost: u.webSearchRequests * model.cost.webSearch }
+      : {}),
+  }
 }
 
 function addTo(to: Usage, u: Usage) {
-  to.input += u.input
-  to.output += u.output
-  to.cacheRead += u.cacheRead
-  to.cacheWrite += u.cacheWrite
-  if (u.cost !== undefined) to.cost = (to.cost ?? 0) + u.cost
+  const sum = addUsage(to, u)
+  if (sum.cost === undefined) delete to.cost
+  if (sum.webSearchCost === undefined) delete to.webSearchCost
+  Object.assign(to, sum)
 }
 
 /** Where requests for `model` on `p` go, and what they offer, for canReplay and canReplayServerTool. */
-function targetOf(p: ProviderConfig, model: ModelInfo): ReplayTarget {
+function targetOf(p: ProviderConfig, model: ModelInfo, functionTools = true): ReplayTarget {
   return {
     dialect: model.dialect,
     provider: p.id,
     host: hostOf(p.baseUrl),
     model: model.id,
-    webSearch: hasNativeWebSearch(model),
+    webSearch: hasNativeWebSearch(model, functionTools),
   }
 }
 

@@ -1,6 +1,6 @@
 import { statSync } from "node:fs"
 import path from "node:path"
-import { emptyUsage, type Message, type ModelRef } from "@amira/ai"
+import { addUsage, emptyUsage, type Message, type ModelRef } from "@amira/ai"
 import { fallbackTitle, type SubagentInfo, type SubagentState } from "@amira/api"
 import type { Agent } from "./agent.ts"
 import { SessionStore } from "./session-store.ts"
@@ -141,7 +141,7 @@ function storedInfo(
   title: string | undefined,
   store: SessionStore | undefined,
 ): SubagentInfo {
-  const usage = emptyUsage()
+  let usage = emptyUsage()
   if (!store) {
     return { id, parentSessionId, depth, role, title: title || role, task: "", status: "aborted", usage }
   }
@@ -159,11 +159,7 @@ function storedInfo(
           ? "aborted"
           : "done"
     if (!m.usage) continue
-    usage.input += m.usage.input
-    usage.output += m.usage.output
-    usage.cacheRead += m.usage.cacheRead
-    usage.cacheWrite += m.usage.cacheWrite
-    if (m.usage.cost !== undefined) usage.cost = (usage.cost ?? 0) + m.usage.cost
+    usage = addUsage(usage, m.usage)
   }
   // A child has one turn: its task is the last user message (a forked one follows the history).
   const asked = messages.findLast((m) => m.role === "user")

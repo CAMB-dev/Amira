@@ -1,6 +1,6 @@
 export * from "./catalog.ts"
 export * from "./client.ts"
-export { usageCost } from "./cost.ts"
+export { hasUnpricedSearch, usageCost } from "./cost.ts"
 export * from "./dialect.ts"
 export { ANTHROPIC_VERSION, anthropicMessages, toAnthropicMessages } from "./dialects/anthropic.ts"
 export { geminiBody, googleGemini, toGeminiContents, toGeminiSchema } from "./dialects/google-gemini.ts"

@@ -106,10 +106,10 @@ Provider 表单中的默认参数用于目录中没有描述的模型。要调�
 | `maxTokensField` | Chat 输出限制字段，默认 `max_tokens`，也可用 `max_completion_tokens` |
 | `streamUsage` | 请求 Chat 流中的用量信息，默认 `true` |
 | `thinking` | Anthropic 思考模式，默认 `adaptive`；需要 token 预算的兼容服务使用 `budget` |
-| `webSearch` | 为 Responses 模型提供服务端搜索，模型的 `caps.webSearch` 优先 |
+| `webSearch` | 提供服务端搜索（Responses、Anthropic Messages、Gemini），模型的 `caps.webSearch` 优先 |
 | `compaction` | 原生压缩模式：`auto`、`on` 或 `off`，默认 `auto` |
 
-服务端搜索目前只在 `openai-responses` 中实现。OpenAI 地址和 Amira 识别为 Azure OpenAI 的 URL 默认开启，其他地址默认关闭。开启后，模型不再看到客户端 `web_search` 工具，`web_fetch` 仍可用。将 `web.nativeSearch` 设为 `false` 可改用客户端搜索；客户端搜索后端通过 web 设置另行选择。
+服务端搜索在 `openai-responses`、`anthropic-messages` 和 `google-gemini` 中实现。官方地址默认开启：OpenAI 和 Amira 识别为 Azure OpenAI 的 URL、`api.anthropic.com`、`generativelanguage.googleapis.com`；其他地址默认关闭。Gemini 只有 Gemini 3 模型能同时使用 Google 搜索和 Amira 的工具，较早的 Gemini 模型仍用客户端搜索。开启后，模型不再看到客户端 `web_search` 工具，`web_fetch` 仍可用。将 `web.nativeSearch` 设为 `false` 可改用客户端搜索；客户端搜索后端通过 web 设置另行选择。模型目录不提供搜索费用，因此搜索过的回复费用显示为未知，除非设置了模型的 `cost.webSearch`（每次搜索的美元价格）。
 
 `openai-responses` 和 `anthropic-messages` 实现了原生压缩。`auto` 只对识别出的官方地址开启，分别是 OpenAI/Azure OpenAI 和 Anthropic。自动压缩和不带指令的 `/compact` 会先尝试原生压缩，失败后回退到文本摘要。设置了 `compact.model`，或向 `/compact` 提供指令时，则使用文本摘要。
 

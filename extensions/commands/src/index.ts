@@ -6,6 +6,7 @@ import {
   defineExtension,
   type EventMap,
   type ExtensionAPI,
+  hasUnpricedSearch,
   modelLabel,
   type ReloadReport,
   type ShellMode,
@@ -252,7 +253,8 @@ export default defineExtension((api: ExtensionAPI) => {
     async run(_args, ctx) {
       const info = ctx.session.info()
       const ws = await workspaceOf(info.id, ctx.signal)
-      const rows = costByModel(ctx.session.replies())
+      const messages = ctx.session.replies()
+      const rows = costByModel(messages)
       const provider = ctx.session.providers().find((p) => p.id === info.model.provider)
       const git = !ws
         ? "unknown"
@@ -262,7 +264,8 @@ export default defineExtension((api: ExtensionAPI) => {
       // This session's own replies, and with its sub-agents' (the status bar shows the latter,
       // as spent since this run started). Both count earlier runs of a resumed session.
       // Compactions (the server's, or summaries the model wrote) count too, and are named.
-      const compacted = (ctx.session.compactions?.() ?? []).filter((c) => c.usage.cost !== undefined)
+      const compactions = ctx.session.compactions?.() ?? []
+      const compacted = compactions.filter((c) => c.usage.cost !== undefined)
       const compaction = compacted.length ? compacted.reduce((n, c) => n + (c.usage.cost ?? 0), 0) : undefined
       const priced = rows.filter((r) => r.cost !== undefined)
       const replies = priced.length ? priced.reduce((n, r) => n + (r.cost ?? 0), 0) : undefined
@@ -271,13 +274,18 @@ export default defineExtension((api: ExtensionAPI) => {
         replies !== undefined || compaction !== undefined || side
           ? (replies ?? 0) + (compaction ?? 0) + side
           : undefined
-      const subs = ctx.session.subagents().filter((s) => s.usage.cost !== undefined)
+      const subagents = ctx.session.subagents()
+      const subs = subagents.filter((s) => s.usage.cost !== undefined)
       const withSubs = subs.length
         ? (own ?? 0) + subs.reduce((n, s) => n + (s.usage.cost ?? 0), 0)
         : undefined
       const ofWhich = compaction !== undefined ? `; of which compaction ${formatCost(compaction)}` : ""
-      const cost =
-        withSubs !== undefined
+      const unpricedSearch =
+        messages.some(hasUnpricedSearch) ||
+        [...compactions, ...subagents].some((c) => hasUnpricedSearch({ content: [], usage: c.usage }))
+      const cost = unpricedSearch
+        ? "unknown (search cost unavailable)"
+        : withSubs !== undefined
           ? `${formatCost(withSubs)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${formatCost(own)}` : ""}${ofWhich}`
           : own !== undefined
             ? `${formatCost(own)} (this session; no sub-agents)${ofWhich}`

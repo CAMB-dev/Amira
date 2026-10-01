@@ -1,7 +1,7 @@
-import type { AssistantContent, Citation, ModelInfo, ServerToolBlock } from "./types.ts"
+import type { AssistantContent, Citation, ModelInfo, ServerToolBlock, StreamEvent } from "./types.ts"
 
 /** Dialects with a hosted web search the provider runs itself (ids spelled out: the dialects import this file). */
-const WEB_SEARCH_DIALECTS = new Set(["openai-responses"])
+const WEB_SEARCH_DIALECTS = new Set(["openai-responses", "anthropic-messages", "google-gemini"])
 
 /** The name a hosted web search goes by, in blocks and in frontends. */
 export const NATIVE_WEB_SEARCH = "web_search"
@@ -9,12 +9,24 @@ export const NATIVE_WEB_SEARCH = "web_search"
 /**
  * Whether requests for `model` offer the provider's hosted web search: its caps say so
  * (ProviderCompat.webSearch), it takes tools natively, and its dialect has one. The client
- * web_search tool is hidden from such a model.
+ * web_search tool is hidden from such a model. With function tools (the default, also used
+ * by tool hiding), Gemini must be a Gemini 3 model.
  */
-export function hasNativeWebSearch(model: Pick<ModelInfo, "dialect" | "caps">): boolean {
+export function hasNativeWebSearch(
+  model: Pick<ModelInfo, "dialect" | "caps"> & Partial<Pick<ModelInfo, "id">>,
+  functionTools = true,
+): boolean {
   return (
-    model.caps.webSearch === true && model.caps.tools === "native" && WEB_SEARCH_DIALECTS.has(model.dialect)
+    model.caps.webSearch === true &&
+    model.caps.tools === "native" &&
+    WEB_SEARCH_DIALECTS.has(model.dialect) &&
+    (model.dialect !== "google-gemini" || !functionTools || isGemini3(model.id ?? ""))
   )
+}
+
+/** Only Gemini 3 documents combining Google Search with function declarations. */
+export function isGemini3(id: string): boolean {
+  return /^(?:models\/)?gemini-3(?:[.-]|$)/.test(id)
 }
 
 /**
@@ -44,7 +56,30 @@ export function isOpenAIVendorUrl(baseUrl: string): boolean {
 
 /** Hosted web search's default for a provider without a setting: on at the vendor's own endpoints. */
 export function defaultWebSearch(dialect: string, baseUrl: string): boolean {
-  return WEB_SEARCH_DIALECTS.has(dialect) && isOpenAIVendorUrl(baseUrl)
+  if (dialect === "openai-responses") return isOpenAIVendorUrl(baseUrl)
+  let host: string
+  try {
+    host = new URL(baseUrl).hostname
+  } catch {
+    return false
+  }
+  if (dialect === "anthropic-messages") return host === "api.anthropic.com"
+  // This dialect builds Developer API URLs and does not implement Vertex authentication/routes.
+  return dialect === "google-gemini" && host === "generativelanguage.googleapis.com"
+}
+
+/** A UI snapshot never exposes opaque provider replay data. */
+export function serverToolSnapshot(block: ServerToolBlock): StreamEvent {
+  const { signature: _, ...rest } = block
+  return {
+    type: "serverTool",
+    block: {
+      ...rest,
+      input: { ...block.input },
+      ...(block.sources ? { sources: [...block.sources] } : {}),
+      ...(block.searchEntryPoint ? { searchEntryPoint: { ...block.searchEntryPoint } } : {}),
+    },
+  }
 }
 
 /**
@@ -55,7 +90,9 @@ export function serverToolText(b: ServerToolBlock): string {
   const what = describeServerTool(b)
   const sources = (b.sources ?? []).map((s) => `- ${s.title ? `${s.title}: ` : ""}${s.url}`)
   const status = b.status === "failed" ? " (failed)" : b.status === "running" ? " (did not finish)" : ""
-  return [`[${what}${status}]`, ...(sources.length ? ["Sources:", ...sources] : [])].join("\n")
+  const error =
+    b.status === "failed" && typeof b.input.error_code === "string" ? [`Error: ${b.input.error_code}`] : []
+  return [`[${what}${status}]`, ...error, ...(sources.length ? ["Sources:", ...sources] : [])].join("\n")
 }
 
 /** "Web search: \"node lts\"", "Web search opened https://…", for notes and frontends. */

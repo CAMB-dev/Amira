@@ -159,6 +159,8 @@ function usageOf(u: any): Usage | undefined {
     out.cacheRead += n(p.cache_read_input_tokens)
     out.cacheWrite += n(p.cache_creation_input_tokens)
   }
+  if (Number.isInteger(u.server_tool_use?.web_search_requests) && u.server_tool_use.web_search_requests >= 0)
+    out.webSearchRequests = u.server_tool_use.web_search_requests
   return out
 }
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { Message, ServerToolBlock } from "@amira/ai"
+import { type Message, type ServerToolBlock, serverToolText } from "@amira/ai"
 import type { ToolPresenter } from "@amira/api"
 import { defaultTheme, stripAnsi } from "@amira/tui-kit"
 import { historyLines } from "../src/history.ts"
@@ -29,6 +29,18 @@ test("a hosted search as a tool row: its queries, the page it opened, how it end
   })
   expect(serverToolCall({ ...search, status: "failed" }).result.isError).toBe(true)
   expect(serverToolCall({ ...search, status: "running" }).rejected).toBe("aborted")
+})
+
+test("a hosted search failure shows the provider's error code in the row and degradation note", () => {
+  const failed: ServerToolBlock = {
+    ...search,
+    status: "failed",
+    input: { query: "Bun", error_code: "max_uses_exceeded" },
+  }
+  const row = serverToolCall(failed)
+  expect(row.result.isError).toBe(true)
+  expect(row.result.content[0]).toMatchObject({ text: expect.stringContaining("Error: max_uses_exceeded") })
+  expect(serverToolText(failed)).toContain("Error: max_uses_exceeded")
 })
 
 // As the web extension's presenter shows these rows (its own tests cover it).

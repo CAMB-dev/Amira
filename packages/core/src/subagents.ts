@@ -7,6 +7,7 @@ import {
   type JSONSchema,
   type Message,
   type ModelInfo,
+  addUsage as sumUsage,
   type Usage,
   type UserMessage,
   unansweredCalls,
@@ -91,11 +92,10 @@ export function usageTokens(u: Usage): number {
 }
 
 function addUsage(to: Usage, u: Usage) {
-  to.input += u.input
-  to.output += u.output
-  to.cacheRead += u.cacheRead
-  to.cacheWrite += u.cacheWrite
-  if (u.cost !== undefined) to.cost = (to.cost ?? 0) + u.cost
+  const sum = sumUsage(to, u)
+  if (sum.cost === undefined) delete to.cost
+  if (sum.webSearchCost === undefined) delete to.webSearchCost
+  Object.assign(to, sum)
 }
 
 /** Why `used` is over `limit`, if it is. */

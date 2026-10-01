@@ -106,10 +106,10 @@ Set compatibility options under a provider's `compat` object:
 | `maxTokensField` | Chat output limit field: `max_tokens` by default, or `max_completion_tokens` |
 | `streamUsage` | Request usage in chat streams; defaults to `true` |
 | `thinking` | Anthropic thinking mode: `adaptive` by default, or `budget` for compatible servers that expect a token budget |
-| `webSearch` | Offer hosted web search for Responses models; a model's `caps.webSearch` takes precedence |
+| `webSearch` | Offer hosted web search (Responses, Anthropic Messages, Gemini); a model's `caps.webSearch` takes precedence |
 | `compaction` | Native compaction: `auto`, `on` or `off`; defaults to `auto` |
 
-Hosted web search is implemented for `openai-responses`. It defaults on for the OpenAI endpoint and URLs Amira recognizes as Azure OpenAI; it defaults off for other hosts. When active, Amira hides its client `web_search` tool from that model; `web_fetch` remains available. Set `web.nativeSearch` to `false` to use client search instead. This is separate from choosing a client search backend in the web settings.
+Hosted web search is implemented for `openai-responses`, `anthropic-messages` and `google-gemini`. It defaults on for the vendor endpoints: OpenAI and URLs Amira recognizes as Azure OpenAI, `api.anthropic.com`, and `generativelanguage.googleapis.com`; it defaults off for other hosts. Gemini combines Google Search with Amira's tools only on Gemini 3 models, so older Gemini models keep client search. When active, Amira hides its client `web_search` tool from that model; `web_fetch` remains available. Set `web.nativeSearch` to `false` to use client search instead. This is separate from choosing a client search backend in the web settings. Model catalogs list no search fees, so a reply that searched shows its cost as unknown unless the model's `cost.webSearch` (USD per search) is set.
 
 Native compaction is implemented for `openai-responses` and `anthropic-messages`. With `auto`, it is enabled only for their recognized vendor endpoints: OpenAI/Azure OpenAI and Anthropic respectively. Automatic compaction and plain `/compact` try it first and fall back to a text summary if it fails. A configured `compact.model` or instructions supplied to `/compact` request a text summary instead.
 
