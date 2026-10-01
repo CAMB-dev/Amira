@@ -49,7 +49,14 @@ import {
   type ToolSession,
   type TurnEndReason,
 } from "@amira/api"
-import { ArtifactStore, artifactDir } from "./artifacts.ts"
+import {
+  type ArtifactScope,
+  ArtifactStore,
+  type ArtifactUsage,
+  artifactDir,
+  artifactIdsIn,
+  referencedArtifacts,
+} from "./artifacts.ts"
 import {
   type CompactionOptions,
   checkpointOf,
@@ -834,6 +841,48 @@ export class Agent {
    */
   projectedMessages(): Message[] {
     return projectMessages(this.messages, this.#views)
+  }
+
+  /**
+   * This session's artifacts by how they are referenced: "active" ones the context the model
+   * sees mentions, "inactive" ones only history it no longer sees mentions (compacted, rewound
+   * away, a sub-agent's), "unused" ones nothing mentions.
+   */
+  artifactUsage(): ArtifactUsage {
+    const active = new Set<string>()
+    for (const m of [...this.messages, ...this.projectedMessages()]) {
+      for (const b of m.content) {
+        if (b.type === "text") for (const id of artifactIdsIn(b.text)) active.add(id)
+        else if (b.type === "toolCall") for (const id of artifactIdsIn(JSON.stringify(b.args))) active.add(id)
+      }
+    }
+    const referenced = this.session ? referencedArtifacts(this.session) : new Set(active)
+    const out: ArtifactUsage = { active: [], inactive: [], unused: [], pruned: [], bytes: 0 }
+    for (const a of this.artifacts.list()) {
+      if (a.pruned) out.pruned.push(a)
+      else {
+        out.bytes += a.bytes
+        if (active.has(a.id)) out.active.push(a)
+        else if (referenced.has(a.id)) out.inactive.push(a)
+        else out.unused.push(a)
+      }
+    }
+    return out
+  }
+
+  /**
+   * Deletes artifacts on request (/prune): "unused" ones, "inactive" ones too, or "all".
+   * Their metadata stays, so reading one says it was pruned.
+   */
+  async pruneArtifacts(scope: ArtifactScope): Promise<{ removed: number; bytes: number }> {
+    const usage = this.artifactUsage()
+    const pick =
+      scope === "unused"
+        ? usage.unused
+        : scope === "inactive"
+          ? [...usage.unused, ...usage.inactive]
+          : [...usage.unused, ...usage.inactive, ...usage.active]
+    return this.artifacts.prune(pick.map((a) => a.id))
   }
 
   /** Most tool calls this agent runs at once. */

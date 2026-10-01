@@ -164,6 +164,7 @@ test("every built-in command is registered with a description", async () => {
     "help",
     "model",
     "provider",
+    "prune",
     "quit",
     "reload",
     "resume",
@@ -423,6 +424,40 @@ test("/compact passes its instructions; the compact events report the outcome", 
   expect((await run("/compact keep the API notes")).text).toBe("")
   await run("/compact")
   expect(calls).toEqual(["compact keep the API notes", "compact "])
+})
+
+test("/prune reports artifacts by reference and deletes only the scope asked for", async () => {
+  const pruned: string[] = []
+  const { run, host } = await setup({
+    artifacts: {
+      usage: () => ({
+        active: 3,
+        inactive: 2,
+        unused: 1,
+        pruned: 0,
+        bytes: 3 * 1024 * 1024,
+        quotaBytes: 256 * 1024 * 1024,
+        dir: "/s/x.assets/outputs",
+      }),
+      prune: async (scope) => {
+        pruned.push(scope)
+        return { removed: scope === "unused" ? 1 : 0, bytes: 1024 * 1024 }
+      },
+    },
+  })
+  const report = (await run("/prune")).text
+  expect(report).toContain("3.0 MB of the 256 MB quota in /s/x.assets/outputs")
+  expect(report).toMatch(/Active\s+3/)
+  expect(report).toMatch(/Unused\s+1/)
+  // Showing deletes nothing.
+  expect(pruned).toEqual([])
+  expect((await run("/prune unused")).text).toBe("Deleted 1 artifact (1.0 MB). Reading one now says it was pruned.")
+  expect((await run("/prune inactive")).text).toBe("Nothing to delete.")
+  expect((await run("/prune everything")).error).toBe("usage: /prune [unused|inactive|all]")
+  expect(pruned).toEqual(["unused", "inactive"])
+  expect((await host.complete("/prune ")).candidates.map((c) => c.value)).toEqual(["unused", "inactive", "all"])
+  const none = await setup()
+  expect((await none.run("/prune")).error).toBe("this session keeps no artifacts")
 })
 
 test("/shell shows and sets the mode; /tools lists, disables and enables tools", async () => {

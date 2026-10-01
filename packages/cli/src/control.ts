@@ -260,6 +260,26 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       },
     }),
     preview: () => agent().preview(),
+    artifacts: {
+      usage: () => {
+        const a = agent()
+        const u = a.artifactUsage()
+        return {
+          active: u.active.length,
+          inactive: u.inactive.length,
+          unused: u.unused.length,
+          pruned: u.pruned.length,
+          bytes: u.bytes,
+          quotaBytes: a.artifacts.quotaBytes,
+          dir: a.artifacts.dir,
+        }
+      },
+      prune: async (scope) => {
+        // Pruning what the running turn may be reading waits until it ends.
+        if (scope !== "unused") idle("prune artifacts the conversation still mentions")
+        return agent().pruneArtifacts(scope)
+      },
+    },
     reloadExtensions: async () => {
       // Unloading drops tools and MCP connections a running tool call may still be using.
       idle("reload extensions")

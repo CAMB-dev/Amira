@@ -352,6 +352,8 @@ export interface SessionControl {
    * summarized. Unset where the host keeps no session file.
    */
   readonly rewind?: (index: number) => Promise<void>
+  /** This session's saved tool outputs (artifacts) and /prune; unset where the host keeps none. */
+  readonly artifacts?: ArtifactControl
   /** Summarizes older history now; `instructions` steer the summary. Resolves false when nothing was compacted. */
   compact(instructions?: string): Promise<boolean>
   /**
@@ -376,6 +378,25 @@ export interface SessionControl {
    * what changed where the host can tell.
    */
   reloadExtensions(): Promise<ReloadReport | undefined>
+}
+
+/**
+ * A session's artifacts: large tool outputs saved whole. "active" ones are mentioned by the
+ * context the model sees, "inactive" ones only by history it no longer sees (compacted, rewound
+ * away, a sub-agent's), "unused" ones by nothing.
+ */
+export interface ArtifactControl {
+  usage(): {
+    active: number
+    inactive: number
+    unused: number
+    pruned: number
+    bytes: number
+    quotaBytes: number
+    dir: string
+  }
+  /** Deletes the artifacts of a scope (and the narrower ones); resolves what was freed. */
+  prune(scope: "unused" | "inactive" | "all"): Promise<{ removed: number; bytes: number }>
 }
 
 /** What /reload changed: extensions (by source) that came or went, and ones that failed. */

@@ -208,3 +208,61 @@ export class ArtifactStore implements OutputStore {
 export function artifactIdsIn(text: string): string[] {
   return [...text.matchAll(/\ba_[0-9a-f]{10}\b/g)].map((m) => m[0])
 }
+
+/** Which artifacts /prune deletes: unreferenced ones, those and ones only old history mentions, or all. */
+export type ArtifactScope = "unused" | "inactive" | "all"
+
+/** A session's artifacts by how they are referenced (Agent.artifactUsage). */
+export interface ArtifactUsage {
+  active: ArtifactInfo[]
+  inactive: ArtifactInfo[]
+  unused: ArtifactInfo[]
+  pruned: ArtifactInfo[]
+  /** Bytes of the artifacts not pruned. */
+  bytes: number
+}
+
+/**
+ * Every artifact id a session file mentions, on any branch, and the files of its sub-agents
+ * (which may be pointed at their parent's artifacts), at any depth.
+ */
+export function referencedArtifacts(session: { file: string; entries: readonly object[] }): Set<string> {
+  const out = new Set<string>()
+  const seen = new Set<string>()
+  const scan = (file: string, entries: readonly object[]) => {
+    if (seen.has(file)) return
+    seen.add(file)
+    for (const e of entries) {
+      for (const id of artifactIdsIn(JSON.stringify(e))) out.add(id)
+      const child = (e as { type?: unknown; childSessionId?: unknown }).childSessionId
+      if (
+        (e as { type?: unknown }).type === "subagent" &&
+        typeof child === "string" &&
+        /^[\w-]+$/.test(child)
+      ) {
+        const childFile = path.join(path.dirname(file), "subagents", `${child}.jsonl`)
+        scan(childFile, readEntries(childFile))
+      }
+    }
+  }
+  scan(session.file, session.entries)
+  return out
+}
+
+/** A session file's lines that parse, for scanning; none when it cannot be read. */
+function readEntries(file: string): object[] {
+  let text: string
+  try {
+    text = readFileSync(file, "utf8")
+  } catch {
+    return []
+  }
+  return text.split("\n").flatMap((line) => {
+    try {
+      const v = JSON.parse(line) as unknown
+      return v && typeof v === "object" ? [v] : []
+    } catch {
+      return []
+    }
+  })
+}
