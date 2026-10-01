@@ -2138,6 +2138,39 @@ test("Esc twice opens the rewind picker; the message picked is cut off and back 
   await exited
 })
 
+test("a command opens the same rewind picker through openRewind", async () => {
+  const rewound: number[] = []
+  const { terminal, live, agent, shows, idle, exited } = await setup([{ text: "an answer" }], {
+    commands: [
+      {
+        name: "rewind",
+        description: "Rewind",
+        run: (_args, ctx) => {
+          if (!ctx.openRewind?.()) throw new Error("no picker")
+        },
+      },
+    ],
+    control: {
+      rewind: async (index: number) => {
+        rewound.push(index)
+        agent.messages.splice(index)
+      },
+    },
+  })
+  terminal.send("a question\r")
+  await shows("an answer")
+  await idle()
+  terminal.send("/rewind\r")
+  await waitFor(() => live().includes("? Rewind the conversation"), "the picker")
+  terminal.send("\r")
+  await shows("Files were not restored")
+  expect(rewound).toEqual([0])
+  expect(live()).toContain("› a question")
+  terminal.send("\x03")
+  terminal.send("\x03")
+  await exited
+})
+
 const subagentNotice = (text: string) =>
   userMessage(`report: ${text}`, { text: `◆ explorer finished · 41s · 12.3k tok`, origin: "subagent" })
 

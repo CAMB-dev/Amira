@@ -1,62 +1,6 @@
-import {
-  type AssistantContent,
-  type Citation,
-  describeServerTool,
-  messageCitations,
-  type ServerToolBlock,
-} from "@amira/ai"
-import type { ToolResult, WebSearchDetails } from "@amira/api"
+import { type AssistantContent, type Citation, messageCitations } from "@amira/ai"
 
-/** The backend a hosted web search row names in its details. */
-export const PROVIDER_SEARCH = "provider search"
-
-/**
- * A tool the provider ran (its hosted web search) as a tool row shows it: under its name, with
- * what it searched or opened as the arguments and the sources as the result. `rejected` is
- * set for one that never finished.
- */
-export function serverToolCall(b: ServerToolBlock): {
-  name: string
-  args: Record<string, unknown>
-  result: ToolResult
-  rejected?: "aborted"
-} {
-  const input = b.input
-  const str = (k: string) => (typeof input[k] === "string" ? (input[k] as string) : "")
-  const queries = Array.isArray(input.queries)
-    ? input.queries.filter((q): q is string => typeof q === "string" && q !== "")
-    : []
-  const query = queries.length ? queries.join(" · ") : str("query")
-  const args: Record<string, unknown> =
-    input.type === "open_page" || input.type === "find_in_page"
-      ? { url: str("url"), ...(str("pattern") ? { pattern: str("pattern") } : {}) }
-      : query
-        ? { query }
-        : {}
-  const sources = b.sources ?? []
-  const details: WebSearchDetails & { native: true } = {
-    backend: PROVIDER_SEARCH,
-    results: sources.map((s) => ({ title: s.title ?? s.url, url: s.url })),
-    failures: [],
-    native: true,
-  }
-  const error = b.status === "failed" && str("error_code") ? [`Error: ${str("error_code")}`] : []
-  const text = [
-    describeServerTool(b),
-    ...error,
-    ...sources.map((s) => `${s.title ? `${s.title} ` : ""}${s.url}`),
-  ].join("\n")
-  return {
-    name: b.name,
-    args,
-    result: {
-      content: [{ type: "text", text }],
-      details,
-      ...(b.status === "failed" ? { isError: true } : {}),
-    },
-    ...(b.status === "running" ? { rejected: "aborted" as const } : {}),
-  }
-}
+export { serverToolView as serverToolCall } from "@amira/api"
 
 /** Link text in Markdown: brackets and backslashes escaped, on one line. */
 function linkText(s: string): string {

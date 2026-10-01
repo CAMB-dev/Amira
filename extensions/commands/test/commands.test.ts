@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
-import type { AssistantMessage, SessionControl, SessionInfo } from "@amira/api"
+import type { AssistantMessage, EventMap, SessionControl, SessionInfo, UserMessage } from "@amira/api"
 import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import commandsExtension, {
   ago,
@@ -138,9 +138,11 @@ async function setup(
   })
   // Dialogs answer from the list, in order; undefined is "cancelled".
   const asked: string[] = []
+  const requests: EventMap["ui.request"][] = []
   bus.subscribe(
     (e) => {
       if (e.type !== "ui.request") return
+      requests.push(e.data)
       asked.push(e.data.kind === "select" ? `${e.data.title}: ${e.data.options.join(" | ")}` : e.data.title)
       const a = answers.shift()
       if (a === undefined) ext.ui.cancel(e.data.requestId)
@@ -148,11 +150,11 @@ async function setup(
     },
     { types: ["ui.request"] },
   )
-  const run = async (line: string) => {
-    const r = await host.run(line, { frontend: "tui" })
+  const run = async (line: string, frontend: "tui" | "rpc" | "print" = "tui") => {
+    const r = await host.run(line, { frontend })
     return { ...r, text: r.output.join("\n") }
   }
-  return { host, run, calls, asked, bus, ext }
+  return { host, run, calls, asked, requests, bus, ext }
 }
 
 test("every built-in command is registered with a description", async () => {
@@ -173,12 +175,90 @@ test("every built-in command is registered with a description", async () => {
     "reload",
     "rename",
     "resume",
+    "rewind",
     "rewind-prune",
     "shell",
     "status",
     "tools",
   ])
   expect(host.list().every((c) => c.description.length > 0)).toBe(true)
+})
+
+test("/rewind opens the frontend's rewind picker, and needs one", async () => {
+  const messages: UserMessage[] = [{ role: "user", content: [{ type: "text", text: "a request" }] }]
+  const rewinds: number[] = []
+  const { host, requests } = await setup({
+    messages: () => messages,
+    rewind: async (i) => void rewinds.push(i),
+  })
+  let opened = 0
+  const shown = await host.run("/rewind", { frontend: "tui", openRewind: () => ++opened > 0 })
+  expect(shown.ok).toBe(true)
+  expect(opened).toBe(1)
+  // The picker itself is the frontend's: the command asks nothing and rewinds nothing.
+  expect(requests).toEqual([])
+  expect(rewinds).toEqual([])
+
+  const busy = await host.run("/rewind", { frontend: "tui", openRewind: () => false })
+  expect(busy.ok).toBe(false)
+  expect(busy.error).toContain("Cannot open the rewind picker now")
+  const rpc = await host.run("/rewind", { frontend: "rpc" })
+  expect(rpc.ok).toBe(false)
+  expect(rpc.error).toContain("/rewind <n> [--yes]")
+  expect(rewinds).toEqual([])
+})
+
+test("/rewind n confirms its plan, and --yes is required without a responder", async () => {
+  const messages: UserMessage[] = [
+    { role: "user", content: [{ type: "text", text: "older" }] },
+    { role: "user", content: [{ type: "text", text: "newer" }] },
+  ]
+  const rewinds: { index: number; restoreFiles?: boolean }[] = []
+  let plan = {
+    owner: "core",
+    enabled: true,
+    restored: 3,
+    removed: 1,
+    conflicts: ["/work/stale"],
+    note: "Resolve conflicts before restoring.",
+  }
+  const control: Partial<SessionControl> = {
+    messages: () => messages,
+    planRewind: () => plan,
+    rewind: async (index, options) => void rewinds.push({ index, ...options }),
+  }
+  const interactive = await setup(control, [true, false])
+  expect((await interactive.run("/rewind 2")).text).toContain("2nd most recent")
+  expect(rewinds).toEqual([{ index: 0, restoreFiles: true }])
+  expect(interactive.requests[0]).toMatchObject({
+    kind: "confirm",
+    title: "Rewind to before the 2nd most recent user message?",
+  })
+  const preview = (interactive.requests[0] as Extract<EventMap["ui.request"], { kind: "confirm" }>).message
+  expect(preview).toContain("Message: older")
+  expect(preview).toContain("This removes 2 messages")
+  expect(preview).toContain("Files: 3 restored, 1 removed.")
+  expect(preview).toContain("refused until they are resolved")
+  expect(preview).toContain("/work/stale")
+  // Declined: nothing changes.
+  expect((await interactive.run("/rewind 1")).text).toContain("Rewind cancelled.")
+  expect(rewinds).toHaveLength(1)
+
+  const headless = await setup(control)
+  expect((await headless.run("/rewind 1", "print")).error).toContain("--yes")
+  expect(rewinds).toHaveLength(1)
+  // Nothing captured to restore: conversation only, as the picker would default to.
+  plan = { ...plan, restored: 0, removed: 0, conflicts: [] }
+  const yes = await headless.run("/rewind 1 --yes", "print")
+  expect(yes.ok).toBe(true)
+  expect(yes.text).toContain("Files were not restored.")
+  expect(rewinds.at(-1)).toEqual({ index: 1, restoreFiles: false })
+  expect(headless.requests).toEqual([])
+
+  for (const bad of ["/rewind 0", "/rewind two", "/rewind 1 --force", "/rewind --yes"])
+    expect((await headless.run(bad, "print")).error).toContain("Usage: /rewind <n> [--yes]")
+  expect((await headless.run("/rewind 3 --yes", "print")).error).toContain("only 2 user messages")
+  expect(rewinds).toHaveLength(2)
 })
 
 test("/help lists every command with its argument hint", async () => {

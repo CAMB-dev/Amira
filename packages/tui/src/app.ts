@@ -1201,7 +1201,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           flush = undefined
           if (rewind) {
             putBack(next)
-            queueMicrotask(openRewind)
+            queueMicrotask(() => void openRewind())
           } else if (next.length) {
             // Wait out the rest of a double press: a second Esc still means rewind.
             const wait = Math.max(0, DOUBLE_ESC_MS - (Date.now() - lastInterruptAt))
@@ -1528,7 +1528,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const abort = new AbortController()
     commandAborts.set(abort, commands!.commandName(line))
     void commands!
-      .run(line, { frontend: "tui", quit: () => quit(), openView, keys: keyHelp, signal: abort.signal })
+      .run(line, {
+        frontend: "tui",
+        quit: () => quit(),
+        openView,
+        openRewind,
+        keys: keyHelp,
+        signal: abort.signal,
+      })
       .finally(() => commandAborts.delete(abort))
       .then(() => view.requestRender())
   }
@@ -1689,16 +1696,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * back to just before it and puts it in the editor to change and send again. The second
    * choice previews file restoration, including the host's coverage and conflicts.
    */
-  function openRewind() {
+  function openRewind(): boolean {
     const control = commands?.control
-    if (!control?.rewind || working || dialogs.some((d) => d.request.requestId.startsWith(REWIND_ID))) return
+    if (
+      !control?.rewind ||
+      working ||
+      compacting ||
+      dialogs.some((d) => d.request.requestId.startsWith(REWIND_ID))
+    )
+      return false
     const picks = agent.messages
       .map((m, index) => ({ m, index }))
       .filter((p): p is { m: UserMessage; index: number } => p.m.role === "user" && !p.m.display?.origin)
       .reverse()
     if (!picks.length) {
       showNote("Nothing to rewind to yet")
-      return
+      return true
     }
     const labels = picks.map((p, i) => `${i + 1}. ${oneLine(messageText(p.m))}`)
     const request: Extract<DialogRequest, { kind: "select" }> = {
@@ -1733,6 +1746,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     )
     dialogs.unshift(dialog)
     view.requestRender()
+    return true
   }
 
   function chooseFileRewind(control: SessionControl, pick: { m: UserMessage; index: number }) {
