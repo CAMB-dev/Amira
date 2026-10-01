@@ -3,64 +3,55 @@ import path from "node:path"
 import {
   type Ai,
   type AssistantMessage,
-  emptyUsage,
-  type JSONSchema,
   type Message,
   type ModelInfo,
-  addUsage as sumUsage,
   type Usage,
   type UserMessage,
-  unansweredCalls,
   userMessage,
 } from "@amira/ai"
 import {
   type AnyEvent,
   type ApprovalRequest,
-  type AskAnswer,
   type AskOutcome,
-  type AskQuestion,
   type AskRequest,
   type Budget,
   type ChildSession,
   type ChildState,
   fallbackTitle,
   MAX_TITLE_CHARS,
-  type PendingNotice,
   RETURN_RESULT_TOOL,
   type SpawnContext,
   type SpawnGroup,
   type SpawnGroupInfo,
   type SpawnGroupOptions,
-  type SpawnGroupState,
   type SpawnOptions,
   type SubagentInfo,
   type SubagentResult,
   type SubagentStatus,
-  type ToolDefinition,
-  textResult,
 } from "@amira/api"
 import { Agent, type ApprovalDecision, type TurnResult } from "./agent.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions } from "./context.ts"
-import type { EmitMeta } from "./event-bus.ts"
 import { instructionsSection, loadInstructions } from "./instructions.ts"
-import { validateValue } from "./json-schema.ts"
 import { addNonInteractive, defaultSections, type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { SessionStore } from "./session-store.ts"
+import { addUsage, BudgetLedger, overBudget, usageTokens } from "./subagents/budget.ts"
+import { Child, Group, type SpawnedSubagent } from "./subagents/child.ts"
+import { askParentPrompt, parseParentAnswers } from "./subagents/consult-parent.ts"
+import { metaOf, parentMeta } from "./subagents/events.ts"
+import { finalText, forkHistory } from "./subagents/fork.ts"
+import {
+  checkResult,
+  isObjectSchema,
+  type ResultSpec,
+  resultInstructions,
+  resultReminder,
+  returnResultTool,
+} from "./subagents/structured-result.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 
-/**
- * A sub-agent a tree started, as `AgentTree.subagent` gives it. A running one comes with its
- * live conversation and session; a finished one keeps its session's file, or, without one,
- * a copy of its conversation.
- */
-export interface SpawnedSubagent {
-  info: SubagentInfo
-  /** The live array while it runs; copy it to keep a snapshot. */
-  messages?: readonly Message[]
-  session?: SessionStore
-  file?: string
-}
+export type { SpawnedSubagent }
+export { forkHistory, parseParentAnswers, usageTokens }
 
 /** spawn refused: too deep, budget spent, a group's limit reached or an unknown model. */
 export class SpawnError extends Error {}
@@ -89,255 +80,20 @@ export interface AgentTreeOptions {
   maxParallelTools?: number
 }
 
-/** All tokens a reply used, cache included: what a token budget counts. */
-export function usageTokens(u: Usage): number {
-  return u.input + u.output + u.cacheRead + u.cacheWrite
-}
-
-function addUsage(to: Usage, u: Usage) {
-  const sum = sumUsage(to, u)
-  if (sum.cost === undefined) delete to.cost
-  if (sum.webSearchCost === undefined) delete to.webSearchCost
-  Object.assign(to, sum)
-}
-
-/** Why `used` is over `limit`, if it is. */
-function overBudget(used: Usage, limit: Budget | undefined): string | undefined {
-  if (!limit) return undefined
-  const tokens = usageTokens(used)
-  if (limit.tokens !== undefined && tokens > limit.tokens)
-    return `${tokens} tokens used, limit ${limit.tokens}`
-  if (limit.costUsd !== undefined && used.cost !== undefined && used.cost > limit.costUsd) {
-    return `$${used.cost.toFixed(4)} spent, limit $${limit.costUsd}`
-  }
-  return undefined
-}
-
-/**
- * The parent's conversation as a child's starting point (context "fork"). The parent is in
- * the middle of a tool call, so calls without a result are dropped; an assistant message left
- * without content gets a placeholder so roles keep alternating for every provider.
- */
-export function forkHistory(messages: readonly Message[]): Message[] {
-  const unanswered = unansweredCalls(messages)
-  return messages.map((m) => {
-    if (m.role !== "assistant") return m
-    const content = m.content.filter((b) => b.type !== "toolCall" || !unanswered.has(b))
-    if (content.length === m.content.length) return m
-    const kept = content.some((b) => b.type === "text" && b.text.trim())
-    return {
-      ...m,
-      content: kept ? content : [...content, { type: "text", text: "(Delegating to sub-agents.)" }],
-    } as AssistantMessage
-  })
-}
-
-/** The text of the last assistant reply. */
-function finalText(messages: readonly Message[]): string {
-  const last = messages.findLast((m) => m.role === "assistant" && m.content.some((b) => b.type === "text"))
-  if (last?.role !== "assistant") return ""
-  return last.content
-    .flatMap((b) => (b.type === "text" ? [b.text] : []))
-    .join("")
-    .trim()
-}
-
-/** What a child spawned with a schema is asked for, and what it handed back so far. */
-interface ResultSpec {
-  schema: JSONSchema
-  /** The schema is not an object's: the tool takes it as `{ value }`. */
-  wrapped: boolean
-  /**
-   * Attempts that failed: a call whose value did not fit, or a turn that ended without any
-   * such call and without a valid result. One turn with a bad call counts once, not twice.
-   */
-  strikes: number
-  /** The turn running now already counted a call that did not fit. */
-  struck?: boolean
-  /** The last reason an attempt failed. */
-  problem?: string
-  returned?: { value: unknown }
-  /** No attempts are left. */
-  failed?: boolean
-}
-
-function isObjectSchema(schema: JSONSchema): boolean {
-  return schema.type === "object" || (schema.type === undefined && typeof schema.properties === "object")
-}
-
-class Child implements ChildSession {
-  readonly id: string
-  readonly parentSessionId: string
-  readonly depth: number
-  readonly cwd: string
-  readonly usage = emptyUsage()
-  state: ChildState = "queued"
-  turns = 0
-  /** Set once aborted: why. */
-  abortReason: string | undefined
-  /** Set once a persistent child was asked to end cleanly: why. */
-  stopReason: string | undefined
-  /** Why it ended early without failing, e.g. its turn limit. */
-  note: string | undefined
-  /** Given a place to run (it starts a microtask later). */
-  admitted = false
-  started = false
-  /** When its turn started, in ms since the epoch. */
-  startedAt: number | undefined
-  /** Set once it ended. */
-  ended: SubagentResult | undefined
-  /** Ends the wait it is in (idle, or queued for its next turn), for a stop or an abort. */
-  waiting: (() => void) | undefined
-  result$: ResultSpec | undefined
-  #result: Promise<SubagentResult>
-  settle!: (r: SubagentResult) => void
-
-  constructor(
-    readonly agent: Agent,
-    readonly role: string | undefined,
-    readonly title: string,
-    readonly toolCallId: string | undefined,
-    readonly prompt: string,
-    readonly context: SpawnContext,
-    /** Who its subagent.end is sent as: its parent, with the grandparent if there is one. */
-    readonly parentMeta: EmitMeta,
-    private tree: AgentTree,
-    readonly persistent: boolean,
-    readonly maxTurns: number | undefined,
-    /** Its own group first, then the groups that one is part of. */
-    readonly groups: Group[],
-  ) {
-    this.id = agent.sessionId
-    this.parentSessionId = agent.parentSessionId!
-    this.depth = agent.depth
-    this.cwd = agent.cwd
-    this.#result = new Promise((resolve) => {
-      this.settle = resolve
-    })
-  }
-
-  get model() {
-    return { provider: this.agent.model.provider, model: this.agent.model.id }
-  }
-
-  get groupId(): string | undefined {
-    return this.groups[0]?.id
-  }
-
-  get pendingNotices(): number {
-    if (this.ended) return 0
-    return this.agent.expectedNotices + this.agent.waitingNotices
-  }
-
-  get events(): AsyncIterable<AnyEvent> {
-    return this.tree.eventsOf(this)
-  }
-
-  result(): Promise<SubagentResult> {
-    return this.#result
-  }
-
-  abort(reason = "aborted by its parent"): void {
-    this.tree.abortChild(this, reason)
-  }
-
-  stop(reason = "stopped"): void {
-    this.tree.stopChild(this, reason)
-  }
-
-  send(message: string | UserMessage): boolean {
-    if (!this.persistent || this.ended || this.stopReason || this.abortReason) return false
-    this.agent.expectNotice().deliver(typeof message === "string" ? userMessage(message) : message)
-    return true
-  }
-
-  expectNotice(): PendingNotice {
-    if (!this.persistent) throw new Error("only a persistent sub-agent can be sent messages")
-    return this.agent.expectNotice()
-  }
-}
-
-/** A spawn group (SpawnGroup): limits and usage of the children started through it. */
-class Group implements SpawnGroup {
-  readonly id = `g_${crypto.randomUUID().slice(0, 8)}`
-  readonly usage = emptyUsage()
-  state: SpawnGroupState = "active"
-  /** Children started in all. */
-  total = 0
-  /** Its children (and theirs) that have not ended. */
-  readonly live = new Set<Child>()
-  endReason: string | undefined
-  exceeded = false
-  /** The owner's line about what the group is doing (setStatus). */
-  status: string | undefined
-  #ended: Promise<SpawnGroupInfo>
-  settle!: (info: SpawnGroupInfo) => void
-
-  constructor(
-    readonly name: string,
-    readonly parent: Agent,
-    /** The group the creating session belongs to: this one's children count against it too. */
-    readonly outer: Group | undefined,
-    readonly limits: Omit<SpawnGroupOptions, "name" | "compact">,
-    readonly compact: boolean,
-    private tree: AgentTree,
-    /** Set on the children it spawns, e.g. the tool call that created the group. */
-    private defaults: { toolCallId?: string },
-  ) {
-    this.#ended = new Promise((resolve) => {
-      this.settle = resolve
-    })
-  }
-
-  /** This group and the groups it is part of. */
-  get chain(): Group[] {
-    const out: Group[] = []
-    for (let g: Group | undefined = this; g; g = g.outer) out.push(g)
-    return out
-  }
-
-  spawn(opts: SpawnOptions): ChildSession {
-    const toolCallId = opts.toolCallId ?? this.defaults.toolCallId
-    return this.tree.spawn(this.parent, { ...opts, ...(toolCallId ? { toolCallId } : {}) }, this)
-  }
-
-  info(): SpawnGroupInfo {
-    const agents = { total: this.total, queued: 0, working: 0, idle: 0, ended: this.total - this.live.size }
-    for (const c of this.live) agents[c.state]++
-    return {
-      id: this.id,
-      name: this.name,
-      parentSessionId: this.parent.sessionId,
-      state: this.state,
-      limits: structuredClone(this.limits),
-      ...(this.compact ? { compact: true } : {}),
-      ...(this.status ? { status: this.status } : {}),
-      usage: { ...this.usage },
-      tokens: usageTokens(this.usage),
-      agents,
-      ...(this.endReason !== undefined ? { endReason: this.endReason } : {}),
-      ...(this.exceeded ? { exceeded: true } : {}),
-    }
-  }
-
-  setStatus(text: string): void {
-    const line = text.replace(/\s+/g, " ").trim() || undefined
-    if (line === this.status || this.state === "ended") return
-    this.status = line
-    this.parent.bus.emit("group.update", { group: this.info() }, metaOf(this.parent))
-  }
-
-  children(): ChildSession[] {
-    return [...this.live]
-  }
-
-  end(reason = "ended by its owner"): void {
-    this.tree.endGroup(this, reason)
-  }
-
-  ended(): Promise<SpawnGroupInfo> {
-    return this.#ended
-  }
+interface SpawnSetup {
+  depth: number
+  model: ModelInfo
+  cwd: string
+  context: SpawnContext
+  persistent: boolean
+  groups: Group[]
+  base: PromptSection[]
+  extra: NonNullable<SpawnOptions["extraTools"]>
+  allow: Set<string> | undefined
+  deny: Set<string>
+  spec: ResultSpec | undefined
+  store: SessionStore | undefined
+  maxTurns: number | undefined
 }
 
 /**
@@ -352,9 +108,7 @@ export class AgentTree {
   readonly budget: Budget | undefined
   readonly resultRetries: number
   #opts: AgentTreeOptions
-  #total = emptyUsage()
-  /** Why the budget is spent, once it is. */
-  #exceeded: string | undefined
+  #ledger: BudgetLedger
   #live = new Map<string, Child>()
   /** Every child this tree started, finished ones too, in spawn order. */
   #spawned = new Map<string, Child | SpawnedSubagent>()
@@ -375,12 +129,13 @@ export class AgentTree {
     this.maxDepth = Math.max(0, opts.maxDepth ?? 2)
     this.maxConcurrent = Math.max(1, opts.maxConcurrent ?? 4)
     this.budget = opts.budget
+    this.#ledger = new BudgetLedger(opts.budget)
     this.resultRetries = Math.max(0, opts.resultRetries ?? 2)
   }
 
   /** What the whole tree has used so far. */
   get usage(): Readonly<Usage> {
-    return this.#total
+    return this.#ledger.usage
   }
 
   /** Children that are queued, running or idle, oldest first. */
@@ -449,7 +204,8 @@ export class AgentTree {
    * is cut down to that; a parent that is itself in a group makes the new one part of it.
    */
   createGroup(parent: Agent, opts: SpawnGroupOptions, defaults: { toolCallId?: string } = {}): SpawnGroup {
-    if (this.#exceeded) throw new SpawnError(`the agent tree's budget is spent (${this.#exceeded})`)
+    if (this.#ledger.exceeded)
+      throw new SpawnError(`the agent tree's budget is spent (${this.#ledger.exceeded})`)
     const outer = this.#live.get(parent.sessionId)?.groups[0]
     if (outer && outer.state !== "active") throw new SpawnError(`the group "${outer.name}" has ended`)
     const limits: Omit<SpawnGroupOptions, "name" | "compact"> = {}
@@ -468,22 +224,21 @@ export class AgentTree {
 
   /** A group's budget within what the tree has left. */
   #carve(asked: Budget | undefined): Budget | undefined {
-    if (!asked) return undefined
-    const out: Budget = {}
-    const limit = this.budget
-    if (asked.tokens !== undefined) {
-      const left = limit?.tokens !== undefined ? limit.tokens - usageTokens(this.#total) : Infinity
-      out.tokens = Math.max(0, Math.min(asked.tokens, left))
-    }
-    if (asked.costUsd !== undefined) {
-      const left = limit?.costUsd !== undefined ? limit.costUsd - (this.#total.cost ?? 0) : Infinity
-      out.costUsd = Math.max(0, Math.min(asked.costUsd, left))
-    }
-    return out
+    return this.#ledger.carve(asked)
   }
 
   spawn(parent: Agent, opts: SpawnOptions, group?: Group): ChildSession {
-    if (this.#exceeded) throw new SpawnError(`the agent tree's budget is spent (${this.#exceeded})`)
+    const setup = this.#validateSpawn(parent, opts, group)
+    // Set once the child exists; the agent's callbacks only run after that.
+    let child!: Child
+    const agent = this.#createAgent(parent, opts, setup, () => child)
+    child = this.#registerSpawn(parent, opts, setup, agent)
+    return child
+  }
+
+  #validateSpawn(parent: Agent, opts: SpawnOptions, group: Group | undefined): SpawnSetup {
+    if (this.#ledger.exceeded)
+      throw new SpawnError(`the agent tree's budget is spent (${this.#ledger.exceeded})`)
     const depth = parent.depth + 1
     if (depth > this.maxDepth) {
       throw new SpawnError(
@@ -545,9 +300,12 @@ export class AgentTree {
       (n): n is number => n !== undefined,
     )
     const maxTurns = persistent && turnLimits.length ? Math.max(1, Math.min(...turnLimits)) : undefined
-    // Set once the child exists; the agent's callbacks only run after that.
-    let child!: Child
-    const agent = new Agent({
+    return { depth, model, cwd, context, persistent, groups, base, extra, allow, deny, spec, store, maxTurns }
+  }
+
+  #createAgent(parent: Agent, opts: SpawnOptions, setup: SpawnSetup, getChild: () => Child): Agent {
+    const { depth, model, cwd, context, persistent, base, extra, allow, deny, spec, store } = setup
+    return new Agent({
       ai: this.#opts.ai,
       model,
       cwd,
@@ -594,12 +352,17 @@ export class AgentTree {
         ? {
             // Only an idle child is woken: a queued one waits for its place as it is.
             onIdleNotice: () => {
+              const child = getChild()
               if (child.state === "idle") child.waiting?.()
             },
           }
         : {}),
-      ...(spec ? { endTurn: () => this.#checkResult(child, spec) } : {}),
+      ...(spec ? { endTurn: () => checkResult(getChild().agent.messages, spec, this.resultRetries) } : {}),
     })
+  }
+
+  #registerSpawn(parent: Agent, opts: SpawnOptions, setup: SpawnSetup, agent: Agent): Child {
+    const { depth, cwd, context, persistent, groups, spec, maxTurns } = setup
     const given = opts.title?.replace(/\s+/g, " ").trim()
     const title = !given
       ? fallbackTitle(opts.prompt)
@@ -607,7 +370,7 @@ export class AgentTree {
         ? `${given.slice(0, MAX_TITLE_CHARS - 1)}…`
         : given
     parent.recordSubagent(agent.sessionId, opts.role, title)
-    child = new Child(
+    const child = new Child(
       agent,
       opts.role,
       title,
@@ -689,11 +452,11 @@ export class AgentTree {
 
   /** Adds a reply's usage to the tree and its groups, reports it, and stops what went over budget. */
   recordUsage(agent: Agent, usage: Usage): void {
-    addUsage(this.#total, usage)
+    this.#ledger.add(usage)
     const child = this.#live.get(agent.sessionId)
     if (child) addUsage(child.usage, usage)
-    const tokens = usageTokens(this.#total)
-    const costUsd = this.#total.cost
+    const tokens = usageTokens(this.#ledger.usage)
+    const costUsd = this.#ledger.usage.cost
     const limit = this.budget
     agent.bus.emit(
       "budget.update",
@@ -709,10 +472,10 @@ export class AgentTree {
       }
     }
     if (child) this.#groupsChanged(child)
-    if (this.#exceeded || !limit) return
-    const over = overBudget(this.#total, limit)
+    if (this.#ledger.exceeded || !limit) return
+    const over = overBudget(this.#ledger.usage, limit)
     if (!over) return
-    this.#exceeded = over
+    this.#ledger.markExceeded(over)
     agent.bus.emit(
       "budget.exceeded",
       { tokens, ...(costUsd !== undefined ? { costUsd } : {}), limit },
@@ -953,7 +716,7 @@ export class AgentTree {
         const spec = child.result$
         while (spec && r.reason === "done" && !spec.returned && !spec.failed && !child.abortReason) {
           // endTurn counted a call that did not fit; a turn that ended without any counts here.
-          if (!this.#checkResult(child, spec, true) && !spec.failed) {
+          if (!checkResult(child.agent.messages, spec, this.resultRetries, true) && !spec.failed) {
             r = await this.#turn(child, resultReminder(spec))
             steps += r.steps
           }
@@ -1007,38 +770,6 @@ export class AgentTree {
       })
       this.#admit()
     }
-  }
-
-  /**
-   * After a batch of tool calls (or, with `turnEnded`, after a turn) of a child that owes a
-   * result: counts each return_result call that did not fit, and a turn that ended without
-   * one, as a failed attempt. True once it has returned a valid result, which ends its turn.
-   */
-  #checkResult(child: Child, spec: ResultSpec, turnEnded = false): boolean {
-    if (spec.returned) return true
-    const limit = this.resultRetries + 1
-    if (turnEnded) {
-      // A turn whose bad call was counted already is not counted again for ending without one.
-      if (!spec.struck) {
-        spec.strikes++
-        spec.problem ??= `it ended its turn without calling ${RETURN_RESULT_TOOL}`
-      }
-      spec.struck = false
-    } else {
-      const messages = child.agent.messages
-      const from = messages.findLastIndex((m) => m.role === "assistant")
-      for (const m of messages.slice(from + 1)) {
-        if (m.role === "toolResult" && m.toolName === RETURN_RESULT_TOOL && m.isError) {
-          spec.strikes++
-          spec.struck = true
-          const text = m.content.map((b) => (b.type === "text" ? b.text : "")).join(" ")
-          spec.problem = text.replace(/\s+/g, " ").trim().slice(0, 500)
-        }
-      }
-    }
-    if (spec.strikes >= limit) spec.failed = true
-    // Out of attempts: the turn ends, and so does the child, with an error.
-    return spec.failed === true
   }
 
   #finish(child: Child, r: Pick<SubagentResult, "status" | "error" | "steps" | "durationMs">) {
@@ -1215,118 +946,8 @@ export class AgentTree {
   }
 }
 
-/** A child's questions as its commander reads them, with how to answer. */
-function askParentPrompt(req: AskRequest): string {
-  const questions = req.questions.map((q, i) => {
-    const how = q.multiSelect ? "choose any number" : "choose one"
-    const options = q.options.map((o) => `   - ${o.label}${o.description ? `: ${o.description}` : ""}`)
-    return [`${i + 1}. ${q.header ? `[${q.header}] ` : ""}${q.question} (${how})`, ...options].join("\n")
-  })
-  return [
-    `A sub-agent working for you (session ${req.sessionId}) asks you ${req.questions.length === 1 ? "this question" : "these questions"} before it goes on:`,
-    questions.join("\n\n"),
-    [
-      'Answer with one line per question, numbered like the questions: "1: <option label>". Where several may be chosen, separate the labels with " | ". When no option fits, write your own answer instead of a label.',
-      "If the user should decide instead, reply with ASK_USER alone on the first line, and the questions go to the user. To refuse to answer, reply with DECLINE on the first line.",
-    ].join(" "),
-  ].join("\n\n")
-}
-
-/** Case, spacing, quotes and a "(Recommended)" mark do not matter when matching a label. */
-const labelKey = (s: string) =>
-  s
-    .replace(/\(recommended\)/i, "")
-    .replace(/^[\s"'`*_]+|[\s"'`*_.]+$/g, "")
-    .toLowerCase()
-
-/**
- * The commander's numbered answers ("1: label", "2: a | b", or its own words) as one answer
- * per question; undefined when a question has none. A single question may be answered by the
- * whole reply.
- */
-export function parseParentAnswers(questions: AskQuestion[], text: string): AskAnswer[] | undefined {
-  const byNumber = new Map<number, string>()
-  for (const line of text.split("\n")) {
-    const m = /^\s*(?:\*\*)?(\d+)(?:\*\*)?\s*[:.)-]\s*(.+)$/.exec(line)
-    if (m && !byNumber.has(Number(m[1]))) byNumber.set(Number(m[1]), m[2]!.trim())
-  }
-  if (questions.length === 1 && !byNumber.has(1) && text.trim()) byNumber.set(1, text.trim())
-  const answers: AskAnswer[] = []
-  for (const [i, q] of questions.entries()) {
-    const reply = byNumber.get(i + 1)
-    if (!reply) return undefined
-    const labels = new Map(q.options.map((o) => [labelKey(o.label), o.label]))
-    const whole = labels.get(labelKey(reply))
-    if (whole) {
-      answers.push({ selected: [whole] })
-      continue
-    }
-    const parts = q.multiSelect ? reply.split("|").map((p) => p.trim()) : [reply]
-    const selected = parts.map((p) => labels.get(labelKey(p))).filter((l): l is string => l !== undefined)
-    const rest = parts.filter((p) => !labels.has(labelKey(p)))
-    answers.push({ selected: [...new Set(selected)], ...(rest.length ? { other: rest.join(" | ") } : {}) })
-  }
-  return answers
-}
-
-function resultInstructions(): string {
-  return [
-    "# Result",
-    `When you have finished the task, hand back your result by calling the ${RETURN_RESULT_TOOL} tool; its parameters describe the result expected. Your turn ends with that call, so make it last, and do not also write the result out as text. If the call reports a problem, call it again with a corrected result.`,
-  ].join("\n")
-}
-
-function resultReminder(spec: ResultSpec): UserMessage {
-  const why = spec.problem ? ` (${spec.problem})` : ""
-  return userMessage(
-    `You have not handed back a valid result yet${why}. Call ${RETURN_RESULT_TOOL} now with your result, matching its parameters. (Sent automatically.)`,
-    { text: `◆ asked again for its result${why}`, origin: "subagent" },
-  )
-}
-
-/** The tool a child with a schema returns its result with; it checks the value fully. */
-function returnResultTool(spec: ResultSpec, retries: number): ToolDefinition {
-  const parameters: JSONSchema = spec.wrapped
-    ? { type: "object", properties: { value: spec.schema }, required: ["value"] }
-    : spec.schema
-  return {
-    name: RETURN_RESULT_TOOL,
-    description:
-      "Hands back the result of your task, as the parameters describe it. Call it once, when you are done; your turn ends with it.",
-    parameters,
-    traits: { readOnly: true },
-    async execute(args) {
-      const value = spec.wrapped ? (args as { value?: unknown }).value : args
-      const problems = validateValue(spec.schema, value)
-      if (problems.length) {
-        const left = retries + 1 - (spec.strikes + 1)
-        return textResult(
-          `The result does not fit: ${problems.join("; ")}.${left > 0 ? ` Call ${RETURN_RESULT_TOOL} again with a corrected result.` : ""}`,
-          true,
-        )
-      }
-      spec.returned = { value: structuredClone(value) }
-      return textResult("Result received.")
-    },
-  }
-}
-
 function standardSections(cwd: string): PromptSection[] {
   return defaultSections({ cwd, project: instructionsSection(loadInstructions(cwd)) })
-}
-
-/** A parent's ids without its turn: a child can end after the turn that started it. */
-function parentMeta(parent: Agent): EmitMeta {
-  const meta: EmitMeta = { sessionId: parent.sessionId }
-  if (parent.parentSessionId) meta.parentSessionId = parent.parentSessionId
-  return meta
-}
-
-function metaOf(agent: Agent): EmitMeta {
-  const meta: EmitMeta = { sessionId: agent.sessionId }
-  if (agent.parentSessionId) meta.parentSessionId = agent.parentSessionId
-  if (agent.turnId) meta.turnId = agent.turnId
-  return meta
 }
 
 /** One directory contains the other (or they are the same), by real path. */
