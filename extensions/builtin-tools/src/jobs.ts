@@ -12,7 +12,15 @@ import {
   type ToolSession,
   textResult,
 } from "@amira/api"
-import { backgroundJobs, type JobInfo, JobLimitError, type JobRegistry, type WaitResult } from "@amira/proc"
+import {
+  backgroundJobs,
+  DEFAULT_BUFFER_CHARS,
+  DEFAULT_MAX_RUNNING,
+  type JobInfo,
+  JobLimitError,
+  type JobRegistry,
+  type WaitResult,
+} from "@amira/proc"
 import type { Shell } from "./shell.ts"
 import { NOT_CONTAINED_WARNING } from "./shell-notes.ts"
 import { MAX_OUTPUT_CHARS } from "./truncate.ts"
@@ -37,10 +45,14 @@ export const STOP_GRACE_MS = 2000
 export const jobsConfig: { registry: JobRegistry; maxLogBytes?: number } = { registry: backgroundJobs }
 
 /** Applies the `backgroundJobs` settings. */
-export function configureJobs(settings: Settings["backgroundJobs"] = {}): void {
-  jobsConfig.registry.configure({
-    ...(settings.maxRunning !== undefined ? { maxRunning: settings.maxRunning } : {}),
-    ...(settings.bufferChars !== undefined ? { bufferChars: settings.bufferChars } : {}),
+export function configureJobs(
+  settings: Settings["backgroundJobs"] = {},
+  registry: JobRegistry = jobsConfig.registry,
+): void {
+  // Unset keys go back to the defaults, so a reload after removing one takes effect.
+  registry.configure({
+    maxRunning: settings.maxRunning ?? DEFAULT_MAX_RUNNING,
+    bufferChars: settings.bufferChars ?? DEFAULT_BUFFER_CHARS,
   })
   if (settings.maxLogBytes !== undefined) jobsConfig.maxLogBytes = settings.maxLogBytes
   else delete jobsConfig.maxLogBytes
@@ -248,6 +260,16 @@ const emptyReads = new Map<string, number>()
  * that start is still found by the first wait.
  */
 const waitFrom = new Map<string, number>()
+
+/** Drops what the maps above keep about jobs the registry no longer keeps, once they grow. */
+function forgetGoneJobs() {
+  if (waitFrom.size + emptyReads.size < 200) return
+  for (const map of [waitFrom, emptyReads]) {
+    for (const key of [...map.keys()]) {
+      if (!jobsConfig.registry.get(key.slice(key.indexOf("\0") + 1))) map.delete(key)
+    }
+  }
+}
 const POLL_WINDOW_MS = 5000
 
 export interface JobOutputParams {
@@ -309,6 +331,7 @@ export const jobOutputTool = defineTool<JobOutputParams>({
     }
     const out = registry.readNew(found.id, reader, MAX_OUTPUT_CHARS)
     waitFrom.set(`${reader}\0${found.id}`, out.to)
+    forgetGoneJobs()
     const job = registry.get(found.id)!
     const printed = out.text.trimEnd()
     const parts: string[] = []

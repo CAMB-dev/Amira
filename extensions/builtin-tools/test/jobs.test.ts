@@ -8,6 +8,7 @@ import type {
   ExtensionAPI,
   NoticeLevel,
   PanelDefinition,
+  Settings,
   ToolSession,
   UserMessage,
 } from "@amira/api"
@@ -325,6 +326,18 @@ test("unknown jobs and bad patterns", async () => {
   expect(waitPattern("ready|listening").test("Listening on 5173")).toBe(true)
 })
 
+test("settings set the limits of the registry the extension serves; removed ones go back to the defaults", () => {
+  const registry = new JobRegistry({ start: startJob })
+  registerJobs(fakeApi({ backgroundJobs: { maxRunning: 3, maxLogBytes: 1000 } }).api, registry)
+  expect(registry.maxRunning).toBe(3)
+  expect(jobsConfig.maxLogBytes).toBe(1000)
+  registerJobs(fakeApi().api, registry)
+  expect(registry.maxRunning).toBe(8)
+  expect(jobsConfig.maxLogBytes).toBeUndefined()
+  // The tools' registry is not swapped by registering the UI for another.
+  expect(jobsConfig.registry).toBe(backgroundJobs)
+})
+
 test("Amira's exit stops every job; the exit handler kills them when it cannot wait", async () => {
   const procs: { stops: number[]; emit: (e: Parameters<Parameters<typeof startJob>[1]>[0]) => void }[] = []
   const registry = new JobRegistry({
@@ -402,13 +415,13 @@ test("presenters: a background start, a read, a stop and the list", () => {
 })
 
 /** The parts of ExtensionAPI registerJobs uses, recording what it registers. */
-function fakeApi() {
+function fakeApi(settings: Settings = {}) {
   const handlers = new Map<string, ((e: EventEnvelope<never>) => void)[]>()
   const exits: ((s: AbortSignal) => void | Promise<void>)[] = []
   const notices: { text: string; level: NoticeLevel | undefined }[] = []
   const panels: PanelDefinition[] = []
   const api = {
-    settings: {},
+    settings,
     notify: (text: string, level?: NoticeLevel) => void notices.push({ text, level }),
     requestRender: () => {},
     registerPanel: (p: PanelDefinition) => {

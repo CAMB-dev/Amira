@@ -316,11 +316,13 @@ export const jobListPresenter: ToolPresenter<Record<string, never>, JobListDetai
 /** Subscriptions of the extension loaded last; a reload replaces them. */
 const unsubscribe: (() => void)[] = []
 
-/** Adds everything above to the extension's registrations and starts the clean-up. */
+/**
+ * Adds everything above to the extension's registrations and starts the clean-up, for the
+ * jobs in `registry` (the tools' own by default; tests pass another without changing the tools').
+ */
 export function registerJobs(api: ExtensionAPI, registry: JobRegistry = jobsConfig.registry): void {
   for (const off of unsubscribe.splice(0)) off()
-  jobsConfig.registry = registry
-  configureJobs(api.settings.backgroundJobs)
+  configureJobs(api.settings.backgroundJobs, registry)
   let lastOutputRender = 0
   unsubscribe.push(
     watchJobEnds(registry),
