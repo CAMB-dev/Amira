@@ -47,5 +47,5 @@ test("serverToolView: page lookups, failures with their code, and unfinished blo
   expect(failed.rejected).toBeUndefined()
   const running = serverToolView({ ...search, status: "running", sources: undefined })
   expect(running.rejected).toBe("aborted")
-  expect(running.result.details.results).toEqual([])
+  expect(running.result.details?.results).toEqual([])
 })
