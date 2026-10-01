@@ -131,4 +131,32 @@ Provider 表单中的默认参数用于目录中没有描述的模型。要调�
 
 本地 Chat 服务选择 `openai-chat` 和本地 Base URL；通过 CLI 添加时，服务无需密钥即可用 `--no-key`。填写服务暴露的模型 ID 和真实限制，只开启服务实际支持的能力。
 
-相关文档：[开始使用](getting-started.md)、[使用与会话](usage.md)、[设置](settings.md)、[扩展](extensions.md)。
+## 编辑工具
+
+Amira 有两个修改已有文件的工具：`edit` 替换确切的文本，`apply_patch` 应用 OpenAI Codex 所用格式的多文件补丁（见[工具与审批](usage.md#工具与审批)）。用 provider 的 `tools.edit` 选择，并可在 `models[].tools.edit` 中为单个模型覆盖：
+
+| 值 | 模型获得的工具 |
+| --- | --- |
+| `"edit"` | 只有 `edit`（默认） |
+| `"apply_patch"` | 只有 `apply_patch` |
+| `"both"` | `edit` 和 `apply_patch` |
+
+无论哪种取值都会提供 `write`。没有模型会自动改用 `apply_patch`，需要为擅长这种补丁格式的模型（例如 OpenAI 的 GPT 和 Codex 模型）手动开启：
+
+```json
+{
+  "providers": {
+    "openai": {
+      "dialect": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "tools": { "edit": "apply_patch" },
+      "models": [{ "id": "my-other-model", "tools": { "edit": "both" } }]
+    }
+  }
+}
+```
+
+该选择跟随当前模型：用 `/model` 切换到其他 provider 或模型后，使用那个模型自己的设置。子 agent 使用其所运行模型的设置。修改设置后需要重启 Amira。项目设置也可以设置 `tools.edit`。补丁工具只在工作目录内写入：路径在工作目录以下经过符号链接或 junction 时拒绝，文件有其他硬链接时拒绝（Bun 或 pnpm 安装的 `node_modules` 中很常见），同一补丁两次修改同一文件时也拒绝。
+
+相关文档：[快速开始](getting-started.md)、[使用与会话](usage.md)、[设置](settings.md)、[扩展](extensions.md)。
