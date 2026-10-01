@@ -1,98 +1,27 @@
-import path from "node:path"
 import {
-  type ChildSession,
   defineExtension,
-  defineTool,
   type ExtensionAPI,
-  formatDuration,
   formatElapsed,
-  MAX_TITLE_CHARS,
   type PendingNotice,
   plural,
   type SubagentResult,
-  type ToolContext,
-  type ToolPresenter,
-  type ToolSession,
   textResult,
   USER_STOP_REASON,
   type UserMessage,
 } from "@amira/api"
-import { agentsCommand, formatTokens, type KeptWorktreeInfo, type KeptWorktrees } from "./agents-command.ts"
-import { type Isolation, loadRoles, type Role, roleModel } from "./roles.ts"
-import {
-  createWorktree,
-  discardKept,
-  extendKept,
-  formatStat,
-  keepChanges,
-  keptChanges,
-  keptStat,
-  listKeptWorktrees,
-  type MergeResult,
-  mergeKept,
-  mergeWorktree,
-  type RunGit,
-  releaseWorktree,
-  removeWorktree,
-  STALE_WORKTREE_MS,
-  type SweepResult,
-  sweepWorktrees,
-  type Worktree,
-} from "./worktree.ts"
+import { agentsCommand, formatTokens } from "./agents-command.ts"
+import { keptWorktrees, sweepNotices } from "./kept-worktrees.ts"
+import { agentPresenter } from "./presenter.ts"
+import { roles } from "./roles-cache.ts"
+import { type Job, type StartChildDeps, shorten } from "./start-child.ts"
+import { AGENT_RESULT_TOOL, AGENT_TOOL, agentTool, type BackgroundBatch, resultTool } from "./tools.ts"
+import type { RunGit } from "./worktree.ts"
 
 export * from "./agents-command.ts"
 export * from "./roles.ts"
+export type { AgentTask } from "./start-child.ts"
 export * from "./worktree.ts"
-
-export const AGENT_TOOL = "agent"
-export const AGENT_RESULT_TOOL = "agent_result"
-
-export interface AgentTask {
-  role?: string
-  /** A few words naming the task, shown to the user: "US market trend". */
-  title: string
-  prompt: string
-  model?: string
-  context?: "fresh" | "fork"
-  isolation?: Isolation
-}
-
-interface AgentParams {
-  tasks: AgentTask[]
-  background?: boolean
-}
-
-/** What a child did in the shared directory, seen from its tool calls. */
-interface Activity {
-  files: Set<string>
-  commands: number
-}
-
-/** A started sub-agent and the report it ends in. */
-interface Job {
-  child: ChildSession
-  role: string
-  title: string
-  prompt: string
-  startedAt: number
-  /** Settles with the report for the commander; never rejects. */
-  report: Promise<string>
-  done?: string
-  /** How it ended, once it did. */
-  result?: SubagentResult
-  /** Called once the report is done. */
-  onDone?: () => void
-  /** Where its report goes by itself when it finishes in the background (top-level commanders). */
-  notice?: PendingNotice
-  /** agent_result calls waiting for it: they hand the report out, so it is not also sent. */
-  waiters: number
-  /** Stopped by its commander: its worktree changes are kept for review, never merged. */
-  cancelled?: boolean
-  /** Nobody will read its report any more, so what it leaves behind is reported as an error. */
-  orphaned?: boolean
-  /** Changes it made that were not merged: how many files, and the patch that holds them. */
-  kept?: { files: number; patch: string }
-}
+export { AGENT_RESULT_TOOL, AGENT_TOOL, agentPresenter }
 
 /** Stops a job whose commander no longer wants it. */
 function cancel(job: Job, reason: string, orphan: boolean): void {
@@ -121,88 +50,6 @@ function serialized<T>(work: () => Promise<T>): Promise<T> {
   const next = mergeChain.then(work, work)
   mergeChain = next.catch(() => {})
   return next
-}
-
-function shorten(text: string, max: number): string {
-  const one = text.replace(/\s+/g, " ").trim()
-  return one.length > max ? `${one.slice(0, max - 1)}…` : one
-}
-
-function childInstructions(role: Role | undefined, wt: Worktree | undefined): string {
-  const parts = [
-    "# Sub-agent",
-    "You are a sub-agent: a commander agent gave you the task in the user message. Work on your own; nobody will answer questions, so make reasonable assumptions and state them. Your final reply is returned to the commander as your result and is all it sees of your work, so make it complete and self-contained.",
-  ]
-  if (wt) {
-    parts.push(
-      `You work in your own git worktree (${wt.cwd}). When you finish, everything you changed there is merged into the commander's working tree. Do not push, switch branches or remove the worktree.`,
-    )
-  }
-  if (role?.prompt) parts.push(role.prompt)
-  return parts.join("\n\n")
-}
-
-/** Follows a child's events for the files it wrote and the commands it ran. */
-async function watch(child: ChildSession, activity: Activity): Promise<void> {
-  const paths = new Map<string, string[]>()
-  for await (const e of child.events) {
-    if (e.sessionId !== child.id) continue
-    if (e.type === "tool.execute.start" && e.data.traits?.writesFiles) {
-      if (e.data.writtenPaths) paths.set(e.data.toolCallId, e.data.writtenPaths)
-    } else if (e.type === "tool.execute.end" && !e.data.rejected && !e.data.result.isError) {
-      for (const p of e.data.writtenPaths ?? paths.get(e.data.toolCallId) ?? []) {
-        const relative = path.isAbsolute(p) ? path.relative(child.cwd, p) || "." : p
-        activity.files.add(relative)
-      }
-      if (e.data.traits?.shell) activity.commands++
-    }
-  }
-}
-
-function changesLine(activity: Activity): string {
-  const parts: string[] = []
-  if (activity.files.size) parts.push(`changed ${[...activity.files].join(", ")}`)
-  if (activity.commands)
-    parts.push(`ran ${activity.commands} shell command${activity.commands === 1 ? "" : "s"}`)
-  return parts.length ? `Changes: ${parts.join("; ")}.` : "Changes: none."
-}
-
-function mergeLine(m: MergeResult, wt: Worktree, unfinished?: string): string {
-  const line = outcomeLine(m, wt, unfinished)
-  return m.cleanup
-    ? `${line} The worktree could not be removed (${shorten(m.cleanup, 200)}); it stays at ${wt.dir} and is deleted later.`
-    : line
-}
-
-function outcomeLine(m: MergeResult, wt: Worktree, unfinished?: string): string {
-  const files = m.stat.files.length ? ` (${m.stat.files.join(", ")})` : ""
-  if (unfinished && m.outcome === "kept") {
-    return `Worktree: NOT merged because the sub-agent ${unfinished}; its work may be incomplete. Its changes, ${formatStat(m.stat)}${files}, stay in ${wt.dir}; the patch is ${wt.patch}. Check them before using any (e.g. read the patch and apply what is right), then remove the worktree with git worktree remove.`
-  }
-  switch (m.outcome) {
-    case "empty":
-      return "Worktree: no changes."
-    case "merged":
-      return `Worktree: merged into the working tree, ${formatStat(m.stat)}${files}.`
-    case "discarded":
-      return `Worktree: the user discarded its changes, ${formatStat(m.stat)}${files}.`
-    case "partial":
-      return `Worktree: applied what fit, ${formatStat(m.stat)}${files}. Rejected hunks are in .rej files next to: ${m.rejected?.join(", ") || "(none reported)"}. The worktree stays at ${wt.dir}.`
-    case "kept":
-      return `Worktree: NOT merged${m.conflict ? ` (conflict: ${shorten(m.conflict, 300)})` : ""}. Its changes, ${formatStat(m.stat)}${files}, stay in ${wt.dir}; the patch is ${wt.patch}. Resolve it yourself (e.g. read the patch and apply the edits), then remove the worktree with git worktree remove.`
-  }
-}
-
-function reportOf(job: Job, r: SubagentResult, changes: string, note?: string): string {
-  const took = formatDuration(r.durationMs)
-  const tokens = formatTokens(r.usage.input + r.usage.output + r.usage.cacheRead + r.usage.cacheWrite)
-  const head = `## ${job.title} · ${job.role} · ${r.sessionId} · ${r.status} (${took}, ${tokens} tokens)`
-  const lines = [head]
-  if (note) lines.push(note)
-  if (r.status !== "done" && r.error) lines.push(`Error: ${r.error}`)
-  lines.push(r.text || "(no final answer)")
-  lines.push(changes)
-  return lines.join("\n\n")
 }
 
 /** How long a finished background report waits for others finishing close by, to go as one message. */
@@ -263,28 +110,6 @@ function noticeMessage(jobs: Pick<Job, "role" | "title" | "done" | "result" | "k
   }
 }
 
-function taskList(params: unknown): AgentTask[] {
-  const p = params as Partial<AgentParams> & Partial<AgentTask>
-  if (Array.isArray(p.tasks)) return p.tasks
-  // Tolerates a single task given at the top level.
-  return typeof p.prompt === "string" ? [p as AgentTask] : []
-}
-
-/** A task's title on one line; empty when it has none. */
-function titleOf(task: AgentTask): string {
-  return typeof task.title === "string" ? task.title.replace(/\s+/g, " ").trim() : ""
-}
-
-/** What is wrong with a task's title, if anything. */
-function titleProblem(task: AgentTask, i: number): string | undefined {
-  const title = titleOf(task)
-  if (!title)
-    return `Task ${i + 1} has no "title": give each task a title of 3–6 words naming it for the user, e.g. "US market trend".`
-  if (title.length > MAX_TITLE_CHARS)
-    return `Task ${i + 1}'s "title" is ${title.length} characters long; keep it to 3–6 words (at most ${MAX_TITLE_CHARS} characters) and put the details in "prompt".`
-  return undefined
-}
-
 export interface AgentExtensionOptions {
   /** Replaces git, for tests. */
   git?: RunGit
@@ -299,192 +124,23 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
     /** Background jobs by commander session, then by child id. */
     const background = new Map<string, Map<string, Job>>()
     /** Reports waiting a moment to be sent together, by commander session. */
-    const batches = new Map<string, { jobs: Job[]; timer: ReturnType<typeof setTimeout> }>()
+    const batches = new Map<string, BackgroundBatch>()
     /** Ids of background sub-agents whose report was sent to their commander as a message. */
     const delivered = new Set<string>()
     /** Worktrees sub-agents of this process work in now: the sweep and /agents leave them alone. */
     const inUse = new Set<string>()
-    /** Tells the user what the sweep of old worktrees is about to delete, and what it deleted. */
-    const sweepNotices = (sweep: SweepResult) => {
-      const days = Math.round(STALE_WORKTREE_MS / 86_400_000)
-      if (sweep.expiring.length) {
-        const n = sweep.expiring.length
-        api.notify(
-          `${n} sub-agent worktree${n === 1 ? "" : "s"} kept from earlier sessions ${n === 1 ? "is" : "are"} over ${days} days old and will be deleted from tomorrow on: ${sweep.expiring.map((w) => w.patch ?? w.dir).join(", ")}. /agents lists them to merge, keep or discard.`,
-          "warning",
-        )
-      }
-      if (sweep.removed.length) {
-        const n = sweep.removed.length
-        api.notify(
-          `Deleted ${n} old sub-agent worktree${n === 1 ? "" : "s"} (announced a day or more ago): ${sweep.removed.join(", ")}.`,
-        )
-      }
-    }
-    /** The repository of the working directory, which kept worktrees merge back into. */
-    const repoRoot = async (): Promise<string | undefined> => {
-      const top = await git(["rev-parse", "--show-toplevel"], api.cwd, true)
-      return top.ok && top.output.trim() ? path.normalize(top.output.trim()) : undefined
-    }
-    const inRepo = async <T>(work: (root: string) => Promise<T>): Promise<T> => {
-      const root = await repoRoot()
-      if (!root) throw new Error("not in a git repository")
-      return work(root)
-    }
-    /** The worktrees of this repository that sub-agents left behind (not the ones in use), for /agents. */
-    const keptWorktrees: KeptWorktrees = {
-      list: async () => {
-        const root = await repoRoot()
-        if (!root) return []
-        const kept = listKeptWorktrees(api.home, root).filter((w) => !inUse.has(w.dir))
-        // Sizes as last collected: collecting them all again would take long in a big repository.
-        const out: KeptWorktreeInfo[] = []
-        for (const w of kept) {
-          const stat = await keptStat(git, root, w).catch(() => undefined)
-          out.push(stat ? { ...w, stat } : w)
-        }
-        return out
-      },
-      changes: (w) => inRepo((root) => keptChanges(git, root, w)),
-      merge: (w) => inRepo((root) => serialized(() => mergeKept(git, root, w))),
-      discard: (w) => inRepo((root) => discardKept(git, root, w)),
-      keep: async (w) => ({ ...extendKept(w), ...(w.stat ? { stat: w.stat } : {}) }),
-    }
-    let cached: { at: number; roles: Map<string, Role> } | undefined
-
-    const roles = (): Map<string, Role> => {
-      if (cached && Date.now() - cached.at < 2000) return cached.roles
-      const found = loadRoles(dirs)
-      for (const p of found.problems) {
-        if (reported.has(p)) continue
-        reported.add(p)
-        api.reportError(`skipped agent role ${p}`)
-      }
-      cached = { at: Date.now(), roles: found.roles }
-      return found.roles
-    }
-
-    const start = async (task: AgentTask, session: ToolSession, ctx: ToolContext): Promise<Job> => {
-      const role = task.role ? roles().get(task.role) : undefined
-      const isolation = task.isolation ?? role?.isolation ?? "none"
-      let wt: Worktree | undefined
-      let note: string | undefined
-      if (isolation === "worktree") {
-        const made = await createWorktree(git, {
-          cwd: ctx.cwd,
-          home: api.home,
-          name: `sa_${crypto.randomUUID().slice(0, 8)}`,
-          about: { title: titleOf(task), role: task.role ?? "agent" },
-        })
-        if ("error" in made) note = `No worktree (${made.error}); it worked in the shared directory.`
-        else {
-          wt = made
-          inUse.add(made.dir)
-          // Once per repository and process: clear out what earlier sessions left behind (D62),
-          // never without telling the user a day before.
-          if (!swept.has(made.root)) {
-            swept.add(made.root)
-            const sweep = await sweepWorktrees(git, { root: made.root, home: api.home, keep: inUse }).catch(
-              () => undefined,
-            )
-            if (sweep) sweepNotices(sweep)
-          }
-        }
-      }
-      // Making the worktree takes a while; the commander may have been interrupted meanwhile.
-      if (ctx.signal.aborted) {
-        if (wt) {
-          inUse.delete(wt.dir)
-          releaseWorktree(wt.dir)
-          await removeWorktree(git, wt)
-        }
-        throw new Error("the commander's turn was interrupted")
-      }
-      // A child that could not spawn further hides the tools that would try (D15).
-      const deep = session.depth + 1 >= session.maxDepth
-      const model = roleModel(role, task.model, api.settings.agents)
-      let child: ChildSession
-      try {
-        child = session.spawn!({
-          ...(task.role ? { role: task.role } : {}),
-          title: titleOf(task),
-          prompt: task.prompt,
-          ...(model ? { model } : {}),
-          ...(task.context ? { context: task.context } : {}),
-          ...(wt ? { cwd: wt.cwd } : {}),
-          ...(role?.tools ? { tools: role.tools } : {}),
-          ...(deep ? { excludeTools: [AGENT_TOOL, AGENT_RESULT_TOOL] } : {}),
-          systemPrompt: childInstructions(role, wt),
-        })
-      } catch (err) {
-        if (wt) {
-          inUse.delete(wt.dir)
-          releaseWorktree(wt.dir)
-          await removeWorktree(git, wt)
-        }
-        throw err
-      }
-      const activity: Activity = { files: new Set(), commands: 0 }
-      const watching = watch(child, activity).catch(() => {})
-      const job: Job = {
-        child,
-        role: task.role ?? "agent",
-        title: titleOf(task),
-        prompt: task.prompt,
-        startedAt: Date.now(),
-        report: Promise.resolve(""),
-        waiters: 0,
-      }
-      job.report = (async () => {
-        const r = await child.result()
-        await watching
-        let changes = changesLine(activity)
-        let leftBehind = false
-        if (wt) {
-          const tree = wt
-          // Only a child that finished its task is merged; half-done work is kept for review.
-          let unfinished: string | undefined
-          try {
-            const merged = await serialized(() => {
-              // Decided when its turn to merge comes: its commander may have stopped it while
-              // it waited in line behind another merge.
-              unfinished = job.cancelled
-                ? "was stopped along with its commander"
-                : r.status !== "done"
-                  ? `ended with status ${r.status}`
-                  : undefined
-              return unfinished
-                ? keepChanges(git, tree)
-                : mergeWorktree(git, tree, {
-                    ...(api.settings.merge?.reviewThreshold
-                      ? { threshold: api.settings.merge.reviewThreshold }
-                      : {}),
-                    who: `"${job.title}" (${job.role})`,
-                    review: (title, diff, options) => api.ui.reviewDiff(title, diff, options),
-                  })
-            })
-            changes = mergeLine(merged, tree, unfinished)
-            leftBehind = merged.outcome === "kept" || merged.outcome === "partial"
-            if (leftBehind) job.kept = { files: merged.stat.files.length, patch: tree.patch }
-          } catch (err) {
-            changes = `Worktree: merging failed (${err instanceof Error ? err.message : String(err)}); its changes stay in ${tree.dir}.`
-            leftBehind = true
-            job.kept = { files: 0, patch: tree.patch }
-          } finally {
-            inUse.delete(tree.dir)
-            releaseWorktree(tree.dir)
-          }
-        }
-        const text = reportOf(job, r, changes, note)
-        job.done = text
-        job.result = r
-        if (job.orphaned && leftBehind) {
-          api.reportError(`sub-agent ${child.id} (${job.role}) ended after its commander stopped: ${changes}`)
-        }
-        job.onDone?.()
-        return text
-      })()
-      return job
+    const getRoles = roles({ api, dirs, reported })
+    const notifySweep = sweepNotices(api)
+    const kept = keptWorktrees({ api, git, inUse, serialized })
+    const childDeps: StartChildDeps = {
+      api,
+      git,
+      roles: getRoles,
+      inUse,
+      swept,
+      sweepNotices: notifySweep,
+      serialized,
+      excludeTools: [AGENT_TOOL, AGENT_RESULT_TOOL],
     }
 
     /**
@@ -542,201 +198,16 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
       return textResult(text, jobs.length === 0)
     }
 
-    const agentTool = defineTool<AgentParams>({
-      name: AGENT_TOOL,
-      get description() {
-        const list = [...roles().values()].map((r) => `- ${r.name}: ${r.description || "(no description)"}`)
-        return `Delegates work to sub-agents: separate agents with their own context that do one task and report back. Use them for self-contained work such as research across many files (explorer), implementing a well-specified change (coder) or reviewing code (reviewer), and to do independent tasks in parallel.
-- Several tasks in one call run in parallel (a few at a time; the rest wait their turn).
-- A sub-agent sees only its prompt (context "fresh", the default), so write complete instructions: the goal, relevant paths, constraints and what to report back. context "fork" gives it this whole conversation instead.
-- isolation "worktree" runs it in its own git worktree; when it finishes its changes are merged into the working tree (a conflict goes to the user for review). Use it for coders that may touch the same files as others.
-${
-  api.settings.subagents?.background === false
-    ? `- The call waits for the sub-agents and returns their results. background: true returns at once with their ids instead: in the main session their results then come to you by themselves as a message when they finish; a sub-agent must collect them with ${AGENT_RESULT_TOOL} before it finishes.`
-    : `- In the main session sub-agents always run in the background: the call returns at once with their ids, and when they finish their results come to you by themselves as a message, in a new turn of your own. Do your summary or follow-up work then, even when you need the results to answer: end your turn now (or go on with other work) instead of waiting; background is ignored there and ${AGENT_RESULT_TOOL} only reports progress. A sub-agent's calls wait by default; with background: true it must collect the results with ${AGENT_RESULT_TOOL} before it finishes.`
-}
-- A result holds each sub-agent's final answer and what it changed.
-Roles:
-${list.join("\n")}`
-      },
-      parameters: {
-        type: "object",
-        properties: {
-          tasks: {
-            type: "array",
-            minItems: 1,
-            description: "The sub-agents to run, each with its own task.",
-            items: {
-              type: "object",
-              properties: {
-                title: {
-                  type: "string",
-                  maxLength: MAX_TITLE_CHARS,
-                  description:
-                    'A title of 3–6 words naming the task for the user, e.g. "US market trend" or "Add status bar test".',
-                },
-                role: { type: "string", description: "Role name (see the list above)." },
-                prompt: { type: "string", description: "The complete task for the sub-agent." },
-                model: {
-                  type: "string",
-                  description: 'Optional "provider/model" to run it on; default: the role\'s model or yours.',
-                },
-                context: {
-                  type: "string",
-                  enum: ["fresh", "fork"],
-                  description: "fresh (default): only the prompt; fork: this whole conversation too.",
-                },
-                isolation: {
-                  type: "string",
-                  enum: ["none", "worktree"],
-                  description:
-                    "worktree: work in a separate git worktree and merge back. Default: the role's, else none.",
-                },
-              },
-              required: ["title", "prompt"],
-            },
-          },
-          background: {
-            type: "boolean",
-            description:
-              "true: return right away with the sub-agents' ids; false: wait for their results. Ignored in the main session, which always runs them in the background (see above).",
-          },
-        },
-        required: ["tasks"],
-      },
-      traits: { readOnly: true },
-      concurrency: "parallel",
-      async execute(params, ctx) {
-        const session = ctx.session
-        if (!session?.spawn) return textResult("Sub-agents are not available in this session.", true)
-        const tasks = taskList(params)
-        if (!tasks.length) {
-          return textResult('Give at least one task in "tasks", each with a "title" and a "prompt".', true)
-        }
-        const untitled = tasks.flatMap((t, i) => titleProblem(t, i) ?? [])
-        if (untitled.length) return textResult(untitled.join("\n"), true)
-        const known = roles()
-        const unknown = tasks.filter((t) => t.role && !known.has(t.role)).map((t) => t.role)
-        if (unknown.length) {
-          return textResult(
-            `Unknown role${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}. Known roles: ${[...known.keys()].join(", ")}.`,
-            true,
-          )
-        }
-        // Results can be sent by themselves only to a session that can be woken: the main one,
-        // or a persistent sub-agent.
-        const auto = session.expectNotice !== undefined
-        // The main session never waits (the user keeps talking to it), whatever the model asks.
-        const alwaysBackground = mainAlwaysBackground(session)
-        const bg = alwaysBackground || (params.background ?? false)
-        const jobs: Job[] = []
-        const failed: string[] = []
-        // Listening before anything starts: starting (making worktrees) can take seconds. An
-        // interrupt stops waiting sub-agents; background ones keep running.
-        const stop = () => {
-          if (!bg) for (const j of jobs) cancel(j, "the commander's turn was interrupted", true)
-        }
-        ctx.signal.addEventListener("abort", stop, { once: true })
-        try {
-          for (const [i, task] of tasks.entries()) {
-            if (ctx.signal.aborted) break
-            try {
-              const job = await start(task, session, ctx)
-              jobs.push(job)
-              if (bg) adopt(session.sessionId, job, auto ? session.expectNotice?.() : undefined)
-              if (ctx.signal.aborted) stop()
-            } catch (err) {
-              failed.push(
-                `Task ${i + 1} (${task.role ?? "agent"}: ${titleOf(task)}) did not start: ${err instanceof Error ? err.message : String(err)}`,
-              )
-            }
-          }
-          if (bg) return startedInBackground(jobs, failed, auto)
-          const reports = await Promise.all(jobs.map((j) => j.report))
-          return textResult([...failed, ...reports].join("\n\n"), jobs.length === 0)
-        } finally {
-          ctx.signal.removeEventListener("abort", stop)
-        }
-      },
+    const agent = agentTool({
+      api,
+      roles: getRoles,
+      child: childDeps,
+      background,
+      adopt,
+      startedInBackground,
+      cancel,
     })
-
-    /** Whether `session` runs sub-agents in the background whatever the call says (D79). */
-    const mainAlwaysBackground = (session: { expectNotice?: unknown; depth: number }) =>
-      session.depth === 0 &&
-      session.expectNotice !== undefined &&
-      api.settings.subagents?.background !== false
-
-    const resultTool = defineTool<{ ids?: string[]; wait?: boolean }>({
-      name: AGENT_RESULT_TOOL,
-      description: `Gets the results of sub-agents started in the background with ${AGENT_TOOL}. Waits for them to finish unless wait is false. Without ids, covers every background sub-agent you started whose result you have not received yet. A result is handed out once: one that already came to you as a message is not repeated. In the main session results come by themselves and this never waits: it only reports which are still running.`,
-      parameters: {
-        type: "object",
-        properties: {
-          ids: { type: "array", items: { type: "string" }, description: "Sub-agent ids; default all." },
-          wait: { type: "boolean", description: "Wait for unfinished ones (default true)." },
-        },
-      },
-      traits: { readOnly: true },
-      concurrency: "parallel",
-      async execute(p, ctx) {
-        const mine = ctx.session ? background.get(ctx.session.sessionId) : undefined
-        const ids = p.ids?.length ? p.ids : [...(mine?.keys() ?? [])]
-        if (!ids.length) return textResult("There are no background sub-agents to collect.")
-        const parts: string[] = []
-        const batched = (id: string) =>
-          [...batches.values()].some((b) => b.jobs.some((j) => j.child.id === id))
-        const gone = (id: string) =>
-          batched(id)
-            ? `${id}: it has ended; its result is on its way to you as a message.`
-            : delivered.has(id)
-              ? `${id}: its result was already sent to you as a message.`
-              : `${id}: no such background sub-agent (or its result was already collected).`
-        const found = ids.flatMap((id) => {
-          const job = mine?.get(id)
-          if (!job) parts.push(gone(id))
-          return job ? [job] : []
-        })
-        // Waiting here would block the main session, whose results come by themselves anyway.
-        const wait = p.wait !== false && !(ctx.session && mainAlwaysBackground(ctx.session))
-        if (wait) {
-          // The turn may have been interrupted before this tool even started.
-          const aborted = new Promise<void>((resolve) => {
-            if (ctx.signal.aborted) resolve()
-            else ctx.signal.addEventListener("abort", () => resolve(), { once: true })
-          })
-          // While this call waits for a job, its report is handed out here, not sent.
-          for (const j of found) j.waiters++
-          try {
-            await Promise.race([Promise.all(found.map((j) => j.report)), aborted])
-          } finally {
-            for (const j of found) j.waiters--
-          }
-        }
-        const commander = ctx.session?.sessionId
-        if (ctx.signal.aborted && commander) {
-          // This result may never reach the model: reports that ended meanwhile go as a notice.
-          for (const job of found)
-            if (job.done !== undefined && mine?.has(job.child.id)) finished(commander, job)
-          return textResult("Interrupted; finished results come to you as a message.", true)
-        }
-        for (const job of found) {
-          if (!mine?.has(job.child.id)) {
-            // Another call collected it meanwhile.
-            parts.push(gone(job.child.id))
-          } else if (job.done !== undefined) {
-            parts.push(job.done)
-            mine.delete(job.child.id)
-            job.notice?.cancel()
-          } else {
-            const seconds = Math.round((Date.now() - job.startedAt) / 1000)
-            parts.push(
-              `## ${job.title} · ${job.role} · ${job.child.id} · still running (${seconds}s): ${shorten(job.prompt, 80)}`,
-            )
-          }
-        }
-        return textResult(parts.join("\n\n"))
-      },
-    })
+    const result = resultTool({ api, background, batches, delivered, finished })
 
     /** Stops `commander`'s uncollected background jobs and forgets them: nobody will ask for them. */
     const dropBackground = (commander: string, reason: string) => {
@@ -774,38 +245,11 @@ ${list.join("\n")}`
       }
     })
 
-    api.registerTool(agentTool)
-    api.registerTool(resultTool)
+    api.registerTool(agent)
+    api.registerTool(result)
     api.registerToolRenderer(AGENT_TOOL, agentPresenter)
-    api.registerCommand(agentsCommand({ worktrees: keptWorktrees }))
+    api.registerCommand(agentsCommand({ worktrees: kept }))
   })
-}
-
-/**
- * Shows an agent call by how many sub-agents it starts; frontends show each one under the
- * call (title, role, time, tokens, what it does), so the result line only sums them up.
- */
-export const agentPresenter: ToolPresenter<AgentParams> = {
-  summary(args) {
-    const n = taskList(args).length
-    return `· ${n} sub-agent${n === 1 ? "" : "s"}${args.background ? ` · background` : ""}`
-  },
-  result(call) {
-    if (call.result.isError) return undefined
-    if (call.text.startsWith("Started in the background")) return "started in the background"
-    const reports = call.text.split("\n").filter((l) => l.startsWith("## ")).length
-    if (reports > 1) return `${reports} reports`
-    return call.text.split("\n")[0]?.replace(/^#+\s*/, "") || undefined
-  },
-  /** All of the reports, at the full level: each one's heading as a heading, not as "## ". */
-  body(call, { detail }) {
-    if (detail !== "full" || call.result.isError) return []
-    return call.text
-      .split("\n")
-      .map((text) =>
-        text.startsWith("## ") ? { kind: "accent", text: text.slice(3) } : { kind: "text", text },
-      )
-  },
 }
 
 /** The built-in `agent` tool (D12, D27): loaded like any other extension. */
