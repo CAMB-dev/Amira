@@ -1,6 +1,7 @@
 import { statSync } from "node:fs"
 import path from "node:path"
 import { parseArgs } from "node:util"
+import type { PermissionMode } from "@amira/api"
 
 export interface CliArgs {
   prompt?: string
@@ -20,6 +21,8 @@ export interface CliArgs {
   shell?: ShellMode
   /** Tools hidden from the model (D70). Unset: from settings. */
   disabledTools?: string[]
+  /** The permission mode to start in (--permission-mode). Unset: from settings, else auto. */
+  permissionMode?: PermissionMode
   help: boolean
   version: boolean
   /** How the interactive UI draws: --fullscreen or --inline. Unset: from settings, else full screen. */
@@ -59,6 +62,13 @@ Options:
       --disable-tools <names>
                         Hide tools from the model, comma-separated (repeatable;
                         replaces "tools.disabled" from settings.json)
+      --permission-mode <mode>
+                        What the model may do without asking: auto (default;
+                        asks only where rules and protected files say), edits
+                        (changes files, asks before shell commands) or plan
+                        (read-only: no file changes, no shell commands). Wins
+                        over "permissions.mode" in settings.json; Shift+Tab
+                        cycles it in the UI
       --fullscreen      Draw the UI full screen: Amira scrolls, searches and
                         folds the conversation, and prints it on exit (default,
                         or "tui.mode" in settings.json)
@@ -127,6 +137,13 @@ export function parseCliArgs(
   if (values.inline) args.mode = "inline"
   if (values.fullscreen) args.mode = "fullscreen"
   if (values.shell !== undefined) args.shell = parseShell(values.shell)
+  if (values["permission-mode"] !== undefined) {
+    const mode = values["permission-mode"]
+    if (mode !== "auto" && mode !== "edits" && mode !== "plan") {
+      throw new UsageError(`--permission-mode must be auto, edits or plan, got "${mode}"`)
+    }
+    args.permissionMode = mode
+  }
   if (values["disable-tools"]) {
     args.disabledTools = values["disable-tools"].flatMap((v) =>
       v
@@ -211,6 +228,7 @@ function parse(argv: string[]) {
       "no-packages": { type: "boolean" },
       shell: { type: "string" },
       "disable-tools": { type: "string", multiple: true },
+      "permission-mode": { type: "string" },
       cwd: { type: "string", short: "C" },
       continue: { type: "boolean", short: "c" },
       resume: { type: "string", short: "r" },

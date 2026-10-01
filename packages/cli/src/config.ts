@@ -6,7 +6,11 @@ import {
   loadAuth,
   loadSettings,
   ProviderSettingsError,
+  projectScopeIsUser,
+  projectTrust,
   providersFromSettings,
+  type ResolvedPermissions,
+  resolvePermissions,
 } from "@amira/core"
 import type { CliArgs } from "./args.ts"
 import { toolsToDisable } from "./session.ts"
@@ -17,6 +21,8 @@ export interface Config {
   providers: ProviderConfig[]
   /** Keys from auth.json, used when the environment has none. */
   apiKeys: Record<string, string>
+  /** The permission mode and rules from every settings layer and --permission-mode. */
+  permissions: ResolvedPermissions
   /** Which shell tools the model gets (D68), after falling back from powershell off Windows. */
   shell: ShellMode
   /** Tools hidden from the model, from the shell mode and tools.disabled. */
@@ -39,8 +45,14 @@ export function resolveConfig(
     ...(args.model ? { model: args.model } : {}),
     ...(args.shell ? { shell: args.shell } : {}),
     ...(args.disabledTools ? { tools: { disabled: args.disabledTools } } : {}),
+    ...(args.permissionMode ? { permissions: { mode: args.permissionMode } } : {}),
   }
-  const { settings, warnings } = loadSettings({ cwd: args.cwd, home, flags })
+  const { settings, warnings, permissions: layers } = loadSettings({ cwd: args.cwd, home, flags })
+  // A project's allow rules count once the user trusts the project (amira ext trust), as its packages do.
+  const where = { cwd: args.cwd, home }
+  const trusted = projectScopeIsUser(where) || projectTrust(args.cwd, settings) === true
+  const permissions = resolvePermissions(layers, { trusted })
+  warnings.push(...permissions.warnings)
   const auth = loadAuth(authFile(home), platform)
   let shell: ShellMode = settings.shell ?? "auto"
   if (shell === "powershell" && platform !== "win32") {
@@ -51,6 +63,7 @@ export function resolveConfig(
     settings,
     providers: settingsProviders(settings, warnings),
     apiKeys: auth.keys,
+    permissions,
     shell,
     disabledTools: toolsToDisable(shell, settings.tools?.disabled ?? []),
     requestedDisabled: {

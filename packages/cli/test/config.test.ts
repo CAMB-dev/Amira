@@ -289,3 +289,42 @@ test("a provider left incomplete by an ignored project key says why", () => {
   expect(message).toContain('"providers.ollama.baseUrl" is ignored')
   expect(message).toContain(path.join(home, "settings.json"))
 })
+
+test("permissions: --permission-mode wins, a project only tightens, untrusted project allows are dropped", () => {
+  expect(config([]).permissions).toMatchObject({ mode: "auto", modeSource: "default", rules: [] })
+  put(path.join(home, "settings.json"), {
+    permissions: { mode: "edits", rules: [{ command: ["git", "push"], decision: "ask" }] },
+  })
+  put(path.join(cwd, ".amira", "settings.json"), {
+    permissions: {
+      mode: "auto",
+      rules: [
+        { command: ["git", "push"], decision: "allow" },
+        { command: ["rm"], decision: "deny" },
+      ],
+    },
+  })
+  const c = config([])
+  expect(c.permissions.mode).toBe("edits")
+  expect(c.permissions.rules.map((r) => `${r.command.join(" ")} ${r.decision} ${r.source.scope}`)).toEqual([
+    "git push ask user",
+    "rm deny project",
+  ])
+  expect(c.warnings.join("\n")).toContain('"permissions.mode" "auto" is ignored')
+  expect(c.warnings.join("\n")).toContain("this project is not trusted")
+  // Merged settings carry no permissions: only the resolved ones count.
+  expect(c.settings.permissions).toBeUndefined()
+  // Trusted (as for its packages), the project's allow rule joins; it still cannot beat the user's ask.
+  put(path.join(home, "settings.json"), {
+    permissions: { mode: "edits", rules: [{ command: ["git", "push"], decision: "ask" }] },
+    packages: { trustedProjects: [cwd] },
+  })
+  expect(config([]).permissions.rules).toHaveLength(3)
+  put(path.join(cwd, ".amira", "settings.local.json"), { permissions: { mode: "plan" } })
+  expect(config([]).permissions.mode).toBe("plan")
+  expect(config(["--permission-mode", "auto"]).permissions).toMatchObject({
+    mode: "auto",
+    modeSource: "--permission-mode",
+  })
+  expect(() => config(["--permission-mode", "yolo"])).toThrow(UsageError)
+})
