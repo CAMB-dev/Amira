@@ -44,9 +44,48 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 
 修改文件有两种编辑工具。`edit` 在单个文件中替换一段确切的文本。`apply_patch` 接收 Codex 格式的补丁（`*** Begin Patch` … `*** End Patch`），一次可以新增、删除、修改和移动多个文件；它在写入前校验所有 hunk，写入中途失败时回滚已写入的部分。除非 provider 设置另有选择，每个模型默认使用 `edit`，详见[编辑工具](providers.md#编辑工具)。`write` 始终可用。当前模型不使用的那个编辑工具会在 `/tools` 中显示为禁用并附上原因，`/tools enable` 也无法启用它，需要修改设置。
 
-扩展可以拦截工具调用，拒绝执行或要求用户批准。是否审批由扩展决定，并非每次编辑或 shell 命令都自动弹出确认。审批界面显示工具名、原因，以及预览或参数。用方向键选项，再按 Enter；确认框初始没有选中项。Esc 拒绝该调用并停止轮次。
+审批请求来自[权限策略](#权限)和扩展；扩展可以拦截工具调用，拒绝执行或要求用户批准。审批界面显示工具名、原因（包括引起询问的模式或规则），以及预览或参数。用方向键选项，再按 Enter；确认框初始没有选中项。Esc 拒绝该调用并停止轮次。
 
-如果界面提供 `Don't ask again`，它只允许**该工具因同一原因**提出的调用，在当前会话剩余时间内生效，不会保存持久权限。子 agent 的审批由其父 agent 的模型决定。打印模式无法回答对话框，因此需要审批的调用会被拒绝，问题会被取消；RPC 客户端必须显式回答界面请求。
+如果界面提供 `Don't ask again`，它只允许**该工具因同一原因**提出的调用，在当前会话剩余时间内生效，不会保存持久权限。子 agent 的权限询问直接交给你，而不是交给父 agent；扩展为子 agent 提出的审批仍由父 agent 的模型决定。打印模式无法回答对话框，因此需要审批的调用会被拒绝，问题会被取消；RPC 客户端必须显式回答界面请求，客户端关闭 stdin 后，审批一律拒绝。
+
+## 权限
+
+权限模式决定模型无需询问就能做什么，对整个会话（包括子 agent）生效。
+
+| 模式 | 作用 |
+| --- | --- |
+| `auto`（默认） | 所有操作都不询问，除非你的规则或受保护文件另有要求 |
+| `edits` | 修改文件不询问；`allow` 规则未覆盖的 shell 命令运行前询问 |
+| `plan` | 只读：不修改文件，不运行 shell 命令；对无法确认只读的工具（例如 MCP 工具）先询问 |
+
+在界面中按 Shift+Tab 依次切换 `auto`、`edits` 和 `plan`；非 `auto` 模式会显示在输入框边框中的模型名旁边。启动时可用 `--permission-mode <mode>` 或设置中的 `"permissions": {"mode": "edits"}` 选择模式。目前 plan 模式会拦截所有 shell 命令，因为 Amira 还无法证明一条命令只读不写。
+
+命令规则按命令的词允许、询问或拒绝 shell 命令：
+
+```json
+{
+  "permissions": {
+    "mode": "edits",
+    "rules": [
+      { "command": ["git", "status"], "decision": "allow" },
+      { "command": ["git", "push"], "decision": "ask", "reason": "Review what goes out" },
+      { "command": ["rm", "-rf"], "decision": "deny" }
+    ]
+  }
+}
+```
+
+规则匹配的是命令的词（argv），而不是文本：`git status --short` 匹配 `["git", "status"]`，`git statusx` 不匹配。对 `ask` 和 `deny` 规则来说，命令名写成路径或带 Windows 扩展名（`/usr/bin/git`、`git.exe`）时同样匹配，PowerShell 的内置别名也算同一个命令（`rm`、`del` 与 `Remove-Item`）；中间夹有其他词时也匹配（`git -C repo push` 匹配 `["git", "push"]`），并且不区分大小写。`allow` 规则必须与命令开头逐词一致，而且命令名不能带路径（`x/git status` 不算 `git status`），除非规则本身写的就是这个路径。多条规则同时匹配时，`deny` 优先于 `ask`，`ask` 优先于 `allow`。`allow` 只表示“不询问”，不会解除 plan 模式，也不会放开受保护文件。
+
+用 `&&`、`||`、`;`、`|` 或换行连接的命令会被拆开，逐个检查。Amira 无法逐词检查的命令一律改为询问：`$(...)` 和反引号等替换、变量、重定向到文件、here-document 和 here-string、分组、文件名通配符（`*`、`?`、`[...]`）、会运行其他命令的包装命令（`eval`、`sudo`、`xargs`、`bash -c`、`Invoke-Expression`、`Start-Process`、各类解释器）、定义别名的命令（`alias`、`Set-Alias`、`git -c`、`git config alias.*`）以及脚本。在 `auto` 模式下，只要没有 `ask` 或 `deny` 规则，这类命令仍然直接运行。命令按实际运行它的 shell 解析：bash 或 PowerShell，包括 `bash` 工具在 Windows 上退回 PowerShell 的情况。
+
+规则只决定 Amira 询问还是拒绝，并不是沙箱。命令仍可能通过其他途径调用被拒绝的程序，例如程序的副本或链接，或模型之前写好的脚本。`deny` 适合拦住值得阻止的失误，不能当作安全边界。
+
+用户设置文件中的规则始终生效。项目的 `.amira/settings.json` 或 `.amira/settings.local.json` 只能收紧权限：比你的模式更严格时，项目的模式才生效；项目的 `ask` 和 `deny` 规则直接生效；项目的 `allow` 规则要在你信任该项目后才生效（`amira ext trust`，与项目扩展包所需的信任相同）。项目文件不允许修改的内容会在启动时提示。`--permission-mode` 优先于所有设置文件。`/permissions` 列出当前模式、每条规则及其来源文件，以及被忽略的设置；`/status` 显示模式和规则数量。
+
+有些文件无论处于哪种模式，`write`、`edit` 或 `apply_patch` 修改前都会询问：`.amira` 目录（设置、扩展包和锁文件）和 Amira 用户目录、`.git`（hooks、config 以及其他 Git 元数据，包括链接 worktree 的 Git 目录）、`.gitmodules`、`core.hooksPath` 指向的目录，以及你的全局 Git 配置。同一文件的其他写法也算在内（大小写不同、`../`、绝对路径、MSYS 路径、链接）。**shell 命令目前仍然可以修改这些文件，因为命令还没有在沙箱中运行。**
+
+被拒绝的调用会告诉模型原因，并提示它应当询问你。在打印模式下，以及 RPC 中没有客户端能回答时，所有需要询问的操作都会被拒绝并说明原因；无人值守运行请使用 `auto` 模式或规则。
 
 ## 会话、压缩与回退
 
@@ -131,7 +170,7 @@ RPC 在 stdin 和 stdout 使用 JSON Lines，不能与 `-p` 或命令行提示�
 
 ## 状态与费用
 
-`/status` 显示模型、provider、会话 ID 与文件、上下文用量和窗口、输出 token、缓存命中率、最近回复速度、已知费用、shell 与 Git 工作区。速度分别显示回复和思考每秒的 token 数；`~` 表示估算值：provider 没有单独上报推理 token 数时按文字估算 token 数，只流式输出了推理摘要时思考速度从发出请求开始计时。`(hidden reasoning)` 表示模型进行了推理但没有流式输出思考内容。恢复的会话会包含之前运行的用量。状态栏显示本次运行以来的 agent 树用量；`/status` 可以包含已保存会话及其子 agent 的费用。
+`/status` 显示模型、provider、会话 ID 与文件、上下文用量和窗口、输出 token、缓存命中率、最近回复速度、已知费用、shell、权限模式与规则数量，以及 Git 工作区。速度分别显示回复和思考每秒的 token 数；`~` 表示估算值：provider 没有单独上报推理 token 数时按文字估算 token 数，只流式输出了推理摘要时思考速度从发出请求开始计时。`(hidden reasoning)` 表示模型进行了推理但没有流式输出思考内容。恢复的会话会包含之前运行的用量。状态栏显示本次运行以来的 agent 树用量；`/status` 可以包含已保存会话及其子 agent 的费用。
 
 `/cost` 按模型列出当前会话回复的费用，并单独列出压缩和会话标题请求的用量，不合计子 agent 费用；子 agent 信息见 `/status` 与 `/agents`。费用依赖已知模型定价和上报用量：未知价格会明确标出，含未知价格行的合计只是部分估算。实际收费以 provider 账单为准。
 

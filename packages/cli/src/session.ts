@@ -10,6 +10,7 @@ import {
 } from "@amira/ai"
 import type {
   AnyEvent,
+  ApprovalPermission,
   EventEnvelope,
   Extension,
   ReloadReport,
@@ -23,6 +24,7 @@ import {
   AgentTree,
   type Approver,
   type Asker,
+  amiraHome,
   amiraPath,
   type CompactionOptions,
   commandAliasWarnings,
@@ -33,6 +35,8 @@ import {
   InterceptorRegistry,
   instructionsSection,
   loadInstructions,
+  Permissions,
+  type ResolvedPermissions,
   type SessionStore,
   ToolRegistry,
   toolSearchExtension,
@@ -88,6 +92,8 @@ export interface SessionOptions {
   warnings?: string[]
   /** Delays before notices of a failed turn are sent again; for tests. Default 10, 30 and 90 s. */
   noticeRetryMs?: number[]
+  /** The permission mode and rules (resolveConfig). Default: auto mode without rules. */
+  permissions?: ResolvedPermissions
 }
 
 export interface Session {
@@ -285,8 +291,23 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   })
   const approve = userApprover(host.ui, {
     presenters: host.renderers,
+    tree,
     notify: (text) =>
       bus.emit("extension.notice", { source: "approval", text, level: "info" }, { sessionId: "host" }),
+  })
+  // One policy for every agent of this session and their sub-agents; its questions go to the user.
+  const resolved = opts.permissions
+  const permissions = new Permissions({
+    ...(resolved
+      ? {
+          mode: resolved.mode,
+          rules: resolved.rules,
+          warnings: resolved.warnings,
+          modeSource: resolved.modeSource,
+        }
+      : {}),
+    protect: { amiraHome: amiraHome() },
+    approver: approve,
   })
   const ask = userAsker(host.ui, tree)
   const newAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
@@ -296,6 +317,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     return new Agent({
       tree,
       approve,
+      permissions,
       ask,
       ai,
       model: m,
@@ -392,6 +414,20 @@ export interface ApproverOptions {
   presenters?: { get(toolName: string): ToolPresenter<any, any> | undefined }
   /** Tells the user something, e.g. that a call is allowed for the rest of the session. */
   notify?: (text: string) => void
+  /** The agent tree, to say which sub-agent a question comes from. */
+  tree?: Pick<AgentTree, "subagent">
+}
+
+/** Which mode or rule made the permission policy ask, for the dialog. */
+function permissionLine(p: ApprovalPermission): string {
+  if (p.rule) {
+    return `Permission rule ${JSON.stringify(p.rule.command)} says ${p.rule.decision} (${p.rule.scope} settings, ${p.rule.file}).`
+  }
+  if (p.cause === "protected")
+    return 'Protected file: changes to it ask in every mode ("Don\'t ask again" lifts that for this session).'
+  if (p.cause === "complex")
+    return `Permission mode "${p.mode}": the command cannot be checked against the rules word by word.`
+  return `Permission mode "${p.mode}".`
 }
 
 /**
@@ -409,9 +445,13 @@ export function userApprover(ui: UiRequests, opts: ApproverOptions = {}): Approv
     const preview = approvalPreview(request.args, opts.presenters?.get(request.name))
     // "Don't ask again" covers this tool asked about for this reason; the message says so.
     const scope = `"Don't ask again" covers ${request.name} asked about for: ${request.reason}`
-    const message = preview
-      ? `${request.reason}\n${scope}`
-      : `${request.reason}\n${rawArgs(request.args)}\n${scope}`
+    const sub = opts.tree?.subagent(request.sessionId)
+    const head = [
+      ...(sub ? [`Asked by the sub-agent "${sub.info.title}" (${sub.info.id}).`] : []),
+      ...(request.permission ? [permissionLine(request.permission)] : []),
+      request.reason,
+    ].join("\n")
+    const message = preview ? `${head}\n${scope}` : `${head}\n${rawArgs(request.args)}\n${scope}`
     const answer = await ui.ask(
       {
         kind: "confirm",

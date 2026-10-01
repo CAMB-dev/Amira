@@ -367,6 +367,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   try {
     for await (const line of io.lines) await handle(line)
     closed = true
+    // Approvals asked from now on are refused with a reason instead of a dialog nobody sees.
+    ui.unavailable ??= "the rpc client closed its input"
     ui.cancelAll()
     await Promise.all(runningCommands)
     // The running turn or /compact, background sub-agents still expected to report, and the
