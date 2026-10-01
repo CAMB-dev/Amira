@@ -9,10 +9,5 @@
   },
   "dependencies": {
     "@amira/api": "workspace:*"
-  },
-  "devDependencies": {
-    "@amira/ai": "workspace:*",
-    "@amira/core": "workspace:*",
-    "@amira/proc": "workspace:*"
   }
 }

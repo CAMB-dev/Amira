@@ -89,11 +89,14 @@ export class ServerConnection {
     if (c.type === "http") return new HttpTransport(c.url, c.headers)
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") env[k] = v
-    return new StdioTransport({
-      argv: [c.command, ...c.args],
-      cwd: c.cwd ? path.resolve(this.#api.cwd, c.cwd) : this.#api.cwd,
-      env: { ...env, ...c.env },
-    })
+    return new StdioTransport(
+      {
+        argv: [c.command, ...c.args],
+        cwd: c.cwd ? path.resolve(this.#api.cwd, c.cwd) : this.#api.cwd,
+        env: { ...env, ...c.env },
+      },
+      { openPipe: this.#api.openPipe },
+    )
   }
 
   #register(tools: McpTool[]) {

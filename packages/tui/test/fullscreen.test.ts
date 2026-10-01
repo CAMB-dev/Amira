@@ -13,7 +13,6 @@ import {
   type TuiSettings,
   textResult,
 } from "@amira/api"
-import { builtinPresenters } from "@amira/builtin-tools"
 import {
   Agent,
   AgentTree,
@@ -24,9 +23,10 @@ import {
   listSubagents,
   ToolRegistry,
 } from "@amira/core"
-import { agentsCommand } from "@amira/ext-agent"
-import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
+import { agentsCommand } from "../../../extensions/agent/src/index.ts"
+import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
+import statusExtension from "../../../extensions/status/src/index.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"

@@ -9,12 +9,9 @@
   },
   "dependencies": {
     "@amira/api": "workspace:*",
-    "@amira/net": "workspace:*",
     "turndown": "^7.2.4"
   },
   "devDependencies": {
-    "@amira/ai": "workspace:*",
-    "@amira/core": "workspace:*",
     "@types/turndown": "^5.0.5"
   }
 }

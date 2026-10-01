@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test"
-import { type ReleaseOptions, type RunResult, type Standby, StandbyGoneError } from "@amira/proc"
+import "../../../packages/core/src/index.ts"
+import {
+  type ReleaseOptions,
+  type RunResult,
+  type Standby,
+  StandbyGoneError,
+} from "../../../packages/proc/src/index.ts"
 import type { ShellCommand } from "../src/shell.ts"
 import { StandbyPool } from "../src/standby.ts"
 

@@ -1,4 +1,5 @@
 // Runs in a fresh Bun process: the first bash call of a process is the one that used to escape the job.
+import "../../../../packages/core/src/index.ts"
 import { bashTool } from "../../src/bash.ts"
 
 const [marker, cwd] = process.argv.slice(2)

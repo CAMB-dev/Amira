@@ -1,7 +1,14 @@
 import { expect, spyOn, test } from "bun:test"
-import { createAi, createMockDialect } from "@amira/ai"
 import type { AssistantMessage, SessionControl, SessionInfo } from "@amira/api"
-import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
+import {
+  Agent,
+  CommandHost,
+  EventBus,
+  ExtensionHost,
+  InterceptorRegistry,
+  ToolRegistry,
+} from "../../../packages/core/src/index.ts"
 import commandsExtension, {
   ago,
   cacheHitRate,

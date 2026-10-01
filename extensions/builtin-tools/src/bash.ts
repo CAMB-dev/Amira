@@ -1,5 +1,4 @@
-import { type BashDetails, defineTool, textResult } from "@amira/api"
-import { type RunResult, runCommand } from "@amira/proc"
+import { type BashDetails, defineTool, type HostRunResult, hostRunCommand, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
 import { startBackground } from "./jobs.ts"
 import {
@@ -86,7 +85,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
       const started = performance.now()
       let lastUpdate = 0
       let output = ""
-      let run: RunResult
+      let run: HostRunResult
       try {
         const opts = {
           timeoutMs,
@@ -103,7 +102,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
         if (pool) run = await pool.run(cmd, opts)
         else {
           const { argv, ...spawn } = cmd
-          run = await runCommand(argv, { ...spawn, ...opts })
+          run = await hostRunCommand(argv, { ...spawn, ...opts })
         }
       } catch (err) {
         return textResult(`Failed to start ${shell.path}: ${(err as Error).message}`, true)
@@ -186,7 +185,7 @@ export function createPowershellTool(path = findPowerShell()) {
 /** Windows only: PowerShell next to bash, for Windows-specific work. */
 export const powershellTool = createPowershellTool()
 
-function statusLine(run: RunResult, timeoutMs: number): string {
+function statusLine(run: HostRunResult, timeoutMs: number): string {
   if (run.timedOut) return `Command timed out after ${timeoutMs} ms and was killed.`
   if (run.aborted) return "Command was aborted."
   if (run.exitCode === null)

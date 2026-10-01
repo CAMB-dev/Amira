@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AskQuestion, defineTool, textResult } from "@amira/api"
-import builtinTools from "@amira/builtin-tools"
 import {
   Agent,
   type Approver,
@@ -11,8 +10,9 @@ import {
   InterceptorRegistry,
   ToolRegistry,
 } from "@amira/core"
-import statusExtension from "@amira/ext-status"
 import { FakeTerminal, setColorEnabled } from "@amira/tui-kit"
+import builtinTools from "../../../extensions/builtin-tools/src/index.ts"
+import statusExtension from "../../../extensions/status/src/index.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { fileList } from "../src/file-index.ts"

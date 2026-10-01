@@ -1,10 +1,16 @@
-import { defineExtension, defineTool, type ExtensionAPI, textResult, type WebSettings } from "@amira/api"
-import type { Resolver } from "@amira/net"
+import {
+  defineExtension,
+  defineTool,
+  type ExtensionAPI,
+  type Resolver,
+  textResult,
+  type WebSettings,
+} from "@amira/api"
 import { FetchError, fetchPage, PageCache, parseUrl, renderPage } from "./fetch.ts"
 import { webFetchPresenter, webSearchPresenter } from "./presenters.ts"
 import { normalizeDomain, renderResults, SearchError, search } from "./search.ts"
 
-export { isPrivateAddress } from "@amira/net"
+export { isPrivateAddress } from "@amira/api"
 export { htmlToMarkdown } from "./html.ts"
 export { BACKENDS, parseExaText } from "./search.ts"
 export { webFetchPresenter, webSearchPresenter }

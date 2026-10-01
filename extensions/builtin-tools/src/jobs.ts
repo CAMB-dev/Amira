@@ -1,26 +1,24 @@
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { TemporaryBackgroundJobRegistry } from "@amira/api"
 import {
   type BackgroundJobDetails,
+  type BackgroundJobInfo,
+  type BackgroundJobWaitResult,
   defineTool,
   formatElapsed,
+  isTemporaryBackgroundJobLimitError,
   type JobListDetails,
   plural,
   type Settings,
+  TEMPORARY_DEFAULT_BUFFER_CHARS,
+  TEMPORARY_DEFAULT_MAX_RUNNING,
   type ToolContext,
   type ToolResult,
   type ToolSession,
+  temporaryBackgroundJobs,
   textResult,
 } from "@amira/api"
-import {
-  backgroundJobs,
-  DEFAULT_BUFFER_CHARS,
-  DEFAULT_MAX_RUNNING,
-  type JobInfo,
-  JobLimitError,
-  type JobRegistry,
-  type WaitResult,
-} from "@amira/proc"
 import type { Shell } from "./shell.ts"
 import { NOT_CONTAINED_WARNING } from "./shell-notes.ts"
 import { MAX_OUTPUT_CHARS } from "./truncate.ts"
@@ -42,17 +40,19 @@ export const MAX_WAIT_MS = 600_000
 export const STOP_GRACE_MS = 2000
 
 /** Where the tools find jobs and how much of their output goes to logs; the extension sets it from settings. */
-export const jobsConfig: { registry: JobRegistry; maxLogBytes?: number } = { registry: backgroundJobs }
+export const jobsConfig: { registry: TemporaryBackgroundJobRegistry; maxLogBytes?: number } = {
+  registry: temporaryBackgroundJobs,
+}
 
 /** Applies the `backgroundJobs` settings. */
 export function configureJobs(
   settings: Settings["backgroundJobs"] = {},
-  registry: JobRegistry = jobsConfig.registry,
+  registry: TemporaryBackgroundJobRegistry = jobsConfig.registry,
 ): void {
   // Unset keys go back to the defaults, so a reload after removing one takes effect.
   registry.configure({
-    maxRunning: settings.maxRunning ?? DEFAULT_MAX_RUNNING,
-    bufferChars: settings.bufferChars ?? DEFAULT_BUFFER_CHARS,
+    maxRunning: settings.maxRunning ?? TEMPORARY_DEFAULT_MAX_RUNNING,
+    bufferChars: settings.bufferChars ?? TEMPORARY_DEFAULT_BUFFER_CHARS,
   })
   if (settings.maxLogBytes !== undefined) jobsConfig.maxLogBytes = settings.maxLogBytes
   else delete jobsConfig.maxLogBytes
@@ -62,7 +62,10 @@ export function configureJobs(
 const readerOf = (ctx: ToolContext) => `model:${ctx.session?.sessionId ?? "-"}`
 
 /** Sub-agents see the jobs they started; the top-level session sees all. */
-export function canSee(job: JobInfo, session: Pick<ToolSession, "depth" | "sessionId"> | undefined): boolean {
+export function canSee(
+  job: BackgroundJobInfo,
+  session: Pick<ToolSession, "depth" | "sessionId"> | undefined,
+): boolean {
   if (!session || session.depth === 0) return true
   return job.owner === session.sessionId
 }
@@ -86,7 +89,7 @@ function watch<T>(id: string, run: () => Promise<T>): Promise<T> {
  * next turn (it does not wake an idle session; the user sees a notice meanwhile). Not when a
  * tool call watching the job reports the end itself. Returns a function that stops listening.
  */
-export function watchJobEnds(registry: JobRegistry = jobsConfig.registry): () => void {
+export function watchJobEnds(registry: TemporaryBackgroundJobRegistry = jobsConfig.registry): () => void {
   return registry.subscribe(({ type, job }) => {
     if (type !== "end") return
     const session = starters.get(job.id)
@@ -108,7 +111,7 @@ export function watchJobEnds(registry: JobRegistry = jobsConfig.registry): () =>
 }
 
 /** How a job ended, for sentences: "exited with code 1", "was stopped", "failed to start: …". */
-export function endText(job: JobInfo): string {
+export function endText(job: BackgroundJobInfo): string {
   if (job.status === "failed")
     return job.pid === undefined ? `failed to start: ${job.error}` : `was lost: ${job.error}`
   if (job.status === "stopped") return "was stopped"
@@ -117,7 +120,7 @@ export function endText(job: JobInfo): string {
 }
 
 /** The job's state in a sentence, for the model. */
-function statusSentence(job: JobInfo, now = Date.now()): string {
+function statusSentence(job: BackgroundJobInfo, now = Date.now()): string {
   if (job.status === "starting" || job.status === "running") {
     const pid = job.pid !== undefined ? `pid ${job.pid}, ` : ""
     return `Job ${job.id} is running (${pid}started ${formatElapsed(now - job.startedAt)} ago).`
@@ -127,7 +130,11 @@ function statusSentence(job: JobInfo, now = Date.now()): string {
 
 const lineCount = (text: string) => (text.trimEnd() === "" ? 0 : text.trimEnd().split("\n").length)
 
-function details(job: JobInfo, output: string, waited?: WaitResult["reason"]): BackgroundJobDetails {
+function details(
+  job: BackgroundJobInfo,
+  output: string,
+  waited?: BackgroundJobWaitResult["reason"],
+): BackgroundJobDetails {
   return {
     jobId: job.id,
     command: job.command,
@@ -141,13 +148,14 @@ function details(job: JobInfo, output: string, waited?: WaitResult["reason"]): B
 }
 
 /** A note where output was left out: older output only in the log, or the read was capped. */
-function droppedNote(job: JobInfo, dropped: number): string | undefined {
+function droppedNote(job: BackgroundJobInfo, dropped: number): string | undefined {
   if (!dropped) return undefined
   const where = job.logPath ? `; the log file has all of it: ${job.logPath}` : ""
   return `[${dropped} earlier characters are left out${where}]`
 }
 
-const failed = (job: JobInfo) => job.status === "failed" || (job.status === "exited" && job.exitCode !== 0)
+const failed = (job: BackgroundJobInfo) =>
+  job.status === "failed" || (job.status === "exited" && job.exitCode !== 0)
 
 /**
  * The shell tools' `background: true`: starts the command as a job and waits briefly, so a
@@ -163,7 +171,7 @@ export async function startBackground(
   const { registry } = jobsConfig
   const session = ctx.session
   const { argv, env, cwd, gated, gateLine, viaCmd } = shell.command(command, ctx.cwd)
-  let job: JobInfo
+  let job: BackgroundJobInfo
   try {
     job = registry.start({
       command,
@@ -180,7 +188,7 @@ export async function startBackground(
       meta: { tool, shell: shell.path },
     })
   } catch (err) {
-    if (err instanceof JobLimitError) {
+    if (isTemporaryBackgroundJobLimitError(err)) {
       const live = registry
         .running()
         .filter((j) => canSee(j, session))
@@ -224,7 +232,7 @@ export async function startBackground(
 }
 
 /** Finds a job the calling session may use, or the error result to return. */
-function lookup(jobId: unknown, ctx: ToolContext): JobInfo | ToolResult {
+function lookup(jobId: unknown, ctx: ToolContext): BackgroundJobInfo | ToolResult {
   if (typeof jobId !== "string" || !jobId.trim()) return textResult("job_id is required", true)
   const job = jobsConfig.registry.get(jobId.trim())
   if (job && canSee(job, ctx.session)) return job
@@ -238,7 +246,7 @@ function lookup(jobId: unknown, ctx: ToolContext): JobInfo | ToolResult {
   )
 }
 
-const isResult = (v: JobInfo | ToolResult): v is ToolResult => "content" in v
+const isResult = (v: BackgroundJobInfo | ToolResult): v is ToolResult => "content" in v
 
 /**
  * A regular expression from the model, matched case-insensitively per line; text that is not
@@ -318,7 +326,7 @@ export const jobOutputTool = defineTool<JobOutputParams>({
         : pattern
           ? DEFAULT_WAIT_MS
           : 0
-    let waited: WaitResult | undefined
+    let waited: BackgroundJobWaitResult | undefined
     if (pattern || waitMs > 0) {
       waited = await watch(found.id, () =>
         registry.waitFor(found.id, {

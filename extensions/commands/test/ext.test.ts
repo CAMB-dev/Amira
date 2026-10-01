@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { createAi, createMockDialect } from "@amira/ai"
 import type {
   ExtensionAdmin,
   ExtensionProgress,
@@ -11,6 +10,7 @@ import type {
   SessionControl,
   UiRequest,
 } from "@amira/api"
+import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
   CommandHost,
@@ -23,7 +23,7 @@ import {
   packageScope,
   readLock,
   ToolRegistry,
-} from "@amira/core"
+} from "../../../packages/core/src/index.ts"
 import { extensionProgressLines, extensionRows, parseExtArgs } from "../src/ext-command.ts"
 import commandsExtension from "../src/index.ts"
 

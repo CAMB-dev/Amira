@@ -7,9 +7,14 @@
  */
 export {
   fetchPublic,
+  type GuardedFetchOptions,
+  type GuardedResponse,
+  guardedFetch,
   isPrivateAddress,
   NetError,
   type PublicFetchOptions,
   type PublicFetchResult,
+  parseHttpUrl,
   type Resolver,
+  readCapped,
 } from "@amira/net"

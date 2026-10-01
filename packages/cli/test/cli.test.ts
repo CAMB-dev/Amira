@@ -536,7 +536,7 @@ test("the top-level session asks the user to approve; dismissing denies and stop
 
 test("an approval shows what the call would do as its tool presents it", async () => {
   const { userApprover, approvalPreview } = await import("../src/session.ts")
-  const { builtinPresenters } = await import("@amira/builtin-tools")
+  const { builtinPresenters } = await import("../../../extensions/builtin-tools/src/index.ts")
   expect(approvalPreview({ command: "make build\necho done" }, builtinPresenters.bash)).toEqual([
     { kind: "code", text: "make build" },
     { kind: "code", text: "echo done" },

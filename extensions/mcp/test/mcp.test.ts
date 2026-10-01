@@ -1,17 +1,16 @@
 import { afterAll, expect, test } from "bun:test"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import type { AnyEvent, ToolResultMessage } from "@amira/api"
+import { createAi, createMockDialect, type MockStep } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
   EventBus,
   ExtensionHost,
   InterceptorRegistry,
-  TOOL_SEARCH,
   ToolRegistry,
-  toolSearchExtension,
-} from "@amira/core"
-import { resetCommandWorker } from "@amira/proc"
+} from "../../../packages/core/src/index.ts"
+import { resetCommandWorker } from "../../../packages/proc/src/index.ts"
+import { TOOL_SEARCH, toolSearchExtension } from "../../builtin-tools/src/tool-search.ts"
 import { McpClient } from "../src/client.ts"
 import type { ServerConfig } from "../src/config.ts"
 import { HttpTransport } from "../src/http.ts"

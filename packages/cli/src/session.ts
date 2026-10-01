@@ -40,7 +40,6 @@ import {
   type ResolvedPermissions,
   type SessionStore,
   ToolRegistry,
-  toolSearchExtension,
   type UiRequests,
 } from "@amira/core"
 import { UsageError } from "./args.ts"
@@ -127,14 +126,19 @@ export interface Session {
 /** Extensions bundled with Amira and loaded by default (D50). */
 async function defaultBuiltins(): Promise<{ source: string; extension: Extension }[]> {
   const bundled: [string, () => Promise<{ default?: unknown }>][] = [
-    ["builtin:tools", () => import("@amira/builtin-tools")],
-    ["builtin:status", () => import("@amira/ext-status")],
-    ["builtin:commands", () => import("@amira/ext-commands")],
-    ["builtin:tool-search", async () => ({ default: toolSearchExtension })],
-    ["builtin:skills", () => import("@amira/ext-skills")],
-    ["builtin:mcp", () => import("@amira/ext-mcp")],
-    ["builtin:web", () => import("@amira/ext-web")],
-    ["builtin:agent", () => import("@amira/ext-agent")],
+    ["builtin:tools", () => import("../../../extensions/builtin-tools/src/index.ts")],
+    [
+      "builtin:tool-search",
+      async () => ({
+        default: (await import("../../../extensions/builtin-tools/src/tool-search.ts")).toolSearchExtension,
+      }),
+    ],
+    ["builtin:status", () => import("../../../extensions/status/src/index.ts")],
+    ["builtin:commands", () => import("../../../extensions/commands/src/index.ts")],
+    ["builtin:skills", () => import("../../../extensions/skills/src/index.ts")],
+    ["builtin:mcp", () => import("../../../extensions/mcp/src/index.ts")],
+    ["builtin:web", () => import("../../../extensions/web/src/index.ts")],
+    ["builtin:agent", () => import("../../../extensions/agent/src/index.ts")],
   ]
   const out: { source: string; extension: Extension }[] = []
   for (const [source, load] of bundled) {

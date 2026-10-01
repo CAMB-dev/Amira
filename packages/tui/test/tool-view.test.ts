@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { outputPreview, type ToolPresenter, textResult } from "@amira/api"
-import { builtinPresenters } from "@amira/builtin-tools"
 import { defaultTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
+import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
 import { parseUnifiedDiff, renderToolLines } from "../src/diff-view.ts"
 import {
   explorationOf,

@@ -1,15 +1,23 @@
-import { openPipe, type PipeEvent, type PipeProcess, type PipeSpec } from "@amira/proc"
+import { type OpenPipeOptions, openPipe, type PipeEvent, type PipeProcess } from "@amira/api"
 import type { JsonRpcMessage, Transport } from "./transport.ts"
+
+export interface StdioSpec {
+  argv: string[]
+  cwd: string
+  env: Record<string, string>
+}
 
 export interface StdioOptions {
   /** How long the server gets to exit after stdin closes before it is killed. Default 2000 ms. */
   closeGraceMs?: number
   onStderr?: (text: string) => void
+  /** For tests and hosts that already have an ExtensionAPI process bridge. */
+  openPipe?: (argv: string[], options: OpenPipeOptions) => PipeProcess
 }
 
 /**
  * Speaks newline-delimited JSON-RPC over a server's stdin/stdout. The process is spawned and
- * owned by the command worker of @amira/proc, so a slow spawn never stalls the main thread; it
+ * owned by the host process bridge, so a slow spawn never stalls the main thread; it
  * kills the server's tree when Amira exits if it still runs then.
  */
 export class StdioTransport implements Transport {
@@ -19,14 +27,14 @@ export class StdioTransport implements Transport {
   /** Process id of the server (or its launcher) once spawned. */
   pid: number | undefined
 
-  #spec: PipeSpec
+  #spec: StdioSpec
   #opts: StdioOptions
   #pipe: PipeProcess | undefined
   #buffer = ""
   #stderrTail = ""
   #closed = false
 
-  constructor(spec: PipeSpec, opts: StdioOptions = {}) {
+  constructor(spec: StdioSpec, opts: StdioOptions = {}) {
     this.#spec = spec
     this.#opts = opts
   }
@@ -56,7 +64,12 @@ export class StdioTransport implements Transport {
           }
         }
       }
-      this.#pipe = openPipe(this.#spec, onEvent)
+      const open = this.#opts.openPipe ?? openPipe
+      this.#pipe = open(this.#spec.argv, {
+        cwd: this.#spec.cwd,
+        env: this.#spec.env,
+        onEvent,
+      })
     })
   }
 

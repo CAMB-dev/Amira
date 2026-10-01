@@ -1,4 +1,4 @@
-import { guardedFetch, NetError, parseHttpUrl, type Resolver, readCapped } from "@amira/net"
+import { guardedFetch, NetError, parseHttpUrl, type Resolver, readCapped } from "@amira/api"
 import { htmlTitle, htmlToMarkdown } from "./html.ts"
 
 export interface FetchOptions {
