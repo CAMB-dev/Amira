@@ -111,9 +111,6 @@ function headStamp(p: Probe): string {
   ].join(":")
 }
 
-/** Built-in tools that only read files: a turn that ran nothing else changed no file. */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "glob"])
-
 /** Whether cwd or one of its ancestors has a .git entry; a stat per level, no spawn. */
 function insideRepo(cwd: string): boolean {
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
@@ -185,7 +182,8 @@ export function trackWorkspace(
     (e) => {
       if (stopped) return
       if (e.type === "tool.execute.end") {
-        if (!READ_ONLY_TOOLS.has(e.data.name)) wrote = true
+        // Only an explicit no-write capability can skip a refresh; unknown tools stay safe.
+        if (e.data.traits?.writesFiles !== false) wrote = true
         return
       }
       if (!last) return

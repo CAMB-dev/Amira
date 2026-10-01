@@ -139,6 +139,7 @@ async function run(argv: string[]): Promise<number> {
     nonInteractive: args.print,
     store,
     disabledTools: config.disabledTools,
+    shell: config.shell,
     requestedDisabled: config.requestedDisabled,
     settings: config.settings,
     permissions: config.permissions,

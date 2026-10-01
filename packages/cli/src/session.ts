@@ -15,6 +15,8 @@ import type {
   Extension,
   ReloadReport,
   Settings,
+  ShellMode,
+  ToolDefinition,
   ToolLine,
   ToolPresenter,
 } from "@amira/api"
@@ -66,6 +68,8 @@ export interface SessionOptions {
   noBuiltins: boolean
   /** Tools hidden from the model. */
   disabledTools?: string[]
+  /** Shell mode used to filter tools after their capabilities are registered. */
+  shell?: ShellMode
   /** The model cannot ask a person; print mode and RPC without a UI use this. */
   nonInteractive?: boolean
   /** Names the user asked to disable and where they came from; ones no tool has are reported. */
@@ -247,8 +251,16 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
     }
   }
-  const disabled = new Set(opts.disabledTools ?? [])
-  if (opts.nonInteractive) disabled.add("ask_user")
+  const disabled = new Set(
+    toolsToDisable(
+      opts.shell ?? settings.shell ?? "auto",
+      opts.disabledTools ?? [],
+      tools.list().map(({ tool }) => tool),
+    ),
+  )
+  if (opts.nonInteractive) {
+    for (const { tool } of tools.list()) if (tool.traits?.interactive) disabled.add(tool.name)
+  }
   tools.setDisabled(disabled)
   await bus.flush()
   stopCapture()
@@ -545,7 +557,7 @@ export function approvalPreview(
 }
 
 /**
- * The top-level session's questions (ask_user) go to the user; a sub-agent's reach here when
+ * The top-level session's questions go to the user; a sub-agent's reach here when
  * its commander passes them on, marked as such. Print mode says nobody can answer.
  */
 export function userAsker(ui: UiRequests, tree?: AgentTree): Asker {
@@ -635,9 +647,14 @@ export function contextFromSettings(context: Settings["context"]): ContextOption
 }
 
 /** The tools to hide for a shell mode and an explicit list (D68, D70). */
-export function toolsToDisable(shell: "auto" | "bash" | "powershell", explicit: string[]): string[] {
+export function toolsToDisable(
+  shell: "auto" | "bash" | "powershell",
+  explicit: string[],
+  tools: readonly Pick<ToolDefinition, "name" | "traits">[] = [],
+): string[] {
   const out = new Set(explicit)
-  if (shell === "bash") out.add("powershell")
-  if (shell === "powershell") out.add("bash")
+  if (shell !== "auto") {
+    for (const tool of tools) if (tool.traits?.shell && tool.traits.shell !== shell) out.add(tool.name)
+  }
   return [...out]
 }

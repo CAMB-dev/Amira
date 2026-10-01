@@ -53,7 +53,14 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
   const turnedOff = new Set<string>()
   const turnedOn = new Set<string>()
   const applyDisabled = () => {
-    const off = new Set([...toolsToDisable(shell, opts.disabled ?? []), ...turnedOff])
+    const off = new Set([
+      ...toolsToDisable(
+        shell,
+        opts.disabled ?? [],
+        tools.list().map(({ tool }) => tool),
+      ),
+      ...turnedOff,
+    ])
     for (const name of turnedOn) off.delete(name)
     tools.setDisabled(off)
   }
@@ -334,6 +341,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
           description: tool.description,
           source,
           exposure: tool.exposure ?? "active",
+          ...(tool.traits ? { traits: tool.traits } : {}),
           enabled: !disabled && agent().toolRestriction(tool) === undefined,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -355,9 +363,10 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       }
       shell = mode
       // The shell mode decides these two again, over earlier /tools choices.
-      for (const name of ["bash", "powershell"]) {
-        turnedOn.delete(name)
-        turnedOff.delete(name)
+      for (const { tool } of tools.list()) {
+        if (!tool.traits?.shell) continue
+        turnedOn.delete(tool.name)
+        turnedOff.delete(tool.name)
       }
       applyDisabled()
     },

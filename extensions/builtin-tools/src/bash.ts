@@ -61,11 +61,18 @@ const PARAMETERS = {
  * A tool that runs commands in the shell `resolve()` returns; bash and powershell share it.
  * With a pool, commands run on a process started ahead of time when one matches.
  */
-function shellTool(name: string, description: string[], resolve: () => Promise<Shell>, pool?: StandbyPool) {
+function shellTool(
+  name: string,
+  shellKind: "bash" | "powershell",
+  description: string[],
+  resolve: () => Promise<Shell>,
+  pool?: StandbyPool,
+) {
   return defineTool<BashParams>({
     name,
     description: description.join("\n"),
     parameters: PARAMETERS,
+    traits: { shell: shellKind },
     // Commands issued together run at the same time (D71); the model orders dependent ones.
     concurrency: "parallel",
     // The permission policy reads the command as the shell that runs it will: bash may fall
@@ -147,6 +154,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
 
 export const bashTool = shellTool(
   "bash",
+  "bash",
   [
     "Run a shell command and return its combined stdout and stderr plus the exit code.",
     "- Runs in bash (Git Bash on Windows, so use POSIX syntax and forward slashes). If Git Bash is not installed, Windows falls back to PowerShell: every result then starts with a `Shell:` line naming the PowerShell edition, and you must use PowerShell syntax.",
@@ -176,6 +184,7 @@ export function createPowershellTool(path = findPowerShell()) {
   const own = path === findPowerShell()
   const shell = own ? resolvePowerShell : () => Promise.resolve(gatedPowerShell(path))
   return shellTool(
+    "powershell",
     "powershell",
     powershellDescription(path),
     shell,

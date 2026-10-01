@@ -13,7 +13,6 @@ import {
   resolvePermissions,
 } from "@amira/core"
 import type { CliArgs } from "./args.ts"
-import { toolsToDisable } from "./session.ts"
 
 export interface Config {
   settings: Settings
@@ -25,7 +24,7 @@ export interface Config {
   permissions: ResolvedPermissions
   /** Which shell tools the model gets (D68), after falling back from powershell off Windows. */
   shell: ShellMode
-  /** Tools hidden from the model, from the shell mode and tools.disabled. */
+  /** Explicit tools hidden from the model; shell filtering is applied after tool traits load. */
   disabledTools: string[]
   /** The names the user asked to disable, and where: reported if no tool has them. */
   requestedDisabled: { names: string[]; from: string }
@@ -65,7 +64,7 @@ export function resolveConfig(
     apiKeys: auth.keys,
     permissions,
     shell,
-    disabledTools: toolsToDisable(shell, settings.tools?.disabled ?? []),
+    disabledTools: settings.tools?.disabled ?? [],
     requestedDisabled: {
       names: settings.tools?.disabled ?? [],
       from: args.disabledTools ? "--disable-tools" : "settings tools.disabled",

@@ -176,6 +176,12 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
 
+### Tool capabilities
+
+Declare a tool's host-visible capabilities in `traits` instead of relying on its name. `readOnly: true` allows the tool in plan mode; `writesFiles: true` marks a file writer, while `writesFiles: "paths"` declares that `getWrittenPaths(params, { cwd })` returns every path the call may write, relative to `cwd` or absolute. A writer with a valid path report receives the same protected-path checks as built-in file tools, and the host captures its pre- and post-images for rewind; a missing or invalid report is treated conservatively and asks for approval. A tool that already uses `ctx.mutateFiles` should set `usesMutationHook: true` so the host does not add a second rewind boundary.
+
+Set `shell: "bash"` or `shell: "powershell"` for a command-running tool; use `shellKind()` as well when the actual shell is selected at runtime. Set `editor: "edit"` or `editor: "apply_patch"` when the tool is an editing-tool replacement, `artifactReader: true` for a tool that reads saved output, `toolSearch: true` for the deferred-tool loader, or `interactive: true` for a tool that needs a UI. `readKey(params, { cwd })` can identify repeatable direct file reads for context deduplication. Omitted traits remain unknown: permission checks, rewind and workspace refresh keep their conservative behavior, and MCP tools currently declare no known traits.
+
 `serverToolView(block)` returns the provider tool's name, arguments, result text and native search details (sources included), plus `rejected: "aborted"` when a block never finished. Use its `ToolCallView` fields with an existing tool presenter or another frontend; it is render-only and must not be sent back as a local tool result.
 
 A command opens the rewind picker that double Esc opens with `ctx.openRewind()`; it is set only where the frontend has the picker (the terminal UI) and returns false when the picker cannot open now, for example during a turn.

@@ -79,6 +79,7 @@ export const askUserTool = defineTool<AskUserParams>({
     required: ["questions"],
     additionalProperties: false,
   },
+  traits: { readOnly: true, interactive: true },
   async execute({ questions }, ctx) {
     const problem = checkQuestions(questions)
     if (problem) return textResult(problem, true)

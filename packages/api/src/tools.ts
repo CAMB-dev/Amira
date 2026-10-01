@@ -135,10 +135,36 @@ export type ToolExposure = "active" | "inactive" | "deferred"
 /** The shell a shell tool runs its commands in. */
 export type ShellKind = "bash" | "powershell"
 
+/** Static capabilities a tool exposes to the host. Omitted capabilities remain unknown. */
+export interface ToolTraits {
+  /** The tool is safe to run in plan mode when it does not also write files or run a shell. */
+  readOnly?: boolean
+  /** Whether the tool can write files; "paths" promises a complete getWrittenPaths report. */
+  writesFiles?: boolean | "paths"
+  /** The shell used by the tool's command argument, when it has one. */
+  shell?: ShellKind
+  /** The kind of built-in editing tool this tool replaces, when provider settings select one. */
+  editor?: "edit" | "apply_patch"
+  /** The tool calls mutateFiles itself; the host must not add a second path capture boundary. */
+  usesMutationHook?: boolean
+  /** The tool reads saved artifacts rather than producing a new artifact worth saving. */
+  artifactReader?: boolean
+  /** The tool loads deferred tool definitions and is omitted when none remain. */
+  toolSearch?: boolean
+  /** The tool requires an interactive UI and is hidden in print or headless mode. */
+  interactive?: boolean
+}
+
+export interface ToolCallPathContext {
+  cwd: string
+}
+
 export interface ToolDefinition<P = any> {
   name: string
   description: string
   parameters: JSONSchema
+  /** The tool's known host-visible capabilities; omitted fields are deliberately unknown. */
+  traits?: ToolTraits
   /**
    * Default "active": the model sees it on every call. "deferred" tools are only named in the
    * system prompt until the model loads them with tool_search. "inactive" tools are hidden.
@@ -168,10 +194,24 @@ export interface ToolDefinition<P = any> {
    */
   supersededBy?: "webSearch"
   /**
+   * Reports the paths this call may write, relative to `ctx.cwd` or absolute. A valid report is
+   * required for host-side protected-path checks and rewind capture of a writer; `"paths"` says
+   * the report is complete for every call.
+   */
+  getWrittenPaths?(
+    params: P,
+    ctx: ToolCallPathContext,
+  ): readonly string[] | undefined | Promise<readonly string[] | undefined>
+  /**
+   * Identifies a repeatable direct file read for context deduplication. A tool without this
+   * callback is never treated as a repeatable file read, even when it is read-only.
+   */
+  readKey?(params: P, ctx: ToolCallPathContext): string | undefined
+  /**
    * For a tool that runs its `command` argument (a string) in a shell: which shell runs it, so
    * the core permission policy reads the command the way that shell will. A tool with this is
-   * checked as a shell tool whatever its name; bash and powershell always are (the bash tool
-   * may fall back to PowerShell on Windows; without this, both readings are checked).
+   * checked as a shell tool whatever its name. The static `traits.shell` is used when this
+   * runtime answer is unavailable.
    */
   shellKind?(): ShellKind | Promise<ShellKind>
   execute(params: P, ctx: ToolContext): Promise<ToolResult>

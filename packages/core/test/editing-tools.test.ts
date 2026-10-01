@@ -15,11 +15,18 @@ function setup(providerSettings: Record<string, ProviderSettings> = {}, steps: M
   const agent = new Agent({ ai, tree, model: ai.model("mock/plain"), cwd: process.cwd(), providerSettings })
   const ran: string[] = []
   for (const name of ["read", "write", "edit", "apply_patch"]) {
+    const traits =
+      name === "read"
+        ? { readOnly: true, writesFiles: false as const }
+        : name === "write"
+          ? { writesFiles: "paths" as const, usesMutationHook: true }
+          : { writesFiles: "paths" as const, usesMutationHook: true, editor: name as "edit" | "apply_patch" }
     agent.tools.register(
       defineTool({
         name,
         description: name,
         parameters: { type: "object" },
+        traits,
         execute: async () => {
           ran.push(name)
           return textResult("ok")
@@ -51,6 +58,21 @@ test("editing tools default to edit and write; providers and exact models can ov
   expect(await names(agent)).toEqual(["read", "write", "edit", "apply_patch"])
   agent.tools.setDisabled(["apply_patch"])
   expect(await names(agent)).toEqual(["read", "write", "edit"])
+})
+
+test("a third-party editor trait participates in provider editing-tool selection", async () => {
+  const { agent } = setup({ mock: { tools: { edit: "edit" } } })
+  agent.tools.register(
+    defineTool({
+      name: "replacement",
+      description: "replacement",
+      parameters: { type: "object" },
+      traits: { writesFiles: "paths", editor: "apply_patch" },
+      execute: async () => textResult("ok"),
+    }),
+    "test",
+  )
+  expect(await names(agent)).not.toContain("replacement")
 })
 
 test("a hidden editing tool cannot run even when the model calls it", async () => {

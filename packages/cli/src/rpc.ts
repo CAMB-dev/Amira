@@ -101,7 +101,12 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   const prepareAgent = (a: Agent) => {
     if (!nonInteractive) return
     a.setNonInteractive()
-    a.tools.setDisabled(new Set([...a.tools.disabled, "ask_user"]))
+    a.tools.setDisabled(
+      new Set([
+        ...a.tools.disabled,
+        ...a.tools.list().flatMap(({ tool }) => (tool.traits?.interactive ? [tool.name] : [])),
+      ]),
+    )
   }
   prepareAgent(agent)
   if (nonInteractive) ui.unavailable = "rpc mode has no UI client"

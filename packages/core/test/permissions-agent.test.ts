@@ -20,6 +20,7 @@ function fakeTools(ran: string[]) {
       description: "",
       parameters: { type: "object" },
       concurrency: "parallel",
+      traits: { shell: "bash" },
       shellKind: (): ShellKind => "bash",
       execute: async ({ command }) => {
         ran.push(`bash: ${command}`)
@@ -34,6 +35,12 @@ function fakeTools(ran: string[]) {
         name,
         description: "",
         parameters: { type: "object" },
+        ...(name === "write"
+          ? {
+              traits: { writesFiles: "paths" as const },
+              getWrittenPaths: (p: { path?: string }) => (typeof p.path === "string" ? [p.path] : []),
+            }
+          : {}),
         execute: async (p) => {
           ran.push(`${name}: ${p.path ?? ""}`)
           return textResult("done")

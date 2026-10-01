@@ -21,7 +21,8 @@ import {
   writeSync,
 } from "node:fs"
 import path from "node:path"
-import type { FileMutation, FileRewindPlan, Settings } from "@amira/api"
+import type { FileMutation, FileRewindPlan, MutateFiles, Settings } from "@amira/api"
+import { toolPath } from "./permissions/protected.ts"
 import type { SessionEntry, SessionStore } from "./session-store.ts"
 
 interface FileImage {
@@ -47,7 +48,7 @@ export type FileJournalEntry =
       turnId: string
       files: FileImage[]
     }
-  | { type: "file_mutation_end"; mutationId: string; rolledBack: boolean }
+  | { type: "file_mutation_end"; mutationId: string; rolledBack: boolean; files?: FileImage[] }
   | { type: "file_restore"; messageId: string; target: string | null; files: FileImage[] }
   /** `started` precedes an in-place write (hard-linked files), which is not atomic. */
   | { type: "file_restore_progress"; restoreId: string; path: string; started?: InPlace }
@@ -58,7 +59,7 @@ type Mutation = Extract<SessionEntry, { type: "file_mutation" }>
 type Restore = Extract<SessionEntry, { type: "file_restore" }>
 
 export const FILE_REWIND_COVERAGE =
-  "Only write, edit and apply_patch changes are covered, including same-directory sub-agents. Shell commands, hook formatters, other processes, user edits and separate worktrees are not captured."
+  "Built-in and declared file-tool changes are covered, including same-directory sub-agents. Shell commands, hook formatters, other processes, user edits and separate worktrees are not captured."
 
 export class FileRewindConflictError extends Error {
   constructor(readonly conflicts: string[]) {
@@ -108,6 +109,30 @@ export class FileRewind {
     write: () => Promise<void>,
     source: { sessionId: string; toolCallId: string; turnId: string },
   ): Promise<void> {
+    return this.#mutate(changes, () => write(), source, false)
+  }
+
+  /** Captures a third-party writer's pre-images and records its post-images after it returns. */
+  async mutatePaths(
+    paths: readonly string[],
+    cwd: string,
+    write: (mutateFiles: MutateFiles) => Promise<void>,
+    source: { sessionId: string; toolCallId: string; turnId: string },
+  ): Promise<void> {
+    return this.#mutate(
+      paths.map((p) => ({ path: toolPath(cwd, p) })),
+      (mutateFiles) => write(mutateFiles!),
+      source,
+      true,
+    )
+  }
+
+  async #mutate(
+    changes: { path: string; before?: Uint8Array | null; after?: Uint8Array | null }[],
+    write: (mutateFiles?: MutateFiles) => Promise<void>,
+    source: { sessionId: string; toolCallId: string; turnId: string },
+    captureAfter: boolean,
+  ): Promise<void> {
     this.#active++
     const previous = this.#tail
     let release!: () => void
@@ -136,10 +161,11 @@ export class FileRewind {
           if (change.before !== undefined && hash(change.before) !== hash(before.bytes)) {
             throw new Error(`File changed before writing: ${file}; read it again`)
           }
+          const after = change.after === undefined ? before.bytes : change.after
           files.push({
             path: file,
             before: this.#put(before.bytes),
-            after: this.#put(change.after),
+            after: this.#put(after),
             ...(before.mode === undefined ? {} : { mode: before.mode }),
           })
         }
@@ -149,7 +175,17 @@ export class FileRewind {
       // Failure here must propagate, unlike best-effort conversation persistence.
       const id = this.store.appendDurable({ type: "file_mutation", messageId: message.id, ...source, files })
       try {
-        await write()
+        const nested = captureAfter
+          ? ((async (nestedChanges: FileMutation[], nestedWrite: () => Promise<void>) => {
+              for (const change of nestedChanges) {
+                if (!path.isAbsolute(change.path) || !seen.has(pathKey(canonicalPath(change.path)))) {
+                  throw new Error(`Mutation path was not declared: ${change.path}`)
+                }
+              }
+              return nestedWrite()
+            }) satisfies MutateFiles)
+          : undefined
+        await write(nested)
       } catch (error) {
         // A patch owns its rollback. A torn/partial write remains pending and conflicts on rewind.
         if (files.every((f) => currentHash(f.path) === f.before)) {
@@ -162,7 +198,18 @@ export class FileRewind {
         throw error
       }
       try {
-        this.store.appendDurable({ type: "file_mutation_end", mutationId: id, rolledBack: false })
+        const completed = captureAfter
+          ? files.map((file) => {
+              const after = readImage(file.path, this.maxFileBytes)
+              return { ...file, after: this.#put(after.bytes) }
+            })
+          : undefined
+        this.store.appendDurable({
+          type: "file_mutation_end",
+          mutationId: id,
+          rolledBack: false,
+          ...(completed ? { files: completed } : {}),
+        })
       } catch {
         // The write happened; reporting it as failed would invite a redo. Unended is still correct.
       }
@@ -276,6 +323,10 @@ export class FileRewind {
     const committed = new Set(
       this.store.entries.flatMap((e) => (e.type === "file_mutation_end" ? [e.mutationId] : [])),
     )
+    const completed = new Map<string, FileImage[]>()
+    for (const e of this.store.entries) {
+      if (e.type === "file_mutation_end" && e.files) completed.set(e.mutationId, e.files)
+    }
     const mutations = branch
       .slice(boundary)
       .filter((e): e is Mutation => e.type === "file_mutation" && !rollback.has(e.id))
@@ -288,7 +339,7 @@ export class FileRewind {
     const files = new Map<string, FileImage & { unwritten?: string | null }>()
     const conflicts = new Set<string>()
     for (const mutation of mutations) {
-      for (const image of mutation.files) {
+      for (const image of completed.get(mutation.id) ?? mutation.files) {
         const key = pathKey(image.path)
         const earlier = files.get(key)
         if (earlier && earlier.after !== image.before && earlier.unwritten !== image.before)
@@ -473,8 +524,9 @@ export function copyFileHistory(from: SessionStore, to: SessionStore): void {
   const target = fileHistoryDir(to.file)
   const keys = new Set<string>()
   for (const e of to.entries) {
-    if (e.type !== "file_mutation" && e.type !== "file_restore") continue
-    for (const f of e.files) for (const k of [f.before, f.after]) if (k) keys.add(k)
+    if (e.type === "file_mutation" || e.type === "file_restore" || e.type === "file_mutation_end") {
+      for (const f of e.files ?? []) for (const k of [f.before, f.after]) if (k) keys.add(k)
+    }
   }
   for (const key of keys) {
     if (!/^[a-f0-9]{64}$/.test(key) || !existsSync(path.join(source, key))) continue

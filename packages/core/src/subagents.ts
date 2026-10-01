@@ -1258,6 +1258,7 @@ function returnResultTool(spec: ResultSpec, retries: number): ToolDefinition {
     description:
       "Hands back the result of your task, as the parameters describe it. Call it once, when you are done; your turn ends with it.",
     parameters,
+    traits: { readOnly: true },
     async execute(args) {
       const value = spec.wrapped ? (args as { value?: unknown }).value : args
       const problems = validateValue(spec.schema, value)

@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import type { ToolDefinition } from "@amira/api"
 
 /**
- * Files the file tools (write, edit, apply_patch) always ask before changing, whatever the
+ * Files declared by file-writing tools always ask before changing, whatever the
  * mode: Amira's own settings, packages and lock files (any `.amira` directory and Amira's user
  * directory), Git's metadata (`.git`, where hooks and config live, and a `.git` file pointing
  * elsewhere), `.gitmodules`, the directories `core.hooksPath` names and the user's Git config.
@@ -241,21 +242,19 @@ export function protectedPath(cwd: string, p: string, opts: ProtectOptions = {})
   return undefined
 }
 
-/**
- * The paths a file tool call would write: `path` for write and edit, every file an
- * apply_patch patch adds, deletes, updates or moves to. Generous on purpose: a header line
- * anywhere counts, whether or not the patch would parse.
- */
-export function writtenPaths(toolName: string, args: Record<string, unknown>): string[] {
-  if (toolName === "write" || toolName === "edit") return typeof args.path === "string" ? [args.path] : []
-  if (toolName !== "apply_patch" || typeof args.patch !== "string") return []
-  const out: string[] = []
-  for (const raw of args.patch.split(/\r?\n/)) {
-    const line = raw.trim()
-    const header = /^\*\*\* (?:Add|Delete|Update) File: (.+)$/.exec(line)
-    const move = /^\*\*\* Move to: (.+)$/.exec(line)
-    const found = header?.[1] ?? move?.[1]
-    if (found) out.push(found)
+/** Calls a tool's path reporter and rejects malformed or failed reports conservatively. */
+export async function writtenPaths(
+  tool: Pick<ToolDefinition, "getWrittenPaths">,
+  args: Record<string, unknown>,
+  cwd: string,
+): Promise<string[] | undefined> {
+  if (!tool.getWrittenPaths) return undefined
+  try {
+    const paths = await tool.getWrittenPaths(args, { cwd })
+    if (!Array.isArray(paths)) return undefined
+    const copy = [...paths]
+    return copy.every((p) => typeof p === "string" && p.length > 0) ? copy : undefined
+  } catch {
+    return undefined
   }
-  return out
 }

@@ -110,8 +110,13 @@ export async function runPrint(
   })
   let jsonFileOpen = jsonFile !== undefined
   agent.setNonInteractive()
-  agent.tools.setDisabled(new Set([...agent.tools.disabled, "ask_user"]))
-  // Questions for the user (ask_user) are not even asked: nobody is there to answer.
+  agent.tools.setDisabled(
+    new Set([
+      ...agent.tools.disabled,
+      ...agent.tools.list().flatMap(({ tool }) => (tool.traits?.interactive ? [tool.name] : [])),
+    ]),
+  )
+  // Tools that need a UI are not even offered: nobody is there to answer them.
   if (opts.ui) opts.ui.unavailable = "print mode"
   let endedWithNewline = true
   /** Hosted web searches already printed, by id. */

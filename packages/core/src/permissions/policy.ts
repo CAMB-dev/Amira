@@ -49,30 +49,6 @@ export interface PermissionVerdict {
   rule?: PermissionRule
 }
 
-/** Tools that change files; checked for plan mode and protected paths. */
-export const FILE_TOOLS = new Set(["write", "edit", "apply_patch"])
-
-/**
- * Tools plan mode lets run: they read (saved outputs too), search, ask, start sub-agents (which
- * inherit the mode) or look at background jobs (stopping one still asks).
- */
-export const READ_ONLY_TOOLS = new Set([
-  "read",
-  "output_read",
-  "grep",
-  "glob",
-  "ask_user",
-  "tool_search",
-  "web_search",
-  "web_fetch",
-  "skill",
-  "agent",
-  "agent_result",
-  "return_result",
-  "job_output",
-  "job_list",
-])
-
 const ALLOW: PermissionVerdict = { decision: "allow", reason: "" }
 const RANK: Record<PermissionDecision, number> = { allow: 0, ask: 1, deny: 2 }
 
@@ -259,18 +235,36 @@ export class Permissions {
 
   /** Decides a call of `tool` with `args` (the final ones, after interceptors), run in `cwd`. */
   async check(
-    tool: Pick<ToolDefinition, "name" | "shellKind">,
+    tool: Pick<ToolDefinition, "name" | "traits" | "shellKind" | "getWrittenPaths">,
     args: Record<string, unknown>,
     cwd: string,
   ): Promise<PermissionVerdict> {
     const mode = this.#mode
     const name = tool.name
-    if (FILE_TOOLS.has(name)) {
+    const writesFiles = tool.traits?.writesFiles
+    if (writesFiles === true || writesFiles === "paths") {
       if (mode === "plan") {
         return { decision: "deny", reason: 'mode "plan" is read-only: files are not changed', cause: "mode" }
       }
-      for (const p of writtenPaths(name, args)) {
-        const hit = protectedPath(cwd, p, this.#protect)
+      const paths = await writtenPaths(tool, args, cwd)
+      if (paths === undefined) {
+        return {
+          decision: "ask",
+          reason: `${name} may change protected files, but could not report its write paths`,
+          cause: "protected",
+        }
+      }
+      for (const p of paths) {
+        let hit: ReturnType<typeof protectedPath>
+        try {
+          hit = protectedPath(cwd, p, this.#protect)
+        } catch {
+          return {
+            decision: "ask",
+            reason: `${name} returned an invalid write path, so its protected files are unknown`,
+            cause: "protected",
+          }
+        }
         if (hit) {
           return {
             decision: "ask",
@@ -281,7 +275,7 @@ export class Permissions {
       }
       return ALLOW
     }
-    if (tool.shellKind || name === "bash" || name === "powershell") {
+    if (tool.traits?.shell !== undefined || tool.shellKind) {
       if (mode === "plan") {
         return {
           decision: "deny",
@@ -299,7 +293,7 @@ export class Permissions {
         kinds.map((k) => this.#shell(k === "bash" ? parseBash(command) : parsePowerShell(command), mode, k)),
       )
     }
-    if (mode === "plan" && !READ_ONLY_TOOLS.has(name)) {
+    if (mode === "plan" && tool.traits?.readOnly !== true) {
       return { decision: "ask", reason: `mode "plan": ${name} is not known to be read-only`, cause: "tool" }
     }
     return ALLOW
@@ -365,14 +359,14 @@ function ruleReason(rule: PermissionRule): string {
   return `${ruleLabel(rule)}${why}`
 }
 
-/** The shells a call may run in: the tool's own answer, else every reading that fits its name. */
-async function shellKinds(tool: Pick<ToolDefinition, "name" | "shellKind">): Promise<ShellKind[]> {
+/** The shells a call may run in: the tool's dynamic answer, then its declared capability. */
+async function shellKinds(tool: Pick<ToolDefinition, "traits" | "shellKind">): Promise<ShellKind[]> {
   if (tool.shellKind) {
     try {
       const kind = await tool.shellKind()
       if (kind === "bash" || kind === "powershell") return [kind]
     } catch {}
   }
-  if (tool.name === "powershell") return ["powershell"]
+  if (tool.traits?.shell) return [tool.traits.shell]
   return ["bash", "powershell"]
 }

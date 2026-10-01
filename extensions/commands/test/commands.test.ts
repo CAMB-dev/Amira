@@ -53,8 +53,22 @@ function fakeControl(over: Partial<SessionControl> = {}) {
     shell: "auto",
   }
   const tools = [
-    { name: "bash", description: "", source: "builtin:tools", exposure: "active" as const, enabled: true },
-    { name: "read", description: "", source: "builtin:tools", exposure: "active" as const, enabled: true },
+    {
+      name: "bash",
+      description: "",
+      source: "builtin:tools",
+      exposure: "active" as const,
+      traits: { shell: "bash" as const },
+      enabled: true,
+    },
+    {
+      name: "read",
+      description: "",
+      source: "builtin:tools",
+      exposure: "active" as const,
+      traits: { readOnly: true, writesFiles: false as const },
+      enabled: true,
+    },
   ]
   const control: SessionControl = {
     info: () => info,

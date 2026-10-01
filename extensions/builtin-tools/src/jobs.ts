@@ -317,6 +317,7 @@ export const jobOutputTool = defineTool<JobOutputParams>({
     required: ["job_id"],
     additionalProperties: false,
   },
+  traits: { readOnly: true },
   concurrency: "parallel",
   async execute({ job_id, wait_for, timeout }, ctx) {
     const found = lookup(job_id, ctx)
@@ -395,6 +396,7 @@ export const jobStopTool = defineTool<JobStopParams>({
     required: ["job_id"],
     additionalProperties: false,
   },
+  traits: { readOnly: false },
   concurrency: "parallel",
   async execute({ job_id }, ctx) {
     const found = lookup(job_id, ctx)
@@ -428,6 +430,7 @@ export const jobListTool = defineTool<Record<string, never>>({
   description:
     "List the background jobs: id, status, how long they ran, the command and how much output you have not read yet.",
   parameters: { type: "object", properties: {}, additionalProperties: false },
+  traits: { readOnly: true },
   concurrency: "parallel",
   async execute(_params, ctx) {
     const registry = ctx.backgroundJobs
