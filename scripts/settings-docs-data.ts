@@ -41,7 +41,7 @@ export const extraRows: { key: string; type: string }[] = [
 export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
   {
     title: { en: "General", zh: "常规" },
-    keys: ["model", "shell", "tools", "maxParallelTools", "commandAliases"],
+    keys: ["model", "shell", "tools", "maxParallelTools", "backgroundJobs", "commandAliases", "sessions"],
   },
   {
     title: { en: "Providers and models", zh: "Provider 与模型" },
@@ -121,6 +121,26 @@ export const annotations: Record<string, Annotation> = {
     default: "`8`",
     en: "Most tool calls running at once.",
     zh: "同时运行的工具调用数上限。",
+  },
+  "backgroundJobs.maxRunning": {
+    default: "`8`",
+    en: "Background jobs (commands the shell tools start with `background: true`, such as dev servers and watchers) running at once.",
+    zh: "同时运行的后台任务数上限（shell 工具以 `background: true` 启动的命令，如开发服务器和文件监视进程）。",
+  },
+  "backgroundJobs.bufferChars": {
+    default: "`1000000`",
+    en: "Characters of output each job keeps in memory for reading; at least 1000.",
+    zh: "每个后台任务在内存中保留、供读取的输出字符数，最少 1000。",
+  },
+  "backgroundJobs.maxLogBytes": {
+    default: "`52428800` (50 MiB)",
+    en: "Bytes of each job's output written to its log file.",
+    zh: "每个后台任务写入日志文件的输出字节数上限。",
+  },
+  "sessions.autoTitle": {
+    default: "`true`",
+    en: "Ask the model for a short session title in the background after the first turn (`compact.model` when set). `/rename` always wins.",
+    zh: "第一个轮次结束后，在后台请模型为会话起一个简短标题（设置了 `compact.model` 时用它）。`/rename` 设置的名称始终优先。",
   },
   providers: {
     default: none,

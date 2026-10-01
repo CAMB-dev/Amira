@@ -112,7 +112,11 @@ Keys are not set here: they live in `keybindings.json` in the user directory. Se
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Which shell tools the model gets on Windows: `"auto"` offers both `bash` and `powershell`, `"bash"` or `"powershell"` hides the other one. Elsewhere only `bash` exists. `--shell` wins. |  |
 | `tools.disabled` | `string[]` | `[]` | Tool names to hide from the model. `--disable-tools` replaces the list for one run; `/tools` changes the current session only. |  |
 | `maxParallelTools` | `number` | `8` | Most tool calls running at once. |  |
+| `backgroundJobs.maxRunning` | `number` | `8` | Background jobs (commands the shell tools start with `background: true`, such as dev servers and watchers) running at once. |  |
+| `backgroundJobs.bufferChars` | `number` | `1000000` | Characters of output each job keeps in memory for reading; at least 1000. |  |
+| `backgroundJobs.maxLogBytes` | `number` | `52428800` (50 MiB) | Bytes of each job's output written to its log file. |  |
 | `commandAliases` | `Record<string, string>` | none | Slash command aliases: `{"ds": "model deepseek/deepseek-flash"}` makes `/ds` run `/model deepseek/deepseek-flash`, with anything typed after `/ds` appended. The value names a command, not another alias; commands and their own aliases win. |  |
+| `sessions.autoTitle` | `boolean` | `true` | Ask the model for a short session title in the background after the first turn (`compact.model` when set). `/rename` always wins. |  |
 
 ## Providers and models
 

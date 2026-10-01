@@ -245,7 +245,8 @@ export function showType(type: Type): string {
 
 /**
  * A value of the type that the settings schema accepts, for the tests. Strings read "a b/c",
- * which passes both as a "provider/model" reference and as a command alias's command line.
+ * which passes both as a "provider/model" reference and as a command alias's command line;
+ * numbers are 1000, the largest minimum a key has (backgroundJobs.bufferChars).
  */
 export function sampleValue(type: Type): unknown {
   if (type.fields) return Object.fromEntries(type.fields.map((f) => [f.name, sampleValue(f.type)]))
@@ -254,7 +255,7 @@ export function sampleValue(type: Type): unknown {
   if (type.name === "|") return sampleValue(type.args![0]!)
   if (type.name.startsWith('"')) return JSON.parse(type.name)
   if (type.name === "string") return "a b/c"
-  if (type.name === "number") return 1
+  if (type.name === "number") return 1000
   if (type.name === "boolean") return true
   if (type.name === "unknown") return {}
   throw new Error(`No sample for type ${type.name}`)
