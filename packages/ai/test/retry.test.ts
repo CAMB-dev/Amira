@@ -239,7 +239,7 @@ test("a running hosted search keeps a quiet stream alive past the idle timeout",
     yield { type: "text.delta", text: "found" }
     yield {
       type: "done",
-      message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "stop" },
+      message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "end" },
     }
   }
   const evs = await events(withRetry(attempt, new AbortController().signal, { idleTimeoutMs: 15 }))
