@@ -24,11 +24,13 @@ Enter sends a message while idle. While a turn runs, Enter normally **steers** i
 
 Shift+Enter inserts a newline where the terminal supports it; Ctrl+Enter is the fallback. Type `/` for commands, `$` for skills and `@` followed by part of a path for file completion. See [Keybindings](keybindings.md) for editor, completion and history controls.
 
-Esc stops the current turn. If steering or queued messages are waiting, they are combined in the order you typed them and sent together. Background sub-agents keep running; [Sub-agents](subagents.md) explains how to stop them. Ctrl+C stops a turn, otherwise clears a nonempty input, otherwise quits. `/quit` also exits.
+Esc stops the current turn; while a slash command such as `/ext install` is still running, it cancels that command first and keeps your draft. If steering or queued messages are waiting, they are combined in the order you typed them and sent together. Background sub-agents keep running; [Sub-agents](subagents.md) explains how to stop them. Ctrl+C likewise cancels a running command first, otherwise stops a turn, otherwise clears a nonempty input, otherwise quits. `/quit` also exits.
 
 ## Tools and approvals
 
 The bundled tools can read, search, write and edit files, run shell commands, search the web and delegate work. Availability depends on the platform, model and loaded extensions. `/tools` lists the current tools; `/tools disable <name>` and `/tools enable <name>` change availability for this session. `--disable-tools` supplies a comma-separated list at startup. See [Settings](settings.md) and [Extensions](extensions.md) for persistent configuration.
+
+Files are changed with one of two editing tools. `edit` replaces exact text in one file. `apply_patch` takes a patch in the Codex format (`*** Begin Patch` … `*** End Patch`) that can add, delete, update and move several files at once; it checks every hunk before writing anything and rolls back what it wrote if a write fails. Each model gets `edit` unless its provider settings choose otherwise; see [Editing tools](providers.md#editing-tools). `write` is always available. `/tools` lists the tool the current model does not use as disabled, with the reason, and `/tools enable` cannot turn it on; change the setting instead.
 
 An extension can block a tool call or require approval before it runs. This is not a blanket confirmation for every edit or command: the extension decides which calls need approval. A request shows the tool, reason and a preview or arguments. Select an option with the arrows, then Enter; confirmations begin with no option selected. Esc denies the call and stops the turn.
 

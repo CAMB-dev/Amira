@@ -131,4 +131,32 @@ For a proxy that actually forwards hosted search and native compaction, opt in e
 
 For a local chat server, choose `openai-chat`, its local base URL and `--no-key` when adding it through the CLI. Enter the model IDs it exposes and set their real limits. Enable only the capabilities the server implements.
 
+## Editing tools
+
+Amira has two tools for changing existing files: `edit`, which replaces exact text, and `apply_patch`, which applies a multi-file patch in the format OpenAI's Codex uses (see [Tools and approvals](usage.md#tools-and-approvals)). Choose per provider with `tools.edit`, and override it for a single model under `models[].tools.edit`:
+
+| Value | Tools the model gets |
+| --- | --- |
+| `"edit"` | `edit` only (the default) |
+| `"apply_patch"` | `apply_patch` only |
+| `"both"` | `edit` and `apply_patch` |
+
+`write` is offered in every case. No model switches to `apply_patch` automatically; opt in for models that handle the patch format well, such as OpenAI's GPT and Codex models:
+
+```json
+{
+  "providers": {
+    "openai": {
+      "dialect": "openai-responses",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "tools": { "edit": "apply_patch" },
+      "models": [{ "id": "my-other-model", "tools": { "edit": "both" } }]
+    }
+  }
+}
+```
+
+The choice follows the current model: after `/model` switches to another provider or model, its own setting applies. Sub-agents use the setting of the model they run on. Restart Amira after changing the setting. Project settings may set `tools.edit` as well. The patch tool only writes inside the working directory, refuses paths that pass through a symbolic link or junction below it, refuses files with other hard links (common in `node_modules` installed by Bun or pnpm), and rejects a patch that changes the same file twice.
+
 Related: [Getting started](getting-started.md), [Usage and sessions](usage.md), [Settings](settings.md), [Extensions](extensions.md).
