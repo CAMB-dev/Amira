@@ -1,28 +1,40 @@
 import { createHash } from "node:crypto"
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   fsyncSync,
+  ftruncateSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs"
 import path from "node:path"
 import type { FileMutation, FileRewindPlan, Settings } from "@amira/api"
 import type { SessionEntry, SessionStore } from "./session-store.ts"
 
 interface FileImage {
+  /** The file's real path when captured: links, case and 8.3 aliases resolved. */
   path: string
   before: string | null
   after: string | null
   mode?: number
+}
+
+/** The inode an in-place restore was writing when it was interrupted. */
+interface InPlace {
+  ino: string
+  dev: string
 }
 
 export type FileJournalEntry =
@@ -36,8 +48,9 @@ export type FileJournalEntry =
     }
   | { type: "file_mutation_end"; mutationId: string; rolledBack: boolean }
   | { type: "file_restore"; messageId: string; target: string | null; files: FileImage[] }
-  | { type: "file_restore_progress"; restoreId: string; path: string }
-  | { type: "file_restore_end"; restoreId: string }
+  /** `started` precedes an in-place write (hard-linked files), which is not atomic. */
+  | { type: "file_restore_progress"; restoreId: string; path: string; started?: InPlace }
+  | { type: "file_restore_end"; restoreId: string; abandoned?: boolean }
   | { type: "file_prune" }
 
 type Mutation = Extract<SessionEntry, { type: "file_mutation" }>
@@ -65,7 +78,7 @@ export class FileRewind {
     readonly store: SessionStore,
     settings: Settings["fileRewind"] = {},
   ) {
-    this.directory = path.join(store.directory, "files")
+    this.directory = fileHistoryDir(store.file)
     this.enabled = settings.enabled !== false
     this.maxFileBytes = settings.maxFileBytes ?? 10 * 1024 * 1024
     this.quotaBytes = settings.quotaBytes ?? 256 * 1024 * 1024
@@ -77,6 +90,12 @@ export class FileRewind {
 
   get restoring(): boolean {
     return this.#pending() !== undefined
+  }
+
+  /** The unfinished restore and what blocks finishing it, if any. */
+  interrupted(): { messageId: string; conflicts: string[] } | undefined {
+    const pending = this.#pending()
+    return pending && { messageId: pending.messageId, conflicts: this.#checkRestore(pending).conflicts }
   }
 
   async mutate(
@@ -93,7 +112,9 @@ export class FileRewind {
     try {
       await previous
       if (this.#pending())
-        throw new Error("An interrupted file restore must finish before file tools can write")
+        throw new Error(
+          "An interrupted file restore must finish before file tools can write; rewind to the same message again, or rewind the conversation only to abandon it if it has conflicts",
+        )
       if (!this.enabled) return await write()
       const message = this.store.branch().findLast((e) => e.type === "message" && e.message.role === "user")
       if (!message) throw new Error("Cannot capture file changes without a stored user message")
@@ -101,11 +122,10 @@ export class FileRewind {
       const seen = new Set<string>()
       try {
         for (const change of changes) {
-          const file = path.resolve(change.path)
-          const key = process.platform === "win32" ? file.toLowerCase() : file
-          if (seen.has(key)) throw new Error(`Duplicate mutation path: ${file}`)
-          seen.add(key)
-          const before = this.#read(file, this.maxFileBytes)
+          const file = canonicalPath(change.path)
+          if (seen.has(pathKey(file))) throw new Error(`Duplicate mutation path: ${file}`)
+          seen.add(pathKey(file))
+          const before = readImage(file, this.maxFileBytes)
           if (change.before !== undefined && hash(change.before) !== hash(before.bytes)) {
             throw new Error(`File changed before writing: ${file}; read it again`)
           }
@@ -125,7 +145,7 @@ export class FileRewind {
         await write()
       } catch (error) {
         // A patch owns its rollback. A torn/partial write remains pending and conflicts on rewind.
-        if (files.every((f) => this.#current(f.path) === f.before)) {
+        if (files.every((f) => currentHash(f.path) === f.before)) {
           this.store.appendDurable({ type: "file_mutation_end", mutationId: id, rolledBack: true })
         }
         throw error
@@ -139,7 +159,17 @@ export class FileRewind {
 
   plan(messageId: string): FileRewindPlan {
     const pending = this.#pending()
-    if (pending && pending.messageId !== messageId) throw new Error("Resume the interrupted rewind first")
+    if (pending && pending.messageId !== messageId) {
+      const conflicts = this.#checkRestore(pending).conflicts
+      return {
+        owner: "core",
+        enabled: false,
+        restored: 0,
+        removed: 0,
+        conflicts,
+        note: `An interrupted file restore to before an earlier choice must finish first: pick that message again${conflicts.length ? ", or, since it has conflicts, rewind the conversation only to abandon it" : ""}. ${FILE_REWIND_COVERAGE}`,
+      }
+    }
     const { files, conflicts, pruned } = pending
       ? { files: pending.files, conflicts: this.#checkRestore(pending).conflicts, pruned: false }
       : this.#plan(messageId)
@@ -149,7 +179,7 @@ export class FileRewind {
       restored: files.filter((f) => f.before !== null).length,
       removed: files.filter((f) => f.before === null).length,
       conflicts,
-      note: `${pending ? "Resume the interrupted file restore. " : !this.enabled ? "Capture is disabled; files will not be restored. " : pruned ? "File history was pruned; files will not be restored. " : ""}${FILE_REWIND_COVERAGE}`,
+      note: `${pending ? `Resume the interrupted file restore${conflicts.length ? "; conversation-only rewind abandons it" : ""}. ` : !this.enabled ? "Capture is disabled; files will not be restored. " : pruned ? "File history was pruned; files will not be restored. " : ""}${FILE_REWIND_COVERAGE}`,
     }
   }
 
@@ -179,6 +209,19 @@ export class FileRewind {
       restored: pending.files.filter((f) => f.before !== null).length,
       removed: pending.files.filter((f) => f.before === null).length,
     }
+  }
+
+  /**
+   * Gives up an interrupted restore that conflicts can no longer let finish. Files stay as they
+   * are, some restored and some not; the caller then rewinds the conversation only.
+   */
+  abandon(): void {
+    this.#idle()
+    const pending = this.#pending()
+    if (!pending) return
+    const { conflicts } = this.#checkRestore(pending)
+    if (!conflicts.length) throw new Error("The interrupted file restore can still finish; finish it instead")
+    this.store.appendDurable({ type: "file_restore_end", restoreId: pending.id, abandoned: true })
   }
 
   prune(): { files: number; bytes: number } {
@@ -220,49 +263,54 @@ export class FileRewind {
     if (mutations.some((e) => this.store.entries.indexOf(e) < pruneAt)) {
       return { files: [], conflicts: [], pruned: true }
     }
-    const files = new Map<string, FileImage>()
+    // `unwritten` is the other possible state of a file a crashed, uncommitted tool may have
+    // written or not: either is accepted, by the next captured write or by the file on disk.
+    const files = new Map<string, FileImage & { unwritten?: string | null }>()
     const conflicts = new Set<string>()
     for (const mutation of mutations) {
       for (const image of mutation.files) {
-        // After a crash, an uncommitted tool may have written none or some of its files.
-        const after =
-          !committed.has(mutation.id) && this.#current(image.path) === image.before
-            ? image.before
-            : image.after
-        const key = process.platform === "win32" ? image.path.toLowerCase() : image.path
+        const key = pathKey(image.path)
         const earlier = files.get(key)
-        if (earlier && earlier.after !== image.before) conflicts.add(image.path)
+        if (earlier && earlier.after !== image.before && earlier.unwritten !== image.before)
+          conflicts.add(image.path)
         files.set(key, {
           ...image,
           before: earlier ? earlier.before : image.before,
-          mode: earlier?.mode ?? image.mode,
-          after,
+          mode: earlier ? earlier.mode : image.mode,
+          ...(committed.has(mutation.id) ? {} : { unwritten: image.before }),
         })
       }
     }
-    for (const file of files.values()) {
-      if (this.#current(file.path) !== file.after) conflicts.add(file.path)
+    const planned: FileImage[] = []
+    for (const { unwritten, ...file } of files.values()) {
+      const current = currentHash(file.path)
+      if (unwritten !== undefined && current === unwritten) file.after = unwritten
+      if (current !== file.after) conflicts.add(file.path)
       try {
         if (file.before !== null) this.#blob(file.before)
       } catch {
         conflicts.add(`${file.path} (missing or damaged pre-image)`)
       }
+      planned.push(file)
     }
-    return { files: [...files.values()], conflicts: [...conflicts], pruned: false }
+    return { files: planned, conflicts: [...conflicts], pruned: false }
   }
 
   #checkRestore(restore: Restore) {
-    const progress = new Set(
-      this.store.entries.flatMap((e) =>
-        e.type === "file_restore_progress" && e.restoreId === restore.id ? [e.path] : [],
-      ),
-    )
+    const progress = new Set<string>()
+    const started = new Map<string, InPlace>()
+    for (const e of this.store.entries) {
+      if (e.type !== "file_restore_progress" || e.restoreId !== restore.id) continue
+      if (e.started) started.set(e.path, e.started)
+      else progress.add(e.path)
+    }
     const conflicts: string[] = []
     const images = new Map<string, Buffer>()
     // Validate the entire operation, including already completed files, before resuming it.
     for (const file of restore.files) {
-      const current = this.#current(file.path)
-      if (current !== file.before && (progress.has(file.path) || current !== file.after))
+      const current = currentHash(file.path)
+      const torn = !progress.has(file.path) && sameInode(file.path, started.get(file.path))
+      if (current !== file.before && !torn && (progress.has(file.path) || current !== file.after))
         conflicts.push(file.path)
       try {
         if (file.before !== null) images.set(file.path, this.#blob(file.before))
@@ -270,24 +318,37 @@ export class FileRewind {
         conflicts.push(`${file.path} (missing or damaged pre-image)`)
       }
     }
-    return { progress, conflicts, images }
+    return { progress, started, conflicts, images }
   }
 
   #apply(restore: Restore) {
-    const { progress, conflicts, images } = this.#checkRestore(restore)
+    const { progress, started, conflicts, images } = this.#checkRestore(restore)
     if (conflicts.length) throw new FileRewindConflictError(conflicts)
     for (const file of restore.files) {
       if (progress.has(file.path)) continue
-      const current = this.#current(file.path)
+      const current = currentHash(file.path)
       if (current !== file.before) {
-        if (current !== file.after)
+        const torn = sameInode(file.path, started.get(file.path))
+        if (current !== file.after && !torn)
           throw new Error(
             `File changed during restore: ${file.path}; resolve it and resume the interrupted restore`,
           )
         if (file.before === null) unlinkSync(file.path)
         else {
-          mkdirSync(path.dirname(file.path), { recursive: true })
-          atomicWrite(file.path, images.get(file.path)!, file.mode)
+          const st = statOrUndefined(file.path)
+          if (st && st.nlink > 1n) {
+            // A rename would detach this name from its other hard links: write the inode in place.
+            this.store.appendDurable({
+              type: "file_restore_progress",
+              restoreId: restore.id,
+              path: file.path,
+              started: { ino: String(st.ino), dev: String(st.dev) },
+            })
+            writeInPlace(file.path, images.get(file.path)!)
+          } else {
+            mkdirSync(path.dirname(file.path), { recursive: true })
+            atomicWrite(file.path, images.get(file.path)!, file.mode)
+          }
         }
       }
       this.store.appendDurable({ type: "file_restore_progress", restoreId: restore.id, path: file.path })
@@ -295,39 +356,6 @@ export class FileRewind {
     // The end marker follows checkout: a crash in either gap can replay the checkout safely.
     this.store.appendDurable({ type: "checkout", target: restore.target })
     this.store.appendDurable({ type: "file_restore_end", restoreId: restore.id })
-  }
-
-  #read(file: string, limit = Number.POSITIVE_INFINITY): { bytes: Buffer | null; mode?: number } {
-    // Replacing a symlink or an aliased inode would restore a different object than was captured.
-    for (let at = file; ; at = path.dirname(at)) {
-      try {
-        const st = lstatSync(at)
-        if (st.isSymbolicLink()) throw new Error(`Symbolic links cannot be captured/restored: ${at}`)
-        if (at === file) {
-          if (!st.isFile() || st.nlink > 1) throw new Error(`Not an unlinked regular file: ${file}`)
-          if (st.size > limit) throw new Error(`${file} exceeds fileRewind.maxFileBytes (${limit} bytes)`)
-        } else if (!st.isDirectory()) throw new Error(`Not a directory: ${at}`)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
-      }
-      if (at === this.store.header.cwd || path.dirname(at) === at) break
-    }
-    try {
-      const bytes = readFileSync(file)
-      if (bytes.length > limit) throw new Error(`${file} exceeds fileRewind.maxFileBytes (${limit} bytes)`)
-      return { bytes, mode: statSync(file).mode }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { bytes: null }
-      throw error
-    }
-  }
-
-  #current(file: string): string | null | undefined {
-    try {
-      return hash(this.#read(file).bytes)
-    } catch {
-      return undefined
-    }
   }
 
   #blobs(): { name: string; size: number }[] {
@@ -366,8 +394,128 @@ export class FileRewind {
   }
 }
 
+/** Captured file bytes live with the session's other assets, `<session>.assets/files`. */
+export function fileHistoryDir(sessionFile: string): string {
+  return path.join(path.dirname(sessionFile), `${path.basename(sessionFile, ".jsonl")}.assets`, "files")
+}
+
+/**
+ * Gives a forked session the images its copied journal refers to. Images never change once
+ * written, so a hard link is as good as a copy, and deleting either session keeps the other's.
+ */
+export function copyFileHistory(from: SessionStore, to: SessionStore): void {
+  const source = fileHistoryDir(from.file)
+  const target = fileHistoryDir(to.file)
+  const keys = new Set<string>()
+  for (const e of to.entries) {
+    if (e.type !== "file_mutation" && e.type !== "file_restore") continue
+    for (const f of e.files) for (const k of [f.before, f.after]) if (k) keys.add(k)
+  }
+  for (const key of keys) {
+    if (!/^[a-f0-9]{64}$/.test(key) || !existsSync(path.join(source, key))) continue
+    mkdirSync(target, { recursive: true })
+    if (existsSync(path.join(target, key))) continue
+    try {
+      linkSync(path.join(source, key), path.join(target, key))
+    } catch {
+      copyFileSync(path.join(source, key), path.join(target, key))
+    }
+  }
+}
+
 function hash(bytes: Uint8Array | null): string | null {
   return bytes === null ? null : createHash("sha256").update(bytes).digest("hex")
+}
+
+/** Case-insensitive file systems: Windows, and macOS by default. Merging is the safe mistake. */
+function pathKey(file: string): string {
+  return process.platform === "win32" || process.platform === "darwin" ? file.toLowerCase() : file
+}
+
+/**
+ * Where a path really leads: symbolic links, junctions, case, 8.3 names and mapped drives
+ * resolved, so every alias of a file has one journal path. A missing tail is kept as given.
+ */
+function canonicalPath(file: string): string {
+  const missing: string[] = []
+  for (let at = path.resolve(file); ; ) {
+    let real: string | undefined
+    try {
+      real = realpathSync.native(at)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== "ENOENT" && code !== "ENOTDIR") real = realpathSync(at)
+    }
+    if (real !== undefined) return path.join(real, ...missing.reverse())
+    // A writer follows a dangling link to a target restore would never look at.
+    if (lstatOrUndefined(at)?.isSymbolicLink()) throw new Error(`Dangling symbolic link: ${at}`)
+    const parent = path.dirname(at)
+    if (parent === at) return path.join(at, ...missing.reverse())
+    missing.push(path.basename(at))
+    at = parent
+  }
+}
+
+function lstatOrUndefined(file: string) {
+  try {
+    return lstatSync(file)
+  } catch {
+    return undefined
+  }
+}
+
+function statOrUndefined(file: string) {
+  try {
+    return lstatSync(file, { bigint: true })
+  } catch {
+    return undefined
+  }
+}
+
+/** A regular file's bytes and mode, or null bytes when nothing is there. */
+function readImage(file: string, limit = Number.POSITIVE_INFINITY): { bytes: Buffer | null; mode?: number } {
+  const st = lstatOrUndefined(file)
+  if (!st) return { bytes: null }
+  if (!st.isFile()) throw new Error(`Not a regular file: ${file}`)
+  if (st.size > limit) throw new Error(`${file} exceeds fileRewind.maxFileBytes (${limit} bytes)`)
+  const bytes = readFileSync(file)
+  if (bytes.length > limit) throw new Error(`${file} exceeds fileRewind.maxFileBytes (${limit} bytes)`)
+  return { bytes, mode: st.mode }
+}
+
+/**
+ * undefined (never equal to an image) when the file is unreadable or the journal path no longer
+ * resolves to itself, e.g. a directory on it became a link: restore would land elsewhere.
+ */
+function currentHash(file: string): string | null | undefined {
+  try {
+    if (pathKey(canonicalPath(file)) !== pathKey(file)) return undefined
+    return hash(readImage(file).bytes)
+  } catch {
+    return undefined
+  }
+}
+
+function sameInode(file: string, at: InPlace | undefined): boolean {
+  if (!at) return false
+  const st = statOrUndefined(file)
+  return !!st && st.isFile() && String(st.ino) === at.ino && String(st.dev) === at.dev
+}
+
+function writeInPlace(file: string, bytes: Uint8Array) {
+  const fd = openSync(file, "r+")
+  try {
+    let offset = 0
+    while (offset < bytes.length) {
+      const written = writeSync(fd, bytes, offset, bytes.length - offset, offset)
+      if (written === 0) throw new Error(`Write made no progress: ${file}`)
+      offset += written
+    }
+    ftruncateSync(fd, bytes.length)
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
 }
 
 function atomicWrite(file: string, bytes: Uint8Array, mode?: number) {

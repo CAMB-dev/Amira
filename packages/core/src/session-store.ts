@@ -6,7 +6,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
@@ -170,17 +169,6 @@ export class SessionStore {
 
   get id(): string {
     return this.header.id
-  }
-
-  /** Private assets kept for exactly as long as this session. */
-  get directory(): string {
-    return path.join(path.dirname(this.file), path.basename(this.file, ".jsonl"))
-  }
-
-  /** Deletes the recording and its captured bytes together. */
-  delete(): void {
-    rmSync(this.directory, { recursive: true, force: true })
-    rmSync(this.file, { force: true })
   }
 
   /** The mutation journal must reach disk before a tool can change a file. */

@@ -1,5 +1,6 @@
-import { existsSync, lstatSync, readdirSync, statSync, unlinkSync } from "node:fs"
+import { existsSync, lstatSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs"
 import path from "node:path"
+import { fileHistoryDir } from "./file-rewind.ts"
 import { SessionStore, sessionsDir } from "./session-store.ts"
 
 export interface SessionSummary {
@@ -133,6 +134,12 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
   }
   // Attachments are inline in message entries; there are no separate attachment files.
   for (const name of [...files].reverse()) {
+    // Captured file bytes first: a failure leaves the recording, so deleting again finishes.
+    const history = fileHistoryDir(name)
+    for (const part of [path.dirname(history), history]) {
+      if (lstatOrUndefined(part)?.isSymbolicLink()) throw new Error("unsafe session asset symlink")
+    }
+    rmSync(history, { recursive: true, force: true, maxRetries: 3 })
     unlinkSync(name)
     summaries.delete(name)
   }
@@ -143,4 +150,12 @@ export function findSession(cwd: string, id: string, dir = sessionsDir(cwd)): st
   if (!/^[\w-]+$/.test(id)) return undefined
   const file = path.join(dir, `${id}.jsonl`)
   return existsSync(file) ? file : undefined
+}
+
+function lstatOrUndefined(file: string) {
+  try {
+    return lstatSync(file)
+  } catch {
+    return undefined
+  }
 }
