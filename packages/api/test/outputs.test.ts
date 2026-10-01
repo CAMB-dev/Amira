@@ -44,6 +44,13 @@ test("a preview starts with the header, keeps whole lines at both ends and says 
   expect(artifactIdOf(out)).toBe("a_0123456789")
 })
 
+test("the artifact of a preview is found also after a line a tool puts first", () => {
+  const text = numbered(3000)
+  const preview = outputPreview({ text, artifact: artifact(text), previewChars: 2000 })
+  expect(artifactIdOf(`Shell: Windows PowerShell 5.1\n\n${preview}`)).toBe("a_0123456789")
+  expect(artifactIdOf(`one\ntwo\nthree\n${preview}`)).toBeUndefined()
+})
+
 test("short text is shown whole under the header; CRLF becomes LF", () => {
   const out = outputPreview({ text: "a\r\nb\r\n", artifact: artifact("a\r\nb\r\n"), previewChars: 8000 })
   expect(out).not.toContain("\r")

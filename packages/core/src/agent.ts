@@ -294,6 +294,8 @@ export class Agent {
   #agingEpoch = 0
   /** Tokens aging freed since the last reply told the context size (an estimate). */
   #contextFreed = 0
+  /** The aging round the last reported context size was counted after. */
+  #epochAtReply = 0
   /** This session's saved tool outputs (A1). */
   readonly artifacts: ArtifactStore
   /** The session entry each message was stored as. */
@@ -427,6 +429,7 @@ export class Agent {
     for (const v of this.#views.values()) {
       if (v.kind === "aged") this.#agingEpoch = Math.max(this.#agingEpoch, v.epoch)
     }
+    this.#epochAtReply = this.#agingEpoch
     this.artifacts = new ArtifactStore({
       dir: artifactDir(opts.session?.file, this.sessionId),
       sessionId: this.sessionId,
@@ -1440,7 +1443,7 @@ export class Agent {
     )
     const observed = this.#contextTokens
     if (observed === undefined || last === -1) return fixed + estimateTokens(projected)
-    const seen = fixed + estimateTokens(projected.slice(0, last + 1))
+    const seen = fixed + estimateTokens(projectMessages(this.messages.slice(0, last + 1), this.#seenViews()))
     const scale = Math.min(4, Math.max(0.5, observed / Math.max(1, seen)))
     return (
       Math.max(0, observed - this.#contextFreed) +
@@ -1455,8 +1458,20 @@ export class Agent {
       (m) => m.role === "assistant" && m.usage !== undefined && contextTokens(m.usage) > 0,
     )
     if (observed === undefined || last === -1) return 1
-    const seen = estimateTokens(projectMessages(this.messages.slice(0, last + 1), this.#views))
+    const seen = estimateTokens(projectMessages(this.messages.slice(0, last + 1), this.#seenViews()))
     return Math.min(4, Math.max(0.5, observed / Math.max(1, seen)))
+  }
+
+  /**
+   * The views the last reported context size was counted with: aging rounds since then are
+   * left out (that size is from before them), so comparing it with an estimate stays fair.
+   */
+  #seenViews(): ReadonlyMap<Message, ContextView> {
+    const since = [...this.#views].filter(([, v]) => v.kind === "aged" && v.epoch > this.#epochAtReply)
+    if (!since.length) return this.#views
+    const out = new Map(this.#views)
+    for (const [m] of since) out.delete(m)
+    return out
   }
 
   /**
@@ -1869,6 +1884,7 @@ export class Agent {
   #noteContext(tokens: number) {
     this.#contextTokens = tokens
     this.#contextFreed = 0
+    this.#epochAtReply = this.#agingEpoch
     if (!this.#checkCompaction) return
     this.#checkCompaction = false
     this.#compactFloor = this.#overThreshold(tokens) ? tokens + this.model.contextWindow / 20 : undefined
@@ -2148,7 +2164,12 @@ export class Agent {
       const writer = this.#compaction.model ?? this.model
       let written: { summary: string; usage?: Usage }
       try {
-        written = await summarize(this.#ai, writer, this.#readable(originals), signal)
+        written = await summarize(
+          this.#ai,
+          writer,
+          projectMessages(this.#readable(originals), this.#views),
+          signal,
+        )
       } catch (err) {
         if (err instanceof SummaryError) this.#recordCompactionUsage(err.usage, modelRef(writer), false)
         if (signal.aborted) return undefined

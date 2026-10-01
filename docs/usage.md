@@ -97,7 +97,7 @@ The defaults can be changed under `context` in settings:
 }
 ```
 
-`saveAbove` is at least 1000 and `previewChars` at least 500 (it is never larger than `saveAbove`); `start` and `target` are shares of the context window between 0 and 1. Set `dedupeReads` or `aging.enabled` to `false` to turn those off.
+`saveAbove` is at least 4000 and `previewChars` at least 500 (it is never larger than `saveAbove`); `start` and `target` are shares of the context window between 0 and 1. Set `dedupeReads` or `aging.enabled` to `false` to turn those off.
 
 ## Print mode
 

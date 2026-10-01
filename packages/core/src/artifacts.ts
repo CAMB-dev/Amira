@@ -183,9 +183,10 @@ export class ArtifactStore implements OutputStore {
     for (const id of ids) {
       const info = this.#known.get(id)
       if (!info || info.pruned) continue
-      await rm(path.join(this.dir, `${id}.txt`), { force: true })
+      // Marked first: if deleting fails, it reads as pruned rather than lost.
       const marked: StoredArtifact = { ...info, pruned: new Date().toISOString() }
-      await writeFile(path.join(this.dir, `${id}.json`), JSON.stringify(marked)).catch(() => {})
+      await writeFile(path.join(this.dir, `${id}.json`), JSON.stringify(marked))
+      await rm(path.join(this.dir, `${id}.txt`), { force: true })
       this.#known.set(id, marked)
       this.#used -= info.bytes
       bytes += info.bytes

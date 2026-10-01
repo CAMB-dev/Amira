@@ -97,7 +97,7 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 }
 ```
 
-`saveAbove` 至少为 1000，`previewChars` 至少为 500（且不会大于 `saveAbove`）；`start` 和 `target` 是上下文窗口的比例，取值在 0 和 1 之间。把 `dedupeReads` 或 `aging.enabled` 设为 `false` 即可关闭对应功能。
+`saveAbove` 至少为 4000，`previewChars` 至少为 500（且不会大于 `saveAbove`）；`start` 和 `target` 是上下文窗口的比例，取值在 0 和 1 之间。把 `dedupeReads` 或 `aging.enabled` 设为 `false` 即可关闭对应功能。
 
 ## 打印模式
 

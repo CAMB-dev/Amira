@@ -171,7 +171,12 @@ export const OMITTED_NOTE =
 
 /** The artifact a tool result's text was saved as, from its preview header. */
 export function artifactIdOf(text: string): string | undefined {
-  return ARTIFACT_HEADER.exec(text.slice(0, 200))?.[1]
+  // The header is the first line, or follows a line a tool put first (a shell label).
+  return text
+    .slice(0, 600)
+    .split("\n", 3)
+    .map((l) => ARTIFACT_HEADER.exec(l)?.[1])
+    .find(Boolean)
 }
 
 /**

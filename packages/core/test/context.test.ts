@@ -15,7 +15,7 @@ import {
 import { ARTIFACT_HEADER, defineTool, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { estimateTokens } from "../src/compaction.ts"
-import { type ContextView, projectMessages } from "../src/context.ts"
+import { agingCandidates, type ContextView, projectMessages } from "../src/context.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
 import { SessionStore } from "../src/session-store.ts"
@@ -703,6 +703,35 @@ test("a context overflow gets one aging round, then compaction, then gives up", 
   const transcript = textOf(summary.messages[0])
   expect(transcript).toContain("Earlier tool result cleared")
   expect(transcript).not.toContain(logText(1, 6000).slice(0, 2000))
+})
+
+test("aging keeps whole recent turns before steps of a long turn, and results a note points at", () => {
+  const opts = { keepTurns: 2, keepSteps: 2, sealed: -1, cwd: process.cwd() }
+  const ids = (ms: Message[], views = new Map<Message, ContextView>()) =>
+    agingCandidates(ms, views, opts).map((c) => c.message.toolCallId)
+  /** A user turn whose model calls big once per id, a step each. */
+  const turn = (...calls: string[]): Message[] => [
+    { role: "user", content: [{ type: "text", text: "go" }] },
+    ...calls.flatMap((id, i): Message[] => [
+      { role: "assistant", content: [{ type: "toolCall", id, name: "big", args: { n: i } }], model: ref },
+      {
+        role: "toolResult",
+        toolCallId: id,
+        toolName: "big",
+        content: [{ type: "text", text: logText(i, 6000) }],
+        isError: false,
+      },
+    ]),
+  ]
+  // Three turns, the current one with three steps: the previous turn is still kept.
+  expect(ids([...turn("a"), ...turn("b"), ...turn("c1", "c2", "c3")])).toEqual(["a"])
+  // One long turn alone: its older steps age, its last two do not.
+  expect(ids(turn("s1", "s2", "s3", "s4", "s5"))).toEqual(["s1", "s2", "s3"])
+  // A result an unchanged-read note points at stays while the note is there.
+  const past = history(4, 6000)
+  const of = past[2] as ToolResultMessage
+  const note = past[6] as ToolResultMessage
+  expect(ids(past, new Map([[note, { kind: "duplicate", text: "same", of }]]))).toEqual([])
 })
 
 // ---- sub-agents ----

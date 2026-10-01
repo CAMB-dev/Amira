@@ -178,7 +178,7 @@ const settings = object({
   maxParallelTools: integer(1),
   compact: object({ threshold: number, model: modelRef, layout: oneOf("tail", "recent-user") }),
   context: object({
-    outputs: object({ saveAbove: integer(1000), previewChars: integer(500), quotaMB: integer(1) }),
+    outputs: object({ saveAbove: integer(4000), previewChars: integer(500), quotaMB: integer(1) }),
     dedupeReads: boolean,
     aging: object({
       enabled: boolean,

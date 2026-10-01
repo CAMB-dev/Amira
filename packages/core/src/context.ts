@@ -172,7 +172,7 @@ export function duplicateView(
     const before = resultText(original)
     if (before === undefined || hash(before) !== hash(text)) return undefined
     const p = typeof call.args.path === "string" ? call.args.path : ""
-    const note = `[Unchanged: this read returned exactly the same text as the earlier read call ${original.toolCallId} of ${p} (${rangeOf(call)}, sha256 ${hash(text).slice(0, 12)}), which is still in your context above; use that output. Call read with force: true to get the text again.]`
+    const note = `[Unchanged: this read returned exactly the same text as the earlier read call ${original.toolCallId} of ${p} (${rangeOf(call)}, sha256 ${hash(text).slice(0, 12)}), shown above; use that output (if it was cleared or summarized since, call read with force: true to get the text again).]`
     // A short read is cheaper than the note about it.
     return note.length < text.length ? { kind: "duplicate", of: original, text: note } : undefined
   }
@@ -224,9 +224,13 @@ export function agingCandidates(
   const starts = messages.flatMap((m, i) => (m.role === "user" && !isSummaryMessage(m) ? [i] : []))
   const current = starts.at(-1) ?? 0
   const steps = messages.flatMap((m, i) => (i > current && m.role === "assistant" ? [i] : []))
+  // As compaction splits: whole turns first; only a long turn with nothing before it to age
+  // (fewer turns than keepTurns) has its own older steps aged.
+  const keep = Math.max(1, opts.keepTurns)
   let protectFrom: number
-  if (steps.length > opts.keepSteps) protectFrom = steps.at(-opts.keepSteps)!
-  else protectFrom = starts.at(-Math.max(1, opts.keepTurns)) ?? 0
+  if (starts.length > keep) protectFrom = starts.at(-keep)!
+  else if (steps.length > opts.keepSteps) protectFrom = steps.at(-opts.keepSteps)!
+  else protectFrom = starts.at(-1) ?? 0
   if (opts.olderThanTurns !== undefined) {
     protectFrom = Math.min(protectFrom, starts.at(-Math.max(1, opts.olderThanTurns)) ?? 0)
   }
@@ -241,11 +245,14 @@ export function agingCandidates(
       if (typeof b.args.id === "string") busyArtifacts.add(b.args.id)
     }
   }
+  // A note pointing at a result says the text is there: the result stays while the note does.
+  const pointedAt = new Set<Message>()
+  for (const v of views.values()) if (v.kind === "duplicate") pointedAt.add(v.of)
   const pairs = pairCalls(messages)
   const out: AgingCandidate[] = []
   for (let i = Math.max(0, opts.sealed + 1); i < protectFrom; i++) {
     const m = messages[i]!
-    if (m.role !== "toolResult" || views.has(m)) continue
+    if (m.role !== "toolResult" || views.has(m) || pointedAt.has(m)) continue
     const text = resultText(m)
     if (text === undefined || text.length < MIN_AGED_CHARS) continue
     const call = pairs.get(m)
