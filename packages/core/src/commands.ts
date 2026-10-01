@@ -8,6 +8,7 @@ import type {
   CommandOutputLevel,
   FrontendView,
   InputHandler,
+  SendOptions,
   SessionControl,
   SkillInfo,
 } from "@amira/api"
@@ -267,6 +268,8 @@ export interface CommandRunOptions {
   openView?: (view: FrontendView) => boolean
   /** The frontend's most useful keys, for /help; frontends without keys leave it out. */
   keys?: CommandContext["keys"]
+  /** Correlates a send with its command echo; returned cleanup runs if the send fails. */
+  onSend?: (text: string, opts?: SendOptions) => (() => void) | undefined
 }
 
 export interface CommandOutcome {
@@ -579,7 +582,20 @@ export class CommandHost {
   #context(opts: CommandRunOptions, print: CommandContext["print"]): CommandContext {
     return {
       cwd: this.#agent.cwd,
-      session: this.#opts.control,
+      session: opts.onSend
+        ? {
+            ...this.#opts.control,
+            send: async (text, sendOpts) => {
+              const failed = opts.onSend!(text, sendOpts)
+              try {
+                await this.#opts.control.send(text, sendOpts)
+              } catch (error) {
+                failed?.()
+                throw error
+              }
+            },
+          }
+        : this.#opts.control,
       frontend: opts.frontend,
       signal: opts.signal ?? new AbortController().signal,
       ui: this.#opts.ui.api(),
