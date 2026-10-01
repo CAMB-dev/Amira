@@ -3454,6 +3454,8 @@ test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at
           `${mode}/${cols}: fetching`,
         )
         expect(live()).toContain("Esc cancel command")
+        // One key in the hint, as while a turn runs; Ctrl+C cancels too.
+        expect(live()).not.toContain("Ctrl+C cancel command")
         terminal.send("draft stays available")
         await waitFor(() => live().includes("draft stays available"), `${mode}/${cols}: responsive draft`)
         samples[`${mode}-${cols}`] = live()

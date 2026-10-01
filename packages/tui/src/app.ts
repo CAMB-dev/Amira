@@ -689,15 +689,18 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * The few keys that matter now, the most useful first to stay as the line narrows; the key
    * reference (the help key) lists the rest.
    */
+  /** The slash commands running now, each with the name of the command its line resolved to. */
   const commandAborts = new Map<AbortController, string | undefined>()
+  /** The newest running command that was not cancelled yet; the interrupt key cancels it first. */
+  const cancellable = () => [...commandAborts].findLast(([c]) => !c.signal.aborted)
   function inputHint(): HintItems {
     const submitKey = keys.label("submit")
     const interruptKey = keys.label("interrupt")
-    if (commandAborts.size && !compacting)
+    // A /compact is a command too, but its hint below says "interrupt", as it always did.
+    if (cancellable() && !compacting)
       return [
         submitKey && { text: `${submitKey} ${working ? enterDoes : "send"}`, priority: 5 },
         interruptKey && { text: `${interruptKey} cancel command`, priority: 4 },
-        keys.label("cancel") && { text: `${keys.label("cancel")} cancel command`, priority: 3 },
       ]
     if (working) {
       // Esc stops the turn; with messages waiting it sends them at once, merged.
@@ -1325,17 +1328,22 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     })
   }
 
-  /** Runs at once, even during a turn; commands that need an idle session say so. */
+  /**
+   * Cancels the newest running slash command (Esc or Ctrl+C, when no dialog has the key): its
+   * signal aborts, the input stays as it is. Only the command is stopped: a turn running
+   * alongside goes on, and so does a compaction, unless the command cancelled is /compact,
+   * whose compaction stops with it as before.
+   */
   function cancelCommand(): boolean {
-    const operation = [...commandAborts].findLast(([c]) => !c.signal.aborted)
+    const operation = cancellable()
     if (!operation) return false
     const [abort, command] = operation
     abort.abort(new Error("cancelled"))
-    // Session compaction has its own abort path, beyond the command's signal.
     if (command === "compact" && compacting) interrupt()
     return true
   }
 
+  /** Runs at once, even during a turn; commands that need an idle session say so. */
   function runCommand(line: string) {
     view.commandEcho(line)
     const abort = new AbortController()
