@@ -1,5 +1,6 @@
 import { afterAll, expect, spyOn, test } from "bun:test"
 import {
+  chmodSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -19,7 +20,7 @@ import { type Settings, type ToolContext, toolResultText } from "@amira/api"
 import { applyPatch, applyPatchTool } from "../../../extensions/builtin-tools/src/apply-patch.ts"
 import { editTool } from "../../../extensions/builtin-tools/src/edit.ts"
 import { writeTool } from "../../../extensions/builtin-tools/src/write.ts"
-import { FileRewind } from "../src/file-rewind.ts"
+import { FileRewind, intermediate } from "../src/file-rewind.ts"
 import { deleteSession } from "../src/session-list.ts"
 import { SessionStore } from "../src/session-store.ts"
 
@@ -454,9 +455,10 @@ test("abandoning is only for a restore conflicts keep from finishing", async () 
   } finally {
     crash.mockRestore()
   }
-  expect(() => rewind.abandon()).toThrow("can still finish")
+  // After a restart (no failure seen in this process) a finishable restore must finish.
+  expect(() => new FileRewind(SessionStore.open(store.file)).abandon()).toThrow("can still finish")
   writeFileSync(join(dir, "b"), "external")
-  expect(rewind.interrupted()).toEqual({ messageId, conflicts: [join(dir, "b")] })
+  expect(rewind.interrupted()).toMatchObject({ messageId, conflicts: [join(dir, "b")] })
   await expect(write("c", "blocked")).rejects.toThrow()
   rewind.abandon()
   expect(rewind.restoring).toBe(false)
@@ -476,3 +478,117 @@ if (process.platform === "win32") {
     expect(readdirSync(dir).filter((n) => n.toLowerCase() === "name.txt")).toEqual(["Name.txt"])
   })
 }
+
+test("an edit made on the same inode after an interrupted in-place restore is a conflict, not torn bytes", async () => {
+  const { dir, store, rewind, messageId, write } = setup()
+  writeFileSync(join(dir, "a"), "original contents")
+  linkSync(join(dir, "a"), join(dir, "twin"))
+  await write("a", "tool")
+  const append = store.appendDurable.bind(store)
+  const crash = spyOn(store, "appendDurable").mockImplementation((entry) => {
+    const id = append(entry)
+    if (entry.type === "file_restore_progress" && entry.started) throw new Error("simulated crash")
+    return id
+  })
+  try {
+    expect(() => rewind.restore(messageId, null)).toThrow("simulated crash")
+  } finally {
+    crash.mockRestore()
+  }
+  writeFileSync(join(dir, "a"), "user edit") // in place: same inode
+  expect(() => new FileRewind(SessionStore.open(store.file)).recover()).toThrow("Conflicts")
+  expect(readFileSync(join(dir, "twin"), "utf8")).toBe("user edit")
+})
+
+test("intermediate accepts only the states of an in-place write cut off at some byte", () => {
+  const before = Buffer.from("abcdef")
+  const after = Buffer.from("XYZ")
+  for (const ok of ["XYZ", "aYZ", "abZ", "abc", "abcd", "abcdef"])
+    expect(intermediate(Buffer.from(ok), before, after)).toBe(true)
+  for (const bad of ["XbZ", "abcX", "ab", "abcdefg", "user"])
+    expect(intermediate(Buffer.from(bad), before, after)).toBe(false)
+})
+
+test("a change that slips in between planning and applying leaves no pending restore", async () => {
+  const { dir, store, rewind, messageId, write } = setup()
+  await write("a", "tool")
+  const append = store.appendDurable.bind(store)
+  const race = spyOn(store, "appendDurable").mockImplementation((entry) => {
+    const id = append(entry)
+    if (entry.type === "file_restore") writeFileSync(join(dir, "a"), "racing writer")
+    return id
+  })
+  try {
+    expect(() => rewind.restore(messageId, null)).toThrow("nothing changed")
+  } finally {
+    race.mockRestore()
+  }
+  expect(rewind.restoring).toBe(false)
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("racing writer")
+  await write("b", "file tools still write")
+})
+
+test("a restore that fails for an I/O error can be abandoned, and a read-only file is still restored", async () => {
+  const { dir, store, rewind, messageId, write } = setup()
+  writeFileSync(join(dir, "a"), "original")
+  await write("a", "tool")
+  await write("b", "tool")
+  chmodSync(join(dir, "a"), 0o444)
+  rewind.restore(messageId, null)
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("original")
+  expect(existsSync(join(dir, "b"))).toBe(false)
+
+  const second = store.appendMessage(userMessage("second"))
+  await write("c", "tool")
+  const append = store.appendDurable.bind(store)
+  const fail = spyOn(store, "appendDurable").mockImplementation((entry) => {
+    if (entry.type === "file_restore_progress") throw new Error("EIO: disk went away")
+    return append(entry)
+  })
+  try {
+    expect(() => rewind.restore(second, store.get(second)!.parentId)).toThrow("EIO")
+  } finally {
+    fail.mockRestore()
+  }
+  expect(rewind.interrupted()).toMatchObject({ conflicts: [], failure: expect.stringContaining("EIO") })
+  expect(rewind.plan(second).note).toContain("abandons it")
+  rewind.abandon()
+  expect(rewind.restoring).toBe(false)
+})
+
+test("capture refuses relative paths, and a failing end marker does not fail a finished write", async () => {
+  const { dir, store, rewind } = setup()
+  const source = { sessionId: store.id, toolCallId: "x", turnId: "t" }
+  await expect(
+    rewind.mutate([{ path: "a", after: Buffer.from("x") }], async () => {}, source),
+  ).rejects.toThrow("Not an absolute path")
+  const append = store.appendDurable.bind(store)
+  const fail = spyOn(store, "appendDurable").mockImplementation((entry) => {
+    if (entry.type === "file_mutation_end") throw new Error("disk hiccup")
+    return append(entry)
+  })
+  try {
+    await rewind.mutate(
+      [{ path: join(dir, "a"), after: Buffer.from("x") }],
+      async () => writeFileSync(join(dir, "a"), "x"),
+      source,
+    )
+  } finally {
+    fail.mockRestore()
+  }
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("x")
+})
+
+test("a damaged image is rewritten when the same bytes are captured again", async () => {
+  const { dir, store, rewind, messageId, write } = setup()
+  writeFileSync(join(dir, "a"), "original")
+  await write("a", "tool")
+  const key = store.entries.find((e) => e.type === "file_mutation")!
+  if (key.type !== "file_mutation") throw new Error("missing mutation")
+  writeFileSync(join(rewind.directory, key.files[0]!.before!), "damaged")
+  writeFileSync(join(dir, "b"), "original")
+  await write("b", "tool")
+  expect(rewind.plan(messageId).conflicts).toEqual([])
+  rewind.restore(messageId, null)
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("original")
+})

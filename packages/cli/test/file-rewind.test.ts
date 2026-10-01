@@ -92,7 +92,7 @@ test("conflicts leave both the conversation and every file in place", async () =
   expect(readFileSync(join(cwd, "a"), "utf8")).toBe("shell")
 })
 
-test("an interrupted core restore cannot become conversation-only or an extension restore", async () => {
+test("an interrupted core restore never turns into an extension restore", async () => {
   const { cwd, store, session, host } = await setup()
   writeFileSync(join(cwd, "a"), "original")
   await host.control.send("change a")
@@ -106,9 +106,8 @@ test("an interrupted core restore cannot become conversation-only or an extensio
   } finally {
     crash.mockRestore()
   }
-  await expect(host.control.rewind!(0, { restoreFiles: false })).rejects.toThrow(
-    "interrupted core file restore",
-  )
+  // Failed here, not crashed: conversation-only rewind would abandon it.
+  expect(host.control.planRewind!(0).note).toContain("abandons it")
   expect(host.control.planRewind!(0)).toMatchObject({ conflicts: [], restored: 1 })
   let extensionCalls = 0
   await session.host.load((api) => {
@@ -282,7 +281,7 @@ test("same-directory sub-agents capture into the parent's journal at its prompt 
 })
 
 test("a separate-directory sub-agent's changes stay outside the parent's file journal", async () => {
-  const { cwd, session, store, host } = await setup([{ text: "ready" }, writing, { text: "child done" }])
+  const { session, store, host } = await setup([{ text: "ready" }, writing, { text: "child done" }])
   await host.control.send("delegate")
   // Agent worktrees live outside the workspace, under the Amira home.
   const other = temporary()

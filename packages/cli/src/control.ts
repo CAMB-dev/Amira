@@ -280,11 +280,16 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       const interrupted = a.fileRewind?.interrupted()
       if (interrupted) {
         // Never two restores: finish the started one, or give it up only once it cannot finish.
-        if (!interrupted.conflicts.length && (!restore || owner || interrupted.messageId !== entry.id))
+        const stuck = interrupted.conflicts.length > 0 || interrupted.failure !== undefined
+        if (!stuck && (!restore || owner || interrupted.messageId !== entry.id))
           throw new Error(
-            "Finish the interrupted core file restore first: rewind with files to the message it was started for",
+            `Finish the interrupted core file restore first: rewind with files to the message it was started for${owner ? ` (unload ${owner.source} first; it would restore instead)` : ""}`,
           )
         if (interrupted.conflicts.length && restore) throw new FileRewindConflictError(interrupted.conflicts)
+        if (stuck && restore && (owner || interrupted.messageId !== entry.id))
+          throw new Error(
+            `The interrupted core file restore failed (${interrupted.failure ?? "conflicts"}); retry it with files to the same message, or rewind the conversation only to abandon it`,
+          )
         if (!restore) a.fileRewind!.abandon()
       }
       if (restore && owner) {
