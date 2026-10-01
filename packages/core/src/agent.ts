@@ -1954,15 +1954,7 @@ export class Agent {
         await this.#afterTool(turn, run, batch, args, first, rejected),
       )
       if (!run.finished) this.#emitToolEnd(turn, run, result, durationMs, rejected, run.approval)
-      return {
-        role: "toolResult",
-        toolCallId: call.id,
-        toolName: call.name,
-        content: result.content,
-        isError: result.isError ?? false,
-        // Kept with the message, so a resumed session renders the call as this one did.
-        ...(rejected ? { rejected } : {}),
-      }
+      return resultMessage(call, result, rejected)
     }
     const reject = (rejected: ToolRejection, text: string, args = call.args) =>
       finish(args, { content: [{ type: "text", text }], isError: true }, 0, rejected)
@@ -2753,15 +2745,14 @@ function normalizeResult(r: unknown): ToolResult {
   return out
 }
 
+/** A call's result, with why it was rejected, so a resumed session renders the call as the live one did. */
+function resultMessage(call: ToolCallBlock, r: ToolResult, rejected?: ToolRejection): ToolResultMessage {
+  const m = { role: "toolResult" as const, toolCallId: call.id, toolName: call.name, content: r.content }
+  return { ...m, isError: r.isError ?? false, ...(rejected && { rejected }) }
+}
+
 function toolError(call: ToolCallBlock, text: string, rejected?: ToolRejection): ToolResultMessage {
-  return {
-    role: "toolResult",
-    toolCallId: call.id,
-    toolName: call.name,
-    content: [{ type: "text", text }],
-    isError: true,
-    ...(rejected ? { rejected } : {}),
-  }
+  return resultMessage(call, { content: [{ type: "text", text }], isError: true }, rejected)
 }
 
 function copyArgs(args: Record<string, unknown>): Record<string, unknown> {
