@@ -702,9 +702,13 @@ test("--shell and --disable-tools decide which tools are hidden", async () => {
   expect(a.disabledTools).toEqual(["glob", "grep", "write"])
   expect(() => parseCliArgs(["--shell", "zsh", "x"], here, {})).toThrow(/--shell/)
   const { toolsToDisable } = await import("../src/session.ts")
+  const shells = [
+    { name: "bash", traits: { shell: "bash" as const } },
+    { name: "powershell", traits: { shell: "powershell" as const } },
+  ]
   expect(toolsToDisable("auto", [])).toEqual([])
-  expect(toolsToDisable("bash", ["glob"]).sort()).toEqual(["glob", "powershell"])
-  expect(toolsToDisable("powershell", [])).toEqual(["bash"])
+  expect(toolsToDisable("bash", ["glob"], shells).sort()).toEqual(["glob", "powershell"])
+  expect(toolsToDisable("powershell", [], shells)).toEqual(["bash"])
 })
 
 test("unknown names to disable are reported at startup, with where they came from", async () => {

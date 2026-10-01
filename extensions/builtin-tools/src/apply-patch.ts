@@ -362,6 +362,8 @@ export const applyPatchTool = defineTool<ApplyPatchParams>({
     required: ["patch"],
     additionalProperties: false,
   },
+  traits: { writesFiles: "paths", usesMutationHook: true, editor: "apply_patch" },
+  getWrittenPaths: ({ patch }) => patchPaths(patch),
   concurrency: "serial",
   async execute({ patch }, ctx) {
     if (typeof patch !== "string") return textResult("patch must be a string", true)
@@ -380,3 +382,17 @@ export const applyPatchTool = defineTool<ApplyPatchParams>({
     }
   },
 })
+
+/** Generously reports patch headers even when the patch itself is malformed. */
+function patchPaths(patch: unknown): string[] {
+  if (typeof patch !== "string") return []
+  const out: string[] = []
+  for (const raw of patch.split(/\r?\n/)) {
+    const line = raw.trim()
+    const header = /^\*\*\* (?:Add|Delete|Update) File: (.+)$/.exec(line)
+    const move = /^\*\*\* Move to: (.+)$/.exec(line)
+    const found = header?.[1] ?? move?.[1]
+    if (found) out.push(found)
+  }
+  return out
+}

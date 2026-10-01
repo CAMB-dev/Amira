@@ -43,6 +43,13 @@ const read = defineTool<{ path: string; offset?: number; limit?: number; force?:
       force: { type: "boolean" },
     },
   },
+  traits: { readOnly: true, writesFiles: false },
+  readKey: ({ path: p, offset, limit, force }, ctx) => {
+    if (typeof p !== "string" || !p || force === true) return undefined
+    const abs =
+      process.platform === "win32" ? path.resolve(ctx.cwd, p).toLowerCase() : path.resolve(ctx.cwd, p)
+    return JSON.stringify(["read/1", abs, offset ?? 1, limit ?? null])
+  },
   concurrency: "parallel",
   async execute({ path: p, offset = 1, limit = 2000 }, ctx) {
     try {

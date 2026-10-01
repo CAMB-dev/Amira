@@ -35,6 +35,8 @@ export const editTool = defineTool<EditParams>({
     required: ["path", "old_string", "new_string"],
     additionalProperties: false,
   },
+  traits: { writesFiles: "paths", usesMutationHook: true, editor: "edit" },
+  getWrittenPaths: ({ path }) => (typeof path === "string" && path ? [path] : []),
   // Writes to different files run in parallel; writes to the same file keep their order (D71).
   concurrency: "parallel",
   concurrencyKey: (p, ctx) => fileKey(ctx.cwd, p.path),

@@ -30,6 +30,7 @@ export const globTool = defineTool<GlobParams>({
     required: ["pattern"],
     additionalProperties: false,
   },
+  traits: { readOnly: true, writesFiles: false },
   concurrency: "parallel",
   async execute({ pattern, path }, ctx) {
     if (typeof pattern !== "string" || pattern === "") return textResult("pattern is required", true)

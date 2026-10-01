@@ -19,7 +19,7 @@ export function offeredTools(
   const active = registry
     .active()
     .filter(allow)
-    .filter((t) => t.name !== TOOL_SEARCH || deferred.length > 0)
+    .filter((t) => t.traits?.toolSearch !== true || deferred.length > 0)
   const byName = new Map(deferred.map((t) => [t.name, t]))
   const extra: ToolDefinition[] = []
   for (const name of loaded) {
