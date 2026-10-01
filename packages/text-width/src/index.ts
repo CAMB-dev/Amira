@@ -1,4 +1,5 @@
-const ANSI_PATTERN =
+/** Matches CSI, OSC, DCS/APC/PM/SOS strings and other escapes (`ESC 7`, `ESC c`, `ESC ( B`, ...). */
+export const ANSI_PATTERN =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences are the point
   /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]*[0-~]/g
 const RESET = "\x1b[0m"
@@ -6,7 +7,7 @@ const RESET = "\x1b[0m"
 /** Zero-width marker used by terminal components to place the real cursor. */
 export const CURSOR_MARKER = "\x1b_tk:cursor\x07"
 
-function stripAnsi(s: string): string {
+export function stripAnsi(s: string): string {
   return s.includes("\x1b") ? s.replace(ANSI_PATTERN, "") : s
 }
 
@@ -284,8 +285,11 @@ const CLOSES: Record<string, string[]> = {
   "59": ["ul"],
 }
 
-/** Splits SGR parameters into single attributes, keeping extended colors as one attribute. */
-function sgrAttributes(params: string): string[] {
+/**
+ * Splits SGR parameters into single attributes: `1;38;5;196` is `1` and `38;5;196`, while the
+ * colon form `38:5:196` is one parameter already. An empty parameter is a reset (`0`).
+ */
+export function sgrAttributes(params: string): string[] {
   const parts = params.split(";")
   const out: string[] = []
   for (let i = 0; i < parts.length; i++) {
@@ -299,8 +303,8 @@ function sgrAttributes(params: string): string[] {
   return out
 }
 
-/** Attributes in the same group replace each other: foreground and background are each one group. */
-function sgrGroup(attr: string): string {
+/** Attributes in the same group replace each other: all foreground colors are one group, and so on. */
+export function sgrGroup(attr: string): string {
   const n = Number.parseInt(attr, 10)
   if ((n >= 30 && n <= 39) || (n >= 90 && n <= 97)) return "fg"
   if ((n >= 40 && n <= 49) || (n >= 100 && n <= 107)) return "bg"
