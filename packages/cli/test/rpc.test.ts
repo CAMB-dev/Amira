@@ -605,10 +605,13 @@ test("during a /compact, prompt and model.set are busy and steer queues the mess
     role: "assistant",
     content: [{ type: "text", text: "three" }],
   })
+  // The refused prompt started no turn of its own.
+  const prompts = rpc.out.filter((l) => l.type === "turn.start").map((l) => l.data.prompt.content[0].text)
+  expect(prompts).toEqual(["first", "second", "later"])
   expect(await rpc.end()).toBe(0)
 })
 
-test("ui.respond needs a value; model.set waits for the turn", async () => {
+test("ui.respond needs a value; model.set and prompt wait for the turn", async () => {
   const s = await session([{ toolCalls: [{ name: "ask", args: {} }] }, { text: "bye" }], [rpcTools])
   const rpc = inProcess(s)
   await rpc.call({ id: 1, cmd: "prompt", text: "go" })
@@ -618,6 +621,7 @@ test("ui.respond needs a value; model.set waits for the turn", async () => {
   const busy = await rpc.call({ id: 2, cmd: "model.set", model: "mock/other" })
   expect(busy.error.code).toBe("busy")
   expect(s.agent.model.id).toBe("m")
+  expect((await rpc.call({ id: "p", cmd: "prompt", text: "not now" })).error.code).toBe("busy")
 
   // A misspelt key leaves the dialog open.
   const typo = await rpc.call({ id: 3, cmd: "ui.respond", requestId, val: true })
@@ -626,6 +630,7 @@ test("ui.respond needs a value; model.set waits for the turn", async () => {
   expect((await rpc.call({ id: 5, cmd: "ui.respond", requestId, value: null })).ok).toBe(true)
   await rpc.until((l) => l.type === "turn.end")
   expect(rpc.out.find((l) => l.type === "ui.resolved")?.data.cancelled).toBe(true)
+  expect(rpc.out.filter((l) => l.type === "turn.start")).toHaveLength(1)
 
   expect(await rpc.call({ id: 6, cmd: "model.set", model: "mock/other" })).toMatchObject({
     ok: true,
