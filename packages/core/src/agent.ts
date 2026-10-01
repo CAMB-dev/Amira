@@ -12,7 +12,6 @@ import {
   isNoModel,
   type Message,
   type ModelError,
-  type ModelErrorInfo,
   type ModelInfo,
   type ModelRef,
   modelMessages,
@@ -26,9 +25,7 @@ import {
   userMessage,
 } from "@amira/ai"
 import {
-  type ApprovalPermission,
   type ApprovalRequest,
-  type ArtifactGroupUsage,
   type AskOutcome,
   type AskQuestion,
   type AskRequest,
@@ -40,11 +37,9 @@ import {
   type CompactionUsage,
   type EventMap,
   type MutateFiles,
-  type OutputStore,
   outputPreview,
   outputSize,
   type PendingNotice,
-  type PermissionMode,
   type ProviderSettings,
   type SessionData,
   type SessionStatus,
@@ -56,17 +51,49 @@ import {
   type ToolRejection,
   type ToolResult,
   type ToolSession,
-  type TurnEndReason,
 } from "@amira/api"
+import {
+  type ArtifactUsageGroupInput,
+  activeArtifactIds,
+  artifactIdsToPrune,
+  buildArtifactUsageGroups,
+  type ManagedArtifactGroup,
+  summarizeArtifactUsage,
+} from "./agent/artifact-usage.ts"
+import {
+  concurrencyKey,
+  copyArgs,
+  formatK,
+  joinMessages,
+  modelRef,
+  normalizeResult,
+  resultMessage,
+  toolError,
+} from "./agent/messages.ts"
+import { approvalPermission, askedText, refusedText } from "./agent/permission-text.ts"
+import {
+  AgentAbortedError,
+  AgentBusyError,
+  type AgentOptions,
+  type ApprovalDecision,
+  type Approver,
+  type Asker,
+  NOTICE_RETRY_MS,
+  newTurnId,
+  type PromptOptions,
+  type TurnResult,
+} from "./agent/types.ts"
 import {
   type ArtifactScope,
   ArtifactStore,
   type ArtifactUsage,
   artifactDir,
-  artifactIdsIn,
   referencedArtifacts,
   subagentSessionFiles,
 } from "./artifacts.ts"
+
+export * from "./agent/types.ts"
+
 import {
   type CompactionOptions,
   checkpointOf,
@@ -101,7 +128,7 @@ import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
-import { Permissions, type PermissionVerdict } from "./permissions/policy.ts"
+import { Permissions } from "./permissions/policy.ts"
 import { writtenPaths } from "./permissions/protected.ts"
 import {
   addNonInteractive,
@@ -117,140 +144,9 @@ import { ToolRegistry } from "./tool-registry.ts"
 import { toolTraits } from "./tool-traits.ts"
 import { checkArgs } from "./validate-args.ts"
 
-export interface ApprovalDecision {
-  approved: boolean
-  /** Shown to the model when the call is denied. */
-  reason?: string
-  /** Who approved it, for the call's row (tool.execute.end `approval`). */
-  by?: ToolApproval
-  /** The user dismissed the question: the call is denied and the whole turn interrupted. */
-  interrupt?: boolean
-}
-
-/** Decides a tool call that a tool.call.before interceptor asked about (D13, D14). */
-export type Approver = (request: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalDecision>
-
-/** Answers the questions a session puts (ToolSession.askUser). */
-export type Asker = (request: AskRequest, signal: AbortSignal) => Promise<AskOutcome>
-
-export interface AgentOptions {
-  ai: Ai
-  model: ModelInfo
-  cwd: string
-  /** The whole system prompt as one "identity" section; `sections` takes precedence. */
-  systemPrompt?: string
-  /** The system prompt's named sections, in order (D43). */
-  sections?: PromptSection[]
-  /**
-   * Where the conversation is persisted. Its id becomes the session id and, unless
-   * `messages` is given, its current branch is restored.
-   */
-  session?: SessionStore
-  fileRewind?: FileRewind
-  fileRewindSettings?: Settings["fileRewind"]
-  compaction?: CompactionOptions
-  /** Context management: large outputs, repeated reads, aging (settings `context`). */
-  context?: ContextOptions
-  autoTitle?: { model?: ModelInfo }
-  sessionId?: string
-  parentSessionId?: string
-  bus?: EventBus
-  interceptors?: InterceptorRegistry
-  tools?: ToolRegistry
-  /** Per-provider and per-model editing tool choices, shared with sub-agents. */
-  providerSettings?: Record<string, ProviderSettings>
-  /** Upper bound on model calls per turn. Default 200. */
-  maxSteps?: number
-  maxTokens?: number
-  /** How long tools get to stop after an abort before they are abandoned. Default 2000 ms. */
-  abortGraceMs?: number
-  /** Most tool calls running at once (D71). Default 8. */
-  maxParallelTools?: number
-  /**
-   * After a turn carrying notices fails, they are sent again after each of these delays in
-   * turn while the resends keep failing. Default 10 s, 30 s, 90 s.
-   */
-  noticeRetryMs?: number[]
-  messages?: Message[]
-  /**
-   * Where `messages` come from (a fork of another agent): the history a compaction summary
-   * among them stands for (Agent.compactedHistory), for a model that cannot read its server
-   * checkpoint and needs a text summary written.
-   */
-  originals?: (summary: Message) => Message[] | undefined
-  /**
-   * How results among `messages` are sent (a fork of another agent: its contextViews), so the
-   * child's requests carry what the parent's did.
-   */
-  views?: ReadonlyMap<Message, ContextView>
-  /** The artifacts of the session this one was started from: output_read finds them too. */
-  outputsParent?: OutputStore
-  /** Sub-agent nesting depth; 0 (the default) for a top-level session. */
-  depth?: number
-  /** The agent tree this session belongs to: it spawns sub-agents and keeps the shared budget. */
-  tree?: AgentTree
-  /** The host's job implementation; the agent turns it into a caller-scoped view. */
-  backgroundJobs?: BackgroundJobHost
-  /**
-   * Decides tool calls an interceptor asked about. Sub-agents get one from their tree that
-   * asks the parent's model; without one such calls are denied.
-   */
-  approve?: Approver
-  /**
-   * The core permission policy (mode, command rules, protected paths), checked on every tool
-   * call after the tool.call.before interceptors. Sub-agents share their parent's. Default: a
-   * policy in "auto" mode without rules, which only asks before protected files change.
-   */
-  permissions?: Permissions
-  /**
-   * For a sub-agent: who answers the permission policy's questions, handed down from the
-   * top-level session (Agent.permissionApprover) when `permissions` has no approver of its own.
-   */
-  permissionApprover?: Approver
-  /**
-   * Answers questions this session's tools put (ToolSession.askUser, the ask_user tool): the
-   * user for a top-level session, the parent's model for sub-agents. Without one nobody answers.
-   */
-  ask?: Asker
-  /**
-   * Called instead of starting a turn when a notice arrives while the session is idle, for an
-   * owner that decides when turns run (a persistent sub-agent waits for a place in its tree);
-   * the owner starts it with wake(). Notices left when a turn ends then wait as well, instead
-   * of starting the next turn by themselves.
-   */
-  onIdleNotice?: () => void
-  /**
-   * Asked after each batch of tool calls: true ends the turn there, as done, without another
-   * model call (a sub-agent that handed back its structured result).
-   */
-  endTurn?: () => boolean
-}
-
-export interface TurnResult {
-  reason: TurnEndReason
-  steps: number
-  error?: string
-  /** A failed model request, read for the user (turn.end `failure`). */
-  failure?: ModelErrorInfo
-}
-
-export interface PromptOptions {
-  /** Id for the new turn, so a caller can report it before the turn runs. Default: a fresh one. */
-  turnId?: string
-}
-
 /** Output budget for an automatic session title from a reasoning model. */
 const TITLE_THINKING_TOKENS = 2048
 const TITLE_MAX_CHARS = 60
-
-export class AgentBusyError extends Error {}
-
-/** A message sent during a manual compaction was dropped because the compaction was aborted. */
-export class AgentAbortedError extends Error {}
-
-export function newTurnId(): string {
-  return `t_${crypto.randomUUID().slice(0, 8)}`
-}
 
 /** State that belongs to one turn, so late callbacks never leak into the next turn. */
 interface Turn {
@@ -259,9 +155,6 @@ interface Turn {
   /** Notices joined this turn and no model reply has come since. */
   unanswered?: boolean
 }
-
-/** Default delays before held notices are sent again after failed turns. */
-export const NOTICE_RETRY_MS = [10_000, 30_000, 90_000]
 
 /**
  * One tool call of a batch. Tracked by the call itself, not its id: providers reuse ids across
@@ -291,12 +184,6 @@ interface AfterCompaction {
   /** A prompt() call is waiting; a second one is refused as busy. */
   prompted: boolean
   waiters: { resolve: (r: TurnResult) => void; reject: (err: unknown) => void }[]
-}
-
-interface ManagedArtifactGroup {
-  store: ArtifactStore
-  buckets: ArtifactUsage
-  usage: ArtifactGroupUsage
 }
 
 type ModelReply =
@@ -1015,34 +902,13 @@ export class Agent {
    * away, a sub-agent's), "unused" ones nothing mentions.
    */
   artifactUsage(): ArtifactUsage {
-    const groups = this.#artifactGroups()
-    const out: ArtifactUsage = { active: [], inactive: [], unused: [], pruned: [], bytes: 0 }
-    for (const group of groups) {
-      out.active.push(...group.buckets.active)
-      out.inactive.push(...group.buckets.inactive)
-      out.unused.push(...group.buckets.unused)
-      out.pruned.push(...group.buckets.pruned)
-      out.bytes += group.usage.bytes
-    }
-    out.groups = groups.map((group) => group.usage)
-    return out
+    return summarizeArtifactUsage(this.#artifactGroups())
   }
 
   /** Builds the parent and sub-agent stores with one consistent reference snapshot. */
   #artifactGroups(): ManagedArtifactGroup[] {
-    const active = new Set<string>()
-    const addActive = (messages: readonly Message[]) => {
-      for (const m of messages) {
-        for (const b of m.content) {
-          if (b.type === "text") for (const id of artifactIdsIn(b.text)) active.add(id)
-          else if (b.type === "toolCall")
-            for (const id of artifactIdsIn(JSON.stringify(b.args))) active.add(id)
-        }
-      }
-    }
-    addActive(this.messages)
-    addActive(this.projectedMessages())
-    const referenced = this.session ? referencedArtifacts(this.session) : new Set(active)
+    const initiallyActive = activeArtifactIds([this.messages, this.projectedMessages()])
+    const referenced = this.session ? referencedArtifacts(this.session) : initiallyActive
     const labels = new Map<string, string>()
     const rememberLabels = (entries: readonly object[]) => {
       for (const e of entries) {
@@ -1065,53 +931,30 @@ export class Agent {
     const live = new Set(this.tree?.children.map((child) => child.id) ?? [])
     for (const child of this.tree?.children ?? [])
       labels.set(child.id, `Sub-agent: ${child.title} (${child.id})`)
+    const childMessages: (readonly Message[])[] = []
     for (const child of files) {
       const known = this.tree?.subagent(child.id)
-      if (known?.messages) addActive(known.messages)
+      if (known?.messages) childMessages.push(known.messages)
       else {
         try {
-          addActive(SessionStore.open(child.file).restore().messages)
+          childMessages.push(SessionStore.open(child.file).restore().messages)
         } catch {
           // A torn or foreign child file has no current context to classify as active.
         }
       }
     }
 
-    const group = (
-      store: ArtifactStore,
-      id: string,
-      label: string,
-      protectedStore: boolean,
-    ): ManagedArtifactGroup => {
-      const buckets: ArtifactUsage = { active: [], inactive: [], unused: [], pruned: [], bytes: 0 }
-      for (const a of store.list()) {
-        if (a.pruned) buckets.pruned.push(a)
-        else {
-          buckets.bytes += a.bytes
-          if (active.has(a.id)) buckets.active.push(a)
-          else if (referenced.has(a.id)) buckets.inactive.push(a)
-          else buckets.unused.push(a)
-        }
-      }
-      return {
-        store,
-        buckets,
-        usage: {
-          id,
-          label,
-          active: buckets.active.length,
-          inactive: buckets.inactive.length,
-          unused: buckets.unused.length,
-          pruned: buckets.pruned.length,
-          bytes: buckets.bytes,
-          quotaBytes: store.quotaBytes,
-          dir: store.dir,
-          ...(protectedStore ? { protected: true } : {}),
-        },
-      }
-    }
-
-    const out = [group(this.artifacts, this.sessionId, "This session", live.size > 0)]
+    const active = new Set(initiallyActive)
+    for (const id of activeArtifactIds(childMessages)) active.add(id)
+    const inputs: ArtifactUsageGroupInput[] = [
+      {
+        store: this.artifacts,
+        artifacts: this.artifacts.list(),
+        id: this.sessionId,
+        label: "This session",
+        protectedStore: live.size > 0,
+      },
+    ]
     for (const child of files) {
       const store = new ArtifactStore({
         dir: artifactDir(child.file, child.id),
@@ -1119,16 +962,15 @@ export class Agent {
         limits: this.artifacts.limits,
         quotaBytes: this.artifacts.quotaBytes,
       })
-      out.push(
-        group(
-          store,
-          child.id,
-          labels.get(child.id) ?? `Sub-agent: ${child.id} (${child.id})`,
-          live.has(child.id),
-        ),
-      )
+      inputs.push({
+        store,
+        artifacts: store.list(),
+        id: child.id,
+        label: labels.get(child.id) ?? `Sub-agent: ${child.id} (${child.id})`,
+        protectedStore: live.has(child.id),
+      })
     }
-    return out
+    return buildArtifactUsageGroups(active, referenced, inputs)
   }
 
   /**
@@ -1143,14 +985,8 @@ export class Agent {
     }
     let removed = 0
     let bytes = 0
-    for (const group of this.#artifactGroups()) {
-      const pick =
-        scope === "unused"
-          ? group.buckets.unused
-          : scope === "inactive"
-            ? [...group.buckets.unused, ...group.buckets.inactive]
-            : [...group.buckets.unused, ...group.buckets.inactive, ...group.buckets.active]
-      const result = await group.store.prune(pick.map((a) => a.id))
+    for (const { group, ids } of artifactIdsToPrune(this.#artifactGroups(), scope)) {
+      const result = await group.store.prune(ids)
       removed += result.removed
       bytes += result.bytes
     }
@@ -2742,120 +2578,5 @@ export class Agent {
     const meta: EmitMeta = { sessionId: this.sessionId, ...(turn ? { turnId: turn.id } : {}) }
     if (this.parentSessionId) meta.parentSessionId = this.parentSessionId
     this.bus.emit(type, data, meta)
-  }
-}
-
-/**
- * Steering messages that start a turn together, as one prompt. When any has a display, the
- * prompt's display lists each message's display (or text) in order.
- */
-function joinMessages(messages: UserMessage[]): UserMessage {
-  if (messages.length === 1 && messages[0]) return messages[0]
-  const joined: UserMessage = { role: "user", content: messages.flatMap((m) => m.content) }
-  if (!messages.some((m) => m.display)) return joined
-  const text = messages
-    .map((m) => m.display?.text ?? m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n"))
-    .join("\n")
-  const notes = messages.flatMap((m) => (m.display?.note ? [m.display.note] : []))
-  // Notices of one kind stay notices; mixed with what the user wrote they read as the user's.
-  const origins = new Set(messages.map((m) => m.display?.origin))
-  const origin = origins.size === 1 ? [...origins][0] : undefined
-  return {
-    ...joined,
-    display: { text, ...(notes.length ? { note: notes.join(" · ") } : {}), ...(origin ? { origin } : {}) },
-  }
-}
-
-/** "12k": tokens for notices. */
-function formatK(tokens: number): string {
-  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens)
-}
-
-function modelRef(model: ModelInfo): ModelRef {
-  return { provider: model.provider, model: model.id }
-}
-
-/** The tool's concurrency key for this call; a throwing key function means no key. */
-function concurrencyKey(
-  tool: ToolDefinition | undefined,
-  call: ToolCallBlock,
-  cwd: string,
-): string | undefined {
-  if (!tool?.concurrencyKey) return undefined
-  try {
-    return tool.concurrencyKey(call.args, { cwd })
-  } catch {
-    return undefined
-  }
-}
-
-/** Coerces whatever a tool returned into a valid result. */
-function normalizeResult(r: unknown): ToolResult {
-  const content = (r as ToolResult | undefined)?.content
-  if (!Array.isArray(content)) {
-    return {
-      content: [{ type: "text", text: "Tool returned an invalid result (missing content)." }],
-      isError: true,
-    }
-  }
-  const valid = content.filter(
-    (b) =>
-      (b?.type === "text" && typeof b.text === "string") ||
-      (b?.type === "image" && typeof b.data === "string" && typeof b.mimeType === "string"),
-  )
-  const out: ToolResult = { content: valid.length ? valid : [{ type: "text", text: "(no output)" }] }
-  if ((r as ToolResult).isError) out.isError = true
-  if ((r as ToolResult).details !== undefined) out.details = (r as ToolResult).details
-  return out
-}
-
-/** A call's result, with why it was rejected, so a resumed session renders the call as the live one did. */
-function resultMessage(call: ToolCallBlock, r: ToolResult, rejected?: ToolRejection): ToolResultMessage {
-  const m = { role: "toolResult" as const, toolCallId: call.id, toolName: call.name, content: r.content }
-  return { ...m, isError: r.isError ?? false, ...(rejected && { rejected }) }
-}
-
-function toolError(call: ToolCallBlock, text: string, rejected?: ToolRejection): ToolResultMessage {
-  return resultMessage(call, { content: [{ type: "text", text }], isError: true }, rejected)
-}
-
-function copyArgs(args: Record<string, unknown>): Record<string, unknown> {
-  try {
-    return structuredClone(args)
-  } catch {
-    return { ...args }
-  }
-}
-
-/** What the model reads when the permission policy refuses a call: why, and what to do instead. */
-function refusedText(policy: PermissionVerdict): string {
-  return [
-    `Tool call blocked by the permission policy: ${policy.reason}.`,
-    "Do not try to get around this with another tool or command. If this step is needed, ask the user: they can switch the permission mode or change the permission rules.",
-  ].join("\n")
-}
-
-/** Added when a permission question was answered no, or nobody could answer it. */
-function askedText(policy: PermissionVerdict): string {
-  return `The permission policy asked because ${policy.reason}. Do not try to get around this; if the step is needed, ask the user how to go on.`
-}
-
-/** What the approval dialog shows about the policy's question. */
-function approvalPermission(policy: PermissionVerdict, mode: PermissionMode): ApprovalPermission {
-  const rule = policy.rule
-  return {
-    mode,
-    cause: policy.cause ?? "mode",
-    ...(rule
-      ? {
-          rule: {
-            command: [...rule.command],
-            decision: rule.decision,
-            ...(rule.reason ? { reason: rule.reason } : {}),
-            scope: rule.source.scope,
-            file: rule.source.file,
-          },
-        }
-      : {}),
   }
 }
