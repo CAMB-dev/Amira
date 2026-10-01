@@ -261,12 +261,12 @@ export class SessionStore {
         // the turn's prompt and its latest steps.
         const gone = new Set(Array.isArray(e.replaces) ? e.replaces : [])
         const checkpoint = checkpointIn(e.checkpoint)
+        const info = compactionInfo(e)
         const summary = summaryMessages(
           typeof e.summary === "string" ? e.summary : "",
-          model,
+          info?.model ?? model,
           checkpoint,
         ).map((message) => ({ id: e.id, message }))
-        const info = compactionInfo(e)
         if (info && summary[0]) compactions.set(summary[0].message, info)
         const keep = new Set(Array.isArray(e.retained) ? e.retained : [])
         const retained = items.filter((i) => keep.has(i.id))

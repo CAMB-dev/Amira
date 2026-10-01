@@ -427,7 +427,9 @@ export default defineExtension((api: ExtensionAPI) => {
         id = chosen
       }
       await ctx.session.resume(id)
-      ctx.print(`Resumed session ${id} (${ctx.session.messages().length} messages).`)
+      // As for /clear, the TUI names the resumed session in its boundary line.
+      if (ctx.frontend !== "tui")
+        ctx.print(`Resumed session ${id} (${ctx.session.messages().length} messages).`)
     },
   })
 

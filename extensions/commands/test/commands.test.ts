@@ -479,7 +479,7 @@ test("/clear starts a new session; /resume switches, or asks among the other ses
   expect((await host.run("/clear", { frontend: "print" })).output).toEqual([
     expect.stringMatching(/^Started a new session \(s\d+\)\.$/),
   ])
-  expect((await run("/resume abc")).text).toContain("Resumed session abc")
+  expect((await run("/resume abc")).text).toBe("")
   // The picker leaves out the current session (now abc); cancelling lists the recent ones.
   const listed = await run("/resume")
   expect(asked[0]).toContain("s1  just now  2 msgs  current")
@@ -490,7 +490,7 @@ test("/clear starts a new session; /resume switches, or asks among the other ses
 
 test("/resume with a picked session resumes its id", async () => {
   const { run, calls } = await setup({}, ["old  3h ago  8 msgs  fix the build"])
-  await run("/resume")
+  expect((await run("/resume")).text).toBe("")
   expect(calls).toEqual(["resume old"])
 })
 
@@ -553,6 +553,16 @@ test("/resume offers every session, including content beyond the old 50-session 
   await run("/resume")
   expect(options).toBe(110)
 })
+
+for (const frontend of ["print", "rpc"] as const) {
+  test(`/resume keeps its notice in ${frontend} mode`, async () => {
+    const { host, calls } = await setup()
+    expect((await host.run("/resume abc", { frontend })).output).toEqual([
+      "Resumed session abc (0 messages).",
+    ])
+    expect(calls).toEqual(["resume abc"])
+  })
+}
 
 test("/compact passes its instructions; the compact events report the outcome", async () => {
   const { run, calls } = await setup()

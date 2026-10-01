@@ -35,3 +35,11 @@ test("the estimate is never more than before, unless the summary is longer than 
   expect(estimateAfter(1_000, older, kept, summaryMessages("z".repeat(4_000)))).toBeGreaterThan(1_000)
   expect(estimateAfter(1_000, [], [], [])).toBe(1_000)
 })
+
+test("a checkpoint's token count replaces the old messages without scaling the prompt overhead", () => {
+  const older = [userMessage("x".repeat(1000))]
+  const kept = [userMessage("y".repeat(400))]
+  expect(estimateAfter(1000, older, kept, 100)).toBe(850)
+  expect(estimateAfter(1000, older, kept, 500)).toBe(1250)
+  expect(estimateAfter(100, older, [], 50)).toBe(50)
+})
