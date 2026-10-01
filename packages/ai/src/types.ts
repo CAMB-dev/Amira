@@ -26,8 +26,9 @@ export interface Signature {
   /**
    * "checkpoint": a server's compaction of earlier history (native compaction), carried by
    * both messages of the summary pair; a dialect that can replay it sends it in their place.
+   * "webSearch": a cited text block whose encrypted citation data also requires native search.
    */
-  kind?: "checkpoint"
+  kind?: "checkpoint" | "webSearch"
 }
 
 export interface TextBlock {
@@ -41,6 +42,8 @@ export interface TextBlock {
 
 export interface ImageBlock {
   type: "image"
+  /** Original attachment name, for frontends and session restore; not sent to the provider. */
+  name?: string
   mimeType: string
   /** Base64-encoded image data. */
   data: string
@@ -69,9 +72,15 @@ export type ToolResultContent = TextBlock | ImageBlock
 export interface Usage {
   input: number
   output: number
+  /** Reasoning tokens included in output, when reported by the provider. */
+  reasoning?: number
   cacheRead: number
   cacheWrite: number
-  /** Cost of these tokens in USD, when the model's prices are known. */
+  /** Search requests reported by the provider (Gemini 3: unique nonempty queries). */
+  webSearchRequests?: number
+  /** USD for those searches, only when their count and per-search price are known. */
+  webSearchCost?: number
+  /** Cost of tokens and searches in USD, when their prices are known. */
   cost?: number
 }
 
@@ -161,8 +170,8 @@ export interface ModelInfo {
   contextWindowSource?: ContextWindowSource
   maxOutput: number
   caps: ModelCaps
-  /** USD per million tokens. */
-  cost?: { input: number; output: number; cacheRead?: number; cacheWrite?: number }
+  /** USD per million tokens; webSearch is USD per search request. */
+  cost?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; webSearch?: number }
 }
 
 export interface ModelRequest {
@@ -234,6 +243,12 @@ export function addUsage(a: Usage, b: Usage): Usage {
     cacheWrite: a.cacheWrite + b.cacheWrite,
   }
   if (a.cost !== undefined || b.cost !== undefined) sum.cost = (a.cost ?? 0) + (b.cost ?? 0)
+  if (a.webSearchRequests !== undefined || b.webSearchRequests !== undefined)
+    sum.webSearchRequests = (a.webSearchRequests ?? 0) + (b.webSearchRequests ?? 0)
+  const unknownSearch = [a, b].some((u) => (u.webSearchRequests ?? 0) > 0 && u.webSearchCost === undefined)
+  if (unknownSearch) delete sum.cost
+  else if (a.webSearchCost !== undefined || b.webSearchCost !== undefined)
+    sum.webSearchCost = (a.webSearchCost ?? 0) + (b.webSearchCost ?? 0)
   return sum
 }
 
@@ -290,6 +305,8 @@ export interface ServerToolBlock {
   status: "running" | "done" | "failed"
   /** Sources it looked at, when the provider lists them. */
   sources?: { url: string; title?: string }[]
+  /** Google's search suggestions, retained for consumers that can display a webview. */
+  searchEntryPoint?: { renderedContent?: string; sdkBlob?: string }
   /**
    * The provider's item as it came (`value`), and the host it came from, set by the ai client.
    * Replayed only there, and only while the request offers the tool (canReplayServerTool).

@@ -1,11 +1,14 @@
 import {
   type AssistantMessage,
+  addUsage,
   type CompactionUsage,
   type ContextPreview,
   type ContextWindowSource,
   formatTokens,
+  hasUnpricedSearch,
   type Message,
   padCells,
+  serverToolText,
   textCells,
   type Usage,
 } from "@amira/api"
@@ -31,6 +34,68 @@ export function tokensPerSecond(
   const seconds = (endAt - firstDeltaAt) / 1000
   if (outputTokens <= 0 || seconds < 0.2) return undefined
   return outputTokens / seconds
+}
+
+export interface ReplyTiming {
+  start: number
+  /** First streamed thinking. */
+  thinking?: number
+  /** First streamed text or tool-call arguments: the answer the model writes. */
+  reply?: number
+}
+
+/** Separate the timed phases; estimates never read as provider token counts. */
+export function replySpeed(
+  message: AssistantMessage,
+  timing: ReplyTiming,
+  end: number,
+  silentGap?: number,
+): string | undefined {
+  const output = message.usage?.output
+  if (output === undefined) return undefined
+  const reasoning = message.usage?.reasoning
+  const thinking = timing.thinking !== undefined
+  // Any thinking block, even an empty signed or redacted one, means the model reasoned.
+  const hidden =
+    !thinking &&
+    ((reasoning ?? 0) > 0 ||
+      message.content.some((b) => b.type === "thinking") ||
+      (reasoning === undefined &&
+        silentGap !== undefined &&
+        timing.reply !== undefined &&
+        timing.reply - timing.start >= silentGap))
+  const estimate = reasoning === undefined && (thinking || hidden)
+  const replyTokens = estimate
+    ? message.content.reduce(
+        (n, b) =>
+          n +
+          (b.type === "text"
+            ? estimateTokens(b.text)
+            : b.type === "toolCall"
+              ? estimateTokens(b.name + JSON.stringify(b.args))
+              : 0),
+        0,
+      )
+    : Math.max(0, output - (reasoning ?? 0))
+  const reply = timing.reply === undefined ? undefined : tokensPerSecond(replyTokens, timing.reply, end)
+  const streamed = message.content.reduce(
+    (n, b) => n + (b.type === "thinking" ? estimateTokens(b.text) : 0),
+    0,
+  )
+  // A reported count far above what streamed means only a summary streamed (OpenAI Responses):
+  // the reasoning ran before the summary began, so time it from the request and mark it.
+  const summary = reasoning !== undefined && streamed < reasoning / 2
+  const thought =
+    timing.thinking === undefined
+      ? undefined
+      : tokensPerSecond(reasoning ?? streamed, summary ? timing.start : timing.thinking, timing.reply ?? end)
+  const rate = (n: number) => (n < 10 ? n.toFixed(1) : String(Math.round(n)))
+  const parts: string[] = []
+  if (reply !== undefined)
+    parts.push(`reply ${estimate ? "~" : ""}${rate(reply)} tok/s${hidden ? " (hidden reasoning)" : ""}`)
+  if (thought !== undefined)
+    parts.push(`thinking ${reasoning === undefined || summary ? "~" : ""}${rate(thought)} tok/s`)
+  return parts.length ? parts.join(" · ") : undefined
 }
 
 /** Share of prompt tokens served from the provider's cache; undefined before any prompt tokens. */
@@ -74,13 +139,14 @@ export interface ModelCost {
   model: string
   replies: number
   usage: Usage
-  /** Undefined when no reply of this model had a price. */
+  /** Undefined when no reply had a price, or a search fee is unknown. */
   cost?: number
 }
 
 /** Usage and cost of the replies, per model in the order they were first used. */
 export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
   const out = new Map<string, ModelCost>()
+  const unpricedSearch = new Set<string>()
   for (const r of replies) {
     if (!r.usage) continue
     const model = `${r.model.provider}/${r.model.model}`
@@ -90,11 +156,13 @@ export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }
     row.replies++
-    row.usage.input += r.usage.input
-    row.usage.output += r.usage.output
-    row.usage.cacheRead += r.usage.cacheRead
-    row.usage.cacheWrite += r.usage.cacheWrite
-    if (r.usage.cost !== undefined) row.cost = (row.cost ?? 0) + r.usage.cost
+    row.usage = addUsage(row.usage, r.usage)
+    if (hasUnpricedSearch(r)) unpricedSearch.add(model)
+    row.cost = row.usage.cost
+    if (unpricedSearch.has(model)) {
+      delete row.cost
+      delete row.usage.cost
+    }
     out.set(model, row)
   }
   return [...out.values()]
@@ -107,12 +175,22 @@ export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
 export function costReport(
   replies: readonly AssistantMessage[],
   compactions: readonly CompactionUsage[] = [],
+  sideRequests: readonly CompactionUsage[] = [],
 ): string {
   const asReplies = compactions.map(
     (c): AssistantMessage => ({ role: "assistant", content: [], model: c.model, usage: c.usage }),
   )
   const compactionRows = costByModel(asReplies).map((r) => ({ ...r, compaction: true }))
-  const rows: (ModelCost & { compaction?: boolean })[] = [...costByModel(replies), ...compactionRows]
+  const sideReplies = sideRequests.map(
+    (c): AssistantMessage => ({ role: "assistant", content: [], model: c.model, usage: c.usage }),
+  )
+  const sideRows = costByModel(sideReplies).map((r) => ({ ...r, side: true }))
+  const rows: (ModelCost & { compaction?: boolean; side?: boolean })[] = [
+    ...costByModel(replies),
+    ...compactionRows,
+    ...sideRows,
+  ]
+  const unpricedSearch = [...replies, ...asReplies, ...sideReplies].some(hasUnpricedSearch)
   if (!rows.length) return "No model replies with usage in this session yet."
   const line = (r: Pick<ModelCost, "usage" | "cost">, label: string, count: string) => {
     const u = r.usage
@@ -129,26 +207,24 @@ export function costReport(
   const body = rows.map((r) =>
     r.compaction
       ? line(r, `${r.model} (compaction)`, `${r.replies} ${r.replies === 1 ? "compaction" : "compactions"}`)
-      : line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`),
+      : r.side
+        ? line(r, `${r.model} (session title)`, `${r.replies} requests`)
+        : line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`),
   )
   if (rows.length > 1) {
-    const total = rows.reduce(
-      (t, r) => ({
-        usage: {
-          input: t.usage.input + r.usage.input,
-          output: t.usage.output + r.usage.output,
-          cacheRead: t.usage.cacheRead + r.usage.cacheRead,
-          cacheWrite: t.usage.cacheWrite + r.usage.cacheWrite,
-        },
-        cost: r.cost === undefined ? t.cost : (t.cost ?? 0) + r.cost,
-      }),
-      { usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } as Pick<ModelCost, "usage" | "cost">,
-    )
-    body.push(line(total, "total", ""))
+    const usage = rows.reduce<Usage>((u, r) => addUsage(u, r.usage), {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    })
+    body.push(line({ usage, cost: unpricedSearch ? undefined : usage.cost }, "total", ""))
   }
-  const priced = rows.some((r) => r.cost === undefined)
-    ? "\nModels without known prices are not counted."
-    : ""
+  const priced = unpricedSearch
+    ? "\nSearch costs are unknown for some replies."
+    : rows.some((r) => r.cost === undefined)
+      ? "\nModels without known prices are not counted."
+      : ""
   return `Session cost by model:\n${table(body)}${priced}`
 }
 
@@ -159,8 +235,8 @@ export function estimateTokens(value: string | Message): number {
   for (const b of value.content) {
     if (b.type === "image") n += 1000
     else if (b.type === "toolCall") n += estimateTokens(b.name + JSON.stringify(b.args))
-    else if (b.type === "serverTool") n += estimateTokens(b.signature?.value ?? JSON.stringify(b.input))
-    else n += estimateTokens(b.text)
+    else if (b.type === "serverTool") n += estimateTokens(b.signature?.value ?? serverToolText(b))
+    else n += estimateTokens(b.signature?.kind === "webSearch" ? b.signature.value : b.text)
   }
   return n + 4
 }

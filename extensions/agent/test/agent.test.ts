@@ -606,11 +606,12 @@ test("an interrupt while worktrees are being made starts nothing further", async
   const second = new Promise<void>((resolve) => {
     makingSecond = resolve
   })
+  const resume = Promise.withResolvers<void>()
   let adds = 0
   const slowGit: typeof git = async (args, cwd, stdoutOnly) => {
     if (args[0] === "worktree" && args[1] === "add" && ++adds === 2) {
       makingSecond()
-      await Bun.sleep(300)
+      await resume.promise
     }
     return git(args, cwd, stdoutOnly)
   }
@@ -638,6 +639,7 @@ test("an interrupt while worktrees are being made starts nothing further", async
   const turn = root.prompt("go")
   await second
   root.abort()
+  resume.resolve()
   await turn
   await bus.flush()
   const starts = events.filter((e) => e.type === "subagent.start")

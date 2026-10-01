@@ -100,6 +100,17 @@ test("/shell and /tools decide the tools together; the shell mode wins for the s
   expect(host.control.info().shell).toBe("powershell")
 })
 
+test("the session's permission policy shows in info and /permissions, and follows the mode", async () => {
+  const { session, host, run } = await setup()
+  expect(host.control.info().permissions).toEqual({ mode: "auto", rules: 0 })
+  session.agent.permissions.cycleMode()
+  expect(host.control.permissions?.()).toMatchObject({ mode: "edits", modeSource: "this session", rules: [] })
+  expect(await run("/permissions")).toContain("Mode: edits (from this session)")
+  // A new session (/clear) keeps the policy: it belongs to the whole run.
+  await run("/clear")
+  expect(host.control.info().permissions?.mode).toBe("edits")
+})
+
 test("the powershell shell mode is refused off Windows", async () => {
   const { host } = await setup([], { platform: "linux" })
   expect(() => host.control.setShell("powershell")).toThrow(/only available on Windows/)

@@ -8,11 +8,13 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs"
 import path from "node:path"
-import type { Message, ModelRef, Signature, Usage } from "@amira/ai"
+import type { Message, ModelRef, Signature, ToolResultMessage, Usage } from "@amira/ai"
 import type { CompactionInfo, CompactionReason } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
+import type { ContextView, StoredView } from "./context.ts"
 import type { FileJournalEntry } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 
@@ -28,6 +30,8 @@ export interface SessionHeader {
 
 export type SessionEntryData =
   | FileJournalEntry
+  | { type: "title"; title: string; source: "manual" | "auto" }
+  | { type: "side_usage"; model: ModelRef; usage: Usage }
   | { type: "message"; message: Message }
   | { type: "model_change"; model: ModelRef }
   /**
@@ -42,6 +46,12 @@ export type SessionEntryData =
   /** Deferred tools the session loaded (via tool_search), offered to the model from then on. */
   | { type: "tools_loaded"; names: string[] }
   | { type: "custom"; ext: string; data: unknown }
+  /**
+   * How earlier tool results are sent from now on (context management): each view replaces
+   * one result's content in requests, the message itself stays whole. An Amira that does not
+   * know this entry type sends the results whole.
+   */
+  | { type: "context"; views: StoredView[] }
 
 /** Optional fields of a compaction entry (no session format version depends on them). */
 export interface CompactionExtras {
@@ -78,6 +88,8 @@ export interface RestoredSession {
   loadedTools: string[]
   /** Why each compaction happened, by its summary's user message; none for old entries. */
   compactions: Map<Message, CompactionInfo>
+  /** How tool results on this branch are sent (context entries), by message. */
+  views: Map<Message, ContextView>
 }
 
 /**
@@ -188,6 +200,40 @@ export class SessionStore {
     return this.#entries
   }
 
+  get title(): string | undefined {
+    const entries = this.#entries.filter(
+      (e): e is Extract<SessionEntry, { type: "title" }> => e.type === "title" && typeof e.title === "string",
+    )
+    return entries.findLast((e) => e.source === "manual")?.title ?? entries.at(-1)?.title
+  }
+
+  rename(title: string, source: "manual" | "auto" = "manual"): void {
+    const clean = title
+      .replace(/\p{Cc}/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+    if (!clean) throw new Error("a session title must not be empty")
+    if (source === "auto" && this.#entries.some((e) => e.type === "title" && e.source === "manual")) return
+    this.append({ type: "title", title: clean, source })
+  }
+
+  /** Copies the stored history through target, retaining entry ids used by compactions. */
+  fork(target: string | null = this.#leaf): SessionStore {
+    const at = target === null ? -1 : this.#entries.findIndex((e) => e.id === target)
+    if (target !== null && at === -1) throw new Error(`unknown entry ${target}`)
+    const next = SessionStore.create({ cwd: this.header.cwd, parent: this.id, dir: path.dirname(this.file) })
+    const entries = this.#entries.slice(0, at + 1)
+    const text = `${[JSON.stringify(next.header), ...entries.map((e) => JSON.stringify(e))].join("\n")}\n`
+    mkdirSync(path.dirname(next.file), { recursive: true })
+    writeFileSync(next.file, text, { flag: "wx" })
+    next.#written = true
+    next.#size = Buffer.byteLength(text)
+    for (const e of entries) next.#add(e)
+    if (next.leafId !== target) next.append({ type: "checkout", target })
+    next.rename(`${this.title ?? this.id} (fork)`)
+    return next
+  }
+
   /** The tip of the current branch. */
   get leafId(): string | null {
     return this.#leaf
@@ -242,8 +288,14 @@ export class SessionStore {
     let tokens: number | undefined
     const loadedTools = new Set<string>()
     const compactions = new Map<Message, CompactionInfo>()
+    const views = new Map<Message, ContextView>()
     for (const e of this.branch()) {
-      if (e.type === "tools_loaded") {
+      if (e.type === "context") {
+        for (const v of Array.isArray(e.views) ? e.views : []) {
+          const view = this.#view(v)
+          if (view) views.set(view.message, view.view)
+        }
+      } else if (e.type === "tools_loaded") {
         for (const name of Array.isArray(e.names) ? e.names : []) {
           if (typeof name === "string") loadedTools.add(name)
         }
@@ -260,12 +312,12 @@ export class SessionStore {
         // the turn's prompt and its latest steps.
         const gone = new Set(Array.isArray(e.replaces) ? e.replaces : [])
         const checkpoint = checkpointIn(e.checkpoint)
+        const info = compactionInfo(e)
         const summary = summaryMessages(
           typeof e.summary === "string" ? e.summary : "",
-          model,
+          info?.model ?? model,
           checkpoint,
         ).map((message) => ({ id: e.id, message }))
-        const info = compactionInfo(e)
         if (info && summary[0]) compactions.set(summary[0].message, info)
         const keep = new Set(Array.isArray(e.retained) ? e.retained : [])
         const retained = items.filter((i) => keep.has(i.id))
@@ -281,7 +333,29 @@ export class SessionStore {
       ...(tokens !== undefined ? { contextTokens: tokens } : {}),
       loadedTools: [...loadedTools],
       compactions,
+      views,
     }
+  }
+
+  /** A stored view, if it is one and the results it names are in the file. */
+  #view(v: Partial<StoredView> | undefined): { message: Message; view: ContextView } | undefined {
+    if (typeof v?.entry !== "string" || typeof v.text !== "string") return undefined
+    const message = this.#toolResult(v.entry)
+    if (!message) return undefined
+    if (v.kind === "aged") {
+      return {
+        message,
+        view: { kind: "aged", text: v.text, epoch: typeof v.epoch === "number" ? v.epoch : 0 },
+      }
+    }
+    if (v.kind !== "duplicate" || typeof v.of !== "string") return undefined
+    const of = this.#toolResult(v.of)
+    return of ? { message, view: { kind: "duplicate", text: v.text, of } } : undefined
+  }
+
+  #toolResult(id: string): ToolResultMessage | undefined {
+    const e = this.#byId.get(id)
+    return e?.type === "message" && e.message.role === "toolResult" ? e.message : undefined
   }
 
   /**
@@ -316,6 +390,9 @@ export class SessionStore {
     this.#tipBefore.set(e.id, this.#leaf)
     this.#entries.push(e)
     this.#byId.set(e.id, e)
+    // Session-wide notes stay off the branch: a rewind keeps the name, and an older Amira that
+    // skips these entry types never sees a message or checkout pointing at one.
+    if (e.type === "title" || e.type === "side_usage") return
     if (e.type !== "checkout") this.#leaf = e.id
     else if (e.target === null) this.#leaf = null
     else if (this.#byId.has(e.target)) this.#leaf = e.target
@@ -431,6 +508,8 @@ const ENTRY_TYPES = new Set<unknown>([
   "file_restore_progress",
   "file_restore_end",
   "file_prune",
+  "title",
+  "side_usage",
   "message",
   "model_change",
   "compaction",
@@ -438,6 +517,7 @@ const ENTRY_TYPES = new Set<unknown>([
   "subagent",
   "tools_loaded",
   "custom",
+  "context",
 ])
 
 function isEntry(v: unknown): v is SessionEntry {

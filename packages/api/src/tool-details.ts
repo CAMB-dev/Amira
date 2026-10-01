@@ -65,9 +65,35 @@ export interface BashDetails {
   shellKind: string
   /** Where the whole output went when it was too long to return. */
   fullOutputPath?: string
+  /** The artifact the whole output was saved as, when it was too long to return. */
+  artifact?: string
   durationMs: number
   /** Lines of output the command printed. */
   outputLines: number
+}
+
+/**
+ * A background job as the shell tools (background: true) and the job tools report it: what it
+ * runs and how it is doing at the time of the result.
+ */
+export interface BackgroundJobDetails {
+  jobId: string
+  command: string
+  /** "starting", "running", "exited", "stopped" or "failed". */
+  status: string
+  exitCode: number | null
+  pid?: number
+  /** The job's whole output, as far as it was written. */
+  logPath?: string
+  /** Lines of output in this result. */
+  outputLines: number
+  /** job_output with a pattern: whether a line matched, the job ended, or the wait timed out. */
+  waited?: "match" | "exit" | "timeout" | "aborted"
+}
+
+/** job_list: the jobs the calling session can see. */
+export interface JobListDetails {
+  jobs: { jobId: string; command: string; status: string; exitCode: number | null }[]
 }
 
 export interface GrepDetails {
@@ -79,11 +105,15 @@ export interface GrepDetails {
   /** Results before head_limit: files, lines or counts depending on the mode. */
   total: number
   fullOutputPath?: string
+  /** The artifact all results were saved as, when they were too long to return. */
+  artifact?: string
 }
 
 export interface GlobDetails {
   count: number
   fullOutputPath?: string
+  /** The artifact all paths were saved as, when they were too long to return. */
+  artifact?: string
 }
 
 export interface WebSearchDetails {

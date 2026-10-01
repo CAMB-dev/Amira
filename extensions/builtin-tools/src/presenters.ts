@@ -1,11 +1,13 @@
 import {
   type ApplyPatchDetails,
+  type BackgroundJobDetails,
   type BashDetails,
   diffToolLines,
   type EditDetails,
   type GlobDetails,
   type GrepDetails,
   plural,
+  previewNoteLine,
   type ReadDetails,
   type ToolCallView,
   type ToolLine,
@@ -19,6 +21,8 @@ import { fileDiff } from "./diff.ts"
 import type { EditParams } from "./edit.ts"
 import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
+import { jobListPresenter, jobOutputPresenter, jobStopPresenter } from "./jobs-ui.ts"
+import type { OutputReadParams } from "./output-read.ts"
 import type { ReadParams } from "./read.ts"
 import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE, STATUS_LINE } from "./shell-notes.ts"
 import { TRUNCATION_NOTE } from "./truncate.ts"
@@ -38,12 +42,15 @@ function firstLine(s: string): string {
 }
 
 /**
- * Output as presenter lines; the note the tool puts where it cut oversized output (meant for
- * the model) as a short muted line saying how much was left out and where all of it is.
+ * Output as presenter lines. The lines a preview of a large output adds for the model (where
+ * it was saved, where lines were left out) and the note older versions left where they cut
+ * show as short muted lines.
  */
 const outputLines = (text: string): ToolLine[] =>
   text
-    ? text.split("\n").map((t) => {
+    ? text.split("\n").map((t): ToolLine => {
+        const note = previewNoteLine(t)
+        if (note) return note
         const cut = TRUNCATION_NOTE.exec(t)
         if (!cut) return { kind: "code", text: t }
         const where = cut[2] ? ` ${"·"} full output: ${cut[2]}` : ""
@@ -191,9 +198,30 @@ function shellOutput(text: string): string {
   return out === "(no output)" ? "" : out
 }
 
-export const shellPresenter: ToolPresenter<BashParams, BashDetails> = {
-  summary: (args) => firstLine(str(args.command)),
+/** What a background start printed: the "Output so far" paragraph, or the output before its end. */
+function backgroundOutput(text: string, d: BackgroundJobDetails): string {
+  const parts = text.split("\n\n")
+  if (parts[0]?.startsWith("Shell: ")) parts.shift()
+  const head = "Output so far:\n"
+  const so = parts.find((p) => p.startsWith(head))
+  if (so) return so.slice(head.length)
+  if (d.status === "running" || d.status === "starting") return ""
+  // It ended at once: the output, then the sentence saying how it ended.
+  return parts
+    .slice(0, -1)
+    .join("\n\n")
+    .replace(/^\(no output\)$/, "")
+}
+
+export const shellPresenter: ToolPresenter<BashParams, BashDetails | BackgroundJobDetails> = {
+  summary: (args) => `${firstLine(str(args.command))}${args.background === true ? " · background" : ""}`,
   result(call) {
+    const job = detailsOf<BackgroundJobDetails>(call, "jobId")
+    if (job) {
+      if (job.status === "running" || job.status === "starting") return `started ${job.jobId}`
+      if (job.status === "failed") return `${job.jobId} failed to start`
+      return `${job.jobId} ended at once · exit ${job.exitCode ?? "killed"}`
+    }
     const d = detailsOf<BashDetails>(call, "exitCode")
     const lines = d?.outputLines ?? shellOutput(call.text).split("\n").filter(Boolean).length
     const printed = lines ? ` · ${plural(lines, "line")}` : " · no output"
@@ -207,7 +235,8 @@ export const shellPresenter: ToolPresenter<BashParams, BashDetails> = {
     return `exit ${code}${printed}`
   },
   body(call, { detail, outputLines: tail = SHELL_TAIL_LINES }) {
-    const out = outputLines(shellOutput(call.text))
+    const job = detailsOf<BackgroundJobDetails>(call, "jobId")
+    const out = outputLines(job ? backgroundOutput(call.text, job) : shellOutput(call.text))
     if (call.result.isError || detail === "full") return out
     // A command that worked shows the end of what it printed, as it did while it ran.
     if (detail !== "summary" || tail <= 0) return []
@@ -252,6 +281,23 @@ export const globPresenter: ToolPresenter<GlobParams, GlobDetails> = {
   }),
 }
 
+export const outputReadPresenter: ToolPresenter<OutputReadParams, unknown> = {
+  summary(args) {
+    const grep = args.grep ? ` · /${str(args.grep)}/${args.ignore_case ? "i" : ""}` : ""
+    const from = Number.isInteger(args.offset) ? ` · from line ${args.offset}` : ""
+    return `${str(args.id)}${grep}${from}`
+  },
+  result(call) {
+    if (call.result.isError) return undefined
+    const matching = /\((\S+) matching lines\./.exec(call.text)
+    if (matching) return `${matching[1]} matching ${matching[1] === "1" ? "line" : "lines"}`
+    const lines = readLines(call.text).length
+    return lines ? plural(lines, "line") : firstLine(call.text)
+  },
+  body: (call, { detail }) => (detail === "full" && !call.result.isError ? readLines(call.text) : []),
+  explore: (args) => ({ verb: "Read", target: str(args.id) }),
+}
+
 /** The presenters of the built-in tools, by tool name. */
 export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   read: readPresenter,
@@ -262,5 +308,9 @@ export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   powershell: shellPresenter,
   grep: grepPresenter,
   glob: globPresenter,
+  output_read: outputReadPresenter,
   ask_user: askUserPresenter,
+  job_output: jobOutputPresenter,
+  job_stop: jobStopPresenter,
+  job_list: jobListPresenter,
 }

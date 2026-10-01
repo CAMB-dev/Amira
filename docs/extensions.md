@@ -66,6 +66,8 @@ amira ext untrust
 
 A trusted project package replaces a user package with the same name. Without trust, the project package is skipped and the user package can still load. On the first interactive start in a project with packages, Amira asks **Load them? [y/N]** and remembers the answer in user settings. Print and RPC modes cannot ask and leave out project packages without prior trust.
 
+The same trust lets the project's `allow` [permission rules](usage.md#permissions) apply; its `ask` and `deny` rules apply either way.
+
 Run trust or untrust from the project directory, then restart Amira. These decisions, and the disabled-package list, are stored in user settings; project settings cannot grant their own trust or re-enable packages. Disabling a name affects both scopes.
 
 Use `--no-packages` to skip every installed package for one run. Explicit files supplied with `--extension` still load. Only install packages whose code you intend to run.
@@ -172,6 +174,8 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `notify`, `reportError` | Show a notice or report a background failure |
 
 Extension-specific settings belong under `extensions` with the extension name. The settings snapshot is deeply frozen; validate your own section. Print mode cancels UI dialogs; RPC clients answer them through the protocol. Panels, views, tool presenters, Markdown renderers, image providers and services are experimental APIs.
+
+`runCommand` resolves once the command has exited, with all of its output in `output`. Pass `onChunk` to get output as it arrives, for example to show progress from a long `git` command. Abort through `signal` (or let `timeoutMs` expire) and the whole process tree is killed; the result then reports `aborted` or `timedOut`. For a command that may print a lot, `maxOutputChars` keeps only the end of `output`; `onChunk` still receives everything.
 
 Registrations return removal functions and are tracked by the host. Unloading removes them; a failed extension load rolls back its registrations. For matching command, tool, skill, status or panel names, an intentional replacement needs `override: true`; consult the specific type for collision rules. Do not replace another extension's registrations accidentally.
 

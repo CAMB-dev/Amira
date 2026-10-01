@@ -1,3 +1,4 @@
+import path from "node:path"
 import {
   type Ai,
   type AssistantMessage,
@@ -24,34 +25,49 @@ import {
   unansweredCalls,
   userMessage,
 } from "@amira/ai"
-import type {
-  ApprovalRequest,
-  AskOutcome,
-  AskQuestion,
-  AskRequest,
-  CompactionInfo,
-  CompactionReason,
-  CompactionUsage,
-  EventMap,
-  PendingNotice,
-  ProviderSettings,
-  SessionData,
-  SessionStatus,
-  Settings,
-  SpawnGroupOptions,
-  SpawnOptions,
-  ToolApproval,
-  ToolDefinition,
-  ToolRejection,
-  ToolResult,
-  ToolSession,
-  TurnEndReason,
+import {
+  type ApprovalPermission,
+  type ApprovalRequest,
+  type AskOutcome,
+  type AskQuestion,
+  type AskRequest,
+  artifactIdOf,
+  type CompactionInfo,
+  type CompactionReason,
+  type CompactionUsage,
+  type EventMap,
+  type OutputStore,
+  outputPreview,
+  outputSize,
+  type PendingNotice,
+  type PermissionMode,
+  type ProviderSettings,
+  type SessionData,
+  type SessionStatus,
+  type Settings,
+  type SpawnGroupOptions,
+  type SpawnOptions,
+  type ToolApproval,
+  type ToolDefinition,
+  type ToolRejection,
+  type ToolResult,
+  type ToolSession,
+  type TurnEndReason,
 } from "@amira/api"
+import {
+  type ArtifactScope,
+  ArtifactStore,
+  type ArtifactUsage,
+  artifactDir,
+  artifactIdsIn,
+  referencedArtifacts,
+} from "./artifacts.ts"
 import {
   type CompactionOptions,
   checkpointOf,
   contextTokens,
   estimateAfter,
+  estimateTokens,
   isSummaryMessage,
   KEEP_USER_TOKENS,
   recentUserMessages,
@@ -62,11 +78,25 @@ import {
   summaryOf,
   windowGuessNotice,
 } from "./compaction.ts"
+import {
+  AGING_DEFAULTS,
+  agedStub,
+  agingCandidates,
+  type ContextOptions,
+  type ContextView,
+  duplicateView,
+  lastSealedIndex,
+  pairCalls,
+  projectMessages,
+  resultText,
+  type StoredView,
+} from "./context.ts"
 import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
+import { Permissions, type PermissionVerdict } from "./permissions/policy.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { newSessionId, type SessionEntryData, type SessionStore } from "./session-store.ts"
 import type { AgentTree } from "./subagents.ts"
@@ -106,6 +136,9 @@ export interface AgentOptions {
   fileRewind?: FileRewind
   fileRewindSettings?: Settings["fileRewind"]
   compaction?: CompactionOptions
+  /** Context management: large outputs, repeated reads, aging (settings `context`). */
+  context?: ContextOptions
+  autoTitle?: { model?: ModelInfo }
   sessionId?: string
   parentSessionId?: string
   bus?: EventBus
@@ -132,6 +165,13 @@ export interface AgentOptions {
    * checkpoint and needs a text summary written.
    */
   originals?: (summary: Message) => Message[] | undefined
+  /**
+   * How results among `messages` are sent (a fork of another agent: its contextViews), so the
+   * child's requests carry what the parent's did.
+   */
+  views?: ReadonlyMap<Message, ContextView>
+  /** The artifacts of the session this one was started from: output_read finds them too. */
+  outputsParent?: OutputStore
   /** Sub-agent nesting depth; 0 (the default) for a top-level session. */
   depth?: number
   /** The agent tree this session belongs to: it spawns sub-agents and keeps the shared budget. */
@@ -141,6 +181,17 @@ export interface AgentOptions {
    * asks the parent's model; without one such calls are denied.
    */
   approve?: Approver
+  /**
+   * The core permission policy (mode, command rules, protected paths), checked on every tool
+   * call after the tool.call.before interceptors. Sub-agents share their parent's. Default: a
+   * policy in "auto" mode without rules, which only asks before protected files change.
+   */
+  permissions?: Permissions
+  /**
+   * For a sub-agent: who answers the permission policy's questions, handed down from the
+   * top-level session (Agent.permissionApprover) when `permissions` has no approver of its own.
+   */
+  permissionApprover?: Approver
   /**
    * Answers questions this session's tools put (ToolSession.askUser, the ask_user tool): the
    * user for a top-level session, the parent's model for sub-agents. Without one nobody answers.
@@ -172,6 +223,10 @@ export interface PromptOptions {
   /** Id for the new turn, so a caller can report it before the turn runs. Default: a fresh one. */
   turnId?: string
 }
+
+/** Output budget for an automatic session title from a reasoning model. */
+const TITLE_THINKING_TOKENS = 2048
+const TITLE_MAX_CHARS = 60
 
 export class AgentBusyError extends Error {}
 
@@ -241,10 +296,15 @@ export class Agent {
   /** 0 for a top-level session, 1 for its sub-agents, and so on. */
   readonly depth: number
   readonly tree: AgentTree | undefined
+  /** The permission policy of this session's tree. */
+  readonly permissions: Permissions
   model: ModelInfo
 
   #ai: Ai
+  #autoTitle: AgentOptions["autoTitle"]
+  #titleStarted = false
   #approve: Approver | undefined
+  #inheritedApprover: Approver | undefined
   #ask: Asker | undefined
   /** Tool calls waiting for approval or for an answer right now. */
   #blockedCalls = 0
@@ -255,6 +315,20 @@ export class Agent {
   #abortGraceMs: number
   #sections: PromptSection[]
   #compaction: CompactionOptions
+  #context: ContextOptions
+  /**
+   * How tool results are sent instead of their content (context management, A0): decided once
+   * per result and kept, so later requests repeat the same text.
+   */
+  #views = new Map<Message, ContextView>()
+  /** Aging rounds so far (A3), for the next round's number. */
+  #agingEpoch = 0
+  /** Tokens aging freed since the last reply told the context size (an estimate). */
+  #contextFreed = 0
+  /** The aging round the last reported context size was counted after. */
+  #epochAtReply = 0
+  /** This session's saved tool outputs (A1). */
+  readonly artifacts: ArtifactStore
   /** The session entry each message was stored as. */
   #entryIds = new Map<Message, string>()
   /** Why each compaction in `messages` happened, by its summary's user message. */
@@ -355,11 +429,16 @@ export class Agent {
     }
     this.interceptors = opts.interceptors ?? new InterceptorRegistry()
     this.tools = opts.tools ?? new ToolRegistry()
+    this.permissions = opts.permissions ?? new Permissions()
     this.cwd = opts.cwd
     this.model = opts.model
     this.providerSettings = opts.providerSettings ?? {}
     this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
     this.#compaction = opts.compaction ?? {}
+    this.#context = opts.context ?? {}
+    this.#autoTitle = opts.autoTitle
+    this.#titleStarted =
+      opts.session?.entries.some((e) => e.type === "message" && e.message.role === "assistant") ?? false
     this.#ai = opts.ai
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
@@ -369,6 +448,7 @@ export class Agent {
     this.depth = opts.depth ?? 0
     this.tree = opts.tree
     this.#approve = opts.approve
+    this.#inheritedApprover = opts.permissionApprover
     this.#ask = opts.ask
     this.#onIdleNotice = opts.onIdleNotice
     this.#endTurn = opts.endTurn
@@ -381,6 +461,12 @@ export class Agent {
         (m) => m.role === "assistant" && m.usage && contextTokens(m.usage) > 0,
       ) as AssistantMessage | undefined
       if (last?.usage) this.#contextTokens = contextTokens(last.usage)
+      if (opts.views) {
+        const kept = new Set(this.messages)
+        for (const [m, v] of opts.views) {
+          if (kept.has(m) && (v.kind !== "duplicate" || kept.has(v.of))) this.#views.set(m, v)
+        }
+      }
     } else {
       const restored = opts.session.restore()
       this.messages = restored.messages
@@ -389,7 +475,32 @@ export class Agent {
       this.#contextTokens = restored.contextTokens
       for (const name of restored.loadedTools) this.#loadedTools.add(name)
       if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
+      this.#views = restored.views
     }
+    for (const v of this.#views.values()) {
+      if (v.kind === "aged") this.#agingEpoch = Math.max(this.#agingEpoch, v.epoch)
+    }
+    this.#epochAtReply = this.#agingEpoch
+    // A session forked from another (beside it) still finds the artifacts its copied history names.
+    const forkedFrom = opts.session?.header.parent
+    const outputsParent =
+      opts.outputsParent ??
+      (forkedFrom && opts.session
+        ? new ArtifactStore({
+            dir: artifactDir(path.join(path.dirname(opts.session.file), `${forkedFrom}.jsonl`), forkedFrom),
+            sessionId: forkedFrom,
+          })
+        : undefined)
+    this.artifacts = new ArtifactStore({
+      dir: artifactDir(opts.session?.file, this.sessionId),
+      sessionId: this.sessionId,
+      limits: {
+        ...(this.#context.saveAbove !== undefined ? { saveAbove: this.#context.saveAbove } : {}),
+        ...(this.#context.previewChars !== undefined ? { previewChars: this.#context.previewChars } : {}),
+      },
+      ...(this.#context.quotaBytes !== undefined ? { quotaBytes: this.#context.quotaBytes } : {}),
+      ...(outputsParent ? { parent: outputsParent } : {}),
+    })
     const stored = opts.session?.model()
     // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
     const changed = stored?.provider !== this.model.provider || stored.model !== this.model.id
@@ -403,7 +514,9 @@ export class Agent {
     )
     this.#toolSession = {
       ...deferred,
+      ...(opts.session ? { dir: opts.session.file.replace(/\.jsonl$/, "") } : {}),
       data: this.data,
+      outputs: this.artifacts,
       // Recorded in the session, so resuming it offers the same tools again.
       loadTools: (names) => {
         const added = deferred.loadTools(names)
@@ -778,6 +891,66 @@ export class Agent {
     return this.#compaction
   }
 
+  /** Context management options (settings `context`). */
+  get context(): Readonly<ContextOptions> {
+    return this.#context
+  }
+
+  /** How tool results are sent instead of their content, by message (see AgentOptions.views). */
+  get contextViews(): ReadonlyMap<Message, ContextView> {
+    return this.#views
+  }
+
+  /**
+   * The history as requests carry it (before the context.build interceptors): for anything
+   * that sends this session's conversation on its own, such as a consultation of its model.
+   */
+  projectedMessages(): Message[] {
+    return projectMessages(this.messages, this.#views)
+  }
+
+  /**
+   * This session's artifacts by how they are referenced: "active" ones the context the model
+   * sees mentions, "inactive" ones only history it no longer sees mentions (compacted, rewound
+   * away, a sub-agent's), "unused" ones nothing mentions.
+   */
+  artifactUsage(): ArtifactUsage {
+    const active = new Set<string>()
+    for (const m of [...this.messages, ...this.projectedMessages()]) {
+      for (const b of m.content) {
+        if (b.type === "text") for (const id of artifactIdsIn(b.text)) active.add(id)
+        else if (b.type === "toolCall") for (const id of artifactIdsIn(JSON.stringify(b.args))) active.add(id)
+      }
+    }
+    const referenced = this.session ? referencedArtifacts(this.session) : new Set(active)
+    const out: ArtifactUsage = { active: [], inactive: [], unused: [], pruned: [], bytes: 0 }
+    for (const a of this.artifacts.list()) {
+      if (a.pruned) out.pruned.push(a)
+      else {
+        out.bytes += a.bytes
+        if (active.has(a.id)) out.active.push(a)
+        else if (referenced.has(a.id)) out.inactive.push(a)
+        else out.unused.push(a)
+      }
+    }
+    return out
+  }
+
+  /**
+   * Deletes artifacts on request (/prune): "unused" ones, "inactive" ones too, or "all".
+   * Their metadata stays, so reading one says it was pruned.
+   */
+  async pruneArtifacts(scope: ArtifactScope): Promise<{ removed: number; bytes: number }> {
+    const usage = this.artifactUsage()
+    const pick =
+      scope === "unused"
+        ? usage.unused
+        : scope === "inactive"
+          ? [...usage.unused, ...usage.inactive]
+          : [...usage.unused, ...usage.inactive, ...usage.active]
+    return this.artifacts.prune(pick.map((a) => a.id))
+  }
+
   /** Most tool calls this agent runs at once. */
   get maxParallelTools(): number {
     return this.#maxParallelTools
@@ -895,8 +1068,13 @@ export class Agent {
       /** A request over the context window is compacted and sent again, once a turn. */
       let overflowRetried = false
       let overflowCompacted: boolean | undefined
+      /** A request over the window first gets one aging round (A3), once a turn. */
+      let overflowAged = false
       while (true) {
         this.#noteWindowGuess(turn)
+        // Planned synchronously: a turn with nothing to age goes on without waiting.
+        const aging = this.#age(turn)
+        if (aging) await aging
         if (!compactFailed && this.#needsCompaction()) {
           compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
         }
@@ -917,6 +1095,11 @@ export class Agent {
         }
         if (reply.kind === "error") {
           const overflow = reply.model && isContextOverflow(reply.model)
+          if (overflow && !overflowAged) {
+            overflowAged = true
+            const aging = this.#age(turn, true)
+            if (aging && (await aging)) continue
+          }
           if (overflow && !overflowRetried && this.#compaction.auto !== false) {
             overflowRetried = true
             this.#noteWindowGuess(turn, true)
@@ -984,6 +1167,7 @@ export class Agent {
         ...(result.failure ? { failure: result.failure } : {}),
       })
       this.#setStatus(turn, "idle")
+      if (result.reason === "done") this.#startTitle()
       // A success resets the notice retries; after an interrupt the user decides when to go on.
       if (result.reason !== "error") this.#retries = 0
       else if (turn.unanswered || this.#notices.length) this.#scheduleRetry(result.error)
@@ -992,6 +1176,76 @@ export class Agent {
       }
     }
     return result
+  }
+
+  #startTitle(): void {
+    const store = this.session
+    if (!this.#autoTitle || this.depth || this.parentSessionId || this.#titleStarted || !store || store.title)
+      return
+    this.#titleStarted = true
+    const model = this.#autoTitle.model ?? this.model
+    const messages = this.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      // Images stay out of the title request (its model may not take them); their names still
+      // tell it something when a message is only an image.
+      .map(
+        (m) =>
+          `${m.role}: ${m.content
+            .flatMap((b) =>
+              b.type === "text"
+                ? [b.text]
+                : b.type === "image"
+                  ? [`[image${b.name ? `: ${b.name}` : ""}]`]
+                  : [],
+            )
+            .join("")}`,
+      )
+      .join("\n")
+      .slice(0, 8000)
+    void (async () => {
+      try {
+        for await (const e of this.#ai.stream(
+          {
+            model: { ...model, caps: { ...model.caps, webSearch: false } },
+            systemPrompt:
+              "Give this conversation a short title, at most six words, in the user's language. Return only the title, without quotes or punctuation around it.",
+            messages: [userMessage(messages)],
+            tools: [],
+            // A reasoning model spends its output budget thinking first; 64 tokens would end it
+            // before any title.
+            maxTokens: model.caps.thinking
+              ? Math.min(TITLE_THINKING_TOKENS, model.maxOutput || Infinity)
+              : 64,
+          },
+          AbortSignal.timeout(30_000),
+        )) {
+          if (e.type !== "done" && e.type !== "error") continue
+          const usage = e.message.usage
+          if (usage) {
+            this.tree?.recordUsage(this, usage)
+            this.#store({ type: "side_usage", model: modelRef(model), usage })
+          }
+          if (e.type === "error") return
+          const title = e.message.content
+            .flatMap((b) => (b.type === "text" ? [b.text] : []))
+            .join("")
+            .trim()
+            .replace(/^["'`]+|["'`]+$/g, "")
+            .split(/\s+/)
+            .slice(0, 6)
+            .join(" ")
+          // Six words of a language without spaces can be a whole paragraph.
+          const short = [...title].slice(0, TITLE_MAX_CHARS).join("")
+          if (short) {
+            store.rename(short, "auto")
+            this.#emit(undefined, "session.title", { title: store.title! })
+          }
+          return
+        }
+      } catch {
+        // Naming is optional; a failed side request never interrupts the conversation.
+      }
+    })()
   }
 
   #injectSteering(turn: Turn) {
@@ -1050,7 +1304,7 @@ export class Agent {
     }
     return this.interceptors.run(
       "context.build",
-      { systemPrompt: renderPrompt(sections), messages: [...this.messages] },
+      { systemPrompt: renderPrompt(sections), messages: projectMessages(this.messages, this.#views) },
       { sessionId: this.sessionId, signal },
     )
   }
@@ -1240,8 +1494,200 @@ export class Agent {
         }
         run.finished = true
       }
-      this.#push(...runs.map((run) => run.result!))
+      const results = runs.map((run) => run.result!)
+      const views = this.#dedupe(results)
+      this.#push(...results)
+      this.#storeViews(views)
     }
+  }
+
+  /**
+   * A1: a result whose text is over the size limit (a tool that does not cut its own output,
+   * such as an MCP server's) is saved whole as an artifact; the model gets a preview with the
+   * artifact's id. Saving that fails leaves a preview that says so. Images stay as they are.
+   */
+  async #keepLarge(call: ToolCallBlock, result: ToolResult): Promise<ToolResult> {
+    if (call.name === "output_read") return result
+    const texts = result.content.flatMap((b) => (b.type === "text" ? [b.text] : []))
+    const text = texts.join("\n")
+    if (outputSize(text) <= this.artifacts.limits.saveAbove) return result
+    let artifact: Awaited<ReturnType<ArtifactStore["save"]>> | undefined
+    let saveError: string | undefined
+    try {
+      artifact = await this.artifacts.save({ text, tool: call.name, toolCallId: call.id })
+    } catch (err) {
+      saveError = err instanceof Error ? err.message : String(err)
+    }
+    const preview = outputPreview({
+      text,
+      ...(artifact ? { artifact } : {}),
+      ...(saveError ? { saveError } : {}),
+      ...(result.isError ? { facts: ["the tool reported an error"] } : {}),
+      previewChars: this.artifacts.limits.previewChars,
+    })
+    const images = result.content.filter((b) => b.type !== "text")
+    return { ...result, content: [{ type: "text", text: preview }, ...images] }
+  }
+
+  /** A2: views for the reads among a batch's results that repeat an earlier read still in context. */
+  #dedupe(results: ToolResultMessage[]): [ToolResultMessage, ContextView][] {
+    if (this.#context.dedupeReads === false || !results.some((r) => r.toolName === "read")) return []
+    const all = [...this.messages, ...results]
+    const pairs = pairCalls(all)
+    const out: [ToolResultMessage, ContextView][] = []
+    for (const [i, result] of results.entries()) {
+      const call = pairs.get(result)
+      if (call?.name !== "read") continue
+      const history = all.slice(0, this.messages.length + i)
+      const view = duplicateView(history, this.#views, pairs, result, call, this.cwd)
+      if (!view) continue
+      this.#views.set(result, view)
+      out.push([result, view])
+    }
+    return out
+  }
+
+  /** Records views in the session file, so a resumed session sends the same. */
+  #storeViews(views: [Message, ContextView][]) {
+    const stored: StoredView[] = []
+    for (const [m, v] of views) {
+      const entry = this.#entryIds.get(m)
+      if (!entry) continue
+      if (v.kind === "duplicate") {
+        const of = this.#entryIds.get(v.of)
+        if (of) stored.push({ entry, kind: "duplicate", text: v.text, of })
+      } else stored.push({ entry, kind: "aged", text: v.text, epoch: v.epoch })
+    }
+    if (stored.length) this.#store({ type: "context", views: stored })
+  }
+
+  /**
+   * The size of the next request, estimated: the context the last reply reported, less what
+   * aging freed since, plus what was added after it, counted in characters and scaled by how
+   * the model's own count compared for what it saw (so text of any script comes out close).
+   */
+  #estimateNext(): number {
+    const projected = projectMessages(this.messages, this.#views)
+    const fixed = Math.ceil(
+      (renderPrompt(this.#sections).length + JSON.stringify(this.#offeredTools()).length) / 4,
+    )
+    const last = this.messages.findLastIndex(
+      (m) => m.role === "assistant" && m.usage !== undefined && contextTokens(m.usage) > 0,
+    )
+    const observed = this.#contextTokens
+    if (observed === undefined || last === -1) return fixed + estimateTokens(projected)
+    const seen = fixed + estimateTokens(projectMessages(this.messages.slice(0, last + 1), this.#seenViews()))
+    const scale = Math.min(4, Math.max(0.5, observed / Math.max(1, seen)))
+    return (
+      Math.max(0, observed - this.#contextFreed) +
+      Math.round(scale * estimateTokens(projected.slice(last + 1)))
+    )
+  }
+
+  /** How the model's count compares with estimateTokens for this session's history. */
+  #tokenScale(): number {
+    const observed = this.#contextTokens
+    const last = this.messages.findLastIndex(
+      (m) => m.role === "assistant" && m.usage !== undefined && contextTokens(m.usage) > 0,
+    )
+    if (observed === undefined || last === -1) return 1
+    const seen = estimateTokens(projectMessages(this.messages.slice(0, last + 1), this.#seenViews()))
+    return Math.min(4, Math.max(0.5, observed / Math.max(1, seen)))
+  }
+
+  /**
+   * The views the last reported context size was counted with: aging rounds since then are
+   * left out (that size is from before them), so comparing it with an estimate stays fair.
+   */
+  #seenViews(): ReadonlyMap<Message, ContextView> {
+    const since = [...this.#views].filter(([, v]) => v.kind === "aged" && v.epoch > this.#epochAtReply)
+    if (!since.length) return this.#views
+    const out = new Map(this.#views)
+    for (const [m] of since) out.delete(m)
+    return out
+  }
+
+  /**
+   * A3: when the next request would pass `start` of the window (or passed it: `overflow`), old
+   * tool results are cleared in one batch down to `target`: each is sent from then on as a short
+   * stub that says how to get it back, and its whole text is kept as an artifact. Only where the
+   * history may be rewritten: nothing before signed or encrypted provider data that a request
+   * would send back. A round freeing less than minSavedTokens is skipped, keeping the prompt
+   * prefix as it is. Undefined when there is nothing to age; else resolves whether it cleared
+   * anything.
+   */
+  #age(turn: Turn, overflow = false): Promise<boolean> | undefined {
+    const o = { ...AGING_DEFAULTS, ...this.#context.aging }
+    if (!o.enabled || isNoModel(this.model)) return undefined
+    const window = this.model.contextWindow
+    const estimate = this.#estimateNext()
+    const pressure = overflow || estimate > o.start * window
+    if (!pressure && o.afterTurns <= 0) return undefined
+    const sealed = lastSealedIndex(this.messages, (sig, producer) =>
+      this.#ai.canReplay(sig, this.model, producer),
+    )
+    const candidates = agingCandidates(this.messages, this.#views, {
+      keepTurns: o.keepTurns,
+      keepSteps: o.keepSteps,
+      sealed,
+      cwd: this.cwd,
+      ...(pressure ? {} : { olderThanTurns: o.afterTurns }),
+    })
+    if (!candidates.length) return undefined
+    const scale = this.#tokenScale()
+    // After an overflow the window or the estimate was wrong: free a good part whatever they say.
+    const down = estimate - Math.min(o.target, o.start) * window
+    const goal = overflow ? Math.max(down, 0.3 * estimate) : pressure ? down : Number.POSITIVE_INFINITY
+    const picks: { m: ToolResultMessage; call: ToolCallBlock | undefined; saved: number }[] = []
+    let saved = 0
+    for (const c of candidates) {
+      if (saved >= goal) break
+      // A stub is about 100 tokens.
+      const gain = Math.max(0, Math.round(scale * (c.tokens - 100)))
+      picks.push({ m: c.message, call: c.call, saved: gain })
+      saved += gain
+    }
+    // A window whose aging band is narrower than minSavedTokens still ages: never ask for more than the band.
+    const minSaved = Math.min(o.minSavedTokens, Math.max(0, (o.start - Math.min(o.target, o.start)) * window))
+    if (saved <= 0 || (!overflow && saved < minSaved)) return undefined
+    return this.#applyAging(turn, picks)
+  }
+
+  /** Sends the picked results as stubs from now on, each with its whole text kept as an artifact. */
+  async #applyAging(
+    turn: Turn,
+    picks: { m: ToolResultMessage; call: ToolCallBlock | undefined; saved: number }[],
+  ): Promise<boolean> {
+    const epoch = this.#agingEpoch + 1
+    const aged: [Message, ContextView][] = []
+    let freed = 0
+    for (const p of picks) {
+      if (turn.signal.aborted) break
+      const text = resultText(p.m) ?? ""
+      let artifact = artifactIdOf(text)
+      if (!artifact) {
+        try {
+          artifact = (await this.artifacts.save({ text, tool: p.m.toolName, toolCallId: p.m.toolCallId })).id
+        } catch {
+          // Without its artifact only a file read can be read again.
+          if (p.call?.name !== "read") continue
+        }
+      }
+      const view: ContextView = { kind: "aged", text: agedStub(p.m, p.call, artifact), epoch }
+      this.#views.set(p.m, view)
+      aged.push([p.m, view])
+      freed += p.saved
+    }
+    if (!aged.length) return false
+    this.#agingEpoch = epoch
+    this.#contextFreed += freed
+    this.#storeViews(aged)
+    this.#emit(turn, "extension.notice", {
+      source: "context",
+      text: `Cleared ${aged.length} old tool ${aged.length === 1 ? "result" : "results"} from the context (about ${formatK(freed)} tokens); the model can read them again with output_read or read.`,
+      level: "info",
+    })
+    return true
   }
 
   /** Waits for the batch, but after an abort gives tools only abortGraceMs to stop. */
@@ -1277,7 +1723,10 @@ export class Agent {
     ): Promise<ToolResultMessage> => {
       run.returned = true
       if (rejected) this.#emitToolStart(turn, run, args)
-      const result = await this.#afterTool(turn, run, batch, args, first, rejected)
+      const result = await this.#keepLarge(
+        call,
+        await this.#afterTool(turn, run, batch, args, first, rejected),
+      )
       if (!run.finished) this.#emitToolEnd(turn, call, result, durationMs, rejected, run.approval)
       return {
         role: "toolResult",
@@ -1318,26 +1767,45 @@ export class Agent {
           : await reject("blocked", `Tool call blocked: ${gate.reason}`)
       }
       const args = gate.value.args
-      if (gate.ask) {
-        const request = { sessionId: this.sessionId, toolCallId: call.id, name: call.name, args }
-        const verdict = await this.#askApproval(turn, { ...request, reason: gate.ask.join("; ") })
+      // The core policy decides on the arguments the tool will get, whatever the interceptors
+      // made of them; no extension can take it away.
+      const policy = await this.permissions.check(tool, args, this.cwd)
+      if (turn.signal.aborted)
+        return await reject("aborted", "Aborted by the user before this tool ran.", args)
+      if (policy.decision === "deny") return await reject("blocked", refusedText(policy), args)
+      const asking = policy.decision === "ask"
+      if (asking || gate.ask) {
+        const reasons = [...(asking ? [policy.reason] : []), ...(gate.ask ?? [])]
+        const request: ApprovalRequest = {
+          sessionId: this.sessionId,
+          toolCallId: call.id,
+          name: call.name,
+          args,
+          reason: reasons.join("; "),
+          ...(asking ? { permission: approvalPermission(policy, this.permissions.mode) } : {}),
+        }
+        // A permission question goes to the user, also from a sub-agent (whose interceptors'
+        // questions go to its parent); the user's answer covers the interceptors' reasons too.
+        const verdict = await this.#askApproval(
+          turn,
+          request,
+          asking ? this.#permissionApprover() : this.#approve,
+        )
         // Dismissing the question stops the turn, like an interrupt.
         if (!verdict.approved && verdict.interrupt && this.#turn === turn) this.#abort?.abort()
         if (verdict.approved && verdict.by) run.approval = verdict.by
         if (turn.signal.aborted)
           return await reject("aborted", "Aborted by the user before this tool ran.", args)
         if (!verdict.approved) {
-          return await reject(
-            "blocked",
-            `Tool call not approved${verdict.reason ? `: ${verdict.reason}` : "."}`,
-            args,
-          )
+          const why = `Tool call not approved${verdict.reason ? `: ${verdict.reason}` : "."}`
+          return await reject("blocked", asking ? `${why}\n${askedText(policy)}` : why, args)
         }
       }
       const problem = checkArgs(tool.parameters, args)
       if (problem) return await reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`, args)
 
-      this.#emitToolStart(turn, run, args)
+      // Listeners get a copy: the arguments the policy checked are the ones the tool runs with.
+      this.#emitToolStart(turn, run, copyArgs(args))
       // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
       // (spawning a process can stall for seconds on some Windows machines).
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -1431,8 +1899,11 @@ export class Agent {
    * Waits for the approver while the session shows as blocked (D44: with the number of calls
    * waiting). A missing or failing approver denies.
    */
-  async #askApproval(turn: Turn, request: ApprovalRequest): Promise<ApprovalDecision> {
-    const approve = this.#approve
+  async #askApproval(
+    turn: Turn,
+    request: ApprovalRequest,
+    approve: Approver | undefined,
+  ): Promise<ApprovalDecision> {
     if (!approve) return { approved: false, reason: "it needs approval and nobody can approve it here" }
     try {
       return await this.#waitBlocked(turn, `approval for ${request.name}`, () =>
@@ -1444,6 +1915,26 @@ export class Agent {
         reason: `approval failed: ${err instanceof Error ? err.message : String(err)}`,
       }
     }
+  }
+
+  /**
+   * Who answers the permission policy's questions: the user of the tree (Permissions.approver),
+   * else a top-level session's own approver. Never a parent's model: a model cannot widen what
+   * its sub-agents may do.
+   */
+  #permissionApprover(): Approver | undefined {
+    return this.permissionApprover
+  }
+
+  /**
+   * Who answers this session's permission questions, for its sub-agents to ask the same: the
+   * tree's user (Permissions.approver), else the one handed down from the top-level session,
+   * else a top-level session's own approver.
+   */
+  get permissionApprover(): Approver | undefined {
+    return (
+      this.permissions.approver ?? this.#inheritedApprover ?? (this.depth === 0 ? this.#approve : undefined)
+    )
   }
 
   /** A tool's questions (ToolSession.askUser), asked while the session shows as blocked. */
@@ -1566,8 +2057,10 @@ export class Agent {
 
   #needsCompaction(): boolean {
     if (this.#compaction.auto === false || this.#contextTokens === undefined) return false
-    if (this.#compactFloor !== undefined && this.#contextTokens <= this.#compactFloor) return false
-    return this.#overThreshold(this.#contextTokens)
+    // What aging freed since the last reply no longer counts.
+    const tokens = this.#contextTokens - this.#contextFreed
+    if (this.#compactFloor !== undefined && tokens <= this.#compactFloor) return false
+    return this.#overThreshold(tokens)
   }
 
   /**
@@ -1578,6 +2071,8 @@ export class Agent {
    */
   #noteContext(tokens: number) {
     this.#contextTokens = tokens
+    this.#contextFreed = 0
+    this.#epochAtReply = this.#agingEpoch
     if (!this.#checkCompaction) return
     this.#checkCompaction = false
     this.#compactFloor = this.#overThreshold(tokens) ? tokens + this.model.contextWindow / 20 : undefined
@@ -1677,7 +2172,8 @@ export class Agent {
           {
             model: this.model,
             systemPrompt,
-            messages: input,
+            // Sent as requests send them; `compacted` keeps the messages themselves.
+            messages: projectMessages(input, this.#views),
             tools: this.#offeredTools(),
           },
           signal,
@@ -1699,7 +2195,7 @@ export class Agent {
             : await summarize(
                 this.#ai,
                 writer,
-                this.#readable(split.older),
+                projectMessages(this.#readable(split.older), this.#views),
                 signal,
                 instructions,
                 split.prompt,
@@ -1723,7 +2219,7 @@ export class Agent {
       ]
       const replaces = ids(replacedMessages)
       const retainedIds = recent ? ids(retained) : []
-      const replacement = summaryMessages(summary, modelRef(this.model), checkpoint)
+      const replacement = summaryMessages(summary, modelRef(checkpoint ? this.model : writer), checkpoint)
       const before = this.#contextTokens
       const nativeRef = checkpoint ? modelRef(this.model) : undefined
       const info: CompactionInfo = {
@@ -1733,12 +2229,14 @@ export class Agent {
               tokensBefore: before,
               tokensAfter: estimateAfter(
                 before,
-                replacedMessages.filter((m) => !retained.includes(m)),
-                keptMessages,
-                // An opaque checkpoint (no readable text) takes up about what the server wrote.
-                checkpoint && !summary
-                  ? [...replacement, checkpointStandIn(checkpoint, checkpointTokens)]
-                  : replacement,
+                projectMessages(
+                  replacedMessages.filter((m) => !retained.includes(m)),
+                  this.#views,
+                ),
+                projectMessages(keptMessages, this.#views),
+                // The checkpoint replaces both summary messages on the wire. Its size is
+                // already in tokens; without usage, estimate from its encrypted length.
+                checkpoint ? checkpointTokens || Math.ceil(checkpoint.value.length / 16) : replacement,
               ),
             }
           : {}),
@@ -1774,6 +2272,7 @@ export class Agent {
         this.messages.splice(0, this.messages.length, ...replacement, ...rest)
       }
       this.#contextTokens = undefined
+      this.#contextFreed = 0
       this.#checkCompaction = true
       this.#emit(turn, "compact.end", {
         summary,
@@ -1852,7 +2351,12 @@ export class Agent {
       const writer = this.#compaction.model ?? this.model
       let written: { summary: string; usage?: Usage }
       try {
-        written = await summarize(this.#ai, writer, this.#readable(originals), signal)
+        written = await summarize(
+          this.#ai,
+          writer,
+          projectMessages(this.#readable(originals), this.#views),
+          signal,
+        )
       } catch (err) {
         if (err instanceof SummaryError) this.#recordCompactionUsage(err.usage, modelRef(writer), false)
         if (signal.aborted) return undefined
@@ -1861,7 +2365,7 @@ export class Agent {
       }
       const oldId = this.#entryIds.get(m)
       const original = oldId ? this.session?.get(oldId) : undefined
-      const pair = summaryMessages(written.summary, modelRef(this.model), cp)
+      const pair = summaryMessages(written.summary, modelRef(writer), cp)
       const prior = this.#compactions.get(m)
       const info: CompactionInfo | undefined = prior ? { ...prior, model: modelRef(writer) } : undefined
       const entryId = this.#store({
@@ -1934,22 +2438,13 @@ function joinMessages(messages: UserMessage[]): UserMessage {
   }
 }
 
-function modelRef(model: ModelInfo): ModelRef {
-  return { provider: model.provider, model: model.id }
+/** "12k": tokens for notices. */
+function formatK(tokens: number): string {
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens)
 }
 
-/**
- * A message about as large as an opaque checkpoint, for estimating the context after it: the
- * tokens the server wrote for it (its summary, encrypted) when the compaction's usage said,
- * else a guess from its size. The encrypted value is base64 of the summary and much larger
- * than the summary's tokens, so a quarter of its length is taken (about a character a token).
- */
-function checkpointStandIn(sig: Signature, written: number): Message {
-  const chars = written > 0 ? written * 4 : Math.ceil(sig.value.length / 4)
-  return {
-    role: "user",
-    content: [{ type: "text", text: " ".repeat(Math.min(chars, 4_000_000)) }],
-  }
+function modelRef(model: ModelInfo): ModelRef {
+  return { provider: model.provider, model: model.id }
 }
 
 /** The tool's concurrency key for this call; a throwing key function means no key. */
@@ -1993,5 +2488,46 @@ function toolError(call: ToolCallBlock, text: string): ToolResultMessage {
     toolName: call.name,
     content: [{ type: "text", text }],
     isError: true,
+  }
+}
+
+function copyArgs(args: Record<string, unknown>): Record<string, unknown> {
+  try {
+    return structuredClone(args)
+  } catch {
+    return { ...args }
+  }
+}
+
+/** What the model reads when the permission policy refuses a call: why, and what to do instead. */
+function refusedText(policy: PermissionVerdict): string {
+  return [
+    `Tool call blocked by the permission policy: ${policy.reason}.`,
+    "Do not try to get around this with another tool or command. If this step is needed, ask the user: they can switch the permission mode or change the permission rules.",
+  ].join("\n")
+}
+
+/** Added when a permission question was answered no, or nobody could answer it. */
+function askedText(policy: PermissionVerdict): string {
+  return `The permission policy asked because ${policy.reason}. Do not try to get around this; if the step is needed, ask the user how to go on.`
+}
+
+/** What the approval dialog shows about the policy's question. */
+function approvalPermission(policy: PermissionVerdict, mode: PermissionMode): ApprovalPermission {
+  const rule = policy.rule
+  return {
+    mode,
+    cause: policy.cause ?? "mode",
+    ...(rule
+      ? {
+          rule: {
+            command: [...rule.command],
+            decision: rule.decision,
+            ...(rule.reason ? { reason: rule.reason } : {}),
+            scope: rule.source.scope,
+            file: rule.source.file,
+          },
+        }
+      : {}),
   }
 }

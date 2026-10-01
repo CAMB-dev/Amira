@@ -2,6 +2,12 @@ import { writeSync } from "node:fs"
 import { constants } from "node:os"
 import { cursor, modes, RESET, type TerminalMode } from "./ansi.ts"
 
+/**
+ * Marks a signal listener that only cleans up (e.g. kills background jobs) and leaves ending
+ * the process to others; @amira/proc marks its own with the same global symbol.
+ */
+export const PASSIVE_SIGNAL_LISTENER = Symbol.for("amira.passiveSignalListener")
+
 type Listener<T extends unknown[]> = (...args: T) => void
 
 class Emitter<T extends unknown[]> {
@@ -206,8 +212,9 @@ export class ProcessTerminal extends BaseTerminal {
    * The restore is written synchronously, since the process may be about to die. An uncaught
    * exception only restores when the app has no `uncaughtException` handler: with one, the
    * process keeps running and the terminal is left to the app. Likewise a signal is only handled
-   * when nobody else listens for it: then we restore and exit with 128 + its number, like the
-   * default action would. When the app has its own handler, the signal is left to it.
+   * when nobody else listens for it (listeners marked PASSIVE_SIGNAL_LISTENER do not count):
+   * then we restore and exit with 128 + its number, like the default action would. When the
+   * app has its own handler, the signal is left to it.
    * Returns a function that removes every handler.
    */
   private restoreOnExit(): () => void {
@@ -232,7 +239,11 @@ export class ProcessTerminal extends BaseTerminal {
     const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]
     if (process.platform === "win32") signals.push("SIGBREAK")
     const onSignal = (signal: NodeJS.Signals) => {
-      if (process.listenerCount(signal) > 1) return
+      // Listeners marked passive (e.g. one killing background jobs) only clean up: not an app handler.
+      const others = process
+        .listeners(signal)
+        .filter((l) => l !== onSignal && !(l as unknown as Record<symbol, unknown>)[PASSIVE_SIGNAL_LISTENER])
+      if (others.length) return
       restoreNow()
       this.stop()
       process.exit(128 + (constants.signals[signal] ?? 0))

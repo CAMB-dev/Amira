@@ -26,15 +26,66 @@ Shift+Enter inserts a newline where the terminal supports it; Ctrl+Enter is the 
 
 Esc stops the current turn; while a slash command such as `/ext install` is still running, it cancels that command first and keeps your draft. If steering or queued messages are waiting, they are combined in the order you typed them and sent together. Background sub-agents keep running; [Sub-agents](subagents.md) explains how to stop them. Ctrl+C likewise cancels a running command first, otherwise stops a turn, otherwise clears a nonempty input, otherwise quits. `/quit` also exits.
 
+## Images
+
+Messages can carry PNG, JPEG, GIF and WebP images, in both terminal modes:
+
+- **Paste or drop paths.** A paste made only of paths to existing image files (absolute or relative to the working directory, quoted when they contain spaces, or with backslash-escaped spaces as macOS and Linux terminals write dropped paths, or `file://` URIs) attaches them. Anything else, such as prose or other files, is pasted as text, and so is an image that cannot be attached, with a notice saying why.
+- **Pick one in the `@` file list.** An image attaches; other files keep their `@path` reference.
+- **Paste from the clipboard** with Alt+V (`paste.image`; see [Keybindings](keybindings.md) for the other keys). The clipboard's text wins when it has any. This uses PowerShell on Windows, `osascript` (or `pngpaste` when installed) on macOS, and `wl-paste` or `xclip` on Linux; without them a notice says what is missing, and paths still work.
+
+An attachment shows as one placeholder, such as `[image 1: screen.png 120 KB]`, in the input and in the sent message. Backspace or Delete removes it whole; undo, cut and yank keep it. Remove attachments before editing the message in an external editor (Ctrl+G). A message with images is never run as a slash command or skill.
+
+The images in one message are limited to **5 MB in total**. Sending them needs a model that accepts images; otherwise a warning appears and the message stays in the input. Images are stored inline (base64) in the session file, so resuming does not need the original files. Image prompts are recalled with ↑ during the run but are not written to the project's prompt history file.
+
 ## Tools and approvals
 
 The bundled tools can read, search, write and edit files, run shell commands, search the web and delegate work. Availability depends on the platform, model and loaded extensions. `/tools` lists the current tools; `/tools disable <name>` and `/tools enable <name>` change availability for this session. `--disable-tools` supplies a comma-separated list at startup. See [Settings](settings.md) and [Extensions](extensions.md) for persistent configuration.
 
 Files are changed with one of two editing tools. `edit` replaces exact text in one file. `apply_patch` takes a patch in the Codex format (`*** Begin Patch` … `*** End Patch`) that can add, delete, update and move several files at once; it checks every hunk before writing anything and rolls back what it wrote if a write fails. Each model gets `edit` unless its provider settings choose otherwise; see [Editing tools](providers.md#editing-tools). `write` is always available. `/tools` lists the tool the current model does not use as disabled, with the reason, and `/tools enable` cannot turn it on; change the setting instead.
 
-An extension can block a tool call or require approval before it runs. This is not a blanket confirmation for every edit or command: the extension decides which calls need approval. A request shows the tool, reason and a preview or arguments. Select an option with the arrows, then Enter; confirmations begin with no option selected. Esc denies the call and stops the turn.
+Approval requests come from the [permission policy](#permissions) and from extensions, which can block a tool call or require approval before it runs. A request shows the tool, the reason (with the mode or rule that caused it) and a preview or arguments. Select an option with the arrows, then Enter; confirmations begin with no option selected. Esc denies the call and stops the turn.
 
-When offered, `Don't ask again` allows that tool **for the same stated reason**, for the rest of the session; it does not save a persistent permission. Sub-agent approval requests are decided by their parent agent's model. Print mode cannot answer dialogs, so requested approvals are denied and questions are cancelled. RPC clients must answer UI requests explicitly.
+When offered, `Don't ask again` allows that tool **for the same stated reason**, for the rest of the session; it does not save a persistent permission. A sub-agent's permission questions go to you, not to its parent; questions an extension raises for a sub-agent are still decided by the parent agent's model. Print mode cannot answer dialogs, so requested approvals are denied and questions are cancelled. RPC clients must answer UI requests explicitly; once an RPC client closes stdin, approvals are denied.
+
+## Permissions
+
+The permission mode decides what the model may do without asking. It applies to the whole session, including sub-agents.
+
+| Mode | What it does |
+| --- | --- |
+| `auto` (default) | Runs everything without asking, except where your rules or protected files say otherwise |
+| `edits` | Changes files without asking; asks before shell commands your `allow` rules do not cover |
+| `plan` | Read-only: no file changes and no shell commands; asks before tools it does not know to be read-only, such as MCP tools |
+
+Press Shift+Tab in the UI to cycle `auto`, `edits` and `plan`; a mode other than `auto` shows next to the model in the input box's border. `--permission-mode <mode>` or `"permissions": {"mode": "edits"}` in settings chooses the mode at startup. Plan mode blocks every shell command for now, because Amira cannot yet prove that a command only reads.
+
+Command rules allow, ask about or deny shell commands by their words:
+
+```json
+{
+  "permissions": {
+    "mode": "edits",
+    "rules": [
+      { "command": ["git", "status"], "decision": "allow" },
+      { "command": ["git", "push"], "decision": "ask", "reason": "Review what goes out" },
+      { "command": ["rm", "-rf"], "decision": "deny" }
+    ]
+  }
+}
+```
+
+A rule matches the words of a command (its argv), not the text: `git status --short` matches `["git", "status"]`, `git statusx` does not. For `ask` and `deny` rules the command name also matches as a path or with a Windows extension (`/usr/bin/git`, `git.exe`), and in PowerShell under its built-in aliases (`rm`, `del` and `Remove-Item` are one command); they also match when other words come between theirs (`git -C repo push` matches `["git", "push"]`) and ignore case. `allow` rules must match the start of the command exactly, and only a command named without a path (`x/git status` is not `git status`) unless the rule itself names that path. When several rules match, `deny` wins over `ask` and `ask` over `allow`. `allow` only means "do not ask": it never lifts plan mode or a protected file.
+
+Commands joined with `&&`, `||`, `;`, `|` or newlines are split and each part is checked. Commands Amira cannot check word by word ask instead: substitutions such as `$(...)` and backticks, variables, redirections into files, here-documents and here-strings, grouping, file name patterns (`*`, `?`, `[...]`), wrappers that run other commands (`eval`, `sudo`, `xargs`, `bash -c`, `Invoke-Expression`, `Start-Process`, interpreters), commands that define aliases (`alias`, `Set-Alias`, `git -c`, `git config alias.*`) and scripts. In `auto` mode they still run without asking unless you have `ask` or `deny` rules. Commands are read the way the shell that runs them reads them: bash or PowerShell, including the `bash` tool falling back to PowerShell on Windows.
+
+Rules make Amira ask or refuse; they are not a sandbox. A command can still reach a denied program another way, for example through a copy or link of it, or through a script the model wrote earlier. Use `deny` for mistakes worth stopping, not as a security boundary.
+
+The user file's rules always apply. A project's `.amira/settings.json` or `.amira/settings.local.json` can only tighten: its mode counts when it is stricter than yours, its `ask` and `deny` rules apply, and its `allow` rules apply only after you trust the project (`amira ext trust`, the same trust its extension packages need). What a project file is not allowed to change is reported at startup. `--permission-mode` wins over every file. `/permissions` lists the mode, every rule with the file it comes from and what was left out; `/status` shows the mode and the number of rules.
+
+Some files always ask before `write`, `edit` or `apply_patch` changes them, in every mode: `.amira` directories (settings, packages and lock files) and Amira's user directory, `.git` (hooks, config and the rest of Git's metadata, including a linked worktree's Git directory), `.gitmodules`, the directory `core.hooksPath` names and your global Git config. Other names for the same file count too (a different case, `../`, absolute or MSYS paths, links). **Shell commands can still change these files: commands do not run in a sandbox yet.**
+
+A refused call tells the model why and that asking you is the way forward. In print mode, and in RPC once no client can answer, anything that would ask is refused with the reason, so use `auto` mode or rules for unattended runs.
 
 ## Sessions, compaction and rewind
 
@@ -48,13 +99,22 @@ Conversations are stored automatically and listed by working directory. On exit,
 | List sessions without the UI | `amira -p -r` |
 | Pick or switch within the UI | `/resume` or `/resume <session-id>` |
 | Start an empty conversation | `/clear` |
+| Name the current session | `/rename <title>` |
+| Continue in a copy of this session | `/fork` |
+| Delete a stored session without the UI | `amira sessions rm <session-id>` (`-C <dir>` for another directory) |
 | Compact older context now | `/compact` or `/compact <instructions>` |
 
 Do not combine `-c` and `-r`. Session IDs begin with `s_`; use the actual ID shown in the list. `/clear` starts a new stored session, keeping the previous one available to resume. `/resume` keeps the current model selected; when no model is selected, the stored model can be used. Switching sessions stops background work belonging to the old conversation.
 
+After a session's first successful turn, Amira asks the model for a short title (at most six words and 60 characters, in the conversation's language) in the background; it uses `compact.model` when set, otherwise the current model, and never holds up the conversation. Print mode and sub-agents do not request titles. The request's cost appears in `/cost` and `/status`. A `/rename` name always wins over the automatic one. Set `"sessions": { "autoTitle": false }` in user or project settings to turn it off. Titles show in `/status`, `/resume`, `amira -r` and the terminal title.
+
+Typing in the `/resume` picker searches titles and the user and assistant text of whole conversations, compacted history included; matching is a case-insensitive substring, so Chinese or Japanese needs no spaces, and the matching text shows under the row. Ctrl+D deletes the selected session after a confirmation; the current session is never listed. Deleting removes the session file and the sub-agent sessions it started, except ones a fork still uses.
+
+`/fork` copies the conversation into a new session that records where it came from, named `<title> (fork)`, and switches to it; the original stays as it was.
+
 Automatic compaction normally starts at 80% of the model's context window. It reduces older context while keeping recent conversation. Compatible providers can use native compaction; otherwise Amira writes a text summary. Instructions passed to `/compact` force a text summary. See [Providers](providers.md) and [Settings](settings.md) for the conditions and options. `/context` shows what occupies the context window.
 
-Press Esc twice in succession to open the rewind picker in either fullscreen or inline mode. Select a previous user message, then choose **Restore files too** or **Conversation only**. File restoration is selected by default when there are captured changes after that message; the picker previews how many files will be restored or removed and lists conflicts. That message and everything after it leave the active conversation, and the prompt returns to the editor for changes and resubmission. Only messages still present after compaction can be selected; a stored session is required. A popup, text selection or dialog can consume Esc first, so follow the current hint line.
+Press Esc twice in succession to open the rewind picker in either fullscreen or inline mode. Select a previous user message, then choose **Restore files too** or **Conversation only**. File restoration is selected by default when there are captured changes after that message; the picker previews how many files will be restored or removed and lists conflicts. That message and everything after it leave the active conversation, and the prompt returns to the editor for changes and resubmission. In the picker, F forks instead: a new session ends before the selected message, the current one stays whole, and no files are restored. Only messages still present after compaction can be selected; a stored session is required. A popup, text selection or dialog can consume Esc first, so follow the current hint line.
 
 A turn starts with a user prompt. Rewinding to before it restores each affected file to its bytes before the first captured mutation after that prompt, and removes files that did not exist then. Capture covers only Amira's `write`, `edit` and `apply_patch` tools, including file-tool writes by sub-agents in the same directory. **Shell commands, formatters run by hooks, other processes, user edits and sub-agents in separate worktrees are not captured.** Before restoring anything, Amira compares all affected files with the journal's expected last contents. Any mismatch, including an external change between captured writes, refuses the entire restore and leaves the conversation unchanged. Resolve the listed conflicts or choose conversation-only rewind. Stop active sub-agents before rewinding.
 
@@ -63,6 +123,49 @@ File bytes, including binary pre-images, are kept by hash in `<session-id>/files
 Captured history lasts as long as the session, across conversation branches and restarts. `/rewind-prune` explicitly discards all captured file history for the current session and frees its quota; earlier changes can no longer be restored, but later writes start a new history. There is no automatic eviction. `SessionStore.delete()` removes both a recording and its asset directory; when deleting recordings manually, remove the matching `<session-id>` directory too. A restore records its plan and progress before checking out the conversation. Resuming the session finishes an interrupted restore after rechecking all files, including ones already restored; conflicts stop recovery without further writes. An interrupted core restore must finish before choosing conversation-only rewind or an extension owner, even if capture is subsequently disabled. File restoration concerns bytes, not empty directories or shell side effects.
 
 The checkpoints extension can take exclusive ownership with `api.registerFileRestoration({ label, restore: async (index) => { /* restore bytes */ } })`. The picker shows its label; the host calls it before rewinding the conversation and does not run the core restore. The callback must restore files only (do not call `session.rewind` recursively), and throw on conflicts. Conversation-only rewind skips it. Unloading the extension releases ownership; only one extension can own restoration at a time.
+
+## Context management
+
+The session file always keeps every message and tool result whole. What each model request carries is a projection of that history: large outputs are previewed, repeated reads are shortened and, when the context gets full, old tool results can be cleared. Previews, `/context`, compaction summaries, sub-agent forks and parent consultations all use the same projection. Once a result has been sent in a shortened form, later requests repeat exactly the same text, so the provider's prompt cache keeps its prefix.
+
+**Large outputs.** Tool output longer than 16,000 characters is saved whole as an artifact next to the session file, in `<session id>.assets/outputs/` (sessions without a file use the system temp directory). The model gets a preview of about 8,000 characters instead: a first line with the artifact ID (`a_…`), its size and how to read more, then the start and end of the output with a note where lines were left out. Sizes are counted in characters, with a Chinese, Japanese or Korean character counting as four, since each takes about a token: such output is saved sooner and gets a shorter preview, and `read` stops sooner. This applies to `bash` and `powershell`, to `grep` and `glob` (which save all results, before their own result limits) and to the results of MCP servers and other tools. `read` does not save artifacts: a long range stops at a whole line under the limit and says which `offset` to continue from. In the terminal UI a saved output shows its preview, with the header as a short muted line.
+
+The model reads artifacts with `output_read`: `offset` and `limit` select lines, `grep` returns matching lines (`ignore_case` for case-insensitive), and `column` pages through very long lines. `read` also works on the artifact's file path. An artifact holds what the tool returned at that time; reading the source file shows it as it is now.
+
+**Repeated reads.** When a `read` returns exactly the same text as the latest read of the same file and line range that is still in the context, only the new result is sent as a short note pointing to the earlier one. Earlier results are never rewritten. A changed range, a different range or an earlier read that was compacted or cleared is sent in full. The model can pass `force: true` to get the text anyway.
+
+**Aging.** When the next request is expected to pass 70% of the context window, Amira clears old tool results in one batch until about 60% is left. Each cleared result is sent from then on as a short stub saying what it was and how to get it back: its artifact ID for `output_read`, or for a read the file to read again. The most recent two user turns are kept, or in a long turn its last two model steps, along with results that later calls are still working on. A round that would free fewer than 8,000 tokens (or, in a small window, less than the space between 70% and 60%) is skipped. Aging only rewrites history where the provider allows it: nothing before signed or encrypted reasoning that the request would send back is changed, so with such models compaction does the work. When a request is rejected as too long, one aging round is tried before compacting. The experimental `afterTurns` option also clears results older than that many user turns regardless of pressure; it is off by default.
+
+**Keeping and pruning artifacts.** Artifacts live as long as their session; nothing deletes them automatically. A session keeps at most 256 MB of them; past the quota, outputs are only previewed and the preview says they could not be saved. `/prune` shows how many artifacts are active (mentioned in the context the model sees), inactive (mentioned only in compacted or rewound history, or a sub-agent's) and unused. `/prune unused`, `/prune inactive` and `/prune all` delete that scope; reading a pruned artifact says it was pruned.
+
+| Action | Command |
+| --- | --- |
+| Show artifact usage | `/prune` |
+| Delete unreferenced artifacts | `/prune unused` |
+| Also delete ones only old history mentions | `/prune inactive` |
+| Delete every artifact of this session | `/prune all` |
+
+The defaults can be changed under `context` in settings:
+
+```json
+{
+  "context": {
+    "outputs": { "saveAbove": 16000, "previewChars": 8000, "quotaMB": 256 },
+    "dedupeReads": true,
+    "aging": {
+      "enabled": true,
+      "start": 0.7,
+      "target": 0.6,
+      "minSavedTokens": 8000,
+      "keepTurns": 2,
+      "keepSteps": 2,
+      "afterTurns": 0
+    }
+  }
+}
+```
+
+`saveAbove` is at least 4000 and `previewChars` at least 500 (it is never larger than `saveAbove`); `start` and `target` are shares of the context window between 0 and 1. Set `dedupeReads` or `aging.enabled` to `false` to turn those off.
 
 ## Print mode
 
@@ -104,6 +207,8 @@ The immediate response contains the request ID, `ok: true` and a `turnId`; it ac
 | `state` | Get status, model, session and pending UI requests |
 | `session.read` | Read `messages` or `lastTurn` using the `what` parameter |
 | `session.resume` | Switch to a stored session using `sessionId` |
+| `session.rename` | Name the current session using `title`; a `session.title` event follows, as it does for an automatic title |
+| `session.fork` | Fork into a new session, before the user message at the optional `index`; a `session.start` with reason `fork` follows |
 | `model.set` | Switch model using `model` as provider/model |
 | `command.list`, `command.complete`, `command.run` | Discover and run slash commands |
 | `skill.list`, `skill.run` | Discover and run skills |
@@ -116,8 +221,8 @@ Closing stdin waits for active work, including background results and their foll
 
 ## Status and costs
 
-`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell and Git workspace. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
+`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell, permission mode and rule count, and Git workspace. The speed shows reply and thinking tokens per second separately; `~` marks an estimate: tokens counted from the text because the provider reported no separate reasoning count, or thinking timed from the request because only a summary of it streamed. `(hidden reasoning)` means the model reasoned without streaming its thinking. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
 
-`/cost` reports this session's replies by model and compaction usage separately; it does not aggregate child-agent costs. Use `/status` and `/agents` for those. Costs depend on known model pricing and reported usage; unknown prices are identified, and totals with unpriced rows are partial estimates. Provider billing remains the source for actual charges.
+`/cost` reports this session's replies by model, and compaction and session-title requests separately; it does not aggregate child-agent costs. Use `/status` and `/agents` for those. Costs depend on known model pricing and reported usage; unknown prices are identified, and totals with unpriced rows are partial estimates. Provider billing remains the source for actual charges.
 
 Related: [Getting started](getting-started.md) · [Providers](providers.md) · [Sub-agents](subagents.md) · [Extensions](extensions.md) · [Settings](settings.md) · [Keybindings](keybindings.md).

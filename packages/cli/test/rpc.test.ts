@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep, userMessage } from "@amira/ai"
@@ -22,6 +22,9 @@ function spawnRpc(
   home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-")),
   extraArgs: string[] = [],
 ) {
+  const settingsFile = path.join(home, "settings.json")
+  const settings = existsSync(settingsFile) ? JSON.parse(readFileSync(settingsFile, "utf8")) : {}
+  writeFileSync(settingsFile, JSON.stringify({ ...settings, sessions: { autoTitle: false } }))
   const p = Bun.spawn(
     [
       "bun",
@@ -212,6 +215,37 @@ test("amira --rpc: session.resume continues a stored session on the same connect
   expect((await second.close()).code).toBe(0)
 }, 60_000)
 
+test("amira --rpc: rename and fork preserve the original and expose session operations", async () => {
+  const rpc = spawnRpc([{ text: "first answer" }, { text: "second answer" }])
+  const start = await rpc.event("session.start")
+  rpc.send({ id: "rename", cmd: "session.rename", title: "Database repair" })
+  expect(await rpc.response("rename")).toMatchObject({ ok: true, title: "Database repair" })
+  expect((await rpc.event("session.title")).data.title).toBe("Database repair")
+  rpc.send({ id: "first", cmd: "prompt", text: "first question" })
+  await rpc.response("first")
+  const first = await rpc.event("turn.end")
+  rpc.send({ id: "second", cmd: "prompt", text: "second question" })
+  await rpc.response("second")
+  await rpc.event("turn.end", first.seq)
+  rpc.send({ id: "invalid", cmd: "session.fork", index: -1 })
+  expect((await rpc.response("invalid")).error.code).toBe("invalid_params")
+  rpc.send({ id: "fork", cmd: "session.fork", index: 2 })
+  const fork = await rpc.response("fork")
+  expect(fork.ok).toBe(true)
+  expect(fork.sessionId).not.toBe(start.sessionId)
+  expect(
+    (await rpc.waitFor((l) => l.type === "session.start" && l.sessionId === fork.sessionId, "fork start"))
+      .data.reason,
+  ).toBe("fork")
+  rpc.send({ id: "state", cmd: "state" })
+  expect((await rpc.response("state")).messages).toBe(2)
+  rpc.send({ id: "resume", cmd: "session.resume", sessionId: start.sessionId })
+  expect((await rpc.response("resume")).ok).toBe(true)
+  rpc.send({ id: "original", cmd: "state" })
+  expect((await rpc.response("original")).messages).toBe(4)
+  expect((await rpc.close()).code).toBe(0)
+}, 60_000)
+
 test("amira --rpc: slash commands list, complete and run, and may ask questions", async () => {
   const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
   const rpc = spawnRpc([{ text: "hello" }], undefined, ["-e", commandsExt])
@@ -349,6 +383,8 @@ test("amira --rpc-schema prints a JSON Schema covering every command", async () 
       "prompt",
       "session.read",
       "session.resume",
+      "session.rename",
+      "session.fork",
       "skill.list",
       "skill.run",
       "state",
@@ -569,10 +605,13 @@ test("during a /compact, prompt and model.set are busy and steer queues the mess
     role: "assistant",
     content: [{ type: "text", text: "three" }],
   })
+  // The refused prompt started no turn of its own.
+  const prompts = rpc.out.filter((l) => l.type === "turn.start").map((l) => l.data.prompt.content[0].text)
+  expect(prompts).toEqual(["first", "second", "later"])
   expect(await rpc.end()).toBe(0)
 })
 
-test("ui.respond needs a value; model.set waits for the turn", async () => {
+test("ui.respond needs a value; model.set and prompt wait for the turn", async () => {
   const s = await session([{ toolCalls: [{ name: "ask", args: {} }] }, { text: "bye" }], [rpcTools])
   const rpc = inProcess(s)
   await rpc.call({ id: 1, cmd: "prompt", text: "go" })
@@ -582,6 +621,7 @@ test("ui.respond needs a value; model.set waits for the turn", async () => {
   const busy = await rpc.call({ id: 2, cmd: "model.set", model: "mock/other" })
   expect(busy.error.code).toBe("busy")
   expect(s.agent.model.id).toBe("m")
+  expect((await rpc.call({ id: "p", cmd: "prompt", text: "not now" })).error.code).toBe("busy")
 
   // A misspelt key leaves the dialog open.
   const typo = await rpc.call({ id: 3, cmd: "ui.respond", requestId, val: true })
@@ -590,6 +630,7 @@ test("ui.respond needs a value; model.set waits for the turn", async () => {
   expect((await rpc.call({ id: 5, cmd: "ui.respond", requestId, value: null })).ok).toBe(true)
   await rpc.until((l) => l.type === "turn.end")
   expect(rpc.out.find((l) => l.type === "ui.resolved")?.data.cancelled).toBe(true)
+  expect(rpc.out.filter((l) => l.type === "turn.start")).toHaveLength(1)
 
   expect(await rpc.call({ id: 6, cmd: "model.set", model: "mock/other" })).toMatchObject({
     ok: true,

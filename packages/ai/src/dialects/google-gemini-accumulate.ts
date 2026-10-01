@@ -10,6 +10,7 @@ import type {
 } from "../types.ts"
 import { emptyUsage } from "../types.ts"
 import { GEMINI_DIALECT, SYNTHETIC_ID } from "./google-gemini-contents.ts"
+import { GeminiWebSearch } from "./google-gemini-web-search.ts"
 import type { ErrorEvent } from "./http-stream.ts"
 
 /** Finish reasons that mean the output was withheld. */
@@ -33,6 +34,7 @@ const RETRYABLE = new Set(["MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL"])
  */
 export class GeminiAccumulator {
   readonly message: AssistantMessage
+  readonly #search: GeminiWebSearch
   /** The block the next text or thought part may extend. */
   #open: TextBlock | ThinkingBlock | undefined
   #calls = 0
@@ -42,26 +44,33 @@ export class GeminiAccumulator {
 
   constructor(model: ModelRef) {
     this.message = { role: "assistant", content: [], model, usage: emptyUsage() }
+    this.#search = new GeminiWebSearch(this.message)
   }
 
   *apply(chunk: any): Generator<StreamEvent> {
-    if (chunk?.usageMetadata) this.message.usage = mapUsage(chunk.usageMetadata)
+    if (chunk?.usageMetadata) this.message.usage = { ...this.message.usage, ...mapUsage(chunk.usageMetadata) }
     const block = chunk?.promptFeedback?.blockReason
     if (typeof block === "string" && block) this.#blocked = block
     const candidate = chunk?.candidates?.[0]
     const parts = candidate?.content?.parts
-    if (Array.isArray(parts)) for (const part of parts) yield* this.#part(part ?? {})
+    if (Array.isArray(parts)) {
+      this.#search.beginChunk()
+      for (const part of parts) yield* this.#part(part ?? {})
+    }
+    yield* this.#search.metadata(candidate?.groundingMetadata)
     if (typeof candidate?.finishReason === "string" && candidate.finishReason)
       this.#finish = candidate.finishReason
   }
 
   fail(error: ModelError, retryable: boolean): ErrorEvent {
+    this.#search.citations()
     this.message.stopReason = error.code === "aborted" ? "aborted" : "error"
     return { type: "error", error, retryable, message: this.message }
   }
 
   /** Closes the message: a done event, or an error when the output was blocked or cut off. */
   end(): StreamEvent {
+    this.#search.citations()
     this.message.content = this.message.content.filter(
       (b) => b.type !== "thinking" || b.text || b.signature?.value,
     )
@@ -89,10 +98,18 @@ export class GeminiAccumulator {
     const sig =
       typeof part.thoughtSignature === "string" && part.thoughtSignature ? part.thoughtSignature : undefined
     const text = typeof part.text === "string" ? part.text : ""
+    if (part.toolCall || part.toolResponse) {
+      this.#open = undefined
+      this.#search.part(part)
+      yield* this.#search.serverPart(part)
+      return
+    }
     if (part.functionCall) {
+      this.#search.part(part)
       yield this.#call(part.functionCall)
     } else if (part.thought) {
       const block = this.#extend("thinking", text) as ThinkingBlock
+      this.#search.part(part, block)
       if (text) yield { type: "thinking.delta", text }
       if (sig) {
         block.signature = { dialect: GEMINI_DIALECT, value: sig }
@@ -100,9 +117,10 @@ export class GeminiAccumulator {
       }
       return
     } else if (text) {
-      this.#extend("text", text)
+      const block = this.#extend("text", text) as TextBlock
+      this.#search.part(part, block)
       yield { type: "text.delta", text }
-    }
+    } else this.#search.part(part)
     if (sig) {
       // The signature belongs to the part just added; see modelParts for the replay side.
       this.message.content.push({
@@ -146,6 +164,7 @@ function mapUsage(u: any): Usage {
   return {
     input: Math.max(0, (u.promptTokenCount ?? 0) - cached),
     output: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0),
+    ...(typeof u.thoughtsTokenCount === "number" ? { reasoning: u.thoughtsTokenCount } : {}),
     cacheRead: cached,
     cacheWrite: 0,
   }

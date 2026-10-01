@@ -1,3 +1,4 @@
+import type { JobEvent, JobSpec } from "./job-inline.ts"
 import type { PipeEvent, PipeSpec } from "./pipe.ts"
 import type { RunResult } from "./run-inline.ts"
 
@@ -8,6 +9,7 @@ export interface SpawnRequest {
   gated?: boolean
   viaCmd?: boolean
   stdoutOnly?: boolean
+  maxOutputChars?: number
 }
 
 export interface ReleaseRequest {
@@ -28,6 +30,8 @@ export type ToWorker =
   | { type: "pipe-open"; id: number; spec: PipeSpec }
   | { type: "pipe-write"; id: number; data: string }
   | { type: "pipe-close"; id: number; graceMs: number }
+  | { type: "job-start"; id: number; spec: JobSpec }
+  | { type: "job-stop"; id: number; graceMs: number }
 
 /** Worker → main thread. */
 export type FromWorker =
@@ -41,3 +45,5 @@ export type FromWorker =
   | { type: "gone"; id: number }
   /** An event of a piped process; `exit` is its last. */
   | { type: "pipe"; id: number; event: PipeEvent }
+  /** An event of a background job; `exit` is its last. */
+  | { type: "job"; id: number; event: JobEvent }

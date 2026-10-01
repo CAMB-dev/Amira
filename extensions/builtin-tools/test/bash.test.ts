@@ -73,7 +73,7 @@ test.if(hasBash)(
         // Contain the tree but leave it running, as if a pipe holder had escaped.
         trackTree(proc) {
           real = trackProcessTree(proc)
-          return { contained: true, kill() {}, dispose() {} }
+          return { contained: true, kill() {}, terminate: () => false, dispose() {} }
         },
       })
       expect(run).toMatchObject({ exitCode: 0, timedOut: false, aborted: false, settled: false })
@@ -115,14 +115,20 @@ test("a command containing NUL is rejected clearly", async () => {
   expect(textOf(r)).toBe("command must not contain NUL characters")
 })
 
-test.if(hasBash)("large output is truncated with the full text saved to a file", async () => {
+test.if(hasBash)("large output is saved whole as an artifact and previewed", async () => {
   const r = await bashTool.execute({ command: "seq 1 20000" }, makeCtx(dir))
   const text = textOf(r)
-  expect(text).toStartWith("1\n2\n")
+  const d = r.details as { fullOutputPath?: string; artifact?: string; outputLines: number }
+  expect(d.artifact).toMatch(/^a_[0-9a-f]+$/)
+  expect(text).toStartWith(`[Output saved as artifact ${d.artifact}: `)
+  expect(text.split("\n")[1]).toBe("1")
   expect(text).toContain("20000\n\nExit code: 0")
-  const path = (r.details as { fullOutputPath?: string }).fullOutputPath
-  expect(path).toBeDefined()
-  expect(text).toContain(path!)
+  expect(text.length).toBeLessThan(9000)
+  expect(d.outputLines).toBe(20000)
+  expect(text).toContain(d.fullOutputPath!)
+  const saved = await Bun.file(d.fullOutputPath!).text()
+  expect(saved.split("\n")).toHaveLength(20000)
+  expect(saved.endsWith("19999\n20000")).toBe(true)
 })
 
 /**

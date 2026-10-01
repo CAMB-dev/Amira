@@ -10,6 +10,7 @@ import {
 } from "@amira/ai"
 import type {
   AnyEvent,
+  ApprovalPermission,
   EventEnvelope,
   Extension,
   ReloadReport,
@@ -23,8 +24,10 @@ import {
   AgentTree,
   type Approver,
   type Asker,
+  amiraHome,
   amiraPath,
   type CompactionOptions,
+  type ContextOptions,
   commandAliasWarnings,
   defaultSections,
   EventBus,
@@ -33,6 +36,8 @@ import {
   InterceptorRegistry,
   instructionsSection,
   loadInstructions,
+  Permissions,
+  type ResolvedPermissions,
   type SessionStore,
   ToolRegistry,
   toolSearchExtension,
@@ -51,6 +56,7 @@ export interface SessionOptions {
   model?: string
   /** Throw a UsageError instead of starting without a model (print mode cannot pick one). */
   requireModel?: boolean
+  autoTitle?: boolean
   cwd: string
   extensions: string[]
   /**
@@ -87,6 +93,8 @@ export interface SessionOptions {
   warnings?: string[]
   /** Delays before notices of a failed turn are sent again; for tests. Default 10, 30 and 90 s. */
   noticeRetryMs?: number[]
+  /** The permission mode and rules (resolveConfig). Default: auto mode without rules. */
+  permissions?: ResolvedPermissions
 }
 
 export interface Session {
@@ -169,6 +177,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const modelNotice = modelRef ? undefined : noModelNotice(ai)
   if (modelNotice && opts.requireModel) throw new UsageError(noModelError(ai))
   const compaction = opts.compaction ?? compactionFromSettings(ai, settings.compact)
+  const context = contextFromSettings(settings.context)
   const bus = new EventBus(opts.onSubscriberError)
   const interceptors = new InterceptorRegistry({
     onError: (point, source, error) =>
@@ -280,12 +289,28 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ...(settings.subagents?.maxConcurrent ? { maxConcurrent: settings.subagents.maxConcurrent } : {}),
     ...(settings.budget ? { budget: settings.budget } : {}),
     ...(compaction ? { compaction } : {}),
+    ...(context ? { context } : {}),
     ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
   const approve = userApprover(host.ui, {
     presenters: host.renderers,
+    tree,
     notify: (text) =>
       bus.emit("extension.notice", { source: "approval", text, level: "info" }, { sessionId: "host" }),
+  })
+  // One policy for every agent of this session and their sub-agents; its questions go to the user.
+  const resolved = opts.permissions
+  const permissions = new Permissions({
+    ...(resolved
+      ? {
+          mode: resolved.mode,
+          rules: resolved.rules,
+          warnings: resolved.warnings,
+          modeSource: resolved.modeSource,
+        }
+      : {}),
+    protect: { amiraHome: amiraHome() },
+    approver: approve,
   })
   const ask = userAsker(host.ui, tree)
   const newAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
@@ -295,6 +320,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     return new Agent({
       tree,
       approve,
+      permissions,
       ask,
       ai,
       model: m,
@@ -306,7 +332,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       interceptors,
       tools,
       ...(store ? { session: store } : {}),
+      ...(opts.autoTitle && settings.sessions?.autoTitle !== false
+        ? { autoTitle: { ...(settings.compact?.model ? { model: ai.model(settings.compact.model) } : {}) } }
+        : {}),
       ...(compaction ? { compaction } : {}),
+      ...(context ? { context } : {}),
       ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
       ...(opts.noticeRetryMs ? { noticeRetryMs: opts.noticeRetryMs } : {}),
     })
@@ -389,6 +419,20 @@ export interface ApproverOptions {
   presenters?: { get(toolName: string): ToolPresenter<any, any> | undefined }
   /** Tells the user something, e.g. that a call is allowed for the rest of the session. */
   notify?: (text: string) => void
+  /** The agent tree, to say which sub-agent a question comes from. */
+  tree?: Pick<AgentTree, "subagent">
+}
+
+/** Which mode or rule made the permission policy ask, for the dialog. */
+function permissionLine(p: ApprovalPermission): string {
+  if (p.rule) {
+    return `Permission rule ${JSON.stringify(p.rule.command)} says ${p.rule.decision} (${p.rule.scope} settings, ${p.rule.file}).`
+  }
+  if (p.cause === "protected")
+    return 'Protected file: changes to it ask in every mode ("Don\'t ask again" lifts that for this session).'
+  if (p.cause === "complex")
+    return `Permission mode "${p.mode}": the command cannot be checked against the rules word by word.`
+  return `Permission mode "${p.mode}".`
 }
 
 /**
@@ -406,9 +450,13 @@ export function userApprover(ui: UiRequests, opts: ApproverOptions = {}): Approv
     const preview = approvalPreview(request.args, opts.presenters?.get(request.name))
     // "Don't ask again" covers this tool asked about for this reason; the message says so.
     const scope = `"Don't ask again" covers ${request.name} asked about for: ${request.reason}`
-    const message = preview
-      ? `${request.reason}\n${scope}`
-      : `${request.reason}\n${rawArgs(request.args)}\n${scope}`
+    const sub = opts.tree?.subagent(request.sessionId)
+    const head = [
+      ...(sub ? [`Asked by the sub-agent "${sub.info.title}" (${sub.info.id}).`] : []),
+      ...(request.permission ? [permissionLine(request.permission)] : []),
+      request.reason,
+    ].join("\n")
+    const message = preview ? `${head}\n${scope}` : `${head}\n${rawArgs(request.args)}\n${scope}`
     const answer = await ui.ask(
       {
         kind: "confirm",
@@ -542,6 +590,20 @@ function compactionFromSettings(ai: Ai, compact: Settings["compact"]): Compactio
   if (compact.threshold !== undefined) out.threshold = compact.threshold
   if (compact.model) out.model = resolveModel(ai, compact.model)
   if (compact.layout) out.layout = compact.layout
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Settings `context` as agent options. */
+export function contextFromSettings(context: Settings["context"]): ContextOptions | undefined {
+  if (!context) return undefined
+  const out: ContextOptions = {}
+  const o = context.outputs
+  if (o?.saveAbove !== undefined) out.saveAbove = o.saveAbove
+  if (o?.previewChars !== undefined)
+    out.previewChars = Math.min(o.previewChars, o.saveAbove ?? o.previewChars)
+  if (o?.quotaMB !== undefined) out.quotaBytes = o.quotaMB * 1024 * 1024
+  if (context.dedupeReads !== undefined) out.dedupeReads = context.dedupeReads
+  if (context.aging) out.aging = { ...context.aging }
   return Object.keys(out).length ? out : undefined
 }
 

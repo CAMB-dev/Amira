@@ -50,7 +50,7 @@ Esc 只打断主轮次，其后台子 agent 会继续运行。用 `/agents stop 
 
 默认允许主 agent 下面嵌套两层子 agent，**整个 agent 树**最多同时有四个工作中的子 agent，其余任务排队。用 `subagents.maxDepth` 与 `subagents.maxConcurrent` 修改限制。等待子任务的父 agent 不占工作名额。`budget.tokens` 与 `budget.costUsd` 限制整个 agent 树，包括主 agent；默认不设预算。token 预算包含输入、输出、缓存读取和写入；费用预算依赖上报费用。预算超限会停止仍在运行的子 agent，并拒绝启动新的子 agent。
 
-子 agent 的审批请求交给父 agent 的模型决定；问题也先由父 agent 回答，父 agent 可以转交给用户。主会话审批界面见[使用说明](usage.md#工具与审批)。
+子 agent 与父 agent 使用相同的权限模式和规则，并共享你通过“Don't ask again”给出的批准。[权限策略](usage.md#权限)对子 agent 的工具调用提出询问时，问题直接交给你，而不是父 agent 的模型，因此任何 agent 都无法放宽其子 agent 的权限。扩展为子 agent 提出的审批请求仍交给父 agent 的模型决定；问题也先由父 agent 回答，父 agent 可以转交给用户。主会话审批界面见[使用说明](usage.md#工具与审批)。
 
 ## 列表与查看器
 

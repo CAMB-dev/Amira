@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import type { Settings } from "@amira/api"
 import { amiraHome, projectAmiraDir } from "../home.ts"
+import type { PermissionLayer } from "../permissions/settings.ts"
 import { deepMerge } from "./merge.ts"
 import { SettingsError, validateSettings } from "./schema.ts"
 
@@ -26,6 +27,11 @@ export interface LoadedSettings {
   warnings: string[]
   /** The files that existed and were merged, lowest precedence first. */
   files: string[]
+  /**
+   * Each layer's `permissions`, lowest precedence first: they are not merged into `settings`,
+   * since a project may only tighten them (resolvePermissions).
+   */
+  permissions: PermissionLayer[]
 }
 
 /** Settings files from lowest to highest precedence (D35). */
@@ -48,6 +54,7 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
   let settings = DEFAULT_SETTINGS
   const warnings: string[] = []
   const files: string[] = []
+  const permissions: PermissionLayer[] = []
   const [userFile] = settingsFiles(src.cwd, src.home)
   for (const file of settingsFiles(src.cwd, src.home)) {
     const raw = readJsonFile(file)
@@ -59,13 +66,25 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
       warnings.push(...dropWebEndpoints(v.settings, file, userFile as string))
       warnings.push(...dropPackageSettings(v.settings, file, userFile as string))
     }
+    if (v.settings.permissions) {
+      permissions.push({
+        scope: file === userFile ? "user" : "project",
+        file,
+        permissions: v.settings.permissions,
+      })
+      delete v.settings.permissions
+    }
     settings = deepMerge(settings, v.settings)
     files.push(file)
   }
   // Flags are typed by the argument parser and checked where they are used, so a bad one
   // is reported as a usage error rather than a settings error.
-  if (src.flags) settings = deepMerge(settings, src.flags)
-  return { settings, warnings, files }
+  if (src.flags) {
+    const { permissions: flagged, ...rest } = src.flags
+    if (flagged) permissions.push({ scope: "flags", file: "--permission-mode", permissions: flagged })
+    settings = deepMerge(settings, rest)
+  }
+  return { settings, warnings, files, permissions }
 }
 
 /** Provider keys that decide where requests and API keys go. */

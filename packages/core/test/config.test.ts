@@ -544,6 +544,17 @@ test("sub-agent settings: role models, limits, budget and the merge review thres
   expect(() => validateSettings({ budget: { costUsd: "1" } }, "f")).toThrow('"budget.costUsd"')
 })
 
+test("background job settings: how many run at once, and how much output is kept", () => {
+  const raw = { backgroundJobs: { maxRunning: 3, bufferChars: 200_000, maxLogBytes: 0 } }
+  expect(validateSettings(raw, "f")).toEqual({ settings: raw, warnings: [] })
+  expect(() => validateSettings({ backgroundJobs: { maxRunning: 0 } }, "f")).toThrow(
+    '"backgroundJobs.maxRunning"',
+  )
+  expect(() => validateSettings({ backgroundJobs: { bufferChars: 10 } }, "f")).toThrow(
+    '"backgroundJobs.bufferChars"',
+  )
+})
+
 test("tui settings: bell, title, progress, reflow and submitWhileWorking", () => {
   const raw = {
     tui: {

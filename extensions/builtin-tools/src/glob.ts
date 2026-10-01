@@ -1,9 +1,9 @@
 import { statSync } from "node:fs"
 import path from "node:path"
-import { defineTool, type GlobDetails, textResult } from "@amira/api"
+import { defineTool, type GlobDetails, outputSize, textResult } from "@amira/api"
 import { statOrNull, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
-import { truncateOutput } from "./truncate.ts"
+import { keepOutput, outputLimits } from "./truncate.ts"
 
 export const GLOB_LIMIT = 1000
 
@@ -18,7 +18,7 @@ export const globTool = defineTool<GlobParams>({
     'Find files by name with a glob pattern such as "**/*.ts" or "src/**/test_*.py".',
     "- The pattern is matched against paths relative to `path` (default: the working directory). Use `**/` to match at any depth; `*.ts` alone only matches the top level.",
     "- Supports `*`, `**`, `?`, `[abc]` and `{a,b}`. A pattern may also start with an absolute directory or `../`, which then becomes the search root.",
-    `- Returns matching file paths, newest modification time first, at most ${GLOB_LIMIT}.`,
+    `- Returns matching file paths, newest modification time first, at most ${GLOB_LIMIT}. A long list is saved whole as an artifact that output_read can read or search.`,
     "- .git and node_modules are skipped. Use grep to search file contents.",
   ].join("\n"),
   parameters: {
@@ -51,15 +51,31 @@ export const globTool = defineTool<GlobParams>({
     }
 
     matches.sort((a, b) => b.mtime - a.mtime)
-    const shown = matches.slice(0, GLOB_LIMIT).map((m) => displayPath(ctx.cwd, m.abs))
-    let text = shown.join("\n")
+    const paths = matches.map((m) => displayPath(ctx.cwd, m.abs))
+    const head = paths.slice(0, GLOB_LIMIT).join("\n")
+    const all = paths.join("\n")
+    let text = head
     if (matches.length > GLOB_LIMIT) {
       text += `\n\n(Showing the ${GLOB_LIMIT} most recently modified of ${matches.length} matches. Use a more specific pattern or path.)`
     }
-    const out = await truncateOutput(text, "glob")
+    // Every path over the size limit is saved; the preview is cut from the ones shown.
+    const out =
+      outputSize(all) > outputLimits(ctx).saveAbove
+        ? await keepOutput(ctx, {
+            text: all,
+            shown: head,
+            tool: "glob",
+            facts: [`${matches.length} files, newest first`],
+          })
+        : { text }
     return {
       content: [{ type: "text", text: out.text }],
-      details: { count: matches.length, fullOutputPath: out.fullOutputPath } satisfies GlobDetails,
+      details: {
+        count: matches.length,
+        ...("artifact" in out && out.artifact
+          ? { fullOutputPath: out.artifact.path, artifact: out.artifact.id }
+          : {}),
+      } satisfies GlobDetails,
     }
   },
 })

@@ -32,10 +32,11 @@
 | --- | --- | --- |
 | `submit` | `enter` | 发送消息；轮次运行时发送引导消息，设置 `tui.submitWhileWorking: "queue"` 后改为排队 |
 | `newline` | `shift+enter`、`ctrl+enter` | 换行 |
+| `paste.image` | `alt+v`、`ctrl+v`、`shift+insert` | 剪贴板有文本时粘贴文本，否则附加剪贴板中的图片（见[图片](usage.md#图片)）。Windows Terminal、VS Code 等终端自己占用 Ctrl+V 或 Shift+Insert 作为粘贴键；Alt+V 可以传到 Amira（macOS 上需把 Option 设为 Meta 键） |
 | `queue` | `alt+enter`、`ctrl+q`（Windows；VS Code 中 `ctrl+q` 优先） | 轮次运行时把消息排队；设置 `tui.submitWhileWorking: "queue"` 后改为引导 |
 | `submit.steer` | 无 | 发送消息；运行期间始终用于引导 |
 | `submit.queue` | 无 | 发送消息；运行期间始终用于排队 |
-| `interrupt` | `escape` | 有命令正在运行时先取消命令并保留输入；否则中断轮次。有等待中的引导或排队消息时，按原输入顺序合并并立即发送。连续按两次（空闲时也可以）打开回退选择器，按时间倒序列出用户消息；选中消息及其后续对话会被移除，选中消息回到输入框供修改。不会恢复文件 |
+| `interrupt` | `escape` | 有命令正在运行时先取消命令并保留输入；否则中断轮次。有等待中的引导或排队消息时，按原输入顺序合并并立即发送。连续按两次（空闲时也可以）打开回退选择器，按时间倒序列出用户消息；选中消息及其后续对话会被移除，选中消息回到输入框供修改。按 `f` 则从该消息之前分支到新会话，当前会话保持完整。不会恢复文件 |
 | `cancel` | `ctrl+c` | 有命令正在运行时先取消命令并保留输入；否则在运行时中断轮次；等待消息的处理与 `interrupt` 相同。空闲时先清空输入，输入已空则退出 |
 | `exit` | `ctrl+d` | 输入为空且没有轮次运行时退出 |
 | `redraw` | `ctrl+l` | 清屏并重新绘制最新对话记录和输入框 |
@@ -44,6 +45,7 @@
 | `history.search` | `ctrl+r` | 搜索提示词历史 |
 | `tool-output` | `ctrl+o` | 切换工具结果的显示量，与 `/verbose` 相同 |
 | `panels.toggle` | `ctrl+t` | 把活动行上方的实时面板折叠为一行，或展开 |
+| `permissions.mode` | `shift+tab` | 依次切换[权限模式](usage.md#权限)：`auto`、`edits`（修改文件不询问，运行 shell 命令前询问）、`plan`（只读）。提示栏会说明新模式的作用；非 `auto` 模式显示在输入框边框中的模型名旁边。对整个会话生效，包括子 agent |
 | `copy.reply` | `alt+c` | 将会话最后一条回复按 Markdown 复制到剪贴板，两种界面模式都可用 |
 | `help` | `?` | 输入为空且没有对话框或列表时打开按键参考；输入有文本时作为普通字符输入 |
 | `edit.kill-to-start` | `ctrl+u` | 剪切行首到光标的文本；在行首则剪切前一个换行 |
@@ -84,6 +86,8 @@
 分区列表可能为不同分区提供额外按键，以提示行为准。`/agents` 中选中子 agent 后按 Enter 打开实时查看器，按 `p` 将其对话记录打印到主对话中；选中保留的 worktree 后按 Enter 查看 diff，再决定合并、保留或丢弃。
 
 在 `/ext` 中，Enter 管理选中的已安装扩展，或从索引安装选中的扩展；`d` 显示选中扩展的详情。直接输入可以过滤列表，过滤框有文字后 `d` 也会作为过滤文字。安装和更新期间输入框仍可使用，并显示实时进度面板。不在对话框或补全列表中时，Esc（`interrupt`）或 Ctrl+C（`cancel`）取消正在运行的命令并保留草稿，已完成的改动保持安装状态。提示行使用当前的快捷键绑定。改动在空闲时运行 `/reload` 后生效。
+
+在 `/resume` 中直接输入会搜索标题和对话内容，匹配的文字显示在每行下方；Ctrl+D 在确认后删除选中的会话。
 
 确认对话框默认不选中任何选项，先用方向键选择，Enter 才会确认，避免原本在消息中输入的按键误答授权。默认没有直接确认的单键，`dialog.yes` 需要自行绑定。授权对话框中的 Esc 会拒绝调用并停止轮次。
 
@@ -167,7 +171,7 @@ VS Code 自己处理 Ctrl+F、Ctrl+Home、Ctrl+End 和 Ctrl+↑↓（它们在 V
 | 设置 | 默认值 | 行为 |
 | --- | --- | --- |
 | `tui.mode` | `"fullscreen"` | `"fullscreen"` 使用 alternate screen，由 Amira 滚动、查找、折叠和复制，窗口改变时重绘，退出或崩溃时打印到普通屏幕；`"inline"` 将完成的输出留在终端滚动历史中。`--inline` 和 `--fullscreen` 优先 |
-| `tui.title` | `true` | 设置终端标题 `Amira · <folder> ⎇ <branch>`，运行期间显示 `●`，退出时恢复旧标题。标题栏使用系统字体，输入框状态不使用部分终端字体缺少的 `⎇` |
+| `tui.title` | `true` | 设置终端标题 `Amira · <folder> ⎇ <branch>`（会话有标题后用标题代替目录名），运行期间显示 `●`，退出时恢复旧标题。标题栏使用系统字体，输入框状态不使用部分终端字体缺少的 `⎇` |
 | `tui.progress` | `true` | 运行时显示终端标签或任务栏进度，对话框等待时显示暂停状态；使用 OSC 9;4，支持终端包括 Windows Terminal、ConEmu、VS Code、Ghostty |
 | `tui.bell` | `true` | 终端在后台时，轮次结束或对话框打开会响铃；无法报告焦点的终端中，只在持续至少 15 秒的轮次之后响铃 |
 | `tui.reflow` | `"auto"` | inline 模式中，`"off"` 用于缩窄时不会重新折行的终端，以避免擦除输入框上方的记录；`"auto"` 和 `"on"` 假定终端会重新折行 |

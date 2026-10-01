@@ -232,8 +232,9 @@ function wrapParagraph(tokens: Token[], width: number): Token[][] {
         breakAt = -1
         continue
       }
-      // Break only when the head has text; a head of bare escapes would be a blank line.
-      if (breakAt > 0 && line.slice(0, breakAt).some((x) => !x.ansi)) {
+      // Break only when the head takes cells: a head of bare escapes or zero-width text (a
+      // lone combining mark, U+200B) would be a blank line and leave the tail too wide.
+      if (breakAt > 0 && line.slice(0, breakAt).some((x) => x.width > 0)) {
         const head = line.slice(0, breakAt)
         const tail = line.slice(breakIsSpace ? breakAt + 1 : breakAt)
         lines.push(head)

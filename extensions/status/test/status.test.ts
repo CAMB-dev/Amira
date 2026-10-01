@@ -363,6 +363,44 @@ test("the cost adds up the replies that have one", async () => {
   expect(item(host, "cost")?.text).toBe("$0.012")
 })
 
+test("unpriced server searches keep the status cost unknown until a new session", async () => {
+  const bus = new EventBus()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
+  await host.load(statusExtension, "builtin:status")
+  const meta = { sessionId: "s" }
+  const model = { provider: "p", model: "m" }
+  bus.emit("budget.update", { tokens: 100, costUsd: 0.01 }, meta)
+  bus.emit(
+    "message.end",
+    {
+      message: {
+        role: "assistant",
+        model,
+        content: [{ type: "serverTool", id: "s", name: "web_search", input: {}, status: "done" }],
+        usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, webSearchRequests: 1 },
+      },
+    },
+    meta,
+  )
+  bus.emit(
+    "message.end",
+    {
+      message: {
+        role: "assistant",
+        model,
+        content: [],
+        usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0.02 },
+      },
+    },
+    meta,
+  )
+  await bus.flush()
+  expect(item(host, "cost")?.text).toBe("cost unknown")
+  bus.emit("session.start", { model, cwd: process.cwd(), reason: "clear" }, meta)
+  await bus.flush()
+  expect(item(host, "cost")).toBeUndefined()
+})
+
 test("sub-agents add to the cost, but do not change the rest of the status", async () => {
   const bus = new EventBus()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })

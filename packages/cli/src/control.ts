@@ -1,10 +1,12 @@
 import { existsSync, statSync } from "node:fs"
+import path from "node:path"
 import { isNoModel, userMessage } from "@amira/ai"
 import { type AssistantMessage, type SessionControl, type ShellMode, USER_STOP_REASON } from "@amira/api"
 import {
   type Agent,
   CommandHost,
   createExtensionAdmin,
+  deleteSession,
   FILE_REWIND_COVERAGE,
   findSession,
   listSessions,
@@ -32,7 +34,7 @@ export interface ControlOptions {
   /** The user's command aliases (settings commandAliases). */
   aliases?: Record<string, string>
   /** Announces a session the commands switched to, e.g. agent.start() plus git tracking. */
-  announce?: (agent: Agent, reason: "resume" | "clear") => void
+  announce?: (agent: Agent, reason: "resume" | "clear" | "fork") => void
 }
 
 /**
@@ -55,13 +57,14 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
   }
 
   const agent = () => host.agent
+  const directory = () => (agent().session ? path.dirname(agent().session!.file) : undefined)
   const idle = (what: string) => {
     const a = agent()
     if (!a.busy) return
     const running = a.turnId ? "a turn" : `a ${a.holdingFor ?? "compaction"}`
     throw new Error(`${running} is running; ${what} after it ends (or press Esc to stop it)`)
   }
-  const switchTo = (next: Agent, reason: "resume" | "clear") => {
+  const switchTo = (next: Agent, reason: "resume" | "clear" | "fork") => {
     // Nobody reads the old conversation any more: no resend of its held notices.
     agent().cancelNoticeRetry()
     host.switchTo(next)
@@ -96,6 +99,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       const file = a.session?.file
       return {
         id: a.sessionId,
+        ...(a.session?.title ? { title: a.session.title } : {}),
         cwd: a.cwd,
         model: { provider: a.model.provider, model: a.model.id },
         contextWindow: a.model.contextWindow,
@@ -104,6 +108,22 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         ...(file && existsSync(file) ? { file } : {}),
         busy: a.busy,
         shell,
+        permissions: { mode: a.permissions.mode, rules: a.permissions.rules.length },
+      }
+    },
+    permissions: () => {
+      const p = agent().permissions
+      return {
+        mode: p.mode,
+        modeSource: p.modeSource,
+        rules: p.rules.map((r) => ({
+          command: [...r.command],
+          decision: r.decision,
+          ...(r.reason ? { reason: r.reason } : {}),
+          scope: r.source.scope,
+          file: r.source.file,
+        })),
+        warnings: [...p.warnings],
       }
     },
     messages: () => agent().messages,
@@ -116,6 +136,10 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       return all.filter((m): m is AssistantMessage => m.role === "assistant")
     },
     compactions: () => agent().compactionUsage,
+    sideRequests: () =>
+      (agent().session?.entries ?? []).flatMap((e) =>
+        e.type === "side_usage" ? [{ model: e.model, usage: e.usage }] : [],
+      ),
     subagents: () => listSubagents(agent(), session.tree).map((e) => e.info),
     subagentMessages: (id) => subagentMessages(agent(), session.tree, id),
     stopSubagent: (id) =>
@@ -144,19 +168,21 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     },
     newSession: async () => {
       idle("start a new session")
-      switchTo(session.resume(SessionStore.create({ cwd }), agent().model), "clear")
+      switchTo(session.resume(SessionStore.create({ cwd, dir: directory() }), agent().model), "clear")
     },
     sessions: () =>
-      listSessions(cwd).map((s) => ({
+      listSessions(cwd, directory()).map((s) => ({
         id: s.id,
         updatedAt: s.updatedAt,
         firstUserText: s.firstUserText,
+        ...(s.title ? { title: s.title } : {}),
+        searchText: s.searchText,
         messageCount: s.messageCount,
       })),
     readSession: (id) => {
       // The current session from memory: its file may lag behind (or have stopped saving).
       const live = id === agent().sessionId ? agent().session : undefined
-      const file = live?.file ?? findSession(cwd, id)
+      const file = live?.file ?? findSession(cwd, id, directory())
       if (!file) return undefined
       let store: SessionStore
       let updatedAt: number
@@ -181,9 +207,35 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     resume: async (id) => {
       idle("resume another session")
       if (id === agent().sessionId) throw new Error(`already in session ${id}`)
-      const file = findSession(cwd, id)
+      const file = findSession(cwd, id, directory())
       if (!file) throw new Error(`no session ${id} in ${cwd}`)
       switchTo(session.resume(SessionStore.open(file), agent().model), "resume")
+    },
+    rename: (title) => {
+      const a = agent()
+      if (!a.session) throw new Error("this session is not stored")
+      a.session.rename(title)
+      a.bus.emit("session.title", { title: a.session.title! }, { sessionId: a.sessionId })
+    },
+    deleteSession: async (id) => {
+      idle("delete a session")
+      deleteSession(cwd, id, agent().sessionId, directory())
+    },
+    fork: async (index) => {
+      idle("fork the conversation")
+      const a = agent()
+      const store = a.session
+      if (!store) throw new Error("this session is not stored")
+      let target = store.leafId
+      if (index !== undefined) {
+        const message = Number.isInteger(index) ? a.messages[index] : undefined
+        if (message?.role !== "user") throw new Error(`message ${index} is not a user message`)
+        const id = a.entryId(message)
+        const entry = id ? store.get(id) : undefined
+        if (entry?.type !== "message") throw new Error("that message was summarized by a compaction")
+        target = entry.parentId
+      }
+      switchTo(session.resume(store.fork(target), a.model), "fork")
     },
     planRewind: (index) => {
       const { a, entry } = rewindEntry(index)
@@ -320,6 +372,26 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       },
     }),
     preview: () => agent().preview(),
+    artifacts: {
+      usage: () => {
+        const a = agent()
+        const u = a.artifactUsage()
+        return {
+          active: u.active.length,
+          inactive: u.inactive.length,
+          unused: u.unused.length,
+          pruned: u.pruned.length,
+          bytes: u.bytes,
+          quotaBytes: a.artifacts.quotaBytes,
+          dir: a.artifacts.dir,
+        }
+      },
+      prune: async (scope) => {
+        // A running turn may have saved outputs its results do not mention yet, or be reading one.
+        idle("prune artifacts")
+        return agent().pruneArtifacts(scope)
+      },
+    },
     reloadExtensions: async () => {
       // Unloading drops tools and MCP connections a running tool call may still be using.
       idle("reload extensions")

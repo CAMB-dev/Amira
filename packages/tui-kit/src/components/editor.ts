@@ -2,8 +2,22 @@ import { type Component, CURSOR_MARKER, type RenderContext } from "../component.
 import { type InputEvent, isNewlineKey, isSubmitKey } from "../keys.ts"
 import { graphemes, TAB_WIDTH, textWidth, truncateToWidth, visibleWidth } from "../width.ts"
 
-/** A piece of editor content: typed text, or a pasted text folded into one placeholder. */
-export type EditorPart = string | { paste: string }
+/** Editor content: text, a folded paste, or an image kept as one placeholder. */
+export type EditorPart = string | { paste: string } | { image: EditorImage }
+
+export interface EditorImage {
+  name: string
+  mimeType: string
+  data: string
+}
+
+export function imageLabel(image: EditorImage, n: number): string {
+  const bytes =
+    Math.floor((image.data.length * 3) / 4) -
+    (image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0)
+  const size = bytes < 1024 ? `${bytes} B` : `${Math.ceil(bytes / 1024)} KB`
+  return `[image ${n}: ${image.name.replace(/\p{Cc}/gu, " ")} ${size}]`
+}
 
 /** What a folded paste's placeholder says. */
 export interface PasteInfo {
@@ -65,6 +79,7 @@ interface LineLayout {
 
 interface Paste {
   text: string
+  part: Exclude<EditorPart, string>
   label: string
   width: number
 }
@@ -76,6 +91,7 @@ interface Snapshot {
   col: number
   pastes: Map<string, Paste>
   nextPaste: number
+  nextImage: number
   nextToken: number
 }
 
@@ -136,6 +152,7 @@ export class Editor implements Component {
   private textCache: string | undefined
   private pastes = new Map<string, Paste>()
   private nextPaste = 1
+  private nextImage = 1
   private nextToken = TOKEN_BASE
   private changes = 0
   private readonly promptWidth: number
@@ -154,7 +171,7 @@ export class Editor implements Component {
     this.promptWidth = visibleWidth(opts.prompt ?? "")
   }
 
-  /** The text, folded pastes expanded. Cached until the next change. */
+  /** The text, folded pastes expanded and images omitted. Cached until the next change. */
   getText(): string {
     if (this.textCache === undefined) {
       const joined = this.lines.join("\n")
@@ -179,7 +196,7 @@ export class Editor implements Component {
       const paste = this.pastes.get(m[0])
       if (!paste) continue
       if (m.index > last) parts.push(joined.slice(last, m.index))
-      parts.push({ paste: paste.text })
+      parts.push(paste.part)
       last = m.index + m[0].length
     }
     if (last < joined.length) parts.push(joined.slice(last))
@@ -194,7 +211,7 @@ export class Editor implements Component {
     this.record("other")
     this.resetPastes()
     const text = parts
-      .map((p) => (typeof p === "string" ? escapeTokens(normalize(p)) : this.addPaste(normalize(p.paste))))
+      .map((p) => (typeof p === "string" ? escapeTokens(normalize(p)) : this.addPart(p)))
       .join("")
     this.replaceAll(text.split("\n"))
     this.line = this.lines.length - 1
@@ -294,7 +311,24 @@ export class Editor implements Component {
 
   /** Inserts `text` folded into one placeholder at the caret. */
   insertPaste(text: string): void {
-    this.insertRaw(this.addPaste(normalize(text)))
+    this.record("other")
+    this.batching = true
+    try {
+      this.insertRaw(this.addPaste(normalize(text)))
+    } finally {
+      this.batching = false
+    }
+  }
+
+  /** Inserts an image as one editable placeholder; getParts keeps its payload. */
+  insertImage(image: EditorImage): void {
+    this.record("other")
+    this.batching = true
+    try {
+      this.insertRaw(this.addPart({ image }))
+    } finally {
+      this.batching = false
+    }
   }
 
   /**
@@ -412,7 +446,7 @@ export class Editor implements Component {
     try {
       for (const p of parts) {
         if (typeof p === "string") this.insertRaw(escapeTokens(normalize(p)))
-        else this.insertRaw(this.addPaste(normalize(p.paste)))
+        else this.insertRaw(this.addPart(p))
       }
     } finally {
       this.batching = false
@@ -478,23 +512,37 @@ export class Editor implements Component {
 
   /** Registers a folded paste and returns the character that stands for it. */
   private addPaste(text: string): string {
+    return this.addPart({ paste: text })
+  }
+
+  private addPart(part: Exclude<EditorPart, string>): string {
     let cp = this.nextToken
     // Skip characters still in use once the range wraps around (only after 1M placeholders).
     while (this.pastes.has(String.fromCodePoint(cp))) cp = cp >= TOKEN_LAST ? TOKEN_BASE : cp + 1
     this.nextToken = cp >= TOKEN_LAST ? TOKEN_BASE : cp + 1
     const token = String.fromCodePoint(cp)
-    const label = (this.opts.pasteLabel ?? defaultPasteLabel)({
-      lines: lineCount(text),
-      chars: text.length,
-      n: this.nextPaste++,
+    const text = "paste" in part ? normalize(part.paste) : ""
+    const label =
+      "image" in part
+        ? imageLabel(part.image, this.nextImage++)
+        : (this.opts.pasteLabel ?? defaultPasteLabel)({
+            lines: lineCount(text),
+            chars: text.length,
+            n: this.nextPaste++,
+          })
+    this.pastes.set(token, {
+      text,
+      part: "paste" in part ? { paste: text } : part,
+      label,
+      width: visibleWidth(label),
     })
-    this.pastes.set(token, { text, label, width: visibleWidth(label) })
     return token
   }
 
   private resetPastes(): void {
     this.pastes.clear()
     this.nextPaste = 1
+    this.nextImage = 1
     this.nextToken = TOKEN_BASE
   }
 
@@ -539,6 +587,7 @@ export class Editor implements Component {
       col: this.col,
       pastes: new Map(this.pastes),
       nextPaste: this.nextPaste,
+      nextImage: this.nextImage,
       nextToken: this.nextToken,
     }
   }
@@ -549,6 +598,7 @@ export class Editor implements Component {
     this.col = s.col
     this.pastes = new Map(s.pastes)
     this.nextPaste = s.nextPaste
+    this.nextImage = s.nextImage
     this.nextToken = s.nextToken
     this.lastEdit = undefined
     this.changed()
@@ -610,7 +660,7 @@ export class Editor implements Component {
       const paste = this.pastes.get(m[0])
       if (!paste) continue
       if (m.index > last) parts.push(joined.slice(last, m.index))
-      parts.push({ paste: paste.text })
+      parts.push(paste.part)
       last = m.index + m[0].length
     }
     if (last < joined.length) parts.push(joined.slice(last))
