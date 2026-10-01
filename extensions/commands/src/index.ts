@@ -25,6 +25,7 @@ import {
 } from "./format.ts"
 import { providerCommand } from "./provider-command.ts"
 
+export { extensionCommand } from "./ext-command.ts"
 export {
   cacheHitRate,
   contextReport,

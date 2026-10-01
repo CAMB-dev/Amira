@@ -32,9 +32,9 @@ import {
   InterceptorRegistry,
   ToolRegistry,
 } from "@amira/core"
+import { extensionCommand } from "@amira/ext-commands"
 import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
-import { extensionCommand } from "../../../extensions/commands/src/ext-command.ts"
 import { plain } from "../../tui-kit/test/context.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
@@ -3388,7 +3388,6 @@ test("inline: a renderer's image goes to the image providers; a renderer that th
 })
 
 test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at 120/60 columns in both modes", async () => {
-  const samples: Record<string, string> = {}
   for (const mode of ["fullscreen", "inline"] as const)
     for (const cols of [120, 60])
       for (const stop of ["\x1b", "\x03"]) {
@@ -3458,7 +3457,6 @@ test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at
         expect(live()).not.toContain("Ctrl+C cancel command")
         terminal.send("draft stays available")
         await waitFor(() => live().includes("draft stays available"), `${mode}/${cols}: responsive draft`)
-        samples[`${mode}-${cols}`] = live()
         progress({ name: "fixture", phase: "extracting", detail: "local fixture repository" })
         await waitFor(() => live().includes("extracting"), `${mode}/${cols}: extracting`)
         terminal.send(stop)
@@ -3475,8 +3473,6 @@ test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at
         terminal.send("\x04")
         await exited
       }
-  if (process.env.TUI_EXT_CAPTURE)
-    writeFileSync(process.env.TUI_EXT_CAPTURE, JSON.stringify(samples, null, 2))
 })
 
 test("extension picker sections filter and show details at 120/60 columns in both modes", async () => {
