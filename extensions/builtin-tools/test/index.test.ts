@@ -34,7 +34,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     provideService: () => () => {},
     useService: () => undefined,
     requestRender: () => {},
-    settings: {},
+    settings: { layers: () => [] },
     backgroundJobs: hostBackgroundJobs(),
     on: () => () => {},
     intercept: () => () => {},

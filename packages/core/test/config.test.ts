@@ -68,6 +68,12 @@ test("layers flags over local, project, user settings and defaults", () => {
   const r = loadSettings({ cwd, home, flags: { shell: "bash" } })
   expect(r.files).toEqual([userFile(), projectFile(), localFile()])
   expect(r.warnings).toEqual([])
+  expect(r.layers.model).toEqual([
+    { scope: "user", file: userFile(), value: "u/m" },
+    { scope: "project", file: projectFile(), value: "p/m" },
+    { scope: "project-local", file: localFile(), value: "l/m" },
+  ])
+  expect(r.layers.shell).toEqual([{ scope: "flags", file: "--flags", value: "bash" }])
   expect(r.settings).toEqual({
     model: "l/m",
     shell: "bash",
@@ -500,11 +506,17 @@ test("extensions see the merged settings", async () => {
     interceptors: new InterceptorRegistry(),
     tools: new ToolRegistry(),
     settings: { mcpServers: { fs: { command: "x" } } },
+    settingsLayers: {
+      mcpServers: [{ scope: "project", file: "project/settings.json", value: { fs: { command: "x" } } }],
+    },
   })
   await host.load((api) => {
-    seen = api.settings.mcpServers
+    seen = { merged: api.settings.mcpServers, layers: api.settings.layers("mcpServers") }
   }, "t")
-  expect(seen).toEqual({ fs: { command: "x" } })
+  expect(seen).toEqual({
+    merged: { fs: { command: "x" } },
+    layers: [{ scope: "project", file: "project/settings.json", value: { fs: { command: "x" } } }],
+  })
 })
 
 test("an extension cannot change the settings another extension reads", async () => {

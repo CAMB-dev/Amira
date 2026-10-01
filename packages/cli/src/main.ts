@@ -142,6 +142,11 @@ async function run(argv: string[]): Promise<number> {
     shell: config.shell,
     requestedDisabled: config.requestedDisabled,
     settings: config.settings,
+    settingsLayers: config.settingsLayers,
+    reloadSettings: () => {
+      const reloaded = resolveConfig(args)
+      return { settings: reloaded.settings, layers: reloaded.settingsLayers }
+    },
     permissions: config.permissions,
     providers: config.providers,
     apiKeys: config.apiKeys,

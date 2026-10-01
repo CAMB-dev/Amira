@@ -3,7 +3,7 @@ import { afterAll, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { expand, isTrusted, parseServers, readMcpConfig } from "../src/config.ts"
+import { expand, isTrusted, parseServers, readMcpConfig, readMcpSettings } from "../src/config.ts"
 import { mcpToolName, toToolResult } from "../src/tools.ts"
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-mcp-config-"))
@@ -66,6 +66,47 @@ test("reads mcpServers from .mcp.json and both settings files; Amira's settings 
     TOKEN: "t",
   })
   expect(args.servers[0]).toMatchObject({ command: "b", args: ["--t", "t"] })
+})
+
+test("host-provided layers keep user servers trusted and project servers gated", () => {
+  const cwd = path.join(tmp, "layered")
+  const home = path.join(tmp, "layered-home")
+  const userFile = path.join(home, "settings.json")
+  const projectFile = path.join(cwd, ".amira", "settings.json")
+  const layers = [
+    {
+      scope: "user" as const,
+      file: userFile,
+      value: {
+        user: { command: "user-${TOKEN}" },
+        shared: { command: "user-shared" },
+      },
+    },
+    {
+      scope: "project" as const,
+      file: projectFile,
+      value: {
+        evil: { command: "project-${TOKEN}" },
+        shared: { command: "project-shared" },
+      },
+    },
+  ]
+  const trustedLayers = [
+    { scope: "user" as const, file: userFile, value: [] },
+    { scope: "project" as const, file: projectFile, value: [cwd] },
+  ]
+  const untrusted = readMcpSettings(layers, trustedLayers, cwd, home, { TOKEN: "secret" })
+  expect(untrusted.servers.map((s) => s.name)).toEqual(["user", "shared"])
+  expect(untrusted.servers.find((s) => s.name === "user")).toMatchObject({ command: "user-secret" })
+  expect(untrusted.servers.find((s) => s.name === "shared")).toMatchObject({ command: "user-shared" })
+  expect(untrusted.problems[0]).toContain('not starting MCP server "evil"')
+
+  const trusted = readMcpSettings(layers, [{ scope: "user", file: userFile, value: [cwd] }], cwd, home, {
+    TOKEN: "secret",
+  })
+  expect(trusted.problems).toEqual([])
+  expect(trusted.servers.map((s) => s.name)).toEqual(["user", "evil", "shared"])
+  expect(trusted.servers.find((s) => s.name === "shared")).toMatchObject({ command: "project-shared" })
 })
 
 test("an untrusted project's stdio servers do not start and its entries get no variables", () => {

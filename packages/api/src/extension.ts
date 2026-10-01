@@ -13,7 +13,7 @@ import type { PanelDefinition } from "./panels.ts"
 import type { OpenPipeOptions, PipeProcess, RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { ImageProvider, MarkdownRendererDefinition } from "./render.ts"
 import type { ServiceName, ServiceOf } from "./services.ts"
-import type { Settings } from "./settings.ts"
+import type { SettingsView } from "./settings.ts"
 import type { SkillDefinition } from "./skills.ts"
 import type { ToolPresenter } from "./tool-renderers.ts"
 import type { ToolDefinition } from "./tools.ts"
@@ -105,8 +105,8 @@ export interface ExtensionAPI {
   useService<K extends ServiceName>(name: K): ServiceOf<K> | undefined
   /** Asks frontends to redraw, e.g. after a status item's or a panel's state changed. */
   requestRender(): void
-  /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */
-  readonly settings: Readonly<Settings>
+  /** The merged settings (D35) and explicit source layers, e.g. for mcpServers trust checks. */
+  readonly settings: SettingsView
   /** Host-level background jobs for panels and frontends; model tools receive a session-scoped view. */
   readonly backgroundJobs: BackgroundJobHost
   /**

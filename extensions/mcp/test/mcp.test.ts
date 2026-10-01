@@ -1,4 +1,6 @@
 import { afterAll, expect, test } from "bun:test"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import type { AnyEvent, ToolResultMessage } from "@amira/api"
 import { createAi, createMockDialect, type MockStep } from "../../../packages/ai/src/index.ts"
@@ -72,6 +74,64 @@ async function harness(servers: ServerConfig[], steps: MockStep[] = [], opts: Mc
   }
   return { agent, mock, tools, mcp, errors }
 }
+
+test(
+  "host settings layers reload MCP servers without restarting unchanged connections",
+  async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "amira-mcp-reload-"))
+    const file = (name: string) => path.join(dir, `${name}.pid`)
+    const userFile = path.join(dir, "settings.json")
+    const named = (pidFile: string) => {
+      return { command: process.execPath, args: [FIXTURE, "stdio"], env: { FIXTURE_PID_FILE: pidFile } }
+    }
+    const layers = (servers: Record<string, unknown>) => ({
+      mcpServers: [{ scope: "user" as const, file: userFile, value: servers }],
+    })
+    const bus = new EventBus()
+    const host = new ExtensionHost({
+      bus,
+      interceptors: new InterceptorRegistry(),
+      tools: new ToolRegistry(),
+      cwd: import.meta.dir,
+      settings: {},
+      settingsLayers: layers({
+        keep: named(file("keep-before")),
+        remove: named(file("remove")),
+        change: named(file("change-before")),
+      }),
+    })
+    const mcp = createMcpExtension({ connectTimeoutMs: 5000 })
+    try {
+      expect(await host.load(mcp, "builtin:mcp")).toBe(true)
+      await mcp.settled()
+      const keepPid = readFileSync(file("keep-before"), "utf8")
+      const changePid = readFileSync(file("change-before"), "utf8")
+      expect(mcp.servers().map((s) => s.name)).toEqual(["keep", "remove", "change"])
+
+      host.unloadAll()
+      host.setSettings(
+        {},
+        layers({
+          keep: named(file("keep-before")),
+          add: named(file("add")),
+          change: named(file("change-after")),
+        }),
+      )
+      expect(await host.load(mcp, "builtin:mcp")).toBe(true)
+      await mcp.settled()
+
+      expect(readFileSync(file("keep-before"), "utf8")).toBe(keepPid)
+      expect(readFileSync(file("change-after"), "utf8")).not.toBe(changePid)
+      expect(existsSync(file("add"))).toBe(true)
+      expect(mcp.servers().map((s) => s.name)).toEqual(["keep", "add", "change"])
+      expect(host.loaded).toEqual(["builtin:mcp"])
+    } finally {
+      await mcp.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  },
+  SLOW,
+)
 
 /**
  * The rejection message. `expect(p).rejects` is avoided on purpose: while it waits, bun test
