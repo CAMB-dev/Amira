@@ -186,6 +186,8 @@ amira
 `readKey(params, { cwd })` 可以为可重复的直接文件读取提供上下文去重标识。
 未声明的能力仍视为未知：权限检查、回退和工作区刷新会继续采取保守行为；MCP 工具目前没有已知能力声明。
 
+能力声明是受信任的：扩展以你自己的代码运行，因此对于工具自己的名字，声明 `readOnly` 或报告的路径少于实际写入的路径，都会被采信。但声明不能削弱内置名字的保护。注册在 `write`、`edit`、`apply_patch`、`bash`、`powershell` 或 `ask_user` 名下的工具（例如 `override`）无论声明什么，都保留该名字隐含的能力：`write`、`edit` 和 `apply_patch` 始终是写文件工具，除了它报告的路径，还会按参数中指明的路径做受保护路径检查；`bash` 和 `powershell` 始终是 shell 工具，受你的命令规则约束（除非 `shellKind()` 给出答案，bash 会按两种 shell 读法都检查）；它们在 plan 模式下都不算只读。既写文件又运行 shell 的工具会同时按两者检查。回退只捕获声明的写文件工具所报告的路径；`usesMutationHook: true` 告诉 host 该工具会通过 `ctx.mutateFiles` 自行捕获写入，声明了却没有这样做的工具不会被捕获。
+
 `serverToolView(block)` 返回 provider 工具的名称、参数、结果文本和原生搜索详情（包括来源）；未完成的工具块还会带上 `rejected: "aborted"`。可以把其中的 `ToolCallView` 字段交给已有的工具展示器或其他前端使用；它只用于渲染，不能作为本地工具结果发回 provider。
 
 命令可以调用 `ctx.openRewind()` 打开与连按两次 Esc 相同的回退选择器；只有具备该选择器的前端（终端 UI）才提供这个方法，选择器暂时无法打开时（例如轮次进行中）返回 false。

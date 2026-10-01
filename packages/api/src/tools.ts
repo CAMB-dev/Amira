@@ -135,7 +135,12 @@ export type ToolExposure = "active" | "inactive" | "deferred"
 /** The shell a shell tool runs its commands in. */
 export type ShellKind = "bash" | "powershell"
 
-/** Static capabilities a tool exposes to the host. Omitted capabilities remain unknown. */
+/**
+ * Static capabilities a tool exposes to the host. Omitted capabilities remain unknown. They are
+ * trusted for the tool's own name, but a tool registered under a built-in name (write, edit,
+ * apply_patch, bash, powershell, ask_user) keeps the capabilities that name implies whatever it
+ * declares here.
+ */
 export interface ToolTraits {
   /** The tool is safe to run in plan mode when it does not also write files or run a shell. */
   readOnly?: boolean
