@@ -79,7 +79,7 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 
 用 `&&`、`||`、`;`、`|` 或换行连接的命令会被拆开，逐个检查。Amira 无法逐词检查的命令一律改为询问：`$(...)` 和反引号等替换、变量、重定向到文件、here-document 和 here-string、分组、文件名通配符（`*`、`?`、`[...]`）、会运行其他命令的包装命令（`eval`、`sudo`、`xargs`、`bash -c`、`Invoke-Expression`、`Start-Process`、各类解释器）、定义别名的命令（`alias`、`Set-Alias`、`git -c`、`git config alias.*`）以及脚本。在 `auto` 模式下，只要没有 `ask` 或 `deny` 规则，这类命令仍然直接运行。命令按实际运行它的 shell 解析：bash 或 PowerShell，包括 `bash` 工具在 Windows 上退回 PowerShell 的情况。
 
-shell 工具已经从工作目录启动命令，只有需要进入其他目录时才使用 `cd`。bash 的前台和后台命令都启用 `pipefail`，因此管道中的任一组件失败都会保留非零状态：测试失败时 `bun test | tail` 也会失败。相应的代价是：读取方提前停止读取时（例如 `git log | head`），被截断的命令会让整个管道以 141（SIGPIPE）退出，后面的 `&&` 也不会执行。PowerShell 没有 `pipefail`，但其包装器会在原生命令管道中保留失败原生命令的 `$LASTEXITCODE`；cmdlet 管道遵循 PowerShell 的 `$?` 规则。
+shell 工具已经从工作目录启动命令，只有需要进入其他目录时才使用 `cd`。bash 的前台和后台命令都启用 `pipefail`，因此管道中的任一组件失败都会保留非零状态：测试失败时 `bun test | tail` 也会失败。如果管道最后一个命令成功，前面的命令只有成功或因读取方提前停止而收到 SIGPIPE（141），例如 `git log | head`，Amira 会将其视为成功；其他非零管道状态仍然失败。PowerShell 没有 `pipefail`，但其包装器会在原生命令管道中保留失败原生命令的 `$LASTEXITCODE`；cmdlet 管道遵循 PowerShell 的 `$?` 规则。
 
 规则只决定 Amira 询问还是拒绝，并不是沙箱。命令仍可能通过其他途径调用被拒绝的程序，例如程序的副本或链接，或模型之前写好的脚本。`deny` 适合拦住值得阻止的失误，不能当作安全边界。
 
@@ -107,7 +107,7 @@ shell 工具已经从工作目录启动命令，只有需要进入其他目录�
 | 不打开界面删除已保存的会话 | `amira sessions rm <session-id>`（其他目录加 `-C <dir>`） |
 | 立即压缩较早的上下文 | `/compact` 或 `/compact <instructions>` |
 
-`-c` 与 `-r` 不能同时使用。会话 ID 以 `s_` 开头，请使用列表中的实际 ID。`/clear` 创建新会话，原会话仍可恢复。`/resume` 保留当前选中的模型；如果尚未选择模型，可以使用会话原来的模型。切换会话会停止旧对话的后台任务。
+`-c` 与 `-r` 不能同时使用。会话 ID 以 `s_` 开头，请使用列表中的实际 ID。`/clear` 创建新会话，原会话仍可恢复。`/resume` 保留当前选中的模型；如果尚未选择模型，可以使用会话原来的模型。顶层后台任务会跨越 `/clear`、`/resume` 和 `/fork` 继续运行，新会话可以列出、读取和停止它们；子 agent 所有的任务仍会在该子 agent 结束时停止。Amira 退出时会停止全部后台任务。
 
 会话第一轮成功结束后，Amira 在后台请模型生成一个简短标题（不超过六个词和 60 个字符，使用对话的语言）；设置了 `compact.model` 时使用它，否则使用当前模型，不会阻塞对话。打印模式和子 agent 不生成标题。这次请求的费用计入 `/cost` 和 `/status`。`/rename` 设置的名称总是优先于自动标题；不带参数执行 `/rename` 会清除手动名称，让最近的自动标题重新显示。在用户或项目设置中写 `"sessions": { "autoTitle": false }` 可以关闭。标题显示在 `/status`、`/resume`、`amira -r` 中，终端标题则同时显示目录名和会话标题。
 

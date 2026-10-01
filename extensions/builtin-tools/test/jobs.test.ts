@@ -234,6 +234,21 @@ test.if(hasBash)("a background pipeline fails when a command before the last one
   expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 1 })
 })
 
+test.if(hasBash)("SIGPIPE-only background pipelines succeed and other pipeline failures fail", async () => {
+  const ok = await bashTool.execute(
+    { command: "yes | head -n 1", background: true },
+    ctxIn(session("s_main")),
+  )
+  expect(ok.isError).toBe(false)
+  expect(detailsOf(ok)).toMatchObject({ status: "exited", exitCode: 0 })
+
+  for (const command of ["false | cat", "cat missing | wc -l", "true | false"]) {
+    const failed = await bashTool.execute({ command, background: true }, ctxIn(session("s_main")))
+    expect(failed.isError).toBe(true)
+    expect(detailsOf(failed)).toMatchObject({ status: "exited", exitCode: 1 })
+  }
+})
+
 test.if(onWindows)("powershell runs commands in the background too", async () => {
   const ps = createPowershellTool()
   const r = await ps.execute(

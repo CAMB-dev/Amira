@@ -164,6 +164,28 @@ test("limits, ownership cleanup and root cleanup are part of the host contract",
   expect(processes.map((process) => process.stops)).toEqual([[0], [0]])
 })
 
+test("root handover keeps top-level jobs visible to the replacement and stops sub-agent jobs", async () => {
+  const { host, processes } = fakeHost()
+  const old = host.forSession({ sessionId: "old", depth: 0 })
+  const child = host.forSession({ sessionId: "child", depth: 1, parentSessionId: "old" })
+  const rootJob = start(old, "root-server")
+  const childJob = start(child, "child-server")
+  processes[0]!.emit({ type: "output", data: "ready\n" })
+
+  await host.handoverRoot("old", "new", 0)
+  const next = host.forSession({ sessionId: "new", depth: 0 })
+
+  expect(old.get(rootJob.id)).toBeUndefined()
+  expect(next.get(rootJob.id)).toMatchObject({ status: "running" })
+  expect(next.output(rootJob.id).text).toBe("ready\n")
+  expect(next.get(childJob.id)).toBeUndefined()
+  expect(host.get(childJob.id)).toMatchObject({ status: "stopped" })
+  expect(processes[1]!.stops).toEqual([0])
+
+  await next.stop(rootJob.id, 0)
+  expect(host.get(rootJob.id)).toMatchObject({ status: "stopped" })
+})
+
 test("ExtensionAPI exposes the host; unload stops the extension's jobs, exit stops every job", async () => {
   const first = fakeHost()
   const extensionHost = new ExtensionHost({

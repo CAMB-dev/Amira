@@ -46,7 +46,7 @@ frontmatter 支持 `name`、`description`、`model`、`tools` 和 `isolation`。
 
 主会话采用默认后台模式时，`agent_result` 不会阻塞等待，只报告进度或收取已经完成的结果，每份结果只投递一次。设置 `subagents.background` 为 `false` 后，调用恢复为默认等待，也可在单次调用中使用 `background: true`。子 agent 自己发起的调用默认等待；如果在后台启动任务，通常必须在结束前收取结果，除非它是由扩展管理的持久子 agent。
 
-Esc 只打断主轮次，其后台子 agent 会继续运行。用 `/agents stop <n|id>` 停止一个，或 `/agents stop all` 停止全部。手动停止的子 agent 的报告会等待下一条用户消息，不会主动启动新的模型轮次。`/clear`、切换会话和退出会停止已关闭对话的后台工作。[打印和 RPC 模式](usage.md#打印模式)在正常退出前会等待后台结果及其触发的轮次。
+Esc 只打断主轮次，其后台子 agent 会继续运行。用 `/agents stop <n|id>` 停止一个，或 `/agents stop all` 停止全部。手动停止的子 agent 的报告会等待下一条用户消息，不会主动启动新的模型轮次。`/clear`、切换会话和退出会停止已关闭对话中子 agent 的后台工作。[打印和 RPC 模式](usage.md#打印模式)在正常退出前会等待后台结果及其触发的轮次。
 
 默认允许主 agent 下面嵌套两层子 agent，**整个 agent 树**最多同时有四个工作中的子 agent，其余任务排队。用 `subagents.maxDepth` 与 `subagents.maxConcurrent` 修改限制。等待子任务的父 agent 不占工作名额。`budget.tokens` 与 `budget.costUsd` 限制整个 agent 树，包括主 agent；默认不设预算。token 预算包含输入、输出、缓存读取和写入；费用预算依赖上报费用。预算超限会停止仍在运行的子 agent，并拒绝启动新的子 agent。
 

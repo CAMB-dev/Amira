@@ -38,6 +38,37 @@ async function setup(steps: MockStep[], extra: Partial<AgentOptions> = {}) {
 
 const types = (events: AnyEvent[]) => events.map((e) => e.type)
 
+test("a top-level background notice follows the replacement session", async () => {
+  const { agent, ai, mock, bus } = await setup([
+    { toolCalls: [{ name: "start", args: {}, id: "c1" }] },
+    { text: "started" },
+    { text: "noticed" },
+  ])
+  let pending: ReturnType<Agent["expectNotice"]> | undefined
+  agent.tools.register(
+    defineTool({
+      name: "start",
+      description: "start",
+      parameters: { type: "object", properties: {} },
+      execute: async (_args, ctx) => {
+        pending = ctx.session?.expectNotice?.()
+        return textResult("started")
+      },
+    }),
+    "test",
+  )
+
+  await agent.prompt("go")
+  const next = new Agent({ ai, model: ai.model("mock/m"), cwd: "/proj", systemPrompt: "sys", bus })
+  agent.handoverBackgroundNotices(next)
+  pending!.deliver(userMessage("the job ended"), { wake: true })
+  const followUp = next.currentTurn
+  expect(followUp).toBeDefined()
+  await followUp
+
+  expect(JSON.stringify(mock.requests.at(-1)?.messages)).toContain("the job ended")
+})
+
 test("every message is persisted as it is added and restores into a new agent", async () => {
   const { agent, session, ai } = await setup([
     { toolCalls: [{ name: "echo", args: { text: "a" }, id: "c1" }] },

@@ -201,6 +201,28 @@ test("rename and fork commands update session info and preserve the source; fork
   expect((await host.run("/fork", { frontend: "tui" })).ok).toBe(true)
 })
 
+test("clear, resume and fork hand over top-level background jobs", async () => {
+  const { host, session, store } = await setup([])
+  store.appendMessage(userMessage("original session"))
+  const job = session.agent.backgroundJobs!.start({
+    command: "long-running test job",
+    argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+    cwd: store.header.cwd,
+  })
+  try {
+    await host.control.newSession()
+    expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
+
+    await host.control.resume(store.id)
+    expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
+
+    await host.control.fork!()
+    expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
+  } finally {
+    await session.host.backgroundJobs.stop(job.id, 0)
+  }
+})
+
 test("/rename without an argument clears the manual name and restores the automatic title", async () => {
   const { host, store } = await setup([{ text: "answer" }])
   await host.control.send("question")

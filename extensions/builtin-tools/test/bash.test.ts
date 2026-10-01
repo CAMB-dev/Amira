@@ -42,13 +42,30 @@ test.if(hasBash)("finds coreutils and other tools on PATH", async () => {
 test("the shell description says commands already start in the working directory", () => {
   expect(bashTool.description).toContain("Commands already start in the working directory")
   expect(bashTool.description).not.toContain("Prefer absolute paths")
-  expect(bashTool.description).toContain("exit 141 (SIGPIPE)")
+  expect(bashTool.description).toContain("SIGPIPE (141)")
+  expect(bashTool.description).toContain("treated as successful")
+  expect(bashTool.description).not.toContain("exit 141 (SIGPIPE)")
 })
 
 test.if(hasBash)("a failed command before a pipeline keeps the bash error status", async () => {
   const r = await bashTool.execute({ command: "false | tail -n 1" }, makeCtx(dir))
   expect(r.isError).toBe(true)
   expect(textOf(r)).toEndWith("Exit code: 1")
+})
+
+test.if(hasBash)("SIGPIPE-only pipelines succeed but real pipeline failures do not", async () => {
+  const sigpipe = await bashTool.execute({ command: "yes | head -n 1" }, makeCtx(dir))
+  expect(sigpipe.isError).toBe(false)
+  expect(textOf(sigpipe)).toEndWith("Exit code: 0")
+
+  const gitLog = await bashTool.execute({ command: "git log --oneline | head -n 1" }, makeCtx(process.cwd()))
+  expect(gitLog.isError).toBe(false)
+
+  for (const command of ["false | cat", "cat missing | wc -l", "true | false"]) {
+    const failed = await bashTool.execute({ command }, makeCtx(dir))
+    expect(failed.isError).toBe(true)
+    expect(textOf(failed)).toEndWith("Exit code: 1")
+  }
 })
 
 test.if(hasBash)("non-zero exit is reported as an error", async () => {
