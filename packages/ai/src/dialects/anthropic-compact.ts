@@ -67,11 +67,7 @@ export const anthropicCompaction: DialectCompaction = {
 }
 
 async function summarize(req: ModelRequest, ctx: DialectContext): Promise<DialectCompactOutcome> {
-  const body = {
-    ...requestBody(req, ctx.compat, ctx.endpoint.baseUrl),
-    stream: false,
-    compaction: { type: "summarize" },
-  }
+  const body = { ...requestBody(req, ctx.compat), stream: false, compaction: { type: "summarize" } }
   if (ctx.signal.aborted) return aborted()
   let res: Response
   try {

@@ -7,7 +7,7 @@ import {
   markCacheBreakpoints,
   toAnthropicMessages,
 } from "./anthropic-messages.ts"
-import { anthropicSearchTool } from "./anthropic-web-search.ts"
+import { ANTHROPIC_SEARCH_TOOL } from "./anthropic-web-search.ts"
 
 /** The API allows at most this many cache_control markers per request. */
 const MAX_BREAKPOINTS = 4
@@ -23,11 +23,7 @@ export const THINKING_BUDGET: Record<ReasoningEffort, number> = {
 
 const EPHEMERAL: CacheControl = { type: "ephemeral" }
 
-export function requestBody(
-  req: ModelRequest,
-  compat: ProviderCompat = {},
-  baseUrl?: string,
-): Record<string, unknown> {
+export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<string, unknown> {
   const sendTools = req.tools.length > 0 && req.model.caps.tools === "native"
   const webSearch = hasNativeWebSearch(req.model)
   const messages = toAnthropicMessages(req.messages, { tools: sendTools, webSearch })
@@ -57,7 +53,7 @@ export function requestBody(
     body.tools = tools
   }
   if (webSearch)
-    body.tools = [...((body.tools as Record<string, unknown>[]) ?? []), anthropicSearchTool(baseUrl)]
+    body.tools = [...((body.tools as Record<string, unknown>[]) ?? []), ANTHROPIC_SEARCH_TOOL]
   if (cache) markCacheBreakpoints(messages, MAX_BREAKPOINTS - breakpoints)
   body.messages = messages
 

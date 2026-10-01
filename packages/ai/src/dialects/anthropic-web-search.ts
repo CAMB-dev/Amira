@@ -3,19 +3,12 @@ import type { ServerToolBlock, StreamEvent, TextBlock } from "../types.ts"
 
 const DIALECT = "anthropic-messages"
 
-/** Direct calls retain the basic search protocol, including on newer dated tool versions. */
-export function anthropicSearchTool(baseUrl?: string): Record<string, unknown> {
-  let official = false
-  try {
-    official = new URL(baseUrl ?? "").hostname === "api.anthropic.com"
-  } catch {}
-  return {
-    type: official ? "web_search_20260318" : "web_search_20250305",
-    name: NATIVE_WEB_SEARCH,
-    max_uses: 5,
-    ...(official ? { allowed_callers: ["direct"] } : {}),
-  }
-}
+/**
+ * The basic version everywhere: later ones add only dynamic filtering (searches run from code
+ * execution, whose blocks Amira does not handle) and response inclusion for those, so with
+ * direct calls they behave the same while fewer hosts and models accept them.
+ */
+export const ANTHROPIC_SEARCH_TOOL = { type: "web_search_20250305", name: NATIVE_WEB_SEARCH, max_uses: 5 }
 
 export interface SearchReplay {
   call: Record<string, any>

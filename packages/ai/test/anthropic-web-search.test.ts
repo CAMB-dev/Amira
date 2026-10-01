@@ -66,19 +66,13 @@ export const anthropicSearchStream = [
 ]
 const searchReq = () => req("anthropic-messages", {}, { webSearch: true })
 
-test("Messages offers a hosted tool alongside functions, with the latest direct version only on Anthropic", () => {
+test("Messages offers the basic hosted tool alongside functions", () => {
   const r = searchReq()
   r.tools = [{ name: "read", description: "Read", parameters: { type: "object" } }]
   expect(requestBody(r).tools).toEqual([
     { name: "read", description: "Read", input_schema: { type: "object" } },
     { type: "web_search_20250305", name: "web_search", max_uses: 5 },
   ])
-  expect((requestBody(r, {}, "https://api.anthropic.com/v1").tools as any[])[1]).toEqual({
-    type: "web_search_20260318",
-    name: "web_search",
-    max_uses: 5,
-    allowed_callers: ["direct"],
-  })
   r.model.caps.webSearch = false
   expect((requestBody(r).tools as any[]).map((t) => t.name)).toEqual(["read"])
 })

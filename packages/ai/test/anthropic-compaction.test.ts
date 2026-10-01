@@ -91,12 +91,7 @@ test("compaction on demand: the beta, the summarize field, and one readable sign
   expect(call.body).toMatchObject({ compaction: { type: "summarize" }, stream: false, model: "claude-x" })
   expect(call.body.system[0].text).toBe("sys")
   expect(call.body.tools.map((t: { name: string }) => t.name)).toEqual(["read", "web_search"])
-  expect(call.body.tools[1]).toEqual({
-    type: "web_search_20260318",
-    name: "web_search",
-    max_uses: 5,
-    allowed_callers: ["direct"],
-  })
+  expect(call.body.tools[1]).toEqual({ type: "web_search_20250305", name: "web_search", max_uses: 5 })
   expect(r.ok).toBe(true)
   if (!r.ok) return
   expect(r.summary).toBe(block.content)
