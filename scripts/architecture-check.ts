@@ -50,12 +50,30 @@ function relative(file: string): string {
   return path.relative(root, file).replaceAll(path.sep, "/")
 }
 
+/** The repo directory (e.g. "packages/core") a relative specifier in `file` lands in, if any. */
+function targetPackage(file: string, specifier: string): string | undefined {
+  if (!specifier.startsWith(".")) return undefined
+  const [top, name] = relative(path.resolve(path.dirname(file), specifier)).split("/")
+  return (top === "packages" || top === "extensions") && name ? `${top}/${name}` : undefined
+}
+
+/**
+ * The composition root that bundles the built-in extensions (D50). It is the one host file that
+ * may reach into extensions/*; everything else talks to them through @amira/api.
+ */
+const bundlingRoots = new Set(["packages/cli/src/session.ts"])
+
 const violations: string[] = []
 const extensionDirectories = packageDirectories(path.join(root, "extensions"))
 for (const directory of extensionDirectories) {
+  const own = relative(directory)
   for (const file of filesUnder(path.join(directory, "src"))) {
     for (const specifier of importsIn(readFileSync(file, "utf8"))) {
-      if (specifier.startsWith("@amira/") && specifier !== "@amira/api") {
+      const target = targetPackage(file, specifier)
+      if (
+        (specifier.startsWith("@amira/") && specifier !== "@amira/api") ||
+        (target !== undefined && target !== own)
+      ) {
         violations.push(`${relative(file)} imports ${specifier}; extensions may only import @amira/api`)
       }
     }
@@ -84,6 +102,15 @@ for (const directory of packageDirectories(path.join(root, "packages"))) {
         violations.push(
           `${relative(file)} imports extension package ${specifier}; packages must depend on @amira/api`,
         )
+      }
+    }
+  }
+  // Tests may load extensions by path to exercise them inside the host; host source may not.
+  for (const file of filesUnder(path.join(directory, "src"))) {
+    if (bundlingRoots.has(relative(file))) continue
+    for (const specifier of importsIn(readFileSync(file, "utf8"))) {
+      if (targetPackage(file, specifier)?.startsWith("extensions/")) {
+        violations.push(`${relative(file)} imports ${specifier}; packages must depend on @amira/api`)
       }
     }
   }
