@@ -1,4 +1,7 @@
+import { type JobEvent, type JobHandle, type JobSpec, startJobInline } from "./job-inline.ts"
+import { JobRegistry } from "./jobs.ts"
 import { openPipeInline, type PipeEvent, type PipeHandle, type PipeSpec } from "./pipe.ts"
+import { terminateJobHandle } from "./process-tree.ts"
 import type { FromWorker, RunRequest, SpawnRequest, ToWorker } from "./protocol.ts"
 import {
   type ReleaseOptions,
@@ -10,6 +13,15 @@ import {
 } from "./run-inline.ts"
 
 export { cmdArgv } from "./cmd-line.ts"
+export {
+  DEFAULT_MAX_LOG_BYTES,
+  JOB_DRAIN_MS,
+  type JobEvent,
+  type JobHandle,
+  type JobSpec,
+  startJobInline,
+} from "./job-inline.ts"
+export * from "./jobs.ts"
 export type { PipeEvent, PipeSpec } from "./pipe.ts"
 export { type ProcessTree, trackProcessTree, warmUpProcessTree } from "./process-tree.ts"
 export {
@@ -69,6 +81,19 @@ interface OpenPipe {
 /** Piped processes in the worker that have not reported their exit. */
 const pipes = new Map<number, OpenPipe>()
 
+interface OpenJob {
+  spec: JobSpec
+  onEvent: (e: JobEvent) => void
+  /** A stop sent before the worker loaded, replayed if it never does. */
+  earlyStop?: number
+  /** Set when the worker never loaded and the job runs on this thread instead. */
+  fallback?: JobHandle
+  pid?: number
+  jobHandle?: number
+}
+/** Background jobs in the worker that have not reported their exit. */
+const jobs = new Map<number, OpenJob>()
+
 function getWorker(): Worker | undefined {
   if (worker || workerBroken) return worker
   try {
@@ -115,6 +140,24 @@ function abandonWorker(neverLoaded: boolean) {
       pipeEvent(p.onEvent, { type: "exit", code: null, error: "the command worker stopped unexpectedly" })
     }
   }
+  for (const [id, j] of jobs) {
+    jobs.delete(id)
+    if (neverLoaded) {
+      j.fallback = startJobInline(j.spec, (e) => pipeEvent(j.onEvent, e))
+      if (j.earlyStop !== undefined) j.fallback.stop(j.earlyStop)
+    } else {
+      // The worker's handles stay open (a stopped thread closes none), so its Job Object still
+      // holds the whole tree: end it from here. Without one, kill by pid.
+      if (j.jobHandle !== undefined) terminateJobHandle(j.jobHandle)
+      else if (j.pid !== undefined) killJobTrees([j.pid])
+      pipeEvent(j.onEvent, {
+        type: "exit",
+        code: null,
+        signal: null,
+        error: "the command worker stopped unexpectedly",
+      })
+    }
+  }
   for (const [id, p] of pending) {
     pending.delete(id)
     p.opts.signal.removeEventListener("abort", p.onAbort)
@@ -133,6 +176,7 @@ function onMessage(m: FromWorker) {
       p.early = []
       delete p.closeGrace
     }
+    for (const j of jobs.values()) delete j.earlyStop
   }
   workerReady = true
   if (m.type === "ready") return
@@ -140,6 +184,16 @@ function onMessage(m: FromWorker) {
     const p = pipes.get(m.id)
     if (m.event.type === "exit") pipes.delete(m.id)
     if (p) pipeEvent(p.onEvent, m.event)
+    return
+  }
+  if (m.type === "job") {
+    const j = jobs.get(m.id)
+    if (m.event.type === "exit") jobs.delete(m.id)
+    if (m.event.type === "spawned" && j) {
+      j.pid = m.event.pid
+      if (m.event.jobHandle !== undefined) j.jobHandle = m.event.jobHandle
+    }
+    if (j) pipeEvent(j.onEvent, m.event)
     return
   }
   if (m.type === "gone") return standbys.get(m.id)?.()
@@ -299,6 +353,161 @@ export function openPipe(spec: PipeSpec, onEvent: (e: PipeEvent) => void): PipeP
   }
 }
 
+/** A background job started by `startJob`. */
+export interface JobProcess {
+  /** Stops its whole tree (see JobHandle.stop); its "exit" event follows. */
+  stop(graceMs: number): void
+}
+
+/**
+ * Starts a background job in the command worker: events arrive asynchronously, first
+ * "spawned" (or "exit" with an error when it cannot start), then output, then one "exit".
+ * A job does not keep this process alive. It is contained (on Windows a Job Object that kills
+ * it when Amira exits, however it exits; on POSIX its own process group) and its tree is
+ * killed when this process exits (killLiveJobs), when a SIGHUP or SIGTERM ends it, and when
+ * the job's main process exits.
+ */
+export function startJob(spec: JobSpec, onEvent: (e: JobEvent) => void): JobProcess {
+  onEvent = trackJobUntilExit(onEvent)
+  const w = getWorker()
+  if (!w) {
+    let handle: JobHandle | undefined
+    let early: number | undefined
+    // Deferred, so callers see the same asynchronous events as with the worker.
+    setTimeout(() => {
+      handle = startJobInline(spec, (e) => pipeEvent(onEvent, e))
+      if (early !== undefined) handle.stop(early)
+    }, 0)
+    return {
+      stop(graceMs) {
+        if (handle) handle.stop(graceMs)
+        else early = graceMs
+      },
+    }
+  }
+  const id = nextId++
+  const j: OpenJob = { spec, onEvent }
+  jobs.set(id, j)
+  const sent = spec.env ? { ...spec, env: plainEnv(spec.env) } : spec
+  w.postMessage({ type: "job-start", id, spec: sent } satisfies ToWorker)
+  return {
+    stop(graceMs) {
+      if (j.fallback) return j.fallback.stop(graceMs)
+      if (!jobs.has(id)) return
+      if (!workerReady) j.earlyStop = graceMs
+      w.postMessage({ type: "job-stop", id, graceMs } satisfies ToWorker)
+    },
+  }
+}
+
+/** Main processes of background jobs that have not exited, for killLiveJobs. */
+const liveJobs = new Set<number>()
+let jobHooksInstalled = false
+
+/**
+ * Kills the trees of background jobs still running (startJob installs it as an exit hook).
+ * On Windows their Job Objects kill them anyway as this process ends; taskkill /T covers a
+ * job that could not be contained. On POSIX each job is its own process group.
+ */
+export function killLiveJobs(): void {
+  if (!liveJobs.size) return
+  const pids = [...liveJobs]
+  liveJobs.clear()
+  killJobTrees(pids)
+}
+
+function killJobTrees(pids: number[]) {
+  if (process.platform === "win32") {
+    try {
+      Bun.spawnSync(["taskkill", "/T", "/F", ...pids.flatMap((p) => ["/PID", String(p)])], {
+        stdout: "ignore",
+        stderr: "ignore",
+        windowsHide: true,
+      })
+    } catch {}
+    return
+  }
+  for (const pid of pids) {
+    try {
+      process.kill(-pid, "SIGKILL")
+    } catch {
+      try {
+        process.kill(pid, "SIGKILL")
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Marks a signal listener that only cleans up and leaves what happens to the process to the
+ * others: whoever decides whether a signal ends the process (such as the terminal's restore
+ * handler, which only acts when nobody else listens) does not count it as a listener.
+ */
+export const PASSIVE_SIGNAL_LISTENER = Symbol.for("amira.passiveSignalListener")
+
+const TERMINATING_SIGNALS = ["SIGHUP", "SIGTERM", "SIGINT"] as const
+const SIGNAL_EXIT_CODES: Record<(typeof TERMINATING_SIGNALS)[number], number> = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+}
+
+/**
+ * A hangup (the terminal closed), SIGTERM, or a SIGINT nobody handles (e.g. Ctrl+C while print
+ * mode shuts down, after it removed its own handler) would end Amira without running its exit
+ * hooks, and jobs in process groups of their own never get the terminal's signal: they are
+ * killed here first. When no listener that decides is left, this one ends the process as the
+ * default action would have. A SIGINT someone handles (print mode interrupting a turn) is
+ * theirs alone: jobs keep running.
+ */
+const onTerminatingSignal = Object.assign(
+  (signal: NodeJS.Signals) => {
+    const deciding = process
+      .listeners(signal)
+      .filter((l) => !(l as unknown as Record<symbol, unknown>)[PASSIVE_SIGNAL_LISTENER])
+    if (signal === "SIGINT" && deciding.length) return
+    killLiveJobs()
+    if (!deciding.length) process.exit(SIGNAL_EXIT_CODES[signal as keyof typeof SIGNAL_EXIT_CODES] ?? 143)
+  },
+  { [PASSIVE_SIGNAL_LISTENER]: true },
+)
+
+/** While jobs run: kill them on exit and on a terminating signal. Removed again when none run. */
+function setJobHooks(on: boolean) {
+  if (on === jobHooksInstalled) return
+  jobHooksInstalled = on
+  for (const signal of TERMINATING_SIGNALS) {
+    try {
+      if (on) process.on(signal, onTerminatingSignal)
+      else process.off(signal, onTerminatingSignal)
+    } catch {}
+  }
+  if (on) process.on("exit", killLiveJobs)
+  else process.off("exit", killLiveJobs)
+}
+
+/** Records a job's main process from "spawned" until its "exit", for killLiveJobs. */
+function trackJobUntilExit(onEvent: (e: JobEvent) => void): (e: JobEvent) => void {
+  let pid: number | undefined
+  return (e) => {
+    if (e.type === "spawned") {
+      pid = e.pid
+      liveJobs.add(e.pid)
+      setJobHooks(true)
+    } else if (e.type === "exit" && pid !== undefined) {
+      // A lost worker's job was killed by pid already.
+      liveJobs.delete(pid)
+      if (!liveJobs.size) setJobHooks(false)
+    }
+    onEvent(e)
+  }
+}
+
+/** Process ids of background jobs that have not exited yet (tests). */
+export function liveJobPids(): number[] {
+  return [...liveJobs]
+}
+
 /**
  * Piped processes (or their launchers) that have not exited yet, from spawn until exit, so one
  * still inside its close grace period is covered too.
@@ -356,7 +565,7 @@ export function livePipePids(): number[] {
   return [...livePipes]
 }
 
-function pipeEvent(onEvent: (e: PipeEvent) => void, e: PipeEvent) {
+function pipeEvent<E>(onEvent: (e: E) => void, e: E) {
   try {
     onEvent(e)
   } catch {
@@ -414,3 +623,9 @@ function plainEnv(env: Record<string, string | undefined>): Record<string, strin
   for (const [k, v] of Object.entries(env)) if (typeof v === "string") out[k] = v
   return out
 }
+
+/**
+ * Amira's background jobs: one registry per process, since every job dies with the process.
+ * Tools start and stop jobs here; frontends list them and ask before quitting while they run.
+ */
+export const backgroundJobs = new JobRegistry({ start: startJob })

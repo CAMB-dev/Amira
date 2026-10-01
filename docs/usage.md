@@ -26,6 +26,18 @@ Shift+Enter inserts a newline where the terminal supports it; Ctrl+Enter is the 
 
 Esc stops the current turn; while a slash command such as `/ext install` is still running, it cancels that command first and keeps your draft. If steering or queued messages are waiting, they are combined in the order you typed them and sent together. Background sub-agents keep running; [Sub-agents](subagents.md) explains how to stop them. Ctrl+C likewise cancels a running command first, otherwise stops a turn, otherwise clears a nonempty input, otherwise quits. `/quit` also exits.
 
+## Images
+
+Messages can carry PNG, JPEG, GIF and WebP images, in both terminal modes:
+
+- **Paste or drop paths.** A paste made only of paths to existing image files (absolute or relative to the working directory, quoted when they contain spaces, or with backslash-escaped spaces as macOS and Linux terminals write dropped paths, or `file://` URIs) attaches them. Anything else, such as prose or other files, is pasted as text, and so is an image that cannot be attached, with a notice saying why.
+- **Pick one in the `@` file list.** An image attaches; other files keep their `@path` reference.
+- **Paste from the clipboard** with Alt+V (`paste.image`; see [Keybindings](keybindings.md) for the other keys). The clipboard's text wins when it has any. This uses PowerShell on Windows, `osascript` (or `pngpaste` when installed) on macOS, and `wl-paste` or `xclip` on Linux; without them a notice says what is missing, and paths still work.
+
+An attachment shows as one placeholder, such as `[image 1: screen.png 120 KB]`, in the input and in the sent message. Backspace or Delete removes it whole; undo, cut and yank keep it. Remove attachments before editing the message in an external editor (Ctrl+G). A message with images is never run as a slash command or skill.
+
+The images in one message are limited to **5 MB in total**. Sending them needs a model that accepts images; otherwise a warning appears and the message stays in the input. Images are stored inline (base64) in the session file, so resuming does not need the original files. Image prompts are recalled with ↑ during the run but are not written to the project's prompt history file.
+
 ## Tools and approvals
 
 The bundled tools can read, search, write and edit files, run shell commands, search the web and delegate work. Availability depends on the platform, model and loaded extensions. `/tools` lists the current tools; `/tools disable <name>` and `/tools enable <name>` change availability for this session. `--disable-tools` supplies a comma-separated list at startup. See [Settings](settings.md) and [Extensions](extensions.md) for persistent configuration.
@@ -48,13 +60,22 @@ Conversations are stored automatically and listed by working directory. On exit,
 | List sessions without the UI | `amira -p -r` |
 | Pick or switch within the UI | `/resume` or `/resume <session-id>` |
 | Start an empty conversation | `/clear` |
+| Name the current session | `/rename <title>` |
+| Continue in a copy of this session | `/fork` |
+| Delete a stored session without the UI | `amira sessions rm <session-id>` (`-C <dir>` for another directory) |
 | Compact older context now | `/compact` or `/compact <instructions>` |
 
 Do not combine `-c` and `-r`. Session IDs begin with `s_`; use the actual ID shown in the list. `/clear` starts a new stored session, keeping the previous one available to resume. `/resume` keeps the current model selected; when no model is selected, the stored model can be used. Switching sessions stops background work belonging to the old conversation.
 
+After a session's first successful turn, Amira asks the model for a short title (at most six words and 60 characters, in the conversation's language) in the background; it uses `compact.model` when set, otherwise the current model, and never holds up the conversation. Print mode and sub-agents do not request titles. The request's cost appears in `/cost` and `/status`. A `/rename` name always wins over the automatic one. Set `"sessions": { "autoTitle": false }` in user or project settings to turn it off. Titles show in `/status`, `/resume`, `amira -r` and the terminal title.
+
+Typing in the `/resume` picker searches titles and the user and assistant text of whole conversations, compacted history included; matching is a case-insensitive substring, so Chinese or Japanese needs no spaces, and the matching text shows under the row. Ctrl+D deletes the selected session after a confirmation; the current session is never listed. Deleting removes the session file and the sub-agent sessions it started, except ones a fork still uses.
+
+`/fork` copies the conversation into a new session that records where it came from, named `<title> (fork)`, and switches to it; the original stays as it was.
+
 Automatic compaction normally starts at 80% of the model's context window. It reduces older context while keeping recent conversation. Compatible providers can use native compaction; otherwise Amira writes a text summary. Instructions passed to `/compact` force a text summary. See [Providers](providers.md) and [Settings](settings.md) for the conditions and options. `/context` shows what occupies the context window.
 
-Press Esc twice in succession to open the rewind picker. Select a previous user message: that message and everything after it are removed from the active conversation, and the selected prompt returns to the editor for changes and resubmission. **Rewind does not restore files or undo shell commands.** Only messages still present after compaction can be selected; it requires a stored session. A popup, text selection or dialog can consume Esc first, so follow the current hint line.
+Press Esc twice in succession to open the rewind picker. Select a previous user message: that message and everything after it are removed from the active conversation, and the selected prompt returns to the editor for changes and resubmission. In the picker, F forks instead: a new session ends before the selected message, and the current one stays whole. **Rewind does not restore files or undo shell commands.** Only messages still present after compaction can be selected; it requires a stored session. A popup, text selection or dialog can consume Esc first, so follow the current hint line.
 
 ## Print mode
 
@@ -96,6 +117,8 @@ The immediate response contains the request ID, `ok: true` and a `turnId`; it ac
 | `state` | Get status, model, session and pending UI requests |
 | `session.read` | Read `messages` or `lastTurn` using the `what` parameter |
 | `session.resume` | Switch to a stored session using `sessionId` |
+| `session.rename` | Name the current session using `title`; a `session.title` event follows, as it does for an automatic title |
+| `session.fork` | Fork into a new session, before the user message at the optional `index`; a `session.start` with reason `fork` follows |
 | `model.set` | Switch model using `model` as provider/model |
 | `command.list`, `command.complete`, `command.run` | Discover and run slash commands |
 | `skill.list`, `skill.run` | Discover and run skills |
@@ -108,8 +131,8 @@ Closing stdin waits for active work, including background results and their foll
 
 ## Status and costs
 
-`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell and Git workspace. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
+`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell and Git workspace. The speed shows reply and thinking tokens per second separately; `~` marks an estimate: tokens counted from the text because the provider reported no separate reasoning count, or thinking timed from the request because only a summary of it streamed. `(hidden reasoning)` means the model reasoned without streaming its thinking. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
 
-`/cost` reports this session's replies by model and compaction usage separately; it does not aggregate child-agent costs. Use `/status` and `/agents` for those. Costs depend on known model pricing and reported usage; unknown prices are identified, and totals with unpriced rows are partial estimates. Provider billing remains the source for actual charges.
+`/cost` reports this session's replies by model, and compaction and session-title requests separately; it does not aggregate child-agent costs. Use `/status` and `/agents` for those. Costs depend on known model pricing and reported usage; unknown prices are identified, and totals with unpriced rows are partial estimates. Provider billing remains the source for actual charges.
 
 Related: [Getting started](getting-started.md) · [Providers](providers.md) · [Sub-agents](subagents.md) · [Extensions](extensions.md) · [Settings](settings.md) · [Keybindings](keybindings.md).

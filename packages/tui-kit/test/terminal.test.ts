@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import { modes } from "../src/ansi.ts"
-import { FakeTerminal, ProcessTerminal } from "../src/terminal.ts"
+import { FakeTerminal, PASSIVE_SIGNAL_LISTENER, ProcessTerminal } from "../src/terminal.ts"
 
 test("restore leaves enabled modes in reverse order, shows the cursor and leaves raw mode", () => {
   const term = new FakeTerminal()
@@ -143,6 +143,28 @@ describe("ProcessTerminal restores itself when the process goes away", () => {
     }
     expect(code).toBe(143)
     expect(readFileSync(file, "utf8")).toStartWith(modes.bracketedPaste.off)
-    expect(process.listenerCount("SIGTERM")).toBe(0)
+    expect(process.listeners("SIGTERM").filter((l) => !(l as never)[PASSIVE_SIGNAL_LISTENER])).toEqual([])
+  })
+
+  test("a passive listener (one that only cleans up) does not count as the app's handler", () => {
+    term.start()
+    term.enableMode(modes.bracketedPaste)
+    let cleaned = 0
+    const passive = Object.assign(() => void cleaned++, { [PASSIVE_SIGNAL_LISTENER]: true })
+    process.on("SIGHUP", passive)
+    const exit = process.exit
+    let code: number | undefined
+    process.exit = ((c?: number) => {
+      code = c
+    }) as typeof process.exit
+    try {
+      process.emit("SIGHUP", "SIGHUP")
+    } finally {
+      process.exit = exit
+      process.off("SIGHUP", passive)
+    }
+    expect(cleaned).toBe(1)
+    expect(code).toBe(129)
+    expect(readFileSync(file, "utf8")).toStartWith(modes.bracketedPaste.off)
   })
 })

@@ -320,6 +320,9 @@ export function mapUsage(u: any): Usage {
   return {
     input: Math.max(0, (u.input_tokens ?? 0) - cached - written),
     output: u.output_tokens ?? 0,
+    ...(typeof u.output_tokens_details?.reasoning_tokens === "number"
+      ? { reasoning: u.output_tokens_details.reasoning_tokens }
+      : {}),
     cacheRead: cached,
     cacheWrite: written,
   }

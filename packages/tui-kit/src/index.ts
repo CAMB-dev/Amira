@@ -20,8 +20,10 @@ export { Box, type BoxOptions } from "./components/box.ts"
 export {
   defaultPasteLabel,
   Editor,
+  type EditorImage,
   type EditorOptions,
   type EditorPart,
+  imageLabel,
   type PasteInfo,
   type SubmitInfo,
 } from "./components/editor.ts"
@@ -120,7 +122,13 @@ export {
   white,
   yellow,
 } from "./style.ts"
-export { BaseTerminal, FakeTerminal, ProcessTerminal, type Terminal } from "./terminal.ts"
+export {
+  BaseTerminal,
+  FakeTerminal,
+  PASSIVE_SIGNAL_LISTENER,
+  ProcessTerminal,
+  type Terminal,
+} from "./terminal.ts"
 export {
   closeStyles,
   graphemes,
