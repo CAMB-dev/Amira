@@ -1744,6 +1744,8 @@ export class Agent {
   /** A2: views for the reads among a batch's results that repeat an earlier read still in context. */
   #dedupe(results: ToolResultMessage[]): [ToolResultMessage, ContextView][] {
     if (this.#context.dedupeReads === false) return []
+    // Only a tool that names repeatable reads can repeat one.
+    if (!results.some((r) => this.tools.get(r.toolName)?.readKey)) return []
     const all = [...this.messages, ...results]
     const pairs = pairCalls(all)
     const out: [ToolResultMessage, ContextView][] = []
@@ -1888,11 +1890,13 @@ export class Agent {
         }
       }
       const tool = p.call ? (this.#callTools.get(p.call) ?? this.tools.get(p.call.name)) : undefined
+      // A tool no longer registered (disabled, unloaded) is judged by its name, as built-ins were.
+      const traits = toolTraits(tool ?? { name: p.m.toolName })
       const view: ContextView = {
         kind: "aged",
         text: agedStub(p.m, p.call, artifact, {
-          read: tool?.readKey !== undefined,
-          shell: (tool && toolTraits(tool)?.shell !== undefined) || tool?.shellKind !== undefined,
+          read: tool ? tool.readKey !== undefined : p.m.toolName === "read",
+          shell: traits?.shell !== undefined || tool?.shellKind !== undefined,
         }),
         epoch,
       }
@@ -2064,6 +2068,7 @@ export class Agent {
         const pathCapture =
           this.fileRewind?.enabled &&
           paths !== undefined &&
+          paths.length > 0 &&
           (traits?.writesFiles === true || traits?.writesFiles === "paths") &&
           traits.usesMutationHook !== true
         const execute = (mutateFilesOverride?: MutateFiles) =>
@@ -2072,6 +2077,8 @@ export class Agent {
             ...(mutateFilesOverride ? { mutateFiles: mutateFilesOverride } : {}),
           })
         if (pathCapture) {
+          // Like the mutateFiles hook: no captured write once the session cannot be saved.
+          if (this.#storeFailed) throw new Error("File write refused: the session could not be saved")
           let captured: ToolResult | undefined
           await this.fileRewind!.mutatePaths(
             paths!,
@@ -2235,11 +2242,12 @@ export class Agent {
   #emitToolStart(turn: Turn, run: CallRun, args: Record<string, unknown>) {
     if (run.started) return
     run.started = true
+    const traits = run.tool && toolTraits(run.tool)
     this.#emit(turn, "tool.execute.start", {
       toolCallId: run.call.id,
       name: run.call.name,
       args,
-      ...(run.tool && toolTraits(run.tool) ? { traits: toolTraits(run.tool) } : {}),
+      ...(traits ? { traits } : {}),
       ...(run.writtenPaths !== undefined ? { writtenPaths: run.writtenPaths } : {}),
     })
   }
@@ -2252,12 +2260,13 @@ export class Agent {
     rejected?: ToolRejection,
     approval?: ToolApproval,
   ) {
+    const traits = run.tool && toolTraits(run.tool)
     this.#emit(turn, "tool.execute.end", {
       toolCallId: run.call.id,
       name: run.call.name,
       result,
       durationMs,
-      ...(run.tool && toolTraits(run.tool) ? { traits: toolTraits(run.tool) } : {}),
+      ...(traits ? { traits } : {}),
       ...(run.writtenPaths !== undefined ? { writtenPaths: run.writtenPaths } : {}),
       ...(rejected ? { rejected } : {}),
       ...(approval ? { approval } : {}),

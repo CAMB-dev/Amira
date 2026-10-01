@@ -181,6 +181,13 @@ export class FileRewind {
                 if (!path.isAbsolute(change.path) || !seen.has(pathKey(canonicalPath(change.path)))) {
                   throw new Error(`Mutation path was not declared: ${change.path}`)
                 }
+                // The same stale-read guard the hook gives a tool that captures its own writes.
+                if (change.before !== undefined) {
+                  const now = readImage(canonicalPath(change.path), this.maxFileBytes)
+                  if (hash(change.before) !== hash(now.bytes)) {
+                    throw new Error(`File changed before writing: ${change.path}; read it again`)
+                  }
+                }
               }
               return nestedWrite()
             }) satisfies MutateFiles)

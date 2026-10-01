@@ -68,3 +68,56 @@ test("a third-party path writer is captured and restored by file rewind", async 
   rewind.restore(message!.id, null)
   expect(existsSync(path.join(cwd, "created.txt"))).toBe(false)
 })
+
+test("a captured writer that uses mutateFiles keeps its stale-read guard; an empty report captures nothing", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "amira-tool-traits-"))
+  dirs.push(cwd)
+  await writeFile(path.join(cwd, "a.txt"), "current")
+  const session = SessionStore.create({ cwd, dir: path.join(cwd, "sessions") })
+  const rewind = new FileRewind(session)
+  const mock = createMockDialect([
+    { toolCalls: [{ name: "stale_write", args: { path: "a.txt" }, id: "call-1" }] },
+    { toolCalls: [{ name: "stale_write", args: { path: "" }, id: "call-2" }] },
+    { text: "done" },
+  ])
+  const ai = createAi({
+    dialects: [mock],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    retry: { retries: 0 },
+  })
+  const tools = new ToolRegistry()
+  tools.register(
+    defineTool<{ path: string }>({
+      name: "stale_write",
+      description: "writes from a stale read",
+      parameters: { type: "object" },
+      traits: { writesFiles: "paths" },
+      getWrittenPaths: ({ path: p }) => (p ? [p] : []),
+      execute: async ({ path: p }, ctx) => {
+        if (!p) return textResult("nothing")
+        const file = path.resolve(ctx.cwd, p)
+        await ctx.mutateFiles!([{ path: file, before: new TextEncoder().encode("stale") }], () =>
+          writeFile(file, "new"),
+        )
+        return textResult("written")
+      },
+    }),
+    "test",
+  )
+  const agent = new Agent({
+    ai,
+    model: ai.model("mock/test"),
+    cwd,
+    session,
+    fileRewind: rewind,
+    tools,
+    systemPrompt: "sys",
+  })
+  await agent.prompt("write")
+  expect(readFileSync(path.join(cwd, "a.txt"), "utf8")).toBe("current")
+  const results = agent.messages.flatMap((m) => (m.role === "toolResult" ? [m] : []))
+  expect(results[0]?.isError).toBe(true)
+  expect(JSON.stringify(results[0]?.content)).toContain("File changed before writing")
+  expect(results[1]?.isError).toBeFalsy()
+  expect(session.entries.filter((e) => e.type === "file_mutation")).toHaveLength(1)
+})
