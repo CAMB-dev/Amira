@@ -305,6 +305,27 @@ test.if(hasBash)("job_output says so when it is polled without waiting", async (
   expect(detailsOf(timed).waited).toBe("timeout")
 })
 
+test("forgetting ended jobs keeps what job_output knows about live ones", async () => {
+  // Jobs that never print or end, without spawning anything.
+  jobRegistry = new SessionBackgroundJobHost(
+    new JobRegistry({
+      start: (_spec, onEvent) => {
+        onEvent({ type: "spawned", pid: 1, contained: true })
+        return { stop: () => onEvent({ type: "exit", code: null, signal: null }) }
+      },
+    }),
+  )
+  registerJobs(fakeApi({ backgroundJobs: { maxRunning: 300 } }).api, jobRegistry)
+  const s = session("s_main")
+  const start = () => ctxIn(s).backgroundJobs.start({ command: "idle", argv: ["idle"], cwd: dir }).id
+  const first = start()
+  await jobOutputTool.execute({ job_id: first }, ctxIn(s))
+  // Enough other reads to make the tools forget the jobs the registry no longer keeps.
+  for (let i = 0; i < 200; i++) await jobOutputTool.execute({ job_id: start() }, ctxIn(s))
+  const again = await jobOutputTool.execute({ job_id: first }, ctxIn(s))
+  expect(textOf(again)).toContain("Do not poll: pass wait_for")
+})
+
 test.if(hasBash)("the number of running jobs is capped", async () => {
   jobRegistry = new SessionBackgroundJobHost(new JobRegistry({ start: startJob, maxRunning: 1 }))
   const s = session("s_main")

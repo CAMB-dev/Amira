@@ -35,8 +35,11 @@ export const MAX_WAIT_MS = 600_000
 /** Grace period for a job asked to stop before it is killed (POSIX; Windows kills at once). */
 export const STOP_GRACE_MS = 2000
 
-/** Where the tools find jobs and how much of their output goes to logs; the extension sets it from settings. */
-export const jobsConfig: { maxLogBytes?: number } = {}
+/**
+ * How much of a job's output goes to its log, and the host view the extension serves (to forget
+ * what the tools keep about jobs it no longer keeps); the extension sets them.
+ */
+export const jobsConfig: { maxLogBytes?: number; registry?: BackgroundJobRegistry } = {}
 
 /** Applies the `backgroundJobs` settings. */
 export function configureJobs(
@@ -48,6 +51,7 @@ export function configureJobs(
     maxRunning: settings.maxRunning,
     bufferChars: settings.bufferChars,
   })
+  jobsConfig.registry = registry
   if (settings.maxLogBytes !== undefined) jobsConfig.maxLogBytes = settings.maxLogBytes
   else delete jobsConfig.maxLogBytes
 }
@@ -253,8 +257,12 @@ const waitFrom = new Map<string, number>()
 /** Drops what the maps above keep about jobs the registry no longer keeps, once they grow. */
 function forgetGoneJobs() {
   if (waitFrom.size + emptyReads.size < 200) return
-  waitFrom.clear()
-  emptyReads.clear()
+  const { registry } = jobsConfig
+  for (const map of [waitFrom, emptyReads]) {
+    for (const key of [...map.keys()]) {
+      if (!registry?.get(key.slice(key.indexOf("\0") + 1))) map.delete(key)
+    }
+  }
 }
 const POLL_WINDOW_MS = 5000
 
