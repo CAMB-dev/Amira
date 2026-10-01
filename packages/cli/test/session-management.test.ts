@@ -245,6 +245,14 @@ test("amira sessions rm deletes stored sessions without loading models or keys",
   expect(existsSync(store.file)).toBe(false)
 })
 
+test("switching sessions gives up the lease on the one left behind", async () => {
+  const { store, host } = await setup([])
+  store.appendMessage(userMessage("first"))
+  expect(existsSync(sessionLockFile(store.file))).toBe(true)
+  await host.control.newSession()
+  expect(existsSync(sessionLockFile(store.file))).toBe(false)
+})
+
 test("amira sessions rm refuses a session leased by another process", async () => {
   const home = mkdtempSync(path.join(tmpdir(), "amira-sessions-rm-live-"))
   const cwd = path.join(home, "project")

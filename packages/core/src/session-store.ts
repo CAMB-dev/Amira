@@ -23,6 +23,7 @@ export const SESSION_LOCK_STALE_MS = 30_000
 export const SESSION_LOCK_HEARTBEAT_MS = 10_000
 
 const sessionLocks = new Map<string, FileLock>()
+let releaseOnExit = false
 
 /** The lease next to a stored session file. It is not a session file itself. */
 export function sessionLockFile(file: string): string {
@@ -215,6 +216,19 @@ export class SessionStore {
       return
     }
     sessionLocks.set(this.file, lock)
+    if (!releaseOnExit) {
+      releaseOnExit = true
+      // A normal exit leaves no lease behind; a crash leaves one a dead pid makes stale.
+      process.once("exit", () => {
+        for (const held of sessionLocks.values()) held.release()
+      })
+    }
+  }
+
+  /** Gives up this process's lease, so another Amira may open or delete the session. */
+  release(): void {
+    sessionLocks.get(this.file)?.release()
+    sessionLocks.delete(this.file)
   }
 
   /** The mutation journal must reach disk before a tool can change a file. */
