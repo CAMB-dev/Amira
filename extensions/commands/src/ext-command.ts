@@ -47,10 +47,34 @@ export function parseExtArgs(args: string): { sub?: Subcommand; names: string[];
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
 
+/** Whether the index offers a higher version than the installed one (both valid semver). */
+function hasUpdate(p: ManagedExtension, available: AvailableExtension[]): boolean {
+  const e = available.find((a) => a.name === p.name)
+  return (
+    !!e &&
+    Bun.semver.satisfies(e.version, "*") &&
+    Bun.semver.satisfies(p.version, "*") &&
+    Bun.semver.order(e.version, p.version) > 0
+  )
+}
+
+/** What `d` (and "Show details") prints about an installed package. */
+function details(item: ManagedExtension): string {
+  return [
+    `${item.name} ${item.version} · ${item.scope}${item.enabled ? "" : " · disabled"}`,
+    item.description,
+    `Source: ${item.source}`,
+    item.trusted ? "Trusted" : "Not trusted: loads once you trust the project (amira ext trust)",
+    item.error,
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
 export function extensionRows(installed: ManagedExtension[], available: AvailableExtension[]) {
   const names = new Set(installed.map((p) => p.name))
   const rows = installed.map((p) => ({
-    label: `${p.name} ${p.version} · ${p.scope} · ${p.enabled ? "enabled" : "disabled"}${!p.trusted ? " · not trusted" : ""}${p.shadowed ? " · shadowed" : ""}${available.some((e) => e.name === p.name && Bun.semver.satisfies(e.version, "*") && Bun.semver.satisfies(p.version, "*") && Bun.semver.order(e.version, p.version) > 0) ? " · update available" : ""}`,
+    label: `${p.name} ${p.version} · ${p.scope} · ${p.enabled ? "enabled" : "disabled"}${!p.trusted ? " · not trusted" : ""}${p.shadowed ? " · shadowed" : ""}${hasUpdate(p, available) ? " · update available" : ""}`,
     description: oneLine(p.error ?? p.description),
     installed: p,
   }))
@@ -103,10 +127,11 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
   let running = false
   let sessionId = ""
   const progress = new Map<string, ExtensionProgress>()
+  // The panel shows while packages are being worked on, not while the picker or a search waits.
   api.registerPanel({
     id: "extensions",
     render: (opts) =>
-      running && opts.sessionId === sessionId
+      running && progress.size && opts.sessionId === sessionId
         ? extensionProgressLines([...progress.values()], opts.width)
         : [],
   })
@@ -114,10 +139,10 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
     progress.set(p.name, p)
     api.requestRender()
   }
-  const changed = (ctx: CommandContext, message: string) =>
-    ctx.print(
-      `${message} ${ctx.session.info().busy ? "Run /reload after the turn ends." : "Reload now? (/reload)"}`,
-    )
+  /** Nothing reloads on its own: a reload mid-turn would unload the tools the turn is using. */
+  const reloadHint = (ctx: CommandContext) =>
+    ctx.session.info().busy ? "Run /reload after the turn ends." : "Reload now? (/reload)"
+  const changed = (ctx: CommandContext, message: string) => ctx.print(`${message} ${reloadHint(ctx)}`)
   const command: CommandDefinition = {
     name: "ext",
     description: "Manage extensions: install, update, remove, enable, disable or search",
@@ -273,11 +298,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         const item = rows.rows.find((r) => r.label === pick.option)?.installed
         const entry = rows.others.find((r) => r.label === pick.option)?.available
         if (pick.key === "d") {
-          ctx.print(
-            item
-              ? `${item.name} ${item.version} · ${item.scope}\n${item.description}\nSource: ${item.source}\n${item.trusted ? "Trusted" : "Not trusted; packages will not load"}${item.error ? `\n${item.error}` : ""}`
-              : `${entry!.name} ${entry!.version}\n${entry!.description}`,
-          )
+          ctx.print(item ? details(item) : `${entry!.name} ${entry!.version}\n${entry!.description}`)
           return
         }
         if (item) {
@@ -288,9 +309,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
           )
           if (!action) return
           if (action === "Show details") {
-            ctx.print(
-              `${item.name} ${item.version} · ${item.scope}\n${item.description}\nSource: ${item.source}`,
-            )
+            ctx.print(details(item))
             return
           }
           if (
@@ -311,11 +330,9 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         }
       } catch (error) {
         if (!ctx.signal.aborted) throw error
-        for (const p of progress.values())
-          if (p.phase !== "done" && p.phase !== "failed")
-            update({ ...p, phase: "cancelled", detail: undefined })
+        // An install stops atomically (the old package or none); updates done so far stay.
         ctx.print(
-          `Extension operation cancelled.${didChange ? " Completed changes are kept; run /reload after the turn ends." : ""}`,
+          `Extension operation cancelled.${didChange ? ` Completed changes are kept. ${reloadHint(ctx)}` : ""}`,
           "warning",
         )
       } finally {

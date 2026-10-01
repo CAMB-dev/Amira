@@ -3528,6 +3528,8 @@ test("extension picker sections filter and show details at 120/60 columns in bot
       await waitFor(() => live().includes("Available from the index"), `${mode}/${cols}: available section`)
       expect(live()).toContain("Installed")
       expect(live()).toContain("d details")
+      // The progress panel is for installs and updates, not for the picker.
+      expect(live()).not.toContain("Extensions · working")
       terminal.send("avail")
       await waitFor(
         () => live().includes("filter") && !live().includes("fixture 1.0.0"),

@@ -2,7 +2,7 @@ import path from "node:path"
 import type { ExtensionAdmin, ExtensionOperationOptions, ExtensionScope } from "@amira/api"
 import { loadSettings } from "../config/index.ts"
 import { amiraHome } from "../home.ts"
-import { GitCache } from "./git-cache.ts"
+import { defaultGitCacheDir, GitCache } from "./git-cache.ts"
 import { type IndexOptions, loadIndex, searchIndex } from "./index-file.ts"
 import { installPackage, removePackage, updatePackages } from "./install.ts"
 import { listInstalled, projectScopeIsUser, type Where } from "./installed.ts"
@@ -27,7 +27,7 @@ export function createExtensionAdmin(
     )
   }
   const operation = (scope: ExtensionScope, opts: ExtensionOperationOptions) => {
-    const cacheDir = path.join(home, "cache", "git")
+    const cacheDir = defaultGitCacheDir(home)
     return {
       ...opts,
       scope: packageScope(scope, location),
