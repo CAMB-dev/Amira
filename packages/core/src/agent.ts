@@ -1353,7 +1353,8 @@ export class Agent {
       const problem = checkArgs(tool.parameters, args)
       if (problem) return await reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`, args)
 
-      this.#emitToolStart(turn, run, args)
+      // Listeners get a copy: the arguments the policy checked are the ones the tool runs with.
+      this.#emitToolStart(turn, run, copyArgs(args))
       // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
       // (spawning a process can stall for seconds on some Windows machines).
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -2019,6 +2020,14 @@ function toolError(call: ToolCallBlock, text: string): ToolResultMessage {
     toolName: call.name,
     content: [{ type: "text", text }],
     isError: true,
+  }
+}
+
+function copyArgs(args: Record<string, unknown>): Record<string, unknown> {
+  try {
+    return structuredClone(args)
+  } catch {
+    return { ...args }
   }
 }
 

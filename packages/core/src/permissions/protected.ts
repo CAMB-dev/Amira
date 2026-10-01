@@ -138,19 +138,35 @@ function workTree(cwd: string): string | undefined {
 export function hooksPathsIn(text: string): string[] {
   const out: string[] = []
   let core = false
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/(^|\s)[#;].*$/, "").trim()
-    const section = /^\[\s*([^\]\s"]+)[^\]]*\]\s*(.*)$/.exec(line)
-    let body = line
+  // A backslash at the end of a line continues it.
+  for (const raw of text.replace(/\\\r?\n/g, "").split(/\r?\n/)) {
+    const section = /^\s*\[\s*([^\]\s"]+)[^\]]*\]\s*(.*)$/.exec(raw)
+    let body = raw.trim()
     if (section) {
       core = section[1]!.toLowerCase() === "core"
-      body = section[2]!
+      body = section[2]!.trim()
     }
     if (!core || !body) continue
     const kv = /^hookspath\s*=\s*(.*)$/i.exec(body)
-    if (kv) out.push(kv[1]!.replace(/^"(.*)"$/, "$1").trim())
+    if (kv) out.push(configValue(kv[1]!))
   }
   return out.filter(Boolean)
+}
+
+/** A Git config value: quoted parts kept whole, a comment outside quotes dropped, escapes read. */
+function configValue(raw: string): string {
+  let out = ""
+  let quoted = false
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]!
+    if (c === "\\" && i + 1 < raw.length) {
+      const e = raw[++i]!
+      out += e === "n" ? "\n" : e === "t" ? "\t" : e
+    } else if (c === '"') quoted = !quoted
+    else if (!quoted && (c === "#" || c === ";")) break
+    else out += c
+  }
+  return out.trim()
 }
 
 function readText(file: string): string {

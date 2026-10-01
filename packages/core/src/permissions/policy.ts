@@ -1,7 +1,7 @@
 import type { CommandRule, PermissionDecision, PermissionMode, ShellKind, ToolDefinition } from "@amira/api"
 import type { Approver } from "../agent.ts"
 import { type ProtectOptions, protectedPath, writtenPaths } from "./protected.ts"
-import { commandName, type ParsedLine, parseBash, parsePowerShell } from "./shell-parse.ts"
+import { commandName, isWrapper, type ParsedLine, parseBash, parsePowerShell } from "./shell-parse.ts"
 
 /** The modes in the order Shift+Tab cycles them, starting from the default. */
 export const PERMISSION_MODES: readonly PermissionMode[] = ["auto", "edits", "plan"]
@@ -88,10 +88,19 @@ export function ruleLabel(rule: PermissionRule): string {
  * word for word; ask and deny rules also match with other words in between (`git -C repo
  * push` is still `git push`) and ignore case, as they only ever make Amira more careful.
  */
-export function ruleMatches(rule: CommandRule, argv: readonly string[]): boolean {
+export function ruleMatches(
+  rule: CommandRule,
+  argv: readonly string[],
+  canon: (name: string) => string = commandName,
+): boolean {
   const [name, ...rest] = rule.command
-  if (name === undefined || !argv.length || commandName(name) !== commandName(argv[0]!)) return false
-  if (rule.decision === "allow") return rest.every((w, i) => argv[i + 1] === w)
+  if (name === undefined || !argv.length || canon(name) !== canon(argv[0]!)) return false
+  if (rule.decision === "allow") {
+    // `x/git status` is not `git status`: a program the model wrote could be named git.
+    const first = argv[0]!
+    if (/[\\/]/.test(first) && first !== name) return false
+    return rest.every((w, i) => argv[i + 1] === w)
+  }
   let j = 1
   for (const w of rest) {
     const want = w.toLowerCase()
@@ -112,15 +121,60 @@ function bare(word: string): string {
  * at: the words without substitution marks, and what follows a word that opens a
  * substitution or block (`` `rm ``, `{`), as a command of its own.
  */
-function hidden(commands: string[][]): string[][] {
+function hidden(commands: string[][], shell: ShellKind): string[][] {
   const out: string[][] = []
   for (const argv of commands) {
     out.push(argv.map(bare).filter(Boolean))
+    // After a wrapper (sudo, xargs, nice, env...) any later word may be the command it runs.
+    const wrapped = isWrapper(argv[0] ?? "", shell)
     argv.forEach((word, k) => {
-      if (k > 0 && /^[`({]/.test(word)) out.push(argv.slice(k).map(bare).filter(Boolean))
+      if (k > 0 && (wrapped || /^[`({]/.test(word))) out.push(argv.slice(k).map(bare).filter(Boolean))
     })
   }
   return out.filter((argv) => argv.length > 0)
+}
+
+/** PowerShell's built-in aliases for commands rules are likely to name, by alias. */
+const POWERSHELL_ALIASES: Record<string, string> = {
+  ac: "add-content",
+  cat: "get-content",
+  cd: "set-location",
+  chdir: "set-location",
+  clc: "clear-content",
+  copy: "copy-item",
+  cp: "copy-item",
+  cpi: "copy-item",
+  curl: "invoke-webrequest",
+  del: "remove-item",
+  dir: "get-childitem",
+  erase: "remove-item",
+  gc: "get-content",
+  gci: "get-childitem",
+  irm: "invoke-restmethod",
+  iwr: "invoke-webrequest",
+  kill: "stop-process",
+  ls: "get-childitem",
+  mi: "move-item",
+  move: "move-item",
+  mv: "move-item",
+  ni: "new-item",
+  rd: "remove-item",
+  ren: "rename-item",
+  ri: "remove-item",
+  rm: "remove-item",
+  rmdir: "remove-item",
+  rni: "rename-item",
+  sc: "set-content",
+  sl: "set-location",
+  spps: "stop-process",
+  type: "get-content",
+  wget: "invoke-webrequest",
+}
+
+/** A command name with PowerShell's aliases resolved, so `rm` and `Remove-Item` are one name. */
+function powershellName(word: string): string {
+  const name = commandName(word)
+  return POWERSHELL_ALIASES[name] ?? name
 }
 
 export interface PermissionsOptions {
@@ -232,10 +286,11 @@ export class Permissions {
       // A shell tool's command is its `command` argument; without one as text there is
       // nothing to check, which counts as a command the rules cannot read.
       const command = typeof args.command === "string" ? args.command : undefined
-      if (command === undefined) return this.#shell({ commands: [], complex: "no command text" }, mode)
+      if (command === undefined)
+        return this.#shell({ commands: [], complex: "no command text" }, mode, "bash")
       const kinds = await shellKinds(tool)
       return strictest(
-        kinds.map((k) => this.#shell(k === "bash" ? parseBash(command) : parsePowerShell(command), mode)),
+        kinds.map((k) => this.#shell(k === "bash" ? parseBash(command) : parsePowerShell(command), mode, k)),
       )
     }
     if (mode === "plan" && !READ_ONLY_TOOLS.has(name)) {
@@ -244,12 +299,11 @@ export class Permissions {
     return ALLOW
   }
 
-  #shell(line: ParsedLine, mode: PermissionMode): PermissionVerdict {
-    const commands = line.complex ? [...line.commands, ...hidden(line.commands)] : line.commands
-    const strongest = (argv: string[]) =>
+  #shell(line: ParsedLine, mode: PermissionMode, shell: ShellKind): PermissionVerdict {
+    const strongest = (argv: string[], canon?: (name: string) => string, restrictOnly = false) =>
       strictest(
         this.rules
-          .filter((r) => ruleMatches(r, argv))
+          .filter((r) => (!restrictOnly || r.decision !== "allow") && ruleMatches(r, argv, canon))
           .map((rule) => ({
             decision: rule.decision,
             reason: ruleReason(rule),
@@ -257,9 +311,23 @@ export class Permissions {
             rule,
           })),
       )
-    const decided = commands.map((argv) => ({ argv, verdict: strongest(argv) }))
-    const deny = decided.find((d) => d.verdict.decision === "deny")
-    if (deny) return deny.verdict
+    const decided = line.commands.map((argv) => ({ argv, verdict: strongest(argv) }))
+    // Readings only ask and deny rules see: commands hidden in a complex line, and with
+    // PowerShell's aliases resolved (`del` for Remove-Item, `rm` for a rule on Remove-Item).
+    const extra = [
+      ...(line.complex ? hidden(line.commands, shell) : []).map((argv) => strongest(argv, undefined, true)),
+      ...(shell === "powershell"
+        ? [...line.commands, ...(line.complex ? hidden(line.commands, shell) : [])].map((argv) =>
+            strongest(argv, powershellName, true),
+          )
+        : []),
+    ]
+    const all = [...decided.map((d) => d.verdict), ...extra]
+    const deny = all.find((v) => v.decision === "deny")
+    if (deny) return deny
+    // A rule that asks is named in the question, so "Don't ask again" for it is its own.
+    const ask = all.find((v) => v.decision === "ask")
+    if (ask) return ask
     if (line.complex && (mode !== "auto" || this.rules.some((r) => r.decision !== "allow"))) {
       return {
         decision: "ask",
@@ -267,8 +335,6 @@ export class Permissions {
         cause: "complex",
       }
     }
-    const ask = decided.find((d) => d.verdict.decision === "ask")
-    if (ask) return ask.verdict
     if (
       !line.complex &&
       decided.length &&

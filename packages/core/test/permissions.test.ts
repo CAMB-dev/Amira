@@ -320,6 +320,84 @@ describe("protected paths", () => {
   })
 })
 
+describe("tricks found in review", () => {
+  test("a lone carriage return ends a PowerShell statement", async () => {
+    expect(parsePowerShell("ls\rRemove-Item -Recurse x").commands).toEqual([
+      ["ls"],
+      ["Remove-Item", "-Recurse", "x"],
+    ])
+    const rules = [user(["ls"], "allow"), user(["git", "push"], "deny")]
+    expect((await decide("ls\rRemove-Item x", { mode: "edits", rules, tool: pwsh })).decision).toBe("ask")
+    expect((await decide("ls .\rgit push --force", { rules, tool: pwsh })).decision).toBe("deny")
+  })
+
+  test("PowerShell 7 escapes inside double quotes are complex", async () => {
+    expect(parsePowerShell('git "`u{70}ush"').complex).toContain("escape")
+    expect(
+      (await decide('git "`u{70}ush"', { rules: [user(["git", "push"], "deny")], tool: pwsh })).decision,
+    ).toBe("ask")
+  })
+
+  test("bash file name patterns in any word are complex", async () => {
+    expect(parseBash("git pus[h]").complex).toContain("pattern")
+    expect(parseBash("git pus?").complex).toContain("pattern")
+    expect(parseBash("ls '*.ts'").complex).toBeUndefined()
+    expect((await decide("git pus?", { rules: [user(["git", "push"], "deny")] })).decision).toBe("ask")
+  })
+
+  test("allow rules do not cover a command named with a path, ask and deny rules do", async () => {
+    const allow = [user(["git", "status"], "allow")]
+    for (const command of ["x/git status", "/tmp/git status", "C:\\x\\git status"]) {
+      expect((await decide(command, { mode: "edits", rules: allow })).decision).toBe("ask")
+    }
+    expect(
+      (await decide("/usr/bin/git status", { mode: "edits", rules: [user(["/usr/bin/git"], "allow")] }))
+        .decision,
+    ).toBe("allow")
+    expect((await decide("/usr/bin/git push", { rules: [user(["git", "push"], "deny")] })).decision).toBe(
+      "deny",
+    )
+  })
+
+  test("aliases and git's own settings are complex; a wrapper's command meets the deny rules", async () => {
+    const deny = [user(["git", "push"], "deny"), user(["rm", "-rf"], "deny")]
+    expect(parseBash("git -c alias.p=push p").complex).toContain("git settings")
+    expect(parseBash("git config alias.p push").complex).toContain("git settings")
+    expect(parseBash("alias g=git").complex).toContain("runs other commands")
+    expect(parseBash("hash -p /usr/bin/git g").complex).toContain("runs other commands")
+    expect(parsePowerShell("Set-Alias g git").complex).toContain("runs other commands")
+    expect((await decide("echo x | xargs rm -rf", { rules: deny })).decision).toBe("deny")
+    expect((await decide("sudo git push", { rules: deny })).decision).toBe("deny")
+  })
+
+  test("PowerShell's built-in aliases meet rules on the command they stand for", async () => {
+    const deny = [user(["Remove-Item"], "deny")]
+    for (const command of ["rm -r C:\\x", "ri C:\\x", "del C:\\x", "Remove-Item x"]) {
+      expect((await decide(command, { rules: deny, tool: pwsh })).decision).toBe("deny")
+    }
+    expect((await decide("Remove-Item x", { rules: [user(["rm"], "deny")], tool: pwsh })).decision).toBe(
+      "deny",
+    )
+    // An allow rule is not widened by an alias.
+    expect(
+      (await decide("del x", { mode: "edits", rules: [user(["Remove-Item"], "allow")], tool: pwsh }))
+        .decision,
+    ).toBe("ask")
+  })
+
+  test("an ask rule inside a complex command is named in the question", async () => {
+    const v = await decide("git push $REMOTE", { rules: [user(["git", "push"], "ask")] })
+    expect(v).toMatchObject({ decision: "ask", cause: "rule" })
+    expect(v.reason).toContain('rule ["git","push"]')
+  })
+
+  test("core.hooksPath values: quotes, comments and continued lines", () => {
+    expect(hooksPathsIn('[core]\n\thooksPath = "/e ; x" # note')).toEqual(["/e ; x"])
+    expect(hooksPathsIn("[core]\n\thooksPath = a\\\nb")).toEqual(["ab"])
+    expect(hooksPathsIn("[core] hooksPath = h ; c")).toEqual(["h"])
+  })
+})
+
 describe("settings scopes", () => {
   const layer = (scope: "user" | "project" | "flags", permissions: object, file = `${scope}.json`) => ({
     scope,

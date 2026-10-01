@@ -18,6 +18,11 @@ export interface ParsedLine {
 /** Commands that run other commands or code given as words: their arguments decide what runs. */
 const BASH_WRAPPERS = new Set([
   ".",
+  // Names made to stand for other commands.
+  "alias",
+  "enable",
+  "hash",
+  "shopt",
   "builtin",
   "busybox",
   "chroot",
@@ -52,6 +57,20 @@ const BASH_WRAPPERS = new Set([
   ...shellNames(),
 ])
 
+/**
+ * A git call that sets configuration for itself (`-c`, `--config-env`) or defines an alias:
+ * either can make `git p` mean `git push`, or run a program of its choosing.
+ */
+function gitRenames(argv: readonly string[]): boolean {
+  if (commandName(argv[0] ?? "") !== "git") return false
+  return argv.some((w, i) => i > 0 && (w === "-c" || /^--config-env/.test(w) || /^alias\./i.test(w)))
+}
+
+/** Whether a command name, read by the given shell, runs another command given in its words. */
+export function isWrapper(name: string, shell: "bash" | "powershell"): boolean {
+  return (shell === "bash" ? BASH_WRAPPERS : POWERSHELL_WRAPPERS).has(commandName(name))
+}
+
 /** Options of find that run a command for each file. */
 const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"])
 
@@ -81,6 +100,12 @@ const BASH_KEYWORDS = new Set([
 
 const POWERSHELL_WRAPPERS = new Set([
   ".",
+  // Names made to stand for other commands.
+  "function",
+  "nal",
+  "new-alias",
+  "sal",
+  "set-alias",
   "icm",
   "iex",
   "ii",
@@ -172,6 +197,8 @@ export function parseBash(src: string): ParsedLine {
   const flush = () => {
     if (cur === null) return
     if (glob && words.length === 0) globName = true
+    // A pattern may expand to any file name, e.g. one the model just created (`pus[h]`).
+    else if (glob) mark("a file name pattern")
     words.push(cur)
     cur = null
     glob = false
@@ -358,7 +385,7 @@ export function parseBash(src: string): ParsedLine {
     else if (isScript(first)) mark(`the script "${first}"`)
     else if (commandName(first) === "find" && argv.some((w) => FIND_EXEC.has(w))) {
       mark("find running a command for each file")
-    }
+    } else if (gitRenames(argv)) mark("git settings that change what git runs")
   }
   if (ODD_BREAKS.test(src)) mark("an unusual line break")
   return complex === undefined ? { commands } : { commands, complex }
@@ -415,15 +442,15 @@ export function parsePowerShell(line: string): ParsedLine {
     const c = src[i]!
     const next = src[i + 1]
     // PowerShell separates words at any Unicode space, not just spaces and tabs.
-    if (c !== "\n" && /\s/.test(c)) {
+    // A carriage return alone ends a statement too.
+    if (c !== "\n" && c !== "\r" && /\s/.test(c)) {
       flush()
       i++
-    } else if (c === "\n") {
+    } else if (c === "\n" || c === "\r") {
       end()
       i++
     } else if (c === "`") {
-      if (next === "\n") i += 2
-      else if (next === "\r" && src[i + 2] === "\n") i += 3
+      if (next === "\n" || next === "\r") i += next === "\r" && src[i + 2] === "\n" ? 3 : 2
       else if (next === undefined) {
         add("`")
         i++
@@ -469,6 +496,8 @@ export function parsePowerShell(line: string): ParsedLine {
           break
         }
         if (d === "`" && i + 1 < n) {
+          // PowerShell 7 spells any character with `u{XXXX}; other escapes are control characters.
+          if (/[u0abefnrtv]/.test(src[i + 1]!)) mark("an escape sequence in a string")
           s += src[i + 1]
           i += 2
           continue
@@ -551,6 +580,7 @@ export function parsePowerShell(line: string): ParsedLine {
     if (/^\$/.test(first)) mark("a variable or assignment")
     else if (POWERSHELL_WRAPPERS.has(commandName(first))) mark(`"${first}", which runs other commands`)
     else if (isScript(first)) mark(`the script "${first}"`)
+    else if (gitRenames(argv)) mark("git settings that change what git runs")
   }
   if (ODD_BREAKS.test(src)) mark("an unusual line break")
   return complex === undefined ? { commands } : { commands, complex }
