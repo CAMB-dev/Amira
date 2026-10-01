@@ -167,6 +167,24 @@ const commandAliases: Check = (v, key, out) => {
   return kept
 }
 
+/** A command rule's words: at least the command name, none of them empty. */
+const commandWords = expect(
+  'a list of the command\'s words, e.g. ["git", "push"]',
+  (v) => Array.isArray(v) && v.length > 0 && v.every((w) => typeof w === "string" && w.trim() !== ""),
+)
+
+const permissionMode = oneOf("plan", "edits", "auto")
+
+const permissions = object({
+  mode: permissionMode,
+  rules: list(
+    object({ command: commandWords, decision: oneOf("allow", "ask", "deny"), reason: string }, [
+      "command",
+      "decision",
+    ]),
+  ),
+})
+
 const settings = object({
   $schema: string,
   model: modelRef,
@@ -219,6 +237,7 @@ const settings = object({
     images: oneOf("auto", "on", "off"),
     shellOutputLines: integer(0),
   }),
+  permissions,
 })
 
 /**
