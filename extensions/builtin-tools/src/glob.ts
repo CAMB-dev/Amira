@@ -2,7 +2,7 @@ import { statSync } from "node:fs"
 import path from "node:path"
 import { defineTool, type GlobDetails, outputSize, textResult } from "@amira/api"
 import { statOrNull, walkFiles } from "./files.ts"
-import { displayPath, resolvePath } from "./paths.ts"
+import { displayPath, outsideNote, resolvePath } from "./paths.ts"
 import { keepOutput, outputLimits } from "./truncate.ts"
 
 export const GLOB_LIMIT = 1000
@@ -19,7 +19,7 @@ export const globTool = defineTool<GlobParams>({
     "- The pattern is matched against paths relative to `path` (default: the working directory). Use `**/` to match at any depth; `*.ts` alone only matches the top level.",
     "- Supports `*`, `**`, `?`, `[abc]` and `{a,b}`. A pattern may also start with an absolute directory or `../`, which then becomes the search root.",
     `- Returns matching file paths, newest modification time first, at most ${GLOB_LIMIT}. A long list is saved whole as an artifact that output_read can read or search.`,
-    "- .git and node_modules are skipped. Use grep to search file contents.",
+    "- Skips .git, node_modules, Git-ignored files and nested repositories other than submodules. Paths outside the working directory stay absolute and are marked.",
   ].join("\n"),
   parameters: {
     type: "object",
@@ -43,6 +43,7 @@ export const globTool = defineTool<GlobParams>({
     const glob = new Bun.Glob(split.pattern)
     const matches: { abs: string; mtime: number }[] = []
     for await (const e of walkFiles(root, ctx.signal)) {
+      if (ctx.signal.aborted) return textResult("Aborted", true)
       if (!glob.match(e.rel)) continue
       matches.push({ abs: e.abs, mtime: (await statOrNull(e.abs))?.mtimeMs ?? 0 })
     }
@@ -52,9 +53,10 @@ export const globTool = defineTool<GlobParams>({
     }
 
     matches.sort((a, b) => b.mtime - a.mtime)
-    const paths = matches.map((m) => displayPath(ctx.cwd, m.abs))
-    const head = paths.slice(0, GLOB_LIMIT).join("\n")
-    const all = paths.join("\n")
+    const paths = matches.map((m) => displayPath(ctx.cwd, m.abs, false))
+    const note = outsideNote(ctx.cwd, root)
+    const head = note + paths.slice(0, GLOB_LIMIT).join("\n")
+    const all = note + paths.join("\n")
     let text = head
     if (matches.length > GLOB_LIMIT) {
       text += `\n\n(Showing the ${GLOB_LIMIT} most recently modified of ${matches.length} matches. Use a more specific pattern or path.)`

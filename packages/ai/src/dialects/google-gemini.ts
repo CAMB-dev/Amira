@@ -8,6 +8,7 @@ import { GEMINI_DIALECT, toGeminiContents } from "./google-gemini-contents.ts"
 import { geminiError } from "./google-gemini-errors.ts"
 import { toGeminiSchema } from "./google-gemini-schema.ts"
 import { parseJSON, postStream } from "./http-stream.ts"
+import { isRetryableBodyError } from "./openai-chat-errors.ts"
 
 export { toGeminiContents, toGeminiSchema }
 
@@ -114,7 +115,8 @@ async function* readPlain(text: string, type: string, acc: GeminiAccumulator): A
     return
   }
   if (!chunks.some((c) => c?.candidates || c?.promptFeedback)) {
-    yield acc.fail({ message: `expected an event stream, got ${type}: ${text.slice(0, 500)}` }, false)
+    const message = `expected an event stream, got ${type}: ${text.slice(0, 500)}`
+    yield acc.fail({ message }, isRetryableBodyError({ message }))
     return
   }
   yield { type: "start" }

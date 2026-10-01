@@ -1,4 +1,5 @@
 import type { ModelError } from "../types.ts"
+import { isRetryableBodyError } from "./openai-chat-errors.ts"
 
 /** Timeouts (408), lock conflicts (409), rate limits and server errors are worth a retry. */
 export const isRetryableStatus = (status: number) =>
@@ -32,5 +33,5 @@ export function anthropicError(raw: unknown, status?: number): { error: ModelErr
   const st = status ?? (type ? STATUS_BY_TYPE[type] : undefined)
   if (st !== undefined) error.status = st
   if (type) error.code = type
-  return { error, retryable: st !== undefined && isRetryableStatus(st) }
+  return { error, retryable: (st !== undefined && isRetryableStatus(st)) || isRetryableBodyError(error) }
 }

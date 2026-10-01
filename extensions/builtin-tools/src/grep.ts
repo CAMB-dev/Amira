@@ -4,7 +4,7 @@ import { defineTool, type GrepDetails, MAX_ARTIFACT_CHARS, outputSize, textResul
 import { splitLines } from "./diff.ts"
 import { statOrNull, type WalkEntry, walkFiles } from "./files.ts"
 import { grepMatcher } from "./grep-matcher.ts"
-import { displayPath, resolvePath } from "./paths.ts"
+import { displayPath, outsideNote, resolvePath } from "./paths.ts"
 import { decodeText, looksBinary } from "./text.ts"
 import { keepOutput, outputLimits } from "./truncate.ts"
 
@@ -33,7 +33,7 @@ export const grepTool = defineTool<GrepParams>({
     "- `path` is a file or directory (default: the working directory). `glob` filters the files of a directory, e.g. `*.ts` or `src/**/*.{ts,tsx}`; a glob without `/` matches file names at any depth.",
     "- `output_mode`: `files_with_matches` (default) lists matching files; `content` shows `file:line:text` for each matching line; `count` shows `file:count`.",
     `- \`head_limit\` caps the number of output lines (default ${DEFAULT_HEAD_LIMIT}). When all results are long they are saved as an artifact that output_read can read or search.`,
-    "- Skips .git, node_modules, binary files and files over 5 MB, and only searches the first 10,000 characters of each line. Paths are relative to the working directory.",
+    "- Skips .git, node_modules, Git-ignored files, nested repositories other than submodules, binary files and files over 5 MB, and only searches the first 10,000 characters of each line. Paths are relative to the working directory; outside paths stay absolute and are marked.",
     "- Use glob to find files by name.",
   ].join("\n"),
   parameters: {
@@ -138,7 +138,7 @@ export const grepTool = defineTool<GrepParams>({
         if (!filter(f.rel)) continue
         const text = await readText(f.abs)
         if (text === undefined) continue
-        batch.push({ shown: displayPath(ctx.cwd, f.abs), text })
+        batch.push({ shown: displayPath(ctx.cwd, f.abs, false), text })
         batched += text.length
         if (batched >= MATCH_BATCH_CHARS || batch.length >= MATCH_BATCH_FILES) await flush()
       }
@@ -151,8 +151,9 @@ export const grepTool = defineTool<GrepParams>({
 
     if (ctx.signal.aborted) return textResult("Aborted", true)
     if (total === 0) return textResult(`No matches for /${pattern}/ in ${displayPath(ctx.cwd, root)}`)
-    const head = out.slice(0, limit).join("\n")
-    const all = out.join("\n")
+    const note = outsideNote(ctx.cwd, root)
+    const head = note + out.slice(0, limit).join("\n")
+    const all = note + out.join("\n")
     const shownCount = Math.min(limit, out.length)
     let text = head
     if (total > shownCount) {

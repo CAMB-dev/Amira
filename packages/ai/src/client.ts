@@ -245,8 +245,12 @@ export function createAi(opts: AiOptions = {}): Ai {
       const host = hostOf(p.baseUrl)
       const messages = forReplay(req.messages, targetOf(p, req.model, req.tools.length > 0))
       const sendable = messages === req.messages ? req : { ...req, messages }
-      const attempt = () => withTextTools(sendable, (r) => dialect.stream(r, ctx))
-      const events = withSignatureHost(withRetry(attempt, sig, opts.retry), host)
+      const attempt = (attemptSignal: AbortSignal) =>
+        withTextTools(sendable, (r) => dialect.stream(r, { ...ctx, signal: attemptSignal }))
+      const events = withSignatureHost(
+        withRetry(attempt, sig, opts.retry, { provider: req.model.provider, model: req.model.id }),
+        host,
+      )
       return withErrorFacts(withCost(events, req.model), host)
     },
     nativeCompaction,

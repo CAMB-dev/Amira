@@ -176,9 +176,11 @@ What the model may do without asking; see [Permissions](usage.md#permissions). A
 | `compact.threshold` | `number` | `0.8` | Share of the context window at which automatic compaction starts. |  |
 | `compact.model` | `string` | the session's model | A `"provider/model"` that writes text summaries. Setting it always makes compaction a text summary, never server-side. |  |
 | `compact.layout` | `"tail" \| "recent-user"` | `"tail"` | Where a server-side checkpoint goes: `"tail"` keeps the last turns verbatim after it; `"recent-user"` compacts everything and puts the most recent user messages (up to about 64k tokens) before it, as Codex does. Text summaries always use `"tail"`. |  |
-| `retry.attempts` | `number` | `3` | Retries of a failed model request after the first try; `0` turns retrying off. A request is retried only while nothing has streamed yet. |  |
+| `retry.attempts` | `number` | `3` | Retries of a failed model request after the first try; `0` turns retrying off. A request is sent again only while nothing has streamed, so this covers provider errors and the first-content timeout. |  |
 | `retry.baseDelayMs` | `number` | `1000` | Wait before the first retry, doubling each time; a server's `Retry-After` replaces it. |  |
 | `retry.maxDelayMs` | `number` | `60000` | A wait longer than this is not waited out: the error is reported instead. |  |
+| `retry.firstContentTimeoutMs` | `number` | `150000` (150 s) | Maximum time in milliseconds to wait for the first streamed content event (text, thinking, a tool call or a hosted search); the attempt is then retried. `0` disables this timeout; keep-alive comments do not count as content. |  |
+| `retry.idleTimeoutMs` | `number` | `100000` (100 s) | Maximum silence in milliseconds between streamed content events after the first one. The reply then ends with a timeout error that keeps its partial text; it is not sent again, since that would repeat what was already shown. While a hosted web search runs, the limit is at least 10 minutes. `0` disables this timeout; keep-alive comments do not reset it. |  |
 
 ## Context management
 

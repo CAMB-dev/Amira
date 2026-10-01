@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import {
+  type AnyEvent,
   type BackgroundJobChange,
   type BackgroundJobInfo,
   defineExtension,
@@ -37,6 +38,14 @@ test("parses print mode, repeatable extensions and the positional prompt", () =>
 test("parses --json-out as an ASCII-safe JSON print destination", () => {
   const a = parseCliArgs(["-p", "--json-out", "events.json", "fix it"], here, {})
   expect(a).toMatchObject({ print: true, json: true, jsonOut: path.join(here, "events.json") })
+})
+
+test("parses --json-coalesce only for JSON print mode", () => {
+  expect(parseCliArgs(["-p", "--json", "--json-coalesce", "fix it"], here, {})).toMatchObject({
+    json: true,
+    jsonCoalesce: true,
+  })
+  expect(() => parseCliArgs(["-p", "--json-coalesce", "fix it"], here, {})).toThrow(UsageError)
 })
 
 test("rejects inconsistent flags", () => {
@@ -524,6 +533,78 @@ test("json print mode can write the event stream to a file", async () => {
   expect(lines.map((line) => JSON.parse(line)).at(-2).type).toBe("turn.end")
 })
 
+test("json output drops empty renders, omits repeated tool names and can coalesce deltas", async () => {
+  const { agent } = await mockSession([{ text: "done" }])
+  const event = (seq: number, data: AnyEvent["data"]): AnyEvent =>
+    ({
+      seq,
+      ts: seq,
+      sessionId: agent.sessionId,
+      turnId: "turn-test",
+      type: "message.delta",
+      data,
+    }) as AnyEvent
+  const pending: AnyEvent[] = [
+    { seq: 1, ts: 1, sessionId: agent.sessionId, turnId: "turn-test", type: "ui.render", data: {} },
+    event(2, { kind: "toolCall", toolCallId: "call-1", index: 0, name: "read", argsDelta: '{"p"' }),
+    { seq: 3, ts: 3, sessionId: agent.sessionId, turnId: "turn-test", type: "ui.render", data: {} },
+    event(4, { kind: "toolCall", toolCallId: "call-1", index: 0, name: "read", argsDelta: ':"x"}' }),
+  ]
+  const io = capture()
+  expect(await runPrint(agent, "go", true, { io, pending, jsonCoalesce: true })).toBe(0)
+  const events = io.out
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+  expect(events.some((e) => e.type === "ui.render")).toBe(false)
+  const calls = events.filter((e) => e.type === "message.delta" && e.data.kind === "toolCall")
+  expect(calls).toHaveLength(1)
+  expect(calls[0].data).toEqual({
+    kind: "toolCall",
+    toolCallId: "call-1",
+    index: 0,
+    name: "read",
+    argsDelta: '{"p":"x"}',
+  })
+})
+
+test("json output keeps separate deltas when coalescing is not requested", async () => {
+  const { agent } = await mockSession([{ text: "done" }])
+  const event = (seq: number, name?: string): AnyEvent =>
+    ({
+      seq,
+      ts: seq,
+      sessionId: agent.sessionId,
+      turnId: "turn-test",
+      type: "message.delta",
+      data: { kind: "toolCall", toolCallId: "call-1", index: 0, ...(name ? { name } : {}), argsDelta: "{}" },
+    }) as AnyEvent
+  const io = capture()
+  await runPrint(agent, "go", true, {
+    io,
+    pending: [event(1, "read"), event(2, "read")],
+  })
+  const calls = io.out
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((e) => e.type === "message.delta" && e.data.kind === "toolCall")
+  expect(calls).toHaveLength(2)
+  expect(calls[0].data.name).toBe("read")
+  expect(calls[1].data.name).toBeUndefined()
+})
+
+test("json-out prints a failure summary to stderr when the turn fails", async () => {
+  const { agent } = await mockSession([{ error: { message: "nope" } }])
+  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-json-failure-"))
+  const file = path.join(dir, "events.jsonl")
+  const io = capture()
+  expect(await runPrint(agent, "go", true, { io, jsonOut: file })).toBe(1)
+  expect(io.out).toBe("")
+  expect(io.err).toContain("amira: run failed: nope")
+  expect(readFileSync(file, "utf8")).toContain('"type":"turn.end"')
+})
+
 test("model errors exit with code 1", async () => {
   const { agent } = await mockSession([{ error: { message: "nope" } }])
   const io = capture()
@@ -990,4 +1071,27 @@ test("print mode refuses what would ask, saying why; auto mode runs it as before
   expect(edits.text).toContain("Tool call not approved: nobody can approve it (print mode)")
   expect(edits.text).toContain('mode "edits": shell commands ask first')
   expect((await run("auto")).ran).toEqual(["ls"])
+})
+
+test("json coalescing writes a merged delta once it is large", async () => {
+  const { agent } = await mockSession([{ text: "done" }])
+  const text = (seq: number, t: string): AnyEvent =>
+    ({
+      seq,
+      ts: seq,
+      sessionId: agent.sessionId,
+      turnId: "turn-test",
+      type: "message.delta",
+      data: { kind: "text", text: t },
+    }) as AnyEvent
+  const pending = [text(1, "a".repeat(3000)), text(2, "b".repeat(3000)), text(3, "c")]
+  const io = capture()
+  expect(await runPrint(agent, "go", true, { io, pending, jsonCoalesce: true })).toBe(0)
+  const chunks = io.out
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((e) => e.type === "message.delta" && e.data.kind === "text" && e.turnId === "turn-test")
+    .map((e) => e.data.text.length)
+  expect(chunks).toEqual([6000, 1])
 })

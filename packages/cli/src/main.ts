@@ -192,6 +192,7 @@ async function run(argv: string[]): Promise<number> {
           ? { backgroundJobTimeoutMs: config.settings.backgroundJobs.printWaitMs }
           : {}),
         ...(args.jsonOut ? { jsonOut: args.jsonOut } : {}),
+        ...(args.jsonCoalesce ? { jsonCoalesce: true } : {}),
       })
     }
     const running = () => session.tree.children.length
