@@ -131,7 +131,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `providers.<id>.apiKeyEnvFallbacks` | `string[]` | 无 | `apiKeyEnv` 未设置或为空时，按顺序尝试的环境变量。 | 是 |
 | `providers.<id>.headers` | `Record<string, string>` | 无 | 每个请求附带的额外 HTTP 请求头。 | 是 |
 | `providers.<id>.compat.maxTokensField` | `"max_tokens" \| "max_completion_tokens"` | `"max_tokens"` | `openai-chat`：携带输出 token 上限的字段。 |  |
-| `providers.<id>.compat.webSearch` | `boolean` | 仅在 api.openai.com 和 Azure OpenAI 地址上开启 | `openai-responses`：使用 provider 托管的网页搜索，此时模型不再获得 `web_search` 工具（`web_fetch` 保留）。模型的 `caps.webSearch` 优先；`web.nativeSearch: false` 会全局关闭它。 |  |
+| `providers.<id>.compat.webSearch` | `boolean` | 仅在 api.openai.com、Azure OpenAI、api.anthropic.com 和 generativelanguage.googleapis.com 上开启 | `openai-responses`、`anthropic-messages`、`google-gemini`：使用 provider 托管的网页搜索，此时模型不再获得 `web_search` 工具（`web_fetch` 保留）。同时带有 Amira 的工具时，Gemini 需要 Gemini 3 模型。模型的 `caps.webSearch` 优先；`web.nativeSearch: false` 会全局关闭它。 |  |
 | `providers.<id>.compat.streamUsage` | `boolean` | `true` | `openai-chat`：在流式响应中请求 token 用量。 |  |
 | `providers.<id>.compat.thinking` | `"adaptive" \| "budget"` | `"adaptive"` | `anthropic-messages`：`"adaptive"` 发送 effort，当前的 Claude 模型要求这种方式；`"budget"` 发送 `budget_tokens`，适用于 Claude 4.5 及更早的模型和 DeepSeek 等兼容服务。 |  |
 | `providers.<id>.compat.compaction` | `"auto" \| "on" \| "off"` | `"auto"` | 服务端（原生）压缩，适用于 `openai-responses` 和 `anthropic-messages`。`"auto"` 只在厂商自己的地址上使用，`"on"` 在任何地址上使用（例如会转发该功能的代理），`"off"` 从不使用。失败时退回文字摘要。 | 是 |
@@ -146,6 +146,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `providers.<id>.models[].cost.output` | `number` | 取模型目录 | 每百万输出 token 的价格（美元）。 |  |
 | `providers.<id>.models[].cost.cacheRead` | `number` | 取模型目录 | 每百万缓存读取 token 的价格（美元）。 |  |
 | `providers.<id>.models[].cost.cacheWrite` | `number` | 取模型目录 | 每百万缓存写入 token 的价格（美元）。 |  |
+| `providers.<id>.models[].cost.webSearch` | `number` | 未知 | 每次托管网页搜索的价格（美元）。模型目录不提供搜索费用，不设置时，搜索过的回复费用显示为未知。 |  |
 | `providers.<id>.models[].caps.tools` | `"native" \| "none"` | `"native"` | 模型不支持工具调用时设为 `"none"`。 |  |
 | `providers.<id>.models[].caps.images` | `boolean` | `false` | 模型接受图片输入。 |  |
 | `providers.<id>.models[].caps.thinking` | `boolean` | `false` | 模型支持推理；`anthropic-messages` 只在设置了这一项时请求思考。 |  |

@@ -183,11 +183,11 @@ export const annotations: Record<string, Annotation> = {
   },
   "providers.<id>.compat.webSearch": {
     default: {
-      en: "on only at api.openai.com and Azure OpenAI hosts",
-      zh: "仅在 api.openai.com 和 Azure OpenAI 地址上开启",
+      en: "on only at api.openai.com, Azure OpenAI, api.anthropic.com and generativelanguage.googleapis.com",
+      zh: "仅在 api.openai.com、Azure OpenAI、api.anthropic.com 和 generativelanguage.googleapis.com 上开启",
     },
-    en: "`openai-responses`: offer the provider's hosted web search; the model then does not get the `web_search` tool (`web_fetch` stays). A model's `caps.webSearch` wins; `web.nativeSearch: false` turns it off everywhere.",
-    zh: "`openai-responses`：使用 provider 托管的网页搜索，此时模型不再获得 `web_search` 工具（`web_fetch` 保留）。模型的 `caps.webSearch` 优先；`web.nativeSearch: false` 会全局关闭它。",
+    en: "`openai-responses`, `anthropic-messages`, `google-gemini`: offer the provider's hosted web search; the model then does not get the `web_search` tool (`web_fetch` stays). With Amira's tools, Gemini needs a Gemini 3 model. A model's `caps.webSearch` wins; `web.nativeSearch: false` turns it off everywhere.",
+    zh: "`openai-responses`、`anthropic-messages`、`google-gemini`：使用 provider 托管的网页搜索，此时模型不再获得 `web_search` 工具（`web_fetch` 保留）。同时带有 Amira 的工具时，Gemini 需要 Gemini 3 模型。模型的 `caps.webSearch` 优先；`web.nativeSearch: false` 会全局关闭它。",
   },
   "providers.<id>.compat.streamUsage": {
     default: "`true`",
@@ -259,6 +259,11 @@ export const annotations: Record<string, Annotation> = {
     default: { en: "catalog", zh: "取模型目录" },
     en: "USD per million tokens written to the prompt cache.",
     zh: "每百万缓存写入 token 的价格（美元）。",
+  },
+  "providers.<id>.models[].cost.webSearch": {
+    default: { en: "unknown", zh: "未知" },
+    en: "USD per hosted web search. Catalogs list no search fees, so without it a reply that searched shows its cost as unknown.",
+    zh: "每次托管网页搜索的价格（美元）。模型目录不提供搜索费用，不设置时，搜索过的回复费用显示为未知。",
   },
   "providers.<id>.models[].caps.tools": {
     default: '`"native"`',

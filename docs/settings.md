@@ -131,7 +131,7 @@ Amira has no built-in providers: an entry needs `dialect` and `baseUrl`, and `ba
 | `providers.<id>.apiKeyEnvFallbacks` | `string[]` | none | Variables tried in order when `apiKeyEnv` is unset or empty. | Yes |
 | `providers.<id>.headers` | `Record<string, string>` | none | Extra HTTP headers sent with every request. | Yes |
 | `providers.<id>.compat.maxTokensField` | `"max_tokens" \| "max_completion_tokens"` | `"max_tokens"` | `openai-chat`: the field that carries the output token limit. |  |
-| `providers.<id>.compat.webSearch` | `boolean` | on only at api.openai.com and Azure OpenAI hosts | `openai-responses`: offer the provider's hosted web search; the model then does not get the `web_search` tool (`web_fetch` stays). A model's `caps.webSearch` wins; `web.nativeSearch: false` turns it off everywhere. |  |
+| `providers.<id>.compat.webSearch` | `boolean` | on only at api.openai.com, Azure OpenAI, api.anthropic.com and generativelanguage.googleapis.com | `openai-responses`, `anthropic-messages`, `google-gemini`: offer the provider's hosted web search; the model then does not get the `web_search` tool (`web_fetch` stays). With Amira's tools, Gemini needs a Gemini 3 model. A model's `caps.webSearch` wins; `web.nativeSearch: false` turns it off everywhere. |  |
 | `providers.<id>.compat.streamUsage` | `boolean` | `true` | `openai-chat`: ask for token usage in the stream. |  |
 | `providers.<id>.compat.thinking` | `"adaptive" \| "budget"` | `"adaptive"` | `anthropic-messages`: `"adaptive"` sends an effort, as current Claude models require; `"budget"` sends `budget_tokens`, for Claude 4.5 and older and compatible servers such as DeepSeek. |  |
 | `providers.<id>.compat.compaction` | `"auto" \| "on" \| "off"` | `"auto"` | Server-side (native) compaction, for `openai-responses` and `anthropic-messages`. `"auto"` uses it only at the vendor's own endpoints, `"on"` at any host (e.g. a proxy that forwards it), `"off"` never. It falls back to a text summary when it fails. | Yes |
@@ -146,6 +146,7 @@ Amira has no built-in providers: an entry needs `dialect` and `baseUrl`, and `ba
 | `providers.<id>.models[].cost.output` | `number` | catalog | USD per million output tokens. |  |
 | `providers.<id>.models[].cost.cacheRead` | `number` | catalog | USD per million tokens read from the prompt cache. |  |
 | `providers.<id>.models[].cost.cacheWrite` | `number` | catalog | USD per million tokens written to the prompt cache. |  |
+| `providers.<id>.models[].cost.webSearch` | `number` | unknown | USD per hosted web search. Catalogs list no search fees, so without it a reply that searched shows its cost as unknown. |  |
 | `providers.<id>.models[].caps.tools` | `"native" \| "none"` | `"native"` | `"none"` for a model that cannot call tools. |  |
 | `providers.<id>.models[].caps.images` | `boolean` | `false` | The model accepts images. |  |
 | `providers.<id>.models[].caps.thinking` | `boolean` | `false` | The model can reason; `anthropic-messages` asks for thinking only when this is set. |  |
