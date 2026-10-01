@@ -132,7 +132,7 @@ export interface EventMap {
     dirty?: boolean
   }
   "session.title": { title: string }
-  "session.end": { reason: "exit" | "error" }
+  "session.end": { reason: "exit" | "error" | "switch" }
   "status.changed": { status: SessionStatus; reason?: string; pending?: number }
   "turn.start": { prompt: UserMessage }
   /**

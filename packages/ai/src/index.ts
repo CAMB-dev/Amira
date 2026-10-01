@@ -20,6 +20,13 @@ export type { RetryOptions } from "./retry.ts"
 export * from "./server-tools.ts"
 export { parseSSE, type SSEMessage } from "./sse.ts"
 export { TextToolParser, textToolsPrompt, toTextToolMessages } from "./text-tools.ts"
-export { adaptThinking, canReplay, canReplayServerTool, forReplay, type ReplayTarget } from "./thinking.ts"
+export {
+  adaptThinking,
+  canReplay,
+  canReplayBlock,
+  canReplayServerTool,
+  forReplay,
+  type ReplayTarget,
+} from "./thinking.ts"
 export { INVALID_ARGS_KEY, invalidArgs, parseToolArgs } from "./tool-args.ts"
 export * from "./types.ts"

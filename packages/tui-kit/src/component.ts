@@ -2,6 +2,8 @@ import type { ImagePlacement } from "./images/screen.ts"
 import type { InputEvent } from "./keys.ts"
 import type { Theme } from "./style.ts"
 
+export { CURSOR_MARKER } from "@amira/text-width"
+
 /** What a component needs to know to draw itself, handed down on every render. */
 export interface RenderContext {
   theme: Theme
@@ -40,4 +42,3 @@ export interface Component {
  * Zero-width marker a focused component puts where the terminal cursor belongs (an editor caret).
  * The renderer removes it and places the real cursor there.
  */
-export const CURSOR_MARKER = "\x1b_tk:cursor\x07"

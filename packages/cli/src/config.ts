@@ -1,5 +1,5 @@
 import type { ProviderConfig } from "@amira/ai"
-import type { Settings, ShellMode } from "@amira/api"
+import type { Settings, SettingsLayers, ShellMode } from "@amira/api"
 import {
   amiraHome,
   authFile,
@@ -15,6 +15,8 @@ import type { CliArgs } from "./args.ts"
 
 export interface Config {
   settings: Settings
+  /** Explicit settings values by source layer, for extensions that need provenance. */
+  settingsLayers: SettingsLayers
   /** The providers in settings; Amira has no others. */
   providers: ProviderConfig[]
   /** Keys from auth.json, used when the environment has none. */
@@ -45,11 +47,20 @@ export function resolveConfig(
     ...(args.disabledTools ? { tools: { disabled: args.disabledTools } } : {}),
     ...(args.permissionMode ? { permissions: { mode: args.permissionMode } } : {}),
   }
-  const { settings, warnings, permissions: layers } = loadSettings({ cwd: args.cwd, home, flags })
+  const {
+    settings,
+    warnings,
+    layers: settingsLayers,
+    permissions: permissionLayers,
+  } = loadSettings({
+    cwd: args.cwd,
+    home,
+    flags,
+  })
   // A project's allow rules count once the user trusts the project (amira ext trust), as its packages do.
   const where = { cwd: args.cwd, home }
   const trusted = projectScopeIsUser(where) || projectTrust(args.cwd, settings) === true
-  const permissions = resolvePermissions(layers, { trusted })
+  const permissions = resolvePermissions(permissionLayers, { trusted })
   warnings.push(...permissions.warnings)
   const auth = loadAuth(authFile(home), platform)
   let shell: ShellMode = settings.shell ?? "auto"
@@ -59,6 +70,7 @@ export function resolveConfig(
   }
   return {
     settings,
+    settingsLayers,
     providers: settingsProviders(settings, warnings),
     apiKeys: auth.keys,
     permissions,

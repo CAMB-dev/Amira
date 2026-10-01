@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
-import type { Message, Signature, ToolCallBlock, ToolResultMessage } from "@amira/ai"
+import {
+  canReplayBlock,
+  type Message,
+  type ReplayTarget,
+  type ToolCallBlock,
+  type ToolResultMessage,
+} from "@amira/ai"
 import { artifactIdOf } from "@amira/api"
 import { estimateTokens, isSummaryMessage } from "./compaction.ts"
 
@@ -175,17 +181,15 @@ export function duplicateView(
  * check such data against everything before it, so nothing before it may be rewritten.
  * -1 when there is none.
  */
-export function lastSealedIndex(
-  messages: readonly Message[],
-  replays: (sig: Signature, producer: string) => boolean,
-): number {
+export function lastSealedIndex(messages: readonly Message[], target: ReplayTarget): number {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]!
     if (m.role !== "assistant") continue
     const sealed = m.content.some(
       (b) =>
-        (b.type === "thinking" && (b.redacted || (b.signature && replays(b.signature, m.model.provider)))) ||
-        (b.type === "serverTool" && b.signature && replays(b.signature, m.model.provider)),
+        (b.type === "thinking" || b.type === "serverTool") &&
+        b.signature !== undefined &&
+        canReplayBlock(b, target, m.model.provider),
     )
     if (sealed) return i
   }

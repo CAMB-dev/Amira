@@ -69,7 +69,7 @@ export interface BackgroundJobWaitOptions {
   signal?: AbortSignal
 }
 
-/** Operations available to both the host view and a session-scoped view. */
+/** Operations available to extensions and to a session-scoped view. */
 export interface BackgroundJobOperations {
   start(options: BackgroundJobStartOptions): BackgroundJobInfo
   get(id: string): BackgroundJobInfo | undefined
@@ -82,7 +82,6 @@ export interface BackgroundJobOperations {
   markRead(id: string, reader: string, to?: number): void
   waitFor(id: string, options: BackgroundJobWaitOptions): Promise<BackgroundJobWaitResult>
   stop(id: string, graceMs?: number): Promise<BackgroundJobInfo>
-  stopAll(which?: (job: BackgroundJobInfo) => boolean, graceMs?: number): Promise<BackgroundJobInfo[]>
   subscribe(listener: (change: BackgroundJobChange) => void): () => void
   /** True when start rejected the job because the configured live-job limit was reached. */
   isLimitError(error: unknown): error is Error
@@ -90,9 +89,13 @@ export interface BackgroundJobOperations {
 
 /** The process-wide host view. Settings configure this view; tools use a session view instead. */
 export interface BackgroundJobRegistry extends BackgroundJobOperations {
+  stopAll(which?: (job: BackgroundJobInfo) => boolean, graceMs?: number): Promise<BackgroundJobInfo[]>
   configure(limits: { maxRunning?: number; bufferChars?: number }): void
   readonly maxRunning: number
 }
+
+/** An extension's own background jobs; host-wide lifecycle operations are not available here. */
+export type BackgroundJobExtension = BackgroundJobOperations
 
 export interface BackgroundJobSessionInfo {
   sessionId: string
@@ -106,9 +109,10 @@ export interface BackgroundJobSessionInfo {
 export interface BackgroundJobSession extends BackgroundJobOperations {
   readonly sessionId: string
   readonly depth: number
+  stopAll(which?: (job: BackgroundJobInfo) => boolean, graceMs?: number): Promise<BackgroundJobInfo[]>
 }
 
-/** Host operations needed by ExtensionAPI and by core to close session lifetimes. */
+/** Host operations used by built-in frontends and core to close session lifetimes. */
 export interface BackgroundJobHost extends BackgroundJobRegistry {
   forSession(info: BackgroundJobSessionInfo): BackgroundJobSession
   /** Stops jobs owned by a sub-agent and invalidates its session view. */

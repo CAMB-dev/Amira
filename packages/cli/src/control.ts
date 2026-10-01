@@ -74,17 +74,32 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     const running = a.turnId ? "a turn" : `a ${a.holdingFor ?? "compaction"}`
     throw new Error(`${running} is running; ${what} after it ends (or press Esc to stop it)`)
   }
-  const switchTo = (rootSessionId: string, makeNext: () => Agent, reason: "resume" | "clear" | "fork") => {
+  const switchTo = async (
+    rootSessionId: string,
+    makeNext: () => Agent,
+    reason: "resume" | "clear" | "fork",
+  ) => {
     // Nobody reads the old conversation any more: no resend of its held notices.
     const old = agent()
     old.cancelNoticeRetry()
+    // Another session is opened first: if it cannot be (another process holds it), this one
+    // keeps its jobs. The same session (a rewind) is reopened after the hand-over, which would
+    // otherwise close the new agent's job scope too.
+    const other = rootSessionId !== old.sessionId ? makeNext() : undefined
     // Top-level jobs belong to the active conversation, not to the Agent object that happened to
-    // start them. Sub-agent jobs are still stopped as their old tree is handed over.
-    void session.host.backgroundJobs.handoverRoot(old.sessionId, rootSessionId)
-    const next = makeNext()
+    // start them. Sub-agent jobs are still stopped as their old tree is handed over. The
+    // re-rooting and the notice hand-over happen before anything awaits, so a job that ends
+    // meanwhile reports to the new session.
+    const handover = session.host.backgroundJobs.handoverRoot(old.sessionId, rootSessionId)
+    const next = other ?? makeNext()
     old.handoverBackgroundNotices(next)
-    host.switchTo(next)
-    opts.announce?.(next, reason)
+    try {
+      await handover
+      await old.dispose("switch")
+    } finally {
+      host.switchTo(next)
+      opts.announce?.(next, reason)
+    }
   }
   const rewindEntry = (index: number) => {
     const a = agent()
@@ -186,7 +201,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     newSession: async () => {
       idle("start a new session")
       const store = SessionStore.create({ cwd, dir: directory() })
-      switchTo(store.id, () => session.resume(store, agent().model), "clear")
+      await switchTo(store.id, () => session.resume(store, agent().model), "clear")
     },
     sessions: () =>
       listSessions(cwd, directory()).map((s) => ({
@@ -228,7 +243,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       const file = findSession(cwd, id, directory())
       if (!file) throw new Error(`no session ${id} in ${cwd}`)
       const store = SessionStore.open(file)
-      switchTo(store.id, () => session.resume(store, agent().model), "resume")
+      await switchTo(store.id, () => session.resume(store, agent().model), "resume")
     },
     rename: (title) => {
       const a = agent()
@@ -259,7 +274,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       const forked = store.fork(target)
       // The copied journal keeps working: the fork gets the captured bytes it refers to.
       copyFileHistory(store, forked)
-      switchTo(forked.id, () => session.resume(forked, a.model), "fork")
+      await switchTo(forked.id, () => session.resume(forked, a.model), "fork")
     },
     planRewind: (index) => {
       const { a, entry } = rewindEntry(index)
@@ -315,17 +330,17 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
           // Inputs queued during the hold belong to the discarded conversation; do not wake it.
           a.abort()
           store.append({ type: "checkout", target: entry.parentId })
-          switchTo(store.id, () => session.resume(store, a.model), "resume")
+          await switchTo(store.id, () => session.resume(store, a.model), "resume")
         })
         return
       } else if (restore && a.fileRewind?.plan(entry.id).enabled) {
         a.fileRewind.restore(entry.id, entry.parentId)
-        switchTo(store.id, () => session.resume(store, a.model), "resume")
+        await switchTo(store.id, () => session.resume(store, a.model), "resume")
         return
       }
       // Nothing came before it: back to an empty conversation, still in this session.
       store.append({ type: "checkout", target: entry.parentId })
-      switchTo(store.id, () => session.resume(store, a.model), "resume")
+      await switchTo(store.id, () => session.resume(store, a.model), "resume")
     },
     compact: (instructions) => {
       idle("compact")

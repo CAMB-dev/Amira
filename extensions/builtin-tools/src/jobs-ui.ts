@@ -7,6 +7,7 @@ import {
   clip,
   type ExtensionAPI,
   formatElapsed,
+  hostBackgroundJobs,
   type JobListDetails,
   type PanelDefinition,
   plural,
@@ -317,9 +318,9 @@ const unsubscribe: (() => void)[] = []
 
 /**
  * Adds everything above to the extension's registrations and starts the clean-up, for the
- * jobs in `registry` (the tools' own by default; tests pass another without changing the tools').
+ * jobs in `registry` (the host's view by default; tests pass another without changing the tools').
  */
-export function registerJobs(api: ExtensionAPI, registry: JobRegistry = api.backgroundJobs): void {
+export function registerJobs(api: ExtensionAPI, registry: JobRegistry = hostBackgroundJobs()): void {
   for (const off of unsubscribe.splice(0)) off()
   configureJobs(api.settings.backgroundJobs, registry)
   let lastOutputRender = 0

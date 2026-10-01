@@ -261,7 +261,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     "dirty?": bool,
   }),
   "session.title": obj({ title: str }),
-  "session.end": obj({ reason: strings("exit", "error") }),
+  "session.end": obj({ reason: strings("exit", "error", "switch") }),
   "status.changed": obj({
     status: strings("idle", "working", "blocked", "error"),
     "reason?": str,

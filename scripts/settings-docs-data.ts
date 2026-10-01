@@ -104,9 +104,9 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
     title: { en: "MCP servers", zh: "MCP 服务器" },
     intro: {
       // biome-ignore lint/suspicious/noTemplateCurlyInString: the MCP extension's own ${VAR} syntax
-      en: "The MCP extension reads `mcpServers` from `.mcp.json` in the working directory, then from the user file, the project file and `settings.local.json`; a later entry of the same name replaces an earlier one. Strings may use `${VAR}` and `${VAR:-default}`. Servers from project files (`.mcp.json` included) are trusted only when the project directory, or a parent, is in `mcpTrustedProjects`: otherwise their stdio servers do not start, their HTTP servers get no environment variables, and they cannot replace a server the user file defines.",
+      en: "The MCP extension reads `mcpServers` from `.mcp.json` in the working directory, then from the user file, the project file and `settings.local.json`; a later entry of the same name replaces an earlier one. Strings may use `${VAR}` and `${VAR:-default}`. Servers from project files (`.mcp.json` included) are trusted only when the project directory, or a parent, is in `mcpTrustedProjects`: otherwise their stdio servers do not start, their HTTP servers get no environment variables, and they cannot replace a server the user file defines. `/reload` reads these files again: it starts servers you added, stops removed ones, restarts changed ones and leaves the others connected.",
       // biome-ignore lint/suspicious/noTemplateCurlyInString: the MCP extension's own ${VAR} syntax
-      zh: "MCP 扩展依次从工作目录的 `.mcp.json`、用户文件、项目文件和 `settings.local.json` 读取 `mcpServers`，同名条目以后读到的为准。字符串中可以使用 `${VAR}` 和 `${VAR:-default}`。来自项目文件（包括 `.mcp.json`）的服务器，只有在项目目录或其上级目录列在 `mcpTrustedProjects` 中时才受信任；否则其中的 stdio 服务器不会启动，HTTP 服务器拿不到环境变量，也不能替换用户文件中定义的同名服务器。",
+      zh: "MCP 扩展依次从工作目录的 `.mcp.json`、用户文件、项目文件和 `settings.local.json` 读取 `mcpServers`，同名条目以后读到的为准。字符串中可以使用 `${VAR}` 和 `${VAR:-default}`。来自项目文件（包括 `.mcp.json`）的服务器，只有在项目目录或其上级目录列在 `mcpTrustedProjects` 中时才受信任；否则其中的 stdio 服务器不会启动，HTTP 服务器拿不到环境变量，也不能替换用户文件中定义的同名服务器。`/reload` 会重新读取这些文件：启动新增的服务器，停止已删除的服务器，重启有改动的服务器，其余服务器保持连接。",
     },
     keys: ["mcpServers", "mcpTrustedProjects"],
   },

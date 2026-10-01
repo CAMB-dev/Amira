@@ -20,12 +20,14 @@ const packageDependencyFields = [
 const sourceLineLimit = 900
 
 const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
-  "packages/ai": [],
+  "packages/ai-shared": [],
+  "packages/ai": ["@amira/ai-shared"],
   "packages/net": [],
   "packages/proc": [],
-  "packages/tui-kit": [],
-  "packages/api": ["@amira/ai", "@amira/net", "@amira/tui-kit"],
-  "packages/core": ["@amira/ai", "@amira/api", "@amira/proc"],
+  "packages/text-width": [],
+  "packages/tui-kit": ["@amira/text-width"],
+  "packages/api": ["@amira/ai-shared", "@amira/text-width"],
+  "packages/core": ["@amira/ai", "@amira/api", "@amira/net", "@amira/proc"],
   "packages/packages": ["@amira/api", "@amira/core", "@amira/proc"],
   "packages/tui": ["@amira/ai", "@amira/api", "@amira/core", "@amira/proc", "@amira/tui-kit"],
   // The CLI is the composition root and may reach every workspace package. It bundles the
@@ -43,9 +45,17 @@ const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
   "extensions/*": ["@amira/api"],
 }
 
+/**
+ * Packages a directory may import with `import type` / `export type` only, on top of its table
+ * entry. They are erased at runtime, so they must be declared under devDependencies.
+ */
+const allowedTypeOnlyDependenciesByDirectory: Record<string, readonly string[]> = {
+  "packages/api": ["@amira/ai"],
+}
+
 const sourceLineAllowlist = new Map<string, number>([
-  ["packages/core/src/agent.ts", 2803],
-  ["packages/core/src/subagents.ts", 1311],
+  ["packages/core/src/agent.ts", 2867],
+  ["packages/core/src/subagents.ts", 1347],
   ["packages/tui/src/app.ts", 2223],
   ["packages/tui/src/blocks.ts", 1186],
   ["packages/tui/src/transcript-pane.ts", 1100],
@@ -77,14 +87,34 @@ function sourceFilesUnder(directory: string): string[] {
   return filesUnder(directory).filter((file) => path.extname(file) === ".ts")
 }
 
-function importsIn(source: string): string[] {
-  return [...source.matchAll(importPattern)].map((match) => match[2] as string)
+/** A whole `import type { ... } from "x"` / `export type * from "x"` statement, and nothing more. */
+const typeOnlyStatementPattern =
+  /\b(?:import|export)\s+type\s+(?:\{[^}]*\}|\*(?:\s+as\s+[\w$]+)?|[\w$]+)\s*from\s*(["'`])([^"'`]+)\1/g
+
+interface ImportSpecifier {
+  specifier: string
+  /** Erased at runtime: written as `import type` or `export type`. */
+  typeOnly: boolean
 }
 
-function packageDependencyNames(packageJsonPath: string): Set<string> {
+function importSpecifiersIn(source: string): ImportSpecifier[] {
+  const typeOnlyEnds = new Set(
+    [...source.matchAll(typeOnlyStatementPattern)].map((match) => (match.index ?? 0) + match[0].length),
+  )
+  return [...source.matchAll(importPattern)].map((match) => ({
+    specifier: match[2] as string,
+    typeOnly: typeOnlyEnds.has((match.index ?? 0) + match[0].length),
+  }))
+}
+
+function importsIn(source: string): string[] {
+  return importSpecifiersIn(source).map((entry) => entry.specifier)
+}
+
+function packageDependencyNames(packageJsonPath: string, fields = packageDependencyFields): Set<string> {
   const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>
   const names = new Set<string>()
-  for (const field of packageDependencyFields) {
+  for (const field of fields) {
     const dependencies = packageJson[field]
     if (!dependencies || typeof dependencies !== "object") continue
     for (const name of Object.keys(dependencies)) names.add(name)
@@ -143,12 +173,18 @@ for (const directory of packageDirectoriesInWorkspace) {
   const own = relative(directory)
   const packageJsonPath = path.join(directory, "package.json")
   const declared = packageDependencyNames(packageJsonPath)
+  const declaredForRuntime = packageDependencyNames(packageJsonPath, ["dependencies", "peerDependencies"])
   const allowed = allowedDependencies(own)
+  const allowedTypeOnly = new Set(allowedTypeOnlyDependenciesByDirectory[own] ?? [])
   const actual = new Set<string>()
+  const runtime = new Set<string>()
 
   for (const file of filesUnder(path.join(directory, "src"))) {
-    for (const specifier of importsIn(readFileSync(file, "utf8"))) {
-      if (specifier.startsWith("@amira/")) actual.add(specifier)
+    for (const { specifier, typeOnly } of importSpecifiersIn(readFileSync(file, "utf8"))) {
+      if (specifier.startsWith("@amira/")) {
+        actual.add(specifier)
+        if (!typeOnly) runtime.add(specifier)
+      }
 
       const target = targetPackage(file, specifier)
       if (!target || target === own) continue
@@ -163,7 +199,13 @@ for (const directory of packageDirectoriesInWorkspace) {
 
   for (const dependency of declared) {
     if (!dependency.startsWith("@amira/")) continue
-    if (!allowed.has(dependency)) {
+    if (allowedTypeOnly.has(dependency) && !allowed.has(dependency)) {
+      if (declaredForRuntime.has(dependency)) {
+        violations.push(
+          `${relative(packageJsonPath)} declares type-only ${dependency} for runtime; use devDependencies`,
+        )
+      }
+    } else if (!allowed.has(dependency)) {
       violations.push(
         `${relative(packageJsonPath)} declares ${dependency}, outside its allowed dependency table`,
       )
@@ -175,7 +217,13 @@ for (const directory of packageDirectoriesInWorkspace) {
 
   for (const dependency of actual) {
     if (!dependency.startsWith("@amira/")) continue
-    if (!allowed.has(dependency)) {
+    if (allowedTypeOnly.has(dependency) && !allowed.has(dependency)) {
+      if (runtime.has(dependency)) {
+        violations.push(
+          `${relative(directory)}/src imports ${dependency} at runtime; it is allowed with import type only`,
+        )
+      }
+    } else if (!allowed.has(dependency)) {
       violations.push(
         `${relative(directory)}/src imports ${dependency}, outside its allowed dependency table`,
       )

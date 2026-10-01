@@ -93,11 +93,17 @@ interface LastTurn {
  * Resolves with the exit code once stdin closes and the running turn has finished.
  */
 export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promise<number> {
-  const io = opts.io ?? stdio()
   const { ai, commands } = session
   let agent = session.agent
+  // A force exit starts the agent's cleanup without waiting for it: nobody is left to wait for.
+  const exitNow = (code: number) => {
+    void agent.dispose("exit")
+    process.exit(code)
+  }
+  const io = opts.io ?? stdio(() => exitNow(0))
   const ui = session.ui ?? new UiRequests(agent.bus, { sessionId: agent.sessionId })
   const nonInteractive = session.nonInteractive === true || session.ui === undefined
+  let lastTurn: LastTurn | undefined
   const prepareAgent = (a: Agent) => {
     if (!nonInteractive) return
     a.setNonInteractive()
@@ -108,10 +114,23 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       ]),
     )
   }
+  const replaceAgent = async (next: Agent) => {
+    const old = agent
+    if (old === next) return
+    const handover =
+      old.sessionId !== next.sessionId
+        ? old.backgroundJobsHost?.handoverRoot(old.sessionId, next.sessionId)
+        : undefined
+    old.handoverBackgroundNotices(next)
+    await handover
+    await old.dispose("switch")
+    agent = next
+    prepareAgent(agent)
+    lastTurn = undefined
+  }
   prepareAgent(agent)
   if (nonInteractive) ui.unavailable = "rpc mode has no UI client"
   let closed = false
-  let lastTurn: LastTurn | undefined
   const offSwitch = commands?.onSwitch((next) => {
     agent = next
     prepareAgent(agent)
@@ -294,8 +313,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       if (!opts.resume) throw new RpcError("not_supported", "this host cannot resume sessions")
       const next = await opts.resume(sessionId)
       if (!next) throw new RpcError("not_found", `no session ${sessionId}`)
-      agent = next
-      lastTurn = undefined
+      await replaceAgent(next)
       return { sessionId: agent.sessionId }
     },
     "command.list": () => ({ commands: needCommands().list(), aliases: needCommands().aliases() }),
@@ -377,7 +395,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   // First Ctrl+C aborts the turn; a second one exits.
   let interrupted = false
   const onSigint = () => {
-    if (interrupted) process.exit(130)
+    if (interrupted) return exitNow(130)
     interrupted = true
     agent.abort()
   }
@@ -398,6 +416,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     return 0
   } finally {
     process.off("SIGINT", onSigint)
+    // Bounded like the other frontends' exit (main.ts); dispose is idempotent.
+    await Promise.race([agent.dispose("exit"), Bun.sleep(5000)])
     offEvents()
     offTurns()
     offSwitch?.()
@@ -450,9 +470,9 @@ function lastAssistantText(messages: Message[]): string | undefined {
 }
 
 /** stdin split into lines, and stdout with backpressure. */
-function stdio(): RpcIO {
+function stdio(onClosed: () => void): RpcIO {
   // The client went away; nobody is left to report to.
-  const out = stdoutWriter({ onClosed: () => process.exit(0) })
+  const out = stdoutWriter({ onClosed })
   return {
     lines: readLines(process.stdin),
     write: (line) => out.write(line),

@@ -265,7 +265,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 
 ## MCP 服务器
 
-MCP 扩展依次从工作目录的 `.mcp.json`、用户文件、项目文件和 `settings.local.json` 读取 `mcpServers`，同名条目以后读到的为准。字符串中可以使用 `${VAR}` 和 `${VAR:-default}`。来自项目文件（包括 `.mcp.json`）的服务器，只有在项目目录或其上级目录列在 `mcpTrustedProjects` 中时才受信任；否则其中的 stdio 服务器不会启动，HTTP 服务器拿不到环境变量，也不能替换用户文件中定义的同名服务器。
+MCP 扩展依次从工作目录的 `.mcp.json`、用户文件、项目文件和 `settings.local.json` 读取 `mcpServers`，同名条目以后读到的为准。字符串中可以使用 `${VAR}` 和 `${VAR:-default}`。来自项目文件（包括 `.mcp.json`）的服务器，只有在项目目录或其上级目录列在 `mcpTrustedProjects` 中时才受信任；否则其中的 stdio 服务器不会启动，HTTP 服务器拿不到环境变量，也不能替换用户文件中定义的同名服务器。`/reload` 会重新读取这些文件：启动新增的服务器，停止已删除的服务器，重启有改动的服务器，其余服务器保持连接。
 
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
 | --- | --- | --- | --- | --- |

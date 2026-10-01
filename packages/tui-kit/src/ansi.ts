@@ -71,11 +71,5 @@ export const queries = {
   background: "\x1b]11;?\x07",
 }
 
-/** Matches CSI, OSC, DCS/APC/PM/SOS strings and other escapes (`ESC 7`, `ESC c`, `ESC ( B`, ...). */
-export const ANSI_PATTERN =
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences are the point
-  /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P_^X][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]*[0-~]/g
-
-export function stripAnsi(s: string): string {
-  return s.includes(ESC) ? s.replace(ANSI_PATTERN, "") : s
-}
+// One escape-sequence matcher for the workspace, shared with the width code.
+export { ANSI_PATTERN, stripAnsi } from "@amira/text-width"

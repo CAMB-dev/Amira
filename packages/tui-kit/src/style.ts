@@ -1,3 +1,5 @@
+import { sgrAttributes, sgrGroup } from "@amira/text-width"
+
 export type StyleFn = (text: string) => string
 
 let colorOn = colorSupported(process.env)
@@ -201,32 +203,7 @@ export function themeToken(theme: Theme, name: string): StyleFn | undefined {
   return (theme as Record<string, StyleFn | undefined>)[name]
 }
 
-/**
- * Splits SGR parameters into single attributes: `1;38;5;196` is `1` and `38;5;196`, while the
- * colon form `38:5:196` is one parameter already. An empty parameter is a reset (`0`).
- */
-export function sgrAttributes(params: string): string[] {
-  const parts = params.split(";")
-  const out: string[] = []
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i]!
-    if ((p === "38" || p === "48" || p === "58") && (parts[i + 1] === "5" || parts[i + 1] === "2")) {
-      const n = parts[i + 1] === "5" ? 2 : 4
-      out.push(parts.slice(i, i + 1 + n).join(";"))
-      i += n
-    } else out.push(p === "" ? "0" : p)
-  }
-  return out
-}
-
-/** Attributes in the same group replace each other: all foreground colors are one group, and so on. */
-export function sgrGroup(attr: string): string {
-  const n = Number.parseInt(attr, 10)
-  if ((n >= 30 && n <= 39) || (n >= 90 && n <= 97)) return "fg"
-  if ((n >= 40 && n <= 49) || (n >= 100 && n <= 107)) return "bg"
-  if (n === 58 || n === 59) return "ul"
-  return String(n)
-}
+export { sgrAttributes, sgrGroup }
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching SGR sequences
 const SGR_SEQUENCE = /\x1b\[([0-9;:]*)m/g

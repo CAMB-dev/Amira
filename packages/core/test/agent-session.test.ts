@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { existsSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -9,7 +10,7 @@ import { splitHistory, summaryMessages } from "../src/compaction.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { amiraHome } from "../src/home.ts"
 import { Permissions } from "../src/permissions/policy.ts"
-import { SessionStore } from "../src/session-store.ts"
+import { SessionStore, sessionLockFile } from "../src/session-store.ts"
 
 async function setup(steps: MockStep[], extra: Partial<AgentOptions> = {}) {
   const mock = createMockDialect(steps)
@@ -38,6 +39,24 @@ async function setup(steps: MockStep[], extra: Partial<AgentOptions> = {}) {
 }
 
 const types = (events: AnyEvent[]) => events.map((e) => e.type)
+
+test("dispose cancels notice retries, releases the lease and is idempotent", async () => {
+  const { agent, session, events, bus } = await setup([{ error: { message: "failed" } }])
+  const pending = agent.expectNotice()
+  pending.deliver(userMessage("background result"), { wake: false })
+  await agent.prompt("try once")
+  expect(agent.noticeRetry).toBeDefined()
+
+  await agent.dispose("switch")
+  await agent.dispose("switch")
+  await bus.flush()
+
+  expect(agent.noticeRetry).toBeUndefined()
+  expect(agent.expectedNotices).toBe(0)
+  expect(events.filter((event) => event.type === "session.end")).toHaveLength(1)
+  expect(events.find((event) => event.type === "session.end")?.data).toEqual({ reason: "switch" })
+  expect(existsSync(sessionLockFile(session.file))).toBe(false)
+})
 
 test("a top-level background notice follows the replacement session", async () => {
   const { agent, ai, mock, bus } = await setup([
@@ -70,7 +89,7 @@ test("a top-level background notice follows the replacement session", async () =
   expect(JSON.stringify(mock.requests.at(-1)?.messages)).toContain("the job ended")
 })
 
-test("a notice asked for after several switches reaches the latest session", async () => {
+test("a notice asked for after several switches (and disposals) reaches the latest session", async () => {
   const { agent, ai, mock, bus } = await setup([
     { toolCalls: [{ name: "start", args: {}, id: "c1" }] },
     { text: "started" },
@@ -94,8 +113,10 @@ test("a notice asked for after several switches reaches the latest session", asy
   const make = () => new Agent({ ai, model: ai.model("mock/m"), cwd: "/proj", systemPrompt: "sys", bus })
   const second = make()
   agent.handoverBackgroundNotices(second)
+  await agent.dispose("switch")
   const third = make()
   second.handoverBackgroundNotices(third)
+  await second.dispose("switch")
   // A job started in the first session ends now: its notice goes to the third.
   toolSession!.expectNotice!().deliver(userMessage("the job ended"), { wake: true })
 

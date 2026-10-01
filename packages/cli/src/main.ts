@@ -142,6 +142,11 @@ async function run(argv: string[]): Promise<number> {
     shell: config.shell,
     requestedDisabled: config.requestedDisabled,
     settings: config.settings,
+    settingsLayers: config.settingsLayers,
+    reloadSettings: () => {
+      const reloaded = resolveConfig(args)
+      return { settings: reloaded.settings, layers: reloaded.settingsLayers, warnings: reloaded.warnings }
+    },
     permissions: config.permissions,
     providers: config.providers,
     apiKeys: config.apiKeys,
@@ -220,16 +225,12 @@ async function run(argv: string[]): Promise<number> {
   } finally {
     stopWorkspace()
     const last = agentRef ?? agent
-    last.cancelNoticeRetry()
-    last.bus.emit("session.end", { reason: "exit" }, { sessionId: last.sessionId })
+    const disposing = last.dispose("exit")
     // Extensions' exit handlers (e.g. a hook for the session's end) get the same few seconds,
     // less a moment for what they started to be killed once they are told to stop.
     const exiting = host.runExitHandlers(3500, 1000)
-    // Sub-agents still running (in the background) end with the session; give them a moment
-    // to stop cleanly. Give a catalog download a moment to reach the cache, so short runs still fill it.
-    session.tree.abortAll("the session ended")
-    const children = Promise.all(session.tree.children.map((c) => c.result()))
-    await Promise.race([Promise.all([children, catalogRefresh, exiting]), Bun.sleep(5000)])
+    // Give the agent tree and a catalog download a moment to stop cleanly or reach the cache.
+    await Promise.race([Promise.all([disposing, catalogRefresh, exiting]), Bun.sleep(5000)])
   }
 }
 

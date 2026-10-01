@@ -9,12 +9,17 @@ import {
   type ExtensionAPI,
   type FileRestorationOwner,
   hostBackgroundJobs,
+  installHostNet,
   installHostProcess,
   type NoticeLevel,
   type RunCommandOptions,
   type RunCommandResult,
   type Settings,
+  type SettingsLayer,
+  type SettingsLayers,
+  type SettingsView,
 } from "@amira/api"
+import { fetchPublic, guardedFetch, isPrivateAddress, NetError, parseHttpUrl, readCapped } from "@amira/net"
 import {
   backgroundJobs,
   DEFAULT_MAX_OUTPUT_CHARS,
@@ -51,6 +56,14 @@ installHostProcess({
   backgroundJobs: backgroundJobHost,
   isStandbyGoneError: (error) => error instanceof StandbyGoneError,
 })
+installHostNet({
+  fetchPublic,
+  guardedFetch,
+  isPrivateAddress,
+  parseHttpUrl,
+  readCapped,
+  isNetError: (error) => error instanceof NetError,
+})
 
 /**
  * Lets extensions anywhere on disk `import "@amira/api"` without installing it,
@@ -71,6 +84,8 @@ export interface ExtensionHostOptions {
   bus: EventBus
   /** Merged settings handed to extensions. Default {}. */
   settings?: Settings
+  /** Explicit settings values by source layer, matching `settings`. */
+  settingsLayers?: SettingsLayers
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
@@ -128,7 +143,7 @@ export class ExtensionHost {
   readonly images: ImageProviderRegistry
   /** What extensions offer each other (D88). */
   readonly services: ServiceRegistry
-  /** The host-level job view shared by extensions and frontends. */
+  /** The host-level job view used by built-in frontends and host lifecycle code. */
   readonly backgroundJobs: BackgroundJobHost
 
   constructor(opts: ExtensionHostOptions) {
@@ -151,9 +166,9 @@ export class ExtensionHost {
     return [...this.#disposers.keys()]
   }
 
-  /** The settings handed to extensions loaded from now on (e.g. on a reload, with new skill directories). */
-  setSettings(settings: Settings): void {
-    this.#opts = { ...this.#opts, settings }
+  /** The settings handed to extensions loaded from now on (e.g. on a reload). */
+  setSettings(settings: Settings, settingsLayers: SettingsLayers = {}): void {
+    this.#opts = { ...this.#opts, settings, settingsLayers }
   }
 
   async load(ext: Extension, source: string): Promise<boolean> {
@@ -409,7 +424,7 @@ export class ExtensionHost {
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
       // Each extension gets its own frozen copy, so none can change what another reads.
-      settings: deepFreeze(structuredClone(this.#opts.settings ?? {})),
+      settings: settingsView(this.#opts.settings ?? {}, this.#opts.settingsLayers ?? {}),
       registerStatusItem: (item) => {
         const off = this.status.register(item)
         this.#requestRender()
@@ -488,4 +503,21 @@ function deepFreeze<T>(value: T): T {
     Object.freeze(value)
   }
   return value
+}
+
+/**
+ * The frozen settings snapshot with `layers` as a non-enumerable method, so spreading,
+ * `Object.keys`, JSON and `structuredClone` still see plain settings.
+ */
+function settingsView(settings: Settings, layers: SettingsLayers): SettingsView {
+  const view = structuredClone(settings)
+  const layerSnapshot = deepFreeze(structuredClone(layers))
+  const emptyLayers: readonly SettingsLayer[] = Object.freeze([])
+  Object.defineProperty(view, "layers", {
+    value: <K extends keyof Settings>(key: K) =>
+      (Object.hasOwn(layerSnapshot, key) ? layerSnapshot[key] : emptyLayers) as readonly SettingsLayer<
+        NonNullable<Settings[K]>
+      >[],
+  })
+  return deepFreeze(view) as SettingsView
 }

@@ -1,3 +1,4 @@
+import * as shared from "@amira/ai-shared"
 import type { ModelErrorKind } from "./errors.ts"
 // Unified message model. Amira's own format is the source of truth;
 // dialect adapters translate to and from the wire format at the edge.
@@ -240,26 +241,11 @@ export type StreamEvent =
   /** A retryable failure; the request is sent again after delayMs. Timeouts may follow partial content. */
   | { type: "retry"; attempt: number; maxRetries: number; delayMs: number; error: ModelError }
 
-export function emptyUsage(): Usage {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-}
+/** A usage value with all token counters at zero. */
+export const emptyUsage: () => Usage = shared.emptyUsage
 
-export function addUsage(a: Usage, b: Usage): Usage {
-  const sum: Usage = {
-    input: a.input + b.input,
-    output: a.output + b.output,
-    cacheRead: a.cacheRead + b.cacheRead,
-    cacheWrite: a.cacheWrite + b.cacheWrite,
-  }
-  if (a.cost !== undefined || b.cost !== undefined) sum.cost = (a.cost ?? 0) + (b.cost ?? 0)
-  if (a.webSearchRequests !== undefined || b.webSearchRequests !== undefined)
-    sum.webSearchRequests = (a.webSearchRequests ?? 0) + (b.webSearchRequests ?? 0)
-  const unknownSearch = [a, b].some((u) => (u.webSearchRequests ?? 0) > 0 && u.webSearchCost === undefined)
-  if (unknownSearch) delete sum.cost
-  else if (a.webSearchCost !== undefined || b.webSearchCost !== undefined)
-    sum.webSearchCost = (a.webSearchCost ?? 0) + (b.webSearchCost ?? 0)
-  return sum
-}
+/** Adds token and search usage, keeping cost unknown when an included search was not priced. */
+export const addUsage: (a: Usage, b: Usage) => Usage = shared.addUsage
 
 export function text(t: string): TextBlock {
   return { type: "text", text: t }
