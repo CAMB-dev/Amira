@@ -47,7 +47,8 @@ export const EXT_USAGE = `Usage:
   amira ext disable <name>...    Stop loading packages, keeping them installed and pinned
   amira ext enable <name>...     Load disabled packages again
   amira ext trust                Load this project's own packages (<cwd>/.amira/packages)
-  amira ext untrust              Stop loading this project's own packages
+                                 and apply its permission allow rules
+  amira ext untrust              Stop loading this project's own packages and allow rules
   amira ext update [name]...     Fetch the newest version and re-pin (all by default)
   amira ext search [query]       Search the extensions index
   amira ext cache [list]         Show the cached git repositories

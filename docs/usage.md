@@ -32,9 +32,46 @@ The bundled tools can read, search, write and edit files, run shell commands, se
 
 Files are changed with one of two editing tools. `edit` replaces exact text in one file. `apply_patch` takes a patch in the Codex format (`*** Begin Patch` … `*** End Patch`) that can add, delete, update and move several files at once; it checks every hunk before writing anything and rolls back what it wrote if a write fails. Each model gets `edit` unless its provider settings choose otherwise; see [Editing tools](providers.md#editing-tools). `write` is always available. `/tools` lists the tool the current model does not use as disabled, with the reason, and `/tools enable` cannot turn it on; change the setting instead.
 
-An extension can block a tool call or require approval before it runs. This is not a blanket confirmation for every edit or command: the extension decides which calls need approval. A request shows the tool, reason and a preview or arguments. Select an option with the arrows, then Enter; confirmations begin with no option selected. Esc denies the call and stops the turn.
+Approval requests come from the [permission policy](#permissions) and from extensions, which can block a tool call or require approval before it runs. A request shows the tool, the reason (with the mode or rule that caused it) and a preview or arguments. Select an option with the arrows, then Enter; confirmations begin with no option selected. Esc denies the call and stops the turn.
 
-When offered, `Don't ask again` allows that tool **for the same stated reason**, for the rest of the session; it does not save a persistent permission. Sub-agent approval requests are decided by their parent agent's model. Print mode cannot answer dialogs, so requested approvals are denied and questions are cancelled. RPC clients must answer UI requests explicitly.
+When offered, `Don't ask again` allows that tool **for the same stated reason**, for the rest of the session; it does not save a persistent permission. A sub-agent's permission questions go to you, not to its parent; questions an extension raises for a sub-agent are still decided by the parent agent's model. Print mode cannot answer dialogs, so requested approvals are denied and questions are cancelled. RPC clients must answer UI requests explicitly; once an RPC client closes stdin, approvals are denied.
+
+## Permissions
+
+The permission mode decides what the model may do without asking. It applies to the whole session, including sub-agents.
+
+| Mode | What it does |
+| --- | --- |
+| `auto` (default) | Runs everything without asking, except where your rules or protected files say otherwise |
+| `edits` | Changes files without asking; asks before shell commands your `allow` rules do not cover |
+| `plan` | Read-only: no file changes and no shell commands; asks before tools it does not know to be read-only, such as MCP tools |
+
+Press Shift+Tab in the UI to cycle `auto`, `edits` and `plan`; a mode other than `auto` shows next to the model in the input box's border. `--permission-mode <mode>` or `"permissions": {"mode": "edits"}` in settings chooses the mode at startup. Plan mode blocks every shell command for now, because Amira cannot yet prove that a command only reads.
+
+Command rules allow, ask about or deny shell commands by their words:
+
+```json
+{
+  "permissions": {
+    "mode": "edits",
+    "rules": [
+      { "command": ["git", "status"], "decision": "allow" },
+      { "command": ["git", "push"], "decision": "ask", "reason": "Review what goes out" },
+      { "command": ["rm", "-rf"], "decision": "deny" }
+    ]
+  }
+}
+```
+
+A rule matches the words of a command (its argv), not the text: `git status --short` matches `["git", "status"]`, `git statusx` does not. The command name also matches as a path or with a Windows extension (`/usr/bin/git`, `git.exe`). `ask` and `deny` rules also match when other words come between theirs (`git -C repo push` matches `["git", "push"]`) and ignore case; `allow` rules must match the start of the command exactly. When several rules match, `deny` wins over `ask` and `ask` over `allow`. `allow` only means "do not ask": it never lifts plan mode or a protected file.
+
+Commands joined with `&&`, `||`, `;`, `|` or newlines are split and each part is checked. Commands Amira cannot check word by word ask instead: substitutions such as `$(...)` and backticks, variables, redirections into files, here-documents and here-strings, grouping, wrappers that run other commands (`eval`, `sudo`, `bash -c`, `Invoke-Expression`, `Start-Process`, interpreters) and scripts. In `auto` mode they still run without asking unless you have `ask` or `deny` rules. Commands are read the way the shell that runs them reads them: bash or PowerShell, including the `bash` tool falling back to PowerShell on Windows.
+
+The user file's rules always apply. A project's `.amira/settings.json` or `.amira/settings.local.json` can only tighten: its mode counts when it is stricter than yours, its `ask` and `deny` rules apply, and its `allow` rules apply only after you trust the project (`amira ext trust`, the same trust its extension packages need). What a project file is not allowed to change is reported at startup. `--permission-mode` wins over every file. `/permissions` lists the mode, every rule with the file it comes from and what was left out; `/status` shows the mode and the number of rules.
+
+Some files always ask before `write`, `edit` or `apply_patch` changes them, in every mode: `.amira` directories (settings, packages and lock files) and Amira's user directory, `.git` (hooks, config and the rest of Git's metadata, including a linked worktree's Git directory), `.gitmodules`, the directory `core.hooksPath` names and your global Git config. Other names for the same file count too (a different case, `../`, absolute or MSYS paths, links). **Shell commands can still change these files: commands do not run in a sandbox yet.**
+
+A refused call tells the model why and that asking you is the way forward. In print mode, and in RPC once no client can answer, anything that would ask is refused with the reason, so use `auto` mode or rules for unattended runs.
 
 ## Sessions, compaction and rewind
 
@@ -108,7 +145,7 @@ Closing stdin waits for active work, including background results and their foll
 
 ## Status and costs
 
-`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell and Git workspace. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
+`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell, permission mode and rule count, and Git workspace. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
 
 `/cost` reports this session's replies by model and compaction usage separately; it does not aggregate child-agent costs. Use `/status` and `/agents` for those. Costs depend on known model pricing and reported usage; unknown prices are identified, and totals with unpriced rows are partial estimates. Provider billing remains the source for actual charges.
 

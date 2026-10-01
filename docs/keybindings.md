@@ -65,6 +65,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `history.search` | `ctrl+r` | Search the prompt history |
 | `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
 | `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as an extension's todo list) to one line each, or unfold them |
+| `permissions.mode` | `shift+tab` | Cycle the [permission mode](usage.md#permissions): `auto`, `edits` (changes files, asks before shell commands), `plan` (read-only). The hint line says what the new mode does; a mode other than `auto` shows next to the model in the input box's border. It applies to the whole session, sub-agents included |
 | `copy.reply` | `alt+c` | Copy the last reply of the session, as Markdown, to the clipboard (both modes) |
 | `help` | `?` | Open the key reference, while the input is empty and no dialog or list is open (with text, `?` is typed). It scrolls with ↑↓, PgUp/PgDn, Home/End; Esc, `q` or `?` close it |
 | `edit.kill-to-start` | `ctrl+u` | Cut from the start of the line to the caret (at the start, the line break before it) |

@@ -44,6 +44,7 @@
 | `history.search` | `ctrl+r` | 搜索提示词历史 |
 | `tool-output` | `ctrl+o` | 切换工具结果的显示量，与 `/verbose` 相同 |
 | `panels.toggle` | `ctrl+t` | 把活动行上方的实时面板折叠为一行，或展开 |
+| `permissions.mode` | `shift+tab` | 依次切换[权限模式](usage.md#权限)：`auto`、`edits`（修改文件不询问，运行 shell 命令前询问）、`plan`（只读）。提示栏会说明新模式的作用；非 `auto` 模式显示在输入框边框中的模型名旁边。对整个会话生效，包括子 agent |
 | `copy.reply` | `alt+c` | 将会话最后一条回复按 Markdown 复制到剪贴板，两种界面模式都可用 |
 | `help` | `?` | 输入为空且没有对话框或列表时打开按键参考；输入有文本时作为普通字符输入 |
 | `edit.kill-to-start` | `ctrl+u` | 剪切行首到光标的文本；在行首则剪切前一个换行 |
