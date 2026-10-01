@@ -6,7 +6,6 @@ import {
   type Agent,
   CommandHost,
   copyFileHistory,
-  createExtensionAdmin,
   deleteSession,
   FILE_REWIND_COVERAGE,
   FileRewindConflictError,
@@ -18,6 +17,7 @@ import {
   subagentMessages,
   subagentsOf,
 } from "@amira/core"
+import { createExtensionAdmin } from "@amira/packages"
 import { createProviderAdmin } from "./provider-admin.ts"
 import { withProviderHint } from "./provider-command.ts"
 import type { Session } from "./session.ts"

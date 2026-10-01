@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { amiraHome, projectAmiraDir } from "../home.ts"
+import { amiraHome, projectAmiraDir } from "@amira/core"
 import { isValidPackageName, PackageError } from "./manifest.ts"
 
 export type ScopeKind = "user" | "project"

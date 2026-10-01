@@ -1,0 +1,15 @@
+{
+  "name": "@amira/packages",
+  "license": "Apache-2.0",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@amira/api": "workspace:*",
+    "@amira/core": "workspace:*",
+    "@amira/proc": "workspace:*"
+  }
+}

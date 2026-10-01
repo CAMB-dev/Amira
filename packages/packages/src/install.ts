@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import path from "node:path"
-import { isProcessAlive } from "../file-lock.ts"
+import { isProcessAlive } from "@amira/core"
 import { defaultGitCacheDir, GitCache, type GitContext, type GitPhase, isFullCommitId } from "./git-cache.ts"
 import { type IndexOptions, type LoadedIndex, loadIndex } from "./index-file.ts"
 import {

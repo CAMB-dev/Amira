@@ -14,7 +14,7 @@ import {
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { tryFileLock } from "../src/file-lock.ts"
+import { tryFileLock } from "@amira/core"
 import {
   GitCache,
   gitCacheKey,
@@ -29,7 +29,7 @@ import {
   removeGitCache,
   restorePackages,
   updatePackages,
-} from "../src/packages/index.ts"
+} from "../src/index.ts"
 
 // git is slow to start on Windows, especially under load.
 setDefaultTimeout(60_000)
