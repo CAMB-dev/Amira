@@ -197,6 +197,16 @@ What model requests carry of the history; the session file always keeps everythi
 | `context.aging.keepSteps` | `number` | `2` | In a long current turn, its most recent model steps whose results are never cleared. |  |
 | `context.aging.afterTurns` | `number` | `0` | Experimental: also clear results older than this many user turns, whatever the pressure. `0` is off. |  |
 
+## File rewind
+
+Bytes the file tools change, kept so rewind can restore them. See [Sessions](usage.md).
+
+| Key | Type | Default | Description | User file only |
+| --- | --- | --- | --- | --- |
+| `fileRewind.enabled` | `boolean` | `true` | Capture `write`, `edit` and `apply_patch` changes. Off: the picker says files will not be restored. |  |
+| `fileRewind.maxFileBytes` | `number` | `10485760` | Largest file (before or after a change) that can be captured; a larger write is refused while capture is on. |  |
+| `fileRewind.quotaBytes` | `number` | `268435456` | Most bytes of unique file images one session keeps; past it, writes are refused until `/rewind-prune`. |  |
+
 ## Web tools
 
 Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tools.disabled`.
