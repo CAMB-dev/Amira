@@ -20,24 +20,26 @@ export const TOOL_SEARCH = "tool_search"
 export function offeredTools(
   registry: ToolRegistry,
   loaded: Iterable<string>,
-  opts: { nativeWebSearch?: boolean } = {},
+  opts: { nativeWebSearch?: boolean; allow?: (tool: ToolDefinition) => boolean } = {},
 ): ToolSpec[] {
-  const deferred = registry.deferred()
-  const active = registry.active().filter((t) => t.name !== TOOL_SEARCH || deferred.length > 0)
+  const allowed = (t: ToolDefinition) =>
+    !(opts.nativeWebSearch === true && t.supersededBy === "webSearch") && (opts.allow?.(t) ?? true)
+  const deferred = registry.deferred().filter(allowed)
+  const active = registry
+    .active()
+    .filter(allowed)
+    .filter((t) => t.name !== TOOL_SEARCH || deferred.length > 0)
   const byName = new Map(deferred.map((t) => [t.name, t]))
   const extra: ToolDefinition[] = []
   for (const name of loaded) {
     const t = byName.get(name)
     if (t) extra.push(t)
   }
-  const superseded = (t: ToolDefinition) => opts.nativeWebSearch === true && t.supersededBy === "webSearch"
-  return [...active, ...extra]
-    .filter((t) => !superseded(t))
-    .map((t) => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    }))
+  return [...active, ...extra].map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+  }))
 }
 
 /** The system prompt section naming every deferred tool; empty when there are none. */
@@ -56,22 +58,28 @@ export function createToolSession(
   sessionId: string,
   registry: ToolRegistry,
   loaded: Set<string>,
+  allow: (tool: ToolDefinition) => boolean = () => true,
 ): Pick<ToolSession, "sessionId" | "deferredTools" | "loadTools"> {
   return {
     sessionId,
     deferredTools: () =>
-      registry.deferred().map((t) => ({
-        name: t.name,
-        description: t.description,
-        parameters: t.parameters,
-        loaded: loaded.has(t.name),
-      })),
+      registry
+        .deferred()
+        .filter(allow)
+        .map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+          loaded: loaded.has(t.name),
+        })),
     // Names not registered yet are remembered too: MCP tools register in the background, so a
     // restored session may load them before they exist. offeredTools() filters at call time.
     loadTools: (names) => {
       const added: string[] = []
       for (const name of names) {
-        const exposure = registry.get(name)?.exposure
+        const tool = registry.get(name)
+        if (tool && !allow(tool)) continue
+        const exposure = tool?.exposure
         if (loaded.has(name) || (exposure && exposure !== "deferred")) continue
         loaded.add(name)
         added.push(name)

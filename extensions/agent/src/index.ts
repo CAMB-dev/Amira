@@ -1,5 +1,6 @@
 import path from "node:path"
 import {
+  type ApplyPatchDetails,
   type ChildSession,
   defineExtension,
   defineTool,
@@ -156,6 +157,13 @@ async function watch(child: ChildSession, activity: Activity): Promise<void> {
     } else if (e.type === "tool.execute.end" && !e.data.rejected && !e.data.result.isError) {
       const p = paths.get(e.data.toolCallId)
       if (p) activity.files.add(p)
+      if (e.data.name === "apply_patch") {
+        const details = e.data.result.details as ApplyPatchDetails | undefined
+        for (const file of details?.files ?? []) {
+          activity.files.add(file.path)
+          if (file.from) activity.files.add(file.from)
+        }
+      }
       if (SHELL_TOOLS.has(e.data.name)) activity.commands++
     }
   }

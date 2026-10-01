@@ -1,4 +1,5 @@
 import {
+  type ApplyPatchDetails,
   type BashDetails,
   diffToolLines,
   type EditDetails,
@@ -11,12 +12,14 @@ import {
   type ToolPresenter,
   type WriteDetails,
 } from "@amira/api"
+import type { ApplyPatchParams } from "./apply-patch.ts"
 import { askUserPresenter } from "./ask-user.ts"
 import type { BashParams } from "./bash.ts"
 import { fileDiff } from "./diff.ts"
 import type { EditParams } from "./edit.ts"
 import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
+import { parsePatch } from "./patch-format.ts"
 import type { ReadParams } from "./read.ts"
 import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE, STATUS_LINE } from "./shell-notes.ts"
 import { TRUNCATION_NOTE } from "./truncate.ts"
@@ -142,6 +145,48 @@ export const writePresenter: ToolPresenter<WriteParams, WriteDetails> = {
   },
 }
 
+export const applyPatchPresenter: ToolPresenter<ApplyPatchParams, ApplyPatchDetails> = {
+  summary(args) {
+    try {
+      return (
+        parsePatch(str(args.patch))
+          .map((op) => op.path)
+          .join(", ") || "empty patch"
+      )
+    } catch {
+      return "patch"
+    }
+  },
+  result(call) {
+    if (call.result.isError) return undefined
+    const d = detailsOf<ApplyPatchDetails>(call, "files")
+    if (!d) return firstLine(call.text)
+    return `${plural(d.files.length, "file")} · ${changeCount(
+      d.files.reduce((n, f) => n + f.added, 0),
+      d.files.reduce((n, f) => n + f.removed, 0),
+    )}`
+  },
+  body(call) {
+    if (call.result.isError) return []
+    const d = detailsOf<ApplyPatchDetails>(call, "files")
+    if (d)
+      return d.files.flatMap((file): ToolLine[] => [
+        { kind: "muted", text: `${file.action}: ${file.from ? `${file.from} → ` : ""}${file.path}` },
+        ...diffToolLines(file.hunks),
+        ...(file.truncated ? [{ kind: "muted" as const, text: "… diff truncated" }] : []),
+      ])
+    // Details are not persisted: render the supplied patch without inventing line numbers.
+    return str(call.args.patch)
+      .split(/\r?\n/)
+      .map(
+        (line): ToolLine => ({
+          kind: line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-remove" : "muted",
+          text: /^[+\- ]/.test(line) ? line.slice(1) : line,
+        }),
+      )
+  },
+}
+
 /** A shell's output without the lines the tool adds around it (the shell label, the exit status). */
 function shellOutput(text: string): string {
   const parts = text.split("\n\n")
@@ -219,6 +264,7 @@ export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   read: readPresenter,
   write: writePresenter,
   edit: editPresenter,
+  apply_patch: applyPatchPresenter,
   bash: shellPresenter,
   powershell: shellPresenter,
   grep: grepPresenter,

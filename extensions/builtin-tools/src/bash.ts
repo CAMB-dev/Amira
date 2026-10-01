@@ -32,7 +32,7 @@ function sharedNotes(cd: string, chain: string): string[] {
     `- Several calls issued together run at the same time. Put commands that depend on each other in one call (${chain}) or in separate turns.`,
     "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
     "- Very long output is cut in the middle; the full output is saved to a file you can read.",
-    "- Prefer the read, write, edit, grep and glob tools over shell commands for reading, editing and searching files.",
+    "- Prefer the available file reading, editing and search tools over shell commands for those tasks.",
   ]
 }
 
