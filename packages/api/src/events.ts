@@ -240,8 +240,8 @@ export interface EventMap {
   "turn.steer":
     | { message: UserMessage; state: "queued" | "injected" | "dropped" }
     | { message: UserMessage; state: "promoted"; nextTurnId: string }
-  /** A dialog waiting for an answer (D42); `source` is the extension that asked. */
-  "ui.request": UiRequest & { requestId: string; source?: string }
+  /** A dialog waiting for an answer (D42); `source` identifies the asker, `sourceLabel` names it for display. */
+  "ui.request": UiRequest & { requestId: string; source?: string; sourceLabel?: string }
   /**
    * A dialog was answered or cancelled; frontends showing it should close it. `value` is left
    * out for forms, secret inputs and answers that are objects (ask answers, a confirm's free text).

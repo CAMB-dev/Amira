@@ -56,6 +56,7 @@ export class UiRequests {
   #bus: EventBus
   #sessionId: string
   #pending = new Map<string, Pending>()
+  #sourceLabels = new Map<string, string>()
   #seq = 0
   formMode: FormMode = "native"
   /**
@@ -67,6 +68,12 @@ export class UiRequests {
   constructor(bus: EventBus, opts: { sessionId?: string } = {}) {
     this.#bus = bus
     this.#sessionId = opts.sessionId ?? "host"
+  }
+
+  /** A display name for an extension; its source remains the cancellation identity. */
+  setSourceLabel(source: string, label: string | undefined): void {
+    if (label === undefined) this.#sourceLabels.delete(source)
+    else this.#sourceLabels.set(source, label)
   }
 
   /** Dialogs still waiting, oldest first. */
@@ -96,10 +103,12 @@ export class UiRequests {
   #ask(request: UiRequest, opts: UiRequestOptions & { source?: string }, form?: FormState) {
     if (opts.signal?.aborted) return Promise.resolve(undefined)
     const requestId = `ui_${++this.#seq}_${crypto.randomUUID().slice(0, 6)}`
+    const sourceLabel = opts.source ? this.#sourceLabels.get(opts.source) : undefined
     const event = {
       ...request,
       requestId,
       ...(opts.source ? { source: opts.source } : {}),
+      ...(sourceLabel !== undefined ? { sourceLabel } : {}),
     } as EventMap["ui.request"]
     return new Promise<Value | undefined>((resolve) => {
       const onAbort = () => this.cancel(requestId)

@@ -394,10 +394,13 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
  * How a package's extension file is named in errors and /help: the package's name, and the
  * file too when the package has several. Its failures say how to turn it off.
  */
-function packageLabel(p: ActivePackages["packages"][number], file: string): { source: string; hint: string } {
+function packageLabel(
+  p: ActivePackages["packages"][number],
+  file: string,
+): { source: string; name: string; hint: string } {
   const rel = path.relative(p.dir, file).split(path.sep).join("/")
   const source = p.manifest.extensions.length > 1 ? `${p.name}/${rel}` : p.name
-  return { source, hint: `${p.scope} package; amira ext disable ${p.name} turns it off` }
+  return { source, name: p.name, hint: `${p.scope} package; amira ext disable ${p.name} turns it off` }
 }
 
 /** An extension file given with --extension: its path relative to the working directory, if inside it. */
