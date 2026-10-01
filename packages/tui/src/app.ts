@@ -558,14 +558,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   function pasteText(text: string) {
     const paths = pastedImagePaths(text, agent.cwd)
-    if (!paths) editor.handleInput({ type: "paste", text })
-    else {
-      try {
-        attachImages(paths.map(readImage))
-      } catch (err) {
-        showNote(err instanceof Error ? err.message : String(err))
-      }
+    let images: EditorImage[] | undefined
+    try {
+      images = paths?.map(readImage)
+    } catch (err) {
+      // An image that cannot be attached stays a path in the text rather than vanishing.
+      showNote(`${err instanceof Error ? err.message : String(err)} Pasted as text.`)
     }
+    if (!images || !attachImages(images)) editor.handleInput({ type: "paste", text })
     redraw()
   }
 

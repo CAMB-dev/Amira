@@ -680,15 +680,17 @@ test("merging queued image messages preserves all attachments and enforces the c
   }
 })
 
-test("unsupported pasted image formats are refused and ordinary missing paths remain text", async () => {
+test("unsupported pasted image formats stay text with a notice, as do missing paths", async () => {
   const dir = mkdtempSync(join(tmpdir(), "amira-invalid-image-"))
   const file = join(dir, "vector.svg")
   writeFileSync(file, "<svg/>")
   const s = await setup([{ text: "Missing path text." }], { cwd: dir, acceptsImages: true, cols: 100 })
   try {
     s.terminal.send(paste(file))
-    await s.shows("Unsupported image format.")
+    await s.shows("Unsupported image format. Use PNG, JPEG, GIF or WebP. Pasted as text.")
     expect(s.live()).not.toContain("[image 1:")
+    expect(s.live()).toContain("vector.svg")
+    s.terminal.send("\x03")
     s.terminal.send(`${paste("missing.png")}\r`)
     await s.shows("Missing path text.")
     await s.idle()
