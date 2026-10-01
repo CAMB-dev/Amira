@@ -167,7 +167,12 @@ export function transcriptLines(
       } else if (b.type === "toolCall") {
         const r = results.get(b.id)
         if (r) {
-          const call = { name: b.name, args: b.args, result: { content: r.content, isError: r.isError } }
+          const call = {
+            name: b.name,
+            args: b.args,
+            result: { content: r.content, isError: r.isError },
+            ...(r.rejected ? { rejected: r.rejected } : {}),
+          }
           out.push(...finishedToolLines(theme, presenters?.get(b.name), call, "summary", width))
         } else {
           const summary = summarizeArgs(b.args)

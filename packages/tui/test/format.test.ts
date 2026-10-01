@@ -183,6 +183,45 @@ test("a resumed history starts at a boundary naming the session, then the transc
   ])
 })
 
+test("a resumed call rejected at its approval prompt reads as it did live, not as a failure", () => {
+  const messages = (rejected?: "aborted" | "blocked"): Message[] => [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "bash", args: { command: "npm publish" } }],
+      model: { provider: "p", model: "m" },
+    },
+    {
+      role: "toolResult",
+      toolCallId: "c1",
+      toolName: "bash",
+      content: [
+        {
+          type: "text",
+          text:
+            rejected === "blocked"
+              ? "Tool call not approved: the user said no."
+              : "Aborted by the user before this tool ran.",
+        },
+      ],
+      isError: true,
+      ...(rejected ? { rejected } : {}),
+    },
+  ]
+  const presenters = { get: (name: string) => builtinPresenters[name] }
+  const rows = (ms: Message[]) =>
+    plain(historyLines(defaultTheme, ms, { width: 60, presenters })).filter(
+      (r) => r.trim() && !r.startsWith("──"),
+    )
+  // Dismissed, the call was interrupted; answered no, it was blocked — both as live showed them.
+  expect(rows(messages("aborted"))).toEqual(["⊘ bash npm publish", "  └ interrupted"])
+  expect(rows(messages("blocked"))).toEqual([
+    "⊘ bash npm publish",
+    "  └ Tool call not approved: the user said no.",
+  ])
+  // A session stored before rejections were kept shows the failure as it always did.
+  expect(rows(messages())[0]).toBe("✗ bash npm publish")
+})
+
 test("a resumed shell command shows as many output lines as tui.shellOutputLines says", () => {
   const messages: Message[] = [
     {
