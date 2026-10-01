@@ -28,6 +28,7 @@ export function overBudget(used: Usage, limit: Budget | undefined): string | und
 /** Shared cost/token accounting and limit arithmetic for an agent tree. */
 export class BudgetLedger {
   readonly usage = emptyUsage()
+  /** Why the budget is spent, once it is. */
   #exceeded: string | undefined
 
   constructor(readonly limit: Budget | undefined) {}

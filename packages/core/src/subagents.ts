@@ -229,6 +229,7 @@ export class AgentTree {
 
   spawn(parent: Agent, opts: SpawnOptions, group?: Group): ChildSession {
     const setup = this.#validateSpawn(parent, opts, group)
+    // Set once the child exists; the agent's callbacks only run after that.
     let child!: Child
     const agent = this.#createAgent(parent, opts, setup, () => child)
     child = this.#registerSpawn(parent, opts, setup, agent)

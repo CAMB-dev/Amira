@@ -67,7 +67,11 @@ export function returnResultTool(spec: ResultSpec, retries: number): ToolDefinit
   }
 }
 
-/** Counts failed structured-result attempts after a tool batch or an ended turn. */
+/**
+ * After a batch of tool calls (or, with `turnEnded`, after a turn) of a child that owes a
+ * result: counts each return_result call that did not fit, and a turn that ended without
+ * one, as a failed attempt. True once it has returned a valid result, which ends its turn.
+ */
 export function checkResult(
   messages: readonly Message[],
   spec: ResultSpec,
