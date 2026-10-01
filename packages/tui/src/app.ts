@@ -764,7 +764,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "turn.start": {
         const prompt = e.data.prompt
-        // A turn woken by notices carries every one that was waiting.
+        // A turn woken by notices carries every one that was waiting, and takes held ones along.
         noticeStrip.turnStarted(prompt)
         // Messages queued together go as one prompt but read as what they were: one each.
         const merged =

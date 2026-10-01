@@ -78,6 +78,7 @@ export function lastReasoningLine(text: string): string {
   return ""
 }
 
+/** Output tokens a streamed text is worth, until the reply's usage says. */
 const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 
 export interface ActivityClock {
@@ -115,18 +116,30 @@ export interface TurnActivity {
 export function createTurnActivity(): TurnActivity {
   let working = false
   let thinking = false
+  /** The end of the reasoning streamed in the current reply, whose last line the activity line shows. */
   let reasoning = ""
+  /** The model request is being tried again, as the activity line says (status.changed). */
   let retrying: string | undefined
   let compacting = false
   let compactingOnServer = false
+  /** A failed model request waiting to be sent again (model.retry), until the next reply starts. */
   let retry: RetryState | undefined
+  /** Tool the model is currently writing a call for, before it runs. */
   let preparing: string | undefined
+  /** When the running turn started, and the output tokens its finished replies used. */
   let turnStartedAt = 0
   let turnTokens = 0
+  /**
+   * send() started the clock for the turn it asked for: the prompt may wait for a compaction
+   * before turn.start comes, and the activity line must not show the last turn's numbers then.
+   */
   let clockFromSend = false
+  /** When a compaction outside a turn (/compact) started. */
   let compactStartedAt = 0
+  /** Characters of the reply streaming now: its tokens until its usage arrives. */
   let streamedChars = 0
 
+  /** The activity line counts the turn's time and tokens from here. */
   const startClock = () => {
     turnStartedAt = Date.now()
     turnTokens = 0

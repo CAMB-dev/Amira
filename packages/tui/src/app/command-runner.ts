@@ -4,15 +4,23 @@ import { userText } from "../format.ts"
 import { ACTIONS, type Action, type Keybindings, type KeySpec } from "../keybindings.ts"
 
 export interface CommandRunner {
-  /** Runs a slash command and tracks it until its promise settles. */
+  /** Runs at once, even during a turn; commands that need an idle session say so. */
   run(line: string): void
-  /** Cancels the newest command that has not already been aborted. */
+  /**
+   * Cancels the newest running slash command (Esc or Ctrl+C, when no dialog has the key): its
+   * signal aborts, the input stays as it is. Only the command is stopped: a turn running
+   * alongside goes on, and so does a compaction, unless the command cancelled is /compact,
+   * whose compaction stops with it as before.
+   */
   cancel(): boolean
   /** Returns the key help exposed to a running command's /help context. */
   keyHelp(): KeyHelp[]
-  /** Consumes a command echo when its command sent the matching message. */
+  /** True when `prompt` is a message a running command sent with its typed line; its echo is used up. */
   takeEcho(prompt: UserMessage): boolean
-  /** Shows the note attached to a command message whose echo is already visible. */
+  /**
+   * A command's message whose display text is the line its echo already shows: only its note
+   * (what the command loaded), under the echo as the command's own output would be.
+   */
   echoedNote(prompt: UserMessage): void
   /** Drops command echo correlation when the active session changes. */
   clearEchoes(): void
@@ -40,10 +48,18 @@ export interface CommandRunnerOptions {
 export function createCommandRunner(options: CommandRunnerOptions): CommandRunner {
   /** The slash commands running now, each with the name of the command its line resolved to. */
   const commandAborts = new Map<AbortController, string | undefined>()
-  /** The message each running command sent with its typed line as display text. */
+  /**
+   * The message each running command sent with its typed line as display text: the echo shows
+   * that line already, so the message is not shown again when its turn starts (or it joins one).
+   */
   const commandEchoes = new Map<AbortController, { line: string; text: string }>()
 
+  /** The newest running command that was not cancelled yet; the interrupt key cancels it first. */
   const cancellable = () => [...commandAborts].findLast(([controller]) => !controller.signal.aborted)
+  /**
+   * The common keys, for /help: the actions with a help line, with their keys as bound now;
+   * the transcript's only in full-screen mode, where they work.
+   */
   const keyHelp = (): KeyHelp[] =>
     (Object.keys(ACTIONS) as Action[]).flatMap((action) => {
       const info: { scope: string; help?: string } = ACTIONS[action]
@@ -75,6 +91,7 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
             return () => void commandEchoes.delete(abort)
           },
         })
+        // A successful send may still be waiting to join a busy turn after its command ends.
         .finally(() => commandAborts.delete(abort))
         .then(() => options.requestRender())
     },

@@ -97,7 +97,10 @@ export function pendingMessageRows(
   return out
 }
 
-/** How a user message reads while queued, or back in the editor once dropped. */
+/**
+ * How a user message reads while queued, or back in the editor once dropped: its display text,
+ * if any. That is what the user typed (e.g. "/review-pr 123"), so sending it again re-runs it.
+ */
 export function messageText(m: UserMessage): string {
   return m.display?.text.trim() || userText(m)
 }
@@ -119,14 +122,16 @@ export interface NoticeStrip {
   setRetry(at: number | undefined): void
   /** Clears notices and any retry timer when the active session changes. */
   reset(): void
-  /** Draws the notice lines above the input. */
+  /** Pending notice lines, with the time to the next resend when one is due. */
   render(theme: Theme): string[]
   /** Releases the retry timer when the controller quits. */
   dispose(): void
 }
 
 export function createNoticeStrip(options: { theme: Theme; requestRender: () => void }): NoticeStrip {
+  /** Lines of notices (background results) waiting to reach the model. */
   const pendingNotices: string[] = []
+  /** When held notices are sent again after a failed turn (notice.retry); redrawn each second. */
   let noticeRetryAt: number | undefined
   let retryTimer: ReturnType<typeof setInterval> | undefined
 
@@ -141,7 +146,9 @@ export function createNoticeStrip(options: { theme: Theme; requestRender: () => 
 
   return {
     turnStarted(prompt) {
+      // A turn woken by notices carries every one that was waiting.
       if (prompt.display?.origin) pendingNotices.length = 0
+      // A turn takes held notices along, so no resend is due any more.
       setRetry(undefined)
     },
     steer(message, state) {
