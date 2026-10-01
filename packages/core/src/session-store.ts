@@ -269,8 +269,8 @@ export class SessionStore {
       .trim()
     if (!clean) {
       if (source === "manual") {
-        // An empty manual entry is a durable "clear" marker. Older readers ignore title
-        // entries, while this reader can reveal the latest automatic title again.
+        // An empty manual entry is a durable "clear" marker that reveals the latest automatic
+        // title again. An older Amira reads it as an empty title.
         this.append({ type: "title", title: "", source })
         return
       }
