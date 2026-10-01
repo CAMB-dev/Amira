@@ -1,0 +1,4 @@
+PASS: 10 JSON blocks parse; 6 settings examples accepted without warnings.
+PASS: EN/ZH extension examples identical; manifest and engine accepted.
+PASS: configured greeting, command execution, status counter, unload and reload reset.
+PASS: extracted extension example typechecks against this checkout's API (TypeScript).
