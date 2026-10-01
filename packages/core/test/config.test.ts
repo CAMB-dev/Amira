@@ -78,6 +78,26 @@ test("layers flags over local, project, user settings and defaults", () => {
   expect(loadSettings({ cwd, home, flags: { model: "f/m" } }).settings.model).toBe("f/m")
 })
 
+test("provider and model editing choices are validated and merge like other tool settings", () => {
+  put(userFile(), { providers: { p: { tools: { edit: "apply_patch" } } } })
+  put(projectFile(), { providers: { p: { models: [{ id: "m", tools: { edit: "both" } }] } } })
+  const r = loadSettings({ cwd, home })
+  expect(r.warnings).toEqual([])
+  expect(r.settings.providers?.p).toEqual({
+    tools: { edit: "apply_patch" },
+    models: [{ id: "m", tools: { edit: "both" } }],
+  })
+  expect(() => validateSettings({ providers: { p: { tools: { edit: "patch" } } } }, "settings.json")).toThrow(
+    '"providers.p.tools.edit" must be one of',
+  )
+  expect(() =>
+    validateSettings(
+      { providers: { p: { models: [{ id: "m", tools: { edit: false } }] } } },
+      "settings.json",
+    ),
+  ).toThrow('"providers.p.models[0].tools.edit" must be one of')
+})
+
 test("server-side compaction and its layout are settings; a project file cannot turn it on", () => {
   put(userFile(), {
     providers: {
