@@ -11,19 +11,29 @@ export interface RetryOptions {
   maxDelayMs?: number
   /** Maximum time to wait for the first content event. Default 150 s; 0 disables it. */
   firstContentTimeoutMs?: number
-  /** Maximum silence after content has streamed. Default 100 s; 0 disables it. */
+  /**
+   * Maximum silence after content has streamed. Default 100 s; 0 disables it. While a hosted
+   * tool (a web search the provider runs) is in progress, at least SERVER_TOOL_IDLE_MS.
+   */
   idleTimeoutMs?: number
 }
+
+/** The idle limit while a hosted tool runs: the server may be quiet (pings only) the whole time. */
+export const SERVER_TOOL_IDLE_MS = 600_000
 
 // A hosted search already shown (and paid for) counts too: sending again would search again.
 const CONTENT = new Set<StreamEvent["type"]>(["text.delta", "thinking.delta", "toolCall.delta", "serverTool"])
 
 /**
- * Sends a request again after a retryable failure (D52): ordinary provider errors are retried
- * only before content, while a first-content or idle timeout uses the same retry budget even
- * after a partial stream. Backoff is exponential, or the server's Retry-After when it gave one.
- * Each retry is announced with a retry event. An abort during the wait ends the stream with an
- * aborted error. Keep-alives do not reach this layer and therefore cannot reset either timer.
+ * Sends a request again after a retryable failure, as long as nothing was streamed yet (D52):
+ * exponential backoff, or the server's Retry-After when it gave one. Each retry is announced
+ * with a retry event. An abort during the wait ends the stream with an aborted error.
+ *
+ * Two timers end an attempt that stalls: no content event within firstContentTimeoutMs
+ * (retried like any transient failure), or silence longer than idleTimeoutMs after content
+ * (not sent again: the partial reply was already shown, and a hosted search would run twice;
+ * it ends with a timeout error that keeps the partial text). Keep-alives never reach this
+ * layer, so they reset neither timer.
  */
 export async function* withRetry(
   open: (signal: AbortSignal) => AsyncIterable<StreamEvent>,
@@ -37,7 +47,6 @@ export async function* withRetry(
   const firstContentTimeoutMs = timeoutValue(opts.firstContentTimeoutMs, 150_000)
   const idleTimeoutMs = timeoutValue(opts.idleTimeoutMs, 100_000)
   let started = false
-  let previousPartial: AssistantMessage | undefined
   for (let attempt = 0; ; attempt++) {
     if (signal.aborted) {
       yield aborted(undefined)
@@ -45,17 +54,18 @@ export async function* withRetry(
     }
     let content = false
     let failed: ErrorEvent | undefined
-    let lastMessage: AssistantMessage | undefined
     let partial: AssistantMessage | undefined
+    const runningServerTools = new Set<string>()
     const attemptController = new AbortController()
     const abortAttempt = () => attemptController.abort()
-    if (signal.aborted) attemptController.abort()
-    else signal.addEventListener("abort", abortAttempt, { once: true })
+    signal.addEventListener("abort", abortAttempt, { once: true })
 
     const iterator = open(attemptController.signal)[Symbol.asyncIterator]()
     let stop: (() => void) | undefined
     let timeout: Promise<{ timedOut: true }> | undefined
+    let armedMs = 0
     const arm = (ms: number) => {
+      armedMs = ms
       stop?.()
       if (ms <= 0) {
         timeout = undefined
@@ -78,20 +88,13 @@ export async function* withRetry(
         const next = iterator.next().then((result) => ({ result }))
         const outcome = timeout ? await Promise.race([next, timeout]) : await next
         if ("timedOut" in outcome) {
-          const timeoutMessage = lastMessage ?? partial ?? previousPartial
-          const timeoutError = timeoutFailure(
-            content,
-            content ? idleTimeoutMs : firstContentTimeoutMs,
-            model,
-            timeoutMessage,
-          )
-          previousPartial = partial ?? previousPartial
           void Promise.resolve(iterator.return?.()).catch(() => {})
           if (signal.aborted) {
-            yield aborted(timeoutMessage)
+            yield aborted(partial)
             return
           }
-          if (attempt < retries) {
+          const timeoutError = timeoutFailure(content, armedMs, model, partial)
+          if (!content && attempt < retries) {
             failed = timeoutError
             break
           }
@@ -106,7 +109,6 @@ export async function* withRetry(
           started = true
           continue
         }
-        if (ev.type === "done" || ev.type === "error") lastMessage = ev.message
         if (ev.type === "error" && ev.retryable && !content && attempt < retries && !signal.aborted) {
           failed = ev
           break
@@ -114,7 +116,15 @@ export async function* withRetry(
         if (CONTENT.has(ev.type)) {
           content = true
           partial = notePartial(partial, ev, model)
-          arm(idleTimeoutMs)
+          if (ev.type === "serverTool") {
+            if (ev.block.status === "running") runningServerTools.add(ev.block.id)
+            else runningServerTools.delete(ev.block.id)
+          }
+          arm(
+            runningServerTools.size && idleTimeoutMs > 0
+              ? Math.max(idleTimeoutMs, SERVER_TOOL_IDLE_MS)
+              : idleTimeoutMs,
+          )
         }
         // The final failure says how often it was retried.
         yield ev.type === "error" && attempt > 0 && ev.error.code !== "aborted" ? retried(ev, attempt) : ev

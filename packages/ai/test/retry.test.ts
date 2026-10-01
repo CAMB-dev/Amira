@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAi } from "../src/client.ts"
 import { retryAfterMs } from "../src/dialects/retry-after.ts"
-import type { RetryOptions } from "../src/retry.ts"
+import { type RetryOptions, withRetry } from "../src/retry.ts"
 import type { StreamEvent } from "../src/types.ts"
 import { delta, events, SSE_HEADERS, sseBody, sseResponse } from "./helpers.ts"
 
@@ -101,7 +101,7 @@ test("times out a keep-alive-only attempt and retries it", async () => {
   })
 })
 
-test("times out silence after content and retries the attempt", async () => {
+test("ends a stream that goes silent after content without sending it again", async () => {
   const encoder = new TextEncoder()
   const partial = () =>
     new Response(
@@ -119,10 +119,12 @@ test("times out silence after content and retries the attempt", async () => {
     idleTimeoutMs: 15,
   })
   const evs = await stream()
-  expect(calls.n).toBe(2)
-  expect(types(evs)).toEqual(["start", "text.delta", "retry", "text.delta", "done"])
-  expect(evs.find((e) => e.type === "retry")).toMatchObject({
+  // The partial text was already shown: a second attempt would show it twice.
+  expect(calls.n).toBe(1)
+  expect(types(evs)).toEqual(["start", "text.delta", "error"])
+  expect(evs.at(-1)).toMatchObject({
     error: { code: "timeout", message: "model stream was idle for 15 ms" },
+    message: { content: [{ type: "text", text: "partial" }], stopReason: "error" },
   })
 })
 
@@ -189,4 +191,57 @@ test("an abort during the backoff ends the stream at once as aborted", async () 
     retryable: false,
     message: { stopReason: "aborted" },
   })
+})
+
+test("an abort while waiting for the first content ends the attempt as aborted", async () => {
+  // Like fetch, the body fails once the request's signal aborts.
+  let hangingSignal: AbortSignal | undefined
+  const hanging = () =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          hangingSignal?.addEventListener("abort", () =>
+            controller.error(new DOMException("aborted", "AbortError")),
+          )
+        },
+      }),
+      { headers: SSE_HEADERS },
+    )
+  const { calls, signals, stream } = scripted(
+    [
+      () => {
+        hangingSignal = signals.at(-1)
+        return hanging()
+      },
+      ok,
+    ],
+    { retries: 1, firstContentTimeoutMs: 5_000 },
+  )
+  const ctl = new AbortController()
+  setTimeout(() => ctl.abort(), 10)
+  const evs = await stream(ctl.signal)
+  expect(calls.n).toBe(1)
+  expect(signals[0]?.aborted).toBe(true)
+  expect(evs.at(-1)).toMatchObject({ type: "error", error: { code: "aborted" } })
+})
+
+test("a running hosted search keeps a quiet stream alive past the idle timeout", async () => {
+  const block = (status: "running" | "done") =>
+    ({
+      type: "serverTool",
+      block: { type: "serverTool", id: "ws1", name: "web_search", input: {}, status },
+    }) as const
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    yield { type: "start" }
+    yield block("running")
+    await Bun.sleep(40)
+    yield block("done")
+    yield { type: "text.delta", text: "found" }
+    yield {
+      type: "done",
+      message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "stop" },
+    }
+  }
+  const evs = await events(withRetry(attempt, new AbortController().signal, { idleTimeoutMs: 15 }))
+  expect(types(evs)).toEqual(["start", "serverTool", "serverTool", "text.delta", "done"])
 })
