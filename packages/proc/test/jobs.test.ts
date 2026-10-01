@@ -375,3 +375,47 @@ test("listeners hear starts, status changes, output and ends; a failing one does
     exitCode: 2,
   })
 })
+
+test("a pattern only ever sees whole lines: not a line's end read on its own, nor two lines together", async () => {
+  const { registry, procs } = fakeRegistry()
+  const job = registry.start({ command: "a", argv: ["a"], cwd })
+  const p = procs[0]!
+  p.emit({ type: "spawned", pid: 1, contained: true })
+  p.emit({ type: "output", data: "Not " })
+  const read = registry.readNew(job.id, "model")
+  const anchored = registry.waitFor(job.id, { pattern: /^ready$/, from: read.to, timeoutMs: 300 })
+  const spanning = registry.waitFor(job.id, { pattern: /ready\s+on/, from: read.to, timeoutMs: 300 })
+  p.emit({ type: "output", data: "ready\non\n" })
+  expect((await anchored).reason).toBe("timeout")
+  expect((await spanning).reason).toBe("timeout")
+})
+
+test("a matching line is seen even when the same chunk floods the buffer past it", async () => {
+  const { registry, procs } = fakeRegistry({ bufferChars: 1000 })
+  const job = registry.start({ command: "a", argv: ["a"], cwd })
+  procs[0]!.emit({ type: "spawned", pid: 1, contained: true })
+  const waiting = registry.waitFor(job.id, { pattern: /listening/, from: 0, timeoutMs: 2000 })
+  procs[0]!.emit({
+    type: "output",
+    data: `listening on 3000\n${"x".repeat(99)}\n${`${"y".repeat(99)}\n`.repeat(30)}`,
+  })
+  expect(await waiting).toEqual({ reason: "match", line: "listening on 3000" })
+  // The buffer was cut at a line start.
+  expect(registry.output(job.id).text.startsWith("y")).toBe(true)
+})
+
+test("ended jobs are forgotten oldest end first; one that just ended is kept for its waiters", async () => {
+  const { registry, procs } = fakeRegistry({ maxRunning: 100 })
+  const first = registry.start({ command: "long", argv: ["a"], cwd })
+  procs[0]!.emit({ type: "spawned", pid: 1, contained: true })
+  for (let i = 1; i <= 50; i++) {
+    registry.start({ command: `short ${i}`, argv: ["a"], cwd })
+    procs[i]!.emit({ type: "exit", code: 0, signal: null })
+  }
+  const waiting = registry.waitFor(first.id, { timeoutMs: 2000 })
+  procs[0]!.emit({ type: "exit", code: 0, signal: null })
+  expect((await waiting).reason).toBe("exit")
+  expect(registry.get(first.id)?.status).toBe("exited")
+  expect(registry.get("job2")).toBeUndefined()
+  expect(registry.list()).toHaveLength(50)
+})

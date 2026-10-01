@@ -384,8 +384,12 @@ export class JobRegistry {
       info.status = "running"
       this.#emit("status", job)
     } else if (e.type === "output") {
-      this.#append(job, e.data)
+      job.buffer += e.data
+      info.outputChars += e.data.length
+      // Waits look at the new output before the buffer drops anything: a ready line followed by
+      // a flood of output in the same chunk is still seen.
       this.#scanAll(job, false)
+      this.#trim(job)
       this.#schedulePartial(job)
       this.#emit("output", job)
     } else {
@@ -418,45 +422,60 @@ export class JobRegistry {
     job.partialTimer = setTimeout(() => this.#scanAll(job, true), PARTIAL_LINE_MS)
   }
 
-  #append(job: Job, data: string) {
-    job.buffer += data
-    job.info.outputChars += data.length
-    // Cut in steps, not on every chunk: a quarter over the limit, back to the limit.
-    if (job.buffer.length > this.#bufferChars * 1.25) {
-      const drop = job.buffer.length - this.#bufferChars
-      job.buffer = job.buffer.slice(drop)
-      job.bufferStart += drop
-    }
+  /**
+   * Cuts the buffer in steps, not on every chunk: a quarter over the limit, back to about the
+   * limit, at the start of a line, so the buffer never starts inside one.
+   */
+  #trim(job: Job) {
+    if (job.buffer.length <= this.#bufferChars * 1.25) return
+    let drop = job.buffer.length - this.#bufferChars
+    const nl = job.buffer.indexOf("\n", drop - 1)
+    if (nl !== -1 && nl - drop < this.#bufferChars / 4) drop = nl + 1
+    job.buffer = job.buffer.slice(drop)
+    job.bufferStart += drop
   }
 
   /**
-   * Looks for the waiter's pattern in the output after its scan point, a line at a time.
-   * Returns the matching line.
+   * Looks for the waiter's pattern in the output after its scan point, one whole line at a
+   * time: a pattern never spans lines, and a line the scan point falls inside (it was partly
+   * read already) is looked at from its start. Returns the matching line.
    */
   #scan(job: Job, w: Waiter, partial = false): string | undefined {
     if (!w.pattern) return undefined
-    const start = Math.max(w.scanFrom, job.bufferStart)
-    let text = job.buffer.slice(start - job.bufferStart)
+    const offset = Math.max(w.scanFrom, job.bufferStart) - job.bufferStart
+    // From the start of the line the scan point is in.
+    const lineStart = offset > 0 ? job.buffer.lastIndexOf("\n", offset - 1) + 1 : 0
+    let text = job.buffer.slice(lineStart)
     // A line still being written (e.g. "port 30" of "port 3000") is only looked at once it is
     // finished or its output paused (partial).
     if (!partial) text = text.slice(0, text.lastIndexOf("\n") + 1)
     if (!text) return undefined
-    w.pattern.lastIndex = 0
-    const m = w.pattern.exec(text)
-    if (m) {
-      const from = text.lastIndexOf("\n", m.index - 1) + 1
-      const nl = text.indexOf("\n", m.index + Math.max(0, m[0].length - 1))
-      w.scanFrom = start + (nl === -1 ? text.length : nl + 1)
-      return text.slice(from, nl === -1 ? undefined : nl).replace(/\r$/, "")
+    let at = 0
+    for (const raw of text.split("\n")) {
+      const end = at + raw.length
+      // The empty piece after a final line break is no line.
+      if (end === text.length && raw === "" && text.endsWith("\n")) break
+      const line = raw.replace(/\r$/, "")
+      w.pattern.lastIndex = 0
+      if (w.pattern.test(line)) {
+        w.scanFrom = job.bufferStart + lineStart + Math.min(text.length, end + 1)
+        return line
+      }
+      at = end + 1
     }
     const lastNl = text.lastIndexOf("\n")
-    if (lastNl !== -1) w.scanFrom = start + lastNl + 1
+    if (lastNl !== -1) w.scanFrom = job.bufferStart + lineStart + lastNl + 1
     return undefined
   }
 
-  /** Forgets the oldest ended jobs beyond keepEnded. */
+  /**
+   * Forgets the jobs that ended longest ago beyond keepEnded; a job that just ended stays, so
+   * a call waiting on it still finds it.
+   */
   #prune() {
-    const ended = [...this.#jobs.values()].filter((j) => !isLive(j.info.status))
+    const ended = [...this.#jobs.values()]
+      .filter((j) => !isLive(j.info.status))
+      .sort((a, b) => (a.info.endedAt ?? 0) - (b.info.endedAt ?? 0))
     for (const j of ended.slice(0, Math.max(0, ended.length - this.#keepEnded))) this.#jobs.delete(j.info.id)
   }
 }
