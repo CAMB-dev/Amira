@@ -8,6 +8,7 @@ export interface PromptEnv {
   cwd: string
   shell?: string
   date?: Date
+  nonInteractive?: boolean
   /** Text of the "project" section, e.g. from instructionsSection(). */
   project?: string
   /** Text of the "role" section, e.g. a sub-agent's role. */
@@ -25,6 +26,10 @@ You help with software engineering tasks: reading and changing code, running com
 - When you run commands, prefer non-interactive forms and explain anything destructive before doing it.
 - Be concise. Report what you changed and anything that failed.`
 
+/** The line shared by non-interactive roots and the fresh sub-agents they create. */
+export const NON_INTERACTIVE_LINE =
+  "Run mode: non-interactive; decide for yourself instead of asking the user."
+
 /**
  * Default sections in a stable order, so the prompt prefix stays cacheable. "skills" and
  * "deferred-tools" start empty; extensions fill them through the system.build interceptor.
@@ -36,6 +41,7 @@ export function defaultSections(env: PromptEnv): PromptSection[] {
     `Platform: ${process.platform} (${os.release()})`,
     ...(env.shell ? [`Shell used by the bash tool: ${env.shell}`] : []),
     `Today's date: ${date}`,
+    ...(env.nonInteractive ? [NON_INTERACTIVE_LINE] : []),
   ]
   return [
     { name: "identity", text: IDENTITY },
@@ -45,6 +51,17 @@ export function defaultSections(env: PromptEnv): PromptSection[] {
     { name: "deferred-tools", text: "" },
     { name: "role", text: env.role ?? "" },
   ]
+}
+
+/** Adds the non-interactive instruction without replacing a child's other prompt sections. */
+export function addNonInteractive(sections: PromptSection[]): PromptSection[] {
+  const environment = sections.find((s) => s.name === "environment")
+  if (environment?.text.includes(NON_INTERACTIVE_LINE)) return sections
+  return setSection(
+    sections,
+    "environment",
+    [environment?.text, NON_INTERACTIVE_LINE].filter(Boolean).join("\n"),
+  )
 }
 
 /** Replaces the named section, or inserts it at its place in SECTION_ORDER. */

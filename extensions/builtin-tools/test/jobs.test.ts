@@ -162,6 +162,22 @@ test.if(hasBash)(
   },
 )
 
+test.if(hasBash)("job_output returns partial output when a steer arrives", async () => {
+  const main = session("s_steer")
+  const started = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(main))
+  const jobId = detailsOf(started).jobId
+  const steer = new AbortController()
+  const began = performance.now()
+  const pending = jobOutputTool.execute(
+    { job_id: jobId, wait_for: "never", timeout: 1000 },
+    { ...ctxIn(main), steerSignal: steer.signal },
+  )
+  setTimeout(() => steer.abort(), 50)
+  const r = await pending
+  expect(performance.now() - began).toBeLessThan(500)
+  expect(textOf(r)).toContain("The wait was aborted.")
+})
+
 test.if(hasBash)("job_stop kills the whole tree a background command started", async () => {
   const pidFile = join(dir, "tree-pids").replaceAll("\\", "/")
   const r = await bashTool.execute(
@@ -207,6 +223,15 @@ test.if(hasBash)("a background command that fails at once is reported like a nor
     `nope\n\nThe background job ${detailsOf(r).jobId} already ended: it exited with code 3.`,
   )
   expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 3, outputLines: 1 })
+})
+
+test.if(hasBash)("a background pipeline fails when a command before the last one fails", async () => {
+  const r = await bashTool.execute(
+    { command: "false | tail -n 1", background: true },
+    ctxIn(session("s_main")),
+  )
+  expect(r.isError).toBe(true)
+  expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 1 })
 })
 
 test.if(onWindows)("powershell runs commands in the background too", async () => {

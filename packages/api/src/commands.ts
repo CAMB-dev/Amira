@@ -310,6 +310,8 @@ export interface SessionControl {
   info(): SessionInfo
   /** The conversation the model sees. */
   messages(): readonly Message[]
+  /** Whether this text is in the context the model sees now: not compacted or aged away. */
+  contextHas?(text: string): boolean
   /** Every model reply of this session, including ones a compaction has since replaced. */
   replies(): readonly AssistantMessage[]
   /**

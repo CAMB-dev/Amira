@@ -26,6 +26,8 @@ export interface ToolContext {
   cwd: string
   toolCallId: string
   signal: AbortSignal
+  /** Aborted when a user steering message arrives; waiting tools may return partial output. */
+  steerSignal?: AbortSignal
   /** Reports progress; emitted as tool.execute.update. */
   update(partial: ToolResult): void
   /** The calling session's tool state; absent when a tool runs outside an agent (e.g. in tests). */
@@ -69,6 +71,8 @@ export interface ToolSession {
   readonly outputs?: OutputStore
   /** Deferred tools registered right now, in registration order. */
   deferredTools(): DeferredToolInfo[]
+  /** Whether this text is present in the messages currently carried as context. */
+  contextHas?(text: string): boolean
   /**
    * Offers these deferred tools to the model from its next call on. Names not registered yet are
    * kept and offered once they register as deferred. Returns the names newly loaded.

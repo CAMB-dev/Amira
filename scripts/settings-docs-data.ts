@@ -161,6 +161,11 @@ export const annotations: Record<string, Annotation> = {
     en: "Bytes of each job's output written to its log file.",
     zh: "每个后台任务写入日志文件的输出字节数上限。",
   },
+  "backgroundJobs.printWaitMs": {
+    default: "`30000` (30 s)",
+    en: "How long print mode waits for top-level background jobs started during the run before stopping them on exit.",
+    zh: "print 模式等待本次运行启动的顶层后台任务的时长，超时后退出时停止它们。",
+  },
   "sessions.autoTitle": {
     default: "`true`",
     en: "Ask the model for a short session title in the background after the first turn (`compact.model` when set). `/rename` always wins.",

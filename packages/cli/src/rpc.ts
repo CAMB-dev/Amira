@@ -7,7 +7,7 @@ import {
   userMessage,
 } from "@amira/ai"
 import { type AnyEvent, modelLabel, type TurnEndReason } from "@amira/api"
-import { type Agent, type CommandHost, newTurnId, type UiRequests } from "@amira/core"
+import { type Agent, type CommandHost, newTurnId, UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
 import type { COMMAND_PARAMS } from "./rpc-schema.ts"
 import { stdoutWriter } from "./stdout-writer.ts"
@@ -42,7 +42,10 @@ export interface RpcOptions {
 export interface RpcSession {
   agent: Agent
   ai: Ai
-  ui: UiRequests
+  /** UI request transport; absent means this RPC client cannot answer dialogs. */
+  ui?: UiRequests
+  /** Explicitly mark an RPC session non-interactive even when a transport object is present. */
+  nonInteractive?: boolean
   /**
    * Slash commands and skills, for command.list, command.complete, command.run, skill.list and
    * skill.run. When given, it owns
@@ -91,12 +94,22 @@ interface LastTurn {
  */
 export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promise<number> {
   const io = opts.io ?? stdio()
-  const { ai, ui, commands } = session
+  const { ai, commands } = session
   let agent = session.agent
+  const ui = session.ui ?? new UiRequests(agent.bus, { sessionId: agent.sessionId })
+  const nonInteractive = session.nonInteractive === true || session.ui === undefined
+  const prepareAgent = (a: Agent) => {
+    if (!nonInteractive) return
+    a.setNonInteractive()
+    a.tools.setDisabled(new Set([...a.tools.disabled, "ask_user"]))
+  }
+  prepareAgent(agent)
+  if (nonInteractive) ui.unavailable = "rpc mode has no UI client"
   let closed = false
   let lastTurn: LastTurn | undefined
   const offSwitch = commands?.onSwitch((next) => {
     agent = next
+    prepareAgent(agent)
     lastTurn = undefined
   })
   /** command.run calls still going; they may wait on dialogs answered by later lines. */

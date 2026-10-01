@@ -112,6 +112,12 @@ for (const path of editions) {
       expect(textOf(r)).toBe("from-stderr\n\nExit code: 0")
     })
 
+    test("keeps a failing native command's status through a pipeline", async () => {
+      const r = await run("cmd /c exit 7 | ForEach-Object { $_ }")
+      expect(r.isError).toBe(true)
+      expect(textOf(r)).toEndWith("Exit code: 7")
+    })
+
     test("a syntax error is reported readably", async () => {
       const r = await run('Write-Output "unterminated')
       expect(r.isError).toBe(true)

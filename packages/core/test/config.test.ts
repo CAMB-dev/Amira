@@ -545,13 +545,16 @@ test("sub-agent settings: role models, limits, budget and the merge review thres
 })
 
 test("background job settings: how many run at once, and how much output is kept", () => {
-  const raw = { backgroundJobs: { maxRunning: 3, bufferChars: 200_000, maxLogBytes: 0 } }
+  const raw = { backgroundJobs: { maxRunning: 3, bufferChars: 200_000, maxLogBytes: 0, printWaitMs: 1000 } }
   expect(validateSettings(raw, "f")).toEqual({ settings: raw, warnings: [] })
   expect(() => validateSettings({ backgroundJobs: { maxRunning: 0 } }, "f")).toThrow(
     '"backgroundJobs.maxRunning"',
   )
   expect(() => validateSettings({ backgroundJobs: { bufferChars: 10 } }, "f")).toThrow(
     '"backgroundJobs.bufferChars"',
+  )
+  expect(() => validateSettings({ backgroundJobs: { printWaitMs: 0 } }, "f")).toThrow(
+    '"backgroundJobs.printWaitMs"',
   )
 })
 

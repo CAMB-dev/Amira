@@ -115,6 +115,7 @@ Keys are not set here: they live in `keybindings.json` in the user directory. Se
 | `backgroundJobs.maxRunning` | `number` | `8` | Background jobs (commands the shell tools start with `background: true`, such as dev servers and watchers) running at once. |  |
 | `backgroundJobs.bufferChars` | `number` | `1000000` | Characters of output each job keeps in memory for reading; at least 1000. |  |
 | `backgroundJobs.maxLogBytes` | `number` | `52428800` (50 MiB) | Bytes of each job's output written to its log file. |  |
+| `backgroundJobs.printWaitMs` | `number` | `30000` (30 s) | How long print mode waits for top-level background jobs started during the run before stopping them on exit. |  |
 | `commandAliases` | `Record<string, string>` | none | Slash command aliases: `{"ds": "model deepseek/deepseek-flash"}` makes `/ds` run `/model deepseek/deepseek-flash`, with anything typed after `/ds` appended. The value names a command, not another alias; commands and their own aliases win. |  |
 | `sessions.autoTitle` | `boolean` | `true` | Ask the model for a short session title in the background after the first turn (`compact.model` when set). `/rename` always wins. |  |
 

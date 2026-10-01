@@ -39,6 +39,18 @@ test.if(hasBash)("finds coreutils and other tools on PATH", async () => {
   expect(textOf(r)).toEndWith("1\n\nExit code: 0")
 })
 
+test("the shell description says commands already start in the working directory", () => {
+  expect(bashTool.description).toContain("Commands already start in the working directory")
+  expect(bashTool.description).not.toContain("Prefer absolute paths")
+  expect(bashTool.description).toContain("exit 141 (SIGPIPE)")
+})
+
+test.if(hasBash)("a failed command before a pipeline keeps the bash error status", async () => {
+  const r = await bashTool.execute({ command: "false | tail -n 1" }, makeCtx(dir))
+  expect(r.isError).toBe(true)
+  expect(textOf(r)).toEndWith("Exit code: 1")
+})
+
 test.if(hasBash)("non-zero exit is reported as an error", async () => {
   const r = await bashTool.execute({ command: "echo failing; exit 3" }, makeCtx(dir))
   expect(r.isError).toBe(true)

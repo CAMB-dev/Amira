@@ -79,13 +79,15 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 
 用 `&&`、`||`、`;`、`|` 或换行连接的命令会被拆开，逐个检查。Amira 无法逐词检查的命令一律改为询问：`$(...)` 和反引号等替换、变量、重定向到文件、here-document 和 here-string、分组、文件名通配符（`*`、`?`、`[...]`）、会运行其他命令的包装命令（`eval`、`sudo`、`xargs`、`bash -c`、`Invoke-Expression`、`Start-Process`、各类解释器）、定义别名的命令（`alias`、`Set-Alias`、`git -c`、`git config alias.*`）以及脚本。在 `auto` 模式下，只要没有 `ask` 或 `deny` 规则，这类命令仍然直接运行。命令按实际运行它的 shell 解析：bash 或 PowerShell，包括 `bash` 工具在 Windows 上退回 PowerShell 的情况。
 
+shell 工具已经从工作目录启动命令，只有需要进入其他目录时才使用 `cd`。bash 的前台和后台命令都启用 `pipefail`，因此管道中的任一组件失败都会保留非零状态：测试失败时 `bun test | tail` 也会失败。相应的代价是：读取方提前停止读取时（例如 `git log | head`），被截断的命令会让整个管道以 141（SIGPIPE）退出，后面的 `&&` 也不会执行。PowerShell 没有 `pipefail`，但其包装器会在原生命令管道中保留失败原生命令的 `$LASTEXITCODE`；cmdlet 管道遵循 PowerShell 的 `$?` 规则。
+
 规则只决定 Amira 询问还是拒绝，并不是沙箱。命令仍可能通过其他途径调用被拒绝的程序，例如程序的副本或链接，或模型之前写好的脚本。`deny` 适合拦住值得阻止的失误，不能当作安全边界。
 
 用户设置文件中的规则始终生效。项目的 `.amira/settings.json` 或 `.amira/settings.local.json` 只能收紧权限：比你的模式更严格时，项目的模式才生效；项目的 `ask` 和 `deny` 规则直接生效；项目的 `allow` 规则要在你信任该项目后才生效（`amira ext trust`，与项目扩展包所需的信任相同）。项目文件不允许修改的内容会在启动时提示。`--permission-mode` 优先于所有设置文件。`/permissions` 列出当前模式、每条规则及其来源文件，以及被忽略的设置；`/status` 显示模式和规则数量。
 
 有些文件无论处于哪种模式，`write`、`edit` 或 `apply_patch` 修改前都会询问：`.amira` 目录（设置、扩展包和锁文件）和 Amira 用户目录、`.git`（hooks、config 以及其他 Git 元数据，包括链接 worktree 的 Git 目录）、`.gitmodules`、`core.hooksPath` 指向的目录，以及你的全局 Git 配置。同一文件的其他写法也算在内（大小写不同、`../`、绝对路径、MSYS 路径、链接）。**shell 命令目前仍然可以修改这些文件，因为命令还没有在沙箱中运行。**
 
-被拒绝的调用会告诉模型原因，并提示它应当询问你。在打印模式下，以及 RPC 中没有客户端能回答时，所有需要询问的操作都会被拒绝并说明原因；无人值守运行请使用 `auto` 模式或规则。
+被拒绝的调用会告诉模型原因，并提示它应当询问你。在打印模式下，以及 RPC 中没有客户端能回答时，所有需要询问的操作都会被拒绝并说明原因。打印模式还会对模型（包括子 agent）隐藏 `ask_user`，并在系统提示中说明这是非交互运行，由模型自行决定。无人值守运行请使用 `auto` 模式或规则。
 
 ## 会话、压缩与回退
 
@@ -176,14 +178,15 @@ checkpoints 扩展可以通过 `api.registerFileRestoration({ label, restore: as
 amira -p "Summarize the changes in this repository"
 amira -p -c "Continue the review"
 amira -p --json "Explain the failing test"
+amira -p --json-out events.json "Explain the failing test"
 amira -p -- "-v means verbose?"
 ```
 
-`-p` / `--print` 不打开交互界面。除用不带 ID 的 `-r` 列出会话外，必须提供提示词。普通模式把回复文本流式写入 stdout，把工具执行情况、警告和错误写入 stderr。`--json` 必须与打印模式一起使用，将每个事件作为一行 JSON 写入 stdout，包含会话、轮次、消息、工具与子 agent 事件，并非只输出一个最终 JSON 答案。
+`-p` / `--print` 不打开交互界面。除用不带 ID 的 `-r` 列出会话外，必须提供提示词。普通模式把回复文本流式写入 stdout，把工具执行情况、警告和错误写入 stderr。`--json` 必须与打印模式一起使用，将每个事件作为一行只含 ASCII 的 JSON 写入 stdout；非 ASCII 字符会转义为 `\uXXXX`，因此 Windows 父进程不会因代码页差异而解码错误。`--json-out <path>` 会隐含 `--json`，把相同的 JSONL 事件流写入文件而不是 stdout；相对路径按 Amira 的启动目录解析。输出包含会话、轮次、消息、工具与子 agent 事件，并非只输出一个最终 JSON 答案。
 
 带引号的命令，例如 `amira -p "/status"`，直接执行命令，不发送模型提示词；已加载的 skill 也可以这样运行。需要选择器的命令无法获得交互回答，支持显式参数时请直接传入参数。
 
-打印模式会等待后台子 agent，以及结果触发的后续轮次。等待没有固定时限，配置的预算仍然生效。结果投递轮次失败后最多重试三次，分别等待 10、30 和 90 秒。Ctrl+C 中止并停止等待，再按一次强制退出。退出码为：完成时 0，错误时 1，轮次被中止时 130。
+打印模式会等待本次运行启动的顶层 shell 后台任务，最长等待 `backgroundJobs.printWaitMs`（默认 30 秒），并把任务结束通知交给模型再运行一轮；也会等待后台子 agent 及其结果触发的后续轮次。任务等待超时会显示提示，并在退出时停止仍在运行的任务。配置的预算仍然生效。结果投递轮次失败后最多重试三次，分别等待 10、30 和 90 秒。Ctrl+C 中止并停止等待，再按一次强制退出。退出码为：完成时 0，错误时 1，轮次被中止时 130。
 
 ## RPC 自动化
 

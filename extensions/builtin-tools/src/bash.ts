@@ -27,7 +27,7 @@ export interface BashParams {
 /** Notes for every shell tool; `cd` and `chain` show how that shell sequences commands. */
 function sharedNotes(cd: string, chain: string): string[] {
   return [
-    `- Starts in the working directory. Each call is a fresh shell: \`cd\`, variables and functions do not persist between calls. Prefer absolute paths or \`${cd}\`.`,
+    `- Commands already start in the working directory. Each call is a fresh shell: \`cd\`, variables and functions do not persist between calls. Use \`${cd}\` only when you need to change directories within a call.`,
     `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed.`,
     "- Processes the command leaves running are killed when it finishes. For commands that keep running (dev servers, watchers, long builds you want to check on later), pass `background: true`: the call returns at once with a job id and the output so far, and the job keeps running. Read its new output with job_output (use wait_for to wait for a line such as a ready message instead of polling) and stop it with job_stop. Do not append `&` or use nohup yourself. Background jobs are stopped when Amira exits, and a sub-agent's when it ends.",
     `- Several calls issued together run at the same time. Put commands that depend on each other in one call (${chain}) or in separate turns.`,
@@ -150,6 +150,7 @@ export const bashTool = shellTool(
   [
     "Run a shell command and return its combined stdout and stderr plus the exit code.",
     "- Runs in bash (Git Bash on Windows, so use POSIX syntax and forward slashes). If Git Bash is not installed, Windows falls back to PowerShell: every result then starts with a `Shell:` line naming the PowerShell edition, and you must use PowerShell syntax.",
+    "- Bash runs with `pipefail`: a pipeline fails when any command in it fails, so `cmd | tail` reports cmd's failure. A command cut off by a reader that stops early (`git log | head`) makes the pipeline exit 141 (SIGPIPE), also before `&&`; limit output with the command's own options (`git log -n 5`) instead.",
     "- Output is decoded as UTF-8. Windows programs that print in a legacy console code page may show garbled non-ASCII text.",
     ...sharedNotes("cd dir && cmd", "`a && b`"),
   ],

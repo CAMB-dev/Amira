@@ -165,7 +165,7 @@ export const COMMAND_VAR = "AMIRA_COMMAND"
  * exec-ing the inner shell: a Windows process killed by an MSYS signal exits 0, while the outer
  * shell reports it as 128+n.
  */
-export const GATE_SCRIPT = `read -r _ || [ -n "$AMIRA_GATE" ] || exit 125; c=$${COMMAND_VAR}; unset AMIRA_GATE ${COMMAND_VAR}; "$BASH" -c "$c" bash; exit $?`
+export const GATE_SCRIPT = `read -r _ || [ -n "$AMIRA_GATE" ] || exit 125; c=$${COMMAND_VAR}; unset AMIRA_GATE ${COMMAND_VAR}; "$BASH" -o pipefail -c "$c" bash; exit $?`
 
 export function windowsBashShell(found: string, exists: (p: string) => boolean = existsSync): Shell {
   const { bash, root } = gitBashLayout(found, exists)
@@ -188,7 +188,12 @@ function posixBashShell(path: string): Shell {
   return {
     kind: "bash",
     path,
-    command: (command, cwd) => ({ argv: [path, "-c", command], env: { ...process.env }, cwd, gated: false }),
+    command: (command, cwd) => ({
+      argv: [path, "-o", "pipefail", "-c", command],
+      env: { ...process.env },
+      cwd,
+      gated: false,
+    }),
   }
 }
 

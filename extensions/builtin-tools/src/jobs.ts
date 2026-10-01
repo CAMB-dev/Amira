@@ -266,6 +266,24 @@ function forgetGoneJobs() {
 }
 const POLL_WINDOW_MS = 5000
 
+function waitSignal(ctx: ToolContext): { signal: AbortSignal; cleanup: () => void } {
+  if (!ctx.steerSignal) return { signal: ctx.signal, cleanup: () => {} }
+  const combined = new AbortController()
+  const abort = () => combined.abort()
+  if (ctx.signal.aborted || ctx.steerSignal.aborted) combined.abort()
+  else {
+    ctx.signal.addEventListener("abort", abort, { once: true })
+    ctx.steerSignal.addEventListener("abort", abort, { once: true })
+  }
+  return {
+    signal: combined.signal,
+    cleanup: () => {
+      ctx.signal.removeEventListener("abort", abort)
+      ctx.steerSignal?.removeEventListener("abort", abort)
+    },
+  }
+}
+
 export interface JobOutputParams {
   job_id: string
   wait_for?: string
@@ -314,14 +332,19 @@ export const jobOutputTool = defineTool<JobOutputParams>({
           : 0
     let waited: BackgroundJobWaitResult | undefined
     if (pattern || waitMs > 0) {
-      waited = await watch(found.id, () =>
-        registry.waitFor(found.id, {
-          ...(pattern ? { pattern } : {}),
-          from: waitFrom.get(`${reader}\0${found.id}`) ?? 0,
-          timeoutMs: waitMs,
-          signal: ctx.signal,
-        }),
-      )
+      const wait = waitSignal(ctx)
+      try {
+        waited = await watch(found.id, () =>
+          registry.waitFor(found.id, {
+            ...(pattern ? { pattern } : {}),
+            from: waitFrom.get(`${reader}\0${found.id}`) ?? 0,
+            timeoutMs: waitMs,
+            signal: wait.signal,
+          }),
+        )
+      } finally {
+        wait.cleanup()
+      }
     }
     const out = registry.readNew(found.id, reader, MAX_OUTPUT_CHARS)
     waitFrom.set(`${reader}\0${found.id}`, out.to)

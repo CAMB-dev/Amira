@@ -1,5 +1,6 @@
-import { describeServerTool, messageCitations } from "@amira/ai"
-import { type AnyEvent, fallbackTitle } from "@amira/api"
+import { createWriteStream, openSync, type WriteStream } from "node:fs"
+import { describeServerTool, messageCitations, userMessage } from "@amira/ai"
+import { type AnyEvent, type BackgroundJobInfo, type BackgroundJobRegistry, fallbackTitle } from "@amira/api"
 import { type Agent, type CommandHost, parseCommandLine, type TurnResult, type UiRequests } from "@amira/core"
 
 export interface PrintIO {
@@ -12,6 +13,9 @@ const defaultIO: PrintIO = {
   stderr: (s) => void process.stderr.write(s),
 }
 
+const DEFAULT_BACKGROUND_JOB_WAIT_MS = 30_000
+type PrintBackgroundJobs = Pick<BackgroundJobRegistry, "list" | "subscribe">
+
 export interface PrintOptions {
   io?: PrintIO
   /** Events emitted before this frontend subscribed (e.g. extension load errors). */
@@ -22,6 +26,12 @@ export interface PrintOptions {
   onReady?: () => void
   /** Called on a second Ctrl+C. Default exits the process with 130. */
   forceExit?: () => void
+  /** Write JSONL events to this file instead of stdout. Only used when json is true. */
+  jsonOut?: string
+  /** Top-level shell jobs started during this run; print mode waits for them before exiting. */
+  backgroundJobs?: PrintBackgroundJobs
+  /** Maximum time print mode waits for those jobs. Default 30 seconds. */
+  backgroundJobTimeoutMs?: number
   /** Dialogs extensions open; print mode cannot answer them, so they are cancelled. */
   ui?: UiRequests
   /**
@@ -42,7 +52,7 @@ export function safeJson(value: unknown): string {
     // The objects being written, outermost first: a value among them is a cycle. One reached
     // twice by different paths (e.g. one model named in two fields) is not, and is written both times.
     const path: object[] = []
-    return JSON.stringify(value, function (this: unknown, _k, v) {
+    const json = JSON.stringify(value, function (this: unknown, _k, v) {
       if (typeof v === "bigint") return v.toString()
       if (v && typeof v === "object") {
         while (path.length && path[path.length - 1] !== this) path.pop()
@@ -51,9 +61,31 @@ export function safeJson(value: unknown): string {
       }
       return v
     })
+    return asciiJson(json ?? "null")
   } catch (err) {
-    return JSON.stringify({ unserializable: true, error: err instanceof Error ? err.message : String(err) })
+    return asciiJson(
+      JSON.stringify({ unserializable: true, error: err instanceof Error ? err.message : String(err) }),
+    )
   }
+}
+
+/** JSON lines stay ASCII so a Windows parent cannot reinterpret UTF-8 as an OEM code page. */
+function asciiJson(json: string): string {
+  let result = ""
+  for (let index = 0; index < json.length; index++) {
+    const character = json[index]
+    const code = json.charCodeAt(index)
+    result += code <= 0x7f ? character : `\\u${code.toString(16).padStart(4, "0")}`
+  }
+  return result
+}
+
+function finishJsonFile(stream: WriteStream): Promise<void> {
+  return new Promise((resolve, reject) => {
+    stream.once("error", reject)
+    stream.once("finish", resolve)
+    stream.end()
+  })
 }
 
 /**
@@ -67,6 +99,18 @@ export async function runPrint(
   opts: PrintOptions = {},
 ): Promise<number> {
   const io = opts.io ?? defaultIO
+  // Opened at once, so a path that cannot be written fails the run before any turn.
+  const jsonFile =
+    json && opts.jsonOut
+      ? createWriteStream("", { fd: openSync(opts.jsonOut, "w"), encoding: "utf8" })
+      : undefined
+  let jsonFileError: Error | undefined
+  jsonFile?.on("error", (err) => {
+    jsonFileError ??= err
+  })
+  let jsonFileOpen = jsonFile !== undefined
+  agent.setNonInteractive()
+  agent.tools.setDisabled(new Set([...agent.tools.disabled, "ask_user"]))
   // Questions for the user (ask_user) are not even asked: nobody is there to answer.
   if (opts.ui) opts.ui.unavailable = "print mode"
   let endedWithNewline = true
@@ -89,7 +133,10 @@ export async function runPrint(
       opts.ui?.cancel(e.data.requestId)
     }
     if (json) {
-      io.stdout(`${safeJson(e)}\n`)
+      const line = `${safeJson(e)}\n`
+      if (jsonFile) {
+        if (jsonFileOpen) jsonFile.write(line)
+      } else io.stdout(line)
       return
     }
     if (e.type === "subagent.start") {
@@ -213,6 +260,7 @@ export async function runPrint(
   for (const e of opts.pending ?? []) handle(e)
   const off = agent.bus.subscribe(handle)
   opts.onReady?.()
+  const initialBackgroundJobIds = new Set(opts.backgroundJobs?.list().map((job) => job.id))
 
   // First Ctrl+C aborts the turn; a second one exits immediately.
   let interrupted = false
@@ -232,9 +280,35 @@ export async function runPrint(
     } else {
       code = exitCode(await agent.prompt(prompt))
     }
+    let jobs: JobWait = { waited: false, timedOut: false }
+    if (code === 0 && opts.backgroundJobs) {
+      jobs = await waitForBackgroundJobs(
+        agent,
+        opts.backgroundJobs,
+        initialBackgroundJobIds,
+        opts.backgroundJobTimeoutMs ?? DEFAULT_BACKGROUND_JOB_WAIT_MS,
+        () => interrupted,
+        io,
+      )
+    }
+    if (code === 0 && jobs.timedOut && !interrupted) {
+      // A follow-up turn may still be running: the note goes after it, as a turn of its own.
+      while (agent.busy && !interrupted) await Bun.sleep(20)
+      const notice = agent.expectNotice()
+      notice.deliver(
+        userMessage(
+          "Top-level background jobs are still running and will be stopped when this print run exits. Decide how to finish without their results.",
+          { text: "◆ top-level background jobs still running", origin: "job" },
+        ),
+        { wake: false },
+      )
+      const turn = agent.wake()
+      if (turn) await turn
+    }
     // Sub-agents still running in the background: wait for their results and the turns they
-    // start, as long as those turns succeed. Ctrl+C stops waiting.
-    if (code === 0 && (await backgroundTurns(agent, () => interrupted))) {
+    // start, as long as those turns succeed. Ctrl+C stops waiting. The turns a job's end started
+    // decide the exit code the same way.
+    if (code === 0 && ((await backgroundTurns(agent, () => interrupted)) || jobs.waited)) {
       await agent.bus.flush()
       code = interrupted ? 130 : lastEnd ? exitCode(lastEnd) : code
     }
@@ -243,9 +317,94 @@ export async function runPrint(
       Bun.sleep(opts.flushTimeoutMs ?? 2000).then(() => false),
     ])
     if (!flushed) io.stderr("amira: some event handlers did not finish; exiting anyway\n")
+    jsonFileOpen = false
+    if (jsonFile)
+      await finishJsonFile(jsonFile).catch((err: Error) => {
+        jsonFileError ??= err
+      })
+    if (jsonFileError) {
+      io.stderr(`amira: could not write ${opts.jsonOut}: ${jsonFileError.message}\n`)
+      if (code === 0) code = 1
+    }
     return code
   } finally {
     process.off("SIGINT", onSigint)
+    off()
+  }
+}
+
+/** Whether print mode waited for top-level jobs, and whether some outlived the wait. */
+interface JobWait {
+  waited: boolean
+  timedOut: boolean
+}
+
+/**
+ * Keeps the registry listener alive through the follow-up turn caused by a root job's notice.
+ * The builtin job watcher delivers that notice with wake=false because interactive users see it;
+ * print mode explicitly wakes the idle root so the model can handle it before the process exits.
+ */
+async function waitForBackgroundJobs(
+  agent: Agent,
+  registry: PrintBackgroundJobs,
+  initialIds: ReadonlySet<string>,
+  timeoutMs: number,
+  stop: () => boolean,
+  io: PrintIO,
+): Promise<JobWait> {
+  const rootIds = new Set<string>()
+  const add = (job: BackgroundJobInfo) => {
+    if (job.owner === undefined && !initialIds.has(job.id)) rootIds.add(job.id)
+  }
+  for (const job of registry.list()) add(job)
+  if (!rootIds.size) return { waited: false, timedOut: false }
+
+  let changed: (() => void) | undefined
+  let signal: Promise<void> | undefined
+  const wake = () => {
+    changed?.()
+    changed = undefined
+    signal = undefined
+  }
+  const off = registry.subscribe(({ type, job }) => {
+    if (type === "start") add(job)
+    if (type === "end" && rootIds.has(job.id) && !agent.busy && agent.waitingNotices) agent.wake()
+    wake()
+  })
+  const waitForChange = () => {
+    signal ??= new Promise<void>((resolve) => {
+      changed = resolve
+    })
+    return signal
+  }
+  const waitMs = Math.max(1, Math.floor(timeoutMs))
+  const deadline = Date.now() + waitMs
+  let noted = false
+  try {
+    while (!stop()) {
+      for (const job of registry.list()) add(job)
+      const live = registry
+        .list()
+        .some((job) => rootIds.has(job.id) && (job.status === "starting" || job.status === "running"))
+      if (!live && !agent.busy && agent.waitingNotices) agent.wake()
+      if (!live && !agent.busy && !agent.expectedNotices && !agent.waitingNotices)
+        return { waited: true, timedOut: false }
+      if (live && !noted) {
+        noted = true
+        io.stderr(`amira: waiting for top-level background jobs (up to ${waitMs} ms)\n`)
+      }
+      const left = deadline - Date.now()
+      if (left <= 0) {
+        if (live)
+          io.stderr(
+            `amira: timed out after ${waitMs} ms while top-level background jobs were still running; they will be stopped on exit\n`,
+          )
+        return { waited: true, timedOut: live }
+      }
+      await Promise.race([waitForChange(), Bun.sleep(Math.min(20, left))])
+    }
+    return { waited: true, timedOut: false }
+  } finally {
     off()
   }
 }

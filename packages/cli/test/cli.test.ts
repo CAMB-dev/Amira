@@ -1,9 +1,16 @@
 import { expect, test } from "bun:test"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
-import { defineExtension, defineTool, type Extension, textResult } from "@amira/api"
+import {
+  type BackgroundJobChange,
+  type BackgroundJobInfo,
+  defineExtension,
+  defineTool,
+  type Extension,
+  textResult,
+} from "@amira/api"
 import { EventBus, UiRequests } from "@amira/core"
 import { parseCliArgs, UsageError } from "../src/args.ts"
 import { type PrintIO, runPrint, safeJson } from "../src/print.ts"
@@ -25,6 +32,11 @@ test("parses print mode, repeatable extensions and the positional prompt", () =>
     prompt: "fix it",
     cwd: here,
   })
+})
+
+test("parses --json-out as an ASCII-safe JSON print destination", () => {
+  const a = parseCliArgs(["-p", "--json-out", "events.json", "fix it"], here, {})
+  expect(a).toMatchObject({ print: true, json: true, jsonOut: path.join(here, "events.json") })
 })
 
 test("rejects inconsistent flags", () => {
@@ -175,6 +187,220 @@ test("print mode waits for background results and lets the commander react befor
   expect(agent.busy).toBe(false)
 })
 
+test("print mode waits for a top-level job and delivers its end notice", async () => {
+  let job: BackgroundJobInfo | undefined
+  const listeners = new Set<(change: BackgroundJobChange) => void>()
+  const registry = {
+    list: () => (job ? [job] : []),
+    subscribe: (listener: (change: BackgroundJobChange) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+  const { agent } = await mockSession([
+    { toolCalls: [{ name: "start-root-job", args: {} }] },
+    { text: "started" },
+    (req) => ({ text: req.messages.at(-1)?.content[0]?.type === "text" ? "noticed" : "missed" }),
+  ])
+  agent.tools.register(
+    defineTool({
+      name: "start-root-job",
+      description: "",
+      parameters: {},
+      execute: async (_args, ctx) => {
+        const notice = ctx.session!.expectNotice!()
+        job = {
+          id: "job1",
+          command: "bun run check",
+          cwd: here,
+          meta: {},
+          startedAt: Date.now(),
+          status: "running",
+          contained: true,
+          exitCode: null,
+          signal: null,
+          stopRequested: false,
+          outputChars: 0,
+        }
+        for (const listener of listeners) listener({ type: "start", job })
+        setTimeout(() => {
+          job = { ...job!, status: "exited", exitCode: 0, endedAt: Date.now() }
+          notice.deliver(userMessage("the root job ended", { text: "◆ root job ended", origin: "job" }), {
+            wake: false,
+          })
+          for (const listener of listeners) listener({ type: "end", job: job! })
+        }, 60)
+        return textResult("started")
+      },
+    }),
+    "test",
+  )
+  const io = capture()
+  expect(
+    await runPrint(agent, "go", false, {
+      io,
+      backgroundJobs: registry,
+      backgroundJobTimeoutMs: 1000,
+    }),
+  ).toBe(0)
+  expect(io.out).toBe("started\nnoticed\n")
+})
+
+test("print mode tells the model when a top-level job outlives its wait timeout", async () => {
+  let job: BackgroundJobInfo | undefined
+  const registry = {
+    list: () => (job ? [job] : []),
+    subscribe: () => () => {},
+  }
+  const { agent } = await mockSession([
+    { toolCalls: [{ name: "start-root-job", args: {} }] },
+    { text: "started" },
+    (req) => ({
+      text: req.messages.at(-1)?.content[0]?.type === "text" ? "told" : "missed",
+    }),
+  ])
+  agent.tools.register(
+    defineTool({
+      name: "start-root-job",
+      description: "",
+      parameters: {},
+      execute: async () => {
+        // Like the job watcher, which announces a notice only when the job ends.
+        job = {
+          id: "job-timeout",
+          command: "bun run check",
+          cwd: here,
+          meta: {},
+          startedAt: Date.now(),
+          status: "running",
+          contained: true,
+          exitCode: null,
+          signal: null,
+          stopRequested: false,
+          outputChars: 0,
+        }
+        return textResult("started")
+      },
+    }),
+    "test",
+  )
+  const io = capture()
+  const began = performance.now()
+  expect(
+    await runPrint(agent, "go", false, {
+      io,
+      backgroundJobs: registry,
+      backgroundJobTimeoutMs: 25,
+    }),
+  ).toBe(0)
+  expect(performance.now() - began).toBeLessThan(1000)
+  expect(io.out).toBe("started\ntold\n")
+  expect(io.err).toContain("waiting for top-level background jobs")
+  expect(io.err).toContain("top-level background jobs were still running")
+})
+
+/** A fake job registry and a tool that starts one root job, ending after `endAfterMs` if given. */
+function rootJobs(endAfterMs?: number) {
+  let job: BackgroundJobInfo | undefined
+  const listeners = new Set<(change: BackgroundJobChange) => void>()
+  const registry = {
+    list: () => (job ? [job] : []),
+    subscribe: (listener: (change: BackgroundJobChange) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+  const tool = defineTool({
+    name: "start-root-job",
+    description: "",
+    parameters: {},
+    execute: async (_args, ctx) => {
+      const session = ctx.session!
+      job = {
+        id: "job1",
+        command: "bun run check",
+        cwd: here,
+        meta: {},
+        startedAt: Date.now(),
+        status: "running",
+        contained: true,
+        exitCode: null,
+        signal: null,
+        stopRequested: false,
+        outputChars: 0,
+      }
+      for (const listener of listeners) listener({ type: "start", job })
+      if (endAfterMs !== undefined)
+        setTimeout(() => {
+          job = { ...job!, status: "exited", exitCode: 1, endedAt: Date.now() }
+          session.expectNotice!().deliver(userMessage("the root job failed"), { wake: false })
+          for (const listener of listeners) listener({ type: "end", job: job! })
+        }, endAfterMs)
+      return textResult("started")
+    },
+  })
+  return { registry, tool }
+}
+
+test("print mode exits with the result of the turn a job's end started", async () => {
+  const { agent } = await mockSession(
+    [
+      { toolCalls: [{ name: "start-root-job", args: {} }] },
+      { text: "started" },
+      { error: { message: "down" } },
+    ],
+    { noticeRetryMs: [] },
+  )
+  const jobs = rootJobs(30)
+  agent.tools.register(jobs.tool, "test")
+  const io = capture()
+  expect(await runPrint(agent, "go", false, { io, backgroundJobs: jobs.registry })).toBe(1)
+  expect(io.err).toContain("down")
+})
+
+test("print mode waits for a follow-up turn before telling the model a job outlived the wait", async () => {
+  let release!: () => void
+  const released = new Promise<void>((r) => {
+    release = r
+  })
+  const jobs = rootJobs()
+  const { agent } = await mockSession([
+    { toolCalls: [{ name: "start-root-job", args: {} }] },
+    { text: "started" },
+    { toolCalls: [{ name: "slow", args: {} }] },
+    { text: "slow done" },
+    (req) => ({ text: JSON.stringify(req.messages.at(-1)).includes("still running") ? "told" : "missed" }),
+  ])
+  agent.tools.register(jobs.tool, "test")
+  agent.tools.register(
+    defineTool({
+      name: "slow",
+      description: "",
+      parameters: {},
+      execute: async () => {
+        await released
+        return textResult("slow")
+      },
+    }),
+    "test",
+  )
+  const io = capture()
+  // The first turn ends, a user message starts another one that outlasts the job wait.
+  const done = runPrint(agent, "go", false, { io, backgroundJobs: jobs.registry, backgroundJobTimeoutMs: 50 })
+  while (!io.out.includes("started")) await Bun.sleep(5)
+  await Bun.sleep(10)
+  agent.steer("one more thing")
+  setTimeout(release, 150)
+  expect(await done).toBe(0)
+  expect(io.out).toBe("started\nslow done\ntold\n")
+})
+
+test("json print mode fails before any turn when the output file cannot be opened", async () => {
+  const { agent } = await mockSession([{ text: "unused" }])
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), "amira-json-out-")), "missing", "events.jsonl")
+  await expect(runPrint(agent, "go", true, { io: capture(), jsonOut: file })).rejects.toThrow("ENOENT")
+})
+
 test("print mode waits through the resends of a failed woken turn, at most three", async () => {
   const down = { error: { message: "provider down" } }
   // Woken turn fails, the first two resends fail, the third one works.
@@ -275,6 +501,27 @@ test("json mode survives non-serializable tool details", async () => {
   const b: Record<string, unknown> = { inner: { x: 1 } }
   ;(b.inner as Record<string, unknown>).back = b
   expect(safeJson(b)).toBe('{"inner":{"x":1,"back":"[circular]"}}')
+})
+
+test("json lines escape non-ASCII characters", () => {
+  const line = safeJson({ text: "你好 héllo 😀" })
+  expect(line).toBe('{"text":"\\u4f60\\u597d h\\u00e9llo \\ud83d\\ude00"}')
+  expect(line.split("").every((character) => character.charCodeAt(0) <= 0x7f)).toBe(true)
+  expect(JSON.parse(line)).toEqual({ text: "你好 héllo 😀" })
+})
+
+test("json print mode can write the event stream to a file", async () => {
+  const { agent } = await mockSession([{ text: "你好" }])
+  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-json-out-"))
+  const file = path.join(dir, "events.jsonl")
+  const io = capture()
+  expect(await runPrint(agent, "go", true, { io, jsonOut: file })).toBe(0)
+  const lines = readFileSync(file, "utf8").trim().split("\n")
+  expect(io.out).toBe("")
+  expect(lines.every((line) => line.split("").every((character) => character.charCodeAt(0) <= 0x7f))).toBe(
+    true,
+  )
+  expect(lines.map((line) => JSON.parse(line)).at(-2).type).toBe("turn.end")
 })
 
 test("model errors exit with code 1", async () => {

@@ -79,13 +79,15 @@ A rule matches the words of a command (its argv), not the text: `git status --sh
 
 Commands joined with `&&`, `||`, `;`, `|` or newlines are split and each part is checked. Commands Amira cannot check word by word ask instead: substitutions such as `$(...)` and backticks, variables, redirections into files, here-documents and here-strings, grouping, file name patterns (`*`, `?`, `[...]`), wrappers that run other commands (`eval`, `sudo`, `xargs`, `bash -c`, `Invoke-Expression`, `Start-Process`, interpreters), commands that define aliases (`alias`, `Set-Alias`, `git -c`, `git config alias.*`) and scripts. In `auto` mode they still run without asking unless you have `ask` or `deny` rules. Commands are read the way the shell that runs them reads them: bash or PowerShell, including the `bash` tool falling back to PowerShell on Windows.
 
+Shell commands already start in the working directory; use `cd` only when a command needs another directory. Bash runs foreground and background commands with `pipefail`, so a failed pipeline component keeps a non-zero status: `bun test | tail` fails when the tests fail. The other side of this: a command cut off by a reader that stops early, such as `git log | head`, makes the pipeline exit 141 (SIGPIPE), and a following `&&` does not run. PowerShell has no `pipefail` option, but its wrapper preserves a failing native command's `$LASTEXITCODE` through a native pipeline; cmdlet pipelines follow PowerShell's `$?` rules.
+
 Rules make Amira ask or refuse; they are not a sandbox. A command can still reach a denied program another way, for example through a copy or link of it, or through a script the model wrote earlier. Use `deny` for mistakes worth stopping, not as a security boundary.
 
 The user file's rules always apply. A project's `.amira/settings.json` or `.amira/settings.local.json` can only tighten: its mode counts when it is stricter than yours, its `ask` and `deny` rules apply, and its `allow` rules apply only after you trust the project (`amira ext trust`, the same trust its extension packages need). What a project file is not allowed to change is reported at startup. `--permission-mode` wins over every file. `/permissions` lists the mode, every rule with the file it comes from and what was left out; `/status` shows the mode and the number of rules.
 
 Some files always ask before `write`, `edit` or `apply_patch` changes them, in every mode: `.amira` directories (settings, packages and lock files) and Amira's user directory, `.git` (hooks, config and the rest of Git's metadata, including a linked worktree's Git directory), `.gitmodules`, the directory `core.hooksPath` names and your global Git config. Other names for the same file count too (a different case, `../`, absolute or MSYS paths, links). **Shell commands can still change these files: commands do not run in a sandbox yet.**
 
-A refused call tells the model why and that asking you is the way forward. In print mode, and in RPC once no client can answer, anything that would ask is refused with the reason, so use `auto` mode or rules for unattended runs.
+A refused call tells the model why and that asking you is the way forward. In print mode, and in RPC once no client can answer, anything that would ask is refused with the reason. Print mode also hides `ask_user` from the model (sub-agents included), and its system prompt says the run is non-interactive, so the model decides for itself. Use `auto` mode or rules for unattended runs.
 
 ## Sessions, compaction and rewind
 
@@ -176,14 +178,15 @@ The defaults can be changed under `context` in settings:
 amira -p "Summarize the changes in this repository"
 amira -p -c "Continue the review"
 amira -p --json "Explain the failing test"
+amira -p --json-out events.json "Explain the failing test"
 amira -p -- "-v means verbose?"
 ```
 
-`-p` / `--print` runs without the interactive UI and needs a prompt, except when listing sessions with bare `-r`. Plain mode streams reply text to stdout and tool activity, warnings and errors to stderr. `--json` requires print mode and writes each event as one JSON line to stdout. These lines include session, turn, message, tool and sub-agent events, rather than one final JSON answer.
+`-p` / `--print` runs without the interactive UI and needs a prompt, except when listing sessions with bare `-r`. Plain mode streams reply text to stdout and tool activity, warnings and errors to stderr. `--json` requires print mode and writes each event as one ASCII-only JSON line to stdout; non-ASCII string characters are escaped as `\uXXXX`, so a Windows parent can decode the stream without a code-page mismatch. `--json-out <path>` implies `--json` and writes the same JSONL event stream to the file instead of stdout; a relative path is resolved from where Amira was invoked. These lines include session, turn, message, tool and sub-agent events, rather than one final JSON answer.
 
 A quoted slash command such as `amira -p "/status"` runs the command instead of sending a model prompt. Skills can also run this way when available. Commands requiring a picker cannot obtain interactive answers; supply explicit arguments where supported.
 
-Print mode waits for background sub-agents and the follow-up turns their results start. This wait has no fixed time limit; configured budgets still apply. Failed result-delivery turns can be retried up to three times after 10, 30 and 90 seconds. Ctrl+C aborts and stops waiting; a second Ctrl+C forces exit. The exit codes are 0 for completion, 1 for errors and 130 for an aborted turn.
+Print mode waits for top-level background shell jobs started during the run, up to `backgroundJobs.printWaitMs` (30 seconds by default), and delivers their end notices to the model for a follow-up turn. It also waits for background sub-agents and the follow-up turns their results start. If the job wait expires, Amira prints a note and stops those jobs on exit. Configured budgets still apply. Failed result-delivery turns can be retried up to three times after 10, 30 and 90 seconds. Ctrl+C aborts and stops waiting; a second Ctrl+C forces exit. The exit codes are 0 for completion, 1 for errors and 130 for an aborted turn.
 
 ## RPC automation
 

@@ -133,6 +133,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       }
     },
     messages: () => agent().messages,
+    contextHas: (text) => agent().contextHas(text),
     replies: () => {
       const a = agent()
       // The session file keeps messages a compaction replaced, so their cost still counts.
