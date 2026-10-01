@@ -264,8 +264,8 @@ test("print mode tells the model when a top-level job outlives its wait timeout"
       name: "start-root-job",
       description: "",
       parameters: {},
-      execute: async (_args, ctx) => {
-        ctx.session!.expectNotice!()
+      execute: async () => {
+        // Like the job watcher, which announces a notice only when the job ends.
         job = {
           id: "job-timeout",
           command: "bun run check",
@@ -297,6 +297,108 @@ test("print mode tells the model when a top-level job outlives its wait timeout"
   expect(io.out).toBe("started\ntold\n")
   expect(io.err).toContain("waiting for top-level background jobs")
   expect(io.err).toContain("top-level background jobs were still running")
+})
+
+/** A fake job registry and a tool that starts one root job, ending after `endAfterMs` if given. */
+function rootJobs(endAfterMs?: number) {
+  let job: BackgroundJobInfo | undefined
+  const listeners = new Set<(change: BackgroundJobChange) => void>()
+  const registry = {
+    list: () => (job ? [job] : []),
+    subscribe: (listener: (change: BackgroundJobChange) => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+  const tool = defineTool({
+    name: "start-root-job",
+    description: "",
+    parameters: {},
+    execute: async (_args, ctx) => {
+      const session = ctx.session!
+      job = {
+        id: "job1",
+        command: "bun run check",
+        cwd: here,
+        meta: {},
+        startedAt: Date.now(),
+        status: "running",
+        contained: true,
+        exitCode: null,
+        signal: null,
+        stopRequested: false,
+        outputChars: 0,
+      }
+      for (const listener of listeners) listener({ type: "start", job })
+      if (endAfterMs !== undefined)
+        setTimeout(() => {
+          job = { ...job!, status: "exited", exitCode: 1, endedAt: Date.now() }
+          session.expectNotice!().deliver(userMessage("the root job failed"), { wake: false })
+          for (const listener of listeners) listener({ type: "end", job: job! })
+        }, endAfterMs)
+      return textResult("started")
+    },
+  })
+  return { registry, tool }
+}
+
+test("print mode exits with the result of the turn a job's end started", async () => {
+  const { agent } = await mockSession(
+    [
+      { toolCalls: [{ name: "start-root-job", args: {} }] },
+      { text: "started" },
+      { error: { message: "down" } },
+    ],
+    { noticeRetryMs: [] },
+  )
+  const jobs = rootJobs(30)
+  agent.tools.register(jobs.tool, "test")
+  const io = capture()
+  expect(await runPrint(agent, "go", false, { io, backgroundJobs: jobs.registry })).toBe(1)
+  expect(io.err).toContain("down")
+})
+
+test("print mode waits for a follow-up turn before telling the model a job outlived the wait", async () => {
+  let release!: () => void
+  const released = new Promise<void>((r) => {
+    release = r
+  })
+  const jobs = rootJobs()
+  const { agent } = await mockSession([
+    { toolCalls: [{ name: "start-root-job", args: {} }] },
+    { text: "started" },
+    { toolCalls: [{ name: "slow", args: {} }] },
+    { text: "slow done" },
+    (req) => ({ text: JSON.stringify(req.messages.at(-1)).includes("still running") ? "told" : "missed" }),
+  ])
+  agent.tools.register(jobs.tool, "test")
+  agent.tools.register(
+    defineTool({
+      name: "slow",
+      description: "",
+      parameters: {},
+      execute: async () => {
+        await released
+        return textResult("slow")
+      },
+    }),
+    "test",
+  )
+  const io = capture()
+  // The first turn ends, a user message starts another one that outlasts the job wait.
+  const done = runPrint(agent, "go", false, { io, backgroundJobs: jobs.registry, backgroundJobTimeoutMs: 50 })
+  while (!io.out.includes("started")) await Bun.sleep(5)
+  await Bun.sleep(10)
+  agent.steer("one more thing")
+  setTimeout(release, 150)
+  expect(await done).toBe(0)
+  expect(io.out).toBe("started\nslow done\ntold\n")
+})
+
+test("json print mode fails before any turn when the output file cannot be opened", async () => {
+  const { agent } = await mockSession([{ text: "unused" }])
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), "amira-json-out-")), "missing", "events.jsonl")
+  await expect(runPrint(agent, "go", true, { io: capture(), jsonOut: file })).rejects.toThrow("ENOENT")
 })
 
 test("print mode waits through the resends of a failed woken turn, at most three", async () => {

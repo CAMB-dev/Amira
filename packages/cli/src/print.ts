@@ -1,4 +1,4 @@
-import { createWriteStream, type WriteStream } from "node:fs"
+import { createWriteStream, openSync, type WriteStream } from "node:fs"
 import { describeServerTool, messageCitations, userMessage } from "@amira/ai"
 import { type AnyEvent, type BackgroundJobInfo, type BackgroundJobRegistry, fallbackTitle } from "@amira/api"
 import { type Agent, type CommandHost, parseCommandLine, type TurnResult, type UiRequests } from "@amira/core"
@@ -99,7 +99,15 @@ export async function runPrint(
   opts: PrintOptions = {},
 ): Promise<number> {
   const io = opts.io ?? defaultIO
-  const jsonFile = json && opts.jsonOut ? createWriteStream(opts.jsonOut, { encoding: "utf8" }) : undefined
+  // Opened at once, so a path that cannot be written fails the run before any turn.
+  const jsonFile =
+    json && opts.jsonOut
+      ? createWriteStream("", { fd: openSync(opts.jsonOut, "w"), encoding: "utf8" })
+      : undefined
+  let jsonFileError: Error | undefined
+  jsonFile?.on("error", (err) => {
+    jsonFileError ??= err
+  })
   let jsonFileOpen = jsonFile !== undefined
   agent.setNonInteractive()
   agent.tools.setDisabled(new Set([...agent.tools.disabled, "ask_user"]))
@@ -272,9 +280,9 @@ export async function runPrint(
     } else {
       code = exitCode(await agent.prompt(prompt))
     }
-    let backgroundJobsTimedOut = false
+    let jobs: JobWait = { waited: false, timedOut: false }
     if (code === 0 && opts.backgroundJobs) {
-      backgroundJobsTimedOut = await waitForBackgroundJobs(
+      jobs = await waitForBackgroundJobs(
         agent,
         opts.backgroundJobs,
         initialBackgroundJobIds,
@@ -283,7 +291,9 @@ export async function runPrint(
         io,
       )
     }
-    if (code === 0 && backgroundJobsTimedOut) {
+    if (code === 0 && jobs.timedOut && !interrupted) {
+      // A follow-up turn may still be running: the note goes after it, as a turn of its own.
+      while (agent.busy && !interrupted) await Bun.sleep(20)
       const notice = agent.expectNotice()
       notice.deliver(
         userMessage(
@@ -293,11 +303,12 @@ export async function runPrint(
         { wake: false },
       )
       const turn = agent.wake()
-      if (turn) code = exitCode(await turn)
+      if (turn) await turn
     }
     // Sub-agents still running in the background: wait for their results and the turns they
-    // start, as long as those turns succeed. Ctrl+C stops waiting.
-    if (code === 0 && !backgroundJobsTimedOut && (await backgroundTurns(agent, () => interrupted))) {
+    // start, as long as those turns succeed. Ctrl+C stops waiting. The turns a job's end started
+    // decide the exit code the same way.
+    if (code === 0 && ((await backgroundTurns(agent, () => interrupted)) || jobs.waited)) {
       await agent.bus.flush()
       code = interrupted ? 130 : lastEnd ? exitCode(lastEnd) : code
     }
@@ -307,12 +318,25 @@ export async function runPrint(
     ])
     if (!flushed) io.stderr("amira: some event handlers did not finish; exiting anyway\n")
     jsonFileOpen = false
-    if (jsonFile) await finishJsonFile(jsonFile)
+    if (jsonFile)
+      await finishJsonFile(jsonFile).catch((err: Error) => {
+        jsonFileError ??= err
+      })
+    if (jsonFileError) {
+      io.stderr(`amira: could not write ${opts.jsonOut}: ${jsonFileError.message}\n`)
+      if (code === 0) code = 1
+    }
     return code
   } finally {
     process.off("SIGINT", onSigint)
     off()
   }
+}
+
+/** Whether print mode waited for top-level jobs, and whether some outlived the wait. */
+interface JobWait {
+  waited: boolean
+  timedOut: boolean
 }
 
 /**
@@ -327,13 +351,13 @@ async function waitForBackgroundJobs(
   timeoutMs: number,
   stop: () => boolean,
   io: PrintIO,
-): Promise<boolean> {
+): Promise<JobWait> {
   const rootIds = new Set<string>()
   const add = (job: BackgroundJobInfo) => {
     if (job.owner === undefined && !initialIds.has(job.id)) rootIds.add(job.id)
   }
   for (const job of registry.list()) add(job)
-  if (!rootIds.size) return false
+  if (!rootIds.size) return { waited: false, timedOut: false }
 
   let changed: (() => void) | undefined
   let signal: Promise<void> | undefined
@@ -363,7 +387,8 @@ async function waitForBackgroundJobs(
         .list()
         .some((job) => rootIds.has(job.id) && (job.status === "starting" || job.status === "running"))
       if (!live && !agent.busy && agent.waitingNotices) agent.wake()
-      if (!live && !agent.busy && !agent.expectedNotices && !agent.waitingNotices) return false
+      if (!live && !agent.busy && !agent.expectedNotices && !agent.waitingNotices)
+        return { waited: true, timedOut: false }
       if (live && !noted) {
         noted = true
         io.stderr(`amira: waiting for top-level background jobs (up to ${waitMs} ms)\n`)
@@ -374,11 +399,11 @@ async function waitForBackgroundJobs(
           io.stderr(
             `amira: timed out after ${waitMs} ms while top-level background jobs were still running; they will be stopped on exit\n`,
           )
-        return live
+        return { waited: true, timedOut: live }
       }
       await Promise.race([waitForChange(), Bun.sleep(Math.min(20, left))])
     }
-    return false
+    return { waited: true, timedOut: false }
   } finally {
     off()
   }
