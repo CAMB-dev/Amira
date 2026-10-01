@@ -62,7 +62,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `history.next` | `down` | Recall the next prompt (from the input's last line) |
 | `history.search` | `ctrl+r` | Search the prompt history |
 | `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
-| `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as an extension's todo list) to one line each, or unfold them |
+| `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as the running background jobs, or an extension's todo list) to one line each, or unfold them |
 | `copy.reply` | `alt+c` | Copy the last reply of the session, as Markdown, to the clipboard (both modes) |
 | `help` | `?` | Open the key reference, while the input is empty and no dialog or list is open (with text, `?` is typed). It scrolls with ↑↓, PgUp/PgDn, Home/End; Esc, `q` or `?` close it |
 | `edit.kill-to-start` | `ctrl+u` | Cut from the start of the line to the caret (at the start, the line break before it) |
@@ -118,7 +118,9 @@ Some lists are split into sections with keys of their own, shown in the hint lin
 option of that section is selected; such a key answers on the selected option. In the
 `/agents` list, Enter on a sub-agent opens the live viewer on it and `p` prints its transcript
 into the conversation instead; Enter on a worktree a sub-agent kept shows its diff, to merge,
-keep or discard it.
+keep or discard it. In the `/jobs` list (background jobs, such as a dev server the model
+started), Enter opens a live view on the job's output, `x` stops the job and `p` prints the end
+of its output into the conversation instead.
 
 A confirmation (such as an approval) starts with nothing selected: Enter does nothing until
 an option is picked with the arrows, so keys typed into a message just as it shows up cannot
@@ -254,8 +256,9 @@ first and the key reference (`?`) lists them first.
 
 Editing keys inside the input (arrows, Home/End, Ctrl+A/Ctrl+E, word moves and deletes) and
 the keys of the `/agents` list (`p` prints the selected sub-agent) and of its viewer (←/→ and
-Tab switch, `x` stops, `p` closes it and prints a snapshot of the one shown, `q`/Esc close) are
-fixed for now.
+Tab switch, `x` stops, `p` closes it and prints a snapshot of the one shown, `q`/Esc close), of
+the `/jobs` list (`x` stops the selected job, `p` prints it) and of a job's view (`x` stops it
+after a confirmation, `q`/Esc close) are fixed for now.
 
 ## Terminal settings
 
