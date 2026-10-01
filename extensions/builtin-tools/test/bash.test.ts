@@ -45,6 +45,7 @@ test("the shell description says commands already start in the working directory
   expect(bashTool.description).toContain("SIGPIPE (141)")
   expect(bashTool.description).toContain("treated as successful")
   expect(bashTool.description).not.toContain("exit 141 (SIGPIPE)")
+  expect(bashTool.description).toContain("a following `&&` does not run")
 })
 
 test.if(hasBash)("a failed command before a pipeline keeps the bash error status", async () => {
@@ -60,6 +61,11 @@ test.if(hasBash)("SIGPIPE-only pipelines succeed but real pipeline failures do n
 
   const gitLog = await bashTool.execute({ command: "git log --oneline | head -n 1" }, makeCtx(process.cwd()))
   expect(gitLog.isError).toBe(false)
+
+  // Only the final status changes: inside the command the pipeline still stops `&&`.
+  const chained = await bashTool.execute({ command: "yes | head -n 1 && echo after" }, makeCtx(dir))
+  expect(chained.isError).toBe(false)
+  expect(textOf(chained)).not.toContain("after")
 
   for (const command of ["false | cat", "cat missing | wc -l", "true | false"]) {
     const failed = await bashTool.execute({ command }, makeCtx(dir))

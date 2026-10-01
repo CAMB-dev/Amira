@@ -150,7 +150,7 @@ export const bashTool = shellTool(
   [
     "Run a shell command and return its combined stdout and stderr plus the exit code.",
     "- Runs in bash (Git Bash on Windows, so use POSIX syntax and forward slashes). If Git Bash is not installed, Windows falls back to PowerShell: every result then starts with a `Shell:` line naming the PowerShell edition, and you must use PowerShell syntax.",
-    "- Bash runs with `pipefail`: a pipeline fails when any command in it fails, so `cmd | tail` reports cmd's failure. A pipeline whose last command succeeds and whose earlier commands only succeeded or were killed by SIGPIPE (141), such as `git log | head`, is treated as successful. Other non-zero pipeline statuses still fail.",
+    "- Bash runs with `pipefail`: a pipeline fails when any command in it fails, so `cmd | tail` reports cmd's failure. A pipeline whose last command succeeds and whose earlier commands only succeeded or were killed by SIGPIPE (141), such as `git log | head`, is treated as successful. Other non-zero pipeline statuses still fail. Inside the command such a pipeline still fails, so a following `&&` does not run; when more commands follow, limit output with the command's own options (`git log -n 5`) instead.",
     "- Output is decoded as UTF-8. Windows programs that print in a legacy console code page may show garbled non-ASCII text.",
     ...sharedNotes("cd dir && cmd", "`a && b`"),
   ],

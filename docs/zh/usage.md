@@ -79,7 +79,7 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 
 用 `&&`、`||`、`;`、`|` 或换行连接的命令会被拆开，逐个检查。Amira 无法逐词检查的命令一律改为询问：`$(...)` 和反引号等替换、变量、重定向到文件、here-document 和 here-string、分组、文件名通配符（`*`、`?`、`[...]`）、会运行其他命令的包装命令（`eval`、`sudo`、`xargs`、`bash -c`、`Invoke-Expression`、`Start-Process`、各类解释器）、定义别名的命令（`alias`、`Set-Alias`、`git -c`、`git config alias.*`）以及脚本。在 `auto` 模式下，只要没有 `ask` 或 `deny` 规则，这类命令仍然直接运行。命令按实际运行它的 shell 解析：bash 或 PowerShell，包括 `bash` 工具在 Windows 上退回 PowerShell 的情况。
 
-shell 工具已经从工作目录启动命令，只有需要进入其他目录时才使用 `cd`。bash 的前台和后台命令都启用 `pipefail`，因此管道中的任一组件失败都会保留非零状态：测试失败时 `bun test | tail` 也会失败。如果管道最后一个命令成功，前面的命令只有成功或因读取方提前停止而收到 SIGPIPE（141），例如 `git log | head`，Amira 会将其视为成功；其他非零管道状态仍然失败。PowerShell 没有 `pipefail`，但其包装器会在原生命令管道中保留失败原生命令的 `$LASTEXITCODE`；cmdlet 管道遵循 PowerShell 的 `$?` 规则。
+shell 工具已经从工作目录启动命令，只有需要进入其他目录时才使用 `cd`。bash 的前台和后台命令都启用 `pipefail`，因此管道中的任一组件失败都会保留非零状态：测试失败时 `bun test | tail` 也会失败。如果管道最后一个命令成功，前面的命令只有成功或因读取方提前停止而收到 SIGPIPE（141），例如 `git log | head`，Amira 会将其视为成功；其他非零管道状态仍然失败。这只改变整条命令的最终状态：在命令内部，这样的管道仍然失败，后面的 `&&` 不会执行（`git log | head && echo done` 不会输出 `done`）。后面还有命令时，请用命令自身的选项限制输出，例如 `git log -n 5`。PowerShell 没有 `pipefail`，但其包装器会在原生命令管道中保留失败原生命令的 `$LASTEXITCODE`；cmdlet 管道遵循 PowerShell 的 `$?` 规则。
 
 规则只决定 Amira 询问还是拒绝，并不是沙箱。命令仍可能通过其他途径调用被拒绝的程序，例如程序的副本或链接，或模型之前写好的脚本。`deny` 适合拦住值得阻止的失误，不能当作安全边界。
 
