@@ -1,8 +1,11 @@
 import { type MouseInput, modes, osc, type Terminal } from "@amira/tui-kit"
 import type { TranscriptPane } from "../transcript-pane.ts"
 
+/** Rows one notch of the mouse wheel scrolls. */
 const WHEEL_ROWS = 3
+/** How often a drag held at the top or bottom edge scrolls the transcript. */
 const EDGE_SCROLL_MS = 40
+/** Held at an edge, the drag scrolls a row more per step every this many steps, up to EDGE_SCROLL_MAX rows. */
 const EDGE_SCROLL_RAMP = 10
 const EDGE_SCROLL_MAX = 6
 /** Presses on one cell this close together make a double or triple click. */

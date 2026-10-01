@@ -14,6 +14,7 @@ import type { Keybindings } from "../keybindings.ts"
 import { isActive } from "../subagents.ts"
 import type { TranscriptPane } from "../transcript-pane.ts"
 
+/** Columns the find bar keeps for its query, at the least, before its keys. */
 const FIND_QUERY_ROOM = 16
 
 export interface FindSelectDeps {
