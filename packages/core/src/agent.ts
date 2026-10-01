@@ -907,8 +907,7 @@ export class Agent {
 
   /** Builds the parent and sub-agent stores with one consistent reference snapshot. */
   #artifactGroups(): ManagedArtifactGroup[] {
-    const projected = this.projectedMessages()
-    const initiallyActive = activeArtifactIds([this.messages, projected])
+    const initiallyActive = activeArtifactIds([this.messages, this.projectedMessages()])
     const referenced = this.session ? referencedArtifacts(this.session) : initiallyActive
     const labels = new Map<string, string>()
     const rememberLabels = (entries: readonly object[]) => {
@@ -945,7 +944,8 @@ export class Agent {
       }
     }
 
-    const active = activeArtifactIds([this.messages, projected, ...childMessages])
+    const active = new Set(initiallyActive)
+    for (const id of activeArtifactIds(childMessages)) active.add(id)
     const inputs: ArtifactUsageGroupInput[] = [
       {
         store: this.artifacts,
