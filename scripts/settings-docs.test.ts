@@ -25,7 +25,8 @@ const sources = () => typeFiles.map((file) => read(file))
 /**
  * A settings object holding every key of the rows, each set to a value of its type. Rows for
  * records and lists of objects are filled by the rows under them; a list gets one item (in
- * `models[]`, with the `id` it requires).
+ * `models[]`, with the `id` it requires). A number key gets its documented default when it has
+ * one, as some have ranges no single sample fits (shares of a window, a minimum of 4000).
  */
 function sample(rows: Row[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}
@@ -39,9 +40,16 @@ function sample(rows: Row[]): Record<string, unknown> {
       const next = at[name]
       at = (Array.isArray(next) ? next[0] : next) as Record<string, unknown>
     }
-    at[parts.at(-1)!.replace(/^<\w+>$/, "a")] = sampleValue(row.type)
+    at[parts.at(-1)!.replace(/^<\w+>$/, "a")] = documentedNumber(row) ?? sampleValue(row.type)
   }
   return out
+}
+
+/** A number key's default, when its annotation documents one as a plain number. */
+function documentedNumber(row: Row): number | undefined {
+  const fallback = annotations[row.key]?.default
+  const value = typeof fallback === "string" ? /^`(-?\d+(?:\.\d+)?)`/.exec(fallback)?.[1] : undefined
+  return row.type.name === "number" && value !== undefined ? Number(value) : undefined
 }
 
 describe("settings reference", () => {

@@ -61,6 +61,14 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
   },
   { title: { en: "Compaction and retries", zh: "压缩与重试" }, keys: ["compact", "retry"] },
   {
+    title: { en: "Context management", zh: "上下文管理" },
+    intro: {
+      en: "What model requests carry of the history; the session file always keeps everything. See [Context management](usage.md#context-management).",
+      zh: "模型请求携带历史中的哪些内容；会话文件始终完整保存。详见[上下文管理](usage.md#上下文管理)。",
+    },
+    keys: ["context"],
+  },
+  {
     title: { en: "Web tools", zh: "网页工具" },
     intro: {
       en: "Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tools.disabled`.",
@@ -352,6 +360,61 @@ export const annotations: Record<string, Annotation> = {
     default: '`"tail"`',
     en: 'Where a server-side checkpoint goes: `"tail"` keeps the last turns verbatim after it; `"recent-user"` compacts everything and puts the most recent user messages (up to about 64k tokens) before it, as Codex does. Text summaries always use `"tail"`.',
     zh: '服务端压缩检查点的位置：`"tail"` 在检查点之后原样保留最近几个轮次；`"recent-user"` 压缩全部历史，把最近的用户消息（约 64k token 以内）放在检查点之前，与 Codex 的做法相同。文字摘要始终使用 `"tail"`。',
+  },
+  "context.outputs.saveAbove": {
+    default: "`16000`",
+    en: "Tool output longer than this many characters (a Chinese, Japanese or Korean character counts as four) is saved whole as an artifact, and the model gets a preview; at least 4000.",
+    zh: "超过这个字符数的工具输出（中文、日文、韩文字符每个按四个计）会作为 artifact 完整保存，模型收到的是预览；最少 4000。",
+  },
+  "context.outputs.previewChars": {
+    default: "`8000`",
+    en: "Characters of the preview the model gets instead; at least 500, and never more than `saveAbove`.",
+    zh: "模型收到的预览的字符数；最少 500，且不超过 `saveAbove`。",
+  },
+  "context.outputs.quotaMB": {
+    default: "`256`",
+    en: "Most megabytes of artifacts one session keeps; past it, outputs are only previewed. `/prune` frees space.",
+    zh: "每个会话最多保存的 artifact 大小（MB）；超出后输出只保留预览。`/prune` 可以释放空间。",
+  },
+  "context.dedupeReads": {
+    default: "`true`",
+    en: "A `read` that returns exactly what the latest read of the same range, still in the context, returned is sent as a short note pointing to it.",
+    zh: "一次 `read` 返回的内容与上下文中仍保留的同一范围的最近一次读取完全相同时，改为发送一条指向它的简短说明。",
+  },
+  "context.aging.enabled": {
+    default: "`true`",
+    en: "Replace old tool results with short stubs when the context gets full, before compacting. Only where the provider allows rewriting history (no signed reasoning after the result).",
+    zh: "上下文快满时，在压缩之前把较早的工具结果替换为简短的占位文本。只在 provider 允许改写历史时进行（结果之后没有签名的推理内容）。",
+  },
+  "context.aging.start": {
+    default: "`0.7`",
+    en: "Share of the context window the next request is expected to pass that starts an aging round.",
+    zh: "预计下一次请求超过上下文窗口的这个比例时，开始一轮清理。",
+  },
+  "context.aging.target": {
+    default: "`0.6`",
+    en: "Share of the context window a round frees down to.",
+    zh: "一轮清理把上下文降到窗口的这个比例。",
+  },
+  "context.aging.minSavedTokens": {
+    default: "`8000`",
+    en: "A round that would free fewer tokens is skipped, so the prompt cache prefix stays (in a small window, at most the space between `start` and `target`).",
+    zh: "一轮清理释放的 token 少于这个数时跳过，以保留提示缓存前缀（窗口较小时，最多取 `start` 与 `target` 之间的空间）。",
+  },
+  "context.aging.keepTurns": {
+    default: "`2`",
+    en: "Most recent user turns whose results are never cleared.",
+    zh: "结果永不清理的最近用户回合数。",
+  },
+  "context.aging.keepSteps": {
+    default: "`2`",
+    en: "In a long current turn, its most recent model steps whose results are never cleared.",
+    zh: "在很长的当前回合中，结果永不清理的最近模型步骤数。",
+  },
+  "context.aging.afterTurns": {
+    default: "`0`",
+    en: "Experimental: also clear results older than this many user turns, whatever the pressure. `0` is off.",
+    zh: "实验性：不管上下文压力，也清理早于这么多个用户回合的结果。`0` 表示关闭。",
   },
   "retry.attempts": {
     default: "`3`",

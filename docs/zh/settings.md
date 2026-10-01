@@ -179,6 +179,24 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `retry.baseDelayMs` | `number` | `1000` | 第一次重试前的等待时间（毫秒），之后每次翻倍；服务端给出 `Retry-After` 时以它为准。 |  |
 | `retry.maxDelayMs` | `number` | `60000` | 需要等待的时间超过这个值时不再等待，直接报告错误。 |  |
 
+## 上下文管理
+
+模型请求携带历史中的哪些内容；会话文件始终完整保存。详见[上下文管理](usage.md#上下文管理)。
+
+| 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
+| --- | --- | --- | --- | --- |
+| `context.outputs.saveAbove` | `number` | `16000` | 超过这个字符数的工具输出（中文、日文、韩文字符每个按四个计）会作为 artifact 完整保存，模型收到的是预览；最少 4000。 |  |
+| `context.outputs.previewChars` | `number` | `8000` | 模型收到的预览的字符数；最少 500，且不超过 `saveAbove`。 |  |
+| `context.outputs.quotaMB` | `number` | `256` | 每个会话最多保存的 artifact 大小（MB）；超出后输出只保留预览。`/prune` 可以释放空间。 |  |
+| `context.dedupeReads` | `boolean` | `true` | 一次 `read` 返回的内容与上下文中仍保留的同一范围的最近一次读取完全相同时，改为发送一条指向它的简短说明。 |  |
+| `context.aging.enabled` | `boolean` | `true` | 上下文快满时，在压缩之前把较早的工具结果替换为简短的占位文本。只在 provider 允许改写历史时进行（结果之后没有签名的推理内容）。 |  |
+| `context.aging.start` | `number` | `0.7` | 预计下一次请求超过上下文窗口的这个比例时，开始一轮清理。 |  |
+| `context.aging.target` | `number` | `0.6` | 一轮清理把上下文降到窗口的这个比例。 |  |
+| `context.aging.minSavedTokens` | `number` | `8000` | 一轮清理释放的 token 少于这个数时跳过，以保留提示缓存前缀（窗口较小时，最多取 `start` 与 `target` 之间的空间）。 |  |
+| `context.aging.keepTurns` | `number` | `2` | 结果永不清理的最近用户回合数。 |  |
+| `context.aging.keepSteps` | `number` | `2` | 在很长的当前回合中，结果永不清理的最近模型步骤数。 |  |
+| `context.aging.afterTurns` | `number` | `0` | 实验性：不管上下文压力，也清理早于这么多个用户回合的结果。`0` 表示关闭。 |  |
+
 ## 网页工具
 
 `web_search` 和 `web_fetch` 工具的设置。要隐藏其中一个工具，把它加入 `tools.disabled`。

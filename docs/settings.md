@@ -179,6 +179,24 @@ What the model may do without asking; see [Permissions](usage.md#permissions). A
 | `retry.baseDelayMs` | `number` | `1000` | Wait before the first retry, doubling each time; a server's `Retry-After` replaces it. |  |
 | `retry.maxDelayMs` | `number` | `60000` | A wait longer than this is not waited out: the error is reported instead. |  |
 
+## Context management
+
+What model requests carry of the history; the session file always keeps everything. See [Context management](usage.md#context-management).
+
+| Key | Type | Default | Description | User file only |
+| --- | --- | --- | --- | --- |
+| `context.outputs.saveAbove` | `number` | `16000` | Tool output longer than this many characters (a Chinese, Japanese or Korean character counts as four) is saved whole as an artifact, and the model gets a preview; at least 4000. |  |
+| `context.outputs.previewChars` | `number` | `8000` | Characters of the preview the model gets instead; at least 500, and never more than `saveAbove`. |  |
+| `context.outputs.quotaMB` | `number` | `256` | Most megabytes of artifacts one session keeps; past it, outputs are only previewed. `/prune` frees space. |  |
+| `context.dedupeReads` | `boolean` | `true` | A `read` that returns exactly what the latest read of the same range, still in the context, returned is sent as a short note pointing to it. |  |
+| `context.aging.enabled` | `boolean` | `true` | Replace old tool results with short stubs when the context gets full, before compacting. Only where the provider allows rewriting history (no signed reasoning after the result). |  |
+| `context.aging.start` | `number` | `0.7` | Share of the context window the next request is expected to pass that starts an aging round. |  |
+| `context.aging.target` | `number` | `0.6` | Share of the context window a round frees down to. |  |
+| `context.aging.minSavedTokens` | `number` | `8000` | A round that would free fewer tokens is skipped, so the prompt cache prefix stays (in a small window, at most the space between `start` and `target`). |  |
+| `context.aging.keepTurns` | `number` | `2` | Most recent user turns whose results are never cleared. |  |
+| `context.aging.keepSteps` | `number` | `2` | In a long current turn, its most recent model steps whose results are never cleared. |  |
+| `context.aging.afterTurns` | `number` | `0` | Experimental: also clear results older than this many user turns, whatever the pressure. `0` is off. |  |
+
 ## Web tools
 
 Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tools.disabled`.

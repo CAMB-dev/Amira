@@ -246,7 +246,8 @@ export function showType(type: Type): string {
 /**
  * A value of the type that the settings schema accepts, for the tests. Strings read "a b/c",
  * which passes both as a "provider/model" reference and as a command alias's command line;
- * numbers are 1000, the largest minimum a key has (backgroundJobs.bufferChars).
+ * numbers are 1000 (backgroundJobs.bufferChars's minimum); the tests give a number key with a
+ * documented default that default instead, for ranges 1000 does not fit.
  */
 export function sampleValue(type: Type): unknown {
   if (type.fields) return Object.fromEntries(type.fields.map((f) => [f.name, sampleValue(f.type)]))
