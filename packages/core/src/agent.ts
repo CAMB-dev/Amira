@@ -1054,7 +1054,9 @@ export class Agent {
    */
   async pruneArtifacts(scope: ArtifactScope): Promise<{ removed: number; bytes: number }> {
     if (this.tree?.children.length) {
-      throw new Error("cannot prune artifacts while a sub-agent is running, queued or idle; wait for it to finish or stop it (/agents stop)")
+      throw new Error(
+        "cannot prune artifacts while a sub-agent is running, queued or idle; wait for it to finish or stop it (/agents stop)",
+      )
     }
     let removed = 0
     let bytes = 0
