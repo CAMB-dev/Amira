@@ -23,7 +23,7 @@ CLI 包提供全局 `amira` 命令；请确认 Bun 的可执行文件目录已�
 
 在项目目录运行 `amira`。输入 `/provider add`，选择协议并填写服务地址、模型和密钥来源，再用 `/model` 选择模型。内置协议包括 `openai-chat`、`openai-responses`、`anthropic-messages` 和 `google-gemini`，没有预配置的 provider。使用环境变量存放密钥时，在表单中选择 `Read it from an environment variable`，填入变量名（`apiKeyEnv`），并在启动 Amira 的 shell 中设置该变量。
 
-输入需求后按 Enter 发送。默认情况下，轮次运行期间 Enter 用于引导，Alt+Enter 把消息排队到下一轮次（Windows 可能使用 Ctrl+Q，以界面提示为准）。Esc 中断当前轮次；若有等待中的消息，会立即发送。连续按两次 Esc 可以回退已保存会话中的消息；回退只改变对话，不恢复文件。输入 `@` 选择文件路径，`$` 选择 skill，`/` 浏览命令；输入框为空时按 `?` 查看快捷键。
+输入需求后按 Enter 发送。默认情况下，轮次运行期间 Enter 用于引导，Alt+Enter 把消息排队到下一轮次（Windows 可能使用 Ctrl+Q，以界面提示为准）。Esc 中断当前轮次；若有等待中的消息，会立即发送。连续按两次 Esc 可以回退已保存会话中的消息；回退只改变对话，不恢复文件。输入 `@` 选择文件路径，`$` 选择 skill，`/` 浏览命令；输入框为空时按 `?` 查看快捷键。`/ext` 用于浏览、安装和管理扩展。
 
 ## 文档
 
