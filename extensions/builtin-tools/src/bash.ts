@@ -12,7 +12,7 @@ import {
 import { resolveShell, type Shell } from "./shell.ts"
 import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE } from "./shell-notes.ts"
 import { StandbyPool } from "./standby.ts"
-import { truncateOutput } from "./truncate.ts"
+import { keepOutput } from "./truncate.ts"
 
 export const DEFAULT_TIMEOUT_MS = 120_000
 export const MAX_TIMEOUT_MS = 600_000
@@ -33,7 +33,7 @@ function sharedNotes(cd: string, chain: string): string[] {
     "- Processes the command leaves running are killed when it finishes. For commands that keep running (dev servers, watchers, long builds you want to check on later), pass `background: true`: the call returns at once with a job id and the output so far, and the job keeps running. Read its new output with job_output (use wait_for to wait for a line such as a ready message instead of polling) and stop it with job_stop. Do not append `&` or use nohup yourself. Background jobs are stopped when Amira exits, and a sub-agent's when it ends.",
     `- Several calls issued together run at the same time. Put commands that depend on each other in one call (${chain}) or in separate turns.`,
     "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
-    "- Very long output is cut in the middle; the full output is saved to a file you can read.",
+    "- Very long output is saved whole as an artifact: you get its start and end, and output_read reads the rest.",
     "- Prefer the available file reading, editing and search tools over shell commands for those tasks.",
   ]
 }
@@ -111,7 +111,13 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
 
       const durationMs = Math.round(performance.now() - started)
       const printed = run.output.trimEnd()
-      const out = await truncateOutput(printed, name)
+      const out = await keepOutput(ctx, {
+        text: printed,
+        tool: name,
+        ...(run.timedOut || run.aborted
+          ? { facts: [run.timedOut ? "the command timed out" : "the command was aborted"] }
+          : {}),
+      })
       const parts = [out.text || "(no output)"]
       if (shell.label) parts.unshift(`Shell: ${shell.label}`)
       parts.push(statusLine(run, timeoutMs))
@@ -131,7 +137,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
           settled: run.settled,
           shell: shell.path,
           shellKind: shell.kind,
-          ...(out.fullOutputPath ? { fullOutputPath: out.fullOutputPath } : {}),
+          ...(out.artifact ? { fullOutputPath: out.artifact.path, artifact: out.artifact.id } : {}),
           durationMs,
           outputLines: printed === "" ? 0 : printed.split("\n").length,
         } satisfies BashDetails,

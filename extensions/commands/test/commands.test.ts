@@ -168,6 +168,7 @@ test("every built-in command is registered with a description", async () => {
     "model",
     "permissions",
     "provider",
+    "prune",
     "quit",
     "reload",
     "rename",
@@ -603,6 +604,46 @@ test("/permissions lists the mode and the rules with their sources; /status coun
   expect(text).toMatch(/deny\s+rm\s+project p\.json/)
   expect(text).toContain("Shell commands can still change these files")
   expect(text).toContain("this project is not trusted")
+})
+
+test("/prune reports artifacts by reference and deletes only the scope asked for", async () => {
+  const pruned: string[] = []
+  const { run, host } = await setup({
+    artifacts: {
+      usage: () => ({
+        active: 3,
+        inactive: 2,
+        unused: 1,
+        pruned: 0,
+        bytes: 3 * 1024 * 1024,
+        quotaBytes: 256 * 1024 * 1024,
+        dir: "/s/x.assets/outputs",
+      }),
+      prune: async (scope) => {
+        pruned.push(scope)
+        return { removed: scope === "unused" ? 1 : 0, bytes: 1024 * 1024 }
+      },
+    },
+  })
+  const report = (await run("/prune")).text
+  expect(report).toContain("3.0 MB of the 256 MB quota in /s/x.assets/outputs")
+  expect(report).toMatch(/Active\s+3/)
+  expect(report).toMatch(/Unused\s+1/)
+  // Showing deletes nothing.
+  expect(pruned).toEqual([])
+  expect((await run("/prune unused")).text).toBe(
+    "Deleted 1 artifact (1.0 MB). Reading one now says it was pruned.",
+  )
+  expect((await run("/prune inactive")).text).toBe("Nothing to delete.")
+  expect((await run("/prune everything")).error).toBe("usage: /prune [unused|inactive|all]")
+  expect(pruned).toEqual(["unused", "inactive"])
+  expect((await host.complete("/prune ")).candidates.map((c) => c.value)).toEqual([
+    "unused",
+    "inactive",
+    "all",
+  ])
+  const none = await setup()
+  expect((await none.run("/prune")).error).toBe("this session keeps no artifacts")
 })
 
 test("/shell shows and sets the mode; /tools lists, disables and enables tools", async () => {

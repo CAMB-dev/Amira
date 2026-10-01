@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto"
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import type { Message, ModelRef, Signature, Usage } from "@amira/ai"
+import type { Message, ModelRef, Signature, ToolResultMessage, Usage } from "@amira/ai"
 import type { CompactionInfo, CompactionReason } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
+import type { ContextView, StoredView } from "./context.ts"
 import { amiraPath } from "./home.ts"
 
 export interface SessionHeader {
@@ -33,6 +34,12 @@ export type SessionEntryData =
   /** Deferred tools the session loaded (via tool_search), offered to the model from then on. */
   | { type: "tools_loaded"; names: string[] }
   | { type: "custom"; ext: string; data: unknown }
+  /**
+   * How earlier tool results are sent from now on (context management): each view replaces
+   * one result's content in requests, the message itself stays whole. An Amira that does not
+   * know this entry type sends the results whole.
+   */
+  | { type: "context"; views: StoredView[] }
 
 /** Optional fields of a compaction entry (no session format version depends on them). */
 export interface CompactionExtras {
@@ -69,6 +76,8 @@ export interface RestoredSession {
   loadedTools: string[]
   /** Why each compaction happened, by its summary's user message; none for old entries. */
   compactions: Map<Message, CompactionInfo>
+  /** How tool results on this branch are sent (context entries), by message. */
+  views: Map<Message, ContextView>
 }
 
 /**
@@ -243,8 +252,14 @@ export class SessionStore {
     let tokens: number | undefined
     const loadedTools = new Set<string>()
     const compactions = new Map<Message, CompactionInfo>()
+    const views = new Map<Message, ContextView>()
     for (const e of this.branch()) {
-      if (e.type === "tools_loaded") {
+      if (e.type === "context") {
+        for (const v of Array.isArray(e.views) ? e.views : []) {
+          const view = this.#view(v)
+          if (view) views.set(view.message, view.view)
+        }
+      } else if (e.type === "tools_loaded") {
         for (const name of Array.isArray(e.names) ? e.names : []) {
           if (typeof name === "string") loadedTools.add(name)
         }
@@ -282,7 +297,29 @@ export class SessionStore {
       ...(tokens !== undefined ? { contextTokens: tokens } : {}),
       loadedTools: [...loadedTools],
       compactions,
+      views,
     }
+  }
+
+  /** A stored view, if it is one and the results it names are in the file. */
+  #view(v: Partial<StoredView> | undefined): { message: Message; view: ContextView } | undefined {
+    if (typeof v?.entry !== "string" || typeof v.text !== "string") return undefined
+    const message = this.#toolResult(v.entry)
+    if (!message) return undefined
+    if (v.kind === "aged") {
+      return {
+        message,
+        view: { kind: "aged", text: v.text, epoch: typeof v.epoch === "number" ? v.epoch : 0 },
+      }
+    }
+    if (v.kind !== "duplicate" || typeof v.of !== "string") return undefined
+    const of = this.#toolResult(v.of)
+    return of ? { message, view: { kind: "duplicate", text: v.text, of } } : undefined
+  }
+
+  #toolResult(id: string): ToolResultMessage | undefined {
+    const e = this.#byId.get(id)
+    return e?.type === "message" && e.message.role === "toolResult" ? e.message : undefined
   }
 
   /**
@@ -438,6 +475,7 @@ const ENTRY_TYPES = new Set<unknown>([
   "subagent",
   "tools_loaded",
   "custom",
+  "context",
 ])
 
 function isEntry(v: unknown): v is SessionEntry {

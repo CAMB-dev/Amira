@@ -1,4 +1,5 @@
 import type { ImageBlock, JSONSchema, ModelRef, TextBlock, UserMessage } from "@amira/ai"
+import type { OutputStore } from "./outputs.ts"
 import type {
   ChildSession,
   SpawnGroup,
@@ -55,6 +56,11 @@ export interface ToolSession {
   readonly dir?: string
   /** Records extensions keep in this session (see SessionData). */
   readonly data?: SessionData
+  /**
+   * Where large tool outputs are saved as artifacts, and the sizes that count as large
+   * (OutputStore). Absent when the host keeps none: tools then cut their output themselves.
+   */
+  readonly outputs?: OutputStore
   /** Deferred tools registered right now, in registration order. */
   deferredTools(): DeferredToolInfo[]
   /**

@@ -41,6 +41,7 @@ import {
 } from "@amira/api"
 import { Agent, type ApprovalDecision, type TurnResult } from "./agent.ts"
 import type { CompactionOptions } from "./compaction.ts"
+import type { ContextOptions } from "./context.ts"
 import type { EmitMeta } from "./event-bus.ts"
 import { instructionsSection, loadInstructions } from "./instructions.ts"
 import { validateValue } from "./json-schema.ts"
@@ -83,6 +84,8 @@ export interface AgentTreeOptions {
   /** System prompt of a fresh child working in `cwd`. Default: the standard sections with that directory's instructions. */
   sections?: (cwd: string) => PromptSection[]
   compaction?: CompactionOptions
+  /** Context management options for every child (settings `context`). */
+  context?: ContextOptions
   maxParallelTools?: number
 }
 
@@ -551,6 +554,10 @@ export class AgentTree {
       // A forked history may hold a server checkpoint only the parent's model reads; a child on
       // another model then writes a text summary from what the parent still knows it stood for.
       ...(context === "fork" ? { originals: (m: Message) => parent.compactedHistory(m) } : {}),
+      // A fork's requests send its inherited results as the parent's did.
+      ...(context === "fork" ? { views: parent.contextViews } : {}),
+      // A child may be pointed at its parent's artifacts (in its task, or in a forked history).
+      outputsParent: parent.artifacts,
       bus: parent.bus,
       interceptors: parent.interceptors,
       tools: ToolRegistry.view(
@@ -570,6 +577,7 @@ export class AgentTree {
       approve: (request, signal) => this.#askParent(parent, request, signal),
       ask: (request, signal) => this.#askParentQuestions(parent, request, signal),
       ...(this.#opts.compaction ? { compaction: this.#opts.compaction } : {}),
+      ...(this.#opts.context ? { context: this.#opts.context } : {}),
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
       // The tree runs a child's turns, and a failed turn ends it: nothing is ever sent again
       // later by itself (that would start a turn in a child that already ended).
@@ -1125,7 +1133,8 @@ export class AgentTree {
       {
         model: parent.model,
         systemPrompt: renderPrompt([...parent.sections]),
-        messages: [...forkHistory(parent.messages), userMessage(question)],
+        // As the parent's own requests send its history (context management).
+        messages: [...forkHistory(parent.projectedMessages()), userMessage(question)],
         tools: [],
       },
       signal,
