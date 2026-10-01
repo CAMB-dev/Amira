@@ -1,5 +1,5 @@
 {
-  "name": "@amira/core",
+  "name": "@amira/packages",
   "license": "Apache-2.0",
   "version": "0.0.0",
   "private": true,
@@ -8,11 +8,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@amira/ai": "workspace:*",
     "@amira/api": "workspace:*",
+    "@amira/core": "workspace:*",
     "@amira/proc": "workspace:*"
-  },
-  "devDependencies": {
-    "@amira/packages": "workspace:*"
   }
 }

@@ -3,11 +3,11 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import os from "node:os"
 import path from "node:path"
 import type { CommandContext } from "@amira/api"
+import { engineMismatch, readManifest } from "@amira/packages"
 import { validateSettings } from "../src/config/schema.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
-import { engineMismatch, readManifest } from "../src/packages/manifest.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
 
 // The user docs (README*.md, docs/): their links resolve, their settings examples are valid,
