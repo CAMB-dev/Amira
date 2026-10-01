@@ -123,8 +123,10 @@ export interface HostProcessService {
   prepareCommand: HostPrepareCommand
   warmUpCommands(): void
   openPipe(argv: string[], options: OpenPipeOptions): PipeProcess
-  backgroundJobs: BackgroundJobRegistry
   isStandbyGoneError(error: unknown): boolean
+  /** TEMPORARY: the background-jobs bridge below; replaced by the background-jobs API. */
+  backgroundJobs: BackgroundJobRegistry
+  /** TEMPORARY: the background-jobs bridge below; replaced by the background-jobs API. */
   isBackgroundJobLimitError(error: unknown): boolean
 }
 
@@ -160,10 +162,16 @@ export function isHostStandbyGoneError(error: unknown): boolean {
   return requireHostProcess().isStandbyGoneError(error)
 }
 
-/**
- * Temporary D97 step-1 background-job bridge. It exposes only what builtin-tools currently
- * consumes; a later background-jobs API should replace this with a session-scoped contract.
- */
+// ---------------------------------------------------------------------------------------------
+// TEMPORARY background-jobs bridge (D97 step 1). Everything from here to the end of the section
+// (the BackgroundJob* types, TemporaryBackgroundJobRegistry, temporaryBackgroundJobs, the
+// TEMPORARY_* defaults, isTemporaryBackgroundJobLimitError, and HostProcessService's
+// backgroundJobs / isBackgroundJobLimitError) mirrors the host's process-wide job registry only
+// so builtin-tools need not import @amira/proc. It is not a supported extension API: the
+// follow-up background-jobs API replaces it with a session-scoped contract and removes it.
+// ---------------------------------------------------------------------------------------------
+
+/** TEMPORARY (see the section note). */
 export type BackgroundJobStatus = "starting" | "running" | "exited" | "stopped" | "failed"
 
 export interface BackgroundJobInfo {
@@ -252,7 +260,7 @@ export const temporaryBackgroundJobs: TemporaryBackgroundJobRegistry = new Proxy
   },
 )
 
-/** Temporary defaults kept in sync with the host registry until the follow-up API lands. */
+/** TEMPORARY: the host registry's defaults; a core test keeps them equal to @amira/proc's. */
 export const TEMPORARY_DEFAULT_BUFFER_CHARS = 1_000_000
 export const TEMPORARY_DEFAULT_MAX_RUNNING = 8
 
@@ -260,6 +268,8 @@ export const TEMPORARY_DEFAULT_MAX_RUNNING = 8
 export function isTemporaryBackgroundJobLimitError(error: unknown): error is Error {
   return requireHostProcess().isBackgroundJobLimitError(error)
 }
+
+// ------------------------------------ end of the temporary bridge ----------------------------
 
 /**
  * Opens a long-lived process for an extension. This has the same containment and worker
