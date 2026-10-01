@@ -5,6 +5,16 @@ import { type ProcessTree, trackProcessTree } from "./process-tree.ts"
 /** How long to wait for pipes to close after the command exits (and leftovers are killed). */
 export const DRAIN_GRACE_MS = 2000
 
+export const DEFAULT_MAX_OUTPUT_CHARS = 1_000_000
+
+export function outputCharLimit(value: number | undefined): number {
+  const limit = value ?? DEFAULT_MAX_OUTPUT_CHARS
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new RangeError("maxOutputChars must be a positive integer")
+  }
+  return limit
+}
+
 /** How to start a command; fixed once the process exists. */
 export interface SpawnOptions {
   cwd: string
@@ -23,7 +33,7 @@ export interface SpawnOptions {
   stdoutOnly?: boolean
   /**
    * Keep only the last this many characters in `output`, so a chatty command cannot fill memory;
-   * onChunk still sees everything. Default: all of it.
+   * onChunk still sees everything. Default: 1,000,000. Must be a positive integer.
    */
   maxOutputChars?: number
   /** Test seam: how the process tree is tracked and killed. */
@@ -45,6 +55,8 @@ export type RunOptions = SpawnOptions & ReleaseOptions
 
 export interface RunResult {
   output: string
+  /** True when `output` was shortened to the configured character limit. */
+  truncated: boolean
   exitCode: number | null
   signalCode: string | null
   /** Set only when the timeout fired before the process exited. */
@@ -99,6 +111,7 @@ export function prepareCommandInline(
   opts: SpawnOptions,
   onIdleExit?: () => void,
 ): PreparedCommand {
+  const cap = outputCharLimit(opts.maxOutputChars)
   const gated = !!opts.gated
   const env = withoutGateVar(opts.env ?? process.env)
   const wrapped =
@@ -127,13 +140,24 @@ export function prepareCommandInline(
   let output = ""
   let onChunk: ((chunk: string) => void) | undefined
   let finished = false
-  const cap = opts.maxOutputChars
+  let truncated = false
   // Trimmed once it holds twice the cap, so a stream of small chunks is not copied each time.
-  const tail = (limit: number) =>
-    cap !== undefined && output.length > limit ? output.slice(output.length - cap) : output
+  const tail = (limit: number) => {
+    if (output.length <= limit) return output
+    truncated = true
+    let start = output.length - cap
+    if (
+      start > 0 &&
+      isLowSurrogate(output.charCodeAt(start)) &&
+      isHighSurrogate(output.charCodeAt(start - 1))
+    ) {
+      start++
+    }
+    return output.slice(start)
+  }
   const emit = (chunk: string) => {
     output += chunk
-    if (cap !== undefined) output = tail(2 * cap)
+    output = tail(2 * cap)
     if (chunk) onChunk?.(chunk)
   }
   const readers: { cancel(): Promise<void> }[] = []
@@ -187,7 +211,7 @@ export function prepareCommandInline(
       if (output) onChunk?.(output)
       // cmd's `set /p` fails on an empty line, which would end the command with 125.
       if (gated) releaseGate(proc.stdin, wrapped ? "go" : (release.gateLine ?? ""))
-      return collect(proc, tree, drained, release, () => (cap === undefined ? output : tail(cap)), close)
+      return collect(proc, tree, drained, release, () => ({ output: tail(cap), truncated }), close)
     },
     dispose() {
       closeIdle()
@@ -200,7 +224,7 @@ async function collect(
   tree: ProcessTree,
   drained: Promise<unknown>,
   opts: ReleaseOptions,
-  output: () => string,
+  result: () => Pick<RunResult, "output" | "truncated">,
   close: () => void,
 ): Promise<RunResult> {
   let reason: "timeout" | "abort" | undefined
@@ -233,7 +257,7 @@ async function collect(
     })
     const settled = await Promise.race([drained.then(() => true), grace])
     return {
-      output: output(),
+      ...result(),
       exitCode,
       signalCode: proc.signalCode,
       timedOut: cause === "timeout",
@@ -248,6 +272,14 @@ async function collect(
     opts.signal.removeEventListener("abort", onAbort)
     close()
   }
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff
 }
 
 /** An inherited gate variable would let a directly started program skip its gate. */

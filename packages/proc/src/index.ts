@@ -4,6 +4,7 @@ import { openPipeInline, type PipeEvent, type PipeHandle, type PipeSpec } from "
 import { terminateJobHandle } from "./process-tree.ts"
 import type { FromWorker, RunRequest, SpawnRequest, ToWorker } from "./protocol.ts"
 import {
+  outputCharLimit,
   type ReleaseOptions,
   type RunOptions,
   type RunResult,
@@ -241,15 +242,21 @@ function start(
  * workers are unavailable or a test seam is given.
  */
 export function runCommand(argv: string[], opts: RunOptions): Promise<RunResult> {
-  const w = opts.trackTree ? undefined : getWorker()
-  if (!w) return runCommandInline(argv, opts)
+  let normalized: RunOptions
+  try {
+    normalized = { ...opts, maxOutputChars: outputCharLimit(opts.maxOutputChars) }
+  } catch (err) {
+    return Promise.reject(err)
+  }
+  const w = normalized.trackTree ? undefined : getWorker()
+  if (!w) return runCommandInline(argv, normalized)
   const id = nextId++
   const request: RunRequest = {
-    ...spawnRequest(argv, opts),
-    timeoutMs: opts.timeoutMs,
-    ...(opts.gateLine !== undefined ? { gateLine: opts.gateLine } : {}),
+    ...spawnRequest(argv, normalized),
+    timeoutMs: normalized.timeoutMs,
+    ...(normalized.gateLine !== undefined ? { gateLine: normalized.gateLine } : {}),
   }
-  return start(w, id, { type: "run", id, request }, opts, () => runCommandInline(argv, opts))
+  return start(w, id, { type: "run", id, request }, normalized, () => runCommandInline(argv, normalized))
 }
 
 /** A gated command started ahead of time in the worker; see `prepareCommand`. */
@@ -271,6 +278,7 @@ export interface Standby {
  * process does (its stdin closes). Without a worker there is no standby: it is never alive.
  */
 export function prepareCommand(argv: string[], opts: Omit<SpawnOptions, "trackTree">): Standby {
+  opts = { ...opts, maxOutputChars: outputCharLimit(opts.maxOutputChars) }
   const w = getWorker()
   let state: "idle" | "released" | "gone" = w ? "idle" : "gone"
   const id = nextId++
