@@ -419,7 +419,8 @@ function permissionLine(p: ApprovalPermission): string {
   if (p.rule) {
     return `Permission rule ${JSON.stringify(p.rule.command)} says ${p.rule.decision} (${p.rule.scope} settings, ${p.rule.file}).`
   }
-  if (p.cause === "protected") return "Protected file: changes to it always ask, in every mode."
+  if (p.cause === "protected")
+    return 'Protected file: changes to it ask in every mode ("Don\'t ask again" lifts that for this session).'
   if (p.cause === "complex")
     return `Permission mode "${p.mode}": the command cannot be checked against the rules word by word.`
   return `Permission mode "${p.mode}".`

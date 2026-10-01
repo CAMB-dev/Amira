@@ -63,9 +63,11 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 }
 ```
 
-规则匹配的是命令的词（argv），而不是文本：`git status --short` 匹配 `["git", "status"]`，`git statusx` 不匹配。命令名写成路径或带 Windows 扩展名（`/usr/bin/git`、`git.exe`）时同样匹配。`ask` 和 `deny` 规则在中间夹有其他词时也匹配（`git -C repo push` 匹配 `["git", "push"]`），并且不区分大小写；`allow` 规则必须与命令开头逐词一致。多条规则同时匹配时，`deny` 优先于 `ask`，`ask` 优先于 `allow`。`allow` 只表示“不询问”，不会解除 plan 模式，也不会放开受保护文件。
+规则匹配的是命令的词（argv），而不是文本：`git status --short` 匹配 `["git", "status"]`，`git statusx` 不匹配。对 `ask` 和 `deny` 规则来说，命令名写成路径或带 Windows 扩展名（`/usr/bin/git`、`git.exe`）时同样匹配，PowerShell 的内置别名也算同一个命令（`rm`、`del` 与 `Remove-Item`）；中间夹有其他词时也匹配（`git -C repo push` 匹配 `["git", "push"]`），并且不区分大小写。`allow` 规则必须与命令开头逐词一致，而且命令名不能带路径（`x/git status` 不算 `git status`），除非规则本身写的就是这个路径。多条规则同时匹配时，`deny` 优先于 `ask`，`ask` 优先于 `allow`。`allow` 只表示“不询问”，不会解除 plan 模式，也不会放开受保护文件。
 
-用 `&&`、`||`、`;`、`|` 或换行连接的命令会被拆开，逐个检查。Amira 无法逐词检查的命令一律改为询问：`$(...)` 和反引号等替换、变量、重定向到文件、here-document 和 here-string、分组、会运行其他命令的包装命令（`eval`、`sudo`、`bash -c`、`Invoke-Expression`、`Start-Process`、各类解释器）以及脚本。在 `auto` 模式下，只要没有 `ask` 或 `deny` 规则，这类命令仍然直接运行。命令按实际运行它的 shell 解析：bash 或 PowerShell，包括 `bash` 工具在 Windows 上退回 PowerShell 的情况。
+用 `&&`、`||`、`;`、`|` 或换行连接的命令会被拆开，逐个检查。Amira 无法逐词检查的命令一律改为询问：`$(...)` 和反引号等替换、变量、重定向到文件、here-document 和 here-string、分组、文件名通配符（`*`、`?`、`[...]`）、会运行其他命令的包装命令（`eval`、`sudo`、`xargs`、`bash -c`、`Invoke-Expression`、`Start-Process`、各类解释器）、定义别名的命令（`alias`、`Set-Alias`、`git -c`、`git config alias.*`）以及脚本。在 `auto` 模式下，只要没有 `ask` 或 `deny` 规则，这类命令仍然直接运行。命令按实际运行它的 shell 解析：bash 或 PowerShell，包括 `bash` 工具在 Windows 上退回 PowerShell 的情况。
+
+规则只决定 Amira 询问还是拒绝，并不是沙箱。命令仍可能通过其他途径调用被拒绝的程序，例如程序的副本或链接，或模型之前写好的脚本。`deny` 适合拦住值得阻止的失误，不能当作安全边界。
 
 用户设置文件中的规则始终生效。项目的 `.amira/settings.json` 或 `.amira/settings.local.json` 只能收紧权限：比你的模式更严格时，项目的模式才生效；项目的 `ask` 和 `deny` 规则直接生效；项目的 `allow` 规则要在你信任该项目后才生效（`amira ext trust`，与项目扩展包所需的信任相同）。项目文件不允许修改的内容会在启动时提示。`--permission-mode` 优先于所有设置文件。`/permissions` 列出当前模式、每条规则及其来源文件，以及被忽略的设置；`/status` 显示模式和规则数量。
 
