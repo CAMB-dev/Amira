@@ -40,6 +40,32 @@ import {
   truncateToWidth,
 } from "@amira/tui-kit"
 import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
+import { createCommandRunner } from "./app/command-runner.ts"
+import {
+  createNoticeStrip,
+  draftMessage,
+  messageParts,
+  messageText,
+  type Outgoing,
+  oneLine,
+  otherWay,
+  outgoing,
+  pendingMessageRows,
+  toPrompt,
+  type WhileWorking,
+} from "./app/outbox.ts"
+import type { InteractiveOptions } from "./app/startup.ts"
+import {
+  DOUBLE_ESC_MS,
+  FOLD_PASTES,
+  FRAME_MS,
+  HINT_NOTE_MS,
+  HOST_EVENTS,
+  overlayKeys,
+  REWIND_ID,
+  tildePath,
+  welcomeCard,
+} from "./app/startup.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer, type DialogRequest, dialogEchoLines } from "./dialog.ts"
@@ -77,39 +103,7 @@ import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
 export type { RetryState } from "./app/activity.ts"
 export { activityLabel, lastReasoningLine, retryLabel, statusRetryLabel } from "./app/activity.ts"
-
-import type { CommandRunner } from "./app/command-runner.ts"
-import { createCommandRunner } from "./app/command-runner.ts"
-import {
-  createNoticeStrip,
-  draftMessage,
-  messageParts,
-  messageText,
-  type NoticeStrip,
-  type Outgoing,
-  oneLine,
-  otherWay,
-  outgoing,
-  pendingMessageRows,
-  toPrompt,
-  type WhileWorking,
-} from "./app/outbox.ts"
-
 export { pendingMessageRows } from "./app/outbox.ts"
-
-import type { InteractiveOptions } from "./app/startup.ts"
-import {
-  DOUBLE_ESC_MS,
-  FOLD_PASTES,
-  FRAME_MS,
-  HINT_NOTE_MS,
-  HOST_EVENTS,
-  overlayKeys,
-  REWIND_ID,
-  tildePath,
-  welcomeCard,
-} from "./app/startup.ts"
-
 export type { InteractiveOptions } from "./app/startup.ts"
 export { tildePath } from "./app/startup.ts"
 
@@ -374,8 +368,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let panelRows = 0
   /** The most rows the list below the input had since it opened (full screen keeps them). */
   let listRows = 0
-  let noticeStrip: NoticeStrip | undefined
-  let commandRunner: CommandRunner | undefined
 
   /** The panels' rows; unfolded, a blank row sets each panel apart from the one before. */
   const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) =>
@@ -416,7 +408,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       })
     }),
     new View((width, ctx) => [
-      ...(noticeStrip?.render(ctx.theme) ?? []).map((l) => truncateToWidth(l, width, "…")),
+      ...noticeStrip.render(ctx.theme).map((l) => truncateToWidth(l, width, "…")),
       ...pendingMessageRows(
         [
           ...steering.map((text) => ({ label: "steering", text })),
@@ -499,7 +491,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const submitKey = keys.label("submit")
     const interruptKey = keys.label("interrupt")
     // A /compact is a command too, but its hint below says "interrupt", as it always did.
-    if (commandRunner?.hasCancellable() && !activity.compacting)
+    if (commandRunner.hasCancellable() && !activity.compacting)
       return [
         submitKey && { text: `${submitKey} ${activity.working ? enterDoes : "send"}`, priority: 5 },
         interruptKey && { text: `${interruptKey} cancel command`, priority: 4 },
@@ -607,8 +599,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // A dumb terminal has no alternate screen to draw the full-screen view on.
   const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
-  noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
-  commandRunner = createCommandRunner({
+  const noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
+  const commandRunner = createCommandRunner({
     commands,
     keys,
     mode,
@@ -638,7 +630,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             // p: back to the conversation, with a snapshot of the one shown printed into it.
             onPrint: (id) => {
               closeView()
-              commandRunner!.run(`/agents ${id}`)
+              commandRunner.run(`/agents ${id}`)
             },
             ...(presenters ? { presenters } : {}),
           }),
@@ -773,13 +765,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "turn.start": {
         const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting.
-        noticeStrip!.turnStarted(prompt)
+        noticeStrip.turnStarted(prompt)
         // Messages queued together go as one prompt but read as what they were: one each.
         const merged =
           mergedQueue && messageText(prompt) === mergedQueue.join("\n\n") ? mergedQueue : undefined
         mergedQueue = undefined
         const shown = merged ? merged.map((text) => ({ ...prompt, display: { text } })) : [prompt]
-        if (commandRunner!.takeEcho(prompt)) commandRunner!.echoedNote(prompt)
+        if (commandRunner.takeEcho(prompt)) commandRunner.echoedNote(prompt)
         else for (const m of shown) view.user(m)
         termStatus.turnStarted()
         activity.turnStarted(() => {
@@ -879,7 +871,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         break
       case "notice.retry":
-        noticeStrip!.setRetry(e.ts + e.data.delayMs)
+        noticeStrip.setRetry(e.ts + e.data.delayMs)
         break
       case "status.changed":
         // A failed model request tried again says so until the stream goes on (or the turn ends).
@@ -922,7 +914,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // A notice (background sub-agents' results) is not the user's steering. It waits in the
         // bottom area until it joins the conversation (all waiting ones join together), also
         // through an interrupt, after which it goes with the next message.
-        if (noticeStrip!.steer(e.data.message, e.data.state)) {
+        if (noticeStrip.steer(e.data.message, e.data.state)) {
           if (e.data.state === "injected") view.user(e.data.message)
           break
         }
@@ -932,9 +924,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        const echoed = e.data.state !== "promoted" && commandRunner!.takeEcho(e.data.message)
+        const echoed = e.data.state !== "promoted" && commandRunner.takeEcho(e.data.message)
         if (e.data.state === "injected") {
-          if (echoed) commandRunner!.echoedNote(e.data.message)
+          if (echoed) commandRunner.echoedNote(e.data.message)
           else view.user(e.data.message)
         }
         // Stopped with Esc while messages waited: it goes out again at once, with the queued ones.
@@ -1129,7 +1121,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       clearTimeout(flushTimer.timer)
       sendMerged(flushTimer.next)
     }
-    if (!hasImages && commands && parseCommandLine(trimmed)) commandRunner!.run(trimmed)
+    if (!hasImages && commands && parseCommandLine(trimmed)) commandRunner.run(trimmed)
     else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed)
     else if (!hasImages && commands?.inputLine(trimmed)) runInput(trimmed, display)
     else if (activity.working && how === "steer") {
@@ -1192,8 +1184,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     cancelClipboard()
     view.leaveSession()
     agent = next
-    commandRunner!.clearEchoes()
-    noticeStrip!.reset()
+    commandRunner.clearEchoes()
+    noticeStrip.reset()
     termStatus.setFolder(next.cwd)
     termStatus.setSessionTitle(next.session?.title)
     showSession(next, true)
@@ -1461,7 +1453,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     clipboardAbort.abort()
     if (quitting) return
     quitting = true
-    commandRunner!.abortAll(new Error("quitting"))
+    commandRunner.abortAll(new Error("quitting"))
     for (const f of forms.splice(0)) opts.ui?.cancel(f.requestId)
     form?.close()
     closeView()
@@ -1474,7 +1466,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     ownFiles?.dispose()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
-    noticeStrip!.dispose()
+    noticeStrip.dispose()
     reader.stop()
     view.stop()
     termStatus.stop()
@@ -1565,7 +1557,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       submitDraft("queue")
     } else if (keys.is(e, "cancel")) {
       cancelClipboard()
-      if (commandRunner!.cancel()) {
+      if (commandRunner.cancel()) {
         // A slash command runs alongside the turn; cancellation leaves the input intact.
       } else if (activity.working) interrupt()
       else if (!editor.isEmpty) editor.clear()
@@ -1591,7 +1583,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // An editing key of the input (cut, paste back, undo, the external editor).
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too. Twice in a row: rewind.
-      if (!commandRunner!.cancel()) pressInterrupt()
+      if (!commandRunner.cancel()) pressInterrupt()
     } else {
       editor.handleInput(e)
     }
@@ -1686,7 +1678,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       historyNav.reset()
       editor.clear()
       if (action.line.startsWith("$")) runSkill(action.line)
-      else commandRunner!.run(action.line)
+      else commandRunner.run(action.line)
     }
     return true
   }
