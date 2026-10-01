@@ -31,6 +31,7 @@ import {
   defaultTheme,
   detectEnv,
   Editor,
+  type EditorImage,
   type EditorPart,
   ImageStore,
   type InputEvent,
@@ -66,6 +67,15 @@ import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { HistorySearch } from "./history-search.ts"
+import {
+  type ClipboardContent,
+  imageBytes,
+  imageMimeType,
+  MAX_IMAGE_BYTES,
+  pastedImagePaths,
+  readClipboard,
+  readImage,
+} from "./image-input.ts"
 import { createInlineView } from "./inline-view.ts"
 import { InputBox } from "./input-box.ts"
 import { KeyReference } from "./key-reference.ts"
@@ -142,6 +152,8 @@ export interface InteractiveOptions {
   env?: Record<string, string | undefined>
   /** Image providers registered by extensions (D88); without one, images are their alt text. */
   imageProviders?: ImageSource
+  /** Clipboard reader; injectable without OS clipboard access in tests. */
+  clipboard?: (cwd: string, signal: AbortSignal) => Promise<ClipboardContent>
   /** Markdown renderers registered by extensions (D88), e.g. diagrams for ```mermaid blocks. */
   markdownRenderers?: MarkdownRenderSource
 }
@@ -162,6 +174,8 @@ interface Outgoing {
   display?: string
   /** When it was typed, among the messages of this run: steering and queued ones merge in this order. */
   seq?: number
+  content?: UserMessage["content"]
+  parts?: EditorPart[]
 }
 
 function outgoing(text: string, display: string | undefined): Outgoing {
@@ -171,8 +185,35 @@ function outgoing(text: string, display: string | undefined): Outgoing {
 
 /** What to hand the agent: the text, or a message that shows its placeholders (MessageDisplay). */
 function toPrompt(o: Outgoing): string | UserMessage {
+  if (o.content) return { role: "user", content: o.content, display: { text: o.display ?? o.text } }
   if (!o.display) return o.text
   return { role: "user", content: [{ type: "text", text: o.text }], display: { text: o.display } }
+}
+
+function messageParts(m: UserMessage): EditorPart[] {
+  return m.content.map((b) =>
+    b.type === "text"
+      ? b.text
+      : {
+          image: {
+            name: b.name ?? `image.${b.mimeType.split("/")[1] ?? "png"}`,
+            mimeType: b.mimeType,
+            data: b.data,
+          },
+        },
+  )
+}
+
+function draftMessage(text: string, display: string | undefined, parts: EditorPart[]): Outgoing {
+  if (!parts.some((p) => typeof p !== "string" && "image" in p)) return outgoing(text, display)
+  const content = parts.flatMap<UserMessage["content"][number]>((p) =>
+    typeof p === "string"
+      ? [{ type: "text" as const, text: p }]
+      : "paste" in p
+        ? [{ type: "text" as const, text: p.paste }]
+        : [{ type: "image" as const, ...p.image }],
+  )
+  return { text: userText({ role: "user", content }), display, content, parts }
 }
 
 /** What a message sent while a turn runs does: joins that turn, or waits for the next. */
@@ -494,6 +535,61 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     isSubmit: (e) => keys.is(e, "submit"),
     isNewline: (e) => keys.is(e, "newline"),
   })
+  const clipboardAbort = new AbortController()
+  let clipboardRead: AbortController | undefined
+
+  function cancelClipboard() {
+    clipboardRead?.abort()
+    clipboardRead = undefined
+  }
+
+  function attachImages(attachments: EditorImage[]): boolean {
+    const bytes = imageBytes([...editor.getParts(), ...attachments.map((image) => ({ image }))])
+    if (bytes > MAX_IMAGE_BYTES) {
+      showNote("Images in a message are limited to 5 MB total. Remove an attachment or resize it first.")
+      return false
+    }
+    for (const image of attachments) editor.insertImage(image)
+    showNote(
+      `Attached ${attachments.map((image) => image.name.replace(/\p{Cc}/gu, " ")).join(", ")}. Backspace removes an attachment.`,
+    )
+    return true
+  }
+
+  function pasteText(text: string) {
+    const paths = pastedImagePaths(text, agent.cwd)
+    let images: EditorImage[] | undefined
+    try {
+      images = paths?.map(readImage)
+    } catch (err) {
+      // An image that cannot be attached stays a path in the text rather than vanishing.
+      showNote(`${err instanceof Error ? err.message : String(err)} Pasted as text.`)
+    }
+    if (!images || !attachImages(images)) editor.handleInput({ type: "paste", text })
+    redraw()
+  }
+
+  async function pasteClipboard() {
+    if (clipboardRead) return
+    const read = new AbortController()
+    clipboardRead = read
+    const signal = AbortSignal.any([clipboardAbort.signal, read.signal])
+    const session = agent
+    try {
+      const result = await (opts.clipboard
+        ? opts.clipboard(agent.cwd, signal)
+        : readClipboard({ cwd: agent.cwd, env: { ...process.env, ...env }, signal }))
+      if (signal.aborted || agent !== session) return
+      if (result.type === "image") attachImages([result.image])
+      else if (result.type === "text") pasteText(result.text)
+      else showNote("No image or text on the clipboard. You can also paste an image file path.")
+    } catch (err) {
+      if (!signal.aborted) showNote(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (clipboardRead === read) clipboardRead = undefined
+      if (!clipboardAbort.signal.aborted) redraw()
+    }
+  }
   const commands = opts.commands
   // The "/" popup lists commands, the "$" one skills; at most one is open, by the first character.
   const popups = commands
@@ -523,7 +619,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   const syncCompletions = (): Promise<void> | undefined => {
     const recalled = historyNav.recalling
-    const line = editor.lineCount === 1 && !recalled ? editor.getText() : ""
+    const line =
+      editor.lineCount === 1 &&
+      !recalled &&
+      !editor.getParts().some((p) => typeof p !== "string" && "image" in p)
+        ? editor.getText()
+        : ""
     const commandsPending = popups.map((p) => p.update(line)).find(Boolean)
     filePicker.update(recalled ? "" : editor.textBeforeCaret())
     return commandsPending
@@ -1140,14 +1241,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         else if (e.data.state === "dropped" && flush) {
           const m = e.data.message
           flush.dropped.push({
-            ...outgoing(userText(m), m.display?.text),
+            ...draftMessage(userText(m), m.display?.text, messageParts(m)),
             seq: steerSeq.get(userText(m)) ?? 0,
           })
         }
         // Put a message the turn dropped back into the editor rather than losing it.
         else if (e.data.state === "dropped") {
           // A message with folded pastes comes back folded.
-          const back = sentParts.get(userText(e.data.message)) ?? [text]
+          const back = e.data.message.content.some((b) => b.type === "image")
+            ? messageParts(e.data.message)
+            : (sentParts.get(userText(e.data.message)) ?? [text])
           editor.setParts(editor.isEmpty ? back : [...editor.getParts(), "\n", ...back])
           return redraw()
         }
@@ -1254,6 +1357,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** The user's message shows up in the transcript on turn.start. */
   function send(message: Outgoing) {
+    if (message.content?.some((b) => b.type === "image") && !agent.model.caps.images) {
+      putBack([message])
+      view.notice(
+        "warning",
+        "This model does not support images. Pick an image-capable model with /model or remove the attachments. Your message is still in the input.",
+      )
+      view.requestRender()
+      return
+    }
     const clock = { turnStartedAt, turnTokens }
     working = true
     startClock()
@@ -1283,11 +1395,28 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   function submit(text: string, parts: EditorPart[] = [text], display?: string, how = enterDoes) {
     const trimmed = text.trim()
-    if (!trimmed) return
+    const hasImages = parts.some((p) => typeof p !== "string" && "image" in p)
+    if (
+      clipboardRead ||
+      (hasImages &&
+        (imageBytes(parts) > MAX_IMAGE_BYTES || (!isNoModel(agent.model) && !agent.model.caps.images)))
+    ) {
+      editor.setParts(parts)
+      view.notice(
+        "warning",
+        clipboardRead
+          ? "Clipboard paste is still loading. Send the message once it finishes."
+          : imageBytes(parts) > MAX_IMAGE_BYTES
+            ? "Images in a message are limited to 5 MB total. Remove an attachment or resize it first."
+            : "This model does not support images. Pick an image-capable model with /model or remove the attachments. Your message is still in the input.",
+      )
+      return
+    }
+    if (!trimmed && !hasImages) return
     editor.clear()
     history.add(parts)
     historyNav.reset()
-    const message: Outgoing = { ...outgoing(trimmed, display), seq: ++typed }
+    const message: Outgoing = { ...draftMessage(trimmed, display, parts), seq: ++typed }
     remember(message, parts)
     // Messages an Esc released still wait out a double press: they were typed first, so they go
     // first, and this one joins the turn they start (or is queued after it).
@@ -1295,9 +1424,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       clearTimeout(flushTimer.timer)
       sendMerged(flushTimer.next)
     }
-    if (commands && parseCommandLine(trimmed)) runCommand(trimmed)
-    else if (commands?.skillLine(trimmed)) runSkill(trimmed)
-    else if (commands?.inputLine(trimmed)) runInput(trimmed, display)
+    if (!hasImages && commands && parseCommandLine(trimmed)) runCommand(trimmed)
+    else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed)
+    else if (!hasImages && commands?.inputLine(trimmed)) runInput(trimmed, display)
     else if (working && how === "steer") {
       steerSeq.set(message.text, message.seq!)
       for (const k of steerSeq.keys()) {
@@ -1394,6 +1523,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
+    cancelClipboard()
     view.leaveSession()
     agent = next
     pendingNotices.length = 0
@@ -1428,7 +1558,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const shown = next.map((q) => q.display ?? q.text)
     const display = next.some((q) => q.display) ? shown.join("\n\n") : undefined
     mergedQueue = next.length > 1 ? shown : undefined
-    send(outgoing(text, display))
+    const message = outgoing(text, display)
+    if (next.some((q) => q.content)) {
+      message.content = next.flatMap((q, i) => [
+        ...(i ? [{ type: "text" as const, text: "\n\n" }] : []),
+        ...(q.content ?? [{ type: "text" as const, text: q.text }]),
+      ])
+      message.parts = next.flatMap((q, i) => [
+        ...(i ? ["\n\n"] : []),
+        ...(q.parts ?? sentParts.get(q.text) ?? [q.text]),
+      ])
+      if (imageBytes(message.parts) > MAX_IMAGE_BYTES) {
+        putBack(next)
+        view.notice("warning", "Images in the combined message exceed 5 MB. Send the attachments separately.")
+        return
+      }
+    }
+    send(message)
   }
 
   /** Puts messages that were about to go back into the editor, before what it holds. */
@@ -1437,7 +1583,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const parts: EditorPart[] = []
     for (const q of next) {
       if (parts.length) parts.push("\n\n")
-      parts.push(...(sentParts.get(q.text) ?? [q.text]))
+      parts.push(...(q.parts ?? sentParts.get(q.text) ?? [q.text]))
     }
     if (!editor.isEmpty) parts.push("\n\n", ...editor.getParts())
     editor.setParts(parts)
@@ -1534,7 +1680,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       view.requestRender()
       return
     }
-    const back = sentParts.get(userText(pick.m)) ?? [text]
+    const back = pick.m.content.some((b) => b.type === "image")
+      ? messageParts(pick.m)
+      : (sentParts.get(userText(pick.m)) ?? [text])
     editor.setParts(editor.isEmpty ? back : [...back, "\n\n", ...editor.getParts()])
     view.notice(
       "info",
@@ -1564,6 +1712,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   let quitting = false
   function quit(code = 0) {
+    clipboardAbort.abort()
     if (quitting) return
     quitting = true
     for (const abort of commandAborts.keys()) abort.abort(new Error("quitting"))
@@ -1640,6 +1789,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // The file picker took one of its keys (popup.*).
     } else if (!viewFirst && view.handleInput(e)) {
       // The view took one of its keys (scrolling, find, selecting, copying).
+    } else if (keys.is(e, "paste.image") || (e.type === "paste" && !e.text)) {
+      void pasteClipboard()
+    } else if (e.type === "paste") {
+      pasteText(e.text)
     } else if (keys.is(e, "history.search")) {
       search.start()
     } else if (
@@ -1655,6 +1808,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (keys.is(e, "submit.queue")) {
       submitDraft("queue")
     } else if (keys.is(e, "cancel")) {
+      cancelClipboard()
       if (cancelCommand()) {
         // A slash command runs alongside the turn; cancellation leaves the input intact.
       } else if (working) interrupt()
@@ -1714,6 +1868,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * the terminal is handed over until it exits, then the file's text is the input's.
    */
   function editExternally() {
+    if (editor.getParts().some((p) => typeof p !== "string" && "image" in p)) {
+      showNote("Remove image attachments before using the external text editor.")
+      return
+    }
     const command =
       env.VISUAL?.trim() || env.EDITOR?.trim() || (process.platform === "win32" ? "notepad" : "vi")
     const file = join(tmpdir(), `amira-message-${process.pid}-${Date.now()}.md`)
@@ -1777,7 +1935,27 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function handleFileKey(e: InputEvent): boolean {
     const action = filePicker.handleKey(e)
     if (!action) return false
-    if (action.type === "insert") editor.replaceBeforeCaret(action.replace, action.text)
+    if (action.type === "insert") {
+      const path = action.text
+        .slice(1)
+        .trim()
+        .replace(/^"(.*)"$/, "$1")
+      if (!path.endsWith("/") && imageMimeType(path)) {
+        try {
+          const image = readImage(join(agent.cwd, path))
+          if (imageBytes([...editor.getParts(), { image }]) > MAX_IMAGE_BYTES)
+            showNote(
+              "Images in a message are limited to 5 MB total. Remove an attachment or resize it first.",
+            )
+          else {
+            editor.replaceBeforeCaret(action.replace, "")
+            attachImages([image])
+          }
+        } catch (err) {
+          showNote(err instanceof Error ? err.message : String(err))
+        }
+      } else editor.replaceBeforeCaret(action.replace, action.text)
+    }
     return true
   }
 

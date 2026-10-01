@@ -53,6 +53,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | --- | --- | --- |
 | `submit` | `enter` | Send the message; while a turn runs, steer it (queue it with `tui.submitWhileWorking: "queue"`) |
 | `newline` | `shift+enter`, `ctrl+enter` | Insert a line break |
+| `paste.image` | `alt+v`, `ctrl+v`, `shift+insert` | Paste the clipboard's text, or attach its image when it holds no text (see [Images](usage.md#images)). Windows Terminal, VS Code and others keep Ctrl+V or Shift+Insert for their own paste; Alt+V reaches Amira (on macOS, with Option set to act as Meta) |
 | `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it (steer it with `tui.submitWhileWorking: "queue"`) |
 | `submit.steer` | none | Send the message; while a turn runs, always steer it |
 | `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |

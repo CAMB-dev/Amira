@@ -41,6 +41,8 @@ export interface TextBlock {
 
 export interface ImageBlock {
   type: "image"
+  /** Original attachment name, for frontends and session restore; not sent to the provider. */
+  name?: string
   mimeType: string
   /** Base64-encoded image data. */
   data: string

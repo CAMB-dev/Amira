@@ -26,6 +26,18 @@ Shift+Enter inserts a newline where the terminal supports it; Ctrl+Enter is the 
 
 Esc stops the current turn; while a slash command such as `/ext install` is still running, it cancels that command first and keeps your draft. If steering or queued messages are waiting, they are combined in the order you typed them and sent together. Background sub-agents keep running; [Sub-agents](subagents.md) explains how to stop them. Ctrl+C likewise cancels a running command first, otherwise stops a turn, otherwise clears a nonempty input, otherwise quits. `/quit` also exits.
 
+## Images
+
+Messages can carry PNG, JPEG, GIF and WebP images, in both terminal modes:
+
+- **Paste or drop paths.** A paste made only of paths to existing image files (absolute or relative to the working directory, quoted when they contain spaces, or `file://` URIs) attaches them. Anything else, such as prose or other files, is pasted as text, and so is an image that cannot be attached, with a notice saying why.
+- **Pick one in the `@` file list.** An image attaches; other files keep their `@path` reference.
+- **Paste from the clipboard** with Alt+V (`paste.image`; see [Keybindings](keybindings.md) for the other keys). The clipboard's text wins when it has any. This uses PowerShell on Windows, `osascript` (or `pngpaste` when installed) on macOS, and `wl-paste` or `xclip` on Linux; without them a notice says what is missing, and paths still work.
+
+An attachment shows as one placeholder, such as `[image 1: screen.png 120 KB]`, in the input and in the sent message. Backspace or Delete removes it whole; undo, cut and yank keep it. Remove attachments before editing the message in an external editor (Ctrl+G). A message with images is never run as a slash command or skill.
+
+The images in one message are limited to **5 MB in total**. Sending them needs a model that accepts images; otherwise a warning appears and the message stays in the input. Images are stored inline (base64) in the session file, so resuming does not need the original files. Image prompts are recalled with ↑ during the run but are not written to the project's prompt history file.
+
 ## Tools and approvals
 
 The bundled tools can read, search, write and edit files, run shell commands, search the web and delegate work. Availability depends on the platform, model and loaded extensions. `/tools` lists the current tools; `/tools disable <name>` and `/tools enable <name>` change availability for this session. `--disable-tools` supplies a comma-separated list at startup. See [Settings](settings.md) and [Extensions](extensions.md) for persistent configuration.
