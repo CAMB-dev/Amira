@@ -43,6 +43,7 @@ test.if(hasBash)("finds coreutils and other tools on PATH", async () => {
 test("the shell description says commands already start in the working directory", () => {
   expect(bashTool.description).toContain("Commands already start in the working directory")
   expect(bashTool.description).not.toContain("Prefer absolute paths")
+  expect(bashTool.description).toContain("exit 141 (SIGPIPE)")
 })
 
 test.if(hasBash)("a failed command before a pipeline keeps the bash error status", async () => {

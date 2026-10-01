@@ -77,7 +77,9 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 
 规则匹配的是命令的词（argv），而不是文本：`git status --short` 匹配 `["git", "status"]`，`git statusx` 不匹配。对 `ask` 和 `deny` 规则来说，命令名写成路径或带 Windows 扩展名（`/usr/bin/git`、`git.exe`）时同样匹配，PowerShell 的内置别名也算同一个命令（`rm`、`del` 与 `Remove-Item`）；中间夹有其他词时也匹配（`git -C repo push` 匹配 `["git", "push"]`），并且不区分大小写。`allow` 规则必须与命令开头逐词一致，而且命令名不能带路径（`x/git status` 不算 `git status`），除非规则本身写的就是这个路径。多条规则同时匹配时，`deny` 优先于 `ask`，`ask` 优先于 `allow`。`allow` 只表示“不询问”，不会解除 plan 模式，也不会放开受保护文件。
 
-用 `&&`、`||`、`;`、`|` 或换行连接的命令会被拆开，逐个检查。Amira 无法逐词检查的命令一律改为询问：`$(...)` 和反引号等替换、变量、重定向到文件、here-document 和 here-string、分组、文件名通配符（`*`、`?`、`[...]`）、会运行其他命令的包装命令（`eval`、`sudo`、`xargs`、`bash -c`、`Invoke-Expression`、`Start-Process`、各类解释器）、定义别名的命令（`alias`、`Set-Alias`、`git -c`、`git config alias.*`）以及脚本。在 `auto` 模式下，只要没有 `ask` 或 `deny` 规则，这类命令仍然直接运行。命令按实际运行它的 shell 解析：bash 或 PowerShell，包括 `bash` 工具在 Windows 上退回 PowerShell 的情况。shell 工具已经从工作目录启动命令，只有需要进入其他目录时才使用 `cd`。bash 的前台和后台命令都启用 `pipefail`，因此管道中的任一组件失败都会保留非零状态。PowerShell 没有 `pipefail`，但其包装器会在原生命令管道中保留失败原生命令的 `$LASTEXITCODE`；cmdlet 管道遵循 PowerShell 的 `$?` 规则。
+用 `&&`、`||`、`;`、`|` 或换行连接的命令会被拆开，逐个检查。Amira 无法逐词检查的命令一律改为询问：`$(...)` 和反引号等替换、变量、重定向到文件、here-document 和 here-string、分组、文件名通配符（`*`、`?`、`[...]`）、会运行其他命令的包装命令（`eval`、`sudo`、`xargs`、`bash -c`、`Invoke-Expression`、`Start-Process`、各类解释器）、定义别名的命令（`alias`、`Set-Alias`、`git -c`、`git config alias.*`）以及脚本。在 `auto` 模式下，只要没有 `ask` 或 `deny` 规则，这类命令仍然直接运行。命令按实际运行它的 shell 解析：bash 或 PowerShell，包括 `bash` 工具在 Windows 上退回 PowerShell 的情况。
+
+shell 工具已经从工作目录启动命令，只有需要进入其他目录时才使用 `cd`。bash 的前台和后台命令都启用 `pipefail`，因此管道中的任一组件失败都会保留非零状态：测试失败时 `bun test | tail` 也会失败。相应的代价是：读取方提前停止读取时（例如 `git log | head`），被截断的命令会让整个管道以 141（SIGPIPE）退出，后面的 `&&` 也不会执行。PowerShell 没有 `pipefail`，但其包装器会在原生命令管道中保留失败原生命令的 `$LASTEXITCODE`；cmdlet 管道遵循 PowerShell 的 `$?` 规则。
 
 规则只决定 Amira 询问还是拒绝，并不是沙箱。命令仍可能通过其他途径调用被拒绝的程序，例如程序的副本或链接，或模型之前写好的脚本。`deny` 适合拦住值得阻止的失误，不能当作安全边界。
 
@@ -85,7 +87,7 @@ Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会
 
 有些文件无论处于哪种模式，`write`、`edit` 或 `apply_patch` 修改前都会询问：`.amira` 目录（设置、扩展包和锁文件）和 Amira 用户目录、`.git`（hooks、config 以及其他 Git 元数据，包括链接 worktree 的 Git 目录）、`.gitmodules`、`core.hooksPath` 指向的目录，以及你的全局 Git 配置。同一文件的其他写法也算在内（大小写不同、`../`、绝对路径、MSYS 路径、链接）。**shell 命令目前仍然可以修改这些文件，因为命令还没有在沙箱中运行。**
 
-被拒绝的调用会告诉模型原因，并提示它应当询问你。在打印模式下，以及 RPC 中没有客户端能回答时，所有需要询问的操作都会被拒绝并说明原因；`ask_user` 也不会提供给模型，非交互系统提示会要求模型自行决定。因此无人值守运行请使用 `auto` 模式或规则。
+被拒绝的调用会告诉模型原因，并提示它应当询问你。在打印模式下，以及 RPC 中没有客户端能回答时，所有需要询问的操作都会被拒绝并说明原因。打印模式还会对模型（包括子 agent）隐藏 `ask_user`，并在系统提示中说明这是非交互运行，由模型自行决定。无人值守运行请使用 `auto` 模式或规则。
 
 ## 会话、压缩与回退
 
@@ -221,7 +223,7 @@ RPC 在 stdin 和 stdout 使用 JSON Lines，不能与 `-p` 或命令行提示�
 
 参数和界面回答格式以生成的 schema 为准。例如确认框使用布尔 `value`；显式 `null` 取消对话框，省略 `value` 则无效。请求等待回答时，客户端仍可发送后续输入行。如果慢速客户端收到 `events.lost`，用 `state` 与 `session.read` 重新同步。工作期间持续读取 stdout。
 
-关闭 stdin 后，Amira 会等待正在进行的工作，包括后台结果及其触发的后续轮次；无人能回答的对话框会取消。没有界面客户端的 RPC 不会提供 `ask_user`，并会告诉模型自行决定。需要对话框的命令应在结束前保持 stdin 打开。
+关闭 stdin 后，Amira 会等待正在进行的工作，包括后台结果及其触发的后续轮次；无人能回答的对话框会取消。需要对话框的命令应在结束前保持 stdin 打开。
 
 ## 状态与费用
 
