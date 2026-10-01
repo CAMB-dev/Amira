@@ -149,9 +149,9 @@ export interface PermissionsOptions {
 export class Permissions {
   readonly rules: readonly PermissionRule[]
   readonly warnings: readonly string[]
-  readonly modeSource: string
   approver: Approver | undefined
   #mode: PermissionMode
+  #modeSource: string
   #protect: ProtectOptions
   #listeners = new Set<(mode: PermissionMode) => void>()
 
@@ -159,7 +159,7 @@ export class Permissions {
     this.#mode = opts.mode ?? "auto"
     this.rules = opts.rules ?? []
     this.warnings = opts.warnings ?? []
-    this.modeSource = opts.modeSource ?? "default"
+    this.#modeSource = opts.modeSource ?? "default"
     this.#protect = opts.protect ?? {}
     this.approver = opts.approver
   }
@@ -168,10 +168,19 @@ export class Permissions {
     return this.#mode
   }
 
-  /** Switches the mode (the user's choice: Shift+Tab); calls already decided stay decided. */
-  setMode(mode: PermissionMode): void {
+  /** Where the mode came from: "default", a settings file, the flag, or this session. */
+  get modeSource(): string {
+    return this.#modeSource
+  }
+
+  /**
+   * Switches the mode: the user's choice (Shift+Tab), never the model's. Calls already decided
+   * stay decided.
+   */
+  setMode(mode: PermissionMode, source = "this session"): void {
     if (mode === this.#mode) return
     this.#mode = mode
+    this.#modeSource = source
     for (const l of this.#listeners) l(mode)
   }
 

@@ -81,6 +81,22 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         ...(file && existsSync(file) ? { file } : {}),
         busy: a.busy,
         shell,
+        permissions: { mode: a.permissions.mode, rules: a.permissions.rules.length },
+      }
+    },
+    permissions: () => {
+      const p = agent().permissions
+      return {
+        mode: p.mode,
+        modeSource: p.modeSource,
+        rules: p.rules.map((r) => ({
+          command: [...r.command],
+          decision: r.decision,
+          ...(r.reason ? { reason: r.reason } : {}),
+          scope: r.source.scope,
+          file: r.source.file,
+        })),
+        warnings: [...p.warnings],
       }
     },
     messages: () => agent().messages,

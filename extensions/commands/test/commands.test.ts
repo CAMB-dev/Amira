@@ -163,6 +163,7 @@ test("every built-in command is registered with a description", async () => {
     "ext",
     "help",
     "model",
+    "permissions",
     "provider",
     "quit",
     "reload",
@@ -423,6 +424,39 @@ test("/compact passes its instructions; the compact events report the outcome", 
   expect((await run("/compact keep the API notes")).text).toBe("")
   await run("/compact")
   expect(calls).toEqual(["compact keep the API notes", "compact "])
+})
+
+test("/permissions lists the mode and the rules with their sources; /status counts them", async () => {
+  const none = await setup()
+  expect((await none.run("/permissions")).text).toBe("This session has no permission policy.")
+  expect((await none.run("/status")).text).not.toContain("Permissions")
+  const { run } = await setup({
+    info: () => ({
+      id: "s1",
+      cwd: "/work",
+      model: { provider: "deepseek", model: "deepseek-flash" },
+      contextWindow: 128000,
+      busy: false,
+      shell: "auto",
+      permissions: { mode: "edits", rules: 2 },
+    }),
+    permissions: () => ({
+      mode: "edits",
+      modeSource: "/home/u/.amira/settings.json",
+      rules: [
+        { command: ["git", "push"], decision: "ask", reason: "review first", scope: "user", file: "u.json" },
+        { command: ["rm"], decision: "deny", scope: "project", file: "p.json" },
+      ],
+      warnings: ['p.json: 1 "allow" rule is ignored; this project is not trusted'],
+    }),
+  })
+  expect((await run("/status")).text).toMatch(/Permissions\s+edits mode; 2 command rules/)
+  const text = (await run("/permissions")).text
+  expect(text).toContain("Mode: edits (from /home/u/.amira/settings.json)")
+  expect(text).toMatch(/ask\s+git push\s+user u\.json — review first/)
+  expect(text).toMatch(/deny\s+rm\s+project p\.json/)
+  expect(text).toContain("Shell commands can still change these files")
+  expect(text).toContain("this project is not trusted")
 })
 
 test("/shell shows and sets the mode; /tools lists, disables and enables tools", async () => {
