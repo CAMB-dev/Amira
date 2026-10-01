@@ -67,6 +67,12 @@ export const ACTIONS = {
     scope: "input",
     description: "Fold or unfold the live panels above the activity line (e.g. a todo list)",
   },
+  "permissions.mode": {
+    scope: "input",
+    description:
+      "Cycle the permission mode: auto, edits (changes files, asks before shell commands), plan (read-only)",
+    help: "Cycle the permission mode: auto, edits, plan",
+  },
   help: {
     scope: "input",
     description: "List every key and what it does, while the input is empty and no list is open",
@@ -186,6 +192,7 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "history.search": ["ctrl+r"],
     "tool-output": ["ctrl+o"],
     "panels.toggle": ["ctrl+t"],
+    "permissions.mode": ["shift+tab"],
     help: ["?"],
     "edit.kill-to-start": ["ctrl+u"],
     "edit.kill-to-end": ["ctrl+k"],
