@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
-import type { AssistantMessage, SessionControl, SessionInfo } from "@amira/api"
+import type { AssistantMessage, EventMap, SessionControl, SessionInfo, UserMessage } from "@amira/api"
 import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import commandsExtension, {
   ago,
@@ -138,9 +138,11 @@ async function setup(
   })
   // Dialogs answer from the list, in order; undefined is "cancelled".
   const asked: string[] = []
+  const requests: EventMap["ui.request"][] = []
   bus.subscribe(
     (e) => {
       if (e.type !== "ui.request") return
+      requests.push(e.data)
       asked.push(e.data.kind === "select" ? `${e.data.title}: ${e.data.options.join(" | ")}` : e.data.title)
       const a = answers.shift()
       if (a === undefined) ext.ui.cancel(e.data.requestId)
@@ -148,11 +150,11 @@ async function setup(
     },
     { types: ["ui.request"] },
   )
-  const run = async (line: string) => {
-    const r = await host.run(line, { frontend: "tui" })
+  const run = async (line: string, frontend: "tui" | "rpc" | "print" = "tui") => {
+    const r = await host.run(line, { frontend })
     return { ...r, text: r.output.join("\n") }
   }
-  return { host, run, calls, asked, bus, ext }
+  return { host, run, calls, asked, requests, bus, ext }
 }
 
 test("every built-in command is registered with a description", async () => {
@@ -173,12 +175,110 @@ test("every built-in command is registered with a description", async () => {
     "reload",
     "rename",
     "resume",
+    "rewind",
     "rewind-prune",
     "shell",
     "status",
     "tools",
   ])
   expect(host.list().every((c) => c.description.length > 0)).toBe(true)
+})
+
+test("/rewind opens the rewind and file choices, including fork", async () => {
+  const messages: UserMessage[] = [
+    { role: "user", content: [{ type: "text", text: "first request" }] },
+    { role: "user", content: [{ type: "text", text: "newest request" }] },
+  ]
+  const rewinds: { index: number; restoreFiles?: boolean }[] = []
+  const { run, requests } = await setup(
+    {
+      messages: () => messages,
+      planRewind: () => ({
+        owner: "core",
+        enabled: true,
+        restored: 1,
+        removed: 2,
+        conflicts: ["/work/conflict"],
+        note: "Captured file changes are restored.",
+      }),
+      rewind: async (index, options) => void rewinds.push({ index, ...options }),
+      fork: async () => {},
+    },
+    ["1. newest request", "Restore files too (1 restored, 2 removed)"],
+  )
+  const result = await run("/rewind")
+  expect(result.ok).toBe(true)
+  expect(result.text).toContain("/work/conflict")
+  expect(rewinds).toEqual([{ index: 1, restoreFiles: true }])
+  expect(requests[0]).toMatchObject({
+    kind: "select",
+    title: "Rewind the conversation to before which message?",
+    options: ["1. newest request", "2. first request"],
+    sections: [{ keys: [{ key: "f", label: "fork from here" }] }],
+  })
+  expect(requests[1]).toMatchObject({
+    title: "Restore files too?",
+    options: ["Restore files too (1 restored, 2 removed)", "Conversation only"],
+  })
+  expect((requests[1] as Extract<EventMap["ui.request"], { kind: "select" }>).descriptions?.[0]).toContain(
+    "Conflicts must be resolved first.",
+  )
+
+  let forked: number | undefined
+  const fork = await setup(
+    {
+      messages: () => messages,
+      rewind: async () => {},
+      fork: async (index) => {
+        forked = index
+      },
+    },
+    [{ option: "1. newest request", key: "f" }],
+  )
+  expect((await fork.run("/rewind")).text).toContain("Forked")
+  expect(forked).toBe(1)
+})
+
+test("/rewind n confirms its plan, and --yes is required without a responder", async () => {
+  const messages: UserMessage[] = [
+    { role: "user", content: [{ type: "text", text: "older" }] },
+    { role: "user", content: [{ type: "text", text: "newer" }] },
+  ]
+  const rewinds: number[] = []
+  const control: Partial<SessionControl> = {
+    messages: () => messages,
+    planRewind: () => ({
+      owner: "core",
+      enabled: true,
+      restored: 3,
+      removed: 1,
+      conflicts: ["/work/stale"],
+      note: "Resolve conflicts before restoring.",
+    }),
+    rewind: async (index) => void rewinds.push(index),
+  }
+  const interactive = await setup(control, [true])
+  expect((await interactive.run("/rewind 2")).text).toContain("2nd most recent")
+  expect(rewinds).toEqual([0])
+  expect(interactive.requests[0]).toMatchObject({
+    kind: "confirm",
+    title: "Rewind to before the 2nd most recent user message?",
+  })
+  expect((interactive.requests[0] as Extract<EventMap["ui.request"], { kind: "confirm" }>).message).toContain(
+    "This removes 2 messages",
+  )
+  expect((interactive.requests[0] as Extract<EventMap["ui.request"], { kind: "confirm" }>).message).toContain(
+    "Files: 3 restored, 1 removed.",
+  )
+  expect((interactive.requests[0] as Extract<EventMap["ui.request"], { kind: "confirm" }>).message).toContain(
+    "/work/stale",
+  )
+
+  const headless = await setup(control)
+  expect((await headless.run("/rewind 1", "print")).error).toContain("--yes")
+  expect(rewinds).toEqual([0])
+  expect((await headless.run("/rewind 1 --yes", "print")).ok).toBe(true)
+  expect(rewinds).toEqual([0, 1])
 })
 
 test("/help lists every command with its argument hint", async () => {

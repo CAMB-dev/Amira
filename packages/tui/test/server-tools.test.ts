@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
 import { type Message, type ServerToolBlock, serverToolText } from "@amira/ai"
-import type { ToolPresenter } from "@amira/api"
+import { serverToolView, type ToolPresenter } from "@amira/api"
 import { defaultTheme, stripAnsi } from "@amira/tui-kit"
 import { historyLines } from "../src/history.ts"
-import { citationsMarkdown, replyCitations, serverToolCall } from "../src/server-tools.ts"
+import { citationsMarkdown, replyCitations } from "../src/server-tools.ts"
 
 const search: ServerToolBlock = {
   type: "serverTool",
@@ -15,7 +15,7 @@ const search: ServerToolBlock = {
 }
 
 test("a hosted search as a tool row: its queries, the page it opened, how it ended", () => {
-  const row = serverToolCall(search)
+  const row = serverToolView(search)
   expect(row.name).toBe("web_search")
   expect(row.args).toEqual({ query: "node lts · node current" })
   expect(row.result.isError).toBeUndefined()
@@ -24,11 +24,11 @@ test("a hosted search as a tool row: its queries, the page it opened, how it end
     native: true,
     results: [{ url: "https://nodejs.org/en/download" }],
   })
-  expect(serverToolCall({ ...search, input: { type: "open_page", url: "https://a.b" } }).args).toEqual({
+  expect(serverToolView({ ...search, input: { type: "open_page", url: "https://a.b" } }).args).toEqual({
     url: "https://a.b",
   })
-  expect(serverToolCall({ ...search, status: "failed" }).result.isError).toBe(true)
-  expect(serverToolCall({ ...search, status: "running" }).rejected).toBe("aborted")
+  expect(serverToolView({ ...search, status: "failed" }).result.isError).toBe(true)
+  expect(serverToolView({ ...search, status: "running" }).rejected).toBe("aborted")
 })
 
 test("a hosted search failure shows the provider's error code in the row and degradation note", () => {
@@ -37,7 +37,7 @@ test("a hosted search failure shows the provider's error code in the row and deg
     status: "failed",
     input: { query: "Bun", error_code: "max_uses_exceeded" },
   }
-  const row = serverToolCall(failed)
+  const row = serverToolView(failed)
   expect(row.result.isError).toBe(true)
   expect(row.result.content[0]).toMatchObject({ text: expect.stringContaining("Error: max_uses_exceeded") })
   expect(serverToolText(failed)).toContain("Error: max_uses_exceeded")

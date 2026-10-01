@@ -9,6 +9,7 @@ export type {
   Message,
   MessageDisplay,
   ModelRef,
+  ServerToolBlock,
   TextBlock,
   ThinkingBlock,
   ToolCallBlock,
@@ -31,6 +32,7 @@ export * from "./panels.ts"
 export * from "./process.ts"
 export * from "./providers.ts"
 export * from "./render.ts"
+export * from "./server-tool-view.ts"
 export * from "./services.ts"
 export * from "./settings.ts"
 export * from "./skills.ts"

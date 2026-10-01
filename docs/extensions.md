@@ -167,12 +167,15 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `registerPanel` | Render live lines above the activity line |
 | `registerView` | Register a full-screen view kind; commands open it through `openView` when the frontend supports it |
 | `registerToolRenderer`, `decorateToolRenderer` | Present tool calls and results, or wrap an existing presenter |
+| `serverToolView` | Turn provider-hosted tool blocks, such as native web search, into the same tool-call view shape used by presenters |
 | `registerMarkdownRenderer`, `registerImageProvider` | Render matching reply code blocks or standalone images and supply terminal image data |
 | `provideService`, `useService` | Share named extension services; look them up when needed because a provider may be absent or unloaded |
 | `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, the working directory, the user directory and API version |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
+
+`serverToolView(block)` returns the provider tool's name, arguments, result text and native search details (sources included), plus `rejected: "aborted"` when a block never finished. Use its `ToolCallView` fields with an existing tool presenter or another frontend; it is render-only and must not be sent back as a local tool result.
 
 Extension-specific settings belong under `extensions` with the extension name. The settings snapshot is deeply frozen; validate your own section. Print mode cancels UI dialogs; RPC clients answer them through the protocol. Panels, views, tool presenters, Markdown renderers, image providers and services are experimental APIs.
 
