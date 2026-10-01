@@ -1183,6 +1183,32 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
   expect(screen.mainText).toMatch(shown)
 })
 
+test("a resumed session shows a call rejected at its approval prompt as it was live, not failed", async () => {
+  const history: Message[] = [
+    { role: "user", content: [{ type: "text", text: "publish it" }] },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "t1", name: "read", args: { path: "old.ts" } }],
+      model: { provider: "mock", model: "m1" },
+      stopReason: "toolUse",
+    } as Message,
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "read",
+      content: [{ type: "text", text: "Aborted by the user before this tool ran." }],
+      isError: true,
+      rejected: "aborted",
+    } as Message,
+  ]
+  const { terminal, view, shows, exited } = await setup([], { history })
+  await shows("⊘ read old.ts")
+  expect(view()).toContain("└ interrupted")
+  expect(view()).not.toContain("✗ read old.ts")
+  terminal.send("\x03")
+  await exited
+})
+
 test("/clear starts the transcript afresh: find, copying, selecting and the printout see the new session only", async () => {
   const { terminal, view, shows, idle, exited, screen, ai, bus, host, commands } = await setup(
     [{ text: "old answer" }, { text: "new answer" }],

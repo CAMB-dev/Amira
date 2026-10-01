@@ -6,6 +6,7 @@ import type {
   ModelErrorKind,
   ModelRef,
   ServerToolBlock,
+  ToolRejection,
   Usage,
   UserMessage,
 } from "@amira/ai"
@@ -91,8 +92,8 @@ export type TurnEndReason = "done" | "error" | "aborted"
 /** Who let a call that needed approval run: the user, or a rule the user chose. */
 export type ToolApproval = "user" | "rule"
 
-/** Why a tool call produced an error result without its tool running to completion. */
-export type ToolRejection = "blocked" | "unknownTool" | "invalidArgs" | "aborted"
+// ToolRejection lives with ToolResultMessage in @amira/ai, which keeps it with the stored message.
+export type { ToolRejection }
 
 /** Read-only events. Emitting never waits for subscribers. New events are only ever added. */
 export interface EventMap {

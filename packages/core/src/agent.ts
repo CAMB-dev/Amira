@@ -1699,7 +1699,7 @@ export class Agent {
     } finally {
       for (const run of runs) {
         if (!run.result) {
-          run.result = toolError(run.call, "Aborted by the user before this tool finished.")
+          run.result = toolError(run.call, "Aborted by the user before this tool finished.", "aborted")
           this.#emitToolStart(turn, run, run.call.args)
           this.#emitToolEnd(turn, run, { content: run.result.content, isError: true }, 0, "aborted")
         }
@@ -1954,13 +1954,7 @@ export class Agent {
         await this.#afterTool(turn, run, batch, args, first, rejected),
       )
       if (!run.finished) this.#emitToolEnd(turn, run, result, durationMs, rejected, run.approval)
-      return {
-        role: "toolResult",
-        toolCallId: call.id,
-        toolName: call.name,
-        content: result.content,
-        isError: result.isError ?? false,
-      }
+      return resultMessage(call, result, rejected)
     }
     const reject = (rejected: ToolRejection, text: string, args = call.args) =>
       finish(args, { content: [{ type: "text", text }], isError: true }, 0, rejected)
@@ -2117,7 +2111,7 @@ export class Agent {
       if (!run.finished) {
         this.#emitToolEnd(turn, run, { content: [{ type: "text", text }], isError: true }, 0, "blocked")
       }
-      return toolError(call, text)
+      return toolError(call, text, "blocked")
     }
   }
 
@@ -2276,7 +2270,7 @@ export class Agent {
   /** Guarantees every tool call in history has a result, so the next request is valid. */
   #repairHistory() {
     const missing = [...unansweredCalls(this.messages)]
-    this.#push(...missing.map((b) => toolError(b, "This tool call did not complete.")))
+    this.#push(...missing.map((b) => toolError(b, "This tool call did not complete.", "aborted")))
   }
 
   /** Adds messages to the history and persists each one. */
@@ -2751,14 +2745,14 @@ function normalizeResult(r: unknown): ToolResult {
   return out
 }
 
-function toolError(call: ToolCallBlock, text: string): ToolResultMessage {
-  return {
-    role: "toolResult",
-    toolCallId: call.id,
-    toolName: call.name,
-    content: [{ type: "text", text }],
-    isError: true,
-  }
+/** A call's result, with why it was rejected, so a resumed session renders the call as the live one did. */
+function resultMessage(call: ToolCallBlock, r: ToolResult, rejected?: ToolRejection): ToolResultMessage {
+  const m = { role: "toolResult" as const, toolCallId: call.id, toolName: call.name, content: r.content }
+  return { ...m, isError: r.isError ?? false, ...(rejected && { rejected }) }
+}
+
+function toolError(call: ToolCallBlock, text: string, rejected?: ToolRejection): ToolResultMessage {
+  return resultMessage(call, { content: [{ type: "text", text }], isError: true }, rejected)
 }
 
 function copyArgs(args: Record<string, unknown>): Record<string, unknown> {

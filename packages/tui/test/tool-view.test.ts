@@ -125,6 +125,32 @@ test("calls that did not run to completion are muted with their own marker, neve
   expect(colored).not.toContain("\x1b[31m")
 })
 
+test("a call rejected at its approval prompt reads as interrupted or blocked, with the command named", () => {
+  // What the live view makes of the tool.execute.end of a question dismissed (aborted) or
+  // answered no (blocked): the saved result's text is the same, the rejection says which.
+  const dismissed = show(builtinPresenters.bash, {
+    name: "bash",
+    args: { command: "npm publish" },
+    result: textResult("Aborted by the user before this tool ran.", true),
+    rejected: "aborted",
+  })
+  expect(dismissed).toEqual(["⊘ bash npm publish", "  └ interrupted"])
+  const saidNo = show(builtinPresenters.bash, {
+    name: "bash",
+    args: { command: "npm publish" },
+    result: textResult("Tool call not approved: the user said no.", true),
+    rejected: "blocked",
+  })
+  expect(saidNo).toEqual(["⊘ bash npm publish", "  └ Tool call not approved: the user said no."])
+  // Without the rejection (a session stored before it was kept) the same text is a failure.
+  const before = show(builtinPresenters.bash, {
+    name: "bash",
+    args: { command: "npm publish" },
+    result: textResult("Aborted by the user before this tool ran.", true),
+  })
+  expect(before[0]).toBe("✗ bash npm publish")
+})
+
 test("an edit shows +added −removed and a compact numbered diff, cut after 20 lines", () => {
   const hunk = (start: number, n: number) => ({
     oldStart: start,
