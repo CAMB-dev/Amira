@@ -56,7 +56,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it (steer it with `tui.submitWhileWorking: "queue"`) |
 | `submit.steer` | none | Send the message; while a turn runs, always steer it |
 | `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |
-| `interrupt` | `escape` | Cancel a running command, preserving the input; otherwise stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. Files are not restored |
+| `interrupt` | `escape` | Cancel a running command, preserving the input; otherwise stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. `f` forks from before it into a new session instead, leaving this one whole. Files are not restored |
 | `cancel` | `ctrl+c` | Cancel a running command, preserving the input; otherwise stop the running turn (with steering or queued messages waiting, they go out as for `interrupt`), else clear the input, else quit |
 | `exit` | `ctrl+d` | Quit when the input is empty and nothing runs |
 | `redraw` | `ctrl+l` | Clear the screen and draw it again: the latest transcript and the input |
@@ -128,6 +128,9 @@ part of the filter. Install and update keep the input available and show a live 
 panel. Outside a dialog or completion list, Esc (`interrupt`) or Ctrl+C (`cancel`) cancels
 the running command and preserves the draft; changes already completed stay installed.
 The hint uses the current keybindings. Changes take effect with `/reload` while idle.
+
+In `/resume`, typing searches titles and conversation text, with the matching text under each
+row; Ctrl+D deletes the selected session after a confirmation.
 
 A confirmation (such as an approval) starts with nothing selected: Enter does nothing until
 an option is picked with the arrows, so keys typed into a message just as it shows up cannot
@@ -273,7 +276,7 @@ These live under `tui` in `settings.json`, the user's or a project's (`.amira/se
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `tui.mode` | `"fullscreen"` | `"fullscreen"` draws on the alternate screen: Amira scrolls, finds, folds and copies the conversation, redraws all of it when the window changes size, and prints it to the normal screen when it exits (also after a crash). `"inline"` leaves finished output in the terminal's own scrollback, for SSH, tmux, or native scrolling and selection. The `--inline` and `--fullscreen` flags win |
-| `tui.title` | `true` | Set the terminal title to `Amira · <folder> ⎇ <branch>`, marked with `●` while a turn runs; the previous title comes back on exit. The title bar draws it in the system's font, so `⎇` is safe there; the status in the input box's border leaves it out (Cascadia Code and Mono lack it) |
+| `tui.title` | `true` | Set the terminal title to `Amira · <folder> ⎇ <branch>` (the session's title in place of the folder once it has one), marked with `●` while a turn runs; the previous title comes back on exit. The title bar draws it in the system's font, so `⎇` is safe there; the status in the input box's border leaves it out (Cascadia Code and Mono lack it) |
 | `tui.progress` | `true` | Show a busy indicator on the tab and taskbar while a turn runs, and a paused one while a dialog waits (OSC 9;4: Windows Terminal, ConEmu, VS Code, Ghostty) |
 | `tui.bell` | `true` | Ring the bell when a turn ends or a dialog opens while the terminal is in the background; where the terminal does not report focus, only after a turn of 15 seconds or more |
 | `tui.reflow` | `"auto"` | Inline mode: `"off"` for terminals that do not re-wrap lines when they get narrower, so a resize does not erase the transcript above the input; `"auto"` and `"on"` assume they do |
