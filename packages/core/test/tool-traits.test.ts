@@ -96,8 +96,9 @@ test("a captured writer that uses mutateFiles keeps its stale-read guard; an emp
       execute: async ({ path: p }, ctx) => {
         if (!p) return textResult("nothing")
         const file = path.resolve(ctx.cwd, p)
-        await ctx.mutateFiles!([{ path: file, before: new TextEncoder().encode("stale") }], () =>
-          writeFile(file, "new"),
+        await ctx.mutateFiles!(
+          [{ path: file, before: new TextEncoder().encode("stale"), after: new TextEncoder().encode("new") }],
+          () => writeFile(file, "new"),
         )
         return textResult("written")
       },
