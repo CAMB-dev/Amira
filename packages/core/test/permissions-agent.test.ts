@@ -111,6 +111,35 @@ test("the policy decides on the arguments interceptors rewrote, not the ones the
   expect(resultText(agent, 0)).toContain("ask the user")
 })
 
+test("a large output is saved as an artifact once a permitted call ran; a refused call saves none", async () => {
+  const permissions = new Permissions({ rules: [rule(["rm"], "deny")] })
+  const long = "x".repeat(20_000)
+  const { agent, ran, interceptors } = setup(
+    [
+      {
+        toolCalls: [
+          { name: "bash", args: { command: `echo ${long}` }, id: "c1" },
+          { name: "bash", args: { command: `echo ${long}y` }, id: "c2" },
+        ],
+      },
+      { text: "ok" },
+    ],
+    { permissions },
+  )
+  // The second call becomes a denied command: the policy sees it as the tool would run it.
+  interceptors.add("tool.call.before", (v) =>
+    v.args.command === `echo ${long}y`
+      ? { action: "modify", value: { ...v, args: { command: `rm -rf ${long}` } } }
+      : { action: "pass" },
+  )
+  await agent.prompt("go")
+  expect(ran).toEqual([`bash: echo ${long}`])
+  const saved = agent.artifacts.list()
+  expect(saved.map((a) => a.toolCallId)).toEqual(["c1"])
+  expect(resultText(agent, 0)).toContain(saved[0]!.id)
+  expect(resultText(agent, 1)).toContain("Tool call blocked by the permission policy")
+})
+
 test("an interceptor that asks and an approver that says yes cannot lift a deny", async () => {
   const approve = async (): Promise<ApprovalDecision> => ({ approved: true, by: "user" })
   const permissions = new Permissions({ rules: [rule(["rm"], "deny")] })
