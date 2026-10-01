@@ -188,7 +188,7 @@ amira
 
 `ExtensionAPI.backgroundJobs` 是供 jobs 面板等前端集成使用的 host 级后台任务注册表；工具执行器应使用会话级的 `ctx.backgroundJobs`，因为这个公共边界会携带任务所有权和可见性。
 
-启动任务时提供 `command`、`argv`、`cwd`、`env` 和 `shell`（也可使用 `shellKind` 别名）。会话 host 会自动记录子 agent 的所有者；主会话可以看到自己的任务和所有子 agent 的任务，子 agent 只能看到自己的任务。`list`、`get`、`running`、`output`、`tail`、`stop` 和 `stopAll` 都会执行可见性检查，不可访问的任务会按不存在处理。
+启动任务时提供 `command`、`argv`、`cwd`、`env` 和 `shell`。会话 host 会自动记录子 agent 的所有者；主会话可以看到自己的任务和所有子 agent 的任务，子 agent 只能看到自己的任务。`list`、`get`、`running`、`output`、`tail`、`stop` 和 `stopAll` 都会执行可见性检查，不可访问的任务会按不存在处理。
 
 `readNew` 为每个 reader 名称维护独立游标，因此多个 reader 可以分别增量读取同一份输出。`waitFor` 可以等待正则表达式匹配、进程退出、超时或 abort signal。`subscribe` 会报告启动、状态、输出和结束变化；先用带宽限期的 `stop`，需要强制停止时再用 `0` 调用一次。
 

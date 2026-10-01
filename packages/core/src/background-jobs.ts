@@ -209,7 +209,7 @@ export class SessionBackgroundJobHost implements BackgroundJobHost {
   }
 
   #start(options: BackgroundJobStartOptions, scope?: Scope): BackgroundJobInfo {
-    const shell = options.shell ?? options.shellKind
+    const { shell } = options
     const meta = shell ? { ...options.meta, shellKind: shell } : options.meta
     const raw: StartJobOptions = {
       command: options.command,

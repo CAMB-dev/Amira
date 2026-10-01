@@ -52,8 +52,6 @@ export interface BackgroundJobStartOptions {
   env?: Record<string, string | undefined>
   /** The shell used to interpret `command`, when the caller is running a shell. */
   shell?: ShellKind
-  /** Alias accepted by callers that use the tool definition's terminology. */
-  shellKind?: ShellKind
   /** The command waits for a line before it runs, so its process tree can be contained first. */
   gated?: boolean
   gateLine?: string

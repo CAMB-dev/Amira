@@ -188,7 +188,7 @@ Extension-specific settings belong under `extensions` with the extension name. T
 
 `ExtensionAPI.backgroundJobs` is the host-level background-job registry used by frontend integrations such as the jobs panel. Tool executors should use the session-scoped `ctx.backgroundJobs` capability instead; the session capability is the public boundary that carries ownership and visibility.
 
-Start a job with `command`, `argv`, `cwd`, `env` and `shell` (or the `shellKind` alias). The session host records the owning sub-agent automatically, while a main session can see its own jobs and all jobs in its sub-agents; a sub-agent can see only its own jobs. `list`, `get`, `running`, `output`, `tail`, `stop` and `stopAll` enforce that visibility, and inaccessible jobs are treated as missing.
+Start a job with `command`, `argv`, `cwd`, `env` and `shell`. The session host records the owning sub-agent automatically, while a main session can see its own jobs and all jobs in its sub-agents; a sub-agent can see only its own jobs. `list`, `get`, `running`, `output`, `tail`, `stop` and `stopAll` enforce that visibility, and inaccessible jobs are treated as missing.
 
 `readNew` maintains a cursor per reader name, so independent readers can consume the same output incrementally. `waitFor` waits for a regular-expression pattern, process exit, a timeout, or an abort signal. `subscribe` reports start, status, output and end changes. Call `stop` with a grace period first and call it again with `0` when a forced stop is required.
 
