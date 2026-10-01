@@ -26,18 +26,19 @@ export interface WalkEntry {
   rel: string
 }
 
+/**
+ * A pattern from an ignore file. Paths are matched relative to the file's directory: `base`
+ * is that directory relative to the walk root (rules found during the walk), `up` the walk
+ * root relative to it (rules from the repository above the walk root).
+ */
 interface IgnoreRule {
-  sourceDir: string
-  pattern: string
+  base: string
+  up: string
   negated: boolean
   directoryOnly: boolean
-  anchored: boolean
-  hasSlash: boolean
+  /** A pattern with a slash matches the whole relative path; one without, the name at any level. */
+  wholePath: boolean
   regex: RegExp
-}
-
-interface IgnoreState {
-  rules: IgnoreRule[]
 }
 
 interface Repository {
@@ -47,21 +48,32 @@ interface Repository {
 }
 
 /**
- * Yields files under `root` in sorted order, honoring Git's ignore files and skipping .git,
- * node_modules and nested repositories. Symlinked directories are not followed.
+ * Yields files under `root` in sorted order. Like git, it leaves out what the repository's
+ * ignore files (.gitignore files, info/exclude, core.excludesFile) exclude, never descends
+ * into an excluded directory, and skips .git and node_modules. A directory holding its own
+ * `.git` (another repository or a linked worktree) is skipped, except a submodule of the
+ * walked repository. Symlinked directories are not followed.
  */
 export async function* walkFiles(root: string, signal?: AbortSignal): AsyncGenerator<WalkEntry> {
   const walkRoot = resolve(root)
-  const state = await ignoreState(walkRoot)
-  const stack: [string, string, IgnoreRule[]][] = [[walkRoot, "", state.rules]]
+  const repo = await repository(walkRoot)
+  const stack: [string, string, IgnoreRule[]][] = [[walkRoot, "", await outerRules(walkRoot, repo)]]
   while (stack.length > 0) {
     if (signal?.aborted) return
-    const [dir, prefix, rules] = stack.pop()!
+    const [dir, prefix, inherited] = stack.pop()!
     let entries: Dirent[]
     try {
       entries = await readdir(dir, { withFileTypes: true })
     } catch {
       continue
+    }
+    let rules = inherited
+    if (prefix) {
+      const dotGit = entries.find((e) => e.name === ".git")
+      if (dotGit && !(dotGit.isFile() && (await isSubmodule(join(dir, ".git"), repo)))) continue
+      if (entries.some((e) => e.name === ".gitignore" && e.isFile())) {
+        rules = [...rules, ...(await readIgnoreFile(join(dir, ".gitignore"), prefix, ""))]
+      }
     }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     const subdirs: [string, string, IgnoreRule[]][] = []
@@ -70,111 +82,99 @@ export async function* walkFiles(root: string, signal?: AbortSignal): AsyncGener
       const abs = join(dir, e.name)
       const rel = prefix + e.name
       if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name) || (await hasGitEntry(abs)) || ignored(abs, true, rules)) continue
-        subdirs.push([abs, `${rel}/`, await addIgnoreFile(rules, abs)])
-      } else if (e.isFile()) {
-        if (!ignored(abs, false, rules)) yield { abs, rel }
-      } else if (e.isSymbolicLink() && (await statOrNull(abs))?.isFile()) {
-        if (!ignored(abs, false, rules)) yield { abs, rel }
+        if (!SKIP_DIRS.has(e.name) && !ignored(rel, e.name, true, rules))
+          subdirs.push([abs, `${rel}/`, rules])
+      } else if (e.isFile() || (e.isSymbolicLink() && (await statOrNull(abs))?.isFile())) {
+        if (!ignored(rel, e.name, false, rules)) yield { abs, rel }
       }
     }
     stack.push(...subdirs.reverse())
   }
 }
 
-async function ignoreState(root: string): Promise<IgnoreState> {
-  const repo = await repository(root)
+/** Rules that apply at the walk root: global excludes, info/exclude and .gitignore files from the repository root down. */
+async function outerRules(walkRoot: string, repo: Repository | undefined): Promise<IgnoreRule[]> {
+  const top = repo?.root ?? walkRoot
+  const up = relative(top, walkRoot).replaceAll("\\", "/")
+  const upPrefix = up ? `${up}/` : ""
   const rules: IgnoreRule[] = []
   const global = await globalExcludeFile()
-  if (global) rules.push(...(await readIgnoreFile(global, repo?.root ?? root)))
-  if (repo) {
-    const exclude = join(repo.commonDir, "info", "exclude")
-    rules.push(...(await readIgnoreFile(exclude, repo.root)))
-    const dirs = [repo.root]
-    const fromRepo = relative(repo.root, resolve(root))
-    if (fromRepo && !fromRepo.startsWith("..") && !isAbsolute(fromRepo)) {
-      let current = repo.root
-      for (const part of fromRepo.split(/[\\/]+/)) {
-        current = join(current, part)
-        dirs.push(current)
-      }
-    }
-    for (const dir of dirs) rules.push(...(await readIgnoreFile(join(dir, ".gitignore"), dir)))
-  } else {
-    rules.push(...(await readIgnoreFile(join(root, ".gitignore"), root)))
+  if (global) rules.push(...(await readIgnoreFile(global, "", upPrefix)))
+  if (repo) rules.push(...(await readIgnoreFile(join(repo.commonDir, "info", "exclude"), "", upPrefix)))
+  const parts = up ? up.split("/") : []
+  for (let i = 0; i <= parts.length; i++) {
+    const below = parts.slice(i).join("/")
+    rules.push(
+      ...(await readIgnoreFile(join(top, ...parts.slice(0, i), ".gitignore"), "", below ? `${below}/` : "")),
+    )
   }
-  return { rules }
+  return rules
 }
 
-async function addIgnoreFile(rules: IgnoreRule[], dir: string): Promise<IgnoreRule[]> {
-  return [...rules, ...(await readIgnoreFile(join(dir, ".gitignore"), dir))]
+/** A `.git` file pointing into the walked repository's modules directory marks a submodule (in a linked worktree, under its own git dir). */
+async function isSubmodule(dotGit: string, repo: Repository | undefined): Promise<boolean> {
+  if (!repo) return false
+  const gitDir = gitDirOf(dotGit, await readText(dotGit))
+  if (!gitDir) return false
+  return [repo.gitDir, repo.commonDir].some((dir) => {
+    const rel = relative(join(dir, "modules"), gitDir)
+    return !!rel && !rel.startsWith("..") && !isAbsolute(rel)
+  })
+}
+
+function gitDirOf(dotGit: string, text: string | undefined): string | undefined {
+  const match = /^gitdir:\s*(.+?)\s*$/im.exec(text ?? "")
+  return match ? resolve(dirname(dotGit), match[1]!) : undefined
 }
 
 async function repository(start: string): Promise<Repository | undefined> {
-  for (let dir = resolve(start); ; dir = dirname(dir)) {
+  for (let dir = start; ; dir = dirname(dir)) {
     const dotGit = join(dir, ".git")
     const st = await statOrNull(dotGit)
     if (st) {
-      let gitDir = dotGit
-      if (st.isFile()) {
-        const text = await readText(dotGit)
-        const match = /^gitdir:\s*(.+?)\s*$/im.exec(text ?? "")
-        if (!match) return undefined
-        gitDir = resolve(dir, match[1]!)
-      }
+      const gitDir = st.isFile() ? gitDirOf(dotGit, await readText(dotGit)) : dotGit
+      if (!gitDir) return undefined
       const commonText = await readText(join(gitDir, "commondir"))
-      const commonDir = commonText ? resolve(gitDir, commonText.trim()) : gitDir
-      return { root: dir, gitDir, commonDir }
+      return { root: dir, gitDir, commonDir: commonText ? resolve(gitDir, commonText.trim()) : gitDir }
     }
-    const parent = dirname(dir)
-    if (parent === dir) return undefined
+    if (dirname(dir) === dir) return undefined
   }
 }
 
-async function readIgnoreFile(file: string, sourceDir: string): Promise<IgnoreRule[]> {
+async function readIgnoreFile(file: string, base: string, up: string): Promise<IgnoreRule[]> {
   const text = await readText(file)
   if (text === undefined) return []
   const rules: IgnoreRule[] = []
   for (const raw of text.split(/\r?\n/)) {
     let pattern = raw.trimEnd()
     if (!pattern || pattern.startsWith("#")) continue
-    if (pattern.startsWith("\\#") || pattern.startsWith("\\!")) pattern = pattern.slice(1)
     let negated = false
     if (pattern.startsWith("!")) {
       negated = true
       pattern = pattern.slice(1)
-    }
+    } else if (pattern.startsWith("#") || pattern.startsWith("!")) pattern = pattern.slice(1)
     const directoryOnly = pattern.endsWith("/")
     if (directoryOnly) pattern = pattern.slice(0, -1)
-    const anchored = pattern.startsWith("/")
-    if (anchored) pattern = pattern.slice(1)
+    const wholePath = pattern.includes("/")
+    if (pattern.startsWith("/")) pattern = pattern.slice(1)
     if (!pattern) continue
-    rules.push({
-      sourceDir,
-      pattern,
-      negated,
-      directoryOnly,
-      anchored,
-      hasSlash: pattern.includes("/"),
-      regex: globRegex(pattern),
-    })
+    rules.push({ base, up, negated, directoryOnly, wholePath, regex: globRegex(pattern) })
   }
   return rules
 }
 
-function ignored(abs: string, directory: boolean, rules: IgnoreRule[]): boolean {
-  let ignored = false
+/** The last matching rule decides, as in git. `rel` is relative to the walk root. */
+function ignored(rel: string, name: string, directory: boolean, rules: IgnoreRule[]): boolean {
+  let out = false
   for (const rule of rules) {
-    const rel = relative(rule.sourceDir, abs).replaceAll("\\", "/")
-    if (!rel || rel.startsWith("../") || isAbsolute(rel)) continue
     if (rule.directoryOnly && !directory) continue
-    const match =
-      rule.hasSlash || rule.anchored
-        ? rule.regex.test(rel)
-        : rel.split("/").some((part) => rule.regex.test(part))
-    if (match) ignored = !rule.negated
+    if (rule.negated !== out) continue
+    const match = rule.wholePath
+      ? rule.regex.test(rule.up + rel.slice(rule.base.length))
+      : rule.regex.test(name)
+    if (match) out = !rule.negated
   }
-  return ignored
+  return out
 }
 
 function globRegex(pattern: string): RegExp {
@@ -249,8 +249,4 @@ async function readText(file: string): Promise<string | undefined> {
   } catch {
     return undefined
   }
-}
-
-async function hasGitEntry(dir: string): Promise<boolean> {
-  return (await statOrNull(join(dir, ".git"))) !== null
 }

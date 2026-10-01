@@ -190,3 +190,45 @@ test("write and edit order calls to the same file, case-insensitively where path
     expect(writeTool.concurrencyKey?.({ path: "X/file.TS", content: "" }, { cwd })).toBe(a)
   }
 })
+
+test("walkFiles follows git's negation, nested patterns, directory rules and submodules", async () => {
+  const root = await mkdtemp(join(tmpdir(), "amira-walk-git-"))
+  dirs.push(root)
+  await mkdir(join(root, ".git", "modules", "sub"), { recursive: true })
+  await writeFile(join(root, ".gitignore"), "*.log\n!keep.log\nout/\n")
+  for (const file of [
+    "a.log",
+    "keep.log",
+    "deep/b.log",
+    "deep/keep.log",
+    "out/x.ts",
+    "notdir/out",
+    "src/gen/x.ts",
+    "gen/x.ts",
+    "sub/mod.ts",
+  ]) {
+    const target = join(root, file)
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, file)
+  }
+  await writeFile(join(root, "src", ".gitignore"), "gen/*.ts\n")
+  await writeFile(join(root, "sub", ".git"), "gitdir: ../.git/modules/sub\n")
+  const walk = async (dir: string) => {
+    const seen: string[] = []
+    for await (const entry of walkFiles(dir)) seen.push(entry.rel)
+    return seen.sort()
+  }
+  expect(await walk(root)).toEqual([
+    ".gitignore",
+    "deep/keep.log",
+    "gen/x.ts",
+    "keep.log",
+    "notdir/out",
+    "src/.gitignore",
+    "sub/mod.ts",
+  ])
+  // Rules from above the walk root still apply, relative to their own directory.
+  expect(await walk(join(root, "src"))).toEqual([".gitignore"])
+  // A directory the caller asks for is walked even when it is ignored itself.
+  expect(await walk(join(root, "out"))).toEqual(["x.ts"])
+})
