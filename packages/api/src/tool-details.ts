@@ -41,6 +41,14 @@ export interface EditDetails extends FileDiff {
   replacements: number
 }
 
+export interface ApplyPatchDetails {
+  files: (FileDiff & {
+    path: string
+    from?: string
+    action: "add" | "update" | "delete" | "move"
+  })[]
+}
+
 export interface WriteDetails extends FileDiff {
   path: string
   created: boolean

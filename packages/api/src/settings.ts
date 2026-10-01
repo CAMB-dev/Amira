@@ -3,6 +3,13 @@ import type { Budget } from "./subagents.ts"
 
 export type ShellMode = "auto" | "bash" | "powershell"
 
+export type EditingTool = "edit" | "apply_patch" | "both"
+
+export interface ModelSettings extends ModelOverrides {
+  /** Overrides the provider's editing tools for this exact model id. */
+  tools?: { edit?: EditingTool }
+}
+
 /**
  * A provider in settings.json (D54). Amira has none built in, so an entry needs `dialect` (the
  * protocol: openai-chat, openai-responses, anthropic-messages or google-gemini) and `baseUrl`;
@@ -19,7 +26,9 @@ export interface ProviderSettings {
   compat?: ProviderCompat
   /** The model catalog's (models.dev) id for this provider, or false to not use the catalog (D51). */
   catalogId?: string | false
-  models?: ModelOverrides[]
+  /** Editing tools for this provider; defaults to "edit". write remains available. */
+  tools?: { edit?: EditingTool }
+  models?: ModelSettings[]
   defaultModel?: ModelOverrides
 }
 

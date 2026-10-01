@@ -345,6 +345,13 @@ export class CommandHost {
     return this.#opts.registry.list()
   }
 
+  /** The command a line actually runs, resolving both registered and settings aliases. */
+  commandName(line: string): string | undefined {
+    const parsed = parseCommandLine(line)
+    const resolved = parsed && this.#resolve(parsed.name)
+    return resolved && "entry" in resolved ? resolved.entry.def.name : undefined
+  }
+
   /** The `$` skills, by name. */
   skills(): SkillInfo[] {
     return this.#opts.skills?.list() ?? []
