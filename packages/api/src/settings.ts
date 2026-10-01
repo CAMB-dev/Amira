@@ -63,6 +63,8 @@ export interface Settings {
    * writes a text summary.
    */
   compact?: { threshold?: number; model?: string; layout?: "tail" | "recent-user" }
+  /** Generate a short name in the background after the first turn. Default true. */
+  sessions?: { autoTitle?: boolean }
   /** Retrying failed model requests (D52): retries after the first try, first backoff, longest Retry-After waited. */
   retry?: { attempts?: number; baseDelayMs?: number; maxDelayMs?: number }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */
@@ -88,6 +90,13 @@ export interface Settings {
    * background unless the call says otherwise; their results come back as a message.
    */
   subagents?: { maxDepth?: number; maxConcurrent?: number; background?: boolean }
+  /**
+   * Commands the shell tools run in the background (`background: true`), such as dev servers
+   * and watchers. `maxRunning`: jobs running at once (default 8). `bufferChars`: output each job
+   * keeps in memory for reading (default 1,000,000); `maxLogBytes`: how much of it goes to the
+   * job's log file (default 50 MB).
+   */
+  backgroundJobs?: { maxRunning?: number; bufferChars?: number; maxLogBytes?: number }
   /** A limit for the whole agent tree (D37); unlimited by default. */
   budget?: Budget
   /** Worktree merges (D38): clean merges past either size are reviewed too. Default: only conflicts. */

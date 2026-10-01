@@ -52,6 +52,16 @@ test("progress: busy while working, paused while a dialog waits, cleared when id
   expect(progress()).toEqual(["3;0", "4;100", "3;0", "0;0", "3;0", "0;0"])
 })
 
+test("a session title replaces the folder and resets when switching to an unnamed session", () => {
+  const { status, titles } = setup()
+  status.start()
+  status.setSessionTitle("Database repair")
+  expect(titles().at(-1)).toBe("Amira · Database repair")
+  status.setSessionTitle(undefined)
+  expect(titles().at(-1)).toBe("Amira · proj")
+  status.stop()
+})
+
 test("the terminal's own restore (a crash, a signal) hands the title and the indicator back too", () => {
   const { terminal, status, titles, progress } = setup()
   status.start()

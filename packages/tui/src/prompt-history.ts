@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { amiraHome, projectKey } from "@amira/core"
-import { defaultPasteLabel, type Editor, type EditorPart } from "@amira/tui-kit"
+import { defaultPasteLabel, type Editor, type EditorPart, imageLabel } from "@amira/tui-kit"
 
 /** Entries kept per project. */
 export const HISTORY_LIMIT = 1000
@@ -24,10 +24,15 @@ export interface PromptHistoryOptions {
 
 function entry(parts: EditorPart[]): HistoryEntry {
   let n = 0
-  const text = parts.map((p) => (typeof p === "string" ? p : p.paste)).join("")
+  let imageN = 0
+  const text = parts
+    .map((p) => (typeof p === "string" ? p : "paste" in p ? p.paste : imageLabel(p.image, ++imageN)))
+    .join("")
+  imageN = 0
   const display = parts
     .map((p) => {
       if (typeof p === "string") return p
+      if ("image" in p) return imageLabel(p.image, ++imageN)
       const lines = p.paste.replace(/\n$/, "").split("\n").length
       return defaultPasteLabel({ lines, chars: p.paste.length, n: ++n })
     })
@@ -93,7 +98,13 @@ export class PromptHistory {
     if (i !== -1) entries.splice(i, 1)
     entries.push(e)
     if (entries.length > this.limit) entries.splice(0, entries.length - this.limit)
-    if (!this.file || e.text.length > MAX_SAVED_CHARS) return
+    // Images live in the session file; do not duplicate their payload in project history.
+    if (
+      !this.file ||
+      e.text.length > MAX_SAVED_CHARS ||
+      parts.some((p) => typeof p !== "string" && "image" in p)
+    )
+      return
     try {
       mkdirSync(path.dirname(this.file), { recursive: true })
       appendFileSync(this.file, `${serialize(e)}\n`)
