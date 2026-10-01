@@ -230,6 +230,7 @@ describe("modes", () => {
     expect((await p.check({ name: "apply_patch" }, { patch: "" }, tmp())).decision).toBe("deny")
     expect((await p.check({ name: "read" }, { path: "a" }, tmp())).decision).toBe("allow")
     expect((await p.check({ name: "grep" }, {}, tmp())).decision).toBe("allow")
+    expect((await p.check({ name: "output_read" }, { id: "a_123456" }, tmp())).decision).toBe("allow")
     expect((await p.check({ name: "mcp__x__y" }, {}, tmp())).decision).toBe("ask")
     // Background jobs can be looked at; stopping one asks.
     expect((await p.check({ name: "job_output" }, { id: "job1" }, tmp())).decision).toBe("allow")

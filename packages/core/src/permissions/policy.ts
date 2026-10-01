@@ -53,11 +53,12 @@ export interface PermissionVerdict {
 export const FILE_TOOLS = new Set(["write", "edit", "apply_patch"])
 
 /**
- * Tools plan mode lets run: they read, search, ask, start sub-agents (which inherit the mode)
- * or look at background jobs (stopping one still asks).
+ * Tools plan mode lets run: they read (saved outputs too), search, ask, start sub-agents (which
+ * inherit the mode) or look at background jobs (stopping one still asks).
  */
 export const READ_ONLY_TOOLS = new Set([
   "read",
+  "output_read",
   "grep",
   "glob",
   "ask_user",
