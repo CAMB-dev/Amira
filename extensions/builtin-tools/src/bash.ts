@@ -1,6 +1,7 @@
 import { type BashDetails, defineTool, textResult } from "@amira/api"
 import { type RunResult, runCommand } from "@amira/proc"
 import { statOrNull } from "./files.ts"
+import { startBackground } from "./jobs.ts"
 import {
   findPowerShell,
   gatedPowerShell,
@@ -21,6 +22,7 @@ const UPDATE_TAIL_CHARS = 4000
 export interface BashParams {
   command: string
   timeout?: number
+  background?: boolean
 }
 
 /** Notes for every shell tool; `cd` and `chain` show how that shell sequences commands. */
@@ -28,7 +30,7 @@ function sharedNotes(cd: string, chain: string): string[] {
   return [
     `- Starts in the working directory. Each call is a fresh shell: \`cd\`, variables and functions do not persist between calls. Prefer absolute paths or \`${cd}\`.`,
     `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed.`,
-    "- Background processes are killed when the command finishes; do not use this tool to start long-running servers.",
+    "- Processes the command leaves running are killed when it finishes. For commands that keep running (dev servers, watchers, long builds you want to check on later), pass `background: true`: the call returns at once with a job id and the output so far, and the job keeps running. Read its new output with job_output (use wait_for to wait for a line such as a ready message instead of polling) and stop it with job_stop. Do not append `&` or use nohup yourself. Background jobs are stopped when Amira exits, and a sub-agent's when it ends.",
     `- Several calls issued together run at the same time. Put commands that depend on each other in one call (${chain}) or in separate turns.`,
     "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
     "- Very long output is cut in the middle; the full output is saved to a file you can read.",
@@ -44,7 +46,12 @@ const PARAMETERS = {
       type: "integer",
       minimum: 1,
       maximum: MAX_TIMEOUT_MS,
-      description: `Timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS})`,
+      description: `Timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}); not for background commands`,
+    },
+    background: {
+      type: "boolean",
+      description:
+        "Run in the background and return at once with a job id (for dev servers, watchers and other commands that keep running); see job_output and job_stop",
     },
   },
   required: ["command"],
@@ -62,7 +69,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
     parameters: PARAMETERS,
     // Commands issued together run at the same time (D71); the model orders dependent ones.
     concurrency: "parallel",
-    async execute({ command, timeout }, ctx) {
+    async execute({ command, timeout, background }, ctx) {
       if (typeof command !== "string" || command.trim() === "") return textResult("command is required", true)
       if (command.includes("\0")) return textResult("command must not contain NUL characters", true)
       if (ctx.signal.aborted) return textResult("Aborted before the command started", true)
@@ -71,6 +78,7 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
       }
       const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1, Math.floor(timeout ?? DEFAULT_TIMEOUT_MS)))
       const shell = await resolve()
+      if (background === true) return startBackground(name, shell, command, ctx)
 
       const started = performance.now()
       let lastUpdate = 0

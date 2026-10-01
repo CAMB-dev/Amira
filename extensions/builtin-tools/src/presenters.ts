@@ -1,4 +1,5 @@
 import {
+  type BackgroundJobDetails,
   type BashDetails,
   diffToolLines,
   type EditDetails,
@@ -17,6 +18,7 @@ import { fileDiff } from "./diff.ts"
 import type { EditParams } from "./edit.ts"
 import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
+import { jobListPresenter, jobOutputPresenter, jobStopPresenter } from "./jobs-ui.ts"
 import type { ReadParams } from "./read.ts"
 import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE, STATUS_LINE } from "./shell-notes.ts"
 import { TRUNCATION_NOTE } from "./truncate.ts"
@@ -153,9 +155,30 @@ function shellOutput(text: string): string {
   return out === "(no output)" ? "" : out
 }
 
-export const shellPresenter: ToolPresenter<BashParams, BashDetails> = {
-  summary: (args) => firstLine(str(args.command)),
+/** What a background start printed: the "Output so far" paragraph, or the output before its end. */
+function backgroundOutput(text: string, d: BackgroundJobDetails): string {
+  const parts = text.split("\n\n")
+  if (parts[0]?.startsWith("Shell: ")) parts.shift()
+  const head = "Output so far:\n"
+  const so = parts.find((p) => p.startsWith(head))
+  if (so) return so.slice(head.length)
+  if (d.status === "running" || d.status === "starting") return ""
+  // It ended at once: the output, then the sentence saying how it ended.
+  return parts
+    .slice(0, -1)
+    .join("\n\n")
+    .replace(/^\(no output\)$/, "")
+}
+
+export const shellPresenter: ToolPresenter<BashParams, BashDetails | BackgroundJobDetails> = {
+  summary: (args) => `${firstLine(str(args.command))}${args.background === true ? " · background" : ""}`,
   result(call) {
+    const job = detailsOf<BackgroundJobDetails>(call, "jobId")
+    if (job) {
+      if (job.status === "running" || job.status === "starting") return `started ${job.jobId}`
+      if (job.status === "failed") return `${job.jobId} failed to start`
+      return `${job.jobId} ended at once · exit ${job.exitCode ?? "killed"}`
+    }
     const d = detailsOf<BashDetails>(call, "exitCode")
     const lines = d?.outputLines ?? shellOutput(call.text).split("\n").filter(Boolean).length
     const printed = lines ? ` · ${plural(lines, "line")}` : " · no output"
@@ -169,7 +192,8 @@ export const shellPresenter: ToolPresenter<BashParams, BashDetails> = {
     return `exit ${code}${printed}`
   },
   body(call, { detail, outputLines: tail = SHELL_TAIL_LINES }) {
-    const out = outputLines(shellOutput(call.text))
+    const job = detailsOf<BackgroundJobDetails>(call, "jobId")
+    const out = outputLines(job ? backgroundOutput(call.text, job) : shellOutput(call.text))
     if (call.result.isError || detail === "full") return out
     // A command that worked shows the end of what it printed, as it did while it ran.
     if (detail !== "summary" || tail <= 0) return []
@@ -224,4 +248,7 @@ export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   grep: grepPresenter,
   glob: globPresenter,
   ask_user: askUserPresenter,
+  job_output: jobOutputPresenter,
+  job_stop: jobStopPresenter,
+  job_list: jobListPresenter,
 }
