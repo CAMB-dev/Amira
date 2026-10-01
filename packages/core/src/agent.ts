@@ -1240,8 +1240,7 @@ export class Agent {
     else this.tree?.abortChildren(this.sessionId, "the session ended")
     const current = this.#current
     if (current) await current.catch(() => {})
-    if (this.depth === 0) await this.tree?.waitForChildren()
-    else await this.tree?.waitForChildrenOf(this.sessionId)
+    await this.tree?.waitForChildren(this.depth === 0 ? undefined : this.sessionId)
 
     try {
       if (this.backgroundJobsHost) {
