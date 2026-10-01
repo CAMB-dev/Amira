@@ -245,7 +245,11 @@ const corpus: { name: string; patch: string; text?: string; expected?: string; e
     error: "first line",
   },
   { name: "missing end rejected", patch: "*** Begin Patch\n*** Delete File: old.ts", error: "last line" },
-  { name: "unprefixed addition rejected", patch: wrap("*** Add File: app.ts\nexport {}"), error: "line 3" },
+  {
+    name: "unprefixed addition rejected",
+    patch: wrap("*** Add File: app.ts\nexport {}"),
+    error: "line 3 (app.ts): Every line of an added file must start with '+'",
+  },
   { name: "empty update rejected", patch: wrap("*** Update File: app.ts"), error: "empty" },
   { name: "empty hunk rejected", patch: wrap("*** Update File: app.ts\n@@"), error: "does not contain" },
   {

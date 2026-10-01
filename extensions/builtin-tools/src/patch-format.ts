@@ -75,7 +75,8 @@ export function parsePatch(input: string): PatchOperation[] {
       operations.push(current)
       continue
     }
-    if (current?.kind === "add" && line.startsWith("+")) {
+    if (current?.kind === "add") {
+      if (!line.startsWith("+")) fail(i, "Every line of an added file must start with '+'")
       current.content += `${line.slice(1)}\n`
       continue
     }

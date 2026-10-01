@@ -19,7 +19,6 @@ import { fileDiff } from "./diff.ts"
 import type { EditParams } from "./edit.ts"
 import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
-import { parsePatch } from "./patch-format.ts"
 import type { ReadParams } from "./read.ts"
 import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE, STATUS_LINE } from "./shell-notes.ts"
 import { TRUNCATION_NOTE } from "./truncate.ts"
@@ -146,17 +145,11 @@ export const writePresenter: ToolPresenter<WriteParams, WriteDetails> = {
 }
 
 export const applyPatchPresenter: ToolPresenter<ApplyPatchParams, ApplyPatchDetails> = {
-  summary(args) {
-    try {
-      return (
-        parsePatch(str(args.patch))
-          .map((op) => op.path)
-          .join(", ") || "empty patch"
-      )
-    } catch {
-      return "patch"
-    }
-  },
+  // The headers alone name the files, whether or not the rest of the patch parses.
+  summary: (args) =>
+    [...str(args.patch).matchAll(/^\*\*\* (?:Add|Delete|Update) File: (.+?)\s*$/gm)]
+      .map((m) => m[1])
+      .join(", ") || "patch",
   result(call) {
     if (call.result.isError) return undefined
     const d = detailsOf<ApplyPatchDetails>(call, "files")
