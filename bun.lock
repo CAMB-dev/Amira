@@ -71,9 +71,7 @@
       "name": "@amira/api",
       "version": "0.0.0",
       "dependencies": {
-        "@amira/ai": "workspace:*",
-        "@amira/net": "workspace:*",
-        "@amira/tui-kit": "workspace:*",
+        "@amira/text-width": "workspace:*",
       },
     },
     "packages/cli": {
@@ -98,6 +96,7 @@
       "dependencies": {
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
+        "@amira/net": "workspace:*",
         "@amira/proc": "workspace:*",
       },
     },
@@ -118,6 +117,10 @@
       "name": "@amira/proc",
       "version": "0.0.0",
     },
+    "packages/text-width": {
+      "name": "@amira/text-width",
+      "version": "0.0.0",
+    },
     "packages/tui": {
       "name": "@amira/tui",
       "version": "0.0.0",
@@ -132,6 +135,9 @@
     "packages/tui-kit": {
       "name": "@amira/tui-kit",
       "version": "0.0.0",
+      "dependencies": {
+        "@amira/text-width": "workspace:*",
+      },
     },
   },
   "packages": {
@@ -160,6 +166,8 @@
     "@amira/packages": ["@amira/packages@workspace:packages/packages"],
 
     "@amira/proc": ["@amira/proc@workspace:packages/proc"],
+
+    "@amira/text-width": ["@amira/text-width@workspace:packages/text-width"],
 
     "@amira/tui": ["@amira/tui@workspace:packages/tui"],
 

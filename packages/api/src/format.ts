@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { truncateToWidth, visibleWidth } from "@amira/text-width"
 
 /**
  * Shared formatting for numbers, times and text in terminal cells, so every screen writes a

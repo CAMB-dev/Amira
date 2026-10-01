@@ -43,6 +43,7 @@ test("the public API exports stay stable", async () => {
     "hostPrepareCommand",
     "hostRunCommand",
     "hostWarmUpCommands",
+    "installHostNet",
     "installHostProcess",
     "isFieldVisible",
     "isHostStandbyGoneError",

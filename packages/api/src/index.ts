@@ -1,5 +1,5 @@
 /** Public API for Amira extensions. Extensions may import only from this package. */
-export const API_VERSION = "0.1.11"
+export const API_VERSION = "0.1.12"
 
 export type {
   AssistantMessage,
@@ -17,7 +17,7 @@ export type {
   Usage,
   UserMessage,
 } from "@amira/ai"
-export { addUsage, emptyUsage, hasUnpricedSearch, serverToolText } from "@amira/ai"
+export { addUsage, emptyUsage, hasUnpricedSearch, serverToolText } from "./ai.ts"
 export * from "./background-jobs.ts"
 export * from "./commands.ts"
 export * from "./events.ts"

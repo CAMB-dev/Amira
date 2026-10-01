@@ -23,9 +23,10 @@ const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
   "packages/ai": [],
   "packages/net": [],
   "packages/proc": [],
-  "packages/tui-kit": [],
-  "packages/api": ["@amira/ai", "@amira/net", "@amira/tui-kit"],
-  "packages/core": ["@amira/ai", "@amira/api", "@amira/proc"],
+  "packages/text-width": [],
+  "packages/tui-kit": ["@amira/text-width"],
+  "packages/api": ["@amira/text-width"],
+  "packages/core": ["@amira/ai", "@amira/api", "@amira/net", "@amira/proc"],
   "packages/packages": ["@amira/api", "@amira/core", "@amira/proc"],
   "packages/tui": ["@amira/ai", "@amira/api", "@amira/core", "@amira/proc", "@amira/tui-kit"],
   // The CLI is the composition root and may reach every workspace package. It bundles the
@@ -78,7 +79,15 @@ function sourceFilesUnder(directory: string): string[] {
 }
 
 function importsIn(source: string): string[] {
-  return [...source.matchAll(importPattern)].map((match) => match[2] as string)
+  const typeOnlyRanges = [
+    ...source.matchAll(/\b(?:import|export)\s+type\b[\s\S]*?\bfrom\s*(["'`])[^"'`]+\1/g),
+  ].map((match) => [match.index ?? 0, (match.index ?? 0) + match[0].length] as const)
+  return [...source.matchAll(importPattern)]
+    .filter(
+      (match) =>
+        !typeOnlyRanges.some(([start, end]) => (match.index ?? 0) >= start && (match.index ?? 0) < end),
+    )
+    .map((match) => match[2] as string)
 }
 
 function packageDependencyNames(packageJsonPath: string): Set<string> {

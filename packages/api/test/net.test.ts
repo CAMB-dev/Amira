@@ -1,6 +1,20 @@
 import { expect, test } from "bun:test"
 import * as api from "../src/index.ts"
 
+class HostNetError extends Error {}
+
+api.installHostNet({
+  fetchPublic: async (url) => {
+    if (url.includes("127.0.0.1")) throw new HostNetError(`${url}: private-network`)
+    return { bytes: new Uint8Array(), contentType: "", url }
+  },
+  guardedFetch: async () => ({ response: new Response(), url: new URL("http://example.test/") }),
+  isPrivateAddress: (ip) => ip !== "8.8.8.8",
+  parseHttpUrl: (raw) => new URL(raw),
+  readCapped: async () => ({ bytes: new Uint8Array(), truncated: false }),
+  isNetError: (error) => error instanceof HostNetError,
+})
+
 test("isPrivateAddress is part of the public API", () => {
   expect(api.isPrivateAddress("127.0.0.1")).toBe(true)
   expect(api.isPrivateAddress("192.168.1.10")).toBe(true)
