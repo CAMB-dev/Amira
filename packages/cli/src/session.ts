@@ -91,8 +91,8 @@ export interface SessionOptions {
   settings?: Settings
   /** Explicit settings values by source layer, handed to extensions with the merged settings. */
   settingsLayers?: SettingsLayers
-  /** Re-reads settings for `/reload`; omitted by isolated session callers. */
-  reloadSettings?: () => { settings: Settings; layers: SettingsLayers }
+  /** Re-reads settings for `/reload`, with their warnings; omitted by isolated session callers. */
+  reloadSettings?: () => { settings: Settings; layers: SettingsLayers; warnings?: string[] }
   /** Providers from settings; there are no others. Unused when `ai` is given. */
   providers?: ProviderConfig[]
   /** Stored API keys by provider id (auth.json). Unused when `ai` is given. */
@@ -417,6 +417,9 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       const skillsBefore = new Set(host.skills.list().map((s) => s.name))
       packages = readPackages()
       const reloaded = opts.reloadSettings?.()
+      for (const error of reloaded?.warnings ?? []) {
+        bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+      }
       host.unloadAll()
       host.setSettings(
         withPackageSkills(reloaded?.settings ?? opts.settings ?? {}, packages),

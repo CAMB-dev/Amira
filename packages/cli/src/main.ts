@@ -145,7 +145,7 @@ async function run(argv: string[]): Promise<number> {
     settingsLayers: config.settingsLayers,
     reloadSettings: () => {
       const reloaded = resolveConfig(args)
-      return { settings: reloaded.settings, layers: reloaded.settingsLayers }
+      return { settings: reloaded.settings, layers: reloaded.settingsLayers, warnings: reloaded.warnings }
     },
     permissions: config.permissions,
     providers: config.providers,
