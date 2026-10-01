@@ -1,6 +1,6 @@
-[English](../providers.md) · [文档首页](../../README.zh-CN.md)
-
 # Provider 与模型
+
+[English](../providers.md) · [文档首页](../../README.zh-CN.md)
 
 Provider 定义请求使用的协议、地址和凭据。Amira 没有内置 provider，发送第一个任务前需要添加一个。模型使用 `provider/model` 格式选择，其中 provider 名称是你设置的 ID。
 

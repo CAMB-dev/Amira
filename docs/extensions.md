@@ -1,6 +1,6 @@
-[简体中文](zh/extensions.md) · [Documentation](../README.md)
-
 # Using and writing extensions
+
+[简体中文](zh/extensions.md) · [Documentation](../README.md)
 
 Extensions add tools, commands and UI behavior. Installed packages can contain multiple extensions, skills and top-level CLI commands. They run code on your computer with your permissions.
 

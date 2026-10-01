@@ -1,6 +1,6 @@
-[English](../extensions.md) · [文档首页](../../README.zh-CN.md)
-
 # 使用与编写扩展
+
+[English](../extensions.md) · [文档首页](../../README.zh-CN.md)
 
 扩展可以添加工具、命令和界面行为。安装的包可以包含多个扩展、skill 和顶层 CLI 命令。扩展会以你的权限在本机运行代码。
 

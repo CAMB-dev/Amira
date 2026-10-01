@@ -1,6 +1,6 @@
-[English](../subagents.md)
-
 # 子 agent
+
+[English](../subagents.md) · [文档首页](../../README.zh-CN.md)
 
 内置 agent 扩展向模型提供 `agent` 工具，用于将任务交给独立的子 agent；需要收取结果时使用 `agent_result`。直接用自然语言要求分工即可，这两个名字是模型工具，不是斜杠命令。
 

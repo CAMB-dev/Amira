@@ -1,6 +1,6 @@
 # Keybindings
 
-[简体中文](zh/keybindings.md)
+[简体中文](zh/keybindings.md) · [Documentation](../README.md)
 
 Every key the interactive UI answers belongs to an action. To change keys, put a JSON object
 in `~/.amira/keybindings.json` (or `$AMIRA_HOME/keybindings.json`) that maps action names to

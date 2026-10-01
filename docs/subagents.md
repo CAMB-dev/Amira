@@ -1,6 +1,6 @@
-[简体中文](zh/subagents.md)
-
 # Sub-agents
+
+[简体中文](zh/subagents.md) · [Documentation](../README.md)
 
 The bundled agent extension gives the model an `agent` tool for delegating tasks to separate agents and an `agent_result` tool for collecting results when needed. You ask for delegation in ordinary language; these are model tools, not slash commands.
 

@@ -1,6 +1,6 @@
 # 快捷键
 
-[English](../keybindings.md)
+[English](../keybindings.md) · [文档首页](../../README.zh-CN.md)
 
 交互界面的快捷键都对应一个 action。要修改绑定，在 `~/.amira/keybindings.json`（或 `$AMIRA_HOME/keybindings.json`）中写入 JSON 对象，将 action 名称映射为一个按键或按键列表：
 
@@ -146,7 +146,7 @@ Ctrl+O（`tool-output`）设置所有工具调用的显示量；手动折叠或�
 
 复制快捷键使用 OSC 52，Windows Terminal、VS Code、iTerm2、kitty、WezTerm 等支持；tmux 需要 `set-clipboard on`。Amira 无法确认剪贴板是否实际收到了内容。全屏模式开启鼠标报告；要使用终端自己的文本选择，在 Windows Terminal、Windows/Linux 的 VS Code、xterm 中按住 Shift 拖动。macOS 的 VS Code 使用 Option，或设置 `terminal.integrated.macOptionClickForcesSelection`。鼠标粘贴也可能被报告给 Amira：Windows Terminal 中可按住 Shift 右键，Linux 终端可用 Shift+鼠标中键，也可按 Ctrl+V。inline 模式直接使用终端的选择和粘贴。
 
-VS Code 默认将 Ctrl+F、Ctrl+Home、Ctrl+End、Ctrl+↑↓ 留给终端自身（受 `terminal.integrated.commandsToSkipShell` 控制），所以 Amira 在该环境优先显示 Alt+F、Alt+Home、Alt+End、Alt+↑。输入框的方向键、Home/End、Ctrl+A/Ctrl+E、单词移动和删除，以及 `/agents` 的 `p` 和查看器快捷键目前不能配置：←/→、Tab 切换，`x` 停止，`p` 关闭查看器并打印当前快照，`q` 或 Esc 关闭。
+VS Code 自己处理 Ctrl+F、Ctrl+Home、Ctrl+End 和 Ctrl+↑↓（它们在 VS Code 的 `terminal.integrated.commandsToSkipShell` 中），不会传给终端程序，所以 Amira 在该环境优先显示 Alt+F、Alt+Home、Alt+End、Alt+↑。输入框的方向键、Home/End、Ctrl+A/Ctrl+E、单词移动和删除，以及 `/agents` 的 `p` 和查看器快捷键目前不能配置：←/→、Tab 切换，`x` 停止，`p` 关闭查看器并打印当前快照，`q` 或 Esc 关闭。
 
 ## 查找
 

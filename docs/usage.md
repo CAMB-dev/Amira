@@ -1,6 +1,6 @@
-[简体中文](zh/usage.md)
-
 # Using Amira
+
+[简体中文](zh/usage.md) · [Documentation](../README.md)
 
 Run `amira` in the directory you want it to work in. A positional prompt becomes the first message; `--cwd` selects a different working directory. See [Getting started](getting-started.md) for provider setup.
 
