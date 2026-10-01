@@ -164,7 +164,7 @@ test("the commander runs an explorer and a coder in parallel and gets both answe
 })
 
 test("patch-enabled coders report all changed paths and read-only roles cannot use apply_patch", async () => {
-  const { root, mock, tools } = await setup(
+  const { root, mock, tools, cwd } = await setup(
     (req) => {
       if (req.messages.at(-1)?.role === "toolResult") return { text: "done" }
       if (who(req) === "commander")
@@ -193,12 +193,12 @@ test("patch-enabled coders report all changed paths and read-only roles cannot u
       name: "apply_patch",
       description: "patch files",
       parameters: { type: "object" },
-      execute: async () => ({
+      execute: async (_p, ctx) => ({
         ...textResult("patched"),
         details: {
           files: [
-            { path: "new.txt", from: "old.txt", action: "move" },
-            { path: "other.txt", action: "update" },
+            { path: path.join(ctx.cwd, "new.txt"), from: path.join(ctx.cwd, "old.txt"), action: "move" },
+            { path: path.join(cwd, "other.txt"), action: "update" },
           ],
         },
       }),
