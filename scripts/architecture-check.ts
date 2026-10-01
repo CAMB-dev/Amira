@@ -20,12 +20,13 @@ const packageDependencyFields = [
 const sourceLineLimit = 900
 
 const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
-  "packages/ai": [],
+  "packages/ai-shared": [],
+  "packages/ai": ["@amira/ai-shared"],
   "packages/net": [],
   "packages/proc": [],
   "packages/text-width": [],
   "packages/tui-kit": ["@amira/text-width"],
-  "packages/api": ["@amira/text-width"],
+  "packages/api": ["@amira/ai-shared", "@amira/text-width"],
   "packages/core": ["@amira/ai", "@amira/api", "@amira/net", "@amira/proc"],
   "packages/packages": ["@amira/api", "@amira/core", "@amira/proc"],
   "packages/tui": ["@amira/ai", "@amira/api", "@amira/core", "@amira/proc", "@amira/tui-kit"],

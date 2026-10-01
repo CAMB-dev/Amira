@@ -1,14 +1,10 @@
+import { hasUnpricedSearch as sharedHasUnpricedSearch } from "@amira/ai-shared"
 import { NATIVE_WEB_SEARCH } from "./server-tools.ts"
 import type { AssistantMessage, ModelInfo, StreamEvent, Usage } from "./types.ts"
 
 /** A reported search or server search block whose total cost could not be priced. */
-export function hasUnpricedSearch(message: Pick<AssistantMessage, "content" | "usage">): boolean {
-  return (
-    message.usage?.cost === undefined &&
-    ((message.usage?.webSearchRequests ?? 0) > 0 ||
-      message.content.some((b) => b.type === "serverTool" && b.name === NATIVE_WEB_SEARCH))
-  )
-}
+export const hasUnpricedSearch: (message: Pick<AssistantMessage, "content" | "usage">) => boolean =
+  sharedHasUnpricedSearch
 
 /**
  * Cost in USD of the tokens in `usage` at the model's prices (per million tokens).
