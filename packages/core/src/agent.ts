@@ -583,10 +583,7 @@ export class Agent {
       // persistent (its owner wakes it for the notices it gets).
       ...(this.depth === 0 || this.#onIdleNotice
         ? {
-            expectNotice: () =>
-              this.depth === 0 && this.#jobNoticeTarget
-                ? this.#jobNoticeTarget.expectNotice()
-                : agent.expectNotice(),
+            expectNotice: () => agent.#noticeTarget().expectNotice(),
           }
         : {}),
     }
@@ -614,6 +611,13 @@ export class Agent {
       },
       cancel: () => void close(),
     }
+  }
+
+  /** The session that gets this one's notices: its latest replacement after switches, if any. */
+  #noticeTarget(): Agent {
+    let target: Agent = this
+    while (target.#jobNoticeTarget) target = target.#jobNoticeTarget
+    return target
   }
 
   /** Sends notices for top-level background work to the replacement session after a switch. */
