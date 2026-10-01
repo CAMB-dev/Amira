@@ -20,7 +20,7 @@ export interface KeptWorktreesDeps {
   serialized<T>(work: () => Promise<T>): Promise<T>
 }
 
-/** Tells the user what a worktree sweep is about to delete, and what it deleted. */
+/** Tells the user what the sweep of old worktrees is about to delete, and what it deleted. */
 export function sweepNotices(api: Pick<ExtensionAPI, "notify">): (sweep: SweepResult) => void {
   return (sweep) => {
     const days = Math.round(STALE_WORKTREE_MS / 86_400_000)

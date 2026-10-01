@@ -1,6 +1,10 @@
 import type { ToolPresenter } from "@amira/api"
 import { type AgentParams, taskList } from "./tools.ts"
 
+/**
+ * Shows an agent call by how many sub-agents it starts; frontends show each one under the
+ * call (title, role, time, tokens, what it does), so the result line only sums them up.
+ */
 export const agentPresenter: ToolPresenter<AgentParams> = {
   summary(args) {
     const n = taskList(args).length
