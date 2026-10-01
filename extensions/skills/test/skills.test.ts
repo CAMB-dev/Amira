@@ -6,11 +6,13 @@ import type { AnyEvent, SendOptions, SessionControl } from "@amira/api"
 import {
   createAi,
   createMockDialect,
+  type Message,
   type MockStep,
   type UserMessage,
 } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
+  type AgentOptions,
   CommandHost,
   EventBus,
   ExtensionHost,
@@ -114,7 +116,11 @@ test("the prompt section lists one line per model-usable skill", () => {
   expect(skillsSection(skills.filter((s) => s.name === "hidden"))).toBe("")
 })
 
-async function run(d: ReturnType<typeof layout>, steps: MockStep[]) {
+async function run(
+  d: ReturnType<typeof layout>,
+  steps: MockStep[],
+  past: Pick<AgentOptions, "messages" | "views"> = {},
+) {
   const mock = createMockDialect(steps)
   const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
   const bus = new EventBus()
@@ -132,6 +138,7 @@ async function run(d: ReturnType<typeof layout>, steps: MockStep[]) {
     bus,
     interceptors,
     tools,
+    ...past,
   })
   await agent.prompt("go")
   await bus.flush()
@@ -179,6 +186,48 @@ test("normalizes skill bodies and does not send an already loaded body again", a
   expect(first).toContain("# Deploy\\nRun ./ship.sh")
   expect(secondText).toBe('Skill "deploy" is already loaded in the current context.')
   expect(second).not.toContain("# Deploy")
+})
+
+test("a skill whose body was aged out of the context loads again", async () => {
+  const d = layout()
+  skill(
+    path.join(d.home, "skills"),
+    "deploy",
+    "name: deploy\ndescription: Ship it",
+    "# Deploy\nRun ./ship.sh",
+  )
+  const loaded = discoverSkills(d).skills[0]!
+  const result: Message = {
+    role: "toolResult",
+    toolCallId: "c0",
+    toolName: "skill",
+    content: [{ type: "text", text: `Skill "deploy" (base directory: x)\n\n${readSkillBody(loaded)}` }],
+    isError: false,
+  }
+  const messages: Message[] = [
+    { role: "user", content: [{ type: "text", text: "earlier" }] },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "c0", name: "skill", args: { name: "deploy" } }],
+      model: { provider: "mock", model: "test" },
+    },
+    result,
+  ]
+  const steps = (): MockStep[] => [
+    { toolCalls: [{ name: "skill", args: { name: "deploy", args: "prod" } }] },
+    { text: "ok" },
+  ]
+  const lastText = (m: { requests: { messages: Message[] }[] }) =>
+    JSON.stringify(m.requests[1]!.messages.at(-1))
+  // Still in the context: a short note, with the new arguments.
+  const kept = await run(d, steps(), { messages: [...messages] })
+  expect(lastText(kept.mock)).toContain("already loaded in the current context.\\n\\nArguments: prod")
+  // Aged: the context carries a stub instead, so the instructions are sent again.
+  const aged = await run(d, steps(), {
+    messages,
+    views: new Map([[result, { kind: "aged", text: "[aged]", epoch: 1 }]]),
+  })
+  expect(lastText(aged.mock)).toContain("# Deploy\\nRun ./ship.sh")
 })
 
 test("no skills: no tool and no prompt block; broken skills are reported", async () => {
@@ -281,6 +330,8 @@ test("every skill runs as $<name> and sends its instructions, user-only ones too
   const context: UserMessage[] = []
   const control = {
     messages: () => context,
+    contextHas: (text: string) =>
+      context.some((m) => m.content.some((b) => b.type === "text" && b.text.includes(text))),
     send: async (text: string, opts?: SendOptions) => {
       sent.push(text)
       shown.push(opts)
@@ -313,7 +364,7 @@ test("every skill runs as $<name> and sends its instructions, user-only ones too
   // Frontends show the skill as typed and what it loaded, not the instructions.
   expect(shown[0]).toEqual({ display: { text: "$deploy to prod", note: "Loaded skill deploy (2 lines)" } })
   await commands.runSkill("$deploy again", { frontend: "tui" })
-  expect(sent[1]).toBe('Skill "deploy" is already loaded in the current context.')
+  expect(sent[1]).toBe('Skill "deploy" is already loaded in the current context.\n\nArguments: again')
   expect(shown[1]).toEqual({ display: { text: "$deploy again", note: "Loaded skill deploy (2 lines)" } })
   await commands.runSkill("$secret", { frontend: "tui" })
   expect(sent[2]).toContain('Skill "secret"')

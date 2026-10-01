@@ -45,6 +45,18 @@ function skillPromptWithBody(skill: Skill, body: string, args = ""): string {
   return parts.join("\n\n")
 }
 
+/**
+ * The skill's prompt, or a short note when its instructions are still in the context the model
+ * sees (not compacted or aged away); the arguments are passed either way.
+ */
+function loadPrompt(skill: Skill, args: string | undefined, inContext: (text: string) => boolean): string {
+  const body = readSkillBody(skill)
+  if (!body || !inContext(body)) return skillPromptWithBody(skill, body, args)
+  const parts = [`Skill "${skill.name}" is already loaded in the current context.`]
+  if (args?.trim()) parts.push(`Arguments: ${args.trim()}`)
+  return parts.join("\n\n")
+}
+
 /** How a skill run as `$<name>` shows in the transcript: the line as typed, then what it loaded. */
 export function skillDisplay(skill: Skill, args = ""): MessageDisplay {
   const lines = readSkillBody(skill).split("\n").length
@@ -90,17 +102,7 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
         async run(args, ctx) {
           const skill = skills.find((s) => s.name === name) ?? scan().find((s) => s.name === name)
           if (!skill) throw new Error(`the skill "${name}" is gone`)
-          const body = readSkillBody(skill)
-          const alreadyLoaded =
-            body.length > 0 &&
-            ctx.session
-              .messages?.()
-              .some((message) =>
-                message.content.some((block) => block.type === "text" && block.text.includes(body)),
-              )
-          const prompt = alreadyLoaded
-            ? `Skill "${skill.name}" is already loaded in the current context.`
-            : skillPromptWithBody(skill, body, args)
+          const prompt = loadPrompt(skill, args, (text) => ctx.session.contextHas?.(text) === true)
           // The transcript shows the skill as typed, not its whole text.
           await ctx.session.send(prompt, { display: skillDisplay(skill, args) })
         },
@@ -132,10 +134,7 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
           return textResult(`No skill named "${p.name}". Available skills: ${names.join(", ")}`, true)
         }
         try {
-          const body = readSkillBody(skill)
-          if (body && ctx.session?.contextHas?.(body))
-            return textResult(`Skill "${skill.name}" is already loaded in the current context.`)
-          return textResult(skillPromptWithBody(skill, body, p.args))
+          return textResult(loadPrompt(skill, p.args, (text) => ctx.session?.contextHas?.(text) === true))
         } catch (err) {
           return textResult(`Could not read ${skill.path}: ${err instanceof Error ? err.message : err}`, true)
         }

@@ -542,12 +542,7 @@ export class Agent {
       ...(opts.session ? { dir: opts.session.file.replace(/\.jsonl$/, "") } : {}),
       data: this.data,
       outputs: this.artifacts,
-      contextHas: (text) =>
-        agent
-          .projectedMessages()
-          .some((message) =>
-            message.content.some((block) => block.type === "text" && block.text.includes(text)),
-          ),
+      contextHas: (text) => agent.contextHas(text),
       // Recorded in the session, so resuming it offers the same tools again.
       loadTools: (names) => {
         const added = deferred.loadTools(names)
@@ -948,6 +943,13 @@ export class Agent {
    */
   projectedMessages(): Message[] {
     return projectMessages(this.messages, this.#views)
+  }
+
+  /** Whether this text is in the context the model sees now: not compacted or aged away. */
+  contextHas(text: string): boolean {
+    return this.projectedMessages().some((message) =>
+      message.content.some((block) => block.type === "text" && block.text.includes(text)),
+    )
   }
 
   /**
