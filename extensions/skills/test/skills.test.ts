@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { AnyEvent, SendOptions, SessionControl } from "@amira/api"
-import { createAi, createMockDialect, type MockStep } from "../../../packages/ai/src/index.ts"
+import {
+  createAi,
+  createMockDialect,
+  type MockStep,
+  type UserMessage,
+} from "../../../packages/ai/src/index.ts"
 import {
   Agent,
   CommandHost,
@@ -12,7 +17,13 @@ import {
   InterceptorRegistry,
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
-import { createSkillsExtension, discoverSkills, parseFrontmatter, skillsSection } from "../src/index.ts"
+import {
+  createSkillsExtension,
+  discoverSkills,
+  parseFrontmatter,
+  readSkillBody,
+  skillsSection,
+} from "../src/index.ts"
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-skills-"))
 afterAll(() => rmSync(tmp, { recursive: true, force: true }))
@@ -148,6 +159,28 @@ test("the skill tool loads a skill's instructions; the listing goes into the sys
   expect(text).not.toContain("description: Ship it")
 })
 
+test("normalizes skill bodies and does not send an already loaded body again", async () => {
+  const d = layout()
+  const root = path.join(d.home, "skills")
+  const file = path.join(root, "deploy", "SKILL.md")
+  mkdirSync(path.dirname(file), { recursive: true })
+  writeFileSync(file, "---\r\nname: deploy\r\ndescription: Ship it\r\n---\r\n# Deploy\r\nRun ./ship.sh\r\n")
+  const skillInfo = discoverSkills(d).skills[0]!
+  expect(readSkillBody(skillInfo)).toBe("# Deploy\nRun ./ship.sh")
+
+  const { mock } = await run(d, [
+    { toolCalls: [{ name: "skill", args: { name: "deploy" } }] },
+    { toolCalls: [{ name: "skill", args: { name: "deploy" } }] },
+    { text: "ok" },
+  ])
+  const first = JSON.stringify(mock.requests[1]!.messages.at(-1))
+  const second = JSON.stringify(mock.requests[2]!.messages.at(-1))
+  const secondText = (mock.requests[2]!.messages.at(-1) as { content: { text: string }[] }).content[0]!.text
+  expect(first).toContain("# Deploy\\nRun ./ship.sh")
+  expect(secondText).toBe('Skill "deploy" is already loaded in the current context.')
+  expect(second).not.toContain("# Deploy")
+})
+
 test("no skills: no tool and no prompt block; broken skills are reported", async () => {
   const d = layout()
   skill(path.join(d.cwd, ".claude", "skills"), "broken", "name: broken")
@@ -245,10 +278,17 @@ test("every skill runs as $<name> and sends its instructions, user-only ones too
   const agent = new Agent({ ai, model: ai.model("mock/test"), cwd: d.cwd, bus })
   const sent: string[] = []
   const shown: (SendOptions | undefined)[] = []
+  const context: UserMessage[] = []
   const control = {
+    messages: () => context,
     send: async (text: string, opts?: SendOptions) => {
       sent.push(text)
       shown.push(opts)
+      context.push({
+        role: "user",
+        content: [{ type: "text", text }],
+        ...(opts?.display ? { display: opts.display } : {}),
+      })
     },
   } as Partial<SessionControl>
   const commands = new CommandHost({
@@ -272,14 +312,17 @@ test("every skill runs as $<name> and sends its instructions, user-only ones too
   expect(sent[0]).toContain("Arguments: to prod")
   // Frontends show the skill as typed and what it loaded, not the instructions.
   expect(shown[0]).toEqual({ display: { text: "$deploy to prod", note: "Loaded skill deploy (2 lines)" } })
+  await commands.runSkill("$deploy again", { frontend: "tui" })
+  expect(sent[1]).toBe('Skill "deploy" is already loaded in the current context.')
+  expect(shown[1]).toEqual({ display: { text: "$deploy again", note: "Loaded skill deploy (2 lines)" } })
   await commands.runSkill("$secret", { frontend: "tui" })
-  expect(sent[1]).toContain('Skill "secret"')
-  expect(shown[1]).toEqual({ display: { text: "$secret", note: "Loaded skill secret (1 line)" } })
+  expect(sent[2]).toContain('Skill "secret"')
+  expect(shown[2]).toEqual({ display: { text: "$secret", note: "Loaded skill secret (1 line)" } })
   // The slash no longer runs a skill; it says how.
   const slash = await commands.run("/deploy now", { frontend: "tui" })
   expect(slash.ok).toBe(false)
   expect(slash.error).toBe("Unknown command /deploy — skills now start with $: $deploy")
-  expect(sent).toHaveLength(2)
+  expect(sent).toHaveLength(3)
   await bus.flush()
   expect(events.filter((e) => e.type === "extension.error")).toEqual([])
 })

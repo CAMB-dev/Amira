@@ -66,6 +66,8 @@ export interface SessionOptions {
   noBuiltins: boolean
   /** Tools hidden from the model. */
   disabledTools?: string[]
+  /** The model cannot ask a person; print mode and RPC without a UI use this. */
+  nonInteractive?: boolean
   /** Names the user asked to disable and where they came from; ones no tool has are reported. */
   requestedDisabled?: { names: string[]; from: string }
   ai?: Ai
@@ -245,7 +247,9 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
     }
   }
-  tools.setDisabled(opts.disabledTools ?? [])
+  const disabled = new Set(opts.disabledTools ?? [])
+  if (opts.nonInteractive) disabled.add("ask_user")
+  tools.setDisabled(disabled)
   await bus.flush()
   stopCapture()
 
@@ -289,6 +293,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
 
   const tree = new AgentTree({
     ai,
+    sections: (cwd) =>
+      defaultSections({
+        cwd,
+        nonInteractive: opts.nonInteractive,
+        project: instructionsSection(loadInstructions(cwd)),
+      }),
     ...(settings.subagents?.maxDepth !== undefined ? { maxDepth: settings.subagents.maxDepth } : {}),
     ...(settings.subagents?.maxConcurrent ? { maxConcurrent: settings.subagents.maxConcurrent } : {}),
     ...(settings.budget ? { budget: settings.budget } : {}),
@@ -336,7 +346,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       providerSettings: settings.providers,
       fileRewindSettings: settings.fileRewind,
       cwd: opts.cwd,
-      sections: defaultSections({ cwd: opts.cwd, project: instructionsSection(loadInstructions(opts.cwd)) }),
+      sections: defaultSections({
+        cwd: opts.cwd,
+        nonInteractive: opts.nonInteractive,
+        project: instructionsSection(loadInstructions(opts.cwd)),
+      }),
       bus,
       interceptors,
       tools,

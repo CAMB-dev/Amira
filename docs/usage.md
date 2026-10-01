@@ -77,7 +77,7 @@ Command rules allow, ask about or deny shell commands by their words:
 
 A rule matches the words of a command (its argv), not the text: `git status --short` matches `["git", "status"]`, `git statusx` does not. For `ask` and `deny` rules the command name also matches as a path or with a Windows extension (`/usr/bin/git`, `git.exe`), and in PowerShell under its built-in aliases (`rm`, `del` and `Remove-Item` are one command); they also match when other words come between theirs (`git -C repo push` matches `["git", "push"]`) and ignore case. `allow` rules must match the start of the command exactly, and only a command named without a path (`x/git status` is not `git status`) unless the rule itself names that path. When several rules match, `deny` wins over `ask` and `ask` over `allow`. `allow` only means "do not ask": it never lifts plan mode or a protected file.
 
-Commands joined with `&&`, `||`, `;`, `|` or newlines are split and each part is checked. Commands Amira cannot check word by word ask instead: substitutions such as `$(...)` and backticks, variables, redirections into files, here-documents and here-strings, grouping, file name patterns (`*`, `?`, `[...]`), wrappers that run other commands (`eval`, `sudo`, `xargs`, `bash -c`, `Invoke-Expression`, `Start-Process`, interpreters), commands that define aliases (`alias`, `Set-Alias`, `git -c`, `git config alias.*`) and scripts. In `auto` mode they still run without asking unless you have `ask` or `deny` rules. Commands are read the way the shell that runs them reads them: bash or PowerShell, including the `bash` tool falling back to PowerShell on Windows.
+Commands joined with `&&`, `||`, `;`, `|` or newlines are split and each part is checked. Commands Amira cannot check word by word ask instead: substitutions such as `$(...)` and backticks, variables, redirections into files, here-documents and here-strings, grouping, file name patterns (`*`, `?`, `[...]`), wrappers that run other commands (`eval`, `sudo`, `xargs`, `bash -c`, `Invoke-Expression`, `Start-Process`, interpreters), commands that define aliases (`alias`, `Set-Alias`, `git -c`, `git config alias.*`) and scripts. In `auto` mode they still run without asking unless you have `ask` or `deny` rules. Commands are read the way the shell that runs them reads them: bash or PowerShell, including the `bash` tool falling back to PowerShell on Windows. Shell commands already start in the working directory; use `cd` only when a command needs another directory. Bash runs foreground and background commands with `pipefail`, so a failed pipeline component keeps a non-zero status. PowerShell has no `pipefail` option, but its wrapper preserves a failing native command's `$LASTEXITCODE` through a native pipeline; cmdlet pipelines follow PowerShell's `$?` rules.
 
 Rules make Amira ask or refuse; they are not a sandbox. A command can still reach a denied program another way, for example through a copy or link of it, or through a script the model wrote earlier. Use `deny` for mistakes worth stopping, not as a security boundary.
 
@@ -85,7 +85,7 @@ The user file's rules always apply. A project's `.amira/settings.json` or `.amir
 
 Some files always ask before `write`, `edit` or `apply_patch` changes them, in every mode: `.amira` directories (settings, packages and lock files) and Amira's user directory, `.git` (hooks, config and the rest of Git's metadata, including a linked worktree's Git directory), `.gitmodules`, the directory `core.hooksPath` names and your global Git config. Other names for the same file count too (a different case, `../`, absolute or MSYS paths, links). **Shell commands can still change these files: commands do not run in a sandbox yet.**
 
-A refused call tells the model why and that asking you is the way forward. In print mode, and in RPC once no client can answer, anything that would ask is refused with the reason, so use `auto` mode or rules for unattended runs.
+A refused call tells the model why and that asking you is the way forward. In print mode, and in RPC once no client can answer, anything that would ask is refused with the reason; `ask_user` is also hidden from the model and the non-interactive system prompt tells it to decide for itself. Use `auto` mode or rules for unattended runs.
 
 ## Sessions, compaction and rewind
 
@@ -176,14 +176,15 @@ The defaults can be changed under `context` in settings:
 amira -p "Summarize the changes in this repository"
 amira -p -c "Continue the review"
 amira -p --json "Explain the failing test"
+amira -p --json-out events.json "Explain the failing test"
 amira -p -- "-v means verbose?"
 ```
 
-`-p` / `--print` runs without the interactive UI and needs a prompt, except when listing sessions with bare `-r`. Plain mode streams reply text to stdout and tool activity, warnings and errors to stderr. `--json` requires print mode and writes each event as one JSON line to stdout. These lines include session, turn, message, tool and sub-agent events, rather than one final JSON answer.
+`-p` / `--print` runs without the interactive UI and needs a prompt, except when listing sessions with bare `-r`. Plain mode streams reply text to stdout and tool activity, warnings and errors to stderr. `--json` requires print mode and writes each event as one ASCII-only JSON line to stdout; non-ASCII string characters are escaped as `\uXXXX`, so a Windows parent can decode the stream without a code-page mismatch. `--json-out <path>` implies `--json` and writes the same JSONL event stream to the file instead of stdout; a relative path is resolved from where Amira was invoked. These lines include session, turn, message, tool and sub-agent events, rather than one final JSON answer.
 
 A quoted slash command such as `amira -p "/status"` runs the command instead of sending a model prompt. Skills can also run this way when available. Commands requiring a picker cannot obtain interactive answers; supply explicit arguments where supported.
 
-Print mode waits for background sub-agents and the follow-up turns their results start. This wait has no fixed time limit; configured budgets still apply. Failed result-delivery turns can be retried up to three times after 10, 30 and 90 seconds. Ctrl+C aborts and stops waiting; a second Ctrl+C forces exit. The exit codes are 0 for completion, 1 for errors and 130 for an aborted turn.
+Print mode waits for top-level background shell jobs started during the run, up to `backgroundJobs.printWaitMs` (30 seconds by default), and delivers their end notices to the model for a follow-up turn. It also waits for background sub-agents and the follow-up turns their results start. If the job wait expires, Amira prints a note and stops those jobs on exit. Configured budgets still apply. Failed result-delivery turns can be retried up to three times after 10, 30 and 90 seconds. Ctrl+C aborts and stops waiting; a second Ctrl+C forces exit. The exit codes are 0 for completion, 1 for errors and 130 for an aborted turn.
 
 ## RPC automation
 
@@ -220,7 +221,7 @@ The immediate response contains the request ID, `ok: true` and a `turnId`; it ac
 
 Read the generated schema for parameter shapes and UI answer types. For example, a confirmation uses a boolean `value`; explicit `null` cancels, while omitting `value` is invalid. Requests can remain open while later input lines answer them. If a slow client receives `events.lost`, use `state` and `session.read` to resynchronize. Keep reading stdout while work runs.
 
-Closing stdin waits for active work, including background results and their follow-up turns; dialogs that nobody can answer are cancelled. For dialog-driven commands, keep stdin open until they finish.
+Closing stdin waits for active work, including background results and their follow-up turns; dialogs that nobody can answer are cancelled. An RPC session without a UI client does not offer `ask_user` and tells the model to decide for itself. For dialog-driven commands, keep stdin open until they finish.
 
 ## Status and costs
 

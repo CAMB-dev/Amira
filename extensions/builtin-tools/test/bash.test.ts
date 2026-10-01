@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
 import "../../../packages/core/src/index.ts"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { type ProcessTree, runCommand, trackProcessTree } from "../../../packages/proc/src/index.ts"
 import { bashTool } from "../src/bash.ts"
 import { resolveShell } from "../src/shell.ts"
@@ -37,6 +38,40 @@ test.if(hasBash)("finds coreutils and other tools on PATH", async () => {
     makeCtx(dir),
   )
   expect(textOf(r)).toEndWith("1\n\nExit code: 0")
+})
+
+test("the shell description says commands already start in the working directory", () => {
+  expect(bashTool.description).toContain("Commands already start in the working directory")
+  expect(bashTool.description).not.toContain("Prefer absolute paths")
+})
+
+test.if(hasBash)("a failed command before a pipeline keeps the bash error status", async () => {
+  const r = await bashTool.execute({ command: "false | tail -n 1" }, makeCtx(dir))
+  expect(r.isError).toBe(true)
+  expect(textOf(r)).toEndWith("Exit code: 1")
+})
+
+test.if(hasBash)("a background bash pipeline keeps the bash error status", async () => {
+  const source = pathToFileURL(join(import.meta.dir, "../src/bash.ts")).href
+  const core = pathToFileURL(join(import.meta.dir, "../../../packages/core/src/index.ts")).href
+  const script = [
+    `await import(${JSON.stringify(core)})`,
+    `const { bashTool } = await import(${JSON.stringify(source)})`,
+    `const r = await bashTool.execute({ command: "false | tail -n 1", background: true }, { cwd: ${JSON.stringify(dir)}, toolCallId: "test", signal: new AbortController().signal, update() {} })`,
+    `process.stdout.write(JSON.stringify({ isError: r.isError, exitCode: r.details?.exitCode }))`,
+  ].join("\n")
+  const child = Bun.spawn([process.execPath, "-e", script], {
+    cwd: process.cwd(),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [exitCode, output, error] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ])
+  if (exitCode !== 0) throw new Error(error || output)
+  expect(JSON.parse(output)).toEqual({ isError: true, exitCode: 1 })
 })
 
 test.if(hasBash)("non-zero exit is reported as an error", async () => {

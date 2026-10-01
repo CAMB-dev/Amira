@@ -137,6 +137,7 @@ async function run(argv: string[]): Promise<number> {
     extensions: args.extensions,
     packages: plan.packages,
     noBuiltins: args.noBuiltins,
+    nonInteractive: args.print,
     store,
     disabledTools: config.disabledTools,
     requestedDisabled: config.requestedDisabled,
@@ -181,6 +182,11 @@ async function run(argv: string[]): Promise<number> {
         onReady,
         ui: host.ui,
         commands,
+        backgroundJobs,
+        ...(config.settings.backgroundJobs?.printWaitMs !== undefined
+          ? { backgroundJobTimeoutMs: config.settings.backgroundJobs.printWaitMs }
+          : {}),
+        ...(args.jsonOut ? { jsonOut: args.jsonOut } : {}),
       })
     }
     const running = () => session.tree.children.length

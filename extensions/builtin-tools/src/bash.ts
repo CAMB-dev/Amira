@@ -27,7 +27,7 @@ export interface BashParams {
 /** Notes for every shell tool; `cd` and `chain` show how that shell sequences commands. */
 function sharedNotes(cd: string, chain: string): string[] {
   return [
-    `- Starts in the working directory. Each call is a fresh shell: \`cd\`, variables and functions do not persist between calls. Prefer absolute paths or \`${cd}\`.`,
+    `- Commands already start in the working directory. Each call is a fresh shell: \`cd\`, variables and functions do not persist between calls. Use \`${cd}\` only when you need to change directories within a call.`,
     `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed.`,
     "- Processes the command leaves running are killed when it finishes. For commands that keep running (dev servers, watchers, long builds you want to check on later), pass `background: true`: the call returns at once with a job id and the output so far, and the job keeps running. Read its new output with job_output (use wait_for to wait for a line such as a ready message instead of polling) and stop it with job_stop. Do not append `&` or use nohup yourself. Background jobs are stopped when Amira exits, and a sub-agent's when it ends.",
     `- Several calls issued together run at the same time. Put commands that depend on each other in one call (${chain}) or in separate turns.`,

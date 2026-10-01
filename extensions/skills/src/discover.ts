@@ -86,7 +86,7 @@ export function discoverSkills(opts: DiscoverOptions): Discovery {
 
 /** The instructions of a skill, without its frontmatter. */
 export function readSkillBody(skill: Skill): string {
-  return parseFrontmatter(readFileSync(skill.path, "utf8")).body.trim()
+  return parseFrontmatter(readFileSync(skill.path, "utf8")).body.trim().replace(/\r\n?/g, "\n")
 }
 
 function toSkill(text: string, file: string, root: string, dirName: string): Skill | string {

@@ -140,7 +140,7 @@ export const grepTool = defineTool<GrepParams>({
             shown: head,
             tool: "grep",
             facts: [
-              `${total} results; the preview is cut from the first ${shownCount} (head_limit), the artifact has ${capped ? `the first ${out.length}` : "all of them"}`,
+              `${total} results; the preview is cut from the first ${shownCount} (${params.head_limit === undefined ? "the default output limit" : "head_limit"}), the artifact has ${capped ? `the first ${out.length}` : "all of them"}`,
             ],
             ...(capped ? { incomplete: `only the first ${out.length} of ${total} results were saved` } : {}),
           })

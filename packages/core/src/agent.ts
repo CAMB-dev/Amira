@@ -99,7 +99,13 @@ import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { Permissions, type PermissionVerdict } from "./permissions/policy.ts"
-import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
+import {
+  addNonInteractive,
+  NON_INTERACTIVE_LINE,
+  type PromptSection,
+  renderPrompt,
+  setSection,
+} from "./prompt.ts"
 import { newSessionId, type SessionEntryData, SessionStore } from "./session-store.ts"
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
@@ -367,6 +373,8 @@ export class Agent {
   #turn: Turn | undefined
   /** Steering messages waiting for the next model call of the running turn. */
   #steering: UserMessage[] = []
+  /** Aborts waits that can return partial output as soon as steering arrives. */
+  #steerAbort: AbortController | undefined
   /**
    * Delivered notices (expectNotice) waiting for a model call. Unlike steering they are never
    * dropped: after an interrupted or failed turn they wait for the next one.
@@ -534,6 +542,12 @@ export class Agent {
       ...(opts.session ? { dir: opts.session.file.replace(/\.jsonl$/, "") } : {}),
       data: this.data,
       outputs: this.artifacts,
+      contextHas: (text) =>
+        agent
+          .projectedMessages()
+          .some((message) =>
+            message.content.some((block) => block.type === "text" && block.text.includes(text)),
+          ),
       // Recorded in the session, so resuming it offers the same tools again.
       loadTools: (names) => {
         const added = deferred.loadTools(names)
@@ -776,6 +790,16 @@ export class Agent {
 
   get sections(): readonly PromptSection[] {
     return this.#sections
+  }
+
+  /** Whether this agent's system prompt tells it to decide without asking a user. */
+  get nonInteractive(): boolean {
+    return this.#sections.some((s) => s.text.includes(NON_INTERACTIVE_LINE))
+  }
+
+  /** Marks this agent and fresh children as non-interactive. */
+  setNonInteractive(): void {
+    this.#sections = addNonInteractive(this.#sections)
   }
 
   /** Replaces one section of the system prompt, leaving the others untouched. */
@@ -1142,6 +1166,7 @@ export class Agent {
       this.prompt(message).catch(() => {})
       return
     }
+    this.#steerAbort?.abort()
     this.#steering.push(message)
     this.#emit(turn, "turn.steer", { message, state: "queued" })
   }
@@ -1170,7 +1195,9 @@ export class Agent {
   async #runTurn(input: string | UserMessage, opts: PromptOptions): Promise<TurnResult> {
     if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
+    const steerAbort = new AbortController()
     this.#abort = abort
+    this.#steerAbort = steerAbort
     const turn: Turn = {
       id: opts.turnId ?? newTurnId(),
       signal: abort.signal,
@@ -1264,6 +1291,7 @@ export class Agent {
       this.#repairHistory()
       this.#abort = undefined
       this.#turn = undefined
+      if (this.#steerAbort === steerAbort) this.#steerAbort = undefined
       const leftover = this.#steering.splice(0)
       // Notices are never dropped: after an interrupted or failed turn they wait for the next.
       // An owner that decides when turns run (onIdleNotice) starts the next one itself.
@@ -1939,6 +1967,7 @@ export class Agent {
             cwd: this.cwd,
             toolCallId: call.id,
             signal: turn.signal,
+            ...(this.#steerAbort ? { steerSignal: this.#steerAbort.signal } : {}),
             session: this.#callSession(turn, call.id),
             ...(this.fileRewind
               ? {

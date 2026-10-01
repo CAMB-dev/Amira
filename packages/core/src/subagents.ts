@@ -45,7 +45,7 @@ import type { ContextOptions } from "./context.ts"
 import type { EmitMeta } from "./event-bus.ts"
 import { instructionsSection, loadInstructions } from "./instructions.ts"
 import { validateValue } from "./json-schema.ts"
-import { defaultSections, type PromptSection, renderPrompt, setSection } from "./prompt.ts"
+import { addNonInteractive, defaultSections, type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { SessionStore } from "./session-store.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 
@@ -515,6 +515,7 @@ export class AgentTree {
     const context = opts.context ?? "fresh"
     const persistent = opts.persistent === true
     let base = context === "fork" ? [...parent.sections] : (this.#opts.sections ?? standardSections)(cwd)
+    if (parent.nonInteractive) base = addNonInteractive(base)
     const extra = opts.extraTools ?? []
     if (extra.some((t) => t.name === RETURN_RESULT_TOOL)) {
       throw new SpawnError(`an extra tool cannot be named ${RETURN_RESULT_TOOL}`)

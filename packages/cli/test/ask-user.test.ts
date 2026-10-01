@@ -34,7 +34,11 @@ const QUESTIONS = [
   },
 ]
 
-async function session(steps: MockStep[], extensions: Extension[] = [builtinTools]) {
+async function session(
+  steps: MockStep[],
+  extensions: Extension[] = [builtinTools],
+  extra: { nonInteractive?: boolean } = {},
+) {
   const mock = createMockDialect(steps)
   const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
   const s = await createSession({
@@ -44,11 +48,22 @@ async function session(steps: MockStep[], extensions: Extension[] = [builtinTool
     noBuiltins: false,
     ai,
     builtins: async () => extensions.map((extension, i) => ({ source: `ext${i}`, extension })),
+    ...extra,
   })
   return { ...s, mock }
 }
 
-function inProcess(s: Awaited<ReturnType<typeof session>>) {
+test("a non-interactive session hides ask_user and tells the model to decide", async () => {
+  const s = await session([{ text: "done" }], [builtinTools], { nonInteractive: true })
+  const io: PrintIO = { stdout: () => {}, stderr: () => {} }
+  expect(await runPrint(s.agent, "go", false, { io })).toBe(0)
+  const request = s.mock.requests[0]!
+  expect(request.tools.some((tool) => tool.name === "ask_user")).toBe(false)
+  expect(request.systemPrompt).toContain("Run mode: non-interactive")
+  expect(request.systemPrompt).toContain("decide for yourself")
+})
+
+function inProcess(s: Awaited<ReturnType<typeof session>>, withUi = true) {
   const queue: string[] = []
   let wake: (() => void) | undefined
   let ended = false
@@ -63,7 +78,7 @@ function inProcess(s: Awaited<ReturnType<typeof session>>) {
   }
   const out: Line[] = []
   const done = runRpc(
-    { agent: s.agent, ai: s.ai, ui: s.host.ui },
+    { agent: s.agent, ai: s.ai, ...(withUi ? { ui: s.host.ui } : {}) },
     { io: { lines, write: (line) => void out.push(JSON.parse(line)) } },
   )
   const until = async (match: (l: Line) => boolean, what: string) => {
@@ -86,6 +101,19 @@ function inProcess(s: Awaited<ReturnType<typeof session>>) {
   }
   return { out, until, call, end }
 }
+
+test("rpc without a UI client hides ask_user and tells the model to decide", async () => {
+  const s = await session([
+    (req) => ({ text: req.systemPrompt.includes("non-interactive") ? "done" : "bad" }),
+  ])
+  const rpc = inProcess(s, false)
+  await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+  await rpc.until((l) => l.type === "turn.end", "the turn's end")
+  expect(await rpc.end()).toBe(0)
+  const request = s.mock.requests[0]!
+  expect(request.tools.some((tool) => tool.name === "ask_user")).toBe(false)
+  expect(request.systemPrompt).toContain("Run mode: non-interactive")
+})
 
 const toolResultText = (s: { agent: { messages: unknown[] } }, name = "ask_user") => {
   const m = s.agent.messages.find(
@@ -144,7 +172,7 @@ test("an rpc client that cancels leaves the model a declined answer", async () =
   expect(toolResultText(s)).toStartWith("The user declined to answer.")
 })
 
-test("in print mode ask_user is not asked: nobody could answer", async () => {
+test("in print mode ask_user is not offered", async () => {
   const s = await session([
     { toolCalls: [{ name: "ask_user", args: { questions: QUESTIONS } }] },
     { text: "ok" },
@@ -152,7 +180,7 @@ test("in print mode ask_user is not asked: nobody could answer", async () => {
   const errors: string[] = []
   const io: PrintIO = { stdout: () => {}, stderr: (t) => void errors.push(t) }
   expect(await runPrint(s.agent, "go", false, { io, ui: s.host.ui })).toBe(0)
-  expect(toolResultText(s)).toStartWith("Nobody could answer (print mode).")
+  expect(toolResultText(s)).toStartWith('Unknown tool "ask_user".')
   expect(errors.join("")).not.toContain("cancelled")
 })
 

@@ -36,7 +36,11 @@ export function skillsSection(skills: Skill[]): string {
  * live, and any arguments the user gave.
  */
 export function skillPrompt(skill: Skill, args = ""): string {
-  const parts = [`Skill "${skill.name}" (base directory: ${skill.dir})`, readSkillBody(skill)]
+  return skillPromptWithBody(skill, readSkillBody(skill), args)
+}
+
+function skillPromptWithBody(skill: Skill, body: string, args = ""): string {
+  const parts = [`Skill "${skill.name}" (base directory: ${skill.dir})`, body]
   if (args.trim()) parts.push(`Arguments: ${args.trim()}`)
   return parts.join("\n\n")
 }
@@ -86,7 +90,17 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
         async run(args, ctx) {
           const skill = skills.find((s) => s.name === name) ?? scan().find((s) => s.name === name)
           if (!skill) throw new Error(`the skill "${name}" is gone`)
-          const prompt = skillPrompt(skill, args)
+          const body = readSkillBody(skill)
+          const alreadyLoaded =
+            body.length > 0 &&
+            ctx.session
+              .messages?.()
+              .some((message) =>
+                message.content.some((block) => block.type === "text" && block.text.includes(body)),
+              )
+          const prompt = alreadyLoaded
+            ? `Skill "${skill.name}" is already loaded in the current context.`
+            : skillPromptWithBody(skill, body, args)
           // The transcript shows the skill as typed, not its whole text.
           await ctx.session.send(prompt, { display: skillDisplay(skill, args) })
         },
@@ -111,14 +125,17 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
         required: ["name"],
       },
       concurrency: "parallel",
-      async execute(p) {
+      async execute(p, ctx) {
         const skill = find(p.name.trim())
         if (!skill) {
           const names = skills.filter((s) => !s.userOnly).map((s) => s.name)
           return textResult(`No skill named "${p.name}". Available skills: ${names.join(", ")}`, true)
         }
         try {
-          return textResult(skillPrompt(skill, p.args))
+          const body = readSkillBody(skill)
+          if (body && ctx.session?.contextHas?.(body))
+            return textResult(`Skill "${skill.name}" is already loaded in the current context.`)
+          return textResult(skillPromptWithBody(skill, body, p.args))
         } catch (err) {
           return textResult(`Could not read ${skill.path}: ${err instanceof Error ? err.message : err}`, true)
         }

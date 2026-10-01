@@ -121,6 +121,14 @@ test("grep saves all its results before head_limit cuts them; the preview is cut
   )
   expect((few.details as { artifact?: string }).artifact).toBeUndefined()
   expect(textOf(few)).toContain("(Showing 5 of")
+
+  const defaultLimit = await grepTool.execute(
+    { pattern: "needle", path: "tree", output_mode: "content" },
+    ctxWith(store),
+  )
+  const defaultText = textOf(defaultLimit)
+  expect(defaultText).toContain("first 250 (the default output limit)")
+  expect(defaultText).not.toContain("first 250 (head_limit)")
 })
 
 test("glob saves every path when the list is long", async () => {

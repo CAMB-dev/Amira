@@ -7,6 +7,8 @@ export interface CliArgs {
   prompt?: string
   print: boolean
   json: boolean
+  /** Write JSONL events to this file instead of stdout (--json-out). */
+  jsonOut?: string
   model?: string
   cwd: string
   extensions: string[]
@@ -44,6 +46,7 @@ Without --print, opens the interactive UI; a prompt becomes the first message.
 Options:
   -p, --print           Run one turn non-interactively and print the reply
       --json            With --print, write every event as a JSON line to stdout
+      --json-out <path> With --print, write ASCII-only JSONL events to this file
       --rpc             Headless mode: JSONL commands on stdin, responses and
                         events on stdout (see --rpc-schema)
       --rpc-schema      Print the JSON Schema of the --rpc protocol
@@ -120,7 +123,7 @@ export function parseCliArgs(
   const { values, positionals } = parsed
   const args: CliArgs = {
     print: values.print ?? false,
-    json: values.json ?? false,
+    json: values.json ?? values["json-out"] !== undefined,
     cwd: path.resolve(cwd, values.cwd ?? "."),
     extensions: (values.extension ?? []).map((e) => path.resolve(cwd, e)),
     noBuiltins: values["no-builtins"] ?? false,
@@ -131,6 +134,7 @@ export function parseCliArgs(
     rpc: values.rpc ?? false,
     rpcSchema: values["rpc-schema"] ?? false,
   }
+  if (values["json-out"] !== undefined) args.jsonOut = path.resolve(cwd, values["json-out"])
   if (positionals.length) args.prompt = positionals.join(" ")
   if (values.resume !== undefined) args.resume = values.resume
   if (args.continue && args.resume !== undefined) throw new UsageError("use either --continue or --resume")
@@ -161,6 +165,7 @@ export function parseCliArgs(
   if (args.rpc && args.resume === "") {
     throw new UsageError("--rpc cannot pick a session; pass --resume <id>, or send session.resume")
   }
+  if (args.jsonOut !== undefined && !args.print) throw new UsageError("--json-out requires --print")
   if (args.json && !args.print) throw new UsageError("--json requires --print")
   const listing = args.resume === ""
   if (args.print && !args.prompt && !args.help && !args.version && !listing)
@@ -223,6 +228,7 @@ function parse(argv: string[]) {
     options: {
       print: { type: "boolean", short: "p" },
       json: { type: "boolean" },
+      "json-out": { type: "string" },
       model: { type: "string", short: "m" },
       extension: { type: "string", short: "e", multiple: true },
       "no-builtins": { type: "boolean" },

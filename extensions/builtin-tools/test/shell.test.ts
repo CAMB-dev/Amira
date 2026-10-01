@@ -9,6 +9,7 @@ import {
   bashFromGitExecPath,
   fallbackPowerShell,
   findGitBash,
+  GATE_SCRIPT,
   gitBashEnv,
   gitBashLayout,
   isRejectedShellPath,
@@ -25,6 +26,16 @@ test("rejects WSL and Store aliases", () => {
   expect(isRejectedShellPath("C:\\Windows\\System32\\bash.exe")).toBe(true)
   expect(isRejectedShellPath("C:/Users/me/AppData/Local/Microsoft/WindowsApps/bash.exe")).toBe(true)
   expect(isRejectedShellPath("D:\\DevSDKs\\Git\\bin\\bash.exe")).toBe(false)
+})
+
+test("enables pipefail for gated bash commands", () => {
+  expect(GATE_SCRIPT).toContain('"$BASH" -o pipefail -c')
+})
+
+test("the command form used by background bash jobs enables pipefail", () => {
+  const command = shell.command("false | tail -n 1", process.cwd())
+  if (command.gated) expect(GATE_SCRIPT).toContain('"$BASH" -o pipefail -c')
+  else expect(command.argv).toEqual(expect.arrayContaining(["-o", "pipefail"]))
 })
 
 test("derives Git Bash from git --exec-path", () => {

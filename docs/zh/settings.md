@@ -115,6 +115,7 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 | `backgroundJobs.maxRunning` | `number` | `8` | 同时运行的后台任务数上限（shell 工具以 `background: true` 启动的命令，如开发服务器和文件监视进程）。 |  |
 | `backgroundJobs.bufferChars` | `number` | `1000000` | 每个后台任务在内存中保留、供读取的输出字符数，最少 1000。 |  |
 | `backgroundJobs.maxLogBytes` | `number` | `52428800` (50 MiB) | 每个后台任务写入日志文件的输出字节数上限。 |  |
+| `backgroundJobs.printWaitMs` | `number` | `30000` (30 s) | print 模式等待本次运行启动的顶层后台任务的时长，超时后退出时停止它们。 |  |
 | `commandAliases` | `Record<string, string>` | 无 | 斜杠命令别名：`{"ds": "model deepseek/deepseek-flash"}` 让 `/ds` 执行 `/model deepseek/deepseek-flash`，`/ds` 后面输入的内容会追加在末尾。值必须是命令而不是另一个别名；与命令或命令自带的别名重名时，以命令为准。 |  |
 | `sessions.autoTitle` | `boolean` | `true` | 第一个轮次结束后，在后台请模型为会话起一个简短标题（设置了 `compact.model` 时用它）。`/rename` 设置的名称始终优先。 |  |
 
