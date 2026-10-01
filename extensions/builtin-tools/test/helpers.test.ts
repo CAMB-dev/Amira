@@ -30,6 +30,13 @@ test("short output is returned unchanged", async () => {
   expect((await keep("x".repeat(1000))).artifact).toBeUndefined()
 })
 
+test("CJK output counts four to a character against the limit", async () => {
+  // 300 CJK characters take about as many tokens as 1200 ASCII ones: over the 1000 limit.
+  const r = await keep("编".repeat(300))
+  expect(r.artifact).toBeDefined()
+  expect((await keep("x".repeat(300))).artifact).toBeUndefined()
+})
+
 test("long output is saved whole and previewed by its head and tail", async () => {
   const lines = Array.from({ length: 5000 }, (_, i) => `line ${i}`)
   const full = lines.join("\n")

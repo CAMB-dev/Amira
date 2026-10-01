@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { extname } from "node:path"
-import { defineTool, type ReadDetails, textResult } from "@amira/api"
+import { defineTool, outputSize, type ReadDetails, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
 import { type LineWindow, type ReadLinesResult, readLineWindow } from "./lines.ts"
 import { resolvePath } from "./paths.ts"
@@ -149,9 +149,11 @@ function formatWindow(
     const line = raw.length > MAX_LINE_CHARS ? `${raw.slice(0, MAX_LINE_CHARS)}… [line truncated]` : raw
     const row = `${String(start + i).padStart(6)}\t${line}`
     // Always return at least one line, even when it alone exceeds the budget.
-    if (out.length > 0 && size + row.length + 1 > budget) break
+    // Measured as the output limits measure: a CJK character counts four.
+    const cost = outputSize(row) + 1
+    if (out.length > 0 && size + cost > budget) break
     out.push(row)
-    size += row.length + 1
+    size += cost
     last = start + i
   }
   if (last < start - 1 + lines.length || window.more) {

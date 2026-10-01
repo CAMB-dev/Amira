@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises"
-import { defineTool, textResult } from "@amira/api"
+import { defineTool, outputSize, textResult } from "@amira/api"
 import { outputLimits, outputStore } from "./truncate.ts"
 
 export const DEFAULT_OUTPUT_READ_LIMIT = 200
@@ -104,10 +104,11 @@ export const outputReadTool = defineTool<OutputReadParams>({
     const header = `Artifact ${info.id} (${facts.join(", ")})`
     const out: string[] = []
     let size = 0
-    const fits = (row: string) => out.length === 0 || size + row.length + 1 <= budget
+    // Measured as the output limits measure: a CJK character counts four.
+    const fits = (row: string) => out.length === 0 || size + outputSize(row) + 1 <= budget
     const push = (row: string) => {
       out.push(row)
-      size += row.length + 1
+      size += outputSize(row) + 1
     }
 
     if (re) {

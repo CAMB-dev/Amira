@@ -11,6 +11,7 @@ import {
   type OutputLimits,
   type OutputStore,
   outputPreview,
+  outputSize,
   type SaveOutputOptions,
   type ToolContext,
 } from "@amira/api"
@@ -125,7 +126,7 @@ export interface KeepOutputOptions {
 export async function keepOutput(ctx: ToolContext, o: KeepOutputOptions): Promise<KeptOutput> {
   const store = o.store ?? outputStore(ctx)
   const { saveAbove, previewChars } = store.limits
-  if (o.text.length <= saveAbove) return { text: o.shown ?? o.text }
+  if (outputSize(o.text) <= saveAbove) return { text: o.shown ?? o.text }
   let artifact: ArtifactInfo | undefined
   let saveError: string | undefined
   try {

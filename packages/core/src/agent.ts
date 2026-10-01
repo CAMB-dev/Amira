@@ -36,6 +36,7 @@ import {
   type EventMap,
   type OutputStore,
   outputPreview,
+  outputSize,
   type PendingNotice,
   type ProviderSettings,
   type SessionData,
@@ -1372,9 +1373,8 @@ export class Agent {
   async #keepLarge(call: ToolCallBlock, result: ToolResult): Promise<ToolResult> {
     if (call.name === "output_read") return result
     const texts = result.content.flatMap((b) => (b.type === "text" ? [b.text] : []))
-    const size = texts.reduce((n, t) => n + t.length, 0)
-    if (size <= this.artifacts.limits.saveAbove) return result
     const text = texts.join("\n")
+    if (outputSize(text) <= this.artifacts.limits.saveAbove) return result
     let artifact: Awaited<ReturnType<ArtifactStore["save"]>> | undefined
     let saveError: string | undefined
     try {

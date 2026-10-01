@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { outputSize } from "@amira/api"
 import { MAX_IMAGE_BYTES, readTool } from "../src/read.ts"
 import { makeCtx, tempDirs, textOf } from "./util.ts"
 
@@ -52,6 +53,16 @@ test("a long range stops at a whole line under the size limit for large outputs"
   expect(last).not.toBeNull()
   expect(Number(last![2])).toBe(Number(last![1]) + 1)
   expect(out).toContain(`\t${lines[Number(last![1]) - 1]}\n`)
+})
+
+test("CJK text counts four to a character against the size limit", async () => {
+  const lines = Array.from({ length: 2000 }, (_, i) => `第${i + 1}行：编译模块完成，没有发现错误`)
+  await writeFile(join(dir, "cjk.txt"), lines.join("\n"))
+  const out = textOf(await read({ path: "cjk.txt" }))
+  // About a quarter of what ASCII text would fit, and never saved as an artifact.
+  expect(out.length).toBeLessThan(8_000)
+  expect(outputSize(out)).toBeLessThanOrEqual(16_000)
+  expect(out).toMatch(/Use offset=\d+ to read more\.\)$/)
 })
 
 test("force must be a boolean", async () => {

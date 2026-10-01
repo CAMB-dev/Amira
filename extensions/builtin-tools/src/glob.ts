@@ -1,6 +1,6 @@
 import { statSync } from "node:fs"
 import path from "node:path"
-import { defineTool, type GlobDetails, textResult } from "@amira/api"
+import { defineTool, type GlobDetails, outputSize, textResult } from "@amira/api"
 import { statOrNull, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
 import { keepOutput, outputLimits } from "./truncate.ts"
@@ -60,7 +60,7 @@ export const globTool = defineTool<GlobParams>({
     }
     // Every path over the size limit is saved; the preview is cut from the ones shown.
     const out =
-      all.length > outputLimits(ctx).saveAbove
+      outputSize(all) > outputLimits(ctx).saveAbove
         ? await keepOutput(ctx, {
             text: all,
             shown: head,

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
-import { defineTool, type GrepDetails, MAX_ARTIFACT_CHARS, textResult } from "@amira/api"
+import { defineTool, type GrepDetails, MAX_ARTIFACT_CHARS, outputSize, textResult } from "@amira/api"
 import { splitLines } from "./diff.ts"
 import { statOrNull, type WalkEntry, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
@@ -134,7 +134,7 @@ export const grepTool = defineTool<GrepParams>({
     }
     // All results over the size limit are saved; the preview is cut from the ones shown.
     const res =
-      all.length > outputLimits(ctx).saveAbove
+      outputSize(all) > outputLimits(ctx).saveAbove
         ? await keepOutput(ctx, {
             text: all,
             shown: head,
