@@ -367,6 +367,8 @@ export class AgentTree {
   /** The last approval question queued for each parent, by its session id. */
   #asking = new Map<string, Promise<unknown>>()
   #groups = new Map<string, Group>()
+  /** Ended sub-agents whose dispose is still running, by session id. */
+  #disposals = new Map<string, { parent: string; done: Promise<void> }>()
 
   constructor(opts: AgentTreeOptions) {
     this.#opts = opts
@@ -771,6 +773,38 @@ export class AgentTree {
     for (const child of [...this.#live.values()]) this.abortChild(child, reason)
   }
 
+  /** Aborts the children of one agent without disturbing its siblings. */
+  abortChildren(parentSessionId: string, reason: string): void {
+    for (const g of [...this.#groups.values()]) {
+      if (g.parent.sessionId === parentSessionId) this.endGroup(g, reason)
+    }
+    for (const child of [...this.#live.values()]) {
+      if (child.parentSessionId === parentSessionId) this.abortChild(child, reason)
+    }
+  }
+
+  /**
+   * Waits for the live and still-disposing descendants of `ancestor` (every sub-agent when
+   * unset). A disposing child never waits for itself or for agents outside its own subtree.
+   */
+  async waitForChildren(ancestor?: string): Promise<void> {
+    const parentOf = (id: string) => this.#live.get(id)?.parentSessionId ?? this.#disposals.get(id)?.parent
+    const under = (id: string) => {
+      for (let p = parentOf(id); ancestor !== undefined && p !== undefined; p = parentOf(p)) {
+        if (p === ancestor) return true
+      }
+      return ancestor === undefined
+    }
+    for (;;) {
+      const waits = [
+        ...[...this.#live.values()].filter((c) => under(c.id)).map((c) => c.result()),
+        ...[...this.#disposals].filter(([id]) => under(id)).map(([, d]) => d.done),
+      ]
+      if (!waits.length) return
+      await Promise.allSettled(waits)
+    }
+  }
+
   abortChild(child: Child, reason: string): void {
     if (!this.#live.has(child.id) || child.abortReason) return
     child.abortReason = reason
@@ -1051,9 +1085,11 @@ export class AgentTree {
       },
       child.parentMeta,
     )
+    const disposing = child.agent.dispose("exit")
+    this.#disposals.set(child.id, { parent: child.parentSessionId, done: disposing })
+    void disposing.finally(() => this.#disposals.delete(child.id))
     // The end event is delivered before cleanup so observers can still inspect the final live
     // state; no job owned by the child may survive the end of its session.
-    void child.agent.backgroundJobsHost?.closeSession(child.id)
     child.ended = result
     // Keep what it did, not the session: one with a file is read back from it when asked for.
     const done = this.subagent(child.id) as SpawnedSubagent

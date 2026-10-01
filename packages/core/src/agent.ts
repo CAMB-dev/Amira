@@ -330,6 +330,8 @@ export class Agent {
   #ai: Ai
   #autoTitle: AgentOptions["autoTitle"]
   #titleStarted = false
+  #titleAbort: AbortController | undefined
+  #titleTimer: ReturnType<typeof setTimeout> | undefined
   #approve: Approver | undefined
   #inheritedApprover: Approver | undefined
   #ask: Asker | undefined
@@ -419,6 +421,9 @@ export class Agent {
   #pendingNotices = new Set<{ target: Agent }>()
   /** The running turn's promise, for owners that wait for whatever turn runs. */
   #current: Promise<TurnResult> | undefined
+  #disposePromise: Promise<void> | undefined
+  #disposed = false
+  #sessionLease = false
   /** Extension records of a session without a file (see `data`). */
   #records: { key: string; data: unknown }[] = []
 
@@ -442,6 +447,8 @@ export class Agent {
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
+    this.depth = opts.depth ?? 0
+    if (this.session && this.depth === 0 && !opts.parentSessionId) this.#sessionLease = this.session.claim()
     this.fileRewindSettings = opts.fileRewindSettings
     this.fileRewind =
       opts.fileRewind ?? (opts.session ? new FileRewind(opts.session, opts.fileRewindSettings) : undefined)
@@ -488,7 +495,6 @@ export class Agent {
     this.#abortGraceMs = opts.abortGraceMs ?? 2000
     this.#noticeRetryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
     this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
-    this.depth = opts.depth ?? 0
     this.tree = opts.tree
     this.backgroundJobs = opts.backgroundJobs?.forSession({
       sessionId: this.sessionId,
@@ -604,6 +610,7 @@ export class Agent {
    * that an interrupted or failed turn did not reach waits for the next turn.
    */
   expectNotice(): PendingNotice {
+    if (this.#disposed) return { deliver: () => {}, cancel: () => {} }
     const pending = { target: this }
     this.#pendingNotices.add(pending)
     this.#expected++
@@ -659,6 +666,7 @@ export class Agent {
   }
 
   #receive(message: UserMessage, wake = true) {
+    if (this.#disposed) return
     this.#notices.push(message)
     const turn = this.#turn
     if (turn) this.#emit(turn, "turn.steer", { message, state: "queued" })
@@ -678,7 +686,7 @@ export class Agent {
    * owners that passed `onIdleNotice`. Returns the turn, or undefined when none started.
    */
   wake(): Promise<TurnResult> | undefined {
-    if (this.#abort || this.#holding || !this.#notices.length) return undefined
+    if (this.#disposed || this.#abort || this.#holding || !this.#notices.length) return undefined
     return this.prompt(joinMessages(this.#notices.splice(0)))
   }
 
@@ -709,6 +717,7 @@ export class Agent {
    * wait for the user's next message.
    */
   #scheduleRetry(error: string | undefined) {
+    if (this.#disposed) return
     this.#cancelRetry()
     const delays = this.#noticeRetryMs
     if (this.#retries >= delays.length) return
@@ -727,6 +736,7 @@ export class Agent {
   }
 
   #redeliver() {
+    if (this.#disposed) return
     this.#retry = undefined
     this.#retries++
     const message = this.#notices.length
@@ -751,7 +761,7 @@ export class Agent {
 
   /** Starts a turn with the waiting notices. */
   #wake() {
-    if (this.#abort || !this.#notices.length) return
+    if (this.#disposed || this.#abort || !this.#notices.length) return
     this.prompt(joinMessages(this.#notices.splice(0))).catch(() => {})
   }
 
@@ -1196,6 +1206,50 @@ export class Agent {
     this.#abort?.abort()
   }
 
+  /** Ends this agent and all of its owned resources. Safe to call more than once. */
+  dispose(reason: EventMap["session.end"]["reason"] = "exit"): Promise<void> {
+    if (this.#disposePromise) return this.#disposePromise
+    this.#disposed = true
+    this.#disposePromise = this.#dispose(reason)
+    return this.#disposePromise
+  }
+
+  async #dispose(reason: EventMap["session.end"]["reason"]): Promise<void> {
+    this.#cancelRetry()
+    this.#abort?.abort()
+    this.#steerAbort?.abort()
+    this.#titleAbort?.abort()
+    if (this.#titleTimer) clearTimeout(this.#titleTimer)
+    this.#titleAbort = undefined
+    this.#titleTimer = undefined
+    ;(this.backgroundJobs as { dispose?: () => void } | undefined)?.dispose?.()
+    this.#steering.splice(0)
+    this.#notices.splice(0)
+    this.#pendingNotices.clear()
+    this.#expected = 0
+    // Messages held for a running hold are dropped as an abort of it drops them.
+    this.#startAfterCompaction(true, this.#holding ?? "session")
+    // #jobNoticeTarget stays: a job that asks for its notice after this switch must still reach
+    // the replacement session.
+    // A sub-agent's end is subagent.end; session.end means the conversation itself ended.
+    if (this.depth === 0) this.#emit(undefined, "session.end", { reason })
+
+    if (this.depth === 0) this.tree?.abortAll("the session ended")
+    else this.tree?.abortChildren(this.sessionId, "the session ended")
+    const current = this.#current
+    if (current) await current.catch(() => {})
+    await this.tree?.waitForChildren(this.depth === 0 ? undefined : this.sessionId)
+
+    // Never rejects: a job that fails to stop here still ends with the process.
+    const jobs = this.backgroundJobsHost
+    if (jobs && this.depth > 0) await jobs.closeSession(this.sessionId).catch(() => {})
+    else if (jobs && reason !== "switch") await jobs.closeRoot(this.sessionId).catch(() => {})
+    if (this.#sessionLease) {
+      this.#sessionLease = false
+      this.session?.release()
+    }
+  }
+
   /**
    * Adds a message to the running turn without interrupting it (D29): it joins the history
    * before the next model call, and a running tool finishes first. Queued messages the turn
@@ -1204,6 +1258,7 @@ export class Agent {
    * the turn that starts when the compaction ends.
    */
   steer(input: string | UserMessage): void {
+    if (this.#disposed) return
     const message = typeof input === "string" ? userMessage(input) : input
     const turn = this.#turn
     if (!turn && this.#holding) {
@@ -1226,6 +1281,7 @@ export class Agent {
    * starts when the compaction ends, together with anything steered meanwhile.
    */
   prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
+    if (this.#disposed) return Promise.reject(new AgentAbortedError("the session has ended"))
     if (this.#holding && !this.#afterCompaction?.prompted) {
       const user = typeof input === "string" ? userMessage(input) : input
       const next = this.#holdForCompaction(user, false, opts.turnId)
@@ -1366,11 +1422,11 @@ export class Agent {
         ...(result.failure ? { failure: result.failure } : {}),
       })
       this.#setStatus(turn, "idle")
-      if (result.reason === "done") this.#startTitle()
+      if (result.reason === "done" && !this.#disposed) this.#startTitle()
       // A success resets the notice retries; after an interrupt the user decides when to go on.
       if (result.reason !== "error") this.#retries = 0
-      else if (turn.unanswered || this.#notices.length) this.#scheduleRetry(result.error)
-      if (nextTurnId) {
+      else if (!this.#disposed && (turn.unanswered || this.#notices.length)) this.#scheduleRetry(result.error)
+      if (nextTurnId && !this.#disposed) {
         this.prompt(joinMessages(leftover), { turnId: nextTurnId }).catch(() => {})
       }
     }
@@ -1401,6 +1457,11 @@ export class Agent {
       )
       .join("\n")
       .slice(0, 8000)
+    const titleAbort = new AbortController()
+    const titleTimer = setTimeout(() => titleAbort.abort(), 30_000)
+    ;(titleTimer as { unref?: () => void }).unref?.()
+    this.#titleAbort = titleAbort
+    this.#titleTimer = titleTimer
     void (async () => {
       try {
         for await (const e of this.#ai.stream(
@@ -1416,9 +1477,10 @@ export class Agent {
               ? Math.min(TITLE_THINKING_TOKENS, model.maxOutput || Infinity)
               : 64,
           },
-          AbortSignal.timeout(30_000),
+          titleAbort.signal,
         )) {
           if (e.type !== "done" && e.type !== "error") continue
+          if (this.#disposed) return
           const usage = e.message.usage
           if (usage) {
             this.tree?.recordUsage(this, usage)
@@ -1443,6 +1505,10 @@ export class Agent {
         }
       } catch {
         // Naming is optional; a failed side request never interrupts the conversation.
+      } finally {
+        if (this.#titleAbort === titleAbort) this.#titleAbort = undefined
+        if (this.#titleTimer === titleTimer) this.#titleTimer = undefined
+        clearTimeout(titleTimer)
       }
     })()
   }
@@ -1839,9 +1905,7 @@ export class Agent {
     const estimate = this.#estimateNext()
     const pressure = overflow || estimate > o.start * window
     if (!pressure && o.afterTurns <= 0) return undefined
-    const sealed = lastSealedIndex(this.messages, (sig, producer) =>
-      this.#ai.canReplay(sig, this.model, producer),
-    )
+    const sealed = lastSealedIndex(this.messages, this.#ai.replayTarget(this.model))
     const candidates = agingCandidates(this.messages, this.#views, {
       keepTurns: o.keepTurns,
       keepSteps: o.keepSteps,

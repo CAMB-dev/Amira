@@ -66,6 +66,18 @@ export function canReplayServerTool(b: ServerToolBlock, target: ReplayTarget, pr
   return target.webSearch && sig !== undefined && sig.host !== undefined && canReplay(sig, target, producer)
 }
 
+/** Whether a signed content block will be sent back to the target without degrading it. */
+export function canReplayBlock(
+  b: { type: string; signature?: Signature },
+  target: ReplayTarget,
+  producer?: string,
+): boolean {
+  if (!b.signature) return false
+  return b.type === "serverTool"
+    ? canReplayServerTool(b as ServerToolBlock, target, producer ?? "")
+    : canReplay(b.signature, target, producer)
+}
+
 /**
  * History as `target` may receive it: signatures it cannot replay (canReplay,
  * canReplayServerTool) are removed, so the dialect sends those blocks as it sends unsigned
@@ -79,10 +91,7 @@ export function forReplay(messages: Message[], target: ReplayTarget): Message[] 
     if (m.role === "toolResult") return m
     const producer = m.role === "assistant" ? m.model.provider : undefined
     const stale = (b: { type: string; signature?: Signature }) =>
-      b.signature !== undefined &&
-      (b.type === "serverTool"
-        ? !canReplayServerTool(b as ServerToolBlock, target, producer ?? "")
-        : !canReplay(b.signature, target, producer))
+      b.signature !== undefined && !canReplayBlock(b, target, producer)
     if (!(m.content as { type: string; signature?: Signature }[]).some(stale)) return m
     changed = true
     const content = m.content.map((b) => {
