@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { createAi } from "../src/client.ts"
 import { anthropicError } from "../src/dialects/anthropic-errors.ts"
 import { geminiError } from "../src/dialects/google-gemini-errors.ts"
-import { bodyError } from "../src/dialects/openai-chat-errors.ts"
+import { bodyError, isRetryableBodyError } from "../src/dialects/openai-chat-errors.ts"
 import { responsesError } from "../src/dialects/openai-responses-errors.ts"
 import { describeModelError, isContextOverflow, modelErrorKind, providerMessage } from "../src/errors.ts"
 import { events } from "./helpers.ts"
@@ -101,4 +101,10 @@ test("errors from the client carry their kind, the host and how often they were 
     type: "error",
     error: { status: 429, kind: "rate", host: "api.example.com", retries: 2 },
   })
+})
+
+test("a client error that mentions a timeout is not retried", () => {
+  expect(isRetryableBodyError({ message: "tools[0].parameters.timeout: invalid", status: 400 })).toBe(false)
+  expect(isRetryableBodyError({ message: "request timed out", status: 408 })).toBe(true)
+  expect(isRetryableBodyError({ message: "unable to start processing your request" })).toBe(true)
 })

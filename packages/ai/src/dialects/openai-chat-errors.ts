@@ -2,8 +2,13 @@ import type { ModelError } from "../types.ts"
 
 export const isRetryableStatus = (status: number) => status === 429 || status >= 500
 
-/** Provider body errors that mean the service may succeed when the same request is retried. */
+/**
+ * Provider body errors that mean the service may succeed when the same request is retried.
+ * A client error status wins over the text: a 400 may quote a tool's `timeout` parameter.
+ */
 export function isRetryableBodyError(error: ModelError): boolean {
+  if (error.status !== undefined && error.status >= 400 && error.status < 500 && error.status !== 408)
+    return false
   const text = `${error.code ?? ""} ${error.message}`.replace(/[_-]+/g, " ")
   return /(?:\btimeout\b|\btimed?\s*out\b|\boverload(?:ed|ing)?\b|unable\s+to\s+start\s+processing)/i.test(
     text,

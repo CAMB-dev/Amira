@@ -93,7 +93,7 @@ function httpError(
     const raw = Array.isArray(parsed) ? parsed[0]?.error : parsed?.error
     if (raw !== undefined) {
       const mapped = errorOf(raw)
-      bodyRetryable ||= mapped.retryable || isRetryableBodyError(mapped.error)
+      bodyRetryable ||= isRetryableBodyError({ ...mapped.error, status })
       const code = mapped.error.code
       if (code) error.code = code
     }
