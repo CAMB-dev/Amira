@@ -108,13 +108,15 @@ function previewHeader(o: PreviewOptions, firstOmitted: number | undefined): str
 /**
  * The preview the model gets for a large output: a header line first (so a transcript that
  * clips long blocks still keeps the reference), then the head and the tail of `text` in whole
- * lines where possible, with a note where lines were left out. At most about `previewChars`.
+ * lines where possible, with a note where lines were left out. At most about `previewChars`,
+ * fewer for text whose characters take more tokens each (CJK), so a preview costs about the
+ * same whatever the script.
  */
 export function outputPreview(o: PreviewOptions): string {
   const text = o.text.replace(/\r\n/g, "\n")
   // Measure with the longest header the result can have.
   const header = previewHeader(o, countLines(text) || 1)
-  const budget = Math.max(200, o.previewChars - header.length - 120)
+  const budget = Math.max(200, Math.floor(o.previewChars / tokenWeight(text)) - header.length - 120)
   if (text.length <= budget) return `${previewHeader(o, undefined)}\n${text}`
   const half = Math.floor(budget / 2)
   let head = text.slice(0, half)
@@ -133,6 +135,19 @@ export function outputPreview(o: PreviewOptions): string {
   const last = first + omittedLines - 1
   const note = `[... ${n(omittedLines)} lines (${n(omitted.length)} characters) omitted: lines ${first}-${last} ...]`
   return `${previewHeader(o, first)}\n${head}${head.endsWith("\n") ? "" : "\n"}${note}\n${tail}`
+}
+
+/**
+ * How many times more tokens a text's characters take than plain ASCII (about four characters a
+ * token): CJK and other wide characters count as a token each. Between 1 and 4, from a sample.
+ */
+export function tokenWeight(text: string): number {
+  const sample = text.length > 20_000 ? text.slice(0, 10_000) + text.slice(-10_000) : text
+  if (!sample) return 1
+  let wide = 0
+  for (const ch of sample) if (ch.codePointAt(0)! >= 0x2e80) wide++
+  const chars = [...sample].length
+  return Math.min(4, Math.max(1, (chars - wide + 4 * wide) / chars))
 }
 
 /** The header line of a saved output's preview; groups: id, characters, lines. */

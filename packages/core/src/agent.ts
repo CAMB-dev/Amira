@@ -1487,7 +1487,9 @@ export class Agent {
     })
     if (!candidates.length) return undefined
     const scale = this.#tokenScale()
-    const goal = pressure ? estimate - Math.min(o.target, o.start) * window : Number.POSITIVE_INFINITY
+    // After an overflow the window or the estimate was wrong: free a good part whatever they say.
+    const down = estimate - Math.min(o.target, o.start) * window
+    const goal = overflow ? Math.max(down, 0.3 * estimate) : pressure ? down : Number.POSITIVE_INFINITY
     const picks: { m: ToolResultMessage; call: ToolCallBlock | undefined; saved: number }[] = []
     let saved = 0
     for (const c of candidates) {
@@ -1497,7 +1499,9 @@ export class Agent {
       picks.push({ m: c.message, call: c.call, saved: gain })
       saved += gain
     }
-    if (saved <= 0 || (!overflow && saved < o.minSavedTokens)) return undefined
+    // A window whose aging band is narrower than minSavedTokens still ages: never ask for more than the band.
+    const minSaved = Math.min(o.minSavedTokens, Math.max(0, (o.start - Math.min(o.target, o.start)) * window))
+    if (saved <= 0 || (!overflow && saved < minSaved)) return undefined
     return this.#applyAging(turn, picks)
   }
 
