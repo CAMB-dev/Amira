@@ -614,6 +614,7 @@ function spawnRequest(argv: string[], opts: SpawnOptions): SpawnRequest {
     ...(opts.gated ? { gated: true } : {}),
     ...(opts.viaCmd ? { viaCmd: true } : {}),
     ...(opts.stdoutOnly ? { stdoutOnly: true } : {}),
+    ...(opts.maxOutputChars !== undefined ? { maxOutputChars: opts.maxOutputChars } : {}),
   }
 }
 
