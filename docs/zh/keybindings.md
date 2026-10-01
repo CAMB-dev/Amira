@@ -170,7 +170,7 @@ VS Code 默认将 Ctrl+F、Ctrl+Home、Ctrl+End、Ctrl+↑↓ 留给终端自身
 | `tui.bell` | `true` | 终端在后台时，轮次结束或对话框打开会响铃；无法报告焦点的终端中，只在持续至少 15 秒的轮次之后响铃 |
 | `tui.reflow` | `"auto"` | inline 模式中，`"off"` 用于缩窄时不会重新折行的终端，以避免擦除输入框上方的记录；`"auto"` 和 `"on"` 假定终端会重新折行 |
 | `tui.submitWhileWorking` | `"steer"` | `"steer"` 让 Enter 引导当前轮次，`"queue"` 让 Enter 排队；排队键始终执行另一种行为。提示行同步更新，slash 命令始终立即执行 |
-| `tui.images` | `"auto"` | 加载的扩展提供图片时，可以显示回复中独占一行的图片。`"auto"` 使用探测到的终端图形能力，`"on"` 强制进行图形设置，`"off"` 关闭；启用后仍需要图片 provider。无法显示、加载失败或 inline 加载超过 3 秒时，显示替代文本和图片链接。支持 Sixel、kitty graphics、iTerm2 inline images；来源访问规则和大小限制由扩展决定 |
+| `tui.images` | `"auto"` | 安装可选的 [`images`](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/images/README.md) 扩展后（`amira ext install images`；它读取本地文件，也能下载 http(s) 图片，沿用 web_fetch 的内网访问防护，单张最大 10 MB），在终端中绘制回复里独占一行的图片：`"auto"` 在终端声明支持时绘制，例如 Windows Terminal 1.22+（Sixel）、开启 `terminal.integrated.enableImages` 的 VS Code、iTerm2、WezTerm、kitty、Ghostty；`"on"` 始终绘制；`"off"` 从不绘制。其他情况下，以及图片加载失败或超过 3 秒时，显示为 `🖼` 加替代文本，并链接到图片 |
 | `tui.shellOutputLines` | `3` | 成功的 shell 命令显示末尾若干行，运行时同样显示这些行；`0` 不显示。失败时显示首尾输出，Ctrl+O 切到 `full` 会显示全部 |
 
 相关文档：[日常使用](usage.md)、[快速开始](getting-started.md)、[子 agent](subagents.md)、[设置参考](settings.md)。
