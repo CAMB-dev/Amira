@@ -26,8 +26,17 @@ export function decodeSearchReplay(value: string): SearchReplay | undefined {
   return undefined
 }
 
-/** Keeps encrypted_content and every result field inside the existing opaque signature. */
-export function searchResult(block: ServerToolBlock, result: any, after: number, order: number): StreamEvent {
+/**
+ * A search's result arrived: the call and the result, with encrypted_content and every other
+ * field, become the block's opaque signature, to go back together as they came.
+ */
+export function searchResult(
+  block: ServerToolBlock,
+  call: Record<string, any>,
+  result: any,
+  after: number,
+  order: number,
+): StreamEvent {
   block.status = result?.content?.type === "web_search_tool_result_error" ? "failed" : "done"
   if (block.status === "failed") block.input = { ...block.input, error_code: result.content.error_code }
   if (Array.isArray(result?.content)) {
@@ -37,9 +46,8 @@ export function searchResult(block: ServerToolBlock, result: any, after: number,
         : [],
     )
   }
-  const replay = block.signature && decodeSearchReplay(block.signature.value)
-  if (replay)
-    block.signature!.value = JSON.stringify({ ...replay, result, resultAfter: after, resultOrder: order })
+  const replay: SearchReplay = { call, result, resultAfter: after, resultOrder: order }
+  block.signature = { dialect: DIALECT, value: JSON.stringify(replay) }
   return serverToolSnapshot(block)
 }
 

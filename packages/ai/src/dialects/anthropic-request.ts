@@ -52,8 +52,7 @@ export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Rec
     }
     body.tools = tools
   }
-  if (webSearch)
-    body.tools = [...((body.tools as Record<string, unknown>[]) ?? []), ANTHROPIC_SEARCH_TOOL]
+  if (webSearch) body.tools = [...((body.tools as Record<string, unknown>[]) ?? []), ANTHROPIC_SEARCH_TOOL]
   if (cache) markCacheBreakpoints(messages, MAX_BREAKPOINTS - breakpoints)
   body.messages = messages
 

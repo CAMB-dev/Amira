@@ -111,7 +111,7 @@ export class MessagesAccumulator {
       if (open?.kind !== "search") return
       this.#close(open)
       const after = this.message.content.length - this.message.content.indexOf(open.block) - 1
-      yield searchResult(open.block, cb, after, index)
+      yield searchResult(open.block, open.raw, cb, after, index)
     } else if (cb?.type === "tool_use") {
       const block: ToolCallBlock = {
         type: "toolCall",
@@ -181,7 +181,6 @@ export class MessagesAccumulator {
       open.closed = true
       open.block.input = open.json ? parseToolArgs(open.json) : (open.raw.input ?? {})
       open.raw.input = open.block.input
-      open.block.signature = { dialect: ANTHROPIC_DIALECT, value: JSON.stringify({ call: open.raw }) }
       return
     }
     if (open?.kind !== "tool" || open.closed) return
@@ -221,6 +220,15 @@ export class MessagesAccumulator {
     if (this.#stop === "refusal") {
       const message = `the model refused to answer (stop_reason: refusal)${refusalDetails(this.#stopDetails)}`
       return this.fail({ message, code: "refusal" }, false)
+    }
+    // A search still without its result runs when the call goes back unchanged: after a
+    // pause, or alongside client tool calls. Anywhere else the API would reject it alone.
+    if (this.#stop === "pause_turn" || this.#stop === "tool_use") {
+      for (const open of this.#blocks.values()) {
+        if (open.kind !== "search" || open.block.signature) continue
+        this.#close(open)
+        open.block.signature = { dialect: ANTHROPIC_DIALECT, value: JSON.stringify({ call: open.raw }) }
+      }
     }
     const stop = mapStop(this.#stop)
     const hasCalls = this.message.content.some((b) => b.type === "toolCall")

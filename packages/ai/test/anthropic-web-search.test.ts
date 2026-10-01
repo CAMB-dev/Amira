@@ -222,6 +222,41 @@ test("a paused server call can be replayed unchanged on the next request", async
   expect(toAnthropicMessages([last.message])[0]?.content).toEqual([call])
 })
 
+test("a server call without its result goes back alone only after a pause or client tool calls", async () => {
+  const reply = async (stop: string) => {
+    const { last } = await run(
+      anthropicMessages,
+      searchReq(),
+      anthropicResponse([
+        blockStart(0, call),
+        blockStop(0),
+        { type: "message_delta", delta: { stop_reason: stop } },
+        messageStop,
+      ]),
+    )
+    if (last.type !== "done") throw new Error("expected done")
+    return toAnthropicMessages([last.message])[0]?.content as AnthropicBlock[]
+  }
+  expect(await reply("tool_use")).toEqual([call])
+  // The API rejects a server_tool_use without its result in any other position.
+  for (const stop of ["end_turn", "max_tokens"]) {
+    const sent = await reply(stop)
+    expect(sent.some((b) => b.type === "server_tool_use")).toBe(false)
+    expect(JSON.stringify(sent)).toContain("did not finish")
+  }
+  const cut = await run(
+    anthropicMessages,
+    searchReq(),
+    anthropicResponse([
+      blockStart(0, call),
+      blockStop(0),
+      { type: "error", error: { type: "overloaded_error", message: "busy" } },
+    ]),
+  )
+  if (cut.last.type !== "error") throw new Error("expected error")
+  expect((cut.last.message.content[0] as ServerToolBlock).signature).toBeUndefined()
+})
+
 test("search usage takes the latest reported counter rather than adding start and delta counts", async () => {
   const { last } = await run(
     anthropicMessages,
