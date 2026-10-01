@@ -11,8 +11,5 @@
     "@amira/ai": "workspace:*",
     "@amira/api": "workspace:*",
     "@amira/proc": "workspace:*"
-  },
-  "devDependencies": {
-    "@amira/packages": "workspace:*"
   }
 }

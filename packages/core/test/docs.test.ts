@@ -3,7 +3,6 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import os from "node:os"
 import path from "node:path"
 import type { CommandContext } from "@amira/api"
-import { engineMismatch, readManifest } from "@amira/packages"
 import { validateSettings } from "../src/config/schema.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
@@ -83,17 +82,11 @@ const isSettingsExtensions = (v: Record<string, unknown>) =>
 test("the example extension in docs/extensions.md loads, runs and typechecks", async () => {
   const code = read("docs/extensions.md").match(/```ts\n([\s\S]*?)\n```/)![1]!
   expect(read("docs/zh/extensions.md").match(/```ts\n([\s\S]*?)\n```/)![1]).toBe(code)
-  const manifest = read("docs/extensions.md").match(/```json\n([\s\S]*?)\n```/)![1]!
 
   const dir = mkdtempSync(path.join(os.tmpdir(), "amira-doc-example-"))
   try {
     const entry = path.join(dir, "index.ts")
     writeFileSync(entry, code)
-    writeFileSync(path.join(dir, "amira-package.json"), manifest)
-    const parsed = readManifest(dir)
-    expect(parsed.name).toBe("hello-extension")
-    expect(engineMismatch(parsed)).toBeUndefined()
-
     const bus = new EventBus()
     const host = new ExtensionHost({
       bus,

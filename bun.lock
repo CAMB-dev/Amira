@@ -100,9 +100,10 @@
         "@amira/api": "workspace:*",
         "@amira/proc": "workspace:*",
       },
-      "devDependencies": {
-        "@amira/packages": "workspace:*",
-      },
+    },
+    "packages/net": {
+      "name": "@amira/net",
+      "version": "0.0.0",
     },
     "packages/packages": {
       "name": "@amira/packages",
@@ -112,10 +113,6 @@
         "@amira/core": "workspace:*",
         "@amira/proc": "workspace:*",
       },
-    },
-    "packages/net": {
-      "name": "@amira/net",
-      "version": "0.0.0",
     },
     "packages/proc": {
       "name": "@amira/proc",
