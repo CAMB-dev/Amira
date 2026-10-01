@@ -62,11 +62,11 @@ export function pastedImagePaths(
   const trimmed = text.trim()
   if (!trimmed) return undefined
   const windows = platform === "win32"
-  const unescape = (s: string) => (windows ? s : s.replace(/\\(.)/gs, "$1"))
+  const unescaped = (s: string) => (windows ? s : s.replace(/\\(.)/gs, "$1"))
   // A single unquoted path can contain spaces.
   try {
     const unquoted = /^(["'])(.*)\1$/s.exec(trimmed)?.[2]
-    const whole = localPath(unquoted ?? unescape(trimmed), cwd)
+    const whole = localPath(unquoted ?? unescaped(trimmed), cwd)
     if (IMAGE_EXTENSION.test(whole) && statSync(whole).isFile()) return [whole]
   } catch {}
   const tokenPattern = windows
@@ -77,7 +77,7 @@ export function pastedImagePaths(
   while (rest) {
     const token = tokenPattern.exec(rest)
     if (!token) return undefined
-    const value = token[1] ?? token[2] ?? unescape(token[3]!)
+    const value = token[1] ?? token[2] ?? unescaped(token[3]!)
     try {
       const file = localPath(value, cwd)
       if (!IMAGE_EXTENSION.test(file) || !statSync(file).isFile()) return undefined
