@@ -1699,7 +1699,7 @@ export class Agent {
     } finally {
       for (const run of runs) {
         if (!run.result) {
-          run.result = toolError(run.call, "Aborted by the user before this tool finished.")
+          run.result = toolError(run.call, "Aborted by the user before this tool finished.", "aborted")
           this.#emitToolStart(turn, run, run.call.args)
           this.#emitToolEnd(turn, run, { content: run.result.content, isError: true }, 0, "aborted")
         }
@@ -1960,6 +1960,8 @@ export class Agent {
         toolName: call.name,
         content: result.content,
         isError: result.isError ?? false,
+        // Kept with the message, so a resumed session renders the call as this one did.
+        ...(rejected ? { rejected } : {}),
       }
     }
     const reject = (rejected: ToolRejection, text: string, args = call.args) =>
@@ -2117,7 +2119,7 @@ export class Agent {
       if (!run.finished) {
         this.#emitToolEnd(turn, run, { content: [{ type: "text", text }], isError: true }, 0, "blocked")
       }
-      return toolError(call, text)
+      return toolError(call, text, "blocked")
     }
   }
 
@@ -2276,7 +2278,7 @@ export class Agent {
   /** Guarantees every tool call in history has a result, so the next request is valid. */
   #repairHistory() {
     const missing = [...unansweredCalls(this.messages)]
-    this.#push(...missing.map((b) => toolError(b, "This tool call did not complete.")))
+    this.#push(...missing.map((b) => toolError(b, "This tool call did not complete.", "aborted")))
   }
 
   /** Adds messages to the history and persists each one. */
@@ -2751,13 +2753,14 @@ function normalizeResult(r: unknown): ToolResult {
   return out
 }
 
-function toolError(call: ToolCallBlock, text: string): ToolResultMessage {
+function toolError(call: ToolCallBlock, text: string, rejected?: ToolRejection): ToolResultMessage {
   return {
     role: "toolResult",
     toolCallId: call.id,
     toolName: call.name,
     content: [{ type: "text", text }],
     isError: true,
+    ...(rejected ? { rejected } : {}),
   }
 }
 

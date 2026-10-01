@@ -8,6 +8,7 @@ import { Agent, type AgentOptions } from "../src/agent.ts"
 import { splitHistory, summaryMessages } from "../src/compaction.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { amiraHome } from "../src/home.ts"
+import { Permissions } from "../src/permissions/policy.ts"
 import { SessionStore } from "../src/session-store.ts"
 
 async function setup(steps: MockStep[], extra: Partial<AgentOptions> = {}) {
@@ -144,6 +145,52 @@ test("every message is persisted as it is added and restores into a new agent", 
   ])
   // Resuming with the same model does not record a model change again.
   expect(reopened.entries.filter((e) => e.type === "model_change").length).toBe(1)
+})
+
+test("a call rejected at its approval prompt keeps why on its stored result, as the live view showed it", async () => {
+  const bash = (ran: string[]) =>
+    defineTool<{ command: string }>({
+      name: "bash",
+      description: "",
+      parameters: { type: "object", properties: { command: { type: "string" } } },
+      traits: { shell: "bash" },
+      execute: async ({ command }) => {
+        ran.push(command)
+        return textResult(`ran ${command}`)
+      },
+    })
+  // The question dismissed interrupts the turn; a plain "no" denies the call alone.
+  const dismissed = await setup(
+    [{ toolCalls: [{ name: "bash", args: { command: "npm publish" }, id: "c1" }] }, { text: "done" }],
+    {
+      permissions: new Permissions({ mode: "edits" }),
+      approve: async () => ({ approved: false, interrupt: true }),
+    },
+  )
+  const ran: string[] = []
+  dismissed.agent.tools.register(bash(ran), "t")
+  const turn = await dismissed.agent.prompt("go")
+  expect(turn.reason).toBe("aborted")
+  expect(ran).toEqual([])
+  // Live, the call's end said interrupted, not failed; the stored result says the same.
+  const end = dismissed.events.find((e) => e.type === "tool.execute.end")
+  expect(end?.type === "tool.execute.end" && end.data.rejected).toBe("aborted")
+  const stored = SessionStore.open(dismissed.session.file).restore().messages
+  const result = stored.find((m) => m.role === "toolResult")
+  expect(result).toMatchObject({ isError: true, rejected: "aborted" })
+
+  const denied = await setup(
+    [{ toolCalls: [{ name: "bash", args: { command: "npm publish" }, id: "c1" }] }, { text: "ok" }],
+    {
+      permissions: new Permissions({ mode: "edits" }),
+      approve: async () => ({ approved: false, reason: "the user said no" }),
+    },
+  )
+  denied.agent.tools.register(bash(ran), "t")
+  await denied.agent.prompt("go")
+  expect(ran).toEqual([])
+  const kept = SessionStore.open(denied.session.file).restore().messages
+  expect(kept.find((m) => m.role === "toolResult")).toMatchObject({ isError: true, rejected: "blocked" })
 })
 
 test("a prompt's display is stored and in turn.start, but the model gets only the full text", async () => {

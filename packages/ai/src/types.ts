@@ -123,12 +123,21 @@ export interface AssistantMessage {
   stopReason?: StopReason
 }
 
+/** Why a tool call produced an error result without its tool running to completion. */
+export type ToolRejection = "blocked" | "unknownTool" | "invalidArgs" | "aborted"
+
 export interface ToolResultMessage {
   role: "toolResult"
   toolCallId: string
   toolName: string
   content: ToolResultContent[]
   isError: boolean
+  /**
+   * Why the call did not run to completion, when it did not. For frontends only — dialects
+   * never send it — so a resumed session renders the call as the live one did. Messages
+   * stored before this was kept have none.
+   */
+  rejected?: ToolRejection
 }
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage
