@@ -325,8 +325,9 @@ test("a resumed session on another provider writes the summary from the session 
 })
 
 test("aborting a server compaction leaves the conversation as it was", async () => {
+  const started = Promise.withResolvers<void>()
   const hang: Script = (_req, signal) =>
-    new Promise((resolve) =>
+    new Promise((resolve) => {
       signal.addEventListener("abort", () =>
         resolve({
           ok: false,
@@ -334,14 +335,15 @@ test("aborting a server compaction leaves the conversation as it was", async () 
           unsupported: false,
           retryable: false,
         }),
-      ),
-    )
+      )
+      started.resolve()
+    })
   const { agent, events, bus } = await setup([{ text: "r1" }, { text: "r2" }], [hang])
   await agent.prompt("q1")
   await agent.prompt("q2")
   const before = [...agent.messages]
   const done = agent.compact()
-  await new Promise((r) => setTimeout(r, 10))
+  await started.promise
   agent.abort()
   expect(await done).toBe(false)
   await bus.flush()
