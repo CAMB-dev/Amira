@@ -284,8 +284,8 @@ test("same-directory sub-agents capture into the parent's journal at its prompt 
 test("a separate-directory sub-agent's changes stay outside the parent's file journal", async () => {
   const { cwd, session, store, host } = await setup([{ text: "ready" }, writing, { text: "child done" }])
   await host.control.send("delegate")
-  const other = join(cwd, "worktree")
-  mkdirSync(other)
+  // Agent worktrees live outside the workspace, under the Amira home.
+  const other = temporary()
   const child = session.tree.spawn(host.agent, { prompt: "create a", cwd: other, systemPrompt: "child" })
   expect((await child.result()).status).toBe("done")
   expect(store.entries.some((e) => e.type === "file_mutation")).toBe(false)
@@ -301,4 +301,60 @@ test("active sub-agents block rewind; explicit prune is available as a command",
   await child.result()
   const result = await host.run("/rewind-prune", { frontend: "print" })
   expect(result.output.join("\n")).toContain("Pruned 0 file images")
+})
+
+test("a sub-agent in a subdirectory writes the parent's files, so it shares the parent's journal", async () => {
+  const { cwd, session, store, host } = await setup([{ text: "ready" }, writing, { text: "child done" }])
+  await host.control.send("delegate")
+  const sub = join(cwd, "pkg")
+  mkdirSync(sub)
+  const child = session.tree.spawn(host.agent, { prompt: "create a", cwd: sub, systemPrompt: "child" })
+  expect((await child.result()).status).toBe("done")
+  expect(store.entries.some((e) => e.type === "file_mutation")).toBe(true)
+  await host.control.rewind!(0)
+  expect(existsSync(join(sub, "a"))).toBe(false)
+})
+
+test("a session with an unfinishable restore still opens, warns, and conversation-only rewind abandons it", async () => {
+  const { cwd, session, store, host } = await setup([writing, { text: "done" }, writing, { text: "again" }])
+  writeFileSync(join(cwd, "a"), "original")
+  await host.control.send("change a")
+  const append = store.appendDurable.bind(store)
+  const crash = spyOn(store, "appendDurable").mockImplementation((entry) => {
+    if (entry.type === "file_restore_progress") throw new Error("interrupted")
+    return append(entry)
+  })
+  try {
+    await expect(host.control.rewind!(0)).rejects.toThrow("interrupted")
+  } finally {
+    crash.mockRestore()
+  }
+  writeFileSync(join(cwd, "a"), "user edit after the crash")
+  const notices: string[] = []
+  session.agent.bus.subscribe((event) => {
+    if (event.type === "extension.notice") notices.push(event.data.text)
+  })
+  const resumed = session.resume(SessionStore.open(store.file))
+  host.switchTo(resumed)
+  await session.agent.bus.flush()
+  expect(notices.join(" ")).toContain("could not finish")
+  expect(host.control.planRewind!(0).conflicts).toEqual([join(cwd, "a")])
+  await expect(host.control.rewind!(0)).rejects.toThrow("nothing changed")
+  await host.control.rewind!(0, { restoreFiles: false })
+  expect(readFileSync(join(cwd, "a"), "utf8")).toBe("user edit after the crash")
+  expect(host.control.messages()).toHaveLength(0)
+  await host.control.send("change a again")
+  expect(readFileSync(join(cwd, "a"), "utf8")).toBe("tool")
+})
+
+test("a fork keeps the captured bytes, also after the original session is deleted", async () => {
+  const { cwd, store, host } = await setup()
+  writeFileSync(join(cwd, "a"), "original")
+  await host.control.send("change a")
+  await host.control.fork!()
+  expect(host.agent.session!.id).not.toBe(store.id)
+  await host.control.deleteSession!(store.id)
+  expect(existsSync(store.file)).toBe(false)
+  await host.control.rewind!(0)
+  expect(readFileSync(join(cwd, "a"), "utf8")).toBe("original")
 })

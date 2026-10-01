@@ -46,7 +46,7 @@ import type { EmitMeta } from "./event-bus.ts"
 import { instructionsSection, loadInstructions } from "./instructions.ts"
 import { validateValue } from "./json-schema.ts"
 import { defaultSections, type PromptSection, renderPrompt, setSection } from "./prompt.ts"
-import { projectKey, SessionStore } from "./session-store.ts"
+import { SessionStore } from "./session-store.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 
 /**
@@ -550,7 +550,9 @@ export class AgentTree {
       cwd,
       providerSettings: parent.providerSettings,
       fileRewindSettings: parent.fileRewindSettings,
-      ...(projectKey(cwd) === projectKey(parent.cwd) ? { fileRewind: parent.fileRewind } : {}),
+      // A child whose directory overlaps the parent's writes the same files: one journal, one
+      // restore. Worktrees live elsewhere and keep their own until their merge is captured.
+      ...(overlaps(cwd, parent.cwd) ? { fileRewind: parent.fileRewind } : {}),
       sections: setSection(base, "role", opts.systemPrompt ?? ""),
       messages: context === "fork" ? forkHistory(parent.messages) : [],
       // A forked history may hold a server checkpoint only the parent's model reads; a child on
@@ -1283,4 +1285,14 @@ function metaOf(agent: Agent): EmitMeta {
   if (agent.parentSessionId) meta.parentSessionId = agent.parentSessionId
   if (agent.turnId) meta.turnId = agent.turnId
   return meta
+}
+
+/** One directory contains the other (or they are the same), case-insensitively on Windows. */
+function overlaps(a: string, b: string): boolean {
+  const key = (p: string) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p))
+  const inside = (child: string, root: string) => {
+    const rel = path.relative(key(root), key(child))
+    return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
+  }
+  return inside(a, b) || inside(b, a)
 }

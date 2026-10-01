@@ -5,9 +5,11 @@ import { type AssistantMessage, type SessionControl, type ShellMode, USER_STOP_R
 import {
   type Agent,
   CommandHost,
+  copyFileHistory,
   createExtensionAdmin,
   deleteSession,
   FILE_REWIND_COVERAGE,
+  FileRewindConflictError,
   findSession,
   listSessions,
   listSubagents,
@@ -235,7 +237,12 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         if (entry?.type !== "message") throw new Error("that message was summarized by a compaction")
         target = entry.parentId
       }
-      switchTo(session.resume(store.fork(target), a.model), "fork")
+      if (a.fileRewind?.restoring)
+        throw new Error("finish or abandon the interrupted file restore before forking")
+      const forked = store.fork(target)
+      // The copied journal keeps working: the fork gets the captured bytes it refers to.
+      copyFileHistory(store, forked)
+      switchTo(session.resume(forked, a.model), "fork")
     },
     planRewind: (index) => {
       const { a, entry } = rewindEntry(index)
@@ -270,8 +277,15 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       const { a, store, entry } = rewindEntry(index)
       const owner = session.host.fileRestoration
       const restore = options?.restoreFiles !== false
-      if (a.fileRewind?.restoring && (!restore || owner)) {
-        throw new Error("Finish the interrupted core file restore before choosing another restoration mode")
+      const interrupted = a.fileRewind?.interrupted()
+      if (interrupted) {
+        // Never two restores: finish the started one, or give it up only once it cannot finish.
+        if (!interrupted.conflicts.length && (!restore || owner || interrupted.messageId !== entry.id))
+          throw new Error(
+            "Finish the interrupted core file restore first: rewind with files to the message it was started for",
+          )
+        if (interrupted.conflicts.length && restore) throw new FileRewindConflictError(interrupted.conflicts)
+        if (!restore) a.fileRewind!.abandon()
       }
       if (restore && owner) {
         await a.hold("file restore", async () => {

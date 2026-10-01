@@ -412,17 +412,26 @@ export class Agent {
     this.fileRewindSettings = opts.fileRewindSettings
     this.fileRewind =
       opts.fileRewind ?? (opts.session ? new FileRewind(opts.session, opts.fileRewindSettings) : undefined)
-    const recovered = !opts.fileRewind ? this.fileRewind?.recover() : undefined
+    let recovered: ReturnType<FileRewind["recover"]>
+    let unrecovered: string | undefined
+    try {
+      recovered = !opts.fileRewind ? this.fileRewind?.recover() : undefined
+    } catch (error) {
+      // The session must still open: the user resolves the conflicts or abandons the restore.
+      unrecovered = (error as Error).message
+    }
     this.sessionId = opts.session?.id ?? opts.sessionId ?? newSessionId()
     this.parentSessionId = opts.parentSessionId
     this.bus = opts.bus ?? new EventBus()
-    if (recovered) {
+    if (recovered || unrecovered) {
       this.bus.emit(
         "extension.notice",
         {
           source: "file-rewind",
-          level: "info",
-          text: `Finished interrupted file restore: ${recovered.restored} restored, ${recovered.removed} removed. ${FILE_REWIND_COVERAGE}`,
+          level: recovered ? "info" : "warning",
+          text: recovered
+            ? `Finished interrupted file restore: ${recovered.restored} restored, ${recovered.removed} removed. ${FILE_REWIND_COVERAGE}`
+            : `An interrupted file restore could not finish, and file tools cannot write until it does. ${unrecovered}\nResolve the conflicts and rewind to the same message with files, or rewind the conversation only to abandon it.`,
         },
         { sessionId: this.sessionId },
       )
