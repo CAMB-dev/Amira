@@ -1,5 +1,16 @@
-import { type FileHandle, lstat, mkdir, open, readFile, rmdir, unlink, writeFile } from "node:fs/promises"
-import { dirname, isAbsolute, relative, sep } from "node:path"
+import {
+  type FileHandle,
+  link,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rmdir,
+  unlink,
+  writeFile,
+} from "node:fs/promises"
+import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { type ApplyPatchDetails, defineTool, textResult } from "@amira/api"
 import { fileDiff } from "./diff.ts"
 import { applyUpdate, parsePatch } from "./patch-format.ts"
@@ -87,8 +98,6 @@ async function snapshot(path: string): Promise<Snapshot> {
   const st = await stat(path)
   if (!st) return { path }
   if (!st.isFile()) throw new Error(`Not a regular file: ${path}`)
-  // An in-place write would change every link, so a file linked from elsewhere is left alone.
-  if (st.nlink > 1) throw new Error(`File has other hard links: ${path}`)
   return { path, bytes: await readFile(path), ino: st.ino, dev: st.dev, mode: st.mode }
 }
 
@@ -127,30 +136,50 @@ export async function applyPatch(
   const operations = parsePatch(patch)
   const changes: Change[] = []
   const files: ApplyPatchDetails["files"] = []
-  const claimed = new Set<string>()
+  const originals = new Map<string, Snapshot>()
+  const staged = new Map<string, Snapshot>()
   async function claim(input: string) {
     const path = await safePath(cwd, input)
     const key = fileKey(cwd, path)!
-    if (claimed.has(key)) throw new Error(`Multiple operations target the same path: ${input}`)
-    for (const other of claimed) {
+    const previous = staged.get(key)
+    if (previous) return previous
+    for (const other of originals.keys()) {
       if (key.startsWith(`${other}${sep}`) || other.startsWith(`${key}${sep}`)) {
         throw new Error(`Patch paths conflict as file and directory: ${input}`)
       }
     }
-    claimed.add(key)
-    return snapshot(path)
+    const before = await snapshot(path)
+    for (const other of originals.values()) {
+      if (before.bytes && before.ino === other.ino && before.dev === other.dev) {
+        throw new Error(
+          `Patch targets multiple hard links to the same file: ${other.path}, ${input}; use one path`,
+        )
+      }
+    }
+    originals.set(key, before)
+    staged.set(key, before)
+    return before
+  }
+  function stage(change: Change) {
+    changes.push(change)
+    staged.set(
+      fileKey(cwd, change.before.path)!,
+      change.after
+        ? { ...change.before, bytes: Buffer.from(change.after), mode: change.mode ?? change.before.mode }
+        : { path: change.before.path },
+    )
   }
   for (const op of operations) {
     const before = await claim(op.path)
     if (op.kind === "add") {
       if (before.bytes) throw new Error(`Cannot add existing file: ${op.path}`)
-      changes.push({ before, after: Buffer.from(op.content) })
+      stage({ before, after: Buffer.from(op.content) })
       files.push({ path: before.path, action: "add", ...fileDiff("", op.content) })
     } else {
       if (op.kind === "delete") {
         if (!before.bytes) throw new Error(`File not found: ${before.path}`)
         const decoded = decodeText(before.bytes)
-        changes.push({ before })
+        stage({ before })
         files.push({
           path: before.path,
           action: "delete",
@@ -165,7 +194,8 @@ export async function applyPatch(
         if (op.moveTo) {
           const destination = await claim(op.moveTo)
           if (destination.bytes) throw new Error(`Move destination already exists: ${op.moveTo}`)
-          changes.push({ before: destination, after, mode: before.mode }, { before })
+          stage({ before: destination, after, mode: before.mode })
+          stage({ before })
           files.push({
             path: destination.path,
             from: before.path,
@@ -173,20 +203,38 @@ export async function applyPatch(
             ...fileDiff(decoded.text, updated),
           })
         } else {
-          changes.push({ before, after })
+          stage({ before, after })
           files.push({ path: before.path, action: "update", ...fileDiff(decoded.text, updated) })
         }
       }
     }
   }
   // Validate every source and destination before any directory or file is created.
-  for (const change of changes) await unchanged(cwd, change.before)
+  for (const before of originals.values()) await unchanged(cwd, before)
   signal.throwIfAborted()
-  const journal: (Change & { owned: Snapshot })[] = []
+  const currentState = new Map(originals)
+  const journal: (Change & { owned: Snapshot; backup?: string })[] = []
+  const backups: string[] = []
   const directories: string[] = []
+  async function cleanBackups(): Promise<string[]> {
+    const failures: string[] = []
+    for (const dir of backups.toReversed()) {
+      try {
+        await unlink(join(dir, "original")).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error
+        })
+        await rmdir(dir)
+      } catch (error) {
+        failures.push(`${dir}: ${(error as Error).message}`)
+      }
+    }
+    return failures
+  }
   try {
-    for (const change of changes) {
+    for (const planned of changes) {
       signal.throwIfAborted()
+      const key = fileKey(cwd, planned.before.path)!
+      const change = { ...planned, before: currentState.get(key)! }
       await unchanged(cwd, change.before)
       if (change.after) {
         const missing: string[] = []
@@ -211,17 +259,30 @@ export async function applyPatch(
           }
           journal.push({ ...change, owned: { path: change.before.path, ino: st.ino, dev: st.dev } })
           await io.write(handle, change.after)
+          currentState.set(key, {
+            ...change.before,
+            bytes: Buffer.from(change.after),
+            ino: st.ino,
+            dev: st.dev,
+            mode: st.mode,
+          })
         } finally {
           await handle.close()
         }
       } else {
-        journal.push({ ...change, owned: change.before })
+        // Keep the inode alive so rollback can restore the name and all hard-link relationships.
+        const directory = await mkdtemp(join(dirname(change.before.path), ".amira-patch-"))
+        backups.push(directory)
+        const backup = join(directory, "original")
+        await link(change.before.path, backup)
+        journal.push({ ...change, owned: change.before, backup })
         await io.remove(change.before.path)
+        currentState.set(key, { path: change.before.path })
       }
     }
   } catch (error) {
     const failures: string[] = []
-    for (const { before, after, owned } of journal.reverse()) {
+    for (const { before, after, owned, backup } of journal.reverse()) {
       try {
         await safePath(cwd, before.path)
         const current = await stat(before.path)
@@ -230,12 +291,15 @@ export async function applyPatch(
         }
         if (!current && after && before.bytes)
           throw new Error("Path was removed concurrently; refusing to recreate it")
+        if (!current && backup) await link(backup, before.path)
+        // writeFile truncates the existing inode; every hard link sees the restored bytes.
         if (before.bytes) await writeFile(before.path, before.bytes, { mode: before.mode })
         else if (current) await unlink(before.path)
       } catch (rollbackError) {
         failures.push(`${before.path}: ${(rollbackError as Error).message}`)
       }
     }
+    failures.push(...(await cleanBackups()))
     for (const dir of directories.reverse()) {
       try {
         await rmdir(dir)
@@ -247,6 +311,9 @@ export async function applyPatch(
       `${(error as Error).message}\n${failures.length ? `Rollback incomplete: ${failures.join("; ")}` : "All patch changes rolled back."}`,
     )
   }
+  const cleanupFailures = await cleanBackups()
+  if (cleanupFailures.length)
+    throw new Error(`Patch applied, but temporary backup cleanup failed: ${cleanupFailures.join("; ")}`)
   return { files }
 }
 
@@ -256,7 +323,7 @@ export const applyPatchTool = defineTool<ApplyPatchParams>({
     "Apply a Codex patch to workspace files. Read existing files first.",
     "Use *** Begin Patch, *** Add File: path (each content line starts with +), *** Delete File: path, or *** Update File: path with @@ hunks; end with *** End Patch.",
     "Update lines start with a space for context, - for removals, or + for additions. @@ context locates a section; *** End of File anchors the final hunk. *** Move to: path follows an Update File header.",
-    "All hunks are validated before writing; I/O failures trigger rollback. Paths must remain in the workspace, without symbolic links. Existing add/move destinations and duplicate target paths are refused.",
+    "Blocks run in order against earlier results; all hunks are validated before writing and I/O failures trigger rollback. Paths must remain in the workspace, without symbolic links. Add/move destinations must be absent at that point. Use only one path per hard-linked file; updates write in place and affect every link.",
     "Existing encoding, BOM, line endings and final-newline state are preserved. Errors include unmatched context and the closest candidate.",
   ].join("\n"),
   parameters: {
