@@ -431,22 +431,43 @@ function killJobTrees(pids: number[]) {
   }
 }
 
-/** A hangup (the terminal closed) or SIGTERM would end Amira without running its exit hooks. */
-function onTerminatingSignal(signal: NodeJS.Signals) {
-  killLiveJobs()
-  // Alone, this listener replaced the default action, which was to end the process.
-  if (process.listenerCount(signal) <= 1) process.exit(signal === "SIGHUP" ? 129 : 143)
-}
+/**
+ * Marks a signal listener that only cleans up and leaves what happens to the process to the
+ * others: whoever decides whether a signal ends the process (such as the terminal's restore
+ * handler, which only acts when nobody else listens) does not count it as a listener.
+ */
+export const PASSIVE_SIGNAL_LISTENER = Symbol.for("amira.passiveSignalListener")
 
-function installJobHooks() {
-  if (jobHooksInstalled) return
-  jobHooksInstalled = true
-  process.once("exit", killLiveJobs)
-  for (const signal of ["SIGHUP", "SIGTERM"] as const) {
+const TERMINATING_SIGNALS = ["SIGHUP", "SIGTERM"] as const
+
+/**
+ * A hangup (the terminal closed) or SIGTERM would end Amira without running its exit hooks:
+ * the jobs are killed first. When no listener that decides is left, this one ends the process
+ * as the default action would have.
+ */
+const onTerminatingSignal = Object.assign(
+  (signal: NodeJS.Signals) => {
+    killLiveJobs()
+    const deciding = process
+      .listeners(signal)
+      .filter((l) => !(l as unknown as Record<symbol, unknown>)[PASSIVE_SIGNAL_LISTENER])
+    if (!deciding.length) process.exit(signal === "SIGHUP" ? 129 : 143)
+  },
+  { [PASSIVE_SIGNAL_LISTENER]: true },
+)
+
+/** While jobs run: kill them on exit and on a terminating signal. Removed again when none run. */
+function setJobHooks(on: boolean) {
+  if (on === jobHooksInstalled) return
+  jobHooksInstalled = on
+  for (const signal of TERMINATING_SIGNALS) {
     try {
-      process.on(signal, onTerminatingSignal)
+      if (on) process.on(signal, onTerminatingSignal)
+      else process.off(signal, onTerminatingSignal)
     } catch {}
   }
+  if (on) process.on("exit", killLiveJobs)
+  else process.off("exit", killLiveJobs)
 }
 
 /** Records a job's main process from "spawned" until its "exit", for killLiveJobs. */
@@ -456,10 +477,11 @@ function trackJobUntilExit(onEvent: (e: JobEvent) => void): (e: JobEvent) => voi
     if (e.type === "spawned") {
       pid = e.pid
       liveJobs.add(e.pid)
-      installJobHooks()
+      setJobHooks(true)
     } else if (e.type === "exit" && pid !== undefined) {
       // A lost worker's job was killed by pid already.
       liveJobs.delete(pid)
+      if (!liveJobs.size) setJobHooks(false)
     }
     onEvent(e)
   }

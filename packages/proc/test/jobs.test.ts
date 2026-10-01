@@ -8,6 +8,7 @@ import {
   JobLimitError,
   JobRegistry,
   liveJobPids,
+  PASSIVE_SIGNAL_LISTENER,
   resetCommandWorker,
   startJob,
 } from "../src/index.ts"
@@ -145,11 +146,18 @@ test("stop kills the whole tree, grandchildren included", async () => {
   const pids = await treePids(pidFile)
   expect(pids.every(alive)).toBe(true)
   expect(liveJobPids()).toContain(backgroundJobs.get(job.id)!.pid!)
+  // While jobs run, a passive listener kills them on SIGTERM and SIGHUP, leaving the rest to others.
+  const passive = (signal: NodeJS.Signals) =>
+    process.listeners(signal).filter((l) => (l as never)[PASSIVE_SIGNAL_LISTENER])
+  expect(passive("SIGTERM")).toHaveLength(1)
+  expect(passive("SIGHUP")).toHaveLength(1)
   const ended = await backgroundJobs.stop(job.id)
   expect(ended.status).toBe("stopped")
   expect(ended.stopRequested).toBe(true)
   await expectAllGone(pids)
   expect(liveJobPids()).not.toContain(ended.pid!)
+  // None run: the listeners are gone again.
+  expect(passive("SIGTERM")).toHaveLength(0)
 })
 
 test("a job whose main process exits takes what it left running with it", async () => {
