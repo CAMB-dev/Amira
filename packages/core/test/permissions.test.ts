@@ -69,6 +69,14 @@ describe("bash reading", () => {
     expect(complex("gi* push")).toContain("pattern")
   })
 
+  test("find running commands, more wrappers and odd line breaks are complex too", () => {
+    expect(parseBash("find . -execdir rm x \\;").complex).toContain("find")
+    expect(parseBash("nice -n 5 git push").complex).toContain("runs other commands")
+    expect(parseBash("wsl git push").complex).toContain("runs other commands")
+    expect(parseBash("ls\u2028git push").complex).toContain("line break")
+    expect(parsePowerShell("ls\u2029git push").complex).toContain("line break")
+  })
+
   test("the words around a substitution are still found", () => {
     expect(parseBash("echo $(git push)").commands).toContainEqual(["git", "push"])
   })
@@ -82,6 +90,9 @@ describe("PowerShell reading", () => {
     // The backtick escapes; a backslash is an ordinary character.
     expect(parsePowerShell("git pu`sh C:\\repo").commands).toEqual([["git", "push", "C:\\repo"]])
     expect(parsePowerShell("git ‘push’ –f").commands).toEqual([["git", "push", "-f"]])
+    // PowerShell splits words at any Unicode space; bash only at spaces and tabs.
+    expect(parsePowerShell("git\u00a0push").commands).toEqual([["git", "push"]])
+    expect(parseBash("git\u00a0push").commands).toEqual([["git\u00a0push"]])
     expect(parsePowerShell("npm test 2>&1").complex).toBeUndefined()
     expect(parsePowerShell("npm test 2>$null").complex).toBeUndefined()
   })
@@ -175,6 +186,10 @@ describe("rules", () => {
     // A tool of any name that says it runs a shell is a shell tool.
     const custom = { name: "run", shellKind: (): ShellKind => "bash" }
     expect((await p.check(custom, { command: "git push" }, process.cwd())).decision).toBe("deny")
+    // Without a command as text there is nothing to check: it asks where anything could.
+    expect((await p.check(custom, { cmd: "git push" }, process.cwd())).decision).toBe("ask")
+    expect((await p.check(bash, { command: ["git", "push"] }, process.cwd())).decision).toBe("ask")
+    expect((await new Permissions().check(bash, {}, process.cwd())).decision).toBe("allow")
   })
 })
 

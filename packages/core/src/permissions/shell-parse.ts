@@ -20,24 +20,43 @@ const BASH_WRAPPERS = new Set([
   ".",
   "builtin",
   "busybox",
+  "chroot",
   "command",
   "doas",
   "env",
   "eval",
   "exec",
+  "flock",
+  "ionice",
+  "ltrace",
   "nice",
   "nohup",
+  "pkexec",
+  "runuser",
+  "script",
   "setsid",
   "source",
   "stdbuf",
+  "strace",
   "su",
   "sudo",
+  "systemd-run",
+  "taskset",
   "time",
   "timeout",
+  "unbuffer",
   "watch",
+  "winpty",
+  "wsl",
   "xargs",
   ...shellNames(),
 ])
+
+/** Options of find that run a command for each file. */
+const FIND_EXEC = new Set(["-exec", "-execdir", "-ok", "-okdir"])
+
+/** Line breaks other than \n that some shells may take as one; a line with them is not read. */
+const ODD_BREAKS = /[\u0085\u2028\u2029]/
 
 const BASH_KEYWORDS = new Set([
   "!",
@@ -337,7 +356,11 @@ export function parseBash(src: string): ParsedLine {
     else if (BASH_KEYWORDS.has(first)) mark(`the shell keyword "${first}"`)
     else if (BASH_WRAPPERS.has(commandName(first))) mark(`"${first}", which runs other commands`)
     else if (isScript(first)) mark(`the script "${first}"`)
+    else if (commandName(first) === "find" && argv.some((w) => FIND_EXEC.has(w))) {
+      mark("find running a command for each file")
+    }
   }
+  if (ODD_BREAKS.test(src)) mark("an unusual line break")
   return complex === undefined ? { commands } : { commands, complex }
 }
 
@@ -367,7 +390,7 @@ export function parsePowerShell(line: string): ParsedLine {
   const n = src.length
   let i = 0
   const target = (): string => {
-    while (i < n && (src[i] === " " || src[i] === "\t")) i++
+    while (i < n && src[i] !== "\n" && /\s/.test(src[i]!)) i++
     let out = ""
     while (i < n && !/[\s;&|<>(){}]/.test(src[i]!)) {
       const c = src[i]!
@@ -391,7 +414,8 @@ export function parsePowerShell(line: string): ParsedLine {
   while (i < n) {
     const c = src[i]!
     const next = src[i + 1]
-    if (c === " " || c === "\t" || c === "\r") {
+    // PowerShell separates words at any Unicode space, not just spaces and tabs.
+    if (c !== "\n" && /\s/.test(c)) {
       flush()
       i++
     } else if (c === "\n") {
@@ -528,5 +552,6 @@ export function parsePowerShell(line: string): ParsedLine {
     else if (POWERSHELL_WRAPPERS.has(commandName(first))) mark(`"${first}", which runs other commands`)
     else if (isScript(first)) mark(`the script "${first}"`)
   }
+  if (ODD_BREAKS.test(src)) mark("an unusual line break")
   return complex === undefined ? { commands } : { commands, complex }
 }

@@ -229,7 +229,10 @@ export class Permissions {
           cause: "mode",
         }
       }
-      const command = typeof args.command === "string" ? args.command : ""
+      // A shell tool's command is its `command` argument; without one as text there is
+      // nothing to check, which counts as a command the rules cannot read.
+      const command = typeof args.command === "string" ? args.command : undefined
+      if (command === undefined) return this.#shell({ commands: [], complex: "no command text" }, mode)
       const kinds = await shellKinds(tool)
       return strictest(
         kinds.map((k) => this.#shell(k === "bash" ? parseBash(command) : parsePowerShell(command), mode)),

@@ -146,7 +146,7 @@ export interface ToolDefinition<P = any> {
    */
   supersededBy?: "webSearch"
   /**
-   * For a tool that runs its `command` argument in a shell: which shell actually runs it, so
+   * For a tool that runs its `command` argument (a string) in a shell: which shell runs it, so
    * the core permission policy reads the command the way that shell will. A tool with this is
    * checked as a shell tool whatever its name; bash and powershell always are (the bash tool
    * may fall back to PowerShell on Windows; without this, both readings are checked).
