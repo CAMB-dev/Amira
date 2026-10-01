@@ -108,7 +108,7 @@ export default defineExtension((api: ExtensionAPI) => {
     return workspace.get(sessionId)
   }
 
-  // For /status: time thinking and text separately in each top-level session's last reply.
+  // For /status: time thinking and the answer separately in each top-level session's last reply.
   // Sub-agents (their events carry parentSessionId) are left out.
   const timing = new Map<string, ReplyTiming>()
   const speed = new Map<string, string>()
@@ -118,8 +118,12 @@ export default defineExtension((api: ExtensionAPI) => {
   api.on("message.delta", (e) => {
     if (e.parentSessionId !== undefined) return
     const t = timing.get(e.sessionId)
-    if (!t || (e.data.kind !== "text" && e.data.kind !== "thinking") || !e.data.text) return
-    t[e.data.kind] ??= e.ts
+    if (!t) return
+    if (e.data.kind === "thinking") {
+      if (e.data.text) t.thinking ??= e.ts
+    } else if (e.data.kind === "toolCall" ? e.data.argsDelta : e.data.kind === "text" && e.data.text) {
+      t.reply ??= e.ts
+    }
   })
   api.on("message.end", (e) => {
     if (e.parentSessionId !== undefined) return

@@ -404,6 +404,10 @@ test("/status tracks thinking and text separately and clears an unmeasurable las
   const clock = spyOn(Date, "now")
   const end = {
     ...reply("mock/m", 0, 100),
+    content: [
+      { type: "thinking" as const, text: "x".repeat(320) },
+      { type: "text" as const, text: "answer" },
+    ],
     usage: { input: 0, output: 100, reasoning: 80, cacheRead: 0, cacheWrite: 0 },
   }
   try {
@@ -411,7 +415,6 @@ test("/status tracks thinking and text separately and clears an unmeasurable las
     bus.emit("message.start", { model }, meta)
     await bus.flush()
     clock.mockReturnValue(100)
-    bus.emit("message.delta", { kind: "toolCall", toolCallId: "t", argsDelta: "{}" }, meta)
     bus.emit("message.delta", { kind: "text", text: "" }, meta)
     await bus.flush()
     clock.mockReturnValue(1000)
@@ -442,6 +445,27 @@ test("/status tracks thinking and text separately and clears an unmeasurable las
   }
   await bus.flush()
   expect((await run("/status")).text).toMatch(/Speed\s+not measured yet/)
+
+  // A reply that only calls a tool is timed from its first arguments.
+  const toolClock = spyOn(Date, "now")
+  const call: AssistantMessage = {
+    ...reply("mock/m", 0, 50),
+    content: [{ type: "toolCall", id: "t", name: "read", args: {} }],
+  }
+  try {
+    toolClock.mockReturnValue(8000)
+    bus.emit("message.start", { model }, meta)
+    await bus.flush()
+    toolClock.mockReturnValue(8500)
+    bus.emit("message.delta", { kind: "toolCall", toolCallId: "t", argsDelta: "{}" }, meta)
+    await bus.flush()
+    toolClock.mockReturnValue(9000)
+    bus.emit("message.end", { message: call }, meta)
+  } finally {
+    toolClock.mockRestore()
+  }
+  await bus.flush()
+  expect((await run("/status")).text).toMatch(/Speed\s+reply 100 tok\/s in this session's last reply/)
 })
 
 test("/clear starts a new session; /resume switches, or asks among the other sessions", async () => {
