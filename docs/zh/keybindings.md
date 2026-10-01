@@ -32,6 +32,7 @@
 | --- | --- | --- |
 | `submit` | `enter` | 发送消息；轮次运行时发送引导消息，设置 `tui.submitWhileWorking: "queue"` 后改为排队 |
 | `newline` | `shift+enter`、`ctrl+enter` | 换行 |
+| `paste.image` | `alt+v`、`ctrl+v`、`shift+insert` | 剪贴板有文本时粘贴文本，否则附加剪贴板中的图片（见[图片](usage.md#图片)）。Windows Terminal、VS Code 等终端自己占用 Ctrl+V 或 Shift+Insert 作为粘贴键；Alt+V 可以传到 Amira（macOS 上需把 Option 设为 Meta 键） |
 | `queue` | `alt+enter`、`ctrl+q`（Windows；VS Code 中 `ctrl+q` 优先） | 轮次运行时把消息排队；设置 `tui.submitWhileWorking: "queue"` 后改为引导 |
 | `submit.steer` | 无 | 发送消息；运行期间始终用于引导 |
 | `submit.queue` | 无 | 发送消息；运行期间始终用于排队 |

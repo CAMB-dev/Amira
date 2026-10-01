@@ -53,7 +53,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | --- | --- | --- |
 | `submit` | `enter` | Send the message; while a turn runs, steer it (queue it with `tui.submitWhileWorking: "queue"`) |
 | `newline` | `shift+enter`, `ctrl+enter` | Insert a line break |
-| `paste.image` | `alt+v`, `ctrl+v`, `shift+insert` | Paste clipboard text, or attach an image when the clipboard has no text. Alt+V also works when the terminal sends nothing for an image paste |
+| `paste.image` | `alt+v`, `ctrl+v`, `shift+insert` | Paste the clipboard's text, or attach its image when it holds no text (see [Images](usage.md#images)). Windows Terminal, VS Code and others keep Ctrl+V or Shift+Insert for their own paste; Alt+V reaches Amira (on macOS, with Option set to act as Meta) |
 | `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it (steer it with `tui.submitWhileWorking: "queue"`) |
 | `submit.steer` | none | Send the message; while a turn runs, always steer it |
 | `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |
@@ -77,23 +77,6 @@ from `terminal.integrated.commandsToSkipShell`.
 | `edit.external` | `ctrl+g` | Edit the message in your editor: `$VISUAL`, else `$EDITOR` (a command, e.g. `code --wait`), else Notepad on Windows and vi elsewhere. The terminal is the editor's until it exits; the saved text becomes the input |
 
 ### Completion lists
-
-Image input works in both full-screen and inline modes. Paste or drop one or more existing
-PNG, JPEG, GIF or WebP paths (quote paths with spaces; `file://` URIs also work), or choose
-an image in the `@` file list. Other files chosen in the list keep their `@path` reference.
-Attachments appear as `[image 1: name.png 120 KB]` in the input and the sent message.
-Backspace or Delete removes the whole placeholder; undo and the cut/yank keys preserve it.
-Remove attachments before editing the message in an external text editor.
-
-Clipboard image paste uses PowerShell on Windows, `osascript` (and `pngpaste` when installed)
-on macOS, or `wl-paste`/`xclip` on Linux. Missing clipboard tools produce a notice; file paths
-work without them. Bracketed-paste text keeps its normal behavior.
-
-Images are limited to **5 MB total per message**. Resize or compress larger images first.
-An image-capable model is required: otherwise sending shows a warning and keeps the draft.
-Images are stored as inline base64 in the session JSONL so resuming does not depend on the
-original files. Image prompts stay in this run's prompt history but are not duplicated into
-the separate project history file. Thumbnails are not required to attach or send images.
 
 The command popup, shown while the input starts with `/`; the skill popup, shown while it
 starts with `$`; and the file list, shown while an `@word` is typed. Their keys come before
