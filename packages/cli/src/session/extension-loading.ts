@@ -13,8 +13,8 @@ export interface ExtensionLoaderOptions {
   cwd: string
 }
 
+/** Loads everything; returns the sources that failed. */
 export function createExtensionLoader(opts: ExtensionLoaderOptions): () => Promise<string[]> {
-  /** Loads everything; returns the sources that failed. */
   return async () => {
     const failed: string[] = []
     if (!opts.noBuiltins) {
