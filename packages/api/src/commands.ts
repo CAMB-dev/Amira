@@ -8,6 +8,7 @@ import type {
   Usage,
 } from "@amira/ai"
 import type { CompactionUsage } from "./events.ts"
+import type { ExtensionAdmin } from "./extensions-admin.ts"
 import type { ProviderAdmin } from "./providers.ts"
 import type { ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
@@ -367,6 +368,8 @@ export interface SessionControl {
   providers(): ProviderInfo[]
   /** Adding, editing and removing providers and their keys; unset where the host cannot. */
   readonly providerAdmin?: ProviderAdmin
+  /** Installed extension packages and the official index; unset where the host cannot manage them. */
+  readonly extensionAdmin?: ExtensionAdmin
   preview(): Promise<ContextPreview>
   /**
    * Unloads every extension and loads them again, with the packages as installed now. Says

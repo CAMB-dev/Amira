@@ -4,6 +4,7 @@ import { type AssistantMessage, type SessionControl, type ShellMode, USER_STOP_R
 import {
   type Agent,
   CommandHost,
+  createExtensionAdmin,
   findSession,
   listSessions,
   listSubagents,
@@ -229,6 +230,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         ...(p.apiKeyEnv ? { apiKeyEnv: p.apiKeyEnv } : {}),
         hasKey: ai.hasKey(p.id),
       })),
+    extensionAdmin: createExtensionAdmin({ cwd, ...(opts.home ? { home: opts.home } : {}) }),
     providerAdmin: createProviderAdmin({
       ai,
       ...(opts.home ? { home: opts.home } : {}),

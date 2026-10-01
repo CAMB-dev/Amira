@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createAi, createMockDialect, type MockStep, NO_MODEL, userMessage } from "@amira/ai"
+import type { ExtensionAdmin, ExtensionProgress } from "@amira/api"
 import {
   type AnyEvent,
   type ChildSession,
@@ -33,6 +34,7 @@ import {
 } from "@amira/core"
 import statusExtension from "@amira/ext-status"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
+import { extensionCommand } from "../../../extensions/commands/src/ext-command.ts"
 import { plain } from "../../tui-kit/test/context.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
@@ -46,7 +48,6 @@ import {
   tildePath,
 } from "../src/app.ts"
 import { FileIndex, type FileSource, fileList } from "../src/file-index.ts"
-
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
 
@@ -76,6 +77,7 @@ interface SetupOptions {
   startupEvents?: AnyEvent[]
   /** Slash commands to offer; the UI gets a CommandHost when given. */
   commands?: CommandDefinition[]
+  aliases?: Record<string, string>
   /** `$` skills to offer, next to `commands`. */
   skills?: SkillDefinition[]
   /** Input handlers extensions register, next to `commands`. */
@@ -185,6 +187,7 @@ async function setup(steps: MockStep[], o: SetupOptions = {}) {
       bus,
       ui: host.ui,
       control: (o.control ?? {}) as SessionControl,
+      ...(o.aliases ? { aliases: o.aliases } : {}),
       agent,
     })
   }
@@ -3384,6 +3387,229 @@ test("inline: a renderer's image goes to the image providers; a renderer that th
   await exited
 })
 
+test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at 120/60 columns in both modes", async () => {
+  const samples: Record<string, string> = {}
+  for (const mode of ["fullscreen", "inline"] as const)
+    for (const cols of [120, 60])
+      for (const stop of ["\x1b", "\x03"]) {
+        let progress!: (p: ExtensionProgress) => void
+        let active: AbortSignal | undefined
+        let finished = false
+        let reloads = 0
+        const admin: ExtensionAdmin = {
+          list: () => [],
+          search: async () => ({ extensions: [], warnings: [] }),
+          install: async (_name, _scope, opts) => {
+            active = opts.signal
+            progress = opts.onProgress
+            opts.onProgress({
+              name: "fixture",
+              phase: "fetching",
+              percent: 42,
+              detail: "local fixture repository",
+            })
+            return new Promise((_resolve, reject) =>
+              opts.signal.addEventListener(
+                "abort",
+                () => {
+                  finished = true
+                  reject(opts.signal.reason)
+                },
+                { once: true },
+              ),
+            )
+          },
+          update: async () => {},
+          remove: () => {},
+          setEnabled: () => true,
+        }
+        const control: Partial<SessionControl> = {
+          extensionAdmin: admin,
+          info: () => ({
+            id: agent.sessionId,
+            cwd: agent.cwd,
+            busy: false,
+            model: { provider: "mock", model: "m1" },
+            contextWindow: 128000,
+            shell: "auto",
+          }),
+          reloadExtensions: async () => {
+            reloads++
+            return undefined
+          },
+        }
+        const { terminal, live, all, agent, host, exited } = await setup([], {
+          cols,
+          rows: 24,
+          commands: [],
+          settings: { mode },
+          control,
+        })
+        await host.load((api) => {
+          api.registerCommand(extensionCommand(api).command)
+        }, "test-ext")
+        terminal.send("/ext install fixture\r")
+        await waitFor(
+          () => active !== undefined && live().includes("fetching 42%"),
+          `${mode}/${cols}: fetching`,
+        )
+        expect(live()).toContain("Esc cancel command")
+        terminal.send("draft stays available")
+        await waitFor(() => live().includes("draft stays available"), `${mode}/${cols}: responsive draft`)
+        samples[`${mode}-${cols}`] = live()
+        progress({ name: "fixture", phase: "extracting", detail: "local fixture repository" })
+        await waitFor(() => live().includes("extracting"), `${mode}/${cols}: extracting`)
+        terminal.send(stop)
+        await waitFor(
+          () => finished && all().includes("Extension operation cancelled"),
+          `${mode}/${cols}: cancelled`,
+        )
+        expect(active?.aborted).toBe(true)
+        expect(live()).toContain("draft stays available")
+        await waitFor(() => !live().includes("Extensions · working"), `${mode}/${cols}: panel removed`)
+        expect(agent.messages).toHaveLength(0)
+        expect(reloads).toBe(0)
+        terminal.send("\x03")
+        terminal.send("\x04")
+        await exited
+      }
+  if (process.env.TUI_EXT_CAPTURE)
+    writeFileSync(process.env.TUI_EXT_CAPTURE, JSON.stringify(samples, null, 2))
+})
+
+test("extension picker sections filter and show details at 120/60 columns in both modes", async () => {
+  for (const mode of ["fullscreen", "inline"] as const)
+    for (const cols of [120, 60]) {
+      const admin: ExtensionAdmin = {
+        list: () => [
+          {
+            name: "fixture",
+            version: "1.0.0",
+            scope: "user",
+            enabled: true,
+            trusted: true,
+            source: "local repository",
+            description: "Installed fixture",
+          },
+        ],
+        search: async () => ({
+          extensions: [{ name: "available", version: "2.0.0", description: "New extension" }],
+          warnings: [],
+        }),
+        install: async () => {
+          throw new Error("Unexpected install")
+        },
+        update: async () => {},
+        remove: () => {},
+        setEnabled: () => true,
+      }
+      const control: Partial<SessionControl> = {
+        extensionAdmin: admin,
+        info: () => ({
+          id: agent.sessionId,
+          cwd: agent.cwd,
+          busy: false,
+          model: { provider: "mock", model: "m1" },
+          contextWindow: 128000,
+          shell: "auto",
+        }),
+      }
+      const { terminal, live, all, agent, host, exited } = await setup([], {
+        cols,
+        rows: 30,
+        commands: [],
+        settings: { mode },
+        control,
+      })
+      await host.load((api) => {
+        api.registerCommand(extensionCommand(api).command)
+      }, "test-ext-picker")
+      terminal.send("/ext\r")
+      await waitFor(() => live().includes("Available from the index"), `${mode}/${cols}: available section`)
+      expect(live()).toContain("Installed")
+      expect(live()).toContain("d details")
+      terminal.send("avail")
+      await waitFor(
+        () => live().includes("filter") && !live().includes("fixture 1.0.0"),
+        `${mode}/${cols}: filter`,
+      )
+      terminal.send("\x1b")
+      await waitFor(() => host.ui.pending.length === 0, `${mode}/${cols}: dismissed`)
+      terminal.send("/ext\r")
+      await waitFor(() => live().includes("Available from the index"), `${mode}/${cols}: reopened`)
+      terminal.send("d")
+      await waitFor(() => all().includes("Source: local repository"), `${mode}/${cols}: details`)
+      expect(agent.messages).toHaveLength(0)
+      terminal.send("\x04")
+      await exited
+    }
+})
+
+test("cancelling an extension operation leaves concurrent compaction alone; compact aliases stop only their compaction", async () => {
+  for (const viaCommand of [false, true]) {
+    let extensionCancelled = false
+    let compacted: Promise<boolean> | undefined
+    const { terminal, live, all, agent, host, exited } = await setup(
+      [{ text: "SUMMARY ".repeat(100), delayMs: 20 }],
+      {
+        cols: 120,
+        history: [...exchange("a"), ...exchange("b")],
+        aliases: { summarize: "compact" },
+        commands: [
+          {
+            name: "compact",
+            description: "Compact",
+            run: async () => {
+              compacted = agent.compact()
+              await compacted
+            },
+          },
+          {
+            name: "ext",
+            description: "Extension operation",
+            run: async (_args, ctx) =>
+              new Promise<void>((resolve) =>
+                ctx.signal.addEventListener(
+                  "abort",
+                  () => {
+                    extensionCancelled = true
+                    ctx.print("Extension cancelled")
+                    resolve()
+                  },
+                  { once: true },
+                ),
+              ),
+          },
+        ],
+      },
+    )
+    expect(host.commands.has("compact")).toBe(true)
+    if (viaCommand) terminal.send("/summarize\r")
+    else compacted = agent.compact()
+    await waitFor(() => live().includes("compacting the conversation"), "concurrent compaction")
+    let aborts = 0
+    const abort = agent.abort.bind(agent)
+    agent.abort = (...args) => {
+      aborts++
+      return abort(...args)
+    }
+    terminal.send("/ext install fixture\r")
+    await waitFor(() => all().includes("/ext install fixture"), "extension started")
+    terminal.send("\x1b")
+    await waitFor(() => extensionCancelled, "extension cancelled")
+    expect(aborts).toBe(0)
+    expect(agent.busy).toBe(true)
+    if (viaCommand) {
+      terminal.send("\x1b")
+      await waitFor(() => aborts === 1, "compact alias cancelled")
+      expect(await compacted).toBe(false)
+    } else expect(await compacted).toBe(true)
+    await waitFor(() => !agent.busy, "compaction finished")
+    terminal.send("\x04")
+    await exited
+  }
+})
+
 test("live panels sit above the input in both modes, fold with Ctrl+T and follow their state", async () => {
   for (const mode of ["inline", "fullscreen"] as const) {
     let items = ["✓ write the parser", "› test it", "• ship it"]
@@ -3723,7 +3949,9 @@ test("commands get the common keys as bound now, for /help; the transcript's onl
     terminal.send("/keys\r")
     await shows("Enter=Send the message; while a turn runs, steer it")
     expect(all()).toContain("Ctrl+R=Search the prompts sent before")
-    expect(all()).toContain("Esc=Stop the turn; twice in a row, rewind to an earlier message")
+    expect(all()).toContain(
+      "Esc=Cancel a command or stop the turn; twice in a row, rewind to an earlier message",
+    )
     expect(all()).toContain("?=Every key and what it does")
     if (mode === "fullscreen") expect(all()).toContain("Ctrl+F=Find text in the transcript")
     else expect(all()).not.toContain("Find text in the transcript")

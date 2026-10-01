@@ -1,3 +1,4 @@
+export * from "./admin.ts"
 export * from "./git-cache.ts"
 export * from "./index-file.ts"
 export * from "./install.ts"

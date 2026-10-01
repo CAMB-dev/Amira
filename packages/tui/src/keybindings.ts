@@ -42,10 +42,13 @@ export const ACTIONS = {
   interrupt: {
     scope: "input",
     description:
-      "Stop the running turn, sending the steering and queued messages at once as one; twice in a row, rewind the conversation",
-    help: "Stop the turn; twice in a row, rewind to an earlier message",
+      "Cancel a running command, else stop the running turn, sending the steering and queued messages at once as one; twice in a row, rewind the conversation",
+    help: "Cancel a command or stop the turn; twice in a row, rewind to an earlier message",
   },
-  cancel: { scope: "input", description: "Stop the running turn, else clear the input, else quit" },
+  cancel: {
+    scope: "input",
+    description: "Cancel a running command, else stop the running turn, else clear the input, else quit",
+  },
   exit: { scope: "input", description: "Quit when the input is empty and nothing runs" },
   redraw: { scope: "input", description: "Clear the screen and draw it again" },
   "history.prev": { scope: "input", description: "Recall the previous prompt, from the first line" },
