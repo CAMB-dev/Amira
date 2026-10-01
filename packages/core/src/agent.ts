@@ -1232,7 +1232,8 @@ export class Agent {
     if (held) {
       for (const waiter of held.waiters) waiter.reject(new AgentAbortedError("the session has ended"))
     }
-    this.#jobNoticeTarget = undefined
+    // #jobNoticeTarget stays: a job that asks for its notice after this switch must still reach
+    // the replacement session.
     this.#emit(undefined, "session.end", { reason })
 
     if (this.depth === 0) this.tree?.abortAll("the session ended")

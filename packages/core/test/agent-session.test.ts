@@ -88,7 +88,7 @@ test("a top-level background notice follows the replacement session", async () =
   expect(JSON.stringify(mock.requests.at(-1)?.messages)).toContain("the job ended")
 })
 
-test("a notice asked for after several switches reaches the latest session", async () => {
+test("a notice asked for after several switches (and disposals) reaches the latest session", async () => {
   const { agent, ai, mock, bus } = await setup([
     { toolCalls: [{ name: "start", args: {}, id: "c1" }] },
     { text: "started" },
@@ -112,8 +112,10 @@ test("a notice asked for after several switches reaches the latest session", asy
   const make = () => new Agent({ ai, model: ai.model("mock/m"), cwd: "/proj", systemPrompt: "sys", bus })
   const second = make()
   agent.handoverBackgroundNotices(second)
+  await agent.dispose("switch")
   const third = make()
   second.handoverBackgroundNotices(third)
+  await second.dispose("switch")
   // A job started in the first session ends now: its notice goes to the third.
   toolSession!.expectNotice!().deliver(userMessage("the job ended"), { wake: true })
 
