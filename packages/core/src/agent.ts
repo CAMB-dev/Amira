@@ -6,7 +6,6 @@ import {
   type CompactionLayout,
   describeModelError,
   emptyUsage,
-  hasNativeWebSearch,
   invalidArgs,
   isContextOverflow,
   isNoModel,
@@ -61,6 +60,12 @@ import {
   summarizeArtifactUsage,
 } from "./agent/artifact-usage.ts"
 import {
+  buildContext,
+  toolRestriction as modelToolRestriction,
+  offeredDeferredTools,
+  offeredTools,
+} from "./agent/context-builder.ts"
+import {
   concurrencyKey,
   copyArgs,
   formatK,
@@ -70,6 +75,7 @@ import {
   resultMessage,
   toolError,
 } from "./agent/messages.ts"
+import { modelCall } from "./agent/model-call.ts"
 import { approvalPermission, askedText, refusedText } from "./agent/permission-text.ts"
 import {
   AgentAbortedError,
@@ -123,7 +129,7 @@ import {
   resultText,
   type StoredView,
 } from "./context.ts"
-import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
+import { createToolSession } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
@@ -1362,17 +1368,7 @@ export class Agent {
 
   /** Why this model cannot use a registered tool, independent of explicit disabled tools. */
   toolRestriction(tool: ToolDefinition): string | undefined {
-    if (hasNativeWebSearch(this.model) && tool.supersededBy === "webSearch") {
-      return `the current model uses the provider's hosted web search`
-    }
-    const provider = this.providerSettings[this.model.provider]
-    const editing =
-      provider?.models?.find((m) => m.id === this.model.id)?.tools?.edit ?? provider?.tools?.edit ?? "edit"
-    const editor = toolTraits(tool)?.editor
-    if (editor !== undefined && editor !== editing && editing !== "both") {
-      return `the editing tool choice for ${this.model.provider}/${this.model.id} is "${editing}". Set providers.${this.model.provider}.tools.edit or this model's models[].tools.edit to "${tool.name}" or "both" in settings.json and restart the session`
-    }
-    return undefined
+    return modelToolRestriction(tool, this.model, this.providerSettings)
   }
 
   #allowsTool(tool: ToolDefinition): boolean {
@@ -1380,34 +1376,25 @@ export class Agent {
   }
 
   #offeredTools() {
-    return offeredTools(this.tools, this.#loadedTools, (t) => this.#allowsTool(t))
+    return offeredTools(this.tools, this.#loadedTools, (tool) => this.#allowsTool(tool))
   }
 
   /** Deferred tools this model may load, after its provider and model choices. */
   #offeredDeferred() {
-    return this.tools.deferred().filter((t) => this.#allowsTool(t))
+    return offeredDeferredTools(this.tools, (tool) => this.#allowsTool(tool))
   }
 
   /** The system prompt and history for a model call, through the system.build and context.build interceptors. */
   async #buildContext(signal: AbortSignal) {
-    // The core owns the "deferred-tools" section: interceptors see it filled in, and it is
-    // listed again afterwards so tools registered while they waited (e.g. MCP servers that
-    // were still connecting) are included, unless an interceptor rewrote the section.
-    const listed = deferredToolsSection(this.#offeredDeferred())
-    const built = await this.interceptors.run(
-      "system.build",
-      { sections: setSection(this.#sections, "deferred-tools", listed).map((s) => ({ ...s })) },
-      { sessionId: this.sessionId, signal },
-    )
-    let sections = built.value.sections
-    if (sections.find((s) => s.name === "deferred-tools")?.text === listed) {
-      sections = setSection(sections, "deferred-tools", deferredToolsSection(this.#offeredDeferred()))
-    }
-    return this.interceptors.run(
-      "context.build",
-      { systemPrompt: renderPrompt(sections), messages: projectMessages(this.messages, this.#views) },
-      { sessionId: this.sessionId, signal },
-    )
+    return buildContext({
+      sections: this.#sections,
+      offeredDeferred: () => this.#offeredDeferred(),
+      messages: () => this.messages,
+      views: () => this.#views,
+      interceptors: this.interceptors,
+      sessionId: this.sessionId,
+      signal,
+    })
   }
 
   #readKey(call: ToolCallBlock, cwd = this.cwd): string | undefined {
@@ -1429,99 +1416,22 @@ export class Agent {
     if (turn.signal.aborted) return { kind: "aborted" }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
-    const modelRef = { provider: this.model.provider, model: this.model.id }
-    this.#emit(turn, "message.start", { model: modelRef, contextWindow: this.model.contextWindow })
-
-    let final: AssistantMessage | undefined
-    let error: string | undefined
-    let modelError: ModelError | undefined
-    let aborted = false
-    let retrying = false
-    try {
-      const stream = this.#ai.stream(
-        {
-          model: this.model,
-          systemPrompt: ctx.value.systemPrompt,
-          messages: ctx.value.messages,
-          tools: this.#offeredTools(),
-          ...(this.#maxTokens ? { maxTokens: this.#maxTokens } : {}),
-        },
-        turn.signal,
-      )
-      for await (const ev of stream) {
-        if (retrying && ev.type !== "retry") {
-          retrying = false
-          this.#emit(turn, "status.changed", { status: "working" })
-        }
-        switch (ev.type) {
-          case "retry":
-            retrying = true
-            this.#emit(turn, "model.retry", {
-              attempt: ev.attempt,
-              maxRetries: ev.maxRetries,
-              delayMs: ev.delayMs,
-              error: ev.error.message,
-              kind: ev.error.kind ?? "other",
-              ...(ev.error.status !== undefined ? { status: ev.error.status } : {}),
-            })
-            this.#emit(turn, "status.changed", {
-              status: "working",
-              reason: `retrying (${ev.attempt}/${ev.maxRetries})`,
-            })
-            break
-          case "text.delta":
-            this.#emit(turn, "message.delta", { kind: "text", text: ev.text })
-            break
-          case "thinking.delta":
-            this.#emit(turn, "message.delta", { kind: "thinking", text: ev.text })
-            break
-          case "toolCall.delta":
-            this.#emit(turn, "message.delta", {
-              kind: "toolCall",
-              toolCallId: ev.id,
-              argsDelta: ev.argsDelta,
-              ...(ev.index !== undefined ? { index: ev.index } : {}),
-              ...(ev.name ? { name: ev.name } : {}),
-            })
-            break
-          // The provider runs it: shown as it goes, never executed here.
-          case "serverTool":
-            this.#emit(turn, "message.delta", { kind: "serverTool", block: ev.block })
-            break
-          case "done":
-            final = ev.message
-            // A reply that ends well after the turn was interrupted is still an interrupted
-            // one: a dialect may finish what it had already read without looking at the signal.
-            if (turn.signal.aborted) {
-              aborted = true
-              final = { ...ev.message, stopReason: "aborted" }
-            }
-            break
-          case "error":
-            final = ev.message
-            if (ev.error.code === "aborted" || turn.signal.aborted) aborted = true
-            else {
-              error = ev.error.message
-              modelError = ev.error
-            }
-            break
-        }
-      }
-    } catch (err) {
-      if (turn.signal.aborted) aborted = true
-      else error = err instanceof Error ? err.message : String(err)
-    }
-    if (!final && !error && !aborted) error = "the model stream ended without a final message"
-
-    const message: AssistantMessage = final ?? {
-      role: "assistant",
-      content: [],
-      model: modelRef,
-      stopReason: aborted ? "aborted" : "error",
-    }
-    // An interrupted reply keeps its text but drops tool calls, which were never executed.
-    if (aborted || error) message.content = message.content.filter((b) => b.type !== "toolCall")
-    else message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
+    const requestModelRef = { provider: this.model.provider, model: this.model.id }
+    this.#emit(turn, "message.start", { model: requestModelRef, contextWindow: this.model.contextWindow })
+    const call = await modelCall({
+      ai: this.#ai,
+      model: this.model,
+      modelRef: requestModelRef,
+      systemPrompt: ctx.value.systemPrompt,
+      messages: ctx.value.messages,
+      tools: () => this.#offeredTools(),
+      maxTokens: this.#maxTokens,
+      signal: turn.signal,
+      emit: <K extends keyof EventMap>(type: K, data: EventMap[K]) => this.#emit(turn, type, data),
+    })
+    const { message, aborted, error, modelError } = call
+    if (!aborted && !error)
+      message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
     if (message.content.length) this.#push(message)
     // An interrupted reply may end with no usage counted: the context is still what it was.
     if (message.usage && contextTokens(message.usage) > 0) this.#noteContext(contextTokens(message.usage))
