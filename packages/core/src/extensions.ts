@@ -9,12 +9,14 @@ import {
   type ExtensionAPI,
   type FileRestorationOwner,
   hostBackgroundJobs,
+  installHostNet,
   installHostProcess,
   type NoticeLevel,
   type RunCommandOptions,
   type RunCommandResult,
   type Settings,
 } from "@amira/api"
+import { fetchPublic, guardedFetch, isPrivateAddress, NetError, parseHttpUrl, readCapped } from "@amira/net"
 import {
   backgroundJobs,
   DEFAULT_MAX_OUTPUT_CHARS,
@@ -50,6 +52,14 @@ installHostProcess({
   openPipe: openExtensionPipe,
   backgroundJobs: backgroundJobHost,
   isStandbyGoneError: (error) => error instanceof StandbyGoneError,
+})
+installHostNet({
+  fetchPublic,
+  guardedFetch,
+  isPrivateAddress,
+  parseHttpUrl,
+  readCapped,
+  isNetError: (error) => error instanceof NetError,
 })
 
 /**

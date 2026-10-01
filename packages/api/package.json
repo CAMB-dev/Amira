@@ -8,8 +8,10 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@amira/ai": "workspace:*",
-    "@amira/net": "workspace:*",
-    "@amira/tui-kit": "workspace:*"
+    "@amira/ai-shared": "workspace:*",
+    "@amira/text-width": "workspace:*"
+  },
+  "devDependencies": {
+    "@amira/ai": "workspace:*"
   }
 }

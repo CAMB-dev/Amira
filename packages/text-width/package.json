@@ -1,13 +1,10 @@
 {
-  "name": "@amira/tui-kit",
+  "name": "@amira/text-width",
   "license": "Apache-2.0",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
-  },
-  "dependencies": {
-    "@amira/text-width": "workspace:*"
   }
 }

@@ -1,10 +1,10 @@
+import * as shared from "@amira/ai-shared"
 import type { AssistantContent, Citation, ModelInfo, ServerToolBlock, StreamEvent } from "./types.ts"
 
 /** Dialects with a hosted web search the provider runs itself (ids spelled out: the dialects import this file). */
 const WEB_SEARCH_DIALECTS = new Set(["openai-responses", "anthropic-messages", "google-gemini"])
 
-/** The name a hosted web search goes by, in blocks and in frontends. */
-export const NATIVE_WEB_SEARCH = "web_search"
+export { NATIVE_WEB_SEARCH } from "@amira/ai-shared"
 
 /**
  * Whether requests for `model` offer the provider's hosted web search: its caps say so
@@ -86,30 +86,11 @@ export function serverToolSnapshot(block: ServerToolBlock): StreamEvent {
  * A server tool's call as a short note, for a model that cannot take its item: another
  * dialect, or one the ai client left no item for (forReplay, canReplayServerTool).
  */
-export function serverToolText(b: ServerToolBlock): string {
-  const what = describeServerTool(b)
-  const sources = (b.sources ?? []).map((s) => `- ${s.title ? `${s.title}: ` : ""}${s.url}`)
-  const status = b.status === "failed" ? " (failed)" : b.status === "running" ? " (did not finish)" : ""
-  const error =
-    b.status === "failed" && typeof b.input.error_code === "string" ? [`Error: ${b.input.error_code}`] : []
-  return [`[${what}${status}]`, ...error, ...(sources.length ? ["Sources:", ...sources] : [])].join("\n")
-}
+export const serverToolText: (b: ServerToolBlock) => string = shared.serverToolText
 
 /** "Web search: \"node lts\"", "Web search opened https://…", for notes and frontends. */
-export function describeServerTool(b: Pick<ServerToolBlock, "name" | "input">): string {
-  const label = b.name === NATIVE_WEB_SEARCH ? "Web search" : b.name
-  const input = b.input
-  const str = (k: string) => (typeof input[k] === "string" ? (input[k] as string) : "")
-  const queries = Array.isArray(input.queries)
-    ? input.queries.filter((q): q is string => typeof q === "string" && q !== "")
-    : []
-  if (input.type === "open_page" && str("url")) return `${label}: opened ${str("url")}`
-  if (input.type === "find_in_page" && str("url")) {
-    return `${label}: looked for "${str("pattern")}" in ${str("url")}`
-  }
-  const all = queries.length ? queries : str("query") ? [str("query")] : []
-  return all.length ? `${label}: ${all.map((q) => `"${q}"`).join(", ")}` : label
-}
+export const describeServerTool: (b: Pick<ServerToolBlock, "name" | "input">) => string =
+  shared.describeServerTool
 
 /** The citations of a message's text blocks, one per URL, in the order first cited. */
 export function messageCitations(content: readonly AssistantContent[]): Citation[] {

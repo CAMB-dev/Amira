@@ -1,4 +1,5 @@
-import { describeServerTool, type ServerToolBlock } from "@amira/ai"
+import type { ServerToolBlock } from "@amira/ai"
+import { describeServerTool } from "./ai.ts"
 import type { WebSearchDetails } from "./tool-details.ts"
 import { type ToolCallView, toolResultText } from "./tool-renderers.ts"
 import type { ToolResult } from "./tools.ts"
