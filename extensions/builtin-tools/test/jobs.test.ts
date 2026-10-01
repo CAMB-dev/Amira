@@ -225,6 +225,15 @@ test.if(hasBash)("a background command that fails at once is reported like a nor
   expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 3, outputLines: 1 })
 })
 
+test.if(hasBash)("a background pipeline fails when a command before the last one fails", async () => {
+  const r = await bashTool.execute(
+    { command: "false | tail -n 1", background: true },
+    ctxIn(session("s_main")),
+  )
+  expect(r.isError).toBe(true)
+  expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 1 })
+})
+
 test.if(onWindows)("powershell runs commands in the background too", async () => {
   const ps = createPowershellTool()
   const r = await ps.execute(
