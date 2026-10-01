@@ -4,9 +4,11 @@ import * as publicApi from "@amira/api"
 import {
   type AnyEvent,
   API_VERSION,
+  type BackgroundJobHost,
   type Extension,
   type ExtensionAPI,
   type FileRestorationOwner,
+  hostBackgroundJobs,
   installHostProcess,
   type NoticeLevel,
   type RunCommandOptions,
@@ -16,12 +18,12 @@ import {
 import {
   backgroundJobs,
   DEFAULT_MAX_OUTPUT_CHARS,
-  JobLimitError,
   prepareCommand,
   runCommand,
   StandbyGoneError,
   warmUpCommands,
 } from "@amira/proc"
+import { SessionBackgroundJobHost } from "./background-jobs.ts"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
@@ -39,15 +41,15 @@ import { ViewRegistry } from "./view-registry.ts"
 let virtualApiInstalled = false
 
 // The public API carries the contract; core owns the process implementation used by bundled
-// extensions. Background jobs are intentionally a temporary bridge until their own API exists.
+// extensions and adds session ownership around the process-wide worker registry.
+const backgroundJobHost = new SessionBackgroundJobHost(backgroundJobs)
 installHostProcess({
   runCommand,
   prepareCommand,
   warmUpCommands,
   openPipe: openExtensionPipe,
-  backgroundJobs,
+  backgroundJobs: backgroundJobHost,
   isStandbyGoneError: (error) => error instanceof StandbyGoneError,
-  isBackgroundJobLimitError: (error) => error instanceof JobLimitError,
 })
 
 /**
@@ -90,6 +92,8 @@ export interface ExtensionHostOptions {
   sessionId?: string
   /** Working directory handed to extensions. Default: the process's. */
   cwd?: string
+  /** Host-owned background jobs. Defaults to the process service's session-aware host. */
+  backgroundJobs?: BackgroundJobHost
 }
 
 /**
@@ -124,9 +128,12 @@ export class ExtensionHost {
   readonly images: ImageProviderRegistry
   /** What extensions offer each other (D88). */
   readonly services: ServiceRegistry
+  /** The host-level job view shared by extensions and frontends. */
+  readonly backgroundJobs: BackgroundJobHost
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
+    this.backgroundJobs = opts.backgroundJobs ?? hostBackgroundJobs()
     this.status = opts.status ?? new StatusRegistry()
     this.panels = opts.panels ?? new PanelRegistry()
     this.renderers = opts.renderers ?? new ToolRendererRegistry()
@@ -156,6 +163,7 @@ export class ExtensionHost {
       await ext(this.#apiFor(source, disposers))
     } catch (err) {
       for (const d of disposers.reverse()) d()
+      void this.backgroundJobs.stopAll(() => true, 0)
       this.#requestRender()
       return this.#fail(source, err instanceof Error ? err.message : String(err))
     }
@@ -207,6 +215,7 @@ export class ExtensionHost {
     const disposers = this.#disposers.get(source)
     if (!disposers) return false
     for (const d of disposers.reverse()) d()
+    void this.backgroundJobs.stopAll(() => true, 0)
     this.#disposers.delete(source)
     this.#requestRender()
     return true
@@ -227,7 +236,10 @@ export class ExtensionHost {
    */
   async runExitHandlers(timeoutMs = 4000, graceMs = 1000): Promise<void> {
     const handlers = [...this.#exitHandlers]
-    if (!handlers.length) return
+    if (!handlers.length) {
+      await this.backgroundJobs.stopAll(() => true, 0)
+      return
+    }
     // Only once the extensions got what was emitted before (session.end): the bus delivers
     // asynchronously. A subscriber that is stuck holds this up for a moment at most.
     await Promise.race([this.#opts.bus.flush(), Bun.sleep(500)])
@@ -250,6 +262,9 @@ export class ExtensionHost {
       await Promise.race([Promise.all(runs), late])
     } finally {
       clearTimeout(timer)
+      // An extension may have been unloaded before it could register its own exit handler. The
+      // host still owns the process trees, so force any remaining job down before returning.
+      await this.backgroundJobs.stopAll(() => true, 0)
     }
   }
 
@@ -327,6 +342,7 @@ export class ExtensionHost {
       apiVersion: API_VERSION,
       cwd: this.#opts.cwd ?? process.cwd(),
       home: amiraHome(),
+      backgroundJobs: this.backgroundJobs,
       reportError: (error) => void this.#fail(source, error),
       notify: (text, level = "info") =>
         void bus.emit(

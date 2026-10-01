@@ -33,6 +33,8 @@ import {
   type AskQuestion,
   type AskRequest,
   artifactIdOf,
+  type BackgroundJobHost,
+  type BackgroundJobSession,
   type CompactionInfo,
   type CompactionReason,
   type CompactionUsage,
@@ -178,6 +180,8 @@ export interface AgentOptions {
   depth?: number
   /** The agent tree this session belongs to: it spawns sub-agents and keeps the shared budget. */
   tree?: AgentTree
+  /** The host's job implementation; the agent turns it into a caller-scoped view. */
+  backgroundJobs?: BackgroundJobHost
   /**
    * Decides tool calls an interceptor asked about. Sub-agents get one from their tree that
    * asks the parent's model; without one such calls are denied.
@@ -304,6 +308,10 @@ export class Agent {
   /** 0 for a top-level session, 1 for its sub-agents, and so on. */
   readonly depth: number
   readonly tree: AgentTree | undefined
+  /** The session-scoped background-job capability, when this host provides it. */
+  readonly backgroundJobs: BackgroundJobSession | undefined
+  /** The host implementation handed to child agents and lifecycle cleanup. */
+  readonly backgroundJobsHost: BackgroundJobHost | undefined
   /** The permission policy of this session's tree. */
   readonly permissions: Permissions
   model: ModelInfo
@@ -430,6 +438,7 @@ export class Agent {
     }
     this.sessionId = opts.session?.id ?? opts.sessionId ?? newSessionId()
     this.parentSessionId = opts.parentSessionId
+    this.backgroundJobsHost = opts.backgroundJobs
     this.bus = opts.bus ?? new EventBus()
     if (recovered || unrecovered) {
       this.bus.emit(
@@ -464,6 +473,11 @@ export class Agent {
     this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
     this.depth = opts.depth ?? 0
     this.tree = opts.tree
+    this.backgroundJobs = opts.backgroundJobs?.forSession({
+      sessionId: this.sessionId,
+      depth: this.depth,
+      ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
+    })
     this.#approve = opts.approve
     this.#inheritedApprover = opts.permissionApprover
     this.#ask = opts.ask
@@ -1939,6 +1953,7 @@ export class Agent {
             cwd: this.cwd,
             toolCallId: call.id,
             signal: turn.signal,
+            ...(this.backgroundJobs ? { backgroundJobs: this.backgroundJobs } : {}),
             session: this.#callSession(turn, call.id),
             ...(this.fileRewind
               ? {

@@ -171,6 +171,7 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `registerMarkdownRenderer`, `registerImageProvider` | Render matching reply code blocks or standalone images and supply terminal image data |
 | `provideService`, `useService` | Share named extension services; look them up when needed because a provider may be absent or unloaded |
 | `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, the working directory, the user directory and API version |
+| `backgroundJobs` | Access the host background-job registry for frontend panels and other host-owned integrations |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
@@ -182,6 +183,16 @@ A command opens the rewind picker that double Esc opens with `ctx.openRewind()`;
 Extension-specific settings belong under `extensions` with the extension name. The settings snapshot is deeply frozen; validate your own section. Print mode cancels UI dialogs; RPC clients answer them through the protocol. Panels, views, tool presenters, Markdown renderers, image providers and services are experimental APIs.
 
 `runCommand` resolves once the command has exited. Pass `onChunk` to get output as it arrives, for example to show progress from a long `git` command. Abort through `signal` (or let `timeoutMs` expire) and the whole process tree is killed; the result then reports `aborted` or `timedOut`. By default, `output` keeps only the last 1,000,000 characters; override that limit with a positive-integer `maxOutputChars` (invalid values reject the call). `onChunk` still receives everything, and `truncated` reports whether `output` was cut. A cut never splits a UTF-16 surrogate pair.
+
+### Background jobs
+
+`ExtensionAPI.backgroundJobs` is the host-level background-job registry used by frontend integrations such as the jobs panel. Tool executors should use the session-scoped `ctx.backgroundJobs` capability instead; the session capability is the public boundary that carries ownership and visibility.
+
+Start a job with `command`, `argv`, `cwd`, `env` and `shell` (or the `shellKind` alias). The session host records the owning sub-agent automatically, while a main session can see its own jobs and all jobs in its sub-agents; a sub-agent can see only its own jobs. `list`, `get`, `running`, `output`, `tail`, `stop` and `stopAll` enforce that visibility, and inaccessible jobs are treated as missing.
+
+`readNew` maintains a cursor per reader name, so independent readers can consume the same output incrementally. `waitFor` waits for a regular-expression pattern, process exit, a timeout, or an abort signal. `subscribe` reports start, status, output and end changes. Call `stop` with a grace period first and call it again with `0` when a forced stop is required.
+
+The registry exposes `maxRunning`, `configure` and `isLimitError` for limits. A sub-agent's session-owned jobs are stopped automatically after its `subagent.end` event is delivered, and a root session's session-owned jobs stop when that session switches. Host-level jobs started directly through `ExtensionAPI.backgroundJobs` are not assigned to a caller session; they are stopped during extension unload or process exit. Extensions must use this API rather than reaching into `@amira/proc` globals.
 
 Registrations return removal functions and are tracked by the host. Unloading removes them; a failed extension load rolls back its registrations. For matching command, tool, skill, status or panel names, an intentional replacement needs `override: true`; consult the specific type for collision rules. Do not replace another extension's registrations accidentally.
 

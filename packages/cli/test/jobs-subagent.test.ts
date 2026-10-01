@@ -68,6 +68,7 @@ test.skipIf(bun.includes(" "))(
       tree,
       tools,
       interceptors,
+      backgroundJobs: host.backgroundJobs,
     })
 
     // The top-level session's job: it runs until stopped or Amira exits.

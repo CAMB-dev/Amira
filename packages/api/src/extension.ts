@@ -1,3 +1,4 @@
+import type { BackgroundJobHost } from "./background-jobs.ts"
 import type { CommandDefinition, InputHandler } from "./commands.ts"
 import type {
   EventEnvelope,
@@ -106,6 +107,8 @@ export interface ExtensionAPI {
   requestRender(): void
   /** The merged settings (D35), e.g. for an extension's own section such as mcpServers. */
   readonly settings: Readonly<Settings>
+  /** Host-level background jobs for panels and frontends; model tools receive a session-scoped view. */
+  readonly backgroundJobs: BackgroundJobHost
   /**
    * Runs a command off the main thread (a slow spawn cannot freeze the UI), killing the
    * whole process tree on abort, timeout and exit.
