@@ -1,8 +1,19 @@
-import { createHash } from "node:crypto"
+// Generates the key tables of docs/settings.md and docs/zh/settings.md from the settings types
+// (packages/api/src/settings.ts and the types it uses) and the reviewed defaults, descriptions
+// and translations in settings-docs-data.ts. `bun scripts/gen-settings-docs.ts` rewrites the
+// generated blocks; `--check` only reports whether they are stale. settings-docs.test.ts fails
+// when they are.
 import { readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { annotations, mcpFields } from "./settings-docs-data.ts"
+import {
+  type Annotation,
+  annotations,
+  collapsed,
+  extraRows,
+  omitted,
+  sections,
+} from "./settings-docs-data.ts"
 
 export const root = fileURLToPath(new URL("../", import.meta.url))
 export const typeFiles = [
@@ -12,34 +23,36 @@ export const typeFiles = [
   "packages/ai/src/dialect.ts",
   "packages/ai/src/types.ts",
 ]
+export const docFiles = { en: "docs/settings.md", zh: "docs/zh/settings.md" } as const
+export type Language = keyof typeof docFiles
 
-interface Field {
-  name: string
-  optional: boolean
-  doc: string
-  type: Type
-}
-interface Type {
+export interface Type {
   name: string
   args?: Type[]
   fields?: Field[]
 }
-export interface Row {
-  key: string
-  type: string
+interface Field {
+  name: string
   optional: boolean
-  doc: string
+  type: Type
+}
+export interface Row {
+  /** Dotted path; `<id>`-style segments stand for a record's keys and `[]` for list items. */
+  key: string
+  type: Type
 }
 
-// A type-only grammar: interfaces, inheritance, literals, unions/intersections, arrays,
-// Record, Partial and Omit. Unsupported syntax fails instead of silently losing fields.
+// A type-only grammar: interfaces with `extends`, type aliases, string literals, unions and
+// intersections, arrays, generics (Record, Partial, Omit) and inline object types. Anything
+// else fails loudly instead of silently losing fields.
 class Parser {
   readonly tokens: string[]
   pos = 0
 
   constructor(source: string) {
-    this.tokens = source.match(/\/\*[^]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\w+|[^\s]/g) ?? []
-    this.tokens = this.tokens.filter((t) => !t.startsWith("//") || t.startsWith("/**"))
+    this.tokens = (source.match(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:\\.|[^"\\])*"|\w+|\S/g) ?? []).filter(
+      (t) => !t.startsWith("//") && !t.startsWith("/*"),
+    )
   }
 
   peek() {
@@ -54,18 +67,8 @@ class Parser {
     return token
   }
 
-  doc(): string {
-    let doc = ""
-    while (this.peek()?.startsWith("/*")) {
-      const comment = this.take()
-      if (comment.startsWith("/**")) {
-        doc = comment.slice(3, -2).replace(/^\s*\* ?/gm, "").replace(/\s+/g, " ").trim()
-      }
-    }
-    return doc
-  }
-
   type(): Type {
+    if (this.peek() === "|") this.take()
     const union = [this.intersection()]
     while (this.peek() === "|") {
       this.take()
@@ -92,9 +95,7 @@ class Parser {
       this.take(")")
     } else {
       const name = this.take()
-      if (!/^(\w+|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$/.test(name)) {
-        throw new Error(`Unsupported type token ${name}`)
-      }
+      if (!/^(\w+|"(?:\\.|[^"\\])*")$/.test(name)) throw new Error(`Unsupported type token ${name}`)
       type = { name }
       if (this.peek() === "<") {
         this.take()
@@ -119,14 +120,12 @@ class Parser {
     this.take("{")
     const fields: Field[] = []
     while (this.peek() !== "}") {
-      const doc = this.doc()
-      if (this.peek() === "}") break
       const name = this.take()
       if (!/^\w+$/.test(name)) throw new Error(`Unsupported property ${name}`)
       const optional = this.peek() === "?"
       if (optional) this.take()
       this.take(":")
-      fields.push({ name, optional, doc, type: this.type() })
+      fields.push({ name, optional, type: this.type() })
       if (this.peek() === ";" || this.peek() === ",") this.take()
     }
     this.take("}")
@@ -134,7 +133,23 @@ class Parser {
   }
 }
 
-export function settingsRows(sources = typeFiles.map((file) => readFileSync(path.join(root, file), "utf8"))) {
+const readSources = () => typeFiles.map((file) => readFileSync(path.join(root, file), "utf8"))
+
+/** Names a record's keys in a row key, e.g. `providers.<id>`. */
+const recordKeyName: Record<string, string> = {
+  providers: "id",
+  agents: "role",
+  commandAliases: "alias",
+  mcpServers: "name",
+  extensions: "name",
+}
+
+/**
+ * Every settings key the types define, outermost first, except objects that are only walked
+ * into (their fields get rows). Keys in `omitted` are left out, and those in `collapsed` get
+ * one row, with what is under them.
+ */
+export function settingsRows(sources = readSources(), omit: Record<string, string> = omitted): Row[] {
   const cache = new Map<string, Type>()
   const resolving = new Set<string>()
   const resolve = (name: string): Type => {
@@ -156,93 +171,145 @@ export function settingsRows(sources = typeFiles.map((file) => readFileSync(path
     } else {
       const parents: Type[] = []
       if (parser.peek() === "extends") {
-        parser.take()
-        parents.push(parser.type())
-        while (parser.peek() === ",") {
+        do {
           parser.take()
           parents.push(parser.type())
-        }
+        } while (parser.peek() === ",")
       }
-      type = { name: "object", fields: [...parents.flatMap(fields), ...parser.fields()] }
+      type = { name: "object", fields: [...parents.flatMap(fieldsOf), ...parser.fields()] }
     }
     cache.set(name, type)
     resolving.delete(name)
     return type
   }
-  const fields = (type: Type): Field[] => {
+  const fieldsOf = (type: Type): Field[] => {
     if (type.fields) return type.fields
-    if (type.name === "&") return type.args!.flatMap(fields)
-    if (type.name === "Partial") return fields(type.args![0]!).map((f) => ({ ...f, optional: true }))
+    if (type.name === "&") return type.args!.flatMap(fieldsOf)
+    if (type.name === "Partial") return fieldsOf(type.args![0]!).map((f) => ({ ...f, optional: true }))
     if (type.name === "Omit") {
       const excluded = type.args![1]!
       const names = (excluded.name === "|" ? excluded.args! : [excluded]).map((t) => t.name.slice(1, -1))
-      return fields(type.args![0]!).filter((f) => !names.includes(f.name))
+      return fieldsOf(type.args![0]!).filter((f) => !names.includes(f.name))
     }
-    return fields(resolve(type.name))
+    return fieldsOf(resolve(type.name))
   }
-  const display = (type: Type): string => {
-    if (type.name === "object") {
-      return `{ ${type.fields!.map((f) => `${f.name}${f.optional ? "?" : ""}: ${display(f.type)}`).join("; ")} }`
+  /** The type with named types, Partial, Omit and intersections written out. */
+  const expand = (type: Type): Type => {
+    if (type.fields || type.name === "&" || type.name === "Partial" || type.name === "Omit") {
+      return { name: "object", fields: fieldsOf(type).map((f) => ({ ...f, type: expand(f.type) })) }
     }
-    if (type.name === "array") return `${display(type.args![0]!)}[]`
-    if (type.name === "|" || type.name === "&") return type.args!.map(display).join(` ${type.name} `)
-    if (type.args) return `${type.name}<${type.args.map(display).join(", ")}>`
-    if (["ShellMode", "EditingTool", "WebSearchBackend", "ContextWindowSource"].includes(type.name)) {
-      return display(resolve(type.name))
+    if (type.args) return { ...type, args: type.args.map(expand) }
+    if (/^[A-Z]/.test(type.name)) return expand(resolve(type.name))
+    return type
+  }
+  /** A list's item or a record's value, which the keys under it hang off, and its key. */
+  const inner = (type: Type, key: string): [Type, string] => {
+    if (type.name === "array") return inner(type.args![0]!, `${key}[]`)
+    if (type.name === "Record") {
+      const value = type.args![1]!
+      if (!value.fields && value.name !== "array" && value.name !== "Record") return [value, key]
+      const name = recordKeyName[key]
+      if (!name) throw new Error(`Name the keys of ${key} in recordKeyName`)
+      return inner(value, `${key}.<${name}>`)
     }
-    return type.name
+    return [type, key]
   }
   const rows: Row[] = []
   const walk = (type: Type, key: string) => {
-    if (type.name === "array") return walk(type.args![0]!, `${key}[]`)
-    if (type.name === "Record") {
-      const variable = key === "providers" ? "id" : key === "agents" ? "role" : key === "commandAliases" ? "alias" : "name"
-      const value = type.args![1]!
-      if (value.name === "string" || (value.name === "Record" && value.args![1]?.name === "unknown")) return
-      return walk(value, `${key}.<${variable}>`)
-    }
-    if (["string", "number", "boolean", "unknown", "false", "|"].includes(type.name)) return
-    if (type.name.startsWith('"') || type.name.startsWith("'")) return
-    for (const field of fields(type)) {
+    for (const field of type.fields ?? []) {
       const at = key ? `${key}.${field.name}` : field.name
-      rows.push({ key: at, type: display(field.type), optional: field.optional, doc: field.doc })
-      walk(field.type, at)
+      if (Object.hasOwn(omit, at)) continue
+      if (collapsed.includes(at)) {
+        rows.push({ key: at, type: field.type })
+        continue
+      }
+      if (!field.type.fields) rows.push({ key: at, type: field.type })
+      walk(...inner(field.type, at))
     }
   }
-  walk(resolve("Settings"), "")
+  walk(expand(resolve("Settings")), "")
   return rows
+}
+
+/** How a type reads in the tables. */
+export function showType(type: Type): string {
+  if (type.fields) return "object"
+  if (type.name === "array") {
+    const item = showType(type.args![0]!)
+    return item.includes(" ") ? `(${item})[]` : `${item}[]`
+  }
+  if (type.name === "|" || type.name === "&") return type.args!.map(showType).join(` ${type.name} `)
+  if (type.args) return `${type.name}<${type.args.map(showType).join(", ")}>`
+  return type.name
+}
+
+/**
+ * A value of the type that the settings schema accepts, for the tests. Strings read "a b/c",
+ * which passes both as a "provider/model" reference and as a command alias's command line.
+ */
+export function sampleValue(type: Type): unknown {
+  if (type.fields) return Object.fromEntries(type.fields.map((f) => [f.name, sampleValue(f.type)]))
+  if (type.name === "array") return [sampleValue(type.args![0]!)]
+  if (type.name === "Record") return { a: sampleValue(type.args![1]!) }
+  if (type.name === "|") return sampleValue(type.args![0]!)
+  if (type.name.startsWith('"')) return JSON.parse(type.name)
+  if (type.name === "string") return "a b/c"
+  if (type.name === "number") return 1
+  if (type.name === "boolean") return true
+  if (type.name === "unknown") return {}
+  throw new Error(`No sample for type ${type.name}`)
 }
 
 export const startMarker = "<!-- settings:generated:start -->"
 export const endMarker = "<!-- settings:generated:end -->"
 
-export function renderReference(language: "en" | "zh", rows = settingsRows()): string {
-  const digest = createHash("sha256").update(JSON.stringify(rows)).digest("hex")
-  const lines = [startMarker, `<!-- Types and JSDoc: ${digest} -->`, ""]
-  let section = ""
-  for (const row of [...rows, ...mcpFields]) {
+const headers = {
+  en: ["Key", "Type", "Default", "Description", "User file only"],
+  zh: ["键", "类型", "默认值", "说明", "仅用户文件"],
+}
+
+/** The generated block of one document. Throws for a key without reviewed annotations. */
+export function renderReference(language: Language, rows = settingsRows()): string {
+  const byTop = new Map<string, { key: string; type: string }[]>()
+  for (const row of [...rows.map((r) => ({ key: r.key, type: showType(r.type) })), ...extraRows]) {
     const top = row.key.split(".")[0]!
-    if (top !== section) {
-      section = top
-      lines.push(`## ${top}`, "", language === "en"
-        ? "| Key | Type | Default | Description | User-only? |"
-        : "| Key | Type | 默认值 | 说明 | 仅限用户设置？ |", "| --- | --- | --- | --- | --- |")
+    byTop.set(top, [...(byTop.get(top) ?? []), row])
+  }
+  const placed = sections.flatMap((s) => s.keys)
+  for (const top of byTop.keys()) {
+    if (!placed.includes(top)) throw new Error(`Place the top-level key ${top} in a section`)
+  }
+  for (const top of placed) if (!byTop.has(top)) throw new Error(`Unknown top-level key ${top} in sections`)
+  const known = new Set([...byTop.values()].flat().map((r) => r.key))
+  for (const key of Object.keys(annotations)) {
+    if (!known.has(key)) throw new Error(`Annotation for unknown key ${key}`)
+  }
+  const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ")
+  const lines = [
+    startMarker,
+    "<!-- Generated by scripts/gen-settings-docs.ts; edit that or its data. -->",
+    "",
+  ]
+  for (const section of sections) {
+    lines.push(`## ${section.title[language]}`, "")
+    if (section.intro) lines.push(section.intro[language], "")
+    lines.push(`| ${headers[language].join(" | ")} |`, "| --- | --- | --- | --- | --- |")
+    for (const row of section.keys.flatMap((top) => byTop.get(top)!)) {
+      const a: Annotation | undefined = annotations[row.key]
+      if (!a) throw new Error(`Add a reviewed default, description and translation for ${row.key}`)
+      const fallback = typeof a.default === "string" ? a.default : a.default[language]
+      const only = a.userOnly ? (language === "en" ? "Yes" : "是") : ""
+      lines.push(
+        `| \`${cell(row.key)}\` | \`${cell(row.type)}\` | ${cell(fallback)} | ${cell(a[language])} | ${only} |`,
+      )
     }
-    const normalized = row.key.replace(/providers\.<id>\.(models\[\]|defaultModel)/, "model")
-    const annotation = annotations[row.key] ?? annotations[normalized]
-    if (!annotation) throw new Error(`Add reviewed defaults and a translation for ${row.key}`)
-    const [fallback, en, zh, userOnly] = annotation
-    const escape = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ")
-    const description = language === "en" ? en || row.doc : zh
-    if (!description) throw new Error(`Missing description for ${row.key}`)
-    const only = userOnly ? (language === "en" ? "Yes" : "是") : (language === "en" ? "No" : "否")
-    lines.push(`| \`${escape(row.key)}\` | \`${escape(row.type)}\` | ${fallback} | ${escape(description)} | ${only} |`)
-    if (row === rows.at(-1) || row === mcpFields.at(-1) || rows[rows.indexOf(row) + 1]?.key.split(".")[0] !== top) lines.push("")
+    lines.push("")
   }
   lines.push(endMarker)
   return lines.join("\n")
 }
 
+/** The document with its generated block replaced. */
 export function updateReference(document: string, generated: string): string {
   const start = document.indexOf(startMarker)
   const end = document.indexOf(endMarker)
@@ -253,12 +320,17 @@ export function updateReference(document: string, generated: string): string {
 }
 
 if (import.meta.main) {
+  const rows = settingsRows()
+  let stale = false
   for (const language of ["en", "zh"] as const) {
-    const file = path.join(root, language === "en" ? "docs/settings.md" : "docs/zh/settings.md")
+    const file = path.join(root, docFiles[language])
     const document = readFileSync(file, "utf8").replace(/\r\n/g, "\n")
-    const updated = updateReference(document, renderReference(language))
+    const updated = updateReference(document, renderReference(language, rows))
+    if (updated === document) continue
     if (process.argv.includes("--check")) {
-      if (updated !== document) throw new Error(`${path.relative(root, file)} is stale; run bun scripts/gen-settings-docs.ts`)
+      console.error(`${docFiles[language]} is stale; run bun scripts/gen-settings-docs.ts`)
+      stale = true
     } else writeFileSync(file, updated)
   }
+  if (stale) process.exit(1)
 }
