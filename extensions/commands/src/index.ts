@@ -372,11 +372,12 @@ export default defineExtension((api: ExtensionAPI) => {
   add({
     name: "rename",
     description: "Name the current session",
-    args: { hint: "<title>" },
+    args: { hint: "[title]" },
     run(args, ctx) {
       if (!ctx.session.rename) throw new Error("this host cannot rename sessions")
       ctx.session.rename(args)
-      ctx.print(`Renamed session to ${ctx.session.info().title}.`)
+      const title = ctx.session.info().title
+      ctx.print(args.trim() ? `Renamed session to ${title}.` : "Cleared the manual session name.")
     },
   })
 
@@ -477,6 +478,23 @@ export default defineExtension((api: ExtensionAPI) => {
         return
       }
       const u = artifacts.usage()
+      const groups =
+        u.groups && u.groups.length > 1
+          ? [
+              "Groups:",
+              table([
+                ["Group", "Active", "Inactive", "Unused", "Pruned", "Bytes"],
+                ...u.groups.map((g) => [
+                  `${g.label}${g.protected ? " (protected)" : ""}`,
+                  String(g.active),
+                  String(g.inactive),
+                  String(g.unused),
+                  String(g.pruned),
+                  formatMb(g.bytes),
+                ]),
+              ]),
+            ]
+          : []
       ctx.print(
         [
           `Artifacts: ${formatMb(u.bytes)} of the ${formatMb(u.quotaBytes)} quota in ${u.dir}`,
@@ -486,6 +504,7 @@ export default defineExtension((api: ExtensionAPI) => {
             ["Unused", `${u.unused} (mentioned nowhere)`],
             ...(u.pruned ? ([["Pruned", String(u.pruned)]] as [string, string][]) : []),
           ]),
+          ...groups,
           "/prune unused deletes the unused ones, /prune inactive those and the inactive ones, /prune all every one.",
         ].join("\n"),
       )

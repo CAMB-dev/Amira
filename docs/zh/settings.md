@@ -227,7 +227,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | --- | --- | --- | --- | --- |
 | `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | `"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。 |  |
 | `tui.bell` | `boolean` | `true` | 终端在后台时，轮次结束或弹出对话框时响铃。 |  |
-| `tui.title` | `boolean` | `true` | 把终端标题设为目录和分支名，工作中会加标记。 |  |
+| `tui.title` | `boolean` | `true` | 把终端标题设为目录名、存在时的会话标题和分支名，工作中会加标记。 |  |
 | `tui.progress` | `boolean` | `true` | 在标签页和任务栏进度指示器上显示工作状态（OSC 9;4）。 |  |
 | `tui.reflow` | `"auto" \| "on" \| "off"` | `"auto"` | 终端在变窄时不会重新折行（旧版 conhost、部分 tmux 配置）时设为 `"off"`。 |  |
 | `tui.submitWhileWorking` | `"steer" \| "queue"` | `"steer"` | 轮次进行中按 Enter 的行为：`"steer"` 把消息发进正在进行的轮次（引导），`"queue"` 让消息排队到轮次结束后发送。排队键执行另一种行为。 |  |

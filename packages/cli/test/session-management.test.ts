@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import type { Settings } from "@amira/api"
-import { Agent, projectKey, SessionStore, validateSettings } from "@amira/core"
+import { Agent, projectKey, SessionStore, sessionLockFile, validateSettings } from "@amira/core"
 import commandsExtension, { costReport } from "@amira/ext-commands"
 import { createCommandHost } from "../src/control.ts"
 import { formatSessionList } from "../src/resume.ts"
@@ -201,6 +201,19 @@ test("rename and fork commands update session info and preserve the source; fork
   expect((await host.run("/fork", { frontend: "tui" })).ok).toBe(true)
 })
 
+test("/rename without an argument clears the manual name and restores the automatic title", async () => {
+  const { host, store } = await setup([{ text: "answer" }])
+  await host.control.send("question")
+  store.rename("Automatic", "auto")
+  host.control.rename!("Manual")
+  expect(host.control.info().title).toBe("Manual")
+
+  const result = await host.run("/rename", { frontend: "tui" })
+  expect(result.output).toEqual(["Cleared the manual session name."])
+  expect(host.control.info().title).toBe("Automatic")
+  expect(SessionStore.open(store.file).title).toBe("Automatic")
+})
+
 test("sessions.autoTitle is accepted at project scope and rejects non-booleans", () => {
   expect(validateSettings({ sessions: { autoTitle: false } }, "project").settings.sessions).toEqual({
     autoTitle: false,
@@ -230,4 +243,34 @@ test("amira sessions rm deletes stored sessions without loading models or keys",
   expect(error).toBe("")
   expect(output).toContain(`Deleted session ${store.id}`)
   expect(existsSync(store.file)).toBe(false)
+})
+
+test("amira sessions rm refuses a session leased by another process", async () => {
+  const home = mkdtempSync(path.join(tmpdir(), "amira-sessions-rm-live-"))
+  const cwd = path.join(home, "project")
+  const store = SessionStore.create({ cwd, dir: path.join(home, "sessions", projectKey(cwd)) })
+  store.appendMessage(userMessage("keep me"))
+  const lock = sessionLockFile(store.file)
+  writeFileSync(lock, `${process.pid}\n`)
+  try {
+    const child = Bun.spawn(
+      ["bun", path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
+      {
+        env: { ...process.env, AMIRA_HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+    const [code, output, error] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    expect(code).not.toBe(0)
+    expect(output).toBe("")
+    expect(error).toContain("open in another Amira process")
+    expect(existsSync(store.file)).toBe(true)
+  } finally {
+    rmSync(lock, { force: true })
+  }
 })

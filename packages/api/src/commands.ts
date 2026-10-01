@@ -415,9 +415,25 @@ export interface ArtifactControl {
     bytes: number
     quotaBytes: number
     dir: string
+    /** The same counts grouped by the owning session, including sub-agents. */
+    groups?: ArtifactGroupUsage[]
   }
   /** Deletes the artifacts of a scope (and the narrower ones); resolves what was freed. */
   prune(scope: "unused" | "inactive" | "all"): Promise<{ removed: number; bytes: number }>
+}
+
+export interface ArtifactGroupUsage {
+  id: string
+  label: string
+  active: number
+  inactive: number
+  unused: number
+  pruned: number
+  bytes: number
+  quotaBytes: number
+  dir: string
+  /** A live sub-agent may still read from this store. */
+  protected?: boolean
 }
 
 /** What /reload changed: extensions (by source) that came or went, and ones that failed. */

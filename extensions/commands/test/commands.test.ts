@@ -535,6 +535,32 @@ for (const confirmed of [true, false]) {
   })
 }
 
+test("/resume reports when the picked session is open elsewhere instead of deleting it", async () => {
+  const now = Date.now()
+  const old = {
+    id: "old",
+    updatedAt: now,
+    title: "Database repair",
+    firstUserText: "hello",
+    searchText: "hello",
+    messageCount: 2,
+  }
+  const { run } = await setup(
+    {
+      sessions: () => [old, { ...old, id: "s1" }],
+      deleteSession: async () => {
+        throw new Error(
+          "cannot delete session old: it is open in another Amira process (pid 42); close that process first",
+        )
+      },
+    },
+    [{ option: sessionLabel(old, now), key: "d" }, true],
+  )
+  const result = await run("/resume")
+  expect(result.ok).toBe(false)
+  expect(result.error).toContain("open in another Amira process")
+})
+
 test("/resume offers every session, including content beyond the old 50-session limit", async () => {
   const sessions = Array.from({ length: 110 }, (_, i) => ({
     id: `s_${i}`,
@@ -618,6 +644,31 @@ test("/prune reports artifacts by reference and deletes only the scope asked for
         bytes: 3 * 1024 * 1024,
         quotaBytes: 256 * 1024 * 1024,
         dir: "/s/x.assets/outputs",
+        groups: [
+          {
+            id: "s1",
+            label: "This session",
+            active: 2,
+            inactive: 1,
+            unused: 0,
+            pruned: 0,
+            bytes: 2 * 1024 * 1024,
+            quotaBytes: 256 * 1024 * 1024,
+            dir: "/s/x.assets/outputs",
+          },
+          {
+            id: "child",
+            label: "Sub-agent: explorer (child)",
+            active: 1,
+            inactive: 1,
+            unused: 1,
+            pruned: 0,
+            bytes: 1024 * 1024,
+            quotaBytes: 256 * 1024 * 1024,
+            dir: "/s/subagents/child.assets/outputs",
+            protected: true,
+          },
+        ],
       }),
       prune: async (scope) => {
         pruned.push(scope)
@@ -629,6 +680,8 @@ test("/prune reports artifacts by reference and deletes only the scope asked for
   expect(report).toContain("3.0 MB of the 256 MB quota in /s/x.assets/outputs")
   expect(report).toMatch(/Active\s+3/)
   expect(report).toMatch(/Unused\s+1/)
+  expect(report).toContain("Groups:")
+  expect(report).toContain("Sub-agent: explorer (child) (protected)")
   // Showing deletes nothing.
   expect(pruned).toEqual([])
   expect((await run("/prune unused")).text).toBe(

@@ -217,7 +217,7 @@ export interface TuiSettings {
    * (or, where the terminal does not report focus, after a long turn). Default true.
    */
   bell?: boolean
-  /** Set the terminal title to the folder and branch, marked while working. Default true. */
+  /** Set the terminal title to the folder, session title when present, and branch, marked while working. Default true. */
   title?: boolean
   /** Show work on the tab and taskbar progress indicator (OSC 9;4). Default true. */
   progress?: boolean

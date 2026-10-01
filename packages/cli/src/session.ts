@@ -317,6 +317,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     // A session resumed while no model is selected continues on the one it ran on.
     const stored = isNoModel(picked) ? storedModel(ai, store) : undefined
     const m = stored ? ai.model(stored) : picked
+    store?.claim()
     return new Agent({
       tree,
       approve,
