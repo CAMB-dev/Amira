@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AssistantMessage, SessionControl, SessionInfo } from "@amira/api"
 import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
@@ -113,7 +113,7 @@ function fakeControl(over: Partial<SessionControl> = {}) {
 
 async function setup(
   over: Partial<SessionControl> = {},
-  answers: (string | undefined)[] = [],
+  answers: (string | boolean | { option: string; key?: string } | undefined)[] = [],
   aliases?: Record<string, string>,
 ) {
   const bus = new EventBus()
@@ -161,11 +161,13 @@ test("every built-in command is registered with a description", async () => {
     "context",
     "cost",
     "ext",
+    "fork",
     "help",
     "model",
     "provider",
     "quit",
     "reload",
+    "rename",
     "resume",
     "shell",
     "status",
@@ -376,7 +378,7 @@ test("/status names the scope of each number: the session's output, cache and sp
   const { text } = await run("/status")
   expect(text).toMatch(/Output\s+300 tokens written by this session's replies/)
   expect(text).toMatch(/Cache\s+80% of this session's prompt tokens read from the cache/)
-  expect(text).toMatch(/Speed\s+\d+(\.\d)? tokens\/s in this session's last reply/)
+  expect(text).toMatch(/Speed\s+reply \d+(\.\d)? tok\/s in this session's last reply/)
   // The sub-agents' replies count in the cost the status shows; this session's own is named too.
   expect(text).toMatch(/Cost\s+\$0\.014 with sub-agents; this session alone \$0\.010/)
   expect(text).toMatch(/Git\s+main in \/work, with uncommitted changes/)
@@ -394,6 +396,78 @@ test("/status names only the session's cost when it had no sub-agents, and a sub
   const { text } = await run("/status")
   expect(text).toMatch(/Cost\s+\$0\.042 \(this session; no sub-agents\)/)
   expect(text).toMatch(/Speed\s+not measured yet/)
+})
+
+test("/status tracks thinking and text separately and clears an unmeasurable last reply", async () => {
+  const { run, bus } = await setup()
+  const meta = { sessionId: "s1" }
+  const model = { provider: "mock", model: "m" }
+  bus.emit("workspace.changed", { cwd: "/work" }, meta)
+  const clock = spyOn(Date, "now")
+  const end = {
+    ...reply("mock/m", 0, 100),
+    content: [
+      { type: "thinking" as const, text: "x".repeat(320) },
+      { type: "text" as const, text: "answer" },
+    ],
+    usage: { input: 0, output: 100, reasoning: 80, cacheRead: 0, cacheWrite: 0 },
+  }
+  try {
+    clock.mockReturnValue(0)
+    bus.emit("message.start", { model }, meta)
+    await bus.flush()
+    clock.mockReturnValue(100)
+    bus.emit("message.delta", { kind: "text", text: "" }, meta)
+    await bus.flush()
+    clock.mockReturnValue(1000)
+    bus.emit("message.delta", { kind: "thinking", text: "hmm" }, meta)
+    await bus.flush()
+    clock.mockReturnValue(5000)
+    bus.emit("message.delta", { kind: "text", text: "answer" }, meta)
+    await bus.flush()
+    clock.mockReturnValue(6000)
+    bus.emit("message.end", { message: end }, meta)
+  } finally {
+    clock.mockRestore()
+  }
+  await bus.flush()
+  expect((await run("/status")).text).toContain("reply 20 tok/s · thinking 20 tok/s")
+
+  const shortClock = spyOn(Date, "now")
+  try {
+    shortClock.mockReturnValue(7000)
+    bus.emit("message.start", { model }, meta)
+    await bus.flush()
+    bus.emit("message.delta", { kind: "text", text: "hi" }, meta)
+    await bus.flush()
+    shortClock.mockReturnValue(7100)
+    bus.emit("message.end", { message: reply("mock/m", 0, 2) }, meta)
+  } finally {
+    shortClock.mockRestore()
+  }
+  await bus.flush()
+  expect((await run("/status")).text).toMatch(/Speed\s+not measured yet/)
+
+  // A reply that only calls a tool is timed from its first arguments.
+  const toolClock = spyOn(Date, "now")
+  const call: AssistantMessage = {
+    ...reply("mock/m", 0, 50),
+    content: [{ type: "toolCall", id: "t", name: "read", args: {} }],
+  }
+  try {
+    toolClock.mockReturnValue(8000)
+    bus.emit("message.start", { model }, meta)
+    await bus.flush()
+    toolClock.mockReturnValue(8500)
+    bus.emit("message.delta", { kind: "toolCall", toolCallId: "t", argsDelta: "{}" }, meta)
+    await bus.flush()
+    toolClock.mockReturnValue(9000)
+    bus.emit("message.end", { message: call }, meta)
+  } finally {
+    toolClock.mockRestore()
+  }
+  await bus.flush()
+  expect((await run("/status")).text).toMatch(/Speed\s+reply 100 tok\/s in this session's last reply/)
 })
 
 test("/clear starts a new session; /resume switches, or asks among the other sessions", async () => {
@@ -416,6 +490,66 @@ test("/resume with a picked session resumes its id", async () => {
   const { run, calls } = await setup({}, ["old  3h ago  8 msgs  fix the build"])
   await run("/resume")
   expect(calls).toEqual(["resume old"])
+})
+
+for (const confirmed of [true, false]) {
+  test(`/resume confirms deletion (${confirmed}) and never offers the current session`, async () => {
+    const now = Date.now()
+    const old = {
+      id: "old",
+      updatedAt: now,
+      title: "Database repair",
+      firstUserText: "hello",
+      searchText: "later assistant: 数据库连接",
+      messageCount: 4,
+    }
+    let stored = [old, { ...old, id: "s1", title: "Current session" }]
+    const removed: string[] = []
+    const { run, asked, bus } = await setup(
+      {
+        sessions: () => stored,
+        deleteSession: async (id) => {
+          removed.push(id)
+          stored = stored.filter((s) => s.id !== id)
+        },
+      },
+      [{ option: sessionLabel(old, now), key: "d" }, confirmed, undefined],
+    )
+    const requests: any[] = []
+    bus.subscribe(
+      (e) => {
+        if (e.type === "ui.request") requests.push(e.data)
+      },
+      { types: ["ui.request"] },
+    )
+    expect((await run("/resume")).ok).toBe(true)
+    expect(asked[0]).not.toContain("Current session")
+    expect(asked[1]).toBe("Delete this session?")
+    expect(removed).toEqual(confirmed ? ["old"] : [])
+    expect(requests[0].searchTexts).toEqual([old.searchText])
+    expect(requests[0].sections[0].keys).toEqual([{ key: "d", label: "delete" }])
+  })
+}
+
+test("/resume offers every session, including content beyond the old 50-session limit", async () => {
+  const sessions = Array.from({ length: 110 }, (_, i) => ({
+    id: `s_${i}`,
+    updatedAt: Date.now(),
+    title: `Topic ${i}`,
+    firstUserText: "hi",
+    searchText: `later answer ${i}`,
+    messageCount: 2,
+  }))
+  const { run, bus } = await setup({ sessions: () => sessions })
+  let options = 0
+  bus.subscribe(
+    (e) => {
+      if (e.type === "ui.request" && e.data.kind === "select") options = e.data.options.length
+    },
+    { types: ["ui.request"] },
+  )
+  await run("/resume")
+  expect(options).toBe(110)
 })
 
 test("/compact passes its instructions; the compact events report the outcome", async () => {

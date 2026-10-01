@@ -35,7 +35,7 @@ test("streams text and maps usage: cached tokens split out, thoughts count as ou
   const { message } = done(evs)
   expect(message.content).toEqual([{ type: "text", text: "Hello" }])
   expect(message.stopReason).toBe("end")
-  expect(message.usage).toEqual({ input: 70, output: 28, cacheRead: 30, cacheWrite: 0 })
+  expect(message.usage).toEqual({ input: 70, output: 28, reasoning: 20, cacheRead: 30, cacheWrite: 0 })
 })
 
 test("function calls get stable synthetic ids and indexes, and report toolUse", async () => {

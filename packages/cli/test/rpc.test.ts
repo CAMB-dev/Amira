@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep, userMessage } from "@amira/ai"
@@ -22,6 +22,9 @@ function spawnRpc(
   home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-")),
   extraArgs: string[] = [],
 ) {
+  const settingsFile = path.join(home, "settings.json")
+  const settings = existsSync(settingsFile) ? JSON.parse(readFileSync(settingsFile, "utf8")) : {}
+  writeFileSync(settingsFile, JSON.stringify({ ...settings, sessions: { autoTitle: false } }))
   const p = Bun.spawn(
     [
       "bun",
@@ -212,6 +215,37 @@ test("amira --rpc: session.resume continues a stored session on the same connect
   expect((await second.close()).code).toBe(0)
 }, 60_000)
 
+test("amira --rpc: rename and fork preserve the original and expose session operations", async () => {
+  const rpc = spawnRpc([{ text: "first answer" }, { text: "second answer" }])
+  const start = await rpc.event("session.start")
+  rpc.send({ id: "rename", cmd: "session.rename", title: "Database repair" })
+  expect(await rpc.response("rename")).toMatchObject({ ok: true, title: "Database repair" })
+  expect((await rpc.event("session.title")).data.title).toBe("Database repair")
+  rpc.send({ id: "first", cmd: "prompt", text: "first question" })
+  await rpc.response("first")
+  const first = await rpc.event("turn.end")
+  rpc.send({ id: "second", cmd: "prompt", text: "second question" })
+  await rpc.response("second")
+  await rpc.event("turn.end", first.seq)
+  rpc.send({ id: "invalid", cmd: "session.fork", index: -1 })
+  expect((await rpc.response("invalid")).error.code).toBe("invalid_params")
+  rpc.send({ id: "fork", cmd: "session.fork", index: 2 })
+  const fork = await rpc.response("fork")
+  expect(fork.ok).toBe(true)
+  expect(fork.sessionId).not.toBe(start.sessionId)
+  expect(
+    (await rpc.waitFor((l) => l.type === "session.start" && l.sessionId === fork.sessionId, "fork start"))
+      .data.reason,
+  ).toBe("fork")
+  rpc.send({ id: "state", cmd: "state" })
+  expect((await rpc.response("state")).messages).toBe(2)
+  rpc.send({ id: "resume", cmd: "session.resume", sessionId: start.sessionId })
+  expect((await rpc.response("resume")).ok).toBe(true)
+  rpc.send({ id: "original", cmd: "state" })
+  expect((await rpc.response("original")).messages).toBe(4)
+  expect((await rpc.close()).code).toBe(0)
+}, 60_000)
+
 test("amira --rpc: slash commands list, complete and run, and may ask questions", async () => {
   const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
   const rpc = spawnRpc([{ text: "hello" }], undefined, ["-e", commandsExt])
@@ -349,6 +383,8 @@ test("amira --rpc-schema prints a JSON Schema covering every command", async () 
       "prompt",
       "session.read",
       "session.resume",
+      "session.rename",
+      "session.fork",
       "skill.list",
       "skill.run",
       "state",

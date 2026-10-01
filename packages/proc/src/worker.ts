@@ -1,6 +1,7 @@
 // Runs commands off the main thread: spawning can block its thread for seconds on
 // some Windows machines (antivirus scanning), which would freeze the UI.
 // Every spawn with pipes happens on this one thread: see `openPipe` in index.ts.
+import { type JobHandle, startJobInline } from "./job-inline.ts"
 import { openPipeInline, type PipeHandle } from "./pipe.ts"
 import { warmUpProcessTree } from "./process-tree.ts"
 import type { FromWorker, ReleaseRequest, SpawnRequest, ToWorker } from "./protocol.ts"
@@ -20,6 +21,8 @@ const running = new Map<number, AbortController>()
 const prepared = new Map<number, PreparedCommand>()
 /** Piped processes that have not exited yet. */
 const pipes = new Map<number, PipeHandle>()
+/** Background jobs that have not exited yet. */
+const jobs = new Map<number, JobHandle>()
 const post = (m: FromWorker) => self.postMessage(m)
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
@@ -48,6 +51,22 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       if (!exited) pipes.set(id, handle)
       return
     }
+    case "job-start": {
+      const { id } = msg
+      let exited = false
+      const handle = startJobInline(msg.spec, (event) => {
+        if (event.type === "exit") {
+          exited = true
+          jobs.delete(id)
+        }
+        post({ type: "job", id, event })
+      })
+      // A job that failed to start has reported its exit already.
+      if (!exited) jobs.set(id, handle)
+      return
+    }
+    case "job-stop":
+      return jobs.get(msg.id)?.stop(msg.graceMs)
     case "pipe-write":
       return pipes.get(msg.id)?.write(msg.data)
     case "pipe-close":

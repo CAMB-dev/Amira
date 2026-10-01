@@ -103,7 +103,7 @@ test("streams text and maps usage with cached tokens", async () => {
   const { message } = done(evs)
   expect(message.content).toEqual([said("Hello")])
   expect(message.stopReason).toBe("end")
-  expect(message.usage).toEqual({ input: 60, output: 12, cacheRead: 40, cacheWrite: 0 })
+  expect(message.usage).toEqual({ input: 60, output: 12, reasoning: 5, cacheRead: 40, cacheWrite: 0 })
 })
 
 test("maps cache_write_tokens to cacheWrite and out of input", async () => {

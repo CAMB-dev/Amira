@@ -78,6 +78,7 @@ after a turn with their results fails; Ctrl+C stops waiting. Sub-agents still ru
 at exit are stopped and given up to 5 s to wrap up.
 
 Commands:
+  amira sessions rm <id>        Delete a stored session and its sub-agent files
   amira provider <command>      Add, edit and remove providers and their keys
                                 (see amira provider help)
   amira ext <command>           Install, list, update, remove and search extension

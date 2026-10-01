@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { projectKey } from "@amira/core"
@@ -15,6 +15,21 @@ let n = 0
 const file = () => path.join(dir, `h${++n}`, "history.jsonl")
 
 const texts = (h: PromptHistory) => h.entries.map((e) => e.text)
+
+test("image prompts can be recalled but their payload is not duplicated into project history", () => {
+  const target = file()
+  const h = new PromptHistory({ file: target })
+  const image = { name: "a.png", mimeType: "image/png", data: "YWJj" }
+  h.add([{ image }])
+  expect(h.entries[0]?.display).toBe("[image 1: a.png 3 B]")
+  expect(existsSync(target)).toBe(false)
+  const ed = new Editor()
+  const nav = new HistoryNavigator(h, ed)
+  expect(nav.move(-1)).toBe(true)
+  expect(ed.getParts()).toEqual([{ image }])
+  h.add(["plain"])
+  expect(readFileSync(target, "utf8")).toBe('{"text":"plain"}\n')
+})
 
 test("entries are unique, newest last, and capped", () => {
   const h = new PromptHistory({ limit: 3 })
