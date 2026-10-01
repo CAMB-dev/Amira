@@ -1,5 +1,5 @@
 import path from "node:path"
-import { defineExtension, formatTokens, type StatusTone } from "@amira/api"
+import { defineExtension, formatTokens, hasUnpricedSearch, type StatusTone } from "@amira/api"
 
 export { formatTokens }
 
@@ -54,6 +54,7 @@ export default defineExtension((api) => {
   let context = 0
   let contextWindow: number | undefined
   let cost: number | undefined
+  let unpricedSearch = false
   /** The agent tree's own total, which also counts calls made outside a turn (approvals). */
   let treeCost: number | undefined
   let place = ""
@@ -71,6 +72,7 @@ export default defineExtension((api) => {
     context = e.data.contextTokens ?? 0
     if (e.data.contextWindow) contextWindow = e.data.contextWindow
     cost = undefined
+    unpricedSearch = false
     treeCost = undefined
     place ||= path.basename(e.data.cwd)
     api.requestRender()
@@ -92,6 +94,7 @@ export default defineExtension((api) => {
   api.on("message.end", (e) => {
     const u = e.data.message.usage
     if (!u) return
+    unpricedSearch ||= hasUnpricedSearch(e.data.message)
     if (u.cost !== undefined) cost = (cost ?? 0) + u.cost
     if (!own(e)) return api.requestRender()
     // An interrupted reply may end with no usage counted; the context is still what it was.
@@ -128,6 +131,7 @@ export default defineExtension((api) => {
     priority: 20,
     tone: "muted",
     text: () => {
+      if (unpricedSearch) return "cost unknown"
       const total = treeCost ?? cost
       return total === undefined ? "" : formatCost(total)
     },

@@ -1,4 +1,5 @@
 import type { ProviderCompat } from "../dialect.ts"
+import { hasNativeWebSearch } from "../server-tools.ts"
 import type { ModelRequest, ReasoningEffort } from "../types.ts"
 import {
   type AnthropicMessage,
@@ -6,6 +7,7 @@ import {
   markCacheBreakpoints,
   toAnthropicMessages,
 } from "./anthropic-messages.ts"
+import { anthropicSearchTool } from "./anthropic-web-search.ts"
 
 /** The API allows at most this many cache_control markers per request. */
 const MAX_BREAKPOINTS = 4
@@ -21,9 +23,14 @@ export const THINKING_BUDGET: Record<ReasoningEffort, number> = {
 
 const EPHEMERAL: CacheControl = { type: "ephemeral" }
 
-export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<string, unknown> {
+export function requestBody(
+  req: ModelRequest,
+  compat: ProviderCompat = {},
+  baseUrl?: string,
+): Record<string, unknown> {
   const sendTools = req.tools.length > 0 && req.model.caps.tools === "native"
-  const messages = toAnthropicMessages(req.messages, { tools: sendTools })
+  const webSearch = hasNativeWebSearch(req.model)
+  const messages = toAnthropicMessages(req.messages, { tools: sendTools, webSearch })
   const maxTokens = Math.max(
     1,
     Math.min(req.maxTokens ?? req.model.maxOutput, req.model.maxOutput, MAX_TOKENS_CAP),
@@ -49,6 +56,8 @@ export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Rec
     }
     body.tools = tools
   }
+  if (webSearch)
+    body.tools = [...((body.tools as Record<string, unknown>[]) ?? []), anthropicSearchTool(baseUrl)]
   if (cache) markCacheBreakpoints(messages, MAX_BREAKPOINTS - breakpoints)
   body.messages = messages
 

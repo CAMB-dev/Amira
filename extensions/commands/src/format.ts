@@ -1,11 +1,14 @@
 import {
   type AssistantMessage,
+  addUsage,
   type CompactionUsage,
   type ContextPreview,
   type ContextWindowSource,
   formatTokens,
+  hasUnpricedSearch,
   type Message,
   padCells,
+  serverToolText,
   textCells,
   type Usage,
 } from "@amira/api"
@@ -74,13 +77,14 @@ export interface ModelCost {
   model: string
   replies: number
   usage: Usage
-  /** Undefined when no reply of this model had a price. */
+  /** Undefined when no reply had a price, or a search fee is unknown. */
   cost?: number
 }
 
 /** Usage and cost of the replies, per model in the order they were first used. */
 export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
   const out = new Map<string, ModelCost>()
+  const unpricedSearch = new Set<string>()
   for (const r of replies) {
     if (!r.usage) continue
     const model = `${r.model.provider}/${r.model.model}`
@@ -90,11 +94,13 @@ export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }
     row.replies++
-    row.usage.input += r.usage.input
-    row.usage.output += r.usage.output
-    row.usage.cacheRead += r.usage.cacheRead
-    row.usage.cacheWrite += r.usage.cacheWrite
-    if (r.usage.cost !== undefined) row.cost = (row.cost ?? 0) + r.usage.cost
+    row.usage = addUsage(row.usage, r.usage)
+    if (hasUnpricedSearch(r)) unpricedSearch.add(model)
+    row.cost = row.usage.cost
+    if (unpricedSearch.has(model)) {
+      delete row.cost
+      delete row.usage.cost
+    }
     out.set(model, row)
   }
   return [...out.values()]
@@ -113,6 +119,7 @@ export function costReport(
   )
   const compactionRows = costByModel(asReplies).map((r) => ({ ...r, compaction: true }))
   const rows: (ModelCost & { compaction?: boolean })[] = [...costByModel(replies), ...compactionRows]
+  const unpricedSearch = [...replies, ...asReplies].some(hasUnpricedSearch)
   if (!rows.length) return "No model replies with usage in this session yet."
   const line = (r: Pick<ModelCost, "usage" | "cost">, label: string, count: string) => {
     const u = r.usage
@@ -132,23 +139,19 @@ export function costReport(
       : line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`),
   )
   if (rows.length > 1) {
-    const total = rows.reduce(
-      (t, r) => ({
-        usage: {
-          input: t.usage.input + r.usage.input,
-          output: t.usage.output + r.usage.output,
-          cacheRead: t.usage.cacheRead + r.usage.cacheRead,
-          cacheWrite: t.usage.cacheWrite + r.usage.cacheWrite,
-        },
-        cost: r.cost === undefined ? t.cost : (t.cost ?? 0) + r.cost,
-      }),
-      { usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } as Pick<ModelCost, "usage" | "cost">,
-    )
-    body.push(line(total, "total", ""))
+    const usage = rows.reduce<Usage>((u, r) => addUsage(u, r.usage), {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    })
+    body.push(line({ usage, cost: unpricedSearch ? undefined : usage.cost }, "total", ""))
   }
-  const priced = rows.some((r) => r.cost === undefined)
-    ? "\nModels without known prices are not counted."
-    : ""
+  const priced = unpricedSearch
+    ? "\nSearch costs are unknown for some replies."
+    : rows.some((r) => r.cost === undefined)
+      ? "\nModels without known prices are not counted."
+      : ""
   return `Session cost by model:\n${table(body)}${priced}`
 }
 
@@ -159,8 +162,8 @@ export function estimateTokens(value: string | Message): number {
   for (const b of value.content) {
     if (b.type === "image") n += 1000
     else if (b.type === "toolCall") n += estimateTokens(b.name + JSON.stringify(b.args))
-    else if (b.type === "serverTool") n += estimateTokens(b.signature?.value ?? JSON.stringify(b.input))
-    else n += estimateTokens(b.text)
+    else if (b.type === "serverTool") n += estimateTokens(b.signature?.value ?? serverToolText(b))
+    else n += estimateTokens(b.signature?.kind === "webSearch" ? b.signature.value : b.text)
   }
   return n + 4
 }

@@ -1,8 +1,10 @@
+import { NATIVE_WEB_SEARCH, serverToolSnapshot } from "../server-tools.ts"
 import { parseToolArgs } from "../tool-args.ts"
 import type {
   AssistantMessage,
   ModelError,
   ModelRef,
+  ServerToolBlock,
   StopReason,
   StreamEvent,
   TextBlock,
@@ -13,14 +15,16 @@ import type {
 import { emptyUsage } from "../types.ts"
 import { anthropicError } from "./anthropic-errors.ts"
 import { ANTHROPIC_DIALECT } from "./anthropic-messages.ts"
+import { searchCitations, searchResult } from "./anthropic-web-search.ts"
 import { madeUpIdPrefix } from "./tool-results.ts"
 
 type ErrorEvent = Extract<StreamEvent, { type: "error" }>
 
 type Open =
-  | { kind: "text"; block: TextBlock }
+  | { kind: "text"; block: TextBlock; raw: Record<string, any> }
   | { kind: "thinking"; block: ThinkingBlock }
   | { kind: "tool"; block: ToolCallBlock; index: number; json: string; initial: unknown; closed: boolean }
+  | { kind: "search"; block: ServerToolBlock; raw: Record<string, any>; json: string; closed: boolean }
 
 /** Builds the assistant message from Messages API stream events and emits the matching deltas. */
 export class MessagesAccumulator {
@@ -75,8 +79,10 @@ export class MessagesAccumulator {
     if (cb?.type === "text") {
       const block: TextBlock = { type: "text", text: "" }
       this.message.content.push(block)
-      this.#blocks.set(index, { kind: "text", block })
+      const raw = { ...cb, text: "" }
+      this.#blocks.set(index, { kind: "text", block, raw })
       yield* this.#delta(index, { type: "text_delta", text: cb.text })
+      searchCitations(block, raw)
     } else if (cb?.type === "thinking") {
       const block: ThinkingBlock = { type: "thinking", text: "" }
       this.message.content.push(block)
@@ -87,6 +93,25 @@ export class MessagesAccumulator {
       const block: ThinkingBlock = { type: "thinking", text: "", redacted: true }
       this.#sign(block, cb.data)
       this.message.content.push(block)
+    } else if (cb?.type === "server_tool_use" && cb.name === NATIVE_WEB_SEARCH) {
+      const block: ServerToolBlock = {
+        type: "serverTool",
+        id: String(cb.id ?? `search_${index}`),
+        name: NATIVE_WEB_SEARCH,
+        input: {},
+        status: "running",
+      }
+      this.message.content.push(block)
+      this.#blocks.set(index, { kind: "search", block, raw: { ...cb }, json: "", closed: false })
+      yield serverToolSnapshot(block)
+    } else if (cb?.type === "web_search_tool_result") {
+      const open = [...this.#blocks.values()].find(
+        (b) => b.kind === "search" && b.block.id === cb.tool_use_id,
+      )
+      if (open?.kind !== "search") return
+      this.#close(open)
+      const after = this.message.content.length - this.message.content.indexOf(open.block) - 1
+      yield searchResult(open.block, cb, after, index)
     } else if (cb?.type === "tool_use") {
       const block: ToolCallBlock = {
         type: "toolCall",
@@ -114,7 +139,18 @@ export class MessagesAccumulator {
     if (!open) return
     if (open.kind === "text" && d?.type === "text_delta" && typeof d.text === "string" && d.text) {
       open.block.text += d.text
+      open.raw.text = open.block.text
+      searchCitations(open.block, open.raw)
       yield { type: "text.delta", text: d.text }
+    } else if (open.kind === "text" && d?.type === "citations_delta" && d.citation) {
+      open.raw.citations = [...(Array.isArray(open.raw.citations) ? open.raw.citations : []), d.citation]
+      searchCitations(open.block, open.raw)
+    } else if (
+      open.kind === "search" &&
+      d?.type === "input_json_delta" &&
+      typeof d.partial_json === "string"
+    ) {
+      open.json += d.partial_json
     } else if (open.kind === "thinking" && d?.type === "thinking_delta") {
       if (typeof d.thinking !== "string" || !d.thinking) return
       open.block.text += d.thinking
@@ -140,6 +176,14 @@ export class MessagesAccumulator {
   }
 
   #close(open: Open | undefined) {
+    if (open?.kind === "search") {
+      if (open.closed) return
+      open.closed = true
+      open.block.input = open.json ? parseToolArgs(open.json) : (open.raw.input ?? {})
+      open.raw.input = open.block.input
+      open.block.signature = { dialect: ANTHROPIC_DIALECT, value: JSON.stringify({ call: open.raw }) }
+      return
+    }
     if (open?.kind !== "tool" || open.closed) return
     open.closed = true
     const initial = open.initial
@@ -156,10 +200,13 @@ export class MessagesAccumulator {
     usage.output = pick(u.output_tokens, usage.output)
     usage.cacheRead = pick(u.cache_read_input_tokens, usage.cacheRead)
     usage.cacheWrite = pick(u.cache_creation_input_tokens, usage.cacheWrite)
+    const searches = u.server_tool_use?.web_search_requests
+    if (typeof searches === "number" && Number.isInteger(searches) && searches >= 0)
+      usage.webSearchRequests = searches
   }
 
   #closeAll() {
-    for (const open of this.#blocks.values()) this.#close(open)
+    for (const open of this.#blocks.values()) if (open.kind !== "search") this.#close(open)
   }
 
   fail(error: ModelError, retryable: boolean): ErrorEvent {

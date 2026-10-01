@@ -45,6 +45,7 @@ export interface ReplayTarget {
  */
 export function canReplay(sig: Signature, target: ReplayTarget, producer?: string): boolean {
   if (sig.dialect !== target.dialect) return false
+  if (sig.kind === "webSearch" && (!target.webSearch || sig.host === undefined)) return false
   if (sig.kind === "checkpoint") {
     return sig.provider === target.provider && sig.host === target.host && sig.model === target.model
   }

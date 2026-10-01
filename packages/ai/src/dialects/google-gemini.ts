@@ -1,4 +1,5 @@
 import type { Dialect, DialectContext } from "../dialect.ts"
+import { hasNativeWebSearch, isGemini3 } from "../server-tools.ts"
 import { parseSSE } from "../sse.ts"
 import { adaptThinking } from "../thinking.ts"
 import type { ModelRequest, ReasoningEffort, StreamEvent } from "../types.ts"
@@ -43,13 +44,17 @@ export const googleGemini: Dialect = {
 }
 
 export function geminiBody(req: ModelRequest): Record<string, unknown> {
+  const sendTools = req.tools.length > 0 && req.model.caps.tools === "native"
+  const webSearch = hasNativeWebSearch(req.model, sendTools)
   const body: Record<string, unknown> = {
     contents: toGeminiContents(adaptThinking(req.messages, GEMINI_DIALECT), {
       images: req.model.caps.images,
+      // Tool context circulation is documented only for Gemini 3, even in search-only requests.
+      webSearch: webSearch && isGemini3(req.model.id),
     }),
   }
   if (req.systemPrompt) body.systemInstruction = { parts: [{ text: req.systemPrompt }] }
-  if (req.tools.length && req.model.caps.tools === "native") {
+  if (sendTools) {
     body.tools = [
       {
         functionDeclarations: req.tools.map((t) => {
@@ -60,6 +65,10 @@ export function geminiBody(req: ModelRequest): Record<string, unknown> {
         }),
       },
     ]
+  }
+  if (webSearch) {
+    body.tools = [...((body.tools as Record<string, unknown>[]) ?? []), { googleSearch: {} }]
+    if (isGemini3(req.model.id)) body.toolConfig = { includeServerSideToolInvocations: true }
   }
   const config: Record<string, unknown> = {}
   if (req.maxTokens) config.maxOutputTokens = req.maxTokens

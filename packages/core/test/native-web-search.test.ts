@@ -71,7 +71,13 @@ const completed = {
   response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
 }
 
-function setup(replies: Record<string, unknown>[][], baseUrl = "https://api.openai.com/v1") {
+function setup(
+  replies: Record<string, unknown>[][],
+  baseUrl = "https://api.openai.com/v1",
+  dialect = "openai-responses",
+  modelId = "gpt-5",
+  webSearch?: boolean,
+) {
   const bodies: any[] = []
   const fetchImpl = (async (_url: string, init: RequestInit) => {
     bodies.push(JSON.parse(init.body as string))
@@ -80,12 +86,26 @@ function setup(replies: Record<string, unknown>[][], baseUrl = "https://api.open
   const ai = createAi({
     fetch: fetchImpl,
     retry: { retries: 0 },
-    providers: [{ id: "oa", dialect: "openai-responses", baseUrl, defaultModel: { contextWindow: 128_000 } }],
+    providers: [
+      {
+        id: "oa",
+        dialect,
+        baseUrl,
+        defaultModel: { contextWindow: 128_000 },
+        ...(webSearch !== undefined ? { compat: { webSearch } } : {}),
+      },
+    ],
   })
   const bus = new EventBus()
   const events: AnyEvent[] = []
   bus.subscribe((e) => void events.push(e))
-  const agent = new Agent({ ai, model: ai.model("oa/gpt-5"), cwd: process.cwd(), systemPrompt: "sys", bus })
+  const agent = new Agent({
+    ai,
+    model: ai.model(`oa/${modelId}`),
+    cwd: process.cwd(),
+    systemPrompt: "sys",
+    bus,
+  })
   const ran: string[] = []
   agent.tools.register(
     defineTool({
@@ -264,4 +284,168 @@ test("models without the hosted search get the client web_search tool", async ()
   expect(tools.map((t) => t.name ?? t.type)).toEqual(["web_search", "echo"])
   const preview = await agent.preview()
   expect(preview.tools.map((t) => t.name)).toEqual(["web_search", "echo"])
+})
+
+const anthropicCall = { type: "server_tool_use", id: "s1", name: "web_search", input: { query: "Bun" } }
+const anthropicResult = {
+  type: "web_search_tool_result",
+  tool_use_id: "s1",
+  content: [{ type: "web_search_result", url, title: "Bun blog", encrypted_content: "SEARCH-CONTENT" }],
+}
+const anthropicReply = [
+  { type: "message_start", message: { usage: { input_tokens: 1 } } },
+  { type: "content_block_start", index: 0, content_block: anthropicCall },
+  { type: "content_block_stop", index: 0 },
+  { type: "content_block_start", index: 1, content_block: anthropicResult },
+  {
+    type: "content_block_start",
+    index: 2,
+    content_block: {
+      type: "text",
+      text: TEXT,
+      citations: [
+        {
+          type: "web_search_result_location",
+          url,
+          title: "Bun blog",
+          encrypted_index: "SEARCH-INDEX",
+          cited_text: "Source",
+        },
+      ],
+    },
+  },
+  {
+    type: "message_delta",
+    delta: { stop_reason: "end_turn" },
+    usage: { output_tokens: 1, server_tool_use: { web_search_requests: 1 } },
+  },
+  { type: "message_stop" },
+]
+const geminiCall = {
+  thoughtSignature: "SEARCH-CALL",
+  toolCall: { id: "s1", toolType: "GOOGLE_SEARCH_WEB", args: { queries: ["Bun"] } },
+}
+const geminiResult = {
+  thoughtSignature: "SEARCH-RESULT",
+  toolResponse: { id: "s1", toolType: "GOOGLE_SEARCH_WEB", response: {} },
+}
+const geminiReply = [
+  {
+    candidates: [
+      {
+        content: { parts: [geminiCall, geminiResult, { text: TEXT }] },
+        groundingMetadata: {
+          webSearchQueries: ["Bun"],
+          groundingChunks: [{ web: { uri: url, title: "Bun blog" } }],
+          groundingSupports: [
+            { segment: { partIndex: 2, startIndex: 0, endIndex: TEXT.length }, groundingChunkIndices: [0] },
+          ],
+        },
+        finishReason: "STOP",
+      },
+    ],
+  },
+]
+
+for (const [dialect, baseUrl, model, reply] of [
+  ["anthropic-messages", "https://api.anthropic.com", "claude", anthropicReply],
+  [
+    "google-gemini",
+    "https://generativelanguage.googleapis.com/v1beta",
+    "gemini-3-flash-preview",
+    geminiReply,
+  ],
+] as const) {
+  test(`${dialect}: agent hides client search, emits server rows, and replays without running a local tool`, async () => {
+    const { agent, bodies, ran, bus, events } = setup([reply, reply], baseUrl, dialect, model)
+    expect((await agent.preview()).tools.map((t) => t.name)).toEqual(["echo"])
+    expect(await agent.prompt("Search Bun")).toEqual({ reason: "done", steps: 1 })
+    await bus.flush()
+    expect(ran).toEqual([])
+    expect(events.some((e) => e.type === "message.delta" && e.data.kind === "serverTool")).toBe(true)
+    expect(events.some((e) => e.type === "tool.execute.start")).toBe(false)
+    const assistant = agent.messages[1]
+    if (assistant?.role !== "assistant") throw new Error("expected assistant")
+    expect(assistant.content.some((b) => b.type === "text" && b.citations?.length)).toBe(true)
+    const asked = JSON.stringify(bodies[0].tools)
+    expect(asked).not.toContain('"name":"web_search","description"')
+    expect(asked).toContain("echo")
+    await agent.prompt("Follow up")
+    if (dialect === "anthropic-messages") {
+      expect(bodies[1].messages[1].content.slice(0, 2)).toEqual([anthropicCall, anthropicResult])
+      expect(JSON.stringify(bodies[1].messages)).toContain("SEARCH-INDEX")
+    } else {
+      expect(bodies[1].contents[1].parts.slice(0, 2)).toEqual([geminiCall, geminiResult])
+    }
+    agent.tools.register({ ...agent.tools.get("web_search")!, exposure: "deferred", override: true }, "test")
+    expect((await agent.preview()).systemPrompt).not.toContain("web_search")
+  })
+  test(`${dialect}: a function next to server search still runs and only it gets a local result`, async () => {
+    const mixed: Record<string, unknown>[] =
+      dialect === "anthropic-messages"
+        ? anthropicReply.flatMap<Record<string, unknown>>((event) =>
+            event.type === "message_delta"
+              ? [
+                  {
+                    type: "content_block_start",
+                    index: 3,
+                    content_block: { type: "tool_use", id: "e1", name: "echo", input: { text: "a" } },
+                  },
+                  { type: "content_block_stop", index: 3 },
+                  { ...event, delta: { stop_reason: "tool_use" } },
+                ]
+              : [event],
+          )
+        : [
+            {
+              candidates: [
+                {
+                  ...geminiReply[0]!.candidates[0],
+                  content: {
+                    parts: [
+                      geminiCall,
+                      geminiResult,
+                      {
+                        functionCall: { id: "e1", name: "echo", args: { text: "a" } },
+                        thoughtSignature: "FUNCTION-SIGNATURE",
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          ]
+    const followup =
+      dialect === "anthropic-messages"
+        ? [
+            { type: "message_start", message: { usage: { input_tokens: 1 } } },
+            { type: "content_block_start", index: 0, content_block: { type: "text", text: "Done." } },
+            { type: "message_delta", delta: { stop_reason: "end_turn" } },
+            { type: "message_stop" },
+          ]
+        : [{ candidates: [{ content: { parts: [{ text: "Done." }] }, finishReason: "STOP" }] }]
+    const { agent, bodies, ran } = setup([mixed, followup], baseUrl, dialect, model)
+    expect(await agent.prompt("Search and echo")).toEqual({ reason: "done", steps: 2 })
+    expect(ran).toEqual(["echo"])
+    const results = agent.messages.filter((m) => m.role === "toolResult")
+    expect(results.map((r) => r.toolCallId)).toEqual(["e1"])
+    if (dialect === "anthropic-messages")
+      expect(bodies[1].messages.at(-1).content[0]).toMatchObject({ type: "tool_result", tool_use_id: "e1" })
+    else expect(bodies[1].contents.at(-1).parts[0].functionResponse.id).toBe("e1")
+  })
+}
+
+test("Gemini 2.5 retains client search beside function tools, even with compat.webSearch enabled", async () => {
+  const { agent, bodies } = setup(
+    [geminiReply],
+    "https://generativelanguage.googleapis.com/v1beta",
+    "google-gemini",
+    "gemini-2.5-pro",
+    true,
+  )
+  expect((await agent.preview()).tools.map((t) => t.name)).toEqual(["web_search", "echo"])
+  await agent.prompt("Search")
+  expect(bodies[0].tools).toHaveLength(1)
+  expect(bodies[0].tools[0].functionDeclarations.map((t: any) => t.name)).toEqual(["web_search", "echo"])
+  expect(bodies[0].toolConfig).toBeUndefined()
 })
