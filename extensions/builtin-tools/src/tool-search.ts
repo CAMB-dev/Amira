@@ -46,6 +46,7 @@ Loaded tools stay available for the rest of the session.`,
       max_results: { type: "number", description: "Most tools a keyword query loads. Default 5." },
     },
   },
+  traits: { readOnly: true, toolSearch: true },
   async execute(p, ctx) {
     if (!ctx.session) return textResult("tool_search only works inside an agent session.", true)
     const all = ctx.session.deferredTools()

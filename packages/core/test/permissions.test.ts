@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import type { CommandRule, PermissionMode, ShellKind } from "@amira/api"
+import type { CommandRule, PermissionMode, ShellKind, ToolDefinition } from "@amira/api"
+import { builtinTools } from "../../../extensions/builtin-tools/src/index.ts"
 import { validateSettings } from "../src/config/schema.ts"
 import { type PermissionRule, Permissions, ruleMatches, stricterMode } from "../src/permissions/policy.ts"
 import { hooksPathsIn, protectedPath, writtenPaths } from "../src/permissions/protected.ts"
@@ -15,13 +16,28 @@ const user = (command: string[], decision: CommandRule["decision"]): PermissionR
   source: { scope: "user", file: "user.json" },
 })
 
-const bash = { name: "bash", shellKind: (): ShellKind => "bash" }
-const pwsh = { name: "powershell", shellKind: (): ShellKind => "powershell" }
+type PermissionTool = Pick<ToolDefinition, "name" | "traits" | "shellKind" | "getWrittenPaths">
+
+const bash = { name: "bash", traits: { shell: "bash" as const }, shellKind: (): ShellKind => "bash" }
+const pwsh = {
+  name: "powershell",
+  traits: { shell: "powershell" as const },
+  shellKind: (): ShellKind => "powershell",
+}
+const writer = (name = "writer"): PermissionTool => ({
+  name,
+  traits: { writesFiles: "paths" },
+  getWrittenPaths: (args) => (typeof args.path === "string" ? [args.path] : []),
+})
+const readOnly = (name = "reader"): PermissionTool => ({
+  name,
+  traits: { readOnly: true, writesFiles: false },
+})
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "amira-perm-"))
 
 async function decide(
   command: string,
-  opts: { mode?: PermissionMode; rules?: PermissionRule[]; tool?: typeof bash } = {},
+  opts: { mode?: PermissionMode; rules?: PermissionRule[]; tool?: PermissionTool } = {},
 ) {
   const p = new Permissions({ mode: opts.mode ?? "auto", rules: opts.rules ?? [] })
   return p.check(opts.tool ?? bash, { command }, process.cwd())
@@ -179,13 +195,15 @@ describe("rules", () => {
     expect((await decide("git pu`sh", { rules, tool: pwsh })).decision).toBe("deny")
     // In bash a backslash escapes.
     expect((await decide("git pu\\sh", { rules, tool: bash })).decision).toBe("deny")
-    // A bash tool that cannot say which shell runs it is read both ways; the stricter wins.
-    const unknown = { name: "bash" }
+    // A tool under the bash name is a shell tool whatever it declares, read both ways.
     const p = new Permissions({ rules })
-    expect((await p.check(unknown, { command: "git pu`sh" }, process.cwd())).decision).toBe("deny")
+    expect((await p.check({ name: "bash" }, { command: "git pu`sh" }, process.cwd())).decision).toBe("deny")
+    expect((await p.check({ name: "other" }, { command: "git push" }, process.cwd())).decision).toBe("allow")
     // A tool of any name that says it runs a shell is a shell tool.
-    const custom = { name: "run", shellKind: (): ShellKind => "bash" }
+    const custom = { name: "run", traits: { shell: "bash" as const }, shellKind: (): ShellKind => "bash" }
     expect((await p.check(custom, { command: "git push" }, process.cwd())).decision).toBe("deny")
+    const staticPowerShell = { name: "runner", traits: { shell: "powershell" as const } }
+    expect((await p.check(staticPowerShell, { command: "git pu`sh" }, process.cwd())).decision).toBe("deny")
     // Without a command as text there is nothing to check: it asks where anything could.
     expect((await p.check(custom, { cmd: "git push" }, process.cwd())).decision).toBe("ask")
     expect((await p.check(bash, { command: ["git", "push"] }, process.cwd())).decision).toBe("ask")
@@ -201,15 +219,30 @@ describe("modes", () => {
       expect(await p.check(bash, { command }, process.cwd())).toEqual({ decision: "allow", reason: "" })
     }
     const dir = tmp()
-    for (const [name, args] of [
-      ["write", { path: "src/a.ts", content: "" }],
-      ["edit", { path: "a.ts", old_string: "a", new_string: "b" }],
-      ["apply_patch", { patch: "*** Begin Patch\n*** Add File: b.ts\n+x\n*** End Patch" }],
-      ["mcp__server__tool", {}],
-      ["read", { path: ".git/config" }],
-    ] as const) {
-      expect(await p.check({ name }, args, dir)).toEqual({ decision: "allow", reason: "" })
-    }
+    expect(await p.check(writer("write"), { path: "src/a.ts", content: "" }, dir)).toEqual({
+      decision: "allow",
+      reason: "",
+    })
+    expect(await p.check(writer("edit"), { path: "a.ts", old_string: "a", new_string: "b" }, dir)).toEqual({
+      decision: "allow",
+      reason: "",
+    })
+    expect(
+      await p.check(
+        {
+          name: "apply_patch",
+          traits: { writesFiles: "paths" },
+          getWrittenPaths: () => ["b.ts"],
+        },
+        { patch: "*** Begin Patch\n*** Add File: b.ts\n+x\n*** End Patch" },
+        dir,
+      ),
+    ).toEqual({ decision: "allow", reason: "" })
+    expect(await p.check({ name: "mcp__server__tool" }, {}, dir)).toEqual({ decision: "allow", reason: "" })
+    expect(await p.check(readOnly("read"), { path: ".git/config" }, dir)).toEqual({
+      decision: "allow",
+      reason: "",
+    })
   })
 
   test("edits changes files without asking and asks before shell commands", async () => {
@@ -218,24 +251,57 @@ describe("modes", () => {
       decision: "ask",
       cause: "mode",
     })
-    expect((await p.check({ name: "write" }, { path: "a.ts", content: "" }, tmp())).decision).toBe("allow")
+    expect((await p.check(writer("write"), { path: "a.ts", content: "" }, tmp())).decision).toBe("allow")
     expect((await p.check({ name: "mcp__x__y" }, {}, tmp())).decision).toBe("allow")
+  })
+
+  test("a file writer without a valid path report asks conservatively", async () => {
+    const p = new Permissions()
+    const verdict = await p.check({ name: "unsafe_writer", traits: { writesFiles: true } }, {}, tmp())
+    expect(verdict).toMatchObject({ decision: "ask", cause: "protected" })
   })
 
   test("plan blocks file changes and every shell command, and asks about unknown tools", async () => {
     const p = new Permissions({ mode: "plan" })
     expect((await p.check(bash, { command: "ls" }, process.cwd())).decision).toBe("deny")
     expect((await p.check(pwsh, { command: "Get-ChildItem" }, process.cwd())).decision).toBe("deny")
-    expect((await p.check({ name: "edit" }, { path: "a" }, tmp())).decision).toBe("deny")
-    expect((await p.check({ name: "apply_patch" }, { patch: "" }, tmp())).decision).toBe("deny")
-    expect((await p.check({ name: "read" }, { path: "a" }, tmp())).decision).toBe("allow")
-    expect((await p.check({ name: "grep" }, {}, tmp())).decision).toBe("allow")
-    expect((await p.check({ name: "output_read" }, { id: "a_123456" }, tmp())).decision).toBe("allow")
+    expect((await p.check(writer("edit"), { path: "a" }, tmp())).decision).toBe("deny")
+    expect((await p.check(writer("apply_patch"), { patch: "" }, tmp())).decision).toBe("deny")
+    expect((await p.check(readOnly("read"), { path: "a" }, tmp())).decision).toBe("allow")
+    expect((await p.check(readOnly("grep"), {}, tmp())).decision).toBe("allow")
+    expect((await p.check(readOnly("output_read"), { id: "a_123456" }, tmp())).decision).toBe("allow")
     expect((await p.check({ name: "mcp__x__y" }, {}, tmp())).decision).toBe("ask")
     // Background jobs can be looked at; stopping one asks.
-    expect((await p.check({ name: "job_output" }, { id: "job1" }, tmp())).decision).toBe("allow")
-    expect((await p.check({ name: "job_list" }, {}, tmp())).decision).toBe("allow")
-    expect((await p.check({ name: "job_stop" }, { id: "job1" }, tmp())).decision).toBe("ask")
+    expect((await p.check(readOnly("job_output"), { id: "job1" }, tmp())).decision).toBe("allow")
+    expect((await p.check(readOnly("job_list"), {}, tmp())).decision).toBe("allow")
+    expect(
+      (await p.check({ name: "job_stop", traits: { readOnly: false } }, { id: "job1" }, tmp())).decision,
+    ).toBe("ask")
+    // Names alone never opt a third-party tool into a permission exception.
+    expect((await p.check({ name: "read" }, { path: "a" }, tmp())).decision).toBe("ask")
+  })
+
+  test("declared capabilities preserve every built-in plan-mode decision", async () => {
+    const p = new Permissions({ mode: "plan" })
+    const tools = new Map(builtinTools.map((tool) => [tool.name, tool]))
+    for (const name of [
+      "read",
+      "grep",
+      "glob",
+      "output_read",
+      "ask_user",
+      "tool_search",
+      "web_search",
+    ] as const) {
+      const tool = tools.get(name)
+      if (tool) expect((await p.check(tool, {}, tmp())).decision, name).toBe("allow")
+    }
+    for (const name of ["write", "edit", "apply_patch", "bash"] as const) {
+      const tool = tools.get(name)
+      if (tool) expect((await p.check(tool, {}, tmp())).decision, name).toBe("deny")
+    }
+    const stop = tools.get("job_stop")
+    if (stop) expect((await p.check(stop, {}, tmp())).decision).toBe("ask")
   })
 
   test("Shift+Tab's cycle goes auto, edits, plan and round; listeners hear each change", () => {
@@ -314,14 +380,103 @@ describe("protected paths", () => {
   test("write, edit and apply_patch ask before protected files, even in auto mode", async () => {
     const dir = repo()
     const p = new Permissions({ protect: opts })
-    const v = await p.check({ name: "write" }, { path: ".git/hooks/pre-commit", content: "x" }, dir)
+    const v = await p.check(writer("write"), { path: ".git/hooks/pre-commit", content: "x" }, dir)
     expect(v).toMatchObject({ decision: "ask", cause: "protected" })
     expect(v.reason).toContain("Git hooks")
     const patch =
       "*** Begin Patch\n*** Update File: src/a.ts\n*** Move to: .amira/settings.json\n@@\n-a\n+b\n*** End Patch"
-    expect((await p.check({ name: "apply_patch" }, { patch }, dir)).decision).toBe("ask")
-    expect(writtenPaths("apply_patch", { patch })).toEqual(["src/a.ts", ".amira/settings.json"])
+    const patchTool = {
+      name: "apply_patch",
+      traits: { writesFiles: "paths" as const },
+      getWrittenPaths: (args: Record<string, unknown>) => {
+        if (typeof args.patch !== "string") return []
+        return args.patch.split(/\r?\n/).flatMap((line) => {
+          const match = /^\*\*\* (?:Add|Delete|Update) File: (.+)$/.exec(line.trim())
+          const move = /^\*\*\* Move to: (.+)$/.exec(line.trim())
+          const found = match?.[1] ?? move?.[1]
+          return found ? [found] : []
+        })
+      },
+    }
+    expect((await p.check(patchTool, { patch }, dir)).decision).toBe("ask")
+    expect(await writtenPaths(patchTool, { patch }, dir)).toEqual(["src/a.ts", ".amira/settings.json"])
     expect(hooksPathsIn('[core]\n  hooksPath = "x y"\n[alias]\n  hooksPath = no')).toEqual(["x y"])
+  })
+})
+
+describe("built-in names keep their protections (overrides)", () => {
+  function repo() {
+    const dir = tmp()
+    mkdirSync(path.join(dir, ".git", "hooks"), { recursive: true })
+    return dir
+  }
+  const hook = { path: ".git/hooks/pre-commit", content: "x" }
+
+  test("a file tool override cannot declare or report its way past protected paths", async () => {
+    const dir = repo()
+    const p = new Permissions()
+    const lies: PermissionTool[] = [
+      { name: "write" },
+      { name: "write", traits: { readOnly: true, writesFiles: false } },
+      { name: "edit", traits: { writesFiles: "paths" }, getWrittenPaths: () => [] },
+      { name: "write", traits: { writesFiles: "paths" }, getWrittenPaths: () => ["elsewhere.txt"] },
+    ]
+    for (const tool of lies) {
+      expect((await p.check(tool, hook, dir)).decision, JSON.stringify(tool.traits)).toBe("ask")
+    }
+    const patch = "*** Begin Patch\n*** Update File: a.ts\n*** Move to: .git/hooks/post-merge\n*** End Patch"
+    expect(
+      (await p.check({ name: "apply_patch", traits: { readOnly: true } }, { patch }, dir)).decision,
+    ).toBe("ask")
+    expect((await p.check({ name: "write" }, { path: "a.txt", content: "" }, dir)).decision).toBe("allow")
+    const plan = new Permissions({ mode: "plan" })
+    expect(
+      (await plan.check({ name: "edit", traits: { readOnly: true } }, { path: "a" }, dir)).decision,
+    ).toBe("deny")
+  })
+
+  test("a shell override is always checked as a shell", async () => {
+    const rules = [user(["rm"], "deny")]
+    const p = new Permissions({ rules })
+    for (const tool of [
+      { name: "powershell" },
+      { name: "bash", traits: { readOnly: true, writesFiles: false } },
+    ]) {
+      expect((await p.check(tool, { command: "rm x" }, process.cwd())).decision, tool.name).toBe("deny")
+    }
+    const plan = new Permissions({ mode: "plan" })
+    expect(
+      (await plan.check({ name: "bash", traits: { readOnly: true } }, { command: "ls" }, process.cwd()))
+        .decision,
+    ).toBe("deny")
+  })
+
+  test("the built-in bash is read both ways when its shell cannot be resolved", async () => {
+    const rules = [user(["git", "push"], "deny")]
+    const p = new Permissions({ rules })
+    const failing = {
+      name: "bash",
+      traits: { shell: "bash" as const },
+      shellKind: (): ShellKind => {
+        throw new Error("no shell")
+      },
+    }
+    expect((await p.check(failing, { command: "git pu`sh" }, process.cwd())).decision).toBe("deny")
+  })
+
+  test("a tool that writes files and runs commands is checked as both", async () => {
+    const rules = [user(["rm"], "deny")]
+    const p = new Permissions({ rules })
+    const both: PermissionTool = {
+      name: "runner",
+      traits: { writesFiles: "paths", shell: "bash" },
+      getWrittenPaths: () => ["out.txt"],
+    }
+    expect((await p.check(both, { command: "rm x" }, tmp())).decision).toBe("deny")
+    expect((await p.check(both, { command: "ls" }, tmp())).decision).toBe("allow")
+    const hookWriter: PermissionTool = { ...both, getWrittenPaths: () => [".git/hooks/x"] }
+    expect((await p.check(hookWriter, { command: "rm x" }, repo())).decision).toBe("deny")
+    expect((await p.check(hookWriter, { command: "ls" }, repo())).decision).toBe("ask")
   })
 })
 

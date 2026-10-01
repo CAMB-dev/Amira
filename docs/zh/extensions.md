@@ -176,6 +176,18 @@ amira
 | `notify`、`reportError` | 显示提示或报告后台错误 |
 | `registerFileRestoration` | 接管回退时的文件恢复（例如 checkpoints 扩展）：选择器显示你提供的选项，core 不再恢复文件；同一时间只能有一个扩展接管，卸载时释放 |
 
+### 工具能力
+
+请在 `traits` 中声明工具对 host 可见的能力，不要依赖工具名称；`readOnly: true` 允许工具在 plan 模式运行，`writesFiles: true` 表示工具会写文件，`writesFiles: "paths"` 还要求 `getWrittenPaths(params, { cwd })` 返回本次调用可能写入的全部路径，路径可以相对于 `cwd` 或使用绝对路径。
+带有有效路径报告的写文件工具会参与和内置文件工具相同的受保护路径检查，host 也会捕获写入前后的文件内容用于回退；报告缺失或无效时会采取保守策略并请求确认。
+如果工具已经自行使用 `ctx.mutateFiles`，请设置 `usesMutationHook: true`，这样 host 不会再添加第二个回退边界。
+运行命令的工具应设置 `shell: "bash"` 或 `shell: "powershell"`；如果实际 shell 在运行时才确定，也应保留 `shellKind()`。
+编辑工具替代品应设置 `editor: "edit"` 或 `editor: "apply_patch"`，读取已保存输出的工具设置 `artifactReader: true`，延迟工具加载器设置 `toolSearch: true`，需要界面的工具设置 `interactive: true`。
+`readKey(params, { cwd })` 可以为可重复的直接文件读取提供上下文去重标识。
+未声明的能力仍视为未知：权限检查、回退和工作区刷新会继续采取保守行为；MCP 工具目前没有已知能力声明。
+
+能力声明是受信任的：扩展以你自己的代码运行，因此对于工具自己的名字，声明 `readOnly` 或报告的路径少于实际写入的路径，都会被采信。但声明不能削弱内置名字的保护。注册在 `write`、`edit`、`apply_patch`、`bash`、`powershell` 或 `ask_user` 名下的工具（例如 `override`）无论声明什么，都保留该名字隐含的能力：`write`、`edit` 和 `apply_patch` 始终是写文件工具，除了它报告的路径，还会按参数中指明的路径做受保护路径检查；`bash` 和 `powershell` 始终是 shell 工具，受你的命令规则约束（除非 `shellKind()` 给出答案，bash 会按两种 shell 读法都检查）；它们在 plan 模式下都不算只读。既写文件又运行 shell 的工具会同时按两者检查。回退只捕获声明的写文件工具所报告的路径；`usesMutationHook: true` 告诉 host 该工具会通过 `ctx.mutateFiles` 自行捕获写入，声明了却没有这样做的工具不会被捕获。host 捕获声明的写文件工具时，整个调用期间都占用会话的文件捕获队列：其他文件写入（包括同一目录中的子 agent）都要等待它完成，因此这类工具应尽快结束，且不要等待其他 agent 的文件写入。
+
 `serverToolView(block)` 返回 provider 工具的名称、参数、结果文本和原生搜索详情（包括来源）；未完成的工具块还会带上 `rejected: "aborted"`。可以把其中的 `ToolCallView` 字段交给已有的工具展示器或其他前端使用；它只用于渲染，不能作为本地工具结果发回 provider。
 
 命令可以调用 `ctx.openRewind()` 打开与连按两次 Esc 相同的回退选择器；只有具备该选择器的前端（终端 UI）才提供这个方法，选择器暂时无法打开时（例如轮次进行中）返回 false。
@@ -196,7 +208,7 @@ amira
 
 注册方法返回移除函数，host 会跟踪注册。卸载时自动移除；加载失败则回滚已注册内容。命令、工具、skill、状态项或 panel 重名时，有意替换需要 `override: true`，具体冲突规则以对应类型为准，避免意外替换其他扩展的内容。
 
-事件包括 `session.start`、`workspace.changed`、`tool.execute.start` 和 `tool.execute.end`。监听器收到的事件封装包含数据和会话 ID，维护会话状态时应按会话筛选。重新加载后，新注册的监听器会收到当前会话、工作区和预算事件，以便恢复状态。自行创建的原生资源仍需自行清理。
+事件包括 `session.start`、`workspace.changed`、`tool.execute.start` 和 `tool.execute.end`（两者都带有工具的 `traits`，写文件工具还带有它报告的 `writtenPaths`）。监听器收到的事件封装包含数据和会话 ID，维护会话状态时应按会话筛选。重新加载后，新注册的监听器会收到当前会话、工作区和预算事件，以便恢复状态。自行创建的原生资源仍需自行清理。
 
 修改入口文件后可用 `/reload`。入口导入的其他模块仍有缓存，因此修改辅助模块后需要重启 Amira。渲染回调应保持轻量，改变可见状态后调用 `requestRender`。
 

@@ -51,10 +51,14 @@ test("the model comes from --model, then $AMIRA_MODEL, then settings", () => {
 
 test("shell and tools.disabled come from settings unless the flags are given", () => {
   put(path.join(cwd, ".amira", "settings.json"), { shell: "bash", tools: { disabled: ["glob"] } })
-  expect(config([]).disabledTools.sort()).toEqual(["glob", "powershell"])
-  expect(config(["--shell", "powershell"]).disabledTools.sort()).toEqual(["bash", "glob"])
-  expect(config(["--disable-tools", "grep"]).disabledTools.sort()).toEqual(["grep", "powershell"])
-  expect(config(["--shell", "auto", "--disable-tools", ""]).disabledTools).toEqual([])
+  // The shell mode hides tools by their declared shell once they are registered (toolsToDisable).
+  expect(config([])).toMatchObject({ shell: "bash", disabledTools: ["glob"] })
+  expect(config(["--shell", "powershell"]).shell).toBe(process.platform === "win32" ? "powershell" : "auto")
+  expect(config(["--disable-tools", "grep"])).toMatchObject({ shell: "bash", disabledTools: ["grep"] })
+  expect(config(["--shell", "auto", "--disable-tools", ""])).toMatchObject({
+    shell: "auto",
+    disabledTools: [],
+  })
 })
 
 test("the names to check for unknown tools come from the flag or, without it, from settings", () => {

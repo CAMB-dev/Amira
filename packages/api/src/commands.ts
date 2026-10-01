@@ -14,7 +14,7 @@ import type { ProviderAdmin } from "./providers.ts"
 import type { CommandRule, PermissionMode, ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
 import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
-import type { PendingNotice, SessionData, ToolExposure } from "./tools.ts"
+import type { PendingNotice, SessionData, ToolExposure, ToolTraits } from "./tools.ts"
 import type { UiApi } from "./ui.ts"
 
 /** A suggestion for a command's argument text. */
@@ -277,6 +277,7 @@ export interface ToolInfo {
   description: string
   source: string
   exposure: ToolExposure
+  traits?: ToolTraits
   /** False when hidden from the model, by settings, --shell or this session. */
   enabled: boolean
 }

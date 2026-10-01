@@ -1,6 +1,5 @@
 import path from "node:path"
 import {
-  type ApplyPatchDetails,
   type ChildSession,
   defineExtension,
   defineTool,
@@ -102,9 +101,6 @@ function cancel(job: Job, reason: string, orphan: boolean): void {
   job.child.abort(reason)
 }
 
-const WRITE_TOOLS = new Set(["write", "edit"])
-const SHELL_TOOLS = new Set(["bash", "powershell"])
-
 /** Runs git through the host (a Worker thread; via cmd.exe on Windows, where direct spawns can stall). */
 export function hostGit(api: Pick<ExtensionAPI, "runCommand">): RunGit {
   return async (args, cwd, stdoutOnly = false) => {
@@ -148,24 +144,17 @@ function childInstructions(role: Role | undefined, wt: Worktree | undefined): st
 
 /** Follows a child's events for the files it wrote and the commands it ran. */
 async function watch(child: ChildSession, activity: Activity): Promise<void> {
-  const paths = new Map<string, string>()
+  const paths = new Map<string, string[]>()
   for await (const e of child.events) {
     if (e.sessionId !== child.id) continue
-    if (e.type === "tool.execute.start" && WRITE_TOOLS.has(e.data.name)) {
-      const p = e.data.args.path
-      if (typeof p === "string") paths.set(e.data.toolCallId, p)
+    if (e.type === "tool.execute.start" && e.data.traits?.writesFiles) {
+      if (e.data.writtenPaths) paths.set(e.data.toolCallId, e.data.writtenPaths)
     } else if (e.type === "tool.execute.end" && !e.data.rejected && !e.data.result.isError) {
-      const p = paths.get(e.data.toolCallId)
-      if (p) activity.files.add(p)
-      if (e.data.name === "apply_patch") {
-        // Its details hold absolute paths; the list reads like the paths the model gave edit/write.
-        const details = e.data.result.details as ApplyPatchDetails | undefined
-        for (const file of details?.files ?? []) {
-          activity.files.add(path.relative(child.cwd, file.path) || ".")
-          if (file.from) activity.files.add(path.relative(child.cwd, file.from))
-        }
+      for (const p of e.data.writtenPaths ?? paths.get(e.data.toolCallId) ?? []) {
+        const relative = path.isAbsolute(p) ? path.relative(child.cwd, p) || "." : p
+        activity.files.add(relative)
       }
-      if (SHELL_TOOLS.has(e.data.name)) activity.commands++
+      if (e.data.traits?.shell) activity.commands++
     }
   }
 }
@@ -615,6 +604,7 @@ ${list.join("\n")}`
         },
         required: ["tasks"],
       },
+      traits: { readOnly: true },
       concurrency: "parallel",
       async execute(params, ctx) {
         const session = ctx.session
@@ -686,6 +676,7 @@ ${list.join("\n")}`
           wait: { type: "boolean", description: "Wait for unfinished ones (default true)." },
         },
       },
+      traits: { readOnly: true },
       concurrency: "parallel",
       async execute(p, ctx) {
         const mine = ctx.session ? background.get(ctx.session.sessionId) : undefined

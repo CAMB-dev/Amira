@@ -651,7 +651,7 @@ export default defineExtension((api: ExtensionAPI) => {
       const shell = ctx.session.info().shell
       const on = ctx.session
         .tools()
-        .filter((t) => (t.name === "bash" || t.name === "powershell") && t.enabled)
+        .filter((t) => t.traits?.shell && t.enabled)
         .map((t) => t.name)
       ctx.print(`Shell: ${shell} (tools: ${on.join(", ") || "none"})`)
     },

@@ -44,6 +44,7 @@ export const outputReadTool = defineTool<OutputReadParams>({
     required: ["id"],
     additionalProperties: false,
   },
+  traits: { readOnly: true, artifactReader: true },
   concurrency: "parallel",
   async execute({ id, offset, limit, grep, ignore_case, column }, ctx) {
     if (typeof id !== "string" || !id.trim()) return textResult("id is required", true)

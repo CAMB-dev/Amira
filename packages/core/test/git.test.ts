@@ -196,12 +196,28 @@ test("trackWorkspace checks for changes after a turn that ran a writing tool, no
   const seen: AnyEvent[] = []
   bus.subscribe((e) => void seen.push(e), { types: ["workspace.changed"] })
   const dirty = (i: number) => (seen[i] as Extract<AnyEvent, { type: "workspace.changed" }>).data.dirty
-  const ran = (name: string, parentSessionId?: string) =>
+  const ran = (name: string, parentSessionId?: string) => {
+    const traits =
+      name === "read"
+        ? { readOnly: true, writesFiles: false as const }
+        : name === "write"
+          ? { writesFiles: "paths" as const }
+          : name === "bash"
+            ? { shell: "bash" as const }
+            : undefined
     bus.emit(
       "tool.execute.end",
-      { toolCallId: "t", name, result: { content: [] }, durationMs: 1 },
+      {
+        toolCallId: "t",
+        name,
+        result: { content: [] },
+        durationMs: 1,
+        ...(traits ? { traits } : {}),
+        ...(name === "write" ? { writtenPaths: ["new.txt"] } : {}),
+      },
       { sessionId: parentSessionId ? "c" : "s", ...(parentSessionId ? { parentSessionId } : {}) },
     )
+  }
   const stop = trackWorkspace(bus, "s", d, { initialDelayMs: 0 })
   while (seen.length === 0) await Bun.sleep(20)
   expect(dirty(0)).toBe(false)

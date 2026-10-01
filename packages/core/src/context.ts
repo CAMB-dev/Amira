@@ -120,19 +120,8 @@ function hash(text: string): string {
   return createHash("sha256").update(text).digest("hex")
 }
 
-/**
- * What identifies a read for A2: the file (resolved, case-insensitive on Windows), the
- * requested range and the rendering version. Undefined for anything else, and for a read the
- * model forced.
- */
-export function readKey(call: ToolCallBlock, cwd: string): string | undefined {
-  if (call.name !== "read") return undefined
-  const a = call.args
-  if (typeof a.path !== "string" || !a.path || a.force === true) return undefined
-  const abs = path.resolve(cwd, a.path)
-  const file = process.platform === "win32" ? abs.toLowerCase() : abs
-  return JSON.stringify(["read/1", file, a.offset ?? 1, a.limit ?? null])
-}
+/** A tool definition's repeatable-read identity, used by context deduplication. */
+export type ReadKey = (call: ToolCallBlock, cwd: string) => string | undefined
 
 /** "lines 1–2000", "from line 40": the range a read asked for, for notes. */
 function rangeOf(call: ToolCallBlock): string {
@@ -155,6 +144,7 @@ export function duplicateView(
   result: ToolResultMessage,
   call: ToolCallBlock,
   cwd: string,
+  readKey: ReadKey,
 ): ContextView | undefined {
   if (result.isError) return undefined
   const key = readKey(call, cwd)
@@ -297,6 +287,7 @@ export function agedStub(
   m: ToolResultMessage,
   call: ToolCallBlock | undefined,
   artifact: string | undefined,
+  kinds: { read?: boolean; shell?: boolean } = {},
 ): string {
   const text = resultText(m) ?? ""
   const lines = text === "" ? 0 : text.split("\n").length
@@ -305,14 +296,14 @@ export function agedStub(
     `${n(text.length)} characters`,
     `${n(lines)} lines`,
   ]
-  const status = m.toolName === "bash" || m.toolName === "powershell" ? shellStatus(text) : undefined
+  const status = kinds.shell ? shellStatus(text) : undefined
   if (status) facts.push(status)
   const how: string[] = []
   if (artifact)
     how.push(`its complete text is artifact ${artifact}: output_read({"id":"${artifact}"}) reads it back`)
-  if (call?.name === "read" && typeof call.args.path === "string") {
+  if (kinds.read && typeof call?.args.path === "string") {
     how.push(`read ${JSON.stringify(call.args.path)} again for the file as it is now`)
-  } else if (m.toolName === "bash" || m.toolName === "powershell") {
+  } else if (kinds.shell) {
     how.push("running the command again is a new run, not this output")
   }
   return `[Earlier tool result cleared from the context to save space (${facts.join(", ")}). ${how.length ? `${how.join("; ")}.` : ""}]`
