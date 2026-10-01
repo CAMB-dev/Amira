@@ -212,7 +212,10 @@ test.if(hasBash)(
   "abort kills background grandchildren with no survivors",
   async () => {
     const marker = newMarker(97)
-    const sleeps = async () => (await marked(marker)).filter((p) => /\bsleep(\.exe)?\b/.test(p.cmd))
+    // The sleep processes themselves: the shells running the command have `sleep <marker>` in
+    // their command lines too, and the one that checks the pipeline status stays alive.
+    const isSleep = new RegExp(`(^|[\\\\/"])sleep(\\.exe)?"?\\s+${marker.replace(".", "\\.")}$`)
+    const sleeps = async () => (await marked(marker)).filter((p) => isSleep.test(p.cmd.trim()))
     const ac = new AbortController()
     const run = bashTool.execute(
       { command: `(sleep ${marker} &); sleep ${marker} & echo started; sleep ${marker}` },
