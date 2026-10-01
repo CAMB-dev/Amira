@@ -26,6 +26,7 @@ export interface TerminalStatusOptions {
 export class TerminalStatus {
   #folder: string
   #branch: string | undefined
+  #sessionTitle: string | undefined
   #working = false
   #waiting = false
   /** Undefined until the terminal reports focus at least once. */
@@ -58,7 +59,7 @@ export class TerminalStatus {
   /** The title as it reads now: "Amira · proj ⎇ main", with a marker in front while working. */
   get title(): string {
     const branch = this.#branch ? ` ${glyphs.branch} ${this.#branch}` : ""
-    const base = `Amira ${glyphs.separator} ${this.#folder}${branch}`
+    const base = `Amira ${glyphs.separator} ${this.#sessionTitle ?? this.#folder}${branch}`
     return this.#working ? `${glyphs.working} ${base}` : base
   }
 
@@ -86,6 +87,11 @@ export class TerminalStatus {
     this.terminal.disableMode(focusReporting)
     this.#shownProgress = "none"
     this.#shownTitle = undefined
+  }
+
+  setSessionTitle(title: string | undefined): void {
+    this.#sessionTitle = title
+    this.#sync()
   }
 
   setBranch(branch: string | undefined): void {

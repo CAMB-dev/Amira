@@ -29,7 +29,8 @@ export function formatSessionList(sessions: SessionSummary[], width = 100): stri
       const when = new Date(s.updatedAt).toLocaleString("sv").slice(0, 16)
       const head = `${String(i + 1).padStart(3)}. ${when}  ${String(s.messageCount).padStart(4)} msgs  ${s.id}  `
       const room = Math.max(10, width - head.length)
-      const text = s.firstUserText.length > room ? `${s.firstUserText.slice(0, room - 1)}…` : s.firstUserText
+      const label = s.title ?? s.firstUserText
+      const text = label.length > room ? `${label.slice(0, room - 1)}…` : label
       return `${head}${text}`
     })
     .join("\n")

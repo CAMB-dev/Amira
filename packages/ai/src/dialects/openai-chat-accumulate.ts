@@ -104,6 +104,9 @@ function mapUsage(u: any): Usage {
   return {
     input: Math.max(0, (u.prompt_tokens ?? 0) - cached),
     output: u.completion_tokens ?? 0,
+    ...(typeof u.completion_tokens_details?.reasoning_tokens === "number"
+      ? { reasoning: u.completion_tokens_details.reasoning_tokens }
+      : {}),
     cacheRead: cached,
     cacheWrite: 0,
   }

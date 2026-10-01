@@ -206,6 +206,7 @@ const settings = object({
     }),
   }),
   agents: record(object({ model: modelRef })),
+  sessions: object({ autoTitle: boolean }),
   subagents: object({ maxDepth: integer(1), maxConcurrent: integer(1), background: boolean }),
   backgroundJobs: object({ maxRunning: integer(1), bufferChars: integer(1000), maxLogBytes: integer(0) }),
   budget: object({ tokens: integer(1), costUsd: number }),
