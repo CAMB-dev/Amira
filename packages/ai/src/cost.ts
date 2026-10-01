@@ -1,3 +1,4 @@
+import { NATIVE_WEB_SEARCH } from "./server-tools.ts"
 import type { AssistantMessage, ModelInfo, StreamEvent, Usage } from "./types.ts"
 
 /** A reported search or server search block whose total cost could not be priced. */
@@ -5,7 +6,7 @@ export function hasUnpricedSearch(message: Pick<AssistantMessage, "content" | "u
   return (
     message.usage?.cost === undefined &&
     ((message.usage?.webSearchRequests ?? 0) > 0 ||
-      message.content.some((b) => b.type === "serverTool" && b.name === "web_search"))
+      message.content.some((b) => b.type === "serverTool" && b.name === NATIVE_WEB_SEARCH))
   )
 }
 
@@ -35,7 +36,7 @@ export async function* withCost(
         usage.webSearchCost = usage.webSearchRequests * model.cost.webSearch
       const searched =
         (ev.type === "done" || ev.type === "error") &&
-        ev.message.content.some((b) => b.type === "serverTool" && b.name === "web_search")
+        ev.message.content.some((b) => b.type === "serverTool" && b.name === NATIVE_WEB_SEARCH)
       const cost =
         searched && usage.webSearchRequests === undefined ? undefined : usageCost(usage, model.cost)
       if (cost !== undefined) usage.cost = cost
