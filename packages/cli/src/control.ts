@@ -275,8 +275,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         }
       },
       prune: async (scope) => {
-        // Pruning what the running turn may be reading waits until it ends.
-        if (scope !== "unused") idle("prune artifacts the conversation still mentions")
+        // A running turn may have saved outputs its results do not mention yet, or be reading one.
+        idle("prune artifacts")
         return agent().pruneArtifacts(scope)
       },
     },
