@@ -46,7 +46,7 @@ test("tool integrates add, update, move, delete and per-file presenter diffs", a
     result: { ...result, details: result.details as ApplyPatchDetails },
     text: toolResultText(result),
   }
-  expect(applyPatchPresenter.summary!({ patch })).toContain("old.txt")
+  expect(applyPatchPresenter.summary!({ patch })).toBe("nested/new.txt, old.txt, delete.txt")
   expect(applyPatchPresenter.result!(call)).toBe("3 files · +2 -2")
   const lines = applyPatchPresenter.body!(call, { detail: "summary", width: 80 })
   expect(lines.some((line) => line.kind === "diff-add" && line.text === "new")).toBe(true)
@@ -122,7 +122,10 @@ test("outside paths, directory targets, symlink ancestors and Windows aliases ar
   await mkdir(join(dir, "folder"))
   await symlink(outside, join(dir, "link"), process.platform === "win32" ? "junction" : "dir")
   const paths = ["../escape", join(outside, "escape"), "folder", "link/escape", "."]
-  if (process.platform === "win32") paths.push("..\\escape", "C:\\escape", "a:stream", "NUL", "a.", "a /file")
+  if (process.platform === "win32") {
+    paths.push("..\\escape", "C:\\escape", `\\\\?\\${dir}\\escape`, "\\\\localhost\\c$\\escape")
+    paths.push("a:stream", "NUL", "a.", "a /file")
+  }
   for (const path of paths) {
     const result = await applyPatchTool.execute(
       { patch: envelope(`*** Add File: ${path}\n+x`) },
@@ -131,6 +134,20 @@ test("outside paths, directory targets, symlink ancestors and Windows aliases ar
     expect(result.isError).toBe(true)
   }
   expect(await Bun.file(join(outside, "escape")).exists()).toBe(false)
+})
+
+test("a workspace reached through a link still takes patches", async () => {
+  const target = await tmp.make()
+  const dir = join(await tmp.make(), "link")
+  await symlink(target, dir, process.platform === "win32" ? "junction" : "dir")
+  await writeFile(join(target, "a"), "old\n")
+  const result = await applyPatchTool.execute(
+    { patch: envelope(`${update("a")}\n*** Add File: sub/b\n+x`) },
+    makeCtx(dir),
+  )
+  expect(result.isError).toBeUndefined()
+  expect(await readFile(join(target, "a"), "utf8")).toBe("new\n")
+  expect(await readFile(join(target, "sub", "b"), "utf8")).toBe("x\n")
 })
 
 test("Windows backslashes and absolute paths inside cwd are supported", async () => {

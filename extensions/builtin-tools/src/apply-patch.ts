@@ -70,12 +70,15 @@ async function safePath(cwd: string, input: string): Promise<string> {
       }
     }
   }
-  // Walk all ancestors, including above cwd: junctions are symbolic links on Windows.
-  for (let path = abs; ; path = dirname(path)) {
+  // No link (junctions are symbolic links on Windows) may sit between cwd and the file, or a
+  // write would land elsewhere. The workspace itself may be reached through one; that is the
+  // user's choice, and macOS temp dirs and Windows project dirs often are.
+  let path = abs
+  for (const _ of rel.split(sep)) {
     const st = await stat(path)
     if (st?.isSymbolicLink()) throw new Error(`Symbolic links are not allowed: ${path}`)
     if (st && path !== abs && !st.isDirectory()) throw new Error(`Not a directory: ${path}`)
-    if (path === dirname(path)) break
+    path = dirname(path)
   }
   return abs
 }
@@ -83,7 +86,9 @@ async function safePath(cwd: string, input: string): Promise<string> {
 async function snapshot(path: string): Promise<Snapshot> {
   const st = await stat(path)
   if (!st) return { path }
-  if (!st.isFile() || st.nlink > 1) throw new Error(`Expected a regular file without hard links: ${path}`)
+  if (!st.isFile()) throw new Error(`Not a regular file: ${path}`)
+  // An in-place write would change every link, so a file linked from elsewhere is left alone.
+  if (st.nlink > 1) throw new Error(`File has other hard links: ${path}`)
   return { path, bytes: await readFile(path), ino: st.ino, dev: st.dev, mode: st.mode }
 }
 
