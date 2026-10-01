@@ -170,7 +170,7 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `serverToolView` | Turn provider-hosted tool blocks, such as native web search, into the same tool-call view shape used by presenters |
 | `registerMarkdownRenderer`, `registerImageProvider` | Render matching reply code blocks or standalone images and supply terminal image data |
 | `provideService`, `useService` | Share named extension services; look them up when needed because a provider may be absent or unloaded |
-| `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, the working directory, the user directory and API version |
+| `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, provenance layers for each top-level key, the working directory, the user directory and API version |
 | `backgroundJobs` | Start and inspect only this extension's background jobs; built-in frontend code uses the host-only `hostBackgroundJobs()` capability |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
 | `notify`, `reportError` | Show a notice or report a background failure |
@@ -188,7 +188,7 @@ Traits are trusted: an extension runs as your own code, so a tool that claims `r
 
 A command opens the rewind picker that double Esc opens with `ctx.openRewind()`; it is set only where the frontend has the picker (the terminal UI) and returns false when the picker cannot open now, for example during a turn.
 
-Extension-specific settings belong under `extensions` with the extension name. The settings snapshot is deeply frozen; validate your own section. Print mode cancels UI dialogs; RPC clients answer them through the protocol. Panels, views, tool presenters, Markdown renderers, image providers and services are experimental APIs.
+Extension-specific settings belong under `extensions` with the extension name. The settings snapshot is deeply frozen; validate your own section. `api.settings.layers(key)` returns the explicit values for a top-level key in precedence order, each with `scope` (`user`, `project`, `project-local` or `flags`), `file` and `value`; missing keys return an empty list. The host supplies a fresh snapshot and layer map whenever it reloads settings, including `/reload`, so an extension can reconcile long-lived resources without reading settings files itself. Print mode cancels UI dialogs; RPC clients answer them through the protocol. Panels, views, tool presenters, Markdown renderers, image providers and services are experimental APIs.
 
 `runCommand` resolves once the command has exited. Pass `onChunk` to get output as it arrives, for example to show progress from a long `git` command. Abort through `signal` (or let `timeoutMs` expire) and the whole process tree is killed; the result then reports `aborted` or `timedOut`. By default, `output` keeps only the last 1,000,000 characters; override that limit with a positive-integer `maxOutputChars` (invalid values reject the call). `onChunk` still receives everything, and `truncated` reports whether `output` was cut. A cut never splits a UTF-16 surrogate pair.
 

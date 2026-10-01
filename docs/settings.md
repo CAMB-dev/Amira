@@ -263,7 +263,7 @@ See [Sub-agents](subagents.md) for roles, the agent tree and worktree merges.
 
 ## MCP servers
 
-The MCP extension reads `mcpServers` from `.mcp.json` in the working directory, then from the user file, the project file and `settings.local.json`; a later entry of the same name replaces an earlier one. Strings may use `${VAR}` and `${VAR:-default}`. Servers from project files (`.mcp.json` included) are trusted only when the project directory, or a parent, is in `mcpTrustedProjects`: otherwise their stdio servers do not start, their HTTP servers get no environment variables, and they cannot replace a server the user file defines.
+The MCP extension reads `mcpServers` from `.mcp.json` in the working directory, then from the user file, the project file and `settings.local.json`; a later entry of the same name replaces an earlier one. Strings may use `${VAR}` and `${VAR:-default}`. Servers from project files (`.mcp.json` included) are trusted only when the project directory, or a parent, is in `mcpTrustedProjects`: otherwise their stdio servers do not start, their HTTP servers get no environment variables, and they cannot replace a server the user file defines. `/reload` reads these files again: it starts servers you added, stops removed ones, restarts changed ones and leaves the others connected.
 
 | Key | Type | Default | Description | User file only |
 | --- | --- | --- | --- | --- |

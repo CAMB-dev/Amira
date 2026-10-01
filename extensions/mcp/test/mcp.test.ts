@@ -1,4 +1,6 @@
 import { afterAll, expect, test } from "bun:test"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import type { AnyEvent, ToolResultMessage } from "@amira/api"
 import { createAi, createMockDialect, type MockStep } from "../../../packages/ai/src/index.ts"
@@ -16,6 +18,7 @@ import type { ServerConfig } from "../src/config.ts"
 import { HttpTransport } from "../src/http.ts"
 import { createMcpExtension, type McpExtensionOptions } from "../src/index.ts"
 import { StdioTransport } from "../src/stdio.ts"
+import { mcpToolName } from "../src/tools.ts"
 import { startHttpServer } from "./fixtures/server.ts"
 
 const FIXTURE = path.join(import.meta.dir, "fixtures", "server.ts")
@@ -71,6 +74,93 @@ async function harness(servers: ServerConfig[], steps: MockStep[] = [], opts: Mc
     return events.flatMap((e) => (e.type === "extension.error" ? [e.data.error] : []))
   }
   return { agent, mock, tools, mcp, errors }
+}
+
+test(
+  "host settings layers reload MCP servers without restarting unchanged connections",
+  async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "amira-mcp-reload-"))
+    const file = (name: string) => path.join(dir, `${name}.pid`)
+    const userFile = path.join(dir, "settings.json")
+    const named = (pidFile: string) => {
+      return { command: process.execPath, args: [FIXTURE, "stdio"], env: { FIXTURE_PID_FILE: pidFile } }
+    }
+    const layers = (servers: Record<string, unknown>) => ({
+      mcpServers: [{ scope: "user" as const, file: userFile, value: servers }],
+    })
+    const bus = new EventBus()
+    const tools = new ToolRegistry()
+    const host = new ExtensionHost({
+      bus,
+      interceptors: new InterceptorRegistry(),
+      tools,
+      cwd: import.meta.dir,
+      settings: {},
+      settingsLayers: layers({
+        keep: named(file("keep-before")),
+        remove: named(file("remove")),
+        change: named(file("change-before")),
+      }),
+    })
+    const mcp = createMcpExtension({ connectTimeoutMs: 5000 })
+    try {
+      expect(await host.load(mcp, "builtin:mcp")).toBe(true)
+      await mcp.settled()
+      const keepPid = readFileSync(file("keep-before"), "utf8")
+      const changePid = readFileSync(file("change-before"), "utf8")
+      const removePid = readFileSync(file("remove"), "utf8")
+      expect(mcp.servers().map((s) => s.name)).toEqual(["keep", "remove", "change"])
+      expect(tools.has(mcpToolName("remove", "echo"))).toBe(true)
+
+      host.unloadAll()
+      host.setSettings(
+        {},
+        layers({
+          keep: named(file("keep-before")),
+          add: named(file("add")),
+          change: named(file("change-after")),
+        }),
+      )
+      expect(await host.load(mcp, "builtin:mcp")).toBe(true)
+      await mcp.settled()
+
+      expect(readFileSync(file("keep-before"), "utf8")).toBe(keepPid)
+      expect(readFileSync(file("change-after"), "utf8")).not.toBe(changePid)
+      expect(existsSync(file("add"))).toBe(true)
+      expect(mcp.servers().map((s) => s.name)).toEqual(["keep", "add", "change"])
+      expect(mcp.servers().every((s) => s.state === "ready")).toBe(true)
+      expect(host.loaded).toEqual(["builtin:mcp"])
+      // The kept server's tools are registered again for the reloaded extension; the removed
+      // server's are gone, and the removed and replaced processes have stopped.
+      expect(tools.has(mcpToolName("keep", "echo"))).toBe(true)
+      expect(tools.has(mcpToolName("remove", "echo"))).toBe(false)
+      expect(await gone(Number(removePid))).toBe(true)
+      expect(await gone(Number(changePid))).toBe(true)
+      expect(alive(Number(keepPid))).toBe(true)
+    } finally {
+      await mcp.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  },
+  SLOW,
+)
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Waits until the process is gone; false if it still runs after `ms`. */
+async function gone(pid: number, ms = 15_000): Promise<boolean> {
+  for (const end = Date.now() + ms; Date.now() < end; ) {
+    if (!alive(pid)) return true
+    await Bun.sleep(100)
+  }
+  return false
 }
 
 /**

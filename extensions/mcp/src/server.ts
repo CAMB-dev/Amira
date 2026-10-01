@@ -26,6 +26,7 @@ export class ServerConnection {
   #opts: ServerOptions
   #client: McpClient | undefined
   #unregister: (() => void)[] = []
+  #tools: McpTool[] = []
   #refreshing: Promise<void> = Promise.resolve()
   /** The tool list changed while connecting; list it again once ready. */
   #stale = false
@@ -34,6 +35,13 @@ export class ServerConnection {
     this.config = config
     this.#api = api
     this.#opts = opts
+  }
+
+  /** Rebinds a still-running connection to the registrations of a reloaded extension. */
+  attach(api: ExtensionAPI): void {
+    this.#unregisterAll()
+    this.#api = api
+    if (this.state === "ready") this.#register(this.#tools)
   }
 
   /** Connects and registers the server's tools. Never throws; failures are reported. */
@@ -81,6 +89,7 @@ export class ServerConnection {
     if (this.state === "closed") return
     this.state = "closed"
     this.#unregisterAll()
+    this.#tools = []
     await this.#client?.close()
   }
 
@@ -101,6 +110,7 @@ export class ServerConnection {
 
   #register(tools: McpTool[]) {
     this.#unregisterAll()
+    this.#tools = tools
     const server = this.config.name
     const seen = new Set<string>()
     for (const tool of tools) {
@@ -177,6 +187,7 @@ export class ServerConnection {
     this.state = "failed"
     this.error = error
     this.#unregisterAll()
+    this.#tools = []
     this.#api.reportError(`MCP server "${this.config.name}" (${this.config.source}) failed: ${error}`)
   }
 

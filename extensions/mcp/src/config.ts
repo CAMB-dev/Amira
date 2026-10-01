@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
+import type { SettingsLayer, SettingsLayerScope } from "@amira/api"
 
 interface Common {
   name: string
@@ -21,6 +22,8 @@ export interface McpConfig {
   disabled?: string[]
 }
 
+export type McpSettingLayer = Pick<SettingsLayer, "scope" | "file"> & { value: unknown }
+
 /**
  * Files holding `mcpServers`, lowest precedence first: a later file's entry replaces an earlier
  * one of the same name. Amira's own settings (the same layers the settings loader merges, D35)
@@ -39,50 +42,100 @@ export function mcpConfigFiles(cwd: string, home: string): string[] {
 export const TRUST_KEY = "mcpTrustedProjects"
 
 /**
- * A deliberately tiny reader for the `mcpServers` of these files.
- *
- * TODO(integrate): read `api.settings.mcpServers` from the core settings loader instead, once
- * it can say which layer (user or project) each entry came from. The merged settings lose
- * that, and the trust rule below depends on it; `.mcp.json` is read here in any case.
+ * Parses the host-provided settings layers. `.mcp.json` remains a separate MCP convention, so
+ * it is read here and prepended; Amira's settings files are never read by this path.
  *
  * Project files come with whatever repository was cloned, so unless the project (or a parent
  * directory) is listed under `mcpTrustedProjects` in the user settings, their stdio servers are
  * not started and their HTTP entries get no environment variables; each skipped server is
  * reported as a problem saying how to trust the project.
  */
+export function readMcpSettings(
+  layers: readonly McpSettingLayer[],
+  trustedLayers: readonly McpSettingLayer[],
+  cwd: string,
+  home: string,
+  env: Record<string, string | undefined> = process.env,
+): McpConfig {
+  const problems: string[] = []
+  const legacyFile = path.join(cwd, ".mcp.json")
+  const legacy = readJson(legacyFile, problems)
+  const all = [...layers]
+  const legacyServers = legacy?.mcpServers
+  if (legacyServers !== undefined) {
+    all.unshift({ scope: "project", file: legacyFile, value: legacyServers })
+  }
+  const trusted = trustedLayers.find((layer) => layer.scope === "user")
+  return parseLayeredServers(
+    all,
+    cwd,
+    trusted?.value,
+    trusted?.file ?? path.join(home, "settings.json"),
+    env,
+    problems,
+  )
+}
+
+/**
+ * Compatibility reader for callers that are not hosted by Amira. The extension itself uses
+ * `readMcpSettings`, so the host remains responsible for locating and parsing Amira settings.
+ */
 export function readMcpConfig(
   cwd: string,
   home: string,
   env: Record<string, string | undefined> = process.env,
 ): McpConfig {
-  const byName = new Map<string, ServerConfig>()
   const problems: string[] = []
   const userFile = path.join(home, "settings.json")
-  let trusted: boolean | undefined
+  let trusted: unknown
+  const layers: McpSettingLayer[] = []
   for (const file of mcpConfigFiles(cwd, home)) {
     const json = readJson(file, problems)
+    if (samePath(file, userFile)) trusted = json?.[TRUST_KEY]
     const servers = (json as { mcpServers?: unknown } | undefined)?.mcpServers
     if (servers === undefined) continue
-    const fromProject = !samePath(file, userFile)
-    trusted ??= !fromProject || isTrusted(cwd, readJson(userFile, [])?.[TRUST_KEY])
+    layers.push({ scope: scopeForFile(file, cwd, home), file, value: servers })
+  }
+  return parseLayeredServers(layers, cwd, trusted, userFile, env, problems)
+}
+
+function parseLayeredServers(
+  layers: readonly McpSettingLayer[],
+  cwd: string,
+  trustedProjects: unknown,
+  trustFile: string,
+  env: Record<string, string | undefined>,
+  problems: string[],
+): McpConfig {
+  const byName = new Map<string, { server: ServerConfig; scope: SettingsLayerScope }>()
+  const trusted = isTrusted(cwd, trustedProjects)
+  for (const layer of layers) {
+    const fromProject = layer.scope === "project" || layer.scope === "project-local"
     const open = !fromProject || trusted
-    const parsed = parseServers(servers, file, open ? env : {})
+    const parsed = parseServers(layer.value, layer.file, open ? env : {})
     problems.push(...parsed.problems)
     for (const name of parsed.disabled ?? []) byName.delete(name)
-    for (const s of parsed.servers) {
-      if (!open && s.type === "stdio") {
+    for (const server of parsed.servers) {
+      if (!open && server.type === "stdio") {
         problems.push(
-          `${file}: not starting MCP server "${s.name}" (${[s.command, ...s.args].join(" ")}): this project is not trusted. To allow it, add ${JSON.stringify(path.resolve(cwd))} to "${TRUST_KEY}" in ${userFile}`,
+          `${layer.file}: not starting MCP server "${server.name}" (${[server.command, ...server.args].join(" ")}): this project is not trusted. To allow it, add ${JSON.stringify(path.resolve(cwd))} to "${TRUST_KEY}" in ${trustFile}`,
         )
         continue
       }
       // An untrusted project cannot redirect a server the user configured.
-      if (!open && byName.get(s.name)?.source === userFile) continue
-      byName.delete(s.name)
-      byName.set(s.name, s)
+      const previous = byName.get(server.name)
+      if (!open && (previous?.scope === "user" || previous?.scope === "flags")) continue
+      byName.delete(server.name)
+      byName.set(server.name, { server, scope: layer.scope })
     }
   }
-  return { servers: [...byName.values()], problems }
+  return { servers: [...byName.values()].map(({ server }) => server), problems }
+}
+
+function scopeForFile(file: string, cwd: string, home: string): SettingsLayerScope {
+  if (samePath(file, path.join(home, "settings.json"))) return "user"
+  if (samePath(file, path.join(cwd, ".amira", "settings.local.json"))) return "project-local"
+  return "project"
 }
 
 function readJson(file: string, problems: string[]): Record<string, unknown> | undefined {

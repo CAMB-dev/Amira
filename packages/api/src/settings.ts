@@ -5,6 +5,25 @@ export type ShellMode = "auto" | "bash" | "powershell"
 
 export type EditingTool = "edit" | "apply_patch" | "both"
 
+/** The source layer of a setting supplied to the host. */
+export type SettingsLayerScope = "user" | "project" | "project-local" | "flags"
+
+/** One explicit value of a setting, in the order the host applies its layers. */
+export interface SettingsLayer<T = unknown> {
+  scope: SettingsLayerScope
+  /** The settings file, or `--flags` for command-line values. */
+  file: string
+  value: T
+}
+
+/** Provenance for the top-level settings keys. Missing keys have no entries. */
+export type SettingsLayers = Partial<Record<keyof Settings, readonly SettingsLayer[]>>
+
+/** Merged settings plus the explicit values that produced each top-level key. */
+export interface SettingsView extends Readonly<Settings> {
+  layers<K extends keyof Settings>(key: K): readonly SettingsLayer<NonNullable<Settings[K]>>[]
+}
+
 export interface ModelSettings extends ModelOverrides {
   /** Overrides the provider's editing tools for this exact model id. */
   tools?: { edit?: EditingTool }

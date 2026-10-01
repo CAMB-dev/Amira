@@ -1,15 +1,23 @@
 import { defineExtension, type Extension, withSection } from "@amira/api"
-import { type McpConfig, readMcpConfig } from "./config.ts"
+import { type McpConfig, readMcpSettings, type ServerConfig } from "./config.ts"
 import { ServerConnection, type ServerOptions, type ServerState } from "./server.ts"
 
 export { McpClient, type McpTool, PROTOCOL_VERSION } from "./client.ts"
-export { expand, mcpConfigFiles, parseServers, readMcpConfig, type ServerConfig } from "./config.ts"
+export {
+  expand,
+  type McpSettingLayer,
+  mcpConfigFiles,
+  parseServers,
+  readMcpConfig,
+  readMcpSettings,
+  type ServerConfig,
+} from "./config.ts"
 export { HttpTransport } from "./http.ts"
 export { StdioTransport } from "./stdio.ts"
 export { mcpToolName, toToolResult } from "./tools.ts"
 
 export interface McpExtensionOptions extends Partial<ServerOptions> {
-  /** Use these servers instead of reading the settings files. */
+  /** Use these servers instead of reading the host settings. */
   config?: McpConfig
   /**
    * How long after loading a model call may wait for servers still connecting, so a prompt
@@ -44,25 +52,56 @@ export function pendingSection(names: string[]): string {
  * reported as extension.error and leaves the others alone.
  */
 export function createMcpExtension(opts: McpExtensionOptions = {}): McpExtension {
-  let connections: ServerConnection[] = []
+  let connections = new Map<string, ServerConnection>()
   let started: Promise<unknown> = Promise.resolve()
-  const ext = defineExtension((api) => {
-    const config = opts.config ?? readMcpConfig(api.cwd, api.home)
+  const closeConnections = async () => {
+    const current = connections
+    connections = new Map()
+    await Promise.all([...current.values()].map((connection) => connection.close()))
+  }
+  const ext = defineExtension(async (api) => {
+    const config =
+      opts.config ??
+      readMcpSettings(
+        api.settings.layers("mcpServers"),
+        api.settings.layers("mcpTrustedProjects"),
+        api.cwd,
+        api.home,
+      )
     for (const p of config.problems) api.reportError(p)
-    if (!config.servers.length) return
     const serverOpts: ServerOptions = {
       connectTimeoutMs: opts.connectTimeoutMs ?? 60_000,
       toolTimeoutMs: opts.toolTimeoutMs ?? 600_000,
     }
-    connections = config.servers.map((s) => new ServerConnection(s, api, serverOpts))
+    const next = new Map<string, ServerConnection>()
+    for (const server of config.servers) {
+      const previous = connections.get(server.name)
+      if (
+        previous &&
+        previous.state !== "failed" &&
+        previous.state !== "closed" &&
+        sameConfig(previous.config, server)
+      ) {
+        previous.attach(api)
+        next.set(server.name, previous)
+      } else {
+        if (previous) await previous.close()
+        next.set(server.name, new ServerConnection(server, api, serverOpts))
+      }
+    }
+    for (const [name, previous] of connections) if (!next.has(name)) await previous.close()
+    connections = next
     started = new Promise((resolve) => {
-      setTimeout(() => resolve(Promise.all(connections.map((c) => c.start()))), 0)
+      setTimeout(() => resolve(Promise.all([...connections.values()].map((c) => c.start()))), 0)
     })
+    api.onExit(() => closeConnections())
+    if (!config.servers.length) return
     // Servers belong to the host, not to a session: they live until close() or process exit
     // (stdio servers are killed by the exit hook), so later sessions keep their tools.
     const waitMs = opts.startupWaitMs ?? 8000
     const waitUntil = Date.now() + waitMs
-    const pending = () => connections.filter((c) => c.state === "idle" || c.state === "connecting")
+    const pending = () =>
+      [...connections.values()].filter((c) => c.state === "idle" || c.state === "connecting")
     // Waits in system.build, so the core's "deferred-tools" section, listed after it, already
     // names the tools of servers that connected meanwhile; the rest get an "mcp" note.
     api.intercept(
@@ -81,16 +120,34 @@ export function createMcpExtension(opts: McpExtensionOptions = {}): McpExtension
       await started
     },
     servers: () =>
-      connections.map((c) => ({
+      [...connections.values()].map((c) => ({
         name: c.config.name,
         state: c.state,
         tools: [...c.toolNames],
         ...(c.error ? { error: c.error } : {}),
       })),
     close: async () => {
-      await Promise.all(connections.map((c) => c.close()))
+      await closeConnections()
     },
   })
+}
+
+function sameConfig(a: ServerConfig, b: ServerConfig): boolean {
+  if (a.name !== b.name || a.source !== b.source || a.type !== b.type || a.timeoutMs !== b.timeoutMs)
+    return false
+  if (a.type === "stdio" && b.type === "stdio") {
+    return a.command === b.command && sameArray(a.args, b.args) && sameRecord(a.env, b.env) && a.cwd === b.cwd
+  }
+  return a.type === "http" && b.type === "http" && a.url === b.url && sameRecord(a.headers, b.headers)
+}
+
+function sameArray(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+function sameRecord(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key])
 }
 
 /** Waits for `work` at most `ms`, or until aborted, without keeping the process alive after. */

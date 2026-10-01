@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
-import type { Settings } from "@amira/api"
+import type { Settings, SettingsLayer, SettingsLayerScope, SettingsLayers } from "@amira/api"
 import { amiraHome, projectAmiraDir } from "../home.ts"
 import type { PermissionLayer } from "../permissions/settings.ts"
 import { deepMerge } from "./merge.ts"
@@ -27,6 +27,8 @@ export interface LoadedSettings {
   warnings: string[]
   /** The files that existed and were merged, lowest precedence first. */
   files: string[]
+  /** Explicit values by key and source layer, lowest precedence first. */
+  layers: SettingsLayers
   /**
    * Each layer's `permissions`, lowest precedence first: they are not merged into `settings`,
    * since a project may only tighten them (resolvePermissions).
@@ -54,6 +56,7 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
   let settings = DEFAULT_SETTINGS
   const warnings: string[] = []
   const files: string[] = []
+  const layers: SettingsLayers = {}
   const permissions: PermissionLayer[] = []
   const [userFile] = settingsFiles(src.cwd, src.home)
   for (const file of settingsFiles(src.cwd, src.home)) {
@@ -74,6 +77,7 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
       })
       delete v.settings.permissions
     }
+    addSettingLayers(layers, scopeOf(file, src.cwd, src.home), file, v.settings)
     settings = deepMerge(settings, v.settings)
     files.push(file)
   }
@@ -81,10 +85,33 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
   // is reported as a usage error rather than a settings error.
   if (src.flags) {
     const { permissions: flagged, ...rest } = src.flags
+    addSettingLayers(layers, "flags", "--flags", rest)
     if (flagged) permissions.push({ scope: "flags", file: "--permission-mode", permissions: flagged })
     settings = deepMerge(settings, rest)
   }
-  return { settings, warnings, files, permissions }
+  return { settings, warnings, files, layers, permissions }
+}
+
+function scopeOf(file: string, cwd: string, home = amiraHome()): SettingsLayerScope {
+  const files = settingsFiles(cwd, home)
+  if (file === files[0]) return "user"
+  if (file === path.join(projectAmiraDir(cwd), "settings.local.json")) return "project-local"
+  return "project"
+}
+
+function addSettingLayers(
+  layers: SettingsLayers,
+  scope: SettingsLayerScope,
+  file: string,
+  settings: Settings,
+): void {
+  for (const key of Object.keys(settings) as (keyof Settings)[]) {
+    const value = settings[key]
+    if (value === undefined) continue
+    const values = (layers[key] ?? []) as SettingsLayer[]
+    if (layers[key] === undefined) layers[key] = values
+    values.push({ scope, file, value })
+  }
 }
 
 /** Provider keys that decide where requests and API keys go. */

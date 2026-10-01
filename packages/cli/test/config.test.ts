@@ -23,6 +23,8 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
 const put = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value))
+const userSettingsFile = () => path.join(home, "settings.json")
+const projectSettingsFile = () => path.join(cwd, ".amira", "settings.json")
 const config = (argv: string[], env: Record<string, string> = {}, platform = "win32") =>
   resolveConfig(parseCliArgs([...argv, "-C", cwd, "hi"], dir, env), home, platform)
 
@@ -123,6 +125,45 @@ test("settings reach the session: extensions, retry hook and model lookup", asyn
     providers: [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }],
   })
   expect(plain.agent.maxParallelTools).toBe(8)
+})
+
+test("session reload hands extensions fresh settings and provenance", async () => {
+  const seen: { model: string | undefined; layers: unknown }[] = []
+  const session = await createSession({
+    model: "mine/m",
+    cwd,
+    extensions: [],
+    noBuiltins: false,
+    catalog: false,
+    builtins: async () => [
+      {
+        source: "t",
+        extension: (api) => {
+          seen.push({ model: api.settings.model, layers: api.settings.layers("model") })
+        },
+      },
+    ],
+    settings: { model: "first" },
+    settingsLayers: { model: [{ scope: "user", file: userSettingsFile(), value: "first" }] },
+    reloadSettings: () => ({
+      settings: { model: "second" },
+      layers: { model: [{ scope: "project", file: projectSettingsFile(), value: "second" }] },
+      warnings: ["reloaded warning"],
+    }),
+    providers: [{ id: "mine", dialect: "openai-chat", baseUrl: "http://mine" }],
+  })
+  expect(seen).toEqual([
+    { model: "first", layers: [{ scope: "user", file: userSettingsFile(), value: "first" }] },
+  ])
+  const errors: unknown[] = []
+  session.agent.bus.subscribe((e) => void errors.push(e.data), { types: ["extension.error"] })
+  await session.reload()
+  await session.agent.bus.flush()
+  expect(errors).toContainEqual({ source: "settings", error: "reloaded warning" })
+  expect(seen).toEqual([
+    { model: "first", layers: [{ scope: "user", file: userSettingsFile(), value: "first" }] },
+    { model: "second", layers: [{ scope: "project", file: projectSettingsFile(), value: "second" }] },
+  ])
 })
 
 test("settings retry becomes the ai layer's retry options", () => {

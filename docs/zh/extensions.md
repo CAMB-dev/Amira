@@ -170,7 +170,7 @@ amira
 | `serverToolView` | 将 provider 托管的工具块（如原生网页搜索）转换为与展示器共用的工具调用视图形状 |
 | `registerMarkdownRenderer`、`registerImageProvider` | 渲染回复中匹配的代码块或独立图片，并提供终端图片数据 |
 | `provideService`、`useService` | 共享具名服务；使用时再查找，提供方可能未加载或已卸载 |
-| `settings`、`cwd`、`home`、`apiVersion` | 读取合并后的设置、工作目录、用户目录和 API 版本 |
+| `settings`、`cwd`、`home`、`apiVersion` | 读取合并后的设置、每个顶层键的来源层、工作目录、用户目录和 API 版本 |
 | `backgroundJobs` | 启动并查看本扩展自己启动的后台任务；内置前端代码使用仅供 host 使用的 `hostBackgroundJobs()` 能力 |
 | `runCommand`、`openPipe`、`onExit` | 运行受管理的子进程、启动长期管道进程，或注册短时退出工作 |
 | `notify`、`reportError` | 显示提示或报告后台错误 |
@@ -192,7 +192,7 @@ amira
 
 命令可以调用 `ctx.openRewind()` 打开与连按两次 Esc 相同的回退选择器；只有具备该选择器的前端（终端 UI）才提供这个方法，选择器暂时无法打开时（例如轮次进行中）返回 false。
 
-扩展设置放在 `extensions` 中，以扩展名为键。设置快照被冻结，扩展应自行校验自己的字段。Print 模式会取消 UI 对话框，RPC 客户端通过协议回答。Panel、视图、工具展示器、Markdown 渲染器、图片 provider 和服务 API 目前属于实验功能。
+扩展设置放在 `extensions` 中，以扩展名为键。设置快照被冻结，扩展应自行校验自己的字段；`api.settings.layers(key)` 按优先级顺序返回顶层键的显式值，每项带有 `scope`（`user`、`project`、`project-local` 或 `flags`）、`file` 和 `value`，没有该键时返回空数组。宿主重新加载设置时（包括 `/reload`）会提供新的快照和来源层，扩展可以据此协调长期资源，而无需自行读取设置文件。Print 模式会取消 UI 对话框，RPC 客户端通过协议回答。Panel、视图、工具展示器、Markdown 渲染器、图片 provider 和服务 API 目前属于实验功能。
 
 `runCommand` 在命令退出后才返回。想边运行边拿到输出（比如显示一条耗时的 `git` 命令的进度），就传入 `onChunk`。通过 `signal` 中止（或等 `timeoutMs` 到期）会杀掉整个进程树，结果里的 `aborted` 或 `timedOut` 会说明原因。默认情况下，`output` 只保留最后 1,000,000 个字符；可以用正整数 `maxOutputChars` 覆盖该限制（无效值会导致调用被拒绝）。`onChunk` 仍会收到全部输出，`truncated` 会说明 `output` 是否被截断。截断不会拆开 UTF-16 代理对。
 
