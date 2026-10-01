@@ -28,7 +28,8 @@ const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
   "packages/core": ["@amira/ai", "@amira/api", "@amira/proc"],
   "packages/packages": ["@amira/api", "@amira/core", "@amira/proc"],
   "packages/tui": ["@amira/ai", "@amira/api", "@amira/core", "@amira/proc", "@amira/tui-kit"],
-  // The CLI is the composition root and may reach every workspace package.
+  // The CLI is the composition root and may reach every workspace package. It bundles the
+  // extensions by source path from its bundling root (D50), never as package dependencies.
   "packages/cli": [
     "@amira/ai",
     "@amira/api",
@@ -38,13 +39,6 @@ const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
     "@amira/proc",
     "@amira/tui",
     "@amira/tui-kit",
-    "@amira/ext-agent",
-    "@amira/builtin-tools",
-    "@amira/ext-commands",
-    "@amira/ext-mcp",
-    "@amira/ext-skills",
-    "@amira/ext-status",
-    "@amira/ext-web",
   ],
   "extensions/*": ["@amira/api"],
 }
@@ -152,7 +146,7 @@ for (const directory of packageDirectoriesInWorkspace) {
   const allowed = allowedDependencies(own)
   const actual = new Set<string>()
 
-  for (const file of sourceFilesUnder(path.join(directory, "src"))) {
+  for (const file of filesUnder(path.join(directory, "src"))) {
     for (const specifier of importsIn(readFileSync(file, "utf8"))) {
       if (specifier.startsWith("@amira/")) actual.add(specifier)
 
@@ -211,13 +205,18 @@ for (const directory of packageDirectoriesInWorkspace) {
   }
 
   if (own.startsWith("packages/")) {
-    for (const file of sourceFilesUnder(path.join(directory, "src"))) {
+    for (const file of filesUnder(directory)) {
       for (const specifier of importsIn(readFileSync(file, "utf8"))) {
         if (extensionPackageNames.has(specifier)) {
           violations.push(
             `${relative(file)} imports extension package ${specifier}; packages must depend on @amira/api`,
           )
         }
+      }
+    }
+    // Tests may load extensions by path to exercise them inside the host; host source may not.
+    for (const file of filesUnder(path.join(directory, "src"))) {
+      for (const specifier of importsIn(readFileSync(file, "utf8"))) {
         if (targetPackage(file, specifier)?.startsWith("extensions/") && !bundlingRoots.has(relative(file))) {
           violations.push(`${relative(file)} imports ${specifier}; packages must depend on @amira/api`)
         }
