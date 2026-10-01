@@ -78,9 +78,16 @@ export function estimateTokens(messages: Message[]): number {
  * by how much of the history's estimated size is left: the summary and the kept messages.
  * Scaling by the model's own count keeps the estimate close for text of any script, where
  * characters per token differ widely. Never more than before unless the summary is longer
- * than what it replaced.
+ * than what it replaced. A checkpoint's size is already in tokens: subtract the replaced
+ * messages' estimate and add that size, preserving the system prompt and tools' overhead.
  */
-export function estimateAfter(before: number, older: Message[], kept: Message[], summary: Message[]): number {
+export function estimateAfter(
+  before: number,
+  older: Message[],
+  kept: Message[],
+  summary: Message[] | number,
+): number {
+  if (typeof summary === "number") return Math.max(0, before - estimateTokens(older)) + summary
   const was = estimateTokens([...older, ...kept])
   const left = estimateTokens([...summary, ...kept])
   if (was <= 0) return before

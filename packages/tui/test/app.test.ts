@@ -2705,6 +2705,66 @@ test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty",
 })
 
 for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: recalled skills still run and dollar-prefixed prose still sends`, async () => {
+    const history = new PromptHistory()
+    history.add(["$100 is the price"])
+    history.add(["$deploy"])
+    const { terminal, live, mock, shows, idle, exited } = await skillSetup(
+      [{ text: "Deployed." }, { text: "Noted." }],
+      { promptHistory: history, settings: { mode } },
+    )
+    try {
+      terminal.send("\x1b[A\r")
+      await shows("Deployed.")
+      await idle()
+      expect(mock.requests[0]!.messages[0]).toMatchObject({
+        content: [{ type: "text", text: "SKILL deploy BODY " }],
+      })
+      terminal.send("\x1b[A\x1b[A")
+      await waitFor(() => live().includes("› $100 is the price"), "recalled prose")
+      terminal.send("\r")
+      await shows("Noted.")
+      await idle()
+      expect(mock.requests[1]!.messages.at(-1)).toMatchObject({
+        content: [{ type: "text", text: "$100 is the price" }],
+      })
+    } finally {
+      terminal.send("\x03\x03")
+      await exited
+    }
+  })
+
+  test(`${mode}: Enter guards a recalled missing skill until its list is dismissed`, async () => {
+    const history = new PromptHistory()
+    history.add(["$removed-skill"])
+    const { terminal, live, mock, shows, idle, exited } = await skillSetup([{ text: "Noted." }], {
+      promptHistory: history,
+      settings: { mode },
+    })
+    try {
+      terminal.send("\x1b[A")
+      await waitFor(() => live().includes("› $removed-skill"), "recalled skill")
+      expect(live()).not.toContain("no skill matches")
+      terminal.send("\r")
+      await Bun.sleep(50)
+      expect(mock.requests).toHaveLength(0)
+      await waitFor(() => live().includes("no skill matches $removed-skill"), "missing skill guard")
+      terminal.send("\x1b")
+      await Bun.sleep(50)
+      terminal.send("\r")
+      await shows("Noted.")
+      await idle()
+      expect(mock.requests).toHaveLength(1)
+      expect(mock.requests[0]!.messages[0]).toMatchObject({
+        role: "user",
+        content: [{ type: "text", text: "$removed-skill" }],
+      })
+    } finally {
+      terminal.send("\x03\x03")
+      await exited
+    }
+  })
+
   test(`${mode}: ↑/↓ walk past recalled commands, skills and @files without opening their lists`, async () => {
     const history = new PromptHistory()
     for (const t of ["look at @src", "oldest", "/status", "$deploy", "newest"]) history.add([t])

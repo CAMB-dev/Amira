@@ -369,7 +369,8 @@ export default defineExtension((api: ExtensionAPI) => {
         id = idOf(picked)
       }
       await ctx.session.resume(id)
-      ctx.print(`Resumed session ${id} (${ctx.session.messages().length} messages).`)
+      if (ctx.frontend !== "tui")
+        ctx.print(`Resumed session ${id} (${ctx.session.messages().length} messages).`)
     },
   })
 
