@@ -13,7 +13,7 @@ amira ext list
 amira ext help
 ```
 
-搜索默认使用 [CAMB-dev/amira-extensions](https://github.com/CAMB-dev/amira-extensions) 的官方索引。缓存通常使用一小时，`--refresh` 强制重新获取。`AMIRA_EXTENSIONS_INDEX` 可指向其他索引 URL 或本地索引文件。索引提供包名和来源，搜索不会安装包。
+搜索默认使用 [CAMB-dev/amira-extensions](https://github.com/CAMB-dev/amira-extensions) 的官方索引。缓存通常使用一小时，`--refresh` 强制重新获取。`AMIRA_EXTENSIONS_INDEX` 可指向其他索引 URL 或本地索引文件。索引提供包名和来源，搜索不会安装包。官方扩展本身也放在这个仓库中，每个都有 README：workflow 和 swarm（见[子 agent](subagents.md#workflow-与-swarm-扩展)）、lsp 诊断、文件检查点 checkpoints、hooks、todo、notify、share、browser、images 和 mermaid。
 
 安装时可用搜索返回的名称、本地目录、带可选 ref 的 git URL，或 npm 来源：
 

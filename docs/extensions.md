@@ -13,7 +13,7 @@ amira ext list
 amira ext help
 ```
 
-Search uses the official index in [CAMB-dev/amira-extensions](https://github.com/CAMB-dev/amira-extensions). A cached copy is normally reused for an hour; `--refresh` fetches it again. `AMIRA_EXTENSIONS_INDEX` can point to another index URL or a local index file. The index lists packages and their sources; searching does not install them.
+Search uses the official index in [CAMB-dev/amira-extensions](https://github.com/CAMB-dev/amira-extensions). A cached copy is normally reused for an hour; `--refresh` fetches it again. `AMIRA_EXTENSIONS_INDEX` can point to another index URL or a local index file. The index lists packages and their sources; searching does not install them. That repository also holds the official extensions themselves, each with its README: workflow and swarm (see [Sub-agents](subagents.md#workflow-and-swarm-extensions)), lsp diagnostics, file checkpoints, hooks, todo, notify, share, browser, images and mermaid.
 
 Use a name returned by search, a local directory, a git URL with an optional ref, or an npm package source:
 
