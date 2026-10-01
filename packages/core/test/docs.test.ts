@@ -106,7 +106,6 @@ test("the example extension in docs/extensions.md loads, runs and typechecks", a
       interceptors: new InterceptorRegistry(),
       tools: new ToolRegistry(),
       cwd: dir,
-      home: dir,
       settings: { extensions: { "hello-extension": { message: "Configured greeting." } } },
     })
     expect(await host.loadFile(entry)).toBe(true)
