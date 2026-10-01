@@ -511,11 +511,23 @@ test("extensions see the merged settings", async () => {
     },
   })
   await host.load((api) => {
-    seen = { merged: api.settings.mcpServers, layers: api.settings.layers("mcpServers") }
+    seen = {
+      merged: api.settings.mcpServers,
+      layers: api.settings.layers("mcpServers"),
+      missing: api.settings.layers("model"),
+      // layers() is not a setting: copies of the snapshot stay plain settings.
+      keys: Object.keys(api.settings),
+      cloned: structuredClone(api.settings),
+      json: JSON.parse(JSON.stringify(api.settings)),
+    }
   }, "t")
   expect(seen).toEqual({
     merged: { fs: { command: "x" } },
     layers: [{ scope: "project", file: "project/settings.json", value: { fs: { command: "x" } } }],
+    missing: [],
+    keys: ["mcpServers"],
+    cloned: { mcpServers: { fs: { command: "x" } } },
+    json: { mcpServers: { fs: { command: "x" } } },
   })
 })
 

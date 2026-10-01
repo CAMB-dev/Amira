@@ -495,14 +495,19 @@ function deepFreeze<T>(value: T): T {
   return value
 }
 
+/**
+ * The frozen settings snapshot with `layers` as a non-enumerable method, so spreading,
+ * `Object.keys`, JSON and `structuredClone` still see plain settings.
+ */
 function settingsView(settings: Settings, layers: SettingsLayers): SettingsView {
-  const snapshot = structuredClone(settings) as Settings & { layers?: unknown }
+  const view = structuredClone(settings)
   const layerSnapshot = deepFreeze(structuredClone(layers))
   const emptyLayers: readonly SettingsLayer[] = Object.freeze([])
-  const view = {
-    ...snapshot,
-    layers: <K extends keyof Settings>(key: K) =>
-      (layerSnapshot[key] ?? emptyLayers) as readonly SettingsLayer<NonNullable<Settings[K]>>[],
-  }
+  Object.defineProperty(view, "layers", {
+    value: <K extends keyof Settings>(key: K) =>
+      (Object.hasOwn(layerSnapshot, key) ? layerSnapshot[key] : emptyLayers) as readonly SettingsLayer<
+        NonNullable<Settings[K]>
+      >[],
+  })
   return deepFreeze(view) as SettingsView
 }
