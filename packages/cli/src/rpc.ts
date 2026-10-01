@@ -95,7 +95,12 @@ interface LastTurn {
 export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promise<number> {
   const { ai, commands } = session
   let agent = session.agent
-  const io = opts.io ?? stdio(() => void agent.dispose("exit").finally(() => process.exit(0)))
+  // A force exit starts the agent's cleanup without waiting for it: nobody is left to wait for.
+  const exitNow = (code: number) => {
+    void agent.dispose("exit")
+    process.exit(code)
+  }
+  const io = opts.io ?? stdio(() => exitNow(0))
   const ui = session.ui ?? new UiRequests(agent.bus, { sessionId: agent.sessionId })
   const nonInteractive = session.nonInteractive === true || session.ui === undefined
   let lastTurn: LastTurn | undefined
@@ -387,10 +392,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   // First Ctrl+C aborts the turn; a second one exits.
   let interrupted = false
   const onSigint = () => {
-    if (interrupted) {
-      void agent.dispose("exit").finally(() => process.exit(130))
-      return
-    }
+    if (interrupted) return exitNow(130)
     interrupted = true
     agent.abort()
   }
