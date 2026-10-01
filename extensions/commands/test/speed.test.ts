@@ -82,7 +82,11 @@ test("tool-call arguments count as the reply", () => {
   }
   expect(replySpeed(call, { start: 0, reply: 500 }, 1000)).toBe("reply 100 tok/s")
   expect(
-    replySpeed({ ...call, usage: { ...call.usage, reasoning: 30 } }, { start: 0, reply: 500 }, 1000),
+    replySpeed(
+      { ...call, usage: { input: 0, output: 50, reasoning: 30, cacheRead: 0, cacheWrite: 0 } },
+      { start: 0, reply: 500 },
+      1000,
+    ),
   ).toBe("reply 40 tok/s (hidden reasoning)")
   const thought = {
     ...call,
