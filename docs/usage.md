@@ -30,7 +30,7 @@ Esc stops the current turn; while a slash command such as `/ext install` is stil
 
 Messages can carry PNG, JPEG, GIF and WebP images, in both terminal modes:
 
-- **Paste or drop paths.** A paste made only of paths to existing image files (absolute or relative to the working directory, quoted when they contain spaces, or `file://` URIs) attaches them. Anything else, such as prose or other files, is pasted as text, and so is an image that cannot be attached, with a notice saying why.
+- **Paste or drop paths.** A paste made only of paths to existing image files (absolute or relative to the working directory, quoted when they contain spaces, or with backslash-escaped spaces as macOS and Linux terminals write dropped paths, or `file://` URIs) attaches them. Anything else, such as prose or other files, is pasted as text, and so is an image that cannot be attached, with a notice saying why.
 - **Pick one in the `@` file list.** An image attaches; other files keep their `@path` reference.
 - **Paste from the clipboard** with Alt+V (`paste.image`; see [Keybindings](keybindings.md) for the other keys). The clipboard's text wins when it has any. This uses PowerShell on Windows, `osascript` (or `pngpaste` when installed) on macOS, and `wl-paste` or `xclip` on Linux; without them a notice says what is missing, and paths still work.
 
@@ -67,7 +67,7 @@ Conversations are stored automatically and listed by working directory. On exit,
 
 Do not combine `-c` and `-r`. Session IDs begin with `s_`; use the actual ID shown in the list. `/clear` starts a new stored session, keeping the previous one available to resume. `/resume` keeps the current model selected; when no model is selected, the stored model can be used. Switching sessions stops background work belonging to the old conversation.
 
-After a session's first successful turn, Amira asks the model for a short title (at most six words, in the conversation's language) in the background; it uses `compact.model` when set, otherwise the current model, and never holds up the conversation. Print mode and sub-agents do not request titles. The request's cost appears in `/cost` and `/status`. A `/rename` name always wins over the automatic one. Set `"sessions": { "autoTitle": false }` in user or project settings to turn it off. Titles show in `/status`, `/resume`, `amira -r` and the terminal title.
+After a session's first successful turn, Amira asks the model for a short title (at most six words and 60 characters, in the conversation's language) in the background; it uses `compact.model` when set, otherwise the current model, and never holds up the conversation. Print mode and sub-agents do not request titles. The request's cost appears in `/cost` and `/status`. A `/rename` name always wins over the automatic one. Set `"sessions": { "autoTitle": false }` in user or project settings to turn it off. Titles show in `/status`, `/resume`, `amira -r` and the terminal title.
 
 Typing in the `/resume` picker searches titles and the user and assistant text of whole conversations, compacted history included; matching is a case-insensitive substring, so Chinese or Japanese needs no spaces, and the matching text shows under the row. Ctrl+D deletes the selected session after a confirmation; the current session is never listed. Deleting removes the session file and the sub-agent sessions it started, except ones a fork still uses.
 
@@ -131,7 +131,7 @@ Closing stdin waits for active work, including background results and their foll
 
 ## Status and costs
 
-`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell and Git workspace. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
+`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell and Git workspace. The speed shows reply and thinking tokens per second separately; `~` marks an estimate: tokens counted from the text because the provider reported no separate reasoning count, or thinking timed from the request because only a summary of it streamed. `(hidden reasoning)` means the model reasoned without streaming its thinking. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
 
 `/cost` reports this session's replies by model, and compaction and session-title requests separately; it does not aggregate child-agent costs. Use `/status` and `/agents` for those. Costs depend on known model pricing and reported usage; unknown prices are identified, and totals with unpriced rows are partial estimates. Provider billing remains the source for actual charges.
 
