@@ -653,3 +653,17 @@ test("disposing a root whose children end together finishes", async () => {
   expect(outcome).toBe("disposed")
   expect(tree.children).toHaveLength(0)
 })
+
+test("only the root's dispose emits session.end; a sub-agent's end is subagent.end", async () => {
+  const { tree, root, events, bus } = setup(() => ({ text: "idle" }))
+  const a = tree.spawn(root, { prompt: "a", persistent: true })
+  await until(() => a.state === "idle")
+  a.abort("done with it")
+  await a.result()
+  await bus.flush()
+  expect(events.some((e) => e.type === "session.end")).toBe(false)
+
+  await root.dispose("exit")
+  await bus.flush()
+  expect(events.filter((e) => e.type === "session.end").map((e) => e.sessionId)).toEqual([root.sessionId])
+})

@@ -1234,7 +1234,8 @@ export class Agent {
     }
     // #jobNoticeTarget stays: a job that asks for its notice after this switch must still reach
     // the replacement session.
-    this.#emit(undefined, "session.end", { reason })
+    // A sub-agent's end is subagent.end; session.end means the conversation itself ended.
+    if (this.depth === 0) this.#emit(undefined, "session.end", { reason })
 
     if (this.depth === 0) this.tree?.abortAll("the session ended")
     else this.tree?.abortChildren(this.sessionId, "the session ended")
