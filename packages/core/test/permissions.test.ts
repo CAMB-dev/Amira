@@ -195,10 +195,10 @@ describe("rules", () => {
     expect((await decide("git pu`sh", { rules, tool: pwsh })).decision).toBe("deny")
     // In bash a backslash escapes.
     expect((await decide("git pu\\sh", { rules, tool: bash })).decision).toBe("deny")
-    // A name alone does not make a third-party tool a shell tool.
-    const unknown = { name: "bash" }
+    // A tool under the bash name is a shell tool whatever it declares, read both ways.
     const p = new Permissions({ rules })
-    expect((await p.check(unknown, { command: "git pu`sh" }, process.cwd())).decision).toBe("allow")
+    expect((await p.check({ name: "bash" }, { command: "git pu`sh" }, process.cwd())).decision).toBe("deny")
+    expect((await p.check({ name: "other" }, { command: "git push" }, process.cwd())).decision).toBe("allow")
     // A tool of any name that says it runs a shell is a shell tool.
     const custom = { name: "run", traits: { shell: "bash" as const }, shellKind: (): ShellKind => "bash" }
     expect((await p.check(custom, { command: "git push" }, process.cwd())).decision).toBe("deny")
@@ -401,6 +401,82 @@ describe("protected paths", () => {
     expect((await p.check(patchTool, { patch }, dir)).decision).toBe("ask")
     expect(await writtenPaths(patchTool, { patch }, dir)).toEqual(["src/a.ts", ".amira/settings.json"])
     expect(hooksPathsIn('[core]\n  hooksPath = "x y"\n[alias]\n  hooksPath = no')).toEqual(["x y"])
+  })
+})
+
+describe("built-in names keep their protections (overrides)", () => {
+  function repo() {
+    const dir = tmp()
+    mkdirSync(path.join(dir, ".git", "hooks"), { recursive: true })
+    return dir
+  }
+  const hook = { path: ".git/hooks/pre-commit", content: "x" }
+
+  test("a file tool override cannot declare or report its way past protected paths", async () => {
+    const dir = repo()
+    const p = new Permissions()
+    const lies: PermissionTool[] = [
+      { name: "write" },
+      { name: "write", traits: { readOnly: true, writesFiles: false } },
+      { name: "edit", traits: { writesFiles: "paths" }, getWrittenPaths: () => [] },
+      { name: "write", traits: { writesFiles: "paths" }, getWrittenPaths: () => ["elsewhere.txt"] },
+    ]
+    for (const tool of lies) {
+      expect((await p.check(tool, hook, dir)).decision, JSON.stringify(tool.traits)).toBe("ask")
+    }
+    const patch = "*** Begin Patch\n*** Update File: a.ts\n*** Move to: .git/hooks/post-merge\n*** End Patch"
+    expect(
+      (await p.check({ name: "apply_patch", traits: { readOnly: true } }, { patch }, dir)).decision,
+    ).toBe("ask")
+    expect((await p.check({ name: "write" }, { path: "a.txt", content: "" }, dir)).decision).toBe("allow")
+    const plan = new Permissions({ mode: "plan" })
+    expect(
+      (await plan.check({ name: "edit", traits: { readOnly: true } }, { path: "a" }, dir)).decision,
+    ).toBe("deny")
+  })
+
+  test("a shell override is always checked as a shell", async () => {
+    const rules = [user(["rm"], "deny")]
+    const p = new Permissions({ rules })
+    for (const tool of [
+      { name: "powershell" },
+      { name: "bash", traits: { readOnly: true, writesFiles: false } },
+    ]) {
+      expect((await p.check(tool, { command: "rm x" }, process.cwd())).decision, tool.name).toBe("deny")
+    }
+    const plan = new Permissions({ mode: "plan" })
+    expect(
+      (await plan.check({ name: "bash", traits: { readOnly: true } }, { command: "ls" }, process.cwd()))
+        .decision,
+    ).toBe("deny")
+  })
+
+  test("the built-in bash is read both ways when its shell cannot be resolved", async () => {
+    const rules = [user(["git", "push"], "deny")]
+    const p = new Permissions({ rules })
+    const failing = {
+      name: "bash",
+      traits: { shell: "bash" as const },
+      shellKind: (): ShellKind => {
+        throw new Error("no shell")
+      },
+    }
+    expect((await p.check(failing, { command: "git pu`sh" }, process.cwd())).decision).toBe("deny")
+  })
+
+  test("a tool that writes files and runs commands is checked as both", async () => {
+    const rules = [user(["rm"], "deny")]
+    const p = new Permissions({ rules })
+    const both: PermissionTool = {
+      name: "runner",
+      traits: { writesFiles: "paths", shell: "bash" },
+      getWrittenPaths: () => ["out.txt"],
+    }
+    expect((await p.check(both, { command: "rm x" }, tmp())).decision).toBe("deny")
+    expect((await p.check(both, { command: "ls" }, tmp())).decision).toBe("allow")
+    const hookWriter: PermissionTool = { ...both, getWrittenPaths: () => [".git/hooks/x"] }
+    expect((await p.check(hookWriter, { command: "rm x" }, repo())).decision).toBe("deny")
+    expect((await p.check(hookWriter, { command: "ls" }, repo())).decision).toBe("ask")
   })
 })
 

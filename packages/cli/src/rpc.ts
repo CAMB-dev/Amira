@@ -7,7 +7,7 @@ import {
   userMessage,
 } from "@amira/ai"
 import { type AnyEvent, modelLabel, type TurnEndReason } from "@amira/api"
-import { type Agent, type CommandHost, newTurnId, UiRequests } from "@amira/core"
+import { type Agent, type CommandHost, newTurnId, toolTraits, UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
 import type { COMMAND_PARAMS } from "./rpc-schema.ts"
 import { stdoutWriter } from "./stdout-writer.ts"
@@ -104,7 +104,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     a.tools.setDisabled(
       new Set([
         ...a.tools.disabled,
-        ...a.tools.list().flatMap(({ tool }) => (tool.traits?.interactive ? [tool.name] : [])),
+        ...a.tools.list().flatMap(({ tool }) => (toolTraits(tool)?.interactive ? [tool.name] : [])),
       ]),
     )
   }

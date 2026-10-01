@@ -41,6 +41,7 @@ import {
   type ResolvedPermissions,
   type SessionStore,
   ToolRegistry,
+  toolTraits,
   type UiRequests,
 } from "@amira/core"
 import type { ActivePackages } from "@amira/packages"
@@ -259,7 +260,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ),
   )
   if (opts.nonInteractive) {
-    for (const { tool } of tools.list()) if (tool.traits?.interactive) disabled.add(tool.name)
+    for (const { tool } of tools.list()) if (toolTraits(tool)?.interactive) disabled.add(tool.name)
   }
   tools.setDisabled(disabled)
   await bus.flush()
@@ -654,7 +655,10 @@ export function toolsToDisable(
 ): string[] {
   const out = new Set(explicit)
   if (shell !== "auto") {
-    for (const tool of tools) if (tool.traits?.shell && tool.traits.shell !== shell) out.add(tool.name)
+    for (const tool of tools) {
+      const kind = toolTraits(tool)?.shell
+      if (kind && kind !== shell) out.add(tool.name)
+    }
   }
   return [...out]
 }

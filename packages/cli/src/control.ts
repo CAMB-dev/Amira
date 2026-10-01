@@ -16,6 +16,7 @@ import {
   storedHistory,
   subagentMessages,
   subagentsOf,
+  toolTraits,
 } from "@amira/core"
 import { createExtensionAdmin } from "@amira/packages"
 import { createProviderAdmin } from "./provider-admin.ts"
@@ -345,7 +346,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
           description: tool.description,
           source,
           exposure: tool.exposure ?? "active",
-          ...(tool.traits ? { traits: tool.traits } : {}),
+          ...(toolTraits(tool) ? { traits: toolTraits(tool) } : {}),
           enabled: !disabled && agent().toolRestriction(tool) === undefined,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -368,7 +369,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       shell = mode
       // The shell mode decides these two again, over earlier /tools choices.
       for (const { tool } of tools.list()) {
-        if (!tool.traits?.shell) continue
+        if (!toolTraits(tool)?.shell) continue
         turnedOn.delete(tool.name)
         turnedOff.delete(tool.name)
       }

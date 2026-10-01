@@ -1,7 +1,14 @@
 import { createWriteStream, openSync, type WriteStream } from "node:fs"
 import { describeServerTool, messageCitations, userMessage } from "@amira/ai"
 import { type AnyEvent, type BackgroundJobInfo, type BackgroundJobRegistry, fallbackTitle } from "@amira/api"
-import { type Agent, type CommandHost, parseCommandLine, type TurnResult, type UiRequests } from "@amira/core"
+import {
+  type Agent,
+  type CommandHost,
+  parseCommandLine,
+  type TurnResult,
+  toolTraits,
+  type UiRequests,
+} from "@amira/core"
 
 export interface PrintIO {
   stdout: (s: string) => void
@@ -113,7 +120,7 @@ export async function runPrint(
   agent.tools.setDisabled(
     new Set([
       ...agent.tools.disabled,
-      ...agent.tools.list().flatMap(({ tool }) => (tool.traits?.interactive ? [tool.name] : [])),
+      ...agent.tools.list().flatMap(({ tool }) => (toolTraits(tool)?.interactive ? [tool.name] : [])),
     ]),
   )
   // Tools that need a UI are not even offered: nobody is there to answer them.

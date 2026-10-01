@@ -2,6 +2,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { ToolDefinition } from "@amira/api"
+import { builtinWrittenPaths } from "../tool-traits.ts"
 
 /**
  * Files declared by file-writing tools always ask before changing, whatever the
@@ -242,19 +243,28 @@ export function protectedPath(cwd: string, p: string, opts: ProtectOptions = {})
   return undefined
 }
 
-/** Calls a tool's path reporter and rejects malformed or failed reports conservatively. */
+/**
+ * The paths a call may write: the tool's own report, plus, for a tool under a built-in file
+ * tool's name, the paths its arguments name (so an override cannot report its way past the
+ * protected paths). Undefined when the tool has no reporter (and no built-in name) or its
+ * report fails or is malformed: callers treat that as unknown.
+ */
 export async function writtenPaths(
-  tool: Pick<ToolDefinition, "getWrittenPaths">,
+  tool: Pick<ToolDefinition, "name" | "getWrittenPaths">,
   args: Record<string, unknown>,
   cwd: string,
 ): Promise<string[] | undefined> {
-  if (!tool.getWrittenPaths) return undefined
+  const builtin = builtinWrittenPaths(tool.name, args)
+  if (!tool.getWrittenPaths) return builtin
+  let reported: string[]
   try {
     const paths = await tool.getWrittenPaths(args, { cwd })
     if (!Array.isArray(paths)) return undefined
-    const copy = [...paths]
-    return copy.every((p) => typeof p === "string" && p.length > 0) ? copy : undefined
+    reported = [...paths]
+    if (!reported.every((p) => typeof p === "string" && p.length > 0)) return undefined
   } catch {
     return undefined
   }
+  if (!builtin) return reported
+  return [...new Set([...reported, ...builtin])]
 }

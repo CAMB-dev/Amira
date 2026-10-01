@@ -114,6 +114,7 @@ import { newSessionId, type SessionEntryData, SessionStore } from "./session-sto
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
+import { toolTraits } from "./tool-traits.ts"
 import { checkArgs } from "./validate-args.ts"
 
 export interface ApprovalDecision {
@@ -1465,7 +1466,7 @@ export class Agent {
     const provider = this.providerSettings[this.model.provider]
     const editing =
       provider?.models?.find((m) => m.id === this.model.id)?.tools?.edit ?? provider?.tools?.edit ?? "edit"
-    const editor = tool.traits?.editor
+    const editor = toolTraits(tool)?.editor
     if (editor !== undefined && editor !== editing && editing !== "both") {
       return `the editing tool choice for ${this.model.provider}/${this.model.id} is "${editing}". Set providers.${this.model.provider}.tools.edit or this model's models[].tools.edit to "${tool.name}" or "both" in settings.json and restart the session`
     }
@@ -1717,7 +1718,8 @@ export class Agent {
    * artifact's id. Saving that fails leaves a preview that says so. Images stay as they are.
    */
   async #keepLarge(call: ToolCallBlock, result: ToolResult): Promise<ToolResult> {
-    if ((this.#callTools.get(call) ?? this.tools.get(call.name))?.traits?.artifactReader) return result
+    const reader = this.#callTools.get(call) ?? this.tools.get(call.name)
+    if (reader && toolTraits(reader)?.artifactReader) return result
     const texts = result.content.flatMap((b) => (b.type === "text" ? [b.text] : []))
     const text = texts.join("\n")
     if (outputSize(text) <= this.artifacts.limits.saveAbove) return result
@@ -1890,7 +1892,7 @@ export class Agent {
         kind: "aged",
         text: agedStub(p.m, p.call, artifact, {
           read: tool?.readKey !== undefined,
-          shell: tool?.traits?.shell !== undefined || tool?.shellKind !== undefined,
+          shell: (tool && toolTraits(tool)?.shell !== undefined) || tool?.shellKind !== undefined,
         }),
         epoch,
       }
@@ -2058,11 +2060,12 @@ export class Agent {
             this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })
           },
         }
+        const traits = toolTraits(tool)
         const pathCapture =
           this.fileRewind?.enabled &&
           paths !== undefined &&
-          (tool.traits?.writesFiles === true || tool.traits?.writesFiles === "paths") &&
-          tool.traits.usesMutationHook !== true
+          (traits?.writesFiles === true || traits?.writesFiles === "paths") &&
+          traits.usesMutationHook !== true
         const execute = (mutateFilesOverride?: MutateFiles) =>
           tool.execute(args, {
             ...context,
@@ -2236,7 +2239,7 @@ export class Agent {
       toolCallId: run.call.id,
       name: run.call.name,
       args,
-      ...(run.tool?.traits ? { traits: run.tool.traits } : {}),
+      ...(run.tool && toolTraits(run.tool) ? { traits: toolTraits(run.tool) } : {}),
       ...(run.writtenPaths !== undefined ? { writtenPaths: run.writtenPaths } : {}),
     })
   }
@@ -2254,7 +2257,7 @@ export class Agent {
       name: run.call.name,
       result,
       durationMs,
-      ...(run.tool?.traits ? { traits: run.tool.traits } : {}),
+      ...(run.tool && toolTraits(run.tool) ? { traits: toolTraits(run.tool) } : {}),
       ...(run.writtenPaths !== undefined ? { writtenPaths: run.writtenPaths } : {}),
       ...(rejected ? { rejected } : {}),
       ...(approval ? { approval } : {}),

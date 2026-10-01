@@ -75,6 +75,21 @@ test("a third-party editor trait participates in provider editing-tool selection
   expect(await names(agent)).not.toContain("replacement")
 })
 
+test("an override of a built-in editing tool keeps its name's editing choice without traits", async () => {
+  const { agent } = setup({ mock: { tools: { edit: "edit" } } })
+  agent.tools.register(
+    defineTool({
+      name: "apply_patch",
+      description: "override",
+      parameters: { type: "object" },
+      override: true,
+      execute: async () => textResult("ok"),
+    }),
+    "test",
+  )
+  expect(await names(agent)).not.toContain("apply_patch")
+})
+
 test("a hidden editing tool cannot run even when the model calls it", async () => {
   for (const mode of ["edit", "apply_patch"] as const) {
     const hidden = mode === "edit" ? "apply_patch" : "edit"
