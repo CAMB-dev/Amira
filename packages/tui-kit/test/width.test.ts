@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
-import { closeStyles, sanitize, tokenize, truncateToWidth, visibleWidth, wrapText } from "../src/width.ts"
+import {
+  closeStyles,
+  graphemes,
+  sanitize,
+  tokenize,
+  truncateToWidth,
+  visibleWidth,
+  wrapText,
+} from "../src/width.ts"
 
 test("visibleWidth counts CJK and emoji as two cells and ignores escapes", () => {
   expect(visibleWidth("abc")).toBe(3)
@@ -107,4 +115,38 @@ test("combined and colon SGR parameters are closed by their own close codes", ()
   ])
   expect(wrapText("\x1b[31m\x1b[32mab cd", 2)).toEqual(["\x1b[31m\x1b[32mab\x1b[0m", "\x1b[32mcd\x1b[0m"])
   expect(wrapText("\x1b[4:3mab\x1b[4:0m cd", 2)).toEqual(["\x1b[4:3mab\x1b[4:0m", "cd"])
+})
+
+test("a break after zero-width text does not leave the rest of the row too wide", () => {
+  // The head before the space takes no cells, so breaking there would gain nothing.
+  expect(wrapText("​ ab中", 3)).toEqual(["​ ab", "中"])
+  expect(wrapText("́ ab中", 3)).toEqual(["́ ab", "中"])
+})
+
+/** A small deterministic PRNG (mulberry32), so a failure can be replayed. */
+function rng(seed: number) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 2 ** 32
+  }
+}
+
+test("wrapped rows fit the width and keep every character but the spaces at breaks", () => {
+  const pieces = ["a", "bc", "word", " ", "  ", "中", "文字", "😀", "é", "​", "́", "\t", "\x1b[1m", "\x1b[0m"]
+  const rand = rng(1)
+  const kept = (s: string) => stripAnsi(s).replace(/[ \t]/g, "")
+  for (let i = 0; i < 5000; i++) {
+    let text = ""
+    for (let n = 1 + Math.floor(rand() * 10); n > 0; n--) text += pieces[Math.floor(rand() * pieces.length)]
+    const width = 1 + Math.floor(rand() * 40)
+    const rows = wrapText(text, width)
+    for (const r of rows) {
+      // A single character wider than the row is the only thing that may stick out.
+      const fits = visibleWidth(r) <= width || graphemes(stripAnsi(r)).length === 1
+      expect({ text, width, r, fits }).toEqual({ text, width, r, fits: true })
+    }
+    expect({ text, width, kept: kept(rows.join("")) }).toEqual({ text, width, kept: kept(text) })
+  }
 })
