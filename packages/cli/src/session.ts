@@ -1,35 +1,11 @@
-import path from "node:path"
-import {
-  type Ai,
-  createAi,
-  isNoModel,
-  type ModelInfo,
-  NO_MODEL,
-  type ProviderConfig,
-  type RetryOptions,
-} from "@amira/ai"
-import type {
-  AnyEvent,
-  ApprovalPermission,
-  EventEnvelope,
-  Extension,
-  ReloadReport,
-  Settings,
-  SettingsLayers,
-  ShellMode,
-  ToolDefinition,
-  ToolLine,
-  ToolPresenter,
-} from "@amira/api"
+import { type Ai, createAi, isNoModel, type ModelInfo, NO_MODEL, type ProviderConfig } from "@amira/ai"
+import type { AnyEvent, Extension, ReloadReport, Settings, SettingsLayers, ShellMode } from "@amira/api"
 import {
   Agent,
   AgentTree,
-  type Approver,
-  type Asker,
   amiraHome,
   amiraPath,
   type CompactionOptions,
-  type ContextOptions,
   commandAliasWarnings,
   defaultSections,
   EventBus,
@@ -43,13 +19,31 @@ import {
   type SessionStore,
   ToolRegistry,
   toolTraits,
-  type UiRequests,
 } from "@amira/core"
 import type { ActivePackages } from "@amira/packages"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
-import { withProviderHint } from "./provider-command.ts"
+import { userApprover, userAsker } from "./session/approvals.ts"
+import { createExtensionLoader, createReloadReplay } from "./session/extension-loading.ts"
+import {
+  compactionFromSettings,
+  contextFromSettings,
+  onlyProviderModel,
+  resolveModel,
+  retryFromSettings,
+  toolsToDisable,
+  withPackageSkills,
+} from "./session/settings-adapters.ts"
 import { testAiOptions } from "./test-hooks.ts"
+
+export type { ApproverOptions } from "./session/approvals.ts"
+export { approvalPreview, userApprover, userAsker } from "./session/approvals.ts"
+export {
+  contextFromSettings,
+  onlyProviderModel,
+  retryFromSettings,
+  toolsToDisable,
+} from "./session/settings-adapters.ts"
 
 export interface SessionOptions {
   /**
@@ -216,36 +210,15 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
   }
 
-  /** Loads everything; returns the sources that failed. */
-  const loadExtensions = async (): Promise<string[]> => {
-    const failed: string[] = []
-    if (!opts.noBuiltins) {
-      try {
-        for (const b of await (opts.builtins ?? defaultBuiltins)()) {
-          if (!(await host.load(b.extension, b.source))) failed.push(b.source)
-        }
-      } catch (err) {
-        const error = `failed to load built-in extensions: ${err instanceof Error ? err.message : String(err)}`
-        bus.emit("extension.error", { source: "builtin", error }, { sessionId: "host" })
-        failed.push("builtin")
-      }
-    }
-    for (const p of packages?.packages ?? []) {
-      for (const file of p.manifest.extensions) {
-        const label = packageLabel(p, file)
-        if (!(await host.loadFile(file, label))) failed.push(label.source)
-      }
-    }
-    for (const file of opts.extensions) {
-      const source = fileLabel(file, opts.cwd)
-      if (!(await host.loadFile(file, { source }))) failed.push(source)
-    }
-    for (const p of packages?.problems ?? []) {
-      bus.emit("extension.error", { source: p.name, error: p.error }, { sessionId: "host" })
-      failed.push(p.name)
-    }
-    return failed
-  }
+  const loadExtensions = createExtensionLoader({
+    host,
+    bus,
+    noBuiltins: opts.noBuiltins,
+    builtins: () => (opts.builtins ?? defaultBuiltins)(),
+    getPackages: () => packages,
+    extensions: opts.extensions,
+    cwd: opts.cwd,
+  })
   const untrusted = packages?.skipped.filter((s) => s.why === "untrusted").map((s) => s.name) ?? []
   if (untrusted.length) {
     const text = `Not loading this project's extension packages (${untrusted.join(", ")}): the project is not trusted. amira ext trust loads them from the next start.`
@@ -278,43 +251,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   await bus.flush()
   stopCapture()
 
-  // What a reload hands the extensions it loads again: the top-level session's start, where it
-  // works and what it cost since (D37: the whole tree's).
-  const state: {
-    start?: EventEnvelope<"session.start">
-    workspace?: EventEnvelope<"workspace.changed">
-    budget?: EventEnvelope<"budget.update">
-  } = {}
-  bus.subscribe(
-    (e) => {
-      if (e.type === "session.start" && e.parentSessionId === undefined) {
-        state.start = e
-        // A cost counts from the start of its session.
-        delete state.budget
-      } else if (e.type === "workspace.changed") state.workspace = e
-      else if (e.type === "budget.update") state.budget = e
-    },
-    { types: ["session.start", "workspace.changed", "budget.update"] },
-  )
-  const reloadReplay = (a: Agent): AnyEvent[] => {
-    const out: AnyEvent[] = []
-    const start = state.start
-    if (start?.sessionId === a.sessionId) {
-      const { contextTokens: _t, contextWindow: _w, ...rest } = start.data
-      const tokens = a.contextTokens
-      out.push({
-        ...start,
-        data: {
-          ...rest,
-          model: { provider: a.model.provider, model: a.model.id },
-          ...(tokens !== undefined ? { contextTokens: tokens, contextWindow: a.model.contextWindow } : {}),
-        },
-      })
-    }
-    if (state.workspace) out.push(state.workspace)
-    if (state.budget) out.push(state.budget)
-    return out.sort((x, y) => x.seq - y.seq)
-  }
+  const reloadReplay = createReloadReplay(bus)
 
   const tree = new AgentTree({
     ai,
@@ -441,167 +378,6 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   }
 }
 
-/**
- * How a package's extension file is named in errors and /help: the package's name, and the
- * file too when the package has several. Its failures say how to turn it off.
- */
-function packageLabel(
-  p: ActivePackages["packages"][number],
-  file: string,
-): { source: string; name: string; hint: string } {
-  const rel = path.relative(p.dir, file).split(path.sep).join("/")
-  const source = p.manifest.extensions.length > 1 ? `${p.name}/${rel}` : p.name
-  return { source, name: p.name, hint: `${p.scope} package; amira ext disable ${p.name} turns it off` }
-}
-
-/** An extension file given with --extension: its path relative to the working directory, if inside it. */
-function fileLabel(file: string, cwd: string): string {
-  const abs = path.resolve(cwd, file)
-  const rel = path.relative(cwd, abs)
-  return rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? rel.split(path.sep).join("/") : abs
-}
-
-/** Package skill directories are searched after the ones from settings. */
-function withPackageSkills(settings: Settings, packages: ActivePackages | undefined): Settings {
-  const dirs = packages?.packages.flatMap((p) => p.manifest.skills) ?? []
-  if (!dirs.length) return settings
-  return { ...settings, skills: { ...settings.skills, dirs: [...(settings.skills?.dirs ?? []), ...dirs] } }
-}
-
-export interface ApproverOptions {
-  /** Where tools' presenters are, to show what a call would do (a command, a diff). */
-  presenters?: { get(toolName: string): ToolPresenter<any, any> | undefined }
-  /** Tells the user something, e.g. that a call is allowed for the rest of the session. */
-  notify?: (text: string) => void
-  /** The agent tree, to say which sub-agent a question comes from. */
-  tree?: Pick<AgentTree, "subagent">
-}
-
-/** Which mode or rule made the permission policy ask, for the dialog. */
-function permissionLine(p: ApprovalPermission): string {
-  if (p.rule) {
-    return `Permission rule ${JSON.stringify(p.rule.command)} says ${p.rule.decision} (${p.rule.scope} settings, ${p.rule.file}).`
-  }
-  if (p.cause === "protected")
-    return 'Protected file: changes to it ask in every mode ("Don\'t ask again" lifts that for this session).'
-  if (p.cause === "complex")
-    return `Permission mode "${p.mode}": the command cannot be checked against the rules word by word.`
-  return `Permission mode "${p.mode}".`
-}
-
-/**
- * The top-level session's approvals go to the user (D13). Print mode cannot ask, so there a
- * call an interceptor asked about is denied. Dismissing the question (Esc) denies the call
- * and interrupts the turn.
- */
-export function userApprover(ui: UiRequests, opts: ApproverOptions = {}): Approver {
-  /** Calls the user said not to ask about again: a tool with the reason it was asked about. */
-  const allowed = new Set<string>()
-  return async (request, signal) => {
-    const key = JSON.stringify([request.name, request.reason])
-    if (allowed.has(key)) return { approved: true, by: "rule" }
-    if (ui.unavailable) return { approved: false, reason: `nobody can approve it (${ui.unavailable})` }
-    const preview = approvalPreview(request.args, opts.presenters?.get(request.name))
-    // "Don't ask again" covers this tool asked about for this reason; the message says so.
-    const scope = `"Don't ask again" covers ${request.name} asked about for: ${request.reason}`
-    const sub = opts.tree?.subagent(request.sessionId)
-    const head = [
-      ...(sub ? [`Asked by the sub-agent "${sub.info.title}" (${sub.info.id}).`] : []),
-      ...(request.permission ? [permissionLine(request.permission)] : []),
-      request.reason,
-    ].join("\n")
-    const message = preview ? `${head}\n${scope}` : `${head}\n${rawArgs(request.args)}\n${scope}`
-    const answer = await ui.ask(
-      {
-        kind: "confirm",
-        title: `Allow ${request.name}?`,
-        message,
-        always: true,
-        other: true,
-        ...(preview ? { preview } : {}),
-      },
-      { signal, source: "approval" },
-    )
-    if (answer === "always") {
-      allowed.add(key)
-      opts.notify?.(
-        `${request.name} is allowed without asking for the rest of this session (${request.reason}).`,
-      )
-    }
-    if (answer === true || answer === "always") return { approved: true, by: "user" }
-    if (typeof answer === "object") return { approved: false, reason: `the user said no: ${answer.other}` }
-    if (answer === false) return { approved: false, reason: "the user said no" }
-    // Cancelled: by the turn's interrupt, or by the user dismissing the question.
-    if (signal.aborted) return { approved: false, reason: "the turn was interrupted" }
-    return {
-      approved: false,
-      reason: "the user dismissed the question and stopped the turn",
-      interrupt: true,
-    }
-  }
-}
-
-/** A call's arguments as JSON, cut short. */
-function rawArgs(args: Record<string, unknown>): string {
-  const json = JSON.stringify(args)
-  return json.length > 300 ? `${json.slice(0, 299)}…` : json
-}
-
-/**
- * What an asked-about call would do, as its presenter shows it: the lines of its body worked
- * out from the arguments alone (edit and write show their diff), else its summary as a line
- * of code (bash shows the command). Undefined when the tool has no presenter for it.
- */
-export function approvalPreview(
-  args: Record<string, unknown>,
-  presenter: ToolPresenter<any, any> | undefined,
-): ToolLine[] | undefined {
-  if (!presenter) return undefined
-  try {
-    const view = { args, result: { content: [] }, text: "" }
-    const body = presenter.body?.(view, { detail: "full", width: 100 }) ?? []
-    const summary = presenter.summary?.(args)?.trim()
-    if (body.length) return summary ? [{ kind: "muted", text: summary }, ...body] : body
-    // A command is shown whole: the summary has its first line only.
-    const command = typeof args.command === "string" && args.command.trim() ? args.command : summary
-    if (command) return command.split("\n").map((text) => ({ kind: "code", text }))
-  } catch {
-    // A presenter that cannot show it leaves the raw arguments.
-  }
-  return undefined
-}
-
-/**
- * The top-level session's questions go to the user; a sub-agent's reach here when
- * its commander passes them on, marked as such. Print mode says nobody can answer.
- */
-export function userAsker(ui: UiRequests, tree?: AgentTree): Asker {
-  return async (request, signal) => {
-    if (ui.unavailable) return { unavailable: ui.unavailable }
-    const source = tree?.subagent(request.sessionId) ? "sub-agent" : undefined
-    const answers = await ui.api(source).ask(request.questions, { signal })
-    return answers ? { answers } : { declined: true }
-  }
-}
-
-/** Settings `retry` as ai retry options (D52); `attempts` counts the retries after the first try. */
-export function retryFromSettings(retry: Settings["retry"]): RetryOptions | undefined {
-  if (!retry) return undefined
-  const out: RetryOptions = {}
-  if (retry.attempts !== undefined) out.retries = retry.attempts
-  if (retry.baseDelayMs !== undefined) out.baseDelayMs = retry.baseDelayMs
-  if (retry.maxDelayMs !== undefined) out.maxDelayMs = retry.maxDelayMs
-  return Object.keys(out).length ? out : undefined
-}
-
-function resolveModel(ai: Ai, ref: string): ModelInfo {
-  try {
-    return ai.model(ref)
-  } catch (err) {
-    throw new UsageError(withProviderHint(err instanceof Error ? err.message : String(err), "startup"))
-  }
-}
-
 /** The model a stored session last ran on, when a configured provider still has it. */
 function storedModel(ai: Ai, store: SessionStore | undefined): string | undefined {
   const m = store?.model()
@@ -613,14 +389,6 @@ function storedModel(ai: Ai, store: SessionStore | undefined): string | undefine
   } catch {
     return undefined
   }
-}
-
-/** With exactly one provider configured, the first model it lists ("provider/model"). */
-export function onlyProviderModel(ai: Ai): string | undefined {
-  const providers = ai.providers()
-  const [only] = providers
-  const first = only?.models?.find((m) => m.id)?.id
-  return providers.length === 1 && only && first ? `${only.id}/${first}` : undefined
 }
 
 /** What the UI says when a session starts without a model. */
@@ -635,44 +403,4 @@ function noModelError(ai: Ai): string {
   return ai.providers().length === 0
     ? 'no providers configured; add one with "amira provider add", then pass --model provider/model'
     : 'no model selected. Pass --model provider/model, set AMIRA_MODEL or set "model" in settings.json.'
-}
-
-/** Settings `compact` as agent options; its model is resolved like --model. */
-function compactionFromSettings(ai: Ai, compact: Settings["compact"]): CompactionOptions | undefined {
-  if (!compact) return undefined
-  const out: CompactionOptions = {}
-  if (compact.threshold !== undefined) out.threshold = compact.threshold
-  if (compact.model) out.model = resolveModel(ai, compact.model)
-  if (compact.layout) out.layout = compact.layout
-  return Object.keys(out).length ? out : undefined
-}
-
-/** Settings `context` as agent options. */
-export function contextFromSettings(context: Settings["context"]): ContextOptions | undefined {
-  if (!context) return undefined
-  const out: ContextOptions = {}
-  const o = context.outputs
-  if (o?.saveAbove !== undefined) out.saveAbove = o.saveAbove
-  if (o?.previewChars !== undefined)
-    out.previewChars = Math.min(o.previewChars, o.saveAbove ?? o.previewChars)
-  if (o?.quotaMB !== undefined) out.quotaBytes = o.quotaMB * 1024 * 1024
-  if (context.dedupeReads !== undefined) out.dedupeReads = context.dedupeReads
-  if (context.aging) out.aging = { ...context.aging }
-  return Object.keys(out).length ? out : undefined
-}
-
-/** The tools to hide for a shell mode and an explicit list (D68, D70). */
-export function toolsToDisable(
-  shell: "auto" | "bash" | "powershell",
-  explicit: string[],
-  tools: readonly Pick<ToolDefinition, "name" | "traits">[] = [],
-): string[] {
-  const out = new Set(explicit)
-  if (shell !== "auto") {
-    for (const tool of tools) {
-      const kind = toolTraits(tool)?.shell
-      if (kind && kind !== shell) out.add(tool.name)
-    }
-  }
-  return [...out]
 }
