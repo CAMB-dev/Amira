@@ -50,21 +50,34 @@ function localPath(value: string, cwd: string): string {
   return resolve(cwd, /^file:\/\//i.test(value) ? fileURLToPath(value) : value)
 }
 
-/** Only a whole paste of image paths is consumed. Prose and other files remain text. */
-export function pastedImagePaths(text: string, cwd: string): string[] | undefined {
+/**
+ * Only a whole paste of image paths is consumed. Prose and other files remain text. Outside
+ * Windows a backslash escapes the next character, as macOS terminals drop paths with spaces.
+ */
+export function pastedImagePaths(
+  text: string,
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] | undefined {
   const trimmed = text.trim()
   if (!trimmed) return undefined
+  const windows = platform === "win32"
+  const unescape = (s: string) => (windows ? s : s.replace(/\\(.)/gs, "$1"))
   // A single unquoted path can contain spaces.
   try {
-    const whole = localPath(trimmed.replace(/^(["'])(.*)\1$/s, "$2"), cwd)
+    const unquoted = /^(["'])(.*)\1$/s.exec(trimmed)?.[2]
+    const whole = localPath(unquoted ?? unescape(trimmed), cwd)
     if (IMAGE_EXTENSION.test(whole) && statSync(whole).isFile()) return [whole]
   } catch {}
+  const tokenPattern = windows
+    ? /^(?:"([^"]+)"|'([^']+)'|(\S+))(?:\s+|$)/
+    : /^(?:"([^"]+)"|'([^']+)'|((?:\\.|[^\s\\])+))(?:\s+|$)/s
   const paths: string[] = []
   let rest = trimmed
   while (rest) {
-    const token = /^(?:"([^"]+)"|'([^']+)'|(\S+))(?:\s+|$)/.exec(rest)
+    const token = tokenPattern.exec(rest)
     if (!token) return undefined
-    const value = token[1] ?? token[2] ?? token[3]!
+    const value = token[1] ?? token[2] ?? unescape(token[3]!)
     try {
       const file = localPath(value, cwd)
       if (!IMAGE_EXTENSION.test(file) || !statSync(file).isFile()) return undefined

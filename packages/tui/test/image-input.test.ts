@@ -34,6 +34,12 @@ test("pasted paths accept spaces, quotes, Windows paths and file URIs", () => {
   if (process.platform === "win32") expect(pastedImagePaths(`"${a.replaceAll("/", "\\")}"`, dir)).toEqual([a])
 })
 
+test("outside Windows, backslash-escaped spaces from a dropped file are part of the path", () => {
+  expect(pastedImagePaths("image\\ one.png", dir, "darwin")).toEqual([a])
+  expect(pastedImagePaths("image\\ one.png two.JPG ", dir, "linux")).toEqual([a, b])
+  expect(pastedImagePaths("image\\ one.png missing.png", dir, "darwin")).toBeUndefined()
+})
+
 test("prose, non-images, missing files, malformed URIs and directories stay text", () => {
   for (const text of [
     "look at image one.png",
