@@ -201,7 +201,14 @@ const toolResult = obj({
   "details?": {},
 })
 
-const usage = obj({ input: num, output: num, cacheRead: num, cacheWrite: num, "cost?": num })
+const usage = obj({
+  input: num,
+  output: num,
+  "reasoning?": num,
+  cacheRead: num,
+  cacheWrite: num,
+  "cost?": num,
+})
 const budget = obj({ "tokens?": num, "costUsd?": num })
 const spawnGroup = obj({
   id: str,
