@@ -42,6 +42,7 @@ export interface IndexEntry {
 }
 
 export interface IndexOptions {
+  signal?: AbortSignal
   /** An http(s) URL or a local file. Default $AMIRA_EXTENSIONS_INDEX, then DEFAULT_INDEX_URL. */
   url?: string
   /** Default ~/.amira/cache/extensions-index.json. */
@@ -77,6 +78,7 @@ interface CacheFile {
  * used with a warning; with no cache at all it throws.
  */
 export async function loadIndex(opts: IndexOptions = {}): Promise<LoadedIndex> {
+  opts.signal?.throwIfAborted()
   const url = indexUrl(opts)
   if (!/^https?:\/\//.test(url)) {
     let text: string
@@ -100,6 +102,7 @@ export async function loadIndex(opts: IndexOptions = {}): Promise<LoadedIndex> {
     const sources = url === DEFAULT_INDEX_URL ? DEFAULT_INDEX_MIRRORS : [url]
     data = await downloadFirst(sources, opts)
   } catch (err) {
+    opts.signal?.throwIfAborted()
     if (!cached) throw new PackageError(`cannot download the extensions index ${url}: ${message(err)}`)
     const parsed = parseIndex(cached.data)
     const when = new Date(cached.fetchedAt).toISOString()
@@ -117,12 +120,15 @@ async function downloadFirst(urls: string[], opts: IndexOptions): Promise<unknow
   const failures: string[] = []
   for (const u of urls) {
     try {
-      const res = await (opts.fetch ?? fetch)(u, { signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000) })
+      const timeout = AbortSignal.timeout(opts.timeoutMs ?? 15_000)
+      const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout
+      const res = await (opts.fetch ?? fetch)(u, { signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = parseJson(await res.text(), u)
       parseIndex(data)
       return data
     } catch (err) {
+      opts.signal?.throwIfAborted()
       failures.push(urls.length > 1 ? `${u}: ${message(err)}` : message(err))
     }
   }
