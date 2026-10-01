@@ -1227,11 +1227,8 @@ export class Agent {
     this.#notices.splice(0)
     this.#pendingNotices.clear()
     this.#expected = 0
-    const held = this.#afterCompaction
-    this.#afterCompaction = undefined
-    if (held) {
-      for (const waiter of held.waiters) waiter.reject(new AgentAbortedError("the session has ended"))
-    }
+    // Messages held for a running hold are dropped as an abort of it drops them.
+    this.#startAfterCompaction(true, this.#holding ?? "session")
     // #jobNoticeTarget stays: a job that asks for its notice after this switch must still reach
     // the replacement session.
     // A sub-agent's end is subagent.end; session.end means the conversation itself ended.
