@@ -88,8 +88,16 @@ Esc 只打断主轮次，其后台子 agent 会继续运行。用 `/agents stop 
 
 ## Workflow 与 swarm 扩展
 
-此版本仓库**没有内置 workflow 或 swarm 扩展、工具或启动命令**，因此没有可直接使用的启动或确认流程。扩展 API 支持持久子 agent 和命名任务组，已安装的扩展可以据此实现这些功能；API 注释中的 workflow 和 swarm 示例不代表已经安装相关功能。
+有两个官方扩展基于子 agent 构建。它们不随 Amira 内置，而是放在 [CAMB-dev/amira-extensions](https://github.com/CAMB-dev/amira-extensions) 仓库中，和其他扩展包一样安装（见[扩展](extensions.md)）：
 
-如果另行安装提供这些功能的扩展，启动命令、确认流程和限制应以该扩展文档为准。用 `/help` 查询命令、`/tools` 查询工具；安装与信任机制见[扩展](extensions.md)。宿主支持任务组并发、总 agent 数、token/费用和每个 agent 的轮次数限制，且不能超出 agent 树限制。是否设置这些限制、是否请求确认，由具体扩展决定。
+```sh
+amira ext install workflow
+amira ext install swarm
+```
+
+- [workflow](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/workflow/README.md) 提供 `/workflow` 命令和 `workflow` 工具：用 TypeScript 脚本在后台编排大量子 agent（并行分派、交叉验证、流水线），可以用 `/workflow view` 查看进度，并能根据日志恢复运行。脚本保存在 `.amira/workflows/` 或用户目录的 `workflows/` 下。默认每次运行最多启动 30 个 agent，同时工作的最多 6 个。
+- [swarm](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/swarm/README.md) 提供 `/swarm <goal>` 命令和 `swarm` 工具：几个长期运行的成员通过共享黑板和消息围绕同一目标协作，可以在 `/swarm view` 中观察。未配置预算时，一个 swarm 最多消耗 3,000,000 token。
+
+你可以主动要求使用（`/workflow <task>`、`/swarm <goal>` 或直接在消息里说明），模型也可能在合适时提议。默认情况下，每次启动都会请你确认，并显示计划和限制；在打印模式等无人确认的场景下，模型无法启动它们。只有主会话可以启动。相关设置位于 `extensions.workflow` 和 `extensions.swarm`（`enabled` 可取 `"ask"`、`"always"` 或 `"never"`，另有各自的限制和预算）；这些限制都在上文 agent 树的 `subagents` 和 `budget` 限制之内生效。完整说明见各扩展的 README。
 
 相关文档：[使用说明](usage.md) · [设置](settings.md) · [扩展](extensions.md) · [快捷键](keybindings.md)。

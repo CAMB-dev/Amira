@@ -88,8 +88,16 @@ Kept worktrees are subject to cleanup: after seven days of inactivity they are a
 
 ## Workflow and swarm extensions
 
-This checkout does **not** bundle workflow or swarm extensions, tools or start commands. There is no built-in workflow/swarm launch or confirmation flow to use. The extension API supports persistent children and named spawn groups that an installed extension can use for such features; references to workflows or swarms in API comments are not installed functionality.
+Two official extensions build on sub-agents. They are not bundled with Amira; they live in [CAMB-dev/amira-extensions](https://github.com/CAMB-dev/amira-extensions) and install like any other package (see [Extensions](extensions.md)):
 
-If you install an extension providing these features, follow its own documentation for startup commands, confirmation and limits. Discover its commands with `/help` and tools with `/tools`; see [Extensions](extensions.md) for installation and trust. The host supports group concurrency, total-agent, token/cost and per-agent-turn limits, within the tree's limits. Whether an extension sets those limits or asks for confirmation is up to that implementation.
+```sh
+amira ext install workflow
+amira ext install swarm
+```
+
+- [workflow](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/workflow/README.md) adds `/workflow` and a `workflow` tool: TypeScript scripts that orchestrate many sub-agents in the background (fan out, verify, pipelines), with a progress view (`/workflow view`) and resume from a journal. Scripts are saved under `.amira/workflows/` or in the user directory's `workflows/`. By default a run may start 30 agents in all, 6 at once.
+- [swarm](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/swarm/README.md) adds `/swarm <goal>` and a `swarm` tool: a few long-lived members that work on one goal through a shared blackboard and messages, watched in `/swarm view`. Without a configured budget a swarm may spend 3,000,000 tokens.
+
+You can ask for either one (`/workflow <task>`, `/swarm <goal>`, or in a message), and the model may propose one when it helps. By default every start asks you to confirm, showing the plan and its limits; where nobody can confirm, as in print mode, the model cannot start one. Only the main session can start them. Their settings live under `extensions.workflow` and `extensions.swarm` (`enabled`: `"ask"`, `"always"` or `"never"`, plus limits and a budget); their own limits apply within the tree's `subagents` and `budget` limits above. Each extension's README is the full reference.
 
 Related: [Usage](usage.md) · [Settings](settings.md) · [Extensions](extensions.md) · [Keybindings](keybindings.md).
