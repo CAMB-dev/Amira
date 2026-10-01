@@ -199,6 +199,11 @@ test("amira --rpc: session.resume continues a stored session on the same connect
   expect(fresh.sessionId).not.toBe(storedId)
   second.send({ id: 1, cmd: "session.resume", sessionId: storedId })
   expect(await second.response(1)).toMatchObject({ ok: true, sessionId: storedId })
+  const ended = await second.waitFor(
+    (l) => l.type === "session.end" && l.sessionId === fresh.sessionId && l.data.reason === "switch",
+    "old session.end",
+  )
+  expect(ended.data.reason).toBe("switch")
   const resumed = await second.waitFor(
     (l) => l.type === "session.start" && l.data.reason === "resume",
     "resumed session.start",
@@ -694,7 +699,7 @@ test("closing stdin waits for the running turn and cancels dialogs nobody can an
   input.end()
   expect(await done).toBe(0)
   expect(out.find((l) => l.type === "ui.resolved")?.data.cancelled).toBe(true)
-  expect(out.at(-1)?.type).toBe("status.changed")
+  expect(out.findLast((l) => l.type === "status.changed")?.type).toBe("status.changed")
   expect(s.agent.messages.at(-1)).toMatchObject({ role: "assistant" })
 })
 

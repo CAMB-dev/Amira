@@ -186,7 +186,7 @@ test("root handover keeps top-level jobs visible to the replacement and stops su
   expect(host.get(rootJob.id)).toMatchObject({ status: "stopped" })
 })
 
-test("ExtensionAPI exposes the host; unload stops the extension's jobs, exit stops every job", async () => {
+test("ExtensionAPI exposes only an extension's jobs; host exit still stops every job", async () => {
   const first = fakeHost()
   const extensionHost = new ExtensionHost({
     bus: new EventBus(),
@@ -203,7 +203,10 @@ test("ExtensionAPI exposes the host; unload stops the extension's jobs, exit sto
   const own = api!.backgroundJobs.start({ command: "own", argv: ["own"], cwd: "/work" })
   const changes: string[] = []
   api!.backgroundJobs.subscribe(({ type, job }) => changes.push(`${type}:${job.id}`))
-  expect(api!.backgroundJobs.get(sessionJob.id)).toBeDefined()
+  expect(api!.backgroundJobs.get(sessionJob.id)).toBeUndefined()
+  expect(api!.backgroundJobs.list().map((job) => job.id)).toEqual([own.id])
+  expect(() => api!.backgroundJobs.output(sessionJob.id)).toThrow(`no background job "${sessionJob.id}"`)
+  expect(() => api!.backgroundJobs.stop(sessionJob.id)).toThrow(`no background job "${sessionJob.id}"`)
   // Unloading another extension (or a /reload's unload) leaves every job running.
   extensionHost.unload("ext:other")
   expect(first.host.get(own.id)?.status).toBe("running")

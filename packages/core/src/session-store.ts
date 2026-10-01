@@ -22,7 +22,7 @@ import { amiraPath } from "./home.ts"
 export const SESSION_LOCK_STALE_MS = 30_000
 export const SESSION_LOCK_HEARTBEAT_MS = 10_000
 
-const sessionLocks = new Map<string, FileLock>()
+const sessionLocks = new Map<string, { lock: FileLock; refs: number }>()
 let releaseOnExit = false
 
 /** The lease next to a stored session file. It is not a session file itself. */
@@ -204,8 +204,12 @@ export class SessionStore {
   }
 
   /** Holds a crash-safe lease while this session is open in an Amira process. */
-  claim(): void {
-    if (sessionLocks.has(this.file)) return
+  claim(): boolean {
+    const held = sessionLocks.get(this.file)
+    if (held) {
+      held.refs++
+      return true
+    }
     const lock = tryFileLock(sessionLockFile(this.file), SESSION_LOCK_STALE_MS, SESSION_LOCK_HEARTBEAT_MS)
     if (!lock) {
       const pid = sessionLockPid(this.file)
@@ -213,21 +217,26 @@ export class SessionStore {
       // the case deletion and a new process must refuse.
       if (pid !== undefined && pid !== process.pid) throw new SessionInUseError(this.file, pid)
       if (pid === undefined) throw new SessionInUseError(this.file)
-      return
+      return false
     }
-    sessionLocks.set(this.file, lock)
+    sessionLocks.set(this.file, { lock, refs: 1 })
     if (!releaseOnExit) {
       releaseOnExit = true
       // A normal exit leaves no lease behind; a crash leaves one a dead pid makes stale.
       process.once("exit", () => {
-        for (const held of sessionLocks.values()) held.release()
+        for (const { lock: held } of sessionLocks.values()) held.release()
       })
     }
+    return true
   }
 
   /** Gives up this process's lease, so another Amira may open or delete the session. */
   release(): void {
-    sessionLocks.get(this.file)?.release()
+    const held = sessionLocks.get(this.file)
+    if (!held) return
+    held.refs--
+    if (held.refs > 0) return
+    held.lock.release()
     sessionLocks.delete(this.file)
   }
 

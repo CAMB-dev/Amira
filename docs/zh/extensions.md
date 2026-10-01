@@ -171,7 +171,7 @@ amira
 | `registerMarkdownRenderer`、`registerImageProvider` | 渲染回复中匹配的代码块或独立图片，并提供终端图片数据 |
 | `provideService`、`useService` | 共享具名服务；使用时再查找，提供方可能未加载或已卸载 |
 | `settings`、`cwd`、`home`、`apiVersion` | 读取合并后的设置、工作目录、用户目录和 API 版本 |
-| `backgroundJobs` | 为终端面板和其他由 host 管理的集成访问后台任务注册表 |
+| `backgroundJobs` | 启动并查看本扩展自己启动的后台任务；内置前端代码使用仅供 host 使用的 `hostBackgroundJobs()` 能力 |
 | `runCommand`、`openPipe`、`onExit` | 运行受管理的子进程、启动长期管道进程，或注册短时退出工作 |
 | `notify`、`reportError` | 显示提示或报告后台错误 |
 | `registerFileRestoration` | 接管回退时的文件恢复（例如 checkpoints 扩展）：选择器显示你提供的选项，core 不再恢复文件；同一时间只能有一个扩展接管，卸载时释放 |
@@ -198,13 +198,13 @@ amira
 
 ### 后台任务
 
-`ExtensionAPI.backgroundJobs` 是供 jobs 面板等前端集成使用的 host 级后台任务注册表；工具执行器应使用会话级的 `ctx.backgroundJobs`，因为这个公共边界会携带任务所有权和可见性。
+`ExtensionAPI.backgroundJobs` 是扩展级视图：它只能启动任务，并列出、读取、等待、停止和订阅本扩展自己启动的任务；它不能配置 host 注册表、停止全部任务、关闭会话或在根会话之间转移任务。`/jobs` 命令和 TUI 面板等内置前端代码使用仅供 host 使用的 `hostBackgroundJobs()` 能力，因此仍能看到工具启动的会话任务；工具执行器应使用会话级的 `ctx.backgroundJobs`，因为这个公共边界会携带任务所有权和可见性。
 
-启动任务时提供 `command`、`argv`、`cwd`、`env` 和 `shell`。会话 host 会自动记录子 agent 的所有者；主会话可以看到自己的任务和所有子 agent 的任务，子 agent 只能看到自己的任务。`list`、`get`、`running`、`output`、`tail`、`stop` 和 `stopAll` 都会执行可见性检查，不可访问的任务会按不存在处理。
+启动任务时提供 `command`、`argv`、`cwd`、`env` 和 `shell`。会话 host 会自动记录子 agent 的所有者；主会话可以看到自己的任务和所有子 agent 的任务，子 agent 只能看到自己的任务。`list`、`get`、`running`、`output`、`tail` 和 `stop` 都会执行可见性检查，不可访问的任务会按不存在处理。
 
-`readNew` 为每个 reader 名称维护独立游标，因此多个 reader 可以分别增量读取同一份输出。`waitFor` 可以等待正则表达式匹配、进程退出、超时或 abort signal。`subscribe` 会报告启动、状态、输出和结束变化；先用带宽限期的 `stop`，需要强制停止时再用 `0` 调用一次。
+`readNew` 为每个 reader 名称维护独立游标，因此多个 reader 可以分别增量读取同一份输出。`waitFor` 可以等待正则表达式匹配、进程退出、超时或 abort signal。`subscribe` 只会报告本扩展任务的启动、状态、输出和结束变化；先用带宽限期的 `stop`，需要强制停止时再用 `0` 调用一次。
 
-注册表提供 `maxRunning`、`configure` 和 `isLimitError` 来处理限制。子 agent 的会话任务会在 `subagent.end` 事件交付后自动停止。顶层会话任务会跨越 `/clear`、`/resume` 和 `/fork` 继续运行：替换后的根会话可以列出、读取和停止它们，任务结束通知也会交付给新会话。直接通过 `ExtensionAPI.backgroundJobs` 启动的 host 级任务不会归属于调用会话，而会在启动它的扩展卸载（其 `subscribe` 监听也一并移除）或 Amira 退出时停止。卸载扩展（包括 `/reload`）不会停止会话中工具启动的任务。扩展应使用此 API，不要访问 `@amira/proc` 的全局注册表。
+host 注册表向内置 host 代码提供 `maxRunning`、`configure`、`stopAll` 和 `isLimitError` 来处理限制。子 agent 的会话任务会在 `subagent.end` 事件交付后自动停止。顶层会话任务会跨越 `/clear`、`/resume` 和 `/fork` 继续运行：替换后的根会话可以列出、读取和停止它们，任务结束通知也会交付给新会话。直接通过 `ExtensionAPI.backgroundJobs` 启动的任务不会归属于调用会话，而会在启动它的扩展卸载（其 `subscribe` 监听也一并移除）或 Amira 退出时停止。卸载扩展（包括 `/reload`）不会停止会话中工具启动的任务。扩展应使用这个收窄后的 API，不要访问 `@amira/proc` 的全局注册表。
 
 注册方法返回移除函数，host 会跟踪注册。卸载时自动移除；加载失败则回滚已注册内容。命令、工具、skill、状态项或 panel 重名时，有意替换需要 `override: true`，具体冲突规则以对应类型为准，避免意外替换其他扩展的内容。
 

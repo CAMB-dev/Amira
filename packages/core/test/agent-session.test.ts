@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { existsSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -8,7 +9,7 @@ import { Agent, type AgentOptions } from "../src/agent.ts"
 import { splitHistory, summaryMessages } from "../src/compaction.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { amiraHome } from "../src/home.ts"
-import { SessionStore } from "../src/session-store.ts"
+import { SessionStore, sessionLockFile } from "../src/session-store.ts"
 
 async function setup(steps: MockStep[], extra: Partial<AgentOptions> = {}) {
   const mock = createMockDialect(steps)
@@ -37,6 +38,24 @@ async function setup(steps: MockStep[], extra: Partial<AgentOptions> = {}) {
 }
 
 const types = (events: AnyEvent[]) => events.map((e) => e.type)
+
+test("dispose cancels notice retries, releases the lease and is idempotent", async () => {
+  const { agent, session, events, bus } = await setup([{ error: { message: "failed" } }])
+  const pending = agent.expectNotice()
+  pending.deliver(userMessage("background result"), { wake: false })
+  await agent.prompt("try once")
+  expect(agent.noticeRetry).toBeDefined()
+
+  await agent.dispose("switch")
+  await agent.dispose("switch")
+  await bus.flush()
+
+  expect(agent.noticeRetry).toBeUndefined()
+  expect(agent.expectedNotices).toBe(0)
+  expect(events.filter((event) => event.type === "session.end")).toHaveLength(1)
+  expect(events.find((event) => event.type === "session.end")?.data).toEqual({ reason: "switch" })
+  expect(existsSync(sessionLockFile(session.file))).toBe(false)
+})
 
 test("a top-level background notice follows the replacement session", async () => {
   const { agent, ai, mock, bus } = await setup([

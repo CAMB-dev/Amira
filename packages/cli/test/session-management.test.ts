@@ -203,6 +203,11 @@ test("rename and fork commands update session info and preserve the source; fork
 
 test("clear, resume and fork hand over top-level background jobs", async () => {
   const { host, session, store } = await setup([])
+  const old = session.agent
+  const ended: string[] = []
+  old.bus.subscribe((event) => {
+    if (event.type === "session.end") ended.push(event.data.reason)
+  })
   store.appendMessage(userMessage("original session"))
   const job = session.agent.backgroundJobs!.start({
     command: "long-running test job",
@@ -211,6 +216,9 @@ test("clear, resume and fork hand over top-level background jobs", async () => {
   })
   try {
     await host.control.newSession()
+    await old.bus.flush()
+    expect(ended).toEqual(["switch"])
+    expect(old.backgroundJobs!.get(job.id)).toBeUndefined()
     expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
 
     await host.control.resume(store.id)
@@ -221,6 +229,20 @@ test("clear, resume and fork hand over top-level background jobs", async () => {
   } finally {
     await session.host.backgroundJobs.stop(job.id, 0)
   }
+})
+
+test("switch disposes the old agent tree before the replacement is active", async () => {
+  const { host, session, store } = await setup([{ text: "child answer" }])
+  const old = session.agent
+  const child = old.tree!.spawn(old, { prompt: "stay alive", persistent: true })
+  await waitFor(() => session.tree.children.length === 1)
+
+  await host.control.newSession()
+
+  expect((await child.result()).status).toBe("aborted")
+  expect(session.tree.children).toHaveLength(0)
+  expect(existsSync(sessionLockFile(store.file))).toBe(false)
+  await session.agent.dispose("exit")
 })
 
 test("/rename without an argument clears the manual name and restores the automatic title", async () => {

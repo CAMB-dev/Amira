@@ -10,6 +10,7 @@ import {
   type Message,
   type MockReply,
   type ModelRequest,
+  type Signature,
   type ToolResultMessage,
 } from "@amira/ai"
 import { ARTIFACT_HEADER, defineTool, textResult } from "@amira/api"
@@ -697,9 +698,9 @@ test("a round that would free too little is skipped; aging can be turned off", a
   expect(await run({ minSavedTokens: 1000 })).toEqual(["c1"])
 })
 
-test("nothing before signed reasoning the model would get back is aged; a checkpoint is sent as it is", async () => {
-  const signed = (dialect: string): AssistantMessage["content"] => [
-    { type: "thinking", text: "hmm", signature: { dialect, value: "sig" } },
+test("only replayed signed or redacted reasoning protects aging; a checkpoint is sent as it is", async () => {
+  const thinking = (signature: Signature): AssistantMessage["content"] => [
+    { type: "thinking", text: "hmm", signature },
   ]
   const { summaryMessages } = await import("../src/compaction.ts")
   const checkpoint = summaryMessages("earlier work", ref, {
@@ -707,11 +708,11 @@ test("nothing before signed reasoning the model would get back is aged; a checkp
     value: "opaque",
     kind: "checkpoint",
     provider: "mock",
-    host: "mock",
+    host: "",
     model: "test",
   })
-  const run = async (dialect: string) => {
-    const past = [...checkpoint, ...history(10, 6000, { thinking: signed(dialect) })]
+  const run = async (content: AssistantMessage["content"]) => {
+    const past = [...checkpoint, ...history(10, 6000, { thinking: content })]
     ;(past.at(-1) as AssistantMessage).usage = {
       input: estimateTokens(past) + 10,
       output: 10,
@@ -728,12 +729,32 @@ test("nothing before signed reasoning the model would get back is aged; a checkp
     return { sent: mock.requests[0]!.messages, projected: agent.projectedMessages() }
   }
   // Signed by this model's dialect: rewriting what comes before it could invalidate it.
-  expect(stubs((await run("mock")).sent)).toHaveLength(0)
+  expect(stubs((await run(thinking({ dialect: "mock", value: "sig" }))).sent)).toHaveLength(0)
   // Signed by another dialect: the request drops the signature, so the history may change.
-  const other = await run("other")
+  const other = await run(thinking({ dialect: "other", value: "sig" }))
   expect(stubs(other.sent).length).toBeGreaterThan(0)
   // The checkpoint pair is never touched.
   expect(other.projected.slice(0, 2)).toEqual(checkpoint)
+  // A redacted block at the same target is replayed verbatim and still seals the prefix.
+  const replayedRedacted = await run([
+    {
+      type: "thinking",
+      text: "",
+      redacted: true,
+      signature: { dialect: "mock", value: "encrypted" },
+    },
+  ])
+  expect(stubs(replayedRedacted.sent)).toHaveLength(0)
+  // A redacted block from another host is dropped by forReplay and must not seal the prefix.
+  const foreignRedacted = await run([
+    {
+      type: "thinking",
+      text: "",
+      redacted: true,
+      signature: { dialect: "mock", value: "encrypted", host: "other.example" },
+    },
+  ])
+  expect(stubs(foreignRedacted.sent).length).toBeGreaterThan(0)
 })
 
 test("in one long turn only its last steps are kept; an experimental setting ages by turns alone", async () => {

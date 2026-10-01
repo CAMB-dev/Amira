@@ -128,7 +128,7 @@ export class ExtensionHost {
   readonly images: ImageProviderRegistry
   /** What extensions offer each other (D88). */
   readonly services: ServiceRegistry
-  /** The host-level job view shared by extensions and frontends. */
+  /** The host-level job view used by built-in frontends and host lifecycle code. */
   readonly backgroundJobs: BackgroundJobHost
 
   constructor(opts: ExtensionHostOptions) {

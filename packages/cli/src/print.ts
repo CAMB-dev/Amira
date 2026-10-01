@@ -276,7 +276,7 @@ export async function runPrint(
 
   // First Ctrl+C aborts the turn; a second one exits immediately.
   let interrupted = false
-  const forceExit = opts.forceExit ?? (() => process.exit(130))
+  const forceExit = opts.forceExit ?? (() => void agent.dispose("exit").finally(() => process.exit(130)))
   const onSigint = () => {
     if (interrupted) return forceExit()
     interrupted = true

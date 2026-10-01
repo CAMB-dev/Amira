@@ -367,6 +367,7 @@ export class AgentTree {
   /** The last approval question queued for each parent, by its session id. */
   #asking = new Map<string, Promise<unknown>>()
   #groups = new Map<string, Group>()
+  #disposals = new Set<Promise<void>>()
 
   constructor(opts: AgentTreeOptions) {
     this.#opts = opts
@@ -771,6 +772,42 @@ export class AgentTree {
     for (const child of [...this.#live.values()]) this.abortChild(child, reason)
   }
 
+  /** Aborts the children of one agent without disturbing its siblings. */
+  abortChildren(parentSessionId: string, reason: string): void {
+    for (const g of [...this.#groups.values()]) {
+      if (g.parent.sessionId === parentSessionId) this.endGroup(g, reason)
+    }
+    for (const child of [...this.#live.values()]) {
+      if (child.parentSessionId === parentSessionId) this.abortChild(child, reason)
+    }
+  }
+
+  /** Waits for children that were already live, including their agent cleanup. */
+  async waitForChildren(): Promise<void> {
+    while (this.#live.size || this.#disposals.size) {
+      await Promise.allSettled([
+        ...[...this.#live.values()].map((child) => child.result()),
+        ...this.#disposals,
+      ])
+    }
+  }
+
+  /** Waits for one agent's descendants, including their agent cleanup. */
+  async waitForChildrenOf(parentSessionId: string): Promise<void> {
+    const descendants = () =>
+      [...this.#live.values()].filter((child) => {
+        let parent = child.parentSessionId
+        while (parent) {
+          if (parent === parentSessionId) return true
+          parent = this.#live.get(parent)?.parentSessionId ?? ""
+        }
+        return false
+      })
+    while (descendants().length || this.#disposals.size) {
+      await Promise.allSettled([...descendants().map((child) => child.result()), ...this.#disposals])
+    }
+  }
+
   abortChild(child: Child, reason: string): void {
     if (!this.#live.has(child.id) || child.abortReason) return
     child.abortReason = reason
@@ -1051,9 +1088,11 @@ export class AgentTree {
       },
       child.parentMeta,
     )
+    const disposal = child.agent.dispose("exit")
+    this.#disposals.add(disposal)
+    void disposal.finally(() => this.#disposals.delete(disposal))
     // The end event is delivered before cleanup so observers can still inspect the final live
     // state; no job owned by the child may survive the end of its session.
-    void child.agent.backgroundJobsHost?.closeSession(child.id)
     child.ended = result
     // Keep what it did, not the session: one with a file is read back from it when asked for.
     const done = this.subagent(child.id) as SpawnedSubagent

@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test"
 import { createAi } from "../src/client.ts"
-import { canReplay, canReplayServerTool, forReplay, type ReplayTarget } from "../src/thinking.ts"
+import {
+  canReplay,
+  canReplayBlock,
+  canReplayServerTool,
+  forReplay,
+  type ReplayTarget,
+} from "../src/thinking.ts"
 import type { AssistantMessage, Message, ServerToolBlock, Signature } from "../src/types.ts"
 import { type DoneEvent, events, fakeFetch, type Seen, sseResponse } from "./helpers.ts"
 
@@ -48,6 +54,33 @@ test("forReplay strips what cannot go back and keeps the rest unchanged", () => 
   expect((reply.content[1] as { signature?: unknown }).signature).toBeDefined()
   const same = [plain]
   expect(forReplay(same, target)).toBe(same)
+})
+
+test("canReplayBlock is the same predicate used for signed and hosted blocks", () => {
+  expect(
+    canReplayBlock(
+      { type: "thinking", signature: { dialect: "d", value: "encrypted", host: "api.p.com" } },
+      target,
+      "p",
+    ),
+  ).toBe(true)
+  expect(
+    canReplayBlock(
+      { type: "thinking", signature: { dialect: "d", value: "encrypted", host: "other.example" } },
+      target,
+      "p",
+    ),
+  ).toBe(false)
+  const search: ServerToolBlock = {
+    type: "serverTool",
+    id: "ws_2",
+    name: "web_search",
+    input: { type: "search", query: "q" },
+    status: "done",
+    signature: { dialect: "d", value: "item", host: "api.p.com" },
+  }
+  expect(canReplayBlock(search, target, "p")).toBe(true)
+  expect(canReplayBlock(search, { ...target, webSearch: false }, "p")).toBe(false)
 })
 
 test("a search item, a checkpoint and reasoning are filtered together, each by its own rule", () => {

@@ -126,7 +126,7 @@ export interface HostProcessService {
   warmUpCommands(): void
   openPipe(argv: string[], options: OpenPipeOptions): PipeProcess
   isStandbyGoneError(error: unknown): boolean
-  /** The host-owned background jobs exposed through ExtensionAPI and session views. */
+  /** The host-owned background jobs used by built-in frontends and other host code. */
   backgroundJobs: BackgroundJobHost
 }
 
@@ -162,7 +162,7 @@ export function isHostStandbyGoneError(error: unknown): boolean {
   return requireHostProcess().isStandbyGoneError(error)
 }
 
-/** The host-owned background jobs, for extension panels and other host-level integrations. */
+/** The host-owned background jobs, for built-in frontends and other host-level integrations. */
 export function hostBackgroundJobs(): BackgroundJobHost {
   return requireHostProcess().backgroundJobs
 }
