@@ -92,6 +92,7 @@ async function setup(
   const root = new Agent({
     ai,
     model: ai.model("mock/big"),
+    providerSettings: settings.providers,
     cwd,
     systemPrompt: "commander",
     bus,
@@ -160,6 +161,56 @@ test("the commander runs an explorer and a coder in parallel and gets both answe
   expect(coderReq.systemPrompt).toContain("# Sub-agent")
   const starts = events.filter((e) => e.type === "subagent.start")
   expect(starts.map((e) => e.type === "subagent.start" && e.data.role)).toEqual(["explorer", "coder"])
+})
+
+test("patch-enabled coders report all changed paths and read-only roles cannot use apply_patch", async () => {
+  const { root, mock, tools, cwd } = await setup(
+    (req) => {
+      if (req.messages.at(-1)?.role === "toolResult") return { text: "done" }
+      if (who(req) === "commander")
+        return {
+          toolCalls: [
+            {
+              name: "agent",
+              args: {
+                tasks: [
+                  { role: "coder", title: "Patch the requested files", prompt: "patch files" },
+                  { role: "explorer", title: "Inspect the requested files", prompt: "inspect files" },
+                ],
+              },
+            },
+          ],
+        }
+      if (who(req) === "explorer") return { text: "inspected" }
+      return { toolCalls: [{ name: "apply_patch", args: {} }] }
+    },
+    {
+      settings: { subagents: { background: false }, providers: { mock: { tools: { edit: "apply_patch" } } } },
+    },
+  )
+  tools.register(
+    defineTool({
+      name: "apply_patch",
+      description: "patch files",
+      parameters: { type: "object" },
+      execute: async (_p, ctx) => ({
+        ...textResult("patched"),
+        details: {
+          files: [
+            { path: path.join(ctx.cwd, "new.txt"), from: path.join(ctx.cwd, "old.txt"), action: "move" },
+            { path: path.join(cwd, "other.txt"), action: "update" },
+          ],
+        },
+      }),
+    }),
+    "test",
+  )
+  expect((await root.prompt("go")).reason).toBe("done")
+  expect(agentResult(root)).toContain("Changes: changed new.txt, old.txt, other.txt.")
+  expect(mock.requests.find((r) => who(r) === "coder")!.tools.map((t) => t.name)).toContain("apply_patch")
+  expect(mock.requests.find((r) => who(r) === "explorer")!.tools.map((t) => t.name)).not.toContain(
+    "apply_patch",
+  )
 })
 
 test("a child at the deepest level does not get the agent tools", async () => {

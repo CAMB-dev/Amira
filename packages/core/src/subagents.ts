@@ -545,6 +545,7 @@ export class AgentTree {
       ai: this.#opts.ai,
       model,
       cwd,
+      providerSettings: parent.providerSettings,
       sections: setSection(base, "role", opts.systemPrompt ?? ""),
       messages: context === "fork" ? forkHistory(parent.messages) : [],
       // A forked history may hold a server checkpoint only the parent's model reads; a child on

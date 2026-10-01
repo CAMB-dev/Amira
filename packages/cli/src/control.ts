@@ -5,6 +5,7 @@ import { type AssistantMessage, type SessionControl, type ShellMode, USER_STOP_R
 import {
   type Agent,
   CommandHost,
+  createExtensionAdmin,
   deleteSession,
   findSession,
   listSessions,
@@ -233,11 +234,14 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
           description: tool.description,
           source,
           exposure: tool.exposure ?? "active",
-          enabled: !disabled,
+          enabled: !disabled && agent().toolRestriction(tool) === undefined,
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     setToolEnabled: (name, enabled) => {
-      if (!tools.has(name)) throw new Error(`no tool named "${name}"`)
+      const tool = tools.list().find((entry) => entry.tool.name === name)?.tool
+      if (!tool) throw new Error(`no tool named "${name}"`)
+      const restriction = agent().toolRestriction(tool)
+      if (enabled && restriction) throw new Error(`cannot enable "${name}": ${restriction}`)
       ;(enabled ? turnedOn : turnedOff).add(name)
       ;(enabled ? turnedOff : turnedOn).delete(name)
       applyDisabled()
@@ -265,6 +269,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         ...(p.apiKeyEnv ? { apiKeyEnv: p.apiKeyEnv } : {}),
         hasKey: ai.hasKey(p.id),
       })),
+    extensionAdmin: createExtensionAdmin({ cwd, ...(opts.home ? { home: opts.home } : {}) }),
     providerAdmin: createProviderAdmin({
       ai,
       ...(opts.home ? { home: opts.home } : {}),

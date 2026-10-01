@@ -1,5 +1,6 @@
 import { defineExtension } from "@amira/api"
 import { warmUpCommands } from "@amira/proc"
+import { applyPatchTool } from "./apply-patch.ts"
 import { askUserPresenter, askUserTool } from "./ask-user.ts"
 import { bashTool, powershellTool } from "./bash.ts"
 import { editTool } from "./edit.ts"
@@ -11,6 +12,7 @@ import { warmUpShell } from "./shell.ts"
 import { writeTool } from "./write.ts"
 
 export {
+  applyPatchTool,
   askUserPresenter,
   askUserTool,
   bashTool,
@@ -29,6 +31,7 @@ export const builtinTools = [
   writeTool,
   editTool,
   bashTool,
+  applyPatchTool,
   ...(process.platform === "win32" ? [powershellTool] : []),
   grepTool,
   globTool,

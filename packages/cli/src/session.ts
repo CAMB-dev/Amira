@@ -299,6 +299,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ask,
       ai,
       model: m,
+      providerSettings: settings.providers,
       cwd: opts.cwd,
       sections: defaultSections({ cwd: opts.cwd, project: instructionsSection(loadInstructions(opts.cwd)) }),
       bus,

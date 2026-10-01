@@ -15,7 +15,7 @@ export const writeTool = defineTool<WriteParams>({
   description: [
     "Write a file to the local filesystem, replacing it entirely if it already exists.",
     "- `path` may be absolute or relative to the working directory. Missing parent directories are created.",
-    "- Prefer the edit tool for changing existing files; it sends only the changed part.",
+    "- Prefer an available patch or replacement tool for changing existing files; it sends only the changed part.",
     "- Read an existing file before overwriting it so you do not lose content.",
   ].join("\n"),
   parameters: {

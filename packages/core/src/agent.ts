@@ -34,6 +34,7 @@ import type {
   CompactionUsage,
   EventMap,
   PendingNotice,
+  ProviderSettings,
   SessionData,
   SessionStatus,
   SpawnGroupOptions,
@@ -107,6 +108,8 @@ export interface AgentOptions {
   bus?: EventBus
   interceptors?: InterceptorRegistry
   tools?: ToolRegistry
+  /** Per-provider and per-model editing tool choices, shared with sub-agents. */
+  providerSettings?: Record<string, ProviderSettings>
   /** Upper bound on model calls per turn. Default 200. */
   maxSteps?: number
   maxTokens?: number
@@ -269,6 +272,7 @@ export class Agent {
   #maxParallelTools: number
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
+  readonly providerSettings: Record<string, ProviderSettings>
   /**
    * Loaded tools restored from the session file, checked at the first model call: by then
    * system.build has waited for tools that register late (MCP servers).
@@ -335,6 +339,7 @@ export class Agent {
     this.tools = opts.tools ?? new ToolRegistry()
     this.cwd = opts.cwd
     this.model = opts.model
+    this.providerSettings = opts.providerSettings ?? {}
     this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
     this.#compaction = opts.compaction ?? {}
     this.#autoTitle = opts.autoTitle
@@ -378,7 +383,9 @@ export class Agent {
     }
     const agent = this
     const tree = opts.tree
-    const deferred = createToolSession(this.sessionId, this.tools, this.#loadedTools)
+    const deferred = createToolSession(this.sessionId, this.tools, this.#loadedTools, (t) =>
+      this.#allowsTool(t),
+    )
     this.#toolSession = {
       ...deferred,
       data: this.data,
@@ -747,7 +754,7 @@ export class Agent {
       systemPrompt: built.value.systemPrompt,
       // As sent: the ai client drops what only frontends read.
       messages: modelMessages(built.value.messages),
-      tools: offeredTools(this.tools, this.#loadedTools, { nativeWebSearch: hasNativeWebSearch(this.model) }),
+      tools: this.#offeredTools(),
     }
   }
 
@@ -1033,10 +1040,34 @@ export class Agent {
     }
   }
 
-  /** Deferred tools this model may load: not those its hosted web search stands in for. */
+  /** Why this model cannot use a registered tool, independent of explicit disabled tools. */
+  toolRestriction(tool: ToolDefinition): string | undefined {
+    if (hasNativeWebSearch(this.model) && tool.supersededBy === "webSearch") {
+      return `the current model uses the provider's hosted web search`
+    }
+    const provider = this.providerSettings[this.model.provider]
+    const editing =
+      provider?.models?.find((m) => m.id === this.model.id)?.tools?.edit ?? provider?.tools?.edit ?? "edit"
+    if (
+      (tool.name === "apply_patch" && editing === "edit") ||
+      (tool.name === "edit" && editing === "apply_patch")
+    ) {
+      return `the editing tool choice for ${this.model.provider}/${this.model.id} is "${editing}". Set providers.${this.model.provider}.tools.edit or this model's models[].tools.edit to "${tool.name}" or "both" in settings.json and restart the session`
+    }
+    return undefined
+  }
+
+  #allowsTool(tool: ToolDefinition): boolean {
+    return this.toolRestriction(tool) === undefined
+  }
+
+  #offeredTools() {
+    return offeredTools(this.tools, this.#loadedTools, (t) => this.#allowsTool(t))
+  }
+
+  /** Deferred tools this model may load, after its provider and model choices. */
   #offeredDeferred() {
-    const native = hasNativeWebSearch(this.model)
-    return this.tools.deferred().filter((t) => !(native && t.supersededBy === "webSearch"))
+    return this.tools.deferred().filter((t) => this.#allowsTool(t))
   }
 
   /** The system prompt and history for a model call, through the system.build and context.build interceptors. */
@@ -1084,9 +1115,7 @@ export class Agent {
           model: this.model,
           systemPrompt: ctx.value.systemPrompt,
           messages: ctx.value.messages,
-          tools: offeredTools(this.tools, this.#loadedTools, {
-            nativeWebSearch: hasNativeWebSearch(this.model),
-          }),
+          tools: this.#offeredTools(),
           ...(this.#maxTokens ? { maxTokens: this.#maxTokens } : {}),
         },
         turn.signal,
@@ -1306,13 +1335,11 @@ export class Agent {
         )
       }
       const tool = this.tools.get(call.name)
-      // A tool hidden from this model (it searches on the provider's side) is not there for it.
-      const native = hasNativeWebSearch(this.model)
-      const hidden = (t: { supersededBy?: string }) => native && t.supersededBy === "webSearch"
-      if (!tool || hidden(tool)) {
+      // A tool hidden from this model is not available even if it calls the name anyway.
+      if (!tool || !this.#allowsTool(tool)) {
         const names = this.tools
           .active()
-          .filter((t) => !hidden(t))
+          .filter((t) => this.#allowsTool(t))
           .map((t) => t.name)
           .join(", ")
         return await reject("unknownTool", `Unknown tool "${call.name}". Available tools: ${names}`)
@@ -1675,9 +1702,7 @@ export class Agent {
             model: this.model,
             systemPrompt,
             messages: input,
-            tools: offeredTools(this.tools, this.#loadedTools, {
-              nativeWebSearch: hasNativeWebSearch(this.model),
-            }),
+            tools: this.#offeredTools(),
           },
           signal,
         )
