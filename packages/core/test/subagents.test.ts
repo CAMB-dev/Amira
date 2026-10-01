@@ -94,6 +94,17 @@ test("a child runs as its own session and its events bubble with parentSessionId
   expect(events.filter((e) => e.type === "budget.update").at(-1)?.data).toEqual({ tokens: 15 })
 })
 
+test("children of a non-interactive root are told so too, fresh or forked", async () => {
+  const { root, tree, mock } = await setup(() => ({ text: "done" }))
+  await tree.spawn(root, { prompt: "p", systemPrompt: "ROLE a" }).result()
+  expect(mock.requests.at(-1)!.systemPrompt).not.toContain("Run mode: non-interactive")
+  root.setNonInteractive()
+  for (const context of ["fresh", "fork"] as const) {
+    await tree.spawn(root, { prompt: "p", systemPrompt: "ROLE a", context }).result()
+    expect(mock.requests.at(-1)!.systemPrompt).toContain("Run mode: non-interactive")
+  }
+})
+
 test("child.events yields the child's events and ends with its subagent.end", async () => {
   const { root, tree } = await setup(() => ({ text: "hi" }))
   const child = tree.spawn(root, { prompt: "p" })
