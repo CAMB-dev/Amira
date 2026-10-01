@@ -6,6 +6,7 @@ import {
   type GlobDetails,
   type GrepDetails,
   plural,
+  previewNoteLine,
   type ReadDetails,
   type ToolCallView,
   type ToolLine,
@@ -19,6 +20,7 @@ import { fileDiff } from "./diff.ts"
 import type { EditParams } from "./edit.ts"
 import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
+import type { OutputReadParams } from "./output-read.ts"
 import type { ReadParams } from "./read.ts"
 import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE, STATUS_LINE } from "./shell-notes.ts"
 import { TRUNCATION_NOTE } from "./truncate.ts"
@@ -38,12 +40,15 @@ function firstLine(s: string): string {
 }
 
 /**
- * Output as presenter lines; the note the tool puts where it cut oversized output (meant for
- * the model) as a short muted line saying how much was left out and where all of it is.
+ * Output as presenter lines. The lines a preview of a large output adds for the model (where
+ * it was saved, where lines were left out) and the note older versions left where they cut
+ * show as short muted lines.
  */
 const outputLines = (text: string): ToolLine[] =>
   text
-    ? text.split("\n").map((t) => {
+    ? text.split("\n").map((t): ToolLine => {
+        const note = previewNoteLine(t)
+        if (note) return note
         const cut = TRUNCATION_NOTE.exec(t)
         if (!cut) return { kind: "code", text: t }
         const where = cut[2] ? ` ${"·"} full output: ${cut[2]}` : ""
@@ -252,6 +257,23 @@ export const globPresenter: ToolPresenter<GlobParams, GlobDetails> = {
   }),
 }
 
+export const outputReadPresenter: ToolPresenter<OutputReadParams, unknown> = {
+  summary(args) {
+    const grep = args.grep ? ` · /${str(args.grep)}/${args.ignore_case ? "i" : ""}` : ""
+    const from = Number.isInteger(args.offset) ? ` · from line ${args.offset}` : ""
+    return `${str(args.id)}${grep}${from}`
+  },
+  result(call) {
+    if (call.result.isError) return undefined
+    const matching = /\((\S+) matching lines\./.exec(call.text)
+    if (matching) return `${matching[1]} matching ${matching[1] === "1" ? "line" : "lines"}`
+    const lines = readLines(call.text).length
+    return lines ? plural(lines, "line") : firstLine(call.text)
+  },
+  body: (call, { detail }) => (detail === "full" && !call.result.isError ? readLines(call.text) : []),
+  explore: (args) => ({ verb: "Read", target: str(args.id) }),
+}
+
 /** The presenters of the built-in tools, by tool name. */
 export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   read: readPresenter,
@@ -262,5 +284,6 @@ export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   powershell: shellPresenter,
   grep: grepPresenter,
   glob: globPresenter,
+  output_read: outputReadPresenter,
   ask_user: askUserPresenter,
 }

@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
-import { defineTool, type GrepDetails, textResult } from "@amira/api"
+import { defineTool, type GrepDetails, MAX_ARTIFACT_CHARS, textResult } from "@amira/api"
 import { splitLines } from "./diff.ts"
 import { statOrNull, type WalkEntry, walkFiles } from "./files.ts"
 import { displayPath, resolvePath } from "./paths.ts"
 import { decodeText, looksBinary } from "./text.ts"
-import { truncateOutput } from "./truncate.ts"
+import { keepOutput, outputLimits } from "./truncate.ts"
 
 export const DEFAULT_HEAD_LIMIT = 250
 export const MAX_GREP_FILE_BYTES = 5 * 1024 * 1024
@@ -31,7 +31,7 @@ export const grepTool = defineTool<GrepParams>({
     "- `pattern` uses JavaScript RegExp syntax (e.g. `function\\s+\\w+`, `log.*Error`). Escape regex metacharacters to match them literally.",
     "- `path` is a file or directory (default: the working directory). `glob` filters the files of a directory, e.g. `*.ts` or `src/**/*.{ts,tsx}`; a glob without `/` matches file names at any depth.",
     "- `output_mode`: `files_with_matches` (default) lists matching files; `content` shows `file:line:text` for each matching line; `count` shows `file:count`.",
-    `- \`head_limit\` caps the number of output lines (default ${DEFAULT_HEAD_LIMIT}).`,
+    `- \`head_limit\` caps the number of output lines (default ${DEFAULT_HEAD_LIMIT}). When all results are long they are saved as an artifact that output_read can read or search.`,
     "- Skips .git, node_modules, binary files and files over 5 MB, and only searches the first 10,000 characters of each line. Paths are relative to the working directory.",
     "- Use glob to find files by name.",
   ].join("\n"),
@@ -81,7 +81,18 @@ export const grepTool = defineTool<GrepParams>({
     // A single file named by `path` is searched even if it does not match `glob`.
     const filter = glob && st.isDirectory() ? globFilter(glob) : () => true
 
+    // Every result, for the artifact (up to its size cap); the first `limit` are shown.
     const out: string[] = []
+    let captured = 0
+    let capped = false
+    const add = (row: string) => {
+      if (captured + row.length + 1 > MAX_ARTIFACT_CHARS) {
+        capped = true
+        return
+      }
+      out.push(row)
+      captured += row.length + 1
+    }
     let total = 0
     let matchedFiles = 0
     let matches = 0
@@ -102,7 +113,7 @@ export const grepTool = defineTool<GrepParams>({
         if (mode === "files_with_matches") break
         if (mode === "content") {
           total++
-          if (out.length < limit) out.push(`${shown}:${i + 1}:${clip(lines[i]!)}`)
+          add(`${shown}:${i + 1}:${clip(lines[i]!)}`)
         }
       }
       if (count === 0) continue
@@ -110,15 +121,30 @@ export const grepTool = defineTool<GrepParams>({
       matches += count
       if (mode === "content") continue
       total++
-      if (out.length < limit) out.push(mode === "count" ? `${shown}:${count}` : shown)
+      add(mode === "count" ? `${shown}:${count}` : shown)
     }
 
     if (total === 0) return textResult(`No matches for /${pattern}/ in ${displayPath(ctx.cwd, root)}`)
-    let text = out.join("\n")
-    if (total > out.length) {
-      text += `\n\n(Showing ${out.length} of ${total} results. Narrow the search or raise head_limit to see more.)`
+    const head = out.slice(0, limit).join("\n")
+    const all = out.join("\n")
+    const shownCount = Math.min(limit, out.length)
+    let text = head
+    if (total > shownCount) {
+      text += `\n\n(Showing ${shownCount} of ${total} results. Narrow the search or raise head_limit to see more.)`
     }
-    const res = await truncateOutput(text, "grep")
+    // All results over the size limit are saved; the preview is cut from the ones shown.
+    const res =
+      all.length > outputLimits(ctx).saveAbove
+        ? await keepOutput(ctx, {
+            text: all,
+            shown: head,
+            tool: "grep",
+            facts: [
+              `${total} results; the preview is cut from the first ${shownCount} (head_limit), the artifact has ${capped ? `the first ${out.length}` : "all of them"}`,
+            ],
+            ...(capped ? { incomplete: `only the first ${out.length} of ${total} results were saved` } : {}),
+          })
+        : { text }
     return {
       content: [{ type: "text", text: res.text }],
       details: {
@@ -127,7 +153,9 @@ export const grepTool = defineTool<GrepParams>({
         // files_with_matches stops at a file's first match, so it cannot count them.
         ...(mode === "files_with_matches" ? {} : { matches }),
         total,
-        fullOutputPath: res.fullOutputPath,
+        ...("artifact" in res && res.artifact
+          ? { fullOutputPath: res.artifact.path, artifact: res.artifact.id }
+          : {}),
       } satisfies GrepDetails,
     }
   },

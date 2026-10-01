@@ -6,6 +6,7 @@ import { bashTool, powershellTool } from "./bash.ts"
 import { editTool } from "./edit.ts"
 import { globTool } from "./glob.ts"
 import { grepTool } from "./grep.ts"
+import { outputReadTool } from "./output-read.ts"
 import { builtinPresenters } from "./presenters.ts"
 import { readTool } from "./read.ts"
 import { warmUpShell } from "./shell.ts"
@@ -20,6 +21,7 @@ export {
   editTool,
   globTool,
   grepTool,
+  outputReadTool,
   powershellTool,
   readTool,
   writeTool,
@@ -35,6 +37,7 @@ export const builtinTools = [
   ...(process.platform === "win32" ? [powershellTool] : []),
   grepTool,
   globTool,
+  outputReadTool,
   askUserTool,
 ]
 

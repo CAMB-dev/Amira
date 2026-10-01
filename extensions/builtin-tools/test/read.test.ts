@@ -34,12 +34,31 @@ test("defaults to 2000 lines and truncates long lines", async () => {
   const lines = Array.from({ length: 2500 }, (_, i) => String(i + 1))
   lines[0] = "x".repeat(5000)
   await writeFile(join(dir, "big.txt"), lines.join("\n"))
-  const out = textOf(await read({ path: "big.txt" }))
+  const out = textOf(await read({ path: "big.txt", limit: 1000 }))
   expect(out).toContain("[line truncated]")
   expect(out).not.toContain("x".repeat(2001))
-  expect(out).toContain("  2000\t2000")
-  expect(out).not.toContain("  2001\t2001")
-  expect(out).toContain("offset=2001")
+  expect(out).toContain("  1000\t1000")
+  expect(out).not.toContain("  1001\t1001")
+  expect(out).toContain("offset=1001")
+})
+
+test("a long range stops at a whole line under the size limit for large outputs", async () => {
+  const lines = Array.from({ length: 2500 }, (_, i) => `line ${i + 1} ${"y".repeat(20)}`)
+  await writeFile(join(dir, "long.txt"), lines.join("\n"))
+  const out = textOf(await read({ path: "long.txt" }))
+  // Never so long that it is saved as an artifact (16,000 characters by default).
+  expect(out.length).toBeLessThanOrEqual(16_000)
+  const last = /\(Showing lines 1-(\d+) of 2500\. Use offset=(\d+) to read more\.\)$/.exec(out)
+  expect(last).not.toBeNull()
+  expect(Number(last![2])).toBe(Number(last![1]) + 1)
+  expect(out).toContain(`\t${lines[Number(last![1]) - 1]}\n`)
+})
+
+test("force must be a boolean", async () => {
+  await writeFile(join(dir, "f.txt"), "a\n")
+  expect(textOf(await read({ path: "f.txt", force: true }))).toBe("     1\ta")
+  const bad = await read({ path: "f.txt", force: "yes" as unknown as boolean })
+  expect(bad.isError).toBe(true)
 })
 
 test("returns images as base64 image blocks", async () => {

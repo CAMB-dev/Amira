@@ -1,19 +1,25 @@
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises"
+import { randomBytes } from "node:crypto"
+import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import {
+  type ArtifactInfo,
+  countLines,
+  DEFAULT_PREVIEW_CHARS,
+  DEFAULT_SAVE_ABOVE,
+  MAX_ARTIFACT_CHARS,
+  type OutputLimits,
+  type OutputStore,
+  outputPreview,
+  type SaveOutputOptions,
+  type ToolContext,
+} from "@amira/api"
 
-export const MAX_OUTPUT_CHARS = 30_000
 const KEEP_OUTPUT_MS = 24 * 60 * 60 * 1000
 
-export interface Truncated {
-  text: string
-  /** Set when the output was cut and saved; the file holds the full text. */
-  fullOutputPath?: string
-}
-
 /**
- * The note `truncateOutput` leaves where it cut, for the model; frontends show it shorter. The
- * groups: the lines left out, and where the full output is when it was saved.
+ * The note older versions left where they cut oversized output; frontends still show it
+ * shorter in sessions saved then. The groups: the lines left out, and where the full output is.
  */
 export const TRUNCATION_NOTE =
   /^\[\.\.\. \d+ characters \((\d+) lines\) omitted\. (?:Full output saved to (.+?) — use the read tool.*|The full output could not be saved.*) \.\.\.\]$/
@@ -22,41 +28,124 @@ export function toolOutputDir(): string {
   return join(tmpdir(), "amira", "tool-output")
 }
 
-/** Keeps the head and tail of oversized output and saves the full text to a temp file when it can. */
-export async function truncateOutput(
-  text: string,
-  label: string,
-  max = MAX_OUTPUT_CHARS,
-  dir = toolOutputDir(),
-): Promise<Truncated> {
-  if (text.length <= max) return { text }
-  let fullOutputPath: string | undefined
+/**
+ * Where tools save large outputs when the host gives them no artifact store (ToolSession.outputs),
+ * e.g. when they run outside an agent: the system's temp directory, swept of files older than a
+ * day once per process.
+ */
+export class TempOutputStore implements OutputStore {
+  readonly limits: OutputLimits
+  readonly #known = new Map<string, ArtifactInfo>()
+
+  constructor(
+    readonly dir = toolOutputDir(),
+    limits: Partial<OutputLimits> = {},
+  ) {
+    this.limits = {
+      saveAbove: limits.saveAbove ?? DEFAULT_SAVE_ABOVE,
+      previewChars: limits.previewChars ?? DEFAULT_PREVIEW_CHARS,
+    }
+  }
+
+  async save(opts: SaveOutputOptions): Promise<ArtifactInfo> {
+    await mkdir(this.dir, { recursive: true })
+    sweepOnce(this.dir)
+    const text = opts.text.length > MAX_ARTIFACT_CHARS ? opts.text.slice(0, MAX_ARTIFACT_CHARS) : opts.text
+    const incomplete =
+      opts.incomplete ?? (text.length < opts.text.length ? "only the first part was saved" : undefined)
+    const id = `a_${randomBytes(5).toString("hex")}`
+    const path = join(this.dir, `${id}.txt`)
+    await writeFile(`${path}.tmp`, text)
+    await rename(`${path}.tmp`, path)
+    const info: ArtifactInfo = {
+      id,
+      path,
+      tool: opts.tool,
+      ...(opts.toolCallId ? { toolCallId: opts.toolCallId } : {}),
+      sessionId: "",
+      chars: text.length,
+      lines: countLines(text),
+      bytes: Buffer.byteLength(text),
+      complete: incomplete === undefined,
+      ...(incomplete !== undefined ? { incomplete } : {}),
+      createdAt: new Date().toISOString(),
+    }
+    this.#known.set(id, info)
+    return info
+  }
+
+  find(id: string): ArtifactInfo | undefined {
+    return this.#known.get(id)
+  }
+}
+
+let fallback: TempOutputStore | undefined
+
+/** The artifact store a tool call saves to: its session's, or the temp directory's. */
+export function outputStore(ctx: ToolContext): OutputStore {
+  if (ctx.session?.outputs) return ctx.session.outputs
+  fallback ??= new TempOutputStore()
+  return fallback
+}
+
+/** The sizes a tool call's output is measured against. */
+export function outputLimits(ctx: ToolContext): OutputLimits {
+  return outputStore(ctx).limits
+}
+
+export interface KeptOutput {
+  /** What the model gets: the output, or a preview of it. */
+  text: string
+  /** Where the whole output was saved, when it was too long. */
+  artifact?: ArtifactInfo
+}
+
+export interface KeepOutputOptions {
+  /** The whole output. */
+  text: string
+  /**
+   * What the preview is cut from when the output is saved: by default the whole output, for a
+   * tool that limits its results the ones it shows.
+   */
+  shown?: string
+  tool: string
+  /** Facts for the preview's header, e.g. how many results there are. */
+  facts?: string[]
+  /** Why the output is not all the tool produced, if it is not. */
+  incomplete?: string
+  /** Store to use instead of the call's (tests). */
+  store?: OutputStore
+}
+
+/**
+ * A1: output over the size limit is saved whole as an artifact, and the model gets a preview
+ * with its id and how to read on; output under it is returned as it is (`shown` when given).
+ * When saving fails the preview says so and names no artifact.
+ */
+export async function keepOutput(ctx: ToolContext, o: KeepOutputOptions): Promise<KeptOutput> {
+  const store = o.store ?? outputStore(ctx)
+  const { saveAbove, previewChars } = store.limits
+  if (o.text.length <= saveAbove) return { text: o.shown ?? o.text }
+  let artifact: ArtifactInfo | undefined
   let saveError: string | undefined
   try {
-    await mkdir(dir, { recursive: true })
-    sweepOnce(dir)
-    const path = join(dir, `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`)
-    await writeFile(path, text)
-    fullOutputPath = path
+    artifact = await store.save({
+      text: o.text,
+      tool: o.tool,
+      toolCallId: ctx.toolCallId,
+      ...(o.incomplete !== undefined ? { incomplete: o.incomplete } : {}),
+    })
   } catch (err) {
     saveError = (err as Error).message
   }
-
-  const half = Math.floor(max / 2)
-  let head = text.slice(0, half)
-  const headCut = head.lastIndexOf("\n")
-  if (headCut > half / 2) head = head.slice(0, headCut + 1)
-  let tail = text.slice(-half)
-  const tailCut = tail.indexOf("\n")
-  if (tailCut !== -1 && tailCut < half / 2) tail = tail.slice(tailCut + 1)
-
-  const omitted = text.slice(head.length, text.length - tail.length)
-  const lines = omitted.split("\n").length - 1
-  const where = fullOutputPath
-    ? `Full output saved to ${fullOutputPath} — use the read tool with offset/limit to see the rest`
-    : `The full output could not be saved (${saveError})`
-  const note = `\n[... ${omitted.length} characters (${lines} lines) omitted. ${where} ...]\n`
-  return { text: head + note + tail, fullOutputPath }
+  const text = outputPreview({
+    text: o.shown ?? o.text,
+    ...(o.facts ? { facts: o.facts } : {}),
+    ...(artifact ? { artifact } : {}),
+    ...(saveError ? { saveError, total: { chars: o.text.length, lines: countLines(o.text) } } : {}),
+    previewChars,
+  })
+  return { text, ...(artifact ? { artifact } : {}) }
 }
 
 const swept = new Set<string>()

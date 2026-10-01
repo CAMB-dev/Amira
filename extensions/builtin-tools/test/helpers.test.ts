@@ -5,7 +5,19 @@ import { homedir, tmpdir } from "node:os"
 import { join, resolve, sep } from "node:path"
 import { isBinary, walkFiles } from "../src/files.ts"
 import { displayPath, resolvePath } from "../src/paths.ts"
-import { truncateOutput } from "../src/truncate.ts"
+import { keepOutput, TempOutputStore } from "../src/truncate.ts"
+import { makeCtx } from "./util.ts"
+
+const ctx = makeCtx(tmpdir())
+/** Outputs over 1000 characters are saved; previews are about 1000 characters. */
+async function keep(text: string, dir?: string) {
+  const store = new TempOutputStore(dir ?? (await mkdtemp(join(tmpdir(), "amira-keep-"))), {
+    saveAbove: 1000,
+    previewChars: 1000,
+  })
+  dirs.push(store.dir)
+  return keepOutput(ctx, { text, tool: "t", store })
+}
 
 const dirs: string[] = []
 afterAll(async () => {
@@ -13,20 +25,25 @@ afterAll(async () => {
 })
 
 test("short output is returned unchanged", async () => {
-  expect(await truncateOutput("hello", "t")).toEqual({ text: "hello" })
+  expect(await keep("hello")).toEqual({ text: "hello" })
+  // Exactly at the limit is not over it.
+  expect((await keep("x".repeat(1000))).artifact).toBeUndefined()
 })
 
-test("long output keeps head and tail and saves the full text", async () => {
+test("long output is saved whole and previewed by its head and tail", async () => {
   const lines = Array.from({ length: 5000 }, (_, i) => `line ${i}`)
   const full = lines.join("\n")
-  const r = await truncateOutput(full, "t", 1000)
-  expect(r.fullOutputPath).toBeDefined()
-  expect(r.text.startsWith("line 0\n")).toBe(true)
+  const r = await keep(full)
+  expect(r.artifact).toBeDefined()
+  const [header, ...rest] = r.text.split("\n")
+  expect(header).toStartWith(`[Output saved as artifact ${r.artifact!.id}: `)
+  expect(header).toContain("5,000 lines")
+  expect(header).toContain(r.artifact!.path)
+  expect(rest[0]).toBe("line 0")
   expect(r.text.endsWith("line 4999")).toBe(true)
-  expect(r.text).toContain(r.fullOutputPath!)
+  expect(r.text).toMatch(/\[\.\.\. [\d,]+ lines \([\d,]+ characters\) omitted: lines \d+-\d+ \.\.\.\]/)
   expect(r.text.length).toBeLessThan(1400)
-  expect(await readFile(r.fullOutputPath!, "utf8")).toBe(full)
-  await rm(r.fullOutputPath!)
+  expect(await readFile(r.artifact!.path, "utf8")).toBe(full)
 })
 
 test("isBinary detects NUL bytes", () => {
@@ -79,11 +96,13 @@ test("truncates without a file when the output directory is unwritable", async (
   const blocker = join(root, "not-a-dir")
   await writeFile(blocker, "x")
   const full = Array.from({ length: 2000 }, (_, i) => `line ${i}`).join("\n")
-  const r = await truncateOutput(full, "t", 1000, join(blocker, "out"))
-  expect(r.fullOutputPath).toBeUndefined()
-  expect(r.text).toStartWith("line 0\n")
+  const r = await keep(full, join(blocker, "out"))
+  expect(r.artifact).toBeUndefined()
+  expect(r.text).toStartWith("[Output too long: ")
+  expect(r.text).toContain("could not be saved")
+  expect(r.text).not.toContain("output_read")
+  expect(r.text.split("\n")[1]).toBe("line 0")
   expect(r.text).toEndWith("line 1999")
-  expect(r.text).toContain("The full output could not be saved")
 })
 
 test("deletes saved outputs older than a day the first time it saves", async () => {
@@ -95,8 +114,8 @@ test("deletes saved outputs older than a day the first time it saves", async () 
   await writeFile(fresh, "fresh")
   const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
   await utimes(old, twoDaysAgo, twoDaysAgo)
-  const r = await truncateOutput("x\n".repeat(1000), "t", 100, out)
-  expect(r.fullOutputPath).toBeDefined()
+  const r = await keep("x\n".repeat(1000), out)
+  expect(r.artifact).toBeDefined()
   for (let i = 0; i < 50 && existsSync(old); i++) await Bun.sleep(20)
   expect(existsSync(old)).toBe(false)
   expect(existsSync(fresh)).toBe(true)

@@ -4,7 +4,7 @@ import { defineTool, type ReadDetails, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
 import { type LineWindow, type ReadLinesResult, readLineWindow } from "./lines.ts"
 import { resolvePath } from "./paths.ts"
-import { MAX_OUTPUT_CHARS } from "./truncate.ts"
+import { outputLimits } from "./truncate.ts"
 
 export const DEFAULT_READ_LIMIT = 2000
 export const MAX_LINE_CHARS = 2000
@@ -25,6 +25,7 @@ export interface ReadParams {
   path: string
   offset?: number
   limit?: number
+  force?: boolean
 }
 
 export const readTool = defineTool<ReadParams>({
@@ -38,6 +39,8 @@ export const readTool = defineTool<ReadParams>({
     "- UTF-8 and UTF-16 (with BOM) text is supported.",
     "- PNG, JPEG, GIF and WebP images up to 5 MB are returned as images you can see.",
     "- Binary files and directories cannot be read; use glob or bash `ls` to list a directory.",
+    "- A long range stops at a whole line once the output reaches its size limit; the last line says where to continue.",
+    "- Reading the same range again when nothing in it changed returns a short note pointing to your earlier read instead of the text; pass `force: true` to get the text anyway.",
     "- Read a file before editing it. It is fine to read several files in parallel.",
   ].join("\n"),
   parameters: {
@@ -50,12 +53,16 @@ export const readTool = defineTool<ReadParams>({
         minimum: 1,
         description: `Maximum number of lines to read (default ${DEFAULT_READ_LIMIT})`,
       },
+      force: {
+        type: "boolean",
+        description: "Return the text even when an earlier read of the same range is unchanged",
+      },
     },
     required: ["path"],
     additionalProperties: false,
   },
   concurrency: "parallel",
-  async execute({ path, offset, limit }, ctx) {
+  async execute({ path, offset, limit, force }, ctx) {
     if (typeof path !== "string" || path === "") return textResult("path is required", true)
     for (const [name, value] of [
       ["offset", offset],
@@ -64,6 +71,9 @@ export const readTool = defineTool<ReadParams>({
       if (value !== undefined && !(Number.isInteger(value) && value >= 1)) {
         return textResult(`${name} must be a whole number of at least 1 (got ${String(value)})`, true)
       }
+    }
+    if (force !== undefined && typeof force !== "boolean") {
+      return textResult(`force must be true or false (got ${String(force)})`, true)
     }
     if (ctx.signal.aborted) return textResult("Aborted", true)
     const abs = resolvePath(ctx.cwd, path)
@@ -105,7 +115,8 @@ export const readTool = defineTool<ReadParams>({
     if (window === "binary") {
       return textResult(`${abs} appears to be a binary file and cannot be read as text.`, true)
     }
-    const shown = formatWindow(abs, window, start)
+    // Under the size limit with the notes after it, so the read is never saved as an artifact.
+    const shown = formatWindow(abs, window, start, Math.max(1000, outputLimits(ctx).saveAbove - 400))
     let text = shown.text
     if (window.invalidUtf8) text += `\n\n${INVALID_UTF8_WARNING}`
     const details: ReadDetails = {
@@ -119,7 +130,12 @@ export const readTool = defineTool<ReadParams>({
 })
 
 /** The numbered lines of a window, and how many lines of the file they show. */
-function formatWindow(abs: string, window: LineWindow, start: number): { text: string; lines: number } {
+function formatWindow(
+  abs: string,
+  window: LineWindow,
+  start: number,
+  budget: number,
+): { text: string; lines: number } {
   const { lines, total } = window
   if (total === 0) return { text: `(${abs} is empty)`, lines: 0 }
   if (total !== undefined && start > total) {
@@ -133,7 +149,7 @@ function formatWindow(abs: string, window: LineWindow, start: number): { text: s
     const line = raw.length > MAX_LINE_CHARS ? `${raw.slice(0, MAX_LINE_CHARS)}… [line truncated]` : raw
     const row = `${String(start + i).padStart(6)}\t${line}`
     // Always return at least one line, even when it alone exceeds the budget.
-    if (out.length > 0 && size + row.length + 1 > MAX_OUTPUT_CHARS) break
+    if (out.length > 0 && size + row.length + 1 > budget) break
     out.push(row)
     size += row.length + 1
     last = start + i
