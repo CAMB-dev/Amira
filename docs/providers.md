@@ -157,6 +157,12 @@ Amira has two tools for changing existing files: `edit`, which replaces exact te
 }
 ```
 
-The choice follows the current model: after `/model` switches to another provider or model, its own setting applies. Sub-agents use the setting of the model they run on. Restart Amira after changing the setting. Project settings may set `tools.edit` as well. The patch tool only writes inside the working directory, refuses paths that pass through a symbolic link or junction below it, refuses files with other hard links (common in `node_modules` installed by Bun or pnpm), and rejects a patch that changes the same file twice.
+The choice follows the current model: after `/model` switches to another provider or model, its own setting applies. Sub-agents use the setting of the model they run on. Restart Amira after changing the setting. Project settings may set `tools.edit` as well.
+
+`apply_patch` only writes inside the working directory and refuses paths that pass through a symbolic link or junction below it. Files with other hard links, such as dependencies installed by Bun or pnpm, are written in place, so every link sees the change, including links outside the working directory. Delete removes only the named link, and Move writes a new file and removes the old name, so other links keep the old content. One patch may not reach the same file through two different links.
+
+Blocks apply in order, each against the result of the earlier ones, so one file can have several `*** Update File:` blocks. Update after Add, Delete after Update, Update of a Move destination, chained Moves (`a` → `b` → `c`, or back to `a`), and Delete followed by Add (or the reverse) all work. Update, Delete and Move need the source to exist at that point, and Add and Move need the destination to be absent; otherwise the patch fails with an error naming the path. A path cannot be used as both a file and a directory in one patch.
+
+Every block is checked before anything is written. If a write fails, the files already changed get their original bytes back (through every hard link), and new files and folders are removed; the error says whether the rollback was complete. While a patch deletes a file, a temporary `.amira-patch-*` folder next to it keeps a link for rollback and is removed at the end. This protects against errors, not crashes, and other programs may see the intermediate state while the patch runs.
 
 Related: [Getting started](getting-started.md), [Usage and sessions](usage.md), [Settings](settings.md), [Extensions](extensions.md).

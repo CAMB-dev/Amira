@@ -5,6 +5,7 @@ import {
   link,
   lstat,
   mkdir,
+  readdir,
   readFile,
   rename,
   symlink,
@@ -102,7 +103,7 @@ test("empty files and Unicode preserve byte content", async () => {
   expect(await readFile(join(dir, "a"), "utf8")).toBe("你好 🌏\n")
 })
 
-test("missing delete, existing add/move and duplicate targets are refused", async () => {
+test("missing delete, existing add/move and stale repeated context are refused", async () => {
   const dir = await tmp.make()
   await writeFile(join(dir, "a"), "old\n")
   for (const body of [
@@ -163,14 +164,244 @@ test("Windows backslashes and absolute paths inside cwd are supported", async ()
   expect(await readFile(join(dir, "folder", "a"), "utf8")).toBe("new\n")
 })
 
-test("hard-linked files cannot change content outside the workspace", async () => {
+test("hard-linked updates write in place and every link sees the change", async () => {
   const dir = await tmp.make()
   const outside = await tmp.make()
   await writeFile(join(outside, "original"), "old\n")
   await link(join(outside, "original"), join(dir, "a"))
+  const before = await lstat(join(dir, "a"))
   const result = await applyPatchTool.execute({ patch: envelope(update("a")) }, makeCtx(dir))
+  expect(result.isError).toBeUndefined()
+  for (const path of [join(dir, "a"), join(outside, "original")]) {
+    expect(await readFile(path, "utf8")).toBe("new\n")
+    expect((await lstat(path)).ino).toBe(before.ino)
+    expect((await lstat(path)).nlink).toBe(2)
+  }
+})
+
+test("sequential update blocks match earlier results through normalized paths", async () => {
+  const dir = await tmp.make()
+  const format = { encoding: "utf-16le" as const, bomLength: 2 }
+  await writeFile(join(dir, "a"), encodeText("old\r\nkeep", format))
+  const result = await applyPatchTool.execute(
+    {
+      patch: envelope(
+        `${update("a", "old", "intermediate")}\n${update(join(dir, "a"), "intermediate", "final")}`,
+      ),
+    },
+    makeCtx(dir),
+  )
+  expect(result.isError).toBeUndefined()
+  expect(await readFile(join(dir, "a"))).toEqual(Buffer.from(encodeText("final\r\nkeep", format)))
+  expect((result.details as ApplyPatchDetails).files.map((file) => file.action)).toEqual(["update", "update"])
+})
+
+const move = (from: string, to: string, old = "old", next = "new") =>
+  `*** Update File: ${from}\n*** Move to: ${to}\n@@\n-${old}\n+${next}`
+
+for (const [name, body, expected] of [
+  ["update after add", `*** Add File: b\n+old\n${update("b")}`, { a: "old\n", b: "new\n" }],
+  ["delete after update", `${update("a")}\n*** Delete File: a`, {}],
+  ["update after move", `${move("a", "b")}\n${update("b", "new", "final")}`, { b: "final\n" }],
+  ["chained moves", `${move("a", "b")}\n${move("b", "c", "new", "final")}`, { c: "final\n" }],
+  ["move back to original path", `${move("a", "b")}\n${move("b", "a", "new", "final")}`, { a: "final\n" }],
+  ["add after delete", `*** Delete File: a\n*** Add File: a\n+replacement`, { a: "replacement\n" }],
+  ["delete after add", "*** Add File: b\n+old\n*** Delete File: b", { a: "old\n" }],
+] as const) {
+  test(`ordered blocks support ${name}`, async () => {
+    const dir = await tmp.make()
+    await writeFile(join(dir, "a"), "old\n")
+    const result = await applyPatchTool.execute({ patch: envelope(body) }, makeCtx(dir))
+    expect(result.isError).toBeUndefined()
+    expect((await readdir(dir)).sort()).toEqual(Object.keys(expected).sort())
+    for (const [path, content] of Object.entries(expected)) {
+      expect(await readFile(join(dir, path), "utf8")).toBe(content)
+    }
+  })
+
+  test(`I/O failure rolls back ${name} including inode identity`, async () => {
+    const dir = await tmp.make()
+    await writeFile(join(dir, "a"), "old\n")
+    await link(join(dir, "a"), join(dir, "alias"))
+    const before = await lstat(join(dir, "a"))
+    let writes = 0
+    const io: PatchIO = {
+      async write(handle, bytes) {
+        await writeHandle(handle, bytes)
+        writes++
+        if (Buffer.from(bytes).toString() === "fail\n") throw new Error("injected final failure")
+      },
+      remove: unlink,
+    }
+    await expect(
+      applyPatch(dir, envelope(`${body}\n*** Add File: failure\n+fail`), makeCtx(dir).signal, io),
+    ).rejects.toThrow("All patch changes rolled back")
+    expect(writes).toBeGreaterThan(0)
+    expect((await readdir(dir)).sort()).toEqual(["a", "alias"])
+    for (const path of ["a", "alias"]) {
+      expect(await readFile(join(dir, path), "utf8")).toBe("old\n")
+      expect((await lstat(join(dir, path))).ino).toBe(before.ino)
+      expect((await lstat(join(dir, path))).nlink).toBe(2)
+    }
+  })
+}
+
+for (const [name, body, error] of [
+  ["two moves from the old source", `${move("a", "b")}\n${move("a", "c")}`, "File not found"],
+  [
+    "two moves into one destination",
+    `${move("a", "b")}\n${move("c", "b")}`,
+    "Move destination already exists",
+  ],
+  ["two adds", "*** Add File: b\n+x\n*** Add File: b\n+y", "Cannot add existing file"],
+  ["update after delete", `*** Delete File: a\n${update("a")}`, "File not found"],
+  ["two deletes", "*** Delete File: a\n*** Delete File: a", "File not found"],
+  ["later context mismatch", `${update("a")}\n${update("a", "missing", "final")}`, "failed to match"],
+] as const) {
+  test(`${name} fails before any mutation`, async () => {
+    const dir = await tmp.make()
+    await writeFile(join(dir, "a"), "old\n")
+    await writeFile(join(dir, "c"), "old\n")
+    const result = await applyPatchTool.execute(
+      { patch: envelope(`*** Add File: nested/new\n+x\n${body}`) },
+      makeCtx(dir),
+    )
+    expect(result.isError).toBe(true)
+    expect(toolResultText(result)).toContain(error)
+    expect((await readdir(dir)).sort()).toEqual(["a", "c"])
+    expect(await readFile(join(dir, "a"), "utf8")).toBe("old\n")
+    expect(await readFile(join(dir, "c"), "utf8")).toBe("old\n")
+  })
+}
+
+test("partial sequential writes restore the original bytes through every hard link", async () => {
+  const dir = await tmp.make()
+  const original = Buffer.from(encodeText("old\r\n", { encoding: "utf-16le", bomLength: 2 }))
+  await writeFile(join(dir, "a"), original)
+  await link(join(dir, "a"), join(dir, "alias"))
+  const before = await lstat(join(dir, "a"))
+  let writes = 0
+  const io: PatchIO = {
+    async write(handle, bytes) {
+      if (++writes === 2) {
+        await handle.write(Buffer.from("partial corruption"), 0, 18, 0)
+        throw new Error("partial write failure")
+      }
+      await writeHandle(handle, bytes)
+    },
+    remove: unlink,
+  }
+  await expect(
+    applyPatch(
+      dir,
+      envelope(`${update("a", "old", "intermediate")}\n${update("a", "intermediate", "final")}`),
+      makeCtx(dir).signal,
+      io,
+    ),
+  ).rejects.toThrow("All patch changes rolled back")
+  expect(writes).toBe(2)
+  for (const path of ["a", "alias"]) {
+    expect(await readFile(join(dir, path))).toEqual(original)
+    expect((await lstat(join(dir, path))).ino).toBe(before.ino)
+    expect((await lstat(join(dir, path))).nlink).toBe(2)
+  }
+})
+
+test("distinct hard-link paths in one patch are refused before writing", async () => {
+  const dir = await tmp.make()
+  await writeFile(join(dir, "a"), "old\n")
+  await link(join(dir, "a"), join(dir, "alias"))
+  const result = await applyPatchTool.execute(
+    { patch: envelope(`${update("a")}\n${update("alias")}`) },
+    makeCtx(dir),
+  )
   expect(result.isError).toBe(true)
-  expect(await readFile(join(outside, "original"), "utf8")).toBe("old\n")
+  expect(toolResultText(result)).toContain("Patch targets multiple hard links to the same file")
+  expect(await readFile(join(dir, "a"), "utf8")).toBe("old\n")
+})
+
+for (const moving of [false, true]) {
+  test(`hard-linked ${moving ? "move" : "delete"} preserves the other link`, async () => {
+    const dir = await tmp.make()
+    await writeFile(join(dir, "a"), "old\n")
+    await link(join(dir, "a"), join(dir, "alias"))
+    const before = await lstat(join(dir, "a"))
+    const patch = envelope(moving ? move("a", "b") : "*** Delete File: a")
+    const result = await applyPatchTool.execute({ patch }, makeCtx(dir))
+    expect(result.isError).toBeUndefined()
+    expect((await readdir(dir)).sort()).toEqual(moving ? ["alias", "b"] : ["alias"])
+    expect(await readFile(join(dir, "alias"), "utf8")).toBe("old\n")
+    expect((await lstat(join(dir, "alias"))).ino).toBe(before.ino)
+    expect((await lstat(join(dir, "alias"))).nlink).toBe(1)
+    if (moving) expect(await readFile(join(dir, "b"), "utf8")).toBe("new\n")
+  })
+
+  test(`failure after hard-linked ${moving ? "move" : "delete"} still restores the source inode`, async () => {
+    const dir = await tmp.make()
+    await writeFile(join(dir, "a"), "old\n")
+    await link(join(dir, "a"), join(dir, "alias"))
+    const before = await lstat(join(dir, "a"))
+    let removed = false
+    const io: PatchIO = {
+      write: writeHandle,
+      async remove(path) {
+        await unlink(path)
+        removed = true
+        throw new Error("failure after unlink")
+      },
+    }
+    const patch = envelope(moving ? move("a", "b") : "*** Delete File: a")
+    await expect(applyPatch(dir, patch, makeCtx(dir).signal, io)).rejects.toThrow(
+      "All patch changes rolled back",
+    )
+    expect(removed).toBe(true)
+    expect((await readdir(dir)).sort()).toEqual(["a", "alias"])
+    for (const path of ["a", "alias"]) {
+      expect(await readFile(join(dir, path), "utf8")).toBe("old\n")
+      expect((await lstat(join(dir, path))).ino).toBe(before.ino)
+      expect((await lstat(join(dir, path))).nlink).toBe(2)
+    }
+  })
+}
+
+test("post-commit backup cleanup errors explicitly report that the patch was applied", async () => {
+  const dir = await tmp.make()
+  await writeFile(join(dir, "a"), "old\n")
+  const io: PatchIO = {
+    write: writeHandle,
+    async remove(path) {
+      await unlink(path)
+      const backup = (await readdir(dir)).find((name) => name.startsWith(".amira-patch-"))!
+      await writeFile(join(dir, backup, "unexpected"), "external")
+    },
+  }
+  await expect(applyPatch(dir, envelope("*** Delete File: a"), makeCtx(dir).signal, io)).rejects.toThrow(
+    "Patch applied, but temporary backup cleanup failed",
+  )
+  expect(await Bun.file(join(dir, "a")).exists()).toBe(false)
+})
+
+test("delete without hard-link support still applies and rolls back by rewriting bytes", async () => {
+  const dir = await tmp.make()
+  await writeFile(join(dir, "a"), "old\n")
+  const noLinks = (fail: boolean): PatchIO => ({
+    async write(handle, bytes) {
+      if (fail && Buffer.from(bytes).toString() === "fail\n") throw new Error("injected failure")
+      await writeHandle(handle, bytes)
+    },
+    remove: unlink,
+    async link() {
+      throw Object.assign(new Error("hard links not supported"), { code: "ENOTSUP" })
+    },
+  })
+  const patch = envelope("*** Delete File: a\n*** Add File: failure\n+fail")
+  await expect(applyPatch(dir, patch, makeCtx(dir).signal, noLinks(true))).rejects.toThrow(
+    "All patch changes rolled back",
+  )
+  expect(await readdir(dir)).toEqual(["a"])
+  expect(await readFile(join(dir, "a"), "utf8")).toBe("old\n")
+  await applyPatch(dir, envelope("*** Delete File: a"), makeCtx(dir).signal, noLinks(false))
+  expect(await readdir(dir)).toEqual([])
 })
 
 test("a stale later file is preserved while earlier writes roll back", async () => {
