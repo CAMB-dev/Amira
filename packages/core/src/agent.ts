@@ -25,6 +25,7 @@ import {
   userMessage,
 } from "@amira/ai"
 import type {
+  ApprovalPermission,
   ApprovalRequest,
   AskOutcome,
   AskQuestion,
@@ -34,6 +35,7 @@ import type {
   CompactionUsage,
   EventMap,
   PendingNotice,
+  PermissionMode,
   ProviderSettings,
   SessionData,
   SessionStatus,
@@ -65,6 +67,7 @@ import { createToolSession, deferredToolsSection, offeredTools } from "./deferre
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
+import { Permissions, type PermissionVerdict } from "./permissions/policy.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
 import { newSessionId, type SessionEntryData, type SessionStore } from "./session-store.ts"
 import type { AgentTree } from "./subagents.ts"
@@ -137,6 +140,17 @@ export interface AgentOptions {
    * asks the parent's model; without one such calls are denied.
    */
   approve?: Approver
+  /**
+   * The core permission policy (mode, command rules, protected paths), checked on every tool
+   * call after the tool.call.before interceptors. Sub-agents share their parent's. Default: a
+   * policy in "auto" mode without rules, which only asks before protected files change.
+   */
+  permissions?: Permissions
+  /**
+   * For a sub-agent: who answers the permission policy's questions, handed down from the
+   * top-level session (Agent.permissionApprover) when `permissions` has no approver of its own.
+   */
+  permissionApprover?: Approver
   /**
    * Answers questions this session's tools put (ToolSession.askUser, the ask_user tool): the
    * user for a top-level session, the parent's model for sub-agents. Without one nobody answers.
@@ -235,10 +249,13 @@ export class Agent {
   /** 0 for a top-level session, 1 for its sub-agents, and so on. */
   readonly depth: number
   readonly tree: AgentTree | undefined
+  /** The permission policy of this session's tree. */
+  readonly permissions: Permissions
   model: ModelInfo
 
   #ai: Ai
   #approve: Approver | undefined
+  #inheritedApprover: Approver | undefined
   #ask: Asker | undefined
   /** Tool calls waiting for approval or for an answer right now. */
   #blockedCalls = 0
@@ -334,6 +351,7 @@ export class Agent {
     this.bus = opts.bus ?? new EventBus()
     this.interceptors = opts.interceptors ?? new InterceptorRegistry()
     this.tools = opts.tools ?? new ToolRegistry()
+    this.permissions = opts.permissions ?? new Permissions()
     this.cwd = opts.cwd
     this.model = opts.model
     this.providerSettings = opts.providerSettings ?? {}
@@ -348,6 +366,7 @@ export class Agent {
     this.depth = opts.depth ?? 0
     this.tree = opts.tree
     this.#approve = opts.approve
+    this.#inheritedApprover = opts.permissionApprover
     this.#ask = opts.ask
     this.#onIdleNotice = opts.onIdleNotice
     this.#endTurn = opts.endTurn
@@ -1297,20 +1316,38 @@ export class Agent {
           : await reject("blocked", `Tool call blocked: ${gate.reason}`)
       }
       const args = gate.value.args
-      if (gate.ask) {
-        const request = { sessionId: this.sessionId, toolCallId: call.id, name: call.name, args }
-        const verdict = await this.#askApproval(turn, { ...request, reason: gate.ask.join("; ") })
+      // The core policy decides on the arguments the tool will get, whatever the interceptors
+      // made of them; no extension can take it away.
+      const policy = await this.permissions.check(tool, args, this.cwd)
+      if (turn.signal.aborted)
+        return await reject("aborted", "Aborted by the user before this tool ran.", args)
+      if (policy.decision === "deny") return await reject("blocked", refusedText(policy), args)
+      const asking = policy.decision === "ask"
+      if (asking || gate.ask) {
+        const reasons = [...(asking ? [policy.reason] : []), ...(gate.ask ?? [])]
+        const request: ApprovalRequest = {
+          sessionId: this.sessionId,
+          toolCallId: call.id,
+          name: call.name,
+          args,
+          reason: reasons.join("; "),
+          ...(asking ? { permission: approvalPermission(policy, this.permissions.mode) } : {}),
+        }
+        // A permission question goes to the user, also from a sub-agent (whose interceptors'
+        // questions go to its parent); the user's answer covers the interceptors' reasons too.
+        const verdict = await this.#askApproval(
+          turn,
+          request,
+          asking ? this.#permissionApprover() : this.#approve,
+        )
         // Dismissing the question stops the turn, like an interrupt.
         if (!verdict.approved && verdict.interrupt && this.#turn === turn) this.#abort?.abort()
         if (verdict.approved && verdict.by) run.approval = verdict.by
         if (turn.signal.aborted)
           return await reject("aborted", "Aborted by the user before this tool ran.", args)
         if (!verdict.approved) {
-          return await reject(
-            "blocked",
-            `Tool call not approved${verdict.reason ? `: ${verdict.reason}` : "."}`,
-            args,
-          )
+          const why = `Tool call not approved${verdict.reason ? `: ${verdict.reason}` : "."}`
+          return await reject("blocked", asking ? `${why}\n${askedText(policy)}` : why, args)
         }
       }
       const problem = checkArgs(tool.parameters, args)
@@ -1397,8 +1434,11 @@ export class Agent {
    * Waits for the approver while the session shows as blocked (D44: with the number of calls
    * waiting). A missing or failing approver denies.
    */
-  async #askApproval(turn: Turn, request: ApprovalRequest): Promise<ApprovalDecision> {
-    const approve = this.#approve
+  async #askApproval(
+    turn: Turn,
+    request: ApprovalRequest,
+    approve: Approver | undefined,
+  ): Promise<ApprovalDecision> {
     if (!approve) return { approved: false, reason: "it needs approval and nobody can approve it here" }
     try {
       return await this.#waitBlocked(turn, `approval for ${request.name}`, () =>
@@ -1410,6 +1450,26 @@ export class Agent {
         reason: `approval failed: ${err instanceof Error ? err.message : String(err)}`,
       }
     }
+  }
+
+  /**
+   * Who answers the permission policy's questions: the user of the tree (Permissions.approver),
+   * else a top-level session's own approver. Never a parent's model: a model cannot widen what
+   * its sub-agents may do.
+   */
+  #permissionApprover(): Approver | undefined {
+    return this.permissionApprover
+  }
+
+  /**
+   * Who answers this session's permission questions, for its sub-agents to ask the same: the
+   * tree's user (Permissions.approver), else the one handed down from the top-level session,
+   * else a top-level session's own approver.
+   */
+  get permissionApprover(): Approver | undefined {
+    return (
+      this.permissions.approver ?? this.#inheritedApprover ?? (this.depth === 0 ? this.#approve : undefined)
+    )
   }
 
   /** A tool's questions (ToolSession.askUser), asked while the session shows as blocked. */
@@ -1959,5 +2019,38 @@ function toolError(call: ToolCallBlock, text: string): ToolResultMessage {
     toolName: call.name,
     content: [{ type: "text", text }],
     isError: true,
+  }
+}
+
+/** What the model reads when the permission policy refuses a call: why, and what to do instead. */
+function refusedText(policy: PermissionVerdict): string {
+  return [
+    `Tool call blocked by the permission policy: ${policy.reason}.`,
+    "Do not try to get around this with another tool or command. If this step is needed, ask the user: they can switch the permission mode or change the permission rules.",
+  ].join("\n")
+}
+
+/** Added when a permission question was answered no, or nobody could answer it. */
+function askedText(policy: PermissionVerdict): string {
+  return `The permission policy asked because ${policy.reason}. Do not try to get around this; if the step is needed, ask the user how to go on.`
+}
+
+/** What the approval dialog shows about the policy's question. */
+function approvalPermission(policy: PermissionVerdict, mode: PermissionMode): ApprovalPermission {
+  const rule = policy.rule
+  return {
+    mode,
+    cause: policy.cause ?? "mode",
+    ...(rule
+      ? {
+          rule: {
+            command: [...rule.command],
+            decision: rule.decision,
+            ...(rule.reason ? { reason: rule.reason } : {}),
+            scope: rule.source.scope,
+            file: rule.source.file,
+          },
+        }
+      : {}),
   }
 }

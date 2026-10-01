@@ -563,6 +563,10 @@ export class AgentTree {
       parentSessionId: parent.sessionId,
       depth,
       tree: this,
+      // The parent's permission policy, mode and rules, with the user who answers its questions:
+      // the policy's questions skip the parent's model and go to the user (Agent).
+      permissions: parent.permissions,
+      ...(parent.permissionApprover ? { permissionApprover: parent.permissionApprover } : {}),
       approve: (request, signal) => this.#askParent(parent, request, signal),
       ask: (request, signal) => this.#askParentQuestions(parent, request, signal),
       ...(this.#opts.compaction ? { compaction: this.#opts.compaction } : {}),
@@ -1136,6 +1140,7 @@ export class AgentTree {
   /**
    * D14: a child's approval request goes to its parent's model, not to the user. It gets the
    * parent's conversation and the request, without tools, and must answer APPROVE or DENY.
+   * Only interceptors' questions come here: the permission policy's go to the user (Agent).
    */
   async #consultParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
     const args = JSON.stringify(req.args, null, 2)

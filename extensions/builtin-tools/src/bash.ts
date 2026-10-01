@@ -62,6 +62,9 @@ function shellTool(name: string, description: string[], resolve: () => Promise<S
     parameters: PARAMETERS,
     // Commands issued together run at the same time (D71); the model orders dependent ones.
     concurrency: "parallel",
+    // The permission policy reads the command as the shell that runs it will: bash may fall
+    // back to PowerShell on Windows.
+    shellKind: async () => (await resolve()).kind,
     async execute({ command, timeout }, ctx) {
       if (typeof command !== "string" || command.trim() === "") return textResult("command is required", true)
       if (command.includes("\0")) return textResult("command must not contain NUL characters", true)
