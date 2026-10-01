@@ -110,6 +110,9 @@ export interface PendingNotice {
 
 export type ToolExposure = "active" | "inactive" | "deferred"
 
+/** The shell a shell tool runs its commands in. */
+export type ShellKind = "bash" | "powershell"
+
 export interface ToolDefinition<P = any> {
   name: string
   description: string
@@ -142,6 +145,13 @@ export interface ToolDefinition<P = any> {
    * web search, settings compat.webSearch), for a tool that would do the same.
    */
   supersededBy?: "webSearch"
+  /**
+   * For a tool that runs its `command` argument in a shell: which shell actually runs it, so
+   * the core permission policy reads the command the way that shell will. A tool with this is
+   * checked as a shell tool whatever its name; bash and powershell always are (the bash tool
+   * may fall back to PowerShell on Windows; without this, both readings are checked).
+   */
+  shellKind?(): ShellKind | Promise<ShellKind>
   execute(params: P, ctx: ToolContext): Promise<ToolResult>
 }
 

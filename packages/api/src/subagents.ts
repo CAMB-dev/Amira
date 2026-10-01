@@ -1,5 +1,6 @@
 import type { JSONSchema, ModelRef, Usage, UserMessage } from "@amira/ai"
 import type { AnyEvent } from "./events.ts"
+import type { CommandRule, PermissionMode } from "./settings.ts"
 import type { PendingNotice, ToolDefinition } from "./tools.ts"
 import type { AskQuestion } from "./ui.ts"
 
@@ -268,8 +269,21 @@ export interface ApprovalRequest {
   toolCallId: string
   name: string
   args: Record<string, unknown>
-  /** Why the interceptor asked. */
+  /** Why the interceptor asked (or the permission policy; then `permission` is set). */
   reason: string
+  /**
+   * Set when the core permission policy asked: the question goes to the user, also for a
+   * sub-agent's call, and says which mode or rule caused it.
+   */
+  permission?: ApprovalPermission
+}
+
+/** What made the core permission policy ask about a call. */
+export interface ApprovalPermission {
+  mode: PermissionMode
+  /** The mode, a rule, a command the rules cannot read, a protected path, or a tool plan mode does not know. */
+  cause: "mode" | "rule" | "complex" | "protected" | "tool"
+  rule?: CommandRule & { scope: "user" | "project"; file: string }
 }
 
 /** Questions a session puts to whoever answers for it (ToolSession.askUser). */

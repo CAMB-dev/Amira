@@ -94,6 +94,47 @@ export interface Settings {
   merge?: { reviewThreshold?: { lines?: number; files?: number } }
   /** The interactive terminal UI. */
   tui?: TuiSettings
+  /**
+   * The core permission policy: the mode and the command rules. A project file can only
+   * tighten them (see PermissionSettings).
+   */
+  permissions?: PermissionSettings
+}
+
+/**
+ * How much the model may do without asking: "plan" is read-only (no file changes, no shell
+ * commands), "edits" changes files without asking and asks before shell commands, "auto"
+ * (the default) asks about nothing beyond the rules and protected paths.
+ */
+export type PermissionMode = "plan" | "edits" | "auto"
+
+/** What a rule says about a command: run it without asking, ask first, or never run it. */
+export type PermissionDecision = "allow" | "ask" | "deny"
+
+/**
+ * A rule for shell commands, matched against the words of each command (argv), not its text:
+ * `{"command": ["git", "push"], "decision": "ask"}`. When several rules match, deny wins over
+ * ask and ask over allow. `allow` only means "do not ask"; it never lifts the mode or a
+ * protected path.
+ */
+export interface CommandRule {
+  command: string[]
+  decision: PermissionDecision
+  /** Shown with the question or the refusal. */
+  reason?: string
+}
+
+export interface PermissionSettings {
+  /**
+   * The mode a session starts in (default "auto"); Shift+Tab cycles it in the TUI and
+   * --permission-mode wins. A project file can choose a stricter mode, never a looser one.
+   */
+  mode?: PermissionMode
+  /**
+   * Command rules. The user file's and the project files' rules all apply; a project's
+   * `allow` rules only once the project is trusted (`amira ext trust`).
+   */
+  rules?: CommandRule[]
 }
 
 export interface PackageSettings {
