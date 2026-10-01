@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test"
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -11,6 +12,7 @@ import {
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
+import { artifactDir } from "../src/artifacts.ts"
 import { deleteSession, listSessions, sessionSnippet } from "../src/session-list.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
 
@@ -179,6 +181,22 @@ test("delete refuses the current session and traversal; removes owned children b
   deleteSession("/project", fork.id, undefined, dir)
   expect(existsSync(child.file)).toBe(false)
   expect(listSessions("/project", dir)).toEqual([])
+})
+
+test("delete removes the saved artifacts of the session and of its sub-agents", () => {
+  const dir = tmp()
+  const s = SessionStore.create({ cwd: "/project", dir })
+  s.appendMessage(userMessage("parent"))
+  const child = SessionStore.create({ cwd: "/project", dir: path.join(dir, "subagents") })
+  child.appendMessage(userMessage("child"))
+  s.append({ type: "subagent", childSessionId: child.id, role: "explorer" })
+  const outputs = [artifactDir(s.file, s.id), artifactDir(child.file, child.id)]
+  for (const out of outputs) {
+    mkdirSync(out, { recursive: true })
+    writeFileSync(path.join(out, "a_1.txt"), "saved output")
+  }
+  deleteSession("/project", s.id, undefined, dir)
+  for (const out of outputs) expect(existsSync(path.dirname(out))).toBe(false)
 })
 
 test("delete refuses a live session lease, then takes over a stale crash lease", () => {

@@ -164,12 +164,13 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
     }
     // Attachments are inline in message entries; there are no separate attachment files.
     for (const name of [...files].reverse()) {
-      // Captured file bytes first: a failure leaves the recording, so deleting again finishes.
-      const history = fileHistoryDir(name)
-      for (const part of [path.dirname(history), history]) {
+      // Its assets (captured file bytes, saved artifacts) first: a failure leaves the recording,
+      // so deleting again finishes.
+      const assets = path.dirname(fileHistoryDir(name))
+      for (const part of [assets, ...["files", "outputs"].map((n) => path.join(assets, n))]) {
         if (lstatOrUndefined(part)?.isSymbolicLink()) throw new Error("unsafe session asset symlink")
       }
-      rmSync(history, { recursive: true, force: true, maxRetries: 3 })
+      rmSync(assets, { recursive: true, force: true, maxRetries: 3 })
       unlinkSync(name)
       summaries.delete(name)
     }
