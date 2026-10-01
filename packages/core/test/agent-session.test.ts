@@ -590,6 +590,7 @@ test("splitHistory never summarizes an earlier summary alone", () => {
 
 test("extension records are kept in the session file, per key, and come back on resume", async () => {
   let seen: unknown[] | undefined
+  let dir: string | undefined
   const { agent, session, ai } = await setup([
     { toolCalls: [{ name: "note", args: {}, id: "c1" }] },
     { text: "noted" },
@@ -600,6 +601,7 @@ test("extension records are kept in the session file, per key, and come back on 
       description: "note",
       parameters: { type: "object" },
       execute: async (_p, ctx) => {
+        dir = ctx.session!.dir
         ctx.session!.data!.append("swarm", { key: "plan", value: "1. read" })
         ctx.session!.data!.append("other", 42)
         seen = ctx.session!.data!.read("swarm")
@@ -612,6 +614,8 @@ test("extension records are kept in the session file, per key, and come back on 
   agent.data.append("swarm", record)
   record.nested.list.push(3)
   await agent.prompt("go")
+  // The session's own directory for files, next to its file.
+  expect(dir).toBe(session.file.slice(0, -".jsonl".length))
   expect(seen).toEqual([
     { at: 1, nested: { list: [1, 2] } },
     { key: "plan", value: "1. read" },

@@ -62,6 +62,30 @@ export interface BashDetails {
   outputLines: number
 }
 
+/**
+ * A background job as the shell tools (background: true) and the job tools report it: what it
+ * runs and how it is doing at the time of the result.
+ */
+export interface BackgroundJobDetails {
+  jobId: string
+  command: string
+  /** "starting", "running", "exited", "stopped" or "failed". */
+  status: string
+  exitCode: number | null
+  pid?: number
+  /** The job's whole output, as far as it was written. */
+  logPath?: string
+  /** Lines of output in this result. */
+  outputLines: number
+  /** job_output with a pattern: whether a line matched, the job ended, or the wait timed out. */
+  waited?: "match" | "exit" | "timeout" | "aborted"
+}
+
+/** job_list: the jobs the calling session can see. */
+export interface JobListDetails {
+  jobs: { jobId: string; command: string; status: string; exitCode: number | null }[]
+}
+
 export interface GrepDetails {
   mode: "files_with_matches" | "content" | "count"
   /** Files with at least one match. */
