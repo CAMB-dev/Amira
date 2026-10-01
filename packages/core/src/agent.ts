@@ -992,7 +992,20 @@ export class Agent {
     const model = this.#autoTitle.model ?? this.model
     const messages = this.messages
       .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => `${m.role}: ${m.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")}`)
+      // Images stay out of the title request (its model may not take them); their names still
+      // tell it something when a message is only an image.
+      .map(
+        (m) =>
+          `${m.role}: ${m.content
+            .flatMap((b) =>
+              b.type === "text"
+                ? [b.text]
+                : b.type === "image"
+                  ? [`[image${b.name ? `: ${b.name}` : ""}]`]
+                  : [],
+            )
+            .join("")}`,
+      )
       .join("\n")
       .slice(0, 8000)
     void (async () => {

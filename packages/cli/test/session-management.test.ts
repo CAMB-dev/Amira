@@ -95,6 +95,21 @@ test("automatic names are short and use the current model without compact.model"
   expect(mock.requests[1]?.systemPrompt).toContain("user's language")
 })
 
+test("an image-only first message names the image in the title request without sending it", async () => {
+  const { mock, store, session } = await setup([{ text: "answer" }, { text: "Login screen" }], {
+    autoTitle: true,
+  })
+  await session.agent.prompt({
+    role: "user",
+    content: [{ type: "image", name: "login.png", mimeType: "image/png", data: "iVBORw0KGgo=" }],
+  })
+  await waitFor(() => !!store.title)
+  const sent = JSON.stringify(mock.requests[1]?.messages)
+  expect(sent).toContain("[image: login.png]")
+  expect(sent).not.toContain("iVBORw0KGgo=")
+  expect(store.title).toBe("Login screen")
+})
+
 test("a reasoning model gets room to think, and a title without spaces is cut to a short one", async () => {
   const { mock, store, host } = await setup([{ text: "answer" }, { text: "数".repeat(200) }], {
     autoTitle: true,
