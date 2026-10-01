@@ -381,7 +381,8 @@ export class Dialog implements Component {
   /** The question with its "?", and who asked in muted text; wrapped under itself. */
   #titleRows(width: number, theme: Theme): string[] {
     const r = this.request
-    const from = r.source ? theme.muted(` (${r.source})`) : ""
+    const sourceLabel = r.sourceLabel ?? r.source
+    const from = sourceLabel ? theme.muted(` (${sourceLabel})`) : ""
     const question = this.#current?.question ?? r.title
     const rows = wrapText(`${question}${from}`, Math.max(1, width - 2))
     return rows.map((l, i) => (i === 0 ? `${theme.accent(glyphs.question)} ${l}` : `  ${l}`))

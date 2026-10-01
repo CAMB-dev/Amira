@@ -166,9 +166,13 @@ export class ExtensionHost {
 
   /**
    * Imports an extension file and loads it. `source` names it in errors, /help and the like
-   * (default: the file's path); `hint` is added to its failures, e.g. how to turn it off.
+   * (default: the file's path); `name` labels its dialogs (default: the file's basename), and
+   * `hint` is added to its failures, e.g. how to turn it off.
    */
-  async loadFile(file: string, label: { source?: string; hint?: string } = {}): Promise<boolean> {
+  async loadFile(
+    file: string,
+    label: { source?: string; name?: string; hint?: string } = {},
+  ): Promise<boolean> {
     installVirtualApi()
     const abs = path.resolve(file)
     const source = label.source ?? abs
@@ -185,6 +189,7 @@ export class ExtensionHost {
     }
     if (typeof mod.default !== "function")
       return this.#fail(source, "extension must default-export a function")
+    this.ui.setSourceLabel(source, label.name ?? path.basename(file))
     return this.load(mod.default as Extension, source)
   }
 
@@ -305,7 +310,10 @@ export class ExtensionHost {
 
   /** Dialogs an extension leaves open are cancelled when it unloads. */
   #uiFor(source: string, track: (d: () => void) => void) {
-    track(() => this.ui.cancelAll(source))
+    track(() => {
+      this.ui.cancelAll(source)
+      this.ui.setSourceLabel(source, undefined)
+    })
     return this.ui.api(source)
   }
 

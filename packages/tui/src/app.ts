@@ -823,6 +823,27 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   /** The slash commands running now, each with the name of the command its line resolved to. */
   const commandAborts = new Map<AbortController, string | undefined>()
+  /**
+   * The message each running command sent with its typed line as display text: the echo shows
+   * that line already, so the message is not shown again when its turn starts (or it joins one).
+   */
+  const commandEchoes = new Map<AbortController, { line: string; text: string }>()
+  /** True when `prompt` is such a message; its echo is used up. */
+  function takeCommandEcho(prompt: UserMessage): boolean {
+    const echoed = [...commandEchoes].find(
+      ([, echo]) => prompt.display?.text === echo.line && userText(prompt) === echo.text,
+    )
+    if (!echoed) return false
+    commandEchoes.delete(echoed[0])
+    return true
+  }
+  /**
+   * A command's message whose display text is the line its echo already shows: only its note
+   * (what the command loaded), under the echo as the command's own output would be.
+   */
+  function echoedNote(prompt: UserMessage) {
+    if (prompt.display?.note) view.commandOutput("info", prompt.display.note)
+  }
   /** The newest running command that was not cancelled yet; the interrupt key cancels it first. */
   const cancellable = () => [...commandAborts].findLast(([c]) => !c.signal.aborted)
   function inputHint(): HintItems {
@@ -1096,7 +1117,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           mergedQueue && messageText(prompt) === mergedQueue.join("\n\n") ? mergedQueue : undefined
         mergedQueue = undefined
         const shown = merged ? merged.map((text) => ({ ...prompt, display: { text } })) : [prompt]
-        for (const m of shown) view.user(m)
+        if (takeCommandEcho(prompt)) echoedNote(prompt)
+        else for (const m of shown) view.user(m)
         termStatus.turnStarted()
         working = true
         thinking = false
@@ -1270,7 +1292,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        if (e.data.state === "injected") view.user(e.data.message)
+        const echoed = e.data.state !== "promoted" && takeCommandEcho(e.data.message)
+        if (e.data.state === "injected") {
+          if (echoed) echoedNote(e.data.message)
+          else view.user(e.data.message)
+        }
         // Stopped with Esc while messages waited: it goes out again at once, with the queued ones.
         else if (e.data.state === "dropped" && flush) {
           const m = e.data.message
@@ -1527,6 +1553,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     view.commandEcho(line)
     const abort = new AbortController()
     commandAborts.set(abort, commands!.commandName(line))
+    let sent = false
     void commands!
       .run(line, {
         frontend: "tui",
@@ -1535,7 +1562,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         openRewind,
         keys: keyHelp,
         signal: abort.signal,
+        onSend: (text, opts) => {
+          if (sent || opts?.display?.text !== line) return
+          commandEchoes.set(abort, { line, text })
+          sent = true
+          return () => void commandEchoes.delete(abort)
+        },
       })
+      // A successful send may still be waiting to join a busy turn after its command ends.
       .finally(() => commandAborts.delete(abort))
       .then(() => view.requestRender())
   }
@@ -1583,6 +1617,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     cancelClipboard()
     view.leaveSession()
     agent = next
+    commandEchoes.clear()
     pendingNotices.length = 0
     setRetry(undefined)
     termStatus.setFolder(next.cwd)

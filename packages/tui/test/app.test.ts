@@ -2529,6 +2529,142 @@ test("async argument candidates get a frame to arrive, so the key still draws on
   await exited
 })
 
+for (const mode of ["fullscreen", "inline"] as const) {
+  test(`${mode}: a command's matching display text is echoed once and remains rewindable`, async () => {
+    const longPrompt = "Investigate the project and coordinate workers to accomplish the goal."
+    const s = await setup([{ text: "Workers finished." }, { text: "Next answer." }], {
+      settings: { mode },
+      commands: [
+        {
+          name: "swarm",
+          description: "Coordinate workers",
+          run: async (goal, ctx) => {
+            await Bun.sleep(5)
+            await ctx.session.send(longPrompt, {
+              display: { text: `/swarm ${goal}`, note: "Coordinating workers" },
+            })
+          },
+        },
+      ],
+      control: {
+        send: async (text, opts) => {
+          await s.agent.prompt(userMessage(text, opts?.display))
+        },
+        rewind: async () => {},
+      },
+    })
+    try {
+      s.terminal.send("/swarm goal\r")
+      await s.shows("Workers finished.")
+      await s.idle()
+      expect(s.all().match(/› \/swarm goal/g)).toHaveLength(1)
+      expect(s.all()).not.toContain(longPrompt)
+      // The note of what it loaded hangs under the echo, as the command's own output would.
+      expect(s.all()).toContain("› /swarm goal\n\n  └ Coordinating workers")
+      expect(s.agent.messages[0]).toEqual(
+        userMessage(longPrompt, { text: "/swarm goal", note: "Coordinating workers" }),
+      )
+      s.terminal.send("\x1b[27u\x1b[27u")
+      await waitFor(() => s.live().includes("? Rewind the conversation"), "rewind picker")
+      expect(s.live()).toContain("❯ 1 /swarm goal")
+      s.terminal.send("\x1b[27u")
+      // A later, unrelated message with the same display must not lose its own echo.
+      await s.agent.prompt(userMessage("another prompt", { text: "/swarm goal" }))
+      await s.shows("Next answer.")
+      await s.idle()
+      expect(s.all().match(/› \/swarm goal/g)).toHaveLength(2)
+    } finally {
+      await closeImageApp(s)
+    }
+  })
+}
+
+for (const delivery of ["injected", "promoted"] as const) {
+  for (const mode of ["fullscreen", "inline"] as const) {
+    test(`${mode}: a command sent while busy is echoed once when ${delivery}`, async () => {
+      let release!: () => void
+      const until = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let sent = false
+      const s = await setup(
+        [
+          {
+            text: "First reply.",
+            hold: { chunks: 0, until },
+            ...(delivery === "injected" ? { toolCalls: [{ name: "read", args: { path: "a.ts" } }] } : {}),
+          },
+          { text: "Workers finished." },
+        ],
+        {
+          settings: { mode },
+          commands: [
+            {
+              name: "swarm",
+              description: "Coordinate workers",
+              run: async (_goal, ctx) => {
+                await ctx.session.send("long prompt", {
+                  display: { text: "/swarm goal", note: "Coordinating workers" },
+                })
+                sent = true
+              },
+            },
+          ],
+          control: {
+            send: async (text, opts) => {
+              const message = userMessage(text, opts?.display)
+              if (s.agent.busy) s.agent.steer(message)
+              else await s.agent.prompt(message)
+            },
+          },
+        },
+      )
+      try {
+        s.terminal.send("go\r")
+        await waitFor(() => s.agent.status === "working", "busy turn")
+        s.terminal.send("/swarm goal\r")
+        await waitFor(() => sent, "command completed while busy")
+        release()
+        await s.shows("Workers finished.")
+        await s.idle()
+        expect(s.all().match(/› \/swarm goal/g)).toHaveLength(1)
+        // Its turn was busy: the note, no longer under the echo, shows as a notice.
+        expect(s.all()).toContain("• Coordinating workers")
+        expect(s.agent.messages.filter((m) => m.role === "user")).toHaveLength(2)
+      } finally {
+        release()
+        await closeImageApp(s)
+      }
+    })
+  }
+}
+
+test("a command's different display text still shows alongside its command echo", async () => {
+  const s = await setup([{ text: "Done." }], {
+    commands: [
+      {
+        name: "swarm",
+        description: "Coordinate workers",
+        run: (_goal, ctx) => ctx.session.send("long prompt", { display: { text: "Workers' task" } }),
+      },
+    ],
+    control: {
+      send: async (text, opts) => {
+        await s.agent.prompt(userMessage(text, opts?.display))
+      },
+    },
+  })
+  try {
+    s.terminal.send("/swarm goal\r")
+    await s.shows("Done.")
+    await s.idle()
+    expect(s.all()).toContain("› /swarm goal")
+    expect(s.all()).toContain("› Workers' task")
+  } finally {
+    await closeImageApp(s)
+  }
+})
+
 test("a command's echo and everything it prints reach the screen in one frame", async () => {
   const writes: string[] = []
   const { terminal, live, shows, exited } = await setup([], {
@@ -2658,7 +2794,8 @@ test("a command that sends a long prompt shows as typed, with its note, while th
   await s.shows("Reviewing.")
   await s.idle()
   const text = s.all()
-  expect(text).toContain("› /review-pr 123\n  └ Loaded skill review-pr (40 lines)")
+  expect(text.match(/› \/review-pr 123/g)).toHaveLength(1)
+  expect(text).toContain("› /review-pr 123\n\n  └ Loaded skill review-pr (40 lines)")
   expect(text).not.toContain("instruction line")
   const sent = s.mock.requests[0]!.messages[0]!
   expect(sent).toEqual({ role: "user", content: [{ type: "text", text: long }] })
