@@ -660,7 +660,7 @@ test("a permission question says which rule or mode asked, and which sub-agent",
   const asked: string[] = []
   bus.subscribe((e) => {
     if (e.type !== "ui.request" || e.data.kind !== "confirm") return
-    asked.push(e.data.message)
+    asked.push(e.data.message ?? "")
     ui.respond(e.data.requestId, true)
   })
   const tree = {
