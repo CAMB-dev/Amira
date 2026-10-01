@@ -21,6 +21,9 @@ const defaultIO: PrintIO = {
 }
 
 const DEFAULT_BACKGROUND_JOB_WAIT_MS = 30_000
+/** --json-coalesce writes a merged delta once it holds this many characters or is this old. */
+const COALESCE_MAX_CHARS = 4096
+const COALESCE_MAX_MS = 100
 type PrintBackgroundJobs = Pick<BackgroundJobRegistry, "list" | "subscribe">
 
 export interface PrintOptions {
@@ -142,10 +145,22 @@ export async function runPrint(
       if (jsonFileOpen) jsonFile.write(line)
     } else io.stdout(line)
   }
+  // A merged delta is written once it is big or old enough, so the stream stays live.
+  let jsonFlushTimer: ReturnType<typeof setTimeout> | undefined
   const flushJson = () => {
+    clearTimeout(jsonFlushTimer)
+    jsonFlushTimer = undefined
     if (!jsonPending) return
     writeJson(jsonPending)
     jsonPending = undefined
+  }
+  const holdJson = (event: AnyEvent) => {
+    jsonPending = event
+    const data = event.type === "message.delta" ? event.data : undefined
+    const size =
+      data?.kind === "toolCall" ? data.argsDelta.length : data && "text" in data ? data.text.length : 0
+    if (data === undefined || size >= COALESCE_MAX_CHARS) flushJson()
+    else jsonFlushTimer ??= setTimeout(flushJson, COALESCE_MAX_MS)
   }
   const jsonEvent = (event: AnyEvent): AnyEvent => {
     if (event.type !== "message.delta" || event.data.kind !== "toolCall" || event.data.name === undefined)
@@ -209,11 +224,8 @@ export async function runPrint(
         return
       }
       const merged = jsonPending && coalesceJson(jsonPending, event)
-      if (merged) jsonPending = merged
-      else {
-        flushJson()
-        jsonPending = event
-      }
+      if (!merged) flushJson()
+      holdJson(merged || event)
       return
     }
     if (e.type === "subagent.start") {

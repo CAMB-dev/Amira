@@ -1072,3 +1072,26 @@ test("print mode refuses what would ask, saying why; auto mode runs it as before
   expect(edits.text).toContain('mode "edits": shell commands ask first')
   expect((await run("auto")).ran).toEqual(["ls"])
 })
+
+test("json coalescing writes a merged delta once it is large", async () => {
+  const { agent } = await mockSession([{ text: "done" }])
+  const text = (seq: number, t: string): AnyEvent =>
+    ({
+      seq,
+      ts: seq,
+      sessionId: agent.sessionId,
+      turnId: "turn-test",
+      type: "message.delta",
+      data: { kind: "text", text: t },
+    }) as AnyEvent
+  const pending = [text(1, "a".repeat(3000)), text(2, "b".repeat(3000)), text(3, "c")]
+  const io = capture()
+  expect(await runPrint(agent, "go", true, { io, pending, jsonCoalesce: true })).toBe(0)
+  const chunks = io.out
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((e) => e.type === "message.delta" && e.data.kind === "text" && e.turnId === "turn-test")
+    .map((e) => e.data.text.length)
+  expect(chunks).toEqual([6000, 1])
+})
