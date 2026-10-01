@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { type ToolPresenter, textResult } from "@amira/api"
+import { outputPreview, type ToolPresenter, textResult } from "@amira/api"
 import { builtinPresenters } from "@amira/builtin-tools"
 import { defaultTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { parseUnifiedDiff, renderToolLines } from "../src/diff-view.ts"
@@ -32,6 +32,44 @@ test("a tool without a presenter: its main argument, the first result line and h
       durationMs: 1500,
     }),
   ).toEqual(["● mcp_x q · limit=3", "  └ a (+2 lines) · 1.5s"])
+})
+
+test("a large output saved as an artifact: its preview's own lines show as short notes", () => {
+  const text = numbered(3000)
+  const preview = outputPreview({
+    text,
+    artifact: {
+      id: "a_0123456789",
+      path: "/s/x.assets/outputs/a_0123456789.txt",
+      tool: "mcp_x",
+      sessionId: "s",
+      chars: text.length,
+      lines: 3000,
+      bytes: text.length,
+      complete: true,
+      createdAt: "",
+    },
+    previewChars: 1200,
+  })
+  const saved = `… output saved as a_0123456789 · 3,000 lines · ${text.length.toLocaleString("en-US")} chars`
+  const call = { name: "mcp_x", args: {}, result: textResult(preview) }
+  const lines = show(undefined, call, "full" as never, 80)
+  expect(lines[1]).toBe("  └ 3,000 lines · saved as a_0123456789")
+  // The header is the result line's to say; the body starts with the output.
+  expect(lines[2]).toBe("    out 1")
+  expect(lines.some((l) => /^ {4}… [\d,]+ lines omitted \(\d+–\d+\)$/.test(l))).toBe(true)
+  expect(lines.at(-1)).toBe("    out 3000")
+  // A shell command's preview under its result, in full and in the summary view.
+  const shell = {
+    name: "bash",
+    args: { command: "make" },
+    result: { ...textResult(`${preview}\n\nExit code: 0`), details: { exitCode: 0, outputLines: 3000 } },
+  }
+  const full = show(builtinPresenters.bash, shell, "full" as never, 80)
+  expect(full[1]).toStartWith("  └ 3000 lines")
+  expect(full[2]).toBe(`    ${saved}`)
+  expect(full.join("\n")).not.toContain("[Output saved")
+  expect(show(builtinPresenters.bash, shell).at(-1)).toBe("    out 3000")
 })
 
 test("a failure shows its output under the result, its start and end when it is long", () => {

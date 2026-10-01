@@ -451,11 +451,17 @@ test("/prune reports artifacts by reference and deletes only the scope asked for
   expect(report).toMatch(/Unused\s+1/)
   // Showing deletes nothing.
   expect(pruned).toEqual([])
-  expect((await run("/prune unused")).text).toBe("Deleted 1 artifact (1.0 MB). Reading one now says it was pruned.")
+  expect((await run("/prune unused")).text).toBe(
+    "Deleted 1 artifact (1.0 MB). Reading one now says it was pruned.",
+  )
   expect((await run("/prune inactive")).text).toBe("Nothing to delete.")
   expect((await run("/prune everything")).error).toBe("usage: /prune [unused|inactive|all]")
   expect(pruned).toEqual(["unused", "inactive"])
-  expect((await host.complete("/prune ")).candidates.map((c) => c.value)).toEqual(["unused", "inactive", "all"])
+  expect((await host.complete("/prune ")).candidates.map((c) => c.value)).toEqual([
+    "unused",
+    "inactive",
+    "all",
+  ])
   const none = await setup()
   expect((await none.run("/prune")).error).toBe("this session keeps no artifacts")
 })
