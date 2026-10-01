@@ -126,6 +126,7 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
         },
         required: ["name"],
       },
+      traits: { readOnly: true },
       concurrency: "parallel",
       async execute(p, ctx) {
         const skill = find(p.name.trim())

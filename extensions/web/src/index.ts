@@ -84,6 +84,7 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
       },
       required: ["query"],
     },
+    traits: { readOnly: true },
     concurrency: "parallel",
     // A model that searches on the provider's side (hosted web search) does not get this one.
     supersededBy: "webSearch",
@@ -146,6 +147,7 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
       },
       required: ["url"],
     },
+    traits: { readOnly: true },
     concurrency: "parallel",
     async execute(p, ctx) {
       const limit = Math.min(

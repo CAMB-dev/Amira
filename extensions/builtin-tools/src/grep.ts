@@ -56,6 +56,7 @@ export const grepTool = defineTool<GrepParams>({
     required: ["pattern"],
     additionalProperties: false,
   },
+  traits: { readOnly: true, writesFiles: false },
   concurrency: "parallel",
   async execute(params, ctx) {
     const { pattern, glob, ignore_case } = params

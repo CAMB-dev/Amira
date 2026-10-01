@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises"
-import { extname } from "node:path"
+import { extname, resolve as resolveFsPath } from "node:path"
 import { defineTool, outputSize, type ReadDetails, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
 import { type LineWindow, type ReadLinesResult, readLineWindow } from "./lines.ts"
@@ -60,6 +60,13 @@ export const readTool = defineTool<ReadParams>({
     },
     required: ["path"],
     additionalProperties: false,
+  },
+  traits: { readOnly: true, writesFiles: false },
+  readKey: ({ path, offset, limit, force }, ctx) => {
+    if (typeof path !== "string" || !path || force === true) return undefined
+    const abs = resolveFsPath(ctx.cwd, path)
+    const file = process.platform === "win32" ? abs.toLowerCase() : abs
+    return JSON.stringify(["read/1", file, offset ?? 1, limit ?? null])
   },
   concurrency: "parallel",
   async execute({ path, offset, limit, force }, ctx) {

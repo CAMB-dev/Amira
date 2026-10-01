@@ -1,9 +1,11 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import type { ToolDefinition } from "@amira/api"
+import { builtinWrittenPaths } from "../tool-traits.ts"
 
 /**
- * Files the file tools (write, edit, apply_patch) always ask before changing, whatever the
+ * Files declared by file-writing tools always ask before changing, whatever the
  * mode: Amira's own settings, packages and lock files (any `.amira` directory and Amira's user
  * directory), Git's metadata (`.git`, where hooks and config live, and a `.git` file pointing
  * elsewhere), `.gitmodules`, the directories `core.hooksPath` names and the user's Git config.
@@ -242,20 +244,27 @@ export function protectedPath(cwd: string, p: string, opts: ProtectOptions = {})
 }
 
 /**
- * The paths a file tool call would write: `path` for write and edit, every file an
- * apply_patch patch adds, deletes, updates or moves to. Generous on purpose: a header line
- * anywhere counts, whether or not the patch would parse.
+ * The paths a call may write: the tool's own report, plus, for a tool under a built-in file
+ * tool's name, the paths its arguments name (so an override cannot report its way past the
+ * protected paths). Undefined when the tool has no reporter (and no built-in name) or its
+ * report fails or is malformed: callers treat that as unknown.
  */
-export function writtenPaths(toolName: string, args: Record<string, unknown>): string[] {
-  if (toolName === "write" || toolName === "edit") return typeof args.path === "string" ? [args.path] : []
-  if (toolName !== "apply_patch" || typeof args.patch !== "string") return []
-  const out: string[] = []
-  for (const raw of args.patch.split(/\r?\n/)) {
-    const line = raw.trim()
-    const header = /^\*\*\* (?:Add|Delete|Update) File: (.+)$/.exec(line)
-    const move = /^\*\*\* Move to: (.+)$/.exec(line)
-    const found = header?.[1] ?? move?.[1]
-    if (found) out.push(found)
+export async function writtenPaths(
+  tool: Pick<ToolDefinition, "name" | "getWrittenPaths">,
+  args: Record<string, unknown>,
+  cwd: string,
+): Promise<string[] | undefined> {
+  const builtin = builtinWrittenPaths(tool.name, args)
+  if (!tool.getWrittenPaths) return builtin
+  let reported: string[]
+  try {
+    const paths = await tool.getWrittenPaths(args, { cwd })
+    if (!Array.isArray(paths)) return undefined
+    reported = [...paths]
+    if (!reported.every((p) => typeof p === "string" && p.length > 0)) return undefined
+  } catch {
+    return undefined
   }
-  return out
+  if (!builtin) return reported
+  return [...new Set([...reported, ...builtin])]
 }

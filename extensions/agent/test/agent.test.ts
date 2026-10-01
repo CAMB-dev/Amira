@@ -80,6 +80,7 @@ async function setup(
       description: "read",
       parameters: { type: "object" },
       concurrency: "parallel",
+      traits: { readOnly: true, writesFiles: false },
       execute: async () => textResult("contents"),
     }),
     "test",
@@ -89,6 +90,8 @@ async function setup(
       name: "write",
       description: "write",
       parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } } },
+      traits: { writesFiles: "paths" },
+      getWrittenPaths: (p) => (typeof p.path === "string" ? [p.path] : []),
       execute: async (p, ctx) => {
         writeFileSync(path.resolve(ctx.cwd, p.path), p.content)
         return textResult("written")
@@ -205,6 +208,8 @@ test("patch-enabled coders report all changed paths and read-only roles cannot u
       name: "apply_patch",
       description: "patch files",
       parameters: { type: "object" },
+      traits: { writesFiles: "paths", editor: "apply_patch" },
+      getWrittenPaths: () => ["new.txt", "old.txt", "other.txt"],
       execute: async (_p, ctx) => ({
         ...textResult("patched"),
         details: {

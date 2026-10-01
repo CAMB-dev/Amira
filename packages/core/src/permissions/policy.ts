@@ -1,5 +1,6 @@
 import type { CommandRule, PermissionDecision, PermissionMode, ShellKind, ToolDefinition } from "@amira/api"
 import type { Approver } from "../agent.ts"
+import { toolTraits } from "../tool-traits.ts"
 import { type ProtectOptions, protectedPath, writtenPaths } from "./protected.ts"
 import { commandName, isWrapper, type ParsedLine, parseBash, parsePowerShell } from "./shell-parse.ts"
 
@@ -48,30 +49,6 @@ export interface PermissionVerdict {
   /** The rule that decided, when one did. */
   rule?: PermissionRule
 }
-
-/** Tools that change files; checked for plan mode and protected paths. */
-export const FILE_TOOLS = new Set(["write", "edit", "apply_patch"])
-
-/**
- * Tools plan mode lets run: they read (saved outputs too), search, ask, start sub-agents (which
- * inherit the mode) or look at background jobs (stopping one still asks).
- */
-export const READ_ONLY_TOOLS = new Set([
-  "read",
-  "output_read",
-  "grep",
-  "glob",
-  "ask_user",
-  "tool_search",
-  "web_search",
-  "web_fetch",
-  "skill",
-  "agent",
-  "agent_result",
-  "return_result",
-  "job_output",
-  "job_list",
-])
 
 const ALLOW: PermissionVerdict = { decision: "allow", reason: "" }
 const RANK: Record<PermissionDecision, number> = { allow: 0, ask: 1, deny: 2 }
@@ -257,49 +234,87 @@ export class Permissions {
     return () => this.#listeners.delete(listener)
   }
 
+  /** Asks when a call may write a protected path, or when the paths it writes are unknown. */
+  async #protectedWrites(
+    tool: Pick<ToolDefinition, "name" | "getWrittenPaths">,
+    args: Record<string, unknown>,
+    cwd: string,
+  ): Promise<PermissionVerdict> {
+    const name = tool.name
+    const paths = await writtenPaths(tool, args, cwd)
+    if (paths === undefined) {
+      return {
+        decision: "ask",
+        reason: `${name} may change protected files, but could not report its write paths`,
+        cause: "protected",
+      }
+    }
+    for (const p of paths) {
+      let hit: ReturnType<typeof protectedPath>
+      try {
+        hit = protectedPath(cwd, p, this.#protect)
+      } catch {
+        return {
+          decision: "ask",
+          reason: `${name} returned an invalid write path, so its protected files are unknown`,
+          cause: "protected",
+        }
+      }
+      if (hit)
+        return {
+          decision: "ask",
+          reason: `it changes ${hit.what}, which always asks first`,
+          cause: "protected",
+        }
+    }
+    return ALLOW
+  }
+
+  /** Checks a shell tool's `command` argument against the rules, read as each shell it may run in. */
+  async #shellCall(
+    tool: Pick<ToolDefinition, "name" | "traits" | "shellKind">,
+    args: Record<string, unknown>,
+    mode: PermissionMode,
+  ): Promise<PermissionVerdict> {
+    // A shell tool's command is its `command` argument; without one as text there is
+    // nothing to check, which counts as a command the rules cannot read.
+    const command = typeof args.command === "string" ? args.command : undefined
+    if (command === undefined) return this.#shell({ commands: [], complex: "no command text" }, mode, "bash")
+    const kinds = await shellKinds(tool)
+    return strictest(
+      kinds.map((k) => this.#shell(k === "bash" ? parseBash(command) : parsePowerShell(command), mode, k)),
+    )
+  }
+
   /** Decides a call of `tool` with `args` (the final ones, after interceptors), run in `cwd`. */
   async check(
-    tool: Pick<ToolDefinition, "name" | "shellKind">,
+    tool: Pick<ToolDefinition, "name" | "traits" | "shellKind" | "getWrittenPaths">,
     args: Record<string, unknown>,
     cwd: string,
   ): Promise<PermissionVerdict> {
     const mode = this.#mode
     const name = tool.name
-    if (FILE_TOOLS.has(name)) {
-      if (mode === "plan") {
-        return { decision: "deny", reason: 'mode "plan" is read-only: files are not changed', cause: "mode" }
-      }
-      for (const p of writtenPaths(name, args)) {
-        const hit = protectedPath(cwd, p, this.#protect)
-        if (hit) {
-          return {
-            decision: "ask",
-            reason: `it changes ${hit.what}, which always asks first`,
-            cause: "protected",
-          }
-        }
-      }
-      return ALLOW
+    // Built-in names keep their capabilities whatever a declaration says (see toolTraits).
+    const traits = toolTraits(tool)
+    const writesFiles = traits?.writesFiles
+    const shell = traits?.shell !== undefined || tool.shellKind !== undefined
+    const writes = writesFiles === true || writesFiles === "paths"
+    if (mode === "plan" && writes) {
+      return { decision: "deny", reason: 'mode "plan" is read-only: files are not changed', cause: "mode" }
     }
-    if (tool.shellKind || name === "bash" || name === "powershell") {
-      if (mode === "plan") {
-        return {
-          decision: "deny",
-          reason: 'mode "plan" is read-only: shell commands are not run (none can be proven read-only yet)',
-          cause: "mode",
-        }
+    if (mode === "plan" && shell) {
+      return {
+        decision: "deny",
+        reason: 'mode "plan" is read-only: shell commands are not run (none can be proven read-only yet)',
+        cause: "mode",
       }
-      // A shell tool's command is its `command` argument; without one as text there is
-      // nothing to check, which counts as a command the rules cannot read.
-      const command = typeof args.command === "string" ? args.command : undefined
-      if (command === undefined)
-        return this.#shell({ commands: [], complex: "no command text" }, mode, "bash")
-      const kinds = await shellKinds(tool)
-      return strictest(
-        kinds.map((k) => this.#shell(k === "bash" ? parseBash(command) : parsePowerShell(command), mode, k)),
-      )
     }
-    if (mode === "plan" && !READ_ONLY_TOOLS.has(name)) {
+    // A tool that writes files and also runs commands is checked as both.
+    const verdicts: PermissionVerdict[] = []
+    if (writes) verdicts.push(await this.#protectedWrites(tool, args, cwd))
+    if (shell) verdicts.push(await this.#shellCall(tool, args, mode))
+    if (writes || shell) return strictest(verdicts)
+    if (mode === "plan" && traits?.readOnly !== true) {
       return { decision: "ask", reason: `mode "plan": ${name} is not known to be read-only`, cause: "tool" }
     }
     return ALLOW
@@ -365,14 +380,19 @@ function ruleReason(rule: PermissionRule): string {
   return `${ruleLabel(rule)}${why}`
 }
 
-/** The shells a call may run in: the tool's own answer, else every reading that fits its name. */
-async function shellKinds(tool: Pick<ToolDefinition, "name" | "shellKind">): Promise<ShellKind[]> {
+/**
+ * The shells a call may run in: the tool's dynamic answer; without one, the declared shell,
+ * except that the built-in bash name (which may fall back to PowerShell on Windows) and an
+ * undeclared shell get every reading.
+ */
+async function shellKinds(tool: Pick<ToolDefinition, "name" | "traits" | "shellKind">): Promise<ShellKind[]> {
   if (tool.shellKind) {
     try {
       const kind = await tool.shellKind()
       if (kind === "bash" || kind === "powershell") return [kind]
     } catch {}
   }
-  if (tool.name === "powershell") return ["powershell"]
+  const declared = toolTraits(tool)?.shell
+  if (declared === "powershell" || (declared === "bash" && tool.name !== "bash")) return [declared]
   return ["bash", "powershell"]
 }

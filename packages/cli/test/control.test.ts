@@ -27,7 +27,16 @@ afterAll(() => {
 const shellTools: Extension = (api) => {
   for (const name of ["bash", "powershell", "read"]) {
     api.registerTool(
-      defineTool({ name, description: name, parameters: {}, execute: async () => textResult("") }),
+      defineTool({
+        name,
+        description: name,
+        parameters: {},
+        traits:
+          name === "read"
+            ? { readOnly: true, writesFiles: false as const }
+            : { shell: name as "bash" | "powershell" },
+        execute: async () => textResult(""),
+      }),
     )
   }
 }

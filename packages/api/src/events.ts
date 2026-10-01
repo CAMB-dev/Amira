@@ -11,7 +11,7 @@ import type {
 } from "@amira/ai"
 import type { CommandOutputLevel } from "./commands.ts"
 import type { Budget, ChildState, SpawnContext, SpawnGroupInfo, SubagentStatus } from "./subagents.ts"
-import type { ToolResult } from "./tools.ts"
+import type { ToolResult, ToolTraits } from "./tools.ts"
 import type { UiRequest } from "./ui.ts"
 
 /**
@@ -173,7 +173,13 @@ export interface EventMap {
      */
     | { kind: "serverTool"; block: ServerToolBlock }
   "message.end": { message: AssistantMessage }
-  "tool.execute.start": { toolCallId: string; name: string; args: Record<string, unknown> }
+  "tool.execute.start": {
+    toolCallId: string
+    name: string
+    args: Record<string, unknown>
+    traits?: ToolTraits
+    writtenPaths?: string[]
+  }
   "tool.execute.update": { toolCallId: string; name: string; partial: ToolResult }
   /**
    * Emitted for every tool call, including ones that never ran; `rejected` says why.
@@ -184,6 +190,8 @@ export interface EventMap {
     name: string
     result: ToolResult
     durationMs: number
+    traits?: ToolTraits
+    writtenPaths?: string[]
     rejected?: ToolRejection
     /**
      * The call ran after an approval (D13): `user` when the user allowed it, `rule` when a

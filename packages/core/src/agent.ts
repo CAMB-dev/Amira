@@ -39,6 +39,7 @@ import {
   type CompactionReason,
   type CompactionUsage,
   type EventMap,
+  type MutateFiles,
   type OutputStore,
   outputPreview,
   outputSize,
@@ -101,6 +102,7 @@ import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { Permissions, type PermissionVerdict } from "./permissions/policy.ts"
+import { writtenPaths } from "./permissions/protected.ts"
 import {
   addNonInteractive,
   NON_INTERACTIVE_LINE,
@@ -112,6 +114,7 @@ import { newSessionId, type SessionEntryData, SessionStore } from "./session-sto
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
+import { toolTraits } from "./tool-traits.ts"
 import { checkArgs } from "./validate-args.ts"
 
 export interface ApprovalDecision {
@@ -266,6 +269,8 @@ export const NOTICE_RETRY_MS = [10_000, 30_000, 90_000]
  */
 interface CallRun {
   call: ToolCallBlock
+  tool?: ToolDefinition
+  writtenPaths?: string[]
   /** tool.execute.start has been emitted. */
   started: boolean
   /** The batch recorded this call's result; later updates and results from it are dropped. */
@@ -343,6 +348,8 @@ export class Agent {
    * per result and kept, so later requests repeat the same text.
    */
   #views = new Map<Message, ContextView>()
+  /** The definition that executed a call, kept when a tool is later disabled or replaced. */
+  #callTools = new WeakMap<ToolCallBlock, ToolDefinition>()
   /** Aging rounds so far (A3), for the next round's number. */
   #agingEpoch = 0
   /** Tokens aging freed since the last reply told the context size (an estimate). */
@@ -1459,10 +1466,8 @@ export class Agent {
     const provider = this.providerSettings[this.model.provider]
     const editing =
       provider?.models?.find((m) => m.id === this.model.id)?.tools?.edit ?? provider?.tools?.edit ?? "edit"
-    if (
-      (tool.name === "apply_patch" && editing === "edit") ||
-      (tool.name === "edit" && editing === "apply_patch")
-    ) {
+    const editor = toolTraits(tool)?.editor
+    if (editor !== undefined && editor !== editing && editing !== "both") {
       return `the editing tool choice for ${this.model.provider}/${this.model.id} is "${editing}". Set providers.${this.model.provider}.tools.edit or this model's models[].tools.edit to "${tool.name}" or "both" in settings.json and restart the session`
     }
     return undefined
@@ -1501,6 +1506,16 @@ export class Agent {
       { systemPrompt: renderPrompt(sections), messages: projectMessages(this.messages, this.#views) },
       { sessionId: this.sessionId, signal },
     )
+  }
+
+  #readKey(call: ToolCallBlock, cwd = this.cwd): string | undefined {
+    const tool = this.#callTools.get(call) ?? this.tools.get(call.name)
+    if (!tool?.readKey) return undefined
+    try {
+      return tool.readKey(call.args, { cwd })
+    } catch {
+      return undefined
+    }
   }
 
   async #callModel(turn: Turn): Promise<ModelReply> {
@@ -1659,6 +1674,8 @@ export class Agent {
         const call = run.call
         if (turn.signal.aborted) break
         const tool = this.tools.get(call.name)
+        run.tool = tool
+        if (tool) this.#callTools.set(call, tool)
         const serial = tool !== undefined && (tool.concurrency ?? "serial") === "serial"
         if (serial) await this.#untilDoneOrAbandoned(turn.signal, Promise.all(started))
         while (running.size >= this.#maxParallelTools && !turn.signal.aborted) {
@@ -1684,7 +1701,7 @@ export class Agent {
         if (!run.result) {
           run.result = toolError(run.call, "Aborted by the user before this tool finished.")
           this.#emitToolStart(turn, run, run.call.args)
-          this.#emitToolEnd(turn, run.call, { content: run.result.content, isError: true }, 0, "aborted")
+          this.#emitToolEnd(turn, run, { content: run.result.content, isError: true }, 0, "aborted")
         }
         run.finished = true
       }
@@ -1701,7 +1718,8 @@ export class Agent {
    * artifact's id. Saving that fails leaves a preview that says so. Images stay as they are.
    */
   async #keepLarge(call: ToolCallBlock, result: ToolResult): Promise<ToolResult> {
-    if (call.name === "output_read") return result
+    const reader = this.#callTools.get(call) ?? this.tools.get(call.name)
+    if (reader && toolTraits(reader)?.artifactReader) return result
     const texts = result.content.flatMap((b) => (b.type === "text" ? [b.text] : []))
     const text = texts.join("\n")
     if (outputSize(text) <= this.artifacts.limits.saveAbove) return result
@@ -1725,15 +1743,19 @@ export class Agent {
 
   /** A2: views for the reads among a batch's results that repeat an earlier read still in context. */
   #dedupe(results: ToolResultMessage[]): [ToolResultMessage, ContextView][] {
-    if (this.#context.dedupeReads === false || !results.some((r) => r.toolName === "read")) return []
+    if (this.#context.dedupeReads === false) return []
+    // Only a tool that names repeatable reads can repeat one.
+    if (!results.some((r) => this.tools.get(r.toolName)?.readKey)) return []
     const all = [...this.messages, ...results]
     const pairs = pairCalls(all)
     const out: [ToolResultMessage, ContextView][] = []
     for (const [i, result] of results.entries()) {
       const call = pairs.get(result)
-      if (call?.name !== "read") continue
+      if (!call || !this.#readKey(call)) continue
       const history = all.slice(0, this.messages.length + i)
-      const view = duplicateView(history, this.#views, pairs, result, call, this.cwd)
+      const view = duplicateView(history, this.#views, pairs, result, call, this.cwd, (c, cwd) =>
+        this.#readKey(c, cwd),
+      )
       if (!view) continue
       this.#views.set(result, view)
       out.push([result, view])
@@ -1864,10 +1886,20 @@ export class Agent {
           artifact = (await this.artifacts.save({ text, tool: p.m.toolName, toolCallId: p.m.toolCallId })).id
         } catch {
           // Without its artifact only a file read can be read again.
-          if (p.call?.name !== "read") continue
+          if (!p.call || !this.#readKey(p.call)) continue
         }
       }
-      const view: ContextView = { kind: "aged", text: agedStub(p.m, p.call, artifact), epoch }
+      const tool = p.call ? (this.#callTools.get(p.call) ?? this.tools.get(p.call.name)) : undefined
+      // A tool no longer registered (disabled, unloaded) is judged by its name, as built-ins were.
+      const traits = toolTraits(tool ?? { name: p.m.toolName })
+      const view: ContextView = {
+        kind: "aged",
+        text: agedStub(p.m, p.call, artifact, {
+          read: tool ? tool.readKey !== undefined : p.m.toolName === "read",
+          shell: traits?.shell !== undefined || tool?.shellKind !== undefined,
+        }),
+        epoch,
+      }
       this.#views.set(p.m, view)
       aged.push([p.m, view])
       freed += p.saved
@@ -1921,7 +1953,7 @@ export class Agent {
         call,
         await this.#afterTool(turn, run, batch, args, first, rejected),
       )
-      if (!run.finished) this.#emitToolEnd(turn, call, result, durationMs, rejected, run.approval)
+      if (!run.finished) this.#emitToolEnd(turn, run, result, durationMs, rejected, run.approval)
       return {
         role: "toolResult",
         toolCallId: call.id,
@@ -1941,6 +1973,7 @@ export class Agent {
         )
       }
       const tool = this.tools.get(call.name)
+      run.tool = tool
       // A tool hidden from this model is not available even if it calls the name anyway.
       if (!tool || !this.#allowsTool(tool)) {
         const names = this.tools
@@ -1997,6 +2030,8 @@ export class Agent {
       }
       const problem = checkArgs(tool.parameters, args)
       if (problem) return await reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`, args)
+      const paths = await writtenPaths(tool, args, this.cwd)
+      if (paths !== undefined) run.writtenPaths = paths
 
       // Listeners get a copy: the arguments the policy checked are the ones the tool runs with.
       this.#emitToolStart(turn, run, copyArgs(args))
@@ -2005,33 +2040,62 @@ export class Agent {
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
       let result: ToolResult
       try {
-        result = normalizeResult(
-          await tool.execute(args, {
-            cwd: this.cwd,
-            toolCallId: call.id,
-            signal: turn.signal,
-            ...(this.#steerAbort ? { steerSignal: this.#steerAbort.signal } : {}),
-            ...(this.backgroundJobs ? { backgroundJobs: this.backgroundJobs } : {}),
-            session: this.#callSession(turn, call.id),
-            ...(this.fileRewind
-              ? {
-                  mutateFiles: (changes, write) => {
-                    if (this.#storeFailed && this.fileRewind!.enabled)
-                      throw new Error("File write refused: the session could not be saved")
-                    return this.fileRewind!.mutate(changes, write, {
-                      sessionId: this.sessionId,
-                      toolCallId: call.id,
-                      turnId: turn.id,
-                    })
-                  },
-                }
-              : {}),
-            update: (partial) => {
-              if (run.finished) return
-              this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })
+        const mutateFiles: MutateFiles | undefined = this.fileRewind
+          ? async (changes, write) => {
+              if (this.#storeFailed && this.fileRewind!.enabled)
+                throw new Error("File write refused: the session could not be saved")
+              return this.fileRewind!.mutate(changes, write, {
+                sessionId: this.sessionId,
+                toolCallId: call.id,
+                turnId: turn.id,
+              })
+            }
+          : undefined
+        const context = {
+          cwd: this.cwd,
+          toolCallId: call.id,
+          signal: turn.signal,
+          ...(this.#steerAbort ? { steerSignal: this.#steerAbort.signal } : {}),
+          ...(this.backgroundJobs ? { backgroundJobs: this.backgroundJobs } : {}),
+          session: this.#callSession(turn, call.id),
+          ...(mutateFiles ? { mutateFiles } : {}),
+          update: (partial: ToolResult) => {
+            if (run.finished) return
+            this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })
+          },
+        }
+        const traits = toolTraits(tool)
+        const pathCapture =
+          this.fileRewind?.enabled &&
+          paths !== undefined &&
+          paths.length > 0 &&
+          (traits?.writesFiles === true || traits?.writesFiles === "paths") &&
+          traits.usesMutationHook !== true
+        const execute = (mutateFilesOverride?: MutateFiles) =>
+          tool.execute(args, {
+            ...context,
+            ...(mutateFilesOverride ? { mutateFiles: mutateFilesOverride } : {}),
+          })
+        if (pathCapture) {
+          // Like the mutateFiles hook: no captured write once the session cannot be saved.
+          if (this.#storeFailed) throw new Error("File write refused: the session could not be saved")
+          let captured: ToolResult | undefined
+          await this.fileRewind!.mutatePaths(
+            paths!,
+            this.cwd,
+            async (mutateFiles) => {
+              captured = await execute(mutateFiles)
             },
-          }),
-        )
+            {
+              sessionId: this.sessionId,
+              toolCallId: call.id,
+              turnId: turn.id,
+            },
+          )
+          result = normalizeResult(captured!)
+        } else {
+          result = normalizeResult(await execute(mutateFiles))
+        }
       } catch (err) {
         const msg = turn.signal.aborted
           ? "Aborted by the user."
@@ -2051,7 +2115,7 @@ export class Agent {
       run.returned = true
       this.#emitToolStart(turn, run, call.args)
       if (!run.finished) {
-        this.#emitToolEnd(turn, call, { content: [{ type: "text", text }], isError: true }, 0, "blocked")
+        this.#emitToolEnd(turn, run, { content: [{ type: "text", text }], isError: true }, 0, "blocked")
       }
       return toolError(call, text)
     }
@@ -2178,22 +2242,32 @@ export class Agent {
   #emitToolStart(turn: Turn, run: CallRun, args: Record<string, unknown>) {
     if (run.started) return
     run.started = true
-    this.#emit(turn, "tool.execute.start", { toolCallId: run.call.id, name: run.call.name, args })
+    const traits = run.tool && toolTraits(run.tool)
+    this.#emit(turn, "tool.execute.start", {
+      toolCallId: run.call.id,
+      name: run.call.name,
+      args,
+      ...(traits ? { traits } : {}),
+      ...(run.writtenPaths !== undefined ? { writtenPaths: run.writtenPaths } : {}),
+    })
   }
 
   #emitToolEnd(
     turn: Turn,
-    call: ToolCallBlock,
+    run: CallRun,
     result: ToolResult,
     durationMs: number,
     rejected?: ToolRejection,
     approval?: ToolApproval,
   ) {
+    const traits = run.tool && toolTraits(run.tool)
     this.#emit(turn, "tool.execute.end", {
-      toolCallId: call.id,
-      name: call.name,
+      toolCallId: run.call.id,
+      name: run.call.name,
       result,
       durationMs,
+      ...(traits ? { traits } : {}),
+      ...(run.writtenPaths !== undefined ? { writtenPaths: run.writtenPaths } : {}),
       ...(rejected ? { rejected } : {}),
       ...(approval ? { approval } : {}),
     })
