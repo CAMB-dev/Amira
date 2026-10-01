@@ -18,6 +18,7 @@ import type { ServerConfig } from "../src/config.ts"
 import { HttpTransport } from "../src/http.ts"
 import { createMcpExtension, type McpExtensionOptions } from "../src/index.ts"
 import { StdioTransport } from "../src/stdio.ts"
+import { mcpToolName } from "../src/tools.ts"
 import { startHttpServer } from "./fixtures/server.ts"
 
 const FIXTURE = path.join(import.meta.dir, "fixtures", "server.ts")
@@ -88,10 +89,11 @@ test(
       mcpServers: [{ scope: "user" as const, file: userFile, value: servers }],
     })
     const bus = new EventBus()
+    const tools = new ToolRegistry()
     const host = new ExtensionHost({
       bus,
       interceptors: new InterceptorRegistry(),
-      tools: new ToolRegistry(),
+      tools,
       cwd: import.meta.dir,
       settings: {},
       settingsLayers: layers({
@@ -106,7 +108,9 @@ test(
       await mcp.settled()
       const keepPid = readFileSync(file("keep-before"), "utf8")
       const changePid = readFileSync(file("change-before"), "utf8")
+      const removePid = readFileSync(file("remove"), "utf8")
       expect(mcp.servers().map((s) => s.name)).toEqual(["keep", "remove", "change"])
+      expect(tools.has(mcpToolName("remove", "echo"))).toBe(true)
 
       host.unloadAll()
       host.setSettings(
@@ -124,7 +128,15 @@ test(
       expect(readFileSync(file("change-after"), "utf8")).not.toBe(changePid)
       expect(existsSync(file("add"))).toBe(true)
       expect(mcp.servers().map((s) => s.name)).toEqual(["keep", "add", "change"])
+      expect(mcp.servers().every((s) => s.state === "ready")).toBe(true)
       expect(host.loaded).toEqual(["builtin:mcp"])
+      // The kept server's tools are registered again for the reloaded extension; the removed
+      // server's are gone, and the removed and replaced processes have stopped.
+      expect(tools.has(mcpToolName("keep", "echo"))).toBe(true)
+      expect(tools.has(mcpToolName("remove", "echo"))).toBe(false)
+      expect(await gone(Number(removePid))).toBe(true)
+      expect(await gone(Number(changePid))).toBe(true)
+      expect(alive(Number(keepPid))).toBe(true)
     } finally {
       await mcp.close()
       rmSync(dir, { recursive: true, force: true })
@@ -132,6 +144,24 @@ test(
   },
   SLOW,
 )
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Waits until the process is gone; false if it still runs after `ms`. */
+async function gone(pid: number, ms = 15_000): Promise<boolean> {
+  for (const end = Date.now() + ms; Date.now() < end; ) {
+    if (!alive(pid)) return true
+    await Bun.sleep(100)
+  }
+  return false
+}
 
 /**
  * The rejection message. `expect(p).rejects` is avoided on purpose: while it waits, bun test
