@@ -1004,7 +1004,7 @@ export class Agent {
   }
 
   #offeredTools() {
-    return offeredTools(this.tools, this.#loadedTools, { allow: (t) => this.#allowsTool(t) })
+    return offeredTools(this.tools, this.#loadedTools, (t) => this.#allowsTool(t))
   }
 
   /** Deferred tools this model may load, after its provider and model choices. */

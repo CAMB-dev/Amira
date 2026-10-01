@@ -14,20 +14,18 @@ export const TOOL_SEARCH = "tool_search"
 /**
  * What the model is offered on a call: active tools, then the deferred ones this session
  * loaded (in load order). tool_search itself is only offered while something is deferred.
- * `nativeWebSearch`: the model searches on the provider's side, so tools that would do the
- * same (supersededBy "webSearch") are left out.
+ * `allow` leaves out tools this model may not use (the agent's toolRestriction): those its
+ * hosted web search stands in for, and the editing tool its settings did not choose.
  */
 export function offeredTools(
   registry: ToolRegistry,
   loaded: Iterable<string>,
-  opts: { nativeWebSearch?: boolean; allow?: (tool: ToolDefinition) => boolean } = {},
+  allow: (tool: ToolDefinition) => boolean = () => true,
 ): ToolSpec[] {
-  const allowed = (t: ToolDefinition) =>
-    !(opts.nativeWebSearch === true && t.supersededBy === "webSearch") && (opts.allow?.(t) ?? true)
-  const deferred = registry.deferred().filter(allowed)
+  const deferred = registry.deferred().filter(allow)
   const active = registry
     .active()
-    .filter(allowed)
+    .filter(allow)
     .filter((t) => t.name !== TOOL_SEARCH || deferred.length > 0)
   const byName = new Map(deferred.map((t) => [t.name, t]))
   const extra: ToolDefinition[] = []
