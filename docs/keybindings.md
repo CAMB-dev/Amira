@@ -1,5 +1,7 @@
 # Keybindings
 
+[简体中文](zh/keybindings.md) · [Documentation](../README.md)
+
 Every key the interactive UI answers belongs to an action. To change keys, put a JSON object
 in `~/.amira/keybindings.json` (or `$AMIRA_HOME/keybindings.json`) that maps action names to
 a key or a list of keys:
@@ -54,8 +56,8 @@ from `terminal.integrated.commandsToSkipShell`.
 | `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it (steer it with `tui.submitWhileWorking: "queue"`) |
 | `submit.steer` | none | Send the message; while a turn runs, always steer it |
 | `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |
-| `interrupt` | `escape` | Stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. Files are not restored |
-| `cancel` | `ctrl+c` | Stop the running turn (with steering or queued messages waiting, they go out as for `interrupt`), else clear the input, else quit |
+| `interrupt` | `escape` | Cancel a running command, preserving the input; otherwise stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. Files are not restored |
+| `cancel` | `ctrl+c` | Cancel a running command, preserving the input; otherwise stop the running turn (with steering or queued messages waiting, they go out as for `interrupt`), else clear the input, else quit |
 | `exit` | `ctrl+d` | Quit when the input is empty and nothing runs |
 | `redraw` | `ctrl+l` | Clear the screen and draw it again: the latest transcript and the input |
 | `history.prev` | `up` | Recall the previous prompt (from the input's first line) |
@@ -119,6 +121,13 @@ option of that section is selected; such a key answers on the selected option. I
 `/agents` list, Enter on a sub-agent opens the live viewer on it and `p` prints its transcript
 into the conversation instead; Enter on a worktree a sub-agent kept shows its diff, to merge,
 keep or discard it.
+
+In `/ext`, Enter manages an installed extension or installs one from the index; `d` shows
+details of the selected extension. Typing filters the list; once a filter has text, `d` is
+part of the filter. Install and update keep the input available and show a live progress
+panel. Outside a dialog or completion list, Esc (`interrupt`) or Ctrl+C (`cancel`) cancels
+the running command and preserves the draft; changes already completed stay installed.
+The hint uses the current keybindings. Changes take effect with `/reload` while idle.
 
 A confirmation (such as an approval) starts with nothing selected: Enter does nothing until
 an option is picked with the arrows, so keys typed into a message just as it shows up cannot
@@ -269,5 +278,7 @@ These live under `tui` in `settings.json`, the user's or a project's (`.amira/se
 | `tui.bell` | `true` | Ring the bell when a turn ends or a dialog opens while the terminal is in the background; where the terminal does not report focus, only after a turn of 15 seconds or more |
 | `tui.reflow` | `"auto"` | Inline mode: `"off"` for terminals that do not re-wrap lines when they get narrower, so a resize does not erase the transcript above the input; `"auto"` and `"on"` assume they do |
 | `tui.submitWhileWorking` | `"steer"` | What `submit` (Enter) does while a turn runs: `"steer"` sends the message into the running turn, `"queue"` sends it after the turn. The `queue` key does the other one, and the hint line says which (`Enter queue · Ctrl+Q steer`). Slash commands run at once either way |
-| `tui.images` | `"auto"` | Draw images that stand on a line of their own in replies, with the optional `images` extension installed (`amira ext install images`; it reads local files, and http(s) URLs with web_fetch's private-network protection, up to 10 MB): `"auto"` where the terminal says it can — Windows Terminal 1.22+ (Sixel), VS Code with `terminal.integrated.enableImages`, iTerm2, WezTerm, kitty, Ghostty; `"on"` everywhere; `"off"` never. Otherwise, and when an image fails or takes over 3 seconds, it shows as `🖼` and its alt text, linked to the image |
+| `tui.images` | `"auto"` | Draw images that stand on a line of their own in replies, with the optional [`images`](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/images/README.md) extension installed (`amira ext install images`; it reads local files, and http(s) URLs with web_fetch's private-network protection, up to 10 MB): `"auto"` where the terminal says it can — Windows Terminal 1.22+ (Sixel), VS Code with `terminal.integrated.enableImages`, iTerm2, WezTerm, kitty, Ghostty; `"on"` everywhere; `"off"` never. Otherwise, and when an image fails or takes over 3 seconds, it shows as `🖼` and its alt text, linked to the image |
 | `tui.shellOutputLines` | `3` | How many of its last output lines a shell command that succeeded shows under its result, as many as show while it runs; `0` shows none. A failed command shows its output's start and end, and the `full` tool output level (Ctrl+O) all of it |
+
+Related: [usage](usage.md), [getting started](getting-started.md), [sub-agents](subagents.md), [settings reference](settings.md).
