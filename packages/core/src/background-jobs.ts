@@ -342,3 +342,109 @@ class SessionBackgroundJobs implements BackgroundJobSession {
     return this.#host.subscribeIn(this.#scope, listener)
   }
 }
+
+/**
+ * One extension's view of the host jobs: the same host, except that the jobs it starts and the
+ * listeners it subscribes end with the extension (`dispose`, run on unload or a failed load).
+ * Jobs started by sessions' tools are not the extension's: they end with their session.
+ */
+export class ExtensionBackgroundJobs implements BackgroundJobHost {
+  readonly #host: BackgroundJobHost
+  readonly #started = new Set<string>()
+  readonly #listeners = new Set<() => void>()
+
+  constructor(host: BackgroundJobHost) {
+    this.#host = host
+  }
+
+  get maxRunning(): number {
+    return this.#host.maxRunning
+  }
+
+  configure(limits: { maxRunning?: number; bufferChars?: number }): void {
+    this.#host.configure(limits)
+  }
+
+  isLimitError(error: unknown): error is Error {
+    return this.#host.isLimitError(error)
+  }
+
+  start(options: BackgroundJobStartOptions): BackgroundJobInfo {
+    const job = this.#host.start(options)
+    this.#started.add(job.id)
+    return job
+  }
+
+  get(id: string): BackgroundJobInfo | undefined {
+    return this.#host.get(id)
+  }
+
+  list(): BackgroundJobInfo[] {
+    return this.#host.list()
+  }
+
+  running(): BackgroundJobInfo[] {
+    return this.#host.running()
+  }
+
+  output(id: string, from?: number): BackgroundJobOutput {
+    return this.#host.output(id, from)
+  }
+
+  tail(id: string, maxChars: number): string {
+    return this.#host.tail(id, maxChars)
+  }
+
+  cursor(id: string, reader: string): number {
+    return this.#host.cursor(id, reader)
+  }
+
+  readNew(id: string, reader: string, maxChars?: number): BackgroundJobOutput {
+    return this.#host.readNew(id, reader, maxChars)
+  }
+
+  markRead(id: string, reader: string, to?: number): void {
+    this.#host.markRead(id, reader, to)
+  }
+
+  waitFor(id: string, options: BackgroundJobWaitOptions): Promise<BackgroundJobWaitResult> {
+    return this.#host.waitFor(id, options)
+  }
+
+  stop(id: string, graceMs?: number): Promise<BackgroundJobInfo> {
+    return this.#host.stop(id, graceMs)
+  }
+
+  stopAll(which?: (job: BackgroundJobInfo) => boolean, graceMs?: number): Promise<BackgroundJobInfo[]> {
+    return this.#host.stopAll(which, graceMs)
+  }
+
+  subscribe(listener: (change: BackgroundJobChange) => void): () => void {
+    const off = this.#host.subscribe(listener)
+    const remove = () => {
+      this.#listeners.delete(remove)
+      off()
+    }
+    this.#listeners.add(remove)
+    return remove
+  }
+
+  forSession(info: BackgroundJobSessionInfo): BackgroundJobSession {
+    return this.#host.forSession(info)
+  }
+
+  closeSession(sessionId: string, graceMs?: number): Promise<BackgroundJobInfo[]> {
+    return this.#host.closeSession(sessionId, graceMs)
+  }
+
+  closeRoot(rootSessionId: string, graceMs?: number): Promise<BackgroundJobInfo[]> {
+    return this.#host.closeRoot(rootSessionId, graceMs)
+  }
+
+  /** Removes the extension's listeners and stops the jobs it started. */
+  dispose(): void {
+    for (const off of [...this.#listeners]) off()
+    const started = this.#started
+    if (started.size) void this.#host.stopAll((job) => started.has(job.id), 0)
+  }
+}

@@ -192,7 +192,7 @@ amira
 
 `readNew` 为每个 reader 名称维护独立游标，因此多个 reader 可以分别增量读取同一份输出。`waitFor` 可以等待正则表达式匹配、进程退出、超时或 abort signal。`subscribe` 会报告启动、状态、输出和结束变化；先用带宽限期的 `stop`，需要强制停止时再用 `0` 调用一次。
 
-注册表提供 `maxRunning`、`configure` 和 `isLimitError` 来处理限制。子 agent 的会话任务会在 `subagent.end` 事件交付后自动停止，根会话切换时该会话的任务也会停止；直接通过 `ExtensionAPI.backgroundJobs` 启动的 host 级任务不会归属于调用会话，而会在扩展卸载或进程退出时停止。扩展应使用此 API，不要访问 `@amira/proc` 的全局注册表。
+注册表提供 `maxRunning`、`configure` 和 `isLimitError` 来处理限制。子 agent 的会话任务会在 `subagent.end` 事件交付后自动停止，根会话切换时该会话的任务也会停止；直接通过 `ExtensionAPI.backgroundJobs` 启动的 host 级任务不会归属于调用会话，而会在启动它的扩展卸载（其 `subscribe` 监听也一并移除）或 Amira 退出时停止。卸载扩展（包括 `/reload`）不会停止会话中工具启动的任务。扩展应使用此 API，不要访问 `@amira/proc` 的全局注册表。
 
 注册方法返回移除函数，host 会跟踪注册。卸载时自动移除；加载失败则回滚已注册内容。命令、工具、skill、状态项或 panel 重名时，有意替换需要 `override: true`，具体冲突规则以对应类型为准，避免意外替换其他扩展的内容。
 

@@ -164,7 +164,7 @@ test("limits, ownership cleanup and root cleanup are part of the host contract",
   expect(processes.map((process) => process.stops)).toEqual([[0], [0]])
 })
 
-test("ExtensionAPI exposes the host and unload/exit cleanup stop its jobs", async () => {
+test("ExtensionAPI exposes the host; unload stops the extension's jobs, exit stops every job", async () => {
   const first = fakeHost()
   const extensionHost = new ExtensionHost({
     bus: new EventBus(),
@@ -176,10 +176,23 @@ test("ExtensionAPI exposes the host and unload/exit cleanup stop its jobs", asyn
   await extensionHost.load((value) => {
     api = value
   }, "ext:jobs")
-  const job = start(first.host.forSession({ sessionId: "main", depth: 0 }))
-  expect(api!.backgroundJobs.get(job.id)).toBeDefined()
+  await extensionHost.load(() => {}, "ext:other")
+  const sessionJob = start(first.host.forSession({ sessionId: "main", depth: 0 }))
+  const own = api!.backgroundJobs.start({ command: "own", argv: ["own"], cwd: "/work" })
+  const changes: string[] = []
+  api!.backgroundJobs.subscribe(({ type, job }) => changes.push(`${type}:${job.id}`))
+  expect(api!.backgroundJobs.get(sessionJob.id)).toBeDefined()
+  // Unloading another extension (or a /reload's unload) leaves every job running.
+  extensionHost.unload("ext:other")
+  expect(first.host.get(own.id)?.status).toBe("running")
   extensionHost.unload("ext:jobs")
-  expect(first.host.get(job.id)?.status).toBe("stopped")
+  expect(first.host.get(own.id)?.status).toBe("stopped")
+  // A session's jobs are the session's, not the extension's whose tool started them.
+  expect(first.host.get(sessionJob.id)?.status).toBe("running")
+  // Its listeners went with it.
+  start(first.host.forSession({ sessionId: "later", depth: 0 }))
+  expect(changes).toEqual([])
+  await first.host.stopAll(() => true, 0)
 
   const second = fakeHost()
   const exiting = new ExtensionHost({

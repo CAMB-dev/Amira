@@ -23,7 +23,7 @@ import {
   StandbyGoneError,
   warmUpCommands,
 } from "@amira/proc"
-import { SessionBackgroundJobHost } from "./background-jobs.ts"
+import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
@@ -163,7 +163,6 @@ export class ExtensionHost {
       await ext(this.#apiFor(source, disposers))
     } catch (err) {
       for (const d of disposers.reverse()) d()
-      void this.backgroundJobs.stopAll(() => true, 0)
       this.#requestRender()
       return this.#fail(source, err instanceof Error ? err.message : String(err))
     }
@@ -215,7 +214,6 @@ export class ExtensionHost {
     const disposers = this.#disposers.get(source)
     if (!disposers) return false
     for (const d of disposers.reverse()) d()
-    void this.backgroundJobs.stopAll(() => true, 0)
     this.#disposers.delete(source)
     this.#requestRender()
     return true
@@ -338,11 +336,14 @@ export class ExtensionHost {
       disposers.push(d)
       return d
     }
+    // The jobs and listeners this extension adds through the API end with it.
+    const backgroundJobs = new ExtensionBackgroundJobs(this.backgroundJobs)
+    track(() => backgroundJobs.dispose())
     return {
       apiVersion: API_VERSION,
       cwd: this.#opts.cwd ?? process.cwd(),
       home: amiraHome(),
-      backgroundJobs: this.backgroundJobs,
+      backgroundJobs,
       reportError: (error) => void this.#fail(source, error),
       notify: (text, level = "info") =>
         void bus.emit(
