@@ -172,11 +172,9 @@ export function duplicateView(
     const before = resultText(original)
     if (before === undefined || hash(before) !== hash(text)) return undefined
     const p = typeof call.args.path === "string" ? call.args.path : ""
-    return {
-      kind: "duplicate",
-      of: original,
-      text: `[Unchanged: this read returned exactly the same text as the earlier read call ${original.toolCallId} of ${p} (${rangeOf(call)}, sha256 ${hash(text).slice(0, 12)}), which is still in your context above; use that output. Call read with force: true to get the text again.]`,
-    }
+    const note = `[Unchanged: this read returned exactly the same text as the earlier read call ${original.toolCallId} of ${p} (${rangeOf(call)}, sha256 ${hash(text).slice(0, 12)}), which is still in your context above; use that output. Call read with force: true to get the text again.]`
+    // A short read is cheaper than the note about it.
+    return note.length < text.length ? { kind: "duplicate", of: original, text: note } : undefined
   }
   return undefined
 }

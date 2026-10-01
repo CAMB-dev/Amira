@@ -90,7 +90,8 @@ export function countLines(text: string): number {
 
 /** The first line of a preview: what was saved, where, and how to read more. */
 function previewHeader(o: PreviewOptions, firstOmitted: number | undefined): string {
-  const facts = o.facts?.length ? ` ${o.facts.join("; ")}.` : ""
+  const joined = o.facts?.length ? o.facts.join("; ") : ""
+  const facts = joined ? ` ${joined[0]!.toUpperCase()}${joined.slice(1)}.` : ""
   const a = o.artifact
   if (a) {
     const cut = a.complete ? "" : `; capture incomplete: ${a.incomplete ?? "cut short"}`
@@ -148,6 +149,15 @@ export function tokenWeight(text: string): number {
   for (const ch of sample) if (ch.codePointAt(0)! >= 0x2e80) wide++
   const chars = [...sample].length
   return Math.min(4, Math.max(1, (chars - wide + 4 * wide) / chars))
+}
+
+/**
+ * A text's size as the output limits measure it: characters, with CJK and other wide
+ * characters counting four (they take about a token each, like four ASCII characters).
+ */
+export function outputSize(text: string): number {
+  // Not rounded: sizes of parts add up to the size of the whole.
+  return text.length * tokenWeight(text)
 }
 
 /** The header line of a saved output's preview; groups: id, characters, lines. */

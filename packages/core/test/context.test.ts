@@ -310,6 +310,10 @@ test("artifacts are found again after a resume, through the tool session", async
 
 // ---- A2: repeated reads ----
 
+/** A file long enough that a note about it is shorter than its text. */
+const doc = (middle = "two") =>
+  ["one", middle, "three", ...Array.from({ length: 30 }, (_, i) => `filler line ${i + 1}`)].join("\n")
+
 /** A tool that runs a test's action by name, e.g. to change a file between two reads. */
 function actTool(actions: Record<string, () => Promise<unknown> | unknown>) {
   return defineTool<{ name: string }>({
@@ -353,7 +357,7 @@ const isNote = (t: string | undefined) => t?.startsWith("[Unchanged: ") ?? false
 
 test("a read returning what the latest read of the same range returned is sent as a note", async () => {
   const dir = await tempDir()
-  await writeFile(path.join(dir, "a.txt"), "one\ntwo\nthree")
+  await writeFile(path.join(dir, "a.txt"), doc())
   const { agent, mock, sent } = await runReads(dir, [readCall("r1"), readCall("r2", { path: "./a.txt" })])
   expect(sent[0]).toContain("two")
   expect(sent[1]).toStartWith(
@@ -371,7 +375,7 @@ test("a read returning what the latest read of the same range returned is sent a
 test("a repeated read is sent whole for another range, when forced, or when the file changed", async () => {
   const dir = await tempDir()
   const file = path.join(dir, "a.txt")
-  const reset = () => writeFile(file, "one\ntwo\nthree")
+  const reset = () => writeFile(file, doc())
   await reset()
   expect((await runReads(dir, [readCall("r1"), readCall("r2", { offset: 2 })])).sent.some(isNote)).toBe(false)
   expect((await runReads(dir, [readCall("r1"), readCall("r2", { limit: 2 })])).sent.some(isNote)).toBe(false)
@@ -383,7 +387,7 @@ test("a repeated read is sent whole for another range, when forced, or when the 
     swap: async () => {
       const { statSync } = await import("node:fs")
       const st = statSync(file)
-      await writeFile(file, "one\nTWO\nthree")
+      await writeFile(file, doc("TWO"))
       await utimes(file, st.atime, st.mtime)
     },
   })
@@ -406,7 +410,7 @@ test("a repeated read is sent whole for another range, when forced, or when the 
     dir,
     [readCall("r1"), actCall("v2"), readCall("r2"), actCall("v1"), readCall("r3")],
     {
-      v2: () => writeFile(file, "one\n2\nthree"),
+      v2: () => writeFile(file, doc("2")),
       v1: reset,
     },
   )
@@ -419,9 +423,16 @@ test("a repeated read is sent whole for another range, when forced, or when the 
   await rm(dir, { recursive: true, force: true })
 })
 
-test("two identical reads in one batch: the second is the note; failed reads are never notes", async () => {
+test("a read shorter than the note about it is sent whole", async () => {
   const dir = await tempDir()
   await writeFile(path.join(dir, "a.txt"), "x")
+  expect((await runReads(dir, [readCall("r1"), readCall("r2")])).sent).toEqual(["     1\tx", "     1\tx"])
+  await rm(dir, { recursive: true, force: true })
+})
+
+test("two identical reads in one batch: the second is the note; failed reads are never notes", async () => {
+  const dir = await tempDir()
+  await writeFile(path.join(dir, "a.txt"), doc())
   const batch = await runReads(dir, [
     {
       toolCalls: [
@@ -442,7 +453,7 @@ test("two identical reads in one batch: the second is the note; failed reads are
 
 test("after a compaction summarized the earlier read, the same read is sent whole again", async () => {
   const dir = await tempDir()
-  await writeFile(path.join(dir, "a.txt"), "one\ntwo")
+  await writeFile(path.join(dir, "a.txt"), doc())
   const { agent, mock } = setup({ cwd: dir, compaction: { auto: false } })
   const turn = (...steps: MockReply[]) => {
     mock.push(...steps)
@@ -462,7 +473,7 @@ test("after a compaction summarized the earlier read, the same read is sent whol
 
 test("notes are restored with the session, and only on the branch that recorded them", async () => {
   const dir = await tempDir()
-  await writeFile(path.join(dir, "a.txt"), "one\ntwo")
+  await writeFile(path.join(dir, "a.txt"), doc())
   const session = SessionStore.create({ cwd: dir, dir })
   const first = setup({ cwd: dir, session, steps: [readCall("r1"), readCall("r2"), { text: "done" }] })
   await first.agent.prompt("go")
