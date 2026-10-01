@@ -231,6 +231,28 @@ test("clear, resume and fork hand over top-level background jobs", async () => {
   }
 })
 
+test("resuming a session another process holds leaves the current session and its jobs intact", async () => {
+  const { host, session, store } = await setup([])
+  const busy = SessionStore.create({ cwd: store.header.cwd, dir: path.dirname(store.file) })
+  busy.appendMessage(userMessage("held elsewhere"))
+  writeFileSync(sessionLockFile(busy.file), `${process.ppid}
+`)
+  const current = host.agent
+  const job = current.backgroundJobs!.start({
+    command: "long-running test job",
+    argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+    cwd: store.header.cwd,
+  })
+  try {
+    await expect(host.control.resume(busy.id)).rejects.toThrow()
+    expect(host.agent).toBe(current)
+    expect(current.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
+  } finally {
+    rmSync(sessionLockFile(busy.file), { force: true })
+    await session.host.backgroundJobs.stop(job.id, 0)
+  }
+})
+
 test("switch disposes the old agent tree before the replacement is active", async () => {
   const { host, session, store } = await setup([{ text: "child answer" }])
   const old = session.agent

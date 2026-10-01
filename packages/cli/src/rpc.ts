@@ -117,9 +117,12 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   const replaceAgent = async (next: Agent) => {
     const old = agent
     if (old === next) return
-    if (old.sessionId !== next.sessionId)
-      await old.backgroundJobsHost?.handoverRoot(old.sessionId, next.sessionId)
+    const handover =
+      old.sessionId !== next.sessionId
+        ? old.backgroundJobsHost?.handoverRoot(old.sessionId, next.sessionId)
+        : undefined
     old.handoverBackgroundNotices(next)
+    await handover
     await old.dispose("switch")
     agent = next
     prepareAgent(agent)
@@ -413,7 +416,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     return 0
   } finally {
     process.off("SIGINT", onSigint)
-    await agent.dispose("exit")
+    // Bounded like the other frontends' exit (main.ts); dispose is idempotent.
+    await Promise.race([agent.dispose("exit"), Bun.sleep(5000)])
     offEvents()
     offTurns()
     offSwitch?.()
