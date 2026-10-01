@@ -101,6 +101,11 @@ export interface BlockState {
   table?: Table
   /** A paragraph line kept back one line: the next may turn it into a heading or a table header. */
   held?: { text: string; renderCol: number }
+  /**
+   * The last line, with a `|`, was committed early as a paragraph (it did not fit the live
+   * region): a delimiter row next still makes it a table header, the table shown as its source.
+   */
+  header?: { text: string; renderCol: number }
   prevBlank: boolean
   /** The last line was paragraph text, held or committed early: a definition cannot follow it. */
   paragraph: boolean
@@ -141,6 +146,7 @@ export function cloneState(s: BlockState): BlockState {
   if (s.fence) c.fence = { ...s.fence, ...(s.fence.held ? { held: [...s.fence.held] } : {}) }
   if (s.table) c.table = { ...s.table, rows: [...s.table.rows], lines: [...s.table.lines] }
   if (s.held) c.held = { ...s.held }
+  if (s.header) c.header = { ...s.header }
   return c
 }
 
@@ -185,6 +191,7 @@ function withRefs(s: BlockState, env: Env): Env {
 /** Processes one complete source line (without its `\n`). */
 export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
   env = withRefs(s, env)
+  const header = takeHeader(s)
   if (s.fence) {
     const f = s.fence
     const m = line.match(FENCE_CLOSE_LIKE)
@@ -230,6 +237,10 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     }
     flushHeld(s, env, sink)
   }
+  if (header && startRawTable(s, header, line)) {
+    emit(s, sink, rawRows(s.table!, [line.trim()], env))
+    return
+  }
   if (s.table) {
     if (line.includes("|")) {
       addTableRow(s, s.table, line.trim(), env, sink)
@@ -252,6 +263,36 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     s.held = { text: line.slice(d.render.start), renderCol: d.render.indent }
     s.paragraph = true
   } else emit(s, sink, renderLine(d.render, line, env).rows)
+}
+
+function takeHeader(s: BlockState): BlockState["header"] {
+  const header = s.header
+  s.header = undefined
+  return header
+}
+
+/**
+ * Starts a table whose header was committed as a paragraph, when `line` is its delimiter row.
+ * The header shows as its source already, so the table goes on as its source lines.
+ */
+function startRawTable(s: BlockState, header: NonNullable<BlockState["header"]>, line: string): boolean {
+  const aligns = line.includes("|") ? delimiterRow(line) : undefined
+  if (!aligns || aligns.length !== splitRow(header.text).length) return false
+  s.table = { renderCol: header.renderCol, aligns, rows: [], lines: [], frozen: "raw" }
+  s.prevBlank = false
+  s.paragraph = false
+  return true
+}
+
+/**
+ * Updates the state after the complete `line`, whose rows were committed in parts as `lr` says
+ * rather than by `step`: a paragraph line may have been a table header, or a header's delimiter row.
+ */
+export function endCut(s: BlockState, line: string, lr: LineRender): void {
+  const header = takeHeader(s)
+  if (lr.code || !s.paragraph || s.table || !line.includes("|")) return
+  if (header && startRawTable(s, header, line)) return
+  s.header = { text: line.trimStart(), renderCol: lr.indent }
 }
 
 /** Ends the blocks that a blank line or the end of the text closes: a held paragraph line, a table. */
@@ -329,7 +370,9 @@ export function heldUndecided(s: BlockState, line: string): boolean {
  */
 export function commitOpenBlocks(s: BlockState, env: Env, sink: Sink): void {
   env = withRefs(s, env)
+  const h = s.held
   flushHeld(s, env, sink)
+  if (h?.text.includes("|")) s.header = h
   const t = s.table
   if (t && !t.frozen) {
     const { rows, widths } = layoutTable(t, env, true)
