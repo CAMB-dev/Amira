@@ -16,9 +16,6 @@ import { ToolRegistry } from "../src/tool-registry.ts"
 const root = path.resolve(import.meta.dir, "../../..")
 const read = (file: string) => readFileSync(path.join(root, file), "utf8")
 
-/** Written by a separate change; drop each one from here once it exists. */
-const PENDING = new Set(["docs/settings.md", "docs/zh/settings.md"])
-
 function pages(dir = "docs"): string[] {
   return readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((e) => {
     const file = `${dir}/${e.name}`
@@ -51,15 +48,12 @@ test("every local link and anchor in the docs resolves", () => {
       if (/^[a-z]+:/i.test(target)) continue
       const [file, anchor] = target.split("#") as [string, string | undefined]
       const resolved = file ? path.posix.normalize(path.posix.join(path.posix.dirname(page), file)) : page
-      if (PENDING.has(resolved)) continue
       if (!existsSync(path.join(root, resolved))) broken.push(`${page}: ${target}`)
       else if (anchor && resolved.endsWith(".md") && !anchors(read(resolved)).has(decodeURI(anchor)))
         broken.push(`${page}: ${target} (no such heading)`)
     }
   }
   expect(broken).toEqual([])
-  for (const p of PENDING)
-    expect(existsSync(path.join(root, p)), `${p} exists: drop it from PENDING`).toBe(false)
 })
 
 test("every English doc page has a Chinese one and the reverse", () => {
