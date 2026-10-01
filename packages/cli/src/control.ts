@@ -66,13 +66,15 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     const running = a.turnId ? "a turn" : `a ${a.holdingFor ?? "compaction"}`
     throw new Error(`${running} is running; ${what} after it ends (or press Esc to stop it)`)
   }
-  const switchTo = (next: Agent, reason: "resume" | "clear" | "fork") => {
+  const switchTo = (rootSessionId: string, makeNext: () => Agent, reason: "resume" | "clear" | "fork") => {
     // Nobody reads the old conversation any more: no resend of its held notices.
     const old = agent()
     old.cancelNoticeRetry()
-    // A session switch abandons the old conversation's background work, including jobs owned
-    // by its sub-agents. The host keeps the ended records for the short-lived UI history.
-    void session.host.backgroundJobs.closeRoot(old.sessionId)
+    // Top-level jobs belong to the active conversation, not to the Agent object that happened to
+    // start them. Sub-agent jobs are still stopped as their old tree is handed over.
+    void session.host.backgroundJobs.handoverRoot(old.sessionId, rootSessionId)
+    const next = makeNext()
+    old.handoverBackgroundNotices(next)
     host.switchTo(next)
     opts.announce?.(next, reason)
   }
@@ -175,7 +177,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     },
     newSession: async () => {
       idle("start a new session")
-      switchTo(session.resume(SessionStore.create({ cwd, dir: directory() }), agent().model), "clear")
+      const store = SessionStore.create({ cwd, dir: directory() })
+      switchTo(store.id, () => session.resume(store, agent().model), "clear")
     },
     sessions: () =>
       listSessions(cwd, directory()).map((s) => ({
@@ -216,7 +219,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       if (id === agent().sessionId) throw new Error(`already in session ${id}`)
       const file = findSession(cwd, id, directory())
       if (!file) throw new Error(`no session ${id} in ${cwd}`)
-      switchTo(session.resume(SessionStore.open(file), agent().model), "resume")
+      const store = SessionStore.open(file)
+      switchTo(store.id, () => session.resume(store, agent().model), "resume")
     },
     rename: (title) => {
       const a = agent()
@@ -247,7 +251,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       const forked = store.fork(target)
       // The copied journal keeps working: the fork gets the captured bytes it refers to.
       copyFileHistory(store, forked)
-      switchTo(session.resume(forked, a.model), "fork")
+      switchTo(forked.id, () => session.resume(forked, a.model), "fork")
     },
     planRewind: (index) => {
       const { a, entry } = rewindEntry(index)
@@ -303,17 +307,17 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
           // Inputs queued during the hold belong to the discarded conversation; do not wake it.
           a.abort()
           store.append({ type: "checkout", target: entry.parentId })
-          switchTo(session.resume(store, a.model), "resume")
+          switchTo(store.id, () => session.resume(store, a.model), "resume")
         })
         return
       } else if (restore && a.fileRewind?.plan(entry.id).enabled) {
         a.fileRewind.restore(entry.id, entry.parentId)
-        switchTo(session.resume(store, a.model), "resume")
+        switchTo(store.id, () => session.resume(store, a.model), "resume")
         return
       }
       // Nothing came before it: back to an empty conversation, still in this session.
       store.append({ type: "checkout", target: entry.parentId })
-      switchTo(session.resume(store, a.model), "resume")
+      switchTo(store.id, () => session.resume(store, a.model), "resume")
     },
     compact: (instructions) => {
       idle("compact")

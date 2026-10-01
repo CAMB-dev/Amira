@@ -141,6 +141,22 @@ export class SessionBackgroundJobHost implements BackgroundJobHost {
     return this.#registry.stopAll((job) => this.#roots.get(job.id) === rootSessionId, graceMs)
   }
 
+  async handoverRoot(
+    rootSessionId: string,
+    nextRootSessionId: string,
+    graceMs = 2000,
+  ): Promise<BackgroundJobInfo[]> {
+    for (const scope of [...this.#scopes]) if (scope.rootSessionId === rootSessionId) this.#closeScope(scope)
+    for (const job of this.#registry.list()) {
+      if (this.#roots.get(job.id) !== rootSessionId || job.owner !== undefined) continue
+      this.#roots.set(job.id, nextRootSessionId)
+    }
+    return this.#registry.stopAll(
+      (job) => this.#roots.get(job.id) === rootSessionId && job.owner !== undefined,
+      graceMs,
+    )
+  }
+
   startIn(scope: Scope, options: BackgroundJobStartOptions): BackgroundJobInfo {
     if (!scope.active) throw new Error(`background job session "${scope.sessionId}" has ended`)
     return this.#start(options, scope)
@@ -439,6 +455,14 @@ export class ExtensionBackgroundJobs implements BackgroundJobHost {
 
   closeRoot(rootSessionId: string, graceMs?: number): Promise<BackgroundJobInfo[]> {
     return this.#host.closeRoot(rootSessionId, graceMs)
+  }
+
+  handoverRoot(
+    rootSessionId: string,
+    nextRootSessionId: string,
+    graceMs?: number,
+  ): Promise<BackgroundJobInfo[]> {
+    return this.#host.handoverRoot(rootSessionId, nextRootSessionId, graceMs)
   }
 
   /** Removes the extension's listeners and stops the jobs it started. */
