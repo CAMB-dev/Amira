@@ -7,6 +7,8 @@ export interface CliArgs {
   prompt?: string
   print: boolean
   json: boolean
+  /** Merge adjacent text, thinking and tool-call deltas in JSON output. */
+  jsonCoalesce: boolean
   /** Write JSONL events to this file instead of stdout (--json-out). */
   jsonOut?: string
   model?: string
@@ -47,6 +49,7 @@ Options:
   -p, --print           Run one turn non-interactively and print the reply
       --json            With --print, write every event as a JSON line to stdout
       --json-out <path> With --print, write ASCII-only JSONL events to this file
+      --json-coalesce   With --json, merge consecutive message deltas into larger chunks
       --rpc             Headless mode: JSONL commands on stdin, responses and
                         events on stdout (see --rpc-schema)
       --rpc-schema      Print the JSON Schema of the --rpc protocol
@@ -124,6 +127,7 @@ export function parseCliArgs(
   const args: CliArgs = {
     print: values.print ?? false,
     json: values.json ?? values["json-out"] !== undefined,
+    jsonCoalesce: values["json-coalesce"] ?? false,
     cwd: path.resolve(cwd, values.cwd ?? "."),
     extensions: (values.extension ?? []).map((e) => path.resolve(cwd, e)),
     noBuiltins: values["no-builtins"] ?? false,
@@ -167,6 +171,7 @@ export function parseCliArgs(
   }
   if (args.jsonOut !== undefined && !args.print) throw new UsageError("--json-out requires --print")
   if (args.json && !args.print) throw new UsageError("--json requires --print")
+  if (args.jsonCoalesce && !args.json) throw new UsageError("--json-coalesce requires --json")
   const listing = args.resume === ""
   if (args.print && !args.prompt && !args.help && !args.version && !listing)
     throw new UsageError("--print needs a prompt")
@@ -229,6 +234,7 @@ function parse(argv: string[]) {
       print: { type: "boolean", short: "p" },
       json: { type: "boolean" },
       "json-out": { type: "string" },
+      "json-coalesce": { type: "boolean" },
       model: { type: "string", short: "m" },
       extension: { type: "string", short: "e", multiple: true },
       "no-builtins": { type: "boolean" },

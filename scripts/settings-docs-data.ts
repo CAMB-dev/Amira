@@ -446,8 +446,8 @@ export const annotations: Record<string, Annotation> = {
   },
   "retry.attempts": {
     default: "`3`",
-    en: "Retries of a failed model request after the first try; `0` turns retrying off. A request is retried only while nothing has streamed yet.",
-    zh: "模型请求失败后，在首次尝试之外的重试次数；`0` 表示不重试。只有在尚未收到任何流式内容时才会重试。",
+    en: "Retries of a failed model request after the first try; `0` turns retrying off. Provider errors retry only while nothing has streamed; first-content and idle timeouts use the same retry budget.",
+    zh: "模型请求失败后，在首次尝试之外的重试次数；`0` 表示不重试。provider 错误只会在尚未收到流式内容时重试；首个内容和流式静默超时使用同一重试次数。",
   },
   "retry.baseDelayMs": {
     default: "`1000`",
@@ -458,6 +458,16 @@ export const annotations: Record<string, Annotation> = {
     default: "`60000`",
     en: "A wait longer than this is not waited out: the error is reported instead.",
     zh: "需要等待的时间超过这个值时不再等待，直接报告错误。",
+  },
+  "retry.firstContentTimeoutMs": {
+    default: "`150000` (150 s)",
+    en: "Maximum time in milliseconds to wait for the first streamed content event. `0` disables this timeout; keep-alive comments do not count as content.",
+    zh: "等待首个流式内容事件的最长时间（毫秒）。`0` 表示关闭；SSE 保活注释不算内容。",
+  },
+  "retry.idleTimeoutMs": {
+    default: "`100000` (100 s)",
+    en: "Maximum silence in milliseconds between streamed content events after the first one. `0` disables this timeout; keep-alive comments do not reset it.",
+    zh: "首个内容事件之后，流式内容事件之间允许的最长静默时间（毫秒）。`0` 表示关闭；SSE 保活注释不会重置计时。",
   },
   "web.nativeSearch": {
     default: "`true`",

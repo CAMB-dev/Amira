@@ -237,7 +237,7 @@ export type StreamEvent =
    * as it is now. It is not a tool call: nothing runs locally and no result is sent back.
    */
   | { type: "serverTool"; block: ServerToolBlock }
-  /** A retryable failure before any content streamed; the request is sent again after delayMs. */
+  /** A retryable failure; the request is sent again after delayMs. Timeouts may follow partial content. */
   | { type: "retry"; attempt: number; maxRetries: number; delayMs: number; error: ModelError }
 
 export function emptyUsage(): Usage {

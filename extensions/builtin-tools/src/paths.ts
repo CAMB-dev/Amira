@@ -1,6 +1,8 @@
 import { homedir, tmpdir } from "node:os"
 import { isAbsolute, join, relative, resolve } from "node:path"
 
+export const OUTSIDE_WORKING_DIRECTORY = "[outside working directory]"
+
 export function resolvePath(cwd: string, path: string): string {
   const p = expandPath(path)
   return isAbsolute(p) ? resolve(p) : resolve(cwd, p)
@@ -18,10 +20,11 @@ function expandPath(path: string): string {
   return path
 }
 
-/** Forward-slash path relative to `cwd`, or the absolute path when it lies outside `cwd`. */
+/** Forward-slash path relative to `cwd`; an absolute path outside it is explicitly marked. */
 export function displayPath(cwd: string, abs: string): string {
   const rel = relative(cwd, abs)
-  const shown = rel === "" ? "." : rel.startsWith("..") || isAbsolute(rel) ? abs : rel
+  const outside = rel.startsWith("..") || isAbsolute(rel)
+  const shown = rel === "" ? "." : outside ? `${OUTSIDE_WORKING_DIRECTORY} ${abs}` : rel
   return shown.replaceAll("\\", "/")
 }
 

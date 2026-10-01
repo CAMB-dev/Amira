@@ -2,9 +2,9 @@ import { afterAll, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import { join, resolve, sep } from "node:path"
+import { dirname, join, resolve, sep } from "node:path"
 import { isBinary, walkFiles } from "../src/files.ts"
-import { displayPath, resolvePath } from "../src/paths.ts"
+import { displayPath, OUTSIDE_WORKING_DIRECTORY, resolvePath } from "../src/paths.ts"
 import { keepOutput, TempOutputStore } from "../src/truncate.ts"
 import { makeCtx } from "./util.ts"
 
@@ -70,11 +70,61 @@ test("walkFiles skips .git and node_modules and yields forward-slash paths", asy
   expect(seen.sort()).toEqual(["a/b/two.ts", "a/one.ts", "z.txt"])
 })
 
-test("displayPath is relative inside cwd and absolute outside", () => {
+test("walkFiles honors repository ignore files and skips nested repositories", async () => {
+  const root = await mkdtemp(join(tmpdir(), "amira-walk-ignore-"))
+  dirs.push(root)
+  await mkdir(join(root, ".git", "info"), { recursive: true })
+  await mkdir(join(root, "src", "nested"), { recursive: true })
+  await mkdir(join(root, "nested-repo", ".git"), { recursive: true })
+  await mkdir(join(root, "linked-repo"), { recursive: true })
+  await writeFile(join(root, ".gitignore"), "ignored.txt\n*.ignored\n/cache/\n")
+  await writeFile(join(root, ".git", "info", "exclude"), "excluded.txt\n")
+  await writeFile(join(root, "src", ".gitignore"), "local.txt\n")
+  for (const file of [
+    "kept.txt",
+    "ignored.txt",
+    "excluded.txt",
+    "bad.ignored",
+    "cache/drop.txt",
+    "src/local.txt",
+    "src/kept.ts",
+    "nested-repo/hidden.ts",
+    "linked-repo/hidden.ts",
+  ]) {
+    const target = join(root, file)
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, file)
+  }
+  await writeFile(join(root, "linked-repo", ".git"), "gitdir: elsewhere\n")
+  const globalIgnore = join(root, "global-ignore")
+  const globalConfig = join(root, "global-gitconfig")
+  await writeFile(globalIgnore, "*.global\n")
+  await writeFile(globalConfig, `[core]\n\texcludesFile = ${globalIgnore}\n`)
+  await writeFile(join(root, "global.global"), "global.global")
+  const oldGlobalConfig = process.env.GIT_CONFIG_GLOBAL
+  process.env.GIT_CONFIG_GLOBAL = globalConfig
+  try {
+    const seen: string[] = []
+    for await (const entry of walkFiles(root)) seen.push(entry.rel)
+    expect(seen.sort()).toEqual([
+      ".gitignore",
+      "global-gitconfig",
+      "global-ignore",
+      "kept.txt",
+      "src/.gitignore",
+      "src/kept.ts",
+    ])
+  } finally {
+    if (oldGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL
+    else process.env.GIT_CONFIG_GLOBAL = oldGlobalConfig
+  }
+})
+
+test("displayPath is relative inside cwd and marks absolute paths outside", () => {
   const cwd = join(tmpdir(), "proj")
   expect(displayPath(cwd, join(cwd, "src", "a.ts"))).toBe("src/a.ts")
   const outside = join(tmpdir(), "other", "b.ts")
-  expect(displayPath(cwd, outside)).toBe(outside.replaceAll("\\", "/"))
+  expect(displayPath(cwd, outside)).toBe(`${OUTSIDE_WORKING_DIRECTORY} ${outside.replaceAll("\\", "/")}`)
 })
 
 const isWindows = process.platform === "win32"

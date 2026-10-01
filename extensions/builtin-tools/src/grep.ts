@@ -33,7 +33,7 @@ export const grepTool = defineTool<GrepParams>({
     "- `path` is a file or directory (default: the working directory). `glob` filters the files of a directory, e.g. `*.ts` or `src/**/*.{ts,tsx}`; a glob without `/` matches file names at any depth.",
     "- `output_mode`: `files_with_matches` (default) lists matching files; `content` shows `file:line:text` for each matching line; `count` shows `file:count`.",
     `- \`head_limit\` caps the number of output lines (default ${DEFAULT_HEAD_LIMIT}). When all results are long they are saved as an artifact that output_read can read or search.`,
-    "- Skips .git, node_modules, binary files and files over 5 MB, and only searches the first 10,000 characters of each line. Paths are relative to the working directory.",
+    "- Skips .git, node_modules, Git-ignored files, nested repositories, binary files and files over 5 MB, and only searches the first 10,000 characters of each line. Paths are relative to the working directory; outside paths stay absolute and are marked.",
     "- Use glob to find files by name.",
   ].join("\n"),
   parameters: {

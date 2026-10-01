@@ -35,6 +35,8 @@ export interface PrintOptions {
   forceExit?: () => void
   /** Write JSONL events to this file instead of stdout. Only used when json is true. */
   jsonOut?: string
+  /** Merge adjacent text, thinking and tool-call deltas before writing JSONL. */
+  jsonCoalesce?: boolean
   /** Top-level shell jobs started during this run; print mode waits for them before exiting. */
   backgroundJobs?: PrintBackgroundJobs
   /** Maximum time print mode waits for those jobs. Default 30 seconds. */
@@ -132,6 +134,61 @@ export async function runPrint(
   const subagents = new Map<string, { title: string; role: string; indent: string }>()
   /** How the main session's latest turn ended. */
   let lastEnd: TurnResult | undefined
+  const jsonToolNames = new Map<string, string>()
+  let jsonPending: AnyEvent | undefined
+  const writeJson = (event: AnyEvent) => {
+    const line = `${safeJson(event)}\n`
+    if (jsonFile) {
+      if (jsonFileOpen) jsonFile.write(line)
+    } else io.stdout(line)
+  }
+  const flushJson = () => {
+    if (!jsonPending) return
+    writeJson(jsonPending)
+    jsonPending = undefined
+  }
+  const jsonEvent = (event: AnyEvent): AnyEvent => {
+    if (event.type !== "message.delta" || event.data.kind !== "toolCall" || event.data.name === undefined)
+      return event
+    const call = event.data.index === undefined ? `id:${event.data.toolCallId}` : `index:${event.data.index}`
+    const key = `${event.sessionId}\u0000${event.turnId ?? ""}\u0000${call}`
+    const previous = jsonToolNames.get(key)
+    jsonToolNames.set(key, event.data.name)
+    if (previous !== undefined && previous === event.data.name) {
+      const data = { ...event.data }
+      delete data.name
+      return { ...event, data }
+    }
+    return event
+  }
+  const coalesceJson = (previous: AnyEvent, next: AnyEvent): AnyEvent | undefined => {
+    if (previous.type !== "message.delta" || next.type !== "message.delta") return undefined
+    if (previous.sessionId !== next.sessionId || previous.turnId !== next.turnId) return undefined
+    if (previous.data.kind !== next.data.kind) return undefined
+    if (previous.data.kind === "text" && next.data.kind === "text") {
+      return { ...previous, data: { kind: "text", text: previous.data.text + next.data.text } }
+    }
+    if (previous.data.kind === "thinking" && next.data.kind === "thinking") {
+      return { ...previous, data: { kind: "thinking", text: previous.data.text + next.data.text } }
+    }
+    if (
+      previous.data.kind === "toolCall" &&
+      next.data.kind === "toolCall" &&
+      (previous.data.index !== undefined && next.data.index !== undefined
+        ? previous.data.index === next.data.index
+        : previous.data.toolCallId === next.data.toolCallId)
+    ) {
+      return {
+        ...previous,
+        data: {
+          ...previous.data,
+          ...(next.data.name !== undefined ? { name: next.data.name } : {}),
+          argsDelta: previous.data.argsDelta + next.data.argsDelta,
+        },
+      }
+    }
+    return undefined
+  }
   const handle = (e: AnyEvent) => {
     if (e.type === "turn.end" && e.sessionId === agent.sessionId) {
       lastEnd = {
@@ -145,10 +202,18 @@ export async function runPrint(
       opts.ui?.cancel(e.data.requestId)
     }
     if (json) {
-      const line = `${safeJson(e)}\n`
-      if (jsonFile) {
-        if (jsonFileOpen) jsonFile.write(line)
-      } else io.stdout(line)
+      if (e.type === "ui.render") return
+      const event = jsonEvent(e)
+      if (!opts.jsonCoalesce) {
+        writeJson(event)
+        return
+      }
+      const merged = jsonPending && coalesceJson(jsonPending, event)
+      if (merged) jsonPending = merged
+      else {
+        flushJson()
+        jsonPending = event
+      }
       return
     }
     if (e.type === "subagent.start") {
@@ -329,6 +394,7 @@ export async function runPrint(
       Bun.sleep(opts.flushTimeoutMs ?? 2000).then(() => false),
     ])
     if (!flushed) io.stderr("amira: some event handlers did not finish; exiting anyway\n")
+    flushJson()
     jsonFileOpen = false
     if (jsonFile)
       await finishJsonFile(jsonFile).catch((err: Error) => {
@@ -337,6 +403,10 @@ export async function runPrint(
     if (jsonFileError) {
       io.stderr(`amira: could not write ${opts.jsonOut}: ${jsonFileError.message}\n`)
       if (code === 0) code = 1
+    }
+    if (jsonFile && code !== 0) {
+      const reason = lastEnd?.error ?? (code === 130 ? "aborted" : "the run failed")
+      io.stderr(`amira: run failed: ${oneLine(reason, 240)}\n`)
     }
     return code
   } finally {

@@ -1,12 +1,13 @@
 import { readFile } from "node:fs/promises"
 import { extname, resolve as resolveFsPath } from "node:path"
-import { defineTool, outputSize, type ReadDetails, textResult } from "@amira/api"
+import { DEFAULT_SAVE_ABOVE, defineTool, outputSize, type ReadDetails, textResult } from "@amira/api"
 import { statOrNull } from "./files.ts"
 import { type LineWindow, type ReadLinesResult, readLineWindow } from "./lines.ts"
 import { resolvePath } from "./paths.ts"
 import { outputLimits } from "./truncate.ts"
 
 export const DEFAULT_READ_LIMIT = 2000
+export const DEFAULT_READ_OUTPUT_CHARS = DEFAULT_SAVE_ABOVE - 400
 export const MAX_LINE_CHARS = 2000
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
@@ -33,7 +34,7 @@ export const readTool = defineTool<ReadParams>({
   description: [
     "Read a file from the local filesystem.",
     "- `path` may be absolute or relative to the working directory.",
-    `- By default returns up to ${DEFAULT_READ_LIMIT} lines from the start. For long files, pass \`offset\` (1-based line number to start at) and \`limit\` (number of lines) to read a specific range.`,
+    `- By default reads up to ${DEFAULT_READ_LIMIT} lines from the start, but the response also stops at a whole line near ${DEFAULT_READ_OUTPUT_CHARS.toLocaleString("en-US")} output-size characters (the default context output limit). For long files, pass \`offset\` (1-based line number to start at) and \`limit\` (number of lines) to read a specific range.`,
     "- Output is numbered like `cat -n`: each line is prefixed with its line number and a tab. The prefix is not part of the file; never include it in replacement text or patch context.",
     `- Lines longer than ${MAX_LINE_CHARS} characters are truncated.`,
     "- UTF-8 and UTF-16 (with BOM) text is supported.",
@@ -51,7 +52,7 @@ export const readTool = defineTool<ReadParams>({
       limit: {
         type: "integer",
         minimum: 1,
-        description: `Maximum number of lines to read (default ${DEFAULT_READ_LIMIT})`,
+        description: `Maximum number of lines to read (default ${DEFAULT_READ_LIMIT}; the output-size limit may stop earlier)`,
       },
       force: {
         type: "boolean",
@@ -165,7 +166,7 @@ function formatWindow(
   }
   if (last < start - 1 + lines.length || window.more) {
     const of = total === undefined ? "" : ` of ${total}`
-    out.push("", `(Showing lines ${start}-${last}${of}. Use offset=${last + 1} to read more.)`)
+    out.push("", `(Showing lines ${start}-${last}${of}. Use offset=${last + 1} to continue reading.)`)
   }
   return { text: out.join("\n"), lines: last - start + 1 }
 }

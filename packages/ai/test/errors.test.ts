@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test"
 import { createAi } from "../src/client.ts"
+import { anthropicError } from "../src/dialects/anthropic-errors.ts"
+import { geminiError } from "../src/dialects/google-gemini-errors.ts"
+import { bodyError } from "../src/dialects/openai-chat-errors.ts"
+import { responsesError } from "../src/dialects/openai-responses-errors.ts"
 import { describeModelError, isContextOverflow, modelErrorKind, providerMessage } from "../src/errors.ts"
 import { events } from "./helpers.ts"
 
@@ -66,6 +70,16 @@ test("takes the message out of a JSON error body", () => {
   expect(providerMessage(`HTTP 400: {"error":"m3"}`)).toBe("m3")
   expect(providerMessage("HTTP 502: <html>bad gateway</html>")).toBe("<html>bad gateway</html>")
   expect(providerMessage("plain")).toBe("plain")
+})
+
+test("classifies timeout, overload and startup body errors as retryable in every dialect", () => {
+  const cases = [
+    ["openai chat", () => bodyError({ message: "provider overloaded" })],
+    ["openai responses", () => responsesError({ message: "request timed out" })],
+    ["anthropic", () => anthropicError({ error: { message: "unable to start processing the request" } })],
+    ["gemini", () => geminiError({ message: "service overloaded" })],
+  ] as const
+  for (const [, classify] of cases) expect(classify()).toMatchObject({ retryable: true })
 })
 
 test("errors from the client carry their kind, the host and how often they were retried", async () => {

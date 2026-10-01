@@ -176,9 +176,11 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `compact.threshold` | `number` | `0.8` | 上下文占用达到上下文窗口的这个比例时，自动开始压缩。 |  |
 | `compact.model` | `string` | 会话当前的模型 | 用来生成文字摘要的模型，格式为 `"provider/model"`。设置后压缩总是生成文字摘要，不再使用服务端压缩。 |  |
 | `compact.layout` | `"tail" \| "recent-user"` | `"tail"` | 服务端压缩检查点的位置：`"tail"` 在检查点之后原样保留最近几个轮次；`"recent-user"` 压缩全部历史，把最近的用户消息（约 64k token 以内）放在检查点之前，与 Codex 的做法相同。文字摘要始终使用 `"tail"`。 |  |
-| `retry.attempts` | `number` | `3` | 模型请求失败后，在首次尝试之外的重试次数；`0` 表示不重试。只有在尚未收到任何流式内容时才会重试。 |  |
+| `retry.attempts` | `number` | `3` | 模型请求失败后，在首次尝试之外的重试次数；`0` 表示不重试。provider 错误只会在尚未收到流式内容时重试；首个内容和流式静默超时使用同一重试次数。 |  |
 | `retry.baseDelayMs` | `number` | `1000` | 第一次重试前的等待时间（毫秒），之后每次翻倍；服务端给出 `Retry-After` 时以它为准。 |  |
 | `retry.maxDelayMs` | `number` | `60000` | 需要等待的时间超过这个值时不再等待，直接报告错误。 |  |
+| `retry.firstContentTimeoutMs` | `number` | `150000` (150 s) | 等待首个流式内容事件的最长时间（毫秒）。`0` 表示关闭；SSE 保活注释不算内容。 |  |
+| `retry.idleTimeoutMs` | `number` | `100000` (100 s) | 首个内容事件之后，流式内容事件之间允许的最长静默时间（毫秒）。`0` 表示关闭；SSE 保活注释不会重置计时。 |  |
 
 ## 上下文管理
 

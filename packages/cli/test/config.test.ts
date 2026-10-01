@@ -129,10 +129,20 @@ test("settings retry becomes the ai layer's retry options", () => {
   expect(retryFromSettings(undefined)).toBeUndefined()
   expect(retryFromSettings({})).toBeUndefined()
   expect(retryFromSettings({ attempts: 0 })).toEqual({ retries: 0 })
-  expect(retryFromSettings({ attempts: 5, baseDelayMs: 200, maxDelayMs: 10_000 })).toEqual({
+  expect(
+    retryFromSettings({
+      attempts: 5,
+      baseDelayMs: 200,
+      maxDelayMs: 10_000,
+      firstContentTimeoutMs: 150_000,
+      idleTimeoutMs: 100_000,
+    }),
+  ).toEqual({
     retries: 5,
     baseDelayMs: 200,
     maxDelayMs: 10_000,
+    firstContentTimeoutMs: 150_000,
+    idleTimeoutMs: 100_000,
   })
 })
 
@@ -261,11 +271,11 @@ test("print mode needs a model: without one it is a usage error", async () => {
   const none = await create([]).catch((e) => e)
   expect(none).toBeInstanceOf(UsageError)
   expect(none.message).toBe(
-    'no providers configured; add one with "amira provider add", then pass --model provider/model',
+    'no providers configured; add one with "amira provider add", then pass -m provider/model',
   )
   const unpicked = await create([{ id: "a", dialect: "openai-chat", baseUrl: "http://a" }]).catch((e) => e)
   expect(unpicked).toBeInstanceOf(UsageError)
-  expect(unpicked.message).toContain("no model selected. Pass --model provider/model")
+  expect(unpicked.message).toContain("no model selected. Pass -m provider/model")
 })
 
 test("amira provider help lists the commands; presets are gone", () => {

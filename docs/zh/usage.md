@@ -178,11 +178,14 @@ checkpoints 扩展可以通过 `api.registerFileRestoration({ label, restore: as
 amira -p "Summarize the changes in this repository"
 amira -p -c "Continue the review"
 amira -p --json "Explain the failing test"
+amira -p --json --json-coalesce "Explain the failing test"
 amira -p --json-out events.json "Explain the failing test"
 amira -p -- "-v means verbose?"
 ```
 
 `-p` / `--print` 不打开交互界面。除用不带 ID 的 `-r` 列出会话外，必须提供提示词。普通模式把回复文本流式写入 stdout，把工具执行情况、警告和错误写入 stderr。`--json` 必须与打印模式一起使用，将每个事件作为一行只含 ASCII 的 JSON 写入 stdout；非 ASCII 字符会转义为 `\uXXXX`，因此 Windows 父进程不会因代码页差异而解码错误。`--json-out <path>` 会隐含 `--json`，把相同的 JSONL 事件流写入文件而不是 stdout；相对路径按 Amira 的启动目录解析。输出包含会话、轮次、消息、工具与子 agent 事件，并非只输出一个最终 JSON 答案。
+
+JSON 打印输出会省略没有信息的空 `ui.render` 事件，并且每个工具调用只在第一个 delta 中带工具名，除非 provider 在流式过程中更改了工具名。`--json-coalesce` 会把连续的文本、思考和同一工具调用参数 delta 合并成更大的 JSONL 块；不使用它时，其余事件仍各占一行。使用 `--json-out` 的运行失败时，事件文件仍会保留已有流，并在 stderr 输出简短失败摘要。
 
 带引号的命令，例如 `amira -p "/status"`，直接执行命令，不发送模型提示词；已加载的 skill 也可以这样运行。需要选择器的命令无法获得交互回答，支持显式参数时请直接传入参数。
 

@@ -4,6 +4,7 @@ import { parseSSE } from "../sse.ts"
 import { adaptThinking } from "../thinking.ts"
 import type { ModelRequest, ReasoningEffort, StreamEvent } from "../types.ts"
 import { parseJSON, postStream } from "./http-stream.ts"
+import { isRetryableBodyError } from "./openai-chat-errors.ts"
 import { ResponsesAccumulator } from "./openai-responses-accumulate.ts"
 import { responsesCompaction } from "./openai-responses-compact.ts"
 import { responsesError } from "./openai-responses-errors.ts"
@@ -112,7 +113,8 @@ async function* readPlain(
     return
   }
   if (!Array.isArray(json?.output)) {
-    yield acc.fail({ message: `expected an event stream, got ${type}: ${text.slice(0, 500)}` }, false)
+    const message = `expected an event stream, got ${type}: ${text.slice(0, 500)}`
+    yield acc.fail({ message }, isRetryableBodyError({ message }))
     return
   }
   yield { type: "start" }
