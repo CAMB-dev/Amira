@@ -380,7 +380,7 @@ test("parent artifact usage groups sub-agent stores and prunes their inactive an
     tree,
   })
   const liveChild = tree.spawn(liveAgent, { prompt: "keep reading", persistent: true })
-  await expect(liveAgent.pruneArtifacts("unused")).rejects.toThrow("sub-agent is running")
+  await expect(liveAgent.pruneArtifacts("unused")).rejects.toThrow("sub-agent is running, queued or idle")
   liveChild.abort()
   await liveChild.result()
 })
