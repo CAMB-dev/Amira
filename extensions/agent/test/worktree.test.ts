@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSyn
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { runCommand } from "@amira/proc"
+import { runCommand } from "../../../packages/proc/src/index.ts"
 import { hostGit } from "../src/index.ts"
 import {
   APPLY_PARTIAL,

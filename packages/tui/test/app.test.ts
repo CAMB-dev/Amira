@@ -23,7 +23,6 @@ import {
   type TuiSettings,
   textResult,
 } from "@amira/api"
-import { builtinPresenters, registerJobs } from "@amira/builtin-tools"
 import {
   Agent,
   AgentTree,
@@ -34,10 +33,11 @@ import {
   SessionStore,
   ToolRegistry,
 } from "@amira/core"
-import commandsExtension, { extensionCommand } from "@amira/ext-commands"
-import statusExtension from "@amira/ext-status"
 import { type JobEvent, JobRegistry } from "@amira/proc"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
+import { builtinPresenters, registerJobs } from "../../../extensions/builtin-tools/src/index.ts"
+import commandsExtension, { extensionCommand } from "../../../extensions/commands/src/index.ts"
+import statusExtension from "../../../extensions/status/src/index.ts"
 import { plain } from "../../tui-kit/test/context.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"

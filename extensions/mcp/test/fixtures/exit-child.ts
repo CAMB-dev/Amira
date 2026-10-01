@@ -1,6 +1,7 @@
 // Connects to a stubborn fixture server started through a launcher, then exits without
 // closing it, leaving the cleanup to the transport's exit hook. Usage: bun exit-child.ts <pidfile>
 import path from "node:path"
+import "../../../../packages/core/src/index.ts"
 import { McpClient } from "../../src/client.ts"
 import { StdioTransport } from "../../src/stdio.ts"
 import { launcherArgv } from "./launcher.ts"

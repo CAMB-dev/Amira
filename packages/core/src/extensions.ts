@@ -7,12 +7,21 @@ import {
   type Extension,
   type ExtensionAPI,
   type FileRestorationOwner,
+  installHostProcess,
   type NoticeLevel,
   type RunCommandOptions,
   type RunCommandResult,
   type Settings,
 } from "@amira/api"
-import { DEFAULT_MAX_OUTPUT_CHARS, runCommand } from "@amira/proc"
+import {
+  backgroundJobs,
+  DEFAULT_MAX_OUTPUT_CHARS,
+  JobLimitError,
+  prepareCommand,
+  runCommand,
+  StandbyGoneError,
+  warmUpCommands,
+} from "@amira/proc"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
@@ -28,6 +37,18 @@ import { UiRequests } from "./ui-requests.ts"
 import { ViewRegistry } from "./view-registry.ts"
 
 let virtualApiInstalled = false
+
+// The public API carries the contract; core owns the process implementation used by bundled
+// extensions. Background jobs are intentionally a temporary bridge until their own API exists.
+installHostProcess({
+  runCommand,
+  prepareCommand,
+  warmUpCommands,
+  openPipe: openExtensionPipe,
+  backgroundJobs,
+  isStandbyGoneError: (error) => error instanceof StandbyGoneError,
+  isBackgroundJobLimitError: (error) => error instanceof JobLimitError,
+})
 
 /**
  * Lets extensions anywhere on disk `import "@amira/api"` without installing it,

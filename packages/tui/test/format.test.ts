@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { EventEnvelope, Message } from "@amira/api"
-import { builtinPresenters } from "@amira/builtin-tools"
 import { defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
 import {
   bandRows,
   commandEchoLines,

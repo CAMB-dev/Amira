@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test"
-import { EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import {
+  EventBus,
+  ExtensionHost,
+  InterceptorRegistry,
+  ToolRegistry,
+} from "../../../packages/core/src/index.ts"
 import { PageCache, renderPage } from "../src/fetch.ts"
 import { htmlToMarkdown } from "../src/html.ts"
 import { createWebExtension, WEB_FETCH_TOOL, WEB_SEARCH_TOOL, webTools } from "../src/index.ts"

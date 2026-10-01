@@ -11,9 +11,9 @@ import {
   listSubagents,
   ToolRegistry,
 } from "@amira/core"
-import { agentsCommand } from "@amira/ext-agent"
-import statusExtension from "@amira/ext-status"
 import { FakeTerminal } from "@amira/tui-kit"
+import { agentsCommand } from "../../../extensions/agent/src/index.ts"
+import statusExtension from "../../../extensions/status/src/index.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 

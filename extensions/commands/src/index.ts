@@ -42,12 +42,6 @@ export {
   table,
   tokensPerSecond,
 } from "./format.ts"
-export {
-  draftFromValues,
-  modelDescription,
-  type ProviderFormInitial,
-  providerFormSpec,
-} from "./provider-form.ts"
 
 const SHELLS: ShellMode[] = ["auto", "bash", "powershell"]
 

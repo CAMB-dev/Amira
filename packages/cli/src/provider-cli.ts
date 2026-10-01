@@ -2,15 +2,17 @@ import path from "node:path"
 import { createInterface } from "node:readline"
 import { createAi } from "@amira/ai"
 import {
+  draftFromValues,
   type FormDialogs,
   type FormSpec,
   type FormValues,
   type ProviderAdmin,
   type ProviderDraft,
+  type ProviderFormInitial,
+  providerFormSpec,
   runFormDialogs,
 } from "@amira/api"
 import { amiraHome, authFile, loadAuth, loadSettings, providersFromSettings } from "@amira/core"
-import { draftFromValues, type ProviderFormInitial, providerFormSpec } from "@amira/ext-commands"
 import { runFormScreen } from "@amira/tui"
 import { UsageError } from "./args.ts"
 import { readCatalogCache } from "./catalog.ts"

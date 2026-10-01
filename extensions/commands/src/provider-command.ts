@@ -1,6 +1,13 @@
-import type { CommandCandidate, CommandContext, CommandDefinition, ProviderAdmin } from "@amira/api"
+import {
+  type CommandCandidate,
+  type CommandContext,
+  type CommandDefinition,
+  DIALECT_NOTES,
+  draftFromValues,
+  type ProviderAdmin,
+  providerFormSpec,
+} from "@amira/api"
 import { table } from "./format.ts"
-import { DIALECT_NOTES, draftFromValues, providerFormSpec } from "./provider-form.ts"
 
 const USAGE = "usage: /provider [add [<protocol>] | edit <id> | remove <id> | key <id>]"
 const NONE = "No providers configured — add one with /provider add"

@@ -3,10 +3,22 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockReply, type ModelRequest } from "@amira/ai"
 import { type AnyEvent, defineTool, type Settings, textResult, USER_STOP_REASON } from "@amira/api"
-import { Agent, AgentTree, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
-import { runCommand } from "@amira/proc"
+import {
+  createAi,
+  createMockDialect,
+  type MockReply,
+  type ModelRequest,
+} from "../../../packages/ai/src/index.ts"
+import {
+  Agent,
+  AgentTree,
+  EventBus,
+  ExtensionHost,
+  InterceptorRegistry,
+  ToolRegistry,
+} from "../../../packages/core/src/index.ts"
+import { runCommand } from "../../../packages/proc/src/index.ts"
 import { createAgentExtension, hostGit, type RunGit } from "../src/index.ts"
 
 setDefaultTimeout(60_000)

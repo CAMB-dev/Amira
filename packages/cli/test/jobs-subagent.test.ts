@@ -3,9 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type ModelRequest } from "@amira/ai"
-import builtinTools from "@amira/builtin-tools"
 import { Agent, AgentTree, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import { backgroundJobs } from "@amira/proc"
+import builtinTools from "../../../extensions/builtin-tools/src/index.ts"
 
 // Spawns can stall for seconds on Windows machines with antivirus scanning.
 setDefaultTimeout(60_000)

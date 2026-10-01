@@ -13,13 +13,6 @@
     "@amira/api": "workspace:*",
     "@amira/proc": "workspace:*",
     "@amira/tui": "workspace:*",
-    "@amira/tui-kit": "workspace:*",
-    "@amira/builtin-tools": "workspace:*",
-    "@amira/ext-status": "workspace:*",
-    "@amira/ext-commands": "workspace:*",
-    "@amira/ext-skills": "workspace:*",
-    "@amira/ext-mcp": "workspace:*",
-    "@amira/ext-web": "workspace:*",
-    "@amira/ext-agent": "workspace:*"
+    "@amira/tui-kit": "workspace:*"
   }
 }

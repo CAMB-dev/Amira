@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import "../../../packages/core/src/index.ts"
 import type { ExtensionAPI, ToolDefinition } from "@amira/api"
 import extension from "../src/index.ts"
 

@@ -2,9 +2,16 @@ import { afterAll, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import type { AnyEvent, SendOptions, SessionControl } from "@amira/api"
-import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { createAi, createMockDialect, type MockStep } from "../../../packages/ai/src/index.ts"
+import {
+  Agent,
+  CommandHost,
+  EventBus,
+  ExtensionHost,
+  InterceptorRegistry,
+  ToolRegistry,
+} from "../../../packages/core/src/index.ts"
 import { createSkillsExtension, discoverSkills, parseFrontmatter, skillsSection } from "../src/index.ts"
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-skills-"))

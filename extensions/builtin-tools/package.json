@@ -8,7 +8,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@amira/api": "workspace:*",
-    "@amira/proc": "workspace:*"
+    "@amira/api": "workspace:*"
   }
 }

@@ -1,8 +1,22 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect } from "@amira/ai"
-import type { EventMap, ProviderAdmin, ProviderDraft, SessionControl } from "@amira/api"
-import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
-import commandsExtension, { draftFromValues, providerFormSpec } from "../src/index.ts"
+import {
+  draftFromValues,
+  type EventMap,
+  type ProviderAdmin,
+  type ProviderDraft,
+  providerFormSpec,
+  type SessionControl,
+} from "@amira/api"
+import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
+import {
+  Agent,
+  CommandHost,
+  EventBus,
+  ExtensionHost,
+  InterceptorRegistry,
+  ToolRegistry,
+} from "../../../packages/core/src/index.ts"
+import commandsExtension from "../src/index.ts"
 
 type Request = EventMap["ui.request"]
 

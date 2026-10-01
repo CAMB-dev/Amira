@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test"
+import "../../../packages/core/src/index.ts"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"

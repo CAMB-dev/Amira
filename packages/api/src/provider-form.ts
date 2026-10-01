@@ -1,12 +1,5 @@
-import type {
-  FormOption,
-  FormSpec,
-  FormValues,
-  ProviderAdmin,
-  ProviderDraft,
-  ProviderKeySource,
-  ProviderModelInfo,
-} from "@amira/api"
+import type { FormOption, FormSpec, FormValues } from "./form.ts"
+import type { ProviderAdmin, ProviderDraft, ProviderKeySource, ProviderModelInfo } from "./providers.ts"
 
 /** What each protocol is, next to its id wherever one is picked. */
 export const DIALECT_NOTES: Record<string, string> = {

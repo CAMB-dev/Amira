@@ -1,5 +1,4 @@
-import { defineExtension } from "@amira/api"
-import { warmUpCommands } from "@amira/proc"
+import { defineExtension, hostWarmUpCommands } from "@amira/api"
 import { applyPatchTool } from "./apply-patch.ts"
 import { askUserPresenter, askUserTool } from "./ask-user.ts"
 import { bashTool, powershellTool } from "./bash.ts"
@@ -12,6 +11,7 @@ import { outputReadTool } from "./output-read.ts"
 import { builtinPresenters } from "./presenters.ts"
 import { readTool } from "./read.ts"
 import { warmUpShell } from "./shell.ts"
+import { toolSearchExtension, toolSearchTool } from "./tool-search.ts"
 import { writeTool } from "./write.ts"
 
 export { configureJobs, jobsConfig } from "./jobs.ts"
@@ -31,6 +31,8 @@ export {
   outputReadTool,
   powershellTool,
   readTool,
+  toolSearchExtension,
+  toolSearchTool,
   writeTool,
 }
 
@@ -56,6 +58,6 @@ export default defineExtension((api) => {
   // Not awaited: loading must not wait for shell discovery or the Win32 bindings.
   setTimeout(() => {
     warmUpShell()
-    warmUpCommands()
+    hostWarmUpCommands()
   }, 0)
 })

@@ -1,3 +1,4 @@
+import type { BackgroundJobInfo as JobInfo, TemporaryBackgroundJobRegistry as JobRegistry } from "@amira/api"
 import {
   type BackgroundJobDetails,
   type CommandCandidate,
@@ -14,7 +15,6 @@ import {
   type ViewDefinition,
   type ViewLine,
 } from "@amira/api"
-import type { JobInfo, JobRegistry } from "@amira/proc"
 import {
   configureJobs,
   endText,

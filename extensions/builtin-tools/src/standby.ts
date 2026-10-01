@@ -1,4 +1,10 @@
-import { prepareCommand, type RunResult, runCommand, type Standby, StandbyGoneError } from "@amira/proc"
+import {
+  type HostPreparedCommand,
+  type HostRunResult,
+  hostPrepareCommand,
+  hostRunCommand,
+  isHostStandbyGoneError,
+} from "@amira/api"
 import type { ShellCommand } from "./shell.ts"
 
 export interface PoolRunOptions {
@@ -8,8 +14,8 @@ export interface PoolRunOptions {
 }
 
 export interface StandbyPoolDeps {
-  prepare?: typeof prepareCommand
-  run?: typeof runCommand
+  prepare?: typeof hostPrepareCommand
+  run?: typeof hostRunCommand
 }
 
 /**
@@ -21,17 +27,17 @@ export interface StandbyPoolDeps {
  * as do parallel calls beyond the one standby.
  */
 export class StandbyPool {
-  #slot: { key: string; standby: Standby } | undefined
-  readonly #prepare: typeof prepareCommand
-  readonly #run: typeof runCommand
+  #slot: { key: string; standby: HostPreparedCommand } | undefined
+  readonly #prepare: typeof hostPrepareCommand
+  readonly #run: typeof hostRunCommand
 
   constructor(deps: StandbyPoolDeps = {}) {
-    this.#prepare = deps.prepare ?? prepareCommand
-    this.#run = deps.run ?? runCommand
+    this.#prepare = deps.prepare ?? hostPrepareCommand
+    this.#run = deps.run ?? hostRunCommand
   }
 
   /** Runs the command on the standby when it matches, else cold; either way refills the pool. */
-  async run(command: ShellCommand, opts: PoolRunOptions): Promise<RunResult> {
+  async run(command: ShellCommand, opts: PoolRunOptions): Promise<HostRunResult> {
     const { argv, gateLine, ...spawn } = command
     const cold = () => this.#run(argv, { ...spawn, ...opts, ...(gateLine !== undefined ? { gateLine } : {}) })
     if (!command.gated || command.viaCmd) return cold()
@@ -53,7 +59,7 @@ export class StandbyPool {
     try {
       return await running
     } catch (err) {
-      if (!(err instanceof StandbyGoneError)) throw err
+      if (!isHostStandbyGoneError(err)) throw err
       return cold()
     }
   }

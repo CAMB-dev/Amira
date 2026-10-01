@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
+import "../../../packages/core/src/index.ts"
 import { existsSync, readFileSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -12,7 +13,12 @@ import type {
   ToolSession,
   UserMessage,
 } from "@amira/api"
-import { backgroundJobs, JobRegistry, resetCommandWorker, startJob } from "@amira/proc"
+import {
+  backgroundJobs,
+  JobRegistry,
+  resetCommandWorker,
+  startJob,
+} from "../../../packages/proc/src/index.ts"
 import { bashTool, createPowershellTool } from "../src/bash.ts"
 import {
   jobListTool,

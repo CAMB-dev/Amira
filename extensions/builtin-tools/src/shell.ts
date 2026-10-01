@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
-import { runCommand } from "@amira/proc"
+import { hostRunCommand } from "@amira/api"
 import {
   findPowerShell,
   gatedPowerShell,
@@ -66,7 +66,7 @@ export function bashFromGitExecPath(execPath: string, exists: (p: string) => boo
 async function gitExecPath(): Promise<string | undefined> {
   try {
     // Off the main thread: a slow spawn must not freeze the UI.
-    const run = await runCommand(["git", "--exec-path"], {
+    const run = await hostRunCommand(["git", "--exec-path"], {
       cwd: process.cwd(),
       timeoutMs: 30_000,
       signal: new AbortController().signal,
@@ -216,7 +216,7 @@ export function resolveShell(): Promise<Shell> {
 export function warmUpShell(): void {
   const warm = (shell: Shell, command: string) => {
     const { argv, ...spawn } = shell.command(command, process.cwd())
-    return runCommand(argv, {
+    return hostRunCommand(argv, {
       ...spawn,
       timeoutMs: 60_000,
       signal: new AbortController().signal,

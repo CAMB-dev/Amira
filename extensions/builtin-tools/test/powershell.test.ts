@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test"
+import "../../../packages/core/src/index.ts"
 import { existsSync } from "node:fs"
 import { mkdir, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { prepareCommand, runCommand } from "@amira/proc"
+import { prepareCommand, runCommand } from "../../../packages/proc/src/index.ts"
 import { createPowershellTool, powershellDescription } from "../src/bash.ts"
 import {
   encodeCommand,

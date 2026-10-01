@@ -2,13 +2,10 @@ import { expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
-import { Agent } from "../src/agent.ts"
-import { searchDeferred, TOOL_SEARCH, toolSearchTool } from "../src/deferred-tools.ts"
-import { EventBus } from "../src/event-bus.ts"
-import { SessionStore } from "../src/session-store.ts"
-import { ToolRegistry } from "../src/tool-registry.ts"
+import { createAi, createMockDialect, type MockStep } from "../../../packages/ai/src/index.ts"
+import { Agent, EventBus, SessionStore, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { searchDeferred, TOOL_SEARCH, toolSearchTool } from "../src/tool-search.ts"
 
 function setup(steps: MockStep[], tools = new ToolRegistry()) {
   const mock = createMockDialect(steps)
