@@ -62,8 +62,11 @@ test("accepts ./-prefixed, ../ and absolute patterns", async () => {
 test("a wildcard-free parent or home pattern lists that directory instead of walking the drive", async () => {
   const started = performance.now()
   const up = textOf(await globTool.execute({ pattern: ".." }, makeCtx(join(dir, "src", "lib"))))
-  // Paths outside cwd remain absolute and carry an explicit marker.
-  const names = up.split("\n").map((p) => p.split("/").slice(-2).join("/"))
+  // Paths outside cwd remain absolute; one line above them says so.
+  const [note, ...lines] = up.split("\n")
+  expect(note).toBe("[outside working directory] paths below are absolute")
+  expect(lines.every((p) => !p.includes("[outside"))).toBe(true)
+  const names = lines.map((p) => p.split("/").slice(-2).join("/"))
   expect(names.sort()).toEqual(["src/a.ts", "src/c.js"])
   expect(performance.now() - started).toBeLessThan(2000)
   const one = textOf(await globTool.execute({ pattern: "../a.ts" }, makeCtx(join(dir, "src", "lib"))))

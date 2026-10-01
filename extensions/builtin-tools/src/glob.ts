@@ -2,7 +2,7 @@ import { statSync } from "node:fs"
 import path from "node:path"
 import { defineTool, type GlobDetails, outputSize, textResult } from "@amira/api"
 import { statOrNull, walkFiles } from "./files.ts"
-import { displayPath, resolvePath } from "./paths.ts"
+import { displayPath, outsideNote, resolvePath } from "./paths.ts"
 import { keepOutput, outputLimits } from "./truncate.ts"
 
 export const GLOB_LIMIT = 1000
@@ -53,9 +53,10 @@ export const globTool = defineTool<GlobParams>({
     }
 
     matches.sort((a, b) => b.mtime - a.mtime)
-    const paths = matches.map((m) => displayPath(ctx.cwd, m.abs))
-    const head = paths.slice(0, GLOB_LIMIT).join("\n")
-    const all = paths.join("\n")
+    const paths = matches.map((m) => displayPath(ctx.cwd, m.abs, false))
+    const note = outsideNote(ctx.cwd, root)
+    const head = note + paths.slice(0, GLOB_LIMIT).join("\n")
+    const all = note + paths.join("\n")
     let text = head
     if (matches.length > GLOB_LIMIT) {
       text += `\n\n(Showing the ${GLOB_LIMIT} most recently modified of ${matches.length} matches. Use a more specific pattern or path.)`

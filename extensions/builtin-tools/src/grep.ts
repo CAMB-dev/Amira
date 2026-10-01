@@ -4,7 +4,7 @@ import { defineTool, type GrepDetails, MAX_ARTIFACT_CHARS, outputSize, textResul
 import { splitLines } from "./diff.ts"
 import { statOrNull, type WalkEntry, walkFiles } from "./files.ts"
 import { grepMatcher } from "./grep-matcher.ts"
-import { displayPath, resolvePath } from "./paths.ts"
+import { displayPath, outsideNote, resolvePath } from "./paths.ts"
 import { decodeText, looksBinary } from "./text.ts"
 import { keepOutput, outputLimits } from "./truncate.ts"
 
@@ -138,7 +138,7 @@ export const grepTool = defineTool<GrepParams>({
         if (!filter(f.rel)) continue
         const text = await readText(f.abs)
         if (text === undefined) continue
-        batch.push({ shown: displayPath(ctx.cwd, f.abs), text })
+        batch.push({ shown: displayPath(ctx.cwd, f.abs, false), text })
         batched += text.length
         if (batched >= MATCH_BATCH_CHARS || batch.length >= MATCH_BATCH_FILES) await flush()
       }
@@ -151,8 +151,9 @@ export const grepTool = defineTool<GrepParams>({
 
     if (ctx.signal.aborted) return textResult("Aborted", true)
     if (total === 0) return textResult(`No matches for /${pattern}/ in ${displayPath(ctx.cwd, root)}`)
-    const head = out.slice(0, limit).join("\n")
-    const all = out.join("\n")
+    const note = outsideNote(ctx.cwd, root)
+    const head = note + out.slice(0, limit).join("\n")
+    const all = note + out.join("\n")
     const shownCount = Math.min(limit, out.length)
     let text = head
     if (total > shownCount) {
