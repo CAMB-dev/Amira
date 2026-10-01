@@ -9,7 +9,8 @@ export interface ModelCallOptions {
   modelRef: ModelRef
   systemPrompt: string
   messages: Message[]
-  tools: ToolSpec[]
+  /** Read inside the stream's try, so a failure becomes this call's error as before. */
+  tools: () => ToolSpec[]
   maxTokens?: number
   signal: AbortSignal
   emit: ModelCallEmit
@@ -35,7 +36,7 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
         model: options.model,
         systemPrompt: options.systemPrompt,
         messages: options.messages,
-        tools: options.tools,
+        tools: options.tools(),
         ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
       },
       options.signal,

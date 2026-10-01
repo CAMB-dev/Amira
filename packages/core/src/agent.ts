@@ -1424,7 +1424,7 @@ export class Agent {
       modelRef: requestModelRef,
       systemPrompt: ctx.value.systemPrompt,
       messages: ctx.value.messages,
-      tools: this.#offeredTools(),
+      tools: () => this.#offeredTools(),
       maxTokens: this.#maxTokens,
       signal: turn.signal,
       emit: <K extends keyof EventMap>(type: K, data: EventMap[K]) => this.#emit(turn, type, data),
