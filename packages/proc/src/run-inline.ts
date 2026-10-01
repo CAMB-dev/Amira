@@ -21,6 +21,11 @@ export interface SpawnOptions {
   viaCmd?: boolean
   /** Keep stderr out of `output` (it is discarded). Default false: both streams are interleaved. */
   stdoutOnly?: boolean
+  /**
+   * Keep only the last this many characters in `output`, so a chatty command cannot fill memory;
+   * onChunk still sees everything. Default: all of it.
+   */
+  maxOutputChars?: number
   /** Test seam: how the process tree is tracked and killed. */
   trackTree?: (proc: Subprocess) => ProcessTree
 }
@@ -122,8 +127,13 @@ export function prepareCommandInline(
   let output = ""
   let onChunk: ((chunk: string) => void) | undefined
   let finished = false
+  const cap = opts.maxOutputChars
+  // Trimmed once it holds twice the cap, so a stream of small chunks is not copied each time.
+  const tail = (limit: number) =>
+    cap !== undefined && output.length > limit ? output.slice(output.length - cap) : output
   const emit = (chunk: string) => {
     output += chunk
+    if (cap !== undefined) output = tail(2 * cap)
     if (chunk) onChunk?.(chunk)
   }
   const readers: { cancel(): Promise<void> }[] = []
@@ -177,7 +187,7 @@ export function prepareCommandInline(
       if (output) onChunk?.(output)
       // cmd's `set /p` fails on an empty line, which would end the command with 125.
       if (gated) releaseGate(proc.stdin, wrapped ? "go" : (release.gateLine ?? ""))
-      return collect(proc, tree, drained, release, () => output, close)
+      return collect(proc, tree, drained, release, () => (cap === undefined ? output : tail(cap)), close)
     },
     dispose() {
       closeIdle()

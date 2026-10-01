@@ -4,8 +4,13 @@ export interface RunCommandOptions {
   /** Milliseconds before the command and everything it started are killed. */
   timeoutMs: number
   signal: AbortSignal
-  /** Called with each new piece of output, in order. */
+  /** Called with each new piece of output, in order, while the command runs. */
   onChunk?: (chunk: string) => void
+  /**
+   * Keep only the last this many characters in the result's `output`, so a chatty command cannot
+   * fill memory; onChunk still sees everything. Default: all of it.
+   */
+  maxOutputChars?: number
   /** Keep stderr out of the output (it is discarded). Default: both are interleaved. */
   stdoutOnly?: boolean
   /**

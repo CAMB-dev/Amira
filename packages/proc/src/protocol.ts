@@ -9,6 +9,7 @@ export interface SpawnRequest {
   gated?: boolean
   viaCmd?: boolean
   stdoutOnly?: boolean
+  maxOutputChars?: number
 }
 
 export interface ReleaseRequest {
