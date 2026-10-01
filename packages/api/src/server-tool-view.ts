@@ -1,6 +1,6 @@
 import { describeServerTool, type ServerToolBlock } from "@amira/ai"
 import type { WebSearchDetails } from "./tool-details.ts"
-import type { ToolCallView } from "./tool-renderers.ts"
+import { type ToolCallView, toolResultText } from "./tool-renderers.ts"
 import type { ToolResult } from "./tools.ts"
 
 /** The backend name used for provider-hosted web searches. */
@@ -57,7 +57,7 @@ export function serverToolView(block: ServerToolBlock): ServerToolView {
     name: block.name,
     args,
     result,
-    text,
+    text: toolResultText(result),
     ...(block.status === "running" ? { rejected: "aborted" as const } : {}),
   }
 }
