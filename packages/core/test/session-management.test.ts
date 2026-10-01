@@ -165,6 +165,22 @@ test("fork copies only the current branch after an abandoned rewind", () => {
   expect(fork.entries.some((e) => e.id === current)).toBe(true)
 })
 
+test("fork keeps the session's usage notes but not the abandoned branch", () => {
+  const s = SessionStore.create({ cwd: "/project", dir: tmp() })
+  const first = s.appendMessage(userMessage("first"))
+  s.append({
+    type: "side_usage",
+    model: { provider: "p", model: "m" },
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+  })
+  s.appendMessage(userMessage("abandoned"))
+  s.append({ type: "checkout", target: first })
+  s.appendMessage(userMessage("current"))
+  const fork = SessionStore.open(s.fork().file)
+  expect(fork.entries.filter((e) => e.type === "side_usage")).toHaveLength(1)
+  expect(fork.restore().messages).toEqual([userMessage("first"), userMessage("current")])
+})
+
 test("delete refuses the current session and traversal; removes owned children but preserves shared fork children", () => {
   const dir = tmp()
   const s = SessionStore.create({ cwd: "/project", dir })

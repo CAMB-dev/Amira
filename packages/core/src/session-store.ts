@@ -283,13 +283,25 @@ export class SessionStore {
     this.append({ type: "title", title: clean, source })
   }
 
-  /** Copies the current branch through target, retaining entry ids used by compactions. */
+  /**
+   * Copies the current branch through target, retaining entry ids used by compactions, plus the
+   * session-wide notes (titles, side usage) recorded before target and every file prune.
+   */
   fork(target: string | null = this.#leaf): SessionStore {
     const branch = this.branch()
     const at = target === null ? -1 : branch.findIndex((e) => e.id === target)
     if (target !== null && at === -1) throw new Error(`unknown entry ${target}`)
     const next = SessionStore.create({ cwd: this.header.cwd, parent: this.id, dir: path.dirname(this.file) })
-    const entries = branch.slice(0, at + 1)
+    const kept = new Set(branch.slice(0, at + 1).map((e) => e.id))
+    const end = target === null ? -1 : this.#entries.findIndex((e) => e.id === target)
+    // Session-wide notes sit off every branch, so they come along as before. A prune discards
+    // the file history of the whole session, wherever it happened, so no fork may restore it.
+    const entries = this.#entries.filter(
+      (e, i) =>
+        kept.has(e.id) ||
+        e.type === "file_prune" ||
+        (i <= end && (e.type === "title" || e.type === "side_usage")),
+    )
     const text = `${[JSON.stringify(next.header), ...entries.map((e) => JSON.stringify(e))].join("\n")}\n`
     mkdirSync(path.dirname(next.file), { recursive: true })
     writeFileSync(next.file, text, { flag: "wx" })
