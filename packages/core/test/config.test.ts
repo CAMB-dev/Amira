@@ -342,7 +342,13 @@ test("checks every documented key", () => {
     tools: { disabled: ["bash"] },
     maxParallelTools: 4,
     compact: { threshold: 0.8, model: "p/small" },
-    retry: { attempts: 0, baseDelayMs: 500, maxDelayMs: 30_000 },
+    retry: {
+      attempts: 0,
+      baseDelayMs: 500,
+      maxDelayMs: 30_000,
+      firstContentTimeoutMs: 150_000,
+      idleTimeoutMs: 100_000,
+    },
     mcpServers: { fs: { command: "mcp-fs", args: ["."] } },
     extensions: {
       swarm: { confirm: false, limits: { maxMessages: 50 } },

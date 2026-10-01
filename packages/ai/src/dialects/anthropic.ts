@@ -6,6 +6,7 @@ import { anthropicCompaction, COMPACT_BETA, carriesCompaction, withBeta } from "
 import { anthropicError, isRetryableStatus } from "./anthropic-errors.ts"
 import { ANTHROPIC_DIALECT, toAnthropicMessages } from "./anthropic-messages.ts"
 import { requestBody } from "./anthropic-request.ts"
+import { isRetryableBodyError } from "./openai-chat-errors.ts"
 import { withRetryAfter } from "./retry-after.ts"
 
 export { toAnthropicMessages }
@@ -109,7 +110,10 @@ function httpError(acc: MessagesAccumulator, status: number, detail: string): St
   const parsed =
     json && typeof json === "object" && "error" in json ? anthropicError(json, status) : undefined
   const message = `HTTP ${status}: ${parsed ? parsed.error.message : detail.slice(0, 500)}`
-  return acc.fail({ ...parsed?.error, message, status }, isRetryableStatus(status))
+  return acc.fail(
+    { ...parsed?.error, message, status },
+    isRetryableStatus(status) || (parsed ? parsed.retryable : isRetryableBodyError({ message, status })),
+  )
 }
 
 /** A 200 response that is not an event stream: an error body, a whole message, or junk. */
@@ -126,7 +130,8 @@ async function* readPlain(res: Response, acc: MessagesAccumulator): AsyncGenerat
   }
   if (json?.type !== "message" || !Array.isArray(json.content)) {
     const type = res.headers.get("content-type") || "no content-type"
-    yield acc.fail({ message: `expected an event stream, got ${type}: ${text.slice(0, 500)}` }, false)
+    const message = `expected an event stream, got ${type}: ${text.slice(0, 500)}`
+    yield acc.fail({ message }, isRetryableBodyError({ message }))
     return
   }
   yield { type: "start" }

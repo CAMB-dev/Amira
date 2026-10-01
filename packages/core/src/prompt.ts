@@ -1,4 +1,6 @@
+import { existsSync, readFileSync, statSync } from "node:fs"
 import os from "node:os"
+import { dirname, join, resolve } from "node:path"
 import type { SystemSection } from "@amira/api"
 
 /** The same shape extensions see in the system.build interceptor. */
@@ -36,8 +38,10 @@ export const NON_INTERACTIVE_LINE =
  */
 export function defaultSections(env: PromptEnv): PromptSection[] {
   const date = (env.date ?? new Date()).toISOString().slice(0, 10)
+  const worktree = gitWorktreeLines(env.cwd)
   const lines = [
     `Working directory: ${env.cwd}`,
+    ...worktree,
     `Platform: ${process.platform} (${os.release()})`,
     ...(env.shell ? [`Shell used by the bash tool: ${env.shell}`] : []),
     `Today's date: ${date}`,
@@ -51,6 +55,35 @@ export function defaultSections(env: PromptEnv): PromptSection[] {
     { name: "deferred-tools", text: "" },
     { name: "role", text: env.role ?? "" },
   ]
+}
+
+/** Identifies linked worktrees so the model does not accidentally edit the main checkout. */
+function gitWorktreeLines(cwd: string): string[] {
+  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
+    const dotGit = join(dir, ".git")
+    try {
+      if (statSync(dotGit).isFile()) {
+        const text = readFileSync(dotGit, "utf8")
+        const gitDir = /^gitdir:\s*(.+?)\s*$/im.exec(text)?.[1]
+        if (gitDir) {
+          const commonText = existsSync(join(resolve(dir, gitDir), "commondir"))
+            ? readFileSync(join(resolve(dir, gitDir), "commondir"), "utf8").trim()
+            : ""
+          if (commonText) {
+            const mainCheckout = dirname(resolve(dir, gitDir, commonText))
+            return [
+              "Git workspace: linked worktree",
+              `Main checkout: ${mainCheckout} (off-limits for changes unless the user explicitly asks)`,
+            ]
+          }
+        }
+      }
+    } catch {
+      // Prompt construction should remain available even if Git metadata is incomplete.
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return []
+  }
 }
 
 /** Adds the non-interactive instruction without replacing a child's other prompt sections. */

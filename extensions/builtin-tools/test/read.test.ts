@@ -32,6 +32,7 @@ test("offset and limit select a range and hint at the next offset", async () => 
 })
 
 test("defaults to 2000 lines and truncates long lines", async () => {
+  expect(readTool.description).toContain("15,600 characters")
   const lines = Array.from({ length: 2500 }, (_, i) => String(i + 1))
   lines[0] = "x".repeat(5000)
   await writeFile(join(dir, "big.txt"), lines.join("\n"))
@@ -49,7 +50,7 @@ test("a long range stops at a whole line under the size limit for large outputs"
   const out = textOf(await read({ path: "long.txt" }))
   // Never so long that it is saved as an artifact (16,000 characters by default).
   expect(out.length).toBeLessThanOrEqual(16_000)
-  const last = /\(Showing lines 1-(\d+) of 2500\. Use offset=(\d+) to read more\.\)$/.exec(out)
+  const last = /\(Showing lines 1-(\d+) of 2500\. Use offset=(\d+) to continue reading\.\)$/.exec(out)
   expect(last).not.toBeNull()
   expect(Number(last![2])).toBe(Number(last![1]) + 1)
   expect(out).toContain(`\t${lines[Number(last![1]) - 1]}\n`)
@@ -62,7 +63,7 @@ test("CJK text counts four to a character against the size limit", async () => {
   // About a quarter of what ASCII text would fit, and never saved as an artifact.
   expect(out.length).toBeLessThan(8_000)
   expect(outputSize(out)).toBeLessThanOrEqual(16_000)
-  expect(out).toMatch(/Use offset=\d+ to read more\.\)$/)
+  expect(out).toMatch(/Use offset=\d+ to continue reading\.\)$/)
 })
 
 test("force must be a boolean", async () => {
@@ -89,7 +90,7 @@ test("streams large files: a window deep in the file, and a huge single line", a
   await writeFile(join(dir, "large.log"), `${lines.join("\n")}\n`)
   const r = textOf(await read({ path: "large.log", offset: 299_998, limit: 2 }))
   expect(r).toBe(
-    `299998\t${line(299_998)}\n299999\t${line(299_999)}\n\n(Showing lines 299998-299999. Use offset=300000 to read more.)`,
+    `299998\t${line(299_998)}\n299999\t${line(299_999)}\n\n(Showing lines 299998-299999. Use offset=300000 to continue reading.)`,
   )
   expect(textOf(await read({ path: "large.log", offset: 300_000 }))).toBe(`300000\t${line(300_000)}`)
   expect(textOf(await read({ path: "large.log", offset: 300_001 }))).toContain("which has 300000 lines")

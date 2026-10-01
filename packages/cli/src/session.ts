@@ -591,6 +591,8 @@ export function retryFromSettings(retry: Settings["retry"]): RetryOptions | unde
   if (retry.attempts !== undefined) out.retries = retry.attempts
   if (retry.baseDelayMs !== undefined) out.baseDelayMs = retry.baseDelayMs
   if (retry.maxDelayMs !== undefined) out.maxDelayMs = retry.maxDelayMs
+  if (retry.firstContentTimeoutMs !== undefined) out.firstContentTimeoutMs = retry.firstContentTimeoutMs
+  if (retry.idleTimeoutMs !== undefined) out.idleTimeoutMs = retry.idleTimeoutMs
   return Object.keys(out).length ? out : undefined
 }
 
@@ -633,8 +635,8 @@ function noModelNotice(ai: Ai): string {
 /** The print-mode error for the same, which cannot be fixed from inside the run. */
 function noModelError(ai: Ai): string {
   return ai.providers().length === 0
-    ? 'no providers configured; add one with "amira provider add", then pass --model provider/model'
-    : 'no model selected. Pass --model provider/model, set AMIRA_MODEL or set "model" in settings.json.'
+    ? 'no providers configured; add one with "amira provider add", then pass -m provider/model'
+    : 'no model selected. Pass -m provider/model, set AMIRA_MODEL or set "model" in settings.json.'
 }
 
 /** Settings `compact` as agent options; its model is resolved like --model. */
