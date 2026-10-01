@@ -146,6 +146,7 @@ function mapUsage(u: any): Usage {
   return {
     input: Math.max(0, (u.promptTokenCount ?? 0) - cached),
     output: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0),
+    ...(typeof u.thoughtsTokenCount === "number" ? { reasoning: u.thoughtsTokenCount } : {}),
     cacheRead: cached,
     cacheWrite: 0,
   }

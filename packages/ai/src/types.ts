@@ -69,6 +69,8 @@ export type ToolResultContent = TextBlock | ImageBlock
 export interface Usage {
   input: number
   output: number
+  /** Reasoning tokens included in output, when reported by the provider. */
+  reasoning?: number
   cacheRead: number
   cacheWrite: number
   /** Cost of these tokens in USD, when the model's prices are known. */

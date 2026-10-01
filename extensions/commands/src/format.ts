@@ -33,6 +33,68 @@ export function tokensPerSecond(
   return outputTokens / seconds
 }
 
+export interface ReplyTiming {
+  start: number
+  /** First streamed thinking. */
+  thinking?: number
+  /** First streamed text or tool-call arguments: the answer the model writes. */
+  reply?: number
+}
+
+/** Separate the timed phases; estimates never read as provider token counts. */
+export function replySpeed(
+  message: AssistantMessage,
+  timing: ReplyTiming,
+  end: number,
+  silentGap?: number,
+): string | undefined {
+  const output = message.usage?.output
+  if (output === undefined) return undefined
+  const reasoning = message.usage?.reasoning
+  const thinking = timing.thinking !== undefined
+  // Any thinking block, even an empty signed or redacted one, means the model reasoned.
+  const hidden =
+    !thinking &&
+    ((reasoning ?? 0) > 0 ||
+      message.content.some((b) => b.type === "thinking") ||
+      (reasoning === undefined &&
+        silentGap !== undefined &&
+        timing.reply !== undefined &&
+        timing.reply - timing.start >= silentGap))
+  const estimate = reasoning === undefined && (thinking || hidden)
+  const replyTokens = estimate
+    ? message.content.reduce(
+        (n, b) =>
+          n +
+          (b.type === "text"
+            ? estimateTokens(b.text)
+            : b.type === "toolCall"
+              ? estimateTokens(b.name + JSON.stringify(b.args))
+              : 0),
+        0,
+      )
+    : Math.max(0, output - (reasoning ?? 0))
+  const reply = timing.reply === undefined ? undefined : tokensPerSecond(replyTokens, timing.reply, end)
+  const streamed = message.content.reduce(
+    (n, b) => n + (b.type === "thinking" ? estimateTokens(b.text) : 0),
+    0,
+  )
+  // A reported count far above what streamed means only a summary streamed (OpenAI Responses):
+  // the reasoning ran before the summary began, so time it from the request and mark it.
+  const summary = reasoning !== undefined && streamed < reasoning / 2
+  const thought =
+    timing.thinking === undefined
+      ? undefined
+      : tokensPerSecond(reasoning ?? streamed, summary ? timing.start : timing.thinking, timing.reply ?? end)
+  const rate = (n: number) => (n < 10 ? n.toFixed(1) : String(Math.round(n)))
+  const parts: string[] = []
+  if (reply !== undefined)
+    parts.push(`reply ${estimate ? "~" : ""}${rate(reply)} tok/s${hidden ? " (hidden reasoning)" : ""}`)
+  if (thought !== undefined)
+    parts.push(`thinking ${reasoning === undefined || summary ? "~" : ""}${rate(thought)} tok/s`)
+  return parts.length ? parts.join(" · ") : undefined
+}
+
 /** Share of prompt tokens served from the provider's cache; undefined before any prompt tokens. */
 export function cacheHitRate(input: number, cacheRead: number, cacheWrite: number): number | undefined {
   const prompt = input + cacheRead + cacheWrite
