@@ -5,7 +5,6 @@ import { resetCommandWorker, runCommand } from "../src/index.ts"
 setDefaultTimeout(60_000)
 
 const bun = process.execPath
-const DEFAULT_MAX_OUTPUT_CHARS = 1_000_000
 const opts = (signal = new AbortController().signal) => ({ cwd: process.cwd(), timeoutMs: 30_000, signal })
 
 test("runs a command in the worker and streams its output in chunks", async () => {
@@ -93,14 +92,10 @@ test("a failing chunk callback does not break the run", async () => {
   expect(run.exitCode).toBe(0)
 })
 
-test("output is capped by default", async () => {
-  const run = await runCommand(
-    [bun, "-e", `process.stdout.write('x'.repeat(${DEFAULT_MAX_OUTPUT_CHARS}) + 'END')`],
-    opts(),
-  )
-  expect(run.output.length).toBe(DEFAULT_MAX_OUTPUT_CHARS)
-  expect(run.output.endsWith("END")).toBe(true)
-  expect(run.truncated).toBe(true)
+test("without maxOutputChars the output is not capped", async () => {
+  const run = await runCommand([bun, "-e", "process.stdout.write('x'.repeat(1_000_000) + 'END')"], opts())
+  expect(run.output.length).toBe(1_000_003)
+  expect(run.truncated).toBe(false)
 })
 
 test("maxOutputChars overrides the cap; chunks still carry all output", async () => {

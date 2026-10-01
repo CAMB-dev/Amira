@@ -5,14 +5,15 @@ import { type ProcessTree, trackProcessTree } from "./process-tree.ts"
 /** How long to wait for pipes to close after the command exits (and leftovers are killed). */
 export const DRAIN_GRACE_MS = 2000
 
+/** The cap the extension and package-command APIs put on `output` when the caller sets none. */
 export const DEFAULT_MAX_OUTPUT_CHARS = 1_000_000
 
-export function outputCharLimit(value: number | undefined): number {
-  const limit = value ?? DEFAULT_MAX_OUTPUT_CHARS
-  if (!Number.isInteger(limit) || limit <= 0) {
+/** Checks `maxOutputChars`: absent means no cap; otherwise it must be a positive integer. */
+export function outputCharLimit(value: number | undefined): number | undefined {
+  if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
     throw new RangeError("maxOutputChars must be a positive integer")
   }
-  return limit
+  return value
 }
 
 /** How to start a command; fixed once the process exists. */
@@ -33,7 +34,7 @@ export interface SpawnOptions {
   stdoutOnly?: boolean
   /**
    * Keep only the last this many characters in `output`, so a chatty command cannot fill memory;
-   * onChunk still sees everything. Default: 1,000,000. Must be a positive integer.
+   * onChunk still sees everything. Must be a positive integer. Default: all of it.
    */
   maxOutputChars?: number
   /** Test seam: how the process tree is tracked and killed. */
@@ -143,7 +144,7 @@ export function prepareCommandInline(
   let truncated = false
   // Trimmed once it holds twice the cap, so a stream of small chunks is not copied each time.
   const tail = (limit: number) => {
-    if (output.length <= limit) return output
+    if (cap === undefined || output.length <= limit) return output
     truncated = true
     let start = output.length - cap
     if (
@@ -157,7 +158,7 @@ export function prepareCommandInline(
   }
   const emit = (chunk: string) => {
     output += chunk
-    output = tail(2 * cap)
+    if (cap !== undefined) output = tail(2 * cap)
     if (chunk) onChunk?.(chunk)
   }
   const readers: { cancel(): Promise<void> }[] = []
@@ -211,7 +212,14 @@ export function prepareCommandInline(
       if (output) onChunk?.(output)
       // cmd's `set /p` fails on an empty line, which would end the command with 125.
       if (gated) releaseGate(proc.stdin, wrapped ? "go" : (release.gateLine ?? ""))
-      return collect(proc, tree, drained, release, () => ({ output: tail(cap), truncated }), close)
+      return collect(
+        proc,
+        tree,
+        drained,
+        release,
+        () => ({ output: cap === undefined ? output : tail(cap), truncated }),
+        close,
+      )
     },
     dispose() {
       closeIdle()

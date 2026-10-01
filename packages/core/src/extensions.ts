@@ -11,7 +11,7 @@ import {
   type RunCommandResult,
   type Settings,
 } from "@amira/api"
-import { runCommand } from "@amira/proc"
+import { DEFAULT_MAX_OUTPUT_CHARS, runCommand } from "@amira/proc"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
@@ -408,7 +408,10 @@ export class ExtensionHost {
  * tree is contained and then closes stdin.
  */
 export function runExtensionCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult> {
-  const { stdin, ...rest } = options
+  const { stdin, ...rest } = {
+    ...options,
+    maxOutputChars: options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS,
+  }
   if (stdin === undefined) return runCommand(argv, rest)
   if (rest.gated || rest.viaCmd) {
     return Promise.reject(new Error("runCommand: stdin cannot be combined with gated or viaCmd"))
