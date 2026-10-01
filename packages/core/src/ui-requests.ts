@@ -212,7 +212,7 @@ export class UiRequests {
         return typeof answer === "object" ? answer.option : answer
       },
       choose: async (title, options, opts) => {
-        const { sections, descriptions, ...rest } = opts
+        const { sections, descriptions, searchTexts, ...rest } = opts
         const problem = sectionProblem(options, sections)
         if (problem) throw new Error(`ui.choose: ${problem}`)
         const request = {
@@ -221,6 +221,7 @@ export class UiRequests {
           options: [...options],
           sections: structuredClone(sections),
           ...(descriptions ? { descriptions: [...descriptions] } : {}),
+          ...(searchTexts ? { searchTexts: [...searchTexts] } : {}),
         }
         const answer = await this.ask(request, o(rest))
         return typeof answer === "string" ? { option: answer } : answer

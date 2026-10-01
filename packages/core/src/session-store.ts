@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs"
+import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { Message, ModelRef, Signature, Usage } from "@amira/ai"
 import type { CompactionInfo, CompactionReason } from "@amira/api"
@@ -17,6 +17,8 @@ export interface SessionHeader {
 }
 
 export type SessionEntryData =
+  | { type: "title"; title: string; source: "manual" | "auto" }
+  | { type: "side_usage"; model: ModelRef; usage: Usage }
   | { type: "message"; message: Message }
   | { type: "model_change"; model: ModelRef }
   /**
@@ -153,6 +155,40 @@ export class SessionStore {
     return this.#entries
   }
 
+  get title(): string | undefined {
+    const entries = this.#entries.filter(
+      (e): e is Extract<SessionEntry, { type: "title" }> => e.type === "title" && typeof e.title === "string",
+    )
+    return entries.findLast((e) => e.source === "manual")?.title ?? entries.at(-1)?.title
+  }
+
+  rename(title: string, source: "manual" | "auto" = "manual"): void {
+    const clean = title
+      .replace(/\p{Cc}/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+    if (!clean) throw new Error("a session title must not be empty")
+    if (source === "auto" && this.#entries.some((e) => e.type === "title" && e.source === "manual")) return
+    this.append({ type: "title", title: clean, source })
+  }
+
+  /** Copies the stored history through target, retaining entry ids used by compactions. */
+  fork(target: string | null = this.#leaf): SessionStore {
+    const at = target === null ? -1 : this.#entries.findIndex((e) => e.id === target)
+    if (target !== null && at === -1) throw new Error(`unknown entry ${target}`)
+    const next = SessionStore.create({ cwd: this.header.cwd, parent: this.id, dir: path.dirname(this.file) })
+    const entries = this.#entries.slice(0, at + 1)
+    const text = `${[JSON.stringify(next.header), ...entries.map((e) => JSON.stringify(e))].join("\n")}\n`
+    mkdirSync(path.dirname(next.file), { recursive: true })
+    writeFileSync(next.file, text, { flag: "wx" })
+    next.#written = true
+    next.#size = Buffer.byteLength(text)
+    for (const e of entries) next.#add(e)
+    if (next.leafId !== target) next.append({ type: "checkout", target })
+    next.rename(`${this.title ?? this.id} (fork)`)
+    return next
+  }
+
   /** The tip of the current branch. */
   get leafId(): string | null {
     return this.#leaf
@@ -281,6 +317,9 @@ export class SessionStore {
     this.#tipBefore.set(e.id, this.#leaf)
     this.#entries.push(e)
     this.#byId.set(e.id, e)
+    // Session-wide notes stay off the branch: a rewind keeps the name, and an older Amira that
+    // skips these entry types never sees a message or checkout pointing at one.
+    if (e.type === "title" || e.type === "side_usage") return
     if (e.type !== "checkout") this.#leaf = e.id
     else if (e.target === null) this.#leaf = null
     else if (this.#byId.has(e.target)) this.#leaf = e.target
@@ -390,6 +429,8 @@ function isHeader(v: unknown): v is SessionHeader {
 }
 
 const ENTRY_TYPES = new Set<unknown>([
+  "title",
+  "side_usage",
   "message",
   "model_change",
   "compaction",

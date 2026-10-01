@@ -73,7 +73,7 @@ test.if(hasBash)(
         // Contain the tree but leave it running, as if a pipe holder had escaped.
         trackTree(proc) {
           real = trackProcessTree(proc)
-          return { contained: true, kill() {}, dispose() {} }
+          return { contained: true, kill() {}, terminate: () => false, dispose() {} }
         },
       })
       expect(run).toMatchObject({ exitCode: 0, timedOut: false, aborted: false, settled: false })

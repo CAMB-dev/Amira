@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
 import { type Agent, amiraPath, listSessions, SessionStore, trackWorkspace } from "@amira/core"
+import { backgroundJobs } from "@amira/proc"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
@@ -15,6 +16,7 @@ import { chooseStore, exitNote, formatSessionList, pickSession } from "./resume.
 import { runRpc } from "./rpc.ts"
 import { rpcSchema } from "./rpc-schema.ts"
 import { createSession } from "./session.ts"
+import { runSessionsCommand } from "./sessions-command.ts"
 import { askProjectTrust, planPackages } from "./trust.ts"
 
 async function main(argv: string[]): Promise<number> {
@@ -31,6 +33,10 @@ async function run(argv: string[]): Promise<number> {
   const io = {
     stdout: (s: string) => void process.stdout.write(s),
     stderr: (s: string) => void process.stderr.write(s),
+  }
+  if (argv[0] === "sessions") {
+    process.stdout.write(runSessionsCommand(argv.slice(1)))
+    return 0
   }
   if (argv[0] === "provider") {
     const managed = await runProviderAdminCommand(argv.slice(1), { io })
@@ -126,6 +132,7 @@ async function run(argv: string[]): Promise<number> {
     ...(model ? { model } : {}),
     // Print mode cannot pick a model; the UI and rpc clients can (/model, model.set).
     requireModel: args.print,
+    autoTitle: !args.print,
     cwd: args.cwd,
     extensions: args.extensions,
     packages: plan.packages,
@@ -144,7 +151,7 @@ async function run(argv: string[]): Promise<number> {
 
   // Announce the session once the frontend listens, then fill in git facts in the background.
   let stopWorkspace = () => {}
-  const announce = (a: Agent, reason: "startup" | "resume" | "clear") => {
+  const announce = (a: Agent, reason: "startup" | "resume" | "clear" | "fork") => {
     const s = a.session
     a.start(reason, s ? { sessionFile: s.file, resume: ["amira", "--resume", s.id] } : {})
     stopWorkspace()
@@ -196,8 +203,9 @@ async function run(argv: string[]): Promise<number> {
       ...(config.settings.tui ? { settings: config.settings.tui } : {}),
       // Full screen unless a flag or tui.mode says inline (D84).
       mode: args.mode ?? config.settings.tui?.mode ?? "fullscreen",
+      runningJobs: () => backgroundJobs.running().length,
     })
-    process.stdout.write(exitNote(agentRef ?? agent, running(), args.cwd))
+    process.stdout.write(exitNote(agentRef ?? agent, running(), args.cwd, backgroundJobs.running().length))
     return code
   } finally {
     stopWorkspace()

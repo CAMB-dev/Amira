@@ -113,6 +113,9 @@ test("quitting says how to continue the session, then a blank line before the sh
     `Continue this session with amira -c (or amira -r ${fresh.store.id}).\n\n`,
   )
   expect(exitNote(agent, 2, here)).toContain("Stopping 2 sub-agents that were still running.\n")
+  expect(exitNote(agent, 1, here, 1)).toContain(
+    "Stopping 1 sub-agent that was still running.\nStopping 1 background job that was still running.\n",
+  )
   expect(exitNote({ session: { id: "s_old" }, messages: [1] }, 0, here)).toBe(
     "Continue this session with amira -r s_old.\n\n",
   )
