@@ -218,6 +218,8 @@ const usage = obj({
   cacheRead: num,
   cacheWrite: num,
   "cost?": num,
+  "webSearchRequests?": num,
+  "webSearchCost?": num,
 })
 const budget = obj({ "tokens?": num, "costUsd?": num })
 const spawnGroup = obj({
@@ -530,6 +532,7 @@ export function rpcSchema(): Schema {
           },
           status: strings("running", "done", "failed"),
           "sources?": arrayOf(obj({ url: str, "title?": str })),
+          "searchEntryPoint?": obj({ "renderedContent?": str, "sdkBlob?": str }),
         },
         "A tool the provider ran on its own servers during the reply (its hosted web search). Not a tool call: it has no result message.",
       ),

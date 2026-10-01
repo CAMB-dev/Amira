@@ -106,10 +106,10 @@ Provider 表单中的默认参数用于目录中没有描述的模型。要调�
 | `maxTokensField` | Chat 输出限制字段，默认 `max_tokens`，也可用 `max_completion_tokens` |
 | `streamUsage` | 请求 Chat 流中的用量信息，默认 `true` |
 | `thinking` | Anthropic 思考模式，默认 `adaptive`；需要 token 预算的兼容服务使用 `budget` |
-| `webSearch` | 为 Responses 模型提供服务端搜索，模型的 `caps.webSearch` 优先 |
+| `webSearch` | 提供服务端搜索（Responses、Anthropic Messages、Gemini），模型的 `caps.webSearch` 优先 |
 | `compaction` | 原生压缩模式：`auto`、`on` 或 `off`，默认 `auto` |
 
-服务端搜索目前只在 `openai-responses` 中实现。OpenAI 地址和 Amira 识别为 Azure OpenAI 的 URL 默认开启，其他地址默认关闭。开启后，模型不再看到客户端 `web_search` 工具，`web_fetch` 仍可用。将 `web.nativeSearch` 设为 `false` 可改用客户端搜索；客户端搜索后端通过 web 设置另行选择。
+服务端搜索在 `openai-responses`、`anthropic-messages` 和 `google-gemini` 中实现。官方地址默认开启：OpenAI 和 Amira 识别为 Azure OpenAI 的 URL、`api.anthropic.com`、`generativelanguage.googleapis.com`；其他地址默认关闭。Gemini 只有 Gemini 3 模型能同时使用 Google 搜索和 Amira 的工具，较早的 Gemini 模型仍用客户端搜索。开启后，模型不再看到客户端 `web_search` 工具，`web_fetch` 仍可用。将 `web.nativeSearch` 设为 `false` 可改用客户端搜索；客户端搜索后端通过 web 设置另行选择。模型目录不提供搜索费用，因此搜索过的回复费用显示为未知，除非设置了模型的 `cost.webSearch`（每次搜索的美元价格）。
 
 `openai-responses` 和 `anthropic-messages` 实现了原生压缩。`auto` 只对识别出的官方地址开启，分别是 OpenAI/Azure OpenAI 和 Anthropic。自动压缩和不带指令的 `/compact` 会先尝试原生压缩，失败后回退到文本摘要。设置了 `compact.model`，或向 `/compact` 提供指令时，则使用文本摘要。
 
@@ -157,6 +157,12 @@ Amira 有两个修改已有文件的工具：`edit` 替换确切的文本，`app
 }
 ```
 
-该选择跟随当前模型：用 `/model` 切换到其他 provider 或模型后，使用那个模型自己的设置。子 agent 使用其所运行模型的设置。修改设置后需要重启 Amira。项目设置也可以设置 `tools.edit`。补丁工具只在工作目录内写入：路径在工作目录以下经过符号链接或 junction 时拒绝，文件有其他硬链接时拒绝（Bun 或 pnpm 安装的 `node_modules` 中很常见），同一补丁两次修改同一文件时也拒绝。
+该选择跟随当前模型：用 `/model` 切换到其他 provider 或模型后，使用那个模型自己的设置。子 agent 使用其所运行模型的设置。修改设置后需要重启 Amira。项目设置也可以设置 `tools.edit`。
+
+`apply_patch` 只在工作目录内写入，路径在工作目录以下经过符号链接或 junction 时拒绝。有其他硬链接的文件（例如 Bun 或 pnpm 安装的依赖）会原地写入，所有链接都会看到变化，包括工作目录外的链接。Delete 只删除指定的那个链接；Move 写入一个新文件并删除旧名字，其他链接保留旧内容。同一个补丁不能通过两个不同的链接修改同一个文件。
+
+各操作块按顺序执行，每块都基于前面各块的结果，因此同一个文件可以有多个 `*** Update File:` 块。Add 后 Update、Update 后 Delete、对 Move 的目标再 Update、连续 Move（`a` → `b` → `c`，或移回 `a`），以及先 Delete 再 Add（或反过来）都可以。执行到某块时，Update、Delete 和 Move 的源文件必须存在，Add 和 Move 的目标必须不存在，否则补丁失败并在错误中给出路径。同一个补丁里，一个路径不能既当文件又当目录。
+
+写入任何内容之前会先检查所有块。如果写入失败，已改动的文件会恢复原来的字节（所有硬链接都恢复），新建的文件和文件夹会被删除；错误信息会说明回滚是否完整。补丁删除文件期间，旁边会有一个临时的 `.amira-patch-*` 文件夹保留一个链接用于回滚，结束时删除。这只防范出错，不防范崩溃；补丁执行期间其他程序可能看到中间状态。
 
 相关文档：[快速开始](getting-started.md)、[使用与会话](usage.md)、[设置](settings.md)、[扩展](extensions.md)。

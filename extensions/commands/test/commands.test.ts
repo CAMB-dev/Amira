@@ -6,7 +6,9 @@ import commandsExtension, {
   ago,
   cacheHitRate,
   contextReport,
+  costByModel,
   costReport,
+  estimateTokens,
   formatTokens,
   sessionLabel,
   table,
@@ -477,7 +479,7 @@ test("/clear starts a new session; /resume switches, or asks among the other ses
   expect((await host.run("/clear", { frontend: "print" })).output).toEqual([
     expect.stringMatching(/^Started a new session \(s\d+\)\.$/),
   ])
-  expect((await run("/resume abc")).text).toContain("Resumed session abc")
+  expect((await run("/resume abc")).text).toBe("")
   // The picker leaves out the current session (now abc); cancelling lists the recent ones.
   const listed = await run("/resume")
   expect(asked[0]).toContain("s1  just now  2 msgs  current")
@@ -488,7 +490,7 @@ test("/clear starts a new session; /resume switches, or asks among the other ses
 
 test("/resume with a picked session resumes its id", async () => {
   const { run, calls } = await setup({}, ["old  3h ago  8 msgs  fix the build"])
-  await run("/resume")
+  expect((await run("/resume")).text).toBe("")
   expect(calls).toEqual(["resume old"])
 })
 
@@ -552,6 +554,16 @@ test("/resume offers every session, including content beyond the old 50-session 
   expect(options).toBe(110)
 })
 
+for (const frontend of ["print", "rpc"] as const) {
+  test(`/resume keeps its notice in ${frontend} mode`, async () => {
+    const { host, calls } = await setup()
+    expect((await host.run("/resume abc", { frontend })).output).toEqual([
+      "Resumed session abc (0 messages).",
+    ])
+    expect(calls).toEqual(["resume abc"])
+  })
+}
+
 test("/compact passes its instructions; the compact events report the outcome", async () => {
   const { run, calls } = await setup()
   expect((await run("/compact keep the API notes")).text).toBe("")
@@ -596,6 +608,41 @@ test("/cost breaks the session cost down by model", async () => {
   expect(text).toMatch(/openai\/gpt-5\s+1 reply\s+in 500\s+out 50\s+price unknown/)
   expect(text).toMatch(/total\s+in 3\.5k\s+out 350\s+\$0\.0030/)
   expect(costReport([])).toContain("No model replies")
+})
+
+test("/cost and /status keep unpriced searches unknown after priced replies", async () => {
+  for (const counted of [true, false]) {
+    const search = reply("anthropic/claude", 100, 20)
+    search.content = [{ type: "serverTool", id: "s", name: "web_search", input: {}, status: "done" }]
+    if (counted) search.usage!.webSearchRequests = 1
+    const replies = [reply("anthropic/claude", 100, 20, 0.01), search, reply("openai/gpt", 100, 20, 0.02)]
+    const rows = costByModel(replies)
+    expect(rows[0]!.cost).toBeUndefined()
+    expect(rows[0]!.usage.webSearchRequests).toBe(counted ? 1 : undefined)
+    const { run } = await setup({ replies: () => replies })
+    expect((await run("/cost")).text).toMatch(/total\s+in 300\s+out 60\s+price unknown/)
+    expect((await run("/status")).text).toMatch(/Cost\s+unknown/)
+  }
+})
+
+test("/context estimates opaque cited text and unsigned search sources", () => {
+  const message = reply("anthropic/claude", 10, 10)
+  message.content = [
+    {
+      type: "text",
+      text: "Answer",
+      signature: { dialect: "anthropic-messages", kind: "webSearch", value: "encrypted-index".repeat(100) },
+    },
+    {
+      type: "serverTool",
+      id: "s",
+      name: "web_search",
+      input: {},
+      status: "done",
+      sources: [{ url: `https://source.test/${"path/".repeat(100)}` }],
+    },
+  ]
+  expect(estimateTokens(message)).toBeGreaterThan(450)
 })
 
 test("/status and /cost count compactions and name their share", async () => {

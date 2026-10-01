@@ -16,5 +16,5 @@
     "skipLibCheck": true,
     "isolatedModules": true
   },
-  "include": ["packages/*/src", "packages/*/test", "extensions/*/src", "extensions/*/test"]
+  "include": ["packages/*/src", "packages/*/test", "extensions/*/src", "extensions/*/test", "scripts"]
 }

@@ -5,6 +5,7 @@ import {
   type Message,
   type ModelInfo,
   type ModelRef,
+  messageCitations,
   type Signature,
   serverToolText,
   type Usage,
@@ -64,9 +65,10 @@ export function estimateTokens(messages: Message[]): number {
   let images = 0
   for (const m of messages) {
     for (const b of m.content) {
-      if (b.type === "text" || b.type === "thinking") chars += b.text.length
+      if (b.type === "text" || b.type === "thinking")
+        chars += b.signature?.kind === "webSearch" ? b.signature.value.length : b.text.length
       else if (b.type === "toolCall") chars += b.name.length + JSON.stringify(b.args).length
-      else if (b.type === "serverTool") chars += (b.signature?.value ?? JSON.stringify(b.input)).length
+      else if (b.type === "serverTool") chars += (b.signature?.value ?? serverToolText(b)).length
       else images++
     }
   }
@@ -78,9 +80,16 @@ export function estimateTokens(messages: Message[]): number {
  * by how much of the history's estimated size is left: the summary and the kept messages.
  * Scaling by the model's own count keeps the estimate close for text of any script, where
  * characters per token differ widely. Never more than before unless the summary is longer
- * than what it replaced.
+ * than what it replaced. A checkpoint's size is already in tokens: subtract the replaced
+ * messages' estimate and add that size, preserving the system prompt and tools' overhead.
  */
-export function estimateAfter(before: number, older: Message[], kept: Message[], summary: Message[]): number {
+export function estimateAfter(
+  before: number,
+  older: Message[],
+  kept: Message[],
+  summary: Message[] | number,
+): number {
+  if (typeof summary === "number") return Math.max(0, before - estimateTokens(older)) + summary
   const was = estimateTokens([...older, ...kept])
   const left = estimateTokens([...summary, ...kept])
   if (was <= 0) return before
@@ -215,6 +224,11 @@ export function renderTranscript(messages: Message[], maxBlock = 2000): string {
         else if (b.type === "toolCall") out.push(`[tool call: ${b.name}]\n${clip(JSON.stringify(b.args))}`)
         else if (b.type === "serverTool") out.push(`[assistant]\n${serverToolText(b)}`)
       }
+      const citations = messageCitations(m.content)
+      if (citations.length)
+        out.push(
+          `[sources]\n${citations.map((c) => `- ${c.title ? `${c.title}: ` : ""}${c.url}`).join("\n")}`,
+        )
     } else {
       const text = m.content.map((b) => (b.type === "text" ? b.text : "[image]")).join("\n")
       out.push(`[tool result: ${m.toolName}${m.isError ? ", error" : ""}]\n${clip(text)}`)

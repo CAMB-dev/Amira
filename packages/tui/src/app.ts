@@ -1801,6 +1801,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return
     }
     const dialog = dialogs[0]
+    // Recalled skills use the same Enter guard as typed ones, without taking the history's arrows.
+    if (
+      !dialog &&
+      !search.active &&
+      historyNav.recalling &&
+      editor.lineCount === 1 &&
+      editor.getText().startsWith("$") &&
+      keys.is(e, "popup.accept")
+    )
+      historyNav.reset()
     // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
     // with candidates for text the editor no longer holds.
     if (!dialog && !search.active) syncCompletions()

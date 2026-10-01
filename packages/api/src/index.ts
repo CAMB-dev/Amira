@@ -16,6 +16,7 @@ export type {
   Usage,
   UserMessage,
 } from "@amira/ai"
+export { addUsage, emptyUsage, hasUnpricedSearch, serverToolText } from "@amira/ai"
 export * from "./commands.ts"
 export * from "./events.ts"
 export * from "./extension.ts"

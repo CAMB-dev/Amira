@@ -1771,7 +1771,7 @@ export class Agent {
       ]
       const replaces = ids(replacedMessages)
       const retainedIds = recent ? ids(retained) : []
-      const replacement = summaryMessages(summary, modelRef(this.model), checkpoint)
+      const replacement = summaryMessages(summary, modelRef(checkpoint ? this.model : writer), checkpoint)
       const before = this.#contextTokens
       const nativeRef = checkpoint ? modelRef(this.model) : undefined
       const info: CompactionInfo = {
@@ -1783,10 +1783,9 @@ export class Agent {
                 before,
                 replacedMessages.filter((m) => !retained.includes(m)),
                 keptMessages,
-                // An opaque checkpoint (no readable text) takes up about what the server wrote.
-                checkpoint && !summary
-                  ? [...replacement, checkpointStandIn(checkpoint, checkpointTokens)]
-                  : replacement,
+                // The checkpoint replaces both summary messages on the wire. Its size is
+                // already in tokens; without usage, estimate from its encrypted length.
+                checkpoint ? checkpointTokens || Math.ceil(checkpoint.value.length / 16) : replacement,
               ),
             }
           : {}),
@@ -1909,7 +1908,7 @@ export class Agent {
       }
       const oldId = this.#entryIds.get(m)
       const original = oldId ? this.session?.get(oldId) : undefined
-      const pair = summaryMessages(written.summary, modelRef(this.model), cp)
+      const pair = summaryMessages(written.summary, modelRef(writer), cp)
       const prior = this.#compactions.get(m)
       const info: CompactionInfo | undefined = prior ? { ...prior, model: modelRef(writer) } : undefined
       const entryId = this.#store({
@@ -1984,20 +1983,6 @@ function joinMessages(messages: UserMessage[]): UserMessage {
 
 function modelRef(model: ModelInfo): ModelRef {
   return { provider: model.provider, model: model.id }
-}
-
-/**
- * A message about as large as an opaque checkpoint, for estimating the context after it: the
- * tokens the server wrote for it (its summary, encrypted) when the compaction's usage said,
- * else a guess from its size. The encrypted value is base64 of the summary and much larger
- * than the summary's tokens, so a quarter of its length is taken (about a character a token).
- */
-function checkpointStandIn(sig: Signature, written: number): Message {
-  const chars = written > 0 ? written * 4 : Math.ceil(sig.value.length / 4)
-  return {
-    role: "user",
-    content: [{ type: "text", text: " ".repeat(Math.min(chars, 4_000_000)) }],
-  }
 }
 
 /** The tool's concurrency key for this call; a throwing key function means no key. */

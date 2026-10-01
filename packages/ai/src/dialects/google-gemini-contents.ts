@@ -1,5 +1,6 @@
 import { serverToolText } from "../server-tools.ts"
 import type { AssistantMessage, ImageBlock, Message, ToolCallBlock, ToolResultMessage } from "../types.ts"
+import { decodeSearchReplay } from "./google-gemini-web-search.ts"
 import { MISSING_RESULT, resultText, ToolResults } from "./tool-results.ts"
 
 export const GEMINI_DIALECT = "google-gemini"
@@ -16,6 +17,8 @@ export type GeminiPart = {
   thoughtSignature?: string
   inlineData?: { mimeType: string; data: string }
   functionCall?: { id?: string; name: string; args: Record<string, unknown> }
+  toolCall?: { id?: string; toolType: string; args?: Record<string, unknown> }
+  toolResponse?: { id?: string; toolType: string; response?: Record<string, unknown> }
   functionResponse?: {
     id?: string
     name: string
@@ -34,6 +37,7 @@ export interface GeminiContent {
 export interface GeminiContentOptions {
   /** Whether the model accepts images; tool-result images then go inside the function responses. */
   images?: boolean
+  webSearch?: boolean
 }
 
 /**
@@ -53,7 +57,7 @@ export function toGeminiContents(messages: Message[], opts: GeminiContentOptions
       return
     }
     if (m.role !== "assistant") return
-    const parts = modelParts(m)
+    const parts = modelParts(m, opts.webSearch !== false)
     if (!parts.length) return
     out.push({ role: "model", parts })
     const calls = m.content.filter((b) => b.type === "toolCall")
@@ -67,16 +71,27 @@ export function toGeminiContents(messages: Message[], opts: GeminiContentOptions
  * A signature that arrived on a text or call part is stored as a redacted thinking block
  * right after that block, and goes back onto the part before it.
  */
-function modelParts(m: AssistantMessage): GeminiPart[] {
+function modelParts(m: AssistantMessage, webSearch: boolean): GeminiPart[] {
   const parts: GeminiPart[] = []
-  for (const b of m.content) {
+  const pending = new Map<number, { part: GeminiPart; order: number }[]>()
+  const resultsAt = (index: number) =>
+    (pending.get(index) ?? []).sort((a, b) => a.order - b.order).map((r) => r.part)
+  for (const [index, b] of m.content.entries()) {
+    parts.push(...resultsAt(index))
     if (b.type === "text") {
       if (b.text) parts.push({ text: b.text })
     } else if (b.type === "toolCall") {
       parts.push({ functionCall: { ...(isSynthetic(b.id) ? {} : { id: b.id }), name: b.name, args: b.args } })
     } else if (b.type === "serverTool") {
-      // Another provider's hosted tool; the ai client turns these into text before they get here.
-      parts.push({ text: serverToolText(b) })
+      const raw =
+        webSearch && b.signature?.dialect === GEMINI_DIALECT
+          ? decodeSearchReplay(b.signature.value)
+          : undefined
+      if (raw?.result) {
+        parts.push(raw.call)
+        const at = index + 1 + (raw.resultAfter ?? 0)
+        pending.set(at, [...(pending.get(at) ?? []), { part: raw.result, order: raw.resultOrder ?? 0 }])
+      } else parts.push({ text: serverToolText(b) })
     } else if (b.signature?.dialect === GEMINI_DIALECT) {
       const sig = b.signature.value
       const prev = parts.at(-1)
@@ -86,6 +101,7 @@ function modelParts(m: AssistantMessage): GeminiPart[] {
       else parts.push({ text: "", thoughtSignature: sig })
     }
   }
+  parts.push(...resultsAt(m.content.length))
   // Gemini 3 rejects a step whose first call has no signature, as with history from another
   // dialect. Gemini itself signs only the first of parallel calls, so only that one is marked.
   const first = parts.find((p) => p.functionCall)
