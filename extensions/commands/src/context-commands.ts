@@ -1,6 +1,7 @@
 import type { CommandDefinition } from "@amira/api"
 import { contextReport, table } from "./format.ts"
 
+/** What each /prune scope deletes. */
 const PRUNE_SCOPES = {
   unused: "artifacts nothing mentions",
   inactive: "also ones only compacted or rewound history mentions",
