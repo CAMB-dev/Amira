@@ -231,8 +231,9 @@ export function jobsCommand(registry: JobRegistry): CommandDefinition {
         return printJob(ctx, registry, job)
       }
       const now = Date.now()
-      const rows = list.map((j, i) => `${i + 1}. ${jobRow(j, now)}`)
-      if (ctx.frontend === "print") return ctx.print(rows.join("\n"))
+      // The list numbers them itself; a digit picks that one.
+      const rows = list.map((j) => jobRow(j, now))
+      if (ctx.frontend === "print") return ctx.print(rows.map((r, i) => `${i + 1}. ${r}`).join("\n"))
       const sections: SelectSection[] = [
         {
           at: 0,
