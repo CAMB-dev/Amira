@@ -56,6 +56,49 @@ Automatic compaction normally starts at 80% of the model's context window. It re
 
 Press Esc twice in succession to open the rewind picker. Select a previous user message: that message and everything after it are removed from the active conversation, and the selected prompt returns to the editor for changes and resubmission. **Rewind does not restore files or undo shell commands.** Only messages still present after compaction can be selected; it requires a stored session. A popup, text selection or dialog can consume Esc first, so follow the current hint line.
 
+## Context management
+
+The session file always keeps every message and tool result whole. What each model request carries is a projection of that history: large outputs are previewed, repeated reads are shortened and, when the context gets full, old tool results can be cleared. Previews, `/context`, compaction summaries, sub-agent forks and parent consultations all use the same projection. Once a result has been sent in a shortened form, later requests repeat exactly the same text, so the provider's prompt cache keeps its prefix.
+
+**Large outputs.** Tool output longer than 16,000 characters is saved whole as an artifact next to the session file, in `<session id>.assets/outputs/` (sessions without a file use the system temp directory). The model gets a preview of about 8,000 characters instead: a first line with the artifact ID (`a_…`), its size and how to read more, then the start and end of the output with a note where lines were left out. Text in Chinese, Japanese or Korean gets a shorter preview, since each of its characters takes about a token. This applies to `bash` and `powershell`, to `grep` and `glob` (which save all results, before their own result limits) and to the results of MCP servers and other tools. `read` does not save artifacts: a long range stops at a whole line under the limit and says which `offset` to continue from. In the terminal UI a saved output shows its preview, with the header as a short muted line.
+
+The model reads artifacts with `output_read`: `offset` and `limit` select lines, `grep` returns matching lines (`ignore_case` for case-insensitive), and `column` pages through very long lines. `read` also works on the artifact's file path. An artifact holds what the tool returned at that time; reading the source file shows it as it is now.
+
+**Repeated reads.** When a `read` returns exactly the same text as the latest read of the same file and line range that is still in the context, only the new result is sent as a short note pointing to the earlier one. Earlier results are never rewritten. A changed range, a different range or an earlier read that was compacted or cleared is sent in full. The model can pass `force: true` to get the text anyway.
+
+**Aging.** When the next request is expected to pass 70% of the context window, Amira clears old tool results in one batch until about 60% is left. Each cleared result is sent from then on as a short stub saying what it was and how to get it back: its artifact ID for `output_read`, or for a read the file to read again. The most recent two user turns are kept, or in a long turn its last two model steps, along with results that later calls are still working on. A round that would free fewer than 8,000 tokens (or, in a small window, less than the space between 70% and 60%) is skipped. Aging only rewrites history where the provider allows it: nothing before signed or encrypted reasoning that the request would send back is changed, so with such models compaction does the work. When a request is rejected as too long, one aging round is tried before compacting. The experimental `afterTurns` option also clears results older than that many user turns regardless of pressure; it is off by default.
+
+**Keeping and pruning artifacts.** Artifacts live as long as their session; nothing deletes them automatically. A session keeps at most 256 MB of them; past the quota, outputs are only previewed and the preview says they could not be saved. `/prune` shows how many artifacts are active (mentioned in the context the model sees), inactive (mentioned only in compacted or rewound history, or a sub-agent's) and unused. `/prune unused`, `/prune inactive` and `/prune all` delete that scope; reading a pruned artifact says it was pruned.
+
+| Action | Command |
+| --- | --- |
+| Show artifact usage | `/prune` |
+| Delete unreferenced artifacts | `/prune unused` |
+| Also delete ones only old history mentions | `/prune inactive` |
+| Delete every artifact of this session | `/prune all` |
+
+The defaults can be changed under `context` in settings:
+
+```json
+{
+  "context": {
+    "outputs": { "saveAbove": 16000, "previewChars": 8000, "quotaMB": 256 },
+    "dedupeReads": true,
+    "aging": {
+      "enabled": true,
+      "start": 0.7,
+      "target": 0.6,
+      "minSavedTokens": 8000,
+      "keepTurns": 2,
+      "keepSteps": 2,
+      "afterTurns": 0
+    }
+  }
+}
+```
+
+`saveAbove` is at least 1000 and `previewChars` at least 500 (it is never larger than `saveAbove`); `start` and `target` are shares of the context window between 0 and 1. Set `dedupeReads` or `aging.enabled` to `false` to turn those off.
+
 ## Print mode
 
 ```sh
