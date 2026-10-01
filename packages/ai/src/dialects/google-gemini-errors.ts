@@ -1,5 +1,5 @@
 import type { ModelError } from "../types.ts"
-import { isRetryableStatus } from "./openai-chat-errors.ts"
+import { isRetryableBodyError, isRetryableStatus } from "./openai-chat-errors.ts"
 
 /** Google RPC status names, for errors that carry no HTTP code. */
 const STATUS_CODES: Record<string, number> = {
@@ -17,7 +17,8 @@ const STATUS_CODES: Record<string, number> = {
 /** Maps a Google API error, `{code: 429, message, status: "RESOURCE_EXHAUSTED"}`. */
 export function geminiError(raw: unknown): { error: ModelError; retryable: boolean } {
   if (typeof raw !== "object" || raw === null) {
-    return { error: { message: typeof raw === "string" && raw ? raw : "stream error" }, retryable: false }
+    const error = { message: typeof raw === "string" && raw ? raw : "stream error" }
+    return { error, retryable: isRetryableBodyError(error) }
   }
   const e = raw as Record<string, unknown>
   const error: ModelError = {
@@ -27,5 +28,8 @@ export function geminiError(raw: unknown): { error: ModelError; retryable: boole
   const status = typeof e.code === "number" ? e.code : name ? STATUS_CODES[name] : undefined
   if (status !== undefined) error.status = status
   if (name) error.code = name
-  return { error, retryable: status !== undefined && isRetryableStatus(status) }
+  return {
+    error,
+    retryable: (status !== undefined && isRetryableStatus(status)) || isRetryableBodyError(error),
+  }
 }

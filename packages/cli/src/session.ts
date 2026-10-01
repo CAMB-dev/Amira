@@ -401,6 +401,6 @@ function noModelNotice(ai: Ai): string {
 /** The print-mode error for the same, which cannot be fixed from inside the run. */
 function noModelError(ai: Ai): string {
   return ai.providers().length === 0
-    ? 'no providers configured; add one with "amira provider add", then pass --model provider/model'
-    : 'no model selected. Pass --model provider/model, set AMIRA_MODEL or set "model" in settings.json.'
+    ? 'no providers configured; add one with "amira provider add", then pass -m provider/model'
+    : 'no model selected. Pass -m provider/model, set AMIRA_MODEL or set "model" in settings.json.'
 }

@@ -52,3 +52,23 @@ test("sections keep a stable order; setSection replaces or inserts in place", ()
   expect(setSection(inserted, "extra", "E").at(-1)?.name).toBe("extra")
   expect(renderPrompt(inserted)).toBe("I\n\nP\n\nR")
 })
+
+test("default prompt identifies a linked worktree and protects its main checkout", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "amira-worktree-prompt-"))
+  const main = path.join(root, "main")
+  const worktree = path.join(root, "worktree")
+  const gitDir = path.join(main, ".git", "worktrees", "worktree")
+  await mkdir(main, { recursive: true })
+  await mkdir(worktree, { recursive: true })
+  await mkdir(gitDir, { recursive: true })
+  await writeFile(path.join(worktree, ".git"), `gitdir: ${gitDir}\n`)
+  await writeFile(path.join(gitDir, "commondir"), "../..\n")
+
+  const environment = defaultSections({ cwd: worktree }).find(
+    (section) => section.name === "environment",
+  )?.text
+  expect(environment).toContain("Working directory:")
+  expect(environment).toContain("Git workspace: linked worktree")
+  expect(environment).toContain(`Main checkout: ${main}`)
+  expect(environment).toContain("off-limits for changes unless the user explicitly asks")
+})

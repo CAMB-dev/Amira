@@ -2,7 +2,7 @@ import type { Dialect, DialectContext, ProviderCompat } from "../dialect.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
 import { ChatAccumulator } from "./openai-chat-accumulate.ts"
-import { bodyError, isRetryableStatus } from "./openai-chat-errors.ts"
+import { bodyError, isRetryableBodyError, isRetryableStatus } from "./openai-chat-errors.ts"
 import { toChatMessages } from "./openai-chat-messages.ts"
 import { withRetryAfter } from "./retry-after.ts"
 
@@ -40,7 +40,7 @@ export const openaiChat: Dialect = {
       const status = res.status
       const failed = acc.fail(
         { message: `HTTP ${status}: ${detail.slice(0, 500)}`, status },
-        isRetryableStatus(status),
+        isRetryableStatus(status) || isRetryableBodyError({ message: detail, status }),
       )
       yield withRetryAfter(failed, res.headers)
       return
@@ -132,7 +132,8 @@ async function* readPlain(res: Response, acc: ChatAccumulator): AsyncGenerator<S
   const choice = json?.choices?.[0]
   if (!choice?.message) {
     const type = res.headers.get("content-type") || "no content-type"
-    yield acc.fail({ message: `expected an event stream, got ${type}: ${text.slice(0, 500)}` }, false)
+    const message = `expected an event stream, got ${type}: ${text.slice(0, 500)}`
+    yield acc.fail({ message }, isRetryableBodyError({ message }))
     return
   }
   yield { type: "start" }

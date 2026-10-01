@@ -44,6 +44,8 @@ The bundled tools can read, search, write and edit files, run shell commands, se
 
 Files are changed with one of two editing tools. `edit` replaces exact text in one file. `apply_patch` takes a patch in the Codex format (`*** Begin Patch` … `*** End Patch`) that can add, delete, update and move several files at once; it checks every hunk before writing anything and rolls back what it wrote if a write fails. Each model gets `edit` unless its provider settings choose otherwise; see [Editing tools](providers.md#editing-tools). `write` is always available. `/tools` lists the tool the current model does not use as disabled, with the reason, and `/tools enable` cannot turn it on; change the setting instead.
 
+`grep` and `glob` skip what git would: `.git`, `node_modules`, files excluded by `.gitignore` files, `.git/info/exclude` or the global excludes file, and directories that hold another repository or a linked worktree (such as `.claude/worktrees/*` inside a checkout). Submodules of the searched repository are searched. A path you pass explicitly is searched even if it is ignored itself. Results outside the working directory are shown as absolute paths marked `[outside working directory]`.
+
 Approval requests come from the [permission policy](#permissions) and from extensions, which can block a tool call or require approval before it runs. A request shows the tool, the reason (with the mode or rule that caused it) and a preview or arguments. Select an option with the arrows, then Enter; confirmations begin with no option selected. Esc denies the call and stops the turn.
 
 When offered, `Don't ask again` allows that tool **for the same stated reason**, for the rest of the session; it does not save a persistent permission. A sub-agent's permission questions go to you, not to its parent; questions an extension raises for a sub-agent are still decided by the parent agent's model. Print mode cannot answer dialogs, so requested approvals are denied and questions are cancelled. RPC clients must answer UI requests explicitly; once an RPC client closes stdin, approvals are denied.
@@ -178,11 +180,14 @@ The defaults can be changed under `context` in settings:
 amira -p "Summarize the changes in this repository"
 amira -p -c "Continue the review"
 amira -p --json "Explain the failing test"
+amira -p --json --json-coalesce "Explain the failing test"
 amira -p --json-out events.json "Explain the failing test"
 amira -p -- "-v means verbose?"
 ```
 
 `-p` / `--print` runs without the interactive UI and needs a prompt, except when listing sessions with bare `-r`. Plain mode streams reply text to stdout and tool activity, warnings and errors to stderr. `--json` requires print mode and writes each event as one ASCII-only JSON line to stdout; non-ASCII string characters are escaped as `\uXXXX`, so a Windows parent can decode the stream without a code-page mismatch. `--json-out <path>` implies `--json` and writes the same JSONL event stream to the file instead of stdout; a relative path is resolved from where Amira was invoked. These lines include session, turn, message, tool and sub-agent events, rather than one final JSON answer.
+
+JSON print output omits empty `ui.render` events and includes a tool-call name only on its first delta unless the provider changes it. `--json-coalesce` merges consecutive text, thinking and same-tool-call argument deltas into larger JSONL chunks, each written once it reaches 4,096 characters or 100 ms; without it, each remaining event stays a separate line. When `--json-out` ends with an error, the event file still contains the stream and a short failure summary is printed to stderr.
 
 A quoted slash command such as `amira -p "/status"` runs the command instead of sending a model prompt. Skills can also run this way when available. Commands requiring a picker cannot obtain interactive answers; supply explicit arguments where supported.
 

@@ -12,6 +12,8 @@ export function retryFromSettings(retry: Settings["retry"]): RetryOptions | unde
   if (retry.attempts !== undefined) out.retries = retry.attempts
   if (retry.baseDelayMs !== undefined) out.baseDelayMs = retry.baseDelayMs
   if (retry.maxDelayMs !== undefined) out.maxDelayMs = retry.maxDelayMs
+  if (retry.firstContentTimeoutMs !== undefined) out.firstContentTimeoutMs = retry.firstContentTimeoutMs
+  if (retry.idleTimeoutMs !== undefined) out.idleTimeoutMs = retry.idleTimeoutMs
   return Object.keys(out).length ? out : undefined
 }
 
