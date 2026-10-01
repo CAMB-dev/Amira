@@ -25,6 +25,7 @@ import {
   type Asker,
   amiraPath,
   type CompactionOptions,
+  type ContextOptions,
   commandAliasWarnings,
   defaultSections,
   EventBus,
@@ -169,6 +170,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const modelNotice = modelRef ? undefined : noModelNotice(ai)
   if (modelNotice && opts.requireModel) throw new UsageError(noModelError(ai))
   const compaction = opts.compaction ?? compactionFromSettings(ai, settings.compact)
+  const context = contextFromSettings(settings.context)
   const bus = new EventBus(opts.onSubscriberError)
   const interceptors = new InterceptorRegistry({
     onError: (point, source, error) =>
@@ -280,6 +282,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ...(settings.subagents?.maxConcurrent ? { maxConcurrent: settings.subagents.maxConcurrent } : {}),
     ...(settings.budget ? { budget: settings.budget } : {}),
     ...(compaction ? { compaction } : {}),
+    ...(context ? { context } : {}),
     ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
   const approve = userApprover(host.ui, {
@@ -306,6 +309,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       tools,
       ...(store ? { session: store } : {}),
       ...(compaction ? { compaction } : {}),
+      ...(context ? { context } : {}),
       ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
       ...(opts.noticeRetryMs ? { noticeRetryMs: opts.noticeRetryMs } : {}),
     })
@@ -541,6 +545,20 @@ function compactionFromSettings(ai: Ai, compact: Settings["compact"]): Compactio
   if (compact.threshold !== undefined) out.threshold = compact.threshold
   if (compact.model) out.model = resolveModel(ai, compact.model)
   if (compact.layout) out.layout = compact.layout
+  return Object.keys(out).length ? out : undefined
+}
+
+/** Settings `context` as agent options. */
+export function contextFromSettings(context: Settings["context"]): ContextOptions | undefined {
+  if (!context) return undefined
+  const out: ContextOptions = {}
+  const o = context.outputs
+  if (o?.saveAbove !== undefined) out.saveAbove = o.saveAbove
+  if (o?.previewChars !== undefined)
+    out.previewChars = Math.min(o.previewChars, o.saveAbove ?? o.previewChars)
+  if (o?.quotaMB !== undefined) out.quotaBytes = o.quotaMB * 1024 * 1024
+  if (context.dedupeReads !== undefined) out.dedupeReads = context.dedupeReads
+  if (context.aging) out.aging = { ...context.aging }
   return Object.keys(out).length ? out : undefined
 }
 
