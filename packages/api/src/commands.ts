@@ -10,7 +10,7 @@ import type {
 import type { CompactionUsage } from "./events.ts"
 import type { ExtensionAdmin } from "./extensions-admin.ts"
 import type { ProviderAdmin } from "./providers.ts"
-import type { ShellMode } from "./settings.ts"
+import type { CommandRule, PermissionMode, ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
 import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
 import type { PendingNotice, SessionData, ToolExposure } from "./tools.ts"
@@ -219,6 +219,18 @@ export interface SessionInfo {
   busy: boolean
   /** Which shell tools the model gets (D68). */
   shell: ShellMode
+  /** The permission mode and how many command rules apply; unset where the host has no policy. */
+  permissions?: { mode: PermissionMode; rules: number }
+}
+
+/** The effective permission settings, for /permissions to list with where each comes from. */
+export interface PermissionsReport {
+  mode: PermissionMode
+  /** Where the mode came from: "default", a settings file or --permission-mode; "this session" after Shift+Tab. */
+  modeSource: string
+  rules: (CommandRule & { scope: "user" | "project"; file: string })[]
+  /** Settings the policy left out (a project loosening, an untrusted project's allow rules). */
+  warnings: string[]
 }
 
 export interface StoredSessionInfo {
@@ -359,6 +371,8 @@ export interface SessionControl {
    * summarized. Unset where the host keeps no session file.
    */
   readonly rewind?: (index: number) => Promise<void>
+  /** This session's saved tool outputs (artifacts) and /prune; unset where the host keeps none. */
+  readonly artifacts?: ArtifactControl
   /** Summarizes older history now; `instructions` steer the summary. Resolves false when nothing was compacted. */
   compact(instructions?: string): Promise<boolean>
   /**
@@ -371,6 +385,8 @@ export interface SessionControl {
   /** Enables or disables a tool for the rest of this session; throws for an unknown tool. */
   setToolEnabled(name: string, enabled: boolean): void
   setShell(mode: ShellMode): void
+  /** The permission mode, rules and where they come from; unset where the host has no policy. */
+  readonly permissions?: () => PermissionsReport
   /** The configured providers; Amira has none built in. */
   providers(): ProviderInfo[]
   /** Adding, editing and removing providers and their keys; unset where the host cannot. */
@@ -383,6 +399,25 @@ export interface SessionControl {
    * what changed where the host can tell.
    */
   reloadExtensions(): Promise<ReloadReport | undefined>
+}
+
+/**
+ * A session's artifacts: large tool outputs saved whole. "active" ones are mentioned by the
+ * context the model sees, "inactive" ones only by history it no longer sees (compacted, rewound
+ * away, a sub-agent's), "unused" ones by nothing.
+ */
+export interface ArtifactControl {
+  usage(): {
+    active: number
+    inactive: number
+    unused: number
+    pruned: number
+    bytes: number
+    quotaBytes: number
+    dir: string
+  }
+  /** Deletes the artifacts of a scope (and the narrower ones); resolves what was freed. */
+  prune(scope: "unused" | "inactive" | "all"): Promise<{ removed: number; bytes: number }>
 }
 
 /** What /reload changed: extensions (by source) that came or went, and ones that failed. */

@@ -40,9 +40,12 @@ export function serverToolCall(b: ServerToolBlock): {
     failures: [],
     native: true,
   }
-  const text = [describeServerTool(b), ...sources.map((s) => `${s.title ? `${s.title} ` : ""}${s.url}`)].join(
-    "\n",
-  )
+  const error = b.status === "failed" && str("error_code") ? [`Error: ${str("error_code")}`] : []
+  const text = [
+    describeServerTool(b),
+    ...error,
+    ...sources.map((s) => `${s.title ? `${s.title} ` : ""}${s.url}`),
+  ].join("\n")
   return {
     name: b.name,
     args,

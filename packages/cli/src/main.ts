@@ -141,6 +141,7 @@ async function run(argv: string[]): Promise<number> {
     disabledTools: config.disabledTools,
     requestedDisabled: config.requestedDisabled,
     settings: config.settings,
+    permissions: config.permissions,
     providers: config.providers,
     apiKeys: config.apiKeys,
     ...(args.print ? {} : { warnings: config.warnings }),

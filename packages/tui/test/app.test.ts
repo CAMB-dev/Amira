@@ -3278,6 +3278,66 @@ test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty",
 })
 
 for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: recalled skills still run and dollar-prefixed prose still sends`, async () => {
+    const history = new PromptHistory()
+    history.add(["$100 is the price"])
+    history.add(["$deploy"])
+    const { terminal, live, mock, shows, idle, exited } = await skillSetup(
+      [{ text: "Deployed." }, { text: "Noted." }],
+      { promptHistory: history, settings: { mode } },
+    )
+    try {
+      terminal.send("\x1b[A\r")
+      await shows("Deployed.")
+      await idle()
+      expect(mock.requests[0]!.messages[0]).toMatchObject({
+        content: [{ type: "text", text: "SKILL deploy BODY " }],
+      })
+      terminal.send("\x1b[A\x1b[A")
+      await waitFor(() => live().includes("› $100 is the price"), "recalled prose")
+      terminal.send("\r")
+      await shows("Noted.")
+      await idle()
+      expect(mock.requests[1]!.messages.at(-1)).toMatchObject({
+        content: [{ type: "text", text: "$100 is the price" }],
+      })
+    } finally {
+      terminal.send("\x03\x03")
+      await exited
+    }
+  })
+
+  test(`${mode}: Enter guards a recalled missing skill until its list is dismissed`, async () => {
+    const history = new PromptHistory()
+    history.add(["$removed-skill"])
+    const { terminal, live, mock, shows, idle, exited } = await skillSetup([{ text: "Noted." }], {
+      promptHistory: history,
+      settings: { mode },
+    })
+    try {
+      terminal.send("\x1b[A")
+      await waitFor(() => live().includes("› $removed-skill"), "recalled skill")
+      expect(live()).not.toContain("no skill matches")
+      terminal.send("\r")
+      await Bun.sleep(50)
+      expect(mock.requests).toHaveLength(0)
+      await waitFor(() => live().includes("no skill matches $removed-skill"), "missing skill guard")
+      terminal.send("\x1b")
+      await Bun.sleep(50)
+      terminal.send("\r")
+      await shows("Noted.")
+      await idle()
+      expect(mock.requests).toHaveLength(1)
+      expect(mock.requests[0]!.messages[0]).toMatchObject({
+        role: "user",
+        content: [{ type: "text", text: "$removed-skill" }],
+      })
+    } finally {
+      terminal.send("\x03\x03")
+      await exited
+    }
+  })
+
   test(`${mode}: ↑/↓ walk past recalled commands, skills and @files without opening their lists`, async () => {
     const history = new PromptHistory()
     for (const t of ["look at @src", "oldest", "/status", "$deploy", "newest"]) history.add([t])
@@ -4707,6 +4767,36 @@ for (const mode of ["inline", "fullscreen"] as const) {
     await waitFor(() => live().includes("was stopped after"), "the stopped state")
     terminal.send("q")
     await waitFor(() => !live().includes("job2 · tsc --watch"), "the view to close")
+    terminal.send("\x03")
+    await exited
+  })
+}
+
+for (const mode of ["inline", "fullscreen"] as const) {
+  test(`Shift+Tab cycles the permission mode, shown in the input's border (${mode})`, async () => {
+    const { agent, terminal, live, exited } = await setup([], { cols: 100, settings: { mode } })
+    // The default (auto) shows nothing new: the border is as it always was.
+    await waitFor(() => live().includes("╰─ m1 ─"), "the status")
+    expect(live()).not.toContain(" mode ")
+    terminal.send("\x1b[Z")
+    await waitFor(() => live().includes("╰─ m1 · edits mode ─"), "edits in the border")
+    expect(agent.permissions.mode).toBe("edits")
+    expect(live()).toContain(
+      "Permission mode: edits — changes files without asking; asks before shell commands",
+    )
+    terminal.send("\x1b[Z")
+    await waitFor(() => live().includes("╰─ m1 · plan mode ─"), "plan in the border")
+    expect(agent.permissions.mode).toBe("plan")
+    terminal.send("\x1b[Z")
+    await waitFor(() => live().includes("Permission mode: auto"), "back to auto")
+    await waitFor(() => !live().includes("plan mode"), "the mode gone from the border")
+    expect(agent.permissions.mode).toBe("auto")
+    // Typed text stays: the key is not the editor's.
+    terminal.send("hi")
+    terminal.send("\x1b[Z")
+    await waitFor(() => live().includes("edits mode"), "edits again")
+    expect(live()).toContain("› hi")
+    terminal.send("\x03")
     terminal.send("\x03")
     await exited
   })

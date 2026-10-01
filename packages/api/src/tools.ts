@@ -1,4 +1,5 @@
 import type { ImageBlock, JSONSchema, ModelRef, TextBlock, UserMessage } from "@amira/ai"
+import type { OutputStore } from "./outputs.ts"
 import type {
   ChildSession,
   SpawnGroup,
@@ -55,6 +56,11 @@ export interface ToolSession {
   readonly dir?: string
   /** Records extensions keep in this session (see SessionData). */
   readonly data?: SessionData
+  /**
+   * Where large tool outputs are saved as artifacts, and the sizes that count as large
+   * (OutputStore). Absent when the host keeps none: tools then cut their output themselves.
+   */
+  readonly outputs?: OutputStore
   /** Deferred tools registered right now, in registration order. */
   deferredTools(): DeferredToolInfo[]
   /**
@@ -116,6 +122,9 @@ export interface PendingNotice {
 
 export type ToolExposure = "active" | "inactive" | "deferred"
 
+/** The shell a shell tool runs its commands in. */
+export type ShellKind = "bash" | "powershell"
+
 export interface ToolDefinition<P = any> {
   name: string
   description: string
@@ -148,6 +157,13 @@ export interface ToolDefinition<P = any> {
    * web search, settings compat.webSearch), for a tool that would do the same.
    */
   supersededBy?: "webSearch"
+  /**
+   * For a tool that runs its `command` argument (a string) in a shell: which shell runs it, so
+   * the core permission policy reads the command the way that shell will. A tool with this is
+   * checked as a shell tool whatever its name; bash and powershell always are (the bash tool
+   * may fall back to PowerShell on Windows; without this, both readings are checked).
+   */
+  shellKind?(): ShellKind | Promise<ShellKind>
   execute(params: P, ctx: ToolContext): Promise<ToolResult>
 }
 

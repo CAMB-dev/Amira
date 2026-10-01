@@ -350,6 +350,7 @@ test("index fetch cancellation stops mirrors and never falls back to a stale cac
     JSON.stringify({ fetchedAt: 1, url: DEFAULT_INDEX_URL, data: { schemaVersion: 1, extensions: [] } }),
   )
   let fetches = 0
+  const fetching = Promise.withResolvers<void>()
   const admin = createExtensionAdmin(
     { home, cwd },
     {
@@ -359,13 +360,14 @@ test("index fetch cancellation stops mirrors and never falls back to a stale cac
           new Promise((_resolve, reject) => {
             fetches++
             opts?.signal?.addEventListener("abort", () => reject(opts.signal?.reason), { once: true })
+            fetching.resolve()
           })) as typeof fetch,
       },
     },
   )
   const { run } = await setup(admin)
   const pending = run("/ext search fixture", abort.signal)
-  await Bun.sleep(20)
+  await fetching.promise
   abort.abort(new Error("cancelled"))
   expect((await pending).output.join("\n")).toContain("cancelled")
   expect(fetches).toBe(1)

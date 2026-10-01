@@ -44,9 +44,48 @@ The bundled tools can read, search, write and edit files, run shell commands, se
 
 Files are changed with one of two editing tools. `edit` replaces exact text in one file. `apply_patch` takes a patch in the Codex format (`*** Begin Patch` … `*** End Patch`) that can add, delete, update and move several files at once; it checks every hunk before writing anything and rolls back what it wrote if a write fails. Each model gets `edit` unless its provider settings choose otherwise; see [Editing tools](providers.md#editing-tools). `write` is always available. `/tools` lists the tool the current model does not use as disabled, with the reason, and `/tools enable` cannot turn it on; change the setting instead.
 
-An extension can block a tool call or require approval before it runs. This is not a blanket confirmation for every edit or command: the extension decides which calls need approval. A request shows the tool, reason and a preview or arguments. Select an option with the arrows, then Enter; confirmations begin with no option selected. Esc denies the call and stops the turn.
+Approval requests come from the [permission policy](#permissions) and from extensions, which can block a tool call or require approval before it runs. A request shows the tool, the reason (with the mode or rule that caused it) and a preview or arguments. Select an option with the arrows, then Enter; confirmations begin with no option selected. Esc denies the call and stops the turn.
 
-When offered, `Don't ask again` allows that tool **for the same stated reason**, for the rest of the session; it does not save a persistent permission. Sub-agent approval requests are decided by their parent agent's model. Print mode cannot answer dialogs, so requested approvals are denied and questions are cancelled. RPC clients must answer UI requests explicitly.
+When offered, `Don't ask again` allows that tool **for the same stated reason**, for the rest of the session; it does not save a persistent permission. A sub-agent's permission questions go to you, not to its parent; questions an extension raises for a sub-agent are still decided by the parent agent's model. Print mode cannot answer dialogs, so requested approvals are denied and questions are cancelled. RPC clients must answer UI requests explicitly; once an RPC client closes stdin, approvals are denied.
+
+## Permissions
+
+The permission mode decides what the model may do without asking. It applies to the whole session, including sub-agents.
+
+| Mode | What it does |
+| --- | --- |
+| `auto` (default) | Runs everything without asking, except where your rules or protected files say otherwise |
+| `edits` | Changes files without asking; asks before shell commands your `allow` rules do not cover |
+| `plan` | Read-only: no file changes and no shell commands; asks before tools it does not know to be read-only, such as MCP tools |
+
+Press Shift+Tab in the UI to cycle `auto`, `edits` and `plan`; a mode other than `auto` shows next to the model in the input box's border. `--permission-mode <mode>` or `"permissions": {"mode": "edits"}` in settings chooses the mode at startup. Plan mode blocks every shell command for now, because Amira cannot yet prove that a command only reads.
+
+Command rules allow, ask about or deny shell commands by their words:
+
+```json
+{
+  "permissions": {
+    "mode": "edits",
+    "rules": [
+      { "command": ["git", "status"], "decision": "allow" },
+      { "command": ["git", "push"], "decision": "ask", "reason": "Review what goes out" },
+      { "command": ["rm", "-rf"], "decision": "deny" }
+    ]
+  }
+}
+```
+
+A rule matches the words of a command (its argv), not the text: `git status --short` matches `["git", "status"]`, `git statusx` does not. For `ask` and `deny` rules the command name also matches as a path or with a Windows extension (`/usr/bin/git`, `git.exe`), and in PowerShell under its built-in aliases (`rm`, `del` and `Remove-Item` are one command); they also match when other words come between theirs (`git -C repo push` matches `["git", "push"]`) and ignore case. `allow` rules must match the start of the command exactly, and only a command named without a path (`x/git status` is not `git status`) unless the rule itself names that path. When several rules match, `deny` wins over `ask` and `ask` over `allow`. `allow` only means "do not ask": it never lifts plan mode or a protected file.
+
+Commands joined with `&&`, `||`, `;`, `|` or newlines are split and each part is checked. Commands Amira cannot check word by word ask instead: substitutions such as `$(...)` and backticks, variables, redirections into files, here-documents and here-strings, grouping, file name patterns (`*`, `?`, `[...]`), wrappers that run other commands (`eval`, `sudo`, `xargs`, `bash -c`, `Invoke-Expression`, `Start-Process`, interpreters), commands that define aliases (`alias`, `Set-Alias`, `git -c`, `git config alias.*`) and scripts. In `auto` mode they still run without asking unless you have `ask` or `deny` rules. Commands are read the way the shell that runs them reads them: bash or PowerShell, including the `bash` tool falling back to PowerShell on Windows.
+
+Rules make Amira ask or refuse; they are not a sandbox. A command can still reach a denied program another way, for example through a copy or link of it, or through a script the model wrote earlier. Use `deny` for mistakes worth stopping, not as a security boundary.
+
+The user file's rules always apply. A project's `.amira/settings.json` or `.amira/settings.local.json` can only tighten: its mode counts when it is stricter than yours, its `ask` and `deny` rules apply, and its `allow` rules apply only after you trust the project (`amira ext trust`, the same trust its extension packages need). What a project file is not allowed to change is reported at startup. `--permission-mode` wins over every file. `/permissions` lists the mode, every rule with the file it comes from and what was left out; `/status` shows the mode and the number of rules.
+
+Some files always ask before `write`, `edit` or `apply_patch` changes them, in every mode: `.amira` directories (settings, packages and lock files) and Amira's user directory, `.git` (hooks, config and the rest of Git's metadata, including a linked worktree's Git directory), `.gitmodules`, the directory `core.hooksPath` names and your global Git config. Other names for the same file count too (a different case, `../`, absolute or MSYS paths, links). **Shell commands can still change these files: commands do not run in a sandbox yet.**
+
+A refused call tells the model why and that asking you is the way forward. In print mode, and in RPC once no client can answer, anything that would ask is refused with the reason, so use `auto` mode or rules for unattended runs.
 
 ## Sessions, compaction and rewind
 
@@ -76,6 +115,49 @@ Typing in the `/resume` picker searches titles and the user and assistant text o
 Automatic compaction normally starts at 80% of the model's context window. It reduces older context while keeping recent conversation. Compatible providers can use native compaction; otherwise Amira writes a text summary. Instructions passed to `/compact` force a text summary. See [Providers](providers.md) and [Settings](settings.md) for the conditions and options. `/context` shows what occupies the context window.
 
 Press Esc twice in succession to open the rewind picker. Select a previous user message: that message and everything after it are removed from the active conversation, and the selected prompt returns to the editor for changes and resubmission. In the picker, F forks instead: a new session ends before the selected message, and the current one stays whole. **Rewind does not restore files or undo shell commands.** Only messages still present after compaction can be selected; it requires a stored session. A popup, text selection or dialog can consume Esc first, so follow the current hint line.
+
+## Context management
+
+The session file always keeps every message and tool result whole. What each model request carries is a projection of that history: large outputs are previewed, repeated reads are shortened and, when the context gets full, old tool results can be cleared. Previews, `/context`, compaction summaries, sub-agent forks and parent consultations all use the same projection. Once a result has been sent in a shortened form, later requests repeat exactly the same text, so the provider's prompt cache keeps its prefix.
+
+**Large outputs.** Tool output longer than 16,000 characters is saved whole as an artifact next to the session file, in `<session id>.assets/outputs/` (sessions without a file use the system temp directory). The model gets a preview of about 8,000 characters instead: a first line with the artifact ID (`a_…`), its size and how to read more, then the start and end of the output with a note where lines were left out. Sizes are counted in characters, with a Chinese, Japanese or Korean character counting as four, since each takes about a token: such output is saved sooner and gets a shorter preview, and `read` stops sooner. This applies to `bash` and `powershell`, to `grep` and `glob` (which save all results, before their own result limits) and to the results of MCP servers and other tools. `read` does not save artifacts: a long range stops at a whole line under the limit and says which `offset` to continue from. In the terminal UI a saved output shows its preview, with the header as a short muted line.
+
+The model reads artifacts with `output_read`: `offset` and `limit` select lines, `grep` returns matching lines (`ignore_case` for case-insensitive), and `column` pages through very long lines. `read` also works on the artifact's file path. An artifact holds what the tool returned at that time; reading the source file shows it as it is now.
+
+**Repeated reads.** When a `read` returns exactly the same text as the latest read of the same file and line range that is still in the context, only the new result is sent as a short note pointing to the earlier one. Earlier results are never rewritten. A changed range, a different range or an earlier read that was compacted or cleared is sent in full. The model can pass `force: true` to get the text anyway.
+
+**Aging.** When the next request is expected to pass 70% of the context window, Amira clears old tool results in one batch until about 60% is left. Each cleared result is sent from then on as a short stub saying what it was and how to get it back: its artifact ID for `output_read`, or for a read the file to read again. The most recent two user turns are kept, or in a long turn its last two model steps, along with results that later calls are still working on. A round that would free fewer than 8,000 tokens (or, in a small window, less than the space between 70% and 60%) is skipped. Aging only rewrites history where the provider allows it: nothing before signed or encrypted reasoning that the request would send back is changed, so with such models compaction does the work. When a request is rejected as too long, one aging round is tried before compacting. The experimental `afterTurns` option also clears results older than that many user turns regardless of pressure; it is off by default.
+
+**Keeping and pruning artifacts.** Artifacts live as long as their session; nothing deletes them automatically. A session keeps at most 256 MB of them; past the quota, outputs are only previewed and the preview says they could not be saved. `/prune` shows how many artifacts are active (mentioned in the context the model sees), inactive (mentioned only in compacted or rewound history, or a sub-agent's) and unused. `/prune unused`, `/prune inactive` and `/prune all` delete that scope; reading a pruned artifact says it was pruned.
+
+| Action | Command |
+| --- | --- |
+| Show artifact usage | `/prune` |
+| Delete unreferenced artifacts | `/prune unused` |
+| Also delete ones only old history mentions | `/prune inactive` |
+| Delete every artifact of this session | `/prune all` |
+
+The defaults can be changed under `context` in settings:
+
+```json
+{
+  "context": {
+    "outputs": { "saveAbove": 16000, "previewChars": 8000, "quotaMB": 256 },
+    "dedupeReads": true,
+    "aging": {
+      "enabled": true,
+      "start": 0.7,
+      "target": 0.6,
+      "minSavedTokens": 8000,
+      "keepTurns": 2,
+      "keepSteps": 2,
+      "afterTurns": 0
+    }
+  }
+}
+```
+
+`saveAbove` is at least 4000 and `previewChars` at least 500 (it is never larger than `saveAbove`); `start` and `target` are shares of the context window between 0 and 1. Set `dedupeReads` or `aging.enabled` to `false` to turn those off.
 
 ## Print mode
 
@@ -131,7 +213,7 @@ Closing stdin waits for active work, including background results and their foll
 
 ## Status and costs
 
-`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell and Git workspace. The speed shows reply and thinking tokens per second separately; `~` marks an estimate: tokens counted from the text because the provider reported no separate reasoning count, or thinking timed from the request because only a summary of it streamed. `(hidden reasoning)` means the model reasoned without streaming its thinking. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
+`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell, permission mode and rule count, and Git workspace. The speed shows reply and thinking tokens per second separately; `~` marks an estimate: tokens counted from the text because the provider reported no separate reasoning count, or thinking timed from the request because only a summary of it streamed. `(hidden reasoning)` means the model reasoned without streaming its thinking. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
 
 `/cost` reports this session's replies by model, and compaction and session-title requests separately; it does not aggregate child-agent costs. Use `/status` and `/agents` for those. Costs depend on known model pricing and reported usage; unknown prices are identified, and totals with unpriced rows are partial estimates. Provider billing remains the source for actual charges.
 

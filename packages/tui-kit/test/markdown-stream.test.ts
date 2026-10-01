@@ -705,3 +705,125 @@ test("per-frame work stays bounded by the open block", () => {
   m.take(80)
   expect(performance.now() - start).toBeLessThan(5000)
 })
+
+/** Streams `steps` (a chunk and the live region's rows after it) and returns all rows shown. */
+function replay(steps: [string, number][], width: number): string[] {
+  const { ctx, committed } = committing()
+  const m = new MarkdownStream({ hyperlinks: false })
+  for (const [chunk, maxRows] of steps) {
+    m.append(chunk)
+    m.maxRows = maxRows
+    m.render(width, ctx)
+  }
+  return [...committed, ...m.take(width)].map(stripAnsi)
+}
+
+test("a table header committed before its delimiter row still starts the table", () => {
+  // Too narrow to lay the table out, so it shows as its source either way. With the header
+  // committed early as a paragraph, its rows used to be paragraph text, so the `===` after the
+  // last one made it a heading and was lost.
+  const text = "| h1 | h2 |\n|----|:--:|\n| another cell here | x |\n==="
+  const whole = md(text, 9)
+  expect(whole.at(-1)).toBe("===")
+  // The header held whole, then committed as it does not fit.
+  const held: [string, number][] = [
+    ["| h1 |", 3],
+    [" h2 |\n", 3],
+    ["|----", 1],
+    ["|:--:|\n", 1],
+    ["| another cell here | x |\n", 3],
+    ["===", 3],
+  ]
+  expect(replay(held, 9)).toEqual(whole)
+  // The header committed in parts while it came in, and then its delimiter row too.
+  const cut: [string, number][] = [
+    ["| h1 | h2", 1],
+    [" |\n", 1],
+    ["|----|:--", 3],
+    [":|", 1],
+    ["\n| another cell here | x |\n", 3],
+    ["===", 3],
+  ]
+  expect(replay(cut, 9)).toEqual(whole)
+})
+
+/** Documents whose blocks a small live region cuts at awkward places. */
+const TRICKY = [
+  "| h1 | h2 |\n|----|:--:|\n| another cell here | x |\n===",
+  "| a | b |\n|---|---|\n| c | d |\n---\nafter",
+  "| long header cell | b |\n|---|---|\n| c | d |\nText\n===",
+  "Title\n===\n| x | y |\n|--|--|",
+]
+
+/** Replies cut off in the middle of a span, and other text that is not a table. */
+const PROSE = [
+  "some **bold te",
+  "a few words here and *an italic span that goes on",
+  "x _under and `code that is not closed",
+  "- item with **bold\n- and ~~gone",
+  "> quoted *it",
+  "Heading\n===\nand **more",
+]
+
+/** The visible characters, but those that differ between a table laid out and its source. */
+const shown = (rows: string[]) => [...rows.join("").replace(/[\s│┼─|:-]/g, "")].sort().join("")
+
+test("streamed in chunks of any size, tricky documents render as they do whole", () => {
+  for (const text of [...TRICKY, ...PROSE]) {
+    for (const width of [9, 10, 14, 32]) {
+      const whole = md(text, width)
+      for (let size = 1; size <= 8; size++) {
+        const chunks = Array.from({ length: Math.ceil(text.length / size) }, (_, i) =>
+          text.slice(i * size, (i + 1) * size),
+        )
+        const wide = replay(
+          chunks.map((c) => [c, 1000]),
+          width,
+        )
+        expect({ text, width, size, rows: wide }).toEqual({ text, width, size, rows: whole })
+        // The live region keeps one size, or changes size between chunks (as when the view
+        // around it changes).
+        const sizes: [string, (i: number) => number][] = [
+          ["1", () => 1],
+          ["2", () => 2],
+          ["3", () => 3],
+          ["1/3", (i) => (i % 2 ? 3 : 1)],
+          ["mixed", (i) => 1 + ((i * 7 + size) % 3)],
+        ]
+        for (let seed = 1; seed <= 4; seed++) {
+          const rand = rng(seed * 101 + size * 7 + width)
+          const at = chunks.map(() => 1 + Math.floor(rand() * 3))
+          sizes.push([`seed ${seed}`, (i) => at[i]!])
+        }
+        for (const [maxRows, rowsAt] of sizes) {
+          const rows = replay(
+            chunks.map((c, i) => [c, rowsAt(i)]),
+            width,
+          )
+          const at = { text, width, size, maxRows }
+          // A table taller than the live region keeps the widths it had when committed; the rest
+          // renders exactly as it does whole.
+          if (PROSE.includes(text)) expect({ ...at, rows }).toEqual({ ...at, rows: whole })
+          else expect({ ...at, shown: shown(rows) }).toEqual({ ...at, shown: shown(whole) })
+        }
+      }
+    }
+  }
+})
+
+test("a reply cut off inside a span is styled as the same text rendered whole", () => {
+  // The delimiters of a span that never closed are text, as in the whole render.
+  const ctx = { ...plain, theme: defaultTheme, color: true }
+  for (const text of PROSE) {
+    const whole = renderMarkdown(text, 20, defaultTheme, { hyperlinks: false })
+    const committed: string[] = []
+    const m = new MarkdownStream({ hyperlinks: false })
+    for (let at = 0; at < text.length; at += 3) {
+      m.append(text.slice(at, at + 3))
+      m.maxRows = 1
+      m.render(20, { ...ctx, commit: (rows) => committed.push(...rows) })
+    }
+    expect({ text, rows: [...committed, ...m.take(20)] }).toEqual({ text, rows: whole })
+  }
+  expect(md("some **bold te")).toEqual(["some **bold te"])
+})

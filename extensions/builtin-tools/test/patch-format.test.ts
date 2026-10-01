@@ -38,6 +38,19 @@ test("keeps Windows paths literal for the filesystem layer to validate", () => {
   expect(parsePatch(wrap("*** Add File: ..\\escape.txt\n+data"))[0]?.path).toBe("..\\escape.txt")
 })
 
+test("retains repeated update blocks in source order", () => {
+  const operations = parsePatch(
+    wrap("*** Update File: a\n@@\n-old\n+middle\n*** Update File: a\n@@\n-middle\n+final"),
+  )
+  expect(operations.map((operation) => operation.path)).toEqual(["a", "a"])
+  let text = "old\n"
+  for (const operation of operations) {
+    expect(operation.kind).toBe("update")
+    text = applyUpdate(text, operation as UpdateOperation)
+  }
+  expect(text).toBe("final\n")
+})
+
 test("accepts empty patch and empty added file", () => {
   expect(parsePatch("*** Begin Patch\n*** End Patch")).toEqual([])
   expect(parsePatch(wrap("*** Add File: empty.txt"))).toEqual([

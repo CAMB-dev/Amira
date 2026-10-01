@@ -22,12 +22,12 @@ const COMMANDS: CommandInfo[] = [
 ]
 const MODELS = ["deepseek/deepseek-flash", "deepseek/deepseek-pro", "openai/gpt-5"]
 
-/** Completes like CommandHost; `delays` holds answers back to test stale ones. */
-function source(delays: Record<string, number> = {}): CompletionSource {
+/** Completes like CommandHost; `gates` holds answers back to test stale ones. */
+function source(gates: Record<string, Promise<void>> = {}): CompletionSource {
   return {
     list: () => COMMANDS,
     async complete(line) {
-      if (delays[line]) await Bun.sleep(delays[line])
+      if (gates[line]) await gates[line]
       const name = /^\/(\S*)$/.exec(line)
       if (name) {
         return {
@@ -46,8 +46,7 @@ function source(delays: Record<string, number> = {}): CompletionSource {
 
 async function popupFor(text: string, src = source()) {
   const popup = new CommandPopup(src, () => {})
-  popup.update(text)
-  await Bun.sleep(5)
+  await popup.update(text)
   const lines = () => popup.render(60, plain)
   return { popup, lines }
 }
@@ -117,16 +116,17 @@ test("Esc closes the popup until the text changes", async () => {
   const { popup } = await popupFor("/c")
   expect(popup.handleKey(key("escape"))).toEqual({ type: "handled" })
   expect(popup.open).toBe(false)
-  popup.update("/cl")
-  await Bun.sleep(5)
+  await popup.update("/cl")
   expect(popup.open).toBe(true)
 })
 
 test("a late answer for older text is dropped", async () => {
-  const popup = new CommandPopup(source({ "/c": 40 }), () => {})
-  popup.update("/c")
-  popup.update("/t")
-  await Bun.sleep(60)
+  const gate = Promise.withResolvers<void>()
+  const popup = new CommandPopup(source({ "/c": gate.promise }), () => {})
+  const old = popup.update("/c")
+  await popup.update("/t")
+  gate.resolve()
+  await old
   // "/t": the prefix match, then "compact" fuzzily; nothing of the answer for "/c".
   // Names show the arguments they take.
   expect(popup.render(60, plain)).toEqual([
@@ -136,13 +136,15 @@ test("a late answer for older text is dropped", async () => {
 })
 
 test("while the next answer is on its way the last list stays drawn, but keys wait for it", async () => {
-  const { popup, lines } = await popupFor("/c", source({ "/co": 40 }))
-  popup.update("/co")
+  const gate = Promise.withResolvers<void>()
+  const { popup, lines } = await popupFor("/c", source({ "/co": gate.promise }))
+  const pending = popup.update("/co")
   // Dropping the list for this frame made the popup and the rows below it flicker on each key.
   expect(popup.visible).toBe(true)
   expect(lines()).toEqual(["❯ /clear                   Start over", "  /compact [instructions]  Summarize"])
   expect(popup.open).toBe(false)
-  await Bun.sleep(60)
+  gate.resolve()
+  await pending
   expect(popup.open).toBe(true)
   expect(lines()[0]).toBe("❯ /compact [instructions]  Summarize")
   // Text that is no longer a command hides it at once.
@@ -238,8 +240,7 @@ function skillSource(): CompletionSource {
 
 async function skillPopupFor(text: string) {
   const popup = new CommandPopup(skillSource(), () => {}, undefined, "$")
-  popup.update(text)
-  await Bun.sleep(5)
+  await popup.update(text)
   return { popup, lines: () => popup.render(60, plain) }
 }
 

@@ -6,6 +6,7 @@ import {
   defineExtension,
   type EventMap,
   type ExtensionAPI,
+  hasUnpricedSearch,
   modelLabel,
   type ReloadReport,
   type ShellMode,
@@ -46,6 +47,19 @@ export {
 } from "./provider-form.ts"
 
 const SHELLS: ShellMode[] = ["auto", "bash", "powershell"]
+
+/** What each /prune scope deletes. */
+const PRUNE_SCOPES = {
+  unused: "artifacts nothing mentions",
+  inactive: "also ones only compacted or rewound history mentions",
+  all: "every artifact of this session",
+}
+
+/** "1.2 MB": artifact sizes. */
+function formatMb(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`
+}
 
 /** "3m ago", "5h ago", "2d ago"; the date after a month. */
 export function ago(ms: number, now = Date.now()): string {
@@ -252,7 +266,8 @@ export default defineExtension((api: ExtensionAPI) => {
     async run(_args, ctx) {
       const info = ctx.session.info()
       const ws = await workspaceOf(info.id, ctx.signal)
-      const rows = costByModel(ctx.session.replies())
+      const messages = ctx.session.replies()
+      const rows = costByModel(messages)
       const provider = ctx.session.providers().find((p) => p.id === info.model.provider)
       const git = !ws
         ? "unknown"
@@ -262,7 +277,8 @@ export default defineExtension((api: ExtensionAPI) => {
       // This session's own replies, and with its sub-agents' (the status bar shows the latter,
       // as spent since this run started). Both count earlier runs of a resumed session.
       // Compactions (the server's, or summaries the model wrote) count too, and are named.
-      const compacted = (ctx.session.compactions?.() ?? []).filter((c) => c.usage.cost !== undefined)
+      const compactions = ctx.session.compactions?.() ?? []
+      const compacted = compactions.filter((c) => c.usage.cost !== undefined)
       const compaction = compacted.length ? compacted.reduce((n, c) => n + (c.usage.cost ?? 0), 0) : undefined
       const priced = rows.filter((r) => r.cost !== undefined)
       const replies = priced.length ? priced.reduce((n, r) => n + (r.cost ?? 0), 0) : undefined
@@ -271,13 +287,18 @@ export default defineExtension((api: ExtensionAPI) => {
         replies !== undefined || compaction !== undefined || side
           ? (replies ?? 0) + (compaction ?? 0) + side
           : undefined
-      const subs = ctx.session.subagents().filter((s) => s.usage.cost !== undefined)
+      const subagents = ctx.session.subagents()
+      const subs = subagents.filter((s) => s.usage.cost !== undefined)
       const withSubs = subs.length
         ? (own ?? 0) + subs.reduce((n, s) => n + (s.usage.cost ?? 0), 0)
         : undefined
       const ofWhich = compaction !== undefined ? `; of which compaction ${formatCost(compaction)}` : ""
-      const cost =
-        withSubs !== undefined
+      const unpricedSearch =
+        messages.some(hasUnpricedSearch) ||
+        [...compactions, ...subagents].some((c) => hasUnpricedSearch({ content: [], usage: c.usage }))
+      const cost = unpricedSearch
+        ? "unknown (search cost unavailable)"
+        : withSubs !== undefined
           ? `${formatCost(withSubs)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${formatCost(own)}` : ""}${ofWhich}`
           : own !== undefined
             ? `${formatCost(own)} (this session; no sub-agents)${ofWhich}`
@@ -323,6 +344,14 @@ export default defineExtension((api: ExtensionAPI) => {
           ["Speed", tps === undefined ? "not measured yet" : `${tps} in this session's last reply`],
           ["Cost", cost],
           ["Shell", info.shell],
+          ...(info.permissions
+            ? [
+                [
+                  "Permissions",
+                  `${info.permissions.mode} mode; ${info.permissions.rules} command ${info.permissions.rules === 1 ? "rule" : "rules"} (/permissions lists them)`,
+                ],
+              ]
+            : []),
           ["Directory", info.cwd],
           ["Git", git],
         ]),
@@ -419,7 +448,47 @@ export default defineExtension((api: ExtensionAPI) => {
         id = chosen
       }
       await ctx.session.resume(id)
-      ctx.print(`Resumed session ${id} (${ctx.session.messages().length} messages).`)
+      // As for /clear, the TUI names the resumed session in its boundary line.
+      if (ctx.frontend !== "tui")
+        ctx.print(`Resumed session ${id} (${ctx.session.messages().length} messages).`)
+    },
+  })
+
+  add({
+    name: "prune",
+    description: "Show or delete this session's saved tool outputs (artifacts)",
+    args: {
+      hint: "[unused|inactive|all]",
+      complete: () => Object.entries(PRUNE_SCOPES).map(([value, description]) => ({ value, description })),
+    },
+    async run(args, ctx) {
+      const artifacts = ctx.session.artifacts
+      if (!artifacts) throw new Error("this session keeps no artifacts")
+      const scope = args.trim()
+      if (scope) {
+        if (!(scope in PRUNE_SCOPES))
+          throw new Error(`usage: /prune [${Object.keys(PRUNE_SCOPES).join("|")}]`)
+        const r = await artifacts.prune(scope as keyof typeof PRUNE_SCOPES)
+        ctx.print(
+          r.removed
+            ? `Deleted ${r.removed} ${r.removed === 1 ? "artifact" : "artifacts"} (${formatMb(r.bytes)}). Reading one now says it was pruned.`
+            : "Nothing to delete.",
+        )
+        return
+      }
+      const u = artifacts.usage()
+      ctx.print(
+        [
+          `Artifacts: ${formatMb(u.bytes)} of the ${formatMb(u.quotaBytes)} quota in ${u.dir}`,
+          table([
+            ["Active", `${u.active} (mentioned in the context the model sees)`],
+            ["Inactive", `${u.inactive} (only in compacted or rewound history, or a sub-agent's)`],
+            ["Unused", `${u.unused} (mentioned nowhere)`],
+            ...(u.pruned ? ([["Pruned", String(u.pruned)]] as [string, string][]) : []),
+          ]),
+          "/prune unused deletes the unused ones, /prune inactive those and the inactive ones, /prune all every one.",
+        ].join("\n"),
+      )
     },
   })
 
@@ -442,6 +511,48 @@ export default defineExtension((api: ExtensionAPI) => {
         .filter((t) => (t.name === "bash" || t.name === "powershell") && t.enabled)
         .map((t) => t.name)
       ctx.print(`Shell: ${shell} (tools: ${on.join(", ") || "none"})`)
+    },
+  })
+
+  add({
+    name: "permissions",
+    description: "Show the permission mode, the command rules and where each comes from",
+    run(_args, ctx) {
+      const report = ctx.session.permissions?.()
+      if (!report) {
+        ctx.print("This session has no permission policy.")
+        return
+      }
+      const modes: Record<string, string> = {
+        auto: "runs everything without asking, except what rules and protected files say",
+        edits: "changes files without asking; asks before shell commands",
+        plan: "read-only: no file changes, no shell commands",
+      }
+      const where = report.modeSource === "default" ? "the default" : `from ${report.modeSource}`
+      const lines = [
+        `Mode: ${report.mode} (${where}) — ${modes[report.mode] ?? ""}`,
+        "Shift+Tab cycles auto, edits and plan in the UI; --permission-mode and permissions.mode set it at start.",
+        "",
+      ]
+      if (report.rules.length) {
+        lines.push(
+          `Command rules (${report.rules.length}; deny wins over ask, ask over allow):`,
+          table(
+            report.rules.map((r) => [
+              r.decision,
+              r.command.join(" "),
+              `${r.scope} ${r.file}${r.reason ? ` — ${r.reason}` : ""}`,
+            ]),
+          ),
+        )
+      } else lines.push('No command rules. Add them to "permissions.rules" in settings.json.')
+      lines.push(
+        "",
+        "Protected (writes and edits always ask, in every mode): .amira directories and Amira's user directory, .git (hooks, config), .gitmodules, core.hooksPath and your Git config.",
+        "Shell commands can still change these files: they do not run in a sandbox yet.",
+      )
+      if (report.warnings.length) lines.push("", "Left out:", ...report.warnings.map((w) => `  ${w}`))
+      ctx.print(lines.join("\n"))
     },
   })
 

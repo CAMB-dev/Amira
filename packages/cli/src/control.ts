@@ -85,6 +85,22 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         ...(file && existsSync(file) ? { file } : {}),
         busy: a.busy,
         shell,
+        permissions: { mode: a.permissions.mode, rules: a.permissions.rules.length },
+      }
+    },
+    permissions: () => {
+      const p = agent().permissions
+      return {
+        mode: p.mode,
+        modeSource: p.modeSource,
+        rules: p.rules.map((r) => ({
+          command: [...r.command],
+          decision: r.decision,
+          ...(r.reason ? { reason: r.reason } : {}),
+          scope: r.source.scope,
+          file: r.source.file,
+        })),
+        warnings: [...p.warnings],
       }
     },
     messages: () => agent().messages,
@@ -296,6 +312,26 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       },
     }),
     preview: () => agent().preview(),
+    artifacts: {
+      usage: () => {
+        const a = agent()
+        const u = a.artifactUsage()
+        return {
+          active: u.active.length,
+          inactive: u.inactive.length,
+          unused: u.unused.length,
+          pruned: u.pruned.length,
+          bytes: u.bytes,
+          quotaBytes: a.artifacts.quotaBytes,
+          dir: a.artifacts.dir,
+        }
+      },
+      prune: async (scope) => {
+        // A running turn may have saved outputs its results do not mention yet, or be reading one.
+        idle("prune artifacts")
+        return agent().pruneArtifacts(scope)
+      },
+    },
     reloadExtensions: async () => {
       // Unloading drops tools and MCP connections a running tool call may still be using.
       idle("reload extensions")

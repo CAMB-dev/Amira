@@ -6,7 +6,9 @@ import commandsExtension, {
   ago,
   cacheHitRate,
   contextReport,
+  costByModel,
   costReport,
+  estimateTokens,
   formatTokens,
   sessionLabel,
   table,
@@ -164,7 +166,9 @@ test("every built-in command is registered with a description", async () => {
     "fork",
     "help",
     "model",
+    "permissions",
     "provider",
+    "prune",
     "quit",
     "reload",
     "rename",
@@ -477,7 +481,7 @@ test("/clear starts a new session; /resume switches, or asks among the other ses
   expect((await host.run("/clear", { frontend: "print" })).output).toEqual([
     expect.stringMatching(/^Started a new session \(s\d+\)\.$/),
   ])
-  expect((await run("/resume abc")).text).toContain("Resumed session abc")
+  expect((await run("/resume abc")).text).toBe("")
   // The picker leaves out the current session (now abc); cancelling lists the recent ones.
   const listed = await run("/resume")
   expect(asked[0]).toContain("s1  just now  2 msgs  current")
@@ -488,7 +492,7 @@ test("/clear starts a new session; /resume switches, or asks among the other ses
 
 test("/resume with a picked session resumes its id", async () => {
   const { run, calls } = await setup({}, ["old  3h ago  8 msgs  fix the build"])
-  await run("/resume")
+  expect((await run("/resume")).text).toBe("")
   expect(calls).toEqual(["resume old"])
 })
 
@@ -552,11 +556,94 @@ test("/resume offers every session, including content beyond the old 50-session 
   expect(options).toBe(110)
 })
 
+for (const frontend of ["print", "rpc"] as const) {
+  test(`/resume keeps its notice in ${frontend} mode`, async () => {
+    const { host, calls } = await setup()
+    expect((await host.run("/resume abc", { frontend })).output).toEqual([
+      "Resumed session abc (0 messages).",
+    ])
+    expect(calls).toEqual(["resume abc"])
+  })
+}
+
 test("/compact passes its instructions; the compact events report the outcome", async () => {
   const { run, calls } = await setup()
   expect((await run("/compact keep the API notes")).text).toBe("")
   await run("/compact")
   expect(calls).toEqual(["compact keep the API notes", "compact "])
+})
+
+test("/permissions lists the mode and the rules with their sources; /status counts them", async () => {
+  const none = await setup()
+  expect((await none.run("/permissions")).text).toBe("This session has no permission policy.")
+  expect((await none.run("/status")).text).not.toContain("Permissions")
+  const { run } = await setup({
+    info: () => ({
+      id: "s1",
+      cwd: "/work",
+      model: { provider: "deepseek", model: "deepseek-flash" },
+      contextWindow: 128000,
+      busy: false,
+      shell: "auto",
+      permissions: { mode: "edits", rules: 2 },
+    }),
+    permissions: () => ({
+      mode: "edits",
+      modeSource: "/home/u/.amira/settings.json",
+      rules: [
+        { command: ["git", "push"], decision: "ask", reason: "review first", scope: "user", file: "u.json" },
+        { command: ["rm"], decision: "deny", scope: "project", file: "p.json" },
+      ],
+      warnings: ['p.json: 1 "allow" rule is ignored; this project is not trusted'],
+    }),
+  })
+  expect((await run("/status")).text).toMatch(/Permissions\s+edits mode; 2 command rules/)
+  const text = (await run("/permissions")).text
+  expect(text).toContain("Mode: edits (from /home/u/.amira/settings.json)")
+  expect(text).toMatch(/ask\s+git push\s+user u\.json — review first/)
+  expect(text).toMatch(/deny\s+rm\s+project p\.json/)
+  expect(text).toContain("Shell commands can still change these files")
+  expect(text).toContain("this project is not trusted")
+})
+
+test("/prune reports artifacts by reference and deletes only the scope asked for", async () => {
+  const pruned: string[] = []
+  const { run, host } = await setup({
+    artifacts: {
+      usage: () => ({
+        active: 3,
+        inactive: 2,
+        unused: 1,
+        pruned: 0,
+        bytes: 3 * 1024 * 1024,
+        quotaBytes: 256 * 1024 * 1024,
+        dir: "/s/x.assets/outputs",
+      }),
+      prune: async (scope) => {
+        pruned.push(scope)
+        return { removed: scope === "unused" ? 1 : 0, bytes: 1024 * 1024 }
+      },
+    },
+  })
+  const report = (await run("/prune")).text
+  expect(report).toContain("3.0 MB of the 256 MB quota in /s/x.assets/outputs")
+  expect(report).toMatch(/Active\s+3/)
+  expect(report).toMatch(/Unused\s+1/)
+  // Showing deletes nothing.
+  expect(pruned).toEqual([])
+  expect((await run("/prune unused")).text).toBe(
+    "Deleted 1 artifact (1.0 MB). Reading one now says it was pruned.",
+  )
+  expect((await run("/prune inactive")).text).toBe("Nothing to delete.")
+  expect((await run("/prune everything")).error).toBe("usage: /prune [unused|inactive|all]")
+  expect(pruned).toEqual(["unused", "inactive"])
+  expect((await host.complete("/prune ")).candidates.map((c) => c.value)).toEqual([
+    "unused",
+    "inactive",
+    "all",
+  ])
+  const none = await setup()
+  expect((await none.run("/prune")).error).toBe("this session keeps no artifacts")
 })
 
 test("/shell shows and sets the mode; /tools lists, disables and enables tools", async () => {
@@ -596,6 +683,41 @@ test("/cost breaks the session cost down by model", async () => {
   expect(text).toMatch(/openai\/gpt-5\s+1 reply\s+in 500\s+out 50\s+price unknown/)
   expect(text).toMatch(/total\s+in 3\.5k\s+out 350\s+\$0\.0030/)
   expect(costReport([])).toContain("No model replies")
+})
+
+test("/cost and /status keep unpriced searches unknown after priced replies", async () => {
+  for (const counted of [true, false]) {
+    const search = reply("anthropic/claude", 100, 20)
+    search.content = [{ type: "serverTool", id: "s", name: "web_search", input: {}, status: "done" }]
+    if (counted) search.usage!.webSearchRequests = 1
+    const replies = [reply("anthropic/claude", 100, 20, 0.01), search, reply("openai/gpt", 100, 20, 0.02)]
+    const rows = costByModel(replies)
+    expect(rows[0]!.cost).toBeUndefined()
+    expect(rows[0]!.usage.webSearchRequests).toBe(counted ? 1 : undefined)
+    const { run } = await setup({ replies: () => replies })
+    expect((await run("/cost")).text).toMatch(/total\s+in 300\s+out 60\s+price unknown/)
+    expect((await run("/status")).text).toMatch(/Cost\s+unknown/)
+  }
+})
+
+test("/context estimates opaque cited text and unsigned search sources", () => {
+  const message = reply("anthropic/claude", 10, 10)
+  message.content = [
+    {
+      type: "text",
+      text: "Answer",
+      signature: { dialect: "anthropic-messages", kind: "webSearch", value: "encrypted-index".repeat(100) },
+    },
+    {
+      type: "serverTool",
+      id: "s",
+      name: "web_search",
+      input: {},
+      status: "done",
+      sources: [{ url: `https://source.test/${"path/".repeat(100)}` }],
+    },
+  ]
+  expect(estimateTokens(message)).toBeGreaterThan(450)
 })
 
 test("/status and /cost count compactions and name their share", async () => {

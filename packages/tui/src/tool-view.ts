@@ -1,6 +1,8 @@
 import {
+  ARTIFACT_HEADER,
   clipMiddle,
   plural,
+  previewNoteLine,
   type ToolApproval,
   type ToolCallView,
   type ToolDetailLevel,
@@ -127,6 +129,9 @@ export const fallbackPresenter: Required<Omit<ToolPresenter, "explore">> = {
     if (json) return json
     const all = lines(call.text)
     if (!all.length) return "no output"
+    // A large output saved as an artifact: what the preview stands for, not its header.
+    const saved = ARTIFACT_HEADER.exec(all[0]!)
+    if (saved) return `${saved[3]} lines · saved as ${saved[1]}`
     return all.length > 1 ? `${all[0]} (+${plural(all.length - 1, "line")})` : all[0]
   },
   body: (call, { detail }) => {
@@ -135,7 +140,7 @@ export const fallbackPresenter: Required<Omit<ToolPresenter, "explore">> = {
     return call.result.isError || detail === "full"
       ? lines(call.text)
           .slice(1)
-          .map((text) => ({ kind: "code", text }))
+          .map((text) => previewNoteLine(text) ?? { kind: "code", text })
       : []
   },
   running: (_args, partial) =>

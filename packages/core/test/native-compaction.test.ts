@@ -89,6 +89,53 @@ const textOf = (m: Message | undefined) => (m?.content[0] as TextBlock | undefin
 const ofType = <K extends keyof EventMap>(events: AnyEvent[], type: K) =>
   events.filter((e) => e.type === type).map((e) => e.data as EventMap[K])
 
+for (const layout of ["tail", "recent-user"] as const) {
+  test(`${layout}: checkpoint tokens are not scaled by the prompt overhead`, async () => {
+    // 10,800 tokens of system/tools plus 40 of history; replace 20 history tokens with 10.
+    const { agent, events, bus } = await setup(
+      [
+        { text: "r".repeat(40) },
+        { text: "s".repeat(40), usage: { input: 10830, output: 10 } },
+        { text: "next", usage: { input: 10831, output: 1 } },
+      ],
+      [{ ...checkpoint, usage: { input: 10820, output: 10, cacheRead: 0, cacheWrite: 0 } }],
+      { compaction: { auto: false, layout } },
+    )
+    await agent.prompt("q".repeat(40))
+    await agent.prompt("t".repeat(40))
+    expect(await agent.compact()).toBe(true)
+    await bus.flush()
+    const end = ofType(events, "compact.end")[0]!
+    expect(end.tokensBefore).toBe(10840)
+    expect(end.tokensAfter).toBeLessThanOrEqual(10840)
+    await agent.prompt("next")
+    expect(Math.abs(end.tokensAfter! - agent.contextTokens!)).toBeLessThan(50)
+  })
+}
+
+test("a filled checkpoint's acknowledgement names the summary writer, including after restore", async () => {
+  const first = await setup([{ text: "r1" }, { text: "r2" }], [checkpoint])
+  await first.agent.prompt("q1")
+  await first.agent.prompt("q2")
+  expect(await first.agent.compact()).toBe(true)
+  const { ai, mock, session } = first
+  mock.push({ text: "SUMMARY" }, { text: "r3" })
+  const agent = new Agent({
+    ai,
+    model: ai.model("other/x"),
+    cwd: "/proj",
+    session,
+    compaction: { auto: false, model: ai.model("other/writer") },
+  })
+  await agent.prompt("q3")
+  expect(mock.requests[2]!.model.id).toBe("writer")
+  expect(agent.messages[1]).toMatchObject({
+    role: "assistant",
+    model: { provider: "other", model: "writer" },
+  })
+  expect(SessionStore.open(session.file).restore().messages).toEqual(agent.messages)
+})
+
 test("the server compacts the older history; the checkpoint rides on the summary pair", async () => {
   const { agent, mock, compactions, events, session, bus, ai } = await setup(
     [{ text: "r1" }, { text: "r2", ...big }, { text: "r3" }],
@@ -188,6 +235,10 @@ test("/compact with instructions, or a compaction model, writes a text summary",
   await withModel.prompt("q2")
   expect(await withModel.compact()).toBe(true)
   expect(other.compactions).toHaveLength(0)
+  expect(withModel.messages[1]).toMatchObject({
+    role: "assistant",
+    model: { provider: "other", model: "w" },
+  })
 })
 
 test('the "recent-user" layout keeps the latest user messages before the checkpoint', async () => {
@@ -325,8 +376,9 @@ test("a resumed session on another provider writes the summary from the session 
 })
 
 test("aborting a server compaction leaves the conversation as it was", async () => {
+  const started = Promise.withResolvers<void>()
   const hang: Script = (_req, signal) =>
-    new Promise((resolve) =>
+    new Promise((resolve) => {
       signal.addEventListener("abort", () =>
         resolve({
           ok: false,
@@ -334,14 +386,15 @@ test("aborting a server compaction leaves the conversation as it was", async () 
           unsupported: false,
           retryable: false,
         }),
-      ),
-    )
+      )
+      started.resolve()
+    })
   const { agent, events, bus } = await setup([{ text: "r1" }, { text: "r2" }], [hang])
   await agent.prompt("q1")
   await agent.prompt("q2")
   const before = [...agent.messages]
   const done = agent.compact()
-  await new Promise((r) => setTimeout(r, 10))
+  await started.promise
   agent.abort()
   expect(await done).toBe(false)
   await bus.flush()

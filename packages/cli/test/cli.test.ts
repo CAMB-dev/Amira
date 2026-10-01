@@ -219,7 +219,9 @@ test("print mode stops waiting for background results on Ctrl+C", async () => {
   agent.tools.register(laterTool(-1), "test")
   const io = capture()
   const p = runPrint(agent, "go", false, { io, forceExit: () => {} })
-  await Bun.sleep(80)
+  // Ctrl+C once the turn is over and print mode is only waiting for the background result.
+  const deadline = performance.now() + 3000
+  while ((agent.busy || io.out !== "started it\n") && performance.now() < deadline) await Bun.sleep(5)
   expect(agent.expectedNotices).toBe(1)
   process.emit("SIGINT")
   expect(await p).toBe(130)
@@ -651,4 +653,90 @@ test("plain print mode shows extensions' notices on stderr, problems with their 
   expect(await runPrint(agent, "go", false, { io })).toBe(0)
   expect(io.out).toBe("all done\n")
   expect(io.err).toBe("● note \n● formatted a.ts\nerror: tests failed\n")
+})
+
+test("a permission question says which rule or mode asked, and which sub-agent", async () => {
+  const { userApprover } = await import("../src/session.ts")
+  const bus = new EventBus()
+  const ui = new UiRequests(bus)
+  const asked: string[] = []
+  bus.subscribe((e) => {
+    if (e.type !== "ui.request" || e.data.kind !== "confirm") return
+    asked.push(e.data.message ?? "")
+    ui.respond(e.data.requestId, true)
+  })
+  const tree = {
+    subagent: (id: string) =>
+      id === "child" ? ({ info: { id: "child", title: "Fix tests" } } as never) : undefined,
+  }
+  const approve = userApprover(ui, { tree })
+  const signal = new AbortController().signal
+  const base = { toolCallId: "t", name: "bash", args: { command: "git push" } }
+  await approve(
+    {
+      ...base,
+      sessionId: "child",
+      reason: 'rule ["git","push"] (ask, user settings s.json)',
+      permission: {
+        mode: "auto",
+        cause: "rule",
+        rule: { command: ["git", "push"], decision: "ask", scope: "user", file: "s.json" },
+      },
+    },
+    signal,
+  )
+  await approve(
+    {
+      ...base,
+      sessionId: "root",
+      reason: 'mode "edits": shell commands ask first',
+      permission: { mode: "edits", cause: "mode" },
+    },
+    signal,
+  )
+  expect(asked[0]).toStartWith(
+    'Asked by the sub-agent "Fix tests" (child).\nPermission rule ["git","push"] says ask (user settings, s.json).',
+  )
+  expect(asked[1]).toStartWith('Permission mode "edits".\nmode "edits": shell commands ask first')
+})
+
+test("print mode refuses what would ask, saying why; auto mode runs it as before", async () => {
+  const { resolvePermissions } = await import("@amira/core")
+  const steps = (): MockStep[] => [
+    { toolCalls: [{ name: "shell", args: { command: "ls" } }] },
+    { text: "done" },
+  ]
+  const run = async (mode: "auto" | "edits") => {
+    const session = await mockSession(steps(), {
+      permissions: resolvePermissions(
+        [{ scope: "flags", file: "--permission-mode", permissions: { mode } }],
+        {
+          trusted: false,
+        },
+      ),
+    })
+    const ran: string[] = []
+    session.agent.tools.register(
+      defineTool<{ command: string }>({
+        name: "shell",
+        description: "",
+        parameters: {},
+        shellKind: () => "bash",
+        execute: async (p) => {
+          ran.push(p.command)
+          return textResult("ok")
+        },
+      }),
+      "test",
+    )
+    const io = capture()
+    expect(await runPrint(session.agent, "go", false, { io, ui: session.host.ui })).toBe(0)
+    const result = session.agent.messages.find((m) => m.role === "toolResult")
+    return { ran, text: result?.content[0]?.type === "text" ? result.content[0].text : "" }
+  }
+  const edits = await run("edits")
+  expect(edits.ran).toEqual([])
+  expect(edits.text).toContain("Tool call not approved: nobody can approve it (print mode)")
+  expect(edits.text).toContain('mode "edits": shell commands ask first')
+  expect((await run("auto")).ran).toEqual(["ls"])
 })

@@ -8,6 +8,7 @@ import type {
   ToolCallBlock,
   ToolResultMessage,
 } from "../types.ts"
+import { decodeSearchReplay, decodeSearchText } from "./anthropic-web-search.ts"
 import { indexResults, MISSING_RESULT, takeResult } from "./tool-results.ts"
 
 export const ANTHROPIC_DIALECT = "anthropic-messages"
@@ -15,7 +16,9 @@ export const ANTHROPIC_DIALECT = "anthropic-messages"
 export type CacheControl = { type: "ephemeral" }
 
 export type AnthropicBlock =
-  | { type: "text"; text: string; cache_control?: CacheControl }
+  | { type: "text"; text: string; citations?: unknown[]; cache_control?: CacheControl }
+  | { type: "server_tool_use"; [key: string]: any }
+  | { type: "web_search_tool_result"; [key: string]: any }
   | {
       type: "image"
       source: { type: "base64"; media_type: string; data: string }
@@ -98,7 +101,7 @@ export function toAnthropicMessages(
     if (m.role === "user") {
       push("user", m.content.flatMap(userBlock))
     } else if (m.role === "assistant") {
-      push("assistant", assistantBlocks(m, tools))
+      push("assistant", assistantBlocks(m, tools, opts.webSearch !== false))
       const answers = m.content
         .filter((b) => b.type === "toolCall")
         .flatMap((call) => {
@@ -114,6 +117,7 @@ export function toAnthropicMessages(
 export interface AnthropicMessageOptions {
   /** Whether the request sends tools; without them the API rejects tool blocks, so they become text. */
   tools?: boolean
+  webSearch?: boolean
 }
 
 function userBlock(b: TextBlock | ImageBlock): AnthropicBlock[] {
@@ -126,9 +130,13 @@ function imageBlock(b: ImageBlock): AnthropicBlock {
 }
 
 /** Keeps the block order: models that interleave thinking with tool calls need it unchanged. */
-function assistantBlocks(m: AssistantMessage, tools: boolean): AnthropicBlock[] {
+function assistantBlocks(m: AssistantMessage, tools: boolean, webSearch: boolean): AnthropicBlock[] {
   const out: AnthropicBlock[] = []
-  for (const b of m.content) {
+  const pending = new Map<number, { block: AnthropicBlock; order: number }[]>()
+  const resultsAt = (index: number) =>
+    (pending.get(index) ?? []).sort((a, b) => a.order - b.order).map((r) => r.block)
+  for (const [index, b] of m.content.entries()) {
+    out.push(...resultsAt(index))
     if (b.type === "thinking") {
       // adaptThinking left only thinking signed by this dialect, or unsigned thinking.
       const sig = b.signature?.dialect === ANTHROPIC_DIALECT ? b.signature.value : ""
@@ -136,16 +144,34 @@ function assistantBlocks(m: AssistantMessage, tools: boolean): AnthropicBlock[] 
       else if (sig) out.push({ type: "thinking", thinking: b.text, signature: sig })
       else if (b.text.trim()) out.push({ type: "text", text: `<thinking>\n${b.text}\n</thinking>` })
     } else if (b.type === "text") {
-      if (b.text.trim()) out.push({ type: "text", text: b.text })
+      const raw =
+        webSearch && b.signature?.dialect === ANTHROPIC_DIALECT && b.signature.kind === "webSearch"
+          ? decodeSearchText(b.signature.value)
+          : undefined
+      if (raw && raw.text === b.text) out.push(raw as AnthropicBlock)
+      else if (b.text.trim()) out.push({ type: "text", text: b.text })
     } else if (b.type === "serverTool") {
-      // Another provider's hosted tool; the ai client turns these into text before they get here.
-      out.push({ type: "text", text: serverToolText(b) })
+      const raw =
+        webSearch && b.signature?.dialect === ANTHROPIC_DIALECT
+          ? decodeSearchReplay(b.signature.value)
+          : undefined
+      if (raw) {
+        out.push(raw.call as AnthropicBlock)
+        if (raw.result) {
+          const at = index + 1 + (raw.resultAfter ?? 0)
+          pending.set(at, [
+            ...(pending.get(at) ?? []),
+            { block: raw.result as AnthropicBlock, order: raw.resultOrder ?? 0 },
+          ])
+        }
+      } else out.push({ type: "text", text: serverToolText(b) })
     } else if (tools) {
       out.push({ type: "tool_use", id: wireToolId(b.id), name: b.name, input: b.args })
     } else {
       out.push({ type: "text", text: `[tool call ${b.name}(${JSON.stringify(b.args)})]` })
     }
   }
+  out.push(...resultsAt(m.content.length))
   return out
 }
 

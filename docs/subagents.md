@@ -50,7 +50,7 @@ Esc interrupts the main turn while its background children continue. Stop them w
 
 Defaults allow two nesting levels below the main agent and four working children **across the whole agent tree**; further tasks queue. Configure `subagents.maxDepth` and `subagents.maxConcurrent` to change them. A parent waiting on its children does not occupy a working slot. `budget.tokens` and `budget.costUsd` constrain the whole tree, including the main agent; no budget is set by default. Token budgets count input, output and cache reads and writes. Cost budgets depend on reported costs. Exceeding the budget stops live children and refuses new ones.
 
-Approval requests from a child go to its parent's model. A child's questions are also answered by the parent, which can pass them to the user. See [Usage](usage.md#tools-and-approvals) for top-level approval dialogs.
+A child works under the same permission mode and rules as its parent, and shares the approvals you gave with "Don't ask again". When the [permission policy](usage.md#permissions) asks about a child's tool call, the question comes to you, not to the parent's model, so no agent can widen what its children may do. Approval requests an extension raises for a child go to its parent's model. A child's questions are also answered by the parent, which can pass them to the user. See [Usage](usage.md#tools-and-approvals) for top-level approval dialogs.
 
 ## Listing and viewing
 

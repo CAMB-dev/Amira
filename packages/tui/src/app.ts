@@ -19,6 +19,7 @@ import {
   type Agent,
   AgentBusyError,
   type CommandHost,
+  MODE_SUMMARY,
   type PanelRegistry,
   parseCommandLine,
   type StatusRegistry,
@@ -83,7 +84,7 @@ import { ACTIONS, type Action, defaultKeys, Keybindings, type KeySpec } from "./
 import { type ImageSource, type MarkdownRenderSource, ReplyRenderers } from "./markdown-nodes.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
-import { statusLine } from "./status-bar.ts"
+import { type StatusEntry, statusLine } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
 import { TerminalStatus } from "./terminal-status.ts"
 import { formatElapsed, type PresenterSource } from "./tool-view.ts"
@@ -648,7 +649,30 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const reaches = (s: KeySpec) => capabilities.shiftEnter || !(s.shift && s.name === "enter")
   const newlineKey = keys.label("newline", reaches)
   const queueKey = keys.label("queue")
-  const inputBox = new InputBox(editor, () => opts.status.snapshot())
+  /**
+   * The status in the input's border: the extensions' items and, when it is not the default
+   * auto, the permission mode, next to the model.
+   */
+  const statusItems = (): StatusEntry[] => {
+    const mode = agent.permissions.mode
+    const own: StatusEntry[] =
+      mode === "auto"
+        ? []
+        : [
+            {
+              id: "permissions.mode",
+              align: "left",
+              tone: mode === "plan" ? "warning" : "default",
+              priority: 35,
+              text: `${mode} mode`,
+            },
+          ]
+    const items = opts.status.snapshot()
+    // After the model, which extensions put first.
+    const at = items.findIndex((i) => i.id !== "model" && i.align === "left")
+    return at < 0 ? [...items, ...own] : [...items.slice(0, at), ...own, ...items.slice(at)]
+  }
+  const inputBox = new InputBox(editor, statusItems)
   /** Rows the last frame's dialog took, to size it against the rest of the bottom area. */
   let dialogRows = 0
   /** The user folded the live panels to one line each (panels.toggle). */
@@ -732,7 +756,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (!dialogs[0]) return inputBox.render(width, ctx)
       const lines = dialogs[0].render(width, ctx)
       dialogRows = lines.length
-      return [...lines, ...statusLine(opts.status.snapshot(), width, ctx)]
+      return [...lines, ...statusLine(statusItems(), width, ctx)]
     }),
     // The command or skill list, file list or history search opens below the input box, in place of
     // the hint, so the box stays where it is while the list changes with each key. Full screen,
@@ -1801,6 +1825,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return
     }
     const dialog = dialogs[0]
+    // Recalled skills use the same Enter guard as typed ones, without taking the history's arrows.
+    if (
+      !dialog &&
+      !search.active &&
+      historyNav.recalling &&
+      editor.lineCount === 1 &&
+      editor.getText().startsWith("$") &&
+      keys.is(e, "popup.accept")
+    )
+      historyNav.reset()
     // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
     // with candidates for text the editor no longer holds.
     if (!dialog && !search.active) syncCompletions()
@@ -1865,6 +1899,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       showNote(setDetail(nextDetail(detail)))
     } else if (keys.is(e, "panels.toggle") && panelsShown) {
       panelsCollapsed = !panelsCollapsed
+    } else if (keys.is(e, "permissions.mode")) {
+      // The user's choice for the whole session tree, sub-agents included; the border shows it.
+      const next = agent.permissions.cycleMode()
+      showNote(`Permission mode: ${next} — ${MODE_SUMMARY[next]}`)
     } else if (keys.is(e, "help") && editor.isEmpty) {
       // Lists open only on text, so an empty input has none; a dialog took the key above.
       return openKeyReference()

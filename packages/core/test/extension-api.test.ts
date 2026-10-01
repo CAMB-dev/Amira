@@ -100,6 +100,51 @@ test("runCommand writes stdin, adding the newline, and closes it", async () => {
   await expect(api!.runCommand(["x"], { ...opts, stdin: "x", viaCmd: true })).rejects.toThrow("stdin")
 })
 
+test("runCommand streams output while the command runs, and an abort stops it", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let api: ExtensionAPI | undefined
+  await host.load((a) => {
+    api = a
+  }, "ext:stream")
+  const opts = { cwd: process.cwd(), timeoutMs: 20_000, signal: new AbortController().signal }
+
+  const chunks: string[] = []
+  let done = false
+  let doneAtFirstChunk: boolean | undefined
+  const script = "console.log('one'); await Bun.sleep(1000); console.log('two')"
+  const run = api!.runCommand([process.execPath, "-e", script], {
+    ...opts,
+    onChunk: (c) => {
+      doneAtFirstChunk ??= done
+      chunks.push(c)
+    },
+  })
+  void run.then(() => (done = true))
+  const r = await run
+  expect(doneAtFirstChunk).toBe(false)
+  expect(chunks[0]).toContain("one")
+  expect(chunks.join("")).toBe(r.output)
+  expect(r.output).toContain("two")
+
+  const abort = new AbortController()
+  const started = performance.now()
+  const stopped = await api!.runCommand(
+    [process.execPath, "-e", "console.log('one'); await Bun.sleep(60_000)"],
+    {
+      ...opts,
+      signal: abort.signal,
+      onChunk: () => abort.abort(),
+    },
+  )
+  expect(stopped).toMatchObject({ aborted: true, timedOut: false })
+  expect(stopped.output).toContain("one")
+  expect(performance.now() - started).toBeLessThan(20_000)
+})
+
 test("notify sends an extension.notice, info by default", async () => {
   const bus = new EventBus()
   const events: AnyEvent[] = []

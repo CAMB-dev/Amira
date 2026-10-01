@@ -63,6 +63,8 @@ export interface Settings {
    * writes a text summary.
    */
   compact?: { threshold?: number; model?: string; layout?: "tail" | "recent-user" }
+  /** What the model is sent of the session's history, besides compaction (see ContextSettings). */
+  context?: ContextSettings
   /** Generate a short name in the background after the first turn. Default true. */
   sessions?: { autoTitle?: boolean }
   /** Retrying failed model requests (D52): retries after the first try, first backoff, longest Retry-After waited. */
@@ -103,6 +105,87 @@ export interface Settings {
   merge?: { reviewThreshold?: { lines?: number; files?: number } }
   /** The interactive terminal UI. */
   tui?: TuiSettings
+  /**
+   * The core permission policy: the mode and the command rules. A project file can only
+   * tighten them (see PermissionSettings).
+   */
+  permissions?: PermissionSettings
+}
+
+/**
+ * How much the model may do without asking: "plan" is read-only (no file changes, no shell
+ * commands), "edits" changes files without asking and asks before shell commands, "auto"
+ * (the default) asks about nothing beyond the rules and protected paths.
+ */
+export type PermissionMode = "plan" | "edits" | "auto"
+
+/** What a rule says about a command: run it without asking, ask first, or never run it. */
+export type PermissionDecision = "allow" | "ask" | "deny"
+
+/**
+ * A rule for shell commands, matched against the words of each command (argv), not its text:
+ * `{"command": ["git", "push"], "decision": "ask"}`. When several rules match, deny wins over
+ * ask and ask over allow. `allow` only means "do not ask"; it never lifts the mode or a
+ * protected path.
+ */
+export interface CommandRule {
+  command: string[]
+  decision: PermissionDecision
+  /** Shown with the question or the refusal. */
+  reason?: string
+}
+
+export interface PermissionSettings {
+  /**
+   * The mode a session starts in (default "auto"); Shift+Tab cycles it in the TUI and
+   * --permission-mode wins. A project file can choose a stricter mode, never a looser one.
+   */
+  mode?: PermissionMode
+  /**
+   * Command rules. The user file's and the project files' rules all apply; a project's
+   * `allow` rules only once the project is trusted (`amira ext trust`).
+   */
+  rules?: CommandRule[]
+}
+
+/**
+ * Context management (all optional; defaults in brackets). The session file always keeps
+ * everything; these only change what requests carry.
+ */
+export interface ContextSettings {
+  outputs?: {
+    /** Tool output longer than this many characters is saved as an artifact [16000]. */
+    saveAbove?: number
+    /** Characters of the preview the model gets for it instead [8000]. */
+    previewChars?: number
+    /** Most megabytes of artifacts one session keeps; past it outputs are only previewed [256]. */
+    quotaMB?: number
+  }
+  /**
+   * A read that returns exactly what an earlier read of the same range, still in context,
+   * returned is sent as a short note pointing to it [true].
+   */
+  dedupeReads?: boolean
+  /**
+   * Replacing old tool results with short stubs when the context gets full, before compaction.
+   * Only for models whose history may be rewritten (no signed reasoning after the result).
+   */
+  aging?: {
+    /** [true] */
+    enabled?: boolean
+    /** Share of the context window that starts it [0.7]. */
+    start?: number
+    /** Share of the window it frees down to [0.6]. */
+    target?: number
+    /** Skipped unless it frees at least this many tokens at once [8000]. */
+    minSavedTokens?: number
+    /** Most recent user turns never touched [2]. */
+    keepTurns?: number
+    /** In a long turn, most recent model steps never touched [2]. */
+    keepSteps?: number
+    /** Experimental: also stub results older than this many user turns, whatever the pressure. 0 is off [0]. */
+    afterTurns?: number
+  }
 }
 
 export interface PackageSettings {

@@ -8,6 +8,7 @@ import { globTool } from "./glob.ts"
 import { grepTool } from "./grep.ts"
 import { jobListTool, jobOutputTool, jobStopTool, jobTools } from "./jobs.ts"
 import { registerJobs } from "./jobs-ui.ts"
+import { outputReadTool } from "./output-read.ts"
 import { builtinPresenters } from "./presenters.ts"
 import { readTool } from "./read.ts"
 import { warmUpShell } from "./shell.ts"
@@ -27,6 +28,7 @@ export {
   jobListTool,
   jobOutputTool,
   jobStopTool,
+  outputReadTool,
   powershellTool,
   readTool,
   writeTool,
@@ -42,6 +44,7 @@ export const builtinTools = [
   ...(process.platform === "win32" ? [powershellTool] : []),
   grepTool,
   globTool,
+  outputReadTool,
   askUserTool,
   ...jobTools,
 ]

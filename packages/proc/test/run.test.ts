@@ -90,3 +90,16 @@ test("a failing chunk callback does not break the run", async () => {
   })
   expect(run.exitCode).toBe(0)
 })
+
+test("maxOutputChars keeps the end of the output; chunks still carry all of it", async () => {
+  let streamed = 0
+  const run = await runCommand([bun, "-e", "process.stdout.write('x'.repeat(200_000) + 'END')"], {
+    ...opts(),
+    maxOutputChars: 10,
+    onChunk: (c) => {
+      streamed += c.length
+    },
+  })
+  expect(run.output).toBe("xxxxxxxEND")
+  expect(streamed).toBe(200_003)
+})

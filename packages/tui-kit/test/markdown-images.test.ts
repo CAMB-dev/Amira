@@ -98,14 +98,21 @@ test("through the renderer: the image is drawn in order, between the text around
   const m = new MarkdownStream({ hyperlinks: false, images: store })
   const r = new LiveRenderer(term, m)
   r.start()
-  m.append("before\n\n![cat](cat-40x60.png)\n\nafter\n\nmore")
-  r.render()
-  await Bun.sleep(100)
-  r.render()
-  // 40×60 pixels: 4 columns, 3 rows.
-  expect(screen.images).toEqual([{ protocol: "sixel", row: 2, col: 0, rows: 3, cols: 4 }])
-  expect(screen.lines.slice(0, 8)).toEqual(["before", "", "▓▓▓▓", "▓▓▓▓", "▓▓▓▓", "", "after", ""])
-  r.stop()
+  try {
+    m.append("before\n\n![cat](cat-40x60.png)\n\nafter\n\nmore")
+    r.render()
+    const deadline = performance.now() + 3000
+    while (!screen.images.length) {
+      if (performance.now() > deadline) throw new Error("timed out waiting for the rendered image")
+      await Bun.sleep(5)
+      r.render()
+    }
+    // 40×60 pixels: 4 columns, 3 rows.
+    expect(screen.images).toEqual([{ protocol: "sixel", row: 2, col: 0, rows: 3, cols: 4 }])
+    expect(screen.lines.slice(0, 8)).toEqual(["before", "", "▓▓▓▓", "▓▓▓▓", "▓▓▓▓", "", "after", ""])
+  } finally {
+    r.stop()
+  }
 })
 
 /** Nodes rendering ```diagram blocks: `render` says what each becomes, and is recorded. */
