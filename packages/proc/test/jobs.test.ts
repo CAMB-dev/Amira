@@ -271,6 +271,35 @@ test("Amira killed outright leaves no process of a job behind on Windows (the Jo
   }
 })
 
+test("a SIGINT someone handles leaves jobs running; one nobody handles kills them and exits 130", async () => {
+  const job = backgroundJobs.start({ command: "idle", argv: script("setInterval(() => {}, 1000)"), cwd })
+  await waitUntil(() => backgroundJobs.get(job.id)!.status === "running", "the job to run")
+  const pid = backgroundJobs.get(job.id)!.pid!
+  let handled = 0
+  const handler = () => void handled++
+  process.on("SIGINT", handler)
+  try {
+    process.emit("SIGINT", "SIGINT")
+  } finally {
+    process.off("SIGINT", handler)
+  }
+  expect(handled).toBe(1)
+  await Bun.sleep(200)
+  expect(alive(pid)).toBe(true)
+  const exit = process.exit
+  let code: number | undefined
+  process.exit = ((c?: number) => {
+    code = c
+  }) as typeof process.exit
+  try {
+    process.emit("SIGINT", "SIGINT")
+  } finally {
+    process.exit = exit
+  }
+  expect(code).toBe(130)
+  await waitUntil(() => !alive(pid), "the job to be killed")
+})
+
 test("a job keeps running on this thread when the worker cannot load", async () => {
   resetCommandWorker({ url: new URL("./does-not-exist.ts", import.meta.url).href })
   try {

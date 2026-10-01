@@ -17,6 +17,25 @@ export interface ProcessTree {
   terminate(): boolean
   /** Releases OS handles. Call once the process has exited and been killed. */
   dispose(): void
+  /**
+   * Windows: the Job Object's handle, valid on every thread of this process. When the thread
+   * that owns this tree is lost (a worker that stopped), another thread can still end the
+   * tree with it (terminateJobHandle).
+   */
+  readonly jobHandle?: number
+}
+
+/**
+ * Kills every process in a Job Object and closes its handle, from any thread of this process:
+ * for trees whose owning worker was lost. Windows only; elsewhere it does nothing.
+ */
+export function terminateJobHandle(handle: number): void {
+  if (process.platform !== "win32") return
+  const k = getKernel32()
+  if (!k) return
+  const job = handle as unknown as NonNullable<ReturnType<Kernel32["CreateJobObjectW"]>>
+  k.TerminateJobObject(job, 1)
+  k.CloseHandle(job)
 }
 
 export interface TrackOptions {
@@ -133,6 +152,7 @@ function windowsJobTree(proc: Subprocess, opts: TrackOptions): ProcessTree {
   }
   return {
     contained,
+    ...(job ? { jobHandle: Number(job) } : {}),
     kill() {
       if (k && job) {
         k.TerminateJobObject(job, 1)

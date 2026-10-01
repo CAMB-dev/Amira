@@ -1,6 +1,7 @@
 import { type JobEvent, type JobHandle, type JobSpec, startJobInline } from "./job-inline.ts"
 import { JobRegistry } from "./jobs.ts"
 import { openPipeInline, type PipeEvent, type PipeHandle, type PipeSpec } from "./pipe.ts"
+import { terminateJobHandle } from "./process-tree.ts"
 import type { FromWorker, RunRequest, SpawnRequest, ToWorker } from "./protocol.ts"
 import {
   type ReleaseOptions,
@@ -88,6 +89,7 @@ interface OpenJob {
   /** Set when the worker never loaded and the job runs on this thread instead. */
   fallback?: JobHandle
   pid?: number
+  jobHandle?: number
 }
 /** Background jobs in the worker that have not reported their exit. */
 const jobs = new Map<number, OpenJob>()
@@ -144,8 +146,10 @@ function abandonWorker(neverLoaded: boolean) {
       j.fallback = startJobInline(j.spec, (e) => pipeEvent(j.onEvent, e))
       if (j.earlyStop !== undefined) j.fallback.stop(j.earlyStop)
     } else {
-      // Its handles went with the worker's state, not with this process: kill it by pid.
-      if (j.pid !== undefined) killJobTrees([j.pid])
+      // The worker's handles stay open (a stopped thread closes none), so its Job Object still
+      // holds the whole tree: end it from here. Without one, kill by pid.
+      if (j.jobHandle !== undefined) terminateJobHandle(j.jobHandle)
+      else if (j.pid !== undefined) killJobTrees([j.pid])
       pipeEvent(j.onEvent, {
         type: "exit",
         code: null,
@@ -185,7 +189,10 @@ function onMessage(m: FromWorker) {
   if (m.type === "job") {
     const j = jobs.get(m.id)
     if (m.event.type === "exit") jobs.delete(m.id)
-    if (m.event.type === "spawned" && j) j.pid = m.event.pid
+    if (m.event.type === "spawned" && j) {
+      j.pid = m.event.pid
+      if (m.event.jobHandle !== undefined) j.jobHandle = m.event.jobHandle
+    }
     if (j) pipeEvent(j.onEvent, m.event)
     return
   }
@@ -438,20 +445,29 @@ function killJobTrees(pids: number[]) {
  */
 export const PASSIVE_SIGNAL_LISTENER = Symbol.for("amira.passiveSignalListener")
 
-const TERMINATING_SIGNALS = ["SIGHUP", "SIGTERM"] as const
+const TERMINATING_SIGNALS = ["SIGHUP", "SIGTERM", "SIGINT"] as const
+const SIGNAL_EXIT_CODES: Record<(typeof TERMINATING_SIGNALS)[number], number> = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+}
 
 /**
- * A hangup (the terminal closed) or SIGTERM would end Amira without running its exit hooks:
- * the jobs are killed first. When no listener that decides is left, this one ends the process
- * as the default action would have.
+ * A hangup (the terminal closed), SIGTERM, or a SIGINT nobody handles (e.g. Ctrl+C while print
+ * mode shuts down, after it removed its own handler) would end Amira without running its exit
+ * hooks, and jobs in process groups of their own never get the terminal's signal: they are
+ * killed here first. When no listener that decides is left, this one ends the process as the
+ * default action would have. A SIGINT someone handles (print mode interrupting a turn) is
+ * theirs alone: jobs keep running.
  */
 const onTerminatingSignal = Object.assign(
   (signal: NodeJS.Signals) => {
-    killLiveJobs()
     const deciding = process
       .listeners(signal)
       .filter((l) => !(l as unknown as Record<symbol, unknown>)[PASSIVE_SIGNAL_LISTENER])
-    if (!deciding.length) process.exit(signal === "SIGHUP" ? 129 : 143)
+    if (signal === "SIGINT" && deciding.length) return
+    killLiveJobs()
+    if (!deciding.length) process.exit(SIGNAL_EXIT_CODES[signal as keyof typeof SIGNAL_EXIT_CODES] ?? 143)
   },
   { [PASSIVE_SIGNAL_LISTENER]: true },
 )

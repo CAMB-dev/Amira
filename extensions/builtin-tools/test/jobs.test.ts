@@ -11,7 +11,7 @@ import type {
   ToolSession,
   UserMessage,
 } from "@amira/api"
-import { backgroundJobs, JobRegistry, startJob } from "@amira/proc"
+import { backgroundJobs, JobRegistry, resetCommandWorker, startJob } from "@amira/proc"
 import { bashTool, createPowershellTool } from "../src/bash.ts"
 import {
   jobListTool,
@@ -160,6 +160,27 @@ test.if(hasBash)("job_stop kills the whole tree a background command started", a
   await jobStopTool.execute({ job_id: detailsOf(r).jobId }, ctxIn(session("s_main")))
   await waitUntil(() => pids.every((p) => !alive(p)), "every process of the tree to end", 10_000)
 })
+
+test.if(hasBash && onWindows)(
+  "Windows: a lost command worker's Git Bash job still dies whole (its Job Object is ended from the main thread)",
+  async () => {
+    const pidFile = join(dir, "lost-pids").replaceAll("\\", "/")
+    const r = await bashTool.execute(
+      { command: `${bun} ${treeFixture} ${JSON.stringify(pidFile)}`, background: true },
+      ctxIn(session("s_main")),
+    )
+    const read = () =>
+      existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean) : []
+    await waitUntil(() => read().length >= 3, "the process tree")
+    const pids = read().map(Number)
+    // taskkill /T cannot follow MSYS's broken parent chain; only the Job Object reaches them all.
+    resetCommandWorker()
+    const { jobId } = detailsOf(r)
+    await waitUntil(() => backgroundJobs.get(jobId)!.status === "failed", "the job to be reported lost")
+    expect(backgroundJobs.get(jobId)!.error).toBe("the command worker stopped unexpectedly")
+    await waitUntil(() => pids.every((p) => !alive(p)), "every process of the tree to end", 10_000)
+  },
+)
 
 test.if(hasBash)("a background command that fails at once is reported like a normal run", async () => {
   const r = await bashTool.execute(

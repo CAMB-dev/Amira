@@ -30,7 +30,8 @@ export const DEFAULT_MAX_LOG_BYTES = 50 * 1024 * 1024
 
 /** What a job reports, in order: "spawned" (unless it cannot start), output, then one "exit". */
 export type JobEvent =
-  | { type: "spawned"; pid: number; contained: boolean }
+  /** `jobHandle`: the Windows Job Object holding it (see ProcessTree.jobHandle). */
+  | { type: "spawned"; pid: number; contained: boolean; jobHandle?: number }
   /** stdout and stderr, interleaved as they arrive. */
   | { type: "output"; data: string }
   /**
@@ -81,7 +82,12 @@ export function startJobInline(spec: JobSpec, emit: (e: JobEvent) => void): JobH
     emit({ type: "exit", code: null, signal: null, error: message(err) })
     return { stop() {} }
   }
-  emit({ type: "spawned", pid: proc.pid, contained: tree.contained })
+  emit({
+    type: "spawned",
+    pid: proc.pid,
+    contained: tree.contained,
+    ...(tree.jobHandle !== undefined ? { jobHandle: tree.jobHandle } : {}),
+  })
 
   const log = openLog(spec)
   let finished = false
