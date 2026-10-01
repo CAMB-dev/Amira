@@ -146,6 +146,17 @@ test("worker matching retains the 10,000-character limit", async () => {
   expect(textOf(await run("FAR.*"))).toContain("No matches")
 })
 
+test("a search over more files than one worker batch reports every file, in order", async () => {
+  const d = await tmp.make()
+  const names = Array.from({ length: 300 }, (_, i) => `f${String(i).padStart(3, "0")}.txt`)
+  for (const name of names) await writeFile(join(d, name), "skip\r\nkeep me\r\nkeep\n")
+  const run = (params: GrepParams) => grepTool.execute({ head_limit: 1000, ...params }, makeCtx(d))
+  const counts = textOf(await run({ pattern: "^keep", output_mode: "count" })).split("\n")
+  expect(counts).toEqual(names.map((n) => `${n}:2`))
+  const rows = textOf(await run({ pattern: "^keep me$", output_mode: "content" })).split("\n")
+  expect(rows).toEqual(names.map((n) => `${n}:2:keep me`))
+})
+
 test("a single-file path is searched even when glob would not match it", async () => {
   const r = await grep({ pattern: "docs", path: "notes.md", glob: "src/**/*.ts", output_mode: "content" })
   expect(textOf(r)).toBe("notes.md:1:TODO: write docs")

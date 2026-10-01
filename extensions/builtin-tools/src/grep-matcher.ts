@@ -1,19 +1,26 @@
-/** Matching budget per file, including worker startup and message delivery. */
+import { splitLines } from "./diff.ts"
+
+/** Matching budget per batch of files, including worker startup and message delivery. */
 const MATCH_TIMEOUT_MS = 1_000
 export const MAX_TESTED_LINE_CHARS = 10_000
 
 // Inline source also works in compiled binaries: there is no extra worker entrypoint to ship.
-// Batch a whole file, not one message per line, and reuse the worker throughout a search.
+// Batch many files, not one message per line or file, and reuse the worker throughout a search.
+// Each file goes as its text, split in the worker: one string copies far faster than its lines.
 const source = `
-self.onmessage = ({ data: { pattern, flags, lines, firstOnly, maxChars } }) => {
+const splitLines = ${splitLines.toString()}
+self.onmessage = ({ data: { pattern, flags, texts, firstOnly, maxChars } }) => {
   const re = new RegExp(pattern, flags)
-  const matches = []
-  for (let i = 0; i < lines.length; i++) {
-    if (!re.test(lines[i].slice(0, maxChars))) continue
-    matches.push(i)
-    if (firstOnly) break
-  }
-  self.postMessage(matches)
+  self.postMessage(texts.map((text) => {
+    const lines = splitLines(text)
+    const matches = []
+    for (let i = 0; i < lines.length; i++) {
+      if (!re.test(lines[i].slice(0, maxChars))) continue
+      matches.push(i)
+      if (firstOnly) break
+    }
+    return matches
+  }))
 }
 `
 
@@ -33,25 +40,29 @@ export function grepMatcher(re: RegExp, signal: AbortSignal) {
 
   return {
     close,
-    async match(lines: string[], firstOnly: boolean): Promise<number[]> {
+    /** The indices of each text's matching lines, as `splitLines` numbers them (only the first with `firstOnly`). */
+    async match(texts: string[], firstOnly: boolean): Promise<number[][]> {
       if (signal.aborted) throw new Error("Aborted")
       if (literal) {
-        const matches: number[] = []
-        for (let i = 0; i < lines.length; i++) {
-          if (!re.test(lines[i]!.slice(0, MAX_TESTED_LINE_CHARS))) continue
-          matches.push(i)
-          if (firstOnly) break
-        }
-        return matches
+        return texts.map((text) => {
+          const lines = splitLines(text)
+          const matches: number[] = []
+          for (let i = 0; i < lines.length; i++) {
+            if (!re.test(lines[i]!.slice(0, MAX_TESTED_LINE_CHARS))) continue
+            matches.push(i)
+            if (firstOnly) break
+          }
+          return matches
+        })
       }
       if (!worker) {
         url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }))
         worker = new Worker(url)
       }
       const w = worker
-      return new Promise<number[]>((resolve, reject) => {
+      return new Promise<number[][]>((resolve, reject) => {
         let settled = false
-        const finish = (error?: Error, matches?: number[]) => {
+        const finish = (error?: Error, matches?: number[][]) => {
           if (settled) return
           settled = true
           clearTimeout(timer)
@@ -71,14 +82,14 @@ export function grepMatcher(re: RegExp, signal: AbortSignal) {
           () =>
             finish(
               new Error(
-                "Regular expression matching timed out (1 second per file). No results were returned. " +
+                "Regular expression matching timed out (1 second for a batch of files). No results were returned. " +
                   "Simplify the pattern: avoid nested quantifiers such as (a+)+ and overlapping alternatives; " +
                   "use a literal or a bounded repetition instead. You can also narrow path or glob.",
               ),
             ),
           MATCH_TIMEOUT_MS,
         )
-        w.onmessage = (event: MessageEvent<number[]>) => finish(undefined, event.data)
+        w.onmessage = (event: MessageEvent<number[][]>) => finish(undefined, event.data)
         w.addEventListener("error", onError)
         w.addEventListener("close", onClose)
         signal.addEventListener("abort", onAbort, { once: true })
@@ -86,7 +97,7 @@ export function grepMatcher(re: RegExp, signal: AbortSignal) {
           w.postMessage({
             pattern: re.source,
             flags: re.flags,
-            lines,
+            texts,
             firstOnly,
             maxChars: MAX_TESTED_LINE_CHARS,
           })
