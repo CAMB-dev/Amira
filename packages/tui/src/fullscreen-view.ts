@@ -1,4 +1,4 @@
-import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
+import type { Message, ToolDetailLevel, ToolResult, ToolResultMessage } from "@amira/api"
 import { isSummaryMessage } from "@amira/core"
 import {
   closeStyles,
@@ -755,9 +755,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     openSession(boundary, messages: Message[], switched, compactionInfo) {
       if (switched) clearTranscript()
       add(new LinesBlock("history", (w, t) => [sessionBoundary(t, boundary, w)], ""))
-      const results = new Map<string, ToolResult>()
+      const results = new Map<string, ToolResultMessage>()
       for (const m of messages) {
-        if (m.role === "toolResult") results.set(m.toolCallId, { content: m.content, isError: m.isError })
+        if (m.role === "toolResult") results.set(m.toolCallId, m)
       }
       const blocks: Block[] = []
       for (const m of messages) {
@@ -783,7 +783,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
             } else if (b.type === "toolCall") {
               const call = new ToolBlock(b.id, b.name, b.args, host.sessionId())
               const result = results.get(b.id)
-              call.end = result ? { result } : { result: { content: [], isError: true }, rejected: "aborted" }
+              // A result that records its rejection renders as the call did live; no result at
+              // all (the turn was cut short) means it never ran to completion either.
+              call.end = result
+                ? {
+                    result: { content: result.content, isError: result.isError },
+                    ...(result.rejected ? { rejected: result.rejected } : {}),
+                  }
+                : { result: { content: [], isError: true }, rejected: "aborted" }
               blocks.push(call)
             }
           }

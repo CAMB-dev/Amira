@@ -1,4 +1,11 @@
-import type { CompactionInfo, Message, ToolDetailLevel, ToolPresenter, ToolResult } from "@amira/api"
+import type {
+  CompactionInfo,
+  Message,
+  ToolDetailLevel,
+  ToolPresenter,
+  ToolRejection,
+  ToolResult,
+} from "@amira/api"
 import { isSummaryMessage } from "@amira/core"
 import {
   type MarkdownNodes,
@@ -57,8 +64,12 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     ...t.block("history", [sessionBoundary(theme, opts.session ?? { resumed: true }, opts.width)]),
   ]
   const results = new Map<string, ToolResult>()
+  const rejections = new Map<string, ToolRejection>()
   for (const m of messages) {
-    if (m.role === "toolResult") results.set(m.toolCallId, { content: m.content, isError: m.isError })
+    if (m.role === "toolResult") {
+      results.set(m.toolCallId, { content: m.content, isError: m.isError })
+      if (m.rejected) rejections.set(m.toolCallId, m.rejected)
+    }
   }
   const gutter = glyphs.assistant
   const detail = opts.detail ?? "summary"
@@ -112,12 +123,15 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
           )
         } else if (b.type === "toolCall") {
           const result = results.get(b.id) ?? { content: [], isError: true }
+          // A call whose result records its rejection renders as it did live; one without any
+          // result at all (the turn was cut short) never ran to completion either.
+          const rejected = rejections.get(b.id) ?? (results.has(b.id) ? undefined : ("aborted" as const))
           const presenter = opts.presenters?.get(b.name)
           const call: FinishedCall = {
             name: b.name,
             args: b.args,
             result,
-            ...(results.has(b.id) ? {} : { rejected: "aborted" as const }),
+            ...(rejected ? { rejected } : {}),
           }
           if (explorationOf(presenter, call)) exploring.push({ call, presenter })
           else block("tool", finishedToolLines(theme, presenter, call, detail, opts.width, toolOpts))

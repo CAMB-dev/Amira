@@ -106,6 +106,17 @@ test("withDirectories adds each directory once", () => {
 
 const tick = () => Bun.sleep(1)
 
+/**
+ * Waits for the setImmediate work an `emit` starts: first the listing adds the paths, then the
+ * picker schedules the search those additions trigger. `Bun.sleep(1)` does not always let both
+ * run before the test goes on (under a loaded event loop a timer can resolve first), so use this
+ * where the test needs the search to have run rather than merely to have yielded.
+ */
+async function flushScheduledWork() {
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
 test("the picker opens for @, inserts the chosen path with a space, and a directory without one", async () => {
   let updates = 0
   const picker = new FilePicker(
@@ -179,12 +190,12 @@ test("while the project is listed the picker shows a status row, then matches as
   expect(picker.open).toBe(false)
   expect(picker.render(60, plain)).toEqual(["  ⠋ indexing… 0 files"])
   src.emit(["src/app.ts", "README.md"])
-  await tick()
+  await flushScheduledWork()
   expect(picker.render(60, plain)).toEqual(["❯ src/app.ts", "  ⠋ indexing… 2 files"])
   // The list keys work on what is there.
   expect(picker.handleKey(key("tab"))).toEqual({ type: "insert", replace: 4, text: "@src/app.ts " })
   src.emit(["app.ts"])
-  await tick()
+  await flushScheduledWork()
   expect(picker.render(60, plain)).toEqual(["❯ app.ts", "  src/app.ts", "  ⠋ indexing… 3 files"])
   src.finish()
   await tick()
@@ -234,11 +245,11 @@ test("the selection stays on the path moved to while more matches arrive", async
   const picker = new FilePicker(src.index, () => {})
   picker.update("@b")
   src.emit(["b1.ts", "b2.ts"])
-  await tick()
+  await flushScheduledWork()
   picker.handleKey(key("down"))
   expect(picker.render(60, plain)[1]).toBe("❯ b2.ts")
   src.emit(["b.ts"])
-  await tick()
+  await flushScheduledWork()
   expect(picker.render(60, plain)).toEqual(["  b.ts", "  b1.ts", "❯ b2.ts", "  ⠋ indexing… 3 files"])
   picker.dispose()
 })
