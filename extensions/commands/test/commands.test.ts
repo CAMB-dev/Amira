@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AssistantMessage, SessionControl, SessionInfo } from "@amira/api"
 import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
@@ -375,7 +375,7 @@ test("/status names the scope of each number: the session's output, cache and sp
   const { text } = await run("/status")
   expect(text).toMatch(/Output\s+300 tokens written by this session's replies/)
   expect(text).toMatch(/Cache\s+80% of this session's prompt tokens read from the cache/)
-  expect(text).toMatch(/Speed\s+\d+(\.\d)? tokens\/s in this session's last reply/)
+  expect(text).toMatch(/Speed\s+reply \d+(\.\d)? tok\/s in this session's last reply/)
   // The sub-agents' replies count in the cost the status shows; this session's own is named too.
   expect(text).toMatch(/Cost\s+\$0\.014 with sub-agents; this session alone \$0\.010/)
   expect(text).toMatch(/Git\s+main in \/work, with uncommitted changes/)
@@ -393,6 +393,54 @@ test("/status names only the session's cost when it had no sub-agents, and a sub
   const { text } = await run("/status")
   expect(text).toMatch(/Cost\s+\$0\.042 \(this session; no sub-agents\)/)
   expect(text).toMatch(/Speed\s+not measured yet/)
+})
+
+test("/status tracks thinking and text separately and clears an unmeasurable last reply", async () => {
+  const { run, bus } = await setup()
+  const meta = { sessionId: "s1" }
+  const model = { provider: "mock", model: "m" }
+  bus.emit("workspace.changed", { cwd: "/work" }, meta)
+  const clock = spyOn(Date, "now")
+  const end = {
+    ...reply("mock/m", 0, 100),
+    usage: { input: 0, output: 100, reasoning: 80, cacheRead: 0, cacheWrite: 0 },
+  }
+  try {
+    clock.mockReturnValue(0)
+    bus.emit("message.start", { model }, meta)
+    await bus.flush()
+    clock.mockReturnValue(100)
+    bus.emit("message.delta", { kind: "toolCall", toolCallId: "t", argsDelta: "{}" }, meta)
+    bus.emit("message.delta", { kind: "text", text: "" }, meta)
+    await bus.flush()
+    clock.mockReturnValue(1000)
+    bus.emit("message.delta", { kind: "thinking", text: "hmm" }, meta)
+    await bus.flush()
+    clock.mockReturnValue(5000)
+    bus.emit("message.delta", { kind: "text", text: "answer" }, meta)
+    await bus.flush()
+    clock.mockReturnValue(6000)
+    bus.emit("message.end", { message: end }, meta)
+  } finally {
+    clock.mockRestore()
+  }
+  await bus.flush()
+  expect((await run("/status")).text).toContain("reply 20 tok/s · thinking 20 tok/s")
+
+  const shortClock = spyOn(Date, "now")
+  try {
+    shortClock.mockReturnValue(7000)
+    bus.emit("message.start", { model }, meta)
+    await bus.flush()
+    bus.emit("message.delta", { kind: "text", text: "hi" }, meta)
+    await bus.flush()
+    shortClock.mockReturnValue(7100)
+    bus.emit("message.end", { message: reply("mock/m", 0, 2) }, meta)
+  } finally {
+    shortClock.mockRestore()
+  }
+  await bus.flush()
+  expect((await run("/status")).text).toMatch(/Speed\s+not measured yet/)
 })
 
 test("/clear starts a new session; /resume switches, or asks among the other sessions", async () => {

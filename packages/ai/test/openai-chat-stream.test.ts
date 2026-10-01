@@ -81,6 +81,32 @@ test("reads OpenAI cached_tokens usage and keeps the latest usage report", async
 const json = (v: unknown, type = "application/json") =>
   new Response(JSON.stringify(v), { headers: { "content-type": type } })
 
+test("keeps the reported reasoning share of completion tokens, including zero", async () => {
+  for (const reasoning of [0, 8]) {
+    const e = last(
+      await run(() =>
+        sseResponse([
+          {
+            ...delta({ content: "answer" }, "stop"),
+            usage: {
+              prompt_tokens: 10,
+              completion_tokens: 12,
+              completion_tokens_details: { reasoning_tokens: reasoning },
+            },
+          },
+        ]),
+      ),
+    )
+    expect(e.type === "done" && e.message.usage).toEqual({
+      input: 10,
+      output: 12,
+      reasoning,
+      cacheRead: 0,
+      cacheWrite: 0,
+    })
+  }
+})
+
 test("reports a JSON error body sent with status 200", async () => {
   const evs = await run(json({ error: { message: "model not found", code: 404 } }))
   expect(evs).toHaveLength(1)

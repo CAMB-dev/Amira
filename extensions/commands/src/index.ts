@@ -18,8 +18,9 @@ import {
   costReport,
   formatCost,
   formatTokens,
+  type ReplyTiming,
+  replySpeed,
   table,
-  tokensPerSecond,
   windowLabel,
 } from "./format.ts"
 import { providerCommand } from "./provider-command.ts"
@@ -105,19 +106,25 @@ export default defineExtension((api: ExtensionAPI) => {
     return workspace.get(sessionId)
   }
 
-  // For /status: the speed of each top-level session's last reply, timed from its first
-  // streamed piece. Sub-agents (their events carry parentSessionId) are left out.
-  const firstDeltaAt = new Map<string, number>()
-  const speed = new Map<string, number>()
-  api.on("message.start", (e) => void firstDeltaAt.delete(e.sessionId))
+  // For /status: time thinking and text separately in each top-level session's last reply.
+  // Sub-agents (their events carry parentSessionId) are left out.
+  const timing = new Map<string, ReplyTiming>()
+  const speed = new Map<string, string>()
+  api.on("message.start", (e) => {
+    if (e.parentSessionId === undefined) timing.set(e.sessionId, { start: e.ts })
+  })
   api.on("message.delta", (e) => {
-    if (e.parentSessionId === undefined && !firstDeltaAt.has(e.sessionId)) firstDeltaAt.set(e.sessionId, e.ts)
+    if (e.parentSessionId !== undefined) return
+    const t = timing.get(e.sessionId)
+    if (!t || (e.data.kind !== "text" && e.data.kind !== "thinking") || !e.data.text) return
+    t[e.data.kind] ??= e.ts
   })
   api.on("message.end", (e) => {
-    const start = firstDeltaAt.get(e.sessionId)
-    firstDeltaAt.delete(e.sessionId)
-    const out = e.data.message.usage?.output ?? 0
-    const tps = start === undefined ? undefined : tokensPerSecond(out, start, e.ts)
+    if (e.parentSessionId !== undefined) return
+    const t = timing.get(e.sessionId)
+    timing.delete(e.sessionId)
+    const tps = t === undefined ? undefined : replySpeed(e.data.message, t, e.ts)
+    speed.delete(e.sessionId)
     if (tps !== undefined) speed.set(e.sessionId, tps)
   })
 
@@ -296,12 +303,7 @@ export default defineExtension((api: ExtensionAPI) => {
               ? "nothing sent yet"
               : `${Math.round(cacheRate * 100)}% of this session's prompt tokens read from the cache`,
           ],
-          [
-            "Speed",
-            tps === undefined
-              ? "not measured yet"
-              : `${tps < 10 ? tps.toFixed(1) : Math.round(tps)} tokens/s in this session's last reply`,
-          ],
+          ["Speed", tps === undefined ? "not measured yet" : `${tps} in this session's last reply`],
           ["Cost", cost],
           ["Shell", info.shell],
           ["Directory", info.cwd],
