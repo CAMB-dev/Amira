@@ -10,9 +10,17 @@ import { createCommandHost } from "../src/control.ts"
 import { formatSessionList } from "../src/resume.ts"
 import { createSession } from "../src/session.ts"
 
-async function setup(steps: MockStep[], options: { autoTitle?: boolean; settings?: Settings } = {}) {
+async function setup(
+  steps: MockStep[],
+  options: { autoTitle?: boolean; settings?: Settings; thinking?: boolean } = {},
+) {
+  const { thinking, ...rest } = options
   const mock = createMockDialect(steps)
-  const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
+  const models = thinking ? [{ id: "main", caps: { thinking: true } }] : undefined
+  const ai = createAi({
+    dialects: [mock],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "", ...(models ? { models } : {}) }],
+  })
   const dir = mkdtempSync(path.join(tmpdir(), "amira-management-cli-"))
   const store = SessionStore.create({ cwd: dir, dir })
   const session = await createSession({
@@ -22,7 +30,7 @@ async function setup(steps: MockStep[], options: { autoTitle?: boolean; settings
     noBuiltins: false,
     ai,
     store,
-    ...options,
+    ...rest,
     builtins: async () => [{ source: "builtin:commands", extension: commandsExtension }],
   })
   const reasons: string[] = []
@@ -85,6 +93,17 @@ test("automatic names are short and use the current model without compact.model"
   expect(store.title).toBe("one two three four five six")
   expect(mock.requests[1]?.model.id).toBe("main")
   expect(mock.requests[1]?.systemPrompt).toContain("user's language")
+})
+
+test("a reasoning model gets room to think, and a title without spaces is cut to a short one", async () => {
+  const { mock, store, host } = await setup([{ text: "answer" }, { text: "数".repeat(200) }], {
+    autoTitle: true,
+    thinking: true,
+  })
+  await host.control.send("question")
+  await waitFor(() => !!store.title)
+  expect(mock.requests[1]?.maxTokens).toBeGreaterThan(64)
+  expect(store.title).toBe("数".repeat(60))
 })
 
 for (const scenario of ["print", "disabled", "manual", "subagent", "resumed"] as const) {

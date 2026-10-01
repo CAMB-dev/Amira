@@ -170,6 +170,10 @@ export interface PromptOptions {
   turnId?: string
 }
 
+/** Output budget for an automatic session title from a reasoning model. */
+const TITLE_THINKING_TOKENS = 2048
+const TITLE_MAX_CHARS = 60
+
 export class AgentBusyError extends Error {}
 
 /** A message sent during a manual compaction was dropped because the compaction was aborted. */
@@ -1000,7 +1004,11 @@ export class Agent {
               "Give this conversation a short title, at most six words, in the user's language. Return only the title, without quotes or punctuation around it.",
             messages: [userMessage(messages)],
             tools: [],
-            maxTokens: 64,
+            // A reasoning model spends its output budget thinking first; 64 tokens would end it
+            // before any title.
+            maxTokens: model.caps.thinking
+              ? Math.min(TITLE_THINKING_TOKENS, model.maxOutput || Infinity)
+              : 64,
           },
           AbortSignal.timeout(30_000),
         )) {
@@ -1019,8 +1027,10 @@ export class Agent {
             .split(/\s+/)
             .slice(0, 6)
             .join(" ")
-          if (title) {
-            store.rename(title, "auto")
+          // Six words of a language without spaces can be a whole paragraph.
+          const short = [...title].slice(0, TITLE_MAX_CHARS).join("")
+          if (short) {
+            store.rename(short, "auto")
             this.#emit(undefined, "session.title", { title: store.title! })
           }
           return
