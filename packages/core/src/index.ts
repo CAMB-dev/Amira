@@ -1,5 +1,6 @@
 export * from "./agent.ts"
 export * from "./artifacts.ts"
+export * from "./background-jobs.ts"
 export * from "./commands.ts"
 export * from "./compaction.ts"
 export * from "./compaction-memory.ts"

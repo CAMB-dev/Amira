@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import "../../../packages/core/src/index.ts"
-import type { ExtensionAPI, ToolDefinition } from "@amira/api"
+import { type ExtensionAPI, hostBackgroundJobs, type ToolDefinition } from "@amira/api"
 import extension from "../src/index.ts"
 
 test("registers the built-in tools (plus powershell on Windows) with the expected concurrency", async () => {
@@ -35,6 +35,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     useService: () => undefined,
     requestRender: () => {},
     settings: {},
+    backgroundJobs: hostBackgroundJobs(),
     on: () => () => {},
     intercept: () => () => {},
     runCommand: () => Promise.reject(new Error("not used")),

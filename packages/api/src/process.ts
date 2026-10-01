@@ -1,3 +1,5 @@
+import type { BackgroundJobHost } from "./background-jobs.ts"
+
 export interface RunCommandOptions {
   cwd: string
   env?: Record<string, string | undefined>
@@ -124,10 +126,8 @@ export interface HostProcessService {
   warmUpCommands(): void
   openPipe(argv: string[], options: OpenPipeOptions): PipeProcess
   isStandbyGoneError(error: unknown): boolean
-  /** TEMPORARY: the background-jobs bridge below; replaced by the background-jobs API. */
-  backgroundJobs: BackgroundJobRegistry
-  /** TEMPORARY: the background-jobs bridge below; replaced by the background-jobs API. */
-  isBackgroundJobLimitError(error: unknown): boolean
+  /** The host-owned background jobs exposed through ExtensionAPI and session views. */
+  backgroundJobs: BackgroundJobHost
 }
 
 let hostProcess: HostProcessService | undefined
@@ -162,114 +162,10 @@ export function isHostStandbyGoneError(error: unknown): boolean {
   return requireHostProcess().isStandbyGoneError(error)
 }
 
-// ---------------------------------------------------------------------------------------------
-// TEMPORARY background-jobs bridge (D97 step 1). Everything from here to the end of the section
-// (the BackgroundJob* types, TemporaryBackgroundJobRegistry, temporaryBackgroundJobs, the
-// TEMPORARY_* defaults, isTemporaryBackgroundJobLimitError, and HostProcessService's
-// backgroundJobs / isBackgroundJobLimitError) mirrors the host's process-wide job registry only
-// so builtin-tools need not import @amira/proc. It is not a supported extension API: the
-// follow-up background-jobs API replaces it with a session-scoped contract and removes it.
-// ---------------------------------------------------------------------------------------------
-
-/** TEMPORARY (see the section note). */
-export type BackgroundJobStatus = "starting" | "running" | "exited" | "stopped" | "failed"
-
-export interface BackgroundJobInfo {
-  readonly id: string
-  readonly command: string
-  readonly cwd: string
-  readonly owner?: string
-  readonly meta: Readonly<Record<string, unknown>>
-  readonly startedAt: number
-  readonly status: BackgroundJobStatus
-  readonly pid?: number
-  readonly contained: boolean
-  readonly exitCode: number | null
-  readonly signal: string | null
-  readonly error?: string
-  readonly endedAt?: number
-  readonly stopRequested: boolean
-  readonly outputChars: number
-  readonly logPath?: string
-  readonly logError?: string
+/** The host-owned background jobs, for extension panels and other host-level integrations. */
+export function hostBackgroundJobs(): BackgroundJobHost {
+  return requireHostProcess().backgroundJobs
 }
-
-export interface BackgroundJobOutput {
-  text: string
-  from: number
-  to: number
-  dropped: number
-}
-
-export interface BackgroundJobWaitResult {
-  reason: "match" | "exit" | "timeout" | "aborted"
-  line?: string
-}
-
-export interface BackgroundJobChange {
-  type: "start" | "status" | "output" | "end"
-  job: BackgroundJobInfo
-}
-
-export interface BackgroundJobStartOptions {
-  command: string
-  argv: string[]
-  cwd: string
-  env?: Record<string, string | undefined>
-  gated?: boolean
-  gateLine?: string
-  viaCmd?: boolean
-  logDir?: string
-  maxLogBytes?: number
-  owner?: string
-  meta?: Record<string, unknown>
-}
-
-export interface BackgroundJobRegistry {
-  configure(limits: { maxRunning?: number; bufferChars?: number }): void
-  start(options: BackgroundJobStartOptions): BackgroundJobInfo
-  get(id: string): BackgroundJobInfo | undefined
-  list(): BackgroundJobInfo[]
-  running(): BackgroundJobInfo[]
-  output(id: string, from?: number): BackgroundJobOutput
-  tail(id: string, maxChars: number): string
-  cursor(id: string, reader: string): number
-  readNew(id: string, reader: string, maxChars?: number): BackgroundJobOutput
-  waitFor(
-    id: string,
-    options: { pattern?: RegExp; from?: number; timeoutMs: number; signal?: AbortSignal },
-  ): Promise<BackgroundJobWaitResult>
-  stop(id: string, graceMs?: number): Promise<BackgroundJobInfo>
-  stopAll(which?: (job: BackgroundJobInfo) => boolean, graceMs?: number): Promise<BackgroundJobInfo[]>
-  subscribe(listener: (change: BackgroundJobChange) => void): () => void
-}
-
-export type TemporaryBackgroundJobRegistry = BackgroundJobRegistry
-/**
- * The temporary registry forwards to the host service so importing an extension never imports
- * the process package. It is intentionally not a public background-jobs abstraction yet.
- */
-export const temporaryBackgroundJobs: TemporaryBackgroundJobRegistry = new Proxy(
-  {} as TemporaryBackgroundJobRegistry,
-  {
-    get(_target, property) {
-      const registry = requireHostProcess().backgroundJobs as unknown as Record<PropertyKey, unknown>
-      const value = registry[property]
-      return typeof value === "function" ? value.bind(registry) : value
-    },
-  },
-)
-
-/** TEMPORARY: the host registry's defaults; a core test keeps them equal to @amira/proc's. */
-export const TEMPORARY_DEFAULT_BUFFER_CHARS = 1_000_000
-export const TEMPORARY_DEFAULT_MAX_RUNNING = 8
-
-/** Whether an error means the host rejected a job because its live-job limit was reached. */
-export function isTemporaryBackgroundJobLimitError(error: unknown): error is Error {
-  return requireHostProcess().isBackgroundJobLimitError(error)
-}
-
-// ------------------------------------ end of the temporary bridge ----------------------------
 
 /**
  * Opens a long-lived process for an extension. This has the same containment and worker

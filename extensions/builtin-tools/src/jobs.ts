@@ -1,22 +1,18 @@
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { TemporaryBackgroundJobRegistry } from "@amira/api"
 import {
   type BackgroundJobDetails,
   type BackgroundJobInfo,
+  type BackgroundJobRegistry,
   type BackgroundJobWaitResult,
   defineTool,
   formatElapsed,
-  isTemporaryBackgroundJobLimitError,
   type JobListDetails,
   plural,
   type Settings,
-  TEMPORARY_DEFAULT_BUFFER_CHARS,
-  TEMPORARY_DEFAULT_MAX_RUNNING,
   type ToolContext,
   type ToolResult,
   type ToolSession,
-  temporaryBackgroundJobs,
   textResult,
 } from "@amira/api"
 import type { Shell } from "./shell.ts"
@@ -39,36 +35,29 @@ export const MAX_WAIT_MS = 600_000
 /** Grace period for a job asked to stop before it is killed (POSIX; Windows kills at once). */
 export const STOP_GRACE_MS = 2000
 
-/** Where the tools find jobs and how much of their output goes to logs; the extension sets it from settings. */
-export const jobsConfig: { registry: TemporaryBackgroundJobRegistry; maxLogBytes?: number } = {
-  registry: temporaryBackgroundJobs,
-}
+/**
+ * How much of a job's output goes to its log, and the host view the extension serves (to forget
+ * what the tools keep about jobs it no longer keeps); the extension sets them.
+ */
+export const jobsConfig: { maxLogBytes?: number; registry?: BackgroundJobRegistry } = {}
 
 /** Applies the `backgroundJobs` settings. */
 export function configureJobs(
   settings: Settings["backgroundJobs"] = {},
-  registry: TemporaryBackgroundJobRegistry = jobsConfig.registry,
+  registry: BackgroundJobRegistry,
 ): void {
   // Unset keys go back to the defaults, so a reload after removing one takes effect.
   registry.configure({
-    maxRunning: settings.maxRunning ?? TEMPORARY_DEFAULT_MAX_RUNNING,
-    bufferChars: settings.bufferChars ?? TEMPORARY_DEFAULT_BUFFER_CHARS,
+    maxRunning: settings.maxRunning,
+    bufferChars: settings.bufferChars,
   })
+  jobsConfig.registry = registry
   if (settings.maxLogBytes !== undefined) jobsConfig.maxLogBytes = settings.maxLogBytes
   else delete jobsConfig.maxLogBytes
 }
 
 /** The reader whose place job_output keeps: each session reads a job's output on its own. */
 const readerOf = (ctx: ToolContext) => `model:${ctx.session?.sessionId ?? "-"}`
-
-/** Sub-agents see the jobs they started; the top-level session sees all. */
-export function canSee(
-  job: BackgroundJobInfo,
-  session: Pick<ToolSession, "depth" | "sessionId"> | undefined,
-): boolean {
-  if (!session || session.depth === 0) return true
-  return job.owner === session.sessionId
-}
 
 /** The session that started each job, told when it ends on its own (see watchJobEnds). */
 const starters = new Map<string, ToolSession>()
@@ -89,7 +78,7 @@ function watch<T>(id: string, run: () => Promise<T>): Promise<T> {
  * next turn (it does not wake an idle session; the user sees a notice meanwhile). Not when a
  * tool call watching the job reports the end itself. Returns a function that stops listening.
  */
-export function watchJobEnds(registry: TemporaryBackgroundJobRegistry = jobsConfig.registry): () => void {
+export function watchJobEnds(registry: BackgroundJobRegistry): () => void {
   return registry.subscribe(({ type, job }) => {
     if (type !== "end") return
     const session = starters.get(job.id)
@@ -168,7 +157,8 @@ export async function startBackground(
   command: string,
   ctx: ToolContext,
 ): Promise<ToolResult> {
-  const { registry } = jobsConfig
+  const registry = ctx.backgroundJobs
+  if (!registry) return textResult("Background jobs are unavailable in this host.", true)
   const session = ctx.session
   const { argv, env, cwd, gated, gateLine, viaCmd } = shell.command(command, ctx.cwd)
   let job: BackgroundJobInfo
@@ -178,21 +168,17 @@ export async function startBackground(
       argv,
       env,
       cwd,
+      shell: shell.kind,
       gated,
       ...(gateLine !== undefined ? { gateLine } : {}),
       ...(viaCmd ? { viaCmd } : {}),
       logDir: join(session?.dir ?? join(tmpdir(), "amira"), "jobs"),
       ...(jobsConfig.maxLogBytes !== undefined ? { maxLogBytes: jobsConfig.maxLogBytes } : {}),
-      // A sub-agent's jobs end with it; the top-level session's run until stopped or Amira exits.
-      ...(session && session.depth > 0 ? { owner: session.sessionId } : {}),
       meta: { tool, shell: shell.path },
     })
   } catch (err) {
-    if (isTemporaryBackgroundJobLimitError(err)) {
-      const live = registry
-        .running()
-        .filter((j) => canSee(j, session))
-        .map((j) => `${j.id}: ${j.command}`)
+    if (registry.isLimitError(err)) {
+      const live = registry.running().map((j) => `${j.id}: ${j.command}`)
       return textResult(`${err.message}.${live.length ? `\nRunning: ${live.join("; ")}` : ""}`, true)
     }
     return textResult(`Failed to start ${shell.path}: ${(err as Error).message}`, true)
@@ -234,12 +220,11 @@ export async function startBackground(
 /** Finds a job the calling session may use, or the error result to return. */
 function lookup(jobId: unknown, ctx: ToolContext): BackgroundJobInfo | ToolResult {
   if (typeof jobId !== "string" || !jobId.trim()) return textResult("job_id is required", true)
-  const job = jobsConfig.registry.get(jobId.trim())
-  if (job && canSee(job, ctx.session)) return job
-  const ids = jobsConfig.registry
-    .list()
-    .filter((j) => canSee(j, ctx.session))
-    .map((j) => j.id)
+  const registry = ctx.backgroundJobs
+  if (!registry) return textResult("Background jobs are unavailable in this host.", true)
+  const job = registry.get(jobId.trim())
+  if (job) return job
+  const ids = registry.list().map((j) => j.id)
   return textResult(
     `No background job "${jobId}". ${ids.length ? `Known jobs: ${ids.join(", ")}.` : "No background jobs were started."}`,
     true,
@@ -272,9 +257,10 @@ const waitFrom = new Map<string, number>()
 /** Drops what the maps above keep about jobs the registry no longer keeps, once they grow. */
 function forgetGoneJobs() {
   if (waitFrom.size + emptyReads.size < 200) return
+  const { registry } = jobsConfig
   for (const map of [waitFrom, emptyReads]) {
     for (const key of [...map.keys()]) {
-      if (!jobsConfig.registry.get(key.slice(key.indexOf("\0") + 1))) map.delete(key)
+      if (!registry?.get(key.slice(key.indexOf("\0") + 1))) map.delete(key)
     }
   }
 }
@@ -317,7 +303,7 @@ export const jobOutputTool = defineTool<JobOutputParams>({
   async execute({ job_id, wait_for, timeout }, ctx) {
     const found = lookup(job_id, ctx)
     if (isResult(found)) return found
-    const { registry } = jobsConfig
+    const registry = ctx.backgroundJobs!
     const reader = readerOf(ctx)
     const pattern = typeof wait_for === "string" && wait_for !== "" ? waitPattern(wait_for) : undefined
     const waitMs =
@@ -390,7 +376,7 @@ export const jobStopTool = defineTool<JobStopParams>({
   async execute({ job_id }, ctx) {
     const found = lookup(job_id, ctx)
     if (isResult(found)) return found
-    const { registry } = jobsConfig
+    const registry = ctx.backgroundJobs!
     const wasLive = found.status === "running" || found.status === "starting"
     const job = await watch(found.id, () => registry.stop(found.id, STOP_GRACE_MS))
     const out = registry.readNew(found.id, readerOf(ctx), STARTUP_OUTPUT_CHARS)
@@ -421,8 +407,9 @@ export const jobListTool = defineTool<Record<string, never>>({
   parameters: { type: "object", properties: {}, additionalProperties: false },
   concurrency: "parallel",
   async execute(_params, ctx) {
-    const { registry } = jobsConfig
-    const jobs = registry.list().filter((j) => canSee(j, ctx.session))
+    const registry = ctx.backgroundJobs
+    if (!registry) return textResult("Background jobs are unavailable in this host.", true)
+    const jobs = registry.list()
     if (!jobs.length) return textResult("No background jobs.")
     const reader = readerOf(ctx)
     const now = Date.now()
