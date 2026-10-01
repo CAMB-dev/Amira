@@ -122,7 +122,14 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
   for (const name of readdirSync(dir).filter((n) => n.endsWith(".jsonl"))) {
     const other = path.join(dir, name)
     if (other === file) continue
-    for (const shared of owned(other)) files.delete(shared)
+    let shared: Set<string>
+    try {
+      shared = owned(other)
+    } catch {
+      // A damaged or foreign file elsewhere is no reason to refuse; it shares nothing readable.
+      continue
+    }
+    for (const name of shared) files.delete(name)
   }
   // Attachments are inline in message entries; there are no separate attachment files.
   for (const name of [...files].reverse()) {

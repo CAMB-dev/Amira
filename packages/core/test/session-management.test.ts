@@ -159,3 +159,16 @@ test("delete refuses a symlinked child directory before removing anything", () =
   expect(existsSync(s.file)).toBe(true)
   expect(existsSync(child.file)).toBe(true)
 })
+
+test("a damaged or unsafe unrelated session does not block deleting another", () => {
+  const dir = tmp()
+  const s = SessionStore.create({ cwd: "/project", dir })
+  s.appendMessage(userMessage("to delete"))
+  const bad = SessionStore.create({ cwd: "/project", dir })
+  bad.appendMessage(userMessage("other"))
+  bad.append({ type: "subagent", childSessionId: "../../outside", role: "explorer" })
+  writeFileSync(path.join(dir, "junk.jsonl"), "not json\n")
+  deleteSession("/project", s.id, undefined, dir)
+  expect(existsSync(s.file)).toBe(false)
+  expect(existsSync(bad.file)).toBe(true)
+})
