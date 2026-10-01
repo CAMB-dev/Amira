@@ -219,7 +219,9 @@ test("print mode stops waiting for background results on Ctrl+C", async () => {
   agent.tools.register(laterTool(-1), "test")
   const io = capture()
   const p = runPrint(agent, "go", false, { io, forceExit: () => {} })
-  await Bun.sleep(80)
+  // Ctrl+C once the turn is over and print mode is only waiting for the background result.
+  const deadline = performance.now() + 3000
+  while ((agent.busy || io.out !== "started it\n") && performance.now() < deadline) await Bun.sleep(5)
   expect(agent.expectedNotices).toBe(1)
   process.emit("SIGINT")
   expect(await p).toBe(130)

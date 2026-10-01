@@ -1,8 +1,13 @@
 import { expect, test } from "bun:test"
 import { fitImage } from "../src/images/fit.ts"
 import { inlineImage, kittyChunks, validPayload } from "../src/images/sequence.ts"
-import { ImageStore } from "../src/images/store.ts"
+import { ImageStore, type ScreenSource } from "../src/images/store.ts"
 import { fakePayload, fakeProvider } from "./fake-images.ts"
+
+/** Resolves once `s` is opened or failed; `onSettled` alone never fires for one already settled. */
+function settled(s: ScreenSource): Promise<void> {
+  return new Promise((resolve) => (s.state === "loading" ? s.onSettled(resolve) : resolve()))
+}
 
 test("fitting: never enlarged, aspect kept, rows counted in whole Sixel bands", () => {
   const cell = { width: 10, height: 20 }
@@ -126,7 +131,7 @@ test("the store: opened once per source, fitted here, encoded by the provider, f
   expect(p.opened).toEqual(["cat-40x60.png", "nothing.png"])
   // The full screen's: its size known once opened, each fitted size encoded when wanted.
   const s = store.screen({ url: "cat-40x60.png" })
-  await Bun.sleep(0)
+  await settled(s)
   expect(s.state).toBe("ready")
   const img = s.image(30, 5)!
   expect(img.rows).toBe(3)
@@ -143,12 +148,12 @@ test("the store: opened once per source, fitted here, encoded by the provider, f
 })
 
 test("the store: what only ran out of time is not remembered, and is asked for again", async () => {
-  let delay = 80
+  const opening = Promise.withResolvers<void>()
   const p = fakeProvider()
   const slow = {
     ...p,
     open: async (...a: Parameters<typeof p.open>) => {
-      await Bun.sleep(delay)
+      await opening.promise
       return p.open(...a)
     },
   }
@@ -158,12 +163,13 @@ test("the store: what only ran out of time is not remembered, and is asked for a
     cwd: "/work",
     maxRows: () => 5,
     timeoutMs: 30,
-    openLimitMs: 200,
   })
   // Its turn came late: alt text this time, the image when asked again.
   expect(await store.load("cat-40x60.png", 30)).toBeUndefined()
-  await Bun.sleep(100)
-  delay = 0
+  const source = store.screen({ url: "cat-40x60.png" })
+  const opened = settled(source)
+  opening.resolve()
+  await opened
   expect(await store.load("cat-40x60.png", 30)).toMatchObject({ cols: 4, rows: 3 })
   // A provider that never answers is given up on (its signal aborts); the full screen asks again later.
   let signal: AbortSignal | undefined
@@ -178,12 +184,7 @@ test("the store: what only ran out of time is not remembered, and is asked for a
     openLimitMs: 40,
   })
   const s = hanging.screen({ url: "x-10x10.png" })
-  let settled = false
-  s.onSettled(() => {
-    settled = true
-  })
-  await Bun.sleep(80)
-  expect(settled).toBe(true)
+  await settled(s)
   expect(s.state).toBe("failed")
   expect(signal?.aborted).toBe(true)
   expect(hanging.screen({ url: "x-10x10.png" })).not.toBe(s)
@@ -202,7 +203,7 @@ test("the store: a provider that answers with something that is not a payload dr
   })
   expect(await store.load("x.png", 30)).toBeUndefined()
   const img = store.screen({ url: "x.png" })
-  await Bun.sleep(0)
+  await settled(img)
   const image = img.image(30, 5)!
   await new Promise<void>((r) => image.whenReady(r))
   expect(image.broken).toBe(true)

@@ -40,11 +40,18 @@ test("a dead holder's lock or one not touched for staleMs is taken over; a live 
 test("a holder's heartbeat keeps its lock fresh; waiting gives up after waitMs", async () => {
   const file = path.join(dir, "x.lock")
   const held = tryFileLock(file, 60_000, 20)!
-  utimesSync(file, new Date(0), new Date(0))
-  await Bun.sleep(80)
-  expect(Date.now() - statSync(file).mtimeMs).toBeLessThan(10_000)
-  const err = await waitFileLock(file, { staleMs: 60_000, waitMs: 150, pollMs: 20 }).catch((e) => e)
-  expect(err).toBeInstanceOf(LockBusyError)
-  held.release()
+  try {
+    utimesSync(file, new Date(0), new Date(0))
+    const deadline = performance.now() + 3000
+    while (statSync(file).mtimeMs === 0) {
+      if (performance.now() > deadline) throw new Error("timed out waiting for the lock heartbeat")
+      await Bun.sleep(5)
+    }
+    expect(Date.now() - statSync(file).mtimeMs).toBeLessThan(10_000)
+    const err = await waitFileLock(file, { staleMs: 60_000, waitMs: 150, pollMs: 20 }).catch((e) => e)
+    expect(err).toBeInstanceOf(LockBusyError)
+  } finally {
+    held.release()
+  }
   ;(await waitFileLock(file, { staleMs: 60_000, waitMs: 150 })).release()
 })

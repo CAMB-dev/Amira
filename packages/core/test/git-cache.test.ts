@@ -227,8 +227,10 @@ test("a subdirectory is checked out byte for byte: CRLF, binary, nested; links b
       "GIT_CONFIG_VALUE_0",
       "GIT_CONFIG_KEY_1",
       "GIT_CONFIG_VALUE_1",
-    ])
+    ]) {
       if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
   }
   const installed = path.join(user().dir, "alpha")
   const got = files(installed)
@@ -324,14 +326,22 @@ test("two amira processes share the cache: the second waits for the lock and dow
   const held = tryFileLock(lockFile, 60_000)!
   const phases: string[] = []
   const first = new GitCache(cacheDir)
-  const install = installPackage(
-    "alpha",
-    opts({ index, gitCache: first, onProgress: (p: InstallProgress) => phases.push(p.phase) }),
-  )
-  await Bun.sleep(600)
+  try {
+    await installPackage(
+      "alpha",
+      opts({
+        index,
+        gitCache: first,
+        onProgress: (p: InstallProgress) => {
+          phases.push(p.phase)
+          if (p.phase === "waiting") held.release()
+        },
+      }),
+    )
+  } finally {
+    held.release()
+  }
   expect(phases).toContain("waiting")
-  held.release()
-  await install
   // Concurrent installs from separate caches (separate processes): one clone between them.
   rmSync(cacheDir, { recursive: true, force: true })
   const a = new GitCache(cacheDir)
