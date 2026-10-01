@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import path from "node:path"
 import {
   type Ai,
@@ -549,6 +549,10 @@ export class AgentTree {
       model,
       cwd,
       providerSettings: parent.providerSettings,
+      fileRewindSettings: parent.fileRewindSettings,
+      // A child whose directory overlaps the parent's writes the same files: one journal, one
+      // restore. Worktrees live elsewhere and keep their own until their merge is captured.
+      ...(overlaps(cwd, parent.cwd) ? { fileRewind: parent.fileRewind } : {}),
       sections: setSection(base, "role", opts.systemPrompt ?? ""),
       messages: context === "fork" ? forkHistory(parent.messages) : [],
       // A forked history may hold a server checkpoint only the parent's model reads; a child on
@@ -1281,4 +1285,21 @@ function metaOf(agent: Agent): EmitMeta {
   if (agent.parentSessionId) meta.parentSessionId = agent.parentSessionId
   if (agent.turnId) meta.turnId = agent.turnId
   return meta
+}
+
+/** One directory contains the other (or they are the same), by real path. */
+function overlaps(a: string, b: string): boolean {
+  const key = (p: string) => {
+    let real = path.resolve(p)
+    try {
+      // A junction or link alias of the parent's directory is still the same files.
+      real = realpathSync.native(real)
+    } catch {}
+    return process.platform === "win32" ? real.toLowerCase() : real
+  }
+  const inside = (child: string, root: string) => {
+    const rel = path.relative(key(root), key(child))
+    return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
+  }
+  return inside(a, b) || inside(b, a)
 }

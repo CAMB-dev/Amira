@@ -9,6 +9,7 @@ import type {
 } from "@amira/ai"
 import type { CompactionUsage } from "./events.ts"
 import type { ExtensionAdmin } from "./extensions-admin.ts"
+import type { FileRewindPlan, RewindOptions } from "./file-rewind.ts"
 import type { ProviderAdmin } from "./providers.ts"
 import type { CommandRule, PermissionMode, ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
@@ -369,8 +370,15 @@ export interface SessionControl {
    * Frontends show the shortened conversation as they show a resumed one. Throws while a turn
    * runs, for an index that is not a user message, and for a message a compaction has since
    * summarized. Unset where the host keeps no session file.
+   * Captured file-tool changes are restored by default; any conflict leaves the conversation
+   * unchanged. Pass restoreFiles: false for conversation only. An extension owner replaces
+   * core file restoration. An interrupted restore must finish before changing modes.
    */
-  readonly rewind?: (index: number) => Promise<void>
+  readonly rewind?: (index: number, options?: RewindOptions) => Promise<void>
+  /** Read-only preview; rewind rechecks it before touching files. */
+  readonly planRewind?: (index: number) => FileRewindPlan
+  /** Explicitly discards this session's captured file history, freeing its quota. */
+  readonly pruneFileHistory?: () => { files: number; bytes: number }
   /** This session's saved tool outputs (artifacts) and /prune; unset where the host keeps none. */
   readonly artifacts?: ArtifactControl
   /** Summarizes older history now; `instructions` steer the summary. Resolves false when nothing was compacted. */

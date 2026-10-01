@@ -172,6 +172,7 @@ amira
 | `settings`、`cwd`、`home`、`apiVersion` | 读取合并后的设置、工作目录、用户目录和 API 版本 |
 | `runCommand`、`openPipe`、`onExit` | 运行受管理的子进程、启动长期管道进程，或注册短时退出工作 |
 | `notify`、`reportError` | 显示提示或报告后台错误 |
+| `registerFileRestoration` | 接管回退时的文件恢复（例如 checkpoints 扩展）：选择器显示你提供的选项，core 不再恢复文件；同一时间只能有一个扩展接管，卸载时释放 |
 
 扩展设置放在 `extensions` 中，以扩展名为键。设置快照被冻结，扩展应自行校验自己的字段。Print 模式会取消 UI 对话框，RPC 客户端通过协议回答。Panel、视图、工具展示器、Markdown 渲染器、图片 provider 和服务 API 目前属于实验功能。
 

@@ -6,6 +6,7 @@ import {
   API_VERSION,
   type Extension,
   type ExtensionAPI,
+  type FileRestorationOwner,
   type NoticeLevel,
   type RunCommandOptions,
   type RunCommandResult,
@@ -75,6 +76,7 @@ export interface ExtensionHostOptions {
  * rolled back completely and a loaded extension can be unloaded.
  */
 export class ExtensionHost {
+  fileRestoration: (FileRestorationOwner & { source: string }) | undefined
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
   #exitHandlers = new Set<{ source: string; run: (signal: AbortSignal) => void | Promise<void> }>()
@@ -309,6 +311,15 @@ export class ExtensionHost {
         return track(() => void this.#exitHandlers.delete(entry))
       },
       registerTool: (tool) => track(tools.register(tool, source)),
+      registerFileRestoration: (owner) => {
+        if (this.fileRestoration)
+          throw new Error(`File restoration is already owned by ${this.fileRestoration.source}`)
+        const claim = { ...owner, source }
+        this.fileRestoration = claim
+        return track(() => {
+          if (this.fileRestoration === claim) this.fileRestoration = undefined
+        })
+      },
       // A taken name skips only this command, not the whole extension.
       registerCommand: (command) => {
         try {
