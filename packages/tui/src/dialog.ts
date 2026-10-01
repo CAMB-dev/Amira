@@ -1,5 +1,5 @@
 import { type AskAnswer, type ConfirmAnswer, type EventMap, type SelectChoice, sectionOf } from "@amira/api"
-import { rankMatches } from "@amira/core"
+import { rankMatches, sessionSnippet } from "@amira/core"
 import {
   type Component,
   Editor,
@@ -103,6 +103,7 @@ export class Dialog implements Component {
   #pages: Page[]
   #page = 0
   #filter = ""
+  #searchTexts: string[] = []
   #editor: Editor | undefined
   /** A secret input: masked, one line, never shown. */
   #secret: LineInput | undefined
@@ -116,6 +117,7 @@ export class Dialog implements Component {
     private keys: Keybindings = defaultKeybindings(),
   ) {
     this.#pages = pagesOf(request)
+    if (request.kind === "select") this.#searchTexts = request.searchTexts?.map((s) => s.toLowerCase()) ?? []
     if (request.kind === "input" && request.secret) {
       this.#secret = new LineInput({ mask: "*", accept: (g) => !/\s/.test(g) })
     } else if (request.kind === "input") {
@@ -185,17 +187,16 @@ export class Dialog implements Component {
     } else if (
       r.kind === "select" &&
       e.type === "key" &&
-      e.text &&
-      !e.ctrl &&
+      (r.searchTexts ? e.ctrl : !e.ctrl) &&
       !e.alt &&
-      !this.#filter &&
-      this.#isSectionKey(e.text)
+      (!this.#filter || (!!r.searchTexts && e.ctrl)) &&
+      this.#isSectionKey(e.text ?? e.name)
     ) {
       // A section's key answers on the selected option; where it does nothing it is not typed
       // either. Once a filter is being typed, the key is part of it.
       const c = choices[page.selected]
-      if (c && this.#sectionKeys(c).some((k) => k.key === e.text))
-        return this.#finish({ option: c.label, key: e.text })
+      if (c && this.#sectionKeys(c).some((k) => k.key === (e.text ?? e.name)))
+        return this.#finish({ option: c.label, key: e.text ?? e.name })
     } else if (r.kind === "select" && e.type === "key" && e.name === "backspace" && this.#filter) {
       this.#setFilter(this.#filter.slice(0, -1))
     } else if (r.kind === "select" && e.type === "key" && e.text && !e.ctrl && !e.alt) {
@@ -342,7 +343,9 @@ export class Dialog implements Component {
     const described = items.filter((it) => it.description && !it.c.other)
     const column = Math.max(0, ...described.map((it) => visibleWidth(it.lead) + visibleWidth(it.typed)))
     const inline =
-      fit.inlineDescriptions || described.every((it) => column + 2 + visibleWidth(it.description) <= width)
+      fit.inlineDescriptions ||
+      (!(this.request.kind === "select" && this.request.searchTexts) &&
+        described.every((it) => column + 2 + visibleWidth(it.description) <= width))
     const rows: string[] = []
     for (const { c, selected, lead, typed, description } of items) {
       const heading = this.#heading(c)
@@ -414,8 +417,8 @@ export class Dialog implements Component {
       answerKeys && { text: answerKeys, priority: 1 },
       !picking && this.#hint("dialog.choose", choose, 5),
       // Typed into a filter, the keys are part of it.
-      ...(this.#filter ? [] : (section?.keys ?? [])).map((k) => ({
-        text: `${k.key} ${k.label}`,
+      ...(this.#filter && !(r.kind === "select" && r.searchTexts) ? [] : (section?.keys ?? [])).map((k) => ({
+        text: `${r.kind === "select" && r.searchTexts ? `Ctrl+${k.key}` : k.key} ${k.label}`,
         priority: 4,
       })),
       this.#hint("dialog.cancel", cancel, 3),
@@ -460,7 +463,16 @@ export class Dialog implements Component {
   #choices(): Choice[] {
     const r = this.request
     const choices = this.#current?.choices ?? []
-    return r.kind === "select" && this.#filter ? rankMatches(this.#filter, choices, (c) => c.label) : choices
+    if (r.kind !== "select" || !this.#filter) return choices
+    if (!r.searchTexts) return rankMatches(this.#filter, choices, (c) => c.label)
+    const query = this.#filter.toLowerCase()
+    return choices.flatMap((c) => {
+      const text = r.searchTexts![c.index ?? 0] ?? ""
+      const snippet = sessionSnippet(text, this.#filter, 45, this.#searchTexts[c.index ?? 0])
+      return c.label.toLowerCase().includes(query) || snippet !== undefined
+        ? [{ ...c, description: snippet ?? c.description }]
+        : []
+    })
   }
 
   /**
@@ -469,7 +481,13 @@ export class Dialog implements Component {
    */
   get #digits(): boolean {
     const r = this.request
-    return r.kind !== "confirm" && r.kind !== "input" && this.#choices().length <= 9 && !this.#filter
+    return (
+      r.kind !== "confirm" &&
+      r.kind !== "input" &&
+      !(r.kind === "select" && r.searchTexts) &&
+      this.#choices().length <= 9 &&
+      !this.#filter
+    )
   }
 
   #choose(i: number): true {

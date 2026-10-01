@@ -62,7 +62,7 @@ const oneLine = (s: string, max = 60) => clip(s.replace(/\s+/g, " ").trim(), max
 
 /** How a stored session reads in a picker: "<id>  3m ago  12 msgs  first words". */
 export function sessionLabel(s: StoredSessionInfo, now = Date.now()): string {
-  return `${s.id}  ${ago(s.updatedAt, now)}  ${s.messageCount} msgs  ${oneLine(s.firstUserText || "(empty)", 50)}`
+  return `${s.id}  ${ago(s.updatedAt, now)}  ${s.messageCount} msgs  ${oneLine(s.title || s.firstUserText || "(empty)", 50)}`
 }
 
 /** The first word of a picker label, which is the id it stands for. */
@@ -266,8 +266,11 @@ export default defineExtension((api: ExtensionAPI) => {
       const compaction = compacted.length ? compacted.reduce((n, c) => n + (c.usage.cost ?? 0), 0) : undefined
       const priced = rows.filter((r) => r.cost !== undefined)
       const replies = priced.length ? priced.reduce((n, r) => n + (r.cost ?? 0), 0) : undefined
+      const side = (ctx.session.sideRequests?.() ?? []).reduce((n, c) => n + (c.usage.cost ?? 0), 0)
       const own =
-        replies !== undefined || compaction !== undefined ? (replies ?? 0) + (compaction ?? 0) : undefined
+        replies !== undefined || compaction !== undefined || side
+          ? (replies ?? 0) + (compaction ?? 0) + side
+          : undefined
       const subs = ctx.session.subagents().filter((s) => s.usage.cost !== undefined)
       const withSubs = subs.length
         ? (own ?? 0) + subs.reduce((n, s) => n + (s.usage.cost ?? 0), 0)
@@ -304,6 +307,7 @@ export default defineExtension((api: ExtensionAPI) => {
               : info.model.provider || "(none; add one with /provider add, pick a model with /model)",
           ],
           ["Session", `${info.id}${info.busy ? " (turn running)" : ""}`],
+          ...(info.title ? [["Title", info.title]] : []),
           ...(info.file ? [["Session file", info.file]] : []),
           ["Context", info.model.provider ? context : "no model yet"],
           ...(info.model.provider
@@ -337,6 +341,27 @@ export default defineExtension((api: ExtensionAPI) => {
   })
 
   add({
+    name: "rename",
+    description: "Name the current session",
+    args: { hint: "<title>" },
+    run(args, ctx) {
+      if (!ctx.session.rename) throw new Error("this host cannot rename sessions")
+      ctx.session.rename(args)
+      ctx.print(`Renamed session to ${ctx.session.info().title}.`)
+    },
+  })
+
+  add({
+    name: "fork",
+    description: "Continue this conversation in a new session",
+    async run(_args, ctx) {
+      if (!ctx.session.fork) throw new Error("this host cannot fork sessions")
+      await ctx.session.fork()
+      ctx.print(`Forked into session ${ctx.session.info().id}.`)
+    },
+  })
+
+  add({
     name: "resume",
     aliases: ["continue"],
     description: "Switch to another session of this directory",
@@ -345,12 +370,12 @@ export default defineExtension((api: ExtensionAPI) => {
       complete: (_prefix, ctx) =>
         ctx.session.sessions().map((s) => ({
           value: s.id,
-          description: `${ago(s.updatedAt)} · ${oneLine(s.firstUserText || "(empty)", 40)}`,
+          description: `${ago(s.updatedAt)} · ${oneLine(s.title || s.firstUserText || "(empty)", 40)}`,
         })),
     },
     async run(args, ctx) {
       let id = args
-      if (!id) {
+      while (!id) {
         const current = ctx.session.info().id
         const sessions = ctx.session.sessions().filter((s) => s.id !== current)
         if (!sessions.length) {
@@ -358,10 +383,21 @@ export default defineExtension((api: ExtensionAPI) => {
           return
         }
         const now = Date.now()
-        const picked = await ctx.ui.select(
+        const picked = await ctx.ui.choose(
           "Resume which session?",
-          sessions.slice(0, 50).map((s) => sessionLabel(s, now)),
-          { signal: ctx.signal },
+          sessions.map((s) => sessionLabel(s, now)),
+          {
+            signal: ctx.signal,
+            sections: [
+              {
+                at: 0,
+                choose: "resume",
+                keys: ctx.session.deleteSession ? [{ key: "d", label: "delete" }] : [],
+              },
+            ],
+            descriptions: sessions.map((s) => oneLine(s.firstUserText, 100)),
+            searchTexts: sessions.map((s) => s.searchText ?? s.firstUserText),
+          },
         )
         if (!picked) {
           ctx.print(
@@ -372,7 +408,15 @@ export default defineExtension((api: ExtensionAPI) => {
           )
           return
         }
-        id = idOf(picked)
+        const chosen = idOf(picked.option)
+        if (picked.key === "d") {
+          if (await ctx.ui.confirm("Delete this session?", picked.option, { signal: ctx.signal })) {
+            await ctx.session.deleteSession!(chosen)
+            ctx.print(`Deleted session ${chosen}.`)
+          }
+          continue
+        }
+        id = chosen
       }
       await ctx.session.resume(id)
       ctx.print(`Resumed session ${id} (${ctx.session.messages().length} messages).`)
@@ -446,7 +490,13 @@ export default defineExtension((api: ExtensionAPI) => {
     aliases: ["usage"],
     description: "Show this session's cost by model",
     run(_args, ctx) {
-      ctx.print(costReport(ctx.session.replies(), ctx.session.compactions?.() ?? []))
+      ctx.print(
+        costReport(
+          ctx.session.replies(),
+          ctx.session.compactions?.() ?? [],
+          ctx.session.sideRequests?.() ?? [],
+        ),
+      )
     },
   })
 

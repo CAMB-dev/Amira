@@ -243,6 +243,24 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         uiRequests: ui.pending,
       }
     },
+    "session.rename": (p) => {
+      const rename = needCommands().control.rename
+      if (!rename) throw new RpcError("not_supported", "this host cannot rename sessions")
+      const title = text(p, "title")
+      if (!title.trim()) throw new RpcError("invalid_params", "title must not be empty")
+      rename(title)
+      return { sessionId: agent.sessionId, title: agent.session?.title }
+    },
+    "session.fork": async (p) => {
+      if (agent.busy) throw new RpcError("busy", `${running()} is running`)
+      const fork = needCommands().control.fork
+      if (!fork) throw new RpcError("not_supported", "this host cannot fork sessions")
+      const index = p.index
+      if (index !== undefined && (typeof index !== "number" || !Number.isInteger(index) || index < 0))
+        throw new RpcError("invalid_params", "index must be a non-negative integer")
+      await fork(index as number | undefined)
+      return { sessionId: agent.sessionId }
+    },
     "session.resume": async (p) => {
       const sessionId = text(p, "sessionId")
       if (agent.busy) throw new RpcError("busy", `${running()} is running`)

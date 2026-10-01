@@ -84,6 +84,14 @@ export const COMMAND_PARAMS = {
     params: { model: str },
   },
   state: { description: "A snapshot to resync from, e.g. after events.lost.", params: {} },
+  "session.rename": {
+    description: "Names the current session; overrides its automatic title.",
+    params: { title: str },
+  },
+  "session.fork": {
+    description: "Forks into a new session, optionally before the user message at index.",
+    params: { "index?": { type: "integer", minimum: 0 } },
+  },
   "session.resume": {
     description:
       "Switches to a stored session of this directory (its id from session.start or `amira -r`), keeping the current model; a session.start with reason resume follows. Fails with `not_found` for an unknown id and `busy` while a turn or a /compact runs.",
@@ -145,6 +153,8 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
     uiRequests: { ...arrayOf(ref("UiRequest")), description: "Dialogs still waiting for ui.respond." },
   },
   "session.resume": { sessionId: str },
+  "session.rename": { sessionId: str, title: str },
+  "session.fork": { sessionId: str },
   "command.list": {
     commands: arrayOf(
       obj({
@@ -248,6 +258,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     "isWorktree?": bool,
     "dirty?": bool,
   }),
+  "session.title": obj({ title: str }),
   "session.end": obj({ reason: strings("exit", "error") }),
   "status.changed": obj({
     status: strings("idle", "working", "blocked", "error"),
@@ -587,6 +598,11 @@ export function rpcSchema(): Schema {
           "descriptions?": {
             ...arrayOf(str),
             description: 'Muted text shown with the option of the same index ("" for none).',
+          },
+          "searchTexts?": {
+            ...arrayOf(str),
+            description:
+              "Conversation text searched as case-insensitive substrings; matching snippets appear under options. Section keys use Ctrl while searching.",
           },
         }),
         obj({

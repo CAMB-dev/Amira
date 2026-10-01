@@ -113,7 +113,7 @@ function fakeControl(over: Partial<SessionControl> = {}) {
 
 async function setup(
   over: Partial<SessionControl> = {},
-  answers: (string | undefined)[] = [],
+  answers: (string | boolean | { option: string; key?: string } | undefined)[] = [],
   aliases?: Record<string, string>,
 ) {
   const bus = new EventBus()
@@ -161,11 +161,13 @@ test("every built-in command is registered with a description", async () => {
     "context",
     "cost",
     "ext",
+    "fork",
     "help",
     "model",
     "provider",
     "quit",
     "reload",
+    "rename",
     "resume",
     "shell",
     "status",
@@ -488,6 +490,66 @@ test("/resume with a picked session resumes its id", async () => {
   const { run, calls } = await setup({}, ["old  3h ago  8 msgs  fix the build"])
   await run("/resume")
   expect(calls).toEqual(["resume old"])
+})
+
+for (const confirmed of [true, false]) {
+  test(`/resume confirms deletion (${confirmed}) and never offers the current session`, async () => {
+    const now = Date.now()
+    const old = {
+      id: "old",
+      updatedAt: now,
+      title: "Database repair",
+      firstUserText: "hello",
+      searchText: "later assistant: 数据库连接",
+      messageCount: 4,
+    }
+    let stored = [old, { ...old, id: "s1", title: "Current session" }]
+    const removed: string[] = []
+    const { run, asked, bus } = await setup(
+      {
+        sessions: () => stored,
+        deleteSession: async (id) => {
+          removed.push(id)
+          stored = stored.filter((s) => s.id !== id)
+        },
+      },
+      [{ option: sessionLabel(old, now), key: "d" }, confirmed, undefined],
+    )
+    const requests: any[] = []
+    bus.subscribe(
+      (e) => {
+        if (e.type === "ui.request") requests.push(e.data)
+      },
+      { types: ["ui.request"] },
+    )
+    expect((await run("/resume")).ok).toBe(true)
+    expect(asked[0]).not.toContain("Current session")
+    expect(asked[1]).toBe("Delete this session?")
+    expect(removed).toEqual(confirmed ? ["old"] : [])
+    expect(requests[0].searchTexts).toEqual([old.searchText])
+    expect(requests[0].sections[0].keys).toEqual([{ key: "d", label: "delete" }])
+  })
+}
+
+test("/resume offers every session, including content beyond the old 50-session limit", async () => {
+  const sessions = Array.from({ length: 110 }, (_, i) => ({
+    id: `s_${i}`,
+    updatedAt: Date.now(),
+    title: `Topic ${i}`,
+    firstUserText: "hi",
+    searchText: `later answer ${i}`,
+    messageCount: 2,
+  }))
+  const { run, bus } = await setup({ sessions: () => sessions })
+  let options = 0
+  bus.subscribe(
+    (e) => {
+      if (e.type === "ui.request" && e.data.kind === "select") options = e.data.options.length
+    },
+    { types: ["ui.request"] },
+  )
+  await run("/resume")
+  expect(options).toBe(110)
 })
 
 test("/compact passes its instructions; the compact events report the outcome", async () => {

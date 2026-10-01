@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { AskQuestion } from "@amira/api"
-import { CURSOR_MARKER, defaultTheme, key, stripAnsi, textKey } from "@amira/tui-kit"
+import { CURSOR_MARKER, defaultTheme, key, stripAnsi, textKey, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { Dialog, type DialogAnswer, type DialogRequest, dialogEchoLines } from "../src/dialog.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
@@ -21,6 +21,49 @@ function open(request: DialogRequest, keys?: Keybindings) {
 }
 
 const select = (options: string[]) => open({ kind: "select", requestId: "r1", title: "Model", options })
+
+for (const width of [120, 60]) {
+  test(`session picker searches content and CJK, shows snippets below rows and deletes the filtered selection at ${width} columns`, () => {
+    const { dialog, type, rows, answers } = open({
+      kind: "select",
+      requestId: "sessions",
+      title: "Resume which session?",
+      options: ["s_a Old session", "s_b Database repair"],
+      descriptions: ["first prompt", "unrelated prompt"],
+      searchTexts: ["other text", "Assistant answer: 数据库连接 NEEDLE"],
+      sections: [{ at: 0, choose: "resume", keys: [{ key: "d", label: "delete" }] }],
+    })
+    type("数据库")
+    const rendered = rows(width)
+    expect(rendered.join("\n")).toContain("s_b Database repair")
+    expect(rendered.join("\n")).not.toContain("s_a")
+    const row = rendered.findIndex((s) => s.includes("s_b"))
+    expect(rendered[row + 1]).toContain("数据库连接")
+    expect(rendered.every((s) => visibleWidth(s) <= width)).toBe(true)
+    expect(rendered.join("\n")).toContain("Ctrl+d delete")
+    dialog.handleInput(key("d", { ctrl: true }))
+    expect(answers).toEqual([{ option: "s_b Database repair", key: "d" }])
+  })
+}
+
+test("session search uses substrings rather than fuzzy matching and ordinary d remains filter text", () => {
+  const { type, rows, answers, dialog } = open({
+    kind: "select",
+    requestId: "r",
+    title: "Sessions",
+    options: ["s_1 Database"],
+    searchTexts: ["MixedCase content"],
+    sections: [{ at: 0, keys: [{ key: "d", label: "delete" }] }],
+  })
+  type("d")
+  expect(answers).toEqual([])
+  type("b")
+  expect(rows().join("\n")).toContain("no match")
+  dialog.handleInput(key("backspace"))
+  dialog.handleInput(key("backspace"))
+  type("mixedcase")
+  expect(rows().join("\n")).toContain("MixedCase content")
+})
 
 function review(lines: number, options = ["merge", "keep worktree", "discard"]) {
   const diff = Array.from({ length: lines }, (_, i) => `+line ${i + 1}`).join("\n")
