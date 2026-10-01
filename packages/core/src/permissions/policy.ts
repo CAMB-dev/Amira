@@ -52,7 +52,10 @@ export interface PermissionVerdict {
 /** Tools that change files; checked for plan mode and protected paths. */
 export const FILE_TOOLS = new Set(["write", "edit", "apply_patch"])
 
-/** Tools plan mode lets run: they read, search, ask or start sub-agents (which inherit the mode). */
+/**
+ * Tools plan mode lets run: they read, search, ask, start sub-agents (which inherit the mode)
+ * or look at background jobs (stopping one still asks).
+ */
 export const READ_ONLY_TOOLS = new Set([
   "read",
   "grep",
@@ -65,6 +68,8 @@ export const READ_ONLY_TOOLS = new Set([
   "agent",
   "agent_result",
   "return_result",
+  "job_output",
+  "job_list",
 ])
 
 const ALLOW: PermissionVerdict = { decision: "allow", reason: "" }
