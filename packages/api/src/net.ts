@@ -70,13 +70,17 @@ export function installHostNet(service: HostNetService): void {
 }
 
 function requireHostNet(): HostNetService {
-  if (!hostNet) throw new Error("Amira's host network service has not been installed")
+  if (!hostNet) {
+    throw new Error(
+      "Amira's host network service has not been installed: the host installs it before loading extensions",
+    )
+  }
   return hostNet
 }
 
 function normalizedError(service: HostNetService, error: unknown): unknown {
   if (!service.isNetError(error)) return error
-  return new NetError(error instanceof Error ? error.message : String(error))
+  return new NetError(error instanceof Error ? error.message : String(error), { cause: error })
 }
 
 function callHost<T>(operation: (service: HostNetService) => T): T {
