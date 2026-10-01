@@ -83,6 +83,7 @@ test("image files are encoded with their name and MIME type; formats and size ar
 
 const result = (output = "", exitCode = 0): RunResult => ({
   output,
+  truncated: false,
   exitCode,
   signalCode: null,
   timedOut: false,

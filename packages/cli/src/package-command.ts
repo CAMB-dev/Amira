@@ -9,7 +9,7 @@ import {
   projectScopeIsUser,
   projectTrust,
 } from "@amira/core"
-import { runCommand } from "@amira/proc"
+import { DEFAULT_MAX_OUTPUT_CHARS, runCommand } from "@amira/proc"
 import type { PrintIO } from "./print.ts"
 
 /** Commands built into the CLI; a package cannot take these names. */
@@ -55,7 +55,8 @@ export async function runPackageCommand(
     cwd: where.cwd,
     home: where.home ?? amiraHome(),
     amiraArgv: amiraArgv(),
-    runCommand: (a, o) => runCommand(a, o),
+    runCommand: (a, o) =>
+      runCommand(a, { ...o, maxOutputChars: o.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS }),
     stdin: Bun.stdin.stream(),
     stdout: io.stdout,
     stderr: io.stderr,

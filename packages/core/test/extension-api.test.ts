@@ -145,6 +145,38 @@ test("runCommand streams output while the command runs, and an abort stops it", 
   expect(performance.now() - started).toBeLessThan(20_000)
 })
 
+test("runCommand caps output at 1,000,000 characters by default, keeping the end", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let api: ExtensionAPI | undefined
+  await host.load((a) => {
+    api = a
+  }, "ext:cap")
+  const opts = { cwd: process.cwd(), timeoutMs: 20_000, signal: new AbortController().signal }
+  let streamed = 0
+  const r = await api!.runCommand(
+    [process.execPath, "-e", "process.stdout.write('x'.repeat(1_000_000) + 'END')"],
+    {
+      ...opts,
+      onChunk: (c) => {
+        streamed += c.length
+      },
+    },
+  )
+  expect(r.output.length).toBe(1_000_000)
+  expect(r.output.endsWith("xEND")).toBe(true)
+  expect(r.truncated).toBe(true)
+  expect(streamed).toBe(1_000_003)
+  const small = await api!.runCommand([process.execPath, "-e", "process.stdout.write('x'.repeat(10))"], {
+    ...opts,
+    maxOutputChars: 4,
+  })
+  expect(small).toMatchObject({ output: "xxxx", truncated: true })
+})
+
 test("notify sends an extension.notice, info by default", async () => {
   const bus = new EventBus()
   const events: AnyEvent[] = []
