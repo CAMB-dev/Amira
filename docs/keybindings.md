@@ -54,8 +54,8 @@ from `terminal.integrated.commandsToSkipShell`.
 | `queue` | `alt+enter`, `ctrl+q` (Windows, except in VS Code: `ctrl+q` first) | While a turn runs, send the message after it (steer it with `tui.submitWhileWorking: "queue"`) |
 | `submit.steer` | none | Send the message; while a turn runs, always steer it |
 | `submit.queue` | none | Send the message; while a turn runs, always send it after the turn |
-| `interrupt` | `escape` | Stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. Files are not restored |
-| `cancel` | `ctrl+c` | Stop the running turn (with steering or queued messages waiting, they go out as for `interrupt`), else clear the input, else quit |
+| `interrupt` | `escape` | Cancel a running command, preserving the input; otherwise stop the running turn. With steering or queued messages waiting, they go out at once, merged into one message in the order they were typed. Pressed twice in a row (also while idle), it opens the rewind picker: your messages, newest first; the one picked and everything after it are cut from the conversation, and it goes back into the input to change and send again. Files are not restored |
+| `cancel` | `ctrl+c` | Cancel a running command, preserving the input; otherwise stop the running turn (with steering or queued messages waiting, they go out as for `interrupt`), else clear the input, else quit |
 | `exit` | `ctrl+d` | Quit when the input is empty and nothing runs |
 | `redraw` | `ctrl+l` | Clear the screen and draw it again: the latest transcript and the input |
 | `history.prev` | `up` | Recall the previous prompt (from the input's first line) |
@@ -119,6 +119,13 @@ option of that section is selected; such a key answers on the selected option. I
 `/agents` list, Enter on a sub-agent opens the live viewer on it and `p` prints its transcript
 into the conversation instead; Enter on a worktree a sub-agent kept shows its diff, to merge,
 keep or discard it.
+
+In `/ext`, Enter manages an installed extension or installs one from the index; `d` shows
+details of the selected extension. Typing filters the list; once a filter has text, `d` is
+part of the filter. Install and update keep the input available and show a live progress
+panel. Outside a dialog or completion list, Esc (`interrupt`) or Ctrl+C (`cancel`) cancels
+the running command and preserves the draft; changes already completed stay installed.
+The hint uses the current keybindings. Changes take effect with `/reload` while idle.
 
 A confirmation (such as an approval) starts with nothing selected: Enter does nothing until
 an option is picked with the arrows, so keys typed into a message just as it shows up cannot

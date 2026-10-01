@@ -689,9 +689,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * The few keys that matter now, the most useful first to stay as the line narrows; the key
    * reference (the help key) lists the rest.
    */
+  /** The slash commands running now, each with the name of the command its line resolved to. */
+  const commandAborts = new Map<AbortController, string | undefined>()
+  /** The newest running command that was not cancelled yet; the interrupt key cancels it first. */
+  const cancellable = () => [...commandAborts].findLast(([c]) => !c.signal.aborted)
   function inputHint(): HintItems {
     const submitKey = keys.label("submit")
     const interruptKey = keys.label("interrupt")
+    // A /compact is a command too, but its hint below says "interrupt", as it always did.
+    if (cancellable() && !compacting)
+      return [
+        submitKey && { text: `${submitKey} ${working ? enterDoes : "send"}`, priority: 5 },
+        interruptKey && { text: `${interruptKey} cancel command`, priority: 4 },
+      ]
     if (working) {
       // Esc stops the turn; with messages waiting it sends them at once, merged.
       const waiting = queued.length > 0 || steering.length > 0
@@ -1318,11 +1328,29 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     })
   }
 
+  /**
+   * Cancels the newest running slash command (Esc or Ctrl+C, when no dialog has the key): its
+   * signal aborts, the input stays as it is. Only the command is stopped: a turn running
+   * alongside goes on, and so does a compaction, unless the command cancelled is /compact,
+   * whose compaction stops with it as before.
+   */
+  function cancelCommand(): boolean {
+    const operation = cancellable()
+    if (!operation) return false
+    const [abort, command] = operation
+    abort.abort(new Error("cancelled"))
+    if (command === "compact" && compacting) interrupt()
+    return true
+  }
+
   /** Runs at once, even during a turn; commands that need an idle session say so. */
   function runCommand(line: string) {
     view.commandEcho(line)
+    const abort = new AbortController()
+    commandAborts.set(abort, commands!.commandName(line))
     void commands!
-      .run(line, { frontend: "tui", quit: () => quit(), openView, keys: keyHelp })
+      .run(line, { frontend: "tui", quit: () => quit(), openView, keys: keyHelp, signal: abort.signal })
+      .finally(() => commandAborts.delete(abort))
       .then(() => view.requestRender())
   }
 
@@ -1538,6 +1566,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function quit(code = 0) {
     if (quitting) return
     quitting = true
+    for (const abort of commandAborts.keys()) abort.abort(new Error("quitting"))
     for (const f of forms.splice(0)) opts.ui?.cancel(f.requestId)
     form?.close()
     closeView()
@@ -1626,7 +1655,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (keys.is(e, "submit.queue")) {
       submitDraft("queue")
     } else if (keys.is(e, "cancel")) {
-      if (working) interrupt()
+      if (cancelCommand()) {
+        // A slash command runs alongside the turn; cancellation leaves the input intact.
+      } else if (working) interrupt()
       else if (!editor.isEmpty) editor.clear()
       else return quitOrWarn("cancel")
     } else if (keys.is(e, "exit") && !working && editor.isEmpty) {
@@ -1646,7 +1677,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // An editing key of the input (cut, paste back, undo, the external editor).
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too. Twice in a row: rewind.
-      pressInterrupt()
+      if (!cancelCommand()) pressInterrupt()
     } else {
       editor.handleInput(e)
     }

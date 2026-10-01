@@ -18,6 +18,7 @@
   "devDependencies": {
     "@amira/builtin-tools": "workspace:*",
     "@amira/ext-agent": "workspace:*",
+    "@amira/ext-commands": "workspace:*",
     "@amira/ext-status": "workspace:*"
   }
 }
