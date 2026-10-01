@@ -32,7 +32,25 @@ These commands accept multiple package names or sources. Update without names up
 
 Install copies a local directory into the package scope; it is not a live link. After editing the source directory, install it again. Git commits and npm versions are pinned exactly in `packages.lock`; update resolves the source again and writes new pins.
 
-Restart Amira or run `/reload` while idle to load package installs, updates, removals and enable/disable changes. `/help` lists the commands registered by loaded extensions. This version manages packages through the shell CLI above.
+Restart Amira or run `/reload` while idle to load package installs, updates, removals and enable/disable changes. `/help` lists the commands registered by loaded extensions.
+
+### Managing packages inside Amira
+
+`/ext` does the same work without leaving a session. On its own it opens a list of installed packages (with their scope, whether they are enabled or trusted, and whether the index has a newer version) followed by the packages available from the index. Enter on an installed package offers update, enable or disable, remove and details; Enter on an available one asks for user or project scope and installs it. `d` shows details. See [Keybindings](keybindings.md#dialogs) for the keys in the list.
+
+```text
+/ext
+/ext search lsp
+/ext install todo
+/ext install todo --project
+/ext update
+/ext disable todo
+/ext remove todo --project
+```
+
+`install`, `remove`, `disable` and `enable` take one name; `update` takes any number, or none for every package in the scope; `--project` selects the project scope for install, update and remove. The rules match the CLI: project installs still need the project to be trusted, and disable and enable apply to both scopes through user settings. Install and update show a progress panel while you keep typing. Esc or Ctrl+C cancels the running operation and keeps your draft; an install is all or nothing, and updates already finished are kept.
+
+`/ext` never reloads on its own. When it changes something it suggests `/reload`, or running it after the current turn. `/reload` refuses to run until an `/ext` operation ends. A package installed into an untrusted project is loaded once you trust the project at the next start or with `amira ext trust` and a restart. In print and RPC modes the subcommands work as quoted slash commands; the list needs the interactive UI.
 
 ## User scope, project scope and trust
 
