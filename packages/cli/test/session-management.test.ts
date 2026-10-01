@@ -235,8 +235,11 @@ test("resuming a session another process holds leaves the current session and it
   const { host, session, store } = await setup([])
   const busy = SessionStore.create({ cwd: store.header.cwd, dir: path.dirname(store.file) })
   busy.appendMessage(userMessage("held elsewhere"))
-  writeFileSync(sessionLockFile(busy.file), `${process.ppid}
-`)
+  writeFileSync(
+    sessionLockFile(busy.file),
+    `${process.ppid}
+`,
+  )
   const current = host.agent
   const job = current.backgroundJobs!.start({
     command: "long-running test job",
