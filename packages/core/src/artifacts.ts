@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto"
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { mkdir, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
+  type ArtifactGroupUsage,
   type ArtifactInfo,
   countLines,
   DEFAULT_PREVIEW_CHARS,
@@ -221,6 +222,41 @@ export interface ArtifactUsage {
   pruned: ArtifactInfo[]
   /** Bytes of the artifacts not pruned. */
   bytes: number
+  groups?: ArtifactGroupUsage[]
+}
+
+export interface SubagentSessionFile {
+  id: string
+  file: string
+  entries: object[]
+}
+
+/** Every readable sub-agent session file below a stored session, including nested children. */
+export function subagentSessionFiles(session: {
+  file: string
+  entries: readonly object[]
+}): SubagentSessionFile[] {
+  const out: SubagentSessionFile[] = []
+  const seen = new Set<string>([session.file])
+  const visit = (file: string, entries: readonly object[]) => {
+    for (const e of entries) {
+      const child = (e as { type?: unknown; childSessionId?: unknown }).childSessionId
+      if (
+        (e as { type?: unknown }).type !== "subagent" ||
+        typeof child !== "string" ||
+        !/^[\w-]+$/.test(child)
+      )
+        continue
+      const childFile = path.join(path.dirname(file), "subagents", `${child}.jsonl`)
+      if (seen.has(childFile) || !existsSync(childFile)) continue
+      seen.add(childFile)
+      const childEntries = readEntries(childFile)
+      out.push({ id: child, file: childFile, entries: childEntries })
+      visit(childFile, childEntries)
+    }
+  }
+  visit(session.file, session.entries)
+  return out
 }
 
 /**
@@ -229,24 +265,13 @@ export interface ArtifactUsage {
  */
 export function referencedArtifacts(session: { file: string; entries: readonly object[] }): Set<string> {
   const out = new Set<string>()
-  const seen = new Set<string>()
-  const scan = (file: string, entries: readonly object[]) => {
-    if (seen.has(file)) return
-    seen.add(file)
+  const add = (entries: readonly object[]) => {
     for (const e of entries) {
       for (const id of artifactIdsIn(JSON.stringify(e))) out.add(id)
-      const child = (e as { type?: unknown; childSessionId?: unknown }).childSessionId
-      if (
-        (e as { type?: unknown }).type === "subagent" &&
-        typeof child === "string" &&
-        /^[\w-]+$/.test(child)
-      ) {
-        const childFile = path.join(path.dirname(file), "subagents", `${child}.jsonl`)
-        scan(childFile, readEntries(childFile))
-      }
     }
   }
-  scan(session.file, session.entries)
+  add(session.entries)
+  for (const child of subagentSessionFiles(session)) add(child.entries)
   return out
 }
 

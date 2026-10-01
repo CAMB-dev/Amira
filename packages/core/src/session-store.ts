@@ -14,8 +14,40 @@ import type { Message, ModelRef, Signature, ToolResultMessage, Usage } from "@am
 import type { CompactionInfo, CompactionReason } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import type { ContextView, StoredView } from "./context.ts"
+import { type FileLock, tryFileLock } from "./file-lock.ts"
 import type { FileJournalEntry } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
+
+/** A live session refreshes this lease; a dead process is safe to replace immediately. */
+export const SESSION_LOCK_STALE_MS = 30_000
+export const SESSION_LOCK_HEARTBEAT_MS = 10_000
+
+const sessionLocks = new Map<string, FileLock>()
+let releaseOnExit = false
+
+/** The lease next to a stored session file. It is not a session file itself. */
+export function sessionLockFile(file: string): string {
+  return `${file}.lock`
+}
+
+/** The pid recorded by an active-session lease, if it is readable. */
+export function sessionLockPid(file: string): number | undefined {
+  try {
+    const pid = Number.parseInt(readFileSync(sessionLockFile(file), "utf8"), 10)
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** A stored session cannot be opened while another Amira process owns its lease. */
+export class SessionInUseError extends Error {
+  constructor(file: string, pid?: number) {
+    super(
+      `session ${path.basename(file, ".jsonl")} is open in another Amira process${pid ? ` (pid ${pid})` : ""}; close it before deleting or resuming it`,
+    )
+  }
+}
 
 export interface SessionHeader {
   type: "session"
@@ -171,6 +203,34 @@ export class SessionStore {
     return this.header.id
   }
 
+  /** Holds a crash-safe lease while this session is open in an Amira process. */
+  claim(): void {
+    if (sessionLocks.has(this.file)) return
+    const lock = tryFileLock(sessionLockFile(this.file), SESSION_LOCK_STALE_MS, SESSION_LOCK_HEARTBEAT_MS)
+    if (!lock) {
+      const pid = sessionLockPid(this.file)
+      // A second Agent in this process can reuse the same lease. A live pid from elsewhere is
+      // the case deletion and a new process must refuse.
+      if (pid !== undefined && pid !== process.pid) throw new SessionInUseError(this.file, pid)
+      if (pid === undefined) throw new SessionInUseError(this.file)
+      return
+    }
+    sessionLocks.set(this.file, lock)
+    if (!releaseOnExit) {
+      releaseOnExit = true
+      // A normal exit leaves no lease behind; a crash leaves one a dead pid makes stale.
+      process.once("exit", () => {
+        for (const held of sessionLocks.values()) held.release()
+      })
+    }
+  }
+
+  /** Gives up this process's lease, so another Amira may open or delete the session. */
+  release(): void {
+    sessionLocks.get(this.file)?.release()
+    sessionLocks.delete(this.file)
+  }
+
   /** The mutation journal must reach disk before a tool can change a file. */
   appendDurable(data: SessionEntryData): string {
     if (!this.#written) throw new Error("Cannot capture file changes before the session is stored")
@@ -189,10 +249,17 @@ export class SessionStore {
   }
 
   get title(): string | undefined {
-    const entries = this.#entries.filter(
-      (e): e is Extract<SessionEntry, { type: "title" }> => e.type === "title" && typeof e.title === "string",
-    )
-    return entries.findLast((e) => e.source === "manual")?.title ?? entries.at(-1)?.title
+    let hasManual = false
+    let manual: string | undefined
+    let fallback: string | undefined
+    for (const e of this.#entries) {
+      if (e.type !== "title" || typeof e.title !== "string") continue
+      if (e.source === "manual") {
+        hasManual = true
+        manual = e.title || undefined
+      } else fallback = e.title || undefined
+    }
+    return hasManual ? (manual ?? fallback) : fallback
   }
 
   rename(title: string, source: "manual" | "auto" = "manual"): void {
@@ -200,17 +267,41 @@ export class SessionStore {
       .replace(/\p{Cc}/gu, " ")
       .replace(/\s+/g, " ")
       .trim()
-    if (!clean) throw new Error("a session title must not be empty")
-    if (source === "auto" && this.#entries.some((e) => e.type === "title" && e.source === "manual")) return
+    if (!clean) {
+      if (source === "manual") {
+        // An empty manual entry is a durable "clear" marker that reveals the latest automatic
+        // title again. An older Amira reads it as an empty title.
+        this.append({ type: "title", title: "", source })
+        return
+      }
+      throw new Error("a session title must not be empty")
+    }
+    const manual = this.#entries.findLast(
+      (e): e is Extract<SessionEntry, { type: "title" }> => e.type === "title" && e.source === "manual",
+    )
+    if (source === "auto" && manual?.title) return
     this.append({ type: "title", title: clean, source })
   }
 
-  /** Copies the stored history through target, retaining entry ids used by compactions. */
+  /**
+   * Copies the current branch through target, retaining entry ids used by compactions, plus the
+   * session-wide notes (titles, side usage) recorded before target and every file prune.
+   */
   fork(target: string | null = this.#leaf): SessionStore {
-    const at = target === null ? -1 : this.#entries.findIndex((e) => e.id === target)
+    const branch = this.branch()
+    const at = target === null ? -1 : branch.findIndex((e) => e.id === target)
     if (target !== null && at === -1) throw new Error(`unknown entry ${target}`)
     const next = SessionStore.create({ cwd: this.header.cwd, parent: this.id, dir: path.dirname(this.file) })
-    const entries = this.#entries.slice(0, at + 1)
+    const kept = new Set(branch.slice(0, at + 1).map((e) => e.id))
+    const end = target === null ? -1 : this.#entries.findIndex((e) => e.id === target)
+    // Session-wide notes sit off every branch, so they come along as before. A prune discards
+    // the file history of the whole session, wherever it happened, so no fork may restore it.
+    const entries = this.#entries.filter(
+      (e, i) =>
+        kept.has(e.id) ||
+        e.type === "file_prune" ||
+        (i <= end && (e.type === "title" || e.type === "side_usage")),
+    )
     const text = `${[JSON.stringify(next.header), ...entries.map((e) => JSON.stringify(e))].join("\n")}\n`
     mkdirSync(path.dirname(next.file), { recursive: true })
     writeFileSync(next.file, text, { flag: "wx" })

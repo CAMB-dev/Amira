@@ -28,6 +28,7 @@ import {
 import {
   type ApprovalPermission,
   type ApprovalRequest,
+  type ArtifactGroupUsage,
   type AskOutcome,
   type AskQuestion,
   type AskRequest,
@@ -61,6 +62,7 @@ import {
   artifactDir,
   artifactIdsIn,
   referencedArtifacts,
+  subagentSessionFiles,
 } from "./artifacts.ts"
 import {
   type CompactionOptions,
@@ -98,7 +100,7 @@ import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { Permissions, type PermissionVerdict } from "./permissions/policy.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
-import { newSessionId, type SessionEntryData, type SessionStore } from "./session-store.ts"
+import { newSessionId, type SessionEntryData, SessionStore } from "./session-store.ts"
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
@@ -274,6 +276,12 @@ interface AfterCompaction {
   /** A prompt() call is waiting; a second one is refused as busy. */
   prompted: boolean
   waiters: { resolve: (r: TurnResult) => void; reject: (err: unknown) => void }[]
+}
+
+interface ManagedArtifactGroup {
+  store: ArtifactStore
+  buckets: ArtifactUsage
+  usage: ArtifactGroupUsage
 }
 
 type ModelReply =
@@ -924,23 +932,118 @@ export class Agent {
    * away, a sub-agent's), "unused" ones nothing mentions.
    */
   artifactUsage(): ArtifactUsage {
+    const groups = this.#artifactGroups()
+    const out: ArtifactUsage = { active: [], inactive: [], unused: [], pruned: [], bytes: 0 }
+    for (const group of groups) {
+      out.active.push(...group.buckets.active)
+      out.inactive.push(...group.buckets.inactive)
+      out.unused.push(...group.buckets.unused)
+      out.pruned.push(...group.buckets.pruned)
+      out.bytes += group.usage.bytes
+    }
+    out.groups = groups.map((group) => group.usage)
+    return out
+  }
+
+  /** Builds the parent and sub-agent stores with one consistent reference snapshot. */
+  #artifactGroups(): ManagedArtifactGroup[] {
     const active = new Set<string>()
-    for (const m of [...this.messages, ...this.projectedMessages()]) {
-      for (const b of m.content) {
-        if (b.type === "text") for (const id of artifactIdsIn(b.text)) active.add(id)
-        else if (b.type === "toolCall") for (const id of artifactIdsIn(JSON.stringify(b.args))) active.add(id)
+    const addActive = (messages: readonly Message[]) => {
+      for (const m of messages) {
+        for (const b of m.content) {
+          if (b.type === "text") for (const id of artifactIdsIn(b.text)) active.add(id)
+          else if (b.type === "toolCall")
+            for (const id of artifactIdsIn(JSON.stringify(b.args))) active.add(id)
+        }
       }
     }
+    addActive(this.messages)
+    addActive(this.projectedMessages())
     const referenced = this.session ? referencedArtifacts(this.session) : new Set(active)
-    const out: ArtifactUsage = { active: [], inactive: [], unused: [], pruned: [], bytes: 0 }
-    for (const a of this.artifacts.list()) {
-      if (a.pruned) out.pruned.push(a)
-      else {
-        out.bytes += a.bytes
-        if (active.has(a.id)) out.active.push(a)
-        else if (referenced.has(a.id)) out.inactive.push(a)
-        else out.unused.push(a)
+    const labels = new Map<string, string>()
+    const rememberLabels = (entries: readonly object[]) => {
+      for (const e of entries) {
+        if ((e as { type?: unknown }).type !== "subagent") continue
+        const id = (e as { childSessionId?: unknown }).childSessionId
+        if (typeof id !== "string") continue
+        const role = (e as { role?: unknown }).role
+        const title = (e as { title?: unknown }).title
+        labels.set(
+          id,
+          `Sub-agent: ${typeof title === "string" && title ? title : typeof role === "string" && role ? role : id} (${id})`,
+        )
       }
+    }
+    const files = this.session ? subagentSessionFiles(this.session) : []
+    if (this.session) {
+      rememberLabels(this.session.entries)
+      for (const child of files) rememberLabels(child.entries)
+    }
+    const live = new Set(this.tree?.children.map((child) => child.id) ?? [])
+    for (const child of this.tree?.children ?? [])
+      labels.set(child.id, `Sub-agent: ${child.title} (${child.id})`)
+    for (const child of files) {
+      const known = this.tree?.subagent(child.id)
+      if (known?.messages) addActive(known.messages)
+      else {
+        try {
+          addActive(SessionStore.open(child.file).restore().messages)
+        } catch {
+          // A torn or foreign child file has no current context to classify as active.
+        }
+      }
+    }
+
+    const group = (
+      store: ArtifactStore,
+      id: string,
+      label: string,
+      protectedStore: boolean,
+    ): ManagedArtifactGroup => {
+      const buckets: ArtifactUsage = { active: [], inactive: [], unused: [], pruned: [], bytes: 0 }
+      for (const a of store.list()) {
+        if (a.pruned) buckets.pruned.push(a)
+        else {
+          buckets.bytes += a.bytes
+          if (active.has(a.id)) buckets.active.push(a)
+          else if (referenced.has(a.id)) buckets.inactive.push(a)
+          else buckets.unused.push(a)
+        }
+      }
+      return {
+        store,
+        buckets,
+        usage: {
+          id,
+          label,
+          active: buckets.active.length,
+          inactive: buckets.inactive.length,
+          unused: buckets.unused.length,
+          pruned: buckets.pruned.length,
+          bytes: buckets.bytes,
+          quotaBytes: store.quotaBytes,
+          dir: store.dir,
+          ...(protectedStore ? { protected: true } : {}),
+        },
+      }
+    }
+
+    const out = [group(this.artifacts, this.sessionId, "This session", live.size > 0)]
+    for (const child of files) {
+      const store = new ArtifactStore({
+        dir: artifactDir(child.file, child.id),
+        sessionId: child.id,
+        limits: this.artifacts.limits,
+        quotaBytes: this.artifacts.quotaBytes,
+      })
+      out.push(
+        group(
+          store,
+          child.id,
+          labels.get(child.id) ?? `Sub-agent: ${child.id} (${child.id})`,
+          live.has(child.id),
+        ),
+      )
     }
     return out
   }
@@ -950,14 +1053,25 @@ export class Agent {
    * Their metadata stays, so reading one says it was pruned.
    */
   async pruneArtifacts(scope: ArtifactScope): Promise<{ removed: number; bytes: number }> {
-    const usage = this.artifactUsage()
-    const pick =
-      scope === "unused"
-        ? usage.unused
-        : scope === "inactive"
-          ? [...usage.unused, ...usage.inactive]
-          : [...usage.unused, ...usage.inactive, ...usage.active]
-    return this.artifacts.prune(pick.map((a) => a.id))
+    if (this.tree?.children.length) {
+      throw new Error(
+        "cannot prune artifacts while a sub-agent is running, queued or idle; wait for it to finish or stop it (/agents stop)",
+      )
+    }
+    let removed = 0
+    let bytes = 0
+    for (const group of this.#artifactGroups()) {
+      const pick =
+        scope === "unused"
+          ? group.buckets.unused
+          : scope === "inactive"
+            ? [...group.buckets.unused, ...group.buckets.inactive]
+            : [...group.buckets.unused, ...group.buckets.inactive, ...group.buckets.active]
+      const result = await group.store.prune(pick.map((a) => a.id))
+      removed += result.removed
+      bytes += result.bytes
+    }
+    return { removed, bytes }
   }
 
   /** Most tool calls this agent runs at once. */

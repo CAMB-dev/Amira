@@ -1,7 +1,15 @@
 import { existsSync, lstatSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs"
 import path from "node:path"
+import { type FileLock, isProcessAlive, tryFileLock } from "./file-lock.ts"
 import { fileHistoryDir } from "./file-rewind.ts"
-import { SessionStore, sessionsDir } from "./session-store.ts"
+import {
+  SESSION_LOCK_HEARTBEAT_MS,
+  SESSION_LOCK_STALE_MS,
+  SessionStore,
+  sessionLockFile,
+  sessionLockPid,
+  sessionsDir,
+} from "./session-store.ts"
 
 export interface SessionSummary {
   id: string
@@ -95,53 +103,79 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
   if (id === currentId) throw new Error("the current session cannot be deleted")
   const file = findSession(cwd, id, dir)
   if (!file) throw new Error(`no session ${id}`)
-  const owned = (root: string): Set<string> => {
-    const out = new Set<string>()
-    const visit = (name: string) => {
-      if (out.has(name)) return
-      // Every path component stays within the session directory and must not be a symlink.
-      const rel = path.relative(path.resolve(dir), path.resolve(name))
-      if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error("unsafe session path")
-      let part = path.resolve(dir)
-      if (lstatSync(part).isSymbolicLink()) throw new Error("unsafe session directory")
-      for (const component of rel.split(path.sep)) {
-        part = path.join(part, component)
-        if (lstatSync(part).isSymbolicLink()) throw new Error("unsafe session symlink")
-      }
-      out.add(name)
-      for (const e of SessionStore.open(name).entries) {
-        if (e.type !== "subagent") continue
-        if (!/^[\w-]+$/.test(e.childSessionId)) throw new Error("unsafe sub-agent id")
-        const child = path.join(path.dirname(name), "subagents", `${e.childSessionId}.jsonl`)
-        if (existsSync(child)) visit(child)
-      }
+  const deletionLock: FileLock | undefined = tryFileLock(
+    sessionLockFile(file),
+    SESSION_LOCK_STALE_MS,
+    SESSION_LOCK_HEARTBEAT_MS,
+  )
+  if (!deletionLock) {
+    const pid = sessionLockPid(file)
+    if (pid !== undefined && pid !== process.pid && isProcessAlive(pid)) {
+      throw new Error(
+        `cannot delete session ${id}: it is open in another Amira process (pid ${pid}); close that process first`,
+      )
     }
-    visit(root)
-    return out
+    if (pid === process.pid) {
+      // This process may still hold a lease for a session it switched away from. The public
+      // currentId check above still protects the active one; no other process can be racing it.
+    } else {
+      // A fresh lock without a readable pid is not safe to interpret as stale. A dead pid should
+      // have been taken over by tryFileLock, so reaching this branch means the lease is changing.
+      throw new Error(`cannot delete session ${id}: it is currently open; try again after it closes`)
+    }
   }
-  const files = owned(file)
-  for (const name of readdirSync(dir).filter((n) => n.endsWith(".jsonl"))) {
-    const other = path.join(dir, name)
-    if (other === file) continue
-    let shared: Set<string>
-    try {
-      shared = owned(other)
-    } catch {
-      // A damaged or foreign file elsewhere is no reason to refuse; it shares nothing readable.
-      continue
+  try {
+    const owned = (root: string): Set<string> => {
+      const out = new Set<string>()
+      const visit = (name: string) => {
+        if (out.has(name)) return
+        // Every path component stays within the session directory and must not be a symlink.
+        const rel = path.relative(path.resolve(dir), path.resolve(name))
+        if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error("unsafe session path")
+        let part = path.resolve(dir)
+        if (lstatSync(part).isSymbolicLink()) throw new Error("unsafe session directory")
+        for (const component of rel.split(path.sep)) {
+          part = path.join(part, component)
+          if (lstatSync(part).isSymbolicLink()) throw new Error("unsafe session symlink")
+        }
+        out.add(name)
+        for (const e of SessionStore.open(name).entries) {
+          if (e.type !== "subagent") continue
+          if (!/^[\w-]+$/.test(e.childSessionId)) throw new Error("unsafe sub-agent id")
+          const child = path.join(path.dirname(name), "subagents", `${e.childSessionId}.jsonl`)
+          if (existsSync(child)) visit(child)
+        }
+      }
+      visit(root)
+      return out
     }
-    for (const name of shared) files.delete(name)
-  }
-  // Attachments are inline in message entries; there are no separate attachment files.
-  for (const name of [...files].reverse()) {
-    // Captured file bytes first: a failure leaves the recording, so deleting again finishes.
-    const history = fileHistoryDir(name)
-    for (const part of [path.dirname(history), history]) {
-      if (lstatOrUndefined(part)?.isSymbolicLink()) throw new Error("unsafe session asset symlink")
+    const files = owned(file)
+    for (const name of readdirSync(dir).filter((n) => n.endsWith(".jsonl"))) {
+      const other = path.join(dir, name)
+      if (other === file) continue
+      let shared: Set<string>
+      try {
+        shared = owned(other)
+      } catch {
+        // A damaged or foreign file elsewhere is no reason to refuse; it shares nothing readable.
+        continue
+      }
+      for (const name of shared) files.delete(name)
     }
-    rmSync(history, { recursive: true, force: true, maxRetries: 3 })
-    unlinkSync(name)
-    summaries.delete(name)
+    // Attachments are inline in message entries; there are no separate attachment files.
+    for (const name of [...files].reverse()) {
+      // Its assets (captured file bytes, saved artifacts) first: a failure leaves the recording,
+      // so deleting again finishes.
+      const assets = path.dirname(fileHistoryDir(name))
+      for (const part of [assets, ...["files", "outputs"].map((n) => path.join(assets, n))]) {
+        if (lstatOrUndefined(part)?.isSymbolicLink()) throw new Error("unsafe session asset symlink")
+      }
+      rmSync(assets, { recursive: true, force: true, maxRetries: 3 })
+      unlinkSync(name)
+      summaries.delete(name)
+    }
+  } finally {
+    deletionLock?.release()
   }
 }
 

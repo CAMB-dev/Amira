@@ -20,7 +20,7 @@ import { type Settings, type ToolContext, toolResultText } from "@amira/api"
 import { applyPatch, applyPatchTool } from "../../../extensions/builtin-tools/src/apply-patch.ts"
 import { editTool } from "../../../extensions/builtin-tools/src/edit.ts"
 import { writeTool } from "../../../extensions/builtin-tools/src/write.ts"
-import { FileRewind, intermediate } from "../src/file-rewind.ts"
+import { copyFileHistory, FileRewind, intermediate } from "../src/file-rewind.ts"
 import { deleteSession } from "../src/session-list.ts"
 import { SessionStore } from "../src/session-store.ts"
 
@@ -283,6 +283,20 @@ test("quota counts unique images, explicit prune frees it, and deleting a sessio
   expect(existsSync(store.file)).toBe(false)
   expect(existsSync(rewind.directory)).toBe(false)
   expect(existsSync(join(dir, "a"))).toBe(true)
+})
+
+test("a fork cannot restore history pruned on a branch it leaves out", async () => {
+  const { store, rewind, messageId, write } = setup()
+  await write("a", "abc")
+  const second = store.appendMessage(userMessage("second"))
+  await write("b", "x")
+  rewind.prune()
+  store.append({ type: "checkout", target: store.get(second)!.parentId })
+  expect(rewind.plan(messageId).note).toContain("pruned")
+  const forked = store.fork()
+  copyFileHistory(store, forked)
+  expect(new FileRewind(forked).plan(messageId)).toMatchObject({ enabled: false, removed: 0 })
+  expect(new FileRewind(SessionStore.open(forked.file)).plan(messageId).note).toContain("pruned")
 })
 
 test("damaged pre-images stop all restoration", async () => {

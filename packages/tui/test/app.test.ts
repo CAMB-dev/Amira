@@ -34,7 +34,7 @@ import {
   SessionStore,
   ToolRegistry,
 } from "@amira/core"
-import { extensionCommand } from "@amira/ext-commands"
+import commandsExtension, { extensionCommand } from "@amira/ext-commands"
 import statusExtension from "@amira/ext-status"
 import { type JobEvent, JobRegistry } from "@amira/proc"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
@@ -2057,6 +2057,50 @@ for (const mode of ["fullscreen", "inline"] as const) {
       terminal.send("\x03\x03")
       await exited
     })
+
+    test(`resume picker reports an active-session deletion refusal at ${cols} columns in ${mode}`, async () => {
+      const refusal =
+        "cannot delete session s_b: it is open in another Amira process (pid 42); close that process first"
+      const { terminal, live, all, host, exited } = await setup([], {
+        cols,
+        settings: { mode },
+        commands: [],
+        control: {
+          info: () => ({
+            id: "current",
+            cwd: "/work/proj",
+            busy: false,
+            model: { provider: "mock", model: "m1" },
+            contextWindow: 128_000,
+            shell: "auto",
+          }),
+          sessions: () => [
+            {
+              id: "s_b",
+              updatedAt: Date.now(),
+              title: "Database repair",
+              firstUserText: "hello",
+              searchText: "hello",
+              messageCount: 2,
+            },
+          ],
+          deleteSession: async () => {
+            throw new Error(refusal)
+          },
+        },
+      })
+      await host.load(commandsExtension, `test-resume-active-${mode}-${cols}`)
+      terminal.send("/resume\r")
+      await waitFor(() => live().includes("Resume which session?"), "active-session resume picker")
+      terminal.send("\x1b[100;5u")
+      await waitFor(() => live().includes("Delete this session?"), "active-session delete confirmation")
+      terminal.send("\x1b[B\r")
+      const normalized = () => all().replace(/\s+/g, " ")
+      await waitFor(() => normalized().includes("open in another Amira process"), "active-session refusal")
+      expect(normalized()).toContain(refusal)
+      terminal.send("\x03\x03")
+      await exited
+    })
   }
 }
 
@@ -3607,26 +3651,40 @@ test("typing @ while the project is still listed shows a status row at once, the
   await exited
 })
 
-test("the terminal title names the folder and branch, and the progress indicator follows the turn", async () => {
-  const { terminal, screen, bus, agent, shows, idle, exited } = await setup([{ text: "done", delayMs: 20 }], {
-    env: { WT_SESSION: "1" },
+for (const mode of ["fullscreen", "inline"] as const) {
+  test(`the terminal title keeps the folder beside the session title in ${mode} mode`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "amira-terminal-title-"))
+    const session = SessionStore.create({ cwd: "/work/proj", dir })
+    session.appendMessage(userMessage("history"))
+    session.rename("Database repair")
+    try {
+      const { terminal, screen, bus, agent, shows, idle, exited } = await setup(
+        [{ text: "done", delayMs: 20 }],
+        { env: { WT_SESSION: "1" }, session, settings: { mode } },
+      )
+      bus.emit("workspace.changed", { cwd: "/work/proj", branch: "main" }, { sessionId: agent.sessionId })
+      await waitFor(
+        () => screen.oscs.includes("0;Amira · proj · Database repair ⎇ main"),
+        "branch in the title",
+      )
+      terminal.send("go\r")
+      await shows("done")
+      await idle()
+      const oscs = screen.oscs
+      expect(oscs).toContain("0;● Amira · proj · Database repair ⎇ main")
+      expect(oscs).toContain("9;4;3;0")
+      expect(oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;0;0")
+      expect(oscs.filter((o) => o.startsWith("0;")).at(-1)).toBe("0;Amira · proj · Database repair ⎇ main")
+      terminal.send("\x03")
+      await exited
+      // The title is handed back: the terminal's own, or the one saved on the title stack.
+      expect(screen.oscs.at(-1)).toBe("0;")
+      expect(terminal.output).toContain("\x1b]0;\x07\x1b[23;0t")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
-  bus.emit("workspace.changed", { cwd: "/work/proj", branch: "main" }, { sessionId: agent.sessionId })
-  await waitFor(() => screen.oscs.includes("0;Amira · proj ⎇ main"), "branch in the title")
-  terminal.send("go\r")
-  await shows("done")
-  await idle()
-  const oscs = screen.oscs
-  expect(oscs).toContain("0;● Amira · proj ⎇ main")
-  expect(oscs).toContain("9;4;3;0")
-  expect(oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;0;0")
-  expect(oscs.filter((o) => o.startsWith("0;")).at(-1)).toBe("0;Amira · proj ⎇ main")
-  terminal.send("\x03")
-  await exited
-  // The title is handed back: the terminal's own, or the one saved on the title stack.
-  expect(screen.oscs.at(-1)).toBe("0;")
-  expect(terminal.output).toContain("\x1b]0;\x07\x1b[23;0t")
-})
+}
 
 test("outside Windows Terminal and friends no progress is sent; settings turn title and bell off", async () => {
   const { terminal, screen, shows, idle, exited } = await setup([{ text: "done" }], {

@@ -14,6 +14,7 @@ import {
 } from "@amira/ai"
 import { ARTIFACT_HEADER, defineTool, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
+import { ArtifactStore, artifactDir } from "../src/artifacts.ts"
 import { estimateTokens } from "../src/compaction.ts"
 import { agingCandidates, type ContextView, projectMessages } from "../src/context.ts"
 import { EventBus } from "../src/event-bus.ts"
@@ -320,6 +321,68 @@ test("a session forked from another finds the artifacts its copied history names
   const forked = setup({ session: SessionStore.open(session.file).fork() })
   expect(forked.agent.artifacts.find(id)?.sessionId).toBe(session.id)
   await rm(dir, { recursive: true, force: true })
+})
+
+test("parent artifact usage groups sub-agent stores and prunes their inactive and unused outputs", async () => {
+  const dir = await tempDir()
+  const session = SessionStore.create({ cwd: dir, dir })
+  const parentStore = new ArtifactStore({
+    dir: artifactDir(session.file, session.id),
+    sessionId: session.id,
+  })
+  const parentActive = await parentStore.save({ text: "parent active", tool: "test" })
+  const parentInactive = await parentStore.save({ text: "parent inactive", tool: "test" })
+  const parentUnused = await parentStore.save({ text: "parent unused", tool: "test" })
+  session.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: `old ${parentInactive.id}` }],
+  })
+  session.append({ type: "checkout", target: null })
+  session.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: `current ${parentActive.id}` }],
+  })
+
+  const child = SessionStore.create({
+    cwd: dir,
+    parent: session.id,
+    dir: path.join(dir, "subagents"),
+  })
+  const childStore = new ArtifactStore({ dir: artifactDir(child.file, child.id), sessionId: child.id })
+  const childActive = await childStore.save({ text: "child active", tool: "test" })
+  const childUnused = await childStore.save({ text: "child unused", tool: "test" })
+  child.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: `child ${childActive.id}` }],
+  })
+  session.append({ type: "subagent", childSessionId: child.id, role: "explorer" })
+
+  const { agent, ai } = setup({ session, cwd: dir })
+  const usage = agent.artifactUsage()
+  const groups = usage.groups ?? []
+  expect(groups).toHaveLength(2)
+  expect(groups.find((g) => g.id === session.id)).toMatchObject({ active: 1, inactive: 1, unused: 1 })
+  expect(groups.find((g) => g.id === child.id)).toMatchObject({ active: 1, inactive: 0, unused: 1 })
+
+  expect(await agent.pruneArtifacts("inactive")).toMatchObject({ removed: 3 })
+  expect(parentStore.exists(parentActive)).toBe(true)
+  expect(parentStore.exists(parentInactive)).toBe(false)
+  expect(parentStore.exists(parentUnused)).toBe(false)
+  expect(childStore.exists(childActive)).toBe(true)
+  expect(childStore.exists(childUnused)).toBe(false)
+
+  const tree = new AgentTree({ ai, sections: () => [] })
+  const liveAgent = new Agent({
+    ai,
+    model: ai.model("mock/test"),
+    cwd: dir,
+    session: SessionStore.open(session.file),
+    tree,
+  })
+  const liveChild = tree.spawn(liveAgent, { prompt: "keep reading", persistent: true })
+  await expect(liveAgent.pruneArtifacts("unused")).rejects.toThrow("sub-agent is running, queued or idle")
+  liveChild.abort()
+  await liveChild.result()
 })
 
 // ---- A2: repeated reads ----

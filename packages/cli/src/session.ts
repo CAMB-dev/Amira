@@ -313,10 +313,15 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     approver: approve,
   })
   const ask = userAsker(host.ui, tree)
+  // The session this process holds a lease on; switching away gives it up.
+  let leased: SessionStore | undefined
   const newAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
     // A session resumed while no model is selected continues on the one it ran on.
     const stored = isNoModel(picked) ? storedModel(ai, store) : undefined
     const m = stored ? ai.model(stored) : picked
+    store?.claim()
+    if (leased && leased.file !== store?.file) leased.release()
+    leased = store
     return new Agent({
       tree,
       approve,

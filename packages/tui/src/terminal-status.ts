@@ -1,6 +1,18 @@
 import path from "node:path"
-import { focusReporting, osc, type ProgressState, type Terminal, type TerminalMode } from "@amira/tui-kit"
+import {
+  focusReporting,
+  osc,
+  type ProgressState,
+  type Terminal,
+  type TerminalMode,
+  truncateToWidth,
+} from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
+
+const MAX_FOLDER_TITLE = 48
+const MAX_SESSION_TITLE = 64
+const MAX_BRANCH_TITLE = 40
+const MAX_TERMINAL_TITLE = 128
 
 export interface TerminalStatusOptions {
   /** Set the window title (default true). */
@@ -18,10 +30,10 @@ export interface TerminalStatusOptions {
 }
 
 /**
- * What Amira tells the terminal around the drawing: a title naming the folder and branch,
- * marked while a turn runs; the progress indicator (busy while working, paused while a dialog
- * waits for an answer); and the bell when a turn ends or a dialog opens while the user looks
- * elsewhere. Writes only on change, and `stop()` hands the title and indicator back.
+ * What Amira tells the terminal around the drawing: a title naming the folder, session title and
+ * branch, marked while a turn runs; the progress indicator (busy while working, paused while a
+ * dialog waits for an answer); and the bell when a turn ends or a dialog opens while the user
+ * looks elsewhere. Writes only on change, and `stop()` hands the title and indicator back.
  */
 export class TerminalStatus {
   #folder: string
@@ -56,11 +68,18 @@ export class TerminalStatus {
     this.#now = opts.now ?? Date.now
   }
 
-  /** The title as it reads now: "Amira · proj ⎇ main", with a marker in front while working. */
+  /** The title as it reads now: "Amira · proj · topic ⎇ main", with a marker while working. */
   get title(): string {
-    const branch = this.#branch ? ` ${glyphs.branch} ${this.#branch}` : ""
-    const base = `Amira ${glyphs.separator} ${this.#sessionTitle ?? this.#folder}${branch}`
-    return this.#working ? `${glyphs.working} ${base}` : base
+    const folder = truncateToWidth(this.#folder.replace(/\s+/g, " ").trim(), MAX_FOLDER_TITLE, "…")
+    const session = this.#sessionTitle
+      ? truncateToWidth(this.#sessionTitle.replace(/\s+/g, " ").trim(), MAX_SESSION_TITLE, "…")
+      : undefined
+    const branch = this.#branch
+      ? ` ${glyphs.branch} ${truncateToWidth(this.#branch.replace(/\s+/g, " ").trim(), MAX_BRANCH_TITLE, "…")}`
+      : ""
+    const name = session ? `${folder} ${glyphs.separator} ${session}` : folder
+    const base = truncateToWidth(`Amira ${glyphs.separator} ${name}${branch}`, MAX_TERMINAL_TITLE, "…")
+    return truncateToWidth(this.#working ? `${glyphs.working} ${base}` : base, MAX_TERMINAL_TITLE, "…")
   }
 
   start(): void {
@@ -90,7 +109,7 @@ export class TerminalStatus {
   }
 
   setSessionTitle(title: string | undefined): void {
-    this.#sessionTitle = title
+    this.#sessionTitle = title?.trim() || undefined
     this.#sync()
   }
 

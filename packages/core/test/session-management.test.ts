@@ -1,10 +1,20 @@
 import { expect, spyOn, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
+import { artifactDir } from "../src/artifacts.ts"
 import { deleteSession, listSessions, sessionSnippet } from "../src/session-list.ts"
-import { SessionStore } from "../src/session-store.ts"
+import { SessionStore, sessionLockFile } from "../src/session-store.ts"
 
 const tmp = () => mkdtempSync(path.join(tmpdir(), "amira-management-"))
 const reply = (text: string) => ({
@@ -26,8 +36,30 @@ test("old sessions restore; titles survive checkout, manual names beat later aut
   const loaded = SessionStore.open(s.file)
   expect(loaded.title).toBe("Last manual")
   expect(loaded.restore().messages).toEqual([userMessage("hello")])
-  expect(() => s.rename(" \n ")).toThrow("empty")
-  expect(listSessions("/project", path.dirname(s.file))[0]?.title).toBe("Last manual")
+  s.rename(" \n ")
+  expect(SessionStore.open(s.file).title).toBe("Foreign late auto")
+  expect(listSessions("/project", path.dirname(s.file))[0]?.title).toBe("Foreign late auto")
+})
+
+test("a cleared manual name reveals the latest automatic title after reload", () => {
+  const s = SessionStore.create({ cwd: "/project", dir: tmp() })
+  s.appendMessage(userMessage("hello"))
+  s.rename("Automatic", "auto")
+  s.rename("Manual")
+  expect(s.title).toBe("Manual")
+  s.rename("")
+  expect(s.title).toBe("Automatic")
+  expect(SessionStore.open(s.file).title).toBe("Automatic")
+})
+
+test("title entries written before the source field remain readable", () => {
+  const dir = tmp()
+  const s = SessionStore.create({ cwd: "/project", dir })
+  s.appendMessage(userMessage("hello"))
+  s.rename("Legacy name")
+  const legacy = path.join(dir, "legacy.jsonl")
+  writeFileSync(legacy, readFileSync(s.file, "utf8").replace(',"source":"manual"', ""))
+  expect(SessionStore.open(legacy).title).toBe("Legacy name")
 })
 
 test("an older Amira that skips title and usage entries rebuilds the same branch after a rewind", () => {
@@ -120,6 +152,35 @@ test("fork keeps the prefix and compaction references, records parent and leaves
   expect(() => s.fork("missing")).toThrow("unknown entry")
 })
 
+test("fork copies only the current branch after an abandoned rewind", () => {
+  const s = SessionStore.create({ cwd: "/project", dir: tmp() })
+  const first = s.appendMessage(userMessage("first"))
+  const abandoned = s.appendMessage(userMessage("abandoned"))
+  s.append({ type: "checkout", target: first })
+  const current = s.appendMessage(userMessage("current"))
+  const fork = s.fork()
+
+  expect(fork.restore().messages).toEqual([userMessage("first"), userMessage("current")])
+  expect(fork.entries.some((e) => e.id === abandoned)).toBe(false)
+  expect(fork.entries.some((e) => e.id === current)).toBe(true)
+})
+
+test("fork keeps the session's usage notes but not the abandoned branch", () => {
+  const s = SessionStore.create({ cwd: "/project", dir: tmp() })
+  const first = s.appendMessage(userMessage("first"))
+  s.append({
+    type: "side_usage",
+    model: { provider: "p", model: "m" },
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+  })
+  s.appendMessage(userMessage("abandoned"))
+  s.append({ type: "checkout", target: first })
+  s.appendMessage(userMessage("current"))
+  const fork = SessionStore.open(s.fork().file)
+  expect(fork.entries.filter((e) => e.type === "side_usage")).toHaveLength(1)
+  expect(fork.restore().messages).toEqual([userMessage("first"), userMessage("current")])
+})
+
 test("delete refuses the current session and traversal; removes owned children but preserves shared fork children", () => {
   const dir = tmp()
   const s = SessionStore.create({ cwd: "/project", dir })
@@ -136,6 +197,37 @@ test("delete refuses the current session and traversal; removes owned children b
   deleteSession("/project", fork.id, undefined, dir)
   expect(existsSync(child.file)).toBe(false)
   expect(listSessions("/project", dir)).toEqual([])
+})
+
+test("delete removes the saved artifacts of the session and of its sub-agents", () => {
+  const dir = tmp()
+  const s = SessionStore.create({ cwd: "/project", dir })
+  s.appendMessage(userMessage("parent"))
+  const child = SessionStore.create({ cwd: "/project", dir: path.join(dir, "subagents") })
+  child.appendMessage(userMessage("child"))
+  s.append({ type: "subagent", childSessionId: child.id, role: "explorer" })
+  const outputs = [artifactDir(s.file, s.id), artifactDir(child.file, child.id)]
+  for (const out of outputs) {
+    mkdirSync(out, { recursive: true })
+    writeFileSync(path.join(out, "a_1.txt"), "saved output")
+  }
+  deleteSession("/project", s.id, undefined, dir)
+  for (const out of outputs) expect(existsSync(path.dirname(out))).toBe(false)
+})
+
+test("delete refuses a live session lease, then takes over a stale crash lease", () => {
+  const dir = tmp()
+  const s = SessionStore.create({ cwd: "/project", dir })
+  s.appendMessage(userMessage("to delete"))
+  const lock = sessionLockFile(s.file)
+  writeFileSync(lock, `${process.ppid}\n`)
+  expect(() => deleteSession("/project", s.id, undefined, dir)).toThrow("open in another Amira process")
+  expect(existsSync(s.file)).toBe(true)
+
+  utimesSync(lock, new Date(0), new Date(0))
+  deleteSession("/project", s.id, undefined, dir)
+  expect(existsSync(s.file)).toBe(false)
+  rmSync(lock, { force: true })
 })
 
 test("untrusted sub-agent ids cannot cause files outside the session directory to be removed", () => {

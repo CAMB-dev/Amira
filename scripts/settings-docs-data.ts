@@ -592,8 +592,8 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.title": {
     default: "`true`",
-    en: "Set the terminal title to the folder and branch, marked while working.",
-    zh: "把终端标题设为目录和分支名，工作中会加标记。",
+    en: "Set the terminal title to the folder, session title when present, and branch, marked while working.",
+    zh: "把终端标题设为目录名、存在时的会话标题和分支名，工作中会加标记。",
   },
   "tui.progress": {
     default: "`true`",

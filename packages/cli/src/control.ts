@@ -217,7 +217,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
       const a = agent()
       if (!a.session) throw new Error("this session is not stored")
       a.session.rename(title)
-      a.bus.emit("session.title", { title: a.session.title! }, { sessionId: a.sessionId })
+      a.bus.emit("session.title", { title: a.session.title ?? "" }, { sessionId: a.sessionId })
     },
     deleteSession: async (id) => {
       idle("delete a session")
@@ -403,6 +403,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
           bytes: u.bytes,
           quotaBytes: a.artifacts.quotaBytes,
           dir: a.artifacts.dir,
+          ...(u.groups ? { groups: u.groups } : {}),
         }
       },
       prune: async (scope) => {
