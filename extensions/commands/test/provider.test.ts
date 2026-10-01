@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test"
-import type { EventMap, ProviderAdmin, ProviderDraft, SessionControl } from "@amira/api"
+import {
+  draftFromValues,
+  type EventMap,
+  type ProviderAdmin,
+  type ProviderDraft,
+  providerFormSpec,
+  type SessionControl,
+} from "@amira/api"
 import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
@@ -9,7 +16,7 @@ import {
   InterceptorRegistry,
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
-import commandsExtension, { draftFromValues, providerFormSpec } from "../src/index.ts"
+import commandsExtension from "../src/index.ts"
 
 type Request = EventMap["ui.request"]
 
