@@ -1,3 +1,4 @@
+import { join } from "node:path"
 import type { JobEvent, JobSpec } from "./job-inline.ts"
 
 /**
@@ -46,6 +47,8 @@ export interface StartJobOptions extends JobSpec {
   command: string
   owner?: string
   meta?: Record<string, unknown>
+  /** Without a logPath: write the log to a file of its own in this directory. */
+  logDir?: string
 }
 
 /** Output from offset `from` up to `to` (offsets count characters since the job started). */
@@ -170,8 +173,11 @@ export class JobRegistry {
         `${live} background jobs are running, the most allowed (backgroundJobs.maxRunning); stop one first`,
       )
     }
-    const { command, owner, meta, ...spec } = opts
+    const { command, owner, meta, logDir, ...spec } = opts
     const id = `job${this.#next++}`
+    // Named after the job and the moment, so a later run of Amira in the same session (which
+    // counts jobs from 1 again) never writes over an earlier log.
+    if (logDir && !spec.logPath) spec.logPath = join(logDir, `${id}-${Date.now().toString(36)}.log`)
     let end = () => {}
     const ended = new Promise<void>((resolve) => {
       end = resolve
@@ -320,6 +326,9 @@ export class JobRegistry {
       job.info.stopRequested = true
       this.#emit("status", job)
       job.stop(graceMs)
+    } else if (graceMs === 0) {
+      // Asked again without a grace period (e.g. Amira cannot wait any longer): kill it now.
+      job.stop(0)
     }
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([
