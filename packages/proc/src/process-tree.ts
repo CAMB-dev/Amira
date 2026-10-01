@@ -9,12 +9,27 @@ export interface ProcessTree {
    */
   readonly contained: boolean
   kill(): void
+  /**
+   * Asks the whole tree to stop: SIGTERM to the process group on POSIX. Returns false where
+   * there is no such request (Windows: console programs without a console window get no
+   * signal Amira could send), so the caller kills instead.
+   */
+  terminate(): boolean
   /** Releases OS handles. Call once the process has exited and been killed. */
   dispose(): void
 }
 
-export function trackProcessTree(proc: Subprocess): ProcessTree {
-  return process.platform === "win32" ? windowsJobTree(proc) : posixGroupTree(proc)
+export interface TrackOptions {
+  /**
+   * Windows: the Job Object kills every process in it when its last handle closes, which
+   * happens when this process exits however it exits (a crash, a kill from Task Manager), so
+   * nothing in the tree can outlive Amira. Used for background jobs; dispose() then kills too.
+   */
+  killOnClose?: boolean
+}
+
+export function trackProcessTree(proc: Subprocess, opts: TrackOptions = {}): ProcessTree {
+  return process.platform === "win32" ? windowsJobTree(proc, opts) : posixGroupTree(proc)
 }
 
 /** Requires the child to have been spawned with `detached: true`, which makes it a process group leader. */
@@ -27,6 +42,16 @@ function posixGroupTree(proc: Subprocess): ProcessTree {
       } catch {
         proc.kill("SIGKILL")
       }
+    },
+    terminate() {
+      try {
+        process.kill(-proc.pid, "SIGTERM")
+      } catch {
+        try {
+          proc.kill("SIGTERM")
+        } catch {}
+      }
+      return true
     },
     dispose() {},
   }
@@ -47,6 +72,10 @@ function loadKernel32() {
     AssignProcessToJobObject: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
     IsProcessInJob: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
     TerminateJobObject: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.i32 },
+    SetInformationJobObject: {
+      args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32],
+      returns: FFIType.i32,
+    },
     CloseHandle: { args: [FFIType.ptr], returns: FFIType.i32 },
   }).symbols
 }
@@ -92,10 +121,12 @@ function assignToJob(k: Kernel32, job: NonNullable<ReturnType<Kernel32["CreateJo
  * Only processes started after assignment are caught, so the caller must keep the child from running
  * anything until this returns (see the stdin gate in shell.ts).
  */
-function windowsJobTree(proc: Subprocess): ProcessTree {
+function windowsJobTree(proc: Subprocess, opts: TrackOptions): ProcessTree {
   const k = getKernel32()
   let job = k?.CreateJobObjectW(null, null) ?? null
-  const contained = !!(k && job && assignToJob(k, job, proc.pid))
+  // Kill-on-close is set before the process joins, so there is no moment it could escape it.
+  const limited = !opts.killOnClose || !!(k && job && setKillOnClose(k, job))
+  const contained = !!(k && job && limited && assignToJob(k, job, proc.pid))
   if (k && job && !contained) {
     k.CloseHandle(job)
     job = null
@@ -126,9 +157,25 @@ function windowsJobTree(proc: Subprocess): ProcessTree {
         proc.kill()
       }
     },
+    terminate: () => false,
     dispose() {
       if (k && job) k.CloseHandle(job)
       job = null
     },
   }
+}
+
+/** JobObjectExtendedLimitInformation, and its JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE flag. */
+const EXTENDED_LIMIT_INFORMATION = 9
+const LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+/**
+ * JOBOBJECT_EXTENDED_LIMIT_INFORMATION on 64-bit Windows: the basic limits (64 bytes, with
+ * LimitFlags at offset 16), IO_COUNTERS (48) and four SIZE_T fields (32).
+ */
+const EXTENDED_LIMIT_SIZE = 144
+
+function setKillOnClose(k: Kernel32, job: NonNullable<ReturnType<Kernel32["CreateJobObjectW"]>>) {
+  const info = new Uint8Array(EXTENDED_LIMIT_SIZE)
+  new DataView(info.buffer).setUint32(16, LIMIT_KILL_ON_JOB_CLOSE, true)
+  return k.SetInformationJobObject(job, EXTENDED_LIMIT_INFORMATION, ptr(info), EXTENDED_LIMIT_SIZE) !== 0
 }
