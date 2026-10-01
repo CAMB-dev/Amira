@@ -144,6 +144,11 @@ export interface InteractiveOptions {
   imageProviders?: ImageSource
   /** Markdown renderers registered by extensions (D88), e.g. diagrams for ```mermaid blocks. */
   markdownRenderers?: MarkdownRenderSource
+  /**
+   * How many background jobs (commands the shell tools run in the background) are running
+   * now. Quitting while some run asks first, as it does for sub-agents; they stop on exit.
+   */
+  runningJobs?: () => number
 }
 
 /** The renderer's shortest time between frames, and how long a key waits for async candidates. */
@@ -1195,18 +1200,34 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       : INTERRUPTED_NOTICE
   }
 
-  /** Until when a second Ctrl+C or Ctrl+D quits although sub-agents run. */
+  /** Background jobs (dev servers, watchers) still running. */
+  const runningJobs = () => {
+    try {
+      return opts.runningJobs?.() ?? 0
+    } catch {
+      return 0
+    }
+  }
+
+  /** Until when a second Ctrl+C or Ctrl+D quits although sub-agents or background jobs run. */
   let quitArmedUntil = 0
   /**
-   * Ctrl+C or Ctrl+D on an empty, idle input: quits, unless sub-agents still run in the
-   * background; then the first press says so and a second one (while the note shows) quits.
+   * Ctrl+C or Ctrl+D on an empty, idle input: quits, unless sub-agents or background jobs still
+   * run; then the first press says so and a second one (while the note shows) quits.
    */
   function quitOrWarn(action: "cancel" | "exit") {
     const n = runningSubagents()
-    if (!n || Date.now() < quitArmedUntil) return quit()
+    const jobs = runningJobs()
+    if ((!n && !jobs) || Date.now() < quitArmedUntil) return quit()
     quitArmedUntil = Date.now() + HINT_NOTE_MS
     const key = keys.label(action) ?? "Ctrl+C"
-    showNote(`${n} sub-agent${n === 1 ? "" : "s"} still running — ${key} again to stop them and quit`)
+    const what = [
+      n ? `${n} sub-agent${n === 1 ? "" : "s"}` : "",
+      jobs ? `${jobs} background job${jobs === 1 ? "" : "s"}` : "",
+    ]
+      .filter(Boolean)
+      .join(" and ")
+    showNote(`${what} still running — ${key} again to stop them and quit`)
   }
 
   /** The activity line counts the turn's time and tokens from here. */

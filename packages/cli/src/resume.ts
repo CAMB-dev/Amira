@@ -49,7 +49,8 @@ export async function pickSession(sessions: SessionSummary[]): Promise<SessionSu
 }
 
 /**
- * What quitting the interactive UI prints last: sub-agents that are stopped now, and how to
+ * What quitting the interactive UI prints last: sub-agents and background jobs that are
+ * stopped now, and how to
  * continue the session, then a blank line before the shell's prompt. Both views already end
  * with a blank line after the transcript, so nothing goes before the note; with nothing to
  * say, nothing is printed and that blank line is the one before the prompt.
@@ -58,11 +59,16 @@ export function exitNote(
   a: { session?: { id: string } | undefined; messages: readonly unknown[] },
   running: number,
   cwd: string,
+  jobs = 0,
 ): string {
   const lines: string[] = []
   if (running)
     lines.push(
       `Stopping ${running} sub-agent${running === 1 ? "" : "s"} that ${running === 1 ? "was" : "were"} still running.`,
+    )
+  if (jobs)
+    lines.push(
+      `Stopping ${jobs} background job${jobs === 1 ? "" : "s"} that ${jobs === 1 ? "was" : "were"} still running.`,
     )
   const s = a.session
   if (s && a.messages.length) {
