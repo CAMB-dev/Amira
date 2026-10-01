@@ -32,7 +32,7 @@ test("offset and limit select a range and hint at the next offset", async () => 
 })
 
 test("defaults to 2000 lines and truncates long lines", async () => {
-  expect(readTool.description).toContain("15,600 output-size characters")
+  expect(readTool.description).toContain("15,600 characters")
   const lines = Array.from({ length: 2500 }, (_, i) => String(i + 1))
   lines[0] = "x".repeat(5000)
   await writeFile(join(dir, "big.txt"), lines.join("\n"))

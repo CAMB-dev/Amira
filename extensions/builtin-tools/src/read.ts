@@ -34,7 +34,7 @@ export const readTool = defineTool<ReadParams>({
   description: [
     "Read a file from the local filesystem.",
     "- `path` may be absolute or relative to the working directory.",
-    `- By default reads up to ${DEFAULT_READ_LIMIT} lines from the start, but the response also stops at a whole line near ${DEFAULT_READ_OUTPUT_CHARS.toLocaleString("en-US")} output-size characters (the default context output limit). For long files, pass \`offset\` (1-based line number to start at) and \`limit\` (number of lines) to read a specific range.`,
+    `- By default reads up to ${DEFAULT_READ_LIMIT} lines from the start, and stops earlier at a whole line once the output nears ${DEFAULT_READ_OUTPUT_CHARS.toLocaleString("en-US")} characters (Chinese, Japanese and Korean characters count as four); the result then says which offset to continue from. For long files, pass \`offset\` (1-based line number to start at) and \`limit\` (number of lines) to read a specific range.`,
     "- Output is numbered like `cat -n`: each line is prefixed with its line number and a tab. The prefix is not part of the file; never include it in replacement text or patch context.",
     `- Lines longer than ${MAX_LINE_CHARS} characters are truncated.`,
     "- UTF-8 and UTF-16 (with BOM) text is supported.",
@@ -52,7 +52,7 @@ export const readTool = defineTool<ReadParams>({
       limit: {
         type: "integer",
         minimum: 1,
-        description: `Maximum number of lines to read (default ${DEFAULT_READ_LIMIT}; the output-size limit may stop earlier)`,
+        description: `Maximum number of lines to read (default ${DEFAULT_READ_LIMIT}; the character limit may stop earlier)`,
       },
       force: {
         type: "boolean",
