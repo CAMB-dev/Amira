@@ -41,6 +41,7 @@ const boolean = expect("true or false", (v) => typeof v === "boolean")
 const number = expect("a number", (v) => typeof v === "number" && Number.isFinite(v))
 const integer = (min: number) =>
   expect(`a whole number of at least ${min}`, (v) => Number.isInteger(v) && (v as number) >= min)
+const share = expect("a number between 0 and 1", (v) => typeof v === "number" && v > 0 && v < 1)
 const oneOf = (...values: string[]) =>
   expect(`one of ${values.map((v) => `"${v}"`).join(", ")}`, (v) => values.includes(v as string))
 
@@ -176,6 +177,19 @@ const settings = object({
   commandAliases,
   maxParallelTools: integer(1),
   compact: object({ threshold: number, model: modelRef, layout: oneOf("tail", "recent-user") }),
+  context: object({
+    outputs: object({ saveAbove: integer(1000), previewChars: integer(500), quotaMB: integer(1) }),
+    dedupeReads: boolean,
+    aging: object({
+      enabled: boolean,
+      start: share,
+      target: share,
+      minSavedTokens: integer(0),
+      keepTurns: integer(1),
+      keepSteps: integer(1),
+      afterTurns: integer(0),
+    }),
+  }),
   retry: object({ attempts: integer(0), baseDelayMs: integer(0), maxDelayMs: integer(0) }),
   mcpServers: record(anyObject),
   extensions: record(anyObject),

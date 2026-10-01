@@ -65,6 +65,8 @@ export interface BashDetails {
   shellKind: string
   /** Where the whole output went when it was too long to return. */
   fullOutputPath?: string
+  /** The artifact the whole output was saved as, when it was too long to return. */
+  artifact?: string
   durationMs: number
   /** Lines of output the command printed. */
   outputLines: number
@@ -79,11 +81,15 @@ export interface GrepDetails {
   /** Results before head_limit: files, lines or counts depending on the mode. */
   total: number
   fullOutputPath?: string
+  /** The artifact all results were saved as, when they were too long to return. */
+  artifact?: string
 }
 
 export interface GlobDetails {
   count: number
   fullOutputPath?: string
+  /** The artifact all paths were saved as, when they were too long to return. */
+  artifact?: string
 }
 
 export interface WebSearchDetails {
