@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { amiraHome } from "../home.ts"
+import { amiraHome } from "@amira/core"
 import type { PackageSource } from "./lock.ts"
 import { isValidPackageName, PackageError } from "./manifest.ts"
 

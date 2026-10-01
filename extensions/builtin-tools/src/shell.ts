@@ -160,6 +160,33 @@ export function gitBashEnv(
 export const COMMAND_VAR = "AMIRA_COMMAND"
 
 /**
+ * Keeps bash's pipefail behavior except for a pipeline whose last command succeeded and whose
+ * earlier commands all either succeeded or received SIGPIPE from that reader.
+ */
+const SIGPIPE_STATUS = [
+  `__amira_pipe_status=("\${PIPESTATUS[@]}")`,
+  "__amira_pipe_exit=0",
+  `for __amira_code in "\${__amira_pipe_status[@]}"; do`,
+  '  if (( __amira_code != 0 )); then __amira_pipe_exit="$__amira_code"; fi',
+  "done",
+  `if (( \${#__amira_pipe_status[@]} > 1 )); then`,
+  `  __amira_last_index=$((\${#__amira_pipe_status[@]} - 1))`,
+  `  __amira_last="\${__amira_pipe_status[$__amira_last_index]}"`,
+  "  __amira_sigpipe_only=1",
+  "  for (( __amira_i = 0; __amira_i < __amira_last_index; __amira_i++ )); do",
+  `    __amira_code="\${__amira_pipe_status[$__amira_i]}"`,
+  "    if (( __amira_code != 0 && __amira_code != 141 )); then __amira_sigpipe_only=0; break; fi",
+  "  done",
+  "  if (( __amira_last == 0 && __amira_sigpipe_only && __amira_pipe_exit == 141 )); then __amira_pipe_exit=0; fi",
+  "fi",
+  'exit "$__amira_pipe_exit"',
+].join("\n")
+
+export function bashCommand(command: string): string {
+  return `${command}\n${SIGPIPE_STATUS}`
+}
+
+/**
  * Runs $AMIRA_COMMAND once the gate is open: cmd.exe held it (AMIRA_GATE is set, stdin is at its
  * end) or a line arrives on stdin (see RunOptions.viaCmd). The trailing `exit $?` keeps bash from
  * exec-ing the inner shell: a Windows process killed by an MSYS signal exits 0, while the outer
@@ -175,7 +202,7 @@ export function windowsBashShell(found: string, exists: (p: string) => boolean =
     // Built per command, so variables set after the shell was resolved still reach commands.
     command: (command, cwd) => ({
       argv: [bash, "-c", GATE_SCRIPT, "bash"],
-      env: { ...(root ? gitBashEnv(root) : process.env), [COMMAND_VAR]: command },
+      env: { ...(root ? gitBashEnv(root) : process.env), [COMMAND_VAR]: bashCommand(command) },
       cwd,
       gated: true,
       // Bun stalls for seconds on some direct spawns of MSYS programs.
@@ -189,7 +216,7 @@ function posixBashShell(path: string): Shell {
     kind: "bash",
     path,
     command: (command, cwd) => ({
-      argv: [path, "-o", "pipefail", "-c", command],
+      argv: [path, "-o", "pipefail", "-c", bashCommand(command)],
       env: { ...process.env },
       cwd,
       gated: false,

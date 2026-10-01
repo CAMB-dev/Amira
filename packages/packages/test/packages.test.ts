@@ -21,7 +21,7 @@ import {
   searchIndex,
   splitNpmSpec,
   updatePackages,
-} from "../src/packages/index.ts"
+} from "../src/index.ts"
 
 // git is slow to start on Windows, especially under load.
 setDefaultTimeout(60_000)

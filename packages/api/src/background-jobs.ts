@@ -115,4 +115,10 @@ export interface BackgroundJobHost extends BackgroundJobRegistry {
   closeSession(sessionId: string, graceMs?: number): Promise<BackgroundJobInfo[]>
   /** Stops all jobs belonging to a top-level session, including its sub-agents. */
   closeRoot(rootSessionId: string, graceMs?: number): Promise<BackgroundJobInfo[]>
+  /** Hands top-level jobs to a replacement root and stops jobs owned by its sub-agents. */
+  handoverRoot(
+    rootSessionId: string,
+    nextRootSessionId: string,
+    graceMs?: number,
+  ): Promise<BackgroundJobInfo[]>
 }

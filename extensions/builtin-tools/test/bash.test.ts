@@ -42,13 +42,36 @@ test.if(hasBash)("finds coreutils and other tools on PATH", async () => {
 test("the shell description says commands already start in the working directory", () => {
   expect(bashTool.description).toContain("Commands already start in the working directory")
   expect(bashTool.description).not.toContain("Prefer absolute paths")
-  expect(bashTool.description).toContain("exit 141 (SIGPIPE)")
+  expect(bashTool.description).toContain("SIGPIPE (141)")
+  expect(bashTool.description).toContain("treated as successful")
+  expect(bashTool.description).not.toContain("exit 141 (SIGPIPE)")
+  expect(bashTool.description).toContain("a following `&&` does not run")
 })
 
 test.if(hasBash)("a failed command before a pipeline keeps the bash error status", async () => {
   const r = await bashTool.execute({ command: "false | tail -n 1" }, makeCtx(dir))
   expect(r.isError).toBe(true)
   expect(textOf(r)).toEndWith("Exit code: 1")
+})
+
+test.if(hasBash)("SIGPIPE-only pipelines succeed but real pipeline failures do not", async () => {
+  const sigpipe = await bashTool.execute({ command: "yes | head -n 1" }, makeCtx(dir))
+  expect(sigpipe.isError).toBe(false)
+  expect(textOf(sigpipe)).toEndWith("Exit code: 0")
+
+  const gitLog = await bashTool.execute({ command: "git log --oneline | head -n 1" }, makeCtx(process.cwd()))
+  expect(gitLog.isError).toBe(false)
+
+  // Only the final status changes: inside the command the pipeline still stops `&&`.
+  const chained = await bashTool.execute({ command: "yes | head -n 1 && echo after" }, makeCtx(dir))
+  expect(chained.isError).toBe(false)
+  expect(textOf(chained)).not.toContain("after")
+
+  for (const command of ["false | cat", "cat missing | wc -l", "true | false"]) {
+    const failed = await bashTool.execute({ command }, makeCtx(dir))
+    expect(failed.isError).toBe(true)
+    expect(textOf(failed)).toEndWith("Exit code: 1")
+  }
 })
 
 test.if(hasBash)("non-zero exit is reported as an error", async () => {
@@ -195,7 +218,10 @@ test.if(hasBash)(
   "abort kills background grandchildren with no survivors",
   async () => {
     const marker = newMarker(97)
-    const sleeps = async () => (await marked(marker)).filter((p) => /\bsleep(\.exe)?\b/.test(p.cmd))
+    // The sleep processes themselves: the shells running the command have `sleep <marker>` in
+    // their command lines too, and the one that checks the pipeline status stays alive.
+    const isSleep = new RegExp(`(^|[\\\\/"])sleep(\\.exe)?"?\\s+${marker.replace(".", "\\.")}$`)
+    const sleeps = async () => (await marked(marker)).filter((p) => isSleep.test(p.cmd.trim()))
     const ac = new AbortController()
     const run = bashTool.execute(
       { command: `(sleep ${marker} &); sleep ${marker} & echo started; sleep ${marker}` },

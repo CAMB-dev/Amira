@@ -1,7 +1,6 @@
 import path from "node:path"
 import type { ExtensionAdmin, ExtensionOperationOptions, ExtensionScope } from "@amira/api"
-import { loadSettings } from "../config/index.ts"
-import { amiraHome } from "../home.ts"
+import { amiraHome, loadSettings } from "@amira/core"
 import { defaultGitCacheDir, GitCache } from "./git-cache.ts"
 import { type IndexOptions, loadIndex, searchIndex } from "./index-file.ts"
 import { installPackage, removePackage, updatePackages } from "./install.ts"

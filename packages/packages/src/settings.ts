@@ -1,8 +1,6 @@
 import path from "node:path"
 import type { Settings } from "@amira/api"
-import { isPlainObject } from "../config/merge.ts"
-import { updateSettingsFile } from "../config/write.ts"
-import { amiraHome } from "../home.ts"
+import { amiraHome, updateSettingsFile } from "@amira/core"
 
 /**
  * Whether the user said a project's own packages may load: true or false once asked (for the
@@ -65,6 +63,10 @@ function updatePackageSettings(
     if (!Object.keys(pkgs).length) delete out.packages
     return out
   })
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v)
 }
 
 function stringList(v: unknown): string[] {

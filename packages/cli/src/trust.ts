@@ -1,15 +1,15 @@
 import { createInterface } from "node:readline/promises"
 import type { Settings } from "@amira/api"
+import { loadSettings } from "@amira/core"
 import {
   type ActivePackages,
   activePackages,
-  loadSettings,
   packageScope,
   projectPackageNames,
   projectScopeIsUser,
   projectTrust,
   rememberProjectTrust,
-} from "@amira/core"
+} from "@amira/packages"
 
 export interface PackagePlan {
   /** The packages to load, read again on each /reload. */

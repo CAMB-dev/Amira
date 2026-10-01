@@ -414,6 +414,8 @@ export class Agent {
   #onIdleNotice: (() => void) | undefined
   #endTurn: (() => boolean) | undefined
   #originals: ((summary: Message) => Message[] | undefined) | undefined
+  #jobNoticeTarget: Agent | undefined
+  #pendingNotices = new Set<{ target: Agent }>()
   /** The running turn's promise, for owners that wait for whatever turn runs. */
   #current: Promise<TurnResult> | undefined
   /** Extension records of a session without a file (see `data`). */
@@ -585,7 +587,11 @@ export class Agent {
         : {}),
       // A sub-agent's life is one turn, and nothing may wake it afterwards, unless it is
       // persistent (its owner wakes it for the notices it gets).
-      ...(this.depth === 0 || this.#onIdleNotice ? { expectNotice: () => agent.expectNotice() } : {}),
+      ...(this.depth === 0 || this.#onIdleNotice
+        ? {
+            expectNotice: () => agent.#noticeTarget().expectNotice(),
+          }
+        : {}),
     }
   }
 
@@ -597,19 +603,39 @@ export class Agent {
    * that an interrupted or failed turn did not reach waits for the next turn.
    */
   expectNotice(): PendingNotice {
+    const pending = { target: this }
+    this.#pendingNotices.add(pending)
     this.#expected++
-    let open = true
     const close = () => {
-      if (!open) return false
-      open = false
-      this.#expected--
+      if (!pending.target.#pendingNotices.delete(pending)) return false
+      pending.target.#expected--
       return true
     }
     return {
       deliver: (message, opts) => {
-        if (close()) this.#receive(message, opts?.wake !== false)
+        if (close()) pending.target.#receive(message, opts?.wake !== false)
       },
       cancel: () => void close(),
+    }
+  }
+
+  /** The session that gets this one's notices: its latest replacement after switches, if any. */
+  #noticeTarget(): Agent {
+    let target: Agent = this
+    while (target.#jobNoticeTarget) target = target.#jobNoticeTarget
+    return target
+  }
+
+  /** Sends notices for top-level background work to the replacement session after a switch. */
+  handoverBackgroundNotices(next: Agent): void {
+    if (this.depth !== 0) return
+    this.#jobNoticeTarget = next
+    for (const pending of this.#pendingNotices) {
+      this.#pendingNotices.delete(pending)
+      this.#expected--
+      pending.target = next
+      next.#pendingNotices.add(pending)
+      next.#expected++
     }
   }
 
