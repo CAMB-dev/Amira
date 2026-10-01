@@ -37,6 +37,7 @@ import type {
   ProviderSettings,
   SessionData,
   SessionStatus,
+  Settings,
   SpawnGroupOptions,
   SpawnOptions,
   ToolApproval,
@@ -63,6 +64,7 @@ import {
 } from "./compaction.ts"
 import { createToolSession, deferredToolsSection, offeredTools } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
+import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { type PromptSection, renderPrompt, setSection } from "./prompt.ts"
@@ -101,6 +103,8 @@ export interface AgentOptions {
    * `messages` is given, its current branch is restored.
    */
   session?: SessionStore
+  fileRewind?: FileRewind
+  fileRewindSettings?: Settings["fileRewind"]
   compaction?: CompactionOptions
   sessionId?: string
   parentSessionId?: string
@@ -232,6 +236,8 @@ export class Agent {
   readonly cwd: string
   readonly messages: Message[]
   readonly session: SessionStore | undefined
+  readonly fileRewind: FileRewind | undefined
+  readonly fileRewindSettings: Settings["fileRewind"]
   /** 0 for a top-level session, 1 for its sub-agents, and so on. */
   readonly depth: number
   readonly tree: AgentTree | undefined
@@ -329,9 +335,24 @@ export class Agent {
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
+    this.fileRewindSettings = opts.fileRewindSettings
+    this.fileRewind =
+      opts.fileRewind ?? (opts.session ? new FileRewind(opts.session, opts.fileRewindSettings) : undefined)
+    const recovered = !opts.fileRewind ? this.fileRewind?.recover() : undefined
     this.sessionId = opts.session?.id ?? opts.sessionId ?? newSessionId()
     this.parentSessionId = opts.parentSessionId
     this.bus = opts.bus ?? new EventBus()
+    if (recovered) {
+      this.bus.emit(
+        "extension.notice",
+        {
+          source: "file-rewind",
+          level: "info",
+          text: `Finished interrupted file restore: ${recovered.restored} restored, ${recovered.removed} removed. ${FILE_REWIND_COVERAGE}`,
+        },
+        { sessionId: this.sessionId },
+      )
+    }
     this.interceptors = opts.interceptors ?? new InterceptorRegistry()
     this.tools = opts.tools ?? new ToolRegistry()
     this.cwd = opts.cwd
@@ -1328,6 +1349,19 @@ export class Agent {
             toolCallId: call.id,
             signal: turn.signal,
             session: this.#callSession(turn, call.id),
+            ...(this.fileRewind
+              ? {
+                  mutateFiles: (changes, write) => {
+                    if (this.#storeFailed && this.fileRewind!.enabled)
+                      throw new Error("File write refused: the session could not be saved")
+                    return this.fileRewind!.mutate(changes, write, {
+                      sessionId: this.sessionId,
+                      toolCallId: call.id,
+                      turnId: turn.id,
+                    })
+                  },
+                }
+              : {}),
             update: (partial) => {
               if (run.finished) return
               this.#emit(turn, "tool.execute.update", { toolCallId: call.id, name: call.name, partial })

@@ -1524,6 +1524,83 @@ test("Esc twice opens the rewind picker; the message picked is cut off and back 
 const subagentNotice = (text: string) =>
   userMessage(`report: ${text}`, { text: `◆ explorer finished · 41s · 12.3k tok`, origin: "subagent" })
 
+for (const mode of ["inline", "fullscreen"] as const) {
+  for (const variant of [
+    "captured",
+    "disabled",
+    "extension",
+    "conflict",
+    "conversation only",
+    "cancel",
+  ] as const) {
+    test(`${mode} rewind picker: ${variant}`, async () => {
+      const calls: { index: number; restoreFiles?: boolean }[] = []
+      const { terminal, live, all, agent, shows, exited } = await setup([], {
+        commands: [],
+        cols: 100,
+        rows: 32,
+        settings: { mode },
+        history: [userMessage("change a")],
+        control: {
+          planRewind: () => ({
+            owner: variant === "extension" ? "Restore checkpoint files" : "core",
+            enabled: variant !== "disabled",
+            restored: 2,
+            removed: 1,
+            conflicts: variant === "conflict" ? ["/workspace/conflicting.txt"] : [],
+            note:
+              variant === "disabled"
+                ? "Capture is disabled; files will not be restored."
+                : "Shell commands and hook formatters are not captured.",
+          }),
+          rewind: async (index, options) => {
+            calls.push({ index, restoreFiles: options?.restoreFiles })
+            if (variant === "conflict")
+              throw new Error("File restore refused; nothing changed. Conflicts: /workspace/conflicting.txt")
+            agent.messages.splice(index)
+          },
+        },
+      })
+      terminal.send("\x1b[27u\x1b[27u")
+      await waitFor(() => live().includes("? Rewind the conversation"), "message picker")
+      terminal.send("\r")
+      await waitFor(
+        () => live().includes(variant === "disabled" ? "files will not be restored" : "Restore files too?"),
+        "file choice",
+      )
+      if (variant === "disabled") expect(live()).toContain("Capture is disabled")
+      else if (variant === "extension") {
+        expect(live()).toContain("Restore checkpoint files")
+        expect(live()).not.toContain("2 restored")
+      } else expect(live()).toContain("2 restored, 1 removed")
+      if (variant === "conversation only") terminal.send("\x1b[B")
+      if (variant === "cancel") {
+        terminal.send("\x1b[27u")
+        await waitFor(() => !live().includes("Restore files too?"), "cancelled picker")
+        expect(calls).toHaveLength(0)
+        expect(agent.messages).toHaveLength(1)
+      } else {
+        terminal.send("\r")
+        await shows(variant === "conflict" ? "Cannot rewind" : "Rewound the conversation")
+        expect(calls).toEqual([
+          { index: 0, restoreFiles: variant !== "disabled" && variant !== "conversation only" },
+        ])
+        if (variant === "conflict") {
+          expect(agent.messages).toHaveLength(1)
+          expect(all()).toContain("conflicting.txt")
+        } else if (variant === "disabled" || variant === "conversation only")
+          expect(all()).toContain("Files were not restored")
+        else if (variant === "extension")
+          expect(all().replace(/\s+/g, " ")).toContain("Restore checkpoint files completed")
+        else expect(all().replace(/\s+/g, " ")).toContain("Restored 2 files; removed 1 file")
+      }
+      terminal.send("\x03")
+      terminal.send("\x03")
+      await exited
+    })
+  }
+}
+
 test("a background result wakes the idle session as a notice line; a draft in the editor stays", async () => {
   const { terminal, live, all, agent, shows, idle, exited } = await setup([
     (req) => ({ text: `reacting to ${lastUserText(req)}` }),

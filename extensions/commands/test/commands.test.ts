@@ -167,6 +167,7 @@ test("every built-in command is registered with a description", async () => {
     "quit",
     "reload",
     "resume",
+    "rewind-prune",
     "shell",
     "status",
     "tools",

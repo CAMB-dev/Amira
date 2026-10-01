@@ -7,10 +7,12 @@ import {
   type AnyEvent,
   type CommandDefinition,
   type EventMap,
+  type FileRewindPlan,
   type FrontendView,
   isSubagentView,
   type KeyHelp,
   modelLabel,
+  type SessionControl,
   type ToolDetailLevel,
   type TuiSettings,
   type UserMessage,
@@ -1489,8 +1491,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /**
    * The rewind picker: the user's messages, newest first. Picking one cuts the conversation
-   * back to just before it and puts it in the editor to change and send again. Files stay as
-   * they are: the conversation is what is rewound.
+   * back to just before it and puts it in the editor to change and send again. The second
+   * choice previews file restoration, including the host's coverage and conflicts.
    */
   function openRewind() {
     const control = commands?.control
@@ -1516,7 +1518,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         const i = dialogs.indexOf(dialog)
         if (i !== -1) dialogs.splice(i, 1)
         const at = typeof answer === "string" ? labels.indexOf(answer) : -1
-        if (at !== -1) void rewindTo(control.rewind!, picks[at]!)
+        if (at !== -1) chooseFileRewind(control, picks[at]!)
         view.requestRender()
       },
       keys,
@@ -1525,10 +1527,59 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     view.requestRender()
   }
 
-  async function rewindTo(rewind: (index: number) => Promise<void>, pick: { m: UserMessage; index: number }) {
+  function chooseFileRewind(control: SessionControl, pick: { m: UserMessage; index: number }) {
+    if (!control.planRewind) {
+      void rewindTo(control, pick, false)
+      return
+    }
+    let plan: FileRewindPlan
+    try {
+      plan = control.planRewind(pick.index)
+    } catch (error) {
+      view.notice("warning", `Cannot rewind: ${(error as Error).message}`)
+      view.requestRender()
+      return
+    }
+    if (plan.conflicts.length) view.notice("warning", `File restore conflicts:\n${plan.conflicts.join("\n")}`)
+    const restore =
+      plan.owner === "core"
+        ? `Restore files too (${plan.restored} restored, ${plan.removed} removed)`
+        : plan.owner
+    const canRestore = plan.enabled && (plan.owner !== "core" || plan.restored + plan.removed > 0)
+    const options = [...(canRestore ? [restore] : []), "Conversation only"]
+    const dialog: Dialog = new Dialog(
+      {
+        kind: "select",
+        requestId: `${REWIND_ID}files-${Date.now()}`,
+        title: canRestore ? "Restore files too?" : "Rewind conversation; files will not be restored",
+        options,
+        descriptions: options.map((option) =>
+          option === restore
+            ? `${plan.conflicts.length ? "Conflicts must be resolved first. " : ""}${plan.note}`
+            : `Files will not be restored. ${plan.note}`,
+        ),
+      },
+      (answer) => {
+        const at = dialogs.indexOf(dialog)
+        if (at !== -1) dialogs.splice(at, 1)
+        if (typeof answer === "string") void rewindTo(control, pick, canRestore && answer === restore, plan)
+        view.requestRender()
+      },
+      keys,
+    )
+    dialogs.unshift(dialog)
+    view.requestRender()
+  }
+
+  async function rewindTo(
+    control: SessionControl,
+    pick: { m: UserMessage; index: number },
+    restoreFiles: boolean,
+    plan?: FileRewindPlan,
+  ) {
     const text = messageText(pick.m)
     try {
-      await rewind(pick.index)
+      await control.rewind!(pick.index, { restoreFiles })
     } catch (err) {
       view.notice("warning", `Cannot rewind: ${err instanceof Error ? err.message : String(err)}`)
       view.requestRender()
@@ -1538,7 +1589,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     editor.setParts(editor.isEmpty ? back : [...back, "\n\n", ...editor.getParts()])
     view.notice(
       "info",
-      "Rewound the conversation to before that message, now back in the input. Files were not restored.",
+      `Rewound the conversation to before that message, now back in the input. ${
+        restoreFiles && plan
+          ? plan.owner === "core"
+            ? `Restored ${plan.restored} file${plan.restored === 1 ? "" : "s"}; removed ${plan.removed} file${plan.removed === 1 ? "" : "s"}.`
+            : `${plan.owner} completed.`
+          : "Files were not restored."
+      }${plan ? ` ${plan.note}` : ""}`,
     )
     redraw()
   }

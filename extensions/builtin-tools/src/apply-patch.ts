@@ -1,7 +1,8 @@
 import { type FileHandle, lstat, mkdir, open, readFile, rmdir, unlink, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, relative, sep } from "node:path"
-import { type ApplyPatchDetails, defineTool, textResult } from "@amira/api"
+import { type ApplyPatchDetails, defineTool, type MutateFiles, textResult } from "@amira/api"
 import { fileDiff } from "./diff.ts"
+import { mutateFiles } from "./mutation.ts"
 import { applyUpdate, parsePatch } from "./patch-format.ts"
 import { displayPath, fileKey, resolvePath } from "./paths.ts"
 import { decodeText, encodeText, looksBinary } from "./text.ts"
@@ -122,6 +123,7 @@ export async function applyPatch(
   patch: string,
   signal: AbortSignal,
   io: PatchIO = disk,
+  mutation?: MutateFiles,
 ): Promise<ApplyPatchDetails> {
   signal.throwIfAborted()
   const operations = parsePatch(patch)
@@ -182,6 +184,19 @@ export async function applyPatch(
   // Validate every source and destination before any directory or file is created.
   for (const change of changes) await unchanged(cwd, change.before)
   signal.throwIfAborted()
+  await mutateFiles(
+    { mutateFiles: mutation },
+    changes.map((change) => ({
+      path: change.before.path,
+      before: change.before.bytes ?? null,
+      after: change.after ?? null,
+    })),
+    () => commitPatch(cwd, changes, signal, io),
+  )
+  return { files }
+}
+
+async function commitPatch(cwd: string, changes: Change[], signal: AbortSignal, io: PatchIO) {
   const journal: (Change & { owned: Snapshot })[] = []
   const directories: string[] = []
   try {
@@ -247,7 +262,6 @@ export async function applyPatch(
       `${(error as Error).message}\n${failures.length ? `Rollback incomplete: ${failures.join("; ")}` : "All patch changes rolled back."}`,
     )
   }
-  return { files }
 }
 
 export const applyPatchTool = defineTool<ApplyPatchParams>({
@@ -271,7 +285,7 @@ export const applyPatchTool = defineTool<ApplyPatchParams>({
   async execute({ patch }, ctx) {
     if (typeof patch !== "string") return textResult("patch must be a string", true)
     try {
-      const details = await applyPatch(ctx.cwd, patch, ctx.signal)
+      const details = await applyPatch(ctx.cwd, patch, ctx.signal, disk, ctx.mutateFiles)
       return {
         ...textResult(
           details.files.length

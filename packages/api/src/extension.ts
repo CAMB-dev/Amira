@@ -7,6 +7,7 @@ import type {
   InterceptorOptions,
   NoticeLevel,
 } from "./events.ts"
+import type { FileRestorationOwner } from "./file-rewind.ts"
 import type { PanelDefinition } from "./panels.ts"
 import type { OpenPipeOptions, PipeProcess, RunCommandOptions, RunCommandResult } from "./process.ts"
 import type { ImageProvider, MarkdownRendererDefinition } from "./render.ts"
@@ -24,6 +25,8 @@ export interface InterceptContext {
 }
 
 export interface ExtensionAPI {
+  /** Claims rewind's file restoration exclusively. Unloading releases the claim. */
+  registerFileRestoration(owner: FileRestorationOwner): () => void
   readonly apiVersion: string
   /** The working directory of the sessions this host serves. */
   readonly cwd: string

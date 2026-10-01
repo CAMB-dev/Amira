@@ -44,7 +44,7 @@ import type { EmitMeta } from "./event-bus.ts"
 import { instructionsSection, loadInstructions } from "./instructions.ts"
 import { validateValue } from "./json-schema.ts"
 import { defaultSections, type PromptSection, renderPrompt, setSection } from "./prompt.ts"
-import { SessionStore } from "./session-store.ts"
+import { projectKey, SessionStore } from "./session-store.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 
 /**
@@ -546,6 +546,8 @@ export class AgentTree {
       model,
       cwd,
       providerSettings: parent.providerSettings,
+      fileRewindSettings: parent.fileRewindSettings,
+      ...(projectKey(cwd) === projectKey(parent.cwd) ? { fileRewind: parent.fileRewind } : {}),
       sections: setSection(base, "role", opts.systemPrompt ?? ""),
       messages: context === "fork" ? forkHistory(parent.messages) : [],
       // A forked history may hold a server checkpoint only the parent's model reads; a child on

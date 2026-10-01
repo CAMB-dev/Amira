@@ -1,9 +1,19 @@
 import { createHash } from "node:crypto"
-import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs"
+import {
+  appendFileSync,
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs"
 import path from "node:path"
 import type { Message, ModelRef, Signature, Usage } from "@amira/ai"
 import type { CompactionInfo, CompactionReason } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
+import type { FileJournalEntry } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 
 export interface SessionHeader {
@@ -17,6 +27,7 @@ export interface SessionHeader {
 }
 
 export type SessionEntryData =
+  | FileJournalEntry
   | { type: "message"; message: Message }
   | { type: "model_change"; model: ModelRef }
   /**
@@ -147,6 +158,30 @@ export class SessionStore {
 
   get id(): string {
     return this.header.id
+  }
+
+  /** Private assets kept for exactly as long as this session. */
+  get directory(): string {
+    return path.join(path.dirname(this.file), path.basename(this.file, ".jsonl"))
+  }
+
+  /** Deletes the recording and its captured bytes together. */
+  delete(): void {
+    rmSync(this.directory, { recursive: true, force: true })
+    rmSync(this.file, { force: true })
+  }
+
+  /** The mutation journal must reach disk before a tool can change a file. */
+  appendDurable(data: SessionEntryData): string {
+    if (!this.#written) throw new Error("Cannot capture file changes before the session is stored")
+    const id = this.append(data)
+    const fd = openSync(this.file, "r+")
+    try {
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    return id
   }
 
   get entries(): readonly SessionEntry[] {
@@ -390,6 +425,12 @@ function isHeader(v: unknown): v is SessionHeader {
 }
 
 const ENTRY_TYPES = new Set<unknown>([
+  "file_mutation",
+  "file_mutation_end",
+  "file_restore",
+  "file_restore_progress",
+  "file_restore_end",
+  "file_prune",
   "message",
   "model_change",
   "compaction",
