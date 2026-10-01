@@ -9,6 +9,7 @@ import {
   cloneState,
   commitOpenBlocks,
   type Env,
+  endCut,
   endOpenBlocks,
   finish,
   hasOpenBlock,
@@ -290,8 +291,10 @@ export class MarkdownStream implements Component {
       if (nl === -1) break
       const line = this.src.slice(from, nl)
       if (this.cut) {
-        sink(renderLine(this.cut.render, line, env, this.cut.carry, this.cut.lead).rows)
+        const { render } = this.cut
+        sink(renderLine(render, line, env, this.cut.carry, this.cut.lead).rows)
         this.cut = undefined
+        endCut(this.state, line, render)
       } else step(this.state, line, env, sink)
       from = nl + 1
     }
