@@ -1195,9 +1195,8 @@ export class Agent {
   async #runTurn(input: string | UserMessage, opts: PromptOptions): Promise<TurnResult> {
     if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
-    const steerAbort = new AbortController()
     this.#abort = abort
-    this.#steerAbort = steerAbort
+    this.#steerAbort = new AbortController()
     const turn: Turn = {
       id: opts.turnId ?? newTurnId(),
       signal: abort.signal,
@@ -1291,7 +1290,7 @@ export class Agent {
       this.#repairHistory()
       this.#abort = undefined
       this.#turn = undefined
-      if (this.#steerAbort === steerAbort) this.#steerAbort = undefined
+      this.#steerAbort = undefined
       const leftover = this.#steering.splice(0)
       // Notices are never dropped: after an interrupted or failed turn they wait for the next.
       // An owner that decides when turns run (onIdleNotice) starts the next one itself.
@@ -1402,6 +1401,8 @@ export class Agent {
   #injectSteering(turn: Turn) {
     const notices = this.#notices.splice(0)
     if (notices.length) turn.unanswered = true
+    // The steers reach the model now: later waits in this turn wait again.
+    if (this.#steerAbort?.signal.aborted) this.#steerAbort = new AbortController()
     for (const message of [...this.#steering.splice(0), ...(notices.length ? [joinMessages(notices)] : [])]) {
       this.#push(message)
       this.#emit(turn, "turn.steer", { message, state: "injected" })

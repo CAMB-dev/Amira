@@ -77,6 +77,48 @@ test("a steering message waits for the running tool and joins the history before
   expect(order.indexOf("tool.execute.end")).toBeLessThan(order.lastIndexOf("turn.steer"))
 })
 
+test("a steer aborts the steer signal of running tools only until it reaches the model", async () => {
+  const { agent } = setup([
+    { toolCalls: [{ name: "wait", args: {} }] },
+    { toolCalls: [{ name: "probe", args: {} }] },
+    { text: "ok" },
+  ])
+  const g = gate()
+  const seen: (boolean | undefined)[] = []
+  agent.tools.register(
+    defineTool({
+      name: "wait",
+      description: "",
+      parameters: {},
+      execute: async (_args, ctx) => {
+        const result = await g.tool.execute({}, ctx)
+        seen.push(ctx.steerSignal?.aborted)
+        return result
+      },
+    }),
+    "test",
+  )
+  agent.tools.register(
+    defineTool({
+      name: "probe",
+      description: "",
+      parameters: {},
+      execute: async (_args, ctx) => {
+        seen.push(ctx.steerSignal?.aborted)
+        return textResult("probed")
+      },
+    }),
+    "test",
+  )
+  const done = agent.prompt("go")
+  await g.running
+  agent.steer("also do B")
+  g.release()
+  expect(await done).toEqual({ reason: "done", steps: 3 })
+  // The waiting call saw the steer; the call after the model read it waits normally again.
+  expect(seen).toEqual([true, false])
+})
+
 test("messages queued when the turn ends become the next prompt, as one turn", async () => {
   const { agent, bus, events } = setup([{ text: "first reply", delayMs: 5 }, { text: "second" }])
   const done = agent.prompt("go")
