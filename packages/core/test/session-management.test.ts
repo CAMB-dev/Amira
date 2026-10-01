@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
@@ -28,6 +28,25 @@ test("old sessions restore; titles survive checkout, manual names beat later aut
   expect(loaded.restore().messages).toEqual([userMessage("hello")])
   expect(() => s.rename(" \n ")).toThrow("empty")
   expect(listSessions("/project", path.dirname(s.file))[0]?.title).toBe("Last manual")
+})
+
+test("an older Amira that skips title and usage entries rebuilds the same branch after a rewind", () => {
+  const s = SessionStore.create({ cwd: "/project", dir: tmp() })
+  s.appendMessage(userMessage("one"))
+  s.appendMessage(reply("answer"))
+  s.append({ type: "side_usage", model: { provider: "p", model: "m" }, usage: { input: 1, output: 1 } })
+  s.rename("Named", "auto")
+  const before = s.leafId
+  s.appendMessage(userMessage("two"))
+  s.append({ type: "checkout", target: before })
+  s.appendMessage(userMessage("three"))
+  // What an older reader keeps: every line but the entry types it does not know.
+  const old = path.join(path.dirname(s.file), "old.jsonl")
+  const lines = readFileSync(s.file, "utf8").split("\n")
+  writeFileSync(old, lines.filter((l) => !/"type":"(title|side_usage)"/.test(l)).join("\n"))
+  expect(SessionStore.open(old).restore().messages).toEqual(s.restore().messages)
+  expect(s.restore().messages).toEqual([userMessage("one"), reply("answer"), userMessage("three")])
+  expect(SessionStore.open(s.file).title).toBe("Named")
 })
 
 test("content search includes later assistant and user text, CJK and reuses the summary cache", () => {

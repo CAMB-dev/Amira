@@ -317,6 +317,9 @@ export class SessionStore {
     this.#tipBefore.set(e.id, this.#leaf)
     this.#entries.push(e)
     this.#byId.set(e.id, e)
+    // Session-wide notes stay off the branch: a rewind keeps the name, and an older Amira that
+    // skips these entry types never sees a message or checkout pointing at one.
+    if (e.type === "title" || e.type === "side_usage") return
     if (e.type !== "checkout") this.#leaf = e.id
     else if (e.target === null) this.#leaf = null
     else if (this.#byId.has(e.target)) this.#leaf = e.target
