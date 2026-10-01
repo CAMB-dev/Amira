@@ -132,6 +132,12 @@ export interface CommandContext extends CommandCompleteContext {
    * extension registered (see ExtensionAPI.registerView).
    */
   readonly openView?: (view: FrontendView) => boolean
+  /**
+   * Opens the frontend's rewind picker, the one double Esc opens (the TUI has it); unset
+   * elsewhere. Returns once it is shown: true, or false when it cannot be shown now, e.g. during
+   * a turn or while it is already open.
+   */
+  readonly openRewind?: () => boolean
 }
 
 /**

@@ -184,59 +184,28 @@ test("every built-in command is registered with a description", async () => {
   expect(host.list().every((c) => c.description.length > 0)).toBe(true)
 })
 
-test("/rewind opens the rewind and file choices, including fork", async () => {
-  const messages: UserMessage[] = [
-    { role: "user", content: [{ type: "text", text: "first request" }] },
-    { role: "user", content: [{ type: "text", text: "newest request" }] },
-  ]
-  const rewinds: { index: number; restoreFiles?: boolean }[] = []
-  const { run, requests } = await setup(
-    {
-      messages: () => messages,
-      planRewind: () => ({
-        owner: "core",
-        enabled: true,
-        restored: 1,
-        removed: 2,
-        conflicts: ["/work/conflict"],
-        note: "Captured file changes are restored.",
-      }),
-      rewind: async (index, options) => void rewinds.push({ index, ...options }),
-      fork: async () => {},
-    },
-    ["1. newest request", "Restore files too (1 restored, 2 removed)"],
-  )
-  const result = await run("/rewind")
-  expect(result.ok).toBe(true)
-  expect(result.text).toContain("/work/conflict")
-  expect(rewinds).toEqual([{ index: 1, restoreFiles: true }])
-  expect(requests[0]).toMatchObject({
-    kind: "select",
-    title: "Rewind the conversation to before which message?",
-    options: ["1. newest request", "2. first request"],
-    sections: [{ keys: [{ key: "f", label: "fork from here" }] }],
+test("/rewind opens the frontend's rewind picker, and needs one", async () => {
+  const messages: UserMessage[] = [{ role: "user", content: [{ type: "text", text: "a request" }] }]
+  const rewinds: number[] = []
+  const { host, requests } = await setup({
+    messages: () => messages,
+    rewind: async (i) => void rewinds.push(i),
   })
-  expect(requests[1]).toMatchObject({
-    title: "Restore files too?",
-    options: ["Restore files too (1 restored, 2 removed)", "Conversation only"],
-  })
-  expect((requests[1] as Extract<EventMap["ui.request"], { kind: "select" }>).descriptions?.[0]).toContain(
-    "Conflicts must be resolved first.",
-  )
+  let opened = 0
+  const shown = await host.run("/rewind", { frontend: "tui", openRewind: () => ++opened > 0 })
+  expect(shown.ok).toBe(true)
+  expect(opened).toBe(1)
+  // The picker itself is the frontend's: the command asks nothing and rewinds nothing.
+  expect(requests).toEqual([])
+  expect(rewinds).toEqual([])
 
-  let forked: number | undefined
-  const fork = await setup(
-    {
-      messages: () => messages,
-      rewind: async () => {},
-      fork: async (index) => {
-        forked = index
-      },
-    },
-    [{ option: "1. newest request", key: "f" }],
-  )
-  expect((await fork.run("/rewind")).text).toContain("Forked")
-  expect(forked).toBe(1)
+  const busy = await host.run("/rewind", { frontend: "tui", openRewind: () => false })
+  expect(busy.ok).toBe(false)
+  expect(busy.error).toContain("Cannot open the rewind picker now")
+  const rpc = await host.run("/rewind", { frontend: "rpc" })
+  expect(rpc.ok).toBe(false)
+  expect(rpc.error).toContain("/rewind <n> [--yes]")
+  expect(rewinds).toEqual([])
 })
 
 test("/rewind n confirms its plan, and --yes is required without a responder", async () => {
@@ -244,41 +213,52 @@ test("/rewind n confirms its plan, and --yes is required without a responder", a
     { role: "user", content: [{ type: "text", text: "older" }] },
     { role: "user", content: [{ type: "text", text: "newer" }] },
   ]
-  const rewinds: number[] = []
+  const rewinds: { index: number; restoreFiles?: boolean }[] = []
+  let plan = {
+    owner: "core",
+    enabled: true,
+    restored: 3,
+    removed: 1,
+    conflicts: ["/work/stale"],
+    note: "Resolve conflicts before restoring.",
+  }
   const control: Partial<SessionControl> = {
     messages: () => messages,
-    planRewind: () => ({
-      owner: "core",
-      enabled: true,
-      restored: 3,
-      removed: 1,
-      conflicts: ["/work/stale"],
-      note: "Resolve conflicts before restoring.",
-    }),
-    rewind: async (index) => void rewinds.push(index),
+    planRewind: () => plan,
+    rewind: async (index, options) => void rewinds.push({ index, ...options }),
   }
-  const interactive = await setup(control, [true])
+  const interactive = await setup(control, [true, false])
   expect((await interactive.run("/rewind 2")).text).toContain("2nd most recent")
-  expect(rewinds).toEqual([0])
+  expect(rewinds).toEqual([{ index: 0, restoreFiles: true }])
   expect(interactive.requests[0]).toMatchObject({
     kind: "confirm",
     title: "Rewind to before the 2nd most recent user message?",
   })
-  expect((interactive.requests[0] as Extract<EventMap["ui.request"], { kind: "confirm" }>).message).toContain(
-    "This removes 2 messages",
-  )
-  expect((interactive.requests[0] as Extract<EventMap["ui.request"], { kind: "confirm" }>).message).toContain(
-    "Files: 3 restored, 1 removed.",
-  )
-  expect((interactive.requests[0] as Extract<EventMap["ui.request"], { kind: "confirm" }>).message).toContain(
-    "/work/stale",
-  )
+  const preview = (interactive.requests[0] as Extract<EventMap["ui.request"], { kind: "confirm" }>).message
+  expect(preview).toContain("Message: older")
+  expect(preview).toContain("This removes 2 messages")
+  expect(preview).toContain("Files: 3 restored, 1 removed.")
+  expect(preview).toContain("refused until they are resolved")
+  expect(preview).toContain("/work/stale")
+  // Declined: nothing changes.
+  expect((await interactive.run("/rewind 1")).text).toContain("Rewind cancelled.")
+  expect(rewinds).toHaveLength(1)
 
   const headless = await setup(control)
   expect((await headless.run("/rewind 1", "print")).error).toContain("--yes")
-  expect(rewinds).toEqual([0])
-  expect((await headless.run("/rewind 1 --yes", "print")).ok).toBe(true)
-  expect(rewinds).toEqual([0, 1])
+  expect(rewinds).toHaveLength(1)
+  // Nothing captured to restore: conversation only, as the picker would default to.
+  plan = { ...plan, restored: 0, removed: 0, conflicts: [] }
+  const yes = await headless.run("/rewind 1 --yes", "print")
+  expect(yes.ok).toBe(true)
+  expect(yes.text).toContain("Files were not restored.")
+  expect(rewinds.at(-1)).toEqual({ index: 1, restoreFiles: false })
+  expect(headless.requests).toEqual([])
+
+  for (const bad of ["/rewind 0", "/rewind two", "/rewind 1 --force", "/rewind --yes"])
+    expect((await headless.run(bad, "print")).error).toContain("Usage: /rewind <n> [--yes]")
+  expect((await headless.run("/rewind 3 --yes", "print")).error).toContain("only 2 user messages")
+  expect(rewinds).toHaveLength(2)
 })
 
 test("/help lists every command with its argument hint", async () => {

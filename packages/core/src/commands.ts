@@ -265,6 +265,8 @@ export interface CommandRunOptions {
   signal?: AbortSignal
   /** Shows a full-screen view; frontends without views leave it out. */
   openView?: (view: FrontendView) => boolean
+  /** Opens the frontend's rewind picker; frontends without one leave it out. */
+  openRewind?: () => boolean
   /** The frontend's most useful keys, for /help; frontends without keys leave it out. */
   keys?: CommandContext["keys"]
 }
@@ -589,6 +591,7 @@ export class CommandHost {
       aliases: () => this.aliases(),
       quit: opts.quit ?? (() => {}),
       ...(opts.openView ? { openView: opts.openView } : {}),
+      ...(opts.openRewind ? { openRewind: opts.openRewind } : {}),
       ...(opts.keys ? { keys: opts.keys } : {}),
     }
   }

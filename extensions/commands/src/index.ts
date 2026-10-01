@@ -69,39 +69,36 @@ function rewindPicks(session: SessionControl): RewindPick[] {
     .reverse()
 }
 
-function rewindLabel(pick: RewindPick, nth: number): string {
+/** Whether rewinding restores files: as the picker's default, only when there is something to restore. */
+function restoresFiles(plan: FileRewindPlan | undefined): boolean {
+  return !!plan && plan.enabled && (plan.owner !== "core" || plan.restored + plan.removed > 0)
+}
+
+function directRewindPreview(
+  pick: RewindPick,
+  messagesCut: number,
+  plan: FileRewindPlan | undefined,
+): string {
   const text =
-    pick.message.display?.text.trim() ||
-    pick.message.content
-      .filter(
-        (block): block is Extract<UserMessage["content"][number], { type: "text" }> => block.type === "text",
-      )
-      .map((block) => block.text)
-      .join("") ||
-    "(image)"
-  return `${nth + 1}. ${oneLine(text, 100)}`
-}
-
-function fileRewindChoice(plan: FileRewindPlan): { restore: string; canRestore: boolean; options: string[] } {
-  const restore =
-    plan.owner === "core"
-      ? `Restore files too (${plan.restored} restored, ${plan.removed} removed)`
-      : plan.owner
-  const canRestore = plan.enabled && (plan.owner !== "core" || plan.restored + plan.removed > 0)
-  return { restore, canRestore, options: [...(canRestore ? [restore] : []), "Conversation only"] }
-}
-
-function directRewindPreview(messagesCut: number, plan: FileRewindPlan | undefined): string {
-  const messages = `This removes ${messagesCut} message${messagesCut === 1 ? "" : "s"} from the active conversation.`
-  if (!plan) return `${messages}\nFile restoration information is not available.`
-  const files =
-    plan.owner === "core"
-      ? plan.enabled
+    pick.message.display?.text ??
+    pick.message.content.map((block) => (block.type === "text" ? block.text : "")).join("")
+  const lines = [
+    `Message: ${oneLine(text || "(image)", 100)}`,
+    `This removes ${messagesCut} message${messagesCut === 1 ? "" : "s"} from the active conversation.`,
+  ]
+  if (!plan || !restoresFiles(plan)) lines.push("Files will not be restored.")
+  else {
+    lines.push(
+      plan.owner === "core"
         ? `Files: ${plan.restored} restored, ${plan.removed} removed.`
-        : "Files will not be restored."
-      : `Files: ${plan.owner}.`
-  const conflicts = plan.conflicts.length ? `Conflicts:\n${plan.conflicts.join("\n")}` : "Conflicts: none."
-  return `${messages}\n${files}\n${conflicts}\n${plan.note}`
+        : `Files: ${plan.owner}.`,
+      plan.conflicts.length
+        ? `Conflicts (the rewind is refused until they are resolved):\n${plan.conflicts.join("\n")}`
+        : "Conflicts: none.",
+    )
+  }
+  if (plan?.note) lines.push(plan.note)
+  return lines.join("\n")
 }
 
 function parseDirectRewind(args: string): { nth: number; yes: boolean } {
@@ -182,59 +179,13 @@ export default defineExtension((api: ExtensionAPI) => {
       if (!picks.length) throw new Error("Nothing to rewind to yet")
 
       if (!args.trim()) {
-        if (ctx.frontend !== "tui")
+        // The frontend's own picker, the one double Esc opens: fork, file choice and the
+        // prompt put back in the editor all stay in one place.
+        if (!ctx.openRewind)
           throw new Error(
             "Use /rewind <n> [--yes] outside the terminal UI; n is the n-th most recent user message",
           )
-        const labels = picks.map(rewindLabel)
-        const selected = await ctx.ui.choose("Rewind the conversation to before which message?", labels, {
-          signal: ctx.signal,
-          sections: [
-            {
-              at: 0,
-              choose: "rewind",
-              ...(ctx.session.fork ? { keys: [{ key: "f", label: "fork from here" }] } : {}),
-            },
-          ],
-        })
-        if (!selected) return
-        const at = labels.indexOf(selected.option)
-        if (at === -1) return
-        const pick = picks[at]!
-        if (selected.key === "f") {
-          await ctx.session.fork?.(pick.index)
-          ctx.print("Forked the conversation to before that message.")
-          return
-        }
-        if (!ctx.session.planRewind) {
-          await rewind(pick.index, { restoreFiles: false })
-          ctx.print("Rewound the conversation to before that message. Files were not restored.")
-          return
-        }
-        const plan = ctx.session.planRewind(pick.index)
-        if (plan.conflicts.length)
-          ctx.print(`File restore conflicts:\n${plan.conflicts.join("\n")}`, "warning")
-        const { restore, canRestore, options } = fileRewindChoice(plan)
-        const choice = await ctx.ui.choose(
-          canRestore ? "Restore files too?" : "Rewind conversation; files will not be restored",
-          options,
-          {
-            signal: ctx.signal,
-            sections: [{ at: 0, choose: "rewind" }],
-            descriptions: options.map((option) =>
-              option === restore
-                ? `${plan.conflicts.length ? "Conflicts must be resolved first. " : ""}${plan.note}`
-                : `Files will not be restored. ${plan.note}`,
-            ),
-          },
-        )
-        if (!choice) return
-        await rewind(pick.index, { restoreFiles: canRestore && choice.option === restore })
-        ctx.print(
-          `Rewound the conversation to before that message. ${
-            canRestore && choice.option === restore ? "Files were restored." : "Files were not restored."
-          }`,
-        )
+        if (!ctx.openRewind()) throw new Error("Cannot open the rewind picker now; wait for the turn to end")
         return
       }
 
@@ -247,7 +198,7 @@ export default defineExtension((api: ExtensionAPI) => {
           throw new Error("Print mode cannot confirm rewind; repeat this command with --yes to proceed")
         const confirmed = await ctx.ui.confirm(
           `Rewind to before the ${ordinal(nth)} most recent user message?`,
-          directRewindPreview(ctx.session.messages().length - pick.index, plan),
+          directRewindPreview(pick, ctx.session.messages().length - pick.index, plan),
           { signal: ctx.signal },
         )
         if (!confirmed) {
@@ -255,8 +206,15 @@ export default defineExtension((api: ExtensionAPI) => {
           return
         }
       }
-      await rewind(pick.index)
-      ctx.print(`Rewound the conversation to before the ${ordinal(nth)} most recent user message.`)
+      const restoreFiles = !!plan && restoresFiles(plan)
+      await rewind(pick.index, { restoreFiles })
+      const files =
+        !plan || !restoreFiles
+          ? "Files were not restored."
+          : plan.owner === "core"
+            ? `Restored ${plan.restored} file${plan.restored === 1 ? "" : "s"}; removed ${plan.removed}.`
+            : `${plan.owner} completed.`
+      ctx.print(`Rewound the conversation to before the ${ordinal(nth)} most recent user message. ${files}`)
     },
   })
   api.registerCommand({
