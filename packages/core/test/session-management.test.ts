@@ -34,7 +34,11 @@ test("an older Amira that skips title and usage entries rebuilds the same branch
   const s = SessionStore.create({ cwd: "/project", dir: tmp() })
   s.appendMessage(userMessage("one"))
   s.appendMessage(reply("answer"))
-  s.append({ type: "side_usage", model: { provider: "p", model: "m" }, usage: { input: 1, output: 1 } })
+  s.append({
+    type: "side_usage",
+    model: { provider: "p", model: "m" },
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+  })
   s.rename("Named", "auto")
   const before = s.leafId
   s.appendMessage(userMessage("two"))
