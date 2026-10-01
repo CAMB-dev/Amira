@@ -10,8 +10,14 @@ import {
   writeFileSync,
 } from "node:fs"
 import path from "node:path"
-import { type FileLock, isProcessAlive, LockBusyError, tryFileLock, waitFileLock } from "../file-lock.ts"
-import { amiraHome } from "../home.ts"
+import {
+  amiraHome,
+  type FileLock,
+  isProcessAlive,
+  LockBusyError,
+  tryFileLock,
+  waitFileLock,
+} from "@amira/core"
 import { packageScope, readLock } from "./lock.ts"
 import { PackageError } from "./manifest.ts"
 import { COMMAND_TIMEOUT_MS, lastLines, runTool, ToolError } from "./run.ts"

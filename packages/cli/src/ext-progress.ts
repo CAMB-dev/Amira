@@ -1,4 +1,4 @@
-import type { InstallProgress } from "@amira/core"
+import type { InstallProgress } from "@amira/packages"
 import { cyan, dim, green, red, truncateToWidth, visibleWidth, yellow } from "@amira/tui-kit"
 
 /**

@@ -1,8 +1,8 @@
 import path from "node:path"
 import { parseArgs } from "node:util"
 import type { Settings } from "@amira/api"
+import { amiraHome, loadSettings } from "@amira/core"
 import {
-  amiraHome,
   defaultGitCacheDir,
   describeSource,
   GIT_CACHE_UNUSED_DAYS,
@@ -17,7 +17,6 @@ import {
   listGitCaches,
   listInstalled,
   loadIndex,
-  loadSettings,
   missingPackages,
   PackageError,
   packageScope,
@@ -34,7 +33,7 @@ import {
   setPackageDisabled,
   type UpdateResult,
   updatePackages,
-} from "@amira/core"
+} from "@amira/packages"
 import { UsageError } from "./args.ts"
 import { clean, ExtProgress, type Outcome, progressMode, shortReason } from "./ext-progress.ts"
 import type { PrintIO } from "./print.ts"

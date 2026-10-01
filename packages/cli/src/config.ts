@@ -6,12 +6,11 @@ import {
   loadAuth,
   loadSettings,
   ProviderSettingsError,
-  projectScopeIsUser,
-  projectTrust,
   providersFromSettings,
   type ResolvedPermissions,
   resolvePermissions,
 } from "@amira/core"
+import { projectScopeIsUser, projectTrust } from "@amira/packages"
 import type { CliArgs } from "./args.ts"
 import { toolsToDisable } from "./session.ts"
 

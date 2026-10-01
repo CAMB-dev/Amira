@@ -19,7 +19,6 @@ import type {
   ToolPresenter,
 } from "@amira/api"
 import {
-  type ActivePackages,
   Agent,
   AgentTree,
   type Approver,
@@ -42,6 +41,7 @@ import {
   ToolRegistry,
   type UiRequests,
 } from "@amira/core"
+import type { ActivePackages } from "@amira/packages"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
 import { withProviderHint } from "./provider-command.ts"

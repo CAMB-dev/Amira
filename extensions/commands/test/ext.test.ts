@@ -14,16 +14,18 @@ import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
   CommandHost,
-  createExtensionAdmin,
-  DEFAULT_INDEX_URL,
   EventBus,
   ExtensionHost,
   InterceptorRegistry,
   loadSettings,
-  packageScope,
-  readLock,
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
+import {
+  createExtensionAdmin,
+  DEFAULT_INDEX_URL,
+  packageScope,
+  readLock,
+} from "../../../packages/packages/src/index.ts"
 import { extensionProgressLines, extensionRows, parseExtArgs } from "../src/ext-command.ts"
 import commandsExtension from "../src/index.ts"
 
