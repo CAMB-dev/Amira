@@ -98,6 +98,17 @@ function subcommandCandidates(
  * They act on the session through `ctx.session`, which the host provides.
  */
 export default defineExtension((api: ExtensionAPI) => {
+  api.registerCommand({
+    name: "rewind-prune",
+    description: "Discard this session's captured file history and free its storage",
+    run: (_args, ctx) => {
+      if (!ctx.session.pruneFileHistory) throw new Error("File rewind storage is not available")
+      const result = ctx.session.pruneFileHistory()
+      ctx.print(
+        `Pruned ${result.files} file images (${result.bytes} bytes). Earlier captured changes can no longer be restored.`,
+      )
+    },
+  })
   // Git facts per session, for /status; workspace.changed follows every session.start.
   const workspace = new Map<string, EventMap["workspace.changed"]>()
   const waiting = new Set<() => void>()

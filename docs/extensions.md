@@ -172,10 +172,11 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, the working directory, the user directory and API version |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
 | `notify`, `reportError` | Show a notice or report a background failure |
+| `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
 
 Extension-specific settings belong under `extensions` with the extension name. The settings snapshot is deeply frozen; validate your own section. Print mode cancels UI dialogs; RPC clients answer them through the protocol. Panels, views, tool presenters, Markdown renderers, image providers and services are experimental APIs.
 
-`runCommand` resolves once the command has exited, with all of its output in `output`. Pass `onChunk` to get output as it arrives, for example to show progress from a long `git` command. Abort through `signal` (or let `timeoutMs` expire) and the whole process tree is killed; the result then reports `aborted` or `timedOut`. For a command that may print a lot, `maxOutputChars` keeps only the end of `output`; `onChunk` still receives everything.
+`runCommand` resolves once the command has exited. Pass `onChunk` to get output as it arrives, for example to show progress from a long `git` command. Abort through `signal` (or let `timeoutMs` expire) and the whole process tree is killed; the result then reports `aborted` or `timedOut`. By default, `output` keeps only the last 1,000,000 characters; override that limit with a positive-integer `maxOutputChars` (invalid values reject the call). `onChunk` still receives everything, and `truncated` reports whether `output` was cut. A cut never splits a UTF-16 surrogate pair.
 
 Registrations return removal functions and are tracked by the host. Unloading removes them; a failed extension load rolls back its registrations. For matching command, tool, skill, status or panel names, an intentional replacement needs `override: true`; consult the specific type for collision rules. Do not replace another extension's registrations accidentally.
 

@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { defineTool, type EditDetails, textResult } from "@amira/api"
 import { fileDiff } from "./diff.ts"
 import { statOrNull } from "./files.ts"
+import { mutateFiles } from "./mutation.ts"
 import { displayPath, fileKey, resolvePath } from "./paths.ts"
 import { decodeText, encodeText, looksBinary } from "./text.ts"
 
@@ -86,7 +87,11 @@ export const editTool = defineTool<EditParams>({
 
     const updated = replace_all ? text.split(oldStr).join(newStr) : spliceFirst(text, oldStr, newStr)
     try {
-      await writeFile(abs, encodeText(updated, decoded), { signal: ctx.signal })
+      const after = encodeText(updated, decoded)
+      await mutateFiles(ctx, [{ path: abs, before: bytes, after }], async () => {
+        ctx.signal.throwIfAborted()
+        await writeFile(abs, after, { signal: ctx.signal })
+      })
     } catch (err) {
       return textResult(`Failed to write ${abs}: ${(err as Error).message}`, true)
     }

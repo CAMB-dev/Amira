@@ -4,6 +4,7 @@ import { openPipeInline, type PipeEvent, type PipeHandle, type PipeSpec } from "
 import { terminateJobHandle } from "./process-tree.ts"
 import type { FromWorker, RunRequest, SpawnRequest, ToWorker } from "./protocol.ts"
 import {
+  outputCharLimit,
   type ReleaseOptions,
   type RunOptions,
   type RunResult,
@@ -25,6 +26,7 @@ export * from "./jobs.ts"
 export type { PipeEvent, PipeSpec } from "./pipe.ts"
 export { type ProcessTree, trackProcessTree, warmUpProcessTree } from "./process-tree.ts"
 export {
+  DEFAULT_MAX_OUTPUT_CHARS,
   DRAIN_GRACE_MS,
   type PreparedCommand,
   prepareCommandInline,
@@ -241,6 +243,11 @@ function start(
  * workers are unavailable or a test seam is given.
  */
 export function runCommand(argv: string[], opts: RunOptions): Promise<RunResult> {
+  try {
+    outputCharLimit(opts.maxOutputChars)
+  } catch (err) {
+    return Promise.reject(err)
+  }
   const w = opts.trackTree ? undefined : getWorker()
   if (!w) return runCommandInline(argv, opts)
   const id = nextId++
@@ -271,6 +278,7 @@ export interface Standby {
  * process does (its stdin closes). Without a worker there is no standby: it is never alive.
  */
 export function prepareCommand(argv: string[], opts: Omit<SpawnOptions, "trackTree">): Standby {
+  outputCharLimit(opts.maxOutputChars)
   const w = getWorker()
   let state: "idle" | "released" | "gone" = w ? "idle" : "gone"
   const id = nextId++

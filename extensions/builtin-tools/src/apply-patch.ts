@@ -11,8 +11,9 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
-import { type ApplyPatchDetails, defineTool, textResult } from "@amira/api"
+import { type ApplyPatchDetails, defineTool, type MutateFiles, textResult } from "@amira/api"
 import { fileDiff } from "./diff.ts"
+import { mutateFiles } from "./mutation.ts"
 import { applyUpdate, parsePatch } from "./patch-format.ts"
 import { displayPath, fileKey, resolvePath } from "./paths.ts"
 import { decodeText, encodeText, looksBinary } from "./text.ts"
@@ -133,6 +134,7 @@ export async function applyPatch(
   patch: string,
   signal: AbortSignal,
   io: PatchIO = disk,
+  mutation?: MutateFiles,
 ): Promise<ApplyPatchDetails> {
   signal.throwIfAborted()
   const operations = parsePatch(patch)
@@ -214,6 +216,26 @@ export async function applyPatch(
   // Validate every source and destination before any directory or file is created.
   for (const before of originals.values()) await unchanged(cwd, before)
   signal.throwIfAborted()
+  // Capture sees each path once: its state before the patch and after all its blocks.
+  await mutateFiles(
+    { mutateFiles: mutation },
+    [...originals].map(([key, before]) => ({
+      path: before.path,
+      before: before.bytes ?? null,
+      after: staged.get(key)?.bytes ?? null,
+    })),
+    () => commitPatch(cwd, changes, originals, signal, io),
+  )
+  return { files }
+}
+
+async function commitPatch(
+  cwd: string,
+  changes: Change[],
+  originals: Map<string, Snapshot>,
+  signal: AbortSignal,
+  io: PatchIO,
+): Promise<void> {
   const currentState = new Map(originals)
   const journal: (Change & { owned: Snapshot; backup?: string })[] = []
   const backups: string[] = []
@@ -321,7 +343,6 @@ export async function applyPatch(
   const cleanupFailures = await cleanBackups()
   if (cleanupFailures.length)
     throw new Error(`Patch applied, but temporary backup cleanup failed: ${cleanupFailures.join("; ")}`)
-  return { files }
 }
 
 export const applyPatchTool = defineTool<ApplyPatchParams>({
@@ -345,7 +366,7 @@ export const applyPatchTool = defineTool<ApplyPatchParams>({
   async execute({ patch }, ctx) {
     if (typeof patch !== "string") return textResult("patch must be a string", true)
     try {
-      const details = await applyPatch(ctx.cwd, patch, ctx.signal)
+      const details = await applyPatch(ctx.cwd, patch, ctx.signal, disk, ctx.mutateFiles)
       return {
         ...textResult(
           details.files.length

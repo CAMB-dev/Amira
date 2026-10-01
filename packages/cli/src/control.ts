@@ -5,8 +5,11 @@ import { type AssistantMessage, type SessionControl, type ShellMode, USER_STOP_R
 import {
   type Agent,
   CommandHost,
+  copyFileHistory,
   createExtensionAdmin,
   deleteSession,
+  FILE_REWIND_COVERAGE,
+  FileRewindConflictError,
   findSession,
   listSessions,
   listSubagents,
@@ -68,6 +71,28 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     agent().cancelNoticeRetry()
     host.switchTo(next)
     opts.announce?.(next, reason)
+  }
+  const rewindEntry = (index: number) => {
+    const a = agent()
+    const store = a.session
+    if (!store) throw new Error("this session is not stored, so it cannot be rewound")
+    const message = Number.isInteger(index) ? a.messages[index] : undefined
+    if (message?.role !== "user")
+      throw new Error(`message ${index} is not a user message of this conversation`)
+    const id = a.entryId(message)
+    const entry = id ? store.get(id) : undefined
+    if (entry?.type !== "message") {
+      throw new Error("that message was summarized by a compaction; only later ones can be rewound to")
+    }
+    return { a, store, entry }
+  }
+  const idleFiles = () => {
+    if (agent().fileRewind?.busy) throw new Error("file tools are still running; wait for them to finish")
+    if (
+      listSubagents(agent(), session.tree).some((e) => ["running", "queued", "idle"].includes(e.info.status))
+    ) {
+      throw new Error("stop this session's active sub-agents before rewinding or pruning file history")
+    }
   }
 
   const control: SessionControl = {
@@ -212,20 +237,74 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
         if (entry?.type !== "message") throw new Error("that message was summarized by a compaction")
         target = entry.parentId
       }
-      switchTo(session.resume(store.fork(target), a.model), "fork")
+      if (a.fileRewind?.restoring)
+        throw new Error("finish or abandon the interrupted file restore before forking")
+      const forked = store.fork(target)
+      // The copied journal keeps working: the fork gets the captured bytes it refers to.
+      copyFileHistory(store, forked)
+      switchTo(session.resume(forked, a.model), "fork")
     },
-    rewind: async (index) => {
+    planRewind: (index) => {
+      const { a, entry } = rewindEntry(index)
+      const owner = session.host.fileRestoration
+      return owner
+        ? {
+            owner: owner.label,
+            enabled: true,
+            restored: 0,
+            removed: 0,
+            conflicts: [],
+            note: `File restoration is managed by ${owner.source}. The core will not restore files.`,
+          }
+        : (a.fileRewind?.plan(entry.id) ?? {
+            owner: "core",
+            enabled: false,
+            restored: 0,
+            removed: 0,
+            conflicts: [],
+            note: `Files will not be restored. ${FILE_REWIND_COVERAGE}`,
+          })
+    },
+    pruneFileHistory: () => {
+      idle("prune file history")
+      idleFiles()
+      if (!agent().fileRewind) throw new Error("this session has no file history")
+      return agent().fileRewind!.prune()
+    },
+    rewind: async (index, options) => {
       idle("rewind the conversation")
-      const a = agent()
-      const store = a.session
-      if (!store) throw new Error("this session is not stored, so it cannot be rewound")
-      const message = Number.isInteger(index) ? a.messages[index] : undefined
-      if (message?.role !== "user")
-        throw new Error(`message ${index} is not a user message of this conversation`)
-      const id = a.entryId(message)
-      const entry = id ? store.get(id) : undefined
-      if (entry?.type !== "message") {
-        throw new Error("that message was summarized by a compaction; only later ones can be rewound to")
+      idleFiles()
+      const { a, store, entry } = rewindEntry(index)
+      const owner = session.host.fileRestoration
+      const restore = options?.restoreFiles !== false
+      const interrupted = a.fileRewind?.interrupted()
+      if (interrupted) {
+        // Never two restores: finish the started one, or give it up only once it cannot finish.
+        const stuck = interrupted.conflicts.length > 0 || interrupted.failure !== undefined
+        if (!stuck && (!restore || owner || interrupted.messageId !== entry.id))
+          throw new Error(
+            `Finish the interrupted core file restore first: rewind with files to the message it was started for${owner ? ` (unload ${owner.source} first; it would restore instead)` : ""}`,
+          )
+        if (interrupted.conflicts.length && restore) throw new FileRewindConflictError(interrupted.conflicts)
+        if (stuck && restore && (owner || interrupted.messageId !== entry.id))
+          throw new Error(
+            `The interrupted core file restore failed (${interrupted.failure ?? "conflicts"}); retry it with files to the same message, or rewind the conversation only to abandon it`,
+          )
+        if (!restore) a.fileRewind!.abandon()
+      }
+      if (restore && owner) {
+        await a.hold("file restore", async () => {
+          await owner.restore(index)
+          // Inputs queued during the hold belong to the discarded conversation; do not wake it.
+          a.abort()
+          store.append({ type: "checkout", target: entry.parentId })
+          switchTo(session.resume(store, a.model), "resume")
+        })
+        return
+      } else if (restore && a.fileRewind?.plan(entry.id).enabled) {
+        a.fileRewind.restore(entry.id, entry.parentId)
+        switchTo(session.resume(store, a.model), "resume")
+        return
       }
       // Nothing came before it: back to an empty conversation, still in this session.
       store.append({ type: "checkout", target: entry.parentId })

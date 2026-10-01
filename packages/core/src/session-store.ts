@@ -1,11 +1,21 @@
 import { createHash } from "node:crypto"
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import {
+  appendFileSync,
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import path from "node:path"
 import type { Message, ModelRef, Signature, ToolResultMessage, Usage } from "@amira/ai"
 import type { CompactionInfo, CompactionReason } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import type { ContextView, StoredView } from "./context.ts"
 import { type FileLock, tryFileLock } from "./file-lock.ts"
+import type { FileJournalEntry } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 
 /** A live session refreshes this lease; a dead process is safe to replace immediately. */
@@ -49,6 +59,7 @@ export interface SessionHeader {
 }
 
 export type SessionEntryData =
+  | FileJournalEntry
   | { type: "title"; title: string; source: "manual" | "auto" }
   | { type: "side_usage"; model: ModelRef; usage: Usage }
   | { type: "message"; message: Message }
@@ -204,6 +215,19 @@ export class SessionStore {
       return
     }
     sessionLocks.set(this.file, lock)
+  }
+
+  /** The mutation journal must reach disk before a tool can change a file. */
+  appendDurable(data: SessionEntryData): string {
+    if (!this.#written) throw new Error("Cannot capture file changes before the session is stored")
+    const id = this.append(data)
+    const fd = openSync(this.file, "r+")
+    try {
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    return id
   }
 
   get entries(): readonly SessionEntry[] {
@@ -531,6 +555,12 @@ function isHeader(v: unknown): v is SessionHeader {
 }
 
 const ENTRY_TYPES = new Set<unknown>([
+  "file_mutation",
+  "file_mutation_end",
+  "file_restore",
+  "file_restore_progress",
+  "file_restore_end",
+  "file_prune",
   "title",
   "side_usage",
   "message",
