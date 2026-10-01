@@ -1,32 +1,20 @@
 import { spawnSync } from "node:child_process"
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { homedir, tmpdir } from "node:os"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { isNoModel, type ServerToolBlock } from "@amira/ai"
 import {
   type AnyEvent,
-  type CommandDefinition,
   type EventMap,
   type FileRewindPlan,
   type FrontendView,
   isSubagentView,
-  type KeyHelp,
   modelLabel,
   type SessionControl,
   type ToolDetailLevel,
-  type TuiSettings,
   type UserMessage,
 } from "@amira/api"
-import {
-  type Agent,
-  AgentBusyError,
-  type CommandHost,
-  MODE_SUMMARY,
-  type PanelRegistry,
-  parseCommandLine,
-  type StatusRegistry,
-  type UiRequests,
-} from "@amira/core"
+import { type Agent, AgentBusyError, MODE_SUMMARY, parseCommandLine, type UiRequests } from "@amira/core"
 import {
   type Component,
   chooseImageSupport,
@@ -40,38 +28,32 @@ import {
   type InputEvent,
   InputReader,
   isColorEnabled,
-  italic,
   monoTheme,
   ProcessTerminal,
   progressSupported,
   type RenderContext,
-  type SetupResult,
   Spinner,
   Stack,
   setupTerminalInput,
   supportsHyperlinks,
   surfaceTheme,
-  type Terminal,
-  type Theme,
   truncateToWidth,
-  visibleWidth,
-  wrapText,
 } from "@amira/tui-kit"
+import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer, type DialogRequest, dialogEchoLines } from "./dialog.ts"
 import { renderToolLines } from "./diff-view.ts"
-import { ExtensionViewer, type ViewSource } from "./extension-view.ts"
-import { FileIndex, type FileSource } from "./file-index.ts"
+import { ExtensionViewer } from "./extension-view.ts"
+import { FileIndex } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
 import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
-import { compactionNotice, compactTokens, userLines, userText } from "./format.ts"
+import { compactionNotice, userText } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import { HistorySearch } from "./history-search.ts"
 import {
-  type ClipboardContent,
   imageBytes,
   imageMimeType,
   MAX_IMAGE_BYTES,
@@ -82,303 +64,57 @@ import {
 import { createInlineView } from "./inline-view.ts"
 import { InputBox } from "./input-box.ts"
 import { KeyReference } from "./key-reference.ts"
-import { ACTIONS, type Action, defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
-import { type ImageSource, type MarkdownRenderSource, ReplyRenderers } from "./markdown-nodes.ts"
+import { defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
+import { ReplyRenderers } from "./markdown-nodes.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import { type StatusEntry, statusLine } from "./status-bar.ts"
 import { SubagentViewer } from "./subagent-view.ts"
 import { TerminalStatus } from "./terminal-status.ts"
-import { formatElapsed, type PresenterSource } from "./tool-view.ts"
 import { INTERRUPTED_NOTICE, modelErrorNotice } from "./transcript.ts"
 import { detailCommand, nextDetail } from "./verbose.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
-export interface InteractiveOptions {
-  agent: Agent
-  status: StatusRegistry
-  /** Live panels registered by extensions, shown above the activity line in both modes. */
-  panels?: PanelRegistry
-  /** Extension dialogs, answered inline. Without it they are left to other frontends. */
-  ui?: UiRequests
-  /**
-   * Slash commands and their completion popup. It owns the active session: the UI follows
-   * the agent it switches to (/clear, /resume).
-   */
-  commands?: CommandHost
-  /**
-   * Adds the TUI's own slash commands (/verbose) to the registry `commands` runs from; the
-   * returned function removes them again when the UI quits.
-   */
-  registerCommand?: (command: CommandDefinition) => () => void
-  /** Presenters of tool calls registered by extensions (D1); unknown tools use a generic one. */
-  toolRenderers?: PresenterSource
-  /** Full-screen view kinds registered by extensions, which commands open with openView. */
-  views?: ViewSource
-  /** Events emitted before the UI subscribed, such as extension load errors. */
-  startupEvents?: AnyEvent[]
-  /** Sent as the first message once the UI is up. */
-  initialPrompt?: string
-  /** Shown as a warning under the banner, e.g. that no model is selected yet. */
-  notice?: string
-  /** Called once the UI listens to the bus, e.g. to announce the session. */
-  onReady?: () => void
-  terminal?: Terminal
-  /** Terminal setup; injectable for tests. Defaults to probing the real terminal. */
-  setup?: (
-    terminal: Terminal,
-    env?: Record<string, string | undefined>,
-    opts?: { images?: boolean; background?: boolean },
-  ) => Promise<SetupResult>
-  theme?: Theme
-  /**
-   * Prompts sent before, for ↑/↓ and Ctrl+R; the CLI passes the project's persisted history.
-   * Default: one kept in memory for this run.
-   */
-  history?: PromptHistory
-  /** The files the @ picker offers. Default: the working directory's, from git or a walk. */
-  files?: FileSource
-  /** The keys of every action; defaults to the defaults for this terminal. See loadKeybindings. */
-  keybindings?: Keybindings
-  /**
-   * The `tui` settings: the mode, bell, title, progress indicator, reflow, what Enter does
-   * while working.
-   */
-  settings?: TuiSettings
-  /**
-   * Full screen (the conversation kept on the alternate screen, scrolled by Amira) or inline
-   * (finished output goes to the terminal's scrollback). Default: `settings.mode`, else inline;
-   * the CLI defaults to full screen (D84).
-   */
-  mode?: "fullscreen" | "inline"
-  /** Tells the terminal apart (Windows Terminal, VS Code); injectable for tests. */
-  env?: Record<string, string | undefined>
-  /** Image providers registered by extensions (D88); without one, images are their alt text. */
-  imageProviders?: ImageSource
-  /** Clipboard reader; injectable without OS clipboard access in tests. */
-  clipboard?: (cwd: string, signal: AbortSignal) => Promise<ClipboardContent>
-  /** Markdown renderers registered by extensions (D88), e.g. diagrams for ```mermaid blocks. */
-  markdownRenderers?: MarkdownRenderSource
-  /**
-   * How many background jobs (commands the shell tools run in the background) are running
-   * now. Quitting while some run asks first, as it does for sub-agents; they stop on exit.
-   */
-  runningJobs?: () => number
-}
+export type { RetryState } from "./app/activity.ts"
+export { activityLabel, lastReasoningLine, retryLabel, statusRetryLabel } from "./app/activity.ts"
 
-/** The renderer's shortest time between frames, and how long a key waits for async candidates. */
-const FRAME_MS = 16
+import type { CommandRunner } from "./app/command-runner.ts"
+import { createCommandRunner } from "./app/command-runner.ts"
+import {
+  createNoticeStrip,
+  draftMessage,
+  messageParts,
+  messageText,
+  type NoticeStrip,
+  type Outgoing,
+  oneLine,
+  otherWay,
+  outgoing,
+  pendingMessageRows,
+  toPrompt,
+  type WhileWorking,
+} from "./app/outbox.ts"
+
+export { pendingMessageRows } from "./app/outbox.ts"
+
+import type { InteractiveOptions } from "./app/startup.ts"
+import {
+  DOUBLE_ESC_MS,
+  FOLD_PASTES,
+  FRAME_MS,
+  HINT_NOTE_MS,
+  HOST_EVENTS,
+  overlayKeys,
+  REWIND_ID,
+  tildePath,
+  welcomeCard,
+} from "./app/startup.ts"
+
+export type { InteractiveOptions } from "./app/startup.ts"
+export { tildePath } from "./app/startup.ts"
 
 /** The items of a hint line, most useful ones with the highest priority. */
 type HintItems = Parameters<typeof fitHint>[0]
-
-/** Bracketed pastes this big become one placeholder in the editor, expanded when sent. */
-const FOLD_PASTES = { lines: 8, chars: 1000 }
-
-/** A message on its way: the text the model gets, and what the transcript shows when that differs. */
-interface Outgoing {
-  text: string
-  /** The text with folded pastes as their placeholders. */
-  display?: string
-  /** When it was typed, among the messages of this run: steering and queued ones merge in this order. */
-  seq?: number
-  content?: UserMessage["content"]
-  parts?: EditorPart[]
-}
-
-function outgoing(text: string, display: string | undefined): Outgoing {
-  const shown = display?.trim()
-  return shown && shown !== text ? { text, display: shown } : { text }
-}
-
-/** What to hand the agent: the text, or a message that shows its placeholders (MessageDisplay). */
-function toPrompt(o: Outgoing): string | UserMessage {
-  if (o.content) return { role: "user", content: o.content, display: { text: o.display ?? o.text } }
-  if (!o.display) return o.text
-  return { role: "user", content: [{ type: "text", text: o.text }], display: { text: o.display } }
-}
-
-function messageParts(m: UserMessage): EditorPart[] {
-  return m.content.map((b) =>
-    b.type === "text"
-      ? b.text
-      : {
-          image: {
-            name: b.name ?? `image.${b.mimeType.split("/")[1] ?? "png"}`,
-            mimeType: b.mimeType,
-            data: b.data,
-          },
-        },
-  )
-}
-
-function draftMessage(text: string, display: string | undefined, parts: EditorPart[]): Outgoing {
-  if (!parts.some((p) => typeof p !== "string" && "image" in p)) return outgoing(text, display)
-  const content = parts.flatMap<UserMessage["content"][number]>((p) =>
-    typeof p === "string"
-      ? [{ type: "text" as const, text: p }]
-      : "paste" in p
-        ? [{ type: "text" as const, text: p.paste }]
-        : [{ type: "image" as const, ...p.image }],
-  )
-  return { text: userText({ role: "user", content }), display, content, parts }
-}
-
-/** What a message sent while a turn runs does: joins that turn, or waits for the next. */
-type WhileWorking = "steer" | "queue"
-
-const otherWay = (w: WhileWorking): WhileWorking => (w === "steer" ? "queue" : "steer")
-
-/** Events without a turn that the UI shows whatever session emitted them. */
-const HOST_EVENTS = new Set<string>([
-  "extension.error",
-  "extension.notice",
-  "ui.render",
-  "extension.loaded",
-  "ui.request",
-  "ui.resolved",
-  "command.output",
-])
-
-/** How long a note such as "Tool output: full" replaces the key hints. */
-const HINT_NOTE_MS = 4000
-
-/** Two presses of the interrupt key (Esc) within this many ms are a double press: rewind. */
-const DOUBLE_ESC_MS = 500
-
-/** Messages waiting above the input box (steering, queued) shown at most; the rest are counted. */
-const PENDING_SHOWN = 3
-/** Rows each of them takes at most. */
-const PENDING_ROWS = 2
-
-/**
- * The rows of messages waiting above the input box: "steering › …" and "queued › …", each on
- * at most two rows (the second under the text, cut with "…"), at most three of them, then how
- * many more wait. They stay a few rows, however long the messages, so the input box keeps its
- * place on the screen.
- */
-export function pendingMessageRows(
-  items: readonly { label: string; text: string }[],
-  width: number,
-  theme: Theme,
-): string[] {
-  const out: string[] = []
-  for (const { label, text } of items.slice(0, PENDING_SHOWN)) {
-    const head = `${label} ${glyphs.user} `
-    const indent = visibleWidth(head)
-    const flat = text.replace(/\s+/g, " ").trim()
-    const rows = wrapText(flat, Math.max(8, width - indent))
-    const shown = rows.slice(0, PENDING_ROWS)
-    if (rows.length > PENDING_ROWS) {
-      const last = shown.length - 1
-      shown[last] = truncateToWidth(
-        `${shown[last]} ${rows.slice(PENDING_ROWS).join(" ")}`,
-        Math.max(8, width - indent),
-        glyphs.more,
-      )
-    }
-    shown.forEach((r, i) => {
-      out.push(truncateToWidth(theme.muted(`${i === 0 ? head : " ".repeat(indent)}${r}`), width, glyphs.more))
-    })
-  }
-  const more = items.length - PENDING_SHOWN
-  if (more > 0) out.push(theme.muted(`+${more} more waiting`))
-  return out
-}
-
-/**
- * How a user message reads while queued, or back in the editor once dropped: its display text,
- * if any. That is what the user typed (e.g. "/review-pr 123"), so sending it again re-runs it.
- */
-function messageText(m: UserMessage): string {
-  return m.display?.text.trim() || userText(m)
-}
-
-/** The start of the rewind picker's request id, which the UI asks itself rather than an extension. */
-const REWIND_ID = "tui-rewind-"
-
-/** A message on one line, cut for a list of them. */
-const oneLine = (s: string, max = 100) => {
-  const flat = s.replace(/\s+/g, " ").trim()
-  return flat.length > max ? `${[...flat].slice(0, max - 1).join("")}…` : flat
-}
-
-/** Output tokens a streamed text is worth, until the reply's usage says. */
-const estimateTokens = (chars: number) => Math.ceil(chars / 4)
-
-/** A model request waiting to be sent again: model.retry, and when the wait ends. */
-export interface RetryState {
-  attempt: number
-  maxRetries: number
-  status?: number
-  kind: string
-  at: number
-}
-
-/** "retrying in 6s (2/3) · 429": the wait for a failed model request to be sent again. */
-export function retryLabel(r: RetryState, now = Date.now()): string {
-  const secs = Math.max(0, Math.ceil((r.at - now) / 1000))
-  const why = r.status !== undefined ? String(r.status) : r.kind
-  return `retrying in ${secs}s (${r.attempt}/${r.maxRetries}) ${glyphs.separator} ${why}`
-}
-
-/**
- * What the turn is doing now, as the activity line names it: the most specific activity first.
- * Running tools are counted, not named: their rows under the reply name them (D10).
- */
-export function activityLabel(s: {
-  compacting: boolean
-  /** The compaction runs on the provider's server (compact.start `native`). */
-  onServer?: boolean
-  running: readonly string[]
-  preparing: string | undefined
-  thinking: boolean
-  /** A failed model request waiting to be sent again (model.retry), and when it goes out. */
-  retry?: RetryState | undefined
-  /** A dialog waits for the user's answer. */
-  waiting?: boolean
-  /** The retry status.changed names ("retrying (2/3)"), when no model.retry says more. */
-  retrying?: string | undefined
-}): string {
-  // Once the wait is over the request is on its way again: the other activities apply.
-  if (s.retry && s.retry.at > Date.now()) return retryLabel(s.retry)
-  if (s.compacting) return s.onServer ? "compacting on the server" : "compacting the conversation"
-  if (s.waiting) return "waiting for you"
-  // model.retry says when the wait is over; the status's own retry words only stand in for it.
-  if (s.retrying && !s.retry) return s.retrying
-  if (s.running.length) return `${s.running.length} ${s.running.length === 1 ? "tool" : "tools"} running`
-  if (s.preparing) return `preparing ${s.preparing}`
-  return s.thinking ? "thinking" : "working"
-}
-
-/**
- * The retry the model request is in, as status.changed tells it: "retrying in 6s (2/3) · 429"
- * when the event says when and why, else its reason as given ("retrying (2/3)"). Undefined when
- * the status is not about a retry.
- */
-export function statusRetryLabel(data: {
-  reason?: string
-  retry?: { attempt?: number; maxRetries?: number; delayMs?: number; status?: number; code?: string }
-}): string | undefined {
-  const r = data.retry
-  if (r && (r.attempt !== undefined || r.delayMs !== undefined)) {
-    const when = r.delayMs !== undefined ? ` in ${Math.max(1, Math.ceil(r.delayMs / 1000))}s` : ""
-    const count = r.attempt !== undefined ? ` (${r.attempt}${r.maxRetries ? `/${r.maxRetries}` : ""})` : ""
-    const why = r.status ?? r.code
-    return `retrying${when}${count}${why !== undefined ? ` ${glyphs.separator} ${why}` : ""}`
-  }
-  return data.reason?.startsWith("retrying") ? data.reason : undefined
-}
-
-/** The last line of the reasoning streamed so far, for the activity line; "" before any. */
-export function lastReasoningLine(text: string): string {
-  const lines = text.split("\n")
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!.replace(/\s+/g, " ").trim()
-    if (line) return line
-  }
-  return ""
-}
 
 /**
  * The interactive terminal UI. This is its controller: it follows the bus and the keys, keeps
@@ -427,6 +163,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // Nodes of replies extensions render, e.g. ```mermaid diagrams (D88).
   const renders = new ReplyRenderers(opts.markdownRenderers)
   const spinner = new Spinner()
+  const activity = createTurnActivity()
   const queued: Outgoing[] = []
   /** Content of recent messages with folded pastes, by their text, so a dropped steer comes back folded. */
   const sentParts = new Map<string, EditorPart[]>()
@@ -450,60 +187,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let flushTimer: { next: Outgoing[]; timer: ReturnType<typeof setTimeout> } | undefined
   /** When the interrupt key was last pressed, to tell a double press. */
   let lastInterruptAt = 0
-  /** Lines of notices (background results) waiting to reach the model. */
-  const pendingNotices: string[] = []
-  /** When held notices are sent again after a failed turn (notice.retry); redrawn each second. */
-  let noticeRetryAt: number | undefined
-  let retryTimer: ReturnType<typeof setInterval> | undefined
-  const setRetry = (at: number | undefined) => {
-    noticeRetryAt = at
-    if (at !== undefined && !retryTimer) retryTimer = setInterval(() => view.requestRender(), 1000)
-    else if (at === undefined && retryTimer) {
-      clearInterval(retryTimer)
-      retryTimer = undefined
-    }
-  }
-  /** Pending notice lines, with the time to the next resend when one is due. */
-  const pendingNoticeLines = (t: Theme): string[] => {
-    const retry =
-      noticeRetryAt === undefined
-        ? ""
-        : ` · retry in ${Math.max(0, Math.ceil((noticeRetryAt - Date.now()) / 1000))}s`
-    const lines = pendingNotices.length
-      ? pendingNotices
-      : noticeRetryAt !== undefined
-        ? [`${t.accent("◆")}${t.muted(" sub-agents' results")}`]
-        : []
-    return lines.map((l) => `${l}${t.muted(` · pending${retry}`)}`)
-  }
   /** Open extension dialogs; the first one has the keyboard. */
   const dialogs: Dialog[] = []
-  let working = false
-  let thinking = false
-  /** The end of the reasoning streamed in the current reply, whose last line the activity line shows. */
-  let reasoning = ""
-  /** The model request is being tried again, as the activity line says (status.changed). */
-  let retrying: string | undefined
-  let compacting = false
-  let compactingOnServer = false
-  /** A failed model request waiting to be sent again (model.retry), until the next reply starts. */
-  let retry: RetryState | undefined
-  /** Tool the model is currently writing a call for, before it runs. */
-  let preparing: string | undefined
   /** Whether the current turn showed anything besides the user's message. */
   let turnShowedOutput = false
-  /** When the running turn started, and the output tokens its finished replies used. */
-  let turnStartedAt = 0
-  let turnTokens = 0
-  /**
-   * send() started the clock for the turn it asked for: the prompt may wait for a compaction
-   * before turn.start comes, and the activity line must not show the last turn's numbers then.
-   */
-  let clockFromSend = false
-  /** When a compaction outside a turn (/compact) started. */
-  let compactStartedAt = 0
-  /** Characters of the reply streaming now: its tokens until its usage arrives. */
-  let streamedChars = 0
   /**
    * The provider's own tool calls (hosted web search) shown as rows this turn: when each
    * started, and whether it ended.
@@ -687,6 +374,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let panelRows = 0
   /** The most rows the list below the input had since it opened (full screen keeps them). */
   let listRows = 0
+  let noticeStrip: NoticeStrip | undefined
+  let commandRunner: CommandRunner | undefined
 
   /** The panels' rows; unfolded, a blank row sets each panel apart from the one before. */
   const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) =>
@@ -720,29 +409,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // the whole turn; running tools are counted here and named on their own rows. How to
     // interrupt is on the hint line.
     new View((width, ctx) => {
-      if (!working && !compacting) return []
-      const label = activityLabel({
-        compacting,
-        onServer: compactingOnServer,
+      return activity.render(width, ctx, {
         running: view.runningTools,
-        preparing,
-        thinking,
         waiting: dialogs.length > 0,
-        retry,
-        retrying,
+        spinner,
       })
-      const tokens = turnTokens + estimateTokens(streamedChars)
-      const stats = [
-        formatElapsed(Date.now() - (working ? turnStartedAt : compactStartedAt)),
-        ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
-      ].join(` ${glyphs.separator} `)
-      const head = `${ctx.theme.accent(spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
-      const thought = label === "thinking" ? lastReasoningLine(reasoning) : ""
-      const tail = thought ? ctx.theme.muted(` ${glyphs.separator} `) + italic(ctx.theme.muted(thought)) : ""
-      return [truncateToWidth(head + ctx.theme.muted(stats) + tail, width, glyphs.more), ""]
     }),
     new View((width, ctx) => [
-      ...pendingNoticeLines(ctx.theme).map((l) => truncateToWidth(l, width, "…")),
+      ...(noticeStrip?.render(ctx.theme) ?? []).map((l) => truncateToWidth(l, width, "…")),
       ...pendingMessageRows(
         [
           ...steering.map((text) => ({ label: "steering", text })),
@@ -821,41 +495,16 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * The few keys that matter now, the most useful first to stay as the line narrows; the key
    * reference (the help key) lists the rest.
    */
-  /** The slash commands running now, each with the name of the command its line resolved to. */
-  const commandAborts = new Map<AbortController, string | undefined>()
-  /**
-   * The message each running command sent with its typed line as display text: the echo shows
-   * that line already, so the message is not shown again when its turn starts (or it joins one).
-   */
-  const commandEchoes = new Map<AbortController, { line: string; text: string }>()
-  /** True when `prompt` is such a message; its echo is used up. */
-  function takeCommandEcho(prompt: UserMessage): boolean {
-    const echoed = [...commandEchoes].find(
-      ([, echo]) => prompt.display?.text === echo.line && userText(prompt) === echo.text,
-    )
-    if (!echoed) return false
-    commandEchoes.delete(echoed[0])
-    return true
-  }
-  /**
-   * A command's message whose display text is the line its echo already shows: only its note
-   * (what the command loaded), under the echo as the command's own output would be.
-   */
-  function echoedNote(prompt: UserMessage) {
-    if (prompt.display?.note) view.commandOutput("info", prompt.display.note)
-  }
-  /** The newest running command that was not cancelled yet; the interrupt key cancels it first. */
-  const cancellable = () => [...commandAborts].findLast(([c]) => !c.signal.aborted)
   function inputHint(): HintItems {
     const submitKey = keys.label("submit")
     const interruptKey = keys.label("interrupt")
     // A /compact is a command too, but its hint below says "interrupt", as it always did.
-    if (cancellable() && !compacting)
+    if (commandRunner?.hasCancellable() && !activity.compacting)
       return [
-        submitKey && { text: `${submitKey} ${working ? enterDoes : "send"}`, priority: 5 },
+        submitKey && { text: `${submitKey} ${activity.working ? enterDoes : "send"}`, priority: 5 },
         interruptKey && { text: `${interruptKey} cancel command`, priority: 4 },
       ]
-    if (working) {
+    if (activity.working) {
       // Esc stops the turn; with messages waiting it sends them at once, merged.
       const waiting = queued.length > 0 || steering.length > 0
       return [
@@ -872,7 +521,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       panelsCollapsed && panelsShown && panelsKey && { text: `${panelsKey} unfold panels`, priority: 2 },
       submitKey && { text: `${submitKey} send`, priority: 5 },
       // A /compact runs without a turn; the interrupt key stops it too.
-      compacting && interruptKey && { text: `${interruptKey} interrupt`, priority: 4 },
+      activity.compacting && interruptKey && { text: `${interruptKey} interrupt`, priority: 4 },
       // The help key only works on an empty input; with text, how to break a line matters more.
       editor.isEmpty
         ? helpKey && { text: `${helpKey} keys`, priority: 3 }
@@ -958,6 +607,21 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   // A dumb terminal has no alternate screen to draw the full-screen view on.
   const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
+  noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
+  commandRunner = createCommandRunner({
+    commands,
+    keys,
+    mode,
+    reaches,
+    commandEcho: (line) => view.commandEcho(line),
+    commandOutput: (level, text) => view.commandOutput(level, text),
+    requestRender: () => view.requestRender(),
+    quit: () => quit(),
+    openView,
+    openRewind,
+    isCompacting: () => activity.compacting,
+    interrupt: () => interrupt(),
+  })
 
   /** Shows a full-screen view; false when it cannot be shown now (see CommandContext.openView). */
   function openView(v: FrontendView): boolean {
@@ -974,7 +638,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
             // p: back to the conversation, with a snapshot of the one shown printed into it.
             onPrint: (id) => {
               closeView()
-              runCommand(`/agents ${id}`)
+              commandRunner!.run(`/agents ${id}`)
             },
             ...(presenters ? { presenters } : {}),
           }),
@@ -1109,59 +773,43 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "turn.start": {
         const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting.
-        if (prompt.display?.origin) pendingNotices.length = 0
-        // A turn takes held notices along, so no resend is due any more.
-        setRetry(undefined)
+        noticeStrip!.turnStarted(prompt)
         // Messages queued together go as one prompt but read as what they were: one each.
         const merged =
           mergedQueue && messageText(prompt) === mergedQueue.join("\n\n") ? mergedQueue : undefined
         mergedQueue = undefined
         const shown = merged ? merged.map((text) => ({ ...prompt, display: { text } })) : [prompt]
-        if (takeCommandEcho(prompt)) echoedNote(prompt)
+        if (commandRunner!.takeEcho(prompt)) commandRunner!.echoedNote(prompt)
         else for (const m of shown) view.user(m)
         termStatus.turnStarted()
-        working = true
-        thinking = false
-        interrupted = false
-        turnShowedOutput = false
-        if (!clockFromSend) startClock()
-        clockFromSend = false
-        streamedChars = 0
+        activity.turnStarted(() => {
+          interrupted = false
+          turnShowedOutput = false
+        })
         spinner.start(() => view.requestRender())
         break
       }
       case "model.retry":
-        retry = { ...e.data, at: e.ts + e.data.delayMs }
+        activity.setRetry({ ...e.data, at: e.ts + e.data.delayMs })
         break
       case "message.start":
-        retry = undefined
-        thinking = false
-        reasoning = ""
-        preparing = undefined
-        streamedChars = 0
+        activity.messageStarted()
         break
       case "message.delta":
-        retry = undefined
         if (e.data.kind === "text") {
-          thinking = false
-          view.replyDelta(e.data.text)
-          textSinceRow = true
-          streamedChars += e.data.text.length
+          const text = e.data.text
+          activity.textDelta(text, () => {
+            view.replyDelta(text)
+            textSinceRow = true
+          })
         } else if (e.data.kind === "thinking") {
-          thinking = true
-          view.reasoningDelta(e.data.text)
-          // Only the end is shown; keep enough of it to hold a whole line.
-          reasoning = (reasoning + e.data.text).slice(-2000)
-          streamedChars += e.data.text.length
+          const text = e.data.text
+          activity.thinkingDelta(text, () => view.reasoningDelta(text))
         } else if (e.data.kind === "serverTool") {
-          thinking = false
-          serverRow(e.data.block)
+          const block = e.data.block
+          activity.serverToolDelta(() => serverRow(block))
         } else {
-          streamedChars += e.data.argsDelta.length
-          if (e.data.name) {
-            thinking = false
-            preparing = e.data.name
-          }
+          activity.toolCallDelta(e.data.argsDelta.length, e.data.name)
         }
         break
       case "message.end": {
@@ -1174,12 +822,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         textSinceRow = true
         const calls = message.content.flatMap((b) => (b.type === "toolCall" ? [b] : []))
         if (view.replyEnd(calls)) turnShowedOutput = true
-        turnTokens += message.usage?.output ?? estimateTokens(streamedChars)
-        streamedChars = 0
+        activity.messageEnded(message.usage?.output)
         break
       }
       case "tool.execute.start":
-        preparing = undefined
+        activity.toolStarted()
         view.toolStart(e.data.toolCallId, e.data.name, e.data.args, Date.now())
         // Draw now: the tool may block the event loop before a scheduled frame would run.
         view.render()
@@ -1203,14 +850,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "turn.end":
         serverRows.clear()
         if (view.turnEnd()) turnShowedOutput = true
-        working = false
-        preparing = undefined
-        retrying = undefined
-        reasoning = ""
+        activity.turnEnded()
         spinner.stop()
         // Steering the turn never reached becomes the next turn, which shows it again.
         steering.length = 0
-        retry = undefined
+        activity.setRetry(undefined)
         if (e.data.reason === "error") errorNotice(e.data)
         else if (e.data.reason === "aborted") view.notice("interrupted", interruptedText())
         else if (!turnShowedOutput) view.notice("info", "No reply")
@@ -1235,29 +879,27 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         break
       case "notice.retry":
-        setRetry(e.ts + e.data.delayMs)
+        noticeStrip!.setRetry(e.ts + e.data.delayMs)
         break
       case "status.changed":
         // A failed model request tried again says so until the stream goes on (or the turn ends).
-        retrying = statusRetryLabel(e.data as Parameters<typeof statusRetryLabel>[0])
+        activity.setRetrying(statusRetryLabel(e.data as Parameters<typeof statusRetryLabel>[0]))
         break
       case "workspace.changed":
         termStatus.setBranch(e.data.branch)
         break
       case "compact.start":
-        compacting = true
-        compactingOnServer = e.data.native === true
-        compactStartedAt = Date.now()
+        activity.startCompaction(e.data.native === true)
         spinner.start(() => view.requestRender())
         break
       case "compact.end":
-        compacting = false
-        if (!working) spinner.stop()
+        activity.endCompaction()
+        if (!activity.working) spinner.stop()
         view.notice("success", compactionNotice(e.data.replaced, e.data))
         break
       case "compact.failed":
-        compacting = false
-        if (!working) spinner.stop()
+        activity.endCompaction()
+        if (!activity.working) spinner.stop()
         if (e.data.empty) view.notice("info", "Nothing to compact yet.")
         else if (e.data.blocked) view.notice("info", `Compaction skipped: ${e.data.error}`)
         else view.notice("warning", `Compaction failed: ${e.data.error}`)
@@ -1280,9 +922,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // A notice (background sub-agents' results) is not the user's steering. It waits in the
         // bottom area until it joins the conversation (all waiting ones join together), also
         // through an interrupt, after which it goes with the next message.
-        if (e.data.message.display?.origin) {
-          if (e.data.state === "queued") pendingNotices.push(...userLines(theme, e.data.message))
-          else pendingNotices.length = 0
+        if (noticeStrip!.steer(e.data.message, e.data.state)) {
           if (e.data.state === "injected") view.user(e.data.message)
           break
         }
@@ -1292,9 +932,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         }
         const i = steering.indexOf(text)
         if (i !== -1) steering.splice(i, 1)
-        const echoed = e.data.state !== "promoted" && takeCommandEcho(e.data.message)
+        const echoed = e.data.state !== "promoted" && commandRunner!.takeEcho(e.data.message)
         if (e.data.state === "injected") {
-          if (echoed) echoedNote(e.data.message)
+          if (echoed) commandRunner!.echoedNote(e.data.message)
           else view.user(e.data.message)
         }
         // Stopped with Esc while messages waited: it goes out again at once, with the queued ones.
@@ -1398,12 +1038,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     showNote(`${what} still running — ${key} again to stop them and quit`)
   }
 
-  /** The activity line counts the turn's time and tokens from here. */
-  function startClock() {
-    turnStartedAt = Date.now()
-    turnTokens = 0
-  }
-
   /** Whether no provider is configured: from the session when it says, else from the CLI's notice. */
   function noProviders(): boolean {
     const providers = commands?.control.providers
@@ -1442,20 +1076,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       view.requestRender()
       return
     }
-    const clock = { turnStartedAt, turnTokens }
-    working = true
-    startClock()
-    clockFromSend = true
+    const clock = activity.beginSend()
     view.requestRender()
     agent.prompt(toPrompt(message)).catch((err) => {
-      clockFromSend = false
-      if (err instanceof AgentBusyError) {
+      const busy = err instanceof AgentBusyError
+      activity.sendFailed(clock, busy)
+      if (busy) {
         // A turn we did not know about is running; send this one after it, and keep its clock.
-        turnStartedAt = clock.turnStartedAt
-        turnTokens = clock.turnTokens
         queued.unshift(message)
       } else {
-        working = false
         spinner.stop()
         view.notice("error", err instanceof Error ? err.message : String(err))
       }
@@ -1500,17 +1129,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       clearTimeout(flushTimer.timer)
       sendMerged(flushTimer.next)
     }
-    if (!hasImages && commands && parseCommandLine(trimmed)) runCommand(trimmed)
+    if (!hasImages && commands && parseCommandLine(trimmed)) commandRunner!.run(trimmed)
     else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed)
     else if (!hasImages && commands?.inputLine(trimmed)) runInput(trimmed, display)
-    else if (working && how === "steer") {
+    else if (activity.working && how === "steer") {
       steerSeq.set(message.text, message.seq!)
       for (const k of steerSeq.keys()) {
         if (steerSeq.size <= 16) break
         steerSeq.delete(k)
       }
       agent.steer(toPrompt(message))
-    } else if (working) queued.push(message)
+    } else if (activity.working) queued.push(message)
     else if (!noModelYet(parts)) send(message)
     view.requestRender()
   }
@@ -1518,60 +1147,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Sends what the editor holds, as a key other than Enter asks: steering or queued. */
   function submitDraft(how: WhileWorking) {
     submit(editor.getText(), editor.getParts(), editor.getDisplayText(), how)
-  }
-
-  /**
-   * The common keys, for /help: the actions with a help line, with their keys as bound now;
-   * the transcript's only in full-screen mode, where they work.
-   */
-  function keyHelp(): KeyHelp[] {
-    return (Object.keys(ACTIONS) as Action[]).flatMap((action) => {
-      const info: { scope: string; help?: string } = ACTIONS[action]
-      if (!info.help || (info.scope === "transcript" && mode !== "fullscreen")) return []
-      const label = keys.label(action, (s) => action !== "newline" || reaches(s))
-      return label ? [{ keys: label, description: info.help }] : []
-    })
-  }
-
-  /**
-   * Cancels the newest running slash command (Esc or Ctrl+C, when no dialog has the key): its
-   * signal aborts, the input stays as it is. Only the command is stopped: a turn running
-   * alongside goes on, and so does a compaction, unless the command cancelled is /compact,
-   * whose compaction stops with it as before.
-   */
-  function cancelCommand(): boolean {
-    const operation = cancellable()
-    if (!operation) return false
-    const [abort, command] = operation
-    abort.abort(new Error("cancelled"))
-    if (command === "compact" && compacting) interrupt()
-    return true
-  }
-
-  /** Runs at once, even during a turn; commands that need an idle session say so. */
-  function runCommand(line: string) {
-    view.commandEcho(line)
-    const abort = new AbortController()
-    commandAborts.set(abort, commands!.commandName(line))
-    let sent = false
-    void commands!
-      .run(line, {
-        frontend: "tui",
-        quit: () => quit(),
-        openView,
-        openRewind,
-        keys: keyHelp,
-        signal: abort.signal,
-        onSend: (text, opts) => {
-          if (sent || opts?.display?.text !== line) return
-          commandEchoes.set(abort, { line, text })
-          sent = true
-          return () => void commandEchoes.delete(abort)
-        },
-      })
-      // A successful send may still be waiting to join a busy turn after its command ends.
-      .finally(() => commandAborts.delete(abort))
-      .then(() => view.requestRender())
   }
 
   /**
@@ -1617,9 +1192,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     cancelClipboard()
     view.leaveSession()
     agent = next
-    commandEchoes.clear()
-    pendingNotices.length = 0
-    setRetry(undefined)
+    commandRunner!.clearEchoes()
+    noticeStrip!.reset()
     termStatus.setFolder(next.cwd)
     termStatus.setSessionTitle(next.session?.title)
     showSession(next, true)
@@ -1688,7 +1262,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   function interrupt() {
     interrupted = true
-    if (working && !flush && (queued.length || steering.length)) flush = { dropped: [], rewind: false }
+    if (activity.working && !flush && (queued.length || steering.length))
+      flush = { dropped: [], rewind: false }
     agent.abort()
   }
 
@@ -1706,11 +1281,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const double = now - lastInterruptAt < DOUBLE_ESC_MS
     lastInterruptAt = double ? 0 : now
     if (!double) {
-      if (working || compacting) interrupt()
+      if (activity.working || activity.compacting) interrupt()
       return
     }
     if (!canRewind()) {
-      if (working || compacting) interrupt()
+      if (activity.working || activity.compacting) interrupt()
       return
     }
     // The merged send was waiting out the double press: hold it in the editor instead.
@@ -1719,11 +1294,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       putBack(flushTimer.next)
       flushTimer = undefined
     }
-    if (working) {
+    if (activity.working) {
       if (!flush) flush = { dropped: [], rewind: true }
       else flush.rewind = true
       interrupt()
-    } else if (!compacting) openRewind()
+    } else if (!activity.compacting) openRewind()
   }
 
   /**
@@ -1735,8 +1310,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const control = commands?.control
     if (
       !control?.rewind ||
-      working ||
-      compacting ||
+      activity.working ||
+      activity.compacting ||
       dialogs.some((d) => d.request.requestId.startsWith(REWIND_ID))
     )
       return false
@@ -1870,7 +1445,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
     if (answer === undefined || refused) ui.cancel(requestId)
     // Esc on an approval denies the call and stops the whole turn, as the dialog's keys say.
-    if (answer === undefined && dialog.request.source === "approval" && working) interrupt()
+    if (answer === undefined && dialog.request.source === "approval" && activity.working) interrupt()
     const echoed = refused ? undefined : answer
     // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
     // declined, the answer). A command's picker or input keeps one, since nothing else shows it.
@@ -1886,7 +1461,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     clipboardAbort.abort()
     if (quitting) return
     quitting = true
-    for (const abort of commandAborts.keys()) abort.abort(new Error("quitting"))
+    commandRunner!.abortAll(new Error("quitting"))
     for (const f of forms.splice(0)) opts.ui?.cancel(f.requestId)
     form?.close()
     closeView()
@@ -1899,7 +1474,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     ownFiles?.dispose()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     spinner.stop()
-    setRetry(undefined)
+    noticeStrip!.dispose()
     reader.stop()
     view.stop()
     termStatus.stop()
@@ -1990,12 +1565,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       submitDraft("queue")
     } else if (keys.is(e, "cancel")) {
       cancelClipboard()
-      if (cancelCommand()) {
+      if (commandRunner!.cancel()) {
         // A slash command runs alongside the turn; cancellation leaves the input intact.
-      } else if (working) interrupt()
+      } else if (activity.working) interrupt()
       else if (!editor.isEmpty) editor.clear()
       else return quitOrWarn("cancel")
-    } else if (keys.is(e, "exit") && !working && editor.isEmpty) {
+    } else if (keys.is(e, "exit") && !activity.working && editor.isEmpty) {
       return quitOrWarn("exit")
     } else if (keys.is(e, "copy.reply")) {
       // In both modes: from the session's messages, so a new session (/clear) has none yet.
@@ -2016,7 +1591,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // An editing key of the input (cut, paste back, undo, the external editor).
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too. Twice in a row: rewind.
-      if (!cancelCommand()) pressInterrupt()
+      if (!commandRunner!.cancel()) pressInterrupt()
     } else {
       editor.handleInput(e)
     }
@@ -2111,7 +1686,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       historyNav.reset()
       editor.clear()
       if (action.line.startsWith("$")) runSkill(action.line)
-      else runCommand(action.line)
+      else commandRunner!.run(action.line)
     }
     return true
   }
@@ -2183,41 +1758,4 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   if (leftoverInput) reader.feed(leftoverInput)
 
   return exited
-}
-
-/** The steps to a first message, shown at startup while no provider is configured. */
-function welcomeCard(): string {
-  return [
-    "Welcome to Amira. Three steps to a first message:",
-    "1. Add a provider: /provider add",
-    "2. Pick one of its models: /model",
-    "3. Ask away: @ mentions files, /help lists the commands and keys",
-  ].join("\n")
-}
-
-/** `path` with the home directory as "~", as shells write it. */
-export function tildePath(
-  path: string,
-  env: Record<string, string | undefined> = process.env,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  // On Windows the profile is the home; a HOME some shell set (Git Bash, MSYS) may spell it
-  // another way ("/c/Users/…") and would never match the cwd.
-  const candidates = platform === "win32" ? [env.USERPROFILE, env.HOME] : [env.HOME, env.USERPROFILE]
-  const home = (candidates.find((h) => h?.trim()) || homedir()).replace(/[\\/]+$/, "")
-  if (!home) return path
-  const sep = path.charAt(home.length)
-  const same =
-    platform === "win32"
-      ? path.slice(0, home.length).toLowerCase() === home.toLowerCase()
-      : path.startsWith(home)
-  return same && (sep === "" || sep === "/" || sep === "\\") ? `~${path.slice(home.length)}` : path
-}
-
-/** The events an overlay gets for one: the wheel as ↑ or ↓ three times, mouse clicks not at all. */
-function overlayKeys(e: InputEvent): InputEvent[] {
-  if (e.type !== "mouse") return [e]
-  if (e.action !== "wheel" || (e.button !== "up" && e.button !== "down")) return []
-  const k: InputEvent = { type: "key", name: e.button, ctrl: false, shift: false, alt: false }
-  return [k, k, k]
 }
