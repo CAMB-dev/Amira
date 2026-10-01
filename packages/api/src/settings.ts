@@ -38,6 +38,8 @@ export interface ProviderSettings {
  * are replaced.
  */
 export interface Settings {
+  /** File-tool rewind: 10 MiB per image, 256 MiB of unique images per session by default. */
+  fileRewind?: { enabled?: boolean; maxFileBytes?: number; quotaBytes?: number }
   /** Default model as "provider/model". */
   model?: string
   /** baseUrl, apiKeyEnv, apiKeyEnvFallbacks and headers are only taken from the user file. */

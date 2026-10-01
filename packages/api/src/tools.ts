@@ -1,4 +1,5 @@
 import type { ImageBlock, JSONSchema, ModelRef, TextBlock, UserMessage } from "@amira/ai"
+import type { MutateFiles } from "./file-rewind.ts"
 import type { OutputStore } from "./outputs.ts"
 import type {
   ChildSession,
@@ -17,6 +18,8 @@ export interface ToolResult {
 }
 
 export interface ToolContext {
+  /** Shared mutation boundary for built-in file tools; absent outside an agent. */
+  mutateFiles?: MutateFiles
   cwd: string
   toolCallId: string
   signal: AbortSignal

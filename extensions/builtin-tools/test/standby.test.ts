@@ -11,6 +11,7 @@ import { StandbyPool } from "../src/standby.ts"
 
 const result = (output: string): RunResult => ({
   output,
+  truncated: false,
   exitCode: 0,
   signalCode: null,
   timedOut: false,

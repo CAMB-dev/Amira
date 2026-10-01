@@ -6,6 +6,7 @@ import {
   API_VERSION,
   type Extension,
   type ExtensionAPI,
+  type FileRestorationOwner,
   installHostProcess,
   type NoticeLevel,
   type RunCommandOptions,
@@ -14,6 +15,7 @@ import {
 } from "@amira/api"
 import {
   backgroundJobs,
+  DEFAULT_MAX_OUTPUT_CHARS,
   JobLimitError,
   prepareCommand,
   runCommand,
@@ -95,6 +97,7 @@ export interface ExtensionHostOptions {
  * rolled back completely and a loaded extension can be unloaded.
  */
 export class ExtensionHost {
+  fileRestoration: (FileRestorationOwner & { source: string }) | undefined
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
   #exitHandlers = new Set<{ source: string; run: (signal: AbortSignal) => void | Promise<void> }>()
@@ -329,6 +332,15 @@ export class ExtensionHost {
         return track(() => void this.#exitHandlers.delete(entry))
       },
       registerTool: (tool) => track(tools.register(tool, source)),
+      registerFileRestoration: (owner) => {
+        if (this.fileRestoration)
+          throw new Error(`File restoration is already owned by ${this.fileRestoration.source}`)
+        const claim = { ...owner, source }
+        this.fileRestoration = claim
+        return track(() => {
+          if (this.fileRestoration === claim) this.fileRestoration = undefined
+        })
+      },
       // A taken name skips only this command, not the whole extension.
       registerCommand: (command) => {
         try {
@@ -428,7 +440,10 @@ export class ExtensionHost {
  * tree is contained and then closes stdin.
  */
 export function runExtensionCommand(argv: string[], options: RunCommandOptions): Promise<RunCommandResult> {
-  const { stdin, ...rest } = options
+  const { stdin, ...rest } = {
+    ...options,
+    maxOutputChars: options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS,
+  }
   if (stdin === undefined) return runCommand(argv, rest)
   if (rest.gated || rest.viaCmd) {
     return Promise.reject(new Error("runCommand: stdin cannot be combined with gated or viaCmd"))

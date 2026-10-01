@@ -3,6 +3,7 @@ import { dirname } from "node:path"
 import { defineTool, textResult, type WriteDetails } from "@amira/api"
 import { fileDiff } from "./diff.ts"
 import { statOrNull } from "./files.ts"
+import { mutateFiles } from "./mutation.ts"
 import { displayPath, fileKey, resolvePath } from "./paths.ts"
 
 export interface WriteParams {
@@ -43,8 +44,11 @@ export const writeTool = defineTool<WriteParams>({
     }
     const before = existing ? await previousText(abs, existing.size) : ""
     try {
-      await mkdir(dirname(abs), { recursive: true })
-      await writeFile(abs, content, { signal: ctx.signal })
+      await mutateFiles(ctx, [{ path: abs, after: Buffer.from(content) }], async () => {
+        ctx.signal.throwIfAborted()
+        await mkdir(dirname(abs), { recursive: true })
+        await writeFile(abs, content, { signal: ctx.signal })
+      })
     } catch (err) {
       return textResult(`Failed to write ${abs}: ${(err as Error).message}`, true)
     }

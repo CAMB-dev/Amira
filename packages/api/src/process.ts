@@ -8,7 +8,7 @@ export interface RunCommandOptions {
   onChunk?: (chunk: string) => void
   /**
    * Keep only the last this many characters in the result's `output`, so a chatty command cannot
-   * fill memory; onChunk still sees everything. Default: all of it.
+   * fill memory; onChunk still sees everything. Default: 1,000,000. Must be a positive integer.
    */
   maxOutputChars?: number
   /** Keep stderr out of the output (it is discarded). Default: both are interleaved. */
@@ -31,6 +31,8 @@ export interface RunCommandOptions {
 
 export interface RunCommandResult {
   output: string
+  /** True when `output` was shortened to `maxOutputChars`. */
+  truncated: boolean
   exitCode: number | null
   signalCode: string | null
   /** The timeout fired before the command exited. */

@@ -192,6 +192,7 @@ const settings = object({
   providers: record(provider),
   shell: oneOf("auto", "bash", "powershell"),
   tools: object({ disabled: list(string) }),
+  fileRewind: object({ enabled: boolean, maxFileBytes: integer(1), quotaBytes: integer(1) }),
   commandAliases,
   maxParallelTools: integer(1),
   compact: object({ threshold: number, model: modelRef, layout: oneOf("tail", "recent-user") }),

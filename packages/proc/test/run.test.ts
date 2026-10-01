@@ -16,6 +16,7 @@ test("runs a command in the worker and streams its output in chunks", async () =
   expect(run.exitCode).toBe(3)
   expect(run.output).toContain("out")
   expect(run.output).toContain("err")
+  expect(run.truncated).toBe(false)
   expect(chunks.join("")).toBe(run.output)
 })
 
@@ -91,7 +92,13 @@ test("a failing chunk callback does not break the run", async () => {
   expect(run.exitCode).toBe(0)
 })
 
-test("maxOutputChars keeps the end of the output; chunks still carry all of it", async () => {
+test("without maxOutputChars the output is not capped", async () => {
+  const run = await runCommand([bun, "-e", "process.stdout.write('x'.repeat(1_000_000) + 'END')"], opts())
+  expect(run.output.length).toBe(1_000_003)
+  expect(run.truncated).toBe(false)
+})
+
+test("maxOutputChars overrides the cap; chunks still carry all output", async () => {
   let streamed = 0
   const run = await runCommand([bun, "-e", "process.stdout.write('x'.repeat(200_000) + 'END')"], {
     ...opts(),
@@ -101,5 +108,23 @@ test("maxOutputChars keeps the end of the output; chunks still carry all of it",
     },
   })
   expect(run.output).toBe("xxxxxxxEND")
+  expect(run.truncated).toBe(true)
   expect(streamed).toBe(200_003)
+})
+
+test("the output cap does not split a UTF-16 surrogate pair", async () => {
+  const run = await runCommand([bun, "-e", "process.stdout.write('a😀tail')"], {
+    ...opts(),
+    maxOutputChars: 5,
+  })
+  expect(run.output).toBe("tail")
+  expect(run.truncated).toBe(true)
+})
+
+test("maxOutputChars rejects invalid values", async () => {
+  for (const maxOutputChars of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    await expect(runCommand([bun, "-e", ""], { ...opts(), maxOutputChars })).rejects.toThrow(
+      "maxOutputChars must be a positive integer",
+    )
+  }
 })

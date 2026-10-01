@@ -7,6 +7,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
   const tools: ToolDefinition[] = []
   const renderers: string[] = []
   const api: ExtensionAPI = {
+    registerFileRestoration: () => () => {},
     apiVersion: "0.1.0",
     cwd: process.cwd(),
     home: process.cwd(),
