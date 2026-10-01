@@ -1243,19 +1243,13 @@ export class Agent {
     if (current) await current.catch(() => {})
     await this.tree?.waitForChildren(this.depth === 0 ? undefined : this.sessionId)
 
-    try {
-      if (this.backgroundJobsHost) {
-        if (this.depth === 0) {
-          if (reason !== "switch") await this.backgroundJobsHost.closeRoot(this.sessionId)
-        } else {
-          await this.backgroundJobsHost.closeSession(this.sessionId)
-        }
-      }
-    } finally {
-      if (this.#sessionLease) {
-        this.#sessionLease = false
-        this.session?.release()
-      }
+    // Never rejects: a job that fails to stop here still ends with the process.
+    const jobs = this.backgroundJobsHost
+    if (jobs && this.depth > 0) await jobs.closeSession(this.sessionId).catch(() => {})
+    else if (jobs && reason !== "switch") await jobs.closeRoot(this.sessionId).catch(() => {})
+    if (this.#sessionLease) {
+      this.#sessionLease = false
+      this.session?.release()
     }
   }
 
