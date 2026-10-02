@@ -21,6 +21,8 @@ interface State {
   compact?: Omit<RecordOf<"compact">, "end">
   /** Loss may include the first delta; omit latency estimates for the rest of this run. */
   lost: boolean
+  /** session.end (or subagent.end) arrived; released once nothing it started is still open. */
+  ended: boolean
 }
 
 const types: (keyof EventMap)[] = [
@@ -76,6 +78,8 @@ export class TraceRecorder {
   register(sessionId: string, file: string): void {
     if (this.#retired.has(sessionId)) return
     const state = this.#state(sessionId)
+    // A resumed session reuses an ended one's state that may still be awaiting release.
+    state.ended = false
     if (state.writer) return
     state.writer = new TraceFile(file, (error) => {
       this.bus.emit(
@@ -134,19 +138,31 @@ export class TraceRecorder {
     for (const state of this.#states.values()) state.writer?.emergencyFlush()
   }
 
-  /** Drops a finished session's state after its writes, so a long-lived host does not accumulate it. */
-  #release(id: string, state: State, idle: boolean) {
+  /**
+   * Drops an ended session's state once it is idle and its writes are done, so a long-lived host
+   * does not accumulate it. session.end comes before an interrupted turn unwinds: its turn,
+   * model, tool and compaction ends follow, and each of them calls this again.
+   */
+  #release(id: string, state: State) {
+    if (!idle(state)) return
     const written = state.writer?.flush()
-    if (!idle) return
     void Promise.resolve(written).then(() => {
-      if (this.#states.get(id) === state && !state.writer?.pending.length) this.#states.delete(id)
+      if (this.#states.get(id) === state && state.ended && idle(state) && !state.writer?.pending.length)
+        this.#states.delete(id)
     })
   }
 
   #state(id: string): State {
     let state = this.#states.get(id)
     if (!state) {
-      state = { announced: false, turns: new Map(), models: new Map(), tools: new Map(), lost: false }
+      state = {
+        announced: false,
+        turns: new Map(),
+        models: new Map(),
+        tools: new Map(),
+        lost: false,
+        ended: false,
+      }
       this.#states.set(id, state)
     }
     return state
@@ -171,6 +187,7 @@ export class TraceRecorder {
           : undefined)
       if (file) this.register(event.sessionId, file)
       state.announced = true
+      state.ended = false
       state.lost = false
       state.turns.clear()
       state.models.clear()
@@ -195,8 +212,7 @@ export class TraceRecorder {
     }
     switch (event.type) {
       case "session.end":
-        // Late tool ends of aborted calls may still follow; release only an idle session.
-        this.#release(event.sessionId, state, !state.models.size && !state.tools.size)
+        state.ended = true
         break
       case "turn.start":
         if (event.turnId) state.turns.set(turn, at)
@@ -354,7 +370,10 @@ export class TraceRecorder {
         }
         // A sub-agent has no session.end of its own: free its state once its records are written.
         const done = this.#states.get(event.data.childSessionId)
-        if (done) this.#release(event.data.childSessionId, done, true)
+        if (done) {
+          done.ended = true
+          this.#release(event.data.childSessionId, done)
+        }
         void this.flush()
         break
       }
@@ -394,7 +413,12 @@ export class TraceRecorder {
         state.compact = undefined
         break
     }
+    if (state.ended) this.#release(event.sessionId, state)
   }
+}
+
+function idle(state: State): boolean {
+  return !state.turns.size && !state.models.size && !state.tools.size && !state.compact
 }
 
 function toolKey(turn: string, id: string, name: string): string {
