@@ -1,3 +1,5 @@
+// Manual benchmark (not part of `bun run check`): `bun scripts/trace-benchmark.ts` compares a
+// 200-tool-call mock run with and without the TraceRecorder and prints the overhead.
 import { mkdtempSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
