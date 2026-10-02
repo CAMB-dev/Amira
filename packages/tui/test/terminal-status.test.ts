@@ -27,6 +27,7 @@ test("effects coalesce outside frame writes and restore the title stack and prog
   status.setProgress("indeterminate")
   status.setProgress("paused")
   status.bell()
+  status.bell()
   expect(screen.oscs).toEqual([])
   terminal.write("frame")
   await flush()

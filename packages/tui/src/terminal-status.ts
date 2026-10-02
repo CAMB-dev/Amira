@@ -20,7 +20,7 @@ export class TerminalStatus implements TerminalApi {
   #pending = false
   #title: string | undefined
   #progress: TerminalProgress | undefined
-  #bells = 0
+  #ringPending = false
   #shownTitle: string | undefined
   #shownProgress: TerminalProgress = "none"
   #titleRestore: TerminalMode | undefined
@@ -60,7 +60,7 @@ export class TerminalStatus implements TerminalApi {
 
   bell(): void {
     if (!this.#started || !this.#opts.bell) return
-    this.#bells++
+    this.#ringPending = true
     this.#schedule()
   }
 
@@ -94,8 +94,9 @@ export class TerminalStatus implements TerminalApi {
         out += osc.progress(this.#progress, this.#progress === "paused" ? 100 : 0)
       }
     }
-    out += osc.bell.repeat(this.#bells)
-    this.#bells = 0
+    // Several bells in one tick ring once: an extension cannot flood the terminal with them.
+    if (this.#ringPending) out += osc.bell
+    this.#ringPending = false
     if (out) this.terminal.write(out)
   }
 
@@ -103,7 +104,7 @@ export class TerminalStatus implements TerminalApi {
   stop(): void {
     if (!this.#started) return
     this.#started = false
-    this.#bells = 0
+    this.#ringPending = false
     if (this.#progressRestore) this.terminal.disableMode(this.#progressRestore)
     if (this.#titleRestore) this.terminal.disableMode(this.#titleRestore)
     this.terminal.disableMode(focusReporting)
