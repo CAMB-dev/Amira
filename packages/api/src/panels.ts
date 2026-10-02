@@ -1,5 +1,5 @@
+import type { ToolLine } from "./tool-renderers.ts"
 import type { SessionData } from "./tools.ts"
-import type { ViewLine } from "./views.ts"
 
 /**
  * Experimental: live panels, a few lines an extension keeps on screen while the user works,
@@ -38,7 +38,7 @@ export interface PanelDefinition {
    * The lines to show now; none hides the panel. Called at every redraw, so keep it cheap.
    * Frontends show at most PANEL_MAX_LINES lines of a panel, and none of one that throws.
    */
-  render(opts: PanelRenderOptions): ViewLine[]
+  render(opts: PanelRenderOptions): ToolLine[]
 }
 
 /** The most lines a frontend shows of one panel; the last one says how many were left out. */

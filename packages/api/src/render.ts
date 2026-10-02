@@ -1,4 +1,4 @@
-import type { ViewLine } from "./views.ts"
+import type { ToolLine } from "./tool-renderers.ts"
 
 /**
  * Experimental (D88): extensions that render parts of the model's Markdown replies themselves,
@@ -47,7 +47,7 @@ export interface MarkdownRenderContext {
  * view's lines), or an image, which goes to the image providers and is drawn like a Markdown
  * image. Undefined declines: the next renderer is asked, and in the end Amira renders it.
  */
-export type MarkdownRenderResult = { lines: ViewLine[] } | { image: ImageInput }
+export type MarkdownRenderResult = { lines: ToolLine[] } | { image: ImageInput }
 
 export interface MarkdownRendererDefinition {
   /** Names the renderer in errors; one extension's ids must differ. */
