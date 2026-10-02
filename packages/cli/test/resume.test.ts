@@ -27,9 +27,11 @@ afterAll(() => {
 
 const quiet = { stdout: () => {}, stderr: () => {} }
 
+const pickerKeys = { Esc: "\x1b", "Ctrl+C": "\x03", Enter: "\r" }
 for (const mode of ["startup", "slash", "select"] as const) {
-  for (const key of mode === "select" ? ["\r"] : ["\x1b", "\x03"]) {
-    test(`${mode} resume picker with ${key === "\x1b" ? "Esc" : key === "\x03" ? "Ctrl+C" : "Enter"} leaves sessions unchanged`, async () => {
+  for (const name of mode === "select" ? (["Enter"] as const) : (["Esc", "Ctrl+C"] as const)) {
+    const key = pickerKeys[name]
+    test(`${mode} resume picker with ${name} leaves sessions unchanged`, async () => {
       const cwd = await mkdtemp(path.join(os.tmpdir(), "amira-resume-cancel-"))
       const store = SessionStore.create({ cwd })
       store.append({ type: "model_change", model: { provider: "local", model: "test" } })

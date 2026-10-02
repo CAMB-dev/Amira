@@ -1,10 +1,9 @@
 import { mock } from "bun:test"
 import * as tui from "@amira/tui"
 import { FakeTerminal } from "@amira/tui-kit"
-import { runInteractive } from "../../../tui/src/app.ts"
 
 // Run the real CLI and UI in a child process, replacing only the terminal boundary.
-const runUi = runInteractive
+const runUi = tui.runInteractive
 const terminal = new FakeTerminal(100, 30)
 Object.defineProperty(process.stdin, "isTTY", { value: true })
 Object.defineProperty(process.stdout, "isTTY", { value: true })
