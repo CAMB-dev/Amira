@@ -256,6 +256,73 @@ API 0.1.20 新增 `SessionControl.setThinking(level: ReasoningEffort | undefined
 
 运行时强度变化会触发有类型的 `thinking.changed` 事件，数据载荷为 `{ thinking?: ReasoningEffort }`。其中 `thinking` 与 `info().thinking` 一样受模型能力限制，不等同于 `thinkingLevel`。实时显示应读取 `api.session()?.info()`，在 `thinking.changed`、模型变更和会话变更时重绘。只显示顶层会话时，应忽略带有 `parentSessionId` 的事件。内置状态栏仅在 `info().thinking` 有值时，在模型名旁显示强度。
 
+### 会话追踪
+
+宿主负责记录每个会话的可观测性追踪（D103）；查看器位于独立仓库。这不是需要加载的扩展，不改变 agent 循环或 `API_VERSION`。持久化会话文件 `<session file>` 旁会有 `<session file>.trace.jsonl`；每个已持久化的子 agent 在 `subagents/` 下的会话文件旁有自己的追踪文件，嵌套后代也一样。临时会话，以及尚未创建对话文件的会话，不产生追踪文件。
+
+`SessionControl.trace(sessionId?: string): Promise<TraceRecord[]>` 默认读取当前会话，也可以读取 `subagents()` 列出的后代。通过 `api.session()` 或命令的 `ctx.session` 获取控制对象。无关的 ID、没有追踪的会话或缺失的文件返回 `[]`；这不是任意文件读取 API。返回的是已完成记录的快照，包括为本次读取刷新的已完成记录缓冲，不会为仍在运行的工作合成区间。它不排空事件总线，因此尚未送达记录器的事件可能缺失；从事件监听器调用不会等待该监听器本身。读取器跳过格式错误或不完整的行，以及版本不受支持的记录段。
+
+```ts
+import { summarizeTrace } from "@amira/api"
+
+const session = api.session()
+if (session) {
+  const records = await session.trace()
+  const summary = summarizeTrace(records)
+  const child = session.subagents()[0]
+  const childRecords = child ? await session.trace(child.id) : []
+}
+```
+
+写入采用异步批处理，至少每秒安排一次，并在会话结束和进程退出时刷新；不会让轮次等待磁盘 I/O。记录失败每个会话只报告一次，不会使 agent 失败。追踪采用尽力持久化：突然终止或订阅者队列过载可能丢失事件。恢复会话时向已有追踪追加新头记录，不截断旧内容。分支只复制对话，不复制追踪；分支在开始记录时创建自己的追踪。删除会话时删除它及其独占后代的追踪，仍被其他会话共享的后代则保留。
+
+#### 记录格式与隐私
+
+`@amira/api` 导出 `TRACE_VERSION = 1`、`TraceRecord`、`ToolOutcome`、`TraceSummary` 和 `summarizeTrace`。JSONL 每行是一条记录，每段记录以 `trace` 头记录开头。下表列出 `type` 判别字段以外的全部字段；可选列中的字段可以省略。`Usage` 是公开的 token、搜索次数及美元费用用量类型；模型字符串使用 `provider/model` 格式。
+
+| `type` | 必需字段 | 可选字段 |
+| --- | --- | --- |
+| `trace` | `v: 1`、`sessionId: string`、`startedAt: number` | `parentSessionId: string`、`role: string`、`title: string` |
+| `turn` | `turnId: string`、`start: number`、`end: number`、`reason: "done" \| "error" \| "aborted"`、`steps: number` | `failure: { kind: string; message: string }` |
+| `model` | `model: string`、`start: number`、`end: number` | `turnId: string`、`firstToken: number`、`usage: Usage`、`stopReason: string`、`retries: { at: number; delayMs: number; kind: string }[]` |
+| `tool` | `toolCallId: string`、`name: string`、`start: number`、`end: number`、`durationMs: number`、`outcome: ToolOutcome`、`argsChars: number`、`resultChars: number`、`argsPreview: string`、`resultPreview: string` | `turnId: string`、`approvalWaitMs: number`、`approval: "user" \| "rule"`、`artifact: string`、`writtenPaths: string[]` |
+| `status` | `at: number`、`status: "idle" \| "working" \| "blocked" \| "error"` | `reason: string` |
+| `subagent` | `childSessionId: string`、`start: number`、`end: number`、`status: string`、`durationMs: number` | `toolCallId: string`、`role: string`、`title: string`、`groupId: string`、`queuedAt: number`、`error: string`、`usage: Usage` |
+| `compact` | `start: number`、`end: number`、`reason: string` | `tokensBefore: number`、`tokensAfter: number`、`usage: Usage`、`native: boolean`、`fallback: boolean` |
+| `side` | `at: number`、`model: string` | `label: string`、`usage: Usage` |
+
+全部时间戳（`startedAt`、`start`、`end`、`at`、`firstToken`、`queuedAt`）均来自事件信封的 `ts`，单位为 Unix 纪元毫秒，不是追加文件的时间。持续时长和重试延迟也使用毫秒。区间记录在结束时追加，因此文件顺序不等于开始时间顺序。轮次对应 `turn.start/end`；模型记录对应 `message.start/end`，保留该请求内的重试。`firstToken` 是首次可靠观测到的消息增量时间，可以是文本、思考或工具调用；增量缺失或被丢弃时可能没有此字段。失败轮次使用结构化失败的分类和摘要；未分类错误使用 `"other"` 分类。
+
+工具参数预览是紧凑 JSON；结果预览仅包含文本块。每个预览最多 300 个 Unicode 码点，不拆开代理对。`argsChars` 统计紧凑 JSON 的码点数，`resultChars` 统计事件结果文本的码点数；后者可能已经是 artifact 预览，而非原始输出。`artifact` 是已保存输出的 ID，不是路径。追踪不复制图片、结果详情或完整参数／结果；完整内容仍保存在会话／artifact 存储中。预览和路径仍可能包含敏感文本，应把追踪视为私密会话数据。
+
+`ToolOutcome` 为 `"ok" | "error" | "denied" | "aborted" | "invalid" | "unknown-tool"`。拒绝原因优先：`tool.execute.end.rejected` 的 `blocked`、`aborted`、`invalidArgs`、`unknownTool` 分别映射为 `denied`、`aborted`、`invalid`、`unknown-tool`。否则根据 `result.isError` 选择 `error` 或 `ok`，不会根据结果文本猜测是否中止。开始和结束按会话、轮次、调用 ID 和工具名配对；重复键使用先进先出。若同一并行批次中的调用具有相同 ID 和工具名，且乱序结束，现有事件无法区分它们，对应的开始时间／预览可能有歧义。
+
+`tool.execute.end.waitedMs?: number` 只测量实际等待审批的时间，在追踪中成为 `approvalWaitMs`。真实等待即使耗时为零也保留 `0`。未等待、策略直接拒绝、没有审批处理器，以及工具提问等待，都没有该字段。`durationMs` 只测量执行时间，不包括审批、执行前检查和调用前后拦截器；执行前被拒绝的调用报告零。工具开始／结束事件区间还可能包含调度和后处理，因此不一定等于 `durationMs`。并发审批等待可以重叠，不是额外的墙钟时间。
+
+父会话的 `subagent` 记录描述已结束的直接子 agent 及其自身用量，不递归包含后代。只有 `subagent.start` 宣告子 agent 进入队列时才有 `queuedAt`；执行 `start` 来自子 agent 实际的 `session.start`。在该宣告前取消的子 agent 使用 `start === end`，表示没有执行区间。报告的子 agent `durationMs` 是获准运行后的存续时长，持久子 agent 的空闲期也可能计入。每个子 agent 自己的追踪包含其轮次、模型和工具详情。
+
+压缩记录不包含摘要文本。成功记录包含触发原因及可选的 token／用量；`native` 和 `fallback` 是布尔值，不是原始模型引用或回退说明。失败尝试使用 `reason: "failure:blocked"`、`"failure:empty"` 或 `"failure:error"`；没有先前开始事件时使用 `start === end`。格式保留了 `side` 变体，但宿主目前没有旁路请求用量事件，因此不写入 `side` 记录。不会轮询或转换已存储的 `side_usage` 条目及预算更新来生成追踪；已存储的旁路请求用量请通过 `sideRequests()` 读取。
+
+#### 追踪汇总
+
+`summarizeTrace(records: TraceRecord[]): TraceSummary` 是不修改输入的纯函数。传入一个会话的追踪，可以包含恢复会话的多个头记录；不要拼接父子会话追踪，因为父会话的子 agent 记录已经报告了子 agent 用量。各时间指标可以重叠，不能相加来还原墙钟时间。
+
+| 汇总字段 | 统计方式 |
+| --- | --- |
+| `start?`、`end?`、`wallTimeMs` | 记录所表示事件的最早和最晚时间，包括排队／重试时间；墙钟时间是两者之差，不是数组首尾记录之差。包括恢复会话前的停机时间。空输入没有时间边界，时长为零。 |
+| `modelTimeMs` | 模型请求区间之和，包括重试延迟。 |
+| `modelWaitMs`、`modelStreamMs`、`modelUnknownMs` | 存在 `firstToken` 时，分别累加开始到首个 token、首个 token 到结束的时间；否则整个区间归入未分类的 `modelUnknownMs`。 |
+| `toolTimeMs` | 工具开始／结束区间的并集；并行重叠部分只计算一次。 |
+| `toolDurationMs`、`approvalWaitMs` | 分别累加报告的工具时长和真实审批等待；同时发生的等待可以重叠。 |
+| `idleMs` | 每个头记录划分的运行段内，轮次区间之间的间隔；不包括恢复前的停机时间，也不包括首轮之前或末轮之后的时间。 |
+| `usage`、`subagentUsage`、`totalUsage` | 自身模型／压缩／旁路请求用量、直接子 agent 自身用量，以及两者之和。保留推理 token；任何计入的用量费用未知时，总费用为空，未定价搜索仍保持未定价状态。 |
+| `tools[name]` | 基于报告的 `durationMs` 计算 `count`、`totalMs`、`avgMs`、`maxMs`；`outcomes` 包含全部六种结果的计数，包括零值。 |
+| `failures` | 所有非 OK 工具，以及失败／中止轮次，按完成时间 `at` 排序，包含来源标识、结果／原因，以及可用的有界工具预览或轮次失败摘要。 |
+| `retries` | 已记录的模型重试条目数。 |
+| `subagents` | 已结束的直接子 agent，包含 ID、可选角色／标题、开始／结束时间、报告的存续时长、状态、可选用量和已知美元费用 `cost`。 |
+
+用量总计只涵盖已报告的用量，不保证覆盖全部计费工作。尤其是没有事件的旁路请求、没有模型事件的父模型咨询，以及未报告的失败请求用量，无法从追踪还原。需要子 agent 的详细时间或后代信息时，请单独读取它的追踪。
+
 ### 工作区 provider
 
 API 0.1.16 新增 `api.registerWorkspaceProvider(provider)`。每个宿主只允许一个 provider；

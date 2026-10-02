@@ -2,7 +2,7 @@ import path from "node:path"
 import type { SessionControl, ShellMode } from "@amira/api"
 import { type Agent, CommandHost, listSubagents } from "@amira/core"
 import { createAdminControl } from "./control/admin.ts"
-import type { ControlContext } from "./control/context.ts"
+import type { ControlContext, ControlTrace } from "./control/context.ts"
 import { createInfoControl } from "./control/info.ts"
 import { createRewindControl } from "./control/rewind.ts"
 import { createSessionsControl } from "./control/sessions.ts"
@@ -12,6 +12,8 @@ import type { Session } from "./session.ts"
 
 export interface ControlOptions {
   session: Session
+  /** The process-owned recorder, for fresh snapshots and deletion coordination. */
+  trace?: ControlTrace
   cwd: string
   /** Shell mode the session starts with (D68). Default auto. */
   shell?: ShellMode
@@ -114,6 +116,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
 
   const context: ControlContext = {
     session,
+    trace: opts.trace ?? session.traceRecorder,
     cwd,
     ai,
     tools,
