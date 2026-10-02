@@ -153,7 +153,8 @@ export class TraceRecorder {
   #event(event: AnyEvent) {
     if (this.#retired.has(event.sessionId)) return
     // Only session.start creates state, so a late event of a released session cannot leak one.
-    const state = event.type === "session.start" ? this.#state(event.sessionId) : this.#states.get(event.sessionId)
+    const state =
+      event.type === "session.start" ? this.#state(event.sessionId) : this.#states.get(event.sessionId)
     if (!state) return
     const at = event.ts
     const turn = event.turnId ?? ""
