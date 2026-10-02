@@ -95,7 +95,8 @@ function sourceLineCapViolations(): string[] {
     return []
   }
 
-  const entries = source.match(
+  const withoutComments = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g, "")
+  const entries = withoutComments.match(
     /\bconst\s+sourceLineAllowlist\s*=\s*new\s+Map(?:\s*<[^>]*>)?\s*\(\s*\[([\s\S]*?)\]\s*\)/,
   )?.[1]
   if (entries === undefined) {
