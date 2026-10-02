@@ -368,7 +368,7 @@ export interface SessionControl {
   readonly readSession?: (sessionId: string) => StoredSession | undefined
   /** Switches to a stored session of this directory. */
   resume(sessionId: string): Promise<void>
-  readonly rename?: (title: string) => void
+  readonly rename?: (title: string, options?: RenameOptions) => void
   readonly deleteSession?: (sessionId: string) => Promise<void>
   readonly fork?: (index?: number) => Promise<void>
   /**
@@ -416,6 +416,11 @@ export interface SessionControl {
    * what changed where the host can tell.
    */
   reloadExtensions(): Promise<ReloadReport | undefined>
+}
+
+export interface RenameOptions {
+  source?: "manual" | "auto"
+  sessionId?: string
 }
 
 /**

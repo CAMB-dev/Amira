@@ -62,7 +62,8 @@ export interface SessionHeader {
 export type SessionEntryData =
   | FileJournalEntry
   | { type: "title"; title: string; source: "manual" | "auto" }
-  | { type: "side_usage"; model: ModelRef; usage: Usage }
+  /** `label` says what the side request was for; entries without one are session titles. */
+  | { type: "side_usage"; model: ModelRef; usage: Usage; label?: string }
   | { type: "message"; message: Message }
   | { type: "model_change"; model: ModelRef }
   /**
@@ -271,7 +272,7 @@ export class SessionStore {
     return hasManual ? (manual ?? fallback) : fallback
   }
 
-  rename(title: string, source: "manual" | "auto" = "manual"): void {
+  rename(title: string, source: "manual" | "auto" = "manual"): boolean {
     const clean = title
       .replace(/\p{Cc}/gu, " ")
       .replace(/\s+/g, " ")
@@ -281,15 +282,16 @@ export class SessionStore {
         // An empty manual entry is a durable "clear" marker that reveals the latest automatic
         // title again. An older Amira reads it as an empty title.
         this.append({ type: "title", title: "", source })
-        return
+        return true
       }
       throw new Error("a session title must not be empty")
     }
     const manual = this.#entries.findLast(
       (e): e is Extract<SessionEntry, { type: "title" }> => e.type === "title" && e.source === "manual",
     )
-    if (source === "auto" && manual?.title) return
+    if (source === "auto" && manual?.title) return false
     this.append({ type: "title", title: clean, source })
+    return true
   }
 
   /**

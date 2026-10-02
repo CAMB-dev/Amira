@@ -1,5 +1,6 @@
+import type { AssistantMessage, Message, Usage } from "@amira/ai"
 import type { BackgroundJobExtension } from "./background-jobs.ts"
-import type { CommandDefinition, InputHandler } from "./commands.ts"
+import type { CommandDefinition, InputHandler, SessionControl } from "./commands.ts"
 import type {
   EventEnvelope,
   EventMap,
@@ -23,6 +24,23 @@ import type { ViewDefinition } from "./views.ts"
 export interface InterceptContext {
   sessionId: string
   signal: AbortSignal
+}
+
+/** A host-accounted model call made by an extension. */
+export interface CompleteRequest {
+  model?: string
+  system?: string
+  messages: Message[]
+  maxTokens?: number
+  signal?: AbortSignal
+  label?: string
+}
+
+/** The assistant reply from an extension's host-accounted model call. */
+export interface CompleteResult {
+  text: string
+  message: AssistantMessage
+  usage?: Usage
 }
 
 export interface ExtensionAPI {
@@ -107,6 +125,10 @@ export interface ExtensionAPI {
   requestRender(): void
   /** The merged settings (D35) and explicit source layers, e.g. for mcpServers trust checks. */
   readonly settings: SettingsView
+  /** Makes a host-accounted side model call without tools or hosted web search. */
+  complete(request: CompleteRequest): Promise<CompleteResult>
+  /** The current top-level session, when the host has injected session control. */
+  session(): SessionControl | undefined
   /** Background jobs started by this extension; host-wide jobs are available only to host code. */
   readonly backgroundJobs: BackgroundJobExtension
   /**

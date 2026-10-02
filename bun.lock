@@ -17,6 +17,13 @@
         "@amira/api": "workspace:*",
       },
     },
+    "extensions/auto-title": {
+      "name": "@amira/ext-auto-title",
+      "version": "0.0.0",
+      "dependencies": {
+        "@amira/api": "workspace:*",
+      },
+    },
     "extensions/builtin-tools": {
       "name": "@amira/builtin-tools",
       "version": "0.0.0",
@@ -163,6 +170,8 @@
     "@amira/core": ["@amira/core@workspace:packages/core"],
 
     "@amira/ext-agent": ["@amira/ext-agent@workspace:extensions/agent"],
+
+    "@amira/ext-auto-title": ["@amira/ext-auto-title@workspace:extensions/auto-title"],
 
     "@amira/ext-commands": ["@amira/ext-commands@workspace:extensions/commands"],
 

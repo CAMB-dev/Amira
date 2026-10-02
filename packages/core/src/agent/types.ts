@@ -55,7 +55,6 @@ export interface AgentOptions {
   compaction?: CompactionOptions
   /** Context management: large outputs, repeated reads, aging (settings `context`). */
   context?: ContextOptions
-  autoTitle?: { model?: ModelInfo }
   sessionId?: string
   parentSessionId?: string
   bus?: EventBus

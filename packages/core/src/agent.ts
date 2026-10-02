@@ -150,10 +150,6 @@ import { ToolRegistry } from "./tool-registry.ts"
 import { toolTraits } from "./tool-traits.ts"
 import { checkArgs } from "./validate-args.ts"
 
-/** Output budget for an automatic session title from a reasoning model. */
-const TITLE_THINKING_TOKENS = 2048
-const TITLE_MAX_CHARS = 60
-
 /** State that belongs to one turn, so late callbacks never leak into the next turn. */
 interface Turn {
   id: string
@@ -221,10 +217,6 @@ export class Agent {
   model: ModelInfo
 
   #ai: Ai
-  #autoTitle: AgentOptions["autoTitle"]
-  #titleStarted = false
-  #titleAbort: AbortController | undefined
-  #titleTimer: ReturnType<typeof setTimeout> | undefined
   #approve: Approver | undefined
   #inheritedApprover: Approver | undefined
   #ask: Asker | undefined
@@ -379,9 +371,6 @@ export class Agent {
     this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
     this.#compaction = opts.compaction ?? {}
     this.#context = opts.context ?? {}
-    this.#autoTitle = opts.autoTitle
-    this.#titleStarted =
-      opts.session?.entries.some((e) => e.type === "message" && e.message.role === "assistant") ?? false
     this.#ai = opts.ai
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
@@ -1060,10 +1049,6 @@ export class Agent {
     this.#cancelRetry()
     this.#abort?.abort()
     this.#steerAbort?.abort()
-    this.#titleAbort?.abort()
-    if (this.#titleTimer) clearTimeout(this.#titleTimer)
-    this.#titleAbort = undefined
-    this.#titleTimer = undefined
     ;(this.backgroundJobs as { dispose?: () => void } | undefined)?.dispose?.()
     this.#steering.splice(0)
     this.#notices.splice(0)
@@ -1264,7 +1249,6 @@ export class Agent {
         ...(result.failure ? { failure: result.failure } : {}),
       })
       this.#setStatus(turn, "idle")
-      if (result.reason === "done" && !this.#disposed) this.#startTitle()
       // A success resets the notice retries; after an interrupt the user decides when to go on.
       if (result.reason !== "error") this.#retries = 0
       else if (!this.#disposed && (turn.unanswered || this.#notices.length)) this.#scheduleRetry(result.error)
@@ -1273,86 +1257,6 @@ export class Agent {
       }
     }
     return result
-  }
-
-  #startTitle(): void {
-    const store = this.session
-    if (!this.#autoTitle || this.depth || this.parentSessionId || this.#titleStarted || !store || store.title)
-      return
-    this.#titleStarted = true
-    const model = this.#autoTitle.model ?? this.model
-    const messages = this.messages
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      // Images stay out of the title request (its model may not take them); their names still
-      // tell it something when a message is only an image.
-      .map(
-        (m) =>
-          `${m.role}: ${m.content
-            .flatMap((b) =>
-              b.type === "text"
-                ? [b.text]
-                : b.type === "image"
-                  ? [`[image${b.name ? `: ${b.name}` : ""}]`]
-                  : [],
-            )
-            .join("")}`,
-      )
-      .join("\n")
-      .slice(0, 8000)
-    const titleAbort = new AbortController()
-    const titleTimer = setTimeout(() => titleAbort.abort(), 30_000)
-    ;(titleTimer as { unref?: () => void }).unref?.()
-    this.#titleAbort = titleAbort
-    this.#titleTimer = titleTimer
-    void (async () => {
-      try {
-        for await (const e of this.#ai.stream(
-          {
-            model: { ...model, caps: { ...model.caps, webSearch: false } },
-            systemPrompt:
-              "Give this conversation a short title, at most six words, in the user's language. Return only the title, without quotes or punctuation around it.",
-            messages: [userMessage(messages)],
-            tools: [],
-            // A reasoning model spends its output budget thinking first; 64 tokens would end it
-            // before any title.
-            maxTokens: model.caps.thinking
-              ? Math.min(TITLE_THINKING_TOKENS, model.maxOutput || Infinity)
-              : 64,
-          },
-          titleAbort.signal,
-        )) {
-          if (e.type !== "done" && e.type !== "error") continue
-          if (this.#disposed) return
-          const usage = e.message.usage
-          if (usage) {
-            this.tree?.recordUsage(this, usage)
-            this.#store({ type: "side_usage", model: modelRef(model), usage })
-          }
-          if (e.type === "error") return
-          const title = e.message.content
-            .flatMap((b) => (b.type === "text" ? [b.text] : []))
-            .join("")
-            .trim()
-            .replace(/^["'`]+|["'`]+$/g, "")
-            .split(/\s+/)
-            .slice(0, 6)
-            .join(" ")
-          // Six words of a language without spaces can be a whole paragraph.
-          const short = [...title].slice(0, TITLE_MAX_CHARS).join("")
-          if (short) {
-            store.rename(short, "auto")
-            this.#emit(undefined, "session.title", { title: store.title! })
-          }
-          return
-        }
-      } catch {
-        // Naming is optional; a failed side request never interrupts the conversation.
-      } finally {
-        if (this.#titleAbort === titleAbort) this.#titleAbort = undefined
-        if (this.#titleTimer === titleTimer) this.#titleTimer = undefined
-        clearTimeout(titleTimer)
-      }
-    })()
   }
 
   #injectSteering(turn: Turn) {

@@ -1,10 +1,13 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import type { Ai, AssistantMessage, ModelInfo } from "@amira/ai"
 import * as publicApi from "@amira/api"
 import {
   type AnyEvent,
   API_VERSION,
   type BackgroundJobHost,
+  type CompleteRequest,
+  type CompleteResult,
   type Extension,
   type ExtensionAPI,
   type FileRestorationOwner,
@@ -14,6 +17,7 @@ import {
   type NoticeLevel,
   type RunCommandOptions,
   type RunCommandResult,
+  type SessionControl,
   type Settings,
   type SettingsLayer,
   type SettingsLayers,
@@ -28,6 +32,7 @@ import {
   StandbyGoneError,
   warmUpCommands,
 } from "@amira/proc"
+import type { Agent } from "./agent.ts"
 import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
@@ -38,6 +43,7 @@ import { openExtensionPipe } from "./pipes.ts"
 import { ImageProviderRegistry, MarkdownRendererRegistry, ServiceRegistry } from "./render-registry.ts"
 import { SkillRegistry } from "./skills.ts"
 import { StatusRegistry } from "./status-registry.ts"
+import { overBudget } from "./subagents/budget.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
 import { ToolRendererRegistry } from "./tool-renderers.ts"
 import { UiRequests } from "./ui-requests.ts"
@@ -82,6 +88,8 @@ export function installVirtualApi(): void {
 
 export interface ExtensionHostOptions {
   bus: EventBus
+  /** The session's model client, used for host-accounted extension side calls. */
+  ai?: Ai
   /** Merged settings handed to extensions. Default {}. */
   settings?: Settings
   /** Explicit settings values by source layer, matching `settings`. */
@@ -129,6 +137,8 @@ export class ExtensionHost {
   #replay: AnyEvent[] | undefined
   /** Failures of each extension's event handlers, by source and event type. */
   #handlerFailures = new Map<string, number>()
+  #agent: (() => Agent) | undefined
+  #session: SessionControl | undefined
   readonly status: StatusRegistry
   readonly panels: PanelRegistry
   readonly renderers: ToolRendererRegistry
@@ -169,6 +179,12 @@ export class ExtensionHost {
   /** The settings handed to extensions loaded from now on (e.g. on a reload). */
   setSettings(settings: Settings, settingsLayers: SettingsLayers = {}): void {
     this.#opts = { ...this.#opts, settings, settingsLayers }
+  }
+
+  /** Injects the active session control after the CLI has built its command surface. */
+  setSessionControl(control: SessionControl, agent: () => Agent): void {
+    this.#session = control
+    this.#agent = agent
   }
 
   async load(ext: Extension, source: string): Promise<boolean> {
@@ -345,6 +361,84 @@ export class ExtensionHost {
     return this.ui.api(source)
   }
 
+  async #complete(
+    request: CompleteRequest,
+    source: string,
+    disposers: (() => void)[],
+  ): Promise<CompleteResult> {
+    const ai = this.#opts.ai
+    const agent = this.#agent?.()
+    if (!ai || !agent) throw new Error("extension side calls are unavailable before session startup")
+    // Side calls spend from the same budget as the conversation: none once it is spent.
+    const spent = agent.tree && overBudget(agent.tree.usage, agent.tree.budget)
+    if (spent) throw new Error(`the agent tree's budget is spent (${spent})`)
+    const model = request.model ? ai.model(request.model) : agent.model
+    const sideModel = { ...model, caps: { ...model.caps, webSearch: false } }
+    const label = sideLabel(request.label) ?? source
+    const abort = new AbortController()
+    const onAbort = () => abort.abort()
+    if (request.signal) {
+      if (request.signal.aborted) abort.abort()
+      else request.signal.addEventListener("abort", onAbort, { once: true })
+    }
+    // Unloading the extension aborts the request; a finished one leaves nothing behind.
+    disposers.push(onAbort)
+    try {
+      if (abort.signal.aborted) throw abortError()
+      let message: AssistantMessage | undefined
+      for await (const event of ai.stream(
+        {
+          model: sideModel,
+          systemPrompt: request.system ?? "",
+          messages: request.messages,
+          tools: [],
+          ...sideMaxTokens(sideModel, request.maxTokens),
+        },
+        abort.signal,
+      )) {
+        if (event.type !== "done" && event.type !== "error") continue
+        if (abort.signal.aborted) throw abortError()
+        const usage = event.message.usage
+        if (usage) {
+          agent.tree?.recordUsage(agent, usage)
+          try {
+            agent.session?.append({
+              type: "side_usage",
+              model: { provider: model.provider, model: model.id },
+              usage,
+              label,
+            })
+          } catch {
+            // A failing disk is reported by the session's own writes; the reply still counts.
+          }
+        }
+        if (event.type === "error") {
+          if (event.error.code === "aborted" || event.message.stopReason === "aborted") throw abortError()
+          throw new Error(event.error.message)
+        }
+        message = event.message
+        break
+      }
+      if (!message || abort.signal.aborted) {
+        if (abort.signal.aborted) throw abortError()
+        throw new Error("model request ended without a reply")
+      }
+      return {
+        text: message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(""),
+        message,
+        ...(message.usage ? { usage: message.usage } : {}),
+      }
+    } catch (error) {
+      if (abort.signal.aborted || (error instanceof DOMException && error.name === "AbortError"))
+        throw abortError()
+      throw error
+    } finally {
+      request.signal?.removeEventListener("abort", onAbort)
+      const at = disposers.indexOf(onAbort)
+      if (at !== -1) disposers.splice(at, 1)
+    }
+  }
+
   #apiFor(source: string, disposers: (() => void)[]): ExtensionAPI {
     const { bus, interceptors, tools } = this.#opts
     const track = (d: () => void) => {
@@ -425,6 +519,8 @@ export class ExtensionHost {
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
       // Each extension gets its own frozen copy, so none can change what another reads.
       settings: settingsView(this.#opts.settings ?? {}, this.#opts.settingsLayers ?? {}),
+      complete: (request) => this.#complete(request, source, disposers),
+      session: () => this.#session,
       registerStatusItem: (item) => {
         const off = this.status.register(item)
         this.#requestRender()
@@ -473,6 +569,29 @@ export class ExtensionHost {
       ui: this.#uiFor(source, track),
     }
   }
+}
+
+/** Reasoning models spend their output budget thinking first; a small one would end before any answer. */
+const SIDE_THINKING_TOKENS = 2048
+
+function sideMaxTokens(model: ModelInfo, asked?: number): { maxTokens?: number } {
+  if (!model.caps.thinking) return asked !== undefined ? { maxTokens: asked } : {}
+  if (asked === undefined) return {}
+  return { maxTokens: Math.max(asked, Math.min(SIDE_THINKING_TOKENS, model.maxOutput || Infinity)) }
+}
+
+/** What /cost calls a side request: one short line. */
+function sideLabel(label: string | undefined): string | undefined {
+  const clean = label
+    ?.replace(/\p{Cc}/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60)
+  return clean || undefined
+}
+
+function abortError(): DOMException {
+  return new DOMException("The operation was aborted", "AbortError")
 }
 
 /**

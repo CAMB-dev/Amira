@@ -163,6 +163,8 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `registerInputHandler` | Handle matching ordinary input before it reaches the model |
 | `registerStatusItem`, `requestRender` | Read live state into the status bar; request a redraw after state changes |
 | `on`, `intercept` | Subscribe to typed events or intercept documented model/tool/context stages |
+| `complete` | Make a host-accounted side model call without tools or hosted web search |
+| `session` | Access the current top-level `SessionControl` outside commands, when the host has injected it |
 | `ui` | Ask through select, confirm, input, form and review dialogs; the command context also exposes UI requests |
 | `registerPanel` | Render live lines above the activity line |
 | `registerView` | Register a full-screen view kind; commands open it through `openView` when the frontend supports it |
@@ -191,6 +193,8 @@ A command opens the rewind picker that double Esc opens with `ctx.openRewind()`;
 Extension-specific settings belong under `extensions` with the extension name. The settings snapshot is deeply frozen; validate your own section. `api.settings.layers(key)` returns the explicit values for a top-level key in precedence order, each with `scope` (`user`, `project`, `project-local` or `flags`), `file` and `value`; missing keys return an empty list. The host supplies a fresh snapshot and layer map whenever it reloads settings, including `/reload`, so an extension can reconcile long-lived resources without reading settings files itself. Print mode cancels UI dialogs; RPC clients answer them through the protocol. Panels, views, tool presenters, Markdown renderers, image providers and services are experimental APIs.
 
 `runCommand` resolves once the command has exited. Pass `onChunk` to get output as it arrives, for example to show progress from a long `git` command. Abort through `signal` (or let `timeoutMs` expire) and the whole process tree is killed; the result then reports `aborted` or `timedOut`. By default, `output` keeps only the last 1,000,000 characters; override that limit with a positive-integer `maxOutputChars` (invalid values reject the call). `onChunk` still receives everything, and `truncated` reports whether `output` was cut. A cut never splits a UTF-16 surrogate pair.
+
+`complete({ messages, system?, model?, maxTokens?, signal?, label? })` makes one model request outside the conversation, with no tools and hosted web search off, and resolves with the reply's text, message and usage. It defaults to the session's current model (`model` takes a `provider/model` reference). Every such request spends your tokens: its usage is saved in the session and shown in `/cost` under `label` (the extension's source when unset) and counts toward the agent tree's `budget`; once the budget is spent the call rejects without a request. A reasoning model gets at least 2,048 output tokens (within its limit) so it can answer after thinking. Provider errors reject the promise and an aborted `signal`, or unloading the extension, rejects it with an `AbortError`. `session()` returns the top-level session's `SessionControl` once the host has built it; `rename(title, { source: "auto", sessionId })` never replaces a name set with `/rename` and does nothing when `sessionId` is no longer the current session.
 
 ### Background jobs
 

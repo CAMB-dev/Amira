@@ -60,7 +60,9 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
     compactions: () => ctx.agent().compactionUsage,
     sideRequests: () =>
       (ctx.agent().session?.entries ?? []).flatMap((e) =>
-        e.type === "side_usage" ? [{ model: e.model, usage: e.usage }] : [],
+        e.type === "side_usage"
+          ? [{ model: e.model, usage: e.usage, ...(e.label ? { label: e.label } : {}) }]
+          : [],
       ),
     subagents: () => listSubagents(ctx.agent(), ctx.session.tree).map((e) => e.info),
     subagentMessages: (id) => subagentMessages(ctx.agent(), ctx.session.tree, id),

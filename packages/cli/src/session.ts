@@ -141,6 +141,7 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
     ],
     ["builtin:status", () => import("../../../extensions/status/src/index.ts")],
     ["builtin:commands", () => import("../../../extensions/commands/src/index.ts")],
+    ["builtin:auto-title", () => import("../../../extensions/auto-title/src/index.ts")],
     ["builtin:skills", () => import("../../../extensions/skills/src/index.ts")],
     ["builtin:mcp", () => import("../../../extensions/mcp/src/index.ts")],
     ["builtin:web", () => import("../../../extensions/web/src/index.ts")],
@@ -163,6 +164,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const readPackages = () => (typeof opts.packages === "function" ? opts.packages() : opts.packages)
   let packages = readPackages()
   const settings = withPackageSkills(opts.settings ?? {}, packages)
+  const extensionSettings = (value: Settings): Settings =>
+    opts.autoTitle === false ? { ...value, sessions: { ...value.sessions, autoTitle: false } } : value
   // AMIRA_TEST_MOCK (end-to-end tests only) adds a scripted "mock" provider and keeps the
   // catalog download out of the test run.
   const mock = testAiOptions()
@@ -198,7 +201,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     bus,
     interceptors,
     tools,
-    settings,
+    ai,
+    settings: extensionSettings(settings),
     settingsLayers: opts.settingsLayers,
     cwd: opts.cwd,
   })
@@ -313,9 +317,6 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       tools,
       backgroundJobs: host.backgroundJobs,
       ...(store ? { session: store } : {}),
-      ...(opts.autoTitle && settings.sessions?.autoTitle !== false
-        ? { autoTitle: { ...(settings.compact?.model ? { model: ai.model(settings.compact.model) } : {}) } }
-        : {}),
       ...(compaction ? { compaction } : {}),
       ...(context ? { context } : {}),
       ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
@@ -354,7 +355,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       }
       host.unloadAll()
       host.setSettings(
-        withPackageSkills(reloaded?.settings ?? opts.settings ?? {}, packages),
+        extensionSettings(withPackageSkills(reloaded?.settings ?? opts.settings ?? {}, packages)),
         reloaded?.layers ?? opts.settingsLayers,
       )
       host.replayOnLoad(reloadReplay(current))

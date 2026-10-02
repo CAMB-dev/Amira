@@ -35,6 +35,8 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     useService: () => undefined,
     requestRender: () => {},
     settings: { layers: () => [] },
+    complete: () => Promise.reject(new Error("not used")),
+    session: () => undefined,
     backgroundJobs: hostBackgroundJobs(),
     on: () => () => {},
     intercept: () => () => {},

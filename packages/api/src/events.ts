@@ -66,6 +66,8 @@ export interface CompactionUsage {
   usage: Usage
   /** Done by the provider's server (native compaction). */
   native?: boolean
+  /** A side request's purpose, as its extension named it; unset for session titles. */
+  label?: string
 }
 
 /** Envelope shared by every event, whether seen by the TUI, headless clients or extensions. */

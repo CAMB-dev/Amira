@@ -184,8 +184,14 @@ export function costReport(
   const sideReplies = sideRequests.map(
     (c): AssistantMessage => ({ role: "assistant", content: [], model: c.model, usage: c.usage }),
   )
-  const sideRows = costByModel(sideReplies).map((r) => ({ ...r, side: true }))
-  const rows: (ModelCost & { compaction?: boolean; side?: boolean })[] = [
+  // Side requests by purpose, then by model; unlabelled ones are session titles.
+  const sideLabels = [...new Set(sideRequests.map((c) => c.label ?? "session title"))]
+  const sideRows = sideLabels.flatMap((label) =>
+    costByModel(sideReplies.filter((_, i) => (sideRequests[i]?.label ?? "session title") === label)).map(
+      (r) => ({ ...r, side: label }),
+    ),
+  )
+  const rows: (ModelCost & { compaction?: boolean; side?: string })[] = [
     ...costByModel(replies),
     ...compactionRows,
     ...sideRows,
@@ -208,7 +214,7 @@ export function costReport(
     r.compaction
       ? line(r, `${r.model} (compaction)`, `${r.replies} ${r.replies === 1 ? "compaction" : "compactions"}`)
       : r.side
-        ? line(r, `${r.model} (session title)`, `${r.replies} requests`)
+        ? line(r, `${r.model} (${r.side})`, `${r.replies} requests`)
         : line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`),
   )
   if (rows.length > 1) {

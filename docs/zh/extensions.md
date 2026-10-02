@@ -163,6 +163,8 @@ amira
 | `registerInputHandler` | 在普通输入到达模型前，处理符合条件的输入 |
 | `registerStatusItem`、`requestRender` | 在状态栏显示当前数据，数据改变后请求重绘 |
 | `on`、`intercept` | 订阅有类型的事件，或拦截文档规定的模型、工具和上下文阶段 |
+| `complete` | 发起由宿主记账的 side model 调用，不启用工具或托管网页搜索 |
+| `session` | 在命令之外访问当前顶层 `SessionControl`；宿主注入前可能为 undefined |
 | `ui` | 通过选择、确认、输入、表单和审阅对话框询问用户，命令上下文也提供 UI 请求 |
 | `registerPanel` | 在活动行上方渲染实时内容 |
 | `registerView` | 注册全屏视图类型，命令在前端支持时通过 `openView` 打开 |
@@ -195,6 +197,8 @@ amira
 扩展设置放在 `extensions` 中，以扩展名为键。设置快照被冻结，扩展应自行校验自己的字段；`api.settings.layers(key)` 按优先级顺序返回顶层键的显式值，每项带有 `scope`（`user`、`project`、`project-local` 或 `flags`）、`file` 和 `value`，没有该键时返回空数组。宿主重新加载设置时（包括 `/reload`）会提供新的快照和来源层，扩展可以据此协调长期资源，而无需自行读取设置文件。Print 模式会取消 UI 对话框，RPC 客户端通过协议回答。Panel、视图、工具展示器、Markdown 渲染器、图片 provider 和服务 API 目前属于实验功能。
 
 `runCommand` 在命令退出后才返回。想边运行边拿到输出（比如显示一条耗时的 `git` 命令的进度），就传入 `onChunk`。通过 `signal` 中止（或等 `timeoutMs` 到期）会杀掉整个进程树，结果里的 `aborted` 或 `timedOut` 会说明原因。默认情况下，`output` 只保留最后 1,000,000 个字符；可以用正整数 `maxOutputChars` 覆盖该限制（无效值会导致调用被拒绝）。`onChunk` 仍会收到全部输出，`truncated` 会说明 `output` 是否被截断。截断不会拆开 UTF-16 代理对。
+
+`complete({ messages, system?, model?, maxTokens?, signal?, label? })` 在对话之外发起一次模型请求，不带工具，关闭托管网页搜索，返回回复的文本、消息和用量。默认使用会话当前的模型（`model` 接受 `provider/model` 引用）。每次请求都会消耗你的 token：用量保存在会话中，在 `/cost` 里以 `label`（未设置时为扩展来源）列出，并计入 agent 树的 `budget`；预算用完后调用直接被拒绝，不会发出请求。推理模型至少获得 2,048 个输出 token（不超过其上限），以便思考后仍能作答。provider 错误会让 promise 被拒绝；`signal` 中止或扩展被卸载时，以 `AbortError` 拒绝。`session()` 在宿主建好会话控制后返回顶层会话的 `SessionControl`；`rename(title, { source: "auto", sessionId })` 不会覆盖 `/rename` 设置的名称，`sessionId` 已不是当前会话时什么也不做。
 
 ### 后台任务
 
