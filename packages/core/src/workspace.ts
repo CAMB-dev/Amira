@@ -26,6 +26,15 @@ export interface WorkspaceOptions {
   staleMs?: number
 }
 
+/** The facts a provider may supply, with their types; anything else it returns is dropped. */
+const FIELDS = [
+  ["repoRoot", "string"],
+  ["branch", "string"],
+  ["head", "string"],
+  ["isWorktree", "boolean"],
+  ["dirty", "boolean"],
+] as const
+
 const hosts = new WeakMap<EventBus, WorkspaceTracker>()
 
 export function workspaceFor(bus: EventBus): WorkspaceTracker {
@@ -150,13 +159,12 @@ export class WorkspaceTracker {
       if (!facts) return
       if (facts.cwd !== active.cwd) throw new Error("workspace provider returned facts for a different cwd")
       // Copy only payload fields: providers cannot supply or override host event metadata.
-      const data: WorkspaceFacts = {
-        cwd: active.cwd,
-        ...(facts.repoRoot !== undefined ? { repoRoot: facts.repoRoot } : {}),
-        ...(facts.branch !== undefined ? { branch: facts.branch } : {}),
-        ...(facts.head !== undefined ? { head: facts.head } : {}),
-        ...(facts.isWorktree !== undefined ? { isWorktree: facts.isWorktree } : {}),
-        ...(facts.dirty !== undefined ? { dirty: facts.dirty } : {}),
+      const data: WorkspaceFacts = { cwd: active.cwd }
+      for (const [key, type] of FIELDS) {
+        const value = facts[key]
+        if (value === undefined) continue
+        if (typeof value !== type) throw new Error(`workspace provider returned a non-${type} ${key}`)
+        Object.assign(data, { [key]: value })
       }
       const signature = JSON.stringify(data)
       if (signature === active.emitted) return
