@@ -6,13 +6,10 @@ import { isNoModel, type ServerToolBlock } from "@amira/ai"
 import {
   type AnyEvent,
   type EventMap,
-  type FileRewindPlan,
   type FrontendView,
   isSubagentView,
   modelLabel,
-  type SessionControl,
   type ToolDetailLevel,
-  type UserMessage,
 } from "@amira/api"
 import { type Agent, AgentBusyError, MODE_SUMMARY, parseCommandLine, type UiRequests } from "@amira/core"
 import {
@@ -47,13 +44,13 @@ import {
   messageParts,
   messageText,
   type Outgoing,
-  oneLine,
   otherWay,
   outgoing,
   pendingMessageRows,
   toPrompt,
   type WhileWorking,
 } from "./app/outbox.ts"
+import { RewindFlow } from "./app/rewind.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
 import {
   DOUBLE_ESC_MS,
@@ -62,13 +59,12 @@ import {
   HINT_NOTE_MS,
   HOST_EVENTS,
   overlayKeys,
-  REWIND_ID,
   tildePath,
   welcomeCard,
 } from "./app/startup.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { CommandPopup } from "./command-popup.ts"
-import { Dialog, type DialogAnswer, type DialogRequest, dialogEchoLines } from "./dialog.ts"
+import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
 import { renderToolLines } from "./diff-view.ts"
 import { ExtensionViewer } from "./extension-view.ts"
 import { FileIndex } from "./file-index.ts"
@@ -600,6 +596,20 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
   const noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
+  const rewind = new RewindFlow({
+    agent: () => agent,
+    commands,
+    dialogs,
+    keys,
+    editor,
+    sentParts,
+    working: () => activity.working,
+    compacting: () => activity.compacting,
+    showNote,
+    view,
+    redraw,
+  })
+  const openRewind = () => rewind.openRewind()
   const commandRunner = createCommandRunner({
     commands,
     keys,
@@ -1291,142 +1301,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       else flush.rewind = true
       interrupt()
     } else if (!activity.compacting) openRewind()
-  }
-
-  /**
-   * The rewind picker: the user's messages, newest first. Picking one cuts the conversation
-   * back to just before it and puts it in the editor to change and send again. The second
-   * choice previews file restoration, including the host's coverage and conflicts.
-   */
-  function openRewind(): boolean {
-    const control = commands?.control
-    if (
-      !control?.rewind ||
-      activity.working ||
-      activity.compacting ||
-      dialogs.some((d) => d.request.requestId.startsWith(REWIND_ID))
-    )
-      return false
-    const picks = agent.messages
-      .map((m, index) => ({ m, index }))
-      .filter((p): p is { m: UserMessage; index: number } => p.m.role === "user" && !p.m.display?.origin)
-      .reverse()
-    if (!picks.length) {
-      showNote("Nothing to rewind to yet")
-      return true
-    }
-    const labels = picks.map((p, i) => `${i + 1}. ${oneLine(messageText(p.m))}`)
-    const request: Extract<DialogRequest, { kind: "select" }> = {
-      kind: "select",
-      requestId: `${REWIND_ID}${Date.now()}`,
-      title: "Rewind the conversation to before which message?",
-      options: labels,
-      ...(control.fork
-        ? { sections: [{ at: 0, choose: "rewind", keys: [{ key: "f", label: "fork from here" }] }] }
-        : {}),
-    }
-    const dialog: Dialog = new Dialog(
-      request,
-      (answer) => {
-        const i = dialogs.indexOf(dialog)
-        if (i !== -1) dialogs.splice(i, 1)
-        const label =
-          typeof answer === "string"
-            ? answer
-            : answer && typeof answer === "object" && "option" in answer
-              ? answer.option
-              : undefined
-        const fork = answer && typeof answer === "object" && "key" in answer && answer.key === "f"
-        const at = label ? labels.indexOf(label) : -1
-        if (at !== -1) {
-          if (fork) void rewindTo(control, picks[at]!, { fork: true })
-          else chooseFileRewind(control, picks[at]!)
-        }
-        view.requestRender()
-      },
-      keys,
-    )
-    dialogs.unshift(dialog)
-    view.requestRender()
-    return true
-  }
-
-  function chooseFileRewind(control: SessionControl, pick: { m: UserMessage; index: number }) {
-    if (!control.planRewind) {
-      void rewindTo(control, pick, { restoreFiles: false })
-      return
-    }
-    let plan: FileRewindPlan
-    try {
-      plan = control.planRewind(pick.index)
-    } catch (error) {
-      view.notice("warning", `Cannot rewind: ${(error as Error).message}`)
-      view.requestRender()
-      return
-    }
-    if (plan.conflicts.length) view.notice("warning", `File restore conflicts:\n${plan.conflicts.join("\n")}`)
-    const restore =
-      plan.owner === "core"
-        ? `Restore files too (${plan.restored} restored, ${plan.removed} removed)`
-        : plan.owner
-    const canRestore = plan.enabled && (plan.owner !== "core" || plan.restored + plan.removed > 0)
-    const options = [...(canRestore ? [restore] : []), "Conversation only"]
-    const dialog: Dialog = new Dialog(
-      {
-        kind: "select",
-        requestId: `${REWIND_ID}files-${Date.now()}`,
-        title: canRestore ? "Restore files too?" : "Rewind conversation; files will not be restored",
-        options,
-        descriptions: options.map((option) =>
-          option === restore
-            ? `${plan.conflicts.length ? "Conflicts must be resolved first. " : ""}${plan.note}`
-            : `Files will not be restored. ${plan.note}`,
-        ),
-      },
-      (answer) => {
-        const at = dialogs.indexOf(dialog)
-        if (at !== -1) dialogs.splice(at, 1)
-        if (typeof answer === "string")
-          void rewindTo(control, pick, { restoreFiles: canRestore && answer === restore, plan })
-        view.requestRender()
-      },
-      keys,
-    )
-    dialogs.unshift(dialog)
-    view.requestRender()
-  }
-
-  async function rewindTo(
-    control: SessionControl,
-    pick: { m: UserMessage; index: number },
-    mode: { fork: true } | { restoreFiles: boolean; plan?: FileRewindPlan },
-  ) {
-    const text = messageText(pick.m)
-    try {
-      if ("fork" in mode) await control.fork!(pick.index)
-      else await control.rewind!(pick.index, { restoreFiles: mode.restoreFiles })
-    } catch (err) {
-      view.notice("warning", `Cannot rewind: ${err instanceof Error ? err.message : String(err)}`)
-      view.requestRender()
-      return
-    }
-    const back = pick.m.content.some((b) => b.type === "image")
-      ? messageParts(pick.m)
-      : (sentParts.get(userText(pick.m)) ?? [text])
-    editor.setParts(editor.isEmpty ? back : [...back, "\n\n", ...editor.getParts()])
-    view.notice(
-      "info",
-      "fork" in mode
-        ? "Forked the conversation to before that message, now back in the input."
-        : `Rewound the conversation to before that message, now back in the input. ${
-            mode.restoreFiles && mode.plan
-              ? mode.plan.owner === "core"
-                ? `Restored ${mode.plan.restored} file${mode.plan.restored === 1 ? "" : "s"}; removed ${mode.plan.removed} file${mode.plan.removed === 1 ? "" : "s"}.`
-                : `${mode.plan.owner} completed.`
-              : "Files were not restored."
-          }${mode.plan ? ` ${mode.plan.note}` : ""}`,
-    )
-    redraw()
   }
 
   function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
