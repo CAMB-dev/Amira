@@ -6,7 +6,11 @@
 
 ## 思考强度
 
-交互模式使用 `amira --thinking high`，打印模式使用 `amira -p --thinking xhigh "Explain this repository"`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。该标志优先于[设置](settings.md)中的顶层 `thinking` 和 `providers.<id>.models[].thinking`；不传标志时，模型设置优先于顶层设置。两者均未配置时，请求不发送推理强度参数，沿用服务端默认值。只有 `caps.thinking` 为真的模型才会收到该参数，`/status` 也只在此时显示档位；子 agent 继承父 agent 选中的档位，标题生成和上下文压缩保持原有默认行为。
+交互模式使用 `amira --thinking high`，打印模式使用 `amira -p --thinking xhigh "Explain this repository"`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。
+
+会话中运行 `/thinking` 会打开选择器，提供这五个档位和 `default`（不发送推理强度参数）。也可以用 `/thinking high` 直接设置档位，或用 `/thinking default` 沿用服务端默认值。这些更改只对当前会话生效，不写入设置文件。优先级为会话中的运行时选择 > `--thinking` > [设置](settings.md)中的 `providers.<id>.models[].thinking` > 顶层 `thinking`。选择 `default` 会明确屏蔽后面三种来源，而不是恢复标志或设置中的值；没有选择或配置档位时，请求同样不发送推理强度参数。
+
+在交互式 `/model` 选择器中选中支持思考的模型后，第二步会提供相同的强度选项。此时按 Esc 会保留刚选中的模型，不改变强度选择。只有 `caps.thinking` 为真的模型才会收到强度参数；状态栏在模型名旁显示档位，`/status` 也只对这类模型显示档位。切换到不支持思考的模型时会隐藏档位，但不会丢弃所选强度。子 agent 继承父 agent 选中的档位，标题生成和上下文压缩保持原有默认行为。
 
 Responses 和 Anthropic 自适应模式原样发送档位。Anthropic 预算模式将 `xhigh` 映射为 32,768 token，低于 `max` 的 64,000，并根据输出上限为回答预留空间。Gemini 将 `xhigh` 按 `high` 处理，保留 Gemini 2.5 Pro 在 `max` 下的更大预算。Chat Completions 当前不发送推理参数。
 
@@ -227,12 +231,15 @@ RPC 在 stdin 和 stdout 使用 JSON Lines，不能与 `-p` 或命令行提示�
 | `session.rename` | 用 `title` 为当前会话命名；随后发出 `session.title` 事件，自动标题也会发出该事件 |
 | `session.fork` | 分支到新会话，可用 `index` 指定在哪条用户消息之前；随后发出原因为 `fork` 的 `session.start` |
 | `model.set` | 用 `model` 指定 provider/model，切换模型 |
+| `thinking.set` | 将 `level` 设为 `low`、`medium`、`high`、`xhigh`、`max` 或 `default`；已有任务时返回 `busy` |
 | `command.list`、`command.complete`、`command.run` | 查询、补全和执行斜杠命令 |
 | `skill.list`、`skill.run` | 查询和运行 skill |
 | `ui.respond` | 用 `requestId` 与 `value` 回答界面请求 |
 | `ui.action`、`ui.configure`、`ui.focus` | 处理表单操作、表单呈现方式与客户端焦点 |
 
 参数和界面回答格式以生成的 schema 为准。例如确认框使用布尔 `value`；显式 `null` 取消对话框，省略 `value` 则无效。请求等待回答时，客户端仍可发送后续输入行。如果慢速客户端收到 `events.lost`，用 `state` 与 `session.read` 重新同步。工作期间持续读取 stdout。
+
+`thinking.set` 必须显式提供 `level`；缺失或无效时返回 `invalid_params`。`default` 表示不发送推理强度，覆盖命令行参数和设置，而非恢复它们。其响应和 `state` 包含 `supportsThinking`，并用 `thinkingLevel` 表示有效强度（即使模型不支持思考）；只有向当前模型发送强度时才包含 `thinking`。使用服务端默认值时，两个强度字段均省略。
 
 关闭 stdin 后，Amira 会等待正在进行的工作，包括后台结果及其触发的后续轮次；无人能回答的对话框会取消。需要对话框的命令应在结束前保持 stdin 打开。
 

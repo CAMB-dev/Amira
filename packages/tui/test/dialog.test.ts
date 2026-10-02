@@ -22,6 +22,50 @@ function open(request: DialogRequest, keys?: Keybindings) {
 
 const select = (options: string[]) => open({ kind: "select", requestId: "r1", title: "Model", options })
 
+test("select highlights its initial option, and Enter keeps it", () => {
+  const d = open({
+    kind: "select",
+    requestId: "effort",
+    title: "Thinking effort",
+    options: ["low", "high (current)", "default (not sent)"],
+    initial: "high (current)",
+  })
+  expect(d.rows()).toContain("❯ 2 high (current)")
+  d.press("enter")
+  expect(d.answers).toEqual(["high (current)"])
+})
+
+test("select navigates and filters from an initial option; Escape cancels", () => {
+  const request: DialogRequest = {
+    kind: "select",
+    requestId: "effort",
+    title: "Thinking effort",
+    options: ["low", "high", "default (not sent)"],
+    initial: "high",
+  }
+  const moved = open(request)
+  moved.press("down", "enter")
+  expect(moved.answers).toEqual(["default (not sent)"])
+  const filtered = open(request)
+  filtered.type("low")
+  filtered.press("enter")
+  expect(filtered.answers).toEqual(["low"])
+  const cancelled = open(request)
+  cancelled.press("escape")
+  expect(cancelled.answers).toEqual([undefined])
+})
+
+test("select scrolls its initial option into view and falls back for an unknown option", () => {
+  const options = Array.from({ length: 20 }, (_, i) => `option ${i}`)
+  const last = open({ kind: "select", requestId: "r", title: "Pick", options, initial: "option 19" })
+  expect(last.rows().some((row) => row.includes("❯") && row.includes("option 19"))).toBe(true)
+  last.press("enter")
+  expect(last.answers).toEqual(["option 19"])
+  const unknown = open({ kind: "select", requestId: "r", title: "Pick", options, initial: "missing" })
+  unknown.press("enter")
+  expect(unknown.answers).toEqual(["option 0"])
+})
+
 for (const width of [120, 60]) {
   test(`session picker searches content and CJK, shows snippets below rows and deletes the filtered selection at ${width} columns`, () => {
     const { dialog, type, rows, answers } = open({

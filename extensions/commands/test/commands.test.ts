@@ -1,5 +1,12 @@
 import { expect, spyOn, test } from "bun:test"
-import type { AssistantMessage, EventMap, SessionControl, SessionInfo, UserMessage } from "@amira/api"
+import type {
+  AssistantMessage,
+  EventMap,
+  ReasoningEffort,
+  SessionControl,
+  SessionInfo,
+  UserMessage,
+} from "@amira/api"
 import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
@@ -49,6 +56,7 @@ function fakeControl(over: Partial<SessionControl> = {}) {
     cwd: "/work",
     model: { provider: "deepseek", model: "deepseek-flash" },
     contextWindow: 128000,
+    supportsThinking: false,
     busy: false,
     shell: "auto",
   }
@@ -82,6 +90,10 @@ function fakeControl(over: Partial<SessionControl> = {}) {
       if (!ref.includes("/")) throw new Error(`unknown model "${ref}"`)
       const [provider, model] = ref.split("/") as [string, string]
       info = { ...info, model: { provider, model } }
+    },
+    setThinking: (level) => {
+      calls.push(`setThinking ${level ?? "default"}`)
+      info = { ...info, thinkingLevel: level, thinking: info.supportsThinking ? level : undefined }
     },
     newSession: async () => {
       calls.push("newSession")
@@ -200,6 +212,7 @@ test("every built-in command is registered with a description", async () => {
     "rewind-prune",
     "shell",
     "status",
+    "thinking",
     "tools",
   ])
   expect(host.list().every((c) => c.description.length > 0)).toBe(true)
@@ -388,6 +401,159 @@ test("/model switches with an argument and asks without one", async () => {
   expect((await run("/model nonsense")).ok).toBe(false)
   const done = await host.complete("/model pro")
   expect(done.candidates.map((c) => c.value)).toEqual(["deepseek/deepseek-pro"])
+})
+
+function thinkingControl(thinkingLevel?: ReasoningEffort, supportsThinking = true) {
+  let info: SessionInfo = {
+    ...fakeControl().control.info(),
+    thinkingLevel,
+    thinking: supportsThinking ? thinkingLevel : undefined,
+    supportsThinking,
+  }
+  const changes: (ReasoningEffort | undefined)[] = []
+  const control: Partial<SessionControl> = {
+    info: () => info,
+    setThinking: (level) => {
+      changes.push(level)
+      info = { ...info, thinkingLevel: level, thinking: info.supportsThinking ? level : undefined }
+    },
+    setModel: (ref) => {
+      const [provider, model] = ref.split("/") as [string, string]
+      const supportsThinking = model !== "deepseek-flash"
+      info = {
+        ...info,
+        model: { provider, model },
+        supportsThinking,
+        thinking: supportsThinking ? info.thinkingLevel : undefined,
+      }
+    },
+  }
+  return { control, changes, info: () => info }
+}
+
+test("/thinking accepts every effort and default, with no picker", async () => {
+  const session = thinkingControl()
+  const { run, requests } = await setup(session.control)
+  for (const level of ["low", "medium", "high", "xhigh", "max", "default"]) {
+    expect(await run(`/thinking ${level}`)).toMatchObject({
+      ok: true,
+      text: `Thinking: ${level === "default" ? "default (not sent)" : level}`,
+    })
+  }
+  expect(session.changes).toEqual(["low", "medium", "high", "xhigh", "max", undefined])
+  expect(session.info().thinkingLevel).toBeUndefined()
+  expect(requests).toEqual([])
+})
+
+test("/thinking rejects invalid arguments and completes all choices, marking the current one", async () => {
+  const session = thinkingControl("high")
+  const { run, host } = await setup(session.control)
+  for (const value of ["off", "HIGH", "high extra"]) {
+    expect(await run(`/thinking ${value}`)).toMatchObject({
+      ok: false,
+      error: "Choose thinking effort: low, medium, high, xhigh, max, default",
+    })
+  }
+  expect(session.changes).toEqual([])
+  const completion = await host.complete("/thinking ")
+  expect(completion.candidates.map((c) => c.value)).toEqual([
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "default",
+  ])
+  expect(completion.candidates.find((c) => c.value === "high")?.description).toBe("current")
+  expect(completion.candidates.find((c) => c.value === "default")?.description).toBe("not sent")
+})
+
+test("/thinking picker marks and preselects the effective choice even for a non-thinking model", async () => {
+  const session = thinkingControl("xhigh", false)
+  const { run, requests } = await setup(session.control, ["medium"])
+  const result = await run("/thinking")
+  expect(requests[0]).toMatchObject({
+    kind: "select",
+    options: ["low", "medium", "high", "xhigh (current)", "max", "default (not sent)"],
+    initial: "xhigh (current)",
+  })
+  expect(result.text).toContain("Thinking: medium")
+  expect(result.text).toContain("doesn't think; choice kept for a thinking model")
+  expect(session.changes).toEqual(["medium"])
+  expect(session.info().thinking).toBeUndefined()
+  expect(session.info().thinkingLevel).toBe("medium")
+})
+
+test("/thinking picker preselects default, and cancellation keeps the choice", async () => {
+  const session = thinkingControl()
+  const { run, requests, host } = await setup(session.control, [undefined])
+  expect((await run("/thinking")).ok).toBe(true)
+  expect(requests[0]).toMatchObject({ initial: "default (not sent) (current)" })
+  expect(session.changes).toEqual([])
+  expect((await host.complete("/thinking ")).candidates.find((c) => c.value === "default")?.description).toBe(
+    "current; not sent",
+  )
+})
+
+test("/thinking picker can select default and reports the result outside the TUI", async () => {
+  const session = thinkingControl("max")
+  const { run } = await setup(session.control, ["default (not sent)"])
+  expect(await run("/thinking", "rpc")).toMatchObject({ ok: true, text: "Thinking: default (not sent)" })
+  expect(session.changes).toEqual([undefined])
+})
+
+test("/model interactive selection asks for effort using the newly selected model's capability", async () => {
+  const session = thinkingControl("high", false)
+  const { run, requests } = await setup(session.control, ["openai/gpt-5", "max"])
+  expect(await run("/model")).toMatchObject({ ok: true, text: "" })
+  expect(requests).toHaveLength(2)
+  expect(requests[1]).toMatchObject({ kind: "select", title: "Thinking effort", initial: "high (current)" })
+  expect(session.info().model).toEqual({ provider: "openai", model: "gpt-5" })
+  expect(session.changes).toEqual(["max"])
+})
+
+test("/model cancellation never opens the effort step", async () => {
+  const session = thinkingControl("high")
+  const before = session.info().model
+  const { run, requests } = await setup(session.control, [undefined])
+  expect((await run("/model")).ok).toBe(true)
+  expect(requests).toHaveLength(1)
+  expect(session.info().model).toEqual(before)
+  expect(session.changes).toEqual([])
+})
+
+test("/model effort cancellation keeps the new model and the effective choice", async () => {
+  const session = thinkingControl("xhigh", false)
+  const { run, requests } = await setup(session.control, ["openai/gpt-5", undefined])
+  expect((await run("/model")).ok).toBe(true)
+  expect(requests).toHaveLength(2)
+  expect(session.info()).toMatchObject({
+    model: { provider: "openai", model: "gpt-5" },
+    thinkingLevel: "xhigh",
+  })
+  expect(session.changes).toEqual([])
+})
+
+test("/model effort step preselects default and can return a chosen effort in RPC", async () => {
+  const session = thinkingControl()
+  const { run, requests } = await setup(session.control, ["openai/gpt-5", "low"])
+  expect(await run("/model", "rpc")).toMatchObject({
+    ok: true,
+    text: "Model: openai/gpt-5\nThinking: low",
+  })
+  expect(requests[1]).toMatchObject({ initial: "default (not sent) (current)" })
+  expect(session.changes).toEqual(["low"])
+})
+
+test("/model direct argument and non-thinking selection never ask for effort", async () => {
+  const session = thinkingControl("high")
+  const { run, requests } = await setup(session.control, ["deepseek/deepseek-flash"])
+  expect((await run("/model openai/gpt-5")).ok).toBe(true)
+  expect(requests).toEqual([])
+  expect((await run("/model")).ok).toBe(true)
+  expect(requests).toHaveLength(1)
+  expect(session.changes).toEqual([])
+  expect(session.info().thinkingLevel).toBe("high")
 })
 
 test("/model without a model or anything to pick says what to do", async () => {

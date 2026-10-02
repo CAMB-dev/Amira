@@ -182,6 +182,16 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   /** What keeps the agent busy, for the busy errors: "a turn", "a compaction", "a reload". */
   const running = () => (agent.turnId ? "a turn" : `a ${agent.holdingFor ?? "compaction"}`)
 
+  const thinkingState = () => {
+    const thinkingLevel = agent.thinkingFor(agent.model)
+    const supportsThinking = !!agent.model.caps.thinking
+    return {
+      supportsThinking,
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(supportsThinking && thinkingLevel ? { thinking: thinkingLevel } : {}),
+    }
+  }
+
   const handlers: Record<keyof typeof COMMAND_PARAMS, Handler> = {
     prompt: (p) => {
       const content: UserContent[] = [{ type: "text", text: text(p) }, ...attachments(p.attachments)]
@@ -267,6 +277,22 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       }
       return { model: modelLabel({ provider: agent.model.provider, model: agent.model.id }) }
     },
+    "thinking.set": (p) => {
+      const level = text(p, "level")
+      if (
+        level !== "default" &&
+        level !== "low" &&
+        level !== "medium" &&
+        level !== "high" &&
+        level !== "xhigh" &&
+        level !== "max"
+      ) {
+        throw new RpcError("invalid_params", '"level" must be low, medium, high, xhigh, max or default')
+      }
+      if (agent.busy) throw new RpcError("busy", `${running()} is running; set thinking after it ends`)
+      agent.setThinking(level === "default" ? undefined : level)
+      return thinkingState()
+    },
     state: () => {
       const last = lastAssistantText(agent.messages)
       return {
@@ -277,6 +303,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         messages: agent.messages.length,
         ...(last !== undefined ? { lastAssistantText: last } : {}),
         busy: agent.busy,
+        ...thinkingState(),
         uiRequests: ui.pending,
       }
     },
