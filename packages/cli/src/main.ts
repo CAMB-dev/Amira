@@ -121,12 +121,17 @@ async function run(argv: string[]): Promise<number> {
   })
   if (plan.warning) config.warnings.push(plan.warning)
 
-  choice ??= chooseStore({
-    cwd: args.cwd,
-    continue: args.continue,
-    ...(args.resume ? { resume: args.resume } : {}),
-  })
-  const { store, resumed } = choice
+  // The startup picker needs a UI host, not a new stored conversation. Only attach a
+  // store after /resume has chosen one; cancelling must leave no session behind.
+  if (!pickInUi) {
+    choice ??= chooseStore({
+      cwd: args.cwd,
+      continue: args.continue,
+      ...(args.resume ? { resume: args.resume } : {}),
+    })
+  }
+  const store = choice?.store
+  const resumed = choice?.resumed ?? false
   const session = await createSession({
     ...(model ? { model } : {}),
     // Print mode cannot pick a model; the UI and rpc clients can (/model, model.set).
@@ -137,7 +142,7 @@ async function run(argv: string[]): Promise<number> {
     packages: plan.packages,
     noBuiltins: args.noBuiltins,
     nonInteractive: args.print,
-    store,
+    ...(store ? { store } : {}),
     disabledTools: config.disabledTools,
     shell: config.shell,
     requestedDisabled: config.requestedDisabled,
@@ -173,7 +178,9 @@ async function run(argv: string[]): Promise<number> {
       announce(next, reason)
     },
   })
-  const onReady = () => announce(agent, resumed ? "resume" : "startup")
+  const onReady = () => {
+    if (!pickInUi) announce(agent, resumed ? "resume" : "startup")
+  }
   try {
     if (args.rpc) {
       return await runRpc({ agent, ai, ui: host.ui, commands }, { pending: startupEvents, onReady })
@@ -208,7 +215,8 @@ async function run(argv: string[]): Promise<number> {
       onReady,
       ...(modelNotice ? { notice: modelNotice } : {}),
       history: PromptHistory.forProject(args.cwd),
-      ...(args.prompt ? { initialPrompt: args.prompt } : pickInUi ? { initialPrompt: "/resume" } : {}),
+      ...(args.prompt ? { initialPrompt: args.prompt } : {}),
+      ...(pickInUi ? { resumePicker: true } : {}),
       ...(keybindings ? { keybindings: keybindings.keys } : {}),
       ...(config.settings.tui ? { settings: config.settings.tui } : {}),
       // Full screen unless a flag or tui.mode says inline (D84).

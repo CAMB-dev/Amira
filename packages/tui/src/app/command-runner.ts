@@ -5,7 +5,7 @@ import { ACTIONS, type Action, type Keybindings, type KeySpec } from "../keybind
 
 export interface CommandRunner {
   /** Runs at once, even during a turn; commands that need an idle session say so. */
-  run(line: string): void
+  run(line: string): Promise<void>
   /**
    * Cancels the newest running slash command (Esc or Ctrl+C, when no dialog has the key): its
    * signal aborts, the input stays as it is. Only the command is stopped: a turn running
@@ -69,14 +69,14 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
     })
 
   return {
-    run(line) {
+    async run(line) {
       const commands = options.commands
       if (!commands) return
       options.commandEcho(line)
       const abort = new AbortController()
       commandAborts.set(abort, commands.commandName(line))
       let sent = false
-      void commands
+      await commands
         .run(line, {
           frontend: "tui",
           quit: options.quit,
