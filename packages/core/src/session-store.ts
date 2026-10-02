@@ -62,7 +62,8 @@ export interface SessionHeader {
 export type SessionEntryData =
   | FileJournalEntry
   | { type: "title"; title: string; source: "manual" | "auto" }
-  | { type: "side_usage"; model: ModelRef; usage: Usage }
+  /** `label` says what the side request was for; entries without one are session titles. */
+  | { type: "side_usage"; model: ModelRef; usage: Usage; label?: string }
   | { type: "message"; message: Message }
   | { type: "model_change"; model: ModelRef }
   /**
