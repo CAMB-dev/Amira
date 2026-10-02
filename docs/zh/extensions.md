@@ -260,8 +260,8 @@ api.registerWorkspaceProvider(provider)
 
 内置 agent 扩展提供 Git 探测。使用 `--no-builtins` 且没有替代 provider 时，不会产生工作区事件或分支
 标签；`/status` 最多等待两秒，然后显示 Git 信息未知。重新加载时会重放当前会话最后的工作区事件。
-`@amira/core` 中已弃用的 `gitInfo` 和 `trackWorkspace` 委托给已注册的 provider：没有针对该 `cwd`
-注册的 provider 时，`gitInfo` 返回空信息；`trackWorkspace` 需要其总线上已有 provider。它们不再独立启动 Git。
+`@amira/core` 中已弃用的导出仍可使用：`gitInfo` 依旧是独立的一次性 Git 探测，不需要 provider；
+`trackWorkspace` 会（重新）启动其总线上的宿主跟踪器，在该总线注册 provider 之前不会发送任何事件。
 
 ### 后台任务
 

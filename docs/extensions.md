@@ -263,9 +263,9 @@ appearing or disappearing. A provider may answer a dirty request with full facts
 The built-in agent extension provides Git probing. With `--no-builtins` and no replacement
 provider there are no workspace events or branch labels; `/status` gives up waiting after two
 seconds and reports unknown Git facts. Reload replays the current session's last workspace
-event. The deprecated `@amira/core` exports `gitInfo` and `trackWorkspace` delegate to registered
-providers: `gitInfo` returns no facts without a provider registered for that `cwd`, and
-`trackWorkspace` needs a provider on its bus. They no longer launch Git independently.
+event. The deprecated `@amira/core` exports stay usable: `gitInfo` remains a standalone
+one-shot Git probe that needs no provider, and `trackWorkspace` (re)starts the host tracker on
+its bus, which emits nothing until a provider is registered there.
 
 ### Background jobs
 

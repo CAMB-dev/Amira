@@ -469,14 +469,7 @@ export class ExtensionHost {
       },
       registerTool: (tool) => track(tools.register(tool, source)),
       registerWorkspaceProvider: (provider) =>
-        track(
-          workspaceFor(bus).register(
-            provider,
-            source,
-            this.#opts.cwd ?? process.cwd(),
-            (error) => void this.#fail(source, error),
-          ),
-        ),
+        track(workspaceFor(bus).register(provider, source, (error) => void this.#fail(source, error))),
       registerFileRestoration: (owner) => {
         if (this.fileRestoration)
           throw new Error(`File restoration is already owned by ${this.fileRestoration.source}`)
