@@ -11,6 +11,8 @@ import {
   sessionsDir,
 } from "./session-store.ts"
 
+export { readTrace } from "./trace-reader.ts"
+
 export interface SessionSummary {
   id: string
   file: string
@@ -36,7 +38,7 @@ const summaries = new Map<string, { mtimeMs: number; size: number; summary: Sess
 export function listSessions(cwd: string, dir = sessionsDir(cwd)): SessionSummary[] {
   let names: string[]
   try {
-    names = readdirSync(dir).filter((n) => n.endsWith(".jsonl"))
+    names = readdirSync(dir).filter((n) => n.endsWith(".jsonl") && !n.endsWith(".trace.jsonl"))
   } catch {
     return []
   }
@@ -98,8 +100,11 @@ export function sessionSnippet(
   return `${start ? "…" : ""}${text.slice(start, end).replace(/\s+/g, " ")}${end < text.length ? "…" : ""}`
 }
 
-/** Deletes only owned files; a fork may still reference the same sub-agent history. */
-export function deleteSession(cwd: string, id: string, currentId?: string, dir = sessionsDir(cwd)): void {
+/**
+ * Deletes only owned files; a fork may still reference the same sub-agent history.
+ * Returns the removed session paths so the host can retire their pending trace writes.
+ */
+export function deleteSession(cwd: string, id: string, currentId?: string, dir = sessionsDir(cwd)): string[] {
   if (id === currentId) throw new Error("the current session cannot be deleted")
   const file = findSession(cwd, id, dir)
   if (!file) throw new Error(`no session ${id}`)
@@ -150,7 +155,7 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
       return out
     }
     const files = owned(file)
-    for (const name of readdirSync(dir).filter((n) => n.endsWith(".jsonl"))) {
+    for (const name of readdirSync(dir).filter((n) => n.endsWith(".jsonl") && !n.endsWith(".trace.jsonl"))) {
       const other = path.join(dir, name)
       if (other === file) continue
       let shared: Set<string>
@@ -171,9 +176,11 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
         if (lstatOrUndefined(part)?.isSymbolicLink()) throw new Error("unsafe session asset symlink")
       }
       rmSync(assets, { recursive: true, force: true, maxRetries: 3 })
+      rmSync(`${name}.trace.jsonl`, { force: true })
       unlinkSync(name)
       summaries.delete(name)
     }
+    return [...files]
   } finally {
     deletionLock?.release()
   }

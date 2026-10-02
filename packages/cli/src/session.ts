@@ -18,6 +18,7 @@ import {
   type ResolvedPermissions,
   type SessionStore,
   ToolRegistry,
+  TraceRecorder,
   toolTraits,
 } from "@amira/core"
 import type { ActivePackages } from "@amira/packages"
@@ -105,6 +106,8 @@ export interface SessionOptions {
 export interface Session {
   agent: Agent
   host: ExtensionHost
+  /** One host recorder shared by resumed agents and their descendants; absent in lightweight fixtures. */
+  traceRecorder?: TraceRecorder
   /** Extension events emitted while loading, before any frontend subscribed. */
   startupEvents: AnyEvent[]
   /** Why the session has no model yet (NO_MODEL) and what to do; for the UI to show. */
@@ -193,6 +196,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const compaction = opts.compaction ?? compactionFromSettings(ai, settings.compact)
   const context = contextFromSettings(settings.context)
   const bus = new EventBus(opts.onSubscriberError)
+  const traceRecorder = new TraceRecorder(bus)
   const interceptors = new InterceptorRegistry({
     onError: (point, source, error) =>
       bus.emit("extension.error", { source, error: `${point}: ${error}` }, { sessionId: "host" }),
@@ -295,6 +299,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   })
   const ask = userAsker(host.ui, tree)
   const newAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
+    if (store) traceRecorder.register(store.id, store.file)
     // A session resumed while no model is selected continues on the one it ran on.
     const stored = isNoModel(picked) ? storedModel(ai, store) : undefined
     const m = stored ? ai.model(stored) : picked
@@ -344,6 +349,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   return {
     agent,
     host,
+    traceRecorder,
     startupEvents,
     ...(modelNotice ? { modelNotice } : {}),
     catalogRefresh,

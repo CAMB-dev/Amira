@@ -50,7 +50,7 @@ import {
   type ToolResult,
   type ToolSession,
 } from "@amira/api"
-import { ApprovalGate } from "./agent/approvals.ts"
+import { ApprovalGate, approvalWaitMs } from "./agent/approvals.ts"
 import {
   type ArtifactUsageGroupInput,
   activeArtifactIds,
@@ -59,6 +59,7 @@ import {
   type ManagedArtifactGroup,
   summarizeArtifactUsage,
 } from "./agent/artifact-usage.ts"
+import type { CallRun } from "./agent/call-run.ts"
 import {
   buildContext,
   toolRestriction as modelToolRestriction,
@@ -154,25 +155,6 @@ interface Turn {
   signal: AbortSignal
   /** Notices joined this turn and no model reply has come since. */
   unanswered?: boolean
-}
-
-/**
- * One tool call of a batch. Tracked by the call itself, not its id: providers reuse ids across
- * steps (and some even within one reply), and each call still needs its own events and result.
- */
-interface CallRun {
-  call: ToolCallBlock
-  tool?: ToolDefinition
-  writtenPaths?: string[]
-  /** tool.execute.start has been emitted. */
-  started: boolean
-  /** The batch recorded this call's result; later updates and results from it are dropped. */
-  finished: boolean
-  /** The call has its result (tool.call.after may still be running on it). */
-  returned?: boolean
-  result?: ToolResultMessage
-  /** Who approved it, when it needed approval. */
-  approval?: ToolApproval
 }
 
 /** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
@@ -1661,7 +1643,6 @@ export class Agent {
   /** Never rejects: every failure becomes an error result for the model. */
   async #runTool(turn: Turn, run: CallRun, batch: readonly CallRun[]): Promise<ToolResultMessage> {
     const call = run.call
-    const started = performance.now()
     // Every outcome goes through tool.call.after (skipped once the turn is interrupted), then
     // tool.execute.end.
     const finish = async (
@@ -1719,11 +1700,13 @@ export class Agent {
       if (policy.decision === "deny") return await reject("blocked", refusedText(policy), args)
       const asking = policy.decision === "ask"
       if (asking || gate.ask) {
+        run.approvalTiming = {}
         const verdict = await this.#approvals.approve(
           turn,
           { id: call.id, name: call.name, args },
           policy,
           gate.ask,
+          run.approvalTiming,
         )
         // Dismissing the question stops the turn, like an interrupt.
         if (!verdict.approved && verdict.interrupt && this.#turn === turn) this.#abort?.abort()
@@ -1745,6 +1728,7 @@ export class Agent {
       // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
       // (spawning a process can stall for seconds on some Windows machines).
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      const started = performance.now()
       let result: ToolResult
       try {
         const mutateFiles: MutateFiles | undefined = this.fileRewind
@@ -1901,11 +1885,13 @@ export class Agent {
     approval?: ToolApproval,
   ) {
     const traits = run.tool && toolTraits(run.tool)
+    const waitedMs = approvalWaitMs(run.approvalTiming)
     this.#emit(turn, "tool.execute.end", {
       toolCallId: run.call.id,
       name: run.call.name,
       result,
       durationMs,
+      ...(waitedMs !== undefined ? { waitedMs } : {}),
       ...(traits ? { traits } : {}),
       ...(run.writtenPaths !== undefined ? { writtenPaths: run.writtenPaths } : {}),
       ...(rejected ? { rejected } : {}),

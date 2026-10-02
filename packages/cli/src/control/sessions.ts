@@ -1,4 +1,5 @@
-import { statSync } from "node:fs"
+import { rmSync, statSync } from "node:fs"
+import path from "node:path"
 import type { SessionControl } from "@amira/api"
 import {
   copyFileHistory,
@@ -74,7 +75,13 @@ export function createSessionsControl(ctx: ControlContext): SessionsControl {
     },
     deleteSession: async (id) => {
       ctx.idle("delete a session")
-      deleteStoredSession(ctx.cwd, id, ctx.agent().sessionId, ctx.directory())
+      const files = deleteStoredSession(ctx.cwd, id, ctx.agent().sessionId, ctx.directory())
+      if (ctx.trace) {
+        await ctx.trace.forget(files.map((file) => path.basename(file, ".jsonl")))
+        // An append already in flight may have finished after the initial unlink. forget()
+        // retires the ids and drains those writes before this final cleanup.
+        for (const file of files) rmSync(`${file}.trace.jsonl`, { force: true })
+      }
     },
     fork: async (index) => {
       ctx.idle("fork the conversation")
