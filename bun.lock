@@ -59,6 +59,13 @@
         "@amira/api": "workspace:*",
       },
     },
+    "extensions/terminal-status": {
+      "name": "@amira/ext-terminal-status",
+      "version": "0.0.0",
+      "dependencies": {
+        "@amira/api": "workspace:*",
+      },
+    },
     "extensions/web": {
       "name": "@amira/ext-web",
       "version": "0.0.0",
@@ -180,6 +187,7 @@
     "@amira/ext-skills": ["@amira/ext-skills@workspace:extensions/skills"],
 
     "@amira/ext-status": ["@amira/ext-status@workspace:extensions/status"],
+    "@amira/ext-terminal-status": ["@amira/ext-terminal-status@workspace:extensions/terminal-status"],
 
     "@amira/ext-web": ["@amira/ext-web@workspace:extensions/web"],
 

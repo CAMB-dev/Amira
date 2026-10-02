@@ -1014,7 +1014,6 @@ export class Agent {
       "reason" | "cwd" | "model" | "contextTokens" | "contextWindow"
     > = {},
   ): void {
-    // A cleared session starts empty, whatever this agent held.
     const context =
       this.#contextTokens !== undefined && reason !== "clear"
         ? { contextTokens: this.#contextTokens, contextWindow: this.model.contextWindow }
@@ -1026,6 +1025,7 @@ export class Agent {
         ...context,
         reason,
         cwd: this.cwd,
+        ...(this.session?.title ? { title: this.session.title } : {}),
         model: { provider: this.model.provider, model: this.model.id },
       },
       {

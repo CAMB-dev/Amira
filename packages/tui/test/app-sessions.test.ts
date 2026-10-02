@@ -423,3 +423,47 @@ test("extension dialogs are answered inline: confirm, select and input", async (
   terminal.send("\x03")
   await exited
 })
+
+for (const mode of ["fullscreen", "inline"] as const) {
+  test(`both local rewind questions emit waiting and pause progress in ${mode}`, async () => {
+    const s = await setup([], {
+      settings: { mode },
+      env: { WT_SESSION: "1" },
+      history: [userMessage("first")],
+      commands: [],
+      control: {
+        rewind: async () => {},
+        planRewind: () => ({
+          enabled: false,
+          owner: "core",
+          restored: 0,
+          removed: 0,
+          conflicts: [],
+          note: "Capture disabled",
+        }),
+      },
+    })
+    const states: { pending: number; hidden: boolean; change: string }[] = []
+    s.bus.subscribe((e) => {
+      if (e.type === "ui.waiting") states.push(e.data)
+    })
+    s.terminal.send("\x1b[O\x1b[27u\x1b[27u")
+    await waitFor(() => s.live().includes("Rewind the conversation"), "rewind picker")
+    await s.bus.flush()
+    expect(states.at(-1)).toEqual({ pending: 1, hidden: false, change: "opened" })
+    expect(s.screen.oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;4;100")
+    expect(s.screen.bells).toBe(1)
+    s.terminal.send("\r")
+    await waitFor(() => s.live().includes("files will not be restored"), "rewind confirmation")
+    await s.bus.flush()
+    expect(states.filter((e) => e.change === "opened")).toHaveLength(2)
+    expect(s.screen.bells).toBe(2)
+    s.terminal.send("\x1b[27u")
+    await waitFor(() => !s.live().includes("files will not be restored"), "cancel confirmation")
+    await s.bus.flush()
+    expect(states.at(-1)?.pending).toBe(0)
+    expect(s.screen.oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;0;0")
+    s.terminal.send("\x03\x03")
+    expect(await s.exited).toBe(0)
+  })
+}

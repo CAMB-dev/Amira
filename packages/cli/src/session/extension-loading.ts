@@ -54,6 +54,9 @@ export function createReloadReplay(bus: EventBus): (agent: Agent) => AnyEvent[] 
     start?: EventEnvelope<"session.start">
     workspace?: EventEnvelope<"workspace.changed">
     budget?: EventEnvelope<"budget.update">
+    title?: EventEnvelope<"session.title">
+    focus?: EventEnvelope<"ui.focus">
+    waiting?: EventEnvelope<"ui.waiting">
   } = {}
   bus.subscribe(
     (e) => {
@@ -62,10 +65,23 @@ export function createReloadReplay(bus: EventBus): (agent: Agent) => AnyEvent[] 
         // A cost counts from the start of its session.
         delete state.budget
         delete state.workspace
+        delete state.title
       } else if (e.type === "workspace.changed") state.workspace = e
       else if (e.type === "budget.update") state.budget = e
+      else if (e.type === "session.title" && e.sessionId === state.start?.sessionId) state.title = e
+      else if (e.type === "ui.focus") state.focus = e
+      else if (e.type === "ui.waiting") state.waiting = e
     },
-    { types: ["session.start", "workspace.changed", "budget.update"] },
+    {
+      types: [
+        "session.start",
+        "session.title",
+        "workspace.changed",
+        "budget.update",
+        "ui.focus",
+        "ui.waiting",
+      ],
+    },
   )
   return (agent) => {
     const out: AnyEvent[] = []
@@ -77,6 +93,7 @@ export function createReloadReplay(bus: EventBus): (agent: Agent) => AnyEvent[] 
         ...start,
         data: {
           ...rest,
+          title: state.title?.data.title ?? agent.session?.title ?? rest.title,
           model: { provider: agent.model.provider, model: agent.model.id },
           ...(tokens !== undefined
             ? { contextTokens: tokens, contextWindow: agent.model.contextWindow }
@@ -86,6 +103,8 @@ export function createReloadReplay(bus: EventBus): (agent: Agent) => AnyEvent[] 
     }
     if (state.workspace?.sessionId === agent.sessionId) out.push(state.workspace)
     if (state.budget) out.push(state.budget)
+    if (state.focus) out.push(state.focus)
+    if (state.waiting) out.push({ ...state.waiting, data: { ...state.waiting.data, change: "visibility" } })
     return out.sort((x, y) => x.seq - y.seq)
   }
 }

@@ -201,6 +201,7 @@ async function run(argv: string[]): Promise<number> {
     }
     const running = () => session.tree.children.length
     const code = await runInteractive({
+      bindTerminal: (terminal) => host.bindTerminal(terminal),
       agent,
       status: host.status,
       panels: host.panels,
