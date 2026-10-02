@@ -99,6 +99,7 @@ async function setup(
       busy: false,
       shell: "auto",
     }),
+    setThinking: () => {},
     providers: () => opts.providers ?? CONFIGURED,
     providerAdmin: admin,
   } as unknown as SessionControl

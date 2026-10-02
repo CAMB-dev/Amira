@@ -1,4 +1,5 @@
 import { type CommandDefinition, modelLabel } from "@amira/api"
+import { pickThinking } from "./thinking-command.ts"
 
 export function modelCommand(): CommandDefinition {
   return {
@@ -37,6 +38,7 @@ export function modelCommand(): CommandDefinition {
         // get the model it came to.
         ctx.session.setModel(picked)
         if (ctx.frontend !== "tui") ctx.print(`Model: ${modelLabel(ctx.session.info().model)}`)
+        if (ctx.session.info().supportsThinking) await pickThinking(ctx)
         return
       }
       ctx.session.setModel(ref)

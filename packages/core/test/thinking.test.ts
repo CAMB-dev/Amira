@@ -127,6 +127,34 @@ test("a thinking child inherits the configured effort from a non-thinking parent
   expect(mock.requests[0]?.reasoning).toEqual({ effort: "max" })
 })
 
+test.each(["fresh", "fork"] as const)(
+  "%s children spawned after an override inherit the new effort, including default",
+  async (context) => {
+    const { agent, ai, tree, mock } = setup(
+      {
+        thinking: "high",
+        defaultThinking: "low",
+        providerSettings: { mock: { models: [{ id: "other", thinking: "medium" }] } },
+      },
+      Array.from({ length: 4 }, () => ({ text: "done" })),
+    )
+    const spawn = async () => {
+      const child = tree.spawn(agent, { prompt: "work", model: "mock/other", context })
+      expect((await child.result()).status).toBe("done")
+    }
+    await spawn()
+    agent.thinking.set("xhigh", agent.model)
+    await spawn()
+    agent.setModel(ai.model("mock/plain"))
+    agent.thinking.set("max", agent.model)
+    await spawn()
+    agent.thinking.set(undefined, agent.model)
+    await spawn()
+    expect(mock.requests.map((r) => r.reasoning?.effort)).toEqual(["high", "xhigh", "max", undefined])
+    expect(mock.requests[3]).not.toHaveProperty("reasoning")
+  },
+)
+
 test("compaction does not inherit the main conversation's effort", async () => {
   const { agent, mock } = setup({ thinking: "max", compaction: { auto: false, keepTurns: 1 } }, [
     { text: "first" },

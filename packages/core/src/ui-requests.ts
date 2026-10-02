@@ -216,8 +216,17 @@ export class UiRequests {
   api(source?: string): UiApi {
     const o = (opts?: UiRequestOptions) => ({ ...opts, ...(source ? { source } : {}) })
     return {
-      select: async (title, options, opts) => {
-        const answer = await this.ask({ kind: "select", title, options: [...options] }, o(opts))
+      select: async (title, options, opts = {}) => {
+        const { initial, ...rest } = opts
+        const answer = await this.ask(
+          {
+            kind: "select",
+            title,
+            options: [...options],
+            ...(initial !== undefined ? { initial } : {}),
+          },
+          o(rest),
+        )
         return typeof answer === "object" ? answer.option : answer
       },
       choose: async (title, options, opts) => {
