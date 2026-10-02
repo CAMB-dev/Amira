@@ -1009,11 +1009,9 @@ export class Agent {
   /** Announces the session to subscribers. Frontends call this once they are listening. */
   start(
     reason: EventMap["session.start"]["reason"],
-    extra: Omit<
-      EventMap["session.start"],
-      "reason" | "cwd" | "model" | "contextTokens" | "contextWindow"
-    > = {},
+    extra: Pick<EventMap["session.start"], "sessionFile" | "resume"> = {},
   ): void {
+    // A cleared session starts empty, whatever this agent held.
     const context =
       this.#contextTokens !== undefined && reason !== "clear"
         ? { contextTokens: this.#contextTokens, contextWindow: this.model.contextWindow }
