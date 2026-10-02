@@ -5,8 +5,12 @@ const TITLE_SYSTEM =
   "Give this conversation a short title, at most six words, in the user's language. Return only the title, without quotes or punctuation around it."
 
 export default defineExtension((api: ExtensionAPI) => {
-  const attempted = new Set<string>()
-  const repliesBeforeTurn = new Map<string, boolean>()
+  /**
+   * Per session: whether it may still be titled. Decided once per agent, when its session
+   * starts (or, without a session.start, at its first turn): one that already has replies
+   * (resumed, forked) never asks; the first successful turn of a new one asks once.
+   */
+  const pending = new Map<string, boolean>()
   let inFlight:
     | {
         sessionId: string
@@ -14,15 +18,17 @@ export default defineExtension((api: ExtensionAPI) => {
         timer: ReturnType<typeof setTimeout>
       }
     | undefined
+  const isCurrent = (event: { sessionId: string; parentSessionId?: string }) =>
+    !event.parentSessionId && event.sessionId === api.session()?.info().id
 
   api.on("session.start", (event) => {
-    if (event.parentSessionId || event.sessionId !== api.session()?.info().id) return
-    if (api.session()?.replies().length) attempted.add(event.sessionId)
+    if (!isCurrent(event)) return
+    pending.set(event.sessionId, !api.session()?.replies().length)
   })
 
   api.on("turn.start", (event) => {
-    if (event.parentSessionId || event.sessionId !== api.session()?.info().id) return
-    repliesBeforeTurn.set(event.sessionId, Boolean(api.session()?.replies().length))
+    if (!isCurrent(event) || pending.has(event.sessionId)) return
+    pending.set(event.sessionId, !api.session()?.replies().length)
   })
 
   api.on("session.end", (event) => {
@@ -31,20 +37,14 @@ export default defineExtension((api: ExtensionAPI) => {
   })
 
   api.on("turn.end", (event) => {
-    if (event.parentSessionId || event.data.reason !== "done") return
+    if (event.data.reason !== "done" || !isCurrent(event)) return
     const session = api.session()
-    if (!session || event.sessionId !== session.info().id) return
+    if (!session) return
     const sessionId = event.sessionId
-    if (attempted.has(sessionId)) return
-    if (repliesBeforeTurn.get(sessionId)) {
-      attempted.add(sessionId)
-      return
-    }
-    if (!session.info().file || session.info().title || api.settings.sessions?.autoTitle === false) {
-      attempted.add(sessionId)
-      return
-    }
-    attempted.add(sessionId)
+    if (!pending.get(sessionId)) return
+    // Not marked as asked: a session titled by hand and cleared again may still be titled.
+    if (!session.info().file || session.info().title || api.settings.sessions?.autoTitle === false) return
+    pending.set(sessionId, false)
     const transcript = session
       .messages()
       .filter(
