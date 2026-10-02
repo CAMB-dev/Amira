@@ -217,32 +217,32 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
     data.sessionId = list[(index + step + list.length) % list.length]!.id
   }
   const navigation: ViewKey<SubagentData>[] = [
-    { key: "left", label: "previous", run: (data) => switchTo(data, -1) },
-    { key: "right", label: "next", run: (data) => switchTo(data, 1) },
-    { key: "tab", label: "next", run: (data) => switchTo(data, 1) },
-    { key: "shift-tab", label: "previous", run: (data) => switchTo(data, -1) },
+    { key: "left", label: "switch", run: (data) => switchTo(data, -1) },
+    { key: "right", label: "switch", run: (data) => switchTo(data, 1) },
+    // Tab and Shift+Tab switch too, without a footer item of their own.
+    { key: "tab", label: "", run: (data) => switchTo(data, 1) },
+    { key: "shift-tab", label: "", run: (data) => switchTo(data, -1) },
   ]
   return {
     kind: "subagent",
     scrollKey: (data) => data.sessionId,
-    title(data) {
+    title(data, opts) {
       shown = data
+      const info = infoFor(data)
+      // What it is and how it goes first; its role and id are cut first on a narrow screen.
+      return info
+        ? `${info.title} · ${stats(info, opts.now)} · ${info.role} · ${info.id}`
+        : `No sub-agent ${data.sessionId} in this session.`
+    },
+    titleAside(data) {
       const list = api.session()?.subagents() ?? []
       const index = list.findIndex((s) => s.id === data.sessionId)
-      return index < 0
-        ? `No sub-agent ${data.sessionId} in this session.`
-        : `${list[index]!.title} · ${index + 1} of ${list.length}`
+      return index < 0 ? "" : `${index + 1} of ${list.length}`
     },
     header(data, opts) {
       const info = infoFor(data)
       return info
-        ? [
-            {
-              kind: statusKind(info),
-              text: clip(`${stats(info, opts.now)} · ${info.role} · ${info.id}`, opts.width),
-            },
-            { kind: "muted", text: clip(`task: ${info.task.replace(/\s+/g, " ").trim()}`, opts.width) },
-          ]
+        ? [{ kind: "muted", text: clip(`task: ${info.task.replace(/\s+/g, " ").trim()}`, opts.width) }]
         : []
     },
     render(data, opts) {

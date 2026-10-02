@@ -267,9 +267,11 @@ test("streaming before opening is visible, thinking changes live, and snapshots 
 
 test("queued, idle, finished, failed and stopped children retain their status, usage and reasons", async () => {
   const s = await snapshotView()
-  expect(s.definition.header!(s.data, { width: 80, now: 6500 })[0]?.text).toContain(
-    "running · 5s · 1.6k tok · $0.0123",
+  expect(s.definition.title(s.data, { width: 80, now: 6500 })).toBe(
+    "Child a · running · 5s · 1.6k tok · $0.0123 · explorer · a",
   )
+  expect(s.definition.titleAside!(s.data)).toBe("1 of 2")
+  expect(s.definition.header!(s.data, { width: 80, now: 6500 })[0]?.text).toBe("task: Task a")
   s.list[0]!.status = "queued"
   expect(s.render()).toContain("waiting for a free slot")
   s.list[0]!.status = "idle"
@@ -390,11 +392,10 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   await waitFor(() => s.screen.inAltScreen, "the viewer")
   await waitFor(() => s.view().includes("● wait"), "the transcript")
   const lines = s.screen.lines
-  expect(lines[0]).toBe("◆ Check explorer · 1 of 1")
-  expect(lines[1]).toMatch(/^running · \d+s · 1\.5k tok · explorer · /)
-  expect(lines[2]).toBe("task: task for the explorer")
+  expect(lines[0]).toMatch(/^◆ Check explorer · running · \d+s · 1\.5k tok · .+ 1 of 1$/)
+  expect(lines[1]).toBe("task: task for the explorer")
   // The task on the user's band, a row of it above and below (blank on this screen).
-  expect(lines.slice(4, 14)).toEqual([
+  expect(lines.slice(3, 13)).toEqual([
     "",
     "› task for the explorer",
     "",
@@ -449,9 +450,9 @@ test("elapsed time redraws every second while no child event arrives", async () 
   await waitFor(s.isWaiting, "the waiting child")
   s.terminal.send("/agents view\r")
   await waitFor(() => s.view().includes("● wait"), "the view")
-  const before = s.screen.lines[1]!
-  await waitFor(() => s.screen.lines[1] !== before, "the elapsed tick", 2500)
-  expect(s.screen.lines[1]).toMatch(/^running · \d+s/)
+  const before = s.screen.lines[0]!
+  await waitFor(() => s.screen.lines[0] !== before, "the elapsed tick", 2500)
+  expect(s.screen.lines[0]).toMatch(/^◆ Check explorer · running · \d+s/)
   s.release()
   await s.idle()
   s.terminal.send(ESC)
@@ -473,8 +474,9 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   await waitFor(s.isWaiting, "the child to block")
   s.terminal.send("/agents view\r")
   await waitFor(() => s.view().includes("● wait"), "the viewer")
-  expect(s.screen.lines.at(-1)).toContain("x stop · p print")
-  expect(s.screen.lines.at(-1)).toContain("Esc back")
+  // The generic footer lists a view's keys before the scroll keys (dropped first when narrow).
+  expect(s.screen.lines.at(-1)).toContain("following · ←→ switch · x stop · p print · ")
+  expect(s.screen.lines.at(-1)).toMatch(/ · Esc back$/)
   s.terminal.send("x")
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer (explorer s_"), "the question")
   expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")
@@ -548,10 +550,10 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   expect(s.screen.lines.at(-1)).toMatch(/^\d+–\d+ of 46 · /)
   expect(s.view()).not.toContain("── done ──")
   s.terminal.send("\x1b[H") // Home
-  await waitFor(() => s.screen.lines[5] === "› task for the explorer", "the top")
-  expect(s.screen.lines.at(-1)).toMatch(/^1–15 of 46 · /)
+  await waitFor(() => s.screen.lines[4] === "› task for the explorer", "the top")
+  expect(s.screen.lines.at(-1)).toMatch(/^1–16 of 46 · /)
   s.terminal.send("\x1b[B") // ↓
-  await waitFor(() => s.screen.lines[4] === "› task for the explorer", "one row down")
+  await waitFor(() => s.screen.lines[3] === "› task for the explorer", "one row down")
   s.terminal.send("\x1b[F") // End
   await waitFor(() => s.screen.lines.at(-1)!.includes("following"), "the end")
   s.resize(70, 12)
