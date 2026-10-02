@@ -6,7 +6,11 @@ Run `amira` in the directory you want it to work in. A positional prompt becomes
 
 ## Thinking effort
 
-Use `amira --thinking high` in interactive mode or `amira -p --thinking xhigh "Explain this repository"` in print mode. Accepted levels are `low`, `medium`, `high`, `xhigh` and `max`. The flag overrides both top-level `thinking` and `providers.<id>.models[].thinking` in [Settings](settings.md); without the flag, the model's setting wins over the top-level setting. With neither configured, requests send no effort and keep the server default. Only models with `caps.thinking` receive it, and `/status` shows it only then; sub-agents inherit the parent's selected effort, while title generation and compaction keep their defaults.
+Use `amira --thinking high` in interactive mode or `amira -p --thinking xhigh "Explain this repository"` in print mode. Accepted levels are `low`, `medium`, `high`, `xhigh` and `max`.
+
+During a session, `/thinking` opens a picker with those five levels and `default` (no effort sent). Set one directly with `/thinking high`, or use `/thinking default` to keep the server default. These changes apply only to the current session and do not write settings. The precedence is the session's runtime choice > `--thinking` > `providers.<id>.models[].thinking` > top-level `thinking` in [Settings](settings.md). Choosing `default` explicitly suppresses all three lower-priority sources; it does not restore the flag or settings. With no choice or configured effort, requests also omit effort.
+
+After you pick a thinking-capable model in the interactive `/model` picker, a second step offers the same effort choices. Esc at that step keeps the selected model and leaves the effort choice unchanged. Only models with `caps.thinking` receive effort; the status bar shows it beside the model name, and `/status` shows it only for those models. Switching to a non-thinking model hides the effort without discarding the choice. Sub-agents inherit the parent's selected effort, while title generation and compaction keep their defaults.
 
 Responses and Anthropic adaptive mode send the level unchanged. Anthropic budget mode maps `xhigh` to 32,768 tokens, below `max` at 64,000, capped to leave room for the answer. Gemini maps `xhigh` like `high`, keeping its larger `max` budget for Gemini 2.5 Pro. Chat Completions currently does not send reasoning parameters.
 
@@ -227,12 +231,15 @@ The immediate response contains the request ID, `ok: true` and a `turnId`; it ac
 | `session.rename` | Name the current session using `title`; a `session.title` event follows, as it does for an automatic title |
 | `session.fork` | Fork into a new session, before the user message at the optional `index`; a `session.start` with reason `fork` follows |
 | `model.set` | Switch model using `model` as provider/model |
+| `thinking.set` | Set `level` to `low`, `medium`, `high`, `xhigh`, `max` or `default`; fails with `busy` while work runs |
 | `command.list`, `command.complete`, `command.run` | Discover and run slash commands |
 | `skill.list`, `skill.run` | Discover and run skills |
 | `ui.respond` | Answer a UI request using `requestId` and `value` |
 | `ui.action`, `ui.configure`, `ui.focus` | Support form actions, form presentation and client focus |
 
 Read the generated schema for parameter shapes and UI answer types. For example, a confirmation uses a boolean `value`; explicit `null` cancels, while omitting `value` is invalid. Requests can remain open while later input lines answer them. If a slow client receives `events.lost`, use `state` and `session.read` to resynchronize. Keep reading stdout while work runs.
+
+`thinking.set` requires an explicit `level`; missing or invalid values return `invalid_params`. `default` sends no reasoning effort, overriding flags and settings rather than restoring them. Its response and `state` include `supportsThinking`, the effective `thinkingLevel` even for unsupported models, and `thinking` only when an effort is sent to the current model. Both effort fields are omitted for the server default.
 
 Closing stdin waits for active work, including background results and their follow-up turns; dialogs that nobody can answer are cancelled. For dialog-driven commands, keep stdin open until they finish.
 

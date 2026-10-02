@@ -14,6 +14,7 @@ import {
   type ModelInfo,
   type ModelRef,
   modelMessages,
+  type ReasoningEffort,
   type Signature,
   type ToolCallBlock,
   type ToolResultMessage,
@@ -266,8 +267,10 @@ export class Agent {
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
   readonly providerSettings: Record<string, ProviderSettings>
-  /** The effort sent for a model (see thinkingFor); a sub-agent inherits it for this.model. */
+  /** The effective effort for a model, even if it does not think; inherited by new sub-agents. */
   readonly thinkingFor: ThinkingFor
+  /** An object distinguishes an explicit server default from no runtime override. */
+  #thinkingOverride: { level: ReasoningEffort | undefined } | undefined
   /**
    * Loaded tools restored from the session file, checked at the first model call: by then
    * system.build has waited for tools that register late (MCP servers).
@@ -370,7 +373,9 @@ export class Agent {
     this.cwd = opts.cwd
     this.model = opts.model
     this.providerSettings = opts.providerSettings ?? {}
-    this.thinkingFor = thinkingFor(opts)
+    const configuredThinking = thinkingFor(opts)
+    this.thinkingFor = (model) =>
+      this.#thinkingOverride ? this.#thinkingOverride.level : configuredThinking(model)
     this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
     this.#compaction = opts.compaction ?? {}
     this.#context = opts.context ?? {}
@@ -742,6 +747,18 @@ export class Agent {
   /** Replaces one section of the system prompt, leaving the others untouched. */
   setSection(name: string, text: string): void {
     this.#sections = setSection(this.#sections, name, text)
+  }
+
+  /** Overrides effort in memory only; undefined explicitly selects the server default. */
+  setThinking(level: ReasoningEffort | undefined): void {
+    this.#thinkingOverride = { level }
+    const thinking = this.model.caps.thinking ? level : undefined
+    this.#emit(undefined, "thinking.changed", thinking ? { thinking } : {})
+  }
+
+  /** Keeps only the runtime override when rebuilding the same session after a rewind. */
+  restoreThinkingFrom(previous: Agent): void {
+    this.#thinkingOverride = previous.#thinkingOverride
   }
 
   /** Switches models for later model calls and records the change in the session (D59). */

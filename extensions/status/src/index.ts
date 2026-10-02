@@ -91,6 +91,10 @@ export default defineExtension((api) => {
     model = modelName(e.data.to)
     api.requestRender()
   })
+  api.on("thinking.changed", (e) => {
+    if (!own(e)) return
+    api.requestRender()
+  })
   api.on("message.end", (e) => {
     const u = e.data.message.usage
     if (!u) return
@@ -114,7 +118,10 @@ export default defineExtension((api) => {
     order: -40,
     priority: 40,
     tone: "accent",
-    text: () => model,
+    text: () => {
+      const thinking = api.session()?.info().thinking
+      return model && thinking ? `${model} (${thinking})` : model
+    },
   })
   api.registerStatusItem({
     id: "context",

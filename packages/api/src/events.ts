@@ -5,6 +5,7 @@ import type {
   ModelErrorInfo,
   ModelErrorKind,
   ModelRef,
+  ReasoningEffort,
   ServerToolBlock,
   ToolRejection,
   Usage,
@@ -215,6 +216,8 @@ export interface EventMap {
   "events.lost": { dropped: number }
   /** The session switched models; later turns use `to`. */
   "model.changed": { from: ModelRef; to: ModelRef }
+  /** The session's effort override changed; thinking is absent when none is sent to its model. */
+  "thinking.changed": { thinking?: ReasoningEffort }
   /**
    * Older history is being summarized. `replacing` counts the messages that will be replaced,
    * `kept` those that stay verbatim; `tokens` is the context size that triggered it, when known.

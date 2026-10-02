@@ -9,6 +9,19 @@ const ref = (name: string): Schema => ({ $ref: `#/$defs/${name}` })
 const oneOf = (...schemas: Schema[]): Schema => ({ oneOf: schemas })
 const strings = (...values: string[]): Schema => ({ enum: values })
 const arrayOf = (items: Schema): Schema => ({ type: "array", items })
+const thinkingLevels = ["low", "medium", "high", "xhigh", "max"]
+const thinkingState = {
+  supportsThinking: { ...bool, description: "Whether the current model supports thinking." },
+  "thinkingLevel?": {
+    ...strings(...thinkingLevels),
+    description: "The effective effort, even on a model without thinking; omitted for the server default.",
+  },
+  "thinking?": {
+    ...strings(...thinkingLevels),
+    description:
+      "The effort sent to the current model; omitted when unsupported or using the server default.",
+  },
+}
 
 /** An object with these properties; keys ending in "?" are optional. */
 function obj(props: Record<string, Schema>, description?: string): Schema {
@@ -83,6 +96,11 @@ export const COMMAND_PARAMS = {
       'Switches the model, as "provider/model". Fails with `busy` while a turn or a /compact runs.',
     params: { model: str },
   },
+  "thinking.set": {
+    description:
+      'Sets the session thinking effort. The required level is low, medium, high, xhigh, max or "default". "default" sends no effort, overriding flags and settings rather than restoring them. Fails with `busy` while work runs. Unsupported models retain the level but send no effort.',
+    params: { level: strings(...thinkingLevels, "default") },
+  },
   state: { description: "A snapshot to resync from, e.g. after events.lost.", params: {} },
   "session.rename": {
     description: "Names the current session; overrides its automatic title.",
@@ -142,12 +160,17 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
     "text?": { ...str, description: "The last assistant text of the turn." },
   },
   "model.set": { model: str },
+  "thinking.set": thinkingState,
   state: {
+    ...thinkingState,
     status: strings("idle", "working", "blocked", "error"),
     model: str,
     sessionId: str,
     "turnId?": str,
-    busy: { ...bool, description: "A turn or a /compact is running: prompt and model.set fail with busy." },
+    busy: {
+      ...bool,
+      description: "Work is running: prompt, model.set and thinking.set fail with busy.",
+    },
     messages: { ...num, description: "Number of messages in the history." },
     "lastAssistantText?": str,
     uiRequests: { ...arrayOf(ref("UiRequest")), description: "Dialogs still waiting for ui.respond." },
@@ -353,6 +376,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   ),
   "ui.progress": obj({ requestId: str, action: str, text: str }),
   "model.changed": obj({ from: modelRef, to: modelRef }),
+  "thinking.changed": obj(
+    { "thinking?": strings(...thinkingLevels) },
+    "The session's runtime effort changed; thinking is omitted when no effort is sent to its model.",
+  ),
   "compact.start": obj({
     reason: strings("threshold", "manual", "overflow"),
     replacing: num,
@@ -604,6 +631,7 @@ export function rpcSchema(): Schema {
           kind: strings("select"),
           title: str,
           options: arrayOf(str),
+          "initial?": { ...str, description: "The option initially highlighted; defaults to the first." },
           "sections?": {
             ...arrayOf(
               obj({

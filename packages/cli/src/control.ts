@@ -78,6 +78,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     // meanwhile reports to the new session.
     const handover = session.host.backgroundJobs.handoverRoot(old.sessionId, rootSessionId)
     const next = other ?? makeNext()
+    if (next.sessionId === old.sessionId) next.restoreThinkingFrom(old)
     old.handoverBackgroundNotices(next)
     try {
       await handover
