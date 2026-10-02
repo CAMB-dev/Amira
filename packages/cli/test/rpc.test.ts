@@ -732,10 +732,10 @@ test("during a /compact, prompt, model.set and thinking.set are busy and steer q
   await rpc.until((l) => l.type === "turn.end")
   await rpc.call({ id: 2, cmd: "prompt", text: "second" })
   await rpc.until((l) => l.type === "turn.end" && l.turnId !== rpc.out.find((o) => o.id === 1)!.turnId)
-  const thinking = s.agent.thinkingFor(s.agent.model)
+  const thinking = s.agent.thinking.for(s.agent.model)
   const compacted = s.agent.compact()
   expect((await rpc.call({ id: "thinking", cmd: "thinking.set", level: "max" })).error.code).toBe("busy")
-  expect(s.agent.thinkingFor(s.agent.model)).toBe(thinking)
+  expect(s.agent.thinking.for(s.agent.model)).toBe(thinking)
   expect((await rpc.call({ id: 3, cmd: "model.set", model: "mock/other" })).error.code).toBe("busy")
   expect((await rpc.call({ id: 4, cmd: "prompt", text: "no" })).error.code).toBe("busy")
   expect(await rpc.call({ id: 6, cmd: "state" })).toMatchObject({ busy: true, status: "idle" })
@@ -763,11 +763,11 @@ test("ui.respond needs a value; model.set and prompt wait for the turn", async (
   const busy = await rpc.call({ id: 2, cmd: "model.set", model: "mock/other" })
   expect(busy.error.code).toBe("busy")
   expect(s.agent.model.id).toBe("m")
-  const thinking = s.agent.thinkingFor(s.agent.model)
+  const thinking = s.agent.thinking.for(s.agent.model)
   for (const level of ["max", "default"]) {
     expect((await rpc.call({ id: level, cmd: "thinking.set", level })).error.code).toBe("busy")
   }
-  expect(s.agent.thinkingFor(s.agent.model)).toBe(thinking)
+  expect(s.agent.thinking.for(s.agent.model)).toBe(thinking)
   expect((await rpc.call({ id: "p", cmd: "prompt", text: "not now" })).error.code).toBe("busy")
 
   // A misspelt key leaves the dialog open.
