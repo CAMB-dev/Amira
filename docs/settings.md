@@ -109,6 +109,7 @@ Keys are not set here: they live in `keybindings.json` in the user directory. Se
 | Key | Type | Default | Description | User file only |
 | --- | --- | --- | --- | --- |
 | `model` | `string` | none | Default model as `"provider/model"`. Without it, Amira uses the resumed session's model, or the first model of the only provider. `--model` and `/model` choose another. |  |
+| `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | none | Reasoning effort for main conversation requests on models with `caps.thinking`. Unset sends nothing (the server default). A model's `thinking` overrides this; `--thinking` overrides both. Sub-agents inherit the parent's selected effort; titles and compaction do not. |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Which shell tools the model gets on Windows: `"auto"` offers both `bash` and `powershell`, `"bash"` or `"powershell"` hides the other one. Elsewhere only `bash` exists. `--shell` wins. |  |
 | `tools.disabled` | `string[]` | `[]` | Tool names to hide from the model. `--disable-tools` replaces the list for one run; `/tools` changes the current session only. |  |
 | `maxParallelTools` | `number` | `8` | Most tool calls running at once. |  |
@@ -154,8 +155,9 @@ Amira has no built-in providers: an entry needs `dialect` and `baseUrl`, and `ba
 | `providers.<id>.models[].caps.promptCache` | `boolean` | `false` | The endpoint supports prompt caching. |  |
 | `providers.<id>.models[].caps.parallelToolCalls` | `boolean` | `true` | The model may call several tools in one reply. |  |
 | `providers.<id>.models[].caps.webSearch` | `boolean` | from `compat.webSearch` | Offer the provider's hosted web search to this model. |  |
+| `providers.<id>.models[].thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | top-level `thinking` | Reasoning effort for this exact model id, unless overridden by `--thinking` or inherited from a parent agent. |  |
 | `providers.<id>.models[].tools.edit` | `"edit" \| "apply_patch" \| "both"` | the provider's `tools.edit` | Editing tools for this model only. |  |
-| `providers.<id>.defaultModel` | `object` | none | Values for models neither `models` nor the catalog describes: the keys of `models[]` except `id` and `tools`. |  |
+| `providers.<id>.defaultModel` | `object` | none | Values for models neither `models` nor the catalog describes: the keys of `models[]` except `id`, `tools` and `thinking`. |  |
 
 ## Permissions
 

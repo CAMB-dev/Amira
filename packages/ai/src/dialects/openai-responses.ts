@@ -2,7 +2,7 @@ import type { Dialect, DialectContext } from "../dialect.ts"
 import { hasNativeWebSearch } from "../server-tools.ts"
 import { parseSSE } from "../sse.ts"
 import { adaptThinking } from "../thinking.ts"
-import type { ModelRequest, ReasoningEffort, StreamEvent } from "../types.ts"
+import type { ModelRequest, StreamEvent } from "../types.ts"
 import { parseJSON, postStream } from "./http-stream.ts"
 import { isRetryableBodyError } from "./openai-chat-errors.ts"
 import { ResponsesAccumulator } from "./openai-responses-accumulate.ts"
@@ -55,7 +55,7 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
   if (req.temperature !== undefined) body.temperature = req.temperature
   if (req.reasoning) {
     // Summaries are the only readable reasoning; the encrypted content lets it be replayed.
-    body.reasoning = { effort: effortOf(req.reasoning.effort), summary: "auto" }
+    body.reasoning = { effort: req.reasoning.effort, summary: "auto" }
     body.include = ["reasoning.encrypted_content"]
   }
   addWebSearch(req, body)
@@ -73,10 +73,6 @@ function addWebSearch(req: ModelRequest, body: Record<string, unknown>) {
   if (!tools.some((t) => t.type === "web_search")) tools.push({ type: "web_search" })
   body.tools = tools
   body.include = [...((body.include as string[] | undefined) ?? []), "web_search_call.action.sources"]
-}
-
-function effortOf(e: ReasoningEffort): "low" | "medium" | "high" {
-  return e === "max" ? "high" : e
 }
 
 async function* readSSE(

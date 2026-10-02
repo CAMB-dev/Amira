@@ -6,7 +6,7 @@
 import { expect, test } from "bun:test"
 import { googleGemini, thinkingConfig } from "../src/dialects/google-gemini.ts"
 import { toGeminiSchema } from "../src/dialects/google-gemini-schema.ts"
-import type { Message, ModelRequest } from "../src/types.ts"
+import type { Message, ModelRequest, ReasoningEffort } from "../src/types.ts"
 import { dataSSE, req, run, sse } from "./dialect-helpers.ts"
 
 const model = { provider: "test", model: "m" }
@@ -32,11 +32,12 @@ test("posts to streamGenerateContent with alt=sse and the key in x-goog-api-key"
 })
 
 test("asks for thoughts with a budget per effort", async () => {
-  const config = async (effort: "low" | "medium" | "high" | "max") =>
+  const config = async (effort: ReasoningEffort) =>
     (await sent({ reasoning: { effort } })).body.generationConfig.thinkingConfig
   expect(await config("low")).toEqual({ thinkingBudget: 1024, includeThoughts: true })
   expect(await config("medium")).toEqual({ thinkingBudget: 8192, includeThoughts: true })
   expect(await config("high")).toEqual({ thinkingBudget: 24576, includeThoughts: true })
+  expect(await config("xhigh")).toEqual({ thinkingBudget: 24576, includeThoughts: true })
   expect(await config("max")).toEqual({ thinkingBudget: 24576, includeThoughts: true })
 })
 
@@ -59,6 +60,24 @@ test("only 2.5 Pro gets the larger max budget; Gemini 3 gets a thinking level in
     includeThoughts: true,
   })
   expect(thinkingConfig("gemini-3-pro", "max")).toEqual({ thinkingLevel: "HIGH", includeThoughts: true })
+})
+
+test.each([
+  ["low", "LOW", 1024],
+  ["medium", "MEDIUM", 8192],
+  ["high", "HIGH", 24576],
+  ["xhigh", "HIGH", 24576],
+  ["max", "HIGH", 32768],
+] as const)("sends %s for Gemini 3 and preserves Gemini 2.5 Pro budgets", async (effort, level, budget) => {
+  for (const id of ["gemini-3-pro", "gemini-2.5-pro"]) {
+    const model = { ...req("google-gemini").model, id }
+    const { body } = await sent({ model, reasoning: { effort } })
+    expect(body.generationConfig.thinkingConfig).toEqual({
+      ...(id === "gemini-3-pro" ? { thinkingLevel: level } : { thinkingBudget: budget }),
+      includeThoughts: true,
+    })
+  }
+  expect((await sent({})).body).not.toHaveProperty("generationConfig")
 })
 
 test("sends tools as function declarations with a cleaned schema", async () => {

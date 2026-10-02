@@ -33,11 +33,14 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
     info: () => {
       const a = ctx.agent()
       const file = a.session?.file
+      // Shown only when it is sent: a model that does not think never gets an effort.
+      const thinking = a.model.caps.thinking ? a.thinkingFor(a.model) : undefined
       return {
         id: a.sessionId,
         ...(a.session?.title ? { title: a.session.title } : {}),
         cwd: a.cwd,
         model: { provider: a.model.provider, model: a.model.id },
+        ...(thinking ? { thinking } : {}),
         contextWindow: a.model.contextWindow,
         ...(a.model.contextWindowSource ? { contextWindowSource: a.model.contextWindowSource } : {}),
         ...(a.contextTokens !== undefined ? { contextTokens: a.contextTokens } : {}),

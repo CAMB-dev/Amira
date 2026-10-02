@@ -1,5 +1,15 @@
-import type { Ai, AssistantMessage, Message, ModelError, ModelInfo, ModelRef, ToolSpec } from "@amira/ai"
+import type {
+  Ai,
+  AssistantMessage,
+  Message,
+  ModelError,
+  ModelInfo,
+  ModelRef,
+  ReasoningEffort,
+  ToolSpec,
+} from "@amira/ai"
 import type { EventMap } from "@amira/api"
+import type { AgentOptions } from "./types.ts"
 
 export type ModelCallEmit = <K extends keyof EventMap>(type: K, data: EventMap[K]) => void
 
@@ -12,8 +22,26 @@ export interface ModelCallOptions {
   /** Read inside the stream's try, so a failure becomes this call's error as before. */
   tools: () => ToolSpec[]
   maxTokens?: number
+  thinking?: ReasoningEffort
   signal: AbortSignal
   emit: ModelCallEmit
+}
+
+/** The reasoning effort an agent asks for on a model; undefined sends none (the server default). */
+export type ThinkingFor = (model: ModelInfo) => ReasoningEffort | undefined
+
+/**
+ * The explicit effort (a --thinking flag, or a sub-agent's inherited one, which never falls back),
+ * else the model's own setting, else the top-level one.
+ */
+export function thinkingFor(
+  opts: Pick<AgentOptions, "thinking" | "defaultThinking" | "providerSettings" | "parentSessionId">,
+): ThinkingFor {
+  if (opts.parentSessionId) return () => opts.thinking
+  return (model) =>
+    opts.thinking ??
+    opts.providerSettings?.[model.provider]?.models?.find((m) => m.id === model.id)?.thinking ??
+    opts.defaultThinking
 }
 
 export interface ModelCallResult {
@@ -38,6 +66,9 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
         messages: options.messages,
         tools: options.tools(),
         ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
+        ...(options.model.caps.thinking && options.thinking
+          ? { reasoning: { effort: options.thinking } }
+          : {}),
       },
       options.signal,
     )

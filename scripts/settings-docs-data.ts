@@ -41,7 +41,16 @@ export const extraRows: { key: string; type: string }[] = [
 export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
   {
     title: { en: "General", zh: "常规" },
-    keys: ["model", "shell", "tools", "maxParallelTools", "backgroundJobs", "commandAliases", "sessions"],
+    keys: [
+      "model",
+      "thinking",
+      "shell",
+      "tools",
+      "maxParallelTools",
+      "backgroundJobs",
+      "commandAliases",
+      "sessions",
+    ],
   },
   {
     title: { en: "Providers and models", zh: "Provider 与模型" },
@@ -125,6 +134,11 @@ export const annotations: Record<string, Annotation> = {
     default: none,
     en: 'Default model as `"provider/model"`. Without it, Amira uses the resumed session\'s model, or the first model of the only provider. `--model` and `/model` choose another.',
     zh: '默认模型，格式为 `"provider/model"`。未设置时，Amira 使用恢复的会话上次用的模型；只配置了一个 provider 时则用它的第一个模型。`--model` 和 `/model` 可以另选。',
+  },
+  thinking: {
+    default: none,
+    en: "Reasoning effort for main conversation requests on models with `caps.thinking`. Unset sends nothing (the server default). A model's `thinking` overrides this; `--thinking` overrides both. Sub-agents inherit the parent's selected effort; titles and compaction do not.",
+    zh: "对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置时不发送参数，沿用服务端默认值。模型的 `thinking` 优先于此项，`--thinking` 优先于两者。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。",
   },
   shell: {
     default: '`"auto"`',
@@ -349,6 +363,11 @@ export const annotations: Record<string, Annotation> = {
     en: "Offer the provider's hosted web search to this model.",
     zh: "为该模型启用 provider 托管的网页搜索。",
   },
+  "providers.<id>.models[].thinking": {
+    default: { en: "top-level `thinking`", zh: "顶层 `thinking`" },
+    en: "Reasoning effort for this exact model id, unless overridden by `--thinking` or inherited from a parent agent.",
+    zh: "仅针对该模型 ID 的推理强度，`--thinking` 或从父 agent 继承的档位优先。",
+  },
   "providers.<id>.models[].tools.edit": {
     default: { en: "the provider's `tools.edit`", zh: "沿用 provider 的 `tools.edit`" },
     en: "Editing tools for this model only.",
@@ -356,8 +375,8 @@ export const annotations: Record<string, Annotation> = {
   },
   "providers.<id>.defaultModel": {
     default: none,
-    en: "Values for models neither `models` nor the catalog describes: the keys of `models[]` except `id` and `tools`.",
-    zh: "既不在 `models` 中、模型目录也不认识的模型所用的值：键与 `models[]` 相同，但没有 `id` 和 `tools`。",
+    en: "Values for models neither `models` nor the catalog describes: the keys of `models[]` except `id`, `tools` and `thinking`.",
+    zh: "既不在 `models` 中、模型目录也不认识的模型所用的值：键与 `models[]` 相同，但没有 `id`、`tools` 和 `thinking`。",
   },
   "compact.threshold": {
     default: "`0.8`",

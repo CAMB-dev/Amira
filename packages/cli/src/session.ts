@@ -305,6 +305,10 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ai,
       model: m,
       providerSettings: settings.providers,
+      defaultThinking: settings.thinking,
+      thinking: opts.settingsLayers?.thinking?.some((layer) => layer.scope === "flags")
+        ? settings.thinking
+        : undefined,
       fileRewindSettings: settings.fileRewind,
       cwd: opts.cwd,
       sections: defaultSections({

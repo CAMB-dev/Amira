@@ -43,6 +43,7 @@ export function resolveConfig(
 ): Config {
   const flags: Settings = {
     ...(args.model ? { model: args.model } : {}),
+    ...(args.thinking ? { thinking: args.thinking } : {}),
     ...(args.shell ? { shell: args.shell } : {}),
     ...(args.disabledTools ? { tools: { disabled: args.disabledTools } } : {}),
     ...(args.permissionMode ? { permissions: { mode: args.permissionMode } } : {}),

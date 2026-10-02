@@ -109,6 +109,7 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
 | --- | --- | --- | --- | --- |
 | `model` | `string` | 无 | 默认模型，格式为 `"provider/model"`。未设置时，Amira 使用恢复的会话上次用的模型；只配置了一个 provider 时则用它的第一个模型。`--model` 和 `/model` 可以另选。 |  |
+| `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | 无 | 对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置时不发送参数，沿用服务端默认值。模型的 `thinking` 优先于此项，`--thinking` 优先于两者。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。 |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Windows 上模型可用的 shell 工具：`"auto"` 同时提供 `bash` 和 `powershell`，`"bash"` 或 `"powershell"` 会隐藏另一个。其他平台只有 `bash`。`--shell` 优先。 |  |
 | `tools.disabled` | `string[]` | `[]` | 对模型隐藏的工具名。`--disable-tools` 在单次运行中替换这个列表，`/tools` 只修改当前会话。 |  |
 | `maxParallelTools` | `number` | `8` | 同时运行的工具调用数上限。 |  |
@@ -154,8 +155,9 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `providers.<id>.models[].caps.promptCache` | `boolean` | `false` | 服务端支持提示缓存。 |  |
 | `providers.<id>.models[].caps.parallelToolCalls` | `boolean` | `true` | 模型可以在一次回复中调用多个工具。 |  |
 | `providers.<id>.models[].caps.webSearch` | `boolean` | 取 `compat.webSearch` | 为该模型启用 provider 托管的网页搜索。 |  |
+| `providers.<id>.models[].thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | 顶层 `thinking` | 仅针对该模型 ID 的推理强度，`--thinking` 或从父 agent 继承的档位优先。 |  |
 | `providers.<id>.models[].tools.edit` | `"edit" \| "apply_patch" \| "both"` | 沿用 provider 的 `tools.edit` | 仅针对该模型的编辑工具设置。 |  |
-| `providers.<id>.defaultModel` | `object` | 无 | 既不在 `models` 中、模型目录也不认识的模型所用的值：键与 `models[]` 相同，但没有 `id` 和 `tools`。 |  |
+| `providers.<id>.defaultModel` | `object` | 无 | 既不在 `models` 中、模型目录也不认识的模型所用的值：键与 `models[]` 相同，但没有 `id`、`tools` 和 `thinking`。 |  |
 
 ## 权限
 

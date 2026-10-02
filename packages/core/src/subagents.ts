@@ -310,6 +310,7 @@ export class AgentTree {
       model,
       cwd,
       providerSettings: parent.providerSettings,
+      thinking: parent.thinkingFor(parent.model),
       fileRewindSettings: parent.fileRewindSettings,
       // A child whose directory overlaps the parent's writes the same files: one journal, one
       // restore. Worktrees live elsewhere and keep their own until their merge is captured.

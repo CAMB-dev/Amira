@@ -5,6 +5,7 @@ import type {
   Message,
   MessageDisplay,
   ModelRef,
+  ReasoningEffort,
   Usage,
 } from "@amira/ai"
 import type { CompactionUsage } from "./events.ts"
@@ -215,6 +216,8 @@ export interface SessionInfo {
   title?: string
   cwd: string
   model: ModelRef
+  /** The reasoning effort sent to the current model; absent when unset or the model does not think. */
+  thinking?: ReasoningEffort
   contextWindow: number
   /** Where `contextWindow` came from; "default" means it is a guess. Unset without a model. */
   contextWindowSource?: ContextWindowSource

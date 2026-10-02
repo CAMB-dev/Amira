@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
 import { createAi } from "../src/client.ts"
 import { collect } from "../src/dialect.ts"
+import { openaiChat } from "../src/dialects/openai-chat.ts"
 import type { ProviderConfig } from "../src/providers.ts"
+import { req, run } from "./dialect-helpers.ts"
 import { fakeFetch, type Seen, sseResponse } from "./helpers.ts"
 
 async function sentBody(ref: string, providers: ProviderConfig[] = []) {
@@ -19,6 +21,16 @@ async function sentBody(ref: string, providers: ProviderConfig[] = []) {
   )
   return seen.body
 }
+
+test.each([undefined, "low", "medium", "high", "xhigh", "max"] as const)(
+  "chat keeps its existing request shape with effort %s",
+  async (effort) => {
+    const request = req("openai-chat", effort ? { reasoning: { effort } } : {}, { thinking: true })
+    const { seen } = await run(openaiChat, request, () => sseResponse([]))
+    expect(seen.body).not.toHaveProperty("reasoning_effort")
+    expect(seen.body).not.toHaveProperty("reasoning")
+  },
+)
 
 test("a provider with compat.maxTokensField sends max_completion_tokens", async () => {
   const body = await sentBody("oa/gpt-5", [

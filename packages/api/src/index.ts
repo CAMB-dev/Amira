@@ -9,6 +9,7 @@ export type {
   Message,
   MessageDisplay,
   ModelRef,
+  ReasoningEffort,
   ServerToolBlock,
   TextBlock,
   ThinkingBlock,
