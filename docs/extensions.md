@@ -237,6 +237,24 @@ Extension-specific settings belong under `extensions` with the extension name. T
 
 `complete({ messages, system?, model?, maxTokens?, signal?, label? })` makes one model request outside the conversation, with no tools and hosted web search off, and resolves with the reply's text, message and usage. It defaults to the session's current model (`model` takes a `provider/model` reference). Every such request spends your tokens: its usage is saved in the session and shown in `/cost` under `label` (the extension's source when unset) and counts toward the agent tree's `budget`; once the budget is spent the call rejects without a request. A reasoning model gets at least 2,048 output tokens (within its limit) so it can answer after thinking. Provider errors reject the promise and an aborted `signal`, or unloading the extension, rejects it with an `AbortError`. `session()` returns the top-level session's `SessionControl` once the host has built it; `rename(title, { source: "auto", sessionId })` never replaces a name set with `/rename` and does nothing when `sessionId` is no longer the current session.
 
+### Session thinking effort
+
+API 0.1.20 adds `SessionControl.setThinking(level: ReasoningEffort | undefined): void`. Get the control from a command's context or `api.session()`; the latter can return `undefined` before the host injects it. Accepted levels are `low`, `medium`, `high`, `xhigh` and `max`. The override is session-only, writes no settings, and takes precedence over `--thinking`, the per-model setting and the top-level setting, in that order. Passing `undefined` explicitly suppresses all of those sources so no effort is sent and the server default applies; it does not remove the runtime override.
+
+`setThinking` throws while a turn, compaction or reload is running. The choice is retained for later thinking models and inherited by sub-agents spawned after the change. Like the current model, it carries over to the conversation that `/clear`, `/resume`, a rewind or a fork switches to; it is kept in memory only, so a new Amira process starts from the flag and settings again.
+
+`ui.select(title, options, { initial, signal })` accepts an optional `initial` option label to highlight when opening the picker. Without a matching label, it highlights the first option. Dismissing a picker returns `undefined`; the built-in effort picker leaves the current choice unchanged.
+
+`SessionControl.info()` returns these `SessionInfo` fields:
+
+| Field | Meaning |
+| --- | --- |
+| `thinking?: ReasoningEffort` | The effort sent to the current model; absent when unset or the model does not support thinking |
+| `thinkingLevel?: ReasoningEffort` | The effective choice regardless of the current model's capability; retained when switching to a non-thinking model |
+| `supportsThinking?: boolean` | Whether the current model supports thinking; the Amira host supplies a boolean |
+
+The typed event `thinking.changed` has payload `{ thinking?: ReasoningEffort }` and is emitted on runtime effort changes. Its `thinking` field has the same capability-gated meaning as `info().thinking`, not `thinkingLevel`. For live displays, read `api.session()?.info()` and redraw on `thinking.changed`, as well as model and session changes. Ignore events with a `parentSessionId` when displaying only the top-level session. The built-in status bar shows effort beside the model name only when `info().thinking` is set.
+
 ### Workspace providers
 
 API 0.1.16 adds `api.registerWorkspaceProvider(provider)`. One provider may be registered per

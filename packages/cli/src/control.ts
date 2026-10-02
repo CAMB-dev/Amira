@@ -78,6 +78,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     // meanwhile reports to the new session.
     const handover = session.host.backgroundJobs.handoverRoot(old.sessionId, rootSessionId)
     const next = other ?? makeNext()
+    // Like the current model, the /thinking choice follows the user to the next conversation.
+    old.thinking.carryTo(next.thinking)
     old.handoverBackgroundNotices(next)
     try {
       await handover

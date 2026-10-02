@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, userMessage } from "@amira/ai"
-import type { ExtensionAPI, Settings } from "@amira/api"
+import type { EventMap, ExtensionAPI, ReasoningEffort, Settings } from "@amira/api"
+import { SessionStore } from "@amira/core"
 import { parseCliArgs, USAGE } from "../src/args.ts"
 import { resolveConfig } from "../src/config.ts"
 import { createCommandHost } from "../src/control.ts"
@@ -44,14 +45,25 @@ test("--thinking lists all levels on invalid or missing input, and in help", () 
   expect(parseCliArgs([], cwd, {}).thinking).toBeUndefined()
 })
 
-async function sessionFor(flags: string[], settings: Settings = {}, thinks = true) {
+async function sessionFor(flags: string[], settings: Settings = {}, thinks = true, stored = false) {
   writeFileSync(path.join(home, "settings.json"), JSON.stringify(settings))
   const args = parseCliArgs(flags, cwd, {})
   const config = resolveConfig(args, home)
   const mock = createMockDialect(Array.from({ length: 8 }, () => ({ text: "done" })))
   const ai = createAi({
     dialects: [mock],
-    providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { caps: { thinking: thinks } } }],
+    providers: [
+      {
+        id: "mock",
+        dialect: "mock",
+        baseUrl: "",
+        defaultModel: { caps: { thinking: thinks } },
+        models: [
+          { id: "plain", caps: { thinking: false } },
+          { id: "think", caps: { thinking: true } },
+        ],
+      },
+    ],
     retry: { retries: 0 },
   })
   const session = await createSession({
@@ -60,6 +72,7 @@ async function sessionFor(flags: string[], settings: Settings = {}, thinks = tru
     cwd,
     extensions: [],
     noBuiltins: true,
+    store: stored ? SessionStore.create({ cwd, dir: path.join(home, "sessions") }) : undefined,
     nonInteractive: args.print,
     settings: config.settings,
     settingsLayers: config.settingsLayers,
@@ -99,6 +112,113 @@ test.each([false, true])(
         await session.agent.dispose()
         session.host.unloadAll()
       }
+    }
+  },
+)
+
+test.each([...levels])("runtime %s overrides the flag and settings without writing them", async (level) => {
+  const settings: Settings = {
+    thinking: "low",
+    providers: {
+      mock: { dialect: "mock", baseUrl: "http://mock", models: [{ id: "m", thinking: "medium" }] },
+    },
+  }
+  const { session, mock, commands } = await sessionFor(["--thinking", "high"], settings)
+  const settingsFile = path.join(home, "settings.json")
+  const before = readFileSync(settingsFile, "utf8")
+  try {
+    expect(commands.control.info()).toMatchObject({ thinking: "high", thinkingLevel: "high" })
+    commands.control.setThinking(level)
+    expect(commands.control.info()).toMatchObject({
+      supportsThinking: true,
+      thinkingLevel: level,
+      thinking: level,
+    })
+    await session.agent.prompt("hello")
+    commands.control.setModel("mock/other")
+    await session.agent.prompt("again")
+    expect(mock.requests.map((r) => r.reasoning?.effort)).toEqual([level, level])
+    expect(readFileSync(settingsFile, "utf8")).toBe(before)
+  } finally {
+    await session.agent.dispose()
+    session.host.unloadAll()
+  }
+})
+
+test("runtime default suppresses the flag and settings across model switches and new children", async () => {
+  const { session, mock, commands } = await sessionFor(["--thinking", "max"], {
+    thinking: "low",
+    providers: {
+      mock: { dialect: "mock", baseUrl: "http://mock", models: [{ id: "m", thinking: "high" }] },
+    },
+  })
+  try {
+    commands.control.setThinking(undefined)
+    expect(commands.control.info()).not.toHaveProperty("thinking")
+    expect(commands.control.info()).not.toHaveProperty("thinkingLevel")
+    await session.agent.prompt("hello")
+    commands.control.setModel("mock/other")
+    await session.agent.prompt("again")
+    const child = session.tree.spawn(session.agent, { prompt: "work", model: "mock/m" })
+    expect((await child.result()).status).toBe("done")
+    expect(mock.requests).toHaveLength(3)
+    for (const request of mock.requests) expect(request).not.toHaveProperty("reasoning")
+    commands.control.setThinking("xhigh")
+    const next = session.tree.spawn(session.agent, { prompt: "more work", model: "mock/m" })
+    expect((await next.result()).status).toBe("done")
+    expect(mock.requests[3]?.reasoning).toEqual({ effort: "xhigh" })
+  } finally {
+    await session.agent.dispose()
+    session.host.unloadAll()
+  }
+})
+
+test("the runtime choice follows /clear like the current model", async () => {
+  const { session, commands } = await sessionFor(["--thinking", "high"])
+  try {
+    commands.control.setThinking("max")
+    await commands.control.newSession()
+    expect(commands.agent).not.toBe(session.agent)
+    expect(commands.control.info()).toMatchObject({ thinking: "max", thinkingLevel: "max" })
+    commands.control.setThinking(undefined)
+    await commands.control.newSession()
+    expect(commands.control.info()).not.toHaveProperty("thinkingLevel")
+  } finally {
+    await commands.agent.dispose()
+    session.host.unloadAll()
+  }
+})
+
+test.each(["configured", "default", "max"] as const)(
+  "rewind preserves %s thinking without freezing per-model fallback",
+  async (choice) => {
+    const { session, mock, commands } = await sessionFor(
+      choice === "configured" ? [] : ["--thinking", "medium"],
+      {
+        thinking: "low",
+        providers: {
+          mock: { dialect: "mock", baseUrl: "http://mock", models: [{ id: "m", thinking: "high" }] },
+        },
+      },
+      true,
+      true,
+    )
+    try {
+      if (choice !== "configured") commands.control.setThinking(choice === "default" ? undefined : choice)
+      const id = commands.agent.sessionId
+      await commands.agent.prompt("hello")
+      await commands.control.rewind!(0, { restoreFiles: false })
+      expect(commands.agent.sessionId).toBe(id)
+      expect(commands.agent).not.toBe(session.agent)
+      await commands.agent.prompt("try again")
+      commands.control.setModel("mock/other")
+      await commands.agent.prompt("another model")
+      const expected: (ReasoningEffort | "default")[] =
+        choice === "configured" ? ["high", "high", "low"] : [choice, choice, choice]
+      expect(mock.requests.map((r) => r.reasoning?.effort ?? "default")).toEqual(expected)
+    } finally {
+      await commands.agent.dispose()
+      session.host.unloadAll()
     }
   },
 )
@@ -145,6 +265,45 @@ test("api.complete side calls do not inherit thinking", async () => {
     expect(mock.requests).toHaveLength(2)
     expect(mock.requests[0]?.reasoning).toEqual({ effort: "max" })
     expect(mock.requests[1]).not.toHaveProperty("reasoning")
+  } finally {
+    await session.agent.dispose()
+    session.host.unloadAll()
+  }
+})
+
+test("a non-thinking model retains runtime effort and announces changes without sending it", async () => {
+  const { session, mock, commands } = await sessionFor(["--thinking", "high"], {}, false)
+  const changes: EventMap["thinking.changed"][] = []
+  session.agent.bus.subscribe((event) => {
+    if (event.type === "thinking.changed") changes.push(event.data)
+  })
+  try {
+    commands.control.setThinking("xhigh")
+    expect(commands.control.info()).toMatchObject({ supportsThinking: false, thinkingLevel: "xhigh" })
+    expect(commands.control.info()).not.toHaveProperty("thinking")
+    await session.agent.prompt("hello")
+    expect(mock.requests[0]).not.toHaveProperty("reasoning")
+    commands.control.setModel("mock/think")
+    expect(commands.control.info()).toMatchObject({ supportsThinking: true, thinking: "xhigh" })
+    await session.agent.prompt("think")
+    expect(mock.requests[1]?.reasoning).toEqual({ effort: "xhigh" })
+    commands.control.setThinking("max")
+    commands.control.setThinking(undefined)
+    await session.agent.bus.flush()
+    expect(changes).toEqual([{}, { thinking: "max" }, {}])
+  } finally {
+    await session.agent.dispose()
+    session.host.unloadAll()
+  }
+})
+
+test("changing effort is blocked while a session is held", async () => {
+  const { session, commands } = await sessionFor(["--thinking", "high"])
+  try {
+    await session.agent.hold("reload", async () => {
+      expect(() => commands.control.setThinking("max")).toThrow(/a reload is running/)
+      expect(commands.control.info().thinking).toBe("high")
+    })
   } finally {
     await session.agent.dispose()
     session.host.unloadAll()

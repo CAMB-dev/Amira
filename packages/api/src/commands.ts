@@ -216,6 +216,10 @@ export interface SessionInfo {
   title?: string
   cwd: string
   model: ModelRef
+  /** Whether the current model supports thinking. */
+  supportsThinking?: boolean
+  /** The effective effort choice, retained even when the current model does not think. */
+  thinkingLevel?: ReasoningEffort
   /** The reasoning effort sent to the current model; absent when unset or the model does not think. */
   thinking?: ReasoningEffort
   contextWindow: number
@@ -359,6 +363,13 @@ export interface SessionControl {
   models(): string[]
   /** Switches the model for later turns; throws for an unknown one. */
   setModel(ref: string): void
+  /**
+   * Overrides reasoning effort until Amira exits, ahead of the flag and settings; writes no
+   * settings, and carries over to the conversation /clear, /resume, a rewind or a fork switches to.
+   * undefined sends no effort (the server default), even when a flag or setting specifies one.
+   * Retained on non-thinking models for a later thinking model. Throws while the session is busy.
+   */
+  setThinking(level: ReasoningEffort | undefined): void
   /** Starts over with an empty conversation in a new session. */
   newSession(): Promise<void>
   /** Stored sessions of this directory, most recent first. */

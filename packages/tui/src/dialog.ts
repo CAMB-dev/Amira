@@ -634,6 +634,7 @@ function pagesOf(r: DialogRequest): Page[] {
             const description = r.descriptions?.[i]
             return { label: o, value: o, index: i, ...(description ? { description } : {}) }
           }),
+          { selected: r.initial === undefined ? 0 : Math.max(0, r.options.indexOf(r.initial)) },
         ),
       ]
     case "diff-review":
