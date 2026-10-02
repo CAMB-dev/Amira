@@ -1,13 +1,14 @@
 import { existsSync } from "node:fs"
 import { isNoModel, userMessage } from "@amira/ai"
 import { type AssistantMessage, type SessionControl, USER_STOP_REASON } from "@amira/api"
-import { listSubagents, subagentMessages } from "@amira/core"
+import { listSubagents, readTrace, subagentMessages } from "@amira/core"
 import { withProviderHint } from "../provider-command.ts"
 import type { ControlContext } from "./context.ts"
 
 type InfoControl = Pick<
   SessionControl,
   | "info"
+  | "trace"
   | "messages"
   | "contextHas"
   | "replies"
@@ -48,6 +49,15 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
         shell: ctx.shell.get(),
         permissions: { mode: a.permissions.mode, rules: a.permissions.rules.length },
       }
+    },
+    trace: async (id) => {
+      const a = ctx.agent()
+      const file =
+        id === undefined || id === a.sessionId
+          ? a.session?.file
+          : listSubagents(a, ctx.session.tree).find((entry) => entry.info.id === id)?.file
+      if (!file) return []
+      return ctx.trace ? ctx.trace.read(file) : readTrace(file)
     },
     messages: () => ctx.agent().messages,
     contextHas: (text) => ctx.agent().contextHas(text),

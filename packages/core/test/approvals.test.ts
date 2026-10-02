@@ -1,7 +1,7 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AnyEvent, type AskOutcome, type AskRequest, defineTool, textResult } from "@amira/api"
-import { ApprovalGate } from "../src/agent/approvals.ts"
+import { ApprovalGate, type ApprovalTiming, approvalWaitMs } from "../src/agent/approvals.ts"
 import { Agent, type ApprovalDecision, type Approver } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { Permissions } from "../src/permissions/policy.ts"
@@ -135,6 +135,14 @@ for (const mixed of [false, true]) {
         events.filter((event) => event.type === "tool.execute.end" && event.data.toolCallId === id),
       ).toHaveLength(1)
     }
+    const endings = events.filter((event) => event.type === "tool.execute.end")
+    for (const ending of endings) {
+      if (mixed && ending.data.toolCallId === "b") expect(ending.data).not.toHaveProperty("waitedMs")
+      else {
+        expect(ending.data.waitedMs).toBeGreaterThanOrEqual(0)
+        expect(ending.data.durationMs).toBe(0)
+      }
+    }
     const results = agent.messages.filter((message) => message.role === "toolResult")
     expect(results.map((message) => message.toolCallId)).toEqual(["a", "b"])
     const trace = order(events)
@@ -207,6 +215,9 @@ test("denying one pending call leaves the other blocked until it is allowed", as
   expect(results[1]).toMatchObject({ isError: false })
   const end = events.find((event) => event.type === "tool.execute.end" && event.data.toolCallId === "b")
   expect(end?.type === "tool.execute.end" && end.data.approval).toBe("user")
+  const endings = events.filter((event) => event.type === "tool.execute.end")
+  for (const ending of endings) expect(ending.data.waitedMs).toBeGreaterThanOrEqual(0)
+  expect(endings[0]!.data.durationMs).toBe(0)
 })
 
 test("commander question forwarding keeps the request, signal and promise without blocking again", async () => {
@@ -276,8 +287,12 @@ for (const available of [true, false]) {
           : undefined
       }
     }
+    const bus = new EventBus()
+    const events: AnyEvent[] = []
+    bus.subscribe((event) => void events.push(event))
     const agent = new CustomAgent({
       ai,
+      bus,
       model: ai.model("mock/test"),
       cwd: process.cwd(),
       permissions: new Permissions({
@@ -301,6 +316,10 @@ for (const available of [true, false]) {
       "test",
     )
     await agent.prompt("go")
+    await bus.flush()
+    const end = events.find((event) => event.type === "tool.execute.end")
+    if (available) expect(end?.data.waitedMs).toBeGreaterThanOrEqual(0)
+    else expect(end?.data).not.toHaveProperty("waitedMs")
     expect(asked).toBe(available ? 1 : 0)
     expect(ran).toBe(available ? 1 : 0)
     expect(fallback).toBe(0)
@@ -330,12 +349,16 @@ test("the gate invokes callbacks synchronously and preserves blocked-wait microt
     blocked: (_turn, _reason, pending) => void trace.push(`blocked:${pending}`),
     working: () => void trace.push("working"),
   })
+  const timing: ApprovalTiming = {}
   const verdict = gate.approve(
     turn,
     { id: "call", name: "work", args: {} },
     { decision: "allow", reason: "" },
     ["check first"],
+    timing,
   )
+  expect(timing.startedAt).toBeNumber()
+  expect(timing.endedAt).toBeUndefined()
   expect(trace).toEqual(["blocked:1", "callback"])
   answer.resolve({ approved: true })
   trace.push("settled")
@@ -347,6 +370,8 @@ test("the gate invokes callbacks synchronously and preserves blocked-wait microt
     })
   })
   await verdict.then(() => trace.push("verdict"))
+  expect(timing.endedAt).toBeNumber()
+  expect(approvalWaitMs(timing)).toBe(Math.round(timing.endedAt! - timing.startedAt!))
   expect(trace).toEqual([
     "blocked:1",
     "callback",
@@ -419,4 +444,200 @@ test("a late wait of an ended turn does not hide the current turn's wait", async
   answers[1]!.resolve({ approved: true })
   await late
   expect(trace).toEqual(["turn2 blocked:1", "turn2 working"])
+})
+
+test("approval timing preserves zero and does not invent a wait", () => {
+  expect(approvalWaitMs(undefined)).toBeUndefined()
+  expect(approvalWaitMs({})).toBeUndefined()
+  expect(approvalWaitMs({ startedAt: 10, endedAt: 10 })).toBe(0)
+  expect(approvalWaitMs({ startedAt: 10, endedAt: 25 })).toBe(15)
+})
+
+test("approval timing belongs to each call even with duplicate parallel IDs", async () => {
+  const ai = mockAi([
+    {
+      toolCalls: ["approved", "denied", "invalid", "plain", "failed"].map((kind) => ({
+        id: "reused",
+        name: "work",
+        args: { kind, ...(kind === "invalid" ? {} : { value: 1 }) },
+      })),
+    },
+    { text: "done" },
+  ])
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((event) => void events.push(event))
+  const agent = new Agent({
+    ai,
+    bus,
+    model: ai.model("mock/test"),
+    cwd: process.cwd(),
+    approve: async (request) => {
+      await Bun.sleep(10)
+      if (request.args.kind === "failed") throw new Error("approver failed")
+      return request.args.kind === "denied" ? { approved: false } : { approved: true, by: "user" }
+    },
+  })
+  agent.tools.register(
+    defineTool({
+      name: "work",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: { kind: { type: "string" }, value: { type: "number" } },
+        required: ["value"],
+      },
+      concurrency: "parallel",
+      traits: { readOnly: true },
+      execute: async (args) => textResult(String(args.kind)),
+    }),
+    "test",
+  )
+  agent.interceptors.add("tool.call.before", (call) =>
+    call.args.kind === "plain" ? { action: "pass" } : { action: "ask", reason: "check" },
+  )
+  await agent.prompt("go")
+  await bus.flush()
+  const endings = events.filter((event) => event.type === "tool.execute.end")
+  expect(endings).toHaveLength(5)
+  const plain = endings.find((event) =>
+    event.data.result.content.some((b) => b.type === "text" && b.text === "plain"),
+  )!
+  expect(plain.data).not.toHaveProperty("waitedMs")
+  for (const event of endings.filter((ending) => ending !== plain)) {
+    expect(event.data.waitedMs).toBeGreaterThanOrEqual(0)
+    if (event.data.rejected) expect(event.data.durationMs).toBe(0)
+  }
+  expect(endings.filter((event) => event.data.rejected === "blocked")).toHaveLength(2)
+  expect(endings.filter((event) => event.data.rejected === "invalidArgs")).toHaveLength(1)
+  expect(endings.filter((event) => event.data.approval === "user")).toHaveLength(2)
+})
+
+test("tool duration measures execution without approval or interceptor time", async () => {
+  let clock = 0
+  const now = spyOn(performance, "now").mockImplementation(() => clock)
+  const ai = mockAi([{ toolCalls: [{ id: "call", name: "work", args: {} }] }, { text: "done" }])
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((event) => void events.push(event))
+  const agent = new Agent({
+    ai,
+    bus,
+    model: ai.model("mock/test"),
+    cwd: process.cwd(),
+    approve: async () => {
+      clock += 250
+      return { approved: true, by: "user" }
+    },
+  })
+  agent.tools.register(
+    defineTool({
+      name: "work",
+      description: "",
+      parameters: { type: "object" },
+      traits: { readOnly: true },
+      execute: async () => {
+        clock += 25
+        return textResult("done")
+      },
+    }),
+    "test",
+  )
+  agent.interceptors.add("tool.call.before", () => {
+    clock += 100
+    return { action: "ask", reason: "check" }
+  })
+  agent.interceptors.add("tool.call.after", () => {
+    clock += 200
+    return { action: "pass" }
+  })
+  try {
+    await agent.prompt("go")
+    await bus.flush()
+    const end = events.find((event) => event.type === "tool.execute.end")!
+    expect(end.data.waitedMs).toBe(250)
+    expect(end.data.durationMs).toBe(25)
+  } finally {
+    now.mockRestore()
+    await agent.dispose()
+  }
+})
+
+test("a policy denial does not report approval waiting", async () => {
+  const ai = mockAi([{ toolCalls: [{ id: "call", name: "write", args: {} }] }, { text: "done" }])
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((event) => void events.push(event))
+  const agent = new Agent({
+    ai,
+    bus,
+    model: ai.model("mock/test"),
+    cwd: process.cwd(),
+    permissions: new Permissions({ mode: "plan" }),
+    approve: async () => {
+      throw new Error("must not ask")
+    },
+  })
+  agent.tools.register(
+    defineTool({
+      name: "write",
+      description: "",
+      parameters: { type: "object" },
+      traits: { writesFiles: true },
+      execute: async () => textResult("must not run"),
+    }),
+    "test",
+  )
+  await agent.prompt("go")
+  await bus.flush()
+  const end = events.find((event) => event.type === "tool.execute.end")!
+  expect(end.data.rejected).toBe("blocked")
+  expect(end.data.durationMs).toBe(0)
+  expect(end.data).not.toHaveProperty("waitedMs")
+})
+
+test("abandoning an approver that ignores abort snapshots its unfinished wait", async () => {
+  const ai = mockAi([{ toolCalls: [{ id: "call", name: "work", args: {} }] }])
+  const bus = new EventBus()
+  const events: AnyEvent[] = []
+  bus.subscribe((event) => void events.push(event))
+  const entered = Promise.withResolvers<void>()
+  const answer = Promise.withResolvers<ApprovalDecision>()
+  const agent = new Agent({
+    ai,
+    bus,
+    model: ai.model("mock/test"),
+    cwd: process.cwd(),
+    abortGraceMs: 1,
+    approve: () => {
+      entered.resolve()
+      return answer.promise
+    },
+  })
+  agent.tools.register(
+    defineTool({
+      name: "work",
+      description: "",
+      parameters: { type: "object" },
+      traits: { readOnly: true },
+      execute: async () => textResult("must not run"),
+    }),
+    "test",
+  )
+  agent.interceptors.add("tool.call.before", () => ({ action: "ask", reason: "check" }))
+  const turn = agent.prompt("go")
+  await entered.promise
+  agent.abort()
+  expect((await turn).reason).toBe("aborted")
+  await bus.flush()
+  const end = events.find((event) => event.type === "tool.execute.end")!
+  expect(end.data.rejected).toBe("aborted")
+  expect(end.data.durationMs).toBe(0)
+  expect(end.data.waitedMs).toBeGreaterThanOrEqual(0)
+  const waitedMs = end.data.waitedMs
+  answer.resolve({ approved: true })
+  await Bun.sleep(0)
+  await bus.flush()
+  expect(end.data.waitedMs).toBe(waitedMs)
+  expect(events.filter((event) => event.type === "tool.execute.end")).toHaveLength(1)
 })

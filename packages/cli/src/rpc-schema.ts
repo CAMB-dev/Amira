@@ -348,6 +348,10 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     name: str,
     result: toolResult,
     durationMs: num,
+    "waitedMs?": {
+      ...num,
+      description: "Milliseconds waiting for an approver; absent if no approval wait was entered.",
+    },
     "traits?": ref("ToolTraits"),
     "writtenPaths?": arrayOf(str),
     "rejected?": strings("blocked", "unknownTool", "invalidArgs", "aborted"),

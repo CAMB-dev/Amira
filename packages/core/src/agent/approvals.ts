@@ -3,6 +3,20 @@ import type { Permissions, PermissionVerdict } from "../permissions/policy.ts"
 import { approvalPermission } from "./permission-text.ts"
 import type { ApprovalDecision, Approver, Asker } from "./types.ts"
 
+/** Per-call monotonic timing, populated only when a real approver is asked. */
+export interface ApprovalTiming {
+  /** performance.now() at entry into the approval wait. */
+  startedAt?: number
+  /** performance.now() when the wait settled; absent while it is still pending. */
+  endedAt?: number
+}
+
+/** Snapshot even an abandoned wait, whose approver may ignore abort and never settle. */
+export function approvalWaitMs(timing: ApprovalTiming | undefined): number | undefined {
+  if (timing?.startedAt === undefined) return undefined
+  return Math.round((timing.endedAt ?? performance.now()) - timing.startedAt)
+}
+
 /** The original turn object, never a copy: identity guards late wait cleanup. */
 interface ApprovalTurn {
   id: string
@@ -71,6 +85,7 @@ export class ApprovalGate {
     call: ApprovalCall,
     policy: PermissionVerdict,
     asks: string[] | undefined,
+    timing?: ApprovalTiming,
   ): Promise<ApprovalDecision> {
     const asking = policy.decision === "ask"
     const reasons = [...(asking ? [policy.reason] : []), ...(asks ?? [])]
@@ -88,6 +103,7 @@ export class ApprovalGate {
       turn,
       request,
       asking ? this.#deps.resolvePermissionApprover() : this.#deps.approve,
+      timing,
     )
   }
 
@@ -99,11 +115,15 @@ export class ApprovalGate {
     turn: ApprovalTurn,
     request: ApprovalRequest,
     approve: Approver | undefined,
+    timing: ApprovalTiming | undefined,
   ): Promise<ApprovalDecision> {
     if (!approve) return { approved: false, reason: "it needs approval and nobody can approve it here" }
     try {
-      return await this.#waitBlocked(turn, `approval for ${request.name}`, () =>
-        approve(request, turn.signal),
+      return await this.#waitBlocked(
+        turn,
+        `approval for ${request.name}`,
+        () => approve(request, turn.signal),
+        timing,
       )
     } catch (err) {
       return {
@@ -148,7 +168,13 @@ export class ApprovalGate {
    * Waits for `wait` while the session shows as blocked (D44: with the number of calls waiting,
    * for approval or for an answer).
    */
-  async #waitBlocked<T>(turn: ApprovalTurn, reason: string, wait: () => Promise<T>): Promise<T> {
+  async #waitBlocked<T>(
+    turn: ApprovalTurn,
+    reason: string,
+    wait: () => Promise<T>,
+    timing?: ApprovalTiming,
+  ): Promise<T> {
+    if (timing) timing.startedAt = performance.now()
     // Each turn has its own count: a wait of another turn (abandoned, or late) never touches it.
     const entry = this.#blocked.get(turn) ?? { calls: 0 }
     this.#blocked.set(turn, entry)
@@ -159,6 +185,7 @@ export class ApprovalGate {
     try {
       return await wait()
     } finally {
+      if (timing) timing.endedAt = performance.now()
       entry.calls--
       // A wait that ends after its turn did (aborted, abandoned) must not wake the session.
       const live = this.#deps.isCurrentTurn(turn) && !turn.signal.aborted

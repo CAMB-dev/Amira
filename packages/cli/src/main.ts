@@ -14,6 +14,7 @@ import { runProviderCommand } from "./provider-command.ts"
 import { chooseStore, exitNote, formatSessionList, pickSession } from "./resume.ts"
 import { runRpc } from "./rpc.ts"
 import { rpcSchema } from "./rpc-schema.ts"
+import { closeTrace } from "./session/trace-shutdown.ts"
 import { createSession } from "./session.ts"
 import { runSessionsCommand } from "./sessions-command.ts"
 import { askProjectTrust, planPackages } from "./trust.ts"
@@ -181,14 +182,29 @@ async function run(argv: string[]): Promise<number> {
   const onReady = () => {
     if (!pickInUi) announce(agent, resumed ? "resume" : "startup")
   }
+  let forceExiting = false
+  const forceExit = (code: number) => {
+    if (forceExiting) return
+    forceExiting = true
+    const last = agentRef ?? agent
+    // Give aborted tools a moment to finish after session.end, then drain their queued events.
+    const disposing = last.dispose("exit").catch(() => {})
+    void Promise.race([disposing, Bun.sleep(250)])
+      .then(() => closeTrace(last.bus, session.traceRecorder, 125))
+      .finally(() => process.exit(code))
+  }
   try {
     if (args.rpc) {
-      return await runRpc({ agent, ai, ui: host.ui, commands }, { pending: startupEvents, onReady })
+      return await runRpc(
+        { agent, ai, ui: host.ui, commands },
+        { pending: startupEvents, onReady, forceExit },
+      )
     }
     if (!interactive) {
       return await runPrint(agent, args.prompt ?? "", args.json, {
         pending: startupEvents,
         onReady,
+        forceExit: () => forceExit(130),
         ui: host.ui,
         commands,
         backgroundJobs: host.backgroundJobs,
@@ -235,7 +251,11 @@ async function run(argv: string[]): Promise<number> {
     // less a moment for what they started to be killed once they are told to stop.
     const exiting = host.runExitHandlers(3500, 1000)
     // Give the agent tree and a catalog download a moment to stop cleanly or reach the cache.
-    await Promise.race([Promise.all([disposing, catalogRefresh, exiting]), Bun.sleep(5000)])
+    try {
+      await Promise.race([Promise.all([disposing, catalogRefresh, exiting]), Bun.sleep(5000)])
+    } finally {
+      await closeTrace(last.bus, session.traceRecorder)
+    }
   }
 }
 

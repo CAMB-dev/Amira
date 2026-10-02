@@ -9,6 +9,8 @@ import type { AgentTree } from "./subagents.ts"
 /** A sub-agent as listed for a session, with a way to get its conversation. */
 export interface SubagentEntry {
   info: SubagentInfo
+  /** Its session file, when known; it may not have been written yet. */
+  file?: string
   /** Its conversation so far; a copy, so it does not change under the caller. */
   messages(): Message[]
   /**
@@ -55,7 +57,7 @@ export function subagentsOf(
       : []
     const ids = [...stored.map((s) => s.id), ...(tree?.childrenOf(parentId) ?? [])]
     for (const id of ids) {
-      if (seen.has(id)) continue
+      if (seen.has(id) || !/^[\w-]+$/.test(id)) continue
       seen.add(id)
       const known = tree?.subagent(id)
       if (known) {
@@ -63,6 +65,7 @@ export function subagentsOf(
         const kept = known.messages
         out.push({
           info: { ...known.info, depth },
+          ...(own?.file || known.file ? { file: own?.file ?? known.file } : {}),
           messages: () => (kept ? [...kept] : own ? [...own.restore().messages] : []),
           history: () => (own ? storedHistory(own) : kept ? [...kept] : []),
         })
@@ -75,6 +78,7 @@ export function subagentsOf(
       const child = openStored(file)
       out.push({
         info: storedInfo(id, parentId, depth, role, entry?.title, child),
+        ...(child ? { file } : {}),
         messages: () => (child ? [...child.restore().messages] : []),
         history: () => (child ? storedHistory(child) : []),
       })
