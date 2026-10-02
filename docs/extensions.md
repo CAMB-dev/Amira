@@ -226,6 +226,47 @@ Extension-specific settings belong under `extensions` with the extension name. T
 
 `complete({ messages, system?, model?, maxTokens?, signal?, label? })` makes one model request outside the conversation, with no tools and hosted web search off, and resolves with the reply's text, message and usage. It defaults to the session's current model (`model` takes a `provider/model` reference). Every such request spends your tokens: its usage is saved in the session and shown in `/cost` under `label` (the extension's source when unset) and counts toward the agent tree's `budget`; once the budget is spent the call rejects without a request. A reasoning model gets at least 2,048 output tokens (within its limit) so it can answer after thinking. Provider errors reject the promise and an aborted `signal`, or unloading the extension, rejects it with an `AbortError`. `session()` returns the top-level session's `SessionControl` once the host has built it; `rename(title, { source: "auto", sessionId })` never replaces a name set with `/rename` and does nothing when `sessionId` is no longer the current session.
 
+### Workspace providers
+
+API 0.1.16 adds `api.registerWorkspaceProvider(provider)`. One provider may be registered per
+host; a second registration throws an error naming the current owner. The returned function
+unregisters it, and unload, failed load and reload release it automatically.
+
+```ts
+import type { WorkspaceProvider } from "@amira/api"
+
+const provider: WorkspaceProvider = {
+  async probe(cwd, signal, kind = "full") {
+    // Honor signal; use api.runCommand for processes. A dirty probe may reuse metadata.
+    return { cwd }
+  },
+  // Optional: a cheap metadata fingerprint, with no process spawn.
+  stamp(cwd) { return undefined },
+}
+api.registerWorkspaceProvider(provider)
+```
+
+`WorkspaceFacts` is the `workspace.changed` payload: `cwd`, and optional `repoRoot`, `branch`,
+`head`, `isWorktree` and `dirty`. Return the exact requested `cwd`; mismatches are rejected.
+Return `undefined` when facts are unavailable. The provider never emits events or supplies
+`sessionId`, `seq` or `ts`; the host owns those fields and binds results to the active top-level
+session. Session switches, session end and provider removal abort pending probes and discard
+late results even if the provider ignores cancellation.
+
+The host waits 500 ms initially, coalesces overlapping requests, and emits only changed facts.
+A changed stamp triggers a full probe after a turn. With an unchanged stamp it requests a dirty
+probe after tools that may write files, or after 60 seconds without a check. Only explicit
+`writesFiles: false` skips the write hint; unknown and child tools remain conservative. Without
+a stamp the host requests a full probe after each turn. Stamps must also reflect a repository
+appearing or disappearing. A provider may answer a dirty request with full facts.
+
+The built-in agent extension provides Git probing. With `--no-builtins` and no replacement
+provider there are no workspace events or branch labels; `/status` gives up waiting after two
+seconds and reports unknown Git facts. Reload replays the current session's last workspace
+event. The deprecated `@amira/core` exports `gitInfo` and `trackWorkspace` delegate to registered
+providers: `gitInfo` returns no facts without a provider registered for that `cwd`, and
+`trackWorkspace` needs a provider on its bus. They no longer launch Git independently.
+
 ### Background jobs
 
 `ExtensionAPI.backgroundJobs` is an extension-scoped view: it can start jobs and list, read, wait for, stop and subscribe only to jobs that the same extension started. It cannot configure the host registry, stop all jobs, close sessions or hand jobs between roots. Built-in frontend code such as the `/jobs` command and TUI panel uses the host-only `hostBackgroundJobs()` capability, so it can see session jobs started by tools; tool executors should use the session-scoped `ctx.backgroundJobs` capability instead, which carries ownership and visibility.

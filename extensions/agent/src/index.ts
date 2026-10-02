@@ -16,6 +16,7 @@ import { roles } from "./roles-cache.ts"
 import { type Job, type StartChildDeps, shorten } from "./start-child.ts"
 import { subagentView } from "./subagent-view.ts"
 import { AGENT_RESULT_TOOL, AGENT_TOOL, agentTool, type BackgroundBatch, resultTool } from "./tools.ts"
+import { gitWorkspaceProvider } from "./workspace.ts"
 import type { RunGit } from "./worktree.ts"
 
 export * from "./agents-command.ts"
@@ -118,6 +119,7 @@ export interface AgentExtensionOptions {
 
 export function createAgentExtension(opts: AgentExtensionOptions = {}) {
   return defineExtension((api: ExtensionAPI) => {
+    api.registerWorkspaceProvider(gitWorkspaceProvider(api))
     const git = opts.git ?? hostGit(api)
     const dirs = { home: api.home, cwd: api.cwd }
     const reported = new Set<string>()

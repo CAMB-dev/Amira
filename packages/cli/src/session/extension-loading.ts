@@ -61,6 +61,7 @@ export function createReloadReplay(bus: EventBus): (agent: Agent) => AnyEvent[] 
         state.start = e
         // A cost counts from the start of its session.
         delete state.budget
+        delete state.workspace
       } else if (e.type === "workspace.changed") state.workspace = e
       else if (e.type === "budget.update") state.budget = e
     },
@@ -83,7 +84,7 @@ export function createReloadReplay(bus: EventBus): (agent: Agent) => AnyEvent[] 
         },
       })
     }
-    if (state.workspace) out.push(state.workspace)
+    if (state.workspace?.sessionId === agent.sessionId) out.push(state.workspace)
     if (state.budget) out.push(state.budget)
     return out.sort((x, y) => x.seq - y.seq)
   }

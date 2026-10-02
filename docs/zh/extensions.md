@@ -227,6 +227,42 @@ amira
 
 `complete({ messages, system?, model?, maxTokens?, signal?, label? })` 在对话之外发起一次模型请求，不带工具，关闭托管网页搜索，返回回复的文本、消息和用量。默认使用会话当前的模型（`model` 接受 `provider/model` 引用）。每次请求都会消耗你的 token：用量保存在会话中，在 `/cost` 里以 `label`（未设置时为扩展来源）列出，并计入 agent 树的 `budget`；预算用完后调用直接被拒绝，不会发出请求。推理模型至少获得 2,048 个输出 token（不超过其上限），以便思考后仍能作答。provider 错误会让 promise 被拒绝；`signal` 中止或扩展被卸载时，以 `AbortError` 拒绝。`session()` 在宿主建好会话控制后返回顶层会话的 `SessionControl`；`rename(title, { source: "auto", sessionId })` 不会覆盖 `/rename` 设置的名称，`sessionId` 已不是当前会话时什么也不做。
 
+### 工作区 provider
+
+API 0.1.16 新增 `api.registerWorkspaceProvider(provider)`。每个宿主只允许一个 provider；
+重复注册会抛出错误并指出当前注册者。返回的函数用于注销，卸载、加载失败和重新加载也会自动注销。
+
+```ts
+import type { WorkspaceProvider } from "@amira/api"
+
+const provider: WorkspaceProvider = {
+  async probe(cwd, signal, kind = "full") {
+    // Honor signal; use api.runCommand for processes. A dirty probe may reuse metadata.
+    return { cwd }
+  },
+  // Optional: a cheap metadata fingerprint, with no process spawn.
+  stamp(cwd) { return undefined },
+}
+api.registerWorkspaceProvider(provider)
+```
+
+`WorkspaceFacts` 是 `workspace.changed` 的数据载荷，包含 `cwd` 以及可选的 `repoRoot`、
+`branch`、`head`、`isWorktree`、`dirty`。返回的 `cwd` 必须与请求完全相同，否则宿主会拒绝结果。
+无法获得信息时返回 `undefined`。provider 不发送事件，也不提供 `sessionId`、`seq`、`ts`；
+这些字段由宿主设置，结果绑定到当前顶层会话。切换会话、结束会话或注销 provider 时，宿主会取消
+未完成的探测；即使 provider 忽略取消信号，迟到的结果也会被丢弃。
+
+宿主在启动后等待 500 毫秒再探测，合并重叠的请求，只在信息变化时发送事件。每轮结束后，若 stamp
+改变则完整探测；若 stamp 未改变，但运行过可能写文件的工具，或距上次检查已过 60 秒，则请求 dirty
+探测。只有明确声明 `writesFiles: false` 的工具可以跳过写入提示；未知工具和子代理工具仍按可能写入
+处理。未提供 stamp 时，每轮结束都会完整探测。stamp 也应反映仓库的出现或消失。provider 可以用完整
+结果回答 dirty 请求。
+
+内置 agent 扩展提供 Git 探测。使用 `--no-builtins` 且没有替代 provider 时，不会产生工作区事件或分支
+标签；`/status` 最多等待两秒，然后显示 Git 信息未知。重新加载时会重放当前会话最后的工作区事件。
+`@amira/core` 中已弃用的 `gitInfo` 和 `trackWorkspace` 委托给已注册的 provider：没有针对该 `cwd`
+注册的 provider 时，`gitInfo` 返回空信息；`trackWorkspace` 需要其总线上已有 provider。它们不再独立启动 Git。
+
 ### 后台任务
 
 `ExtensionAPI.backgroundJobs` 是扩展级视图：它只能启动任务，并列出、读取、等待、停止和订阅本扩展自己启动的任务；它不能配置 host 注册表、停止全部任务、关闭会话或在根会话之间转移任务。`/jobs` 命令和 TUI 面板等内置前端代码使用仅供 host 使用的 `hostBackgroundJobs()` 能力，因此仍能看到工具启动的会话任务；工具执行器应使用会话级的 `ctx.backgroundJobs`，因为这个公共边界会携带任务所有权和可见性。
