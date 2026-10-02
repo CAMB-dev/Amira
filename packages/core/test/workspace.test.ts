@@ -30,7 +30,7 @@ function setup(provider?: WorkspaceProvider) {
   const tracker = workspaceFor(bus)
   if (provider)
     cleanup.push(
-      tracker.register(provider, "test", "/work", (error) => {
+      tracker.register(provider, "test", (error) => {
         bus.emit("extension.error", { source: "test", error }, { sessionId: "host" })
       }),
     )

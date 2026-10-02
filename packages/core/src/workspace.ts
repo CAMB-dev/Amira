@@ -4,7 +4,6 @@ import type { EventBus } from "./event-bus.ts"
 interface Registration {
   provider: WorkspaceProvider
   source: string
-  cwd: string
   reportError(error: string): void
 }
 
@@ -28,8 +27,6 @@ export interface WorkspaceOptions {
 }
 
 const hosts = new WeakMap<EventBus, WorkspaceTracker>()
-// Only the deprecated cwd-only probe needs to find a registration without a bus.
-const registrations = new Set<Registration>()
 
 export function workspaceFor(bus: EventBus): WorkspaceTracker {
   let host = hosts.get(bus)
@@ -77,19 +74,16 @@ export class WorkspaceTracker {
   register(
     provider: WorkspaceProvider,
     source: string,
-    cwd: string,
     reportError: Registration["reportError"],
   ): () => void {
     if (this.#registration)
       throw new Error(`Workspace provider is already registered by ${this.#registration.source}`)
-    const registration = { provider, source, cwd, reportError }
+    const registration = { provider, source, reportError }
     this.#registration = registration
-    registrations.add(registration)
     this.#restart()
     return () => {
       if (this.#registration !== registration) return
       this.#registration = undefined
-      registrations.delete(registration)
       this.#restart()
     }
   }
@@ -180,21 +174,5 @@ export class WorkspaceTracker {
       active.again = undefined
       if (next && !active.abort.signal.aborted) void this.#check(active, next)
     }
-  }
-}
-
-/** Compatibility lookup; no provider means no workspace facts. */
-export async function probeWorkspace(cwd: string, timeoutMs: number): Promise<WorkspaceFacts | undefined> {
-  const registration = [...registrations].reverse().find((r) => r.cwd === cwd)
-  if (!registration) return undefined
-  const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), timeoutMs)
-  try {
-    const facts = await registration.provider.probe(cwd, abort.signal, "full")
-    return !abort.signal.aborted && registrations.has(registration) && facts?.cwd === cwd ? facts : undefined
-  } catch {
-    return undefined
-  } finally {
-    clearTimeout(timer)
   }
 }
