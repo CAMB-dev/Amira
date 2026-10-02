@@ -9,7 +9,7 @@ import { variantB } from "./variant-b.ts"
 import { variantC } from "./variant-c.ts"
 import { variantD } from "./variant-d.ts"
 
-function snap(app: App, cols: number, rows: number): string {
+export function snap(app: App, cols: number, rows: number): string {
   const term = new FakeTerminal(cols, rows)
   const screen = new VirtualScreen(cols, rows)
   const write = term.write.bind(term)
