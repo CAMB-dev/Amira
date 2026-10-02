@@ -9,7 +9,6 @@ import {
 } from "@amira/tui-kit"
 import type { CommandPopup } from "../command-popup.ts"
 import type { Dialog } from "../dialog.ts"
-import { renderToolLines } from "../diff-view.ts"
 import type { FilePicker } from "../file-picker.ts"
 import { glyphs } from "../glyphs.ts"
 import { fitHint } from "../hint.ts"
@@ -18,6 +17,7 @@ import { InputBox } from "../input-box.ts"
 import type { Keybindings, KeySpec } from "../keybindings.ts"
 import { type StatusEntry, statusLine } from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
+import { renderViewLines } from "../view-lines.ts"
 import type { TurnActivity } from "./activity.ts"
 import { type NoticeStrip, type Outgoing, otherWay, pendingMessageRows, type WhileWorking } from "./outbox.ts"
 
@@ -119,7 +119,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         })
       : []
     )
-      .map((p) => renderToolLines(p.lines, ctx.theme, width))
+      .map((p) => renderViewLines(p.lines, ctx.theme, width))
       .filter((rows) => rows.length > 0)
       .flatMap((rows, i) => (i > 0 && !collapsed ? ["", ...rows] : rows))
 

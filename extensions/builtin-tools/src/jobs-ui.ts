@@ -12,6 +12,7 @@ import {
   type PanelDefinition,
   plural,
   type SelectSection,
+  type ToolLine,
   type ToolPresenter,
   type ViewDefinition,
   type ViewLine,
@@ -90,7 +91,7 @@ export function jobsPanel(registry: JobRegistry): PanelDefinition {
 }
 
 /** The output of one job as lines: its end, with how much came before. */
-function outputLines(registry: JobRegistry, id: string, max: number): ViewLine[] {
+function outputLines(registry: JobRegistry, id: string, max: number): ToolLine[] {
   const out = registry.output(id)
   const lines = out.text.replace(/\r?\n$/, "").split(/\r?\n/)
   if (!out.text) return [{ kind: "muted", text: "(no output yet)" }]
@@ -110,7 +111,7 @@ function outputLines(registry: JobRegistry, id: string, max: number): ViewLine[]
 }
 
 /** The job's facts under the view's title: its state, process, working directory and log. */
-function headerLines(job: JobInfo, now: number): ViewLine[] {
+function headerLines(job: JobInfo, now: number): ToolLine[] {
   const pid = job.pid !== undefined ? ` · pid ${job.pid}` : ""
   return [
     {
@@ -272,7 +273,7 @@ function shortState(d: BackgroundJobDetails): string {
   return d.status
 }
 
-const outputBody = (text: string, detail: string, max = 3): ViewLine[] => {
+const outputBody = (text: string, detail: string, max = 3): ToolLine[] => {
   // The tool's own sentences come after the output; the presenter shows the output's end only.
   const lines = text.split("\n\n")[0]?.split("\n") ?? []
   if (detail === "full") return lines.map((t) => ({ kind: "code", text: t }))

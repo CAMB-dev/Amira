@@ -181,12 +181,23 @@ amira
 ### 全屏视图
 
 通过 `api.registerView()` 注册 `ViewDefinition`，命令用
-`ctx.openView?.({ kind, data })` 打开它。视图返回纯文本的 `ViewLine` 对象；前端负责
+`ctx.openView?.({ kind, data })` 打开它。视图返回结构化的 `ViewLine` 对象；前端负责
 终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent
 扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。
 
-`title(data, opts)` 给出第一行；`titleAside(data)` 在其右端追加一段简短文字，如
-`2 of 5`，屏幕较窄时先截断标题，这段文字保持完整。
+`title(data, opts)` 返回 `string | ViewLine`，作为第一行。字符串保留默认的 `◆`
+标记；语义化的 `ViewLine` 提供完整标题，前端不会自动添加标记。两种形式都会由前端
+截断到标题的可用宽度。`titleAside(data)` 在其右端追加一段简短文字，如 `2 of 5`，
+这段文字保持完整。
+
+`ViewLine` 支持语义化内容，不使用 ANSI 转义码，样式由前端负责：
+
+- `{ kind: "segments", parts: ViewSegment[] }` 将带样式的文本组合为单行，超出宽度时
+  由前端截断，不换行。导出的 `ViewSegment` 类型为
+  `{ text: string, kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }`。
+- `{ kind: "user-message", text: string, note?: string }` 使用与对话中用户消息相同的显示方式，
+  包括换行、背景和间距。只需提供消息文本，不要手动添加 `›` 标记。可选的备注显示在
+  消息下方，与消息共用同一背景。
 
 视图按键支持单个可打印字符，以及 `left`、`right`、`tab`、`shift-tab`。标签相同的
 按键在底部提示中合并为一项（`←→ switch`）；标签为空的按键（例如另一个按键的别名）
