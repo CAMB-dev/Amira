@@ -2167,7 +2167,16 @@ export class Agent {
           checkpoint = r.checkpoint
           compacted = input
           checkpointTokens = r.usage.output
-        } else fallback = r.error
+        } else {
+          fallback = r.error
+          if (r.timedOut) {
+            this.#emit(turn, "extension.notice", {
+              source: "compaction",
+              text: "Native compaction timed out. Writing a text summary instead.",
+              level: "warning",
+            })
+          }
+        }
       }
       const writer = this.#compaction.model ?? this.model
       if (summary === undefined) {

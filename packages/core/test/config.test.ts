@@ -348,6 +348,7 @@ test("checks every documented key", () => {
       maxDelayMs: 30_000,
       firstContentTimeoutMs: 150_000,
       idleTimeoutMs: 100_000,
+      nativeCompactionTimeoutMs: 300_000,
     },
     mcpServers: { fs: { command: "mcp-fs", args: ["."] } },
     extensions: {
@@ -363,6 +364,11 @@ test("checks every documented key", () => {
   expect(bad({ maxParallelTools: 0 })).toThrow('"maxParallelTools" must be a whole number of at least 1')
   expect(bad({ retry: { attempts: 1.5 } })).toThrow('"retry.attempts"')
   expect(bad({ retry: { baseDelayMs: -1 } })).toThrow('"retry.baseDelayMs"')
+  expect(validateSettings({ retry: { nativeCompactionTimeoutMs: 0 } }, "f").settings.retry).toEqual({
+    nativeCompactionTimeoutMs: 0,
+  })
+  expect(bad({ retry: { nativeCompactionTimeoutMs: -1 } })).toThrow('"retry.nativeCompactionTimeoutMs"')
+  expect(bad({ retry: { nativeCompactionTimeoutMs: 1.5 } })).toThrow('"retry.nativeCompactionTimeoutMs"')
   expect(bad({ providers: { p: { catalogId: true } } })).toThrow(
     '"providers.p.catalogId" must be a string or false',
   )

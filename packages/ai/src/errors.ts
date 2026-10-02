@@ -23,6 +23,9 @@ export interface ModelErrorInfo {
   detail?: string
 }
 
+/** Recovery after a partial reply times out: shared by the raw error and the TUI notice. */
+export const IDLE_TIMEOUT_HINT = "Type a message to continue, or press ↑ to resend."
+
 /** Codes of failures that happen before anything is sent (the ai client's own). */
 const CONFIG_CODES = new Set(["no_model", "unknown_provider", "unknown_dialect", "missing_api_key"])
 
@@ -67,6 +70,17 @@ export function describeModelError(e: ModelError, opts: DescribeOptions = {}): M
   const retried = e.retries ? `, retried ${e.retries} ${e.retries === 1 ? "time" : "times"}` : ""
   const detail = e.message
   const id = opts.provider
+  // Locally generated idle timeouts after visible content need the continuation hint in
+  // the primary TUI notice, not folded into the generic server error's detail.
+  const idleSuffix = `. ${IDLE_TIMEOUT_HINT}`
+  if (e.code === "timeout" && e.message.endsWith(idleSuffix)) {
+    return {
+      kind,
+      summary: `${capitalize(e.message.slice(0, -idleSuffix.length))}${retried}`,
+      hint: IDLE_TIMEOUT_HINT,
+      detail,
+    }
+  }
   switch (kind) {
     case "auth":
       return {

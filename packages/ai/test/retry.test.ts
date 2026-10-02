@@ -195,8 +195,11 @@ test("streamed reasoning text that then goes idle is not sent again", async () =
   expect(n).toBe(1)
   expect(types(evs)).toEqual(["start", "thinking.start", "thinking.delta", "error"])
   expect(evs[3]).toMatchObject({
-    error: { code: "timeout" },
-    message: { content: [{ type: "thinking", text: "hmm" }] },
+    error: {
+      code: "timeout",
+      message: "model stream was idle for 20 ms. Type a message to continue, or press ↑ to resend.",
+    },
+    message: { content: [{ type: "thinking", text: "hmm" }], stopReason: "error" },
   })
 })
 
@@ -229,7 +232,7 @@ test("ends a stream that goes silent after content without sending it again", as
       }),
       { headers: SSE_HEADERS },
     )
-  const { calls, stream } = scripted([partial, ok], {
+  const { calls, signals, stream } = scripted([partial, ok], {
     retries: 1,
     baseDelayMs: 1,
     firstContentTimeoutMs: 100,
@@ -238,9 +241,85 @@ test("ends a stream that goes silent after content without sending it again", as
   const evs = await stream()
   // The partial text was already shown: a second attempt would show it twice.
   expect(calls.n).toBe(1)
+  expect(signals[0]?.aborted).toBe(true)
   expect(types(evs)).toEqual(["start", "text.delta", "error"])
   expect(evs.at(-1)).toMatchObject({
-    error: { code: "timeout", message: "model stream was idle for 15 ms" },
+    error: {
+      code: "timeout",
+      status: 408,
+      message: "model stream was idle for 15 ms. Type a message to continue, or press ↑ to resend.",
+    },
+    message: { content: [{ type: "text", text: "partial" }], stopReason: "error" },
+  })
+})
+
+test("a timeout after a visible tool event waits for the user instead of sending again", async () => {
+  const visible: StreamEvent[] = [
+    { type: "toolCall.delta", id: "call1", name: "echo", argsDelta: "{}" },
+    {
+      type: "serverTool",
+      block: { type: "serverTool", id: "ws1", name: "web_search", input: {}, status: "done" },
+    },
+  ]
+  for (const ev of visible) {
+    let calls = 0
+    const attempt = async function* (): AsyncGenerator<StreamEvent> {
+      calls++
+      yield { type: "start" }
+      yield ev
+      await new Promise<never>(() => {})
+    }
+    const evs = await events(
+      withRetry(attempt, new AbortController().signal, {
+        retries: 2,
+        baseDelayMs: 1,
+        firstContentTimeoutMs: 100,
+        idleTimeoutMs: 15,
+      }),
+    )
+    expect(calls).toBe(1)
+    expect(types(evs)).toEqual(["start", ev.type, "error"])
+    expect(evs.at(-1)).toMatchObject({
+      error: {
+        code: "timeout",
+        message: "model stream was idle for 15 ms. Type a message to continue, or press ↑ to resend.",
+      },
+    })
+  }
+})
+
+test("a visible-content idle timeout after a retry retains the retry count and recovery hint", async () => {
+  let calls = 0
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    calls++
+    yield { type: "start" }
+    if (calls === 1) {
+      yield {
+        type: "error",
+        error: { message: "overloaded", status: 529 },
+        retryable: true,
+        message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "error" },
+      }
+      return
+    }
+    yield { type: "text.delta", text: "partial" }
+    await new Promise<never>(() => {})
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 3,
+      baseDelayMs: 1,
+      idleTimeoutMs: 15,
+    }),
+  )
+  expect(calls).toBe(2)
+  expect(types(evs)).toEqual(["start", "retry", "text.delta", "error"])
+  expect(evs.at(-1)).toMatchObject({
+    error: {
+      code: "timeout",
+      retries: 1,
+      message: "model stream was idle for 15 ms. Type a message to continue, or press ↑ to resend.",
+    },
     message: { content: [{ type: "text", text: "partial" }], stopReason: "error" },
   })
 })

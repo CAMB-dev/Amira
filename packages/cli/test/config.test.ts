@@ -177,6 +177,7 @@ test("settings retry becomes the ai layer's retry options", () => {
       maxDelayMs: 10_000,
       firstContentTimeoutMs: 150_000,
       idleTimeoutMs: 100_000,
+      nativeCompactionTimeoutMs: 300_000,
     }),
   ).toEqual({
     retries: 5,
@@ -184,7 +185,9 @@ test("settings retry becomes the ai layer's retry options", () => {
     maxDelayMs: 10_000,
     firstContentTimeoutMs: 150_000,
     idleTimeoutMs: 100_000,
+    nativeCompactionTimeoutMs: 300_000,
   })
+  expect(retryFromSettings({ nativeCompactionTimeoutMs: 0 })).toEqual({ nativeCompactionTimeoutMs: 0 })
 })
 
 test("settings compact sets the agent's threshold and summary model", async () => {
