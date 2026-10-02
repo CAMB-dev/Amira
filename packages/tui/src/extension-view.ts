@@ -3,6 +3,7 @@ import type {
   ToolLine,
   ViewControl,
   ViewDefinition,
+  ViewKey,
   ViewLine,
   ViewRenderOptions,
 } from "@amira/api"
@@ -22,7 +23,7 @@ import {
 } from "@amira/tui-kit"
 import { renderToolLines, terminalText } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
-import { fitHint } from "./hint.ts"
+import { fitHint, type HintItem } from "./hint.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
 
@@ -165,8 +166,8 @@ export class ExtensionViewer implements Component {
       return true
     }
     for (const k of this.#view.keys ?? []) {
-      const named = ["left", "right", "tab", "shift-tab"].includes(k.key)
-      if ((!named && k.key.length !== 1) || k.key === "q") continue
+      if (!usable(k.key)) continue
+      const named = NAMED.has(k.key)
       const match =
         k.key === "shift-tab"
           ? matchesKey(e, "tab", { shift: true })
@@ -239,10 +240,19 @@ export class ExtensionViewer implements Component {
     const { theme } = ctx
     const opts = this.#renderOptions(width, theme)
     const head: string[] = []
-    const title = this.#call("title", () => this.#view.title(this.#data)) ?? this.kind
-    head.push(
-      truncateToWidth(`${theme.accent(glyphs.subagent)} ${theme.text(oneLine(title))}`, width, glyphs.more),
+    const title = this.#call("title", () => this.#view.title(this.#data, opts)) ?? this.kind
+    const asideText = this.#view.titleAside
+      ? oneLine(this.#call("titleAside", () => this.#view.titleAside?.(this.#data)) ?? "")
+      : ""
+    const aside = asideText ? theme.muted(truncateToWidth(` ${asideText}`, width, glyphs.more)) : ""
+    // The aside stays at the right end; the title is cut first on a narrow screen.
+    const room = width - visibleWidth(aside)
+    const fitted = truncateToWidth(
+      `${theme.accent(glyphs.subagent)} ${theme.text(oneLine(title))}`,
+      Math.max(1, room),
+      glyphs.more,
     )
+    head.push(aside ? fitted + " ".repeat(Math.max(0, room - visibleWidth(fitted))) + aside : fitted)
     const extra = this.#view.header
       ? (this.#call("header", () => this.#view.header?.(this.#data, opts)) ?? [])
       : []
@@ -321,10 +331,7 @@ export class ExtensionViewer implements Component {
     const hint = fitHint(
       [
         (p.total > p.height || !!this.#view.scrollKey) && { text: scrollPosition(scroll), priority: 3 },
-        ...(this.#view.keys ?? []).map((k) => ({
-          text: `${keyLabel(k.key)} ${k.label}`,
-          priority: k.key.length === 1 ? 4 : 2,
-        })),
+        ...keyHints(this.#view.keys ?? []),
         { text: "↑↓ PgUp PgDn Home End scroll", priority: 1 },
         { text: "Esc back", priority: 5 },
       ],
@@ -346,6 +353,32 @@ export class ExtensionViewer implements Component {
       return undefined
     }
   }
+}
+
+const NAMED: ReadonlySet<string> = new Set(["left", "right", "tab", "shift-tab"])
+const ARROWS: ReadonlySet<string> = new Set(["left", "right"])
+
+/** A key a view may handle: one character other than q (the host's), or a named navigation key. */
+function usable(key: string): boolean {
+  return NAMED.has(key) || (key.length === 1 && key !== "q")
+}
+
+/**
+ * Footer items for a view's keys: keys sharing a label share an item ("←→ switch",
+ * "→ Tab next"), in the order their labels first appear; keys with an empty label are left out.
+ */
+function keyHints(keys: readonly ViewKey[]): HintItem[] {
+  const groups = new Map<string, string[]>()
+  for (const k of keys) {
+    const label = oneLine(k.label)
+    if (!label || !usable(k.key)) continue
+    groups.set(label, [...(groups.get(label) ?? []), k.key])
+  }
+  return [...groups].map(([label, names]) => ({
+    text: `${names.map(keyLabel).join(names.every((n) => ARROWS.has(n)) ? "" : " ")} ${label}`,
+    // A view's own letters outlast its navigation keys.
+    priority: names.some((n) => n.length === 1) ? 4 : 2,
+  }))
 }
 
 function keyLabel(key: string): string {

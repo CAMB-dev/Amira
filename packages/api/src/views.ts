@@ -50,8 +50,10 @@ export interface ViewControl {
 }
 
 /**
- * A key the view handles, shown in its footer, e.g. `{ key: "x", label: "stop" }`. While a
- * prompt (ViewControl.prompt) is open, keys go to it instead.
+ * A key the view handles, shown in its footer, e.g. `{ key: "x", label: "stop" }`. Keys with
+ * the same label share one footer item ("←→ switch"); an empty label keeps a key out of the
+ * footer, e.g. an alias of another key. While a prompt (ViewControl.prompt) is open, keys go
+ * to it instead.
  */
 export interface ViewKey<D = unknown> {
   /** One printable character or a named navigation key. Esc, q and scrolling remain host-owned. */
@@ -65,8 +67,13 @@ export type ViewKeyName = "left" | "right" | "tab" | "shift-tab" | (string & {})
 export interface ViewDefinition<D = any> {
   /** The name commands open it by. */
   kind: string
-  /** The first line of the screen. */
-  title(data: D): string
+  /** The first line of the screen; `opts` gives the time for an elapsed time shown there. */
+  title(data: D, opts: ViewRenderOptions): string
+  /**
+   * Short text at the right end of the title line, such as "2 of 5". It stays whole while
+   * the title is cut on a narrow screen.
+   */
+  titleAside?(data: D): string
   /** Lines under the title that stay in place while the body scrolls, e.g. totals. */
   header?(data: D, opts: ViewRenderOptions): ViewLine[]
   /** The body, scrolled by the frontend. Called again whenever the view is redrawn. */

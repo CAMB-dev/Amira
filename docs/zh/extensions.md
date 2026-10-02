@@ -185,8 +185,12 @@ amira
 终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent
 扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。
 
-视图按键支持单个可打印字符，以及 `left`、`right`、`tab`、`shift-tab`。
-Esc、q、Ctrl+C 和滚动按键仍由前端处理。按键处理函数通过 `ViewControl` 关闭视图、
+`title(data, opts)` 给出第一行；`titleAside(data)` 在其右端追加一段简短文字，如
+`2 of 5`，屏幕较窄时先截断标题，这段文字保持完整。
+
+视图按键支持单个可打印字符，以及 `left`、`right`、`tab`、`shift-tab`。标签相同的
+按键在底部提示中合并为一项（`←→ switch`）；标签为空的按键（例如另一个按键的别名）
+不出现在底部提示中。Esc、q、Ctrl+C 和滚动按键仍由前端处理。按键处理函数通过 `ViewControl` 关闭视图、
 请求重绘、调用 `print(text, level?)` 打印快照，或请求输入、确认。打印等级与命令输出
 一致：`info`、`warning`、`error`。若要立即返回对话，先关闭视图再打印。
 

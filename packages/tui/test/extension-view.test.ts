@@ -378,6 +378,30 @@ test("named navigation keys distinguish Tab and Shift+Tab, leaving reserved keys
   expect(closed).toBe(2)
 })
 
+test("keys sharing a label share a footer item, empty labels stay out, and the aside keeps right", () => {
+  const run = () => {}
+  const view: ViewDefinition = {
+    kind: "pager",
+    title: () => "A rather long title that has to be cut on a narrow screen",
+    titleAside: () => "2 of 5",
+    render: () => [],
+    keys: [
+      { key: "left", label: "switch", run },
+      { key: "right", label: "switch", run },
+      { key: "tab", label: "", run },
+      { key: "x", label: "stop", run },
+      { key: "y", label: "stop", run },
+      { key: "up", label: "unreachable", run },
+    ],
+  }
+  const lines = new ExtensionViewer(view, {}).render(40, renderContext).map(stripAnsi)
+  expect(lines[0]).toBe("◆ A rather long title that has t… 2 of 5")
+  expect(lines.at(-1)).toBe("←→ switch · x y stop · Esc back")
+  const wide = new ExtensionViewer(view, {}).render(120, renderContext).map(stripAnsi)
+  expect(wide[0]).toMatch(/^◆ A rather long title .*screen +2 of 5$/)
+  expect(wide[0]).toHaveLength(120)
+})
+
 test("a view prints snapshots at command output levels, including after closing", async () => {
   const s = await setup({
     view: {

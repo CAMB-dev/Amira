@@ -186,8 +186,12 @@ the terminal, wrapping, scrolling, prompts and confirmations. The `subagent` kin
 `/agents` command are registered by the built-in agent extension. Without that extension,
 opening a child from a transcript block reports that the live view is unavailable.
 
-Keys can be one printable character or `left`, `right`, `tab`, and `shift-tab`. Esc, q,
-Ctrl+C and scrolling keys remain frontend-owned. A handler receives `ViewControl` to
+`title(data, opts)` gives the first line; `titleAside(data)` adds short text kept at its
+right end, such as `2 of 5`, while the title is cut on a narrow screen.
+
+Keys can be one printable character or `left`, `right`, `tab`, and `shift-tab`. Keys with
+the same label share one footer item (`←→ switch`); an empty label keeps a key, such as an
+alias, out of the footer. Esc, q, Ctrl+C and scrolling keys remain frontend-owned. A handler receives `ViewControl` to
 close, request a redraw, print a snapshot with `print(text, level?)`, prompt or confirm.
 Printing uses the command output levels (`info`, `warning`, `error`); close first to return
 to the conversation immediately.
