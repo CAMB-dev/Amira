@@ -13,6 +13,8 @@ type ChildStart = Omit<RecordOf<"subagent">, "type" | "end" | "status" | "durati
 interface State {
   writer?: TraceFile
   announced: boolean
+  /** The run's header, written with its first record so opening a session leaves no file behind. */
+  header?: TraceRecord
   turns: Map<string, number>
   models: Map<string, ModelStart>
   tools: Map<string, ToolStart[]>
@@ -174,7 +176,7 @@ export class TraceRecorder {
       state.models.clear()
       state.tools.clear()
       state.compact = undefined
-      state.writer?.push({
+      state.header = {
         type: "trace",
         v: TRACE_VERSION,
         sessionId: event.sessionId,
@@ -182,11 +184,15 @@ export class TraceRecorder {
         role: child?.role,
         title: event.data.title ?? child?.title,
         startedAt: at,
-      })
+      }
       return
     }
     if (!state.announced) return
-    const push = (record: TraceRecord) => state.writer?.push(record)
+    const push = (record: TraceRecord) => {
+      if (state.header) state.writer?.push(state.header)
+      state.header = undefined
+      state.writer?.push(record)
+    }
     switch (event.type) {
       case "session.end":
         // Late tool ends of aborted calls may still follow; release only an idle session.

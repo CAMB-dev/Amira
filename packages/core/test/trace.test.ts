@@ -530,3 +530,11 @@ test("process.exit emergency hook saves delivered records without an async flush
   expect(lines.map((record) => record.type)).toEqual(["trace", "status"])
   expect(lines[0].sessionId).toBe("exit")
 }, 10000)
+
+test("opening a session without activity writes no trace file", async () => {
+  const { start, recorder, file, bus } = setup()
+  start(100)
+  await bus.flush()
+  await recorder.flush()
+  expect(existsSync(`${file}.trace.jsonl`)).toBe(false)
+})
