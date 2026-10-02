@@ -91,7 +91,6 @@ import { ReplyRenderers } from "./markdown-nodes.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import { type StatusEntry, statusLine } from "./status-bar.ts"
-import { SubagentViewer } from "./subagent-view.ts"
 import { TerminalStatus } from "./terminal-status.ts"
 import { INTERRUPTED_NOTICE, modelErrorNotice } from "./transcript.ts"
 import { detailCommand, nextDetail } from "./verbose.ts"
@@ -555,10 +554,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   /**
-   * The full-screen sub-agent viewer or an extension's view, open over the conversation. Inline,
+   * An extension's full-screen view, open over the conversation. Inline,
    * the UI is suspended meanwhile: what the main session commits is held and printed when it closes.
    */
-  let viewer: SubagentViewer | ExtensionViewer | KeyReference | undefined
+  let viewer: ExtensionViewer | KeyReference | undefined
   let viewerTimer: ReturnType<typeof setInterval> | undefined
   /**
    * Forms (ui.form) waiting to be shown full screen, oldest first; the first one is open while
@@ -590,7 +589,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     overlay: new View((width, ctx) => (form ? form.render(width, ctx) : (viewer?.render(width, ctx) ?? []))),
     editorEmpty: () => editor.isEmpty,
     showNote,
-    ...(commands ? { openSubagent: (id: string) => openView({ kind: "subagent", sessionId: id }) } : {}),
+    openSubagent: (sessionId: string) => {
+      if (!opts.views?.get("subagent")) {
+        view.commandOutput("info", "The live sub-agent view is unavailable.")
+        view.requestRender()
+        return
+      }
+      openView({ kind: "subagent", data: { sessionId } })
+    },
   }
   // A dumb terminal has no alternate screen to draw the full-screen view on.
   const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
@@ -627,31 +633,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Shows a full-screen view; false when it cannot be shown now (see CommandContext.openView). */
   function openView(v: FrontendView): boolean {
-    if (isSubagentView(v)) {
-      // A form owns the screen until it is answered; a dumb terminal has no screen to show it on.
-      if (!commands || form || env.TERM === "dumb") return false
-      if (viewer instanceof SubagentViewer) viewer.show(v.sessionId)
-      else {
-        showOverlay(
-          new SubagentViewer(v.sessionId, {
-            source: commands.control,
-            waiting: waitingTitles,
-            onClose: closeView,
-            // p: back to the conversation, with a snapshot of the one shown printed into it.
-            onPrint: (id) => {
-              closeView()
-              commandRunner.run(`/agents ${id}`)
-            },
-            ...(presenters ? { presenters } : {}),
-          }),
-        )
-      }
-      view.renderOverlay()
-      return true
-    }
+    // Keep old command requests working through the same extension lookup.
+    if (isSubagentView(v)) v = { kind: v.kind, data: { sessionId: v.sessionId } }
     const definition = opts.views?.get(v.kind)
     if (!definition) throw new Error(`there is no "${v.kind}" view`)
-    if (form) return false
+    if (form || env.TERM === "dumb") return false
     if (viewer instanceof ExtensionViewer && viewer.kind === v.kind) viewer.show(v.data)
     else {
       showOverlay(
@@ -660,6 +646,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
           onClose: closeView,
           requestRender: () => view.requestOverlayRender(),
           onError: (error) => view.notice("warning", `View ${v.kind}: ${error}`),
+          onPrint: (text, level) => {
+            view.commandOutput(level ?? "info", text)
+            view.requestRender()
+          },
+          ...(presenters ? { presenters } : {}),
         }),
       )
     }
@@ -681,7 +672,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   /** Puts `next` over the conversation, in place of the viewer open there if any. */
-  function showOverlay(next: SubagentViewer | ExtensionViewer | KeyReference) {
+  function showOverlay(next: ExtensionViewer | KeyReference) {
     const opened = viewer !== undefined
     if (viewer instanceof ExtensionViewer) viewer.dispose()
     viewer = next
@@ -764,7 +755,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const onEvent = (e: AnyEvent) => {
     if (view.subagentEvent(e)) view.requestRender()
     // An extension's view may show anything: it is drawn again at each event (at most once a frame).
-    if (viewer instanceof ExtensionViewer || viewer?.handleEvent(e)) view.requestOverlayRender()
+    if (viewer instanceof ExtensionViewer || viewer?.handleEvent()) view.requestOverlayRender()
     if (form && (e.type === "ui.request" || e.type === "ui.resolved")) view.requestOverlayRender()
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return

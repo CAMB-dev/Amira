@@ -70,7 +70,7 @@ function spawnCount(call: ToolCallBlock): number {
  * Takes the sub-agents an agent call started out of `rest`: those naming the call, or, for
  * sub-agents from before calls were recorded, as many as it had tasks, in order.
  */
-function callKids(rest: SubagentInfo[], call: ToolCallBlock): SubagentInfo[] {
+export function callKids(rest: SubagentInfo[], call: ToolCallBlock): SubagentInfo[] {
   if (!rest.some((k) => k.toolCallId !== undefined)) return rest.splice(0, spawnCount(call))
   const mine = rest.filter((k) => k.toolCallId === call.id)
   for (const k of mine) rest.splice(rest.indexOf(k), 1)
@@ -193,7 +193,7 @@ function printTranscript(ctx: CommandContext, id: string) {
  * form holds the screen), prints its transcript instead.
  */
 function openOrPrint(ctx: CommandContext, s: SubagentInfo) {
-  if (ctx.openView?.({ kind: "subagent", sessionId: s.id })) return
+  if (ctx.openView?.({ kind: "subagent", data: { sessionId: s.id } })) return
   printTranscript(ctx, s.id)
 }
 

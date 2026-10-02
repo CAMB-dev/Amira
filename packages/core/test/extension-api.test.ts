@@ -48,27 +48,30 @@ test("tool renderers: the last one registered for a tool wins, and unloading res
   expect(host.renderers.get("read")).toBeUndefined()
 })
 
-test("views: the last one registered for a kind wins, unloading restores the one before, built-in kinds are refused", async () => {
+test("views: the last registration wins, unloading restores it, and subagent is extension-owned", async () => {
   const bus = new EventBus()
   const events: AnyEvent[] = []
   bus.subscribe((e) => void events.push(e))
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
   const first = { kind: "workflow", title: () => "first", render: () => [] }
   const second = { kind: "workflow", title: () => "second", render: () => [] }
+  const subagent = { kind: "subagent", title: () => "child", render: () => [] }
   await host.load((api) => void api.registerView(first), "ext:a")
   await host.load((api) => {
     api.registerView(second)
-    api.registerView({ kind: "subagent", title: () => "", render: () => [] })
+    api.registerView(subagent)
+    api.registerView({ kind: " ", title: () => "", render: () => [] })
   }, "ext:b")
   expect(host.views.get("workflow")).toBe(second)
-  expect(host.views.get("subagent")).toBeUndefined()
+  expect(host.views.get("subagent")).toBe(subagent)
   expect(host.loaded).toContain("ext:b")
   await bus.flush()
   expect(events.find((e) => e.type === "extension.error")?.data).toEqual({
     source: "ext:b",
-    error: 'the view kind "subagent" is built in',
+    error: "a view needs a kind",
   })
   host.unload("ext:b")
+  expect(host.views.get("subagent")).toBeUndefined()
   expect(host.views.get("workflow")).toBe(first)
   host.unload("ext:a")
   expect(host.views.kinds()).toEqual([])

@@ -141,12 +141,12 @@ export interface CommandContext extends CommandCompleteContext {
 }
 
 /**
- * A full-screen view a frontend can show: the live transcript of a sub-agent, or a view kind
- * an extension registered, over the data given here (see ViewDefinition).
+ * A full-screen view an extension registered, over the data given here (see ViewDefinition).
  */
 export type FrontendView = SubagentView | ExtensionView
 
 export interface SubagentView {
+  /** Legacy request shape; frontends normalize it to an extension view with { sessionId } data. */
   kind: "subagent"
   sessionId: string
 }
@@ -158,7 +158,7 @@ export interface ExtensionView {
   data?: unknown
 }
 
-/** Whether `view` is the frontend's own sub-agent view rather than an extension's. */
+/** Whether `view` uses the legacy sub-agent request shape. */
 export function isSubagentView(view: FrontendView): view is SubagentView {
   return view.kind === "subagent" && typeof (view as Partial<SubagentView>).sessionId === "string"
 }

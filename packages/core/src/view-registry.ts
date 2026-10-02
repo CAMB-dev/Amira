@@ -1,7 +1,7 @@
 import type { ViewDefinition } from "@amira/api"
 
 /** View kinds frontends provide themselves, which extensions cannot register. */
-export const BUILTIN_VIEW_KINDS: readonly string[] = ["subagent"]
+export const BUILTIN_VIEW_KINDS: readonly string[] = []
 
 /**
  * Full-screen view kinds registered by extensions (experimental); a frontend looks one up when

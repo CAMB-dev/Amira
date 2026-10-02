@@ -1,12 +1,29 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
-import type { ExtensionAPI, SessionControl, ViewDefinition, ViewLine } from "@amira/api"
+import {
+  type ExtensionAPI,
+  type SessionControl,
+  type ToolCallView,
+  type ToolPresenter,
+  textResult,
+  type ViewDefinition,
+  type ViewLine,
+} from "@amira/api"
 import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
-import { FakeTerminal } from "@amira/tui-kit"
+import {
+  defaultTheme,
+  FakeTerminal,
+  type KeyEvent,
+  monoTheme,
+  type RenderContext,
+  stripAnsi,
+  surfaceTheme,
+} from "@amira/tui-kit"
 import statusExtension from "../../../extensions/status/src/index.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
-import { wrapViewLines } from "../src/extension-view.ts"
+import { ExtensionViewer, wrapViewLines } from "../src/extension-view.ts"
+import { finishedToolLines } from "../src/tool-view.ts"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -106,6 +123,7 @@ async function setup(
     ui: host.ui,
     commands,
     views: host.views,
+    toolRenderers: host.renderers,
     terminal,
     setup: async () => ({
       capabilities: {
@@ -196,16 +214,41 @@ test("a long body starts at its top unless the view follows its end; the body sc
   await end.exited
 })
 
-test("an unknown kind is the command's error; the built-in kind cannot be registered", async () => {
+test("an unknown kind is the command's error; subagent can be registered by an extension", async () => {
   const s = await setup({
     extra: (api) =>
       void api.registerView({ kind: "subagent", title: () => "mine", render: () => [] } as ViewDefinition),
   })
-  expect(s.host.views.get("subagent")).toBeUndefined()
-  expect(s.errors).toEqual(['the view kind "subagent" is built in'])
+  expect(s.host.views.get("subagent")?.title(undefined)).toBe("mine")
+  expect(s.errors).toEqual([])
   s.terminal.send("/progress nope\r")
   await waitFor(() => s.screen.text.includes('there is no "nope" view'), "the error")
   expect(s.screen.inAltScreen).toBe(false)
+  s.terminal.send("\x03")
+  await s.exited
+})
+
+test("legacy subagent requests normalize to data through ordinary extension lookup", async () => {
+  const s = await setup({
+    extra: (api) => {
+      api.registerView({
+        kind: "subagent",
+        title: (data: { sessionId: string }) => `Child ${data.sessionId}`,
+        render: () => [],
+      })
+      api.registerCommand({
+        name: "legacy",
+        description: "Legacy view",
+        run: (_args, ctx) => {
+          ctx.openView?.({ kind: "subagent", sessionId: "child-id" })
+        },
+      })
+    },
+  })
+  s.terminal.send("/legacy\r")
+  await waitFor(() => s.view().includes("◆ Child child-id"), "the normalized request")
+  s.terminal.send(ESC)
+  await waitFor(() => !s.screen.inAltScreen, "closed")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -289,6 +332,233 @@ test("long text lines wrap under their text; code lines are cut", () => {
     "  ran out of time",
     "x".repeat(60),
   ])
+})
+
+const renderContext: RenderContext = { theme: monoTheme, color: false, rows: 12 }
+const keyEvent = (name: string, shift = false): KeyEvent => ({
+  type: "key",
+  name,
+  ctrl: false,
+  alt: false,
+  shift,
+})
+
+test("named navigation keys distinguish Tab and Shift+Tab, leaving reserved keys to the host", () => {
+  const calls: string[] = []
+  let closed = 0
+  const view: ViewDefinition = {
+    kind: "tabs",
+    title: () => "Tabs",
+    render: () => [],
+    keys: ["left", "right", "tab", "shift-tab", "up", "q", "escape"].map((key) => ({
+      key,
+      label: key,
+      run: () => {
+        calls.push(key)
+      },
+    })),
+  }
+  const viewer = new ExtensionViewer(
+    view,
+    {},
+    {
+      onClose: () => {
+        closed++
+      },
+    },
+  )
+  viewer.render(80, renderContext)
+  for (const event of [keyEvent("left"), keyEvent("right"), keyEvent("tab"), keyEvent("tab", true)])
+    expect(viewer.handleInput(event)).toBe(true)
+  expect(viewer.handleInput({ ...keyEvent("left"), ctrl: true })).toBe(false)
+  viewer.handleInput(keyEvent("up"))
+  viewer.handleInput(keyEvent("q"))
+  viewer.handleInput(keyEvent("escape"))
+  expect(calls).toEqual(["left", "right", "tab", "shift-tab"])
+  expect(closed).toBe(2)
+})
+
+test("a view prints snapshots at command output levels, including after closing", async () => {
+  const s = await setup({
+    view: {
+      ...progressView,
+      keys: [
+        {
+          key: "p",
+          label: "print",
+          run: (_data, view) => {
+            view.print("queued snapshot")
+            view.close()
+            view.print("view warning", "warning")
+            view.print("view error", "error")
+          },
+        },
+      ],
+    },
+  })
+  s.terminal.send("/progress\r")
+  await waitFor(() => s.view().includes("check the tests"), "the view")
+  s.terminal.send("p")
+  await waitFor(() => !s.screen.inAltScreen && s.screen.mainText.includes("view error"), "the printed output")
+  expect(s.screen.mainText).toContain("queued snapshot")
+  expect(s.screen.mainText).toContain("└ view warning")
+  expect(s.screen.mainText).toContain("✗ view error")
+  expect(s.screen.mainText).not.toContain("› /agents")
+  s.terminal.send("\x03")
+  await s.exited
+})
+
+test("ViewControl.print forwards text and its optional level to the frontend", () => {
+  const printed: unknown[] = []
+  const viewer = new ExtensionViewer(
+    {
+      ...progressView,
+      keys: [
+        {
+          key: "p",
+          label: "print",
+          run: (_data, view) => {
+            view.print("plain")
+            view.print("warning", "warning")
+            view.print("error", "error")
+          },
+        },
+      ],
+    },
+    {},
+    {
+      onPrint: (text, level) => {
+        printed.push([text, level])
+      },
+    },
+  )
+  viewer.handleInput(keyEvent("p"))
+  expect(printed).toEqual([
+    ["plain", undefined],
+    ["warning", "warning"],
+    ["error", "error"],
+  ])
+})
+
+test("renderTool uses the current presenter, fallback and exact host styling in headers and bodies", () => {
+  const theme = { ...defaultTheme, ...surfaceTheme("dark") }
+  const context = { ...renderContext, theme, color: true, rows: 25 }
+  const call: ToolCallView = {
+    args: { path: "a.ts" },
+    result: textResult("first\nsecond\nthird"),
+    text: "first\nsecond\nthird",
+    durationMs: 2100,
+  }
+  let presenter: ToolPresenter | undefined = {
+    summary: () => "custom summary",
+    result: () => "custom result",
+    body: () => [
+      { kind: "diff-remove", text: "old value", lineNo: 9 },
+      { kind: "diff-add", text: "new value", lineNo: 10 },
+    ],
+  }
+  let plainLines: ViewLine[] = []
+  const viewer = new ExtensionViewer(
+    {
+      kind: "tools",
+      title: () => "Tools",
+      header: (_data, opts) => opts.renderTool!("read", call, "collapsed"),
+      render: (_data, opts) => {
+        plainLines = opts.renderTool!("read", call, "full")
+        return plainLines
+      },
+    },
+    {},
+    { presenters: { get: () => presenter } },
+  )
+  const rows = viewer.render(60, context)
+  const expected = finishedToolLines(theme, presenter, { ...call, name: "read" }, "full", 60)
+  expect(rows.slice(4, 4 + expected.length)).toEqual(expected)
+  expect(rows.slice(1, 3)).toEqual(
+    finishedToolLines(theme, presenter, { ...call, name: "read" }, "collapsed", 60),
+  )
+  expect(plainLines.map((line) => line.text)).toEqual(expected.map(stripAnsi))
+  expect(plainLines.every((line) => !line.text.includes("\x1b"))).toBe(true)
+  for (const next of [
+    undefined,
+    {
+      summary: () => {
+        throw new Error("bad presenter")
+      },
+      body: () => {
+        throw new Error("bad presenter")
+      },
+    },
+  ]) {
+    presenter = next
+    const rendered = viewer.render(32, context)
+    const fallback = finishedToolLines(theme, presenter, { ...call, name: "read" }, "full", 32)
+    expect(rendered.slice(4, 4 + fallback.length)).toEqual(fallback)
+  }
+})
+
+test("renderTool in an open view uses the registry passed by the app", async () => {
+  const call: ToolCallView = { args: {}, result: textResult("output"), text: "output" }
+  const s = await setup({
+    view: { ...progressView, render: (_data, opts) => opts.renderTool!("test", call, "summary") },
+    extra: (api) => {
+      api.registerToolRenderer("test", { summary: () => "from registry", result: () => "presented result" })
+    },
+  })
+  s.terminal.send("/progress\r")
+  await waitFor(() => s.view().includes("└ presented result"), "the presenter")
+  expect(s.view()).toContain("● test from registry")
+  s.terminal.send(ESC)
+  await waitFor(() => !s.screen.inAltScreen, "closed")
+  s.terminal.send("\x03")
+  await s.exited
+})
+
+test("scrollKey preserves each body's position and follow state across switching and show", () => {
+  const data = { id: "a", length: 40 }
+  const definition: ViewDefinition<typeof data> = {
+    kind: "tabs",
+    title: (data) => data.id,
+    scrollKey: (data) => data.id,
+    render: (data) =>
+      Array.from({ length: data.length }, (_, i) => ({ kind: "text", text: `${data.id} row ${i}` })),
+  }
+  const viewer = new ExtensionViewer(definition, data)
+  viewer.render(60, renderContext)
+  const first = viewer.scroll
+  first.scrollToTop()
+  first.scrollBy(3)
+  data.id = "b"
+  viewer.render(60, renderContext)
+  const second = viewer.scroll
+  expect(second).not.toBe(first)
+  expect(second.position.following).toBe(true)
+  second.scrollBy(-4)
+  const secondTop = second.position.top
+  viewer.show({ id: "a", length: 50 })
+  viewer.render(60, renderContext)
+  expect(viewer.scroll).toBe(first)
+  expect(first.position).toMatchObject({ top: 3, following: false, total: 50 })
+  viewer.show({ id: "b", length: 60 })
+  viewer.render(60, { ...renderContext, rows: 10 })
+  expect(viewer.scroll.position).toMatchObject({ top: secondTop, following: false, total: 60 })
+  viewer.handleInput(keyEvent("end"))
+  viewer.show({ id: "b", length: 70 })
+  viewer.render(60, renderContext)
+  expect(viewer.scroll.position).toMatchObject({ following: true, total: 70 })
+  viewer.dispose()
+  viewer.render(60, renderContext)
+  expect(viewer.scroll).not.toBe(second)
+
+  const top = new ExtensionViewer({ ...definition, follow: false }, { id: "a", length: 40 })
+  top.render(60, renderContext)
+  top.scroll.scrollBy(2)
+  top.show({ id: "b", length: 40 })
+  top.render(60, renderContext)
+  expect(top.scroll.position.top).toBe(0)
+  top.show({ id: "a", length: 40 })
+  top.render(60, renderContext)
+  expect(top.scroll.position.top).toBe(2)
 })
 
 test("a key can ask for a line of text at the bottom of the view; Esc cancels it, not the view", async () => {

@@ -25,6 +25,7 @@ import {
 } from "@amira/core"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
 import { agentsCommand } from "../../../extensions/agent/src/index.ts"
+import { subagentView } from "../../../extensions/agent/src/subagent-view.ts"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
 import statusExtension from "../../../extensions/status/src/index.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
@@ -118,6 +119,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     const quit: CommandDefinition = { name: "quit", description: "Leave", run: (_a, ctx) => ctx.quit() }
     await host.load((api) => {
       api.registerCommand(agentsCommand())
+      api.registerView(subagentView(api))
       api.registerCommand(quit)
     }, "builtin:agent")
     const control = {
@@ -127,6 +129,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
           .find((e) => e.info.id === id)
           ?.messages(),
     } as Partial<SessionControl> as SessionControl
+    host.setSessionControl(control, () => agent)
     commands = new CommandHost({ registry: host.commands, bus, ui: host.ui, control, agent })
   }
   const cols = o.cols ?? 60
@@ -143,6 +146,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     status: host.status,
     ui: host.ui,
     ...(commands ? { commands } : {}),
+    views: host.views,
     terminal,
     mode: "fullscreen",
     setup: async (_t, _env, setupOpts) => ({
@@ -1076,6 +1080,30 @@ test("a selected row of background sub-agents opens the viewer on them with →"
   await waitFor(() => view().includes("Esc back") && view().includes("Scan api"), "the viewer")
   terminal.send(ESC)
   await waitFor(() => /background sub-agents \d+ of \d+/.test(view()), "back, still selected")
+  terminal.send(ESC)
+  await kid.result()
+  group.end()
+  await group.ended()
+  terminal.send("\x03")
+  await exited
+})
+
+test("opening a child without the agent extension prints that its live view is unavailable", async () => {
+  const { terminal, view, shows, exited, agent, tree, bus, host } = await setup([{ text: "scanned" }], {
+    cols: 80,
+    tree: true,
+  })
+  expect(host.commands.get("agents")).toBeUndefined()
+  const group = tree!.createGroup(agent, { name: "workflow demo", compact: true })
+  const kid = group.spawn({ role: "explorer", title: "Scan api", prompt: "scan" })
+  await shows("◆ workflow demo")
+  await bus.flush()
+  terminal.send(CTRL_UP)
+  await waitFor(() => /background sub-agents \d+ of \d+ · .*→ sub-agent/.test(view()), "the row selected")
+  terminal.send(RIGHT)
+  await shows("The live sub-agent view is unavailable.")
+  expect(view()).toMatch(/background sub-agents \d+ of \d+/)
+  expect(view()).toContain("Message Amira")
   terminal.send(ESC)
   await kid.result()
   group.end()

@@ -9,7 +9,6 @@ test("the public TUI exports stay stable", async () => {
     "HISTORY_LIMIT",
     "Keybindings",
     "PromptHistory",
-    "SubagentViewer",
     "defaultKeys",
     "fallbackPresenter",
     "finishedToolLines",
@@ -20,9 +19,7 @@ test("the public TUI exports stay stable", async () => {
     "specFormBackend",
     "statusBorder",
     "statusLine",
-    "subagentStats",
     "summarizeArgs",
-    "transcriptLines",
     "uiFormBackend",
     "userLines",
   ])
