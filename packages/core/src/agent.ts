@@ -1009,10 +1009,7 @@ export class Agent {
   /** Announces the session to subscribers. Frontends call this once they are listening. */
   start(
     reason: EventMap["session.start"]["reason"],
-    extra: Omit<
-      EventMap["session.start"],
-      "reason" | "cwd" | "model" | "contextTokens" | "contextWindow"
-    > = {},
+    extra: Pick<EventMap["session.start"], "sessionFile" | "resume"> = {},
   ): void {
     // A cleared session starts empty, whatever this agent held.
     const context =
@@ -1026,6 +1023,7 @@ export class Agent {
         ...context,
         reason,
         cwd: this.cwd,
+        ...(this.session?.title ? { title: this.session.title } : {}),
         model: { provider: this.model.provider, model: this.model.id },
       },
       {

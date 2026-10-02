@@ -1,5 +1,5 @@
 import { homedir } from "node:os"
-import type { AnyEvent, CommandDefinition, TuiSettings } from "@amira/api"
+import type { AnyEvent, CommandDefinition, TerminalApi, TuiSettings } from "@amira/api"
 import type { Agent, CommandHost, PanelRegistry, StatusRegistry, UiRequests } from "@amira/core"
 import type { InputEvent, SetupResult, Terminal, Theme } from "@amira/tui-kit"
 import type { ViewSource } from "../extension-view.ts"
@@ -41,6 +41,8 @@ export interface InteractiveOptions {
   notice?: string
   /** Called once the UI listens to the bus, e.g. to announce the session. */
   onReady?: () => void
+  /** Binds terminal effects before session.start; the returned function detaches on quit. */
+  bindTerminal?: (terminal: TerminalApi) => () => void
   terminal?: Terminal
   /** Terminal setup; injectable for tests. Defaults to probing the real terminal. */
   setup?: (

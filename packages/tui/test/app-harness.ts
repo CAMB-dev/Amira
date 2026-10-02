@@ -28,6 +28,7 @@ import {
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
 import statusExtension from "../../../extensions/status/src/index.ts"
+import terminalStatusExtension from "../../../extensions/terminal-status/src/index.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { type FileSource, fileList } from "../src/file-index.ts"
@@ -113,6 +114,7 @@ export interface SetupOptions {
   extensions?: Extension[]
   /** Background jobs running, as the CLI tells the UI. */
   runningJobs?: () => number
+  noBuiltins?: boolean
 }
 
 export async function setup(steps: MockStep[], o: SetupOptions = {}) {
@@ -120,6 +122,7 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
   const tools = new ToolRegistry()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools })
   await host.load(statusExtension, "builtin:status")
+  if (!o.noBuiltins) await host.load(terminalStatusExtension, "builtin:terminal-status")
   const mock = createMockDialect(steps)
   const ai = createAi({
     dialects: [mock],
@@ -209,6 +212,7 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
   if (o.history) agent.messages.push(...o.history)
   await o.prepare?.(agent)
   const exited = runInteractive({
+    bindTerminal: (terminal) => host.bindTerminal(terminal),
     agent,
     status: host.status,
     panels: host.panels,
