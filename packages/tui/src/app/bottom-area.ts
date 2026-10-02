@@ -24,12 +24,14 @@ import { type NoticeStrip, type Outgoing, otherWay, pendingMessageRows, type Whi
 /** The items of a hint line, most useful ones with the highest priority. */
 type HintItems = Parameters<typeof fitHint>[0]
 
+/** The input box, its hint and list, the status, live panels and pending messages under the transcript. */
 export interface BottomArea {
   layout(width: number, ctx: RenderContext, budget: number, top?: Component): string[]
   readonly panelsShown: boolean
   togglePanels(): void
 }
 
+/** The functions are read at draw time, never once: the agent is replaced on a session switch. */
 export interface BottomAreaDeps {
   agent: () => Agent
   activity: () => TurnActivity
