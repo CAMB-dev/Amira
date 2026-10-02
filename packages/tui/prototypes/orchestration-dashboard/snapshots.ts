@@ -7,6 +7,7 @@ import { type App, createApp, handleInput, rootComponent, step } from "./app.ts"
 import { variantA } from "./variant-a.ts"
 import { variantB } from "./variant-b.ts"
 import { variantC } from "./variant-c.ts"
+import { variantD } from "./variant-d.ts"
 
 function snap(app: App, cols: number, rows: number): string {
   const term = new FakeTerminal(cols, rows)
@@ -24,7 +25,7 @@ function snap(app: App, cols: number, rows: number): string {
 }
 
 export function scenario(seconds: number, data: "workflow" | "swarm", variant: number, sel?: string): App {
-  const app = createApp([variantA, variantB, variantC])
+  const app = createApp([variantA, variantB, variantC, variantD])
   for (let t = 0; t < seconds; t += 0.1) step(app, 0.1)
   app.data = data
   app.variant = variant
@@ -39,10 +40,10 @@ if (import.meta.main && process.argv[2] !== "interactions") {
   const only = process.argv[5]
   const border = `+${"-".repeat(cols)}+`
   for (const data of ["workflow", "swarm"] as const) {
-    for (const v of [0, 1, 2]) {
+    for (const v of [0, 1, 2, 3]) {
       if (only && only !== `${"abc"[v]}-${data}`) continue
       const app = scenario(secs, data, v, data === "workflow" ? "worker-1" : "coder-b")
-      console.log(`\n=== Variant ${"ABC"[v]} · ${data} · ${cols}x${rows} · t=${secs}s ===`)
+      console.log(`\n=== Variant ${"ABCD"[v]} · ${data} · ${cols}x${rows} · t=${secs}s ===`)
       console.log(border)
       console.log(
         snap(app, cols, rows)

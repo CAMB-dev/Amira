@@ -267,7 +267,10 @@ function doingLines(app: App, a: Agent, w: number): string[] {
 
 function filesAndNotes(app: App, a: Agent, w: number): string[] {
   const run = runOf(app)
-  const out = [lr(bold("Changed files"), C.muted(`${a.files.length} file${a.files.length === 1 ? "" : "s"}`), w), ...fileRows(a.files, w)]
+  const out = [
+    lr(bold("Changed files"), C.muted(`${a.files.length} file${a.files.length === 1 ? "" : "s"}`), w),
+    ...fileRows(a.files, w),
+  ]
   if (!a.files.length) out.push(C.muted("none yet"))
   if (a.notes.length) out.push("", bold("Notes"), ...a.notes.flatMap((n) => wrap(C.muted(n), w)))
   const said = run.msgs.filter((m) => m.from === a.name).slice(-3)
@@ -403,7 +406,7 @@ export function inputText(app: App, w: number): string {
 
 export function footer(app: App, w: number): string {
   const v = app.variants[app.variant]!
-  const letter = "ABC"[app.variant]
+  const letter = "ABCD"[app.variant]
   const data =
     app.data === "workflow"
       ? `${C.barKey("workflow")}${C.bar("|swarm")}`
@@ -550,7 +553,7 @@ export function handleInput(app: App, e: InputEvent): void {
   }
   if (e.type !== "key") return
   if (e.ctrl && (e.name === "c" || e.name === "d")) return app.onQuit()
-  if (e.name === "f1" || e.name === "f2" || e.name === "f3") {
+  if (e.name === "f1" || e.name === "f2" || e.name === "f3" || e.name === "f4") {
     app.variant = Number(e.name[1]) - 1
     app.overlay = undefined
     return
