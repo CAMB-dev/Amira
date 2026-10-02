@@ -242,6 +242,70 @@ test("session rename guards keep manual titles and ignore stale session ids", as
   expect(store.entries.length).toBe(entries)
 })
 
+test("a title request in flight is aborted by /clear and names neither session", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const { mock, store, host } = await setup(
+    [{ text: "answer" }, { text: "late title", hold: { chunks: 0, until: gate } }],
+    { autoTitle: true },
+  )
+  await host.control.send("question")
+  await waitFor(() => mock.requests.length === 2)
+  await host.control.newSession!()
+  release()
+  await Bun.sleep(20)
+  expect(host.control.info().id).not.toBe(store.id)
+  expect(host.control.info().title).toBeUndefined()
+  expect(SessionStore.open(store.file).title).toBeUndefined()
+})
+
+test("a failed first turn still leaves the first successful turn its title", async () => {
+  const { mock, store, host } = await setup(
+    [{ error: { message: "down" } }, { text: "answer" }, { text: "Database fix" }],
+    { autoTitle: true },
+  )
+  await host.control.send("question").catch(() => {})
+  await host.control.send("again")
+  await waitFor(() => !!store.title)
+  expect(store.title).toBe("Database fix")
+  expect(mock.requests).toHaveLength(3)
+})
+
+test("a name set by hand and cleared before the first reply leaves room for an automatic title", async () => {
+  const { store, host } = await setup([{ text: "answer" }, { text: "answer two" }, { text: "Auto name" }], {
+    autoTitle: true,
+  })
+  host.control.rename!("Manual")
+  await host.control.send("question")
+  host.control.rename!("")
+  await host.control.send("more")
+  await waitFor(() => !!store.title)
+  expect(store.title).toBe("Auto name")
+})
+
+test("api.complete keeps a larger budget on reasoning models, labels its cost and stops at a spent budget", async () => {
+  let api!: ExtensionAPI
+  const extension = defineExtension((value) => {
+    api = value
+  })
+  const { mock, host } = await setup(
+    [{ text: "long" }, { text: "short", usage: { input: 50, output: 60, cost: 0.5 } }],
+    { extension, thinking: true, settings: { budget: { tokens: 100 } } },
+  )
+  await api.complete({ messages: [userMessage("a")], maxTokens: 5000 })
+  expect(mock.requests[0]?.maxTokens).toBe(5000)
+  await api.complete({ messages: [userMessage("b")], maxTokens: 10, label: "summary\nof notes" })
+  expect(mock.requests[1]?.maxTokens).toBe(2048)
+  expect(host.control.sideRequests!().map((r) => r.label)).toEqual(["test:extension", "summary of notes"])
+  const report = costReport([], [], host.control.sideRequests!())
+  expect(report).toContain("mock/main (test:extension)")
+  expect(report).toContain("mock/main (summary of notes)")
+  await expect(api.complete({ messages: [userMessage("c")] })).rejects.toThrow("budget is spent")
+  expect(mock.requests).toHaveLength(2)
+})
+
 test("automatic title side calls abort when the session is disposed", async () => {
   const { mock, store, session } = await setup([{ text: "answer" }, { delayMs: 1000, text: "late title" }], {
     autoTitle: true,
