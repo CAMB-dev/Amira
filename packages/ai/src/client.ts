@@ -82,7 +82,9 @@ export interface Ai {
   /**
    * Compacts `req.messages` on the server, trying each way nativeCompaction lists in order
    * and retrying transient failures. A way the endpoint turns out not to support is
-   * remembered (compactionMemory) and skipped from then on. Never throws.
+   * remembered (compactionMemory) and skipped from then on. All attempts share the deadline
+   * retry.nativeCompactionTimeoutMs (5 minutes by default); a timeout aborts the native request
+   * and returns a failure for the caller to fall back to a text summary. Never throws.
    */
   compact(req: ModelRequest, signal?: AbortSignal, onProgress?: () => void): Promise<CompactResult>
 }
@@ -157,57 +159,96 @@ export function createAi(opts: AiOptions = {}): Ai {
   ): Promise<CompactResult> => {
     const usage = emptyUsage()
     const tried: CompactAttempt[] = []
-    const model = full.model
-    const support = nativeCompaction(model)
-    const p = providers.get(model.provider)
-    const native = dialects.get(model.dialect)?.compaction
-    if (!support || !p || !native) {
-      return { ok: false, error: `${model.provider}/${model.id} has no server-side compaction`, usage, tried }
-    }
-    const ctx = contextOf(p, signal)
-    if (typeof ctx === "string") return { ok: false, error: ctx, usage, tried }
-    const target = targetOf(p, model)
-    const key = endpointKey(p.id, target.host, model.id)
-    const req = withoutDisplay(full)
-    const sendable = { ...req, messages: forReplay(req.messages, target) }
-    const retries = opts.retry?.retries ?? 3
-    const base = opts.retry?.baseDelayMs ?? 1000
     const aborted = (): CompactResult => ({ ok: false, error: "aborted", usage, tried, aborted: true })
-    for (const method of support.methods) {
-      for (let attempt = 0; ; attempt++) {
-        if (signal.aborted) return aborted()
-        const out = await native.compact(method, sendable, ctx, onProgress)
-        if (out.usage) addTo(usage, withPrice(out.usage, model))
-        if (signal.aborted) return aborted()
-        if (out.ok) {
-          const checkpoint: Signature = {
-            dialect: model.dialect,
-            value: out.value,
-            kind: "checkpoint",
-            provider: p.id,
-            host: target.host,
-            model: model.id,
-          }
-          return {
-            ok: true,
-            checkpoint,
-            ...(out.summary?.trim() ? { summary: out.summary.trim() } : {}),
-            usage,
-            method,
-            tried,
-          }
-        }
-        if (out.retryable && !out.unsupported && attempt < retries) {
-          if (!(await sleep(base * 2 ** attempt, signal))) return aborted()
-          continue
-        }
-        tried.push({ method, error: out.error.message, unsupported: out.unsupported })
-        if (out.unsupported) failures.remember(key, method)
-        break
-      }
+    if (signal.aborted) return aborted()
+    const controller = new AbortController()
+    const timeoutMs = Math.max(0, Math.floor(opts.retry?.nativeCompactionTimeoutMs ?? 300_000))
+    const stopped = Promise.withResolvers<CompactResult>()
+    const onAbort = () => {
+      stopped.resolve(aborted())
+      controller.abort()
     }
-    const error = tried.map((t) => `${t.method}: ${t.error}`).join("; ")
-    return { ok: false, error, usage, tried }
+    signal.addEventListener("abort", onAbort, { once: true })
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            // Resolve before aborting: the dialect may finish synchronously on abort.
+            stopped.resolve({
+              ok: false,
+              error: `native compaction timed out after ${timeoutMs} ms`,
+              timedOut: true,
+              usage,
+              tried,
+            })
+            controller.abort()
+          }, timeoutMs)
+        : undefined
+    const run = async (): Promise<CompactResult> => {
+      const signal = controller.signal
+      const model = full.model
+      const support = nativeCompaction(model)
+      const p = providers.get(model.provider)
+      const native = dialects.get(model.dialect)?.compaction
+      if (!support || !p || !native) {
+        return {
+          ok: false,
+          error: `${model.provider}/${model.id} has no server-side compaction`,
+          usage,
+          tried,
+        }
+      }
+      const ctx = contextOf(p, signal)
+      if (typeof ctx === "string") return { ok: false, error: ctx, usage, tried }
+      const target = targetOf(p, model)
+      const key = endpointKey(p.id, target.host, model.id)
+      const req = withoutDisplay(full)
+      const sendable = { ...req, messages: forReplay(req.messages, target) }
+      const retries = opts.retry?.retries ?? 3
+      const base = opts.retry?.baseDelayMs ?? 1000
+      const progress = onProgress ? () => !signal.aborted && onProgress() : undefined
+      for (const method of support.methods) {
+        for (let attempt = 0; ; attempt++) {
+          if (signal.aborted) return aborted()
+          const out = await native.compact(method, sendable, ctx, progress)
+          if (signal.aborted) return aborted()
+          if (out.usage) addTo(usage, withPrice(out.usage, model))
+          if (out.ok) {
+            const checkpoint: Signature = {
+              dialect: model.dialect,
+              value: out.value,
+              kind: "checkpoint",
+              provider: p.id,
+              host: target.host,
+              model: model.id,
+            }
+            return {
+              ok: true,
+              checkpoint,
+              ...(out.summary?.trim() ? { summary: out.summary.trim() } : {}),
+              usage,
+              method,
+              tried,
+            }
+          }
+          if (out.retryable && !out.unsupported && attempt < retries) {
+            if (!(await sleep(base * 2 ** attempt, signal))) return aborted()
+            continue
+          }
+          tried.push({ method, error: out.error.message, unsupported: out.unsupported })
+          if (out.unsupported) failures.remember(key, method)
+          break
+        }
+      }
+      const error = tried.map((t) => `${t.method}: ${t.error}`).join("; ")
+      return { ok: false, error, usage, tried }
+    }
+    try {
+      // Do not wait for a dialect that ignores abort; local summary compaction can start now.
+      return await Promise.race([run(), stopped.promise])
+    } finally {
+      clearTimeout(timer)
+      signal.removeEventListener("abort", onAbort)
+    }
   }
 
   return {

@@ -1,3 +1,4 @@
+import { IDLE_TIMEOUT_HINT } from "./errors.ts"
 import type { AssistantMessage, ModelRef, StreamEvent } from "./types.ts"
 
 type ErrorEvent = Extract<StreamEvent, { type: "error" }>
@@ -16,6 +17,8 @@ export interface RetryOptions {
    * tool (a web search the provider runs) is in progress, at least SERVER_TOOL_IDLE_MS.
    */
   idleTimeoutMs?: number
+  /** Deadline for all native compaction attempts and backoff. Default 5 min; 0 disables it. */
+  nativeCompactionTimeoutMs?: number
 }
 
 /** The idle limit while a hosted tool runs: the server may be quiet (pings only) the whole time. */
@@ -99,7 +102,7 @@ export async function* withRetry(
             yield aborted(partial)
             return
           }
-          const timeoutError = timeoutFailure(active, armedMs, model, partial)
+          const timeoutError = timeoutFailure(active, content, armedMs, model, partial)
           if (!content && attempt < retries) {
             failed = timeoutError
             break
@@ -201,17 +204,19 @@ function notePartial(
 }
 
 function timeoutFailure(
+  hadActivity: boolean,
   hadContent: boolean,
   timeoutMs: number,
   model: ModelRef | undefined,
   lastMessage: AssistantMessage | undefined,
 ): ErrorEvent {
-  const message = hadContent
+  const message = hadActivity
     ? `model stream was idle for ${timeoutMs} ms`
     : `model produced no content within ${timeoutMs} ms`
+  const hint = hadContent ? `. ${IDLE_TIMEOUT_HINT}` : ""
   return {
     type: "error",
-    error: { message, code: "timeout", status: 408 },
+    error: { message: message + hint, code: "timeout", status: 408 },
     retryable: true,
     message:
       lastMessage ??

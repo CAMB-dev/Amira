@@ -64,6 +64,24 @@ test("reads a failure as one line, the next step and the provider's raw answer",
   })
 })
 
+test("a partial-reply idle timeout puts the continuation hint in the primary TUI notice", () => {
+  const message = "model stream was idle for 20 ms. Type a message to continue, or press ↑ to resend."
+  expect(describeModelError({ message, code: "timeout", status: 408, host: "x.io", retries: 1 })).toEqual({
+    kind: "server",
+    summary: "Model stream was idle for 20 ms, retried 1 time",
+    hint: "Type a message to continue, or press ↑ to resend.",
+    detail: message,
+  })
+  // Exhausted first-content/silent-reasoning waits and provider HTTP 408s keep their old advice.
+  for (const error of [
+    { message: "model produced no content within 15 ms", code: "timeout", status: 408 },
+    { message: "model stream was idle for 20 ms", code: "timeout", status: 408 },
+    { message: "HTTP 408: request timed out", status: 408 },
+  ]) {
+    expect(describeModelError(error).hint).toBe("Try again later, or switch models with /model")
+  }
+})
+
 test("takes the message out of a JSON error body", () => {
   expect(providerMessage(`HTTP 400: {"error":{"message":"m1"}}`)).toBe("m1")
   expect(providerMessage(`HTTP 400: [{"error":{"message":"m2"}}]`)).toBe("m2")
