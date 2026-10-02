@@ -183,6 +183,27 @@ test("concurrent requests coalesce; a full probe wins over dirty requests", asyn
   await until(() => f.workspace().length === 2)
 })
 
+test("turns ending before the first probe finishes ask for nothing more, like before", async () => {
+  const pending: ((facts: WorkspaceFacts) => void)[] = []
+  const kinds: (string | undefined)[] = []
+  const f = setup({
+    stamp: () => undefined,
+    probe: (_cwd, _signal, kind) => {
+      kinds.push(kind)
+      return new Promise((resolve) => pending.push(resolve))
+    },
+  })
+  f.start()
+  await until(() => pending.length === 1)
+  f.tool()
+  f.turn()
+  await f.bus.flush()
+  pending.shift()!({ cwd: "/work" })
+  await until(() => f.workspace().length === 1)
+  await Bun.sleep(20)
+  expect(kinds).toEqual(["full"])
+})
+
 test("session switches abort and drop stale results; child starts never replace the root", async () => {
   const pending: { cwd: string; signal: AbortSignal; resolve(facts: WorkspaceFacts): void }[] = []
   const f = setup({

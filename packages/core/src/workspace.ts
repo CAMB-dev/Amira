@@ -60,7 +60,7 @@ export class WorkspaceTracker {
         if (e.type === "tool.execute.end") {
           // Unknown tools and bubbled child tools are conservative unless explicitly no-write.
           if (e.data.traits?.writesFiles !== false) active.wrote = true
-        } else if (e.type === "turn.end" && (active.checked || active.checking) && this.#registration) {
+        } else if (e.type === "turn.end" && active.checked && this.#registration) {
           const stamp = this.#stamp(this.#registration, active.cwd)
           if (stamp === undefined || stamp !== active.stamp) void this.#check(active, "full")
           else if (active.wrote || Date.now() - active.checkedAt >= (this.#options.staleMs ?? 60_000))
