@@ -383,6 +383,8 @@ test("appends another header on resume and accepts late completion after session
   emit("turn.end", 50, { reason: "aborted", steps: 1 })
   await read()
   const before = readFileSync(`${file}.trace.jsonl`, "utf8")
+  // The host registers the stored session again when it resumes it (session.ts newAgent).
+  recorder.register("root", file)
   start(100, "resume")
   emit("status.changed", 101, { status: "idle" })
   const all = await read()
@@ -537,4 +539,51 @@ test("opening a session without activity writes no trace file", async () => {
   await bus.flush()
   await recorder.flush()
   expect(existsSync(`${file}.trace.jsonl`)).toBe(false)
+})
+
+test("session.end while a turn waits on approval keeps its late records, then releases the session", async () => {
+  const { start, emit, read, bus, recorder } = setup()
+  start(10)
+  emit("turn.start", 20, { prompt: { role: "user", content: [] } })
+  // No model call or tool is in flight: the turn waits on an approval when the session ends.
+  emit("session.end", 30, { reason: "exit" })
+  await bus.flush()
+  await recorder.flush()
+  await Bun.sleep(5)
+  emit("tool.execute.start", 40, { toolCallId: "asked", name: "echo", args: {} })
+  emit("tool.execute.end", 40, {
+    toolCallId: "asked",
+    name: "echo",
+    result: textResult("aborted", true),
+    durationMs: 0,
+    rejected: "aborted",
+  })
+  emit("turn.end", 50, { reason: "aborted", steps: 1 })
+  await read()
+  await Bun.sleep(5)
+  // Released once idle: a stray event of the ended session is not recorded.
+  emit("status.changed", 60, { status: "idle" })
+  const all = await read()
+  expect(records(all, "tool").map((record) => record.outcome)).toEqual(["aborted"])
+  expect(records(all, "turn").map((record) => record.reason)).toEqual(["aborted"])
+  expect(records(all, "status")).toEqual([])
+})
+
+test("a session that ends mid-stream is released after its late model and turn ends", async () => {
+  const { start, emit, read, bus, recorder } = setup()
+  start(10)
+  emit("turn.start", 20, { prompt: { role: "user", content: [] } })
+  emit("message.start", 25, { model })
+  emit("session.end", 30, { reason: "switch" })
+  await bus.flush()
+  await recorder.flush()
+  emit("message.end", 40, { message: { role: "assistant", content: [], model, stopReason: "aborted" } })
+  emit("turn.end", 50, { reason: "aborted", steps: 1 })
+  await read()
+  await Bun.sleep(5)
+  emit("status.changed", 60, { status: "idle" })
+  const all = await read()
+  expect(records(all, "model")).toHaveLength(1)
+  expect(records(all, "turn")).toHaveLength(1)
+  expect(records(all, "status")).toEqual([])
 })

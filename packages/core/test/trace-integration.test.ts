@@ -147,3 +147,67 @@ test("a stored mock run records parent and child, retries, parallel tools, compa
     rmSync(dir, { recursive: true, force: true })
   }
 }, 30_000)
+
+test("quitting while a tool waits on approval still records the interrupted call and turn", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "amira-trace-quit-"))
+  const mock = createMockDialect([{ toolCalls: [{ id: "asked", name: "work", args: {} }] }])
+  const ai = createAi({
+    dialects: [mock],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { contextWindow: 128_000 } }],
+  })
+  const bus = new EventBus()
+  const recorder = new TraceRecorder(bus)
+  const store = SessionStore.create({ cwd: dir, dir })
+  recorder.register(store.id, store.file)
+  const waiting = Promise.withResolvers<void>()
+  const agent = new Agent({
+    ai,
+    bus,
+    session: store,
+    cwd: dir,
+    model: ai.model("mock/test"),
+    systemPrompt: "test",
+    compaction: { auto: false },
+    abortGraceMs: 1,
+    approve: (_request, signal) => {
+      waiting.resolve()
+      return new Promise((resolve) =>
+        signal?.addEventListener("abort", () => resolve({ approved: false }), { once: true }),
+      )
+    },
+  })
+  agent.tools.register(
+    defineTool({
+      name: "work",
+      description: "fake work",
+      parameters: { type: "object", properties: {} },
+      execute: async () => textResult("never"),
+    }),
+    "test",
+  )
+  agent.interceptors.add("tool.call.before", () => ({ action: "ask", reason: "approve test call" }))
+  try {
+    agent.start("startup")
+    const turn = agent.prompt("run a tool")
+    await waiting.promise
+    // The user takes a while to answer: the one-second timer has written everything so far.
+    await bus.flush()
+    await recorder.flush()
+    // No abort first: session.end comes before the turn unwinds.
+    await agent.dispose("exit")
+    await turn
+    await bus.flush()
+    const records = await recorder.read(store.file)
+    expect(records.filter((record) => record.type === "tool").map((record) => record.outcome)).toEqual([
+      "aborted",
+    ])
+    expect(records.filter((record) => record.type === "turn").map((record) => record.reason)).toEqual([
+      "aborted",
+    ])
+  } finally {
+    await agent.dispose("exit")
+    await bus.flush()
+    await recorder.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, 30_000)
