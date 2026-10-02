@@ -3,140 +3,103 @@ import { FakeTerminal } from "@amira/tui-kit"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { TerminalStatus, type TerminalStatusOptions } from "../src/terminal-status.ts"
 
-function setup(opts: TerminalStatusOptions = {}) {
+function setup(
+  opts: TerminalStatusOptions = {},
+  env: Record<string, string | undefined> = { WT_SESSION: "1" },
+) {
   const terminal = new FakeTerminal()
   const screen = new VirtualScreen(80, 24)
   const write = terminal.write.bind(terminal)
-  terminal.write = (d: string) => {
+  terminal.write = (d) => {
     write(d)
     screen.write(d)
   }
-  let now = 0
-  const status = new TerminalStatus(terminal, "/work/proj", { now: () => now, ...opts })
-  const titles = () => screen.oscs.filter((o) => o.startsWith("0;")).map((o) => o.slice(2))
-  const progress = () => screen.oscs.filter((o) => o.startsWith("9;4;")).map((o) => o.slice(4))
-  return { terminal, screen, status, titles, progress, advance: (ms: number) => (now += ms) }
-}
-
-test("the title names the folder and branch, marked while a turn runs, and is handed back on stop", () => {
-  const { terminal, status, titles } = setup()
+  const status = new TerminalStatus(terminal, opts, env)
   status.start()
-  expect(terminal.output.startsWith("\x1b[22;0t")).toBe(true)
-  status.setBranch("main")
-  status.turnStarted()
-  status.turnEnded("completed")
-  expect(titles()).toEqual([
-    "Amira · proj",
-    "Amira · proj ⎇ main",
-    "● Amira · proj ⎇ main",
-    "Amira · proj ⎇ main",
-  ])
-  // Nothing new is written when nothing changed.
+  return { terminal, screen, status }
+}
+const flush = () => new Promise<void>((resolve) => queueMicrotask(resolve))
+
+test("effects coalesce outside frame writes and restore the title stack and progress before focus", async () => {
+  const { terminal, screen, status } = setup()
+  status.setTitle("first")
+  status.setTitle("Amira · proj")
+  status.setProgress("indeterminate")
+  status.setProgress("paused")
+  status.bell()
+  expect(screen.oscs).toEqual([])
+  terminal.write("frame")
+  await flush()
+  expect(screen.oscs).toEqual(["0;Amira · proj", "9;4;4;100"])
+  expect(screen.bells).toBe(1)
+  expect(terminal.output).toContain("frame\x1b[22;0t")
   const writes = terminal.writes.length
-  status.setBranch("main")
+  status.setTitle("Amira · proj")
+  status.setProgress("paused")
+  await flush()
   expect(terminal.writes.length).toBe(writes)
   status.stop()
-  expect(titles().at(-1)).toBe("")
-  expect(terminal.output.endsWith("\x1b[23;0t\x1b[?1004l")).toBe(true)
+  expect(terminal.output.endsWith("\x1b]9;4;0;0\x07\x1b]0;\x07\x1b[23;0t\x1b[?1004l")).toBe(true)
 })
 
-test("progress: busy while working, paused while a dialog waits, cleared when idle and on stop", () => {
-  const { status, progress } = setup()
-  status.start()
-  status.turnStarted()
-  status.setWaiting(true)
-  status.setWaiting(false)
-  status.turnEnded("completed")
-  status.turnStarted()
-  status.stop()
-  expect(progress()).toEqual(["3;0", "4;100", "3;0", "0;0", "3;0", "0;0"])
-})
-
-test("a session title follows the folder and resets when switching to an unnamed session", () => {
-  const { status, titles } = setup()
-  status.start()
-  status.setSessionTitle("Database repair")
-  expect(titles().at(-1)).toBe("Amira · proj · Database repair")
-  status.setSessionTitle(undefined)
-  expect(titles().at(-1)).toBe("Amira · proj")
-  status.stop()
-})
-
-test("the terminal's own restore (a crash, a signal) hands the title and the indicator back too", () => {
-  const { terminal, status, titles, progress } = setup()
-  status.start()
-  status.turnStarted()
-  // What ProcessTerminal writes on exit when stop() never ran.
+test("terminal restore hands the title and progress back even without adapter stop", async () => {
+  const { terminal, screen, status } = setup()
+  status.setTitle("Amira · proj")
+  status.setProgress("indeterminate")
+  await flush()
   terminal.restore()
-  expect(progress().at(-1)).toBe("0;0")
-  expect(titles().at(-1)).toBe("")
-  expect(terminal.output).toContain("\x1b]0;\x07\x1b[23;0t")
-  // Handed back once: a later stop() finds nothing left to undo.
+  expect(screen.oscs.slice(-2)).toEqual(["9;4;0;0", "0;"])
   const writes = terminal.output.length
   status.stop()
   expect(terminal.output.length).toBe(writes)
 })
 
-test("a hidden dialog rings even with the terminal in front", () => {
-  const { status, screen } = setup()
-  status.start()
-  status.focus(true)
-  status.setWaiting(true, true)
-  expect(screen.bells).toBe(1)
-  // Another one while the first still waits rings again.
-  status.setWaiting(true, true)
-  expect(screen.bells).toBe(2)
-  status.setWaiting(true)
-  expect(screen.bells).toBe(2)
+test("stop drops queued effects and detached calls cannot write after restore", async () => {
+  const { terminal, screen, status } = setup()
+  status.setTitle("queued")
+  status.setProgress("paused")
+  status.bell()
+  status.stop()
+  terminal.restore()
+  const writes = terminal.output.length
+  status.setTitle("late")
+  status.bell()
+  await flush()
+  expect(terminal.output.length).toBe(writes)
+  expect(screen.oscs).toEqual([])
+  expect(screen.bells).toBe(0)
 })
 
-test("settings turn each part off", () => {
-  const { terminal, status, screen } = setup({ title: false, progress: false, bell: false })
-  status.start()
-  status.turnStarted()
-  status.turnEnded("completed")
+test("settings gate effects while focus reporting remains available", async () => {
+  const { terminal, screen, status } = setup({ title: false, progress: false, bell: false })
+  status.setTitle("ignored")
+  status.setProgress("paused")
+  status.bell()
+  await flush()
   status.stop()
   expect(screen.oscs).toEqual([])
-  // Only the focus reports, which extensions use too (ui.focus), are left.
+  expect(screen.bells).toBe(0)
   expect(terminal.output).toBe("\x1b[?1004h\x1b[?1004l")
 })
 
-test("with focus reports, the bell rings only while the terminal is in the background", () => {
-  const { terminal, status, screen } = setup()
-  status.start()
-  expect(terminal.output).toContain("\x1b[?1004h")
-  status.focus(true)
-  status.turnStarted()
-  status.turnEnded("completed")
-  expect(screen.bells).toBe(0)
-  status.focus(false)
-  status.turnStarted()
-  status.setWaiting(true)
-  expect(screen.bells).toBe(1)
-  status.setWaiting(false)
-  status.turnEnded("completed")
-  expect(screen.bells).toBe(2)
-  // Not after Esc: the user is right there.
-  status.turnStarted()
-  status.turnEnded("aborted")
-  expect(screen.bells).toBe(2)
-})
+for (const env of [{ TERM_PROGRAM: "iTerm.app", WT_SESSION: "1" }, { TERM_PROGRAM: "unknown" }]) {
+  test(`progress is suppressed in ${env.TERM_PROGRAM}`, async () => {
+    const { screen, status } = setup({}, env)
+    status.setProgress("paused")
+    await flush()
+    status.stop()
+    expect(screen.oscs).toEqual([])
+  })
+}
 
-test("without focus reports, only a long turn rings", () => {
-  const { status, screen, advance } = setup({ longTurnMs: 10_000 })
-  status.start()
-  status.turnStarted()
-  advance(3000)
-  status.turnEnded("completed")
+test("adapter sanitizes titles and clamps progress to the structured states", async () => {
+  const { screen, status } = setup()
+  status.setTitle(`safe\x1b\x07\n${"界".repeat(100)}`)
+  status.setProgress("normal" as never)
+  await flush()
+  expect(screen.oscs).toHaveLength(1)
+  expect(screen.oscs[0]).toStartWith("0;safe")
+  expect(screen.oscs[0]).toEndWith("…")
   expect(screen.bells).toBe(0)
-  status.turnStarted()
-  advance(12_000)
-  status.setWaiting(true)
-  expect(screen.bells).toBe(1)
-  status.setWaiting(false)
-  status.turnEnded("error")
-  expect(screen.bells).toBe(2)
-  // A dialog outside a turn (a command's picker) was just asked for.
-  status.setWaiting(true)
-  expect(screen.bells).toBe(2)
+  status.stop()
 })

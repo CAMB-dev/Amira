@@ -655,3 +655,35 @@ test("with tui.reflow off, a narrower terminal does not move up past the live re
  * A stand-in for the images extension's provider: `size` says what each image is (undefined:
  * it cannot be shown), encoding makes up data of the fitted size.
  */
+
+test("without built-ins the TUI leaves terminal title, progress and bell untouched", async () => {
+  const s = await setup([{ text: "done" }], { noBuiltins: true, env: { WT_SESSION: "1" } })
+  s.terminal.send("\x1b[Ogo\r")
+  await s.shows("done")
+  await s.idle()
+  s.terminal.send("\x03")
+  expect(await s.exited).toBe(0)
+  expect(s.screen.oscs).toEqual([])
+  expect(s.screen.bells).toBe(0)
+  expect(s.terminal.output).not.toContain("\x1b[22;0t")
+})
+
+test("a hidden question rings once and visibility changes retain paused progress without ringing", async () => {
+  const s = await setup([], { env: { WT_SESSION: "1" } })
+  s.terminal.send("\x1b[I?")
+  await waitFor(() => s.live().includes("? Keys"), "key reference")
+  const answer = s.host.ui.api("test").confirm("Hidden question", "Proceed?")
+  await s.bus.flush()
+  expect(s.screen.bells).toBe(1)
+  expect(s.screen.oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;4;100")
+  s.terminal.send("\x1b[27u")
+  await waitFor(() => s.live().includes("Hidden question"), "visible question")
+  await s.bus.flush()
+  expect(s.screen.bells).toBe(1)
+  s.terminal.send("\x1b[27u")
+  await answer
+  await s.bus.flush()
+  expect(s.screen.oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;0;0")
+  s.terminal.send("\x03\x03")
+  expect(await s.exited).toBe(0)
+})

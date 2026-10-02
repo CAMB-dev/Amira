@@ -140,6 +140,7 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
       }),
     ],
     ["builtin:status", () => import("../../../extensions/status/src/index.ts")],
+    ["builtin:terminal-status", () => import("../../../extensions/terminal-status/src/index.ts")],
     ["builtin:commands", () => import("../../../extensions/commands/src/index.ts")],
     ["builtin:auto-title", () => import("../../../extensions/auto-title/src/index.ts")],
     ["builtin:skills", () => import("../../../extensions/skills/src/index.ts")],

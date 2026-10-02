@@ -246,6 +246,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "session.start": obj({
     reason: strings("startup", "resume", "fork", "clear"),
     cwd: str,
+    "title?": str,
     model: modelRef,
     "sessionFile?": str,
     "resume?": arrayOf(str),
@@ -352,6 +353,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     "Whether the user's frontend has focus (from the TUI's terminal, or an rpc client's ui.focus); sent when it changes.",
   ),
   "ui.progress": obj({ requestId: str, action: str, text: str }),
+  "ui.waiting": obj({ pending: num, hidden: bool, change: strings("opened", "resolved", "visibility") }),
   "model.changed": obj({ from: modelRef, to: modelRef }),
   "compact.start": obj({
     reason: strings("threshold", "manual", "overflow"),
