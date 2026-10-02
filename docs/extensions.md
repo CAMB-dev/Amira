@@ -202,7 +202,7 @@ second for elapsed times. `header` and `render` receive the available width, cur
 and an optional `renderTool(toolName, call, detail)` callback. It uses the host's current
 tool presenter and fallback renderer; pass a `ToolCallView` and return the resulting lines
 unchanged to preserve the host's presentation. Other frontends may omit it, so provide a
-plain-line fallback. API version 0.2.0 adds these view capabilities.
+plain-line fallback. API version 0.1.15 adds these view capabilities.
 
 ### Tool capabilities
 
