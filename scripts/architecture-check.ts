@@ -54,12 +54,20 @@ const allowedTypeOnlyDependenciesByDirectory: Record<string, readonly string[]> 
 }
 
 const sourceLineAllowlist = new Map<string, number>([
-  ["packages/core/src/agent.ts", 2492],
+  ["packages/core/src/agent.ts", 2396],
   ["packages/core/src/subagents.ts", 968],
   ["packages/tui/src/app.ts", 1627],
   ["packages/tui/src/transcript-pane.ts", 1100],
   ["packages/tui-kit/src/components/editor.ts", 979],
   ["packages/tui-kit/src/components/form.ts", 962],
+])
+
+const hostBackgroundJobsPattern = /\bhostBackgroundJobs\b/
+const hostBackgroundJobsAllowlist = new Set([
+  "packages/api/src/index.ts",
+  "packages/api/src/process.ts",
+  "packages/core/src/extensions.ts",
+  "extensions/builtin-tools/src/jobs-ui.ts",
 ])
 
 function filesUnder(directory: string): string[] {
@@ -125,6 +133,14 @@ function relative(file: string): string {
   return path.relative(root, file).replaceAll(path.sep, "/")
 }
 
+function isTestFile(file: string): boolean {
+  const key = relative(file)
+  return (
+    key.split("/").some((part) => part === "test" || part === "tests" || part === "__tests__") ||
+    /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(key)
+  )
+}
+
 /** The repo directory (e.g. "packages/core") a relative specifier in `file` lands in, if any. */
 function targetPackage(file: string, specifier: string): string | undefined {
   if (!specifier.startsWith(".")) return undefined
@@ -167,6 +183,16 @@ function allowedDependencies(own: string): ReadonlySet<string> {
 }
 
 const violations: string[] = []
+
+for (const directory of packageDirectoriesInWorkspace) {
+  for (const file of filesUnder(directory)) {
+    const key = relative(file)
+    if (isTestFile(file) || hostBackgroundJobsAllowlist.has(key)) continue
+    if (hostBackgroundJobsPattern.test(readFileSync(file, "utf8"))) {
+      violations.push(`${key} references hostBackgroundJobs; use the per-extension job view`)
+    }
+  }
+}
 
 for (const directory of packageDirectoriesInWorkspace) {
   const own = relative(directory)
