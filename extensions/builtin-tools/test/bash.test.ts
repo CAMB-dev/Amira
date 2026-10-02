@@ -88,6 +88,9 @@ test.if(hasBash)("times out and kills the command", async () => {
   expect(r.isError).toBe(true)
   expect(textOf(r)).toContain("before")
   expect(textOf(r)).toContain("timed out after 1000 ms")
+  expect(textOf(r)).toContain("longer `timeout`")
+  expect(textOf(r)).toContain("`background: true`")
+  expect(textOf(r)).toContain("job_output")
 })
 
 test.if(hasBash)(
