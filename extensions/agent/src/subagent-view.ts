@@ -13,6 +13,7 @@ import {
   type ViewKey,
   type ViewLine,
   type ViewRenderOptions,
+  type ViewSegment,
 } from "@amira/api"
 import { callKids, elapsed, transcriptText, usageText } from "./agents-command.ts"
 
@@ -29,13 +30,16 @@ function live(info: SubagentInfo): boolean {
   return info.status === "running" || info.status === "queued" || info.status === "idle"
 }
 
-function stats(info: SubagentInfo, now: number): string {
+function stats(info: SubagentInfo, now: number): ViewSegment[] {
   const timed = info.durationMs !== undefined || info.startedAt !== undefined
   const when = info.status === "queued" || !timed ? "" : ` · ${elapsed(info, now)}`
-  return `${subagentStateText(info.status)}${when} · ${usageText(info)}`
+  return [
+    { kind: statusKind(info), text: subagentStateText(info.status) },
+    { kind: "muted", text: `${when} · ${usageText(info)}` },
+  ]
 }
 
-function statusKind(info: SubagentInfo): ViewLine["kind"] {
+function statusKind(info: SubagentInfo): ViewSegment["kind"] {
   switch (info.status) {
     case "running":
       return "accent"
@@ -101,21 +105,29 @@ function transcriptLines(
   )
   const first = own[0]
   const task = first?.role === "user" ? (first.display?.text || blockText(first)).trim() : info.task
-  const out: ViewLine[] = [{ kind: "text", text: "" }]
-  for (const [i, text] of (task || "(no task)").split("\n").entries())
-    out.push({ kind: "text", text: `${i === 0 ? "›" : " "} ${text}` })
-  if (first?.role === "user" && first.display?.note)
-    out.push({ kind: "muted", text: `  └ ${first.display.note}` })
-  out.push({ kind: "text", text: "" }, { kind: "text", text: "" })
+  const out: ViewLine[] = [
+    {
+      kind: "user-message",
+      text: task || "(no task)",
+      ...(first?.role === "user" && first.display?.note ? { note: first.display.note } : {}),
+    },
+    { kind: "text", text: "" },
+  ]
   const results = new Map<string, ToolResultMessage>()
   for (const message of own) if (message.role === "toolResult") results.set(message.toolCallId, message)
   const rest = [...kids]
   const kidLine = (kid: SubagentInfo, indent: string): ViewLine => ({
-    kind: statusKind(kid),
-    text: clip(
-      `${indent}◆ ${kid.title} · ${kid.role} · ${kid.id} ${stats(kid, opts.now)} · ${kid.task.replace(/\s+/g, " ").trim()}`,
-      opts.width,
-    ),
+    kind: "segments",
+    parts: [
+      { kind: "text", text: indent },
+      { kind: "accent", text: "◆" },
+      { kind: "text", text: ` ${kid.title} ` },
+      { kind: "muted", text: `· ${kid.role} · ${kid.id}` },
+      { kind: "text", text: " " },
+      ...stats(kid, opts.now),
+      { kind: "text", text: " " },
+      { kind: "muted", text: `· ${kid.task.replace(/\s+/g, " ").trim()}` },
+    ],
   })
   for (const message of own) {
     if (message.role !== "assistant") continue
@@ -231,8 +243,18 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
       const info = infoFor(data)
       // What it is and how it goes first; its role and id are cut first on a narrow screen.
       return info
-        ? `${info.title} · ${stats(info, opts.now)} · ${info.role} · ${info.id}`
-        : `No sub-agent ${data.sessionId} in this session.`
+        ? {
+            kind: "segments",
+            parts: [
+              { kind: "accent", text: "◆" },
+              { kind: "text", text: ` ${info.title} ` },
+              { kind: "muted", text: "·" },
+              { kind: "text", text: " " },
+              ...stats(info, opts.now),
+              { kind: "muted", text: ` · ${info.role} · ${info.id}` },
+            ],
+          }
+        : { kind: "warning", text: `No sub-agent ${data.sessionId} in this session.` }
     },
     titleAside(data) {
       const list = api.session()?.subagents() ?? []
