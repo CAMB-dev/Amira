@@ -4,6 +4,12 @@
 
 Run `amira` in the directory you want it to work in. A positional prompt becomes the first message; `--cwd` selects a different working directory. See [Getting started](getting-started.md) for provider setup.
 
+## Thinking effort
+
+Use `amira --thinking high` in interactive mode or `amira -p --thinking xhigh "Explain this repository"` in print mode. Accepted levels are `low`, `medium`, `high`, `xhigh` and `max`. The flag overrides both top-level `thinking` and `providers.<id>.models[].thinking` in [Settings](settings.md); without the flag, the model's setting wins over the top-level setting. With neither configured, requests send no effort and keep the server default. `/status` shows the configured effort. Only models with `caps.thinking` receive it; sub-agents inherit the parent's selected effort, while title generation and compaction keep their defaults.
+
+Responses and Anthropic adaptive mode send the level unchanged. Anthropic budget mode maps `xhigh` to 32,768 tokens, below `max` at 64,000, capped to leave room for the answer. Gemini maps `xhigh` like `high`, keeping its larger `max` budget for Gemini 2.5 Pro. Chat Completions currently does not send reasoning parameters.
+
 ## Terminal modes and the transcript
 
 ```sh

@@ -1,4 +1,13 @@
-import type { Ai, AssistantMessage, Message, ModelError, ModelInfo, ModelRef, ToolSpec } from "@amira/ai"
+import type {
+  Ai,
+  AssistantMessage,
+  Message,
+  ModelError,
+  ModelInfo,
+  ModelRef,
+  ReasoningEffort,
+  ToolSpec,
+} from "@amira/ai"
 import type { EventMap } from "@amira/api"
 
 export type ModelCallEmit = <K extends keyof EventMap>(type: K, data: EventMap[K]) => void
@@ -12,6 +21,7 @@ export interface ModelCallOptions {
   /** Read inside the stream's try, so a failure becomes this call's error as before. */
   tools: () => ToolSpec[]
   maxTokens?: number
+  thinking?: ReasoningEffort
   signal: AbortSignal
   emit: ModelCallEmit
 }
@@ -38,6 +48,9 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
         messages: options.messages,
         tools: options.tools(),
         ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
+        ...(options.model.caps.thinking && options.thinking
+          ? { reasoning: { effort: options.thinking } }
+          : {}),
       },
       options.signal,
     )

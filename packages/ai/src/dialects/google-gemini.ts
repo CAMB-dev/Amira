@@ -13,10 +13,22 @@ import { isRetryableBodyError } from "./openai-chat-errors.ts"
 export { toGeminiContents, toGeminiSchema }
 
 /** Thinking budgets in tokens; 24576 is the most every 2.5 model accepts, only Pro goes higher. */
-const BUDGET: Record<ReasoningEffort, number> = { low: 1024, medium: 8192, high: 24576, max: 24576 }
+const BUDGET: Record<ReasoningEffort, number> = {
+  low: 1024,
+  medium: 8192,
+  high: 24576,
+  xhigh: 24576,
+  max: 24576,
+}
 const PRO_MAX_BUDGET = 32768
 
-const LEVEL: Record<ReasoningEffort, string> = { low: "LOW", medium: "MEDIUM", high: "HIGH", max: "HIGH" }
+const LEVEL: Record<ReasoningEffort, string> = {
+  low: "LOW",
+  medium: "MEDIUM",
+  high: "HIGH",
+  xhigh: "HIGH",
+  max: "HIGH",
+}
 
 /** Gemini 3 takes a thinking level and rejects budgets as a way to set it; older models take a budget. */
 export function thinkingConfig(modelId: string, effort: ReasoningEffort): Record<string, unknown> {

@@ -1,4 +1,4 @@
-import type { Ai, Message, ModelErrorInfo, ModelInfo } from "@amira/ai"
+import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort } from "@amira/ai"
 import type {
   ApprovalRequest,
   AskOutcome,
@@ -40,6 +40,10 @@ export type Asker = (request: AskRequest, signal: AbortSignal) => Promise<AskOut
 export interface AgentOptions {
   ai: Ai
   model: ModelInfo
+  /** Explicit effort from a CLI flag or parent agent; overrides per-model settings. */
+  thinking?: ReasoningEffort
+  /** Top-level setting, used when no explicit or per-model effort is set. */
+  defaultThinking?: ReasoningEffort
   cwd: string
   /** The whole system prompt as one "identity" section; `sections` takes precedence. */
   systemPrompt?: string
@@ -60,7 +64,7 @@ export interface AgentOptions {
   bus?: EventBus
   interceptors?: InterceptorRegistry
   tools?: ToolRegistry
-  /** Per-provider and per-model editing tool choices, shared with sub-agents. */
+  /** Per-provider and per-model choices, shared with sub-agents. */
   providerSettings?: Record<string, ProviderSettings>
   /** Upper bound on model calls per turn. Default 200. */
   maxSteps?: number

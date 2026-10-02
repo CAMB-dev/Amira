@@ -38,6 +38,7 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
         ...(a.session?.title ? { title: a.session.title } : {}),
         cwd: a.cwd,
         model: { provider: a.model.provider, model: a.model.id },
+        ...(a.thinking ? { thinking: a.thinking } : {}),
         contextWindow: a.model.contextWindow,
         ...(a.model.contextWindowSource ? { contextWindowSource: a.model.contextWindowSource } : {}),
         ...(a.contextTokens !== undefined ? { contextTokens: a.contextTokens } : {}),

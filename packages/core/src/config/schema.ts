@@ -103,6 +103,7 @@ const modelRef = expect(
 )
 
 const editingTools = object({ edit: oneOf("edit", "apply_patch", "both") })
+const thinking = oneOf("low", "medium", "high", "xhigh", "max")
 
 const modelOverrides = (required: string[], tools = false) =>
   object(
@@ -111,7 +112,7 @@ const modelOverrides = (required: string[], tools = false) =>
       dialect: string,
       contextWindow: integer(1),
       maxOutput: integer(1),
-      ...(tools ? { tools: editingTools } : {}),
+      ...(tools ? { tools: editingTools, thinking } : {}),
       caps: object({
         tools: oneOf("native", "none"),
         images: boolean,
@@ -189,6 +190,7 @@ const permissions = object({
 const settings = object({
   $schema: string,
   model: modelRef,
+  thinking,
   providers: record(provider),
   shell: oneOf("auto", "bash", "powershell"),
   tools: object({ disabled: list(string) }),

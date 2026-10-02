@@ -14,6 +14,7 @@ import {
   type ModelInfo,
   type ModelRef,
   modelMessages,
+  type ReasoningEffort,
   type Signature,
   type ToolCallBlock,
   type ToolResultMessage,
@@ -266,6 +267,8 @@ export class Agent {
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
   readonly providerSettings: Record<string, ProviderSettings>
+  #thinking: ReasoningEffort | undefined
+  #defaultThinking: ReasoningEffort | undefined
   /**
    * Loaded tools restored from the session file, checked at the first model call: by then
    * system.build has waited for tools that register late (MCP servers).
@@ -368,6 +371,8 @@ export class Agent {
     this.cwd = opts.cwd
     this.model = opts.model
     this.providerSettings = opts.providerSettings ?? {}
+    this.#thinking = opts.thinking
+    this.#defaultThinking = opts.defaultThinking
     this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
     this.#compaction = opts.compaction ?? {}
     this.#context = opts.context ?? {}
@@ -861,6 +866,16 @@ export class Agent {
     }
   }
 
+  /** Configured effort for the current model, also inherited by sub-agents. */
+  get thinking(): ReasoningEffort | undefined {
+    if (this.parentSessionId) return this.#thinking
+    return (
+      this.#thinking ??
+      this.providerSettings[this.model.provider]?.models?.find((m) => m.id === this.model.id)?.thinking ??
+      this.#defaultThinking
+    )
+  }
+
   /** When and with which model this agent compacts. */
   get compaction(): Readonly<CompactionOptions> {
     return this.#compaction
@@ -1330,6 +1345,7 @@ export class Agent {
       messages: ctx.value.messages,
       tools: () => this.#offeredTools(),
       maxTokens: this.#maxTokens,
+      thinking: this.thinking,
       signal: turn.signal,
       emit: <K extends keyof EventMap>(type: K, data: EventMap[K]) => this.#emit(turn, type, data),
     })
