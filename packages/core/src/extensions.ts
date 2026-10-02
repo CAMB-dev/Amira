@@ -22,6 +22,7 @@ import {
   type SettingsLayer,
   type SettingsLayers,
   type SettingsView,
+  type TerminalApi,
 } from "@amira/api"
 import { fetchPublic, guardedFetch, isPrivateAddress, NetError, parseHttpUrl, readCapped } from "@amira/net"
 import {
@@ -140,6 +141,7 @@ export class ExtensionHost {
   #handlerFailures = new Map<string, number>()
   #agent: (() => Agent) | undefined
   #session: SessionControl | undefined
+  #terminal: TerminalApi | undefined
   readonly status: StatusRegistry
   readonly panels: PanelRegistry
   readonly renderers: ToolRendererRegistry
@@ -176,6 +178,14 @@ export class ExtensionHost {
 
   get loaded(): string[] {
     return [...this.#disposers.keys()]
+  }
+
+  /** Binds the interactive sink; existing extension proxies follow it without reloading. */
+  bindTerminal(terminal: TerminalApi): () => void {
+    this.#terminal = terminal
+    return () => {
+      if (this.#terminal === terminal) this.#terminal = undefined
+    }
   }
 
   /** The settings handed to extensions loaded from now on (e.g. on a reload). */
@@ -450,11 +460,27 @@ export class ExtensionHost {
     // The jobs and listeners this extension adds through the API end with it.
     const backgroundJobs = new ExtensionBackgroundJobs(this.backgroundJobs)
     track(() => backgroundJobs.dispose())
+    let active = true
+    track(() => {
+      active = false
+    })
+    const terminal: TerminalApi = {
+      setTitle: (title) => {
+        if (active) this.#terminal?.setTitle(title)
+      },
+      setProgress: (state) => {
+        if (active) this.#terminal?.setProgress(state)
+      },
+      bell: () => {
+        if (active) this.#terminal?.bell()
+      },
+    }
     return {
       apiVersion: API_VERSION,
       cwd: this.#opts.cwd ?? process.cwd(),
       home: amiraHome(),
       backgroundJobs,
+      terminal,
       reportError: (error) => void this.#fail(source, error),
       notify: (text, level = "info") =>
         void bus.emit(

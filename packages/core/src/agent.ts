@@ -75,7 +75,7 @@ import {
   resultMessage,
   toolError,
 } from "./agent/messages.ts"
-import { modelCall, Thinking } from "./agent/model-call.ts"
+import { compactionFallback, modelCall, Thinking } from "./agent/model-call.ts"
 import { approvalPermission, askedText, refusedText } from "./agent/permission-text.ts"
 import {
   AgentAbortedError,
@@ -1009,10 +1009,7 @@ export class Agent {
   /** Announces the session to subscribers. Frontends call this once they are listening. */
   start(
     reason: EventMap["session.start"]["reason"],
-    extra: Omit<
-      EventMap["session.start"],
-      "reason" | "cwd" | "model" | "contextTokens" | "contextWindow"
-    > = {},
+    extra: Pick<EventMap["session.start"], "sessionFile" | "resume"> = {},
   ): void {
     // A cleared session starts empty, whatever this agent held.
     const context =
@@ -1026,6 +1023,7 @@ export class Agent {
         ...context,
         reason,
         cwd: this.cwd,
+        ...(this.session?.title ? { title: this.session.title } : {}),
         model: { provider: this.model.provider, model: this.model.id },
       },
       {
@@ -2167,7 +2165,7 @@ export class Agent {
           checkpoint = r.checkpoint
           compacted = input
           checkpointTokens = r.usage.output
-        } else fallback = r.error
+        } else fallback = compactionFallback(r, (notice) => this.#emit(turn, "extension.notice", notice))
       }
       const writer = this.#compaction.model ?? this.model
       if (summary === undefined) {

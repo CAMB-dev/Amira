@@ -26,7 +26,6 @@ import {
   isColorEnabled,
   monoTheme,
   ProcessTerminal,
-  progressSupported,
   Spinner,
   setupTerminalInput,
   supportsHyperlinks,
@@ -194,11 +193,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
   /** What Enter does with a message while a turn runs; the queue key does the other. */
   const enterDoes: WhileWorking = settings.submitWhileWorking === "queue" ? "queue" : "steer"
-  const termStatus = new TerminalStatus(terminal, agent.cwd, {
-    title: settings.title ?? true,
-    progress: (settings.progress ?? true) && progressSupported(env),
-    bell: settings.bell ?? true,
-  })
+  const termStatus = new TerminalStatus(
+    terminal,
+    {
+      title: settings.title ?? true,
+      progress: settings.progress ?? true,
+      bell: settings.bell ?? true,
+    },
+    env,
+  )
   /** What the terminal last reported about its focus; unknown until it reports. */
   let focused: boolean | undefined
   const editor = new Editor({
@@ -342,6 +345,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   const forms: FormRequest[] = []
   let form: FormView | undefined
+  function waitingChanged(change: EventMap["ui.waiting"]["change"]) {
+    const pending = dialogs.length + forms.length
+    const hidden = pending > 0 && (viewer !== undefined || (form !== undefined && pending > 1))
+    agent.bus.emit("ui.waiting", { pending, hidden, change }, { sessionId: "host" })
+  }
   /** Titles of everything waiting for an answer, for the banners of full-screen views. */
   const waitingTitles = () => [
     ...dialogs.map((d) => d.request.title),
@@ -390,6 +398,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     showNote,
     view,
     redraw,
+    waitingChanged,
   })
   const openRewind = () => rewind.openRewind()
   const commandRunner = createCommandRunner({
@@ -452,6 +461,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const opened = viewer !== undefined
     if (viewer instanceof ExtensionViewer) viewer.dispose()
     viewer = next
+    waitingChanged("visibility")
     if (opened) return
     view.openOverlay()
     // Elapsed times move even when no event comes.
@@ -466,6 +476,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     viewerTimer = undefined
     view.closeOverlay()
     openNextForm()
+    waitingChanged("visibility")
   }
 
   /** Shows the first waiting form, unless a dialog, the viewer or another form is up. */
@@ -480,8 +491,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     })
     view.openOverlay()
     view.renderOverlay()
-    // A form waits for the user like a dialog does: the tab shows it.
-    termStatus.setWaiting(true)
   }
 
   /** The open form was answered, cancelled, or resolved elsewhere: back to the conversation. */
@@ -491,8 +500,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (!form) return
     form = undefined
     view.closeOverlay()
-    termStatus.setWaiting(dialogs.length > 0 || forms.length > 0)
     openNextForm()
+    waitingChanged("resolved")
   }
 
   let resolveExit!: (code: number) => void
@@ -536,9 +545,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
-      case "session.title":
-        termStatus.setSessionTitle(e.data.title)
-        break
       case "turn.start": {
         const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting, and takes held ones along.
@@ -550,7 +556,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         const shown = merged ? merged.map((text) => ({ ...prompt, display: { text } })) : [prompt]
         if (commandRunner.takeEcho(prompt)) commandRunner.echoedNote(prompt)
         else for (const m of shown) view.user(m)
-        termStatus.turnStarted()
         activity.turnStarted(() => {
           interrupted = false
           turnShowedOutput = false
@@ -627,7 +632,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (e.data.reason === "error") errorNotice(e.data)
         else if (e.data.reason === "aborted") view.notice("interrupted", interruptedText())
         else if (!turnShowedOutput) view.notice("info", "No reply")
-        termStatus.turnEnded(e.data.reason)
         if (flush) {
           // Stopped with Esc: the steering the turn dropped and the queued messages go out as
           // one, in the order they were typed; unless a second Esc asked to rewind instead.
@@ -653,9 +657,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "status.changed":
         // A failed model request tried again says so until the stream goes on (or the turn ends).
         activity.setRetrying(statusRetryLabel(e.data as Parameters<typeof statusRetryLabel>[0]))
-        break
-      case "workspace.changed":
-        termStatus.setBranch(e.data.branch)
         break
       case "compact.start":
         activity.startCompaction(e.data.native === true)
@@ -732,12 +733,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (e.data.kind === "form") {
           forms.push(e.data)
           openNextForm()
+          waitingChanged("opened")
           break
         }
         const dialog = new Dialog(e.data, (answer) => answerDialog(ui, dialog, answer), keys)
         dialogs.push(dialog)
         // Over the viewer or a form it shows only as a banner; the bell rings so it is noticed.
-        termStatus.setWaiting(true, viewer !== undefined || form !== undefined)
+        waitingChanged("opened")
         break
       }
       case "ui.resolved": {
@@ -748,7 +750,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         if (f && form && forms[0] === f) form.close()
         else if (f) forms.splice(forms.indexOf(f), 1)
         openNextForm()
-        termStatus.setWaiting(dialogs.length > 0)
+        waitingChanged("resolved")
         break
       }
       case "command.output":
@@ -963,8 +965,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     agent = next
     commandRunner.clearEchoes()
     noticeStrip.reset()
-    termStatus.setFolder(next.cwd)
-    termStatus.setSessionTitle(next.session?.title)
     showSession(next, true)
     view.requestRender()
   }
@@ -1073,7 +1073,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
     const i = dialogs.indexOf(dialog)
     if (i !== -1) dialogs.splice(i, 1)
-    termStatus.setWaiting(dialogs.length > 0)
     const { requestId } = dialog.request
     const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
     if (answer === undefined || refused) ui.cancel(requestId)
@@ -1087,6 +1086,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
     view.requestRender()
     openNextForm()
+    waitingChanged("resolved")
   }
 
   let quitting = false
@@ -1106,10 +1106,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     filePicker.dispose()
     ownFiles?.dispose()
     for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
+    waitingChanged("resolved")
     spinner.stop()
     noticeStrip.dispose()
     reader.stop()
     view.stop()
+    unbindTerminal?.()
     termStatus.stop()
     if (terminal instanceof ProcessTerminal) terminal.stop()
     else terminal.restore()
@@ -1117,10 +1119,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   function onInput(e: InputEvent) {
-    // Focus is the terminal's, not a key: it goes to the title and bell even over the viewer,
-    // and to extensions as ui.focus when it changes.
+    // Focus reaches extensions even over the viewer.
     if (e.type === "focus") {
-      termStatus.focus(e.focused)
       if (e.focused !== focused) {
         focused = e.focused
         agent.bus.emit("ui.focus", { focused }, { sessionId: "host" })
@@ -1360,11 +1360,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       (level) => setDetail(level),
     ),
   )
+  termStatus.start()
+  const unbindTerminal = opts.bindTerminal?.(termStatus)
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
-  termStatus.setSessionTitle(agent.session?.title)
-  termStatus.start()
   view.banner(
     `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${tildePath(agent.cwd, env)}`)}`,
   )

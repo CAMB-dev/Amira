@@ -1,9 +1,9 @@
-import { PANEL_MAX_LINES, type PanelDefinition, type PanelRenderOptions, type ViewLine } from "@amira/api"
+import { PANEL_MAX_LINES, type PanelDefinition, type PanelRenderOptions, type ToolLine } from "@amira/api"
 
 /** A panel's lines as a frontend draws them: cut to PANEL_MAX_LINES, one row each. */
 export interface ResolvedPanel {
   id: string
-  lines: ViewLine[]
+  lines: ToolLine[]
 }
 
 interface Entry {
@@ -12,7 +12,7 @@ interface Entry {
   seq: number
 }
 
-const KINDS = new Set<ViewLine["kind"]>([
+const KINDS = new Set<ToolLine["kind"]>([
   "text",
   "muted",
   "accent",
@@ -73,12 +73,12 @@ export class PanelRegistry {
         continue
       }
       if (!Array.isArray(raw)) continue
-      const lines: ViewLine[] = []
+      const lines: ToolLine[] = []
       for (const l of raw as unknown[]) {
-        if (!l || typeof l !== "object" || typeof (l as ViewLine).text !== "string") continue
-        const kind = KINDS.has((l as ViewLine).kind) ? (l as ViewLine).kind : "text"
+        if (!l || typeof l !== "object" || typeof (l as ToolLine).text !== "string") continue
+        const kind = KINDS.has((l as ToolLine).kind) ? (l as ToolLine).kind : "text"
         // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
-        lines.push({ kind, text: (l as ViewLine).text.replace(/[\x00-\x1f\x7f]/g, " ").trimEnd() })
+        lines.push({ kind, text: (l as ToolLine).text.replace(/[\x00-\x1f\x7f]/g, " ").trimEnd() })
       }
       if (!lines.length) continue
       const shown = opts.collapsed

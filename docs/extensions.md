@@ -181,13 +181,24 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 ### Full-screen views
 
 Register a `ViewDefinition` with `api.registerView()` and open it from a command with
-`ctx.openView?.({ kind, data })`. Views return plain `ViewLine` objects; the frontend owns
+`ctx.openView?.({ kind, data })`. Views return structured `ViewLine` objects; the frontend owns
 the terminal, wrapping, scrolling, prompts and confirmations. The `subagent` kind and
 `/agents` command are registered by the built-in agent extension. Without that extension,
 opening a child from a transcript block reports that the live view is unavailable.
 
-`title(data, opts)` gives the first line; `titleAside(data)` adds short text kept at its
-right end, such as `2 of 5`, while the title is cut on a narrow screen.
+`title(data, opts)` returns `string | ViewLine` for the first line. A string keeps the
+default `◆` marker; a semantic `ViewLine` supplies the whole title without an automatic
+marker. The frontend truncates either form to the available title space.
+`titleAside(data)` adds short text kept at its right end, such as `2 of 5`.
+
+`ViewLine` supports semantic content without ANSI escape codes. Frontends own its styling:
+
+- `{ kind: "segments", parts: ViewSegment[] }` combines styled text into one line,
+  truncated by the frontend rather than wrapped. The exported `ViewSegment` type is
+  `{ text: string, kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }`.
+- `{ kind: "user-message", text: string, note?: string }` renders like a transcript user
+  message, including wrapping, background and spacing. Supply only the message text; do
+  not add a `›` marker yourself. An optional note appears below it, inside the same band.
 
 Keys can be one printable character or `left`, `right`, `tab`, and `shift-tab`. Keys with
 the same label share one footer item (`←→ switch`); an empty label keeps a key, such as an
@@ -228,7 +239,7 @@ Extension-specific settings belong under `extensions` with the extension name. T
 
 ### Session thinking effort
 
-API 0.1.18 adds `SessionControl.setThinking(level: ReasoningEffort | undefined): void`. Get the control from a command's context or `api.session()`; the latter can return `undefined` before the host injects it. Accepted levels are `low`, `medium`, `high`, `xhigh` and `max`. The override is session-only, writes no settings, and takes precedence over `--thinking`, the per-model setting and the top-level setting, in that order. Passing `undefined` explicitly suppresses all of those sources so no effort is sent and the server default applies; it does not remove the runtime override.
+API 0.1.20 adds `SessionControl.setThinking(level: ReasoningEffort | undefined): void`. Get the control from a command's context or `api.session()`; the latter can return `undefined` before the host injects it. Accepted levels are `low`, `medium`, `high`, `xhigh` and `max`. The override is session-only, writes no settings, and takes precedence over `--thinking`, the per-model setting and the top-level setting, in that order. Passing `undefined` explicitly suppresses all of those sources so no effort is sent and the server default applies; it does not remove the runtime override.
 
 `setThinking` throws while a turn, compaction or reload is running. The choice is retained for later thinking models and inherited by sub-agents spawned after the change. Like the current model, it carries over to the conversation that `/clear`, `/resume`, a rewind or a fork switches to; it is kept in memory only, so a new Amira process starts from the flag and settings again.
 
@@ -297,7 +308,11 @@ The host registry exposes `maxRunning`, `configure`, `stopAll` and `isLimitError
 
 Registrations return removal functions and are tracked by the host. Unloading removes them; a failed extension load rolls back its registrations. For matching command, tool, skill, status or panel names, an intentional replacement needs `override: true`; consult the specific type for collision rules. Do not replace another extension's registrations accidentally.
 
-Events include `session.start`, `workspace.changed`, `tool.execute.start` and `tool.execute.end` (both carry the tool's `traits` and, for a writer, the `writtenPaths` it reported). Event listeners receive an envelope containing event data and the session ID, so filter by session when maintaining session-specific state. On reload, newly registered listeners receive current session/workspace/budget events to rebuild state. Native resources you create yourself need their own cleanup.
+Events include `session.start` (with the initial optional `title`), `workspace.changed`, `tool.execute.start` and `tool.execute.end` (both carry the tool's `traits` and, for a writer, the `writtenPaths` it reported). Event listeners receive an envelope containing event data and the session ID, so filter by session when maintaining session-specific state. On reload, newly registered listeners receive current session/workspace/budget events and the latest `ui.focus` and `ui.waiting` state. Waiting is replayed as a visibility change, without announcing a new question. Native resources you create yourself need their own cleanup.
+
+`api.terminal` is a stable structured capability: `setTitle(title: string)`, `setProgress(state: "none" | "indeterminate" | "paused")` and `bell()`. It exposes no raw writes or escape sequences. Print and RPC frontends leave these methods as no-ops. The TUI sanitizes and limits titles to 128 terminal cells, coalesces effects at a microtask boundary outside frame writes, respects `tui.title`, `tui.progress` and `tui.bell`, detects progress support and restores the terminal on exit.
+
+The built-in `@amira/ext-terminal-status` owns title composition, working/waiting progress and bell policy; `--no-builtins` disables it. The TUI emits `ui.waiting` after questions (including local rewind dialogs), forms and overlays change: `{ pending: number, hidden: boolean, change: "opened" | "resolved" | "visibility" }`. `hidden` means an overlay covers a pending answer. Hidden question openings ring once; visibility changes do not ring. Focus reports arrive as `ui.focus`; completion and visible questions ring when unfocused, or after 15 seconds of a turn if focus is unknown. Aborted turns do not ring.
 
 Use `/reload` after editing the extension entry file. Modules imported by that file stay cached, so restart Amira after changing helper modules. Keep render callbacks cheap and call `requestRender` after changing visible state.
 

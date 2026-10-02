@@ -1,5 +1,5 @@
 /** Public API for Amira extensions. Extensions may import only from this package. */
-export const API_VERSION = "0.1.18"
+export const API_VERSION = "0.1.20"
 
 export type {
   AssistantMessage,
@@ -40,6 +40,7 @@ export * from "./services.ts"
 export * from "./settings.ts"
 export * from "./skills.ts"
 export * from "./subagents.ts"
+export type { TerminalApi, TerminalProgress } from "./terminal.ts"
 export * from "./tool-details.ts"
 export * from "./tool-renderers.ts"
 export * from "./tools.ts"

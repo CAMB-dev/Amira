@@ -9,14 +9,25 @@ import type { ToolCallView, ToolDetailLevel, ToolLine } from "./tool-renderers.t
  * describe what they are rather than how they look (as tool presenters do).
  */
 
-/** A line of a view: plain text, styled by the frontend after its kind. */
-export type ViewLine = ToolLine
+/** A piece of a line, styled by meaning rather than by a frontend-specific color. */
+export interface ViewSegment {
+  text: string
+  kind: "text" | "muted" | "accent" | "success" | "warning" | "error"
+}
+
+/** Lines styled by the frontend; text and parts contain no raw styling. */
+export type ViewLine =
+  | ToolLine
+  /** A single row with independently styled parts, cut to the available width. */
+  | { kind: "segments"; parts: ViewSegment[] }
+  /** A user message, with the transcript's marker, wrapping and background band. */
+  | { kind: "user-message"; text: string; note?: string }
 
 export interface ViewRenderOptions {
   /**
    * Columns available for each line. Longer text lines (text, muted, accent, success, warning,
    * error) wrap, their later rows hanging under the text after any leading marker; code and
-   * diff lines are cut.
+   * diff and segments lines are cut. User-message lines wrap like transcript user messages.
    */
   width: number
   /** The current time, in ms since the epoch, for elapsed times. */
@@ -67,8 +78,12 @@ export type ViewKeyName = "left" | "right" | "tab" | "shift-tab" | (string & {})
 export interface ViewDefinition<D = any> {
   /** The name commands open it by. */
   kind: string
-  /** The first line of the screen; `opts` gives the time for an elapsed time shown there. */
-  title(data: D, opts: ViewRenderOptions): string
+  /**
+   * The first line of the screen; `opts` gives the time for an elapsed time shown there.
+   * A string gets the frontend's default marker. A semantic line supplies the whole title,
+   * without an added marker; it is cut to the available title space rather than wrapped.
+   */
+  title(data: D, opts: ViewRenderOptions): string | ViewLine
   /**
    * Short text at the right end of the title line, such as "2 of 5". It stays whole while
    * the title is cut on a narrow screen.

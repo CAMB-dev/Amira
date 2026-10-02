@@ -21,11 +21,12 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { renderToolLines, terminalText } from "./diff-view.ts"
+import { terminalText } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
+import { renderViewLines, viewTitle } from "./view-lines.ts"
 
 /** Where the TUI finds the view kinds extensions registered. */
 export interface ViewSource {
@@ -71,6 +72,10 @@ const HANG = /^(\s*)((?:[^\p{L}\p{N}\s]{1,2}|\d{1,3}[.)])\s+)?/u
 export function wrapViewLines(lines: readonly ViewLine[], width: number): ViewLine[] {
   const out: ViewLine[] = []
   for (const l of lines) {
+    if (l.kind === "segments" || l.kind === "user-message") {
+      out.push(l)
+      continue
+    }
     const text = terminalText(l.text)
     if (!WRAPPED.has(l.kind) || l.lineNo !== undefined || visibleWidth(text) <= width) {
       out.push(l)
@@ -247,11 +252,14 @@ export class ExtensionViewer implements Component {
     const aside = asideText ? theme.muted(truncateToWidth(` ${asideText}`, width, glyphs.more)) : ""
     // The aside stays at the right end; the title is cut first on a narrow screen.
     const room = width - visibleWidth(aside)
-    const fitted = truncateToWidth(
-      `${theme.accent(glyphs.subagent)} ${theme.text(oneLine(title))}`,
-      Math.max(1, room),
-      glyphs.more,
-    )
+    const fitted =
+      typeof title === "string"
+        ? truncateToWidth(
+            `${theme.accent(glyphs.subagent)} ${theme.text(oneLine(title))}`,
+            Math.max(1, room),
+            glyphs.more,
+          )
+        : viewTitle(title, theme, Math.max(1, room))
     head.push(aside ? fitted + " ".repeat(Math.max(0, room - visibleWidth(fitted))) + aside : fitted)
     const extra = this.#view.header
       ? (this.#call("header", () => this.#view.header?.(this.#data, opts)) ?? [])
@@ -303,7 +311,7 @@ export class ExtensionViewer implements Component {
     const out: string[] = []
     let plain: ViewLine[] = []
     const flush = () => {
-      out.push(...renderToolLines(plain, theme, width))
+      out.push(...renderViewLines(plain, theme, width))
       plain = []
     }
     for (const line of wrapViewLines(lines, width)) {

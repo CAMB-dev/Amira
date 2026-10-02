@@ -107,6 +107,8 @@ export interface EventMap {
   "session.start": {
     reason: "startup" | "resume" | "fork" | "clear"
     cwd: string
+    /** The session's initial title, if named. */
+    title?: string
     model: ModelRef
     /** Where the session is stored, once sessions are persisted. */
     sessionFile?: string
@@ -268,6 +270,8 @@ export interface EventMap {
    * whether the user is looking is unknown. E.g. for notifying only a user who is away.
    */
   "ui.focus": { focused: boolean }
+  /** Frontend questions, including local dialogs; hidden means an overlay covers an answer. */
+  "ui.waiting": { pending: number; hidden: boolean; change: "opened" | "resolved" | "visibility" }
   /** Progress of a form action (a button such as "Fetch models") running on the host. */
   "ui.progress": { requestId: string; action: string; text: string }
   /** Text a slash command shows the user; `command` is its name, without the slash. */

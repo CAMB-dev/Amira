@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, jest, test } from "bun:test"
 import { createAi } from "../src/client.ts"
 import type { Dialect, DialectCompactOutcome, ProviderCompat } from "../src/dialect.ts"
 import {
@@ -7,11 +7,14 @@ import {
   isUnsupportedCompaction,
   type RememberedFailures,
 } from "../src/native-compaction.ts"
+import type { RetryOptions } from "../src/retry.ts"
 import type { ModelRequest } from "../src/types.ts"
 
+type Script = DialectCompactOutcome | ((signal: AbortSignal) => Promise<DialectCompactOutcome>)
+
 /** A dialect whose compaction answers from a script, one outcome per call, and records calls. */
-function fakeDialect(outcomes: DialectCompactOutcome[]) {
-  const calls: { method: string; req: ModelRequest }[] = []
+function fakeDialect(outcomes: Script[]) {
+  const calls: { method: string; req: ModelRequest; signal: AbortSignal }[] = []
   const dialect: Dialect = {
     id: "fake",
     async *stream() {},
@@ -20,16 +23,17 @@ function fakeDialect(outcomes: DialectCompactOutcome[]) {
       layouts: ["tail", "recent-user"],
       midTurn: true,
       official: (baseUrl) => baseUrl.startsWith("https://official."),
-      async compact(method, req) {
-        calls.push({ method, req })
-        return (
-          outcomes.shift() ?? {
-            ok: false,
-            error: { message: "no script" },
-            unsupported: false,
-            retryable: false,
-          }
-        )
+      async compact(method, req, ctx) {
+        calls.push({ method, req, signal: ctx.signal })
+        const next = outcomes.shift()
+        return typeof next === "function"
+          ? next(ctx.signal)
+          : (next ?? {
+              ok: false,
+              error: { message: "no script" },
+              unsupported: false,
+              retryable: false,
+            })
       },
     },
   }
@@ -49,15 +53,16 @@ const unsupported = (message = "HTTP 404: not found"): DialectCompactOutcome => 
 })
 
 function setup(
-  outcomes: DialectCompactOutcome[],
+  outcomes: Script[],
   baseUrl = "http://proxy.local/v1",
   compat?: ProviderCompat,
+  retry: RetryOptions = { retries: 2, baseDelayMs: 1 },
 ) {
   const { dialect, calls } = fakeDialect(outcomes)
   const saved: RememberedFailures[] = []
   const ai = createAi({
     dialects: [dialect],
-    retry: { retries: 2, baseDelayMs: 1 },
+    retry,
     compactionMemory: { load: () => ({}), save: (f) => void saved.push(structuredClone(f)) },
     providers: [
       {
@@ -162,6 +167,120 @@ test("an abort stops trying", async () => {
   const r = await ai.compact(req(), abort.signal)
   expect(r).toMatchObject({ ok: false, aborted: true })
   expect(calls).toEqual([])
+})
+
+test("native compaction times out, aborts its request, and remains supported", async () => {
+  const hang: Script = (signal) =>
+    new Promise((resolve) => {
+      signal.addEventListener("abort", () => resolve(unsupported("aborted")), { once: true })
+    })
+  const { ai, calls, saved, req } = setup([hang, ok()], "https://official.example", undefined, {
+    retries: 3,
+    nativeCompactionTimeoutMs: 15,
+  })
+  const caller = new AbortController()
+  expect(await ai.compact(req(), caller.signal)).toMatchObject({
+    ok: false,
+    timedOut: true,
+    error: "native compaction timed out after 15 ms",
+  })
+  expect(calls).toHaveLength(1)
+  expect(calls[0]!.signal.aborted).toBe(true)
+  expect(caller.signal.aborted).toBe(false)
+  expect(saved).toEqual([])
+  expect(ai.nativeCompaction(ai.model("p/m"))?.methods).toEqual(["first", "second"])
+  expect((await ai.compact(req())).ok).toBe(true)
+})
+
+test("the default native deadline is five minutes; late outcomes cannot change its result", async () => {
+  jest.useFakeTimers()
+  try {
+    const late = Promise.withResolvers<DialectCompactOutcome>()
+    const { ai, calls, saved, req } = setup([() => late.promise], "https://official.example")
+    let settled = false
+    const done = ai.compact(req()).then((result) => {
+      settled = true
+      return result
+    })
+    jest.advanceTimersByTime(299_999)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(calls[0]!.signal.aborted).toBe(false)
+    jest.advanceTimersByTime(1)
+    const result = await done
+    expect(result).toMatchObject({
+      ok: false,
+      timedOut: true,
+      error: "native compaction timed out after 300000 ms",
+      usage: { input: 0, output: 0 },
+      tried: [],
+    })
+    expect(calls[0]!.signal.aborted).toBe(true)
+    late.resolve({ ...unsupported(), usage: { input: 100, output: 1, cacheRead: 0, cacheWrite: 0 } })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(result.usage.input).toBe(0)
+    expect(result.tried).toEqual([])
+    expect(saved).toEqual([])
+  } finally {
+    jest.useRealTimers()
+  }
+})
+
+test("zero disables the native deadline, and success clears it and the caller's abort listener", async () => {
+  jest.useFakeTimers()
+  try {
+    for (const nativeCompactionTimeoutMs of [0, 15]) {
+      const finish = Promise.withResolvers<DialectCompactOutcome>()
+      const { ai, calls, req } = setup([() => finish.promise], "https://official.example", undefined, {
+        nativeCompactionTimeoutMs,
+      })
+      const caller = new AbortController()
+      const done = ai.compact(req(), caller.signal)
+      if (nativeCompactionTimeoutMs === 0) {
+        jest.advanceTimersByTime(600_000)
+        expect(calls[0]!.signal.aborted).toBe(false)
+      }
+      finish.resolve(ok())
+      expect((await done).ok).toBe(true)
+      jest.advanceTimersByTime(600_000)
+      caller.abort()
+      expect(calls[0]!.signal.aborted).toBe(false)
+    }
+  } finally {
+    jest.useRealTimers()
+  }
+})
+
+test("the native deadline includes retry waits and retains usage from completed attempts", async () => {
+  const busy: DialectCompactOutcome = {
+    ok: false,
+    error: { message: "HTTP 503" },
+    retryable: true,
+    unsupported: false,
+    usage: { input: 10, output: 0, cacheRead: 0, cacheWrite: 0 },
+  }
+  const { ai, calls, saved, req } = setup([busy, ok()], "https://official.example", undefined, {
+    retries: 3,
+    baseDelayMs: 10_000,
+    nativeCompactionTimeoutMs: 15,
+  })
+  expect(await ai.compact(req())).toMatchObject({ ok: false, timedOut: true, usage: { input: 10 } })
+  expect(calls).toHaveLength(1)
+  expect(saved).toEqual([])
+})
+
+test("user cancellation is not a timeout, even when the native provider ignores abort", async () => {
+  const { ai, calls, req } = setup([() => new Promise(() => {})], "https://official.example", undefined, {
+    nativeCompactionTimeoutMs: 0,
+  })
+  const caller = new AbortController()
+  const done = ai.compact(req(), caller.signal)
+  caller.abort()
+  const result = await done
+  expect(result).toMatchObject({ ok: false, aborted: true, error: "aborted" })
+  expect(!result.ok && result.timedOut).toBeUndefined()
+  expect(calls[0]!.signal.aborted).toBe(true)
 })
 
 test("remembered failures load from memory and are forgotten after a while", () => {

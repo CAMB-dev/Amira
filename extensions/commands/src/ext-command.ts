@@ -8,7 +8,7 @@ import {
   type ExtensionScope,
   type ManagedExtension,
   type SelectSection,
-  type ViewLine,
+  type ToolLine,
 } from "@amira/api"
 
 const USAGE =
@@ -100,11 +100,11 @@ export function extensionRows(installed: ManagedExtension[], available: Availabl
   }
 }
 
-export function extensionProgressLines(rows: ExtensionProgress[], width: number): ViewLine[] {
+export function extensionProgressLines(rows: ExtensionProgress[], width: number): ToolLine[] {
   return [
     { kind: "muted", text: clip("Extensions · working", width) },
     ...rows.map(
-      (p): ViewLine => ({
+      (p): ToolLine => ({
         kind:
           p.phase === "failed"
             ? "error"
