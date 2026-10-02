@@ -115,6 +115,15 @@ test("a stored mock run records parent and child, retries, parallel tools, compa
     const retry = events.find((event) => event.type === "model.retry")!
     const model = records.find((record) => record.type === "model" && record.retries?.length)
     expect(model).toMatchObject({ retries: [{ at: retry.ts, delayMs: 1, kind: "rate" }] })
+    // withRetry only sends again before any content, so a failed attempt emits no delta and the
+    // first token belongs to the attempt that succeeded.
+    const first = events.find((event) => event.type === "message.start")!
+    expect(
+      events.filter(
+        (event) => event.type === "message.delta" && event.seq > first.seq && event.seq < retry.seq,
+      ),
+    ).toEqual([])
+    expect(model?.type === "model" && model.firstToken).toBeGreaterThanOrEqual(retry.ts)
     const compact = records.find((record) => record.type === "compact")
     expect(compact).toMatchObject({
       reason: "manual",
