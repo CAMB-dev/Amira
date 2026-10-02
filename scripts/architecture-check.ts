@@ -89,7 +89,7 @@ function sourceLineCapViolations(): string[] {
 
   const main = gitOutput(["rev-parse", "--verify", "refs/remotes/origin/main"]) ? "origin/main" : "main"
   const base = gitOutput(["merge-base", "HEAD", main])
-  const source = base ? gitOutput(["show", `${base}:scripts/architecture-check.ts`]) : undefined
+  const source = base ? gitOutput(["show", `${base}:./scripts/architecture-check.ts`]) : undefined
   if (source === undefined) {
     console.log("Source line cap ratchet skipped: git or the merge-base script is unavailable.")
     return []
