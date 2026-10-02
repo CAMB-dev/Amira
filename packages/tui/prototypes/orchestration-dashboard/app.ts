@@ -86,7 +86,9 @@ export interface App {
   collapsed: Set<string>
   autoOpened: Set<string>
   scroll: Record<string, number>
-  overlay?: { kind: "diff" | "detail"; id: string }
+  overlay?: { kind: "diff" | "detail" | "page"; id: string }
+  /** The page a diff was opened from, to go back to it. */
+  returnTo?: string
   input: LineInput
   inputOn: boolean
   inputMode: "msg" | "request"
@@ -477,6 +479,42 @@ function detailOverlay(app: App, base: string[], w: number, h: number): string[]
   return overlay(base, box, x, y)
 }
 
+/** Full-screen page for one agent: big tabs (←→ or 1–4), the whole height for the tab's content. */
+function pageView(app: App, w: number, h: number): string[] {
+  const run = runOf(app)
+  const a = byId(run, app.overlay!.id)
+  if (!a) return []
+  const head = [
+    "",
+    lr(
+      `  ${glyph(a.status, app.now)}  ${bold(a.name)}   ${a.task}`,
+      `${statusWord(a)}   ${runtime(run, a)}   ${tok(a.tokens)} tok  `,
+      w,
+    ),
+    "",
+  ]
+  const tabs = TABS.map((t, i) => {
+    const label = `  ${i + 1} ${t}  `
+    return i === app.tab ? C.run(bold(label)) : C.muted(label)
+  }).join(C.border("│"))
+  const marks = TABS.map((t, i) => {
+    const width = t.length + 6
+    return i === app.tab ? C.run("━".repeat(width)) : " ".repeat(width)
+  }).join(" ")
+  const top = [...head, `  ${tabs}`, `  ${marks}`, C.border("─".repeat(w))]
+  const vh = h - top.length - 1
+  const tail = TABS[app.tab] === "Logs"
+  const inner = Math.min(w - 6, 110)
+  region(app, "page", 3, top.length, inner, vh, tail)
+  const body = viewport(app, "page", detailTab(app, a, inner), vh, tail).map((l) => `   ${l}`)
+  const keys = lr(
+    ` ${C.run("←→")} ${C.muted("tab")}   ${C.run("1-4")} ${C.muted("jump")}   ${C.run("↑↓ PgUp/PgDn")} ${C.muted("scroll")}   ${C.run("o")} ${C.muted("diff")}   ${C.run("p")} ${C.muted("pause")}   ${C.run("r")} ${C.muted("changes")}`,
+    `${C.run("Esc")} ${C.muted("back")} `,
+    w,
+  )
+  return [...top, ...body, ...Array(Math.max(0, vh - body.length)).fill(""), keys]
+}
+
 // ---------------------------------------------------------------------------------------------
 // Frame
 
@@ -486,6 +524,7 @@ export function renderApp(app: App, w: number, h: number): string[] {
   const bodyH = h - 1
   let body: string[]
   if (app.overlay?.kind === "diff") body = diffOverlay(app, w, bodyH)
+  else if (app.overlay?.kind === "page") body = pageView(app, w, bodyH)
   else {
     body = v.render(app, w, bodyH)
     if (app.overlay?.kind === "detail") {
@@ -573,11 +612,28 @@ export function handleInput(app: App, e: InputEvent): void {
   const v = app.variants[app.variant]!
   const n = app.variants.length
   if (app.overlay) {
-    const name = app.overlay.kind === "diff" ? "diff" : "detail"
-    const tail = app.overlay.kind === "detail" && TABS[app.tab] === "Logs"
+    const name = app.overlay.kind
+    const tail = app.overlay.kind !== "diff" && TABS[app.tab] === "Logs"
     if (e.name === "escape" || (e.name === "enter" && app.overlay.kind === "detail")) {
-      app.overlay = undefined
+      // From a diff opened on the page, Esc goes back to the page.
+      app.overlay =
+        app.overlay.kind === "diff" && app.returnTo ? { kind: "page", id: app.returnTo } : undefined
+      app.returnTo = undefined
       return
+    }
+    if (app.overlay.kind === "page") {
+      const n = TABS.length
+      const jump = Number(e.name)
+      if (e.name === "left" || e.name === "right" || (jump >= 1 && jump <= n)) {
+        app.tab = jump >= 1 ? jump - 1 : (app.tab + (e.name === "left" ? n - 1 : 1)) % n
+        app.scroll.page = 0
+        return
+      }
+      if (e.name === "o") {
+        app.returnTo = app.overlay.id
+        app.overlay = { kind: "diff", id: app.overlay.id }
+        return
+      }
     }
     if (e.name === "up") return scrollBy(app, name, tail, -1)
     if (e.name === "down") return scrollBy(app, name, tail, 1)

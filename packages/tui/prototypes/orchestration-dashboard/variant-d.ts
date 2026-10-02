@@ -6,15 +6,11 @@ import { bold, type KeyEvent } from "@amira/tui-kit"
 import {
   type App,
   children,
-  detailTab,
   inputText,
   keepVisible,
-  phaseLines,
   region,
   runOf,
   selectedAgent,
-  TABS,
-  tabsRow,
   type Variant,
   viewport,
 } from "./app.ts"
@@ -73,44 +69,40 @@ interface Row {
   id?: string
 }
 
-function agentRows(app: App, a: Agent, w: number, depth: number): Row[] {
+function agentRows(app: App, a: Agent, last: boolean, w: number, prefix: string): Row[] {
   const run = runOf(app)
   const sel = app.sel[app.data] === a.id
   const open = sel || app.expanded.has(a.id)
-  const pad = "    ".repeat(depth + 1)
+  const branch = C.border(last ? "└─ " : "├─ ")
+  const cont = `${prefix}${C.border(last ? "   " : "│  ")}`
   const time = a.startedAt === undefined ? "" : dur((a.endedAt ?? run.clock) - a.startedAt)
   const progress = a.status === "queued" ? C.muted("queued") : pips(a.steps)
-  const left = `${pad}${glyph(a.status, app.now)}  ${bold(a.name)}${GAP}${fit(a.task, Math.max(12, w - 60))}`
+  const left = `${prefix}${branch}${glyph(a.status, app.now)}  ${bold(a.name)}${GAP}${fit(a.task, Math.max(12, w - 60))}`
   const right = `${progress}${GAP}${C.muted(time)} `
   const rows: Row[] = [{ line: lr(left, right, w), id: a.id }]
-  const sub = (s: string) => rows.push({ line: fit(`${pad}   ${s}`, w) })
+  const sub = (s: string) => rows.push({ line: fit(`${cont}   ${s}`, w) })
   if (a.status === "approval") sub(C.warn(`waiting for approval: ${a.approval}`))
   if (open) {
     const now = currentStep(a)
     if (now) sub(`${C.run("›")} ${now}`)
     const files = a.files.length
-    sub(
-      C.muted(
-        a.tool
-          ? `${a.tool}${files ? ` · ${files} file${files > 1 ? "s" : ""} changed` : ""}`
-          : files
-            ? `${files} file${files > 1 ? "s" : ""} changed`
-            : statusWord(a),
-      ),
-    )
+    const changed = files ? `${files} file${files > 1 ? "s" : ""} changed` : ""
+    sub(C.muted([a.tool, changed].filter(Boolean).join(" · ") || statusWord(a)))
   }
   const kids = children(run, a.id)
   if (kids.length && (open || kids.some((k) => k.status === "running"))) {
-    for (const k of kids) rows.push(...agentRows(app, k, w, depth + 1))
+    kids.forEach((k, i) => rows.push(...agentRows(app, k, i === kids.length - 1, w, cont)))
   }
   return rows
 }
+
+const RAIL = "    " // phases' left rail sits under the glyph column
 
 function timeline(app: App, w: number): Row[] {
   const run = runOf(app)
   const rows: Row[] = []
   run.phases.forEach((p, i) => {
-    if (i > 0) rows.push({ line: "" })
+    const lastPhase = i === run.phases.length - 1
     const open = app.expanded.has(p.id)
     const as = phaseAgents(run, p.id)
     const sel = app.sel[app.data] === p.id
@@ -120,16 +112,44 @@ function timeline(app: App, w: number): Row[] {
       line: lr(` ${phaseGlyph(p, app.now)}  ${name}${fold}`, `${phaseNote(run, p)} `, w),
       id: p.id,
     })
-    if (sel && !open && as.length) rows.push({ line: C.muted(`     ${as.length} inside · Enter to open`) })
-    if (open) for (const a of as) rows.push(...agentRows(app, a, w, 0))
+    const rail = lastPhase ? " " : C.border("│")
+    if (sel && !open && as.length)
+      rows.push({ line: ` ${rail}  ${C.muted(`${as.length} inside · → to expand`)}` })
+    if (open) as.forEach((a, j) => rows.push(...agentRows(app, a, j === as.length - 1, w, ` ${rail}  `)))
+    if (!lastPhase) rows.push({ line: ` ${C.border("│")}` })
   })
   return rows
+}
+
+/** A few lines about the selection; Enter opens the full-screen page for an agent. */
+function preview(app: App, a: Agent | undefined, ph: Phase | undefined, w: number, h: number): string[] {
+  const run = runOf(app)
+  const lines: string[] = []
+  if (a) {
+    lines.push(
+      lr(
+        `  ${glyph(a.status, app.now)} ${bold(a.name)}   ${C.muted(a.task)}`,
+        `${statusWord(a)}   ${tok(a.tokens)} tok · ${cost(a.cost)}  `,
+        w,
+      ),
+    )
+    lines.push(`  ${C.muted(fit(a.summary, w - 4))}`)
+    const now = currentStep(a)
+    if (now) lines.push(`  ${C.run("›")} ${fit(now, w - 6)}`)
+  } else if (ph) {
+    const as = phaseAgents(run, ph.id)
+    lines.push(
+      `  ${phaseGlyph(ph, app.now)} ${bold(ph.name)}   ${C.muted(`${as.length} agent${as.length === 1 ? "" : "s"}`)}`,
+    )
+  }
+  while (lines.length < h) lines.push("")
+  return lines.slice(0, h)
 }
 
 function render(app: App, w: number, h: number): string[] {
   const run = runOf(app)
   const out = header(app, w)
-  const panelH = Math.max(7, Math.min(12, Math.round(h * 0.34)))
+  const panelH = 5
   const tlH = Math.max(3, h - out.length - panelH - 3)
   const rows = timeline(app, w)
   const lines = rows.map((r) => (r.id && r.id === app.sel[app.data] ? C.sel(fit(r.line, w)) : r.line))
@@ -141,21 +161,10 @@ function render(app: App, w: number, h: number): string[] {
   const a = selectedAgent(app)
   const ph = run.phases.find((p) => p.id === app.sel[app.data])
   out.push(C.border("─".repeat(w)))
-  const title = a ? `${glyph(a.status, app.now)} ${bold(a.name)} ` : ph ? `${bold(ph.name)} ` : ""
-  out.push(tabsRow(app, w, title))
-  const ch = panelH - 2
-  const tail = TABS[app.tab] === "Logs"
-  const body = a
-    ? detailTab(app, a, Math.min(w - 4, 96))
-    : ph
-      ? phaseLines(app, ph, w - 4)
-      : [C.muted("Nothing selected")]
-  region(app, "d.panel", 2, out.length, w - 4, ch, tail)
-  out.push(...viewport(app, "d.panel", body, ch, tail).map((l) => `  ${l}`))
-
+  out.push(...preview(app, a, ph, w, panelH - 1))
   const keys = a
-    ? `${C.run("o")} ${C.muted("diff")}${GAP}${C.run("p")} ${C.muted("pause")}${GAP}${C.run("r")} ${C.muted("changes")}${a.status === "approval" ? `${GAP}${C.run("a/x")} ${C.muted("approve/deny")}` : ""}`
-    : `${C.run("Enter")} ${C.muted("open")}`
+    ? `${C.run("Enter")} ${C.muted("open")}${GAP}${C.run("o")} ${C.muted("diff")}${GAP}${C.run("p")} ${C.muted("pause")}${GAP}${C.run("r")} ${C.muted("changes")}${a.status === "approval" ? `${GAP}${C.run("a/x")} ${C.muted("approve/deny")}` : ""}`
+    : `${C.run("→")} ${C.muted("expand")}`
   out.push(C.border("─".repeat(w)))
   out.push(lr(` ${inputText(app, w - 40)}`, `${keys} `, w))
   return out.slice(0, h)
@@ -185,6 +194,20 @@ function key(app: App, e: KeyEvent): boolean {
       app.scroll["d.panel"] = 0
       return true
     case "enter":
+      if (!isPhase) {
+        app.overlay = { kind: "page", id: cur }
+        app.tab = 0
+        app.scroll.page = 0
+        return true
+      }
+      if (app.expanded.has(cur)) {
+        app.expanded.delete(cur)
+        app.collapsed.add(cur)
+      } else {
+        app.expanded.add(cur)
+        app.collapsed.delete(cur)
+      }
+      return true
     case "right":
       if (app.expanded.has(cur) && e.name === "enter") {
         app.expanded.delete(cur)
