@@ -418,5 +418,5 @@ test("a late wait of an ended turn does not hide the current turn's wait", async
   await current
   answers[1]!.resolve({ approved: true })
   await late
-  expect(trace).toEqual(["turn2 blocked:1", "turn1 blocked:1", "turn2 working"])
+  expect(trace).toEqual(["turn2 blocked:1", "turn2 working"])
 })
