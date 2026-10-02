@@ -21,8 +21,15 @@ export interface RetryOptions {
 /** The idle limit while a hosted tool runs: the server may be quiet (pings only) the whole time. */
 export const SERVER_TOOL_IDLE_MS = 600_000
 
+// A reasoning start counts even before visible text, like every other existing content event.
 // A hosted search already shown (and paid for) counts too: sending again would search again.
-const CONTENT = new Set<StreamEvent["type"]>(["text.delta", "thinking.delta", "toolCall.delta", "serverTool"])
+const CONTENT = new Set<StreamEvent["type"]>([
+  "text.delta",
+  "thinking.start",
+  "thinking.delta",
+  "toolCall.delta",
+  "serverTool",
+])
 
 /**
  * Sends a request again after a retryable failure, as long as nothing was streamed yet (D52):

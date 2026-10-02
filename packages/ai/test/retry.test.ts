@@ -101,6 +101,44 @@ test("times out a keep-alive-only attempt and retries it", async () => {
   })
 })
 
+test("a silent reasoning block uses the idle timeout instead of the first-content timeout", async () => {
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    yield { type: "start" }
+    yield { type: "thinking.start" }
+    await Bun.sleep(35)
+    yield {
+      type: "done",
+      message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "end" },
+    }
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 0,
+      firstContentTimeoutMs: 15,
+      idleTimeoutMs: 100,
+    }),
+  )
+  expect(types(evs)).toEqual(["start", "thinking.start", "done"])
+})
+
+test("a stream with no events still times out as having no content", async () => {
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    await new Promise<never>(() => {})
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 0,
+      firstContentTimeoutMs: 15,
+      idleTimeoutMs: 100,
+    }),
+  )
+  expect(types(evs)).toEqual(["error"])
+  expect(evs[0]).toMatchObject({
+    type: "error",
+    error: { code: "timeout", message: "model produced no content within 15 ms" },
+  })
+})
+
 test("ends a stream that goes silent after content without sending it again", async () => {
   const encoder = new TextEncoder()
   const partial = () =>

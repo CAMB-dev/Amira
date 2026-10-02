@@ -222,6 +222,7 @@ test("round trips reasoning: the streamed message replays as the same reasoning 
     ...callEvents("fc_1", "call_a", "read", 1, ["{}"]),
     completed(),
   ])
+  expect(evs.filter((e) => e.type === "thinking.start")).toEqual([{ type: "thinking.start" }])
   const first = done(evs).message
   expect(first.content[0]).toEqual({
     type: "thinking",
@@ -416,6 +417,7 @@ test("a non-SSE 200 with a whole response is read as one", async () => {
   const { evs } = await run(openaiResponses, req("openai-responses"), res)
   expect(evs.map((e) => e.type)).toEqual([
     "start",
+    "thinking.start",
     "thinking.delta",
     "text.delta",
     "toolCall.delta",

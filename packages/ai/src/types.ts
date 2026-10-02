@@ -214,6 +214,8 @@ export interface ModelError {
 export type StreamEvent =
   | { type: "start" }
   | { type: "text.delta"; text: string }
+  /** A reasoning block began; may be followed by no visible text. */
+  | { type: "thinking.start" }
   | { type: "thinking.delta"; text: string }
   | {
       type: "toolCall.delta"

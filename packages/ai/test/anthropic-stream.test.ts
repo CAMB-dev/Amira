@@ -136,6 +136,7 @@ test("records redacted thinking with its encrypted data as the signature", async
       messageStop,
     ]),
   )
+  expect(evs.map((e) => e.type)).toEqual(["start", "thinking.start", "text.delta", "done"])
   expect((last(evs) as DoneEvent).message.content).toEqual([
     {
       type: "thinking",
@@ -299,6 +300,7 @@ test("a whole JSON message with status 200 is replayed as a stream", async () =>
   )
   expect(evs.map((e) => e.type)).toEqual([
     "start",
+    "thinking.start",
     "thinking.delta",
     "text.delta",
     "toolCall.delta",

@@ -62,7 +62,14 @@ test("streams text, reasoning and usage", async () => {
   expect(seen.url).toBe("https://api.deepseek.com/chat/completions")
   expect(seen.headers.authorization).toBe("Bearer k")
   expect(seen.body.messages[0]).toEqual({ role: "system", content: "sys" })
-  expect(events.map((e) => e.type)).toEqual(["start", "thinking.delta", "text.delta", "text.delta", "done"])
+  expect(events.map((e) => e.type)).toEqual([
+    "start",
+    "thinking.start",
+    "thinking.delta",
+    "text.delta",
+    "text.delta",
+    "done",
+  ])
   const done = events.at(-1) as Extract<StreamEvent, { type: "done" }>
   expect(done.message.content).toEqual([
     { type: "thinking", text: "think " },
@@ -70,6 +77,24 @@ test("streams text, reasoning and usage", async () => {
   ])
   expect(done.message.stopReason).toBe("end")
   expect(done.message.usage).toEqual({ input: 60, output: 5, cacheRead: 40, cacheWrite: 0 })
+})
+
+test("announces reasoning when a Chat Completions server sends no reasoning text", async () => {
+  const ai = createAi({
+    providers,
+    fetch: fakeFetch(sseResponse([delta({ reasoning_content: "" }), delta({ content: "answer" }, "stop")])),
+  })
+  const events: StreamEvent[] = []
+  for await (const e of ai.stream({
+    model: ai.model("ollama/qwen"),
+    systemPrompt: "",
+    messages: [],
+    tools: [],
+  }))
+    events.push(e)
+
+  expect(events.map((e) => e.type)).toEqual(["start", "thinking.start", "text.delta", "done"])
+  expect(events.at(-1)).toMatchObject({ message: { content: [{ type: "text", text: "answer" }] } })
 })
 
 test("assembles streamed tool calls and keeps invalid JSON arguments", async () => {

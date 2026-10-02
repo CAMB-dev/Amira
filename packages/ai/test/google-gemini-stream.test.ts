@@ -86,6 +86,12 @@ test("thoughts stream as thinking; signatures on thoughts, text and empty parts 
   ])
 })
 
+test("announces a thought part before any thought text", async () => {
+  const { evs } = await go([chunk([{ text: "", thought: true }]), chunk([{ text: "answer" }], "STOP")])
+  expect(evs.map((e) => e.type)).toEqual(["start", "thinking.start", "text.delta", "done"])
+  expect(done(evs).message.content).toEqual([{ type: "text", text: "answer" }])
+})
+
 test("round trips signatures: the streamed message replays with each signature on its part", async () => {
   const { evs } = await go([
     chunk([{ text: "hmm", thought: true }]),

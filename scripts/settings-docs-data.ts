@@ -461,8 +461,8 @@ export const annotations: Record<string, Annotation> = {
   },
   "retry.firstContentTimeoutMs": {
     default: "`150000` (150 s)",
-    en: "Maximum time in milliseconds to wait for the first streamed content event (text, thinking, a tool call or a hosted search); the attempt is then retried. `0` disables this timeout; keep-alive comments do not count as content.",
-    zh: "等待首个流式内容事件（文字、思考、工具调用或托管搜索）的最长时间（毫秒），超时后会重试这次请求。`0` 表示关闭；SSE 保活注释不算内容。",
+    en: "Maximum time in milliseconds to wait for the first streamed content event (text, a reasoning-block start or delta, a tool call or a hosted search); the attempt is then retried. `0` disables this timeout; keep-alive comments do not count as content.",
+    zh: "等待首个流式内容事件（文字、思考块开始或思考增量、工具调用或托管搜索）的最长时间（毫秒），超时后会重试这次请求。`0` 表示关闭；SSE 保活注释不算内容。",
   },
   "retry.idleTimeoutMs": {
     default: "`100000` (100 s)",
