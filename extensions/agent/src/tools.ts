@@ -128,7 +128,7 @@ export function agentTool(deps: AgentToolDeps) {
       const list = [...deps.roles().values()].map(
         (r) => `- ${r.name}: ${r.description || "(no description)"}`,
       )
-      return `Delegates work to sub-agents: separate agents with their own context that do one task and report back. Use them for self-contained work such as research across many files (explorer), implementing a well-specified change (coder) or reviewing code (reviewer), and to do independent tasks in parallel.
+      return `Delegates work to sub-agents: separate agents with their own context that do one task and report back. Use them for self-contained work such as research across many files (explorer), implementing a well-specified change (coder) or reviewing code (reviewer), and to do independent tasks in parallel. Use a reviewer only when the change is large or risky, not for small or mechanical edits.
 - Several tasks in one call run in parallel (a few at a time; the rest wait their turn).
 - A sub-agent sees only its prompt (context "fresh", the default), so write complete instructions: the goal, relevant paths, constraints and what to report back. context "fork" gives it this whole conversation instead.
 - isolation "worktree" runs it in its own git worktree; when it finishes its changes are merged into the working tree (a conflict goes to the user for review). Use it for coders that may touch the same files as others.

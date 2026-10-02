@@ -9,11 +9,16 @@ import {
   resolvePowerShell,
 } from "./powershell.ts"
 import { resolveShell, type Shell } from "./shell.ts"
-import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE } from "./shell-notes.ts"
+import {
+  NOT_CONTAINED_WARNING,
+  OUTPUT_OPEN_NOTE,
+  TIMEOUT_BACKGROUND_NOTE,
+  TIMEOUT_RETRY_NOTE,
+} from "./shell-notes.ts"
 import { StandbyPool } from "./standby.ts"
 import { keepOutput } from "./truncate.ts"
 
-export const DEFAULT_TIMEOUT_MS = 120_000
+export const DEFAULT_TIMEOUT_MS = 600_000
 export const MAX_TIMEOUT_MS = 600_000
 const UPDATE_INTERVAL_MS = 250
 const UPDATE_TAIL_CHARS = 4000
@@ -28,7 +33,7 @@ export interface BashParams {
 function sharedNotes(cd: string, chain: string): string[] {
   return [
     `- Commands already start in the working directory. Each call is a fresh shell: \`cd\`, variables and functions do not persist between calls. Use \`${cd}\` only when you need to change directories within a call.`,
-    `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed.`,
+    `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed. For longer runs, use \`background: true\`.`,
     "- Processes the command leaves running are killed when it finishes. For commands that keep running (dev servers, watchers, long builds you want to check on later), pass `background: true`: the call returns at once with a job id and the output so far, and the job keeps running. Read its new output with job_output (use wait_for to wait for a line such as a ready message instead of polling) and stop it with job_stop. Do not append `&` or use nohup yourself. Top-level background jobs survive `/clear`, `/resume` and `/fork` and become available in the new session; they are stopped when Amira exits, and a sub-agent's when it ends.",
     `- Several calls issued together run at the same time. Put commands that depend on each other in one call (${chain}) or in separate turns.`,
     "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
@@ -127,6 +132,9 @@ function shellTool(
       const parts = [out.text || "(no output)"]
       if (shell.label) parts.unshift(`Shell: ${shell.label}`)
       parts.push(statusLine(run, timeoutMs))
+      if (run.timedOut) {
+        parts.push(timeoutMs < MAX_TIMEOUT_MS ? TIMEOUT_RETRY_NOTE : TIMEOUT_BACKGROUND_NOTE)
+      }
       if (!run.contained) {
         parts.push(NOT_CONTAINED_WARNING)
       } else if (!run.settled && !run.aborted) {
