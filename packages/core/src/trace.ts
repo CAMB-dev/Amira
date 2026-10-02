@@ -421,6 +421,12 @@ function idle(state: State): boolean {
   return !state.turns.size && !state.models.size && !state.tools.size && !state.compact
 }
 
+/**
+ * Calls are paired by (turn, id, name), first started first ended. Ids can repeat: providers reuse
+ * them across steps (harmless, a step's calls all end before the next step starts) and some send
+ * duplicates within one reply. Only duplicates with the same name that run in parallel and end out
+ * of order swap their start time and argument preview; durationMs comes from the end event.
+ */
 function toolKey(turn: string, id: string, name: string): string {
   return JSON.stringify([turn, id, name])
 }
