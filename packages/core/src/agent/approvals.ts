@@ -54,8 +54,8 @@ interface ApprovalCall {
  */
 export class ApprovalGate {
   #deps: ApprovalGateDeps
-  /** The latest turn with a wait, and how many of its tool calls wait for approval or an answer. */
-  #blocked: { turn: ApprovalTurn; calls: number } | undefined
+  /** Per turn, how many of its tool calls wait for approval or an answer. */
+  #blocked = new WeakMap<ApprovalTurn, { calls: number }>()
 
   constructor(deps: ApprovalGateDeps) {
     this.#deps = deps
@@ -149,9 +149,9 @@ export class ApprovalGate {
    * for approval or for an answer).
    */
   async #waitBlocked<T>(turn: ApprovalTurn, reason: string, wait: () => Promise<T>): Promise<T> {
-    // A new turn starts a fresh count: waits a finished turn left behind never settle into it.
-    if (this.#blocked?.turn !== turn) this.#blocked = { turn, calls: 0 }
-    const entry = this.#blocked
+    // Each turn has its own count: a wait of another turn (abandoned, or late) never touches it.
+    const entry = this.#blocked.get(turn) ?? { calls: 0 }
+    this.#blocked.set(turn, entry)
     entry.calls++
     this.#deps.blocked(turn, reason, entry.calls)
     try {
@@ -159,7 +159,7 @@ export class ApprovalGate {
     } finally {
       entry.calls--
       // A wait that ends after its turn did (aborted, abandoned) must not wake the session.
-      const live = this.#blocked === entry && this.#deps.isCurrentTurn(turn) && !turn.signal.aborted
+      const live = this.#deps.isCurrentTurn(turn) && !turn.signal.aborted
       if (entry.calls === 0 && live) this.#deps.working(turn)
     }
   }

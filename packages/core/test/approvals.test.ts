@@ -391,3 +391,32 @@ test("a wait abandoned by an aborted turn stays out of the next turn's count", a
   await verdict
   expect(trace).toEqual(["turn1 blocked:1", "turn2 blocked:1", "turn2 working"])
 })
+
+test("a late wait of an ended turn does not hide the current turn's wait", async () => {
+  const trace: string[] = []
+  const turn1 = { id: "turn1", signal: new AbortController().signal }
+  const turn2 = { id: "turn2", signal: new AbortController().signal }
+  const answers = [Promise.withResolvers<ApprovalDecision>(), Promise.withResolvers<ApprovalDecision>()]
+  let calls = 0
+  const gate = new ApprovalGate({
+    sessionId: "session",
+    depth: 0,
+    permissions: new Permissions(),
+    inheritedApprover: undefined,
+    resolvePermissionApprover: () => undefined,
+    ask: undefined,
+    forwardAsk: undefined,
+    approve: () => answers[calls++]!.promise,
+    isCurrentTurn: (candidate) => candidate === turn2,
+    blocked: (turn, _reason, pending) => void trace.push(`${turn.id} blocked:${pending}`),
+    working: (turn) => void trace.push(`${turn.id} working`),
+  })
+  const call = { id: "call", name: "work", args: {} }
+  const current = gate.approve(turn2, call, { decision: "allow", reason: "" }, ["check"])
+  const late = gate.approve(turn1, call, { decision: "allow", reason: "" }, ["check"])
+  answers[0]!.resolve({ approved: true })
+  await current
+  answers[1]!.resolve({ approved: true })
+  await late
+  expect(trace).toEqual(["turn2 blocked:1", "turn1 blocked:1", "turn2 working"])
+})
