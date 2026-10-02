@@ -147,6 +147,23 @@ test("an rpc client gets ask_user as a ui.request of kind ask and answers with t
   })
   await rpc.until((l) => l.type === "turn.end", "the turn's end")
   expect(await rpc.end()).toBe(0)
+  expect(
+    rpc.out.flatMap((line) => {
+      if (line.type === "status.changed") return [`status ${line.data.status}`]
+      if (["ui.request", "ui.resolved", "tool.execute.start", "tool.execute.end"].includes(line.type))
+        return [line.type]
+      return []
+    }),
+  ).toEqual([
+    "status working",
+    "tool.execute.start",
+    "status blocked",
+    "ui.request",
+    "ui.resolved",
+    "status working",
+    "tool.execute.end",
+    "status idle",
+  ])
   expect(toolResultText(s)).toBe(
     [
       "The user answered:",
@@ -156,6 +173,54 @@ test("an rpc client gets ask_user as a ui.request of kind ask and answers with t
       '   → Tests, (own words) "and a changelog"',
     ].join("\n"),
   )
+})
+
+test("approval and question UI events keep their order around tool execution", async () => {
+  const s = await session([
+    { toolCalls: [{ name: "ask_user", args: { questions: [QUESTIONS[0]] } }] },
+    { text: "ok" },
+  ])
+  s.agent.interceptors.add("tool.call.before", () => ({ action: "ask", reason: "test approval" }))
+  const rpc = inProcess(s)
+  await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+  const approval = await rpc.until(
+    (line) => line.type === "ui.request" && line.data.kind === "confirm",
+    "the approval",
+  )
+  await rpc.call({ id: 2, cmd: "ui.respond", requestId: approval.data.requestId, value: true })
+  const question = await rpc.until(
+    (line) => line.type === "ui.request" && line.data.kind === "ask",
+    "the question",
+  )
+  await rpc.call({
+    id: 3,
+    cmd: "ui.respond",
+    requestId: question.data.requestId,
+    value: [{ selected: ["Patch"] }],
+  })
+  await rpc.until((line) => line.type === "turn.end", "the turn's end")
+  expect(await rpc.end()).toBe(0)
+  expect(
+    rpc.out.flatMap((line) => {
+      if (line.type === "status.changed") return [`status ${line.data.status}`]
+      if (line.type === "ui.request") return [`ui.request ${line.data.kind}`]
+      if (["ui.resolved", "tool.execute.start", "tool.execute.end"].includes(line.type)) return [line.type]
+      return []
+    }),
+  ).toEqual([
+    "status working",
+    "status blocked",
+    "ui.request confirm",
+    "ui.resolved",
+    "status working",
+    "tool.execute.start",
+    "status blocked",
+    "ui.request ask",
+    "ui.resolved",
+    "status working",
+    "tool.execute.end",
+    "status idle",
+  ])
 })
 
 test("an rpc client that cancels leaves the model a declined answer", async () => {
