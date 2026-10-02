@@ -24,7 +24,6 @@ import {
   userMessage,
 } from "@amira/ai"
 import {
-  type ApprovalRequest,
   type AskOutcome,
   type AskQuestion,
   type AskRequest,
@@ -51,6 +50,7 @@ import {
   type ToolResult,
   type ToolSession,
 } from "@amira/api"
+import { ApprovalGate } from "./agent/approvals.ts"
 import {
   type ArtifactUsageGroupInput,
   activeArtifactIds,
@@ -76,14 +76,12 @@ import {
   toolError,
 } from "./agent/messages.ts"
 import { compactionFallback, modelCall, Thinking } from "./agent/model-call.ts"
-import { approvalPermission, askedText, refusedText } from "./agent/permission-text.ts"
+import { askedText, refusedText } from "./agent/permission-text.ts"
 import {
   AgentAbortedError,
   AgentBusyError,
   type AgentOptions,
-  type ApprovalDecision,
   type Approver,
-  type Asker,
   NOTICE_RETRY_MS,
   newTurnId,
   type PromptOptions,
@@ -217,11 +215,7 @@ export class Agent {
   model: ModelInfo
 
   #ai: Ai
-  #approve: Approver | undefined
-  #inheritedApprover: Approver | undefined
-  #ask: Asker | undefined
-  /** Tool calls waiting for approval or for an answer right now. */
-  #blockedCalls = 0
+  #approvals: ApprovalGate
   #status: SessionStatus = "idle"
   #abort: AbortController | undefined
   #maxSteps: number
@@ -386,9 +380,22 @@ export class Agent {
       depth: this.depth,
       ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
     })
-    this.#approve = opts.approve
-    this.#inheritedApprover = opts.permissionApprover
-    this.#ask = opts.ask
+    this.#approvals = new ApprovalGate({
+      sessionId: this.sessionId,
+      depth: this.depth,
+      approve: opts.approve,
+      inheritedApprover: opts.permissionApprover,
+      ask: opts.ask,
+      forwardAsk: opts.ask?.bind(this),
+      resolvePermissionApprover: () => this.permissionApprover,
+      permissions: this.permissions,
+      isCurrentTurn: (turn) => this.#turn === turn,
+      blocked: (turn, reason, pending) => {
+        this.#status = "blocked"
+        this.#emit(turn, "status.changed", { status: "blocked", reason, pending })
+      },
+      working: (turn) => this.#setStatus(turn, "working"),
+    })
     this.#onIdleNotice = opts.onIdleNotice
     this.#endTurn = opts.endTurn
     this.#originals = opts.originals
@@ -664,11 +671,11 @@ export class Agent {
     const spawn = base.spawn
     const tree = this.tree
     const props: PropertyDescriptorMap = {
-      ...(this.#ask
+      ...(this.#approvals.hasAsker
         ? {
             askUser: {
               value: (questions: AskQuestion[], signal?: AbortSignal) =>
-                this.#askFromTool(turn, toolCallId, questions, signal),
+                this.#approvals.askFromTool(turn, toolCallId, questions, signal),
               enumerable: true,
             },
           }
@@ -1712,21 +1719,11 @@ export class Agent {
       if (policy.decision === "deny") return await reject("blocked", refusedText(policy), args)
       const asking = policy.decision === "ask"
       if (asking || gate.ask) {
-        const reasons = [...(asking ? [policy.reason] : []), ...(gate.ask ?? [])]
-        const request: ApprovalRequest = {
-          sessionId: this.sessionId,
-          toolCallId: call.id,
-          name: call.name,
-          args,
-          reason: reasons.join("; "),
-          ...(asking ? { permission: approvalPermission(policy, this.permissions.mode) } : {}),
-        }
-        // A permission question goes to the user, also from a sub-agent (whose interceptors'
-        // questions go to its parent); the user's answer covers the interceptors' reasons too.
-        const verdict = await this.#askApproval(
+        const verdict = await this.#approvals.approve(
           turn,
-          request,
-          asking ? this.#permissionApprover() : this.#approve,
+          { id: call.id, name: call.name, args },
+          policy,
+          gate.ask,
         )
         // Dismissing the question stops the turn, like an interrupt.
         if (!verdict.approved && verdict.interrupt && this.#turn === turn) this.#abort?.abort()
@@ -1866,59 +1863,12 @@ export class Agent {
   }
 
   /**
-   * Waits for the approver while the session shows as blocked (D44: with the number of calls
-   * waiting). A missing or failing approver denies.
-   */
-  async #askApproval(
-    turn: Turn,
-    request: ApprovalRequest,
-    approve: Approver | undefined,
-  ): Promise<ApprovalDecision> {
-    if (!approve) return { approved: false, reason: "it needs approval and nobody can approve it here" }
-    try {
-      return await this.#waitBlocked(turn, `approval for ${request.name}`, () =>
-        approve(request, turn.signal),
-      )
-    } catch (err) {
-      return {
-        approved: false,
-        reason: `approval failed: ${err instanceof Error ? err.message : String(err)}`,
-      }
-    }
-  }
-
-  /**
-   * Who answers the permission policy's questions: the user of the tree (Permissions.approver),
-   * else a top-level session's own approver. Never a parent's model: a model cannot widen what
-   * its sub-agents may do.
-   */
-  #permissionApprover(): Approver | undefined {
-    return this.permissionApprover
-  }
-
-  /**
    * Who answers this session's permission questions, for its sub-agents to ask the same: the
    * tree's user (Permissions.approver), else the one handed down from the top-level session,
    * else a top-level session's own approver.
    */
   get permissionApprover(): Approver | undefined {
-    return (
-      this.permissions.approver ?? this.#inheritedApprover ?? (this.depth === 0 ? this.#approve : undefined)
-    )
-  }
-
-  /** A tool's questions (ToolSession.askUser), asked while the session shows as blocked. */
-  async #askFromTool(turn: Turn, toolCallId: string, questions: AskQuestion[], signal?: AbortSignal) {
-    const ask = this.#ask
-    if (!ask) return { unavailable: "nobody can answer questions here" }
-    const both = signal && signal !== turn.signal ? AbortSignal.any([turn.signal, signal]) : turn.signal
-    const request: AskRequest = { sessionId: this.sessionId, toolCallId, questions }
-    const who = this.depth === 0 ? "the user" : "the commander"
-    try {
-      return await this.#waitBlocked(turn, `question for ${who}`, () => ask(request, both))
-    } catch (err) {
-      return { unavailable: `asking failed: ${err instanceof Error ? err.message : String(err)}` }
-    }
+    return this.#approvals.permissionApprover
   }
 
   /**
@@ -1926,27 +1876,7 @@ export class Agent {
    * passing on its sub-agent's questions. Says so when nobody can answer here.
    */
   askQuestions(request: AskRequest, signal: AbortSignal): Promise<AskOutcome> {
-    return this.#ask
-      ? this.#ask(request, signal)
-      : Promise.resolve({ unavailable: "nobody can answer questions here" })
-  }
-
-  /**
-   * Waits for `wait` while the session shows as blocked (D44: with the number of calls waiting,
-   * for approval or for an answer).
-   */
-  async #waitBlocked<T>(turn: Turn, reason: string, wait: () => Promise<T>): Promise<T> {
-    this.#blockedCalls++
-    this.#status = "blocked"
-    this.#emit(turn, "status.changed", { status: "blocked", reason, pending: this.#blockedCalls })
-    try {
-      return await wait()
-    } finally {
-      this.#blockedCalls--
-      // A wait that ends after its turn did (aborted, abandoned) must not wake the session.
-      const live = this.#turn === turn && !turn.signal.aborted
-      if (this.#blockedCalls === 0 && live) this.#setStatus(turn, "working")
-    }
+    return this.#approvals.askQuestions(request, signal)
   }
 
   #emitToolStart(turn: Turn, run: CallRun, args: Record<string, unknown>) {
