@@ -153,7 +153,9 @@ export class ApprovalGate {
     const entry = this.#blocked.get(turn) ?? { calls: 0 }
     this.#blocked.set(turn, entry)
     entry.calls++
-    this.#deps.blocked(turn, reason, entry.calls)
+    // Only the current turn shows as blocked: a late wait of an ended turn must not mark the
+    // session blocked, since nothing of that turn would bring it back to working.
+    if (this.#deps.isCurrentTurn(turn) && !turn.signal.aborted) this.#deps.blocked(turn, reason, entry.calls)
     try {
       return await wait()
     } finally {
