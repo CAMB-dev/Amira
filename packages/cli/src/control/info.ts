@@ -22,6 +22,7 @@ type InfoControl = Pick<
   | "expectNotice"
   | "models"
   | "setModel"
+  | "setThinking"
   | "compact"
   | "send"
   | "preview"
@@ -33,14 +34,12 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
     info: () => {
       const a = ctx.agent()
       const file = a.session?.file
-      // Shown only when it is sent: a model that does not think never gets an effort.
-      const thinking = a.model.caps.thinking ? a.thinkingFor(a.model) : undefined
       return {
         id: a.sessionId,
         ...(a.session?.title ? { title: a.session.title } : {}),
         cwd: a.cwd,
         model: { provider: a.model.provider, model: a.model.id },
-        ...(thinking ? { thinking } : {}),
+        ...a.thinking.state(a.model),
         contextWindow: a.model.contextWindow,
         ...(a.model.contextWindowSource ? { contextWindowSource: a.model.contextWindowSource } : {}),
         ...(a.contextTokens !== undefined ? { contextTokens: a.contextTokens } : {}),
@@ -92,6 +91,11 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
       } catch (err) {
         throw new Error(withProviderHint(err instanceof Error ? err.message : String(err)))
       }
+    },
+    setThinking: (level) => {
+      ctx.idle("change thinking effort")
+      const a = ctx.agent()
+      a.thinking.set(level, a.model)
     },
     compact: (instructions) => {
       ctx.idle("compact")

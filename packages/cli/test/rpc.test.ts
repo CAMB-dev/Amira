@@ -5,6 +5,8 @@ import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep, userMessage } from "@amira/ai"
 import type { Extension } from "@amira/api"
+import commandsExtension from "../../../extensions/commands/src/index.ts"
+import { createCommandHost } from "../src/control.ts"
 import { type PrintIO, runPrint } from "../src/print.ts"
 import { runRpc } from "../src/rpc.ts"
 import { COMMAND_PARAMS, rpcSchema } from "../src/rpc-schema.ts"
@@ -385,6 +387,7 @@ test("amira --rpc-schema prints a JSON Schema covering every command", async () 
       "command.list",
       "command.run",
       "model.set",
+      "thinking.set",
       "prompt",
       "session.read",
       "session.resume",
@@ -521,11 +524,11 @@ test("amira --rpc drops deltas when the client stops reading stdout", async () =
 }, 90_000)
 
 /** runRpc in process, with commands pushed and responses awaited by id. */
-function inProcess(s: Awaited<ReturnType<typeof session>>) {
+function inProcess(s: Awaited<ReturnType<typeof session>>, commands?: ReturnType<typeof createCommandHost>) {
   const input = channel()
   const out: Line[] = []
   const done = runRpc(
-    { agent: s.agent, ai: s.ai, ui: s.host.ui },
+    { agent: s.agent, ai: s.ai, ui: s.host.ui, commands },
     { io: { lines: input.lines, write: (line) => void out.push(JSON.parse(line)) } },
   )
   const until = async (match: (l: Line) => boolean) => {
@@ -542,6 +545,137 @@ function inProcess(s: Awaited<ReturnType<typeof session>>) {
   }
   return { out, until, call, end }
 }
+
+test.each([false, true])("thinking.set reaches requests and overrides settings (flag=%s)", async (flag) => {
+  const mock = createMockDialect(Array.from({ length: 10 }, () => ({ text: "done" })))
+  const ai = createAi({
+    dialects: [mock],
+    providers: [
+      {
+        id: "mock",
+        dialect: "mock",
+        baseUrl: "",
+        defaultModel: { caps: { thinking: true } },
+        models: [{ id: "plain", caps: { thinking: false } }],
+      },
+    ],
+  })
+  const s = await createSession({
+    model: "mock/m",
+    cwd: here,
+    extensions: [],
+    noBuiltins: true,
+    ai,
+    settings: {
+      thinking: "medium",
+      providers: { mock: { models: [{ id: "m", thinking: "high" }] } },
+    },
+    settingsLayers: flag ? { thinking: [{ scope: "flags", file: "--flags", value: "medium" }] } : {},
+  })
+  await s.host.load(commandsExtension, "test:commands")
+  const commands = createCommandHost({ session: s, cwd: here })
+  const rpc = inProcess(s, commands)
+  let id = 0
+  const call = (cmd: string, params: Record<string, unknown> = {}) => rpc.call({ id: ++id, cmd, ...params })
+  const prompt = async () => {
+    const started = await call("prompt", { text: "hello" })
+    expect(started.ok).toBe(true)
+    await rpc.until((l) => l.type === "turn.end" && l.turnId === started.turnId)
+    return mock.requests.at(-1)
+  }
+  try {
+    expect(await call("state")).toMatchObject({
+      thinking: flag ? "medium" : "high",
+      thinkingLevel: flag ? "medium" : "high",
+      supportsThinking: true,
+    })
+    for (const level of ["low", "medium", "high", "xhigh", "max"] as const) {
+      expect(await call("thinking.set", { level })).toMatchObject({
+        ok: true,
+        thinking: level,
+        thinkingLevel: level,
+        supportsThinking: true,
+      })
+      expect((await prompt())?.reasoning).toEqual({ effort: level })
+    }
+    const cleared = await call("thinking.set", { level: "default" })
+    expect(cleared).toMatchObject({ ok: true, supportsThinking: true })
+    expect(cleared).not.toHaveProperty("thinking")
+    expect(cleared).not.toHaveProperty("thinkingLevel")
+    expect(await prompt()).not.toHaveProperty("reasoning")
+    const defaultState = await call("state")
+    expect(defaultState).not.toHaveProperty("thinking")
+    expect(defaultState).not.toHaveProperty("thinkingLevel")
+
+    await call("model.set", { model: "mock/plain" })
+    const unsupported = await call("thinking.set", { level: "max" })
+    expect(unsupported).toMatchObject({ ok: true, thinkingLevel: "max", supportsThinking: false })
+    expect(unsupported).not.toHaveProperty("thinking")
+    expect(await call("state")).not.toHaveProperty("thinking")
+    expect(await prompt()).not.toHaveProperty("reasoning")
+    await call("model.set", { model: "mock/m" })
+    expect((await prompt())?.reasoning).toEqual({ effort: "max" })
+
+    expect(await call("command.run", { text: "/thinking low" })).toMatchObject({
+      ok: true,
+      command: "thinking",
+    })
+    expect((await prompt())?.reasoning).toEqual({ effort: "low" })
+    expect(await call("command.run", { text: "/thinking default" })).toMatchObject({
+      ok: true,
+      command: "thinking",
+    })
+    expect(await prompt()).not.toHaveProperty("reasoning")
+  } finally {
+    await rpc.end()
+    await s.agent.dispose()
+    s.host.unloadAll()
+  }
+})
+
+test("thinking.set requires a valid explicit level and leaves state unchanged on invalid input", async () => {
+  const s = await session([])
+  const rpc = inProcess(s)
+  try {
+    const initial = await rpc.call({ id: "initial", cmd: "state" })
+    expect(initial).not.toHaveProperty("thinking")
+    expect(initial).not.toHaveProperty("thinkingLevel")
+    expect((await rpc.call({ id: "set", cmd: "thinking.set", level: "high" })).ok).toBe(true)
+    const invalid = [{}, ...[null, false, 1, {}, [], "", "off", "HIGH", " high "].map((level) => ({ level }))]
+    for (const [id, params] of invalid.entries()) {
+      expect(await rpc.call({ id, cmd: "thinking.set", ...params })).toMatchObject({
+        ok: false,
+        error: { code: "invalid_params" },
+      })
+    }
+    expect(await rpc.call({ id: "after", cmd: "state" })).toMatchObject({ thinkingLevel: "high" })
+  } finally {
+    await rpc.end()
+    await s.agent.dispose()
+    s.host.unloadAll()
+  }
+})
+
+test("the rpc schema requires thinking.set level and describes gated state", () => {
+  const defs = (rpcSchema() as any).$defs
+  const command = defs.Command.oneOf.find((c: any) => c.properties.cmd.enum[0] === "thinking.set")
+  expect(command.required).toContain("level")
+  expect(command.properties.level.enum).toEqual(["low", "medium", "high", "xhigh", "max", "default"])
+  for (const cmd of ["thinking.set", "state"]) {
+    const result = defs.Response.oneOf.find((r: any) => r.description === `Answer to ${cmd}.`)
+    expect(result.required).toContain("supportsThinking")
+    expect(result.required).not.toContain("thinking")
+    expect(result.required).not.toContain("thinkingLevel")
+    expect(result.properties.thinking.enum).toEqual(["low", "medium", "high", "xhigh", "max"])
+    expect(result.properties.thinkingLevel.enum).toEqual(result.properties.thinking.enum)
+  }
+  const event = defs.Event.anyOf.find((e: any) => e.properties.type.enum[0] === "thinking.changed")
+  expect(event.properties.data.properties.thinking.enum).toEqual(["low", "medium", "high", "xhigh", "max"])
+  expect(event.properties.data.required).not.toContain("thinking")
+  const select = defs.UiRequest.oneOf.find((r: any) => r.properties.kind.enum[0] === "select")
+  expect(select.properties.initial.type).toBe("string")
+  expect(select.required).not.toContain("initial")
+})
 
 test("session.read lastTurn survives history entries being replaced", async () => {
   const s = await session([{ text: "one" }, { text: "two" }])
@@ -591,14 +725,17 @@ test("the rpc schema describes a user message's display and lets prompt and stee
   expect(COMMAND_PARAMS.steer.params).toHaveProperty("display?")
 })
 
-test("during a /compact, prompt and model.set are busy and steer queues the message", async () => {
+test("during a /compact, prompt, model.set and thinking.set are busy and steer queues the message", async () => {
   const s = await session([{ text: "one" }, { text: "two" }, { text: "S", delayMs: 100 }, { text: "three" }])
   const rpc = inProcess(s)
   await rpc.call({ id: 1, cmd: "prompt", text: "first" })
   await rpc.until((l) => l.type === "turn.end")
   await rpc.call({ id: 2, cmd: "prompt", text: "second" })
   await rpc.until((l) => l.type === "turn.end" && l.turnId !== rpc.out.find((o) => o.id === 1)!.turnId)
+  const thinking = s.agent.thinking.for(s.agent.model)
   const compacted = s.agent.compact()
+  expect((await rpc.call({ id: "thinking", cmd: "thinking.set", level: "max" })).error.code).toBe("busy")
+  expect(s.agent.thinking.for(s.agent.model)).toBe(thinking)
   expect((await rpc.call({ id: 3, cmd: "model.set", model: "mock/other" })).error.code).toBe("busy")
   expect((await rpc.call({ id: 4, cmd: "prompt", text: "no" })).error.code).toBe("busy")
   expect(await rpc.call({ id: 6, cmd: "state" })).toMatchObject({ busy: true, status: "idle" })
@@ -626,6 +763,11 @@ test("ui.respond needs a value; model.set and prompt wait for the turn", async (
   const busy = await rpc.call({ id: 2, cmd: "model.set", model: "mock/other" })
   expect(busy.error.code).toBe("busy")
   expect(s.agent.model.id).toBe("m")
+  const thinking = s.agent.thinking.for(s.agent.model)
+  for (const level of ["max", "default"]) {
+    expect((await rpc.call({ id: level, cmd: "thinking.set", level })).error.code).toBe("busy")
+  }
+  expect(s.agent.thinking.for(s.agent.model)).toBe(thinking)
   expect((await rpc.call({ id: "p", cmd: "prompt", text: "not now" })).error.code).toBe("busy")
 
   // A misspelt key leaves the dialog open.

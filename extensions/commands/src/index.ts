@@ -12,6 +12,7 @@ import { registerRewindCommands } from "./rewind-command.ts"
 import { clearCommand, forkCommand, renameCommand, resumeCommand } from "./sessions-commands.ts"
 import { shellCommand } from "./shell-command.ts"
 import { statusCommand } from "./status-command.ts"
+import { thinkingCommand } from "./thinking-command.ts"
 import { toolsCommand } from "./tools-command.ts"
 
 export { extensionCommand } from "./ext-command.ts"
@@ -46,6 +47,7 @@ export default defineExtension((api: ExtensionAPI) => {
   add(quitCommand())
   add(clearCommand())
   add(modelCommand())
+  add(thinkingCommand())
   add(status)
   add(compactCommand())
   add(renameCommand())

@@ -45,6 +45,27 @@ test("select, confirm and input round trip through events and respond()", async 
   expect(ui.respond("nope", 1)).toContain("no pending")
 })
 
+test("select forwards the initial option, and still supports cancellation and signals", async () => {
+  const { ui, next } = setup()
+  const controller = new AbortController()
+  const choice = ui.api("ext").select("Effort", ["low", "high", "default"], {
+    initial: "high",
+    signal: controller.signal,
+  })
+  const request = (await next()).data
+  expect(request).toMatchObject({ kind: "select", initial: "high", source: "ext" })
+  expect(request).not.toHaveProperty("signal")
+  controller.abort()
+  expect(await choice).toBeUndefined()
+  expect(ui.pending).toEqual([])
+
+  const defaultChoice = ui.api().select("Effort", ["low", "high"])
+  const defaultRequest = (await next()).data
+  expect(defaultRequest).not.toHaveProperty("initial")
+  ui.respond(defaultRequest.requestId, "low")
+  expect(await defaultChoice).toBe("low")
+})
+
 test("choose sends sections and takes a key of the option's section, or the option alone", async () => {
   const { ui, next } = setup()
   const api = ui.api("ext")

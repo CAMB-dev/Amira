@@ -30,18 +30,61 @@ export interface ModelCallOptions {
 /** The reasoning effort an agent asks for on a model; undefined sends none (the server default). */
 export type ThinkingFor = (model: ModelInfo) => ReasoningEffort | undefined
 
+/** What a session reports about effort: `thinking` only when it is sent to the model. */
+export type ThinkingState = {
+  supportsThinking: boolean
+  thinkingLevel?: ReasoningEffort
+  thinking?: ReasoningEffort
+}
+
 /**
- * The explicit effort (a --thinking flag, or a sub-agent's inherited one, which never falls back),
- * else the model's own setting, else the top-level one.
+ * An agent's reasoning effort, highest precedence first: the runtime override (/thinking, kept in
+ * memory only), the explicit effort (a --thinking flag, or a sub-agent's inherited one, which never
+ * falls back), the model's own setting, the top-level one.
  */
-export function thinkingFor(
-  opts: Pick<AgentOptions, "thinking" | "defaultThinking" | "providerSettings" | "parentSessionId">,
-): ThinkingFor {
-  if (opts.parentSessionId) return () => opts.thinking
-  return (model) =>
-    opts.thinking ??
-    opts.providerSettings?.[model.provider]?.models?.find((m) => m.id === model.id)?.thinking ??
-    opts.defaultThinking
+export class Thinking {
+  /** An object tells "explicitly send none" apart from "no override". */
+  #override: { level: ReasoningEffort | undefined } | undefined
+  readonly #configured: ThinkingFor
+  readonly #changed: (data: EventMap["thinking.changed"]) => void
+
+  constructor(
+    opts: Pick<AgentOptions, "thinking" | "defaultThinking" | "providerSettings" | "parentSessionId">,
+    changed: (data: EventMap["thinking.changed"]) => void,
+  ) {
+    this.#configured = opts.parentSessionId
+      ? () => opts.thinking
+      : (model) =>
+          opts.thinking ??
+          opts.providerSettings?.[model.provider]?.models?.find((m) => m.id === model.id)?.thinking ??
+          opts.defaultThinking
+    this.#changed = changed
+  }
+
+  /** The effective effort for a model, even one that does not think (a request checks caps). */
+  readonly for: ThinkingFor = (model) => (this.#override ? this.#override.level : this.#configured(model))
+
+  /** What SessionInfo and the RPC state report for the current model. */
+  state(model: ModelInfo): ThinkingState {
+    const level = this.for(model)
+    const supportsThinking = !!model.caps.thinking
+    return {
+      supportsThinking,
+      ...(level ? { thinkingLevel: level } : {}),
+      ...(supportsThinking && level ? { thinking: level } : {}),
+    }
+  }
+
+  /** Sets the runtime override; undefined explicitly sends none, whatever is configured. */
+  set(level: ReasoningEffort | undefined, model: ModelInfo): void {
+    this.#override = { level }
+    this.#changed(model.caps.thinking && level ? { thinking: level } : {})
+  }
+
+  /** Carries the override to the agent that replaces this one (rewind, resume, /clear, fork). */
+  carryTo(next: Thinking): void {
+    next.#override = this.#override
+  }
 }
 
 export interface ModelCallResult {
