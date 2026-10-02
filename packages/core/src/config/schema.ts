@@ -217,6 +217,7 @@ const settings = object({
     maxDelayMs: integer(0),
     firstContentTimeoutMs: integer(0),
     idleTimeoutMs: integer(0),
+    nativeCompactionTimeoutMs: integer(0),
   }),
   mcpServers: record(anyObject),
   extensions: record(anyObject),

@@ -7,7 +7,7 @@ import type {
   MarkdownRendererDefinition,
   MarkdownRenderResult,
   OpenedImage,
-  ViewLine,
+  ToolLine,
 } from "@amira/api"
 
 /** Reports a failure of an extension's registration (extension.error). */
@@ -27,7 +27,7 @@ const MAX_WAIT_MS = 15_000
 /** Rows a rendering may take: more are cut (and reported), so a runaway one cannot flood the transcript. */
 const MAX_LINES = 2000
 
-const KINDS = new Set<ViewLine["kind"]>([
+const KINDS = new Set<ToolLine["kind"]>([
   "text",
   "muted",
   "accent",
@@ -174,10 +174,10 @@ export class MarkdownRendererRegistry {
     if (value === undefined || value === null) return undefined
     const v = value as { lines?: unknown; image?: unknown }
     if (Array.isArray(v.lines)) {
-      const lines: ViewLine[] = []
+      const lines: ToolLine[] = []
       for (const raw of v.lines as unknown[]) {
         const l = (raw ?? {}) as { kind?: unknown; text?: unknown }
-        const kind = KINDS.has(l.kind as ViewLine["kind"]) ? (l.kind as ViewLine["kind"]) : "text"
+        const kind = KINDS.has(l.kind as ToolLine["kind"]) ? (l.kind as ToolLine["kind"]) : "text"
         const text = String(l.text ?? "")
           .replace(/\r\n?/g, "\n")
           .replace(/\t/g, "  ")

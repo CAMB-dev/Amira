@@ -335,3 +335,61 @@ test("openPipe starts a piped process whose events reach the extension", async (
   expect(await exit.promise).toBe(0)
   expect(() => api!.openPipe([], { cwd: process.cwd(), onEvent: () => {} })).toThrow()
 }, 60_000)
+
+test("terminal proxies follow binding, default to no-op and become inert on unload", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let api!: ExtensionAPI
+  await host.load((a) => {
+    api = a
+  }, "terminal")
+  const proxy = api.terminal
+  proxy.setTitle("headless")
+  proxy.setProgress("paused")
+  proxy.bell()
+  const seen: string[] = []
+  const detach = host.bindTerminal({
+    setTitle: (title) => seen.push(title),
+    setProgress: (state) => seen.push(state),
+    bell: () => seen.push("bell"),
+  })
+  expect(api.terminal).toBe(proxy)
+  proxy.setTitle("live")
+  proxy.setProgress("indeterminate")
+  proxy.bell()
+  expect(seen).toEqual(["live", "indeterminate", "bell"])
+  detach()
+  proxy.bell()
+  host.bindTerminal({
+    setTitle: (title) => seen.push(title),
+    setProgress: () => {},
+    bell: () => seen.push("late"),
+  })
+  host.unload("terminal")
+  proxy.setTitle("unloaded")
+  proxy.setProgress("paused")
+  proxy.bell()
+  expect(seen).toEqual(["live", "indeterminate", "bell"])
+})
+
+test("failed extension loads revoke retained terminal proxies", async () => {
+  const host = new ExtensionHost({
+    bus: new EventBus(),
+    interceptors: new InterceptorRegistry(),
+    tools: new ToolRegistry(),
+  })
+  let api!: ExtensionAPI
+  let bells = 0
+  host.bindTerminal({ setTitle: () => {}, setProgress: () => {}, bell: () => bells++ })
+  expect(
+    await host.load((a) => {
+      api = a
+      throw new Error("failed")
+    }, "failed"),
+  ).toBe(false)
+  api.terminal.bell()
+  expect(bells).toBe(0)
+})

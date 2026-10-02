@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { defineExtension, defineTool, type Extension, type FormSpec, textResult } from "@amira/api"
+import terminalStatus from "../../../extensions/terminal-status/src/index.ts"
 import { runRpc } from "../src/rpc.ts"
 import { rpcSchema } from "../src/rpc-schema.ts"
 import { createSession } from "../src/session.ts"
@@ -197,6 +198,11 @@ test("the rpc schema describes forms, ui.action and ui.progress", () => {
   ])
   const events = schema.$defs.Event.anyOf.flatMap((e: any) => e.properties.type.enum ?? [])
   expect(events).toContain("ui.progress")
+  expect(events).toContain("ui.waiting")
+  const waiting = schema.$defs.Event.anyOf.find((e: any) => e.properties.type.enum?.includes("ui.waiting"))
+  expect(waiting.properties.data.properties.change.enum).toEqual(["opened", "resolved", "visibility"])
+  const start = schema.$defs.Event.anyOf.find((e: any) => e.properties.type.enum?.includes("session.start"))
+  expect(start.properties.data.properties.title.type).toBe("string")
 })
 
 test("rpc: ui.focus reaches extensions as a ui.focus event when it changes", async () => {
@@ -214,5 +220,25 @@ test("rpc: ui.focus reaches extensions as a ui.focus event when it changes", asy
     { focused: false },
     { focused: true },
   ])
+  expect(await rpc.end()).toBe(0)
+})
+
+test("RPC terminal effects are no-ops and output remains JSON records", async () => {
+  let effects = 0
+  const rpc = await rpcWith([{ text: "done" }], async (api) => {
+    await terminalStatus(api)
+    api.on("turn.end", () => {
+      api.terminal.setTitle("Must not be written")
+      api.terminal.setProgress("paused")
+      api.terminal.bell()
+      effects++
+    })
+  })
+  await rpc.call({ id: 1, cmd: "ui.focus", focused: false })
+  await rpc.call({ id: 2, cmd: "prompt", text: "go" })
+  await rpc.until((line) => line.type === "turn.end")
+  await rpc.session.agent.bus.flush()
+  expect(effects).toBe(1)
+  expect(JSON.stringify(rpc.out)).not.toContain("Must not be written")
   expect(await rpc.end()).toBe(0)
 })

@@ -181,12 +181,23 @@ amira
 ### 全屏视图
 
 通过 `api.registerView()` 注册 `ViewDefinition`，命令用
-`ctx.openView?.({ kind, data })` 打开它。视图返回纯文本的 `ViewLine` 对象；前端负责
+`ctx.openView?.({ kind, data })` 打开它。视图返回结构化的 `ViewLine` 对象；前端负责
 终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent
 扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。
 
-`title(data, opts)` 给出第一行；`titleAside(data)` 在其右端追加一段简短文字，如
-`2 of 5`，屏幕较窄时先截断标题，这段文字保持完整。
+`title(data, opts)` 返回 `string | ViewLine`，作为第一行。字符串保留默认的 `◆`
+标记；语义化的 `ViewLine` 提供完整标题，前端不会自动添加标记。两种形式都会由前端
+截断到标题的可用宽度。`titleAside(data)` 在其右端追加一段简短文字，如 `2 of 5`，
+这段文字保持完整。
+
+`ViewLine` 支持语义化内容，不使用 ANSI 转义码，样式由前端负责：
+
+- `{ kind: "segments", parts: ViewSegment[] }` 将带样式的文本组合为单行，超出宽度时
+  由前端截断，不换行。导出的 `ViewSegment` 类型为
+  `{ text: string, kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }`。
+- `{ kind: "user-message", text: string, note?: string }` 使用与对话中用户消息相同的显示方式，
+  包括换行、背景和间距。只需提供消息文本，不要手动添加 `›` 标记。可选的备注显示在
+  消息下方，与消息共用同一背景。
 
 视图按键支持单个可打印字符，以及 `left`、`right`、`tab`、`shift-tab`。标签相同的
 按键在底部提示中合并为一项（`←→ switch`）；标签为空的按键（例如另一个按键的别名）
@@ -229,7 +240,7 @@ amira
 
 ### 会话思考强度
 
-API 0.1.18 新增 `SessionControl.setThinking(level: ReasoningEffort | undefined): void`。通过命令上下文或 `api.session()` 获取控制对象；宿主注入之前，后者可能返回 `undefined`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。覆盖值只对当前会话生效，不写入设置文件，优先级高于 `--thinking`、模型级设置和顶层设置，后三者的优先级依次降低。传入 `undefined` 会明确屏蔽这些来源，不发送推理强度参数，沿用服务端默认值；它并不是移除运行时覆盖值。
+API 0.1.20 新增 `SessionControl.setThinking(level: ReasoningEffort | undefined): void`。通过命令上下文或 `api.session()` 获取控制对象；宿主注入之前，后者可能返回 `undefined`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。覆盖值只对当前会话生效，不写入设置文件，优先级高于 `--thinking`、模型级设置和顶层设置，后三者的优先级依次降低。传入 `undefined` 会明确屏蔽这些来源，不发送推理强度参数，沿用服务端默认值；它并不是移除运行时覆盖值。
 
 轮次、压缩或重新加载进行中时，`setThinking` 会抛出错误。选择会保留给之后切换到的思考模型，变更后启动的子 agent 也会继承它。与当前模型一样，`/clear`、`/resume`、回退或分支切换到的对话会沿用该选择；它只保存在内存中，新启动的 Amira 进程会重新按标志和设置确定强度。
 
@@ -293,7 +304,11 @@ host 注册表向内置 host 代码提供 `maxRunning`、`configure`、`stopAll`
 
 注册方法返回移除函数，host 会跟踪注册。卸载时自动移除；加载失败则回滚已注册内容。命令、工具、skill、状态项或 panel 重名时，有意替换需要 `override: true`，具体冲突规则以对应类型为准，避免意外替换其他扩展的内容。
 
-事件包括 `session.start`、`workspace.changed`、`tool.execute.start` 和 `tool.execute.end`（两者都带有工具的 `traits`，写文件工具还带有它报告的 `writtenPaths`）。监听器收到的事件封装包含数据和会话 ID，维护会话状态时应按会话筛选。重新加载后，新注册的监听器会收到当前会话、工作区和预算事件，以便恢复状态。自行创建的原生资源仍需自行清理。
+事件包括 `session.start`（携带可选的初始 `title`）、`workspace.changed`、`tool.execute.start` 和 `tool.execute.end`（两者都带有工具的 `traits`，写文件工具还带有它报告的 `writtenPaths`）。监听器收到的事件封装包含数据和会话 ID，维护会话状态时应按会话筛选。重新加载后，新注册的监听器会收到当前会话、工作区、预算事件以及最新的 `ui.focus` 和 `ui.waiting` 状态。等待状态以 visibility 变化重放，不会再次宣布问题打开。自行创建的原生资源仍需自行清理。
+
+`api.terminal` 是稳定的结构化能力，提供 `setTitle(title: string)`、`setProgress(state: "none" | "indeterminate" | "paused")` 和 `bell()`，不暴露原始写入或转义序列。在 print 和 RPC 前端，这些方法不执行任何操作。TUI 清理标题中的控制字符，将其限制为 128 个终端单元格，在帧写入之外的微任务边界合并输出，遵守 `tui.title`、`tui.progress` 和 `tui.bell` 设置，检测进度支持，并在退出时恢复终端。
+
+内置 `@amira/ext-terminal-status` 负责标题组合、工作与等待进度以及响铃策略；`--no-builtins` 会禁用它。问题（包括本地 rewind 对话框）、表单及覆盖视图变化后，TUI 发出 `ui.waiting`：`{ pending: number, hidden: boolean, change: "opened" | "resolved" | "visibility" }`。`hidden` 表示覆盖视图挡住了待回答的问题。隐藏问题打开时只响铃一次，可见性变化不再响铃。焦点通过 `ui.focus` 传递；完成回合或打开可见问题时，窗口失焦则响铃，焦点未知则在回合持续 15 秒后响铃。中断的回合不响铃。
 
 修改入口文件后可用 `/reload`。入口导入的其他模块仍有缓存，因此修改辅助模块后需要重启 Amira。渲染回调应保持轻量，改变可见状态后调用 `requestRender`。
 
