@@ -65,10 +65,11 @@ export function createSessionsControl(ctx: ControlContext): SessionsControl {
       const store = SessionStore.open(file)
       await ctx.switchTo(store.id, () => ctx.session.resume(store, ctx.agent().model), "resume")
     },
-    rename: (title) => {
+    rename: (title, options) => {
       const a = ctx.agent()
+      if (options?.sessionId && options.sessionId !== a.sessionId) return
       if (!a.session) throw new Error("this session is not stored")
-      a.session.rename(title)
+      if (!a.session.rename(title, options?.source ?? "manual")) return
       a.bus.emit("session.title", { title: a.session.title ?? "" }, { sessionId: a.sessionId })
     },
     deleteSession: async (id) => {

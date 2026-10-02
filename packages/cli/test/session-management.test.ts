@@ -3,8 +3,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
-import type { Settings } from "@amira/api"
+import { defineExtension, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
 import { Agent, projectKey, SessionStore, sessionLockFile, validateSettings } from "@amira/core"
+import autoTitleExtension from "../../../extensions/auto-title/src/index.ts"
 import commandsExtension, { costReport } from "../../../extensions/commands/src/index.ts"
 import { createCommandHost } from "../src/control.ts"
 import { formatSessionList } from "../src/resume.ts"
@@ -12,9 +13,9 @@ import { createSession } from "../src/session.ts"
 
 async function setup(
   steps: MockStep[],
-  options: { autoTitle?: boolean; settings?: Settings; thinking?: boolean } = {},
+  options: { autoTitle?: boolean; settings?: Settings; thinking?: boolean; extension?: Extension } = {},
 ) {
-  const { thinking, ...rest } = options
+  const { thinking, extension, ...rest } = options
   const mock = createMockDialect(steps)
   const models = thinking ? [{ id: "main", caps: { thinking: true } }] : undefined
   const ai = createAi({
@@ -31,7 +32,11 @@ async function setup(
     ai,
     store,
     ...rest,
-    builtins: async () => [{ source: "builtin:commands", extension: commandsExtension }],
+    builtins: async () => [
+      { source: "builtin:commands", extension: commandsExtension },
+      ...(rest.autoTitle ? [{ source: "builtin:auto-title", extension: autoTitleExtension }] : []),
+      ...(extension ? [{ source: "test:extension", extension }] : []),
+    ],
   })
   const reasons: string[] = []
   const host = createCommandHost({ session, cwd: dir, announce: (_a, reason) => reasons.push(reason) })
@@ -84,13 +89,19 @@ test("auto title is one non-blocking request on compact.model; a manual name win
 })
 
 test("automatic names are short and use the current model without compact.model", async () => {
-  const { mock, store, host } = await setup(
+  const { mock, store, host, session } = await setup(
     [{ text: "answer" }, { text: '"one two three four five six seven"' }],
     { autoTitle: true },
   )
+  const titles: string[] = []
+  session.agent.bus.subscribe((event) => {
+    if (event.type === "session.title") titles.push(event.data.title)
+  })
   await host.control.send("question")
   await waitFor(() => !!store.title)
+  await session.agent.bus.flush()
   expect(store.title).toBe("one two three four five six")
+  expect(titles).toEqual(["one two three four five six"])
   expect(mock.requests[1]?.model.id).toBe("main")
   expect(mock.requests[1]?.systemPrompt).toContain("user's language")
 })
@@ -144,7 +155,6 @@ for (const scenario of ["print", "disabled", "manual", "subagent", "resumed"] as
             cwd: store.header.cwd,
             session: store,
             parentSessionId: "parent",
-            autoTitle: {},
           })
         : scenario === "resumed"
           ? session.resume(store)
@@ -165,6 +175,83 @@ test("failed auto-title requests are harmless and their reported usage is counte
   expect(store.title).toBeUndefined()
   expect(host.control.info().busy).toBe(false)
   expect(host.control.sideRequests!()[0]?.usage.cost).toBe(0.001)
+})
+
+test("extensions can make host-accounted side calls and reach the current session", async () => {
+  let api!: ExtensionAPI
+  const extension = defineExtension((value) => {
+    api = value
+  })
+  const { mock, store, session } = await setup(
+    [{ text: "side reply", usage: { input: 4, output: 3, cost: 0.004 } }],
+    { extension },
+  )
+
+  expect(api.session()?.info().id).toBe(store.id)
+  const result = await api.complete({
+    model: "mock/side",
+    system: "side system",
+    messages: [userMessage("side input")],
+    maxTokens: 1,
+    label: "test side call",
+  })
+  expect(result.text).toBe("side reply")
+  expect(result.usage?.cost).toBe(0.004)
+  expect(mock.requests[0]?.model.id).toBe("side")
+  expect(mock.requests[0]?.model.caps.webSearch).toBe(false)
+  expect(mock.requests[0]?.systemPrompt).toBe("side system")
+  expect(mock.requests[0]?.tools).toEqual([])
+  expect(mock.requests[0]?.maxTokens).toBe(1)
+  expect(store.entries.some((entry) => entry.type === "side_usage")).toBe(true)
+  expect(session.tree.usage.cost).toBe(0.004)
+})
+
+test("api.complete rejects provider failures and aborted requests", async () => {
+  let api!: ExtensionAPI
+  const extension = defineExtension((value) => {
+    api = value
+  })
+  await setup([{ error: { message: "side failed" } }], { extension })
+  await expect(api.complete({ messages: [userMessage("input")] })).rejects.toThrow("side failed")
+
+  let abortedApi!: ExtensionAPI
+  const abortedExtension = defineExtension((value) => {
+    abortedApi = value
+  })
+  await setup([{ delayMs: 1000, text: "too late" }], { extension: abortedExtension })
+  const signal = new AbortController()
+  const pending = abortedApi.complete({ messages: [userMessage("input")], signal: signal.signal })
+  signal.abort()
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+})
+
+test("session rename guards keep manual titles and ignore stale session ids", async () => {
+  let api!: ExtensionAPI
+  const extension = defineExtension((value) => {
+    api = value
+  })
+  const { store } = await setup([], { extension })
+  const control = api.session()!
+
+  control.rename!("Manual")
+  const entries = store.entries.length
+  control.rename!("Automatic", { source: "auto", sessionId: store.id })
+  control.rename!("Stale", { source: "auto", sessionId: "other-session" })
+
+  expect(control.info().title).toBe("Manual")
+  expect(store.entries.length).toBe(entries)
+})
+
+test("automatic title side calls abort when the session is disposed", async () => {
+  const { mock, store, session } = await setup([{ text: "answer" }, { delayMs: 1000, text: "late title" }], {
+    autoTitle: true,
+  })
+  await session.agent.prompt(userMessage("question"))
+  await waitFor(() => mock.requests.length === 2)
+  await session.agent.dispose()
+  await session.agent.bus.flush()
+  await Bun.sleep(20)
+  expect(store.title).toBeUndefined()
 })
 
 test("rename and fork commands update session info and preserve the source; fork-before uses message indexes", async () => {

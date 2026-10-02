@@ -1,5 +1,5 @@
 /** Public API for Amira extensions. Extensions may import only from this package. */
-export const API_VERSION = "0.1.13"
+export const API_VERSION = "0.1.14"
 
 export type {
   AssistantMessage,

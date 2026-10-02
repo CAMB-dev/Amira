@@ -163,6 +163,8 @@ amira
 | `registerInputHandler` | 在普通输入到达模型前，处理符合条件的输入 |
 | `registerStatusItem`、`requestRender` | 在状态栏显示当前数据，数据改变后请求重绘 |
 | `on`、`intercept` | 订阅有类型的事件，或拦截文档规定的模型、工具和上下文阶段 |
+| `complete` | 发起由宿主记账的 side model 调用，不启用工具或托管网页搜索 |
+| `session` | 在命令之外访问当前顶层 `SessionControl`；宿主注入前可能为 undefined |
 | `ui` | 通过选择、确认、输入、表单和审阅对话框询问用户，命令上下文也提供 UI 请求 |
 | `registerPanel` | 在活动行上方渲染实时内容 |
 | `registerView` | 注册全屏视图类型，命令在前端支持时通过 `openView` 打开 |

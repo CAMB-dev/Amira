@@ -218,7 +218,7 @@ The immediate response contains the request ID, `ok: true` and a `turnId`; it ac
 | `state` | Get status, model, session and pending UI requests |
 | `session.read` | Read `messages` or `lastTurn` using the `what` parameter |
 | `session.resume` | Switch to a stored session using `sessionId` |
-| `session.rename` | Name the current session using `title`; a `session.title` event follows, as it does for an automatic title |
+| `session.rename` | Name the current session using `title`; optional `source`/`sessionId` options support guarded automatic names, and a `session.title` event follows when the name changes |
 | `session.fork` | Fork into a new session, before the user message at the optional `index`; a `session.start` with reason `fork` follows |
 | `model.set` | Switch model using `model` as provider/model |
 | `command.list`, `command.complete`, `command.run` | Discover and run slash commands |

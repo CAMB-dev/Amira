@@ -142,6 +142,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     ...createAdminControl(context),
   }
 
+  session.host.setSessionControl(control, agent)
+
   const host = new CommandHost({
     registry: session.host.commands,
     skills: session.host.skills,

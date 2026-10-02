@@ -1,10 +1,13 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import type { Ai, AssistantMessage } from "@amira/ai"
 import * as publicApi from "@amira/api"
 import {
   type AnyEvent,
   API_VERSION,
   type BackgroundJobHost,
+  type CompleteRequest,
+  type CompleteResult,
   type Extension,
   type ExtensionAPI,
   type FileRestorationOwner,
@@ -14,6 +17,7 @@ import {
   type NoticeLevel,
   type RunCommandOptions,
   type RunCommandResult,
+  type SessionControl,
   type Settings,
   type SettingsLayer,
   type SettingsLayers,
@@ -28,6 +32,7 @@ import {
   StandbyGoneError,
   warmUpCommands,
 } from "@amira/proc"
+import type { Agent } from "./agent.ts"
 import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
@@ -82,6 +87,8 @@ export function installVirtualApi(): void {
 
 export interface ExtensionHostOptions {
   bus: EventBus
+  /** The session's model client, used for host-accounted extension side calls. */
+  ai?: Ai
   /** Merged settings handed to extensions. Default {}. */
   settings?: Settings
   /** Explicit settings values by source layer, matching `settings`. */
@@ -129,6 +136,8 @@ export class ExtensionHost {
   #replay: AnyEvent[] | undefined
   /** Failures of each extension's event handlers, by source and event type. */
   #handlerFailures = new Map<string, number>()
+  #agent: (() => Agent) | undefined
+  #session: SessionControl | undefined
   readonly status: StatusRegistry
   readonly panels: PanelRegistry
   readonly renderers: ToolRendererRegistry
@@ -169,6 +178,12 @@ export class ExtensionHost {
   /** The settings handed to extensions loaded from now on (e.g. on a reload). */
   setSettings(settings: Settings, settingsLayers: SettingsLayers = {}): void {
     this.#opts = { ...this.#opts, settings, settingsLayers }
+  }
+
+  /** Injects the active session control after the CLI has built its command surface. */
+  setSessionControl(control: SessionControl, agent: () => Agent): void {
+    this.#session = control
+    this.#agent = agent
   }
 
   async load(ext: Extension, source: string): Promise<boolean> {
@@ -345,6 +360,78 @@ export class ExtensionHost {
     return this.ui.api(source)
   }
 
+  async #complete(request: CompleteRequest, track: (d: () => void) => void): Promise<CompleteResult> {
+    const ai = this.#opts.ai
+    const agent = this.#agent?.()
+    if (!ai || !agent) throw new Error("extension side calls are unavailable before session startup")
+    const model = request.model ? ai.model(request.model) : agent.model
+    const sideModel = { ...model, caps: { ...model.caps, webSearch: false } }
+    const abort = new AbortController()
+    const onAbort = () => abort.abort()
+    if (request.signal) {
+      if (request.signal.aborted) abort.abort()
+      else request.signal.addEventListener("abort", onAbort, { once: true })
+    }
+    track(() => abort.abort())
+    try {
+      // Reasoning models spend their output budget thinking first; a small caller budget can
+      // otherwise end the request before it produces any answer.
+      const maxTokens = sideModel.caps.thinking
+        ? Math.min(2048, sideModel.maxOutput || Infinity)
+        : request.maxTokens
+      let message: AssistantMessage | undefined
+      for await (const event of ai.stream(
+        {
+          model: sideModel,
+          systemPrompt: request.system ?? "",
+          messages: request.messages,
+          tools: [],
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+        },
+        abort.signal,
+      )) {
+        if (event.type !== "done" && event.type !== "error") continue
+        if (abort.signal.aborted) throw abortError()
+        const usage = event.message.usage
+        if (usage) {
+          agent.tree?.recordUsage(agent, usage)
+          agent.session?.append({
+            type: "side_usage",
+            model: { provider: model.provider, model: model.id },
+            usage,
+          })
+        }
+        if (event.type === "error") {
+          if (
+            abort.signal.aborted ||
+            event.error.code === "aborted" ||
+            event.message.stopReason === "aborted"
+          )
+            throw abortError()
+          throw new Error(event.error.message)
+        }
+        message = event.message
+        break
+      }
+      if (!message) {
+        if (abort.signal.aborted) throw abortError()
+        throw new Error("model request ended without a reply")
+      }
+      if (abort.signal.aborted) throw abortError()
+      return {
+        text: message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(""),
+        message,
+        ...(message.usage ? { usage: message.usage } : {}),
+      }
+    } catch (error) {
+      if (abort.signal.aborted || (error instanceof DOMException && error.name === "AbortError"))
+        throw abortError()
+      throw error
+    } finally {
+      request.signal?.removeEventListener("abort", onAbort)
+    }
+  }
+
   #apiFor(source: string, disposers: (() => void)[]): ExtensionAPI {
     const { bus, interceptors, tools } = this.#opts
     const track = (d: () => void) => {
@@ -425,6 +512,8 @@ export class ExtensionHost {
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
       // Each extension gets its own frozen copy, so none can change what another reads.
       settings: settingsView(this.#opts.settings ?? {}, this.#opts.settingsLayers ?? {}),
+      complete: (request) => this.#complete(request, track),
+      session: () => this.#session,
       registerStatusItem: (item) => {
         const off = this.status.register(item)
         this.#requestRender()
@@ -473,6 +562,10 @@ export class ExtensionHost {
       ui: this.#uiFor(source, track),
     }
   }
+}
+
+function abortError(): DOMException {
+  return new DOMException("The operation was aborted", "AbortError")
 }
 
 /**

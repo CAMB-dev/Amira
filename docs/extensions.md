@@ -163,6 +163,8 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `registerInputHandler` | Handle matching ordinary input before it reaches the model |
 | `registerStatusItem`, `requestRender` | Read live state into the status bar; request a redraw after state changes |
 | `on`, `intercept` | Subscribe to typed events or intercept documented model/tool/context stages |
+| `complete` | Make a host-accounted side model call without tools or hosted web search |
+| `session` | Access the current top-level `SessionControl` outside commands, when the host has injected it |
 | `ui` | Ask through select, confirm, input, form and review dialogs; the command context also exposes UI requests |
 | `registerPanel` | Render live lines above the activity line |
 | `registerView` | Register a full-screen view kind; commands open it through `openView` when the frontend supports it |
