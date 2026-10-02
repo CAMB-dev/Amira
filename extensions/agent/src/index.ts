@@ -14,6 +14,7 @@ import { keptWorktrees, sweepNotices } from "./kept-worktrees.ts"
 import { agentPresenter } from "./presenter.ts"
 import { roles } from "./roles-cache.ts"
 import { type Job, type StartChildDeps, shorten } from "./start-child.ts"
+import { subagentView } from "./subagent-view.ts"
 import { AGENT_RESULT_TOOL, AGENT_TOOL, agentTool, type BackgroundBatch, resultTool } from "./tools.ts"
 import type { RunGit } from "./worktree.ts"
 
@@ -249,6 +250,7 @@ export function createAgentExtension(opts: AgentExtensionOptions = {}) {
     api.registerTool(result)
     api.registerToolRenderer(AGENT_TOOL, agentPresenter)
     api.registerCommand(agentsCommand({ worktrees: kept }))
+    api.registerView(subagentView(api))
   })
 }
 

@@ -1,6 +1,16 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import { defineTool, type SessionControl, textResult } from "@amira/api"
+import {
+  type AssistantMessage,
+  defineTool,
+  emptyUsage,
+  type Message,
+  type SessionControl,
+  type SubagentInfo,
+  textResult,
+  type ViewDefinition,
+} from "@amira/api"
+import statusExtension from "../../../extensions/status/src/index.ts"
+import { createAi, createMockDialect, type MockStep, userMessage } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
   AgentTree,
@@ -10,12 +20,13 @@ import {
   InterceptorRegistry,
   listSubagents,
   ToolRegistry,
-} from "@amira/core"
-import { FakeTerminal } from "@amira/tui-kit"
-import { agentsCommand } from "../../../extensions/agent/src/index.ts"
-import statusExtension from "../../../extensions/status/src/index.ts"
-import { VirtualScreen } from "../../tui-kit/test/screen.ts"
-import { runInteractive } from "../src/app.ts"
+} from "../../../packages/core/src/index.ts"
+import { runInteractive } from "../../../packages/tui/src/app.ts"
+import { ExtensionViewer } from "../../../packages/tui/src/extension-view.ts"
+import { FakeTerminal, monoTheme } from "../../../packages/tui-kit/src/index.ts"
+import { VirtualScreen } from "../../../packages/tui-kit/test/screen.ts"
+import { agentsCommand } from "../src/index.ts"
+import { subagentView } from "../src/subagent-view.ts"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -35,7 +46,10 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
   const tools = new ToolRegistry()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools })
   await host.load(statusExtension, "builtin:status")
-  await host.load((api) => void api.registerCommand(agentsCommand()), "builtin:agent")
+  await host.load((api) => {
+    api.registerCommand(agentsCommand())
+    api.registerView(subagentView(api))
+  }, "builtin:agent")
   const ai = createAi({
     dialects: [createMockDialect(steps)],
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
@@ -105,6 +119,7 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
         ?.messages(),
     stopSubagent: (id: string) => tree.stop(id, "stopped by the user"),
   } as Partial<SessionControl> as SessionControl
+  host.setSessionControl(control, () => agent)
   const commands = new CommandHost({ registry: host.commands, bus, ui: host.ui, control, agent })
   const cols = o.cols ?? 60
   const rows = o.rows ?? 20
@@ -124,6 +139,8 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
     status: host.status,
     ui: host.ui,
     commands,
+    views: host.views,
+    toolRenderers: host.renderers,
     terminal,
     setup: async () => ({
       capabilities: {
@@ -161,6 +178,204 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
 }
 
 const ESC = "\x1b[27u"
+
+async function snapshotView() {
+  const bus = new EventBus()
+  const tools = new ToolRegistry()
+  const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools })
+  const ai = createAi({
+    dialects: [createMockDialect([])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const agent = new Agent({ ai, model: ai.model("mock/m1"), cwd: "/work", systemPrompt: "", bus, tools })
+  const list: SubagentInfo[] = ["a", "b"].map((id) => ({
+    id,
+    parentSessionId: agent.sessionId,
+    depth: 1,
+    role: "explorer",
+    title: `Child ${id}`,
+    task: `Task ${id}`,
+    status: "running",
+    startedAt: 1000,
+    usage: { ...emptyUsage(), input: 1500, output: 50, cost: 0.0123 },
+  }))
+  const histories = new Map<string, Message[]>()
+  for (const info of list) histories.set(info.id, [userMessage("parent history"), userMessage(info.task)])
+  const stopped: string[] = []
+  const control = {
+    subagents: () => list,
+    subagentMessages: (id: string) => histories.get(id),
+    stopSubagent: (id: string) => {
+      stopped.push(id)
+      return true
+    },
+  } as Partial<SessionControl> as SessionControl
+  host.setSessionControl(control, () => agent)
+  let definition!: ViewDefinition<{ sessionId: string }>
+  await host.load((api) => {
+    definition = subagentView(api)
+    api.registerView(definition)
+  }, "builtin:agent")
+  const data = { sessionId: "a" }
+  const context = { theme: monoTheme, color: false, rows: 20 }
+  const viewer = new ExtensionViewer(definition, data, { now: () => 6500 })
+  const render = () => viewer.render(80, context).join("\n")
+  const meta = { sessionId: "a", parentSessionId: agent.sessionId }
+  return { bus, host, agent, list, histories, stopped, definition, data, viewer, render, meta }
+}
+
+test("streaming before opening is visible, thinking changes live, and snapshots replace deltas", async () => {
+  const s = await snapshotView()
+  s.bus.emit("message.start", { model: { provider: "mock", model: "m1" } }, s.meta)
+  s.bus.emit("message.delta", { kind: "thinking", text: "reason" }, s.meta)
+  await s.bus.flush()
+  expect(s.render()).toContain("… thinking")
+  expect(s.render()).not.toContain("parent history")
+  s.bus.emit("message.delta", { kind: "text", text: "streamed " }, s.meta)
+  s.bus.emit("message.delta", { kind: "text", text: "reply" }, s.meta)
+  s.bus.emit("message.delta", { kind: "text", text: "main session reply" }, { sessionId: s.agent.sessionId })
+  await s.bus.flush()
+  expect(s.render()).toContain("streamed reply")
+  expect(s.render()).toContain("… working")
+  expect(s.render()).not.toContain("main session reply")
+  const reply: AssistantMessage = {
+    role: "assistant",
+    model: { provider: "mock", model: "m1" },
+    content: [{ type: "text", text: "streamed reply" }],
+  }
+  s.histories.get("a")!.push(reply)
+  s.bus.emit("message.end", { message: reply }, s.meta)
+  await s.bus.flush()
+  expect(s.render().split("streamed reply")).toHaveLength(2)
+  s.bus.emit("message.delta", { kind: "text", text: "aborted partial" }, s.meta)
+  s.bus.emit("turn.end", { reason: "aborted", steps: 1 }, s.meta)
+  await s.bus.flush()
+  expect(s.render()).not.toContain("aborted partial")
+  s.bus.emit("message.delta", { kind: "text", text: "old session" }, s.meta)
+  s.bus.emit(
+    "session.start",
+    { reason: "clear", cwd: "/work", model: { provider: "mock", model: "m1" } },
+    { sessionId: "next" },
+  )
+  await s.bus.flush()
+  expect(s.render()).not.toContain("old session")
+  s.host.unload("builtin:agent")
+  s.bus.emit("message.delta", { kind: "text", text: "after unload" }, s.meta)
+  await s.bus.flush()
+  expect(s.render()).not.toContain("after unload")
+})
+
+test("queued, idle, finished, failed and stopped children retain their status, usage and reasons", async () => {
+  const s = await snapshotView()
+  expect(s.definition.title(s.data, { width: 80, now: 6500 })).toBe(
+    "Child a · running · 5s · 1.6k tok · $0.0123 · explorer · a",
+  )
+  expect(s.definition.titleAside!(s.data)).toBe("1 of 2")
+  expect(s.definition.header!(s.data, { width: 80, now: 6500 })[0]?.text).toBe("task: Task a")
+  s.list[0]!.status = "queued"
+  expect(s.render()).toContain("waiting for a free slot")
+  s.list[0]!.status = "idle"
+  expect(s.render()).toContain("idle, waiting for a message")
+  expect(s.definition.keys?.map((key) => key.key)).toContain("x")
+  s.list[0]!.status = "error"
+  s.list[0]!.error = "failed to start"
+  expect(s.render()).toContain("✗ failed to start")
+  expect(s.definition.keys?.map((key) => key.key)).not.toContain("x")
+  s.list[0]!.status = "aborted"
+  delete s.list[0]!.error
+  s.list[0]!.note = "turn limit"
+  expect(s.render()).toContain("⊘ stopped: turn limit")
+  s.list[0]!.status = "done"
+  s.list[0]!.durationMs = 2100
+  expect(s.render()).toContain("── done ──")
+  expect(s.render()).toContain("done · 2s")
+  s.data.sessionId = "missing"
+  expect(s.render()).toContain("No sub-agent missing in this session.")
+})
+
+test("the extension associates nested children with calls and delegates completed and provider tools", async () => {
+  const s = await snapshotView()
+  const own = s.histories.get("a")!
+  const callId = "call_1"
+  s.list[1]!.parentSessionId = "a"
+  s.list[1]!.toolCallId = callId
+  own.push(
+    {
+      role: "assistant",
+      model: { provider: "mock", model: "m1" },
+      content: [
+        { type: "toolCall", id: callId, name: "agent", args: { tasks: [{ prompt: "Task b" }] } },
+        {
+          type: "serverTool",
+          id: "search",
+          name: "web_search",
+          input: { query: "typescript" },
+          status: "done",
+        },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolCallId: callId,
+      toolName: "agent",
+      content: [{ type: "text", text: "started" }],
+      isError: false,
+    },
+  )
+  const calls: { name: string; text: string; detail: string }[] = []
+  const lines = s.definition.render(s.data, {
+    width: 80,
+    now: 6500,
+    renderTool: (name, call, detail) => {
+      calls.push({ name, text: call.text, detail })
+      return [{ kind: "accent", text: `presented ${name}` }]
+    },
+  })
+  expect(calls).toMatchObject([
+    { name: "agent", text: "started", detail: "summary" },
+    { name: "web_search", detail: "summary" },
+  ])
+  expect(lines.map((line) => line.text)).toContain("presented agent")
+  const child = lines.filter((line) => line.text.includes("◆ Child b"))
+  expect(child).toHaveLength(1)
+  expect(child[0]!.text).toStartWith("  ◆ Child b")
+})
+
+test("each child keeps its scroll position and follows independently when switching with Shift+Tab", async () => {
+  const s = await snapshotView()
+  for (const info of s.list)
+    s.histories.get(info.id)!.push({
+      role: "assistant",
+      model: { provider: "mock", model: "m1" },
+      content: [
+        { type: "text", text: Array.from({ length: 40 }, (_, i) => `${info.id} row ${i}`).join("\n") },
+      ],
+    })
+  const event = (name: string, shift = false) => ({
+    type: "key" as const,
+    name,
+    ctrl: false,
+    alt: false,
+    shift,
+  })
+  s.render()
+  s.viewer.handleInput(event("home"))
+  s.viewer.handleInput(event("down"))
+  const first = s.viewer.scroll
+  s.viewer.handleInput(event("tab"))
+  expect(s.render()).toContain("b row 39")
+  expect(s.viewer.scroll.position.following).toBe(true)
+  s.viewer.handleInput(event("pageup"))
+  const secondTop = s.viewer.scroll.position.top
+  s.viewer.handleInput(event("tab", true))
+  s.render()
+  expect(s.data.sessionId).toBe("a")
+  expect(s.viewer.scroll).toBe(first)
+  expect(first.position).toMatchObject({ top: 1, following: false })
+  s.viewer.handleInput(event("right"))
+  s.render()
+  expect(s.viewer.scroll.position.top).toBe(secondTop)
+})
 
 test("/agents view shows a running sub-agent live; main-session lines land in the scrollback after Esc", async () => {
   const s = await setup([
@@ -224,6 +439,28 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   await s.exited
 })
 
+test("elapsed time redraws every second while no child event arrives", async () => {
+  const s = await setup([
+    { toolCalls: [{ name: "delegate", args: { roles: ["explorer"] } }] },
+    { toolCalls: [{ name: "wait", args: {} }] },
+    { text: "child done" },
+    { text: "all done" },
+  ])
+  s.terminal.send("go\r")
+  await waitFor(s.isWaiting, "the waiting child")
+  s.terminal.send("/agents view\r")
+  await waitFor(() => s.view().includes("● wait"), "the view")
+  const before = s.screen.lines[0]!
+  await waitFor(() => s.screen.lines[0] !== before, "the elapsed tick", 2500)
+  expect(s.screen.lines[0]).toMatch(/^◆ Check explorer · running · \d+s/)
+  s.release()
+  await s.idle()
+  s.terminal.send(ESC)
+  await waitFor(() => !s.screen.inAltScreen, "closed")
+  s.terminal.send("\x03")
+  await s.exited
+})
+
 test("x in the viewer stops the running sub-agent after y confirms; another key keeps it", async () => {
   const s = await setup(
     [
@@ -237,7 +474,9 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   await waitFor(s.isWaiting, "the child to block")
   s.terminal.send("/agents view\r")
   await waitFor(() => s.view().includes("● wait"), "the viewer")
-  expect(s.screen.lines.at(-1)).toContain("←→ switch · x stop · p print · Esc back")
+  // The generic footer lists a view's keys before the scroll keys (dropped first when narrow).
+  expect(s.screen.lines.at(-1)).toContain("following · ←→ switch · x stop · p print · ")
+  expect(s.screen.lines.at(-1)).toMatch(/ · Esc back$/)
   s.terminal.send("x")
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer (explorer s_"), "the question")
   expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")

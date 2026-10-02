@@ -178,6 +178,33 @@ amira
 | `notify`、`reportError` | 显示提示或报告后台错误 |
 | `registerFileRestoration` | 接管回退时的文件恢复（例如 checkpoints 扩展）：选择器显示你提供的选项，core 不再恢复文件；同一时间只能有一个扩展接管，卸载时释放 |
 
+### 全屏视图
+
+通过 `api.registerView()` 注册 `ViewDefinition`，命令用
+`ctx.openView?.({ kind, data })` 打开它。视图返回纯文本的 `ViewLine` 对象；前端负责
+终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent
+扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。
+
+`title(data, opts)` 给出第一行；`titleAside(data)` 在其右端追加一段简短文字，如
+`2 of 5`，屏幕较窄时先截断标题，这段文字保持完整。
+
+视图按键支持单个可打印字符，以及 `left`、`right`、`tab`、`shift-tab`。标签相同的
+按键在底部提示中合并为一项（`←→ switch`）；标签为空的按键（例如另一个按键的别名）
+不出现在底部提示中。Esc、q、Ctrl+C 和滚动按键仍由前端处理。按键处理函数通过 `ViewControl` 关闭视图、
+请求重绘、调用 `print(text, level?)` 打印快照，或请求输入、确认。打印等级与命令输出
+一致：`info`、`warning`、`error`。若要立即返回对话，先关闭视图再打印。
+
+`scrollKey(data)` 返回当前子 agent 或标签页的 id。前端为每个 id 保存滚动位置及
+跟随末尾的状态，直到视图关闭。不提供该函数时，视图共用一个滚动状态。
+`follow: false` 让每个新 id 从顶部开始显示。
+
+通过 `api.session()` 读取实时快照，通过 `api.on()` 订阅事件；状态变化后调用
+`api.requestRender()`。TUI 还会每秒重绘打开的视图，更新耗时。`header` 和 `render`
+接收可用宽度、当前时间，以及可选的 `renderTool(toolName, call, detail)` 回调。
+该回调使用 host 当前的工具 presenter 和通用渲染器；传入 `ToolCallView`，直接返回
+得到的行以保留 host 的显示效果。其他前端可能不提供该回调，因此应提供纯文本行的
+回退实现。API 0.1.15 增加了这些视图能力。
+
 ### 工具能力
 
 请在 `traits` 中声明工具对 host 可见的能力，不要依赖工具名称；`readOnly: true` 允许工具在 plan 模式运行，`writesFiles: true` 表示工具会写文件，`writesFiles: "paths"` 还要求 `getWrittenPaths(params, { cwd })` 返回本次调用可能写入的全部路径，路径可以相对于 `cwd` 或使用绝对路径。

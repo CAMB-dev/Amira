@@ -89,7 +89,7 @@ export interface ExtensionAPI {
   /**
    * Experimental: adds a full-screen view kind that commands open with CommandContext.openView
    * and data of their own. Like presenters, the last view registered for a kind wins and
-   * removing it restores the one before. The frontend's own kind ("subagent") is reported as
+   * removing it restores the one before. Reserved frontend kinds, if any, are reported as
    * extension.error and skipped.
    */
   registerView(view: ViewDefinition): () => void

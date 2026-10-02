@@ -1,4 +1,12 @@
-import type { ToolLine, ViewControl, ViewDefinition, ViewLine } from "@amira/api"
+import type {
+  CommandOutputLevel,
+  ToolLine,
+  ViewControl,
+  ViewDefinition,
+  ViewKey,
+  ViewLine,
+  ViewRenderOptions,
+} from "@amira/api"
 import {
   type Component,
   type InputEvent,
@@ -7,6 +15,7 @@ import {
   matchesKey,
   type RenderContext,
   ScrollView,
+  stripAnsi,
   type Theme,
   truncateToWidth,
   visibleWidth,
@@ -14,8 +23,9 @@ import {
 } from "@amira/tui-kit"
 import { renderToolLines, terminalText } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
-import { fitHint } from "./hint.ts"
-import { scrollPosition, waitingLine } from "./subagent-view.ts"
+import { fitHint, type HintItem } from "./hint.ts"
+import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
+import { scrollPosition, waitingLine } from "./view-helpers.ts"
 
 /** Where the TUI finds the view kinds extensions registered. */
 export interface ViewSource {
@@ -32,6 +42,10 @@ export interface ExtensionViewerOptions {
   requestRender?: () => void
   /** Reports a view that threw, e.g. as an extension error; the view shows a line instead. */
   onError?: (error: string) => void
+  /** Prints view output into the conversation. */
+  onPrint?: (text: string, level?: CommandOutputLevel) => void
+  /** Presents finished calls with the same registry as the main transcript. */
+  presenters?: PresenterSource
 }
 
 /** Lines of text that wrap to the width; the rest (code, diffs) are cut, as tool output is. */
@@ -86,10 +100,10 @@ export class ExtensionViewer implements Component {
   #view: ViewDefinition
   #data: unknown
   #opts: ExtensionViewerOptions
-  #scroll: ScrollView
+  #scrolls = new Map<string | undefined, { scroll: ScrollView; placed: boolean }>()
+  /** Host-rendered tool lines retain their styles without exposing terminal escapes to views. */
+  #toolLines = new WeakMap<ViewLine, string>()
   #now: () => number
-  /** The view does not follow its end: the first render puts it at the top. */
-  #placed: boolean
   /** The last error of each part of the view, so one that keeps throwing is reported once. */
   #failed = new Map<string, string>()
   /** A line of text a key handler asked for (ViewControl.prompt), while it is open. */
@@ -103,8 +117,6 @@ export class ExtensionViewer implements Component {
     this.#data = data
     this.#opts = opts
     this.#now = opts.now ?? Date.now
-    this.#placed = view.follow !== false
-    this.#scroll = new ScrollView((width, ctx) => this.#body(width, ctx.theme))
   }
 
   /** Shows other data, e.g. when a command opens the same kind again. */
@@ -118,7 +130,20 @@ export class ExtensionViewer implements Component {
   }
 
   get scroll(): ScrollView {
-    return this.#scroll
+    return this.#scrollState().scroll
+  }
+
+  #scrollState() {
+    const key = this.#call("scrollKey", () => this.#view.scrollKey?.(this.#data))
+    let state = this.#scrolls.get(key)
+    if (!state) {
+      state = {
+        scroll: new ScrollView((width, ctx) => this.#body(width, ctx.theme)),
+        placed: this.#view.follow !== false,
+      }
+      this.#scrolls.set(key, state)
+    }
+    return state
   }
 
   handleInput(e: InputEvent): boolean {
@@ -141,12 +166,18 @@ export class ExtensionViewer implements Component {
       return true
     }
     for (const k of this.#view.keys ?? []) {
-      if (k.key.length !== 1 || k.key === "q" || !matchesKey(e, k.key)) continue
+      if (!usable(k.key)) continue
+      const named = NAMED.has(k.key)
+      const match =
+        k.key === "shift-tab"
+          ? matchesKey(e, "tab", { shift: true })
+          : matchesKey(e, k.key, named ? { shift: false } : {})
+      if (!match) continue
       this.#call(`key ${k.key}`, () => k.run(this.#data, this.#control()))
       this.#opts.requestRender?.()
       return true
     }
-    return this.#scroll.handleInput(e)
+    return this.scroll.handleInput(e)
   }
 
   /** What a key handler gets to act on the view with. */
@@ -158,6 +189,7 @@ export class ExtensionViewer implements Component {
         this.#opts.onClose?.()
       },
       requestRender: () => this.#opts.requestRender?.(),
+      print: (text, level) => this.#opts.onPrint?.(text, level),
       prompt: (title, opts) => {
         this.#answer(undefined)
         this.#confirmed(false)
@@ -201,43 +233,88 @@ export class ExtensionViewer implements Component {
   dispose(): void {
     this.#answer(undefined)
     this.#confirmed(false)
+    this.#scrolls.clear()
   }
 
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
-    const opts = { width, now: this.#now() }
+    const opts = this.#renderOptions(width, theme)
     const head: string[] = []
-    const title = this.#call("title", () => this.#view.title(this.#data)) ?? this.kind
-    head.push(
-      truncateToWidth(`${theme.accent(glyphs.subagent)} ${theme.text(oneLine(title))}`, width, glyphs.more),
+    const title = this.#call("title", () => this.#view.title(this.#data, opts)) ?? this.kind
+    const asideText = this.#view.titleAside
+      ? oneLine(this.#call("titleAside", () => this.#view.titleAside?.(this.#data)) ?? "")
+      : ""
+    const aside = asideText ? theme.muted(truncateToWidth(` ${asideText}`, width, glyphs.more)) : ""
+    // The aside stays at the right end; the title is cut first on a narrow screen.
+    const room = width - visibleWidth(aside)
+    const fitted = truncateToWidth(
+      `${theme.accent(glyphs.subagent)} ${theme.text(oneLine(title))}`,
+      Math.max(1, room),
+      glyphs.more,
     )
+    head.push(aside ? fitted + " ".repeat(Math.max(0, room - visibleWidth(fitted))) + aside : fitted)
     const extra = this.#view.header
       ? (this.#call("header", () => this.#view.header?.(this.#data, opts)) ?? [])
       : []
-    head.push(...renderToolLines(wrapViewLines(extra, width), theme, width))
+    head.push(...this.#renderLines(extra, width, theme))
     for (const t of this.#opts.waiting?.() ?? []) head.push(waitingLine(theme, t, width))
     head.push(theme.muted(glyphs.rule.repeat(width)))
-    this.#scroll.height = Math.max(1, ctx.rows - head.length - 1)
-    let body = this.#scroll.render(width, ctx)
-    if (!this.#placed) {
+    const state = this.#scrollState()
+    const scroll = state.scroll
+    scroll.height = Math.max(1, ctx.rows - head.length - 1)
+    let body = scroll.render(width, ctx)
+    if (!state.placed) {
       // Content is known only after a render: then it can start at the top.
-      this.#placed = true
-      this.#scroll.scrollToTop()
-      body = this.#scroll.render(width, ctx)
+      state.placed = true
+      scroll.scrollToTop()
+      body = scroll.render(width, ctx)
     }
     return [...head, ...body, this.#footer(theme, width)].slice(0, ctx.rows)
   }
 
   #body(width: number, theme: Theme): string[] {
     const lines: ViewLine[] = this.#call("render", () =>
-      this.#view.render(this.#data, { width, now: this.#now() }),
+      this.#view.render(this.#data, this.#renderOptions(width, theme)),
     ) ?? [
       {
         kind: "error",
         text: `The ${this.kind} view failed: ${this.#failed.get("render") ?? "unknown error"}`,
       },
     ]
-    return renderToolLines(wrapViewLines(lines, width), theme, width)
+    return this.#renderLines(lines, width, theme)
+  }
+
+  #renderOptions(width: number, theme: Theme): ViewRenderOptions {
+    return {
+      width,
+      now: this.#now(),
+      renderTool: (name, call, detail) =>
+        finishedToolLines(theme, this.#opts.presenters?.get(name), { ...call, name }, detail, width).map(
+          (text) => {
+            const line: ViewLine = { kind: "code", text: stripAnsi(text) }
+            this.#toolLines.set(line, text)
+            return line
+          },
+        ),
+    }
+  }
+
+  #renderLines(lines: ViewLine[], width: number, theme: Theme): string[] {
+    const out: string[] = []
+    let plain: ViewLine[] = []
+    const flush = () => {
+      out.push(...renderToolLines(plain, theme, width))
+      plain = []
+    }
+    for (const line of wrapViewLines(lines, width)) {
+      const tool = this.#toolLines.get(line)
+      if (tool !== undefined) {
+        flush()
+        out.push(tool)
+      } else plain.push(line)
+    }
+    flush()
+    return out
   }
 
   #footer(theme: Theme, width: number): string {
@@ -248,12 +325,13 @@ export class ExtensionViewer implements Component {
       const room = Math.max(1, width - visibleWidth(label))
       return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder: "Enter send · Esc cancel" })}`
     }
-    const p = this.#scroll.position
+    const scroll = this.scroll
+    const p = scroll.position
     // The way back stays longest, then the view's own keys; the scroll keys go first.
     const hint = fitHint(
       [
-        p.total > p.height && { text: scrollPosition(this.#scroll), priority: 3 },
-        ...(this.#view.keys ?? []).map((k) => ({ text: `${k.key} ${k.label}`, priority: 4 })),
+        (p.total > p.height || !!this.#view.scrollKey) && { text: scrollPosition(scroll), priority: 3 },
+        ...keyHints(this.#view.keys ?? []),
         { text: "↑↓ PgUp PgDn Home End scroll", priority: 1 },
         { text: "Esc back", priority: 5 },
       ],
@@ -275,6 +353,37 @@ export class ExtensionViewer implements Component {
       return undefined
     }
   }
+}
+
+const NAMED: ReadonlySet<string> = new Set(["left", "right", "tab", "shift-tab"])
+const ARROWS: ReadonlySet<string> = new Set(["left", "right"])
+
+/** A key a view may handle: one character other than q (the host's), or a named navigation key. */
+function usable(key: string): boolean {
+  return NAMED.has(key) || (key.length === 1 && key !== "q")
+}
+
+/**
+ * Footer items for a view's keys: keys sharing a label share an item ("←→ switch",
+ * "→ Tab next"), in the order their labels first appear; keys with an empty label are left out.
+ */
+function keyHints(keys: readonly ViewKey[]): HintItem[] {
+  const groups = new Map<string, string[]>()
+  for (const k of keys) {
+    const label = oneLine(k.label)
+    if (!label || !usable(k.key)) continue
+    groups.set(label, [...(groups.get(label) ?? []), k.key])
+  }
+  return [...groups].map(([label, names]) => ({
+    text: `${names.map(keyLabel).join(names.every((n) => ARROWS.has(n)) ? "" : " ")} ${label}`,
+    // A view's own letters outlast its navigation keys.
+    priority: names.some((n) => n.length === 1) ? 4 : 2,
+  }))
+}
+
+function keyLabel(key: string): string {
+  const labels: Record<string, string> = { left: "←", right: "→", tab: "Tab", "shift-tab": "Shift+Tab" }
+  return labels[key] ?? key
 }
 
 function oneLine(s: string): string {

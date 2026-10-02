@@ -217,7 +217,7 @@ test("/agents in the TUI: Enter opens the live view on the one chosen, p prints 
   })
   expect(opened.ok).toBe(true)
   expect(opened.text).toBe("")
-  expect(views).toEqual([{ kind: "subagent", sessionId: control.subagents()[1]!.id }])
+  expect(views).toEqual([{ kind: "subagent", data: { sessionId: control.subagents()[1]!.id } }])
   // p prints the transcript as it is now, as Enter used to.
   const printed = await pick((options) => ({ option: options[1], key: "p" }))
   expect(printed.text).toContain("› where is it used")
@@ -299,8 +299,8 @@ test("/agents view opens the live view where the frontend has one", async () => 
   await run("/agents view")
   await run("/agents view 1")
   expect(views).toEqual([
-    { kind: "subagent", sessionId: explorer!.id },
-    { kind: "subagent", sessionId: coder!.id },
+    { kind: "subagent", data: { sessionId: explorer!.id } },
+    { kind: "subagent", data: { sessionId: coder!.id } },
   ])
   const rpc = await run("/agents view", "rpc")
   expect(rpc.ok).toBe(false)

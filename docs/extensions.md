@@ -178,6 +178,36 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
 
+### Full-screen views
+
+Register a `ViewDefinition` with `api.registerView()` and open it from a command with
+`ctx.openView?.({ kind, data })`. Views return plain `ViewLine` objects; the frontend owns
+the terminal, wrapping, scrolling, prompts and confirmations. The `subagent` kind and
+`/agents` command are registered by the built-in agent extension. Without that extension,
+opening a child from a transcript block reports that the live view is unavailable.
+
+`title(data, opts)` gives the first line; `titleAside(data)` adds short text kept at its
+right end, such as `2 of 5`, while the title is cut on a narrow screen.
+
+Keys can be one printable character or `left`, `right`, `tab`, and `shift-tab`. Keys with
+the same label share one footer item (`←→ switch`); an empty label keeps a key, such as an
+alias, out of the footer. Esc, q, Ctrl+C and scrolling keys remain frontend-owned. A handler receives `ViewControl` to
+close, request a redraw, print a snapshot with `print(text, level?)`, prompt or confirm.
+Printing uses the command output levels (`info`, `warning`, `error`); close first to return
+to the conversation immediately.
+
+Use `scrollKey(data)` to return the selected child's or tab's id. The frontend preserves
+each id's scroll position and following state until the view closes. Without it, a view
+has one scroll state. `follow: false` starts each new id at its top.
+
+Read live snapshots through `api.session()` and subscribe to events with `api.on()`;
+call `api.requestRender()` when your state changes. The TUI also redraws open views every
+second for elapsed times. `header` and `render` receive the available width, current time
+and an optional `renderTool(toolName, call, detail)` callback. It uses the host's current
+tool presenter and fallback renderer; pass a `ToolCallView` and return the resulting lines
+unchanged to preserve the host's presentation. Other frontends may omit it, so provide a
+plain-line fallback. API version 0.1.15 adds these view capabilities.
+
 ### Tool capabilities
 
 Declare a tool's host-visible capabilities in `traits` instead of relying on its name. `readOnly: true` allows the tool in plan mode; `writesFiles: true` marks a file writer, while `writesFiles: "paths"` declares that `getWrittenPaths(params, { cwd })` returns every path the call may write, relative to `cwd` or absolute. A writer with a valid path report receives the same protected-path checks as built-in file tools, and the host captures its pre- and post-images for rewind; a missing or invalid report is treated conservatively and asks for approval. A tool that already uses `ctx.mutateFiles` should set `usesMutationHook: true` so the host does not add a second rewind boundary.

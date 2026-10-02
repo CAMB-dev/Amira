@@ -21,11 +21,4 @@ export {
 } from "./keybindings.ts"
 export { HISTORY_LIMIT, PromptHistory } from "./prompt-history.ts"
 export { type StatusEntry, statusBorder, statusLine } from "./status-bar.ts"
-export {
-  type SubagentSource,
-  SubagentViewer,
-  type SubagentViewerOptions,
-  subagentStats,
-  transcriptLines,
-} from "./subagent-view.ts"
 export { fallbackPresenter, finishedToolLines, type PresenterSource } from "./tool-view.ts"
