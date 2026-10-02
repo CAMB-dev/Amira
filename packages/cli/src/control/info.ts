@@ -34,17 +34,12 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
     info: () => {
       const a = ctx.agent()
       const file = a.session?.file
-      const thinkingLevel = a.thinkingFor(a.model)
-      // Shown only when it is sent: a model that does not think never gets an effort.
-      const thinking = a.model.caps.thinking ? thinkingLevel : undefined
       return {
         id: a.sessionId,
         ...(a.session?.title ? { title: a.session.title } : {}),
         cwd: a.cwd,
         model: { provider: a.model.provider, model: a.model.id },
-        supportsThinking: a.model.caps.thinking,
-        ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(thinking ? { thinking } : {}),
+        ...a.thinking.state(a.model),
         contextWindow: a.model.contextWindow,
         ...(a.model.contextWindowSource ? { contextWindowSource: a.model.contextWindowSource } : {}),
         ...(a.contextTokens !== undefined ? { contextTokens: a.contextTokens } : {}),
@@ -99,7 +94,8 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
     },
     setThinking: (level) => {
       ctx.idle("change thinking effort")
-      ctx.agent().setThinking(level)
+      const a = ctx.agent()
+      a.thinking.set(level, a.model)
     },
     compact: (instructions) => {
       ctx.idle("compact")
