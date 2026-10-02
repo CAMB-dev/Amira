@@ -44,14 +44,14 @@ test("--thinking lists all levels on invalid or missing input, and in help", () 
   expect(parseCliArgs([], cwd, {}).thinking).toBeUndefined()
 })
 
-async function sessionFor(flags: string[], settings: Settings = {}) {
+async function sessionFor(flags: string[], settings: Settings = {}, thinks = true) {
   writeFileSync(path.join(home, "settings.json"), JSON.stringify(settings))
   const args = parseCliArgs(flags, cwd, {})
   const config = resolveConfig(args, home)
   const mock = createMockDialect(Array.from({ length: 8 }, () => ({ text: "done" })))
   const ai = createAi({
     dialects: [mock],
-    providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { caps: { thinking: true } } }],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "", defaultModel: { caps: { thinking: thinks } } }],
     retry: { retries: 0 },
   })
   const session = await createSession({
@@ -145,6 +145,18 @@ test("api.complete side calls do not inherit thinking", async () => {
     expect(mock.requests).toHaveLength(2)
     expect(mock.requests[0]?.reasoning).toEqual({ effort: "max" })
     expect(mock.requests[1]).not.toHaveProperty("reasoning")
+  } finally {
+    await session.agent.dispose()
+    session.host.unloadAll()
+  }
+})
+
+test("status hides an effort the current model would not be sent", async () => {
+  const { session, mock, commands } = await sessionFor(["--thinking", "high"], {}, false)
+  try {
+    await session.agent.prompt("hello")
+    expect(mock.requests[0]).not.toHaveProperty("reasoning")
+    expect(commands.control.info()).not.toHaveProperty("thinking")
   } finally {
     await session.agent.dispose()
     session.host.unloadAll()

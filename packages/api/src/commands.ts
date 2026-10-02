@@ -216,7 +216,7 @@ export interface SessionInfo {
   title?: string
   cwd: string
   model: ModelRef
-  /** Configured reasoning effort; only sent when the model supports thinking. */
+  /** The reasoning effort sent to the current model; absent when unset or the model does not think. */
   thinking?: ReasoningEffort
   contextWindow: number
   /** Where `contextWindow` came from; "default" means it is a guess. Unset without a model. */
