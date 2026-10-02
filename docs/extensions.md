@@ -181,7 +181,7 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 ### Full-screen views
 
 Register a `ViewDefinition` with `api.registerView()` and open it from a command with
-`ctx.openView?.({ kind, data })`. Views return plain `ViewLine` objects; the frontend owns
+`ctx.openView?.({ kind, data })`. Views return structured `ViewLine` objects; the frontend owns
 the terminal, wrapping, scrolling, prompts and confirmations. The `subagent` kind and
 `/agents` command are registered by the built-in agent extension. Without that extension,
 opening a child from a transcript block reports that the live view is unavailable.
