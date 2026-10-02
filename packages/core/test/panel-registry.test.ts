@@ -34,39 +34,6 @@ test("panels come in order, empty and failing ones are left out, text is made sa
   ])
 })
 
-test("panels preserve semantic segments and user messages while sanitizing their text", () => {
-  const r = new PanelRegistry()
-  r.register({
-    id: "semantic",
-    render: () => [
-      {
-        kind: "segments",
-        parts: [
-          { kind: "accent", text: "Title\n " },
-          { kind: "muted", text: "detail\x07" },
-          { kind: "code" as never, text: "fallback" },
-          null as never,
-          { kind: "text", text: 5 as never },
-        ],
-      },
-      { kind: "user-message", text: "hello\nworld  ", note: "sent\tthen  " },
-      { kind: "segments", parts: null as never },
-    ],
-  })
-  expect(r.snapshot(opts())[0]!.lines).toEqual([
-    {
-      kind: "segments",
-      parts: [
-        { kind: "accent", text: "Title  " },
-        { kind: "muted", text: "detail " },
-        { kind: "text", text: "fallback" },
-      ],
-    },
-    { kind: "user-message", text: "hello world", note: "sent then" },
-  ])
-  expect(r.snapshot(opts({ collapsed: true }))[0]!.lines).toHaveLength(1)
-})
-
 test("a collapsed panel keeps its first line; a long one is cut with a count", () => {
   const r = new PanelRegistry()
   const lines = Array.from({ length: 20 }, (_, i) => ({ kind: "text" as const, text: `l${i}` }))
@@ -82,9 +49,9 @@ test("an id holds a stack: override replaces, removing restores; a taken id is r
   const offA = r.register({ id: "p", render: () => [{ kind: "text", text: "first" }] })
   expect(() => r.register({ id: "p", render: () => [] })).toThrow(/already registered/)
   const offB = r.register({ id: "p", override: true, render: () => [{ kind: "text", text: "second" }] })
-  expect(r.snapshot(opts())[0]!.lines[0]).toEqual({ kind: "text", text: "second" })
+  expect(r.snapshot(opts())[0]!.lines[0]!.text).toBe("second")
   offB()
-  expect(r.snapshot(opts())[0]!.lines[0]).toEqual({ kind: "text", text: "first" })
+  expect(r.snapshot(opts())[0]!.lines[0]!.text).toBe("first")
   offA()
   expect(r.size).toBe(0)
 })

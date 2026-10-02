@@ -15,7 +15,6 @@ import {
   type ToolLine,
   type ToolPresenter,
   type ViewDefinition,
-  type ViewLine,
 } from "@amira/api"
 import {
   configureJobs,
@@ -74,7 +73,7 @@ export function jobsPanel(registry: JobRegistry): PanelDefinition {
     render({ width, now, collapsed }) {
       const live = registry.running()
       if (!live.length) return []
-      const lines: ViewLine[] = [
+      const lines: ToolLine[] = [
         { kind: "muted", text: `${plural(live.length, "background job")} running · /jobs to see or stop` },
       ]
       if (collapsed) return lines

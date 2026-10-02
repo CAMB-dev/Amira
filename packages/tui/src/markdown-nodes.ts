@@ -1,4 +1,4 @@
-import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult, ViewLine } from "@amira/api"
+import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult, ToolLine } from "@amira/api"
 import {
   type ImageOpener,
   type ImageStore,
@@ -12,7 +12,6 @@ import {
   truncateToWidth,
 } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
-import { renderViewLines } from "./view-lines.ts"
 
 /** Where replies' nodes get rendered by extensions (D88): the host's MarkdownRendererRegistry. */
 export interface MarkdownRenderSource {
@@ -136,9 +135,8 @@ export class ReplyRenderers {
 }
 
 /** A rendered node's lines as rows of `width`: plain text as it is, other kinds in the theme's colors. */
-export function nodeRows(lines: ViewLine[], theme: Theme, width: number): string[] {
-  return lines.flatMap((l) => {
-    if (l.kind === "segments" || l.kind === "user-message") return renderViewLines([l], theme, width)
+export function nodeRows(lines: ToolLine[], theme: Theme, width: number): string[] {
+  return lines.map((l) => {
     const text = truncateToWidth(stripAnsi(l.text).replace(/\s+$/, ""), Math.max(1, width), glyphs.more)
     switch (l.kind) {
       case "muted":
