@@ -10,6 +10,7 @@ import {
   type Message,
   type MockStep,
   type ModelRequest,
+  type RetryOptions,
   type TextBlock,
 } from "@amira/ai"
 import type { AnyEvent, EventMap } from "@amira/api"
@@ -22,7 +23,12 @@ type Script =
   | DialectCompactOutcome
   | ((req: ModelRequest, signal: AbortSignal) => Promise<DialectCompactOutcome>)
 
-async function setup(steps: MockStep[], outcomes: Script[] = [], extra: Partial<AgentOptions> = {}) {
+async function setup(
+  steps: MockStep[],
+  outcomes: Script[] = [],
+  extra: Partial<AgentOptions> = {},
+  retry: RetryOptions = { retries: 0 },
+) {
   const mock = createMockDialect(steps)
   const compactions: ModelRequest[] = []
   const dialect: Dialect = {
@@ -43,7 +49,7 @@ async function setup(steps: MockStep[], outcomes: Script[] = [], extra: Partial<
   }
   const ai = createAi({
     dialects: [dialect],
-    retry: { retries: 0 },
+    retry,
     providers: [
       {
         id: "mock",
@@ -214,6 +220,51 @@ test("when the server cannot compact, the model writes a summary and the event s
   expect(end.usage).toMatchObject({ input: 50, output: 5 })
   expect(agent.compactionUsage).toHaveLength(1)
 })
+
+for (const layout of ["tail", "recent-user"] as const) {
+  test(`${layout}: a stalled native provider is aborted and falls back to a summary with a notice`, async () => {
+    let nativeSignal: AbortSignal | undefined
+    const hang: Script = (_req, signal) => {
+      nativeSignal = signal
+      // Even a provider that ignores abort must not hold up the summary fallback.
+      return new Promise(() => {})
+    }
+    const { agent, ai, mock, compactions, events, bus } = await setup(
+      [
+        { text: "r1" },
+        { text: "r2", ...big },
+        { text: "SUMMARY", usage: { input: 50, output: 5 } },
+        { text: "r3" },
+      ],
+      [hang],
+      { compaction: { layout } },
+      { retries: 3, nativeCompactionTimeoutMs: 15 },
+    )
+    await agent.prompt("q1")
+    await agent.prompt("q2")
+    expect(await agent.prompt("q3")).toMatchObject({ reason: "done" })
+    await bus.flush()
+    expect(nativeSignal?.aborted).toBe(true)
+    expect(compactions).toHaveLength(1)
+    expect(mock.requests).toHaveLength(4)
+    expect(textOf(mock.requests[3]!.messages[0])).toContain("SUMMARY")
+    expect(sigOf(mock.requests[3]!.messages[0])).toBeUndefined()
+    expect(textOf(mock.requests[3]!.messages[2])).toBe("q2")
+    expect(ofType(events, "compact.end")[0]).toMatchObject({
+      summary: "SUMMARY",
+      fallback: "native compaction timed out after 15 ms",
+      usage: { input: 50, output: 5 },
+    })
+    expect(ofType(events, "compact.end")[0]!.native).toBeUndefined()
+    expect(ofType(events, "compact.failed")).toEqual([])
+    expect(ofType(events, "extension.notice")).toContainEqual({
+      source: "compaction",
+      text: "Native compaction timed out. Writing a text summary instead.",
+      level: "warning",
+    })
+    expect(ai.nativeCompaction(agent.model)?.methods).toEqual(["server"])
+  })
+}
 
 test("/compact with instructions, or a compaction model, writes a text summary", async () => {
   const { agent, compactions } = await setup(
@@ -389,7 +440,12 @@ test("aborting a server compaction leaves the conversation as it was", async () 
       )
       started.resolve()
     })
-  const { agent, events, bus } = await setup([{ text: "r1" }, { text: "r2" }], [hang])
+  const { agent, mock, events, bus } = await setup(
+    [{ text: "r1" }, { text: "r2" }],
+    [hang],
+    {},
+    { retries: 0, nativeCompactionTimeoutMs: 1000 },
+  )
   await agent.prompt("q1")
   await agent.prompt("q2")
   const before = [...agent.messages]
@@ -400,4 +456,7 @@ test("aborting a server compaction leaves the conversation as it was", async () 
   await bus.flush()
   expect(agent.messages).toEqual(before)
   expect(ofType(events, "compact.failed")[0]?.error).toBe("aborted")
+  expect(mock.requests).toHaveLength(2)
+  expect(ofType(events, "extension.notice")).toEqual([])
+  expect(ofType(events, "compact.end")).toEqual([])
 })

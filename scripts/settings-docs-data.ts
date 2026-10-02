@@ -485,8 +485,13 @@ export const annotations: Record<string, Annotation> = {
   },
   "retry.idleTimeoutMs": {
     default: "`100000` (100 s)",
-    en: "Maximum silence in milliseconds between streamed content events after the first one. The reply then ends with a timeout error that keeps its partial text; it is not sent again, since that would repeat what was already shown (a reply that has only begun reasoning, with nothing shown yet, is retried). While a hosted web search runs, the limit is at least 10 minutes. `0` disables this timeout; keep-alive comments do not reset it.",
-    zh: "首个内容事件之后，流式内容事件之间允许的最长静默时间（毫秒）。超时后回复以超时错误结束并保留已收到的文字；不会重发，因为那样会重复已经显示的内容（只开始了思考、尚未显示任何内容的回复会重试）。托管网页搜索进行期间，这个上限至少为 10 分钟。`0` 表示关闭；SSE 保活注释不会重置计时。",
+    en: "Maximum silence in milliseconds between streamed content events after the first one. The reply then ends with a timeout error that keeps its partial text; it is not sent again, since that would repeat what was already shown (a reply that has only begun reasoning, with nothing shown yet, is retried). Type a message to continue, or press ↑ to resend. Plain print mode reports the error on stderr and exits non-zero. While a hosted web search runs, the limit is at least 10 minutes. `0` disables this timeout; keep-alive comments do not reset it.",
+    zh: "首个内容事件之后，流式内容事件之间允许的最长静默时间（毫秒）。超时后回复以超时错误结束并保留已收到的文字；不会重发，因为那样会重复已经显示的内容（只开始了思考、尚未显示任何内容的回复会重试）。输入消息可继续，或按 ↑ 重发。普通打印模式在 stderr 上报告错误，并以非零退出码结束。托管网页搜索进行期间，这个上限至少为 10 分钟。`0` 表示关闭；SSE 保活注释不会重置计时。",
+  },
+  "retry.nativeCompactionTimeoutMs": {
+    default: { en: "`300000` (5 minutes)", zh: "`300000`（5 分钟）" },
+    en: "Deadline in milliseconds for server-side compaction, including all attempts and retry waits. On timeout, the native request is aborted and a text summary is written instead, with a notice. `0` disables this timeout; Esc still cancels compaction without writing a summary.",
+    zh: "服务端压缩的总时限（毫秒），包括所有尝试及重试等待。超时后会中止服务端请求，改为生成文字摘要，并显示提示。`0` 表示关闭此超时；Esc 仍会取消压缩，不生成摘要。",
   },
   "web.nativeSearch": {
     default: "`true`",

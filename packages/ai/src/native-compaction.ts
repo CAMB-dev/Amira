@@ -47,7 +47,7 @@ export type CompactResult =
       /** Ways that failed before this one worked. */
       tried: CompactAttempt[]
     }
-  | { ok: false; error: string; usage: Usage; tried: CompactAttempt[]; aborted?: boolean }
+  | { ok: false; error: string; usage: Usage; tried: CompactAttempt[]; aborted?: boolean; timedOut?: boolean }
 
 /**
  * Remembers ways of compacting that an endpoint does not support: for the rest of the
