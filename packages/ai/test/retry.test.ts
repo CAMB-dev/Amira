@@ -121,6 +121,85 @@ test("a silent reasoning block uses the idle timeout instead of the first-conten
   expect(types(evs)).toEqual(["start", "thinking.start", "done"])
 })
 
+test("a reasoning start alone that then goes idle is sent again", async () => {
+  let n = 0
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    n++
+    yield { type: "start" }
+    yield { type: "thinking.start" }
+    if (n === 1) await new Promise<never>(() => {})
+    yield { type: "text.delta", text: "hi" }
+    yield {
+      type: "done",
+      message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "end" },
+    }
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 1,
+      baseDelayMs: 1,
+      firstContentTimeoutMs: 15,
+      idleTimeoutMs: 20,
+    }),
+  )
+  expect(n).toBe(2)
+  expect(types(evs)).toEqual(["start", "thinking.start", "retry", "thinking.start", "text.delta", "done"])
+  expect(evs[2]).toMatchObject({
+    type: "retry",
+    error: { code: "timeout", message: "model stream was idle for 20 ms" },
+  })
+})
+
+test("a reasoning start alone does not stop a retryable error from being retried", async () => {
+  let n = 0
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    n++
+    yield { type: "start" }
+    yield { type: "thinking.start" }
+    if (n === 1) {
+      yield {
+        type: "error",
+        error: { message: "overloaded", status: 529 },
+        retryable: true,
+        message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "error" },
+      }
+      return
+    }
+    yield {
+      type: "done",
+      message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "end" },
+    }
+  }
+  const evs = await events(withRetry(attempt, new AbortController().signal, { retries: 1, baseDelayMs: 1 }))
+  expect(n).toBe(2)
+  expect(types(evs)).toEqual(["start", "thinking.start", "retry", "thinking.start", "done"])
+})
+
+test("streamed reasoning text that then goes idle is not sent again", async () => {
+  let n = 0
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    n++
+    yield { type: "start" }
+    yield { type: "thinking.start" }
+    yield { type: "thinking.delta", text: "hmm" }
+    await new Promise<never>(() => {})
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 2,
+      baseDelayMs: 1,
+      firstContentTimeoutMs: 15,
+      idleTimeoutMs: 20,
+    }),
+  )
+  expect(n).toBe(1)
+  expect(types(evs)).toEqual(["start", "thinking.start", "thinking.delta", "error"])
+  expect(evs[3]).toMatchObject({
+    error: { code: "timeout" },
+    message: { content: [{ type: "thinking", text: "hmm" }] },
+  })
+})
+
 test("a stream with no events still times out as having no content", async () => {
   const attempt = async function* (): AsyncGenerator<StreamEvent> {
     await new Promise<never>(() => {})

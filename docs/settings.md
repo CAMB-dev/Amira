@@ -180,7 +180,7 @@ What the model may do without asking; see [Permissions](usage.md#permissions). A
 | `retry.baseDelayMs` | `number` | `1000` | Wait before the first retry, doubling each time; a server's `Retry-After` replaces it. |  |
 | `retry.maxDelayMs` | `number` | `60000` | A wait longer than this is not waited out: the error is reported instead. |  |
 | `retry.firstContentTimeoutMs` | `number` | `150000` (150 s) | Maximum time in milliseconds to wait for the first streamed content event (text, a reasoning-block start or delta, a tool call or a hosted search); the attempt is then retried. `0` disables this timeout; keep-alive comments do not count as content. |  |
-| `retry.idleTimeoutMs` | `number` | `100000` (100 s) | Maximum silence in milliseconds between streamed content events after the first one. The reply then ends with a timeout error that keeps its partial text; it is not sent again, since that would repeat what was already shown. While a hosted web search runs, the limit is at least 10 minutes. `0` disables this timeout; keep-alive comments do not reset it. |  |
+| `retry.idleTimeoutMs` | `number` | `100000` (100 s) | Maximum silence in milliseconds between streamed content events after the first one. The reply then ends with a timeout error that keeps its partial text; it is not sent again, since that would repeat what was already shown (a reply that has only begun reasoning, with nothing shown yet, is retried). While a hosted web search runs, the limit is at least 10 minutes. `0` disables this timeout; keep-alive comments do not reset it. |  |
 
 ## Context management
 

@@ -21,15 +21,12 @@ export interface RetryOptions {
 /** The idle limit while a hosted tool runs: the server may be quiet (pings only) the whole time. */
 export const SERVER_TOOL_IDLE_MS = 600_000
 
-// A reasoning start counts even before visible text, like every other existing content event.
-// A hosted search already shown (and paid for) counts too: sending again would search again.
-const CONTENT = new Set<StreamEvent["type"]>([
-  "text.delta",
-  "thinking.start",
-  "thinking.delta",
-  "toolCall.delta",
-  "serverTool",
-])
+// Content already streamed: sending again would repeat it. A hosted search already shown (and
+// paid for) counts too: sending again would search again.
+const CONTENT = new Set<StreamEvent["type"]>(["text.delta", "thinking.delta", "toolCall.delta", "serverTool"])
+// A reasoning start ends the first-content wait (the model is working, silently), but nothing was
+// shown or kept yet, so the attempt can still be sent again.
+const ACTIVITY = new Set<StreamEvent["type"]>([...CONTENT, "thinking.start"])
 
 /**
  * Sends a request again after a retryable failure, as long as nothing was streamed yet (D52):
@@ -39,8 +36,9 @@ const CONTENT = new Set<StreamEvent["type"]>([
  * Two timers end an attempt that stalls: no content event within firstContentTimeoutMs
  * (retried like any transient failure), or silence longer than idleTimeoutMs after content
  * (not sent again: the partial reply was already shown, and a hosted search would run twice;
- * it ends with a timeout error that keeps the partial text). Keep-alives never reach this
- * layer, so they reset neither timer.
+ * it ends with a timeout error that keeps the partial text). A reasoning start alone switches
+ * to the idle timer but streams nothing, so a later failure is still retried. Keep-alives never
+ * reach this layer, so they reset neither timer.
  */
 export async function* withRetry(
   open: (signal: AbortSignal) => AsyncIterable<StreamEvent>,
@@ -60,6 +58,7 @@ export async function* withRetry(
       return
     }
     let content = false
+    let active = false
     let failed: ErrorEvent | undefined
     let partial: AssistantMessage | undefined
     const runningServerTools = new Set<string>()
@@ -100,7 +99,7 @@ export async function* withRetry(
             yield aborted(partial)
             return
           }
-          const timeoutError = timeoutFailure(content, armedMs, model, partial)
+          const timeoutError = timeoutFailure(active, armedMs, model, partial)
           if (!content && attempt < retries) {
             failed = timeoutError
             break
@@ -120,8 +119,9 @@ export async function* withRetry(
           failed = ev
           break
         }
-        if (CONTENT.has(ev.type)) {
-          content = true
+        if (ACTIVITY.has(ev.type)) {
+          active = true
+          if (CONTENT.has(ev.type)) content = true
           partial = notePartial(partial, ev, model)
           if (ev.type === "serverTool") {
             if (ev.block.status === "running") runningServerTools.add(ev.block.id)
