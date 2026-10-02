@@ -60,7 +60,7 @@ export class TraceRecorder {
         try {
           this.#event(event)
         } catch (error) {
-          this.#state(event.sessionId).writer?.fail(error)
+          this.#states.get(event.sessionId)?.writer?.fail(error)
         }
       },
       { maxQueue: 100_000, types },
@@ -132,6 +132,15 @@ export class TraceRecorder {
     for (const state of this.#states.values()) state.writer?.emergencyFlush()
   }
 
+  /** Drops a finished session's state after its writes, so a long-lived host does not accumulate it. */
+  #release(id: string, state: State, idle: boolean) {
+    const written = state.writer?.flush()
+    if (!idle) return
+    void Promise.resolve(written).then(() => {
+      if (this.#states.get(id) === state && !state.writer?.pending.length) this.#states.delete(id)
+    })
+  }
+
   #state(id: string): State {
     let state = this.#states.get(id)
     if (!state) {
@@ -143,7 +152,9 @@ export class TraceRecorder {
 
   #event(event: AnyEvent) {
     if (this.#retired.has(event.sessionId)) return
-    const state = this.#state(event.sessionId)
+    // Only session.start creates state, so a late event of a released session cannot leak one.
+    const state = event.type === "session.start" ? this.#state(event.sessionId) : this.#states.get(event.sessionId)
+    if (!state) return
     const at = event.ts
     const turn = event.turnId ?? ""
     if (event.type === "session.start") {
@@ -177,7 +188,8 @@ export class TraceRecorder {
     const push = (record: TraceRecord) => state.writer?.push(record)
     switch (event.type) {
       case "session.end":
-        void state.writer?.flush()
+        // Late tool ends of aborted calls may still follow; release only an idle session.
+        this.#release(event.sessionId, state, !state.models.size && !state.tools.size)
         break
       case "turn.start":
         if (event.turnId) state.turns.set(turn, at)
@@ -333,6 +345,9 @@ export class TraceRecorder {
           })
           this.#children.delete(childSessionId)
         }
+        // A sub-agent has no session.end of its own: free its state once its records are written.
+        const done = this.#states.get(event.data.childSessionId)
+        if (done) this.#release(event.data.childSessionId, done, true)
         void this.flush()
         break
       }
