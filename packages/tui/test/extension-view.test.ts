@@ -219,7 +219,7 @@ test("an unknown kind is the command's error; subagent can be registered by an e
     extra: (api) =>
       void api.registerView({ kind: "subagent", title: () => "mine", render: () => [] } as ViewDefinition),
   })
-  expect(s.host.views.get("subagent")?.title(undefined)).toBe("mine")
+  expect(s.host.views.get("subagent")?.title(undefined, { width: 80, now: 0 })).toBe("mine")
   expect(s.errors).toEqual([])
   s.terminal.send("/progress nope\r")
   await waitFor(() => s.screen.text.includes('there is no "nope" view'), "the error")
