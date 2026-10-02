@@ -156,8 +156,11 @@ export class ResponsesAccumulator {
   *#added(item: any, outputIndex: unknown): Generator<StreamEvent> {
     const key = itemKey({ item_id: item?.id, output_index: outputIndex })
     if (item?.type === "function_call") yield* this.#call(key, item)
-    else if (item?.type === "reasoning") this.#reasoningFor(key)
-    else if (item?.type === "message") this.#noteMessage(key, item)
+    else if (item?.type === "reasoning") {
+      const starts = !this.#reasoning.has(key)
+      this.#reasoningFor(key)
+      if (starts) yield { type: "thinking.start" }
+    } else if (item?.type === "message") this.#noteMessage(key, item)
     else if (item?.type === "web_search_call") yield* this.#webSearch.item(key, item, false)
   }
 
@@ -172,7 +175,9 @@ export class ResponsesAccumulator {
       }
       this.#pushCall(call)
     } else if (item?.type === "reasoning") {
+      const starts = !this.#reasoning.has(key)
       const r = this.#reasoningFor(key)
+      if (starts) yield { type: "thinking.start" }
       if (!r.block.text) {
         const summary = (item.summary ?? [])
           .map((s: any) => s?.text ?? "")
@@ -235,8 +240,10 @@ export class ResponsesAccumulator {
   }
 
   *#thinking(key: string, delta: unknown, part: unknown): Generator<StreamEvent> {
-    if (typeof delta !== "string" || !delta) return
+    const starts = !this.#reasoning.has(key)
     const r = this.#reasoningFor(key)
+    if (starts) yield { type: "thinking.start" }
+    if (typeof delta !== "string" || !delta) return
     const n = typeof part === "number" ? part : 0
     const text = !r.parts.has(n) && r.block.text ? `\n\n${delta}` : delta
     r.parts.add(n)

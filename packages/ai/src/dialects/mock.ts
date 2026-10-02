@@ -61,6 +61,7 @@ export function createMockDialect(steps: MockStep[] = []) {
         }
         if (reply.thinking) {
           message.content.push({ type: "thinking", text: reply.thinking })
+          yield { type: "thinking.start" }
           yield { type: "thinking.delta", text: reply.thinking }
         }
         if (reply.text) {

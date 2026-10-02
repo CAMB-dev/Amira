@@ -87,12 +87,14 @@ export class MessagesAccumulator {
       const block: ThinkingBlock = { type: "thinking", text: "" }
       this.message.content.push(block)
       this.#blocks.set(index, { kind: "thinking", block })
+      yield { type: "thinking.start" }
       yield* this.#delta(index, { type: "thinking_delta", thinking: cb.thinking })
       this.#sign(block, cb.signature)
     } else if (cb?.type === "redacted_thinking") {
       const block: ThinkingBlock = { type: "thinking", text: "", redacted: true }
       this.#sign(block, cb.data)
       this.message.content.push(block)
+      yield { type: "thinking.start" }
     } else if (cb?.type === "server_tool_use" && cb.name === NATIVE_WEB_SEARCH) {
       const block: ServerToolBlock = {
         type: "serverTool",

@@ -65,6 +65,9 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
         case "text.delta":
           options.emit("message.delta", { kind: "text", text: ev.text })
           break
+        case "thinking.start":
+          // Reasoning has begun, but there is no visible delta to forward to the UI.
+          break
         case "thinking.delta":
           options.emit("message.delta", { kind: "thinking", text: ev.text })
           break

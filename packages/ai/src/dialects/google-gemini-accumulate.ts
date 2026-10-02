@@ -108,8 +108,10 @@ export class GeminiAccumulator {
       this.#search.part(part)
       yield this.#call(part.functionCall)
     } else if (part.thought) {
+      const starts = this.#open?.type !== "thinking"
       const block = this.#extend("thinking", text) as ThinkingBlock
       this.#search.part(part, block)
+      if (starts) yield { type: "thinking.start" }
       if (text) yield { type: "thinking.delta", text }
       if (sig) {
         block.signature = { dialect: GEMINI_DIALECT, value: sig }

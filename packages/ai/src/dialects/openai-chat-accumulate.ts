@@ -18,6 +18,7 @@ export class ChatAccumulator {
   readonly message: AssistantMessage
   #text: TextBlock | undefined
   #thinking: { type: "thinking"; text: string } | undefined
+  #thinkingStarted = false
   readonly #calls = new ToolCallAssembler()
   #finish: string | undefined
 
@@ -36,13 +37,19 @@ export class ChatAccumulator {
     if (!choice) return
     const delta = choice.delta ?? {}
     const reasoning: unknown = delta.reasoning_content ?? delta.reasoning
-    if (typeof reasoning === "string" && reasoning) {
-      if (!this.#thinking) {
-        this.#thinking = { type: "thinking", text: "" }
-        this.message.content.push(this.#thinking)
+    if (typeof reasoning === "string") {
+      if (!this.#thinkingStarted) {
+        this.#thinkingStarted = true
+        yield { type: "thinking.start" }
       }
-      this.#thinking.text += reasoning
-      yield { type: "thinking.delta", text: reasoning }
+      if (reasoning) {
+        if (!this.#thinking) {
+          this.#thinking = { type: "thinking", text: "" }
+          this.message.content.push(this.#thinking)
+        }
+        this.#thinking.text += reasoning
+        yield { type: "thinking.delta", text: reasoning }
+      }
     }
     if (typeof delta.content === "string" && delta.content) {
       if (!this.#text) {
