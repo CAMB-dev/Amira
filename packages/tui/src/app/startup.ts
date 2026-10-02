@@ -35,6 +35,8 @@ export interface InteractiveOptions {
   startupEvents?: AnyEvent[]
   /** Sent as the first message once the UI is up. */
   initialPrompt?: string
+  /** Pick a stored session before starting; cancellation exits instead of leaving an unsaved chat. */
+  resumePicker?: boolean
   /** Shown as a warning under the banner, e.g. that no model is selected yet. */
   notice?: string
   /** Called once the UI listens to the bus, e.g. to announce the session. */
