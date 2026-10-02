@@ -37,17 +37,19 @@ interface ApprovalCall {
 }
 
 /**
- * Internal approval/question interface. approve() builds and routes a request synchronously,
- * returning the existing approval wait directly; the caller still owns the policy await,
- * abort/dismissal handling, approval attribution and rejection at their original await sites.
- * askFromTool() shares the blocked count; askQuestions() forwards a commander's questions
- * directly, without another wait, error conversion or promise wrapper. hasAsker controls
- * whether the call session exposes askUser at all. permissionApprover never falls back to
- * a child session's parent-model approver.
+ * Approval and question routing for one session, plus the count of calls waiting on an answer.
  *
- * Every wait emits blocked before invoking its callback synchronously. Only the last settled
- * wait of the current, non-aborted turn restores working. Callbacks must cooperate with abort:
- * no abort race or turn-end reset is added, including for abandoned waits that settle later.
+ * - approve() builds the request and starts the wait synchronously, returning the wait's promise
+ *   directly. The caller keeps the policy await, abort/dismissal handling, approval attribution
+ *   and rejection at their original await sites, so no await or microtask boundary is added.
+ * - askFromTool() shares the blocked count; askQuestions() forwards a commander's questions
+ *   directly, with no wait, error conversion or promise wrapper.
+ * - hasAsker says whether the session exposes askUser at all. permissionApprover never falls
+ *   back to a child's parent-model approver.
+ *
+ * Every wait emits blocked, then calls its callback synchronously. Only the last settled wait of
+ * the current, non-aborted turn restores working. Callbacks must cooperate with abort: no abort
+ * race or turn-end reset is added, including for abandoned waits that settle later.
  */
 export class ApprovalGate {
   #deps: ApprovalGateDeps
