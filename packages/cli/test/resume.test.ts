@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { mkdtemp } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect } from "@amira/ai"
+import { createAi, createMockDialect, userMessage } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
-import { listSessions } from "@amira/core"
+import { listSessions, SessionStore } from "@amira/core"
 import { parseCliArgs, UsageError } from "../src/args.ts"
 import { runPrint } from "../src/print.ts"
 import { chooseStore, exitNote, formatSessionList } from "../src/resume.ts"
@@ -26,6 +26,81 @@ afterAll(() => {
 })
 
 const quiet = { stdout: () => {}, stderr: () => {} }
+
+const pickerKeys = { Esc: "\x1b", "Ctrl+C": "\x03", Enter: "\r" }
+for (const mode of ["startup", "slash", "select"] as const) {
+  for (const name of mode === "select" ? (["Enter"] as const) : (["Esc", "Ctrl+C"] as const)) {
+    const key = pickerKeys[name]
+    test(`${mode} resume picker with ${name} leaves sessions unchanged`, async () => {
+      const cwd = await mkdtemp(path.join(os.tmpdir(), "amira-resume-cancel-"))
+      const store = SessionStore.create({ cwd })
+      store.append({ type: "model_change", model: { provider: "local", model: "test" } })
+      store.appendMessage(userMessage("keep this session"))
+      if (mode === "slash") {
+        SessionStore.create({ cwd }).appendMessage(userMessage("another session to pick"))
+      }
+      const dir = path.dirname(store.file)
+      const before = await readdir(dir)
+      const contents = await Promise.all(before.map((f) => readFile(path.join(dir, f), "utf8")))
+      const ids = listSessions(cwd)
+        .map((s) => s.id)
+        .sort()
+      await writeFile(
+        path.join(home, "settings.json"),
+        JSON.stringify({
+          model: "local/test",
+          providers: {
+            local: { dialect: "openai-chat", baseUrl: "http://127.0.0.1:1", models: [{ id: "test" }] },
+          },
+        }),
+      )
+      try {
+        const child = Bun.spawn(
+          [
+            process.execPath,
+            path.join(here, "fixtures/resume-picker.ts"),
+            "-r",
+            ...(mode === "slash" ? [store.id] : []),
+            "-C",
+            cwd,
+            "--no-packages",
+          ],
+          {
+            stdout: "pipe",
+            stderr: "pipe",
+            env: {
+              ...process.env,
+              AMIRA_HOME: home,
+              HOME: home,
+              USERPROFILE: home,
+              AMIRA_MODEL: "",
+              TEST_PICKER_MODE: mode,
+              TEST_PICKER_KEY: key,
+            },
+          },
+        )
+        const [out, err, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ])
+        expect({ code, err }).toEqual({ code: 0, err: "" })
+        expect(out).toContain(`startup stored: ${mode === "slash"}`)
+        expect(out).toContain("picker exited: 0")
+        expect(await readdir(dir)).toEqual(before)
+        expect(await Promise.all(before.map((f) => readFile(path.join(dir, f), "utf8")))).toEqual(contents)
+        expect(
+          listSessions(cwd)
+            .map((s) => s.id)
+            .sort(),
+        ).toEqual(ids)
+      } finally {
+        await rm(cwd, { recursive: true, force: true })
+        await rm(path.join(home, "settings.json"), { force: true })
+      }
+    }, 20_000)
+  }
+}
 
 test("parses -c, -r <id> and a bare -r", () => {
   expect(parseCliArgs(["-c", "hi"], here, {})).toMatchObject({ continue: true, prompt: "hi" })
