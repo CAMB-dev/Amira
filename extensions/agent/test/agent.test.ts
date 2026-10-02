@@ -373,6 +373,9 @@ test("project role files are offered and used", async () => {
   expect(mock.requests[0]!.tools?.find((t) => t.name === "agent")?.description).toContain(
     "- scribe: Writes notes",
   )
+  expect(mock.requests[0]!.tools?.find((t) => t.name === "agent")?.description).toContain(
+    "Use a reviewer only when the change is large or risky",
+  )
   expect(mock.requests.find((q) => q.systemPrompt.includes("scribe"))?.tools?.map((t) => t.name)).toEqual([
     "read",
   ])
