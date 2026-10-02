@@ -156,3 +156,21 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
     ...(modelError ? { modelError } : {}),
   }
 }
+
+/**
+ * The reason a failed native compaction falls back to a text summary. A timeout (not a user
+ * abort, which never gets here) also tells the user why, through `notice`.
+ */
+export function compactionFallback(
+  r: { error: string; timedOut?: boolean },
+  notice: (n: EventMap["extension.notice"]) => void,
+): string {
+  if (r.timedOut) {
+    notice({
+      source: "compaction",
+      text: "Native compaction timed out. Writing a text summary instead.",
+      level: "warning",
+    })
+  }
+  return r.error
+}

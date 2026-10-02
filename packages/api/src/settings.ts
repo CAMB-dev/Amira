@@ -102,6 +102,8 @@ export interface Settings {
     maxDelayMs?: number
     firstContentTimeoutMs?: number
     idleTimeoutMs?: number
+    /** Native compaction deadline in milliseconds. Default 300000 (5 minutes); 0 disables it. */
+    nativeCompactionTimeoutMs?: number
   }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */
   mcpServers?: Record<string, Record<string, unknown>>
