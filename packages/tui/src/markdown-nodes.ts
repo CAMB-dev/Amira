@@ -1,4 +1,4 @@
-import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult, ViewLine } from "@amira/api"
+import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult, ToolLine } from "@amira/api"
 import {
   type ImageOpener,
   type ImageStore,
@@ -135,7 +135,7 @@ export class ReplyRenderers {
 }
 
 /** A rendered node's lines as rows of `width`: plain text as it is, other kinds in the theme's colors. */
-export function nodeRows(lines: ViewLine[], theme: Theme, width: number): string[] {
+export function nodeRows(lines: ToolLine[], theme: Theme, width: number): string[] {
   return lines.map((l) => {
     const text = truncateToWidth(stripAnsi(l.text).replace(/\s+$/, ""), Math.max(1, width), glyphs.more)
     switch (l.kind) {

@@ -181,13 +181,24 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 ### Full-screen views
 
 Register a `ViewDefinition` with `api.registerView()` and open it from a command with
-`ctx.openView?.({ kind, data })`. Views return plain `ViewLine` objects; the frontend owns
+`ctx.openView?.({ kind, data })`. Views return structured `ViewLine` objects; the frontend owns
 the terminal, wrapping, scrolling, prompts and confirmations. The `subagent` kind and
 `/agents` command are registered by the built-in agent extension. Without that extension,
 opening a child from a transcript block reports that the live view is unavailable.
 
-`title(data, opts)` gives the first line; `titleAside(data)` adds short text kept at its
-right end, such as `2 of 5`, while the title is cut on a narrow screen.
+`title(data, opts)` returns `string | ViewLine` for the first line. A string keeps the
+default `◆` marker; a semantic `ViewLine` supplies the whole title without an automatic
+marker. The frontend truncates either form to the available title space.
+`titleAside(data)` adds short text kept at its right end, such as `2 of 5`.
+
+`ViewLine` supports semantic content without ANSI escape codes. Frontends own its styling:
+
+- `{ kind: "segments", parts: ViewSegment[] }` combines styled text into one line,
+  truncated by the frontend rather than wrapped. The exported `ViewSegment` type is
+  `{ text: string, kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }`.
+- `{ kind: "user-message", text: string, note?: string }` renders like a transcript user
+  message, including wrapping, background and spacing. Supply only the message text; do
+  not add a `›` marker yourself. An optional note appears below it, inside the same band.
 
 Keys can be one printable character or `left`, `right`, `tab`, and `shift-tab`. Keys with
 the same label share one footer item (`←→ switch`); an empty label keeps a key, such as an
