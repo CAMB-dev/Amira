@@ -45,7 +45,7 @@ async function setup() {
 }
 const prompt = { role: "user" as const, content: [{ type: "text" as const, text: "go" }] }
 
-test("titles preserve folder, session, branch and working marker; switching clears the branch and title", async () => {
+test("titles preserve folder, session, branch and working marker; switching folders clears the branch", async () => {
   const s = await setup()
   s.emit("workspace.changed", { cwd: "/work/proj", branch: "main" })
   s.emit("turn.start", { prompt })
@@ -58,6 +58,13 @@ test("titles preserve folder, session, branch and working marker; switching clea
   ])
   s.emit("session.title", { title: "  New\nname  " })
   expect(s.titles.at(-1)).toBe("Amira · proj · New name ⎇ main")
+  // A session in the same folder keeps the branch until its own probe reports.
+  s.emit(
+    "session.start",
+    { reason: "clear", cwd: "/work/proj", model: { provider: "mock", model: "m" } },
+    "new",
+  )
+  expect(s.titles.at(-1)).toBe("Amira · proj ⎇ main")
   s.emit(
     "session.start",
     { reason: "resume", cwd: "C:\\work\\next\\", model: { provider: "mock", model: "m" } },
