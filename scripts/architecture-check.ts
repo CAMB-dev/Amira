@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 
@@ -5,8 +6,9 @@ import path from "node:path"
  * Architecture guard rails for the workspace.
  *
  * The dependency table is intentionally explicit: update it when a package boundary changes.
- * Source files over 900 lines must be added to the allowlist with their current line count. When
- * an allowlisted file is split, remove it from the list so the new files are checked normally.
+ * Source files over 900 lines have explicit caps that may only decrease from the merge base with
+ * main. New entries and cap increases require ALLOW_CAP_RAISE=1 for a deliberate exception.
+ * When an allowlisted file is split, remove it so the new files are checked normally.
  */
 const root = path.resolve(import.meta.dir, "..")
 const importPattern = /\b(?:from\s*|import\s*(?:\(\s*)?|require\s*\(\s*)(["'`])([^"'`]+)\1/g
@@ -69,6 +71,51 @@ const hostBackgroundJobsAllowlist = new Set([
   "packages/core/src/extensions.ts",
   "extensions/builtin-tools/src/jobs-ui.ts",
 ])
+
+function gitOutput(args: string[]): string | undefined {
+  try {
+    return execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim()
+  } catch {
+    return undefined
+  }
+}
+
+function sourceLineCapViolations(): string[] {
+  if (process.env.ALLOW_CAP_RAISE === "1") return []
+
+  const main = gitOutput(["rev-parse", "--verify", "refs/remotes/origin/main"]) ? "origin/main" : "main"
+  const base = gitOutput(["merge-base", "HEAD", main])
+  const source = base ? gitOutput(["show", `${base}:scripts/architecture-check.ts`]) : undefined
+  if (source === undefined) {
+    console.log("Source line cap ratchet skipped: git or the merge-base script is unavailable.")
+    return []
+  }
+
+  const entries = source.match(
+    /\bconst\s+sourceLineAllowlist\s*=\s*new\s+Map(?:\s*<[^>]*>)?\s*\(\s*\[([\s\S]*?)\]\s*\)/,
+  )?.[1]
+  if (entries === undefined) {
+    return [`Cannot parse sourceLineAllowlist in scripts/architecture-check.ts at ${base}`]
+  }
+  const oldCaps = new Map<string, number>()
+  for (const match of entries.matchAll(/\[\s*(["'])([^"']+)\1\s*,\s*([\d_]+)\s*,?\s*\]/g)) {
+    oldCaps.set(match[2] as string, Number((match[3] as string).replaceAll("_", "")))
+  }
+
+  const violations: string[] = []
+  for (const [file, cap] of sourceLineAllowlist) {
+    const oldCap = oldCaps.get(file)
+    if (oldCap !== undefined && cap <= oldCap) continue
+    violations.push(
+      `${file} allowlist cap: ${oldCap ?? "none (new entry)"} -> ${cap}; move code out of the file instead of raising its cap; a maintainer can override with ALLOW_CAP_RAISE=1 for a deliberate exception`,
+    )
+  }
+  return violations
+}
 
 function filesUnder(directory: string): string[] {
   const files: string[] = []
@@ -182,7 +229,7 @@ function allowedDependencies(own: string): ReadonlySet<string> {
   return new Set(allowed)
 }
 
-const violations: string[] = []
+const violations = sourceLineCapViolations()
 
 for (const directory of packageDirectoriesInWorkspace) {
   for (const file of filesUnder(directory)) {
@@ -303,9 +350,7 @@ for (const directory of packageDirectoriesInWorkspace) {
     if (lines <= sourceLineLimit) continue
     const cap = sourceLineAllowlist.get(key)
     if (cap === undefined) {
-      violations.push(
-        `${key} has ${lines} lines; split it or add it to the explicit ${sourceLineLimit}-line allowlist`,
-      )
+      violations.push(`${key} has ${lines} lines; split it to stay within the ${sourceLineLimit}-line limit`)
     } else if (lines > cap) {
       violations.push(`${key} grew to ${lines} lines; its allowlist cap is ${cap}`)
     }
