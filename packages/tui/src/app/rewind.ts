@@ -28,6 +28,7 @@ export interface RewindFlowDeps {
   showNote: (text: string) => void
   view: Pick<TranscriptView, "notice" | "requestRender">
   redraw: () => void
+  waitingChanged: (change: "opened" | "resolved") => void
 }
 
 /** The TUI's rewind picker, including optional file restoration and its notices. */
@@ -73,6 +74,7 @@ export class RewindFlow {
       (answer) => {
         const i = dialogs.indexOf(dialog)
         if (i !== -1) dialogs.splice(i, 1)
+        this.deps.waitingChanged("resolved")
         const label =
           typeof answer === "string"
             ? answer
@@ -90,6 +92,7 @@ export class RewindFlow {
       keys,
     )
     dialogs.unshift(dialog)
+    this.deps.waitingChanged("opened")
     view.requestRender()
     return true
   }
@@ -130,6 +133,7 @@ export class RewindFlow {
       (answer) => {
         const at = dialogs.indexOf(dialog)
         if (at !== -1) dialogs.splice(at, 1)
+        this.deps.waitingChanged("resolved")
         if (typeof answer === "string")
           void this.rewindTo(control, pick, { restoreFiles: canRestore && answer === restore, plan })
         view.requestRender()
@@ -137,6 +141,7 @@ export class RewindFlow {
       keys,
     )
     dialogs.unshift(dialog)
+    this.deps.waitingChanged("opened")
     view.requestRender()
   }
 

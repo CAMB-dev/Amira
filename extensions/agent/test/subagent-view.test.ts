@@ -12,6 +12,7 @@ import {
   type ViewSegment,
 } from "@amira/api"
 import statusExtension from "../../../extensions/status/src/index.ts"
+import terminalStatusExtension from "../../../extensions/terminal-status/src/index.ts"
 import { createAi, createMockDialect, type MockStep, userMessage } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
@@ -55,6 +56,7 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
   const tools = new ToolRegistry()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools })
   await host.load(statusExtension, "builtin:status")
+  await host.load(terminalStatusExtension, "builtin:terminal-status")
   await host.load((api) => {
     api.registerCommand(agentsCommand())
     api.registerView(subagentView(api))
@@ -144,6 +146,7 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
     terminal.setSize(c, r)
   }
   const exited = runInteractive({
+    bindTerminal: (t) => host.bindTerminal(t),
     agent,
     status: host.status,
     ui: host.ui,

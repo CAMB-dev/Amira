@@ -16,6 +16,7 @@ import type { ImageProvider, MarkdownRendererDefinition } from "./render.ts"
 import type { ServiceName, ServiceOf } from "./services.ts"
 import type { SettingsView } from "./settings.ts"
 import type { SkillDefinition } from "./skills.ts"
+import type { TerminalApi } from "./terminal.ts"
 import type { ToolPresenter } from "./tool-renderers.ts"
 import type { ToolDefinition } from "./tools.ts"
 import type { StatusItem, UiApi } from "./ui.ts"
@@ -45,6 +46,8 @@ export interface CompleteResult {
 }
 
 export interface ExtensionAPI {
+  /** Structured terminal effects, bound by the interactive frontend; no-op otherwise. */
+  readonly terminal: TerminalApi
   /** Claims workspace probing exclusively. Throws if taken; unregisters on unload/reload. */
   registerWorkspaceProvider(provider: WorkspaceProvider): () => void
   /** Claims rewind's file restoration exclusively. Unloading releases the claim. */

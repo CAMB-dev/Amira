@@ -286,7 +286,11 @@ host 注册表向内置 host 代码提供 `maxRunning`、`configure`、`stopAll`
 
 注册方法返回移除函数，host 会跟踪注册。卸载时自动移除；加载失败则回滚已注册内容。命令、工具、skill、状态项或 panel 重名时，有意替换需要 `override: true`，具体冲突规则以对应类型为准，避免意外替换其他扩展的内容。
 
-事件包括 `session.start`、`workspace.changed`、`tool.execute.start` 和 `tool.execute.end`（两者都带有工具的 `traits`，写文件工具还带有它报告的 `writtenPaths`）。监听器收到的事件封装包含数据和会话 ID，维护会话状态时应按会话筛选。重新加载后，新注册的监听器会收到当前会话、工作区和预算事件，以便恢复状态。自行创建的原生资源仍需自行清理。
+事件包括 `session.start`（携带可选的初始 `title`）、`workspace.changed`、`tool.execute.start` 和 `tool.execute.end`（两者都带有工具的 `traits`，写文件工具还带有它报告的 `writtenPaths`）。监听器收到的事件封装包含数据和会话 ID，维护会话状态时应按会话筛选。重新加载后，新注册的监听器会收到当前会话、工作区、预算事件以及最新的 `ui.focus` 和 `ui.waiting` 状态。等待状态以 visibility 变化重放，不会再次宣布问题打开。自行创建的原生资源仍需自行清理。
+
+`api.terminal` 是稳定的结构化能力，提供 `setTitle(title: string)`、`setProgress(state: "none" | "indeterminate" | "paused")` 和 `bell()`，不暴露原始写入或转义序列。在 print 和 RPC 前端，这些方法不执行任何操作。TUI 清理标题中的控制字符，将其限制为 128 个终端单元格，在帧写入之外的微任务边界合并输出，遵守 `tui.title`、`tui.progress` 和 `tui.bell` 设置，检测进度支持，并在退出时恢复终端。
+
+内置 `@amira/ext-terminal-status` 负责标题组合、工作与等待进度以及响铃策略；`--no-builtins` 会禁用它。问题（包括本地 rewind 对话框）、表单及覆盖视图变化后，TUI 发出 `ui.waiting`：`{ pending: number, hidden: boolean, change: "opened" | "resolved" | "visibility" }`。`hidden` 表示覆盖视图挡住了待回答的问题。隐藏问题打开时只响铃一次，可见性变化不再响铃。焦点通过 `ui.focus` 传递；完成回合或打开可见问题时，窗口失焦则响铃，焦点未知则在回合持续 15 秒后响铃。中断的回合不响铃。
 
 修改入口文件后可用 `/reload`。入口导入的其他模块仍有缓存，因此修改辅助模块后需要重启 Amira。渲染回调应保持轻量，改变可见状态后调用 `requestRender`。
 
