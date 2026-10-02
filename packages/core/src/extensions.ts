@@ -48,6 +48,7 @@ import type { ToolRegistry } from "./tool-registry.ts"
 import { ToolRendererRegistry } from "./tool-renderers.ts"
 import { UiRequests } from "./ui-requests.ts"
 import { ViewRegistry } from "./view-registry.ts"
+import { workspaceFor } from "./workspace.ts"
 
 let virtualApiInstalled = false
 
@@ -158,6 +159,7 @@ export class ExtensionHost {
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
+    workspaceFor(opts.bus)
     this.backgroundJobs = opts.backgroundJobs ?? hostBackgroundJobs()
     this.status = opts.status ?? new StatusRegistry()
     this.panels = opts.panels ?? new PanelRegistry()
@@ -466,6 +468,8 @@ export class ExtensionHost {
         return track(() => void this.#exitHandlers.delete(entry))
       },
       registerTool: (tool) => track(tools.register(tool, source)),
+      registerWorkspaceProvider: (provider) =>
+        track(workspaceFor(bus).register(provider, source, (error) => void this.#fail(source, error))),
       registerFileRestoration: (owner) => {
         if (this.fileRestoration)
           throw new Error(`File restoration is already owned by ${this.fileRestoration.source}`)

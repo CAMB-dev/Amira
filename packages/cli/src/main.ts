@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
-import { type Agent, amiraPath, listSessions, SessionStore, trackWorkspace } from "@amira/core"
+import { type Agent, amiraPath, listSessions, SessionStore } from "@amira/core"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
@@ -156,13 +156,10 @@ async function run(argv: string[]): Promise<number> {
   const { agent, host, startupEvents, catalogRefresh, ai, modelNotice } = session
   agentRef = agent
 
-  // Announce the session once the frontend listens, then fill in git facts in the background.
-  let stopWorkspace = () => {}
+  // Announce the session once the frontend listens, the host probes workspace facts in the background.
   const announce = (a: Agent, reason: "startup" | "resume" | "clear" | "fork") => {
     const s = a.session
     a.start(reason, s ? { sessionFile: s.file, resume: ["amira", "--resume", s.id] } : {})
-    stopWorkspace()
-    stopWorkspace = trackWorkspace(a.bus, a.sessionId, a.cwd)
   }
   // Slash commands own which agent is active: /clear and /resume (and rpc session.resume) switch it.
   const commands = createCommandHost({
@@ -223,7 +220,6 @@ async function run(argv: string[]): Promise<number> {
     )
     return code
   } finally {
-    stopWorkspace()
     const last = agentRef ?? agent
     const disposing = last.dispose("exit")
     // Extensions' exit handlers (e.g. a hook for the session's end) get the same few seconds,
