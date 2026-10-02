@@ -47,14 +47,15 @@ interface ApprovalCall {
  * - hasAsker says whether the session exposes askUser at all. permissionApprover never falls
  *   back to a child's parent-model approver.
  *
- * Every wait emits blocked, then calls its callback synchronously. Only the last settled wait of
- * the current, non-aborted turn restores working. Callbacks must cooperate with abort: no abort
- * race or turn-end reset is added, including for abandoned waits that settle later.
+ * Every wait emits blocked, then calls its callback synchronously. Waits are counted per turn:
+ * only the last settled wait of the current, non-aborted turn restores working. A wait its turn
+ * abandoned (an approver that ignores abort) stays out of the next turn's count, whenever it
+ * settles.
  */
 export class ApprovalGate {
   #deps: ApprovalGateDeps
-  /** Tool calls waiting for approval or for an answer right now. */
-  #blockedCalls = 0
+  /** The latest turn with a wait, and how many of its tool calls wait for approval or an answer. */
+  #blocked: { turn: ApprovalTurn; calls: number } | undefined
 
   constructor(deps: ApprovalGateDeps) {
     this.#deps = deps
@@ -148,15 +149,18 @@ export class ApprovalGate {
    * for approval or for an answer).
    */
   async #waitBlocked<T>(turn: ApprovalTurn, reason: string, wait: () => Promise<T>): Promise<T> {
-    this.#blockedCalls++
-    this.#deps.blocked(turn, reason, this.#blockedCalls)
+    // A new turn starts a fresh count: waits a finished turn left behind never settle into it.
+    if (this.#blocked?.turn !== turn) this.#blocked = { turn, calls: 0 }
+    const entry = this.#blocked
+    entry.calls++
+    this.#deps.blocked(turn, reason, entry.calls)
     try {
       return await wait()
     } finally {
-      this.#blockedCalls--
+      entry.calls--
       // A wait that ends after its turn did (aborted, abandoned) must not wake the session.
-      const live = this.#deps.isCurrentTurn(turn) && !turn.signal.aborted
-      if (this.#blockedCalls === 0 && live) this.#deps.working(turn)
+      const live = this.#blocked === entry && this.#deps.isCurrentTurn(turn) && !turn.signal.aborted
+      if (entry.calls === 0 && live) this.#deps.working(turn)
     }
   }
 }
