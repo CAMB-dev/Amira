@@ -218,7 +218,7 @@ RPC 在 stdin 和 stdout 使用 JSON Lines，不能与 `-p` 或命令行提示�
 | `state` | 获取状态、模型、会话和待回答的界面请求 |
 | `session.read` | 用 `what` 参数选择 `messages` 或 `lastTurn` |
 | `session.resume` | 用 `sessionId` 切换到已有会话 |
-| `session.rename` | 用 `title` 为当前会话命名；可选的 `source`/`sessionId` 选项支持受保护的自动命名，名称改变时发出 `session.title` 事件 |
+| `session.rename` | 用 `title` 为当前会话命名；随后发出 `session.title` 事件，自动标题也会发出该事件 |
 | `session.fork` | 分支到新会话，可用 `index` 指定在哪条用户消息之前；随后发出原因为 `fork` 的 `session.start` |
 | `model.set` | 用 `model` 指定 provider/model，切换模型 |
 | `command.list`、`command.complete`、`command.run` | 查询、补全和执行斜杠命令 |
