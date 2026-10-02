@@ -39,6 +39,8 @@ test("recorder close drains records delivered while an earlier file handle is cl
       { reason: "startup", cwd: dir, model: { provider: "mock", model: "test" } },
       { sessionId: "root" },
     )
+    // The header is written with the first record, not alone.
+    bus.emit("status.changed", { status: "working" }, { sessionId: "root" })
     await bus.flush()
     const flushing = recorder.flush()
     await closing.promise
@@ -47,7 +49,7 @@ test("recorder close drains records delivered while an earlier file handle is cl
     const closed = recorder.close()
     release.resolve()
     await Promise.all([flushing, closed])
-    expect((await readTrace(file)).map((record) => record.type)).toEqual(["trace", "status"])
+    expect((await readTrace(file)).map((record) => record.type)).toEqual(["trace", "status", "status"])
   } finally {
     release.resolve()
     open.mockRestore()
