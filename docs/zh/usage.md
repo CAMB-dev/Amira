@@ -8,7 +8,7 @@
 
 交互模式使用 `amira --thinking high`，打印模式使用 `amira -p --thinking xhigh "Explain this repository"`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。
 
-会话中运行 `/thinking` 会打开选择器，提供这五个档位和 `default`（不发送推理强度参数）。也可以用 `/thinking high` 直接设置档位，或用 `/thinking default` 沿用服务端默认值。这些更改只对当前会话生效，不写入设置文件。优先级为会话中的运行时选择 > `--thinking` > [设置](settings.md)中的 `providers.<id>.models[].thinking` > 顶层 `thinking`。选择 `default` 会明确屏蔽后面三种来源，而不是恢复标志或设置中的值；没有选择或配置档位时，请求同样不发送推理强度参数。
+会话中运行 `/thinking` 会打开选择器，提供这五个档位和 `default`（不发送推理强度参数）。也可以用 `/thinking high` 直接设置档位，或用 `/thinking default` 沿用服务端默认值。这些更改持续到 Amira 退出，不写入设置文件；与当前模型一样，`/clear`、`/resume`、回退或分支切换到的对话会沿用该选择。优先级为会话中的运行时选择 > `--thinking` > [设置](settings.md)中的 `providers.<id>.models[].thinking` > 顶层 `thinking`。选择 `default` 会明确屏蔽后面三种来源，而不是恢复标志或设置中的值；没有选择或配置档位时，请求同样不发送推理强度参数。
 
 在交互式 `/model` 选择器中选中支持思考的模型后，第二步会提供相同的强度选项。此时按 Esc 会保留刚选中的模型，不改变强度选择。只有 `caps.thinking` 为真的模型才会收到强度参数；状态栏在模型名旁显示档位，`/status` 也只对这类模型显示档位。切换到不支持思考的模型时会隐藏档位，但不会丢弃所选强度。子 agent 继承父 agent 选中的档位，标题生成和上下文压缩保持原有默认行为。
 

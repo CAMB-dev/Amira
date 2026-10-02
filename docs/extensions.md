@@ -230,7 +230,7 @@ Extension-specific settings belong under `extensions` with the extension name. T
 
 API 0.1.18 adds `SessionControl.setThinking(level: ReasoningEffort | undefined): void`. Get the control from a command's context or `api.session()`; the latter can return `undefined` before the host injects it. Accepted levels are `low`, `medium`, `high`, `xhigh` and `max`. The override is session-only, writes no settings, and takes precedence over `--thinking`, the per-model setting and the top-level setting, in that order. Passing `undefined` explicitly suppresses all of those sources so no effort is sent and the server default applies; it does not remove the runtime override.
 
-`setThinking` throws while a turn, compaction or reload is running. The choice is retained for later thinking models and inherited by sub-agents spawned after the change, but it is not saved when switching to another session.
+`setThinking` throws while a turn, compaction or reload is running. The choice is retained for later thinking models and inherited by sub-agents spawned after the change. Like the current model, it carries over to the conversation that `/clear`, `/resume`, a rewind or a fork switches to; it is kept in memory only, so a new Amira process starts from the flag and settings again.
 
 `ui.select(title, options, { initial, signal })` accepts an optional `initial` option label to highlight when opening the picker. Without a matching label, it highlights the first option. Dismissing a picker returns `undefined`; the built-in effort picker leaves the current choice unchanged.
 

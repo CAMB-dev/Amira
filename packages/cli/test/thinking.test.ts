@@ -173,12 +173,16 @@ test("runtime default suppresses the flag and settings across model switches and
   }
 })
 
-test("the runtime choice belongs only to the current session", async () => {
+test("the runtime choice follows /clear like the current model", async () => {
   const { session, commands } = await sessionFor(["--thinking", "high"])
   try {
     commands.control.setThinking("max")
     await commands.control.newSession()
-    expect(commands.control.info()).toMatchObject({ thinking: "high", thinkingLevel: "high" })
+    expect(commands.agent).not.toBe(session.agent)
+    expect(commands.control.info()).toMatchObject({ thinking: "max", thinkingLevel: "max" })
+    commands.control.setThinking(undefined)
+    await commands.control.newSession()
+    expect(commands.control.info()).not.toHaveProperty("thinkingLevel")
   } finally {
     await commands.agent.dispose()
     session.host.unloadAll()

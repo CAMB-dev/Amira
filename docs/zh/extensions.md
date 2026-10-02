@@ -231,7 +231,7 @@ amira
 
 API 0.1.18 新增 `SessionControl.setThinking(level: ReasoningEffort | undefined): void`。通过命令上下文或 `api.session()` 获取控制对象；宿主注入之前，后者可能返回 `undefined`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。覆盖值只对当前会话生效，不写入设置文件，优先级高于 `--thinking`、模型级设置和顶层设置，后三者的优先级依次降低。传入 `undefined` 会明确屏蔽这些来源，不发送推理强度参数，沿用服务端默认值；它并不是移除运行时覆盖值。
 
-轮次、压缩或重新加载进行中时，`setThinking` 会抛出错误。选择会保留给之后切换到的思考模型，变更后启动的子 agent 也会继承它，但切换到其他会话时不会保存该选择。
+轮次、压缩或重新加载进行中时，`setThinking` 会抛出错误。选择会保留给之后切换到的思考模型，变更后启动的子 agent 也会继承它。与当前模型一样，`/clear`、`/resume`、回退或分支切换到的对话会沿用该选择；它只保存在内存中，新启动的 Amira 进程会重新按标志和设置确定强度。
 
 `ui.select(title, options, { initial, signal })` 接受可选的 `initial` 选项标签，用于指定选择器打开时高亮的选项；没有匹配标签时高亮第一项。取消选择器会返回 `undefined`；内置强度选择器会保留当前选择。
 

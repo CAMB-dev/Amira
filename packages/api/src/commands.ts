@@ -364,7 +364,8 @@ export interface SessionControl {
   /** Switches the model for later turns; throws for an unknown one. */
   setModel(ref: string): void
   /**
-   * Overrides reasoning effort for this session only, ahead of the flag and settings.
+   * Overrides reasoning effort until Amira exits, ahead of the flag and settings; writes no
+   * settings, and carries over to the conversation /clear, /resume, a rewind or a fork switches to.
    * undefined sends no effort (the server default), even when a flag or setting specifies one.
    * Retained on non-thinking models for a later thinking model. Throws while the session is busy.
    */
