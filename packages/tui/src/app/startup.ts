@@ -146,3 +146,18 @@ export function overlayKeys(e: InputEvent): InputEvent[] {
   const k: InputEvent = { type: "key", name: e.button, ctrl: false, shift: false, alt: false }
   return [k, k, k]
 }
+
+/**
+ * Opens the session picker for `amira -r`. When it ends without switching sessions (cancelled or
+ * unavailable), quits: the temporary host must not stay open as a fresh session.
+ */
+export function resumeAtStartup(deps: {
+  run(line: string): Promise<void>
+  agent(): unknown
+  quit(): void
+}): void {
+  const initial = deps.agent()
+  void deps.run("/resume").then(() => {
+    if (deps.agent() === initial) deps.quit()
+  })
+}

@@ -55,6 +55,7 @@ import {
   HINT_NOTE_MS,
   HOST_EVENTS,
   overlayKeys,
+  resumeAtStartup,
   tildePath,
   welcomeCard,
 } from "./app/startup.ts"
@@ -1386,13 +1387,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   if (opts.notice && !(welcome && opts.notice.startsWith("No providers"))) view.notice("warning", opts.notice)
   // The first frame carries the banner, history and startup messages.
   view.start()
-  if (opts.resumePicker) {
-    const initialAgent = agent
-    void commandRunner.run("/resume").then(() => {
-      // A cancelled (or unavailable) startup picker must not leave the temporary host open.
-      if (agent === initialAgent) quit()
-    })
-  } else if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
+  if (opts.resumePicker) resumeAtStartup({ run: (line) => commandRunner.run(line), agent: () => agent, quit })
+  else if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)
 
   return exited
