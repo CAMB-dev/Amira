@@ -1,20 +1,14 @@
-import type { Message, ToolDetailLevel, ToolResult, ToolResultMessage } from "@amira/api"
-import { isSummaryMessage } from "@amira/core"
+import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
 import {
   closeStyles,
   FullScreenRenderer,
-  type InputEvent,
   isColorEnabled,
-  LineInput,
-  type MouseInput,
   modes,
-  osc,
   ProcessTerminal,
   presentEmoji,
   stripAnsi,
   stripColors,
   truncateToWidth,
-  visibleWidth,
 } from "@amira/tui-kit"
 import {
   type Block,
@@ -24,21 +18,19 @@ import {
   DetailNoticeBlock,
   exploredRun,
   fixedLine,
-  groupExplored,
   LinesBlock,
   ReasoningBlock,
   ReplyBlock,
   SubagentGroupBlock,
-  SummaryBlock,
   ToolBlock,
   userBlock,
 } from "./blocks.ts"
-import { copyToClipboard } from "./clipboard.ts"
 import { commandEchoLines } from "./format.ts"
+import { createFindSelect } from "./fullscreen/find-select.ts"
+import { historyBlocks } from "./fullscreen/history-blocks.ts"
+import { createMouse } from "./fullscreen/mouse.ts"
 import { glyphs } from "./glyphs.ts"
-import { fitHint } from "./hint.ts"
-import { sessionBoundary, summaryText } from "./history.ts"
-import { replyCitations, serverToolCall } from "./server-tools.ts"
+import { sessionBoundary } from "./history.ts"
 import {
   endNode,
   isActive,
@@ -50,7 +42,7 @@ import {
   updateNode,
 } from "./subagents.ts"
 import { OUTPUT_LINES } from "./tool-view.ts"
-import { commandOutputLines, type NoticeLevel, noticeLines, replyEndNotice } from "./transcript.ts"
+import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
 import { TranscriptPane } from "./transcript-pane.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
@@ -58,19 +50,6 @@ import { type TranscriptView, View, type ViewHost } from "./view.ts"
 const FRAME_MS = 16
 /** Rows the transcript keeps when a dialog wants the screen. */
 const MIN_TRANSCRIPT_ROWS = 3
-/** Rows one notch of the mouse wheel scrolls. */
-const WHEEL_ROWS = 3
-/** How often a drag held at the top or bottom edge scrolls the transcript. */
-const EDGE_SCROLL_MS = 40
-/** Held at an edge, the drag scrolls a row more per step every this many steps, up to EDGE_SCROLL_MAX rows. */
-const EDGE_SCROLL_RAMP = 10
-const EDGE_SCROLL_MAX = 6
-/** Presses on one cell this close together make a double or triple click. */
-const MULTI_CLICK_MS = 400
-/** Copies longer than this (in UTF-16 units) may be more than a terminal takes through OSC 52. */
-const OSC52_SAFE = 100_000
-/** Columns the find bar keeps for its query, at the least, before its keys. */
-const FIND_QUERY_ROOM = 16
 
 /**
  * The full-screen view (D84): the conversation is kept as blocks on the alternate screen and
@@ -108,8 +87,6 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     reasoning = undefined
     return true
   }
-  const findInput = new LineInput()
-  let finding = false
   /** Rows of the transcript in the last frame, for mouse clicks. */
   let paneRows = 0
 
@@ -145,6 +122,18 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     }
   }
 
+  const findSelect = createFindSelect({
+    editorEmpty: () => host.editorEmpty(),
+    env,
+    keys,
+    openSubagent: host.openSubagent ? (id) => host.openSubagent?.(id) : undefined,
+    pane,
+    render: () => renderer.render(),
+    showNote: (text) => host.showNote(text),
+    terminal,
+    theme,
+  })
+
   /** Makes the exploring calls in a row around `block` one "Explored" row. */
   function regroup(block: Block): void {
     const run = exploredRun(pane.blocks, block, env(terminal.columns))
@@ -158,7 +147,11 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const root = new View((width, ctx) => {
     // Covered by a full-screen overlay, the transcript's images are not placed: they are cleared.
     if (overlay) return host.overlay.render(width, ctx)
-    const bar = finding ? [findBar(width)] : pane.selected ? [selectBar(width)] : []
+    const bar = findSelect.finding
+      ? [findSelect.findBar(width)]
+      : pane.selected
+        ? [findSelect.selectBar(width)]
+        : []
     const budget = Math.max(1, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - bar.length)
     const bottom = host.bottom(width, ctx, budget)
     paneRows = Math.max(1, ctx.rows - bottom.length - bar.length - 1)
@@ -185,84 +178,17 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     frameIntervalMs: FRAME_MS,
   })
 
+  const mouseHandlers = createMouse({
+    pane,
+    paneRows: () => paneRows,
+    requestRender: () => renderer.requestRender(),
+    showNote: (text) => host.showNote(text),
+    terminal,
+  })
+
   const endHint = () => {
     const end = keys.label("scroll.bottom")
     return end ? ` · ${end} follows` : ""
-  }
-
-  function findBar(width: number): string {
-    const count = pane.matchCount
-      ? `${pane.matchPosition}/${pane.matchCount}`
-      : findInput.value
-        ? "no matches"
-        : ""
-    const next = keys.label("find.next")
-    const prev = keys.label("find.prev")
-    const close = keys.label("find.close")
-    const head = `${theme.accent(glyphs.search)} find ${theme.muted(glyphs.searchPrompt)} `
-    // The query keeps room for what is typed (and the caret); the keys get the rest, the
-    // least needed going first.
-    const query = Math.max(FIND_QUERY_ROOM, visibleWidth(findInput.value) + 1)
-    const hint = fitHint(
-      [
-        count && { text: count, priority: 5 },
-        next && { text: `${next} older`, priority: 3 },
-        prev && { text: `${prev} newer`, priority: 2 },
-        close && { text: `${close} close`, priority: 4 },
-      ],
-      Math.max(0, width - visibleWidth(head) - query - 2),
-    )
-    const room = Math.max(4, width - visibleWidth(head) - visibleWidth(hint) - 2)
-    const input = findInput.render(room, theme, { focused: true, placeholder: "text in the transcript" })
-    const pad = " ".repeat(Math.max(1, room - visibleWidth(input) + 2))
-    return truncateToWidth(`${head}${input}${pad}${theme.muted(hint)}`, width, glyphs.more)
-  }
-
-  /** The blocks a selection moves over (those with rows), and where `b` is among them. */
-  function position(b: Block, e: BlockEnv): string {
-    let at = 0
-    let count = 0
-    for (const x of pane.blocks) {
-      if (!pane.lines(x, e).length) continue
-      count++
-      if (x === b) at = count
-    }
-    return `${at} of ${count}`
-  }
-
-  /** What the open key does on a block: go into a reply's code blocks, open the sub-agent viewer. */
-  function opens(b: Block, e: BlockEnv): "code blocks" | "sub-agent" | undefined {
-    if (pane.codeBlocks(b).length) return "code blocks"
-    if (host.openSubagent && b.subagents(e).length) return "sub-agent"
-    return undefined
-  }
-
-  function selectBar(width: number): string {
-    const b = pane.selected!
-    const e = env(width)
-    const fold = keys.label("select.toggle")
-    const copy = keys.label("select.copy")
-    const back = keys.label("select.exit")
-    const open = keys.label("select.open")
-    const code = pane.selectedCode
-    // Moving between blocks is in the key reference (the help key).
-    const items = code
-      ? [
-          {
-            text: `${glyphs.pointer} code block ${code.index + 1} of ${code.count} in the reply`,
-            priority: 6,
-          },
-          copy && { text: `${copy} copy`, priority: 5 },
-          back && { text: `${back} reply`, priority: 5 },
-        ]
-      : [
-          { text: `${glyphs.pointer} ${b.label} ${position(b, e)}`, priority: 6 },
-          b.foldable(e) && fold && { text: `${fold} ${b.isFolded(e) ? "unfold" : "fold"}`, priority: 3 },
-          open && opens(b, e) && { text: `${open} ${opens(b, e)}`, priority: 3 },
-          copy && { text: `${copy} copy`, priority: 4 },
-          back && { text: `${back} back`, priority: 5 },
-        ]
-    return theme.muted(fitHint(items, width))
   }
 
   /** Redraws once a second while sub-agents run, so their elapsed time moves. */
@@ -317,13 +243,11 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     return `\r\n${rows}\r\n`
   }
 
-  const copy = (text: string, what: string) => copyToClipboard(terminal, text, what, host.showNote)
-
   /** The transcript starts afresh for another session: only the banner stays. */
   function clearTranscript(): void {
     settleStep()
     reply = undefined
-    closeFind()
+    findSelect.closeFind()
     pane.clear((b) => b.kind === "banner")
     // The old session's calls and sub-agents are not shown under the new one.
     nodes.clear()
@@ -334,212 +258,6 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     tickSubagents()
   }
 
-  function closeFind(): void {
-    finding = false
-    findInput.value = ""
-    pane.clearFind()
-  }
-
-  /** The last press of the left button, for double and triple clicks. */
-  let lastPress: { x: number; y: number; at: number; count: number } | undefined
-  /** Scrolls while a drag is held above or below the transcript. */
-  let edgeTimer: ReturnType<typeof setInterval> | undefined
-  let edgeDirection = 0
-  /** Whether the drag was ever below the top row. */
-  let leftTop = false
-  /** Whether the left button went down in the transcript: its release copies. */
-  let armed = false
-
-  /**
-   * Scrolls every EDGE_SCROLL_MS while the drag is held at the edge of the transcript: on its
-   * top row (the top of the screen) up, under its last row down; a row at a time at first,
-   * faster the longer it is held. `y` undefined stops.
-   */
-  function edgeScroll(y: number | undefined): void {
-    // A drag along the top row, where it started, selects there: it scrolls once it came back.
-    if (y !== undefined && y > 0) leftTop = true
-    const direction = y === undefined ? 0 : y <= 0 && leftTop ? -1 : y >= paneRows ? 1 : 0
-    if (direction === edgeDirection) return
-    edgeDirection = direction
-    clearInterval(edgeTimer)
-    edgeTimer = undefined
-    if (!direction) return
-    let ticks = 0
-    const tick = () => {
-      pane.scrollBy(direction * Math.min(EDGE_SCROLL_MAX, 1 + Math.floor(ticks++ / EDGE_SCROLL_RAMP)))
-      renderer.requestRender()
-    }
-    tick()
-    edgeTimer = setInterval(tick, EDGE_SCROLL_MS)
-  }
-
-  /** The drag is over: no more motion reports, no more scrolling at the edges. */
-  function stopDrag(): void {
-    pane.endDrag()
-    edgeScroll(undefined)
-    terminal.disableMode(modes.mouseDrag)
-  }
-
-  /** Copies the selected text, if any, and says so. */
-  function copySelection(): void {
-    const text = pane.selectedText()
-    if (!text) return
-    terminal.write(osc.clipboard(text))
-    const n = [...text].length
-    const big =
-      text.length > OSC52_SAFE ? " (a lot: some terminals drop that much; Shift+drag selects natively)" : ""
-    host.showNote(`Copied ${n} character${n === 1 ? "" : "s"}${big}`)
-  }
-
-  function mouse(e: MouseInput): boolean {
-    if (e.action === "wheel") {
-      if (e.button === "up") pane.scrollBy(-WHEEL_ROWS)
-      else if (e.button === "down") pane.scrollBy(WHEEL_ROWS)
-      return true
-    }
-    if (e.action === "press" && (e.button === "right" || e.button === "middle")) {
-      // The terminal hands every click to the app while it reports the mouse; say how to paste.
-      host.showNote(
-        `Clicks go to Amira here: Shift+${e.button}-click (or Ctrl+V) pastes, Shift+drag selects natively.`,
-      )
-      return true
-    }
-    if (e.button !== "left") return true
-    /** Near the last press: a column off still makes a double click. */
-    const near = (p: typeof lastPress) => p !== undefined && p.y === e.y && Math.abs(p.x - e.x) <= 1
-    if (e.action === "press") {
-      // A click clears the selection and does nothing else: the keyboard stays with the input.
-      stopDrag()
-      pane.clearText()
-      const now = Date.now()
-      const again = near(lastPress) && now - lastPress!.at <= MULTI_CLICK_MS
-      const count = again ? (lastPress!.count % 3) + 1 : 1
-      lastPress = { x: e.x, y: e.y, at: now, count }
-      armed = e.y < paneRows
-      if (!armed) return true
-      pane.select(undefined)
-      if (count === 2) pane.selectWord(e.y, e.x)
-      else if (count === 3) pane.selectLine(e.y, e.x)
-      else {
-        pane.startDrag(e.y, e.x)
-        leftTop = e.y > 0
-        // Moves with the button held are reported from now on, until it is released.
-        if (pane.dragging) terminal.enableMode(modes.mouseDrag)
-      }
-      return true
-    }
-    if (e.action === "drag") {
-      if (!pane.dragging) return true
-      // Moved off: the next press is no double click.
-      if (!near(lastPress)) lastPress = undefined
-      pane.dragTo(e.y, e.x)
-      edgeScroll(e.y)
-      return true
-    }
-    // Released: what this press selected goes to the clipboard.
-    stopDrag()
-    if (armed) copySelection()
-    armed = false
-    return true
-  }
-
-  function findKey(e: InputEvent): boolean {
-    if (keys.is(e, "find.close")) closeFind()
-    else if (keys.is(e, "find.next")) pane.stepMatch(-1)
-    else if (keys.is(e, "find.prev")) pane.stepMatch(1)
-    else if (scrollKey(e)) return true
-    else {
-      const before = findInput.value
-      if (!findInput.handleInput(e)) return false
-      if (findInput.value !== before) {
-        if (findInput.value) pane.find(findInput.value)
-        else pane.clearFind()
-      }
-    }
-    return true
-  }
-
-  /** Keys while a code block of the selected reply is selected. */
-  function codeKey(e: InputEvent): boolean {
-    if (keys.is(e, "select.exit") || keys.is(e, "select.back")) pane.leaveCode()
-    else if (keys.is(e, "select.prev")) pane.selectCode(-1)
-    else if (keys.is(e, "select.next")) pane.selectCode(1)
-    else if (keys.is(e, "select.copy")) copy(pane.codeText(), "the code block")
-    else if (keys.is(e, "select.toggle") || keys.is(e, "select.open")) {
-      const back = keys.label("select.exit")
-      host.showNote(`A code block does not fold${back ? `; ${back} goes back to the reply` : ""}.`)
-    } else return false
-    return true
-  }
-
-  /** The open key on a block: into a reply's code blocks, or the viewer of its sub-agents. */
-  function openBlock(block: Block, renv: BlockEnv): void {
-    const what = opens(block, renv)
-    if (what === "code blocks") {
-      // Folded, long code is cut short: its code blocks are shown whole to be picked.
-      if (block.isFolded(renv)) {
-        block.toggleFold(renv)
-        renderer.render()
-      }
-      pane.selectCode(0)
-    } else if (what === "sub-agent") {
-      const list = block.subagents(renv)
-      // The one still running, else the latest.
-      const target = list.findLast(isActive) ?? list[list.length - 1]!
-      host.openSubagent?.(target.id)
-    } else host.showNote(`Nothing in this ${block.label} opens: no code blocks, no sub-agents.`)
-  }
-
-  function selectKey(e: InputEvent): boolean {
-    const block = pane.selected!
-    const renv = env(terminal.columns)
-    if (pane.selectedCode && codeKey(e)) return true
-    if (keys.is(e, "select.exit")) pane.select(undefined)
-    else if (keys.is(e, "select.prev")) pane.selectPrev()
-    else if (keys.is(e, "select.next")) pane.selectNext()
-    else if (keys.is(e, "select.toggle")) {
-      if (block.foldable(renv)) {
-        block.toggleFold(renv)
-        pane.reveal(block)
-      } else host.showNote(`Nothing in this ${block.label} folds.`)
-    } else if (keys.is(e, "select.open")) openBlock(block, renv)
-    else if (keys.is(e, "select.copy")) copy(block.copyText(), `the ${block.label}`)
-    else {
-      // Typing goes back to the input.
-      if (e.type === "paste" || (e.type === "key" && e.text !== undefined && !e.ctrl && !e.alt))
-        pane.select(undefined)
-      return false
-    }
-    return true
-  }
-
-  /** Scrolling keys, in any state of the view. */
-  function scrollKey(e: InputEvent): boolean {
-    if (keys.is(e, "scroll.up")) pane.scrollBy(-1)
-    else if (keys.is(e, "scroll.down")) pane.scrollBy(1)
-    else if (keys.is(e, "scroll.page-up")) pane.pageUp()
-    else if (keys.is(e, "scroll.page-down")) pane.pageDown()
-    else return false
-    return true
-  }
-
-  function transcriptKey(e: InputEvent): boolean {
-    // Home, End and typing belong to the input unless it is empty.
-    const plain = e.type === "key" && !e.ctrl && !e.alt
-    if (plain && (e.name === "home" || e.name === "end" || e.text !== undefined) && !host.editorEmpty())
-      return false
-    if (scrollKey(e)) return true
-    if (keys.is(e, "scroll.top")) pane.toTop()
-    else if (keys.is(e, "scroll.bottom")) pane.follow()
-    else if (keys.is(e, "select.start")) pane.selectPrev()
-    else if (keys.is(e, "find")) {
-      finding = true
-      pane.select(undefined)
-      findInput.value = ""
-    } else return false
-    return true
-  }
-
   let offEmergency: (() => void) | undefined
   let started = false
 
@@ -548,7 +266,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       return stepCalls.flatMap((b) => (b.startedAt !== undefined && !b.end ? [b.name] : []))
     },
     get capturing() {
-      return !overlay && (finding || pane.selected !== undefined)
+      return !overlay && (findSelect.finding || pane.selected !== undefined)
     },
     start() {
       started = true
@@ -564,8 +282,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     openOverlay() {
       overlay = true
       // The overlay takes the mouse: a drag under way would never see its release.
-      stopDrag()
-      armed = false
+      mouseHandlers.stopDrag()
+      mouseHandlers.disarm()
     },
     closeOverlay() {
       overlay = false
@@ -577,7 +295,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     stop() {
       if (subagentTimer) clearInterval(subagentTimer)
       subagentTimer = undefined
-      edgeScroll(undefined)
+      mouseHandlers.stopEdgeScroll()
       offEmergency?.()
       if (!started) return
       started = false
@@ -755,51 +473,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     openSession(boundary, messages: Message[], switched, compactionInfo) {
       if (switched) clearTranscript()
       add(new LinesBlock("history", (w, t) => [sessionBoundary(t, boundary, w)], ""))
-      const results = new Map<string, ToolResultMessage>()
-      for (const m of messages) {
-        if (m.role === "toolResult") results.set(m.toolCallId, m)
-      }
-      const blocks: Block[] = []
-      for (const m of messages) {
-        // A compaction's summary is a folded block of its own; the reply that took it goes with it.
-        if (isSummaryMessage(m)) {
-          if (m.role === "user") blocks.push(new SummaryBlock(summaryText(m), compactionInfo?.(m)))
-        } else if (m.role === "user") blocks.push(userBlock(m))
-        else if (m.role === "assistant") {
-          // The sources the reply cited follow its last text, as they did live.
-          const sources = replyCitations(m.content)
-          const lastText = m.content.findLastIndex((b) => b.type === "text" && b.text.trim() !== "")
-          for (const [i, b] of m.content.entries()) {
-            if (b.type === "thinking" && (b.text.trim() || b.redacted))
-              blocks.push(new ReasoningBlock(b.text, undefined))
-            else if (b.type === "text" && b.text.trim())
-              blocks.push(new ReplyBlock(i === lastText ? b.text + sources : b.text, false, host.hyperlinks))
-            else if (b.type === "serverTool") {
-              // A search the provider ran shows as the tool row it was live.
-              const { rejected, ...call } = serverToolCall(b)
-              const row = new ToolBlock(b.id, call.name, call.args, host.sessionId())
-              row.end = { result: call.result, ...(rejected ? { rejected } : {}) }
-              blocks.push(row)
-            } else if (b.type === "toolCall") {
-              const call = new ToolBlock(b.id, b.name, b.args, host.sessionId())
-              const result = results.get(b.id)
-              // A result that records its rejection renders as the call did live; no result at
-              // all (the turn was cut short) means it never ran to completion either.
-              call.end = result
-                ? {
-                    result: { content: result.content, isError: result.isError },
-                    ...(result.rejected ? { rejected: result.rejected } : {}),
-                  }
-                : { result: { content: [], isError: true }, rejected: "aborted" }
-              blocks.push(call)
-            }
-          }
-          // How the reply ended, when it did not end well: as the live transcript said it.
-          const end = replyEndNotice(m)
-          if (end) blocks.push(noticeBlock(end.level, end.text))
-        }
-      }
-      for (const b of groupExplored(blocks, env(terminal.columns))) pane.add(b)
+      for (const b of historyBlocks(messages, env, {
+        compactionInfo,
+        hyperlinks: host.hyperlinks,
+        noticeBlock,
+        sessionId: () => host.sessionId(),
+        terminal,
+      }))
+        pane.add(b)
       renderer.requestRender()
     },
     leaveSession() {
@@ -814,11 +495,11 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     },
     handleInput(e) {
       if (overlay) return false
-      if (e.type === "mouse") return mouse(e)
+      if (e.type === "mouse") return mouseHandlers.mouse(e)
       if (e.type === "focus") return false
-      if (finding) return findKey(e)
-      if (pane.selected && selectKey(e)) return true
-      return transcriptKey(e)
+      if (findSelect.finding) return findSelect.findKey(e)
+      if (pane.selected && findSelect.selectKey(e)) return true
+      return findSelect.transcriptKey(e)
     },
     takeFirst(e) {
       // Esc clears selected text before it does anything else (closing the find bar or a list,
