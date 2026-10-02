@@ -1,5 +1,5 @@
 /** Public API for Amira extensions. Extensions may import only from this package. */
-export const API_VERSION = "0.1.15"
+export const API_VERSION = "0.1.16"
 
 export type {
   AssistantMessage,
@@ -9,6 +9,7 @@ export type {
   Message,
   MessageDisplay,
   ModelRef,
+  ReasoningEffort,
   ServerToolBlock,
   TextBlock,
   ThinkingBlock,

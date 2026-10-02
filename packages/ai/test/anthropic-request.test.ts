@@ -68,7 +68,7 @@ test("sends the system prompt, tools and max_tokens", async () => {
 })
 
 test("adaptive mode, the default, sends an effort and never a budget, disabled or temperature", async () => {
-  for (const effort of ["low", "medium", "high", "max"] as const) {
+  for (const effort of ["low", "medium", "high", "xhigh", "max"] as const) {
     const { body } = await sent({ reasoning: { effort }, temperature: 0.2 })
     expect(body.thinking).toEqual({ type: "adaptive" })
     expect(body.output_config).toEqual({ effort })
@@ -89,6 +89,7 @@ test("budget mode maps effort to a thinking budget below max_tokens and drops te
   expect(await budget({ reasoning: { effort: "low" } })).toBe(2_048)
   expect(await budget({ reasoning: { effort: "medium" } })).toBe(8_192)
   expect(await budget({ reasoning: { effort: "high" } })).toBe(24_576)
+  expect(await budget({ reasoning: { effort: "xhigh" } })).toBe(32_000 - 1_024)
   expect(await budget({ reasoning: { effort: "max" } })).toBe(32_000 - 1_024)
   expect(await budget({ reasoning: { effort: "high" }, maxTokens: 4_000 })).toBe(4_000 - 1_024)
   expect(await budget({ reasoning: { effort: "high" }, maxTokens: 1_500 })).toBeUndefined()
@@ -98,6 +99,21 @@ test("budget mode maps effort to a thinking budget below max_tokens and drops te
   expect(withThinking.body.output_config).toBeUndefined()
   expect(withThinking.body.temperature).toBeUndefined()
   expect((await sent({ temperature: 0.2 }, budgetMode)).body.temperature).toBe(0.2)
+})
+
+test.each([
+  ["low", 2_048],
+  ["medium", 8_192],
+  ["high", 24_576],
+  ["xhigh", 32_768],
+  ["max", 64_000],
+] as const)("budget mode sends the full %s budget when it fits", async (effort, budget) => {
+  const { body } = await sent(
+    { reasoning: { effort } },
+    { ...budgetMode, models: [{ id: "claude", maxOutput: 128_000, caps: { thinking: true } }] },
+  )
+  expect(body.thinking).toEqual({ type: "enabled", budget_tokens: budget })
+  expect(body).not.toHaveProperty("output_config")
 })
 
 test("sends no thinking when the model lacks the capability", async () => {

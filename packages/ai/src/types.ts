@@ -197,7 +197,7 @@ export interface ModelRequest {
   promptCache?: boolean
 }
 
-export type ReasoningEffort = "low" | "medium" | "high" | "max"
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max"
 
 export interface ModelError {
   message: string

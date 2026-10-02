@@ -4,6 +4,12 @@
 
 在要处理的项目目录运行 `amira`。命令行末尾的提示词会成为第一条消息，也可以用 `--cwd` 指定工作目录。provider 配置见[快速开始](getting-started.md)。
 
+## 思考强度
+
+交互模式使用 `amira --thinking high`，打印模式使用 `amira -p --thinking xhigh "Explain this repository"`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。该标志优先于[设置](settings.md)中的顶层 `thinking` 和 `providers.<id>.models[].thinking`；不传标志时，模型设置优先于顶层设置。两者均未配置时，请求不发送推理强度参数，沿用服务端默认值。`/status` 会显示配置的档位。只有 `caps.thinking` 为真的模型才会收到该参数；子 agent 继承父 agent 选中的档位，标题生成和上下文压缩保持原有默认行为。
+
+Responses 和 Anthropic 自适应模式原样发送档位。Anthropic 预算模式将 `xhigh` 映射为 32,768 token，低于 `max` 的 64,000，并根据输出上限为回答预留空间。Gemini 将 `xhigh` 按 `high` 处理，保留 Gemini 2.5 Pro 在 `max` 下的更大预算。Chat Completions 当前不发送推理参数。
+
 ## 终端模式与对话记录
 
 ```sh

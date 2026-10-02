@@ -18,6 +18,7 @@ export const THINKING_BUDGET: Record<ReasoningEffort, number> = {
   low: 2_048,
   medium: 8_192,
   high: 24_576,
+  xhigh: 32_768,
   max: 64_000,
 }
 
