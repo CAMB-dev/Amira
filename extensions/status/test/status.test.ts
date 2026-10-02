@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { AnyEvent } from "@amira/api"
+import type { AnyEvent, ReasoningEffort, SessionControl, SessionInfo } from "@amira/api"
 import { createAi, createMockDialect, NO_MODEL } from "../../../packages/ai/src/index.ts"
 import {
   Agent,
@@ -27,7 +27,7 @@ test("formats token counts compactly, rounding before picking the unit", () => {
   ])
 })
 
-function setup() {
+function setup(sessionInfo?: Partial<SessionInfo>) {
   const bus = new EventBus()
   const host = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
   const ai = createAi({
@@ -35,7 +35,20 @@ function setup() {
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
   })
   const agent = new Agent({ ai, model: ai.model("mock/m1"), cwd: "/work/proj", systemPrompt: "", bus })
-  return { bus, host, agent, ai }
+  const info: SessionInfo = {
+    id: agent.sessionId,
+    cwd: agent.cwd,
+    model: { provider: agent.model.provider, model: agent.model.id },
+    contextWindow: 128_000,
+    busy: false,
+    shell: "bash",
+    ...sessionInfo,
+  }
+  if (sessionInfo) {
+    const control = { info: () => info } as Partial<SessionControl> as SessionControl
+    host.setSessionControl(control, () => agent)
+  }
+  return { bus, host, agent, ai, info }
 }
 
 const texts = (host: ExtensionHost) => host.status.snapshot().map((i) => [i.id, i.align, i.text])
@@ -53,6 +66,77 @@ test("shows (no model) until one is picked, and follows a model switch at once",
   await bus.flush()
   // The provider is left out; /status names it.
   expect(model()).toBe("m2")
+})
+
+test("shows only the effort sent to the model, and follows effort, model and session changes", async () => {
+  const { bus, host, agent, ai, info } = setup({ supportsThinking: true })
+  await host.load(statusExtension, "builtin:status")
+  const model = () => item(host, "model")?.text
+  agent.start("startup")
+  await bus.flush()
+  expect(model()).toBe("m1")
+
+  const levels: ReasoningEffort[] = ["low", "medium", "high", "xhigh", "max"]
+  for (const level of levels) {
+    info.thinking = level
+    info.thinkingLevel = level
+    bus.emit("thinking.changed", { thinking: level }, { sessionId: agent.sessionId })
+    await bus.flush()
+    expect(model()).toBe(`m1 (${level})`)
+  }
+
+  // Default suppresses effort rather than showing a default label.
+  info.thinking = undefined
+  info.thinkingLevel = undefined
+  bus.emit("thinking.changed", {}, { sessionId: agent.sessionId })
+  await bus.flush()
+  expect(model()).toBe("m1")
+
+  // A retained choice is not an effort sent to a non-thinking model.
+  info.thinkingLevel = "high"
+  info.supportsThinking = false
+  agent.setModel(ai.model("mock/m2"))
+  await bus.flush()
+  expect(model()).toBe("m2")
+
+  info.supportsThinking = true
+  info.thinking = "high"
+  agent.setModel(ai.model("mock/m1"))
+  await bus.flush()
+  expect(model()).toBe("m1 (high)")
+
+  info.thinking = undefined
+  info.thinkingLevel = undefined
+  bus.emit(
+    "session.start",
+    { reason: "resume", cwd: "/work/proj", model: { provider: "mock", model: "m3" } },
+    { sessionId: "resumed" },
+  )
+  await bus.flush()
+  expect(model()).toBe("m3")
+})
+
+test("effort changes request a redraw for the top-level session only", async () => {
+  const { bus, host, agent, info } = setup({ supportsThinking: true, thinking: "high" })
+  await host.load(statusExtension, "builtin:status")
+  agent.start("startup")
+  await Bun.sleep(5)
+  await bus.flush()
+  const renders: AnyEvent[] = []
+  bus.subscribe((e) => void renders.push(e), { types: ["ui.render"] })
+
+  info.thinking = "low"
+  bus.emit("thinking.changed", { thinking: "low" }, { sessionId: agent.sessionId })
+  await Bun.sleep(5)
+  await bus.flush()
+  expect(renders).toHaveLength(1)
+  expect(item(host, "model")?.text).toBe("m1 (low)")
+
+  bus.emit("thinking.changed", { thinking: "max" }, { sessionId: "child", parentSessionId: agent.sessionId })
+  await Bun.sleep(5)
+  await bus.flush()
+  expect(renders).toHaveLength(1)
+  expect(item(host, "model")?.text).toBe("m1 (low)")
 })
 
 test("fills the status from session and workspace events, built-ins first by priority", async () => {

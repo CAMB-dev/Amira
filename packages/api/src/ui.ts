@@ -45,6 +45,8 @@ export type UiRequest =
       kind: "select"
       title: string
       options: string[]
+      /** Option to highlight initially; absent or unknown starts at the first option. */
+      initial?: string
       sections?: SelectSection[]
       descriptions?: string[]
       /** Full conversation text: substring filtering and matching snippets; section keys use Ctrl. */
@@ -179,7 +181,11 @@ export interface UiRequestOptions {
  * keeps "the user said no" (false) apart from "nobody answered" (undefined).
  */
 export interface UiApi {
-  select(title: string, options: string[], opts?: UiRequestOptions): Promise<string | undefined>
+  select(
+    title: string,
+    options: string[],
+    opts?: UiRequestOptions & { initial?: string },
+  ): Promise<string | undefined>
   /**
    * A select whose list is split into sections (headings, and keys besides Enter for each);
    * resolves with the option chosen and the key that chose it (none for Enter). Frontends

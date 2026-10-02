@@ -267,6 +267,22 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       }
       return { model: modelLabel({ provider: agent.model.provider, model: agent.model.id }) }
     },
+    "thinking.set": (p) => {
+      const level = text(p, "level")
+      if (
+        level !== "default" &&
+        level !== "low" &&
+        level !== "medium" &&
+        level !== "high" &&
+        level !== "xhigh" &&
+        level !== "max"
+      ) {
+        throw new RpcError("invalid_params", '"level" must be low, medium, high, xhigh, max or default')
+      }
+      if (agent.busy) throw new RpcError("busy", `${running()} is running; set thinking after it ends`)
+      agent.thinking.set(level === "default" ? undefined : level, agent.model)
+      return agent.thinking.state(agent.model)
+    },
     state: () => {
       const last = lastAssistantText(agent.messages)
       return {
@@ -277,6 +293,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         messages: agent.messages.length,
         ...(last !== undefined ? { lastAssistantText: last } : {}),
         busy: agent.busy,
+        ...agent.thinking.state(agent.model),
         uiRequests: ui.pending,
       }
     },

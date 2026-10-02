@@ -129,6 +129,7 @@ async function setup(
   let reloads = 0
   const control = {
     extensionAdmin: admin,
+    setThinking: () => {},
     info: () => ({ id: agent.sessionId, cwd, busy }),
     reloadExtensions: async () => {
       if (busy) throw new Error("a turn is running; reload after it ends")
