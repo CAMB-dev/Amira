@@ -24,7 +24,13 @@ import type { GrepParams } from "./grep.ts"
 import { jobListPresenter, jobOutputPresenter, jobStopPresenter } from "./jobs-ui.ts"
 import type { OutputReadParams } from "./output-read.ts"
 import type { ReadParams } from "./read.ts"
-import { NOT_CONTAINED_WARNING, OUTPUT_OPEN_NOTE, STATUS_LINE } from "./shell-notes.ts"
+import {
+  NOT_CONTAINED_WARNING,
+  OUTPUT_OPEN_NOTE,
+  STATUS_LINE,
+  TIMEOUT_BACKGROUND_NOTE,
+  TIMEOUT_RETRY_NOTE,
+} from "./shell-notes.ts"
 import { TRUNCATION_NOTE } from "./truncate.ts"
 import type { WriteParams } from "./write.ts"
 
@@ -193,6 +199,7 @@ function shellOutput(text: string): string {
   if (parts[0]?.startsWith("Shell: ")) parts.shift()
   // Only the tool's own paragraphs: output whose last paragraph starts with "Warning:" stays.
   while (parts.at(-1) === NOT_CONTAINED_WARNING || parts.at(-1) === OUTPUT_OPEN_NOTE) parts.pop()
+  if (parts.at(-1) === TIMEOUT_RETRY_NOTE || parts.at(-1) === TIMEOUT_BACKGROUND_NOTE) parts.pop()
   if (parts.length && STATUS_LINE.test(parts.at(-1)!)) parts.pop()
   const out = parts.join("\n\n")
   return out === "(no output)" ? "" : out
