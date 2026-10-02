@@ -305,25 +305,28 @@ test("unload cancels scheduled and in-flight probes, even if a provider ignores 
   expect(f.workspace()).toEqual([])
 })
 
-test("unavailable facts, provider errors and a mismatched cwd never emit invalid events", async () => {
+test("unavailable facts, provider errors, a mismatched cwd or mistyped facts never emit invalid events", async () => {
   let mode = 0
   const f = setup({
     probe: async (cwd) => {
       if (mode === 0) return undefined
       if (mode === 1) throw new Error("offline")
-      return { cwd: mode === 2 ? "/wrong" : cwd, branch: "ok" }
+      if (mode === 3) return { cwd, branch: 42 as never }
+      return { cwd: mode === 2 ? "/wrong" : cwd, branch: "ok", sessionId: "forged" } as WorkspaceFacts
     },
   })
   f.start()
   await Bun.sleep(20)
-  for (mode = 1; mode <= 2; mode++) {
+  for (mode = 1; mode <= 3; mode++) {
     f.turn()
     await f.bus.flush()
   }
   expect(f.workspace()).toEqual([])
-  expect(f.seen.filter((e) => e.type === "extension.error")).toHaveLength(2)
+  expect(f.seen.filter((e) => e.type === "extension.error")).toHaveLength(3)
   f.turn()
   await until(() => f.workspace().length === 1)
+  expect(f.workspace()[0]).toMatchObject({ sessionId: "s", data: { cwd: "/work", branch: "ok" } })
+  expect(f.workspace()[0]!.data).toEqual({ cwd: "/work", branch: "ok" })
 })
 
 test("a failed extension load releases its provider registration", async () => {
