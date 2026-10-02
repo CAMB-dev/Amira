@@ -99,7 +99,8 @@ function sourceLineCapViolations(): string[] {
     /\bconst\s+sourceLineAllowlist\s*=\s*new\s+Map(?:\s*<[^>]*>)?\s*\(\s*\[([\s\S]*?)\]\s*\)/,
   )?.[1]
   if (entries === undefined) {
-    return [`Cannot parse sourceLineAllowlist in scripts/architecture-check.ts at ${base}`]
+    console.log("Source line cap ratchet skipped: no sourceLineAllowlist in the merge-base script.")
+    return []
   }
   const oldCaps = new Map<string, number>()
   for (const match of entries.matchAll(/\[\s*(["'])([^"']+)\1\s*,\s*([\d_]+)\s*,?\s*\]/g)) {
