@@ -1,7 +1,7 @@
 import { statSync } from "node:fs"
 import path from "node:path"
 import { parseArgs } from "node:util"
-import type { PermissionMode } from "@amira/api"
+import type { PermissionMode, ReasoningEffort } from "@amira/api"
 
 export interface CliArgs {
   prompt?: string
@@ -12,6 +12,7 @@ export interface CliArgs {
   /** Write JSONL events to this file instead of stdout (--json-out). */
   jsonOut?: string
   model?: string
+  thinking?: ReasoningEffort
   cwd: string
   extensions: string[]
   noBuiltins: boolean
@@ -56,6 +57,9 @@ Options:
   -m, --model <ref>     Model as provider/model (default: $AMIRA_MODEL, then
                         "model" in settings.json, then the first model of the
                         only configured provider)
+      --thinking <level>
+                        Reasoning effort: low, medium, high, xhigh or max
+                        (overrides settings; no configured effort sends none)
   -e, --extension <f>   Load an extension file (repeatable; relative to where
                         amira is run, not to --cwd)
       --no-builtins     Do not load the built-in tools
@@ -121,7 +125,10 @@ export function parseCliArgs(
   try {
     parsed = parse(optionalResumeValue(argv))
   } catch (err) {
-    throw new UsageError(err instanceof Error ? err.message : String(err))
+    const message = err instanceof Error ? err.message : String(err)
+    throw new UsageError(
+      message.includes("--thinking") ? `${message}; levels: low, medium, high, xhigh, max` : message,
+    )
   }
   const { values, positionals } = parsed
   const args: CliArgs = {
@@ -146,6 +153,19 @@ export function parseCliArgs(
   if (values.inline) args.mode = "inline"
   if (values.fullscreen) args.mode = "fullscreen"
   if (values.shell !== undefined) args.shell = parseShell(values.shell)
+  if (values.thinking !== undefined) {
+    const effort = values.thinking
+    if (
+      effort !== "low" &&
+      effort !== "medium" &&
+      effort !== "high" &&
+      effort !== "xhigh" &&
+      effort !== "max"
+    ) {
+      throw new UsageError(`--thinking must be low, medium, high, xhigh or max, got "${effort}"`)
+    }
+    args.thinking = effort
+  }
   if (values["permission-mode"] !== undefined) {
     const mode = values["permission-mode"]
     if (mode !== "auto" && mode !== "edits" && mode !== "plan") {
@@ -236,6 +256,7 @@ function parse(argv: string[]) {
       "json-out": { type: "string" },
       "json-coalesce": { type: "boolean" },
       model: { type: "string", short: "m" },
+      thinking: { type: "string" },
       extension: { type: "string", short: "e", multiple: true },
       "no-builtins": { type: "boolean" },
       "no-packages": { type: "boolean" },

@@ -440,6 +440,21 @@ test("/status shows model, provider, session, context, cost, cwd and git", async
   expect(text).toMatch(/Window\s+128k$/m)
 })
 
+test.each([undefined, "low", "medium", "high", "xhigh", "max"] as const)(
+  "/status shows thinking only when configured (%s)",
+  async (thinking) => {
+    const { control } = fakeControl()
+    const { run, bus } = await setup({
+      info: () => ({ ...control.info(), ...(thinking ? { thinking } : {}) }),
+    })
+    bus.emit("workspace.changed", { cwd: "/work" }, { sessionId: "s1" })
+    await bus.flush()
+    const { text } = await run("/status")
+    if (thinking) expect(text).toMatch(new RegExp(`Thinking\\s+${thinking}`))
+    else expect(text).not.toMatch(/^Thinking\s/m)
+  },
+)
+
 test("/status says where the context window came from, and when it is only a guess", async () => {
   const windowRow = async (contextWindow: number, source?: SessionInfo["contextWindowSource"]) => {
     const { run, bus } = await setup({

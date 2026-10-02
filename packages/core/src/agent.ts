@@ -75,7 +75,7 @@ import {
   resultMessage,
   toolError,
 } from "./agent/messages.ts"
-import { modelCall } from "./agent/model-call.ts"
+import { modelCall, type ThinkingFor, thinkingFor } from "./agent/model-call.ts"
 import { approvalPermission, askedText, refusedText } from "./agent/permission-text.ts"
 import {
   AgentAbortedError,
@@ -266,6 +266,8 @@ export class Agent {
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
   readonly providerSettings: Record<string, ProviderSettings>
+  /** The effort sent for a model (see thinkingFor); a sub-agent inherits it for this.model. */
+  readonly thinkingFor: ThinkingFor
   /**
    * Loaded tools restored from the session file, checked at the first model call: by then
    * system.build has waited for tools that register late (MCP servers).
@@ -368,6 +370,7 @@ export class Agent {
     this.cwd = opts.cwd
     this.model = opts.model
     this.providerSettings = opts.providerSettings ?? {}
+    this.thinkingFor = thinkingFor(opts)
     this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
     this.#compaction = opts.compaction ?? {}
     this.#context = opts.context ?? {}
@@ -1330,6 +1333,7 @@ export class Agent {
       messages: ctx.value.messages,
       tools: () => this.#offeredTools(),
       maxTokens: this.#maxTokens,
+      thinking: this.thinkingFor(this.model),
       signal: turn.signal,
       emit: <K extends keyof EventMap>(type: K, data: EventMap[K]) => this.#emit(turn, type, data),
     })

@@ -37,15 +37,19 @@ test("sends tools as flat function definitions", async () => {
   ])
 })
 
-test("asks for reasoning with encrypted content and maps max to high", async () => {
-  expect((await sent({ reasoning: { effort: "low" } })).body.reasoning).toEqual({
-    effort: "low",
-    summary: "auto",
-  })
-  const seen = await sent({ reasoning: { effort: "max" } })
-  expect(seen.body.reasoning).toEqual({ effort: "high", summary: "auto" })
-  expect(seen.body.include).toEqual(["reasoning.encrypted_content"])
-  expect((await sent({})).body.include).toBeUndefined()
+test.each(["low", "medium", "high", "xhigh", "max"] as const)(
+  "passes through reasoning effort %s with encrypted content",
+  async (effort) => {
+    const { body } = await sent({ reasoning: { effort } })
+    expect(body.reasoning).toEqual({ effort, summary: "auto" })
+    expect(body.include).toEqual(["reasoning.encrypted_content"])
+  },
+)
+
+test("omits reasoning and its include when no effort is set", async () => {
+  const { body } = await sent({})
+  expect(body).not.toHaveProperty("reasoning")
+  expect(body).not.toHaveProperty("include")
 })
 
 test("translates every block type into input items", async () => {

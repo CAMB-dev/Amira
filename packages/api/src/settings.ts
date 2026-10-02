@@ -1,4 +1,4 @@
-import type { ModelOverrides, ProviderCompat } from "@amira/ai"
+import type { ModelOverrides, ProviderCompat, ReasoningEffort } from "@amira/ai"
 import type { Budget } from "./subagents.ts"
 
 export type ShellMode = "auto" | "bash" | "powershell"
@@ -25,6 +25,8 @@ export interface SettingsView extends Readonly<Settings> {
 }
 
 export interface ModelSettings extends ModelOverrides {
+  /** Overrides the top-level thinking effort for this exact model id; --thinking wins. */
+  thinking?: ReasoningEffort
   /** Overrides the provider's editing tools for this exact model id. */
   tools?: { edit?: EditingTool }
 }
@@ -61,6 +63,8 @@ export interface Settings {
   fileRewind?: { enabled?: boolean; maxFileBytes?: number; quotaBytes?: number }
   /** Default model as "provider/model". */
   model?: string
+  /** Reasoning effort for thinking models. Unset uses the server default. */
+  thinking?: ReasoningEffort
   /** baseUrl, apiKeyEnv, apiKeyEnvFallbacks and headers are only taken from the user file. */
   providers?: Record<string, ProviderSettings>
   /** Which shell tools the model gets on Windows (D68). */

@@ -132,6 +132,7 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
       ctx.print(
         table([
           ["Model", modelLabel(info.model)],
+          ...(info.thinking ? [["Thinking", info.thinking]] : []),
           [
             "Provider",
             provider
