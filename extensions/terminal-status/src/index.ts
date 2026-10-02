@@ -8,6 +8,7 @@ export default defineExtension((api) => {
   let folder = ""
   let sessionTitle: string | undefined
   let branch: string | undefined
+  let branchCwd: string | undefined
   let working = false
   let waiting = false
   let focused: boolean | undefined
@@ -33,7 +34,9 @@ export default defineExtension((api) => {
         .split(/[\\/]/)
         .pop() || e.data.cwd
     sessionTitle = e.data.title?.trim() || undefined
-    branch = undefined
+    // The same folder keeps its branch until the new session's first probe reports, so a /clear
+    // does not flicker it out of the title.
+    if (branchCwd !== e.data.cwd) branch = undefined
     working = false
     turnStartedAt = undefined
     sync()
@@ -46,6 +49,7 @@ export default defineExtension((api) => {
   api.on("workspace.changed", (e) => {
     if (e.sessionId !== sessionId) return
     branch = e.data.branch
+    branchCwd = e.data.cwd
     sync()
   })
   api.on("turn.start", (e) => {
