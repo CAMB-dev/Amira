@@ -20,6 +20,7 @@ import type { ToolPresenter } from "./tool-renderers.ts"
 import type { ToolDefinition } from "./tools.ts"
 import type { StatusItem, UiApi } from "./ui.ts"
 import type { ViewDefinition } from "./views.ts"
+import type { WorkspaceProvider } from "./workspace.ts"
 
 export interface InterceptContext {
   sessionId: string
@@ -44,6 +45,8 @@ export interface CompleteResult {
 }
 
 export interface ExtensionAPI {
+  /** Claims workspace probing exclusively. Throws if taken; unregisters on unload/reload. */
+  registerWorkspaceProvider(provider: WorkspaceProvider): () => void
   /** Claims rewind's file restoration exclusively. Unloading releases the claim. */
   registerFileRestoration(owner: FileRestorationOwner): () => void
   readonly apiVersion: string

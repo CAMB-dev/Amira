@@ -353,6 +353,17 @@ test("/help lists the skills in their own section, run with $", async () => {
   expect(text).not.toContain("From builtin:skills")
 })
 
+test("/status finishes with unknown git facts when no workspace provider is loaded", async () => {
+  const { run, ext } = await setup()
+  const started = performance.now()
+  try {
+    expect((await run("/status")).text).toMatch(/Git\s+unknown/)
+    expect(performance.now() - started).toBeLessThan(3000)
+  } finally {
+    ext.unloadAll()
+  }
+})
+
 test("/status right at startup waits briefly for the git facts", async () => {
   const { run, bus } = await setup()
   const status = run("/status")

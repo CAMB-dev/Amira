@@ -21,14 +21,14 @@ import {
  * factory is called so the extension's registration order stays the same as the original.
  */
 export function statusCommand(api: ExtensionAPI): CommandDefinition {
-  // Git facts per session, for /status; workspace.changed follows every session.start.
+  // Git facts per session, for /status; hosts without a workspace provider emit no facts.
   const workspace = new Map<string, EventMap["workspace.changed"]>()
   const waiting = new Set<() => void>()
   api.on("workspace.changed", (e) => {
     workspace.set(e.sessionId, e.data)
     for (const wake of waiting) wake()
   })
-  /** The git facts arrive in the background after session.start; right at startup, wait a little. */
+  /** Wait briefly for the initial facts, with a deadline even when no provider is loaded. */
   const workspaceOf = async (sessionId: string, signal: AbortSignal) => {
     const deadline = Date.now() + 2000
     while (!workspace.has(sessionId) && Date.now() < deadline && !signal.aborted) {
