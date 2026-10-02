@@ -3,7 +3,7 @@
 // status mark and a node on a rail, each row underlined; an open phase shows a box of worker cards
 // (tag, progress bar, changed files, Open diff / Pause / Request changes) joined to the rail; the
 // tabbed detail panel below; a framed input. Enter on an agent opens a full-screen page.
-import { bold, type KeyEvent } from "@amira/tui-kit"
+import { bg256, bold, compose, fg256, type KeyEvent } from "@amira/tui-kit"
 import {
   type App,
   children,
@@ -81,6 +81,32 @@ function bar(a: Agent, width = 14): string {
   return `${C.ok("━".repeat(full))}${C.border("━".repeat(width - full))}  ${C.muted(`${pct}%`.padStart(4))}`
 }
 
+/** Ways to mark an agent's language without a box; `t` cycles them to compare. */
+const TAG_STYLES = ["pill", "chip", "text", "brackets"] as const
+let tagStyle = 0
+const TAG_COLORS: Record<string, number> = {
+  TypeScript: 24,
+  PostgreSQL: 23,
+  Markdown: 239,
+  Rust: 94,
+  Python: 58,
+}
+
+function tagLabel(tag: string): string {
+  const c = TAG_COLORS[tag] ?? 60
+  switch (TAG_STYLES[tagStyle]) {
+    case "pill":
+      // Half blocks in the chip's colour round its ends off.
+      return `${fg256(c)("▐")}${compose(bg256(c), fg256(255))(tag)}${fg256(c)("▌")}`
+    case "chip":
+      return compose(bg256(c), fg256(255))(` ${tag} `)
+    case "text":
+      return fg256(c === 239 ? 250 : c + 87)(tag)
+    default:
+      return C.tag(`[${tag}]`)
+  }
+}
+
 function card(app: App, a: Agent, w: number, nested = false): Line[] {
   const run = runOf(app)
   const sel = app.sel[app.data] === a.id
@@ -98,7 +124,7 @@ function card(app: App, a: Agent, w: number, nested = false): Line[] {
     .filter(Boolean)
     .join("   ")
   const progress = a.status === "queued" ? C.muted("queued".padEnd(20)) : bar(a)
-  const tag = a.tag ? C.tag(`▏${a.tag}▕`) : ""
+  const tag = a.tag ? tagLabel(a.tag) : ""
   const name = sel ? C.sel(bold(a.name.padEnd(10))) : bold(a.name.padEnd(10))
   const left = `${pad}${glyph(a.status, app.now)} ${name}  ${fit(a.task, 22)}  ${fit(tag, 14)}  ${progress}`
   const right = `${changed}  ${C.border("│")}  ${acts}  ${C.muted("⋮")}`
@@ -139,6 +165,7 @@ function cards(app: App, p: Phase, w: number, railBelow: boolean): Line[] {
     `Enter ${C.muted("open")}`,
     `o ${C.muted("open all diffs")}`,
     `p ${C.muted("pause all")}`,
+    `t ${C.muted(`tag: ${TAG_STYLES[tagStyle]}`)}`,
   ].join("    ")
   body.push({ line: lr(`${C.run("Add worker")}  ${C.muted("(max 4)")}`, keys, inner) })
   const boxed = frame(
@@ -263,6 +290,9 @@ function key(app: App, e: KeyEvent): boolean {
   const i = Math.max(0, list.indexOf(cur))
   const isPhase = cur.startsWith("ph:")
   switch (e.name) {
+    case "t":
+      tagStyle = (tagStyle + 1) % TAG_STYLES.length
+      return true
     case "up":
     case "k":
       app.sel[app.data] = list[Math.max(0, i - 1)]!
