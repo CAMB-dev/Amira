@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createAi, createMockDialect } from "@amira/ai"
+import { createAi, createMockDialect, userMessage } from "@amira/ai"
 import {
   type ExtensionAPI,
   type SessionControl,
@@ -18,11 +18,14 @@ import {
   type RenderContext,
   stripAnsi,
   surfaceTheme,
+  truncateToWidth,
+  visibleWidth,
 } from "@amira/tui-kit"
 import statusExtension from "../../../extensions/status/src/index.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { ExtensionViewer, wrapViewLines } from "../src/extension-view.ts"
+import { userLines } from "../src/format.ts"
 import { finishedToolLines } from "../src/tool-view.ts"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
@@ -325,7 +328,7 @@ test("long text lines wrap under their text; code lines are cut", () => {
     ],
     30,
   )
-  expect(lines.map((l) => l.text)).toEqual([
+  expect(lines.map((l) => (l.kind === "segments" ? l.parts.map((p) => p.text).join("") : l.text))).toEqual([
     "✗ Verify failed: the reviewer",
     "  ran out of time the reviewer",
     "  ran out of time the reviewer",
@@ -341,6 +344,100 @@ const keyEvent = (name: string, shift = false): KeyEvent => ({
   ctrl: false,
   alt: false,
   shift,
+})
+
+test("semantic segments keep each color in titles, headers and bodies; plain text is unchanged", () => {
+  const parts = (["accent", "text", "muted", "success", "warning", "error"] as const).map((kind) => ({
+    kind,
+    text: `${kind} `,
+  }))
+  const line: ViewLine = { kind: "segments", parts }
+  const viewer = new ExtensionViewer(
+    {
+      kind: "segments",
+      title: () => line,
+      header: () => [line],
+      render: () => [line],
+    },
+    {},
+  )
+  const theme = defaultTheme
+  const styled = parts.map((p) => theme[p.kind](p.text)).join("")
+  const plain = parts.map((p) => p.text).join("")
+  for (const width of [80, 18]) {
+    const colored = viewer.render(width, { ...renderContext, theme, color: true })
+    const mono = viewer.render(width, renderContext).map(stripAnsi)
+    for (const index of [0, 1, 3]) {
+      expect(colored[index]).toBe(truncateToWidth(styled, width, "…"))
+      expect(mono[index]).toBe(truncateToWidth(plain, width, "…"))
+      expect(stripAnsi(colored[index]!)).toBe(mono[index]!)
+      expect(visibleWidth(colored[index]!)).toBeLessThanOrEqual(width)
+    }
+  }
+})
+
+test("semantic titles omit the default marker and preserve the muted aside when truncated", () => {
+  const theme = defaultTheme
+  const viewer = new ExtensionViewer(
+    {
+      kind: "note",
+      title: () => ({ kind: "warning", text: "No child in this session." }),
+      titleAside: () => "2 of 5",
+      render: () => [],
+    },
+    {},
+  )
+  const rows = viewer.render(25, { ...renderContext, theme, color: true })
+  expect(rows[0]).toBe(`${theme.warning("No child in this …")}${theme.muted(" 2 of 5")}`)
+  expect(stripAnsi(rows[0]!)).not.toContain("◆")
+})
+
+test("user-message lines use transcript wrapping, marker, note and background in headers and bodies", () => {
+  const text = "A task that wraps across several rows\nand a second line"
+  const note = "a display note"
+  const message = userMessage(text)
+  message.display = { text: "", note }
+  const viewer = new ExtensionViewer(
+    {
+      kind: "message",
+      title: () => "Task",
+      header: () => [{ kind: "user-message", text, note }],
+      render: () => [{ kind: "user-message", text, note }],
+    },
+    {},
+  )
+  for (const theme of [monoTheme, { ...defaultTheme, ...surfaceTheme("dark") }]) {
+    const expected = userLines(theme, message, 30)
+    const rows = viewer.render(30, { theme, color: theme !== monoTheme, rows: 40 })
+    expect(rows.slice(1, 1 + expected.length)).toEqual(expected)
+    expect(rows.slice(2 + expected.length, 2 + 2 * expected.length)).toEqual(expected)
+    if (theme === monoTheme) {
+      expect(expected.map(stripAnsi)).toEqual([
+        "› A task that wraps across",
+        "  several rows",
+        "  and a second line",
+        "  └ a display note",
+      ])
+    } else expect(expected[0]).not.toBe(stripAnsi(expected[0]!))
+  }
+})
+
+test("semantic view text cannot inject terminal styling", () => {
+  const viewer = new ExtensionViewer(
+    {
+      kind: "safe",
+      title: () => ({ kind: "segments", parts: [{ kind: "text", text: "\x1b[31mTitle\x1b[0m\nrow" }] }),
+      render: () => [{ kind: "user-message", text: "\x1b[31mTask\x1b[0m", note: "\x1b[31mNote" }],
+    },
+    {},
+  )
+  const rendered = viewer.render(80, renderContext)
+  expect(rendered.join("\n")).not.toContain("\x1b[31m")
+  const rows = rendered.map(stripAnsi)
+  expect(rows[0]).toBe("Title row")
+  expect(rows[2]).toBe("› Task")
+  expect(rows[3]).toBe("  └ Note")
+  expect(rows.join("\n")).not.toContain("\x1b")
 })
 
 test("named navigation keys distinguish Tab and Shift+Tab, leaving reserved keys to the host", () => {
@@ -501,8 +598,12 @@ test("renderTool uses the current presenter, fallback and exact host styling in 
   expect(rows.slice(1, 3)).toEqual(
     finishedToolLines(theme, presenter, { ...call, name: "read" }, "collapsed", 60),
   )
-  expect(plainLines.map((line) => line.text)).toEqual(expected.map(stripAnsi))
-  expect(plainLines.every((line) => !line.text.includes("\x1b"))).toBe(true)
+  const texts = plainLines.map((line) => {
+    if (line.kind === "segments") throw new Error("renderTool must return plain host-owned lines")
+    return line.text
+  })
+  expect(texts).toEqual(expected.map(stripAnsi))
+  expect(texts.every((text) => !text.includes("\x1b"))).toBe(true)
   for (const next of [
     undefined,
     {

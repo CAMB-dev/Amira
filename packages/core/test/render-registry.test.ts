@@ -128,6 +128,42 @@ test("results are checked: plain text only, a row per line, known kinds; images 
   expect(r.render(code("x"), ctx)).toBeUndefined()
 })
 
+test("semantic lines keep their structure and sanitize segments, messages and notes", () => {
+  const r = new MarkdownRendererRegistry()
+  r.register({
+    id: "semantic",
+    match: { codeLang: ["x"] },
+    render: () => ({
+      lines: [
+        {
+          kind: "segments",
+          parts: [
+            { kind: "accent", text: "a\x1b[31mred\x1b[0m\n" },
+            { kind: "success", text: " b\t\x07" },
+            { kind: "diff-add" as never, text: "fallback" },
+            null as never,
+          ],
+        },
+        { kind: "user-message", text: "first\r\nsecond\x07", note: "note\n\x1b[31mred" },
+        { kind: "segments", parts: false as never },
+      ],
+    }),
+  })
+  expect(r.render(code("x"), ctx)).toEqual({
+    lines: [
+      {
+        kind: "segments",
+        parts: [
+          { kind: "accent", text: "ared " },
+          { kind: "success", text: " b  " },
+          { kind: "text", text: "fallback" },
+        ],
+      },
+      { kind: "user-message", text: "first\nsecond", note: "note red" },
+    ],
+  })
+})
+
 test("wait times as asked (0 too, nonsense as the default); a runaway rendering is cut and reported", () => {
   const errors: string[] = []
   const r = new MarkdownRendererRegistry((_s, e) => errors.push(e))

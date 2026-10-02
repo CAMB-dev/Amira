@@ -1,4 +1,11 @@
-import { PANEL_MAX_LINES, type PanelDefinition, type PanelRenderOptions, type ViewLine } from "@amira/api"
+import {
+  PANEL_MAX_LINES,
+  type PanelDefinition,
+  type PanelRenderOptions,
+  type ToolLine,
+  type ViewLine,
+  type ViewSegment,
+} from "@amira/api"
 
 /** A panel's lines as a frontend draws them: cut to PANEL_MAX_LINES, one row each. */
 export interface ResolvedPanel {
@@ -12,7 +19,9 @@ interface Entry {
   seq: number
 }
 
-const KINDS = new Set<ViewLine["kind"]>([
+const SEGMENT_KINDS = new Set<ViewSegment["kind"]>(["text", "muted", "accent", "success", "warning", "error"])
+
+const KINDS = new Set<ToolLine["kind"]>([
   "text",
   "muted",
   "accent",
@@ -74,11 +83,38 @@ export class PanelRegistry {
       }
       if (!Array.isArray(raw)) continue
       const lines: ViewLine[] = []
-      for (const l of raw as unknown[]) {
-        if (!l || typeof l !== "object" || typeof (l as ViewLine).text !== "string") continue
-        const kind = KINDS.has((l as ViewLine).kind) ? (l as ViewLine).kind : "text"
-        // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
-        lines.push({ kind, text: (l as ViewLine).text.replace(/[\x00-\x1f\x7f]/g, " ").trimEnd() })
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
+      const clean = (text: string) => text.replace(/[\x00-\x1f\x7f]/g, " ")
+      for (const rawLine of raw as unknown[]) {
+        if (!rawLine || typeof rawLine !== "object") continue
+        const l = rawLine as { kind?: unknown; text?: unknown; parts?: unknown; note?: unknown }
+        if (l.kind === "segments") {
+          if (!Array.isArray(l.parts)) continue
+          const parts: ViewSegment[] = []
+          for (const rawPart of l.parts as unknown[]) {
+            if (!rawPart || typeof rawPart !== "object") continue
+            const part = rawPart as { kind?: unknown; text?: unknown }
+            if (typeof part.text !== "string") continue
+            const kind = SEGMENT_KINDS.has(part.kind as ViewSegment["kind"])
+              ? (part.kind as ViewSegment["kind"])
+              : "text"
+            parts.push({ kind, text: clean(part.text) })
+          }
+          lines.push({ kind: "segments", parts })
+          continue
+        }
+        if (typeof l.text !== "string") continue
+        const text = clean(l.text).trimEnd()
+        if (l.kind === "user-message") {
+          lines.push({
+            kind: "user-message",
+            text,
+            ...(typeof l.note === "string" ? { note: clean(l.note).trimEnd() } : {}),
+          })
+          continue
+        }
+        const kind = KINDS.has(l.kind as ToolLine["kind"]) ? (l.kind as ToolLine["kind"]) : "text"
+        lines.push({ kind, text })
       }
       if (!lines.length) continue
       const shown = opts.collapsed

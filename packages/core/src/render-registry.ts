@@ -7,7 +7,9 @@ import type {
   MarkdownRendererDefinition,
   MarkdownRenderResult,
   OpenedImage,
+  ToolLine,
   ViewLine,
+  ViewSegment,
 } from "@amira/api"
 
 /** Reports a failure of an extension's registration (extension.error). */
@@ -27,7 +29,9 @@ const MAX_WAIT_MS = 15_000
 /** Rows a rendering may take: more are cut (and reported), so a runaway one cannot flood the transcript. */
 const MAX_LINES = 2000
 
-const KINDS = new Set<ViewLine["kind"]>([
+const SEGMENT_KINDS = new Set<ViewSegment["kind"]>(["text", "muted", "accent", "success", "warning", "error"])
+
+const KINDS = new Set<ToolLine["kind"]>([
   "text",
   "muted",
   "accent",
@@ -175,14 +179,37 @@ export class MarkdownRendererRegistry {
     const v = value as { lines?: unknown; image?: unknown }
     if (Array.isArray(v.lines)) {
       const lines: ViewLine[] = []
-      for (const raw of v.lines as unknown[]) {
-        const l = (raw ?? {}) as { kind?: unknown; text?: unknown }
-        const kind = KINDS.has(l.kind as ViewLine["kind"]) ? (l.kind as ViewLine["kind"]) : "text"
-        const text = String(l.text ?? "")
+      const clean = (text: unknown) =>
+        String(text ?? "")
           .replace(/\r\n?/g, "\n")
           .replace(/\t/g, "  ")
-        for (const row of text.split("\n"))
-          lines.push({ kind, text: row.replace(ESCAPES, "").replace(CONTROLS, "") })
+          .replace(ESCAPES, "")
+          .replace(CONTROLS, "")
+      for (const raw of v.lines as unknown[]) {
+        const l = (raw ?? {}) as { kind?: unknown; text?: unknown; parts?: unknown; note?: unknown }
+        if (l.kind === "segments") {
+          if (!Array.isArray(l.parts)) continue
+          const parts: ViewSegment[] = []
+          for (const rawPart of l.parts as unknown[]) {
+            if (!rawPart || typeof rawPart !== "object") continue
+            const part = rawPart as { kind?: unknown; text?: unknown }
+            if (typeof part.text !== "string") continue
+            const kind = SEGMENT_KINDS.has(part.kind as ViewSegment["kind"])
+              ? (part.kind as ViewSegment["kind"])
+              : "text"
+            parts.push({ kind, text: clean(part.text).replace(/\n/g, " ") })
+          }
+          lines.push({ kind: "segments", parts })
+        } else if (l.kind === "user-message") {
+          lines.push({
+            kind: "user-message",
+            text: clean(l.text),
+            ...(typeof l.note === "string" ? { note: clean(l.note).replace(/\n/g, " ") } : {}),
+          })
+        } else {
+          const kind = KINDS.has(l.kind as ToolLine["kind"]) ? (l.kind as ToolLine["kind"]) : "text"
+          for (const row of clean(l.text).split("\n")) lines.push({ kind, text: row })
+        }
         if (lines.length > MAX_LINES) break
       }
       if (lines.length > MAX_LINES) {

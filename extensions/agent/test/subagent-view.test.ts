@@ -8,6 +8,8 @@ import {
   type SubagentInfo,
   textResult,
   type ViewDefinition,
+  type ViewLine,
+  type ViewSegment,
 } from "@amira/api"
 import statusExtension from "../../../extensions/status/src/index.ts"
 import { createAi, createMockDialect, type MockStep, userMessage } from "../../../packages/ai/src/index.ts"
@@ -23,7 +25,14 @@ import {
 } from "../../../packages/core/src/index.ts"
 import { runInteractive } from "../../../packages/tui/src/app.ts"
 import { ExtensionViewer } from "../../../packages/tui/src/extension-view.ts"
-import { FakeTerminal, monoTheme } from "../../../packages/tui-kit/src/index.ts"
+import { userLines } from "../../../packages/tui/src/format.ts"
+import {
+  defaultTheme,
+  FakeTerminal,
+  monoTheme,
+  stripAnsi,
+  surfaceTheme,
+} from "../../../packages/tui-kit/src/index.ts"
 import { VirtualScreen } from "../../../packages/tui-kit/test/screen.ts"
 import { agentsCommand } from "../src/index.ts"
 import { subagentView } from "../src/subagent-view.ts"
@@ -179,6 +188,11 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
 
 const ESC = "\x1b[27u"
 
+function lineText(line: string | ViewLine): string {
+  if (typeof line === "string") return line
+  return line.kind === "segments" ? line.parts.map((part) => part.text).join("") : line.text
+}
+
 async function snapshotView() {
   const bus = new EventBus()
   const tools = new ToolRegistry()
@@ -219,7 +233,7 @@ async function snapshotView() {
   const data = { sessionId: "a" }
   const context = { theme: monoTheme, color: false, rows: 20 }
   const viewer = new ExtensionViewer(definition, data, { now: () => 6500 })
-  const render = () => viewer.render(80, context).join("\n")
+  const render = () => viewer.render(80, context).map(stripAnsi).join("\n")
   const meta = { sessionId: "a", parentSessionId: agent.sessionId }
   return { bus, host, agent, list, histories, stopped, definition, data, viewer, render, meta }
 }
@@ -267,11 +281,14 @@ test("streaming before opening is visible, thinking changes live, and snapshots 
 
 test("queued, idle, finished, failed and stopped children retain their status, usage and reasons", async () => {
   const s = await snapshotView()
-  expect(s.definition.title(s.data, { width: 80, now: 6500 })).toBe(
-    "Child a · running · 5s · 1.6k tok · $0.0123 · explorer · a",
+  expect(lineText(s.definition.title(s.data, { width: 80, now: 6500 }))).toBe(
+    "◆ Child a · running · 5s · 1.6k tok · $0.0123 · explorer · a",
   )
   expect(s.definition.titleAside!(s.data)).toBe("1 of 2")
-  expect(s.definition.header!(s.data, { width: 80, now: 6500 })[0]?.text).toBe("task: Task a")
+  expect(s.definition.header!(s.data, { width: 80, now: 6500 })[0]).toEqual({
+    kind: "muted",
+    text: "task: Task a",
+  })
   s.list[0]!.status = "queued"
   expect(s.render()).toContain("waiting for a free slot")
   s.list[0]!.status = "idle"
@@ -335,10 +352,112 @@ test("the extension associates nested children with calls and delegates complete
     { name: "agent", text: "started", detail: "summary" },
     { name: "web_search", detail: "summary" },
   ])
-  expect(lines.map((line) => line.text)).toContain("presented agent")
-  const child = lines.filter((line) => line.text.includes("◆ Child b"))
+  expect(lines.map(lineText)).toContain("presented agent")
+  const child = lines.filter((line) => lineText(line).includes("◆ Child b"))
   expect(child).toHaveLength(1)
-  expect(child[0]!.text).toStartWith("  ◆ Child b")
+  expect(lineText(child[0]!)).toStartWith("  ◆ Child b")
+  expect(child[0]?.kind === "segments" && child[0].parts[0]).toEqual({ kind: "text", text: "  " })
+})
+
+const statuses: { status: SubagentInfo["status"]; text: string; kind: ViewSegment["kind"] }[] = [
+  { status: "running", text: "running", kind: "accent" },
+  { status: "queued", text: "queued", kind: "muted" },
+  { status: "idle", text: "idle", kind: "muted" },
+  { status: "done", text: "done", kind: "success" },
+  { status: "error", text: "failed", kind: "error" },
+  { status: "aborted", text: "stopped", kind: "warning" },
+]
+
+for (const { status, text, kind } of statuses) {
+  test(`${status} titles and child rows preserve semantic styles`, async () => {
+    const s = await snapshotView()
+    s.list[0]!.status = status
+    s.list[1]!.status = status
+    s.list[1]!.parentSessionId = "a"
+    const opts = { width: 80, now: 6500 }
+    const timing = status === "queued" ? "" : " · 5s"
+    const stats: ViewSegment[] = [
+      { kind, text },
+      { kind: "muted", text: `${timing} · 1.6k tok · $0.0123` },
+    ]
+    expect(s.definition.title(s.data, opts)).toEqual({
+      kind: "segments",
+      parts: [
+        { kind: "accent", text: "◆" },
+        { kind: "text", text: " Child a " },
+        { kind: "muted", text: "·" },
+        { kind: "text", text: " " },
+        ...stats,
+        { kind: "muted", text: " · explorer · a" },
+      ],
+    })
+    // Expectations mirror the deleted frontend viewer's theme calls, not just the API shape.
+    const theme = { ...defaultTheme, ...surfaceTheme("dark") }
+    const rows = s.viewer.render(120, { theme, color: true, rows: 20 })
+    const styledStats = `${theme[kind](text)}${theme.muted(`${timing} · 1.6k tok · $0.0123`)}`
+    const title = `${theme.accent("◆")} Child a ${theme.muted("·")} ${styledStats}${theme.muted(" · explorer · a")}`
+    expect(rows[0]).toBe(title + " ".repeat(120 - stripAnsi(title).length - 7) + theme.muted(" 1 of 2"))
+    expect(rows).toContain(
+      `${theme.accent("◆")} Child b ${theme.muted("· explorer · b")} ${styledStats} ${theme.muted("· Task b")}`,
+    )
+    const task = userLines(theme, userMessage("Task a"), 120)
+    expect(rows.slice(3, 3 + task.length)).toEqual(task)
+    expect(s.definition.render(s.data, opts).find((line) => line.kind === "segments")).toEqual({
+      kind: "segments",
+      parts: [
+        { kind: "text", text: "" },
+        { kind: "accent", text: "◆" },
+        { kind: "text", text: " Child b " },
+        { kind: "muted", text: "· explorer · b" },
+        { kind: "text", text: " " },
+        ...stats,
+        { kind: "text", text: " " },
+        { kind: "muted", text: "· Task b" },
+      ],
+    })
+  })
+}
+
+test("task bands use semantic user messages and retain display text and empty-task fallback", async () => {
+  const s = await snapshotView()
+  const opts = { width: 80, now: 6500 }
+  expect(s.definition.render(s.data, opts)[0]).toEqual({ kind: "user-message", text: "Task a" })
+  s.histories.set("a", [userMessage("first line\nsecond line")])
+  expect(s.definition.render(s.data, opts)[0]).toEqual({
+    kind: "user-message",
+    text: "first line\nsecond line",
+  })
+  s.histories.set("a", [{ ...userMessage("hidden"), display: { text: "visible task" } }])
+  expect(s.definition.render(s.data, opts)[0]).toEqual({ kind: "user-message", text: "visible task" })
+  const message = { ...userMessage("hidden"), display: { text: "visible task", note: "task note" } }
+  s.histories.set("a", [message])
+  expect(s.definition.render(s.data, opts)[0]).toEqual({
+    kind: "user-message",
+    text: "visible task",
+    note: "task note",
+  })
+  const theme = { ...defaultTheme, ...surfaceTheme("dark") }
+  const expected = userLines(theme, message, 80)
+  expect(s.viewer.render(80, { theme, color: true, rows: 20 }).slice(3, 3 + expected.length)).toEqual(
+    expected,
+  )
+  s.histories.set("a", [])
+  s.list[0]!.task = ""
+  expect(s.definition.render(s.data, opts)[0]).toEqual({ kind: "user-message", text: "(no task)" })
+})
+
+test("missing children have a warning title without an automatic diamond", async () => {
+  const s = await snapshotView()
+  s.data.sessionId = "missing"
+  expect(s.definition.title(s.data, { width: 80, now: 6500 })).toEqual({
+    kind: "warning",
+    text: "No sub-agent missing in this session.",
+  })
+  expect(s.render()).toContain("No sub-agent missing in this session.")
+  expect(s.render()).not.toContain("◆")
+  expect(s.viewer.render(80, { theme: defaultTheme, color: true, rows: 20 })[0]).toBe(
+    defaultTheme.warning("No sub-agent missing in this session."),
+  )
 })
 
 test("each child keeps its scroll position and follows independently when switching with Shift+Tab", async () => {
