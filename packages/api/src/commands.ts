@@ -16,6 +16,7 @@ import type { CommandRule, PermissionMode, ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
 import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
 import type { PendingNotice, SessionData, ToolExposure, ToolTraits } from "./tools.ts"
+import type { TraceRecord } from "./trace.ts"
 import type { UiApi } from "./ui.ts"
 
 /** A suggestion for a command's argument text. */
@@ -227,7 +228,7 @@ export interface SessionInfo {
   contextWindowSource?: ContextWindowSource
   /** Tokens the context held at the last reply; unknown before one and right after a compaction. */
   contextTokens?: number
-  /** Where the session is stored, once it has been written. */
+  /** Where the session is stored, once written; its host trace is `${file}.trace.jsonl`. */
   file?: string
   /** A turn is running. */
   busy: boolean
@@ -316,6 +317,13 @@ export interface SendOptions {
  */
 export interface SessionControl {
   info(): SessionInfo
+  /**
+   * Completed host trace records for this session (the default) or a descendant listed by
+   * `subagents()`. Returns [] for an unknown id or absent trace. This is a snapshot: events
+   * still queued on the bus and unfinished intervals are not included. Malformed lines and
+   * unsupported trace versions are skipped; a resumed session can contain multiple headers.
+   */
+  trace(sessionId?: string): Promise<TraceRecord[]>
   /** The conversation the model sees. */
   messages(): readonly Message[]
   /** Whether this text is in the context the model sees now: not compacted or aged away. */

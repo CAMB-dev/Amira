@@ -83,6 +83,8 @@ test("running, queued and finished sub-agents are listed with their state and co
     status: "done",
     usage: { input: 100, output: 20, cost: 0.01 },
   })
+  expect(first!.file).toBe(tree.subagent(a.id)?.file)
+  expect(second!.file).toBe(tree.subagent(b.id)?.session?.file)
   expect(first!.info.durationMs).toBeGreaterThanOrEqual(0)
   expect(first!.messages().map((m) => m.role)).toEqual(["user", "assistant"])
   // A finished child is read back from its file; the tree no longer holds its session.
@@ -191,6 +193,7 @@ test("a resumed session lists the sub-agents of its earlier runs from their file
       parentSessionId: mid.id,
     }),
   ])
+  expect(list[0]!.file).toBe(path.join(path.dirname(session!.file), "subagents", `${mid.id}.jsonl`))
   expect(list[0]!.info.startedAt).toBeGreaterThan(0)
   expect(list[1]!.messages().at(-1)).toMatchObject({ role: "assistant", content: [{ text: "leaf answer" }] })
   // A session from before titles has none in its entries: the task's first words stand in.
@@ -211,6 +214,7 @@ test("without a session file, only this process's sub-agents are known", async (
   expect(listSubagents(root, tree)).toEqual([])
   await tree.spawn(root, { prompt: "p" }).result()
   expect(listSubagents(root, tree).map((e) => e.info.task)).toEqual(["p"])
+  expect(listSubagents(root, tree)[0]?.file).toBeUndefined()
   expect(listSubagents(root)).toEqual([])
 })
 

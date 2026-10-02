@@ -32,6 +32,8 @@ export interface RpcOptions {
   maxQueue?: number
   /** How long to wait for queued events at exit. Default 2000 ms. */
   flushTimeoutMs?: number
+  /** Host override for a second Ctrl+C or a closed output; may briefly drain observability first. */
+  forceExit?: (code: number) => void
   /**
    * Loads a stored session into a new agent on the same bus; undefined when there is no such
    * session. Without it, session.resume answers not_supported.
@@ -95,11 +97,13 @@ interface LastTurn {
 export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promise<number> {
   const { ai, commands } = session
   let agent = session.agent
-  // A force exit starts the agent's cleanup without waiting for it: nobody is left to wait for.
-  const exitNow = (code: number) => {
-    void agent.dispose("exit")
-    process.exit(code)
-  }
+  // The host may briefly drain its trace; standalone callers keep the immediate exit.
+  const exitNow =
+    opts.forceExit ??
+    ((code: number) => {
+      void agent.dispose("exit")
+      process.exit(code)
+    })
   const io = opts.io ?? stdio(() => exitNow(0))
   const ui = session.ui ?? new UiRequests(agent.bus, { sessionId: agent.sessionId })
   const nonInteractive = session.nonInteractive === true || session.ui === undefined

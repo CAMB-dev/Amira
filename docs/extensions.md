@@ -255,6 +255,73 @@ API 0.1.20 adds `SessionControl.setThinking(level: ReasoningEffort | undefined):
 
 The typed event `thinking.changed` has payload `{ thinking?: ReasoningEffort }` and is emitted on runtime effort changes. Its `thinking` field has the same capability-gated meaning as `info().thinking`, not `thinkingLevel`. For live displays, read `api.session()?.info()` and redraw on `thinking.changed`, as well as model and session changes. Ignore events with a `parentSessionId` when displaying only the top-level session. The built-in status bar shows effort beside the model name only when `info().thinking` is set.
 
+### Session traces
+
+The host records per-session observability traces (D103); the viewer lives in a separate repository. This is not an extension that must be loaded, and it does not change the agent loop or `API_VERSION`. A persisted session at `<session file>` has a companion `<session file>.trace.jsonl`; each persisted child has its own companion beside its session file under `subagents/`, including nested descendants. Ephemeral sessions and sessions whose conversation file has not been created produce no trace file.
+
+`SessionControl.trace(sessionId?: string): Promise<TraceRecord[]>` reads the current session by default, or a descendant listed by `subagents()`. Get the control from `api.session()` or a command's `ctx.session`. Unrelated IDs, sessions without traces and missing files return `[]`; this is not an arbitrary file-reading API. The result is a snapshot of completed records, including completed recorder buffers flushed for the read, not synthesized intervals for work still running. It does not drain the event bus, so events not yet delivered to the recorder may be absent; calling it from an event listener does not wait on that listener. Readers skip malformed or torn lines and runs with unsupported versions.
+
+```ts
+import { summarizeTrace } from "@amira/api"
+
+const session = api.session()
+if (session) {
+  const records = await session.trace()
+  const summary = summarizeTrace(records)
+  const child = session.subagents()[0]
+  const childRecords = child ? await session.trace(child.id) : []
+}
+```
+
+Writes are asynchronous batches scheduled at least once per second and flushed at session end and process shutdown; they never make a turn wait for disk I/O. A recording failure is reported once per session and does not fail the agent. Trace persistence is best-effort: abrupt termination or an overloaded subscriber can lose events. Resume appends a new header to the existing trace rather than truncating it. Fork copies the conversation, not its trace; the fork starts its own trace when recorded. Deleting a session removes its trace and the traces of owned descendants, while preserving descendants still shared with another session.
+
+#### Record format and privacy
+
+`@amira/api` exports `TRACE_VERSION = 1`, `TraceRecord`, `ToolOutcome`, `TraceSummary` and `summarizeTrace`. Each JSONL line is one record, with a `trace` header first in every recording run. The following table lists all fields besides the `type` discriminator; fields in the optional column may be omitted. `Usage` is the public token/search/USD-cost usage type, and model strings use `provider/model` form.
+
+| `type` | Required fields | Optional fields |
+| --- | --- | --- |
+| `trace` | `v: 1`, `sessionId: string`, `startedAt: number` | `parentSessionId: string`, `role: string`, `title: string` |
+| `turn` | `turnId: string`, `start: number`, `end: number`, `reason: "done" \| "error" \| "aborted"`, `steps: number` | `failure: { kind: string; message: string }` |
+| `model` | `model: string`, `start: number`, `end: number` | `turnId: string`, `firstToken: number`, `usage: Usage`, `stopReason: string`, `retries: { at: number; delayMs: number; kind: string }[]` |
+| `tool` | `toolCallId: string`, `name: string`, `start: number`, `end: number`, `durationMs: number`, `outcome: ToolOutcome`, `argsChars: number`, `resultChars: number`, `argsPreview: string`, `resultPreview: string` | `turnId: string`, `approvalWaitMs: number`, `approval: "user" \| "rule"`, `artifact: string`, `writtenPaths: string[]` |
+| `status` | `at: number`, `status: "idle" \| "working" \| "blocked" \| "error"` | `reason: string` |
+| `subagent` | `childSessionId: string`, `start: number`, `end: number`, `status: string`, `durationMs: number` | `toolCallId: string`, `role: string`, `title: string`, `groupId: string`, `queuedAt: number`, `error: string`, `usage: Usage` |
+| `compact` | `start: number`, `end: number`, `reason: string` | `tokensBefore: number`, `tokensAfter: number`, `usage: Usage`, `native: boolean`, `fallback: boolean` |
+| `side` | `at: number`, `model: string` | `label: string`, `usage: Usage` |
+
+All timestamps (`startedAt`, `start`, `end`, `at`, `firstToken`, `queuedAt`) come from event-envelope `ts` values in epoch milliseconds, not append times. Durations and retry delays are milliseconds. Interval records are appended when they finish, so file order is not start-time order. Turns pair `turn.start/end`; model records pair `message.start/end` and retain retries within that request. `firstToken` is the first reliably observed message delta, whether text, thinking or a tool call; it can be absent when deltas are missing or dropped. A failed turn uses the structured failure's kind and summary, or kind `"other"` for an unclassified error.
+
+Tool argument previews are compact JSON; result previews contain text blocks only. Each preview is at most 300 Unicode code points, without splitting a surrogate pair. `argsChars` counts compact-JSON code points and `resultChars` counts emitted result-text code points; the latter may already describe an artifact preview rather than the original output. `artifact` is the saved-output ID, not its path. Images, result details and full arguments/results are not copied into traces; full content stays in session/artifact storage. Previews and paths can still contain sensitive text, so treat traces as private session data.
+
+`ToolOutcome` is `"ok" | "error" | "denied" | "aborted" | "invalid" | "unknown-tool"`. Rejection takes precedence: `tool.execute.end.rejected` values `blocked`, `aborted`, `invalidArgs` and `unknownTool` map to `denied`, `aborted`, `invalid` and `unknown-tool`, respectively. Otherwise, `result.isError` selects `error` or `ok`; result text is not used to guess an abort. Starts and ends are matched by session, turn, call ID and tool name, using FIFO for repeated keys. Identical ID/name calls in the same parallel batch cannot be disambiguated if they finish out of order, so their associated starts/previews may be ambiguous.
+
+`tool.execute.end.waitedMs?: number` measures only a real wait for an approver and becomes trace `approvalWaitMs`. A genuine zero-length wait is retained as `0`. The field is absent for calls that never waited, direct policy denials, missing approvers and tool-question waits. `durationMs` measures execution only, excluding approval, pre-execution checks and pre/post-call interceptors; calls rejected before execution report zero. The tool start/end event interval can additionally include scheduling and post-processing, so it need not equal `durationMs`. Concurrent approval waits can overlap and are not additional wall time.
+
+A parent's `subagent` record describes a completed direct child and its own usage, not recursive descendant usage. `queuedAt` exists only if `subagent.start` announced a queued child; execution `start` comes from the child's actual `session.start`. A child cancelled before that announcement has `start === end`, denoting no execution interval. Reported child `durationMs` is lifetime after admission and can include idle periods for persistent children. Each child's own trace contains its turn/model/tool details.
+
+A compaction record never contains the summary text. Successful records carry the trigger reason and optional tokens/usage; `native` and `fallback` are booleans, not the original model reference or fallback explanation. Failed attempts use `reason: "failure:blocked"`, `"failure:empty"` or `"failure:error"`; without a preceding start they have `start === end`. The `side` variant is reserved in the format, but the host currently emits no side-usage event, so no `side` records are written. Stored `side_usage` entries and budget updates are not polled or converted into traces; use `sideRequests()` for stored side-request accounting.
+
+#### Trace summaries
+
+`summarizeTrace(records: TraceRecord[]): TraceSummary` is pure and does not mutate its input. Pass one session's trace, including its resume headers; do not concatenate parent and child traces, because the parent's subagent records already report child usage. Time metrics overlap and must not be added together to reconstruct wall time.
+
+| Summary fields | Accounting |
+| --- | --- |
+| `start?`, `end?`, `wallTimeMs` | Earliest and latest represented event times, including queue/retry times; wall time is their difference, not the distance between array endpoints. Resume downtime counts here. Empty input has no bounds and zero time. |
+| `modelTimeMs` | Sum of model request intervals, including retry delays. |
+| `modelWaitMs`, `modelStreamMs`, `modelUnknownMs` | Start-to-first-token and first-token-to-end sums where `firstToken` exists; otherwise the entire interval is unclassified in `modelUnknownMs`. |
+| `toolTimeMs` | Union of tool start/end intervals; overlapping parallel calls count once. |
+| `toolDurationMs`, `approvalWaitMs` | Independently summed reported tool durations and real approval waits; simultaneous waits can overlap. |
+| `idleMs` | Gaps between turn intervals within each header-delimited run; excludes resume downtime and time outside the first/last turn. |
+| `usage`, `subagentUsage`, `totalUsage` | Own model/compact/side usage, direct children's own usage, and the combination. Reasoning tokens are retained; a total cost is absent if any included usage has unknown cost, and unpriced searches remain unpriced. |
+| `tools[name]` | `count`, `totalMs`, `avgMs`, `maxMs` based on reported `durationMs`, plus `outcomes` with all six disposition counts, including zeros. |
+| `failures` | Every non-OK tool and failed/aborted turn, ordered by completion `at`, with source identifiers, outcome/reason and available bounded tool preview or turn failure summary. |
+| `retries` | Count of recorded model retry entries. |
+| `subagents` | Completed direct children with ID, optional role/title, start/end, reported lifetime duration, status, optional usage and known USD `cost`. |
+
+Usage totals cover only reported usage, not all billable work. In particular, absent side-usage events, parent-model consultations without model events and unreported failed-request usage cannot be reconstructed from traces. Read a child's trace separately when you need its detailed timing or descendants.
+
 ### Workspace providers
 
 API 0.1.16 adds `api.registerWorkspaceProvider(provider)`. One provider may be registered per

@@ -195,7 +195,10 @@ export interface EventMap {
     toolCallId: string
     name: string
     result: ToolResult
+    /** Execution milliseconds, excluding approval and pre/post-call interceptors; zero if not run. */
     durationMs: number
+    /** Milliseconds waiting for an approver; absent if no approval wait was entered. */
+    waitedMs?: number
     traits?: ToolTraits
     writtenPaths?: string[]
     rejected?: ToolRejection

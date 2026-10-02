@@ -80,6 +80,7 @@ function fakeControl(over: Partial<SessionControl> = {}) {
   ]
   const control: SessionControl = {
     info: () => info,
+    trace: async () => [],
     messages: () => [],
     replies: () => [],
     subagents: () => [],
