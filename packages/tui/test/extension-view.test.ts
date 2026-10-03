@@ -155,7 +155,7 @@ test("a command opens an extension's view over its data; it follows changes, run
   expect(lines[1]).toBe("1/2 done")
   expect(lines[2]).toBe("─".repeat(80))
   expect(lines.slice(3, 5)).toEqual(["✓ read the diff", "… check the tests"])
-  expect(lines.at(-1)).toBe("x cancel · c close · ↑↓ PgUp PgDn Home End scroll · Esc back")
+  expect(lines.at(-1)).toBe("x cancel · c close · ↑↓ PgUp PgDn Home End scroll · Esc close")
 
   // The extension changes its data and asks for a redraw: the view shows it.
   s.data.steps.push({ title: "write the summary", state: "running" })
@@ -472,7 +472,7 @@ test("named navigation keys distinguish Tab and Shift+Tab, leaving reserved keys
   viewer.handleInput(keyEvent("q"))
   viewer.handleInput(keyEvent("escape"))
   expect(calls).toEqual(["left", "right", "tab", "shift-tab"])
-  expect(closed).toBe(2)
+  expect(closed).toBe(1) // A closed viewer cannot close twice.
 })
 
 test("keys sharing a label share a footer item, empty labels stay out, and the aside keeps right", () => {
@@ -493,7 +493,7 @@ test("keys sharing a label share a footer item, empty labels stay out, and the a
   }
   const lines = new ExtensionViewer(view, {}).render(40, renderContext).map(stripAnsi)
   expect(lines[0]).toBe("◆ A rather long title that has t… 2 of 5")
-  expect(lines.at(-1)).toBe("←→ switch · x y stop · Esc back")
+  expect(lines.at(-1)).toBe("←→ switch · x y stop · Esc close")
   const wide = new ExtensionViewer(view, {}).render(120, renderContext).map(stripAnsi)
   expect(wide[0]).toMatch(/^◆ A rather long title .*screen +2 of 5$/)
   expect(wide[0]).toHaveLength(120)
@@ -711,7 +711,7 @@ test("a key can ask for a line of text at the bottom of the view; Esc cancels it
   // Keys go to the prompt: "q" and "m" are typed, not run.
   s.terminal.send("q m\r")
   await waitFor(() => s.view().includes("sent: hi q m"), "the answer")
-  expect(s.screen.lines.at(-1)).toBe("m message · ↑↓ PgUp PgDn Home End scroll · Esc back")
+  expect(s.screen.lines.at(-1)).toBe("m message · ↑↓ PgUp PgDn Home End scroll · Esc close")
   s.terminal.send("m")
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer:"), "the prompt again")
   s.terminal.send(ESC)
@@ -722,8 +722,7 @@ test("a key can ask for a line of text at the bottom of the view; Esc cancels it
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer:"), "a third prompt")
   s.terminal.send("\x03")
   await waitFor(() => answers.length === 3, "cancelled by Ctrl+C")
-  s.terminal.send(ESC)
-  await waitFor(() => !s.screen.inAltScreen, "closed")
+  await waitFor(() => !s.screen.inAltScreen, "Ctrl+C closes even with a prompt")
   expect(answers).toEqual(["hi q m", undefined, undefined])
   s.terminal.send("\x03")
   await s.exited

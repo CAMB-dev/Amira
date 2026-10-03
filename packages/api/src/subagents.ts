@@ -110,7 +110,8 @@ export interface SubagentResult {
 
 /**
  * Where a child is: waiting for a place to run, running a turn, idle between turns (only
- * persistent children), or ended.
+ * persistent children), or ended. A user pause holds execution within a working turn,
+ * retaining its admission slot; subagent.state and SubagentInfo report that hold as paused.
  */
 export type ChildState = "queued" | "working" | "idle" | "ended"
 

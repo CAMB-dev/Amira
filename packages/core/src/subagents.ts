@@ -38,7 +38,7 @@ import { SessionStore } from "./session-store.ts"
 import { addUsage, BudgetLedger, overBudget, usageTokens } from "./subagents/budget.ts"
 import { Child, Group, type SpawnedSubagent } from "./subagents/child.ts"
 import { askParentPrompt, parseParentAnswers } from "./subagents/consult-parent.ts"
-import { metaOf, parentMeta } from "./subagents/events.ts"
+import { followChild, metaOf, parentMeta } from "./subagents/events.ts"
 import { finalText, forkHistory } from "./subagents/fork.ts"
 import {
   checkResult,
@@ -163,11 +163,13 @@ export class AgentTree {
     const r = c.ended
     const status = r
       ? r.status
-      : c.state === "idle"
-        ? "idle"
-        : c.started && c.state !== "queued"
-          ? "running"
-          : "queued"
+      : c.agent.execution.paused
+        ? "paused"
+        : c.state === "idle"
+          ? "idle"
+          : c.started && c.state !== "queued"
+            ? "running"
+            : "queued"
     const info: SubagentInfo = {
       id: c.id,
       parentSessionId: c.parentSessionId,
@@ -421,7 +423,8 @@ export class AgentTree {
   /** Busy children: running a turn, and not just waiting for children of their own. */
   #busy(among: Iterable<Child>): number {
     let n = 0
-    for (const c of among) if (this.#running.has(c) && !this.#liveKids.has(c.id)) n++
+    for (const c of among)
+      if (this.#running.has(c) && (c.agent.execution.paused || !this.#liveKids.has(c.id))) n++
     return n
   }
 
@@ -525,6 +528,23 @@ export class AgentTree {
     return true
   }
 
+  /** Sends a user message without bypassing a child's admission or persistent wakeup. */
+  message(id: string, text: string): boolean {
+    return this.#live.get(id)?.message(text) ?? false
+  }
+
+  /** Holds a running child at its next call boundary, retaining its admission slot. */
+  pause(id: string): boolean {
+    return this.#live.get(id)?.pause() ?? false
+  }
+
+  /** Releases a user pause; it does not affect extension-level message holds. */
+  resume(id: string): boolean {
+    if (!this.#live.get(id)?.resume()) return false
+    this.#admit()
+    return true
+  }
+
   /** Delivers a message to a live persistent child by id (as ChildSession.send); false for any other. */
   deliver(sessionId: string, message: string | UserMessage): boolean {
     const child = this.#live.get(sessionId)
@@ -585,6 +605,7 @@ export class AgentTree {
   stopChild(child: Child, reason: string): void {
     if (!child.persistent || !this.#live.has(child.id) || child.abortReason || child.stopReason) return
     child.stopReason = reason
+    if (child.agent.execution.resume()) this.#admit()
     if (child.started) {
       child.waiting?.()
       return
@@ -594,55 +615,9 @@ export class AgentTree {
     this.#finish(child, { status: "done", steps: 0, durationMs: 0 })
   }
 
-  /**
-   * Events of the child and its descendants, ending with the child's subagent.end. Subscribes
-   * when iteration starts; a child that already ended yields nothing.
-   */
+  /** Events of a child and its descendants, ending with its subagent.end. */
   eventsOf(child: Child): AsyncIterable<AnyEvent> {
-    return { [Symbol.asyncIterator]: () => this.#follow(child) }
-  }
-
-  #follow(child: Child): AsyncIterator<AnyEvent> {
-    const queue: AnyEvent[] = []
-    // Descendants join as their subagent.start comes by, which is before any of their events.
-    const members = new Set([child.id])
-    let ended = !this.#live.has(child.id)
-    let wake: (() => void) | undefined
-    const off = ended
-      ? () => {}
-      : child.agent.bus.subscribe((e) => {
-          if (ended) return
-          const end = e.type === "subagent.end" && e.data.childSessionId === child.id
-          const own = e.type === "subagent.state" && e.data.childSessionId === child.id
-          if (!end && !own && !members.has(e.sessionId)) return
-          if (e.type === "subagent.start") members.add(e.data.childSessionId)
-          queue.push(e)
-          if (end) {
-            ended = true
-            off()
-          }
-          wake?.()
-        })
-    return {
-      async next() {
-        while (true) {
-          const e = queue.shift()
-          if (e) return { value: e, done: false }
-          if (ended) return { value: undefined, done: true }
-          await new Promise<void>((resolve) => {
-            wake = resolve
-          })
-          wake = undefined
-        }
-      },
-      async return() {
-        ended = true
-        queue.length = 0
-        off()
-        wake?.()
-        return { value: undefined, done: true }
-      },
-    }
+    return { [Symbol.asyncIterator]: () => followChild(child) }
   }
 
   /**
@@ -904,6 +879,8 @@ export class AgentTree {
 
   /** One call to the parent's model with its conversation and `question`, without tools. */
   async #consult(parent: Agent, question: string, signal: AbortSignal) {
+    if (parent.execution.paused) await parent.execution.wait(signal)
+    if (signal.aborted) return { text: undefined, failure: "aborted" }
     let reply: AssistantMessage | undefined
     let failure: string | undefined
     for await (const ev of this.#opts.ai.stream(

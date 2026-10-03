@@ -17,6 +17,9 @@ type InfoControl = Pick<
   | "subagents"
   | "subagentMessages"
   | "stopSubagent"
+  | "messageSubagent"
+  | "pauseSubagent"
+  | "resumeSubagent"
   | "createGroup"
   | "data"
   | "groups"
@@ -81,6 +84,15 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
     stopSubagent: (id) =>
       listSubagents(ctx.agent(), ctx.session.tree).some((e) => e.info.id === id) &&
       ctx.session.tree.stop(id, USER_STOP_REASON),
+    messageSubagent: (id, text) =>
+      listSubagents(ctx.agent(), ctx.session.tree).some((e) => e.info.id === id) &&
+      ctx.session.tree.message(id, text),
+    pauseSubagent: (id) =>
+      listSubagents(ctx.agent(), ctx.session.tree).some((e) => e.info.id === id) &&
+      ctx.session.tree.pause(id),
+    resumeSubagent: (id) =>
+      listSubagents(ctx.agent(), ctx.session.tree).some((e) => e.info.id === id) &&
+      ctx.session.tree.resume(id),
     createGroup: (groupOpts) => ctx.session.tree.createGroup(ctx.agent(), groupOpts),
     data: {
       append: (key, data) => ctx.agent().data.append(key, data),
