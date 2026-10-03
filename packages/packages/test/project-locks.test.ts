@@ -84,3 +84,34 @@ test("nested projects are looked for only a few levels below a recorded path", (
     rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
   }
 })
+
+test("a missing lock is empty, a lock that is not a readable file is reported", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-project-locks-missing-"))
+  const home = path.join(dir, "home")
+  const cwd = path.join(dir, "project")
+  try {
+    mkdirSync(home)
+    expect(gitCachePins({ home, cwd })).toEqual({ urls: [], unreadable: [] })
+    const lock = packageScope("project", { home, cwd }).lockFile
+    mkdirSync(lock, { recursive: true })
+    expect(gitCachePins({ home, cwd }).unreadable).toEqual([lock])
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+  }
+})
+
+test("the current project's lock is read even when the directory budget is spent", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-project-locks-cap-"))
+  const home = path.join(dir, "home")
+  const cwd = path.join(dir, "project")
+  try {
+    mkdirSync(home)
+    mkdirSync(cwd, { recursive: true })
+    const lock = packageScope("project", { home, cwd }).lockFile
+    mkdirSync(path.dirname(lock), { recursive: true })
+    writeFileSync(lock, "{ not json")
+    expect(gitCachePins({ home, cwd }).unreadable).toEqual([lock])
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+  }
+})
