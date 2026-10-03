@@ -253,7 +253,7 @@ api.registerView(review)
 
 `Size` 为 `number | \`${number}%\` | "fill"`：分别表示固定终端格数、扣除间距及分隔线后主轴空间的百分比，以及均分剩余空间。省略尺寸时使用 fill，但 spacer 显式提供的 size 会成为默认值。每条分隔线在 `gap` 之外另占一格。先保留可满足的 `min`，再按比例缩小超出部分；只有最小尺寸之和也无法容纳时才缩小最小尺寸，并按声明顺序分配取整余量。矩形尺寸不会变成负数；不足八列或三行时隐藏框边。表头和单元格共用列宽分配，列间隔为一格。可根据 `ctx.width` 为窄终端选择不同的组合。
 
-`UiTreeItem` 包含稳定的 `key`、语义片段 `row`，以及可选的 `aside`、`detail: ViewLine[]`、`children`、`rail` 和 `expandable`。详情和子项只在展开时显示；`expandable: true` 可在子项尚未加载时显示展开标记，扩展通过 toggle 事件加载数据。树默认折叠。工作者卡片应使用树旁边或下方的独立 box；树的 detail 是行，不是任意组件子树。
+`UiTreeItem` 包含稳定的 `key`、语义片段 `row`，以及可选的 `aside`、`detail: ViewLine[]`、`children`、`rail` 和 `expandable`。详情和子项只在展开时显示；`expandable: true` 可在子项尚未加载时显示展开标记，扩展通过 toggle 事件加载数据。树默认折叠。工作者卡片应使用树旁边或下方的独立 box；树的 detail 是行，不是任意组件子树（这是第二阶段已知的缺口）。
 
 `UiContext` 在 `ViewRenderOptions` 基础上增加宿主持有的 `state: UiState`。所有映射以稳定、整个视图内唯一的组件 ID 为键：`selected` 保存树或表格的选中项键，`expanded` 保存树中展开项的键数组，`activeTabs` 保存标签页键，`scroll` 保存 `{ top, following }`，`inputValues` 保存输入字符串；可选的 `focused` 保存焦点组件 ID。重绘、同类型视图的数据替换和非活动标签页均保留状态，直到视图关闭。选中项或标签页消失时选择第一个可见项或标签页；焦点无效时选择第一个可见组件。请将上下文状态视为只读，并保持 `ui` 无副作用：宿主修复选中项、标签页或焦点后可能在同一帧重建内容，确保详情与控件一致；八次尝试后仍不稳定时安全地显示错误。没有 ID 的文本和表格可用滚轮滚动，但键盘焦点和显式状态管理需要稳定的 ID。
 
