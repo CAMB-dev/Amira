@@ -141,9 +141,9 @@ export function tildePath(
   return same && (sep === "" || sep === "/" || sep === "\\") ? `~${path.slice(home.length)}` : path
 }
 
-/** The events an overlay gets for one: the wheel as ↑ or ↓ three times, mouse clicks not at all. */
-export function overlayKeys(e: InputEvent): InputEvent[] {
-  if (e.type !== "mouse") return [e]
+/** Legacy overlays get wheel arrows; declarative overlays keep original pointer coordinates. */
+export function overlayKeys(e: InputEvent, pointer = false): InputEvent[] {
+  if (pointer || e.type !== "mouse") return [e]
   if (e.action !== "wheel" || (e.button !== "up" && e.button !== "down")) return []
   const k: InputEvent = { type: "key", name: e.button, ctrl: false, shift: false, alt: false }
   return [k, k, k]

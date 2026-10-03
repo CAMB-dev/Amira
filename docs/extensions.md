@@ -219,6 +219,63 @@ tool presenter and fallback renderer; pass a `ToolCallView` and return the resul
 unchanged to preserve the host's presentation. Other frontends may omit it, so provide a
 plain-line fallback. API version 0.1.15 adds these view capabilities.
 
+### Declarative view widgets (Experimental)
+
+D104 L3 adds an experimental `ui(data, ctx): UiNode` path to `ViewDefinition`, without changing `API_VERSION`. Import its types only from `@amira/api`; no TUI or tui-kit dependency is needed. Supply `ui` or the existing `render`. When `ui` is present it replaces the title, header and line-rendered screen content; `title` is still required for window/fallback presentation. Existing line-only views, including `/agents` and job views, keep their current behavior.
+
+```ts
+import type { ViewDefinition } from "@amira/api"
+
+const review: ViewDefinition<{ messages: string[] }> = {
+  kind: "review",
+  title: () => "Review",
+  ui: (data) => ({
+    type: "column",
+    children: [
+      { node: { type: "text", id: "log", follow: true,
+        lines: data.messages.map((text) => ({ kind: "text", text })) } },
+      { size: 3, node: { type: "box", title: "Message the team",
+        child: { type: "input", id: "message", placeholder: "Ask for a review…" } } },
+    ],
+  }),
+  onEvent(event, data, view) {
+    if (event.type === "submit") {
+      data.messages.push(event.value)
+      view.setState({ inputValues: { message: "" } })
+    }
+  },
+}
+api.registerView(review)
+```
+
+The exported `UiNode` union uses `type` as its discriminator. All content is semantic: text and `ViewSegment` meanings, not colors or raw escape sequences. Every displayed string is sanitized exactly like existing view lines, including titles, labels, cells, hints and input values. Long rows are cut with an ellipsis; text lines retain existing wrapping. The host owns theme, clipping, input and the terminal.
+
+| Widget | Content and options |
+| --- | --- |
+| `column`, `row` | `children: { node, size?, min? }[]`, `gap?`, `divider?` |
+| `box` | `child`, `title?: ViewLine \| string`, `aside?`, `border?: "round" \| "none"`, `tone?: "normal" \| "accent" \| "focus"` |
+| `text` | `lines: ViewLine[]`, optional `id`, `follow?` (default false) |
+| `tree` | `id`, `items: UiTreeItem[]` |
+| `tabs` | `id`, `tabs: { key, label, body }[]`; only the active body is laid out |
+| `table` | Optional `id`, `columns: { key, label, size?, align?: "left" \| "right" }[]`, `rows: { key, cells: Record<string, string \| ViewSegment[]> }[]` |
+| `bar` | `left: ViewSegment[]`, optional `right: ViewSegment[]` |
+| `progress` | `value` from 0 to 1 (clamped), optional maximum bar `width` and `label` |
+| `rule` | Optional `label` |
+| `input` | `id`, optional `placeholder` and `hint`; use a visible label such as a box title |
+| `spacer` | Optional default main-axis `size` in cells |
+
+`Size` is `number | \`${number}%\` | "fill"`: fixed cells, a percentage of the main-axis budget after gaps/dividers, or an equal share of the remaining budget. Omitted sizes mean fill (except a spacer's explicit size). Each divider adds one cell beyond `gap`. Feasible minima are reserved before shrinking excess requests proportionally; minima themselves shrink only when their sum cannot fit, rounding cells in source order. Rectangles never become negative, and box borders disappear below eight columns or three rows. Table headers and cells share one column allocation with one-cell gaps. Use `ctx.width` to choose a different composition for narrow terminals.
+
+`UiTreeItem` has a stable `key`, semantic `row`, optional semantic `aside`, `detail: ViewLine[]`, `children`, `rail`, and `expandable`. Details and children appear only while expanded. `expandable: true` shows disclosure before children have loaded; handle a toggle to load them. Trees start collapsed. Use separate boxes next to or below a tree for worker cards: details are lines, not arbitrary widget subtrees (a known phase 2 gap).
+
+`UiContext` extends `ViewRenderOptions` with host-kept `state: UiState`. Maps are keyed by stable, view-wide unique widget IDs: `selected` holds tree/table item keys, `expanded` holds arrays of tree item keys, `activeTabs` holds tab keys, `scroll` holds `{ top, following }`, and `inputValues` holds strings. `focused` is an optional widget ID. State survives rerenders, same-kind data replacement and inactive tabs until the view closes. Missing selections or tabs fall back to the first visible item or tab; absent focus falls back to the first visible widget. Treat context state as read-only and keep `ui` free of side effects: the host may rebuild it within a frame after repairing selection, tabs or focus so dependent details agree with the controls. Unstable content fails safely after eight attempts. ID-less text/tables can be wheel-scrolled, but stable IDs are needed for keyboard focus and explicitly managed state.
+
+`onEvent(event, data, view)` receives `select`/`activate` with `{ id, key }`, `toggle` with `{ id, key, expanded }`, `tab` with `{ id, key }`, `submit` with `{ id, value }`, or a declared `key` with `{ key, focused? }`. Events use the `type` discriminator. Declare shortcuts in `keys` (for example, `keys: [{ key: "x", label: "stop" }]`); declarative views receive them through `onEvent` rather than the legacy `run` callback. Undeclared keys do not emit events. The host changes state before invoking the handler, so `view.setState(patch)` can override the default. Patches are shallow: each supplied top-level map replaces that map, not individual entries. Use `{ ...ctx.state.selected, [id]: key }` when preserving other entries. `view.focus(id)` focuses a visible widget. Existing `close`, `requestRender`, `print`, `prompt` and `confirm` methods remain available. Submitting does not automatically clear an input.
+
+Tab/Shift+Tab traverse visible trees, identified tables/text, tab strips and inputs. Tree Up/Down selects, Right expands, Left collapses or selects the parent, and Enter activates. Tables select with Up/Down and activate with Enter. Tab strips switch with Left/Right; input Enter submits. Paging/Home/End scroll the focused scrollable, and the wheel scrolls the widget under the pointer without moving focus or selection. Text follows growth only with `follow: true` or after scrolling to the end; scrolling up stops following. Widget keys take precedence over declared shortcuts; remaining declared keys reach `onEvent`. Esc, q and Ctrl+C retain the host's close rules, except that a focused declarative input receives q as text (Esc and Ctrl+C still close). The existing prompt overlay also temporarily takes these keys. Prompt/confirm overlays suspend widget input and own the cursor.
+
+Views redraw on input, data updates and `requestRender`; no widget animation timer is added. Expanded tree rows are indexed once per preparation pass and only viewport rows are painted. The test-only semantic dashboard proof and its 180×52/80×24 snapshots live under `packages/tui/test/ui-runtime`; run `bun packages/tui/test/ui-runtime/benchmark.ts` for the reproducible 500-item nested-tree benchmark at 180×50.
+
 ### Tool capabilities
 
 Declare a tool's host-visible capabilities in `traits` instead of relying on its name. `readOnly: true` allows the tool in plan mode; `writesFiles: true` marks a file writer, while `writesFiles: "paths"` declares that `getWrittenPaths(params, { cwd })` returns every path the call may write, relative to `cwd` or absolute. A writer with a valid path report receives the same protected-path checks as built-in file tools, and the host captures its pre- and post-images for rewind; a missing or invalid report is treated conservatively and asks for approval. A tool that already uses `ctx.mutateFiles` should set `usesMutationHook: true` so the host does not add a second rewind boundary.

@@ -99,7 +99,7 @@ export interface TranscriptView {
   /** Clears the screen and draws it again (Ctrl+L). */
   redraw(): void
   /** Shows the overlay (a form, the viewer) over the whole screen, until `closeOverlay`. */
-  openOverlay(): void
+  openOverlay(pointer?: boolean): void
   closeOverlay(): void
   requestOverlayRender(): void
   /** Clears the screen and draws the overlay again (Ctrl+L over a form or a viewer). */
