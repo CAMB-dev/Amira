@@ -1,5 +1,14 @@
-import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { afterAll, afterEach, beforeAll, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -90,8 +99,33 @@ async function git(at: string, ...args: string[]): Promise<string> {
   return out.trim()
 }
 
+let templateDir: string
+let emptyRepo: string
+let gitPackage: { repo: string; head: string }
+let subPackage: { repo: string; head: string }
+
+beforeAll(async () => {
+  templateDir = mkdtempSync(path.join(os.tmpdir(), "amira-packages-templates-"))
+  emptyRepo = path.join(templateDir, "empty")
+  mkdirSync(emptyRepo)
+  await git(emptyRepo, "init", "-q", "-b", "main")
+  const root = makePackage(path.join(templateDir, "root"), "git-pkg", "1.0.0")
+  gitPackage = { repo: root, head: await gitRepo(root) }
+  const sub = path.join(templateDir, "sub")
+  makePackage(path.join(sub, "packages", "sub-pkg"), "sub-pkg", "0.3.0")
+  subPackage = { repo: sub, head: await gitRepo(sub) }
+})
+
+afterAll(() => rmSync(templateDir, { recursive: true, force: true, maxRetries: 3 }))
+
+function copyRepo(at: string, template: { repo: string; head: string }): string {
+  // The complete copy gives every test its own refs, index and objects.
+  cpSync(template.repo, at, { recursive: true })
+  return template.head
+}
+
 async function gitRepo(at: string): Promise<string> {
-  await git(at, "init", "-q", "-b", "main")
+  cpSync(path.join(emptyRepo, ".git"), path.join(at, ".git"), { recursive: true })
   await git(at, "add", "-A")
   await git(at, "commit", "-q", "-m", "one")
   return git(at, "rev-parse", "HEAD")
@@ -227,8 +261,8 @@ test("refuses a package whose engine range this Amira does not satisfy", async (
 })
 
 test("installs from a git repository, pins the commit, restores the pin and updates past it", async () => {
-  const repo = makePackage(path.join(dir, "repo"), "git-pkg", "1.0.0")
-  const first = await gitRepo(repo)
+  const repo = path.join(dir, "repo")
+  const first = copyRepo(repo, gitPackage)
   await git(repo, "tag", "v1")
   const url = pathToFileURL(repo).href
   const r = await installPackage(url, { scope: project(), cwd })
@@ -324,8 +358,7 @@ function fixtureIndex(repoUrl: string) {
 
 test("names resolve through the extensions index, including a subdirectory of a git repository", async () => {
   const repo = path.join(dir, "exts")
-  makePackage(path.join(repo, "packages", "sub-pkg"), "sub-pkg", "0.3.0")
-  const commit = await gitRepo(repo)
+  const commit = copyRepo(repo, subPackage)
   const indexFile = path.join(dir, "index.json")
   writeFileSync(indexFile, JSON.stringify(fixtureIndex(pathToFileURL(repo).href)))
 
@@ -470,8 +503,8 @@ test("npm packages are resolved on the registry, checked and pinned to version a
 })
 
 test("update keeps going past a package that fails, which keeps its files and pin; unchanged ones stay as they are", async () => {
-  const repo = makePackage(path.join(dir, "repo"), "git-pkg", "1.0.0")
-  const first = await gitRepo(repo)
+  const repo = path.join(dir, "repo")
+  const first = copyRepo(repo, gitPackage)
   const url = pathToFileURL(repo).href
   await installPackage(url, { scope: user(), cwd })
   const other = makePackage(path.join(dir, "other"), "other-pkg", "1.0.0")
@@ -542,8 +575,7 @@ test("an install or update whose lock file cannot be written puts the previous f
 
 test("update reads the index afresh, and updates from the recorded source when the index is out of reach", async () => {
   const repo = path.join(dir, "exts")
-  makePackage(path.join(repo, "packages", "sub-pkg"), "sub-pkg", "0.3.0")
-  const first = await gitRepo(repo)
+  const first = copyRepo(repo, subPackage)
   await git(repo, "tag", "v1")
   makePackage(path.join(repo, "packages", "sub-pkg"), "sub-pkg", "0.4.0")
   await git(repo, "commit", "-qam", "two")
