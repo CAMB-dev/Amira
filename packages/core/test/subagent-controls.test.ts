@@ -377,3 +377,28 @@ test("pause holds before compaction and again after an in-flight compaction fini
   expect(textOf(mock.requests[2]!.messages)).toContain("summary kept")
   expect(textOf(mock.requests[2]!.messages)).toContain("keep this after summary")
 })
+
+test("a stream of user messages during request preparation is dispatched after a few rebuilds", async () => {
+  const buildsAtRequest: number[] = []
+  let builds = 0
+  const { tree, root, mock } = setup(() => {
+    buildsAtRequest.push(builds)
+    return { text: "done" }
+  })
+  let childId: string | undefined
+  // Every preparation of the request brings one more message, as a steady stream from the user would.
+  root.interceptors.add("context.build", async () => {
+    if (childId && ++builds <= 8) tree.message(childId, `message ${builds}`)
+    return { action: "pass" }
+  })
+  const child = tree.spawn(root, { prompt: "work" })
+  childId = child.id
+  expect((await child.result()).status).toBe("done")
+  // Three rebuilds at most, then the call goes out; what came later waits for the next call.
+  expect(buildsAtRequest[0]).toBe(4)
+  const first = textOf(mock.requests[0]!.messages)
+  expect(first).toContain("message 3")
+  expect(first).not.toContain("message 4")
+  expect(mock.requests).toHaveLength(3)
+  expect(textOf(mock.requests[2]!.messages)).toContain("message 8")
+})
