@@ -56,3 +56,11 @@ for (const supplied of [false, true]) {
     expect({ output, error, code }).toEqual({ output: "plain\nbye\n", error: "", code: 0 })
   }, 30_000)
 }
+
+test("TERM=dumb drops the bell as well as escapes", async () => {
+  const { interactiveTerminal } = await import("../src/app/terminal.ts")
+  const written: string[] = []
+  const terminal = interactiveTerminal({ write: (d: string) => written.push(d) } as never, { TERM: "dumb" })
+  terminal.write("a\x07b\x1b]0;t\x07c")
+  expect(written).toEqual(["abc"])
+})
