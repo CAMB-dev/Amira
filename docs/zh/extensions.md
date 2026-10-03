@@ -170,13 +170,25 @@ amira
 | `registerView` | 注册全屏视图类型，命令在前端支持时通过 `openView` 打开 |
 | `registerToolRenderer`、`decorateToolRenderer` | 展示工具调用和结果，或包装已有展示器 |
 | `serverToolView` | 将 provider 托管的工具块（如原生网页搜索）转换为与展示器共用的工具调用视图形状 |
-| `registerMarkdownRenderer`、`registerImageProvider` | 渲染回复中匹配的代码块或独立图片，并提供终端图片数据 |
+| `registerMarkdownRenderer`、`registerImageProvider` | 渲染回复中匹配的代码块、数学公式或独立图片，并提供终端图片数据 |
 | `provideService`、`useService` | 共享具名服务；使用时再查找，提供方可能未加载或已卸载 |
 | `settings`、`cwd`、`home`、`apiVersion` | 读取合并后的设置、每个顶层键的来源层、工作目录、用户目录和 API 版本 |
 | `backgroundJobs` | 启动并查看本扩展自己启动的后台任务；内置前端代码使用仅供 host 使用的 `hostBackgroundJobs()` 能力 |
 | `runCommand`、`openPipe`、`onExit` | 运行受管理的子进程、启动长期管道进程，或注册短时退出工作 |
 | `notify`、`reportError` | 显示提示或报告后台错误 |
 | `registerFileRestoration` | 接管回退时的文件恢复（例如 checkpoints 扩展）：选择器显示你提供的选项，core 不再恢复文件；同一时间只能有一个扩展接管，卸载时释放 |
+
+### Markdown 与数学公式渲染器
+
+`api.registerMarkdownRenderer({ id, match, render })` 接管回复中已完整的节点。代码围栏使用 `match: { codeLang: ["latex", "tex"] }`，独立图片使用 `{ image: true }`，公式使用 `{ math: "inline" | "display" | "both" }`。公式节点为 `{ type: "math", display: boolean, source: string }`，source 不包含定界符。渲染器先按优先级从高到低运行，同优先级按注册顺序运行。返回 undefined、抛出异常或返回无效结果时继续尝试下一个渲染器；无人接管时，原有 Markdown 显示保持不变。
+
+块级公式使用 `$$…$$` 或 `\[…\]`，可以跨行；独占一行的 `$$` 开始一个块。与被接管的代码围栏一样，流式输出期间显示源码，收到结束定界符后才交给渲染器。回复结束时仍未闭合的公式继续显示源码。段落内的行内公式使用 `$…$` 或 `\(…\)`，代码跨度和代码块内不识别公式。起始美元符号后不能紧跟空白，结束美元符号前不能是空白、后不能紧跟数字；`\$` 表示字面美元符号，因此 `$5 and $10` 这样的货币文本不会被识别为公式。
+
+行内公式必须返回 `{ segments: [{ kind: "text", text: "x²" }] }`，这些带样式的文本片段会拼入段落并随段落换行；行内图片和块级 lines 结果会被拒绝。块级公式、代码围栏和独立图片返回 `{ lines: ToolLine[] }` 或 `{ image: ImageInput, alt?: string, fallback?: ToolLine[] }`。alt 描述图片，fallback 提供可读的文本呈现。无法显示图片、复制或打印对话时优先使用 fallback，其次使用 alt；两者都没有时回退为原节点。Core 移除渲染文本中的转义和控制序列，并将块级结果限制为 2000 行。
+
+渲染上下文包含 width、images、maxImageRows 和 `theme: { dark: boolean, foreground?: string, background?: string }`。执行图片工作前请检查 images。纯文本 `amira -p` 将已完整的节点交给同一注册表，设置 `images: false`，无人接管的源码保持原样；此时应返回文本。带 fallback 或 alt 的图片结果会转换成文本。渲染器在 `waitMs` 内没有回应时会被跳过，改为输出源码。`--json` 保留原始事件，不运行渲染器。
+
+TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次 COLORFGBG，默认深色），整个会话期间保持不变。渲染上下文使用同一选择，单色模式也如此。目前无法确定准确的前景色和背景色，因此省略这两个字段。非交互打印模式默认使用 `{ dark: true }`。渲染缓存的键包含主题。全屏回复在异步结果到达时重绘；内联对话记录等待块级结果的时间由 waitMs 指定（默认 3000 毫秒，最多 15000 毫秒），超时后提交源码。行内公式应同步返回 segments，以便段落进入滚动记录前完成替换。
 
 ### 命令回显
 

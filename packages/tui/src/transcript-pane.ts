@@ -1,5 +1,6 @@
 import type { ToolDetailLevel } from "@amira/api"
 import { type ImagePlacement, stripAnsi, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { setImageFallback } from "./blocks/base.ts"
 import { type Block, type BlockEnv, type CodeFrame, codeFrames, imagesIn, ReplyBlock } from "./blocks.ts"
 import { cellsOf, ESCAPE, markCells, selectionMarks, sliceCells, wordAt } from "./text-selection.ts"
 import { gapBetween } from "./transcript.ts"
@@ -257,11 +258,10 @@ export class TranscriptPane {
         const to = end - im.line
         const at = i + (top - first)
         const col = im.col
-        const indent = " ".repeat(im.col)
         if (from === 0 && to === im.image.rows ? false : !im.image.croppable) {
           // Drawn whole only: said where to find it, when the view is tall enough to show it.
           const note = im.image.rows <= this.height ? env.theme.muted(" (scroll to view)") : ""
-          alt.set(at, `${indent}${im.alt}${note}`)
+          setImageFallback(alt, at, im, to - from, env.width, note)
           continue
         }
         // In view: kept, and prepared if it is not ready.
@@ -277,8 +277,8 @@ export class TranscriptPane {
           })
           continue
         }
-        if (!im.image.broken) im.image.whenReady(env.images.changed)
-        alt.set(at, `${indent}${im.alt}`)
+        if (!im.image.broken) im.image.whenReady(im.changed ?? env.images.changed)
+        setImageFallback(alt, at, im, to - from, env.width)
       }
       i = j
     }

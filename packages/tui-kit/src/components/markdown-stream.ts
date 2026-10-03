@@ -25,6 +25,7 @@ import {
 } from "../markdown/blocks.ts"
 import { codeCarry } from "../markdown/highlight.ts"
 import { type Lead, type LeadPart, markdownStyles, type Run } from "../markdown/inline.ts"
+import { displayMathStart, mathCodeLine } from "../markdown/math-source.ts"
 import { defaultTheme, type Theme } from "../style.ts"
 import { TAB_WIDTH, textWidth } from "../width.ts"
 
@@ -76,6 +77,7 @@ export interface MarkdownImages {
 export type MarkdownNodeRef =
   | { type: "image"; url: string; alt: string }
   | { type: "code"; lang: string; info: string; code: string }
+  | { type: "math"; display: boolean; source: string }
 
 /**
  * Renders nodes of a Markdown stream instead of it: standalone images (with `images`) and code
@@ -85,6 +87,15 @@ export type MarkdownNodeRef =
 export interface MarkdownNodes {
   images?: boolean
   claimsCode?(lang: string): boolean
+  /** Claim display blocks or inline math; unclaimed syntax keeps its ordinary Markdown rendering. */
+  claimsMath?(display: boolean): boolean
+  /** Styled inline text, not image rows; return `fallback` to leave the original Markdown unchanged. */
+  inline?(
+    node: Extract<MarkdownNodeRef, { type: "math" }>,
+    fallback: string,
+    width: number,
+    commit: boolean,
+  ): string
   /**
    * The rows a complete node shows as, given how it renders as Markdown (`fallback`: its alt
    * text, the code block), its column and the stream's width. With `commit`, the rows go to the
@@ -163,6 +174,8 @@ export class MarkdownStream implements Component {
   private state = newState()
   /** Text not processed yet: complete lines, then the partial line being written. */
   private src = ""
+  /** End of a multiline code span relative to the remaining source, for math exclusion. */
+  private codeThrough = 0
   /** Where the rest of the partial line starts, when its first rows were committed. */
   private cut: Cut | undefined
   /** Rows finished while no renderer could commit them. */
@@ -249,11 +262,12 @@ export class MarkdownStream implements Component {
     const rows = this.done
     const sink: Sink = (r) => rows.push(...r)
     if (this.src !== "" && !this.src.endsWith("\n")) this.src += "\n"
-    this.processLines(env, sink)
+    this.processLines(env, sink, true)
     finish(this.state, env, sink)
     while (rows.length > 0 && rows[rows.length - 1]!.trim() === "") rows.pop()
     this.state = newState()
     this.src = ""
+    this.codeThrough = 0
     this.cut = undefined
     this.done = []
     this.pending = ""
@@ -280,22 +294,33 @@ export class MarkdownStream implements Component {
       env.claimsCode = (lang) => claims(lang)
       env.code = (block, rows, col) => nodes.render({ type: "code", ...block }, rows, col, env.width, commit)
     }
+    if (nodes?.claimsMath) {
+      env.claimsMath = nodes.claimsMath.bind(nodes)
+      env.math = (source, rows, col) =>
+        nodes.render({ type: "math", display: true, source }, rows, col, env.width, commit)
+      if (nodes.inline && nodes.claimsMath(false))
+        env.inlineMath = (source, fallback) =>
+          nodes.inline!({ type: "math", display: false, source }, fallback, env.width, commit)
+    }
     return env
   }
 
   /** Processes the complete lines, leaving the partial one. */
-  private processLines(env: Env, sink: Sink) {
+  private processLines(env: Env, sink: Sink, final = false) {
     let from = 0
     for (;;) {
       const nl = this.src.indexOf("\n", from)
       if (nl === -1) break
       const line = this.src.slice(from, nl)
+      const math = lineMath(this.src.slice(from), env, this.state, this.codeThrough, final)
+      if (!math) break
       if (this.cut) {
         const { render } = this.cut
-        sink(renderLine(render, line, env, this.cut.carry, this.cut.lead).rows)
+        sink(renderLine(render, line, math.env, this.cut.carry, this.cut.lead).rows)
         this.cut = undefined
         endCut(this.state, line, render)
-      } else step(this.state, line, env, sink)
+      } else step(this.state, line, math.env, sink)
+      this.codeThrough = Math.max(0, math.through - (nl + 1 - from))
       from = nl + 1
     }
     if (from > 0) this.src = this.src.slice(from)
@@ -303,14 +328,31 @@ export class MarkdownStream implements Component {
 
   /** The rows of what is still open, as they would render if the text ended with `line`. */
   private live(env: Env, line = this.src): string[] {
-    if (this.cut)
-      return line !== "" ? renderLine(this.cut.render, line, env, this.cut.carry, this.cut.lead).rows : []
     const rows: string[] = []
     const sink: Sink = (r) => rows.push(...r)
     const s = cloneState(this.state)
-    if (line !== "") step(s, line, env, sink)
-    endOpenBlocks(s, env, sink)
-    heldCode(s, env, sink)
+    let through = this.codeThrough
+    let rest = line
+    let liveEnv = env
+    let cut = this.cut
+    while (rest !== "") {
+      const nl = rest.indexOf("\n")
+      const length = nl === -1 ? rest.length : nl
+      const math = lineMath(rest, liveEnv, s, through, false)
+      // A later matching backtick may turn all remaining lines into code: preview only legacy text.
+      if (!math) liveEnv = { ...env, math: undefined, claimsMath: undefined, inlineMath: undefined }
+      const current = rest.slice(0, length)
+      const currentEnv = math?.env ?? liveEnv
+      if (cut) {
+        sink(renderLine(cut.render, current, currentEnv, cut.carry, cut.lead).rows)
+        if (nl !== -1) endCut(s, current, cut.render)
+        cut = undefined
+      } else step(s, current, currentEnv, sink)
+      through = Math.max(0, (math?.through ?? 0) - length - 1)
+      rest = nl === -1 ? "" : rest.slice(nl + 1)
+    }
+    endOpenBlocks(s, liveEnv, sink)
+    heldCode(s, liveEnv, sink)
     return rows
   }
 
@@ -323,6 +365,9 @@ export class MarkdownStream implements Component {
    */
   private commitPartial(env: Env, sink: Sink): boolean {
     const line = this.src
+    // Cutting can discard the escape or neighboring dollar that disqualifies a delimiter.
+    if (env.inlineMath && /[$\\]/.test(line)) return false
+    if (env.math && /[`\n]/.test(line)) return false
     let render: LineRender
     let state: BlockState | undefined
     let carry: string | undefined
@@ -344,6 +389,7 @@ export class MarkdownStream implements Component {
       state = p.state
     }
     const r = renderLine(render, line, env, carry, lead)
+    if (r.mathOpen) return false
     const skip = carry?.length ?? 0
     /** The cell rows `[0, n)` would be cut before, if they can be. */
     const cutAt = (n: number) => {
@@ -379,6 +425,25 @@ export class MarkdownStream implements Component {
     this.cut = cutInside(render, r.runs, cell.run, cell.src, skip)
     return true
   }
+}
+
+/** Look ahead only for math exclusion; the legacy line-based Markdown renderer stays unchanged. */
+function lineMath(
+  source: string,
+  env: Env,
+  state: BlockState,
+  through: number,
+  final: boolean,
+): { env: Env; through: number } | undefined {
+  if (!env.math || (!env.inlineMath && !env.claimsMath?.(true)) || state.fence || state.math)
+    return { env, through: 0 }
+  const line = source.split("\n", 1)[0]!
+  const fence = line.match(/^\s*(`{3,}|~{3,})(.*)$/)
+  if (!through && (displayMathStart(line) || (fence && !(fence[1]![0] === "`" && fence[2]!.includes("`")))))
+    return { env, through: 0 }
+  const code = mathCodeLine(source, through, final)
+  if (!code) return
+  return { env: { ...env, mathCode: code.ranges }, through: code.through }
 }
 
 /** Where the rest of a line starts after a cut before the cell at `src` of `runs[index]`. */

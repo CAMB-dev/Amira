@@ -13,6 +13,8 @@ import {
   type Run,
 } from "./inline.ts"
 import { type Cell, cellText, type Row, toCells, wrapCells } from "./layout.ts"
+import { finishMath, type MathBlock, mathRows, stepMath } from "./math-block.ts"
+import { displayMathStart, type MathCodeRange } from "./math-source.ts"
 
 /** What rendering needs besides the text. */
 export interface Env {
@@ -34,6 +36,11 @@ export interface Env {
    */
   claimsCode?: (lang: string) => boolean
   code?: (block: CodeBlock, rows: string[], col: number) => string[]
+  claimsMath?: ((display: boolean) => boolean) | undefined
+  math?: ((source: string, rows: string[], col: number) => string[]) | undefined
+  inlineMath?: ((source: string, fallback: string) => string) | undefined
+  /** Code spans overlapping the current source line, for math exclusion only. */
+  mathCode?: MathCodeRange[] | undefined
 }
 
 /** A fenced code block's language, info string and text (without the fences). */
@@ -98,9 +105,10 @@ interface Table {
 export interface BlockState {
   list: ListEntry[]
   fence?: Fence
+  math?: MathBlock | undefined
   table?: Table
   /** A paragraph line kept back one line: the next may turn it into a heading or a table header. */
-  held?: { text: string; renderCol: number }
+  held?: { text: string; renderCol: number; mathCode?: MathCodeRange[] | undefined }
   /**
    * The last line, with a `|`, was committed early as a paragraph (it did not fit the live
    * region): a delimiter row next still makes it a table header, the table shown as its source.
@@ -143,6 +151,7 @@ export function cloneState(s: BlockState): BlockState {
     refs: new Map(s.refs),
     ordinals: new Map([...s.ordinals].map(([k, v]) => [k, { ...v }])),
   }
+  if (s.math) c.math = { ...s.math, lines: [...s.math.lines] }
   if (s.fence) c.fence = { ...s.fence, ...(s.fence.held ? { held: [...s.fence.held] } : {}) }
   if (s.table) c.table = { ...s.table, rows: [...s.table.rows], lines: [...s.table.lines] }
   if (s.held) c.held = { ...s.held }
@@ -192,6 +201,7 @@ function withRefs(s: BlockState, env: Env): Env {
 export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
   env = withRefs(s, env)
   const header = takeHeader(s)
+  if (s.math && stepMath(s, line, env, sink, (rows) => emit(s, sink, rows))) return
   if (s.fence) {
     const f = s.fence
     const m = line.match(FENCE_CLOSE_LIKE)
@@ -231,7 +241,7 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
       s.held = undefined
       s.blankPending = true
       const lr = headingRender(setext[1]![0] === "=" ? 1 : 2, h.renderCol, env)
-      emit(s, sink, renderLine(lr, h.text, env).rows)
+      emit(s, sink, renderLine(lr, h.text, { ...env, mathCode: h.mathCode }).rows)
       s.prevBlank = false
       return
     }
@@ -248,6 +258,7 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     }
     flushTable(s, env, sink)
   }
+  if (stepMath(s, line, env, sink, (rows) => emit(s, sink, rows))) return
   const def = !inParagraph && line.match(DEFINITION)
   if (def) {
     // Not shown; links and images further on use it. The first definition of a label wins.
@@ -260,7 +271,14 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
   s.prevBlank = false
   if (d.rows) emit(s, sink, d.rows)
   else if (d.hold) {
-    s.held = { text: line.slice(d.render.start), renderCol: d.render.indent }
+    s.held = {
+      text: line.slice(d.render.start),
+      renderCol: d.render.indent,
+      mathCode: env.mathCode?.map(({ start, end }) => ({
+        start: start - d.render.start,
+        end: end - d.render.start,
+      })),
+    }
     s.paragraph = true
   } else emit(s, sink, renderLine(d.render, line, env).rows)
 }
@@ -305,6 +323,7 @@ export function endOpenBlocks(s: BlockState, env: Env, sink: Sink): void {
 /** Ends everything at the end of the text, closing an unclosed code block too. */
 export function finish(s: BlockState, env: Env, sink: Sink): void {
   env = withRefs(s, env)
+  finishMath(s, env, sink)
   endOpenBlocks(s, env, sink)
   if (s.fence) {
     const f = s.fence
@@ -318,6 +337,7 @@ export function finish(s: BlockState, env: Env, sink: Sink): void {
  * without its bottom. None when no block is held.
  */
 export function heldCode(s: BlockState, env: Env, sink: Sink): void {
+  if (s.math) emit(s, sink, mathRows(s, env))
   const f = s.fence
   if (!f?.held) return
   emit(s, sink, heldRows(f, withRefs(s, env), false))
@@ -325,7 +345,7 @@ export function heldCode(s: BlockState, env: Env, sink: Sink): void {
 
 /** Whether a code block is held open (`Env.code` renders it once it closes). */
 export function holdsCode(s: BlockState): boolean {
-  return s.fence?.held !== undefined
+  return s.math !== undefined || s.fence?.held !== undefined
 }
 
 /** A held code block's rows as a code block: its frame's top, its lines, and the bottom once closed. */
@@ -394,7 +414,8 @@ export function partialRender(
   line: string,
   env: Env,
 ): { state: BlockState; render: LineRender; raw?: boolean } | undefined {
-  if (hasOpenBlock(s) || line.trim() === "") return undefined
+  if (hasOpenBlock(s) || s.math || line.trim() === "") return undefined
+  if (env.math && (env.claimsMath?.(true) || env.inlineMath) && displayMathStart(line)) return undefined
   if (s.fence)
     return FENCE_CLOSE_LIKE.test(line) || s.fence.held
       ? undefined
@@ -566,7 +587,7 @@ function flushHeld(s: BlockState, env: Env, sink: Sink) {
     indent: h.renderCol,
     start: 0,
   }
-  const rows = renderLine(lr, h.text, env).rows
+  const rows = renderLine(lr, h.text, { ...env, mathCode: h.mathCode }).rows
   const image = env.image && standaloneImage(h.text, env)
   emit(s, sink, image ? env.image!(image, rows, h.renderCol) : rows)
 }
@@ -596,6 +617,7 @@ export interface Rendered {
   carry: string
   /** Offset in the parsed text from which the rows may still change as the line goes on. */
   open: number
+  mathOpen: boolean
 }
 
 /** A heading's closing `#`s, or the blanks at its end. */
@@ -616,6 +638,7 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
   const text = (carry ?? "") + line.slice(lr.start, end)
   let runs: Run[]
   let open = Number.POSITIVE_INFINITY
+  let mathOpen = false
   if (lr.code) {
     const code = text.slice(skip)
     runs = env.highlight
@@ -628,12 +651,18 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
       styles: env.styles,
       hyperlinks: env.hyperlinks,
       imageGlyph: env.glyphs.image,
+      ...(env.inlineMath ? { math: env.inlineMath } : {}),
+      mathCode: env.mathCode?.map(({ start, end }) => ({
+        start: start - lr.start + skip,
+        end: end - lr.start + skip,
+      })),
       ...(env.refs ? { refs: env.refs } : {}),
       ...(lr.base ? { base: lr.base } : {}),
       ...(lead ? { lead, leadAt: skip } : {}),
     })
     runs = parsed.runs
     open = parsed.open
+    mathOpen = parsed.mathOpen
   }
   const cells = toCells(runs)
   let prefix = carry === undefined ? lr.prefix : lr.rest
@@ -650,7 +679,7 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
     const head = i === 0 ? prefix : rest
     return r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
   })
-  return { rows, cells, runs, layout, carry: carry ?? "", open }
+  return { rows, cells, runs, layout, carry: carry ?? "", open, mathOpen }
 }
 
 // Tables
@@ -709,6 +738,7 @@ function inlineText(text: string, env: Env, base?: StyleFn): string {
     styles: env.styles,
     hyperlinks: env.hyperlinks,
     imageGlyph: env.glyphs.image,
+    ...(env.inlineMath ? { math: env.inlineMath } : {}),
     ...(env.refs ? { refs: env.refs } : {}),
     ...(base ? { base } : {}),
   })
