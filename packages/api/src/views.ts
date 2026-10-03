@@ -98,8 +98,8 @@ export interface ViewDefinition<D = any> {
   /**
    * Experimental D104 L3: replaces title/header/render screen content with semantic widgets.
    * Title remains required for window/fallback presentation. Supply ui or render. Existing
-   * line-only views are unchanged. Esc, q and Ctrl+C still close, even inside a UI input;
-   * only ViewControl.prompt temporarily takes those keys. Tab moves focus, arrows operate
+   * line-only views are unchanged. Esc and Ctrl+C always close, and so does q unless a UI input
+   * has focus (it types q); ViewControl.prompt temporarily takes all of those keys. Tab moves focus, arrows operate
    * the focused widget, Enter activates/submits, and the wheel scrolls under the pointer.
    * Keep ui free of side effects: state reconciliation can rebuild it within the same frame.
    */

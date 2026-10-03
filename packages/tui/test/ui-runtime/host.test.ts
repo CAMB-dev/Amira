@@ -136,14 +136,21 @@ test("prompt and confirm overlays own input and the only cursor; show/dispose ca
   expect(await h.confirm).toBe(false)
 })
 
-test("host still reserves q, Escape and Ctrl+C, including inside a UI input", () => {
-  for (const e of [textKey("q"), key("escape"), key("c", { ctrl: true })]) {
-    const h = host()
-    h.viewer.handleInput(key("tab"))
-    h.viewer.handleInput(e)
-    expect(h.closed).toBe(1)
-    expect(h.state.inputValues.i).toBe("")
+test("host reserves q outside inputs, and Escape and Ctrl+C everywhere; a focused input types q", () => {
+  const h = host()
+  h.viewer.handleInput(textKey("q"))
+  expect(h.closed).toBe(1)
+  for (const e of [key("escape"), key("c", { ctrl: true })]) {
+    const g = host()
+    g.viewer.handleInput(key("tab"))
+    g.viewer.handleInput(e)
+    expect(g.closed).toBe(1)
   }
+  const g = host()
+  g.viewer.handleInput(key("tab"))
+  g.viewer.handleInput(textKey("q"))
+  expect(g.closed).toBe(0)
+  expect(g.state.inputValues.i).toBe("q")
 })
 
 test("data mutations and focus patches are reflected before the next input in a burst", () => {

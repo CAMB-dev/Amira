@@ -182,7 +182,11 @@ export class ExtensionViewer implements Component {
       this.#opts.requestRender?.()
       return true
     }
-    if (matchesKey(e, "escape") || matchesKey(e, "q") || matchesKey(e, "c", { ctrl: true })) {
+    if (
+      matchesKey(e, "escape") ||
+      (matchesKey(e, "q") && !this.#ui?.typing) ||
+      matchesKey(e, "c", { ctrl: true })
+    ) {
       this.#opts.onClose?.()
       return true
     }

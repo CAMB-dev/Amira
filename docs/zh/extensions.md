@@ -259,7 +259,7 @@ api.registerView(review)
 
 `onEvent(event, data, view)` 接收以 `type` 区分的事件：带 `{ id, key }` 的 select/activate、带 `{ id, key, expanded }` 的 toggle、带 `{ id, key }` 的 tab、带 `{ id, value }` 的 submit，以及已声明按键的 `{ key, focused? }`。在 `keys` 中声明快捷键（例如 `keys: [{ key: "x", label: "停止" }]`）；声明式视图通过 `onEvent` 接收它们，不调用旧的 `run` 回调。未声明的按键不产生事件。宿主先更新状态，再调用处理函数，因此 `view.setState(patch)` 可以覆盖默认结果。补丁为浅层替换：提供的顶层映射会替换整个映射，而不是合并其中条目；需要保留其他条目时使用 `{ ...ctx.state.selected, [id]: key }`。`view.focus(id)` 聚焦可见组件。原有 close、requestRender、print、prompt 和 confirm 方法仍可使用。提交输入不会自动清空内容。
 
-Tab/Shift+Tab 在可见的树、带 ID 的表格及文本、标签栏和输入框之间移动焦点。树用上下键选择，右键展开，左键折叠或选择父项，Enter 激活；表格用上下键选择，Enter 激活；标签栏用左右键切换；输入框用 Enter 提交。翻页键及 Home/End 滚动当前可滚动组件，滚轮作用于指针下的组件，不改变焦点或选中项。文本仅在 `follow: true` 或滚到末尾后跟随增长，向上滚动会停止跟随。组件按键优先于声明的快捷键，其余已声明按键交给 onEvent。Esc、q、Ctrl+C 仍按宿主规则关闭视图，**声明式输入框中的 q 也不例外**；只有原有 prompt 覆盖层临时接管这些键。prompt/confirm 覆盖层暂停组件输入，并独占光标。
+Tab/Shift+Tab 在可见的树、带 ID 的表格及文本、标签栏和输入框之间移动焦点。树用上下键选择，右键展开，左键折叠或选择父项，Enter 激活；表格用上下键选择，Enter 激活；标签栏用左右键切换；输入框用 Enter 提交。翻页键及 Home/End 滚动当前可滚动组件，滚轮作用于指针下的组件，不改变焦点或选中项。文本仅在 `follow: true` 或滚到末尾后跟随增长，向上滚动会停止跟随。组件按键优先于声明的快捷键，其余已声明按键交给 onEvent。Esc、q、Ctrl+C 仍按宿主规则关闭视图，但获得焦点的声明式输入框会把 q 当作文本输入（Esc 和 Ctrl+C 仍然关闭）；原有 prompt 覆盖层也会临时接管这些键。prompt/confirm 覆盖层暂停组件输入，并独占光标。
 
 输入、数据更新和 requestRender 会触发重绘，不增加组件动画计时器。树在每次准备布局时仅索引展开的行，只绘制视口内的行。纯语义组件仪表盘测试、180×52 和 80×24 快照位于 `packages/tui/test/ui-runtime`；运行 `bun packages/tui/test/ui-runtime/benchmark.ts` 可复现 180×50 下的 500 项嵌套树基准测试。
 
