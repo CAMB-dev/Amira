@@ -186,7 +186,7 @@ amira
 
 行内公式必须返回 `{ segments: [{ kind: "text", text: "x²" }] }`，这些带样式的文本片段会拼入段落并随段落换行；行内图片和块级 lines 结果会被拒绝。块级公式、代码围栏和独立图片返回 `{ lines: ToolLine[] }` 或 `{ image: ImageInput, alt?: string, fallback?: ToolLine[] }`。alt 描述图片，fallback 提供可读的文本呈现。无法显示图片、复制或打印对话时优先使用 fallback，其次使用 alt；两者都没有时回退为原节点。Core 移除渲染文本中的转义和控制序列，并将块级结果限制为 2000 行。
 
-渲染上下文包含 width、images、maxImageRows 和 `theme: { dark: boolean, foreground?: string, background?: string }`。执行图片工作前请检查 images。纯文本 `amira -p` 将已完整的节点交给同一注册表，设置 `images: false`，无人接管的源码保持原样；此时应返回文本。带 fallback 或 alt 的图片结果会转换成文本。`--json` 保留原始事件，不运行渲染器。
+渲染上下文包含 width、images、maxImageRows 和 `theme: { dark: boolean, foreground?: string, background?: string }`。执行图片工作前请检查 images。纯文本 `amira -p` 将已完整的节点交给同一注册表，设置 `images: false`，无人接管的源码保持原样；此时应返回文本。带 fallback 或 alt 的图片结果会转换成文本。渲染器在 `waitMs` 内没有回应时会被跳过，改为输出源码。`--json` 保留原始事件，不运行渲染器。
 
 TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次 COLORFGBG，默认深色），整个会话期间保持不变。渲染上下文使用同一选择，单色模式也如此。目前无法确定准确的前景色和背景色，因此省略这两个字段。非交互打印模式默认使用 `{ dark: true }`。渲染缓存的键包含主题。全屏回复在异步结果到达时重绘；内联对话记录等待块级结果的时间由 waitMs 指定（默认 3000 毫秒，最多 15000 毫秒），超时后提交源码。行内公式应同步返回 segments，以便段落进入滚动记录前完成替换。
 
