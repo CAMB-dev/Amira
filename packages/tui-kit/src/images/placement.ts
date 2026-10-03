@@ -26,7 +26,7 @@ interface Pending {
   state: "loading" | "ready" | "failed"
   result?: PendingResult
   /** Rows shown while it loads, and committed instead when it fails or takes too long. */
-  fallback: string[]
+  fallback: string[] | (() => string[])
   deadline: number
   listeners: Set<() => void>
 }
@@ -42,17 +42,18 @@ const safeRows = (rows: string[]) => rows.flatMap((r) => sanitize(r).split("\n")
  * when it resolves to nothing, fails, or is not there by `timeoutMs` from now. Whatever is
  * committed after it waits for it, so the scrollback keeps the order. Text may go in front of
  * the marker (a gutter); it is drawn first, and the image or the first row start where it ends.
+ * A fallback getter lets a renderer supply better text before its image finishes loading.
  */
 export function pendingBlock(
   load: Promise<PendingResult | undefined>,
-  fallback: string[],
+  fallback: string[] | (() => string[]),
   timeoutMs = 3000,
   now = performance.now(),
 ): string {
   const id = nextId++
   const entry: Pending = {
     state: "loading",
-    fallback: safeRows(fallback),
+    fallback: typeof fallback === "function" ? () => safeRows(fallback()) : safeRows(fallback),
     deadline: now + timeoutMs,
     listeners: new Set(),
   }
@@ -72,6 +73,7 @@ export function pendingBlock(
   const forget = setTimeout(() => {
     if (!pending.has(id)) return
     entry.result = undefined
+    if (typeof entry.fallback === "function") entry.fallback = entry.fallback()
     entry.state = "failed"
     entry.listeners.clear()
   }, timeoutMs + KEEP_MS)
@@ -107,14 +109,13 @@ export type ImageState =
 export function imageState(id: number, now = performance.now(), force = false): ImageState {
   const e = pending.get(id)
   if (!e) return { kind: "fallback", fallback: [] }
+  const fallback = typeof e.fallback === "function" ? e.fallback() : e.fallback
   if (e.state === "ready") {
     const r = e.result!
-    return Array.isArray(r)
-      ? { kind: "rows", rows: r, fallback: e.fallback }
-      : { kind: "image", block: r, fallback: e.fallback }
+    return Array.isArray(r) ? { kind: "rows", rows: r, fallback } : { kind: "image", block: r, fallback }
   }
-  if (e.state === "failed" || force || now >= e.deadline) return { kind: "fallback", fallback: e.fallback }
-  return { kind: "wait", fallback: e.fallback, deadline: e.deadline }
+  if (e.state === "failed" || force || now >= e.deadline) return { kind: "fallback", fallback }
+  return { kind: "wait", fallback, deadline: e.deadline }
 }
 
 /** Calls `fn` once when the marker settles; returns how to stop waiting. */
