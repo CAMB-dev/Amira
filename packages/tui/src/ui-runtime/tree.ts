@@ -1,4 +1,5 @@
 import type { UiNode, UiTreeItem, ViewLine, ViewSegment } from "@amira/api"
+import { cells } from "./layout.ts"
 
 const EMPTY: string[] = []
 
@@ -72,7 +73,7 @@ export class TreeIndex {
       row.last = frame.at === frame.items.length
       row.rail = frame.parent >= 0 && !!this.rows[frame.parent]!.item.rail
       row.open = this.#open.has(item.key) && expandable(item)
-      if (item.lead) this.leadWidth = Math.max(this.leadWidth, segmentWidth(item.lead) + 1)
+      if (item.lead) this.leadWidth = Math.max(this.leadWidth, segmentWidth(item.lead) + cells(item.gap ?? 1))
       this.rows.push(row)
       this.byKey.set(item.key, index)
       if (row.open && item.children?.length)

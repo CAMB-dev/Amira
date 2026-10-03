@@ -1,5 +1,5 @@
 import type { UiEvent, UiNode, UiState, ViewKeyName, ViewLine } from "@amira/api"
-import { type InputEvent, isSubmitKey, LineInput, type Theme } from "@amira/tui-kit"
+import { type InputEvent, isSubmitKey, LineInput, matchesKey, type Theme } from "@amira/tui-kit"
 import { terminalText } from "../diff-view.ts"
 import { cells, inside } from "./layout.ts"
 import { expandable, type TreeIndex } from "./tree.ts"
@@ -28,6 +28,7 @@ export class UiRuntime {
   #anonymousScroll = new Map<string, { top: number; following: boolean }>()
   #frame: { node: UiNode; width: number; height: number; host: WidgetHost } | undefined
   #dirty = true
+  #previousFocus: string | undefined
 
   constructor(private emit: (event: UiEvent) => void) {}
 
@@ -44,13 +45,22 @@ export class UiRuntime {
     if (patch.scroll) {
       for (const [id, scroll] of Object.entries(patch.scroll)) this.state.scroll[id] = { ...scroll }
     }
-    if (Object.hasOwn(patch, "focused")) this.state.focused = patch.focused
+    if (Object.hasOwn(patch, "focused")) {
+      this.#rememberFocus()
+      this.state.focused = patch.focused
+    }
     this.#dirty = true
   }
 
   focus(id: string): void {
+    this.#rememberFocus()
     this.state.focused = id
     this.#dirty = true
+  }
+
+  #rememberFocus(): void {
+    if (this.#widgets.some((p) => p.node.type !== "input" && widgetId(p.node) === this.state.focused))
+      this.#previousFocus = this.state.focused
   }
 
   /** A failed extension render must not leave invisible widgets accepting input. */
@@ -62,6 +72,7 @@ export class UiRuntime {
 
   dispose(): void {
     this.state = initialState()
+    this.#previousFocus = undefined
     this.#inputs.clear()
     this.#trees.clear()
     this.#defaultExpanded.clear()
@@ -131,7 +142,8 @@ export class UiRuntime {
     this.#scrollables.length = 0
     const plan = prepare(node, { x: 0, y: 0, width, height }, host, this.#widgets)
     if (!this.#widgets.some((p) => widgetId(p.node) === this.state.focused)) {
-      const focused = widgetId(this.#widgets[0]?.node ?? { type: "spacer" })
+      const first = this.#widgets.find((p) => p.node.type !== "input" || p.node.activate === undefined)
+      const focused = first && widgetId(first.node)
       if (focused !== this.state.focused) this.reconciled = true
       this.state.focused = focused
     }
@@ -159,6 +171,18 @@ export class UiRuntime {
     return this.#widgets.some((p) => p.node.type === "input" && widgetId(p.node) === this.state.focused)
   }
 
+  /** Escape releases an opt-in input before the viewer pops/closes the page. */
+  releaseInput(): boolean {
+    if (this.#dirty) this.#prepare()
+    const current = this.#widgets.find((p) => widgetId(p.node) === this.state.focused)
+    if (current?.node.type !== "input" || current.node.activate === undefined) return false
+    const targets = this.#widgets.filter((p) => p.node.type !== "input")
+    const target = targets.find((p) => widgetId(p.node) === this.#previousFocus) ?? targets[0]
+    this.state.focused = target && widgetId(target.node)
+    this.#previousFocus = undefined
+    return true
+  }
+
   /** The viewer matches declared shortcuts only after host/widget key handling. */
   key(key: ViewKeyName): void {
     this.#event({ type: "key", key, focused: this.state.focused })
@@ -177,8 +201,19 @@ export class UiRuntime {
       const n = this.#widgets.length
       if (!n) return false
       const at = this.#widgets.findIndex((p) => widgetId(p.node) === this.state.focused)
-      this.state.focused = widgetId(this.#widgets[(at + (e.shift ? n - 1 : 1)) % n]!.node)
+      const next = at < 0 ? (e.shift ? n - 1 : 0) : (at + (e.shift ? n - 1 : 1)) % n
+      this.focus(widgetId(this.#widgets[next]!.node)!)
       return true
+    }
+    if (matchesKey(e, "escape") && this.releaseInput()) return true
+    if (!this.typing) {
+      const target = this.#widgets.find(
+        (p) => p.node.type === "input" && p.node.activate !== undefined && matchesKey(e, p.node.activate),
+      )
+      if (target) {
+        this.focus(widgetId(target.node)!)
+        return true
+      }
     }
     const plan = this.#widgets.find((p) => widgetId(p.node) === this.state.focused)
     if (!plan) return false
