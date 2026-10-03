@@ -216,6 +216,53 @@ amira
 得到的行以保留 host 的显示效果。其他前端可能不提供该回调，因此应提供纯文本行的
 回退实现。API 0.1.15 增加了这些视图能力。
 
+### 声明式视图组件（Experimental，实验功能）
+
+D104 L3 为 `ViewDefinition` 增加实验性的 `ui(data, ctx): UiNode`，不改变 `API_VERSION`。所有类型均从 `@amira/api` 导入，无需依赖 TUI 或 tui-kit。视图提供 `ui` 或原有的 `render`；提供 `ui` 后，它会替代标题、页眉和逐行渲染的屏幕内容，但仍必须提供 `title`，供窗口或错误回退使用。原有纯 `ViewLine` 视图（包括 `/agents` 和任务视图）的行为不变。
+
+```ts
+import type { ViewDefinition } from "@amira/api"
+
+const review: ViewDefinition<{ messages: string[] }> = {
+  kind: "review",
+  title: () => "评审",
+  ui: (data) => ({
+    type: "column",
+    children: [
+      { node: { type: "text", id: "log", follow: true,
+        lines: data.messages.map((text) => ({ kind: "text", text })) } },
+      { size: 3, node: { type: "box", title: "给团队发消息",
+        child: { type: "input", id: "message", placeholder: "请检查键盘操作…" } } },
+    ],
+  }),
+  onEvent(event, data, view) {
+    if (event.type === "submit") {
+      data.messages.push(event.value)
+      view.setState({ inputValues: { message: "" } })
+    }
+  },
+}
+api.registerView(review)
+```
+
+`UiNode` 使用 `type` 区分组件：`column` 和 `row` 接收 `children: { node, size?, min? }[]`、`gap?` 和 `divider?`；`box` 接收 `child`、`title?: ViewLine | string`、`aside?`、`border?: "round" | "none"` 和 `tone?: "normal" | "accent" | "focus"`；`text` 接收 `lines: ViewLine[]`、可选 `id` 和默认关闭的 `follow`；`tree` 接收 `id` 和 `items: UiTreeItem[]`；`tabs` 接收 `id` 和 `tabs: { key, label, body }[]`，只布局当前标签页。
+
+`table` 接收可选 `id`、`columns: { key, label, size?, align?: "left" | "right" }[]` 和 `rows: { key, cells: Record<string, string | ViewSegment[]> }[]`；`bar` 接收语义片段数组 `left` 和可选的 `right`；`progress` 接收范围为 0 到 1 的 `value`（超出时截取到边界），以及可选的进度条最大 `width` 和 `label`；`rule` 接收可选 `label`；`input` 接收 `id`、`placeholder?` 和 `hint?`，应配合可见标签（例如框标题）使用；`spacer` 的可选 `size` 指定主轴默认空白格数。
+
+内容只描述文本和 `ViewSegment` 的语义，不使用颜色值或原始转义序列。所有显示字符串（包括标题、标签、表格单元格、提示和输入值）都使用与原有视图行相同的清理规则。超长单行以省略号截断，普通文本行保留原有换行行为；主题、裁剪、输入和终端均由宿主管理。
+
+`Size` 为 `number | \`${number}%\` | "fill"`：分别表示固定终端格数、扣除间距及分隔线后主轴空间的百分比，以及均分剩余空间。省略尺寸时使用 fill，但 spacer 显式提供的 size 会成为默认值。每条分隔线在 `gap` 之外另占一格。先保留可满足的 `min`，再按比例缩小超出部分；只有最小尺寸之和也无法容纳时才缩小最小尺寸，并按声明顺序分配取整余量。矩形尺寸不会变成负数；不足八列或三行时隐藏框边。表头和单元格共用列宽分配，列间隔为一格。可根据 `ctx.width` 为窄终端选择不同的组合。
+
+`UiTreeItem` 包含稳定的 `key`、语义片段 `row`，以及可选的 `aside`、`detail: ViewLine[]`、`children`、`rail` 和 `expandable`。详情和子项只在展开时显示；`expandable: true` 可在子项尚未加载时显示展开标记，扩展通过 toggle 事件加载数据。树默认折叠。工作者卡片应使用树旁边或下方的独立 box；树的 detail 是行，不是任意组件子树（这是第二阶段已知的缺口）。
+
+`UiContext` 在 `ViewRenderOptions` 基础上增加宿主持有的 `state: UiState`。所有映射以稳定、整个视图内唯一的组件 ID 为键：`selected` 保存树或表格的选中项键，`expanded` 保存树中展开项的键数组，`activeTabs` 保存标签页键，`scroll` 保存 `{ top, following }`，`inputValues` 保存输入字符串；可选的 `focused` 保存焦点组件 ID。重绘、同类型视图的数据替换和非活动标签页均保留状态，直到视图关闭。选中项或标签页消失时选择第一个可见项或标签页；焦点无效时选择第一个可见组件。请将上下文状态视为只读，并保持 `ui` 无副作用：宿主修复选中项、标签页或焦点后可能在同一帧重建内容，确保详情与控件一致；八次尝试后仍不稳定时安全地显示错误。没有 ID 的文本和表格可用滚轮滚动，但键盘焦点和显式状态管理需要稳定的 ID。
+
+`onEvent(event, data, view)` 接收以 `type` 区分的事件：带 `{ id, key }` 的 select/activate、带 `{ id, key, expanded }` 的 toggle、带 `{ id, key }` 的 tab、带 `{ id, value }` 的 submit，以及已声明按键的 `{ key, focused? }`。在 `keys` 中声明快捷键（例如 `keys: [{ key: "x", label: "停止" }]`）；声明式视图通过 `onEvent` 接收它们，不调用旧的 `run` 回调。未声明的按键不产生事件。宿主先更新状态，再调用处理函数，因此 `view.setState(patch)` 可以覆盖默认结果。补丁为浅层替换：提供的顶层映射会替换整个映射，而不是合并其中条目；需要保留其他条目时使用 `{ ...ctx.state.selected, [id]: key }`。`view.focus(id)` 聚焦可见组件。原有 close、requestRender、print、prompt 和 confirm 方法仍可使用。提交输入不会自动清空内容。
+
+Tab/Shift+Tab 在可见的树、带 ID 的表格及文本、标签栏和输入框之间移动焦点。树用上下键选择，右键展开，左键折叠或选择父项，Enter 激活；表格用上下键选择，Enter 激活；标签栏用左右键切换；输入框用 Enter 提交。翻页键及 Home/End 滚动当前可滚动组件，滚轮作用于指针下的组件，不改变焦点或选中项。文本仅在 `follow: true` 或滚到末尾后跟随增长，向上滚动会停止跟随。组件按键优先于声明的快捷键，其余已声明按键交给 onEvent。Esc、q、Ctrl+C 仍按宿主规则关闭视图，但获得焦点的声明式输入框会把 q 当作文本输入（Esc 和 Ctrl+C 仍然关闭）；原有 prompt 覆盖层也会临时接管这些键。prompt/confirm 覆盖层暂停组件输入，并独占光标。
+
+输入、数据更新和 requestRender 会触发重绘，不增加组件动画计时器。树在每次准备布局时仅索引展开的行，只绘制视口内的行。纯语义组件仪表盘测试、180×52 和 80×24 快照位于 `packages/tui/test/ui-runtime`；运行 `bun packages/tui/test/ui-runtime/benchmark.ts` 可复现 180×50 下的 500 项嵌套树基准测试。
+
 ### 工具能力
 
 请在 `traits` 中声明工具对 host 可见的能力，不要依赖工具名称；`readOnly: true` 允许工具在 plan 模式运行，`writesFiles: true` 表示工具会写文件，`writesFiles: "paths"` 还要求 `getWrittenPaths(params, { cwd })` 返回本次调用可能写入的全部路径，路径可以相对于 `cwd` 或使用绝对路径。

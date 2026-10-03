@@ -3,6 +3,7 @@ import {
   FullScreenRenderer,
   LiveRenderer,
   MarkdownStream,
+  modes,
   type RenderContext,
   type Theme,
   truncateToWidth,
@@ -408,6 +409,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
 
   /** Whether a key of the full-screen view was pressed here and the note said so. */
   let fullscreenNoted = false
+  let overlayMouse = false
 
   return {
     get runningTools() {
@@ -418,11 +420,16 @@ export function createInlineView(host: ViewHost): TranscriptView {
     requestRender: () => renderer.requestRender(),
     render: () => renderer.render(),
     redraw: () => renderer.redraw(),
-    openOverlay() {
+    openOverlay(pointer = false) {
       renderer.suspend()
       fullScreen.open()
+      if (pointer && !overlayMouse) terminal.enableMode(modes.mouse)
+      if (!pointer && overlayMouse) terminal.disableMode(modes.mouse)
+      overlayMouse = pointer
     },
     closeOverlay() {
+      if (overlayMouse) terminal.disableMode(modes.mouse)
+      overlayMouse = false
       fullScreen.close()
       renderer.resume()
     },
