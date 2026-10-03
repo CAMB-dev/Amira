@@ -1,6 +1,7 @@
 import { ProcessTerminal, stripAnsi, type Terminal } from "@amira/tui-kit"
 
-const plain = (data: string) => stripAnsi(data).replace(/\r\n?/g, "\n")
+/** No escapes, carriage returns or bell: a dumb terminal gets plain text only. */
+const plain = (data: string) => stripAnsi(data).replace(/\r\n?/g, "\n").replaceAll("\x07", "")
 
 /** Apply the same output policy to real terminals and terminals supplied by a host. */
 export function interactiveTerminal(
