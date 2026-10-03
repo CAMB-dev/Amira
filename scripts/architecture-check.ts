@@ -256,8 +256,10 @@ for (const directory of packageDirectoriesInWorkspace) {
   for (const file of filesUnder(path.join(directory, "src"))) {
     for (const { specifier, typeOnly } of importSpecifiersIn(readFileSync(file, "utf8"))) {
       if (specifier.startsWith("@amira/")) {
-        actual.add(specifier)
-        if (!typeOnly) runtime.add(specifier)
+        // Public subpaths belong to the same declared workspace dependency.
+        const dependency = specifier.split("/").slice(0, 2).join("/")
+        actual.add(dependency)
+        if (!typeOnly) runtime.add(dependency)
       }
 
       const target = targetPackage(file, specifier)

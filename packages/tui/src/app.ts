@@ -141,7 +141,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     })
   const images = imageStore ? () => (providers!.size > 0 ? imageStore : undefined) : undefined
   // Nodes of replies extensions render, e.g. ```mermaid diagrams (D88).
-  const renders = new ReplyRenderers(opts.markdownRenderers)
+  const renders = new ReplyRenderers(opts.markdownRenderers, capabilities.background)
   const spinner = new Spinner()
   const activity = createTurnActivity()
   const queued: Outgoing[] = []
