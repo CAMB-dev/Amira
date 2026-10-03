@@ -11,10 +11,14 @@ import type { UiContext, UiControl, UiEvent, UiNode } from "./views-ui.ts"
  */
 
 /** A piece of a line, styled by meaning rather than by a frontend-specific color. */
-export interface ViewSegment {
-  text: string
-  kind: "text" | "muted" | "accent" | "success" | "warning" | "error"
-}
+export type ViewSegment =
+  | { text: string; kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }
+  /** A pill with half-block ends in color, or [text] without colors. Defaults to neutral. */
+  | {
+      kind: "chip"
+      text: string
+      tone?: "neutral" | "info" | "success" | "warning" | "danger" | "accent"
+    }
 
 /** Lines styled by the frontend; text and parts contain no raw styling. */
 export type ViewLine =

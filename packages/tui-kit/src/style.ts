@@ -101,6 +101,13 @@ export const markdownTheme = {
 
 export type MarkdownToken = keyof typeof markdownTheme
 
+/** Half-block ends use the body's background as their foreground, leaving the outside clear. */
+function chip(foreground: number, background: number): StyleFn {
+  const edge = fg256(background)
+  const body = compose(bg256(background), fg256(foreground))
+  return (text) => edge("▐") + body(text) + edge("▌")
+}
+
 export const defaultTheme: Theme = {
   text: (s) => s,
   accent: cyan,
@@ -109,6 +116,13 @@ export const defaultTheme: Theme = {
   success: green,
   warning: yellow,
   border: gray,
+  /** Chip foregrounds are explicit so their filled labels work on dark and light terminals. */
+  chipNeutral: chip(231, 240),
+  chipInfo: chip(231, 24),
+  chipSuccess: chip(231, 22),
+  chipWarning: chip(16, 178),
+  chipDanger: chip(231, 124),
+  chipAccent: chip(231, 54),
   /** Text selected with the mouse, as in a full-screen transcript. */
   selection: inverse,
   ...markdownTheme,

@@ -37,7 +37,7 @@ export const dashboardData = (): DashboardData => ({
 
 export const dashboardState: Partial<UiState> = {
   selected: { timeline: "ui" },
-  expanded: { timeline: ["build"] },
+  expanded: { timeline: ["build", "api", "ui", "review"] },
   activeTabs: { detail: "logs" },
   focused: "message",
   inputValues: { message: "Review the keyboard paths" },
@@ -48,8 +48,18 @@ const part = (text: string, kind: ViewSegment["kind"] = "text"): ViewSegment => 
 function workerCard(worker: DashboardData["workers"][number]): UiNode {
   return {
     type: "box",
-    title: worker.name,
-    aside: "TypeScript",
+    title: {
+      kind: "segments",
+      parts: [
+        part(`${worker.name}  `, "accent"),
+        {
+          kind: "chip",
+          text: worker.key === "review" ? "Markdown" : "TypeScript",
+          tone: worker.key === "review" ? "neutral" : "info",
+        },
+      ],
+    },
+    aside: "running",
     tone: "accent",
     child: {
       type: "column",
@@ -85,32 +95,50 @@ export const dashboard: ViewDefinition<DashboardData> = {
       type: "tree",
       id: "timeline",
       items: [
-        { key: "request", row: [part("10:12:30  ✓ Request", "success")], rail: true },
+        {
+          key: "request",
+          lead: [part("10:12:30  ✓", "success")],
+          node: [part("○", "muted")],
+          row: [part("Request")],
+          rail: true,
+          underline: true,
+        },
         {
           key: "plan",
-          row: [part("10:12:31  ✓ Plan", "success")],
+          lead: [part("10:12:31  ✓", "success")],
+          node: [part("○", "muted")],
+          row: [part("Plan")],
           aside: [part("done", "muted")],
           rail: true,
+          underline: true,
         },
         {
           key: "build",
-          row: [part("10:12:40  ● Build", "accent")],
+          lead: [part("10:12:40  ●", "accent")],
+          node: [part("◉", "accent")],
+          row: [part("Build · Code Agent ×3", "accent")],
+          aside: [part("running · 42s", "accent")],
           rail: true,
+          underline: true,
           children: data.workers.map((w) => ({
             key: w.key,
             row: [part(w.name)],
             aside: [part(`${Math.round(w.progress * 100)}%`, "accent")],
+            detail: !narrow || w.key === selected.key ? workerCard(w) : undefined,
             rail: true,
           })),
         },
-        { key: "verify", row: [part("○ Verify", "muted")], rail: true, expandable: true },
-        { key: "complete", row: [part("○ Complete", "muted")] },
+        {
+          key: "verify",
+          node: [part("○", "muted")],
+          row: [part("Verify", "muted")],
+          aside: [part("queued", "muted")],
+          rail: true,
+          underline: true,
+          expandable: true,
+        },
+        { key: "complete", node: [part("○", "muted")], row: [part("Complete", "muted")], underline: true },
       ],
-    }
-    const cards: UiNode = {
-      type: "column",
-      gap: narrow ? 0 : 1,
-      children: (narrow ? [selected] : data.workers).map((w) => ({ node: workerCard(w), min: 3 })),
     }
     return {
       type: "column",
@@ -124,19 +152,9 @@ export const dashboard: ViewDefinition<DashboardData> = {
           },
         },
         { size: 1, node: { type: "rule" } },
+        { node: timeline },
         {
-          node: {
-            type: narrow ? "column" : "row",
-            gap: 1,
-            divider: !narrow,
-            children: [
-              { node: timeline, size: narrow ? "fill" : "38%", min: 3 },
-              { node: { type: "box", title: `Workers · ${selected.name}`, child: cards }, min: 5 },
-            ],
-          },
-        },
-        {
-          size: narrow ? 6 : 12,
+          size: narrow ? 4 : 12,
           node: {
             type: "box",
             title: `Details · ${selected.name}`,
