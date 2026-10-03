@@ -26,28 +26,51 @@ export type MarkdownNode =
       url: string
       alt: string
     }
+  | {
+      type: "math"
+      /** Whether this is a display block rather than inline math. */
+      display: boolean
+      /** The math source, without its delimiters. */
+      source: string
+    }
 
-/** Which nodes a renderer is asked for: standalone images, or code blocks in these languages. */
-export type MarkdownRenderMatch = { image: true } | { codeLang: string[] }
+/** Which nodes a renderer is asked for: standalone images, code blocks, or math. */
+export type MarkdownRenderMatch =
+  | { image: true }
+  | { codeLang: string[] }
+  | { math: "inline" | "display" | "both" }
 
 export interface MarkdownRenderContext {
   /** Columns the lines may take; longer lines are cut. */
   width: number
   /**
    * Whether an image result would be drawn here: an image provider is installed and this
-   * terminal draws images. When false, an image result shows as Amira's own rendering.
+   * terminal draws images. When false, an image result uses its fallback lines or alt text;
+   * without either, the renderer declines.
    */
   images: boolean
   /** The most rows an image may take now; images are scaled down to `width` × this. */
   maxImageRows: number
+  /** The current terminal theme, including known foreground and background colors. */
+  theme: { dark: boolean; foreground?: string; background?: string }
 }
 
 /**
- * What a node renders as: lines of text (styled by the frontend after their kind, like a
- * view's lines), or an image, which goes to the image providers and is drawn like a Markdown
- * image. Undefined declines: the next renderer is asked, and in the end Amira renders it.
+ * Inline math must return segments: styled text fragments concatenated into a single line.
+ * Blocks return lines of text (styled by the frontend after their kind, like a view's lines),
+ * or an image, which goes to the image providers and is drawn like a Markdown image.
+ * Undefined declines: the next renderer is asked, and in the end Amira renders it.
  */
-export type MarkdownRenderResult = { lines: ToolLine[] } | { image: ImageInput }
+export type MarkdownRenderResult =
+  | { segments: ToolLine[] }
+  | { lines: ToolLine[] }
+  | {
+      image: ImageInput
+      /** Plain-text alternative when the image cannot be drawn. */
+      alt?: string
+      /** Styled alternative, preferred over alt text when the image cannot be drawn. */
+      fallback?: ToolLine[]
+    }
 
 export interface MarkdownRendererDefinition {
   /** Names the renderer in errors; one extension's ids must differ. */
@@ -68,7 +91,7 @@ export interface MarkdownRendererDefinition {
   /**
    * Renders a node, once it is complete (a code block once it closes). Results are kept by the
    * node's text and the context, so it is asked again only for another width, another answer
-   * of `images` or `maxImageRows`, after the renderers changed, or once a result was let go of
+   * of `images`, `maxImageRows` or `theme`, after the renderers changed, or once a result was let go of
    * (keep expensive work cached yourself, by the source). May be async; Amira's own rendering
    * shows meanwhile. Lines past 2000 are cut.
    */
