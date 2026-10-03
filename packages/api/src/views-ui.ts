@@ -13,10 +13,20 @@ export interface UiTreeItem {
   key: string
   row: ViewSegment[]
   aside?: ViewSegment[]
-  /** Shown only while expanded, before children. */
-  detail?: ViewLine[]
+  /** Fixed column before the rail, sized to the widest lead among expanded/visible tree rows. */
+  lead?: ViewSegment[]
+  /** Replaces the two-cell disclosure/rail slot (e.g. ○ or ◉); navigation still expands/collapses. */
+  node?: ViewSegment[]
+  /** Thin rule after the row's expanded detail, before children; rail continues through it. */
+  underline?: boolean
+  /**
+   * Shown only while expanded, before children, at the width remaining after the tree indent.
+   * Widget details are content-height, display-only: box, row/column, text, progress, bar, rule,
+   * table (and blank spacer). IDs/follow are ignored; tree, tabs and input are not rendered.
+   */
+  detail?: ViewLine[] | UiNode
   children?: UiTreeItem[]
-  /** Draw tree connector lines (├─, └─, │) to children and beside expanded details. */
+  /** Draw connectors to children and beside details/underlines. lead precedes, node replaces its row slot. */
   rail?: boolean
   /** Show disclosure even before children have loaded; toggle events can load them. */
   expandable?: boolean

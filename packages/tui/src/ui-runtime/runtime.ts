@@ -142,10 +142,9 @@ export class UiRuntime {
     }
     if (e.type === "key" && e.name === "tab" && !e.ctrl && !e.alt) {
       const n = this.#widgets.length
-      if (n) {
-        const at = this.#widgets.findIndex((p) => widgetId(p.node) === this.state.focused)
-        this.state.focused = widgetId(this.#widgets[(at + (e.shift ? n - 1 : 1)) % n]!.node)
-      }
+      if (!n) return false
+      const at = this.#widgets.findIndex((p) => widgetId(p.node) === this.state.focused)
+      this.state.focused = widgetId(this.#widgets[(at + (e.shift ? n - 1 : 1)) % n]!.node)
       return true
     }
     const plan = this.#widgets.find((p) => widgetId(p.node) === this.state.focused)

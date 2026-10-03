@@ -193,7 +193,9 @@ const ESC = "\x1b[27u"
 
 function lineText(line: string | ViewLine): string {
   if (typeof line === "string") return line
-  return line.kind === "segments" ? line.parts.map((part) => part.text).join("") : line.text
+  return line.kind === "segments"
+    ? line.parts.map((part) => (part.kind === "chip" ? `[${part.text}]` : part.text)).join("")
+    : line.text
 }
 
 function requireRenderer<D>(
@@ -369,7 +371,11 @@ test("the extension associates nested children with calls and delegates complete
   expect(child[0]?.kind === "segments" && child[0].parts[0]).toEqual({ kind: "text", text: "  " })
 })
 
-const statuses: { status: SubagentInfo["status"]; text: string; kind: ViewSegment["kind"] }[] = [
+const statuses: {
+  status: SubagentInfo["status"]
+  text: string
+  kind: Exclude<ViewSegment["kind"], "chip">
+}[] = [
   { status: "running", text: "running", kind: "accent" },
   { status: "queued", text: "queued", kind: "muted" },
   { status: "idle", text: "idle", kind: "muted" },

@@ -1,13 +1,30 @@
 import { userMessage } from "@amira/ai"
 import type { ToolLine, ViewLine, ViewSegment } from "@amira/api"
-import { type Theme, truncateToWidth } from "@amira/tui-kit"
+import { type Theme, themeToken, truncateToWidth } from "@amira/tui-kit"
 import { renderToolLines, terminalText } from "./diff-view.ts"
 import { userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 
+const CHIP_TOKENS = {
+  neutral: "chipNeutral",
+  info: "chipInfo",
+  success: "chipSuccess",
+  warning: "chipWarning",
+  danger: "chipDanger",
+  accent: "chipAccent",
+} as const
+
 /** Semantic parts share one row; sanitizing each part keeps styling host-owned. */
 export function segmentText(parts: ViewSegment[], theme: Theme): string {
-  return parts.map((part) => theme[part.kind](terminalText(part.text))).join("")
+  return parts
+    .map((part) => {
+      const text = terminalText(part.text)
+      if (part.kind !== "chip") return theme[part.kind](text)
+      const style = themeToken(theme, CHIP_TOKENS[part.tone ?? "neutral"])
+      // Mono and older/custom themes have no chip colors; brackets keep the label distinct.
+      return style ? style(text) : `[${text}]`
+    })
+    .join("")
 }
 
 /** View lines shared by full-screen views, panels and Markdown renderers. */
