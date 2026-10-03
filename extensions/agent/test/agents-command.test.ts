@@ -159,6 +159,21 @@ function nested(req: ModelRequest): MockReply {
   return { text: "Used in b.ts." }
 }
 
+test("/agents stop all still stops paused children", async () => {
+  const { root, tree, run } = await setup(() => ({ text: "done", delayMs: 100 }))
+  const child = tree.spawn(root, { prompt: "work" })
+  while (child.state !== "working") await Bun.sleep(1)
+  expect(tree.pause(child.id)).toBe(true)
+  try {
+    const { text } = await run("/agents 1")
+    expect(text).toContain("… paused")
+    expect(text).not.toContain("… still running")
+  } finally {
+    expect((await run("/agents stop all")).ok).toBe(true)
+    expect((await child.result()).status).toBe("aborted")
+  }
+})
+
 test("/agents lists the sub-agents; where the frontend has no live view, it prints the one chosen", async () => {
   const { root, run, host } = await setup(nested)
   await root.prompt("go")

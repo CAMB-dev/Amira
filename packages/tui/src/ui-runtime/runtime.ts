@@ -21,6 +21,8 @@ export class UiRuntime {
   reconciled = false
   #inputs = new Map<string, LineInput>()
   #trees = new Map<string, TreeIndex>()
+  #defaultExpanded = new Map<string, Set<string>>()
+  #explicitExpanded = new Set<string>()
   #widgets: Plan[] = []
   #scrollables: Plan[] = []
   #anonymousScroll = new Map<string, { top: number; following: boolean }>()
@@ -35,7 +37,12 @@ export class UiRuntime {
         Object.assign(this.state, { [key]: Object.assign(Object.create(null), patch[key]) })
     }
     if (patch.expanded) {
+      this.#defaultExpanded.clear()
+      this.#explicitExpanded = new Set(Object.keys(patch.expanded))
       for (const [id, keys] of Object.entries(patch.expanded)) this.state.expanded[id] = [...keys]
+    }
+    if (patch.scroll) {
+      for (const [id, scroll] of Object.entries(patch.scroll)) this.state.scroll[id] = { ...scroll }
     }
     if (Object.hasOwn(patch, "focused")) this.state.focused = patch.focused
     this.#dirty = true
@@ -57,6 +64,8 @@ export class UiRuntime {
     this.state = initialState()
     this.#inputs.clear()
     this.#trees.clear()
+    this.#defaultExpanded.clear()
+    this.#explicitExpanded.clear()
     this.#anonymousScroll.clear()
     this.#scrollables.length = 0
     this.#widgets.length = 0
@@ -82,6 +91,7 @@ export class UiRuntime {
       cursor,
       inputs: this.#inputs,
       trees: this.#trees,
+      expand: (node) => this.#expand(node),
       scrollables: this.#scrollables,
       anonymousScroll: this.#anonymousScroll,
       input: (id) => this.#input(id),
@@ -89,6 +99,29 @@ export class UiRuntime {
     this.#frame = { node, width: cells(width), height: cells(height), host }
     const plan = this.#prepare()!
     return paint(plan, host)
+  }
+
+  /** Defaults apply once per row; user collapses survive redraws and newly arriving siblings. */
+  #expand(node: Extract<UiNode, { type: "tree" }>): void {
+    if (node.expanded !== "all" || this.#explicitExpanded.has(node.id)) return
+    const seen = this.#defaultExpanded.get(node.id) ?? new Set<string>()
+    this.#defaultExpanded.set(node.id, seen)
+    const expanded = new Set(this.state.expanded[node.id])
+    const pending = [...node.items]
+    let changed = false
+    while (pending.length) {
+      const item = pending.pop()!
+      if (!seen.has(item.key) && expandable(item)) {
+        seen.add(item.key)
+        expanded.add(item.key)
+        changed = true
+      }
+      for (const child of item.children ?? []) pending.push(child)
+    }
+    if (changed) {
+      this.state.expanded[node.id] = [...expanded]
+      this.reconciled = true
+    }
   }
 
   #prepare(): Plan | undefined {
@@ -205,6 +238,9 @@ export class UiRuntime {
         } else if (expandable(row.item)) {
           const open = e.name === "right"
           if (open !== row.open) {
+            const seen = this.#defaultExpanded.get(id) ?? new Set<string>()
+            seen.add(row.item.key)
+            this.#defaultExpanded.set(id, seen)
             const expanded = new Set(this.state.expanded[id])
             if (open) expanded.add(row.item.key)
             else expanded.delete(row.item.key)

@@ -25,6 +25,7 @@ export interface WidgetHost {
   theme: Theme
   inputs: Map<string, LineInput>
   trees: Map<string, TreeIndex>
+  expand(node: Extract<UiNode, { type: "tree" }>): void
   anonymousScroll: Map<string, { top: number; following: boolean }>
   scrollables: Plan[]
   lines(lines: ViewLine[], width: number): string[]
@@ -92,6 +93,7 @@ export function prepare(
       break
     }
     case "tree": {
+      host.expand(node)
       let tree = host.trees.get(node.id)
       if (!tree) {
         tree = new TreeIndex()

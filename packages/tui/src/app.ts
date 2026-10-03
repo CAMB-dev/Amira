@@ -419,62 +419,62 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Shows a full-screen view; false when it cannot be shown now (see CommandContext.openView). */
   function openView(v: FrontendView): boolean {
     // Keep old command requests working through the same extension lookup.
-    if (isSubagentView(v)) v = { kind: v.kind, data: { sessionId: v.sessionId } }
+    if (isSubagentView(v)) v = { ...v, data: { sessionId: v.sessionId } }
     const definition = opts.views?.get(v.kind)
     if (!definition) throw new Error(`there is no "${v.kind}" view`)
-    if (form || env.TERM === "dumb") return false
-    if (viewer instanceof ExtensionViewer && viewer.kind === v.kind) viewer.show(v.data)
+    if (quitting || form || env.TERM === "dumb") return false
+    if (viewer instanceof ExtensionViewer && viewer.kind === v.kind) viewer.show(v.data, v.state)
     else {
-      showOverlay(
-        new ExtensionViewer(definition, v.data, {
-          waiting: waitingTitles,
-          onClose: closeView,
-          requestRender: () => view.requestOverlayRender(),
-          onError: (error) => view.notice("warning", `View ${v.kind}: ${error}`),
-          onPrint: (text, level) => {
-            view.commandOutput(level ?? "info", text)
-            view.requestRender()
-          },
-          ...(presenters ? { presenters } : {}),
-        }),
-      )
+      const next = new ExtensionViewer(definition, v.data, {
+        state: v.state,
+        waiting: waitingTitles,
+        onClose: () => viewer === next && closeView(),
+        requestRender: () => next.ready && view.requestOverlayRender(),
+        onError: (error) => view.notice("warning", `View ${v.kind}: ${error}`),
+        onPrint: (text, level) => {
+          view.commandOutput(level ?? "info", text)
+          view.requestRender()
+        },
+        ...(presenters ? { presenters } : {}),
+      })
+      showOverlay(next)
     }
-    view.renderOverlay()
+    if (!(viewer instanceof ExtensionViewer) || viewer.ready) view.renderOverlay()
     return true
   }
-
   /** Opens the key reference over the conversation (the help key); a form keeps the screen. */
   function openKeyReference() {
     if (form) return
-    showOverlay(
-      new KeyReference(keys, {
-        fullscreen: mode === "fullscreen",
-        onClose: closeView,
-        usable: (action, s) => action !== "newline" || reaches(s),
-      }),
-    )
+    const next = new KeyReference(keys, {
+      fullscreen: mode === "fullscreen",
+      onClose: () => viewer === next && closeView(),
+      usable: (action, s) => action !== "newline" || reaches(s),
+    })
+    showOverlay(next)
     view.renderOverlay()
   }
 
   /** Puts `next` over the conversation, in place of the viewer open there if any. */
   function showOverlay(next: ExtensionViewer | KeyReference) {
-    const opened = viewer !== undefined
-    if (viewer instanceof ExtensionViewer) viewer.dispose()
+    const previous = viewer
     viewer = next
-    waitingChanged("visibility")
+    if (previous instanceof ExtensionViewer) previous.dispose()
+    if (viewer !== next) return
+    if (next instanceof ExtensionViewer) next.mount()
+    if (viewer !== next) return
     view.openOverlay(next instanceof ExtensionViewer && next.declarative)
-    if (opened) return
-    // Elapsed times move even when no event comes.
-    viewerTimer = setInterval(() => view.requestOverlayRender(), 1000)
+    if (!viewerTimer) viewerTimer = setInterval(() => view.requestOverlayRender(), 1000)
+    waitingChanged("visibility")
   }
 
   function closeView() {
-    if (!viewer) return
-    if (viewer instanceof ExtensionViewer) viewer.dispose()
+    const previous = viewer
+    if (!previous) return
     viewer = undefined
     clearInterval(viewerTimer)
     viewerTimer = undefined
     view.closeOverlay()
+    if (previous instanceof ExtensionViewer) previous.dispose()
     openNextForm()
     waitingChanged("visibility")
   }

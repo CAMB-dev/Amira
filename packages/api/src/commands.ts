@@ -18,6 +18,7 @@ import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } fr
 import type { PendingNotice, SessionData, ToolExposure, ToolTraits } from "./tools.ts"
 import type { TraceRecord } from "./trace.ts"
 import type { UiApi } from "./ui.ts"
+import type { UiState } from "./views-ui.ts"
 
 /** A suggestion for a command's argument text. */
 export interface CommandCandidate {
@@ -151,6 +152,7 @@ export interface SubagentView {
   /** Legacy request shape; frontends normalize it to an extension view with { sessionId } data. */
   kind: "subagent"
   sessionId: string
+  state?: Partial<UiState>
 }
 
 export interface ExtensionView {
@@ -158,6 +160,8 @@ export interface ExtensionView {
   kind: string
   /** What the view shows; it is read again at each redraw, so changes to it show up. */
   data?: unknown
+  /** Initial declarative state, applied before onOpen and the first UI build. */
+  state?: Partial<UiState>
 }
 
 /** Whether `view` uses the legacy sub-agent request shape. */
@@ -166,13 +170,13 @@ export function isSubagentView(view: FrontendView): view is SubagentView {
 }
 
 /**
- * Where a sub-agent is: waiting for a slot, working, idle between turns (persistent ones
- * only), or how it ended.
+ * Where a sub-agent is: waiting for a slot, working, paused, idle between turns (persistent
+ * ones only), or how it ended.
  */
-export type SubagentState = "queued" | "running" | "idle" | SubagentStatus
+export type SubagentState = "queued" | "running" | "idle" | "paused" | SubagentStatus
 
 /**
- * A sub-agent's state as every screen words it: running, queued, idle, done, failed, stopped
+ * A sub-agent's state as every screen words it: running, queued, idle, paused, done, failed, stopped
  * (the states are named for code: an ended one is "error" or "aborted").
  */
 export function subagentStateText(state: SubagentState): string {
@@ -344,10 +348,16 @@ export interface SessionControl {
   /** A sub-agent's conversation so far (a snapshot while it runs); undefined for an unknown id. */
   subagentMessages(id: string): readonly Message[] | undefined
   /**
-   * Stops a queued or running sub-agent of this session (its own sub-agents end with it); its
+   * Stops a live sub-agent of this session, including paused ones (its own sub-agents end with it); its
    * result says it was stopped by the user. False when it is unknown or already ended.
    */
   stopSubagent(id: string): boolean
+  /** Sends a user message before the next model call; wakes an idle persistent child. False if ended or unknown. */
+  messageSubagent(id: string, text: string): boolean
+  /** Holds a running child before the next model call without aborting current work; it keeps its admission slot. */
+  pauseSubagent(id: string): boolean
+  /** Releases a paused child. False if not paused; pause also returns false for queued/idle or ended children. */
+  resumeSubagent(id: string): boolean
   /**
    * Creates a spawn group whose sub-agents are children of this session, e.g. for a command
    * that runs a workflow. Unset where the host has no agent tree.

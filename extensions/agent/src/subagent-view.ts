@@ -27,7 +27,12 @@ interface Streaming {
 }
 
 function live(info: SubagentInfo): boolean {
-  return info.status === "running" || info.status === "queued" || info.status === "idle"
+  return (
+    info.status === "running" ||
+    info.status === "queued" ||
+    info.status === "idle" ||
+    info.status === "paused"
+  )
 }
 
 function stats(info: SubagentInfo, now: number): ViewSegment[] {
@@ -293,9 +298,11 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
             ? "waiting for a free slot"
             : info.status === "idle"
               ? "idle, waiting for a message"
-              : stream?.thinking
-                ? "thinking"
-                : "working"
+              : info.status === "paused"
+                ? "paused"
+                : stream?.thinking
+                  ? "thinking"
+                  : "working"
         out.push({ kind: "muted", text: `… ${what}` })
       } else if (info.error && info.status !== "done") out.push({ kind: "error", text: `✗ ${info.error}` })
       else if (info.note && info.status !== "done")

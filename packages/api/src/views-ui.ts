@@ -54,7 +54,13 @@ export type UiNode =
       tone?: "normal" | "accent" | "focus"
     }
   | { type: "text"; id?: string; lines: ViewLine[]; follow?: boolean }
-  | { type: "tree"; id: string; items: UiTreeItem[] }
+  | {
+      type: "tree"
+      id: string
+      items: UiTreeItem[]
+      /** Expands untouched and newly added rows. Explicit expanded state and user toggles win. */
+      expanded?: "all"
+    }
   | { type: "tabs"; id: string; tabs: { key: string; label: string; body: UiNode }[] }
   | {
       type: "table"
@@ -88,6 +94,8 @@ export interface UiState {
 
 /** Experimental render context for declarative views. */
 export interface UiContext extends ViewRenderOptions {
+  /** Body rows available after the host's page title, waiting banners and footer. */
+  height: number
   state: UiState
 }
 
