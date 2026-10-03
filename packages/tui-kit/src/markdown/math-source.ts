@@ -13,24 +13,37 @@ function escaped(text: string, at: number): boolean {
   return n % 2 === 1
 }
 
+/** The last dollar scan that found no closer: later openers in the same text cannot find one either. */
+let failed: { text: string; end: number; from: number; result: "open" | undefined } | undefined
+
 /** A single-line inline expression, or `open` when more input could close it. */
 export function inlineMathAt(text: string, at: number, end = text.length): MathSource | "open" | undefined {
-  if (escaped(text, at)) return
   const dollar = text[at] === "$" && text[at - 1] !== "$" && text[at + 1] !== "$"
   const paren = text.startsWith("\\(", at)
-  if (!dollar && !paren) return
+  if ((!dollar && !paren) || escaped(text, at)) return
   const from = at + (dollar ? 1 : 2)
   if (dollar && from < end && /\s/.test(text[from]!)) return
+  // A closer does not depend on its opener, so a scan that found none rules out every later opener.
+  if (dollar && failed && failed.text === text && failed.end === end && failed.from <= from) return failed.result
   for (let i = from; i < end; i++) {
-    if (text[i] === "\n") return
-    if (escaped(text, i)) continue
-    if (paren && text.startsWith("\\)", i) && i + 2 <= end)
-      return i > from ? { start: at, end: i + 2, display: false, source: text.slice(from, i) } : undefined
-    if (!dollar || text[i] !== "$" || text[i - 1] === "$" || text[i + 1] === "$") continue
+    const ch = text[i]
+    if (ch === "\n") {
+      if (dollar) failed = { text, end, from, result: undefined }
+      return
+    }
+    if (ch === "\\") {
+      if (paren && text.startsWith("\\)", i) && i + 2 <= end)
+        return i > from ? { start: at, end: i + 2, display: false, source: text.slice(from, i) } : undefined
+      i++ // an escaped character, so a backslash run is walked once, not once per character
+      if (text[i] === "\n") i--
+      continue
+    }
+    if (!dollar || ch !== "$" || text[i - 1] === "$" || text[i + 1] === "$") continue
     // Currency-like endings ($5 and $10), and whitespace against either delimiter, are not math.
     if (i === from || /\s/.test(text[i - 1]!) || /\d/.test(text[i + 1] ?? "")) continue
     return { start: at, end: i + 1, display: false, source: text.slice(from, i) }
   }
+  if (dollar) failed = { text, end, from, result: "open" }
   return "open"
 }
 
@@ -97,7 +110,10 @@ export function mathCodeLine(
   const length = newline === -1 ? text.length : newline
   const ranges: MathCodeRange[] = through > 0 ? [{ start: 0, end: through }] : []
   for (let i = through; i < length; i++) {
-    if (escaped(text, i)) continue
+    if (text[i] === "\\" && !text.startsWith("\\(", i)) {
+      i++ // skips the escaped character; walking a backslash run once keeps long runs linear
+      continue
+    }
     if (text[i] === "`") {
       const end = codeSpanEnd(text, i)
       if (end === undefined || (!final && end === text.length)) {
