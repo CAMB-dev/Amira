@@ -1,6 +1,7 @@
 import type { UiEvent, UiNode, UiState, ViewKeyName, ViewLine } from "@amira/api"
 import { type InputEvent, isSubmitKey, LineInput, matchesKey, type Theme } from "@amira/tui-kit"
 import { terminalText } from "../diff-view.ts"
+import { defaultKeybindings, isTypingKey, type Keybindings, viewScrollAction } from "../keybindings.ts"
 import { cells, inside } from "./layout.ts"
 import { expandable, type TreeIndex } from "./tree.ts"
 import { type Plan, paint, prepare, scrollable, type WidgetHost, widgetId } from "./widgets.ts"
@@ -30,7 +31,10 @@ export class UiRuntime {
   #dirty = true
   #previousFocus: string | undefined
 
-  constructor(private emit: (event: UiEvent) => void) {}
+  constructor(
+    private emit: (event: UiEvent) => void,
+    private keys: Keybindings = defaultKeybindings(),
+  ) {}
 
   setState(patch: Partial<UiState>): void {
     for (const key of ["selected", "expanded", "activeTabs", "scroll", "inputValues"] as const) {
@@ -188,7 +192,8 @@ export class UiRuntime {
     this.#event({ type: "key", key, focused: this.state.focused })
   }
 
-  handleInput(e: InputEvent): boolean {
+  /** The viewer defers scrolling until after extension-defined shortcuts. */
+  handleInput(e: InputEvent, scroll = true): boolean {
     if (this.#dirty) this.#prepare()
     if (e.type === "mouse") {
       if (e.action !== "wheel" || (e.button !== "up" && e.button !== "down")) return false
@@ -205,7 +210,7 @@ export class UiRuntime {
       this.focus(widgetId(this.#widgets[next]!.node)!)
       return true
     }
-    if (matchesKey(e, "escape") && this.releaseInput()) return true
+    if (this.keys.is(e, "view.back") && !(this.typing && isTypingKey(e)) && this.releaseInput()) return true
     if (!this.typing) {
       const target = this.#widgets.find(
         (p) => p.node.type === "input" && p.node.activate !== undefined && matchesKey(e, p.node.activate),
@@ -235,7 +240,7 @@ export class UiRuntime {
       this.state.inputValues[id] = input.value
       return handled
     }
-    if (e.type !== "key" || e.ctrl || e.alt || e.shift) return false
+    if (e.type !== "key" || e.ctrl || e.alt || e.shift) return scroll && this.handleScroll(e)
     if (node.type === "tabs" && (e.name === "left" || e.name === "right")) {
       const n = node.tabs.length
       if (n) {
@@ -286,24 +291,25 @@ export class UiRuntime {
         return true
       }
     }
-    if (scrollable(node)) {
-      if (e.name === "pageup" || e.name === "pagedown") {
-        this.#scroll(plan, Math.max(1, plan.viewport) * (e.name === "pageup" ? -1 : 1))
-        return true
-      }
-      if (e.name === "home" || e.name === "end") {
-        Object.assign(plan.scroll!, {
-          top: e.name === "home" ? 0 : Math.max(0, plan.total - plan.viewport),
-          following: e.name === "end",
-        })
-        return true
-      }
-      if (node.type === "text" && (e.name === "up" || e.name === "down")) {
-        this.#scroll(plan, e.name === "up" ? -1 : 1)
-        return true
-      }
-    }
-    return false
+    return scroll && this.handleScroll(e)
+  }
+
+  handleScroll(e: InputEvent): boolean {
+    if (this.#dirty) this.#prepare()
+    const plan = this.#widgets.find((p) => widgetId(p.node) === this.state.focused)
+    if (!plan || !scrollable(plan.node)) return false
+    const action = viewScrollAction(this.keys, e)
+    if (action === "page-up" || action === "page-down") {
+      this.#scroll(plan, Math.max(1, plan.viewport) * (action === "page-up" ? -1 : 1))
+    } else if (action === "top" || action === "bottom") {
+      Object.assign(plan.scroll!, {
+        top: action === "top" ? 0 : Math.max(0, plan.total - plan.viewport),
+        following: action === "bottom",
+      })
+    } else if (action === "up" || action === "down") {
+      this.#scroll(plan, action === "up" ? -1 : 1)
+    } else return false
+    return true
   }
 
   #select(plan: Plan, index: number): void {

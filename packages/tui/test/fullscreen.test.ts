@@ -230,9 +230,9 @@ test("thinking shows folded as how long it took, and unfolds to the text", async
   terminal.send(ESC)
   terminal.send("\x03")
   expect(await exited).toBe(0)
-  // Exiting prints it as the inline view shows it: folded.
+  // Exiting keeps the thinking unfolded, as it was shown.
   expect(screen.mainText).toContain("∴ Thought for 1s")
-  expect(screen.mainText).not.toContain("Maybe the answer")
+  expect(screen.mainText).toContain("Maybe the answer")
 })
 
 test("the conversation is drawn on the alternate screen and printed to the normal one on exit", async () => {

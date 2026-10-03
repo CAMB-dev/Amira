@@ -287,8 +287,8 @@ export class TranscriptPane {
 
   /**
    * Every block at `width`, spaced like the inline transcript: what exiting prints. Blocks
-   * folded or unfolded by hand print as the inline transcript shows them, so nothing folded
-   * away is lost. Images print as their alt text: the normal screen is text.
+   * folded by hand print as the inline transcript shows them, except thinking keeps its chosen
+   * fold. Images print as their alt text: the normal screen is text.
    */
   printout(env: BlockEnv): string[] {
     const out: string[] = []
@@ -296,7 +296,7 @@ export class TranscriptPane {
     const { images: _, ...text } = env
     for (const b of this.blocks) {
       let lines: string[]
-      if (b.refolded) lines = b.printLines(text)
+      if (b.refolded && b.kind !== "reasoning") lines = b.printLines(text)
       else if (b instanceof ReplyBlock) {
         // Laid out without images (none is loaded for it), unless its lines as shown have none.
         const shown = this.cached(b, env)

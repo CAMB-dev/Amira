@@ -1,10 +1,65 @@
 import { expect, test } from "bun:test"
 import { userMessage } from "@amira/ai"
 import { defineTool, textResult } from "@amira/api"
+import { Agent } from "@amira/core"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
-import { lastUserText, QUEUE_HINT, setup, waitFor } from "./app-harness.ts"
+import { closeImageApp, lastUserText, QUEUE_HINT, setup, waitFor } from "./app-harness.ts"
 
 for (const mode of ["fullscreen", "inline"] as const) {
+  test(`${mode}: /resume names the resumed session once in its boundary`, async () => {
+    let next!: Agent
+    const s = await setup([], {
+      cols: 100,
+      settings: { mode },
+      extensions: [commandsExtension],
+      control: {
+        info: () => ({
+          id: "current",
+          cwd: "/work/proj",
+          busy: false,
+          model: { provider: "mock", model: "m1" },
+          contextWindow: 128_000,
+          shell: "auto",
+        }),
+        sessions: () => [
+          {
+            id: next.sessionId,
+            updatedAt: Date.now(),
+            title: "Repair the build",
+            firstUserText: "Restored question",
+            messageCount: 1,
+          },
+        ],
+        resume: async (id) => {
+          expect(id).toBe(next.sessionId)
+          await Bun.sleep(40) // Let the answered picker render while the session opens.
+          s.commands!.switchTo(next)
+        },
+      },
+    })
+    next = new Agent({ ai: s.ai, model: s.ai.model("mock/m1"), cwd: "/work/proj", bus: s.bus })
+    next.messages.push(userMessage("Restored question"))
+    try {
+      s.terminal.send("/resume\r")
+      await waitFor(() => s.live().includes("Resume which session?"), "resume picker")
+      s.terminal.send("\r")
+      await waitFor(() => s.commands!.agent === next, "session switched")
+      await s.shows("Restored question")
+      await s.idle()
+      expect(s.commands!.agent).toBe(next)
+      expect(s.all()).toContain(`── resumed ${next.sessionId}`)
+      expect(
+        s
+          .all()
+          .split("\n")
+          .filter((line) => line.includes(next.sessionId)),
+      ).toEqual([expect.stringContaining(`── resumed ${next.sessionId}`)])
+      expect(s.all()).not.toContain("Resumed session")
+    } finally {
+      await closeImageApp(s)
+    }
+  })
+
   for (const cols of [120, 60]) {
     test(`rewind picker offers fork from here at ${cols} columns in ${mode}`, async () => {
       const forks: number[] = []
