@@ -4,6 +4,7 @@ import type {
   AskOutcome,
   AskRequest,
   BackgroundJobHost,
+  EventMap,
   OutputStore,
   ProviderSettings,
   Settings,
@@ -20,6 +21,16 @@ import type { PromptSection } from "../prompt.ts"
 import type { SessionStore } from "../session-store.ts"
 import type { AgentTree } from "../subagents.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
+
+/** State that belongs to one turn, so late callbacks never leak into the next turn. */
+export interface Turn {
+  id: string
+  signal: AbortSignal
+  /** Notices joined this turn and no model reply has come since. */
+  unanswered?: boolean
+}
+
+export type Emit = <K extends keyof EventMap>(turn: Turn | undefined, type: K, data: EventMap[K]) => void
 
 export interface ApprovalDecision {
   approved: boolean
