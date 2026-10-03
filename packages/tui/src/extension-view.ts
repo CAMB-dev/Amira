@@ -26,6 +26,13 @@ import {
 import { terminalText } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
+import {
+  keyLabel as bindingLabel,
+  defaultKeybindings,
+  isTypingKey,
+  type Keybindings,
+  viewScrollAction,
+} from "./keybindings.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
 import { UiRuntime } from "./ui-runtime/runtime.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
@@ -44,6 +51,8 @@ interface ViewPage {
 }
 
 export interface ExtensionViewerOptions {
+  /** Host navigation and scrolling; extension-defined shortcuts remain the extension's. */
+  keys?: Keybindings
   /** Initial root-page widget state, applied before lifecycle hooks and the first render. */
   state?: Partial<UiState>
   /** Titles of main-session dialogs waiting for an answer; shown as a banner. */
@@ -109,7 +118,7 @@ export function wrapViewLines(lines: readonly ViewLine[], width: number): ViewLi
 /**
  * A full-screen view an extension registered (ViewDefinition), over the data a command
  * opened it with: the title and header stay at the top, the body scrolls (ScrollView), and the
- * footer lists the view's own keys. Esc goes back a page or closes the root; q and Ctrl+C close.
+ * footer lists the view's own keys. By default, Esc goes back or closes the root; q and Ctrl+C close.
  * The frontend mounts it on a FullScreenRenderer and redraws it as events come.
  */
 export class ExtensionViewer implements Component {
@@ -117,6 +126,7 @@ export class ExtensionViewer implements Component {
   #view: ViewDefinition
   #data: unknown
   #opts: ExtensionViewerOptions
+  #keys: Keybindings
   #pages: ViewPage[]
   #mounted = false
   #opening = false
@@ -139,6 +149,7 @@ export class ExtensionViewer implements Component {
     this.#view = view
     this.#data = data
     this.#opts = opts
+    this.#keys = opts.keys ?? defaultKeybindings()
     this.#now = opts.now ?? Date.now
     this.#pages = [this.#newPage({ state: opts.state })]
   }
@@ -172,7 +183,7 @@ export class ExtensionViewer implements Component {
     const ui = this.#view.ui
       ? new UiRuntime((event) => {
           this.#call("onEvent", () => this.#view.onEvent?.(event, this.#data, this.#uiControl()))
-        })
+        }, this.#keys)
       : undefined
     if (page.state) ui?.setState(page.state)
     return { title: page.title, data: page.data, ui, scrolls: new Map() }
@@ -205,7 +216,7 @@ export class ExtensionViewer implements Component {
     }
   }
 
-  /** Declarative views keep pointer coordinates; legacy views retain wheel-to-arrow routing. */
+  /** Whether this view uses declarative widgets. */
   get declarative(): boolean {
     return !!this.#ui
   }
@@ -245,7 +256,7 @@ export class ExtensionViewer implements Component {
 
   handleInput(e: InputEvent): boolean {
     if (this.#disposed) return false
-    if (matchesKey(e, "c", { ctrl: true })) {
+    if (this.#keys.is(e, "view.close") && !isTypingKey(e)) {
       this.#close()
       return true
     }
@@ -259,13 +270,14 @@ export class ExtensionViewer implements Component {
     }
     const asking = this.#prompt
     if (asking) {
-      if (matchesKey(e, "escape")) this.#answer(undefined)
+      if (this.#keys.is(e, "view.back") && !isTypingKey(e)) this.#answer(undefined)
       else if (isSubmitKey(e)) this.#answer(asking.input.value)
       else asking.input.handleInput(e)
       this.#opts.requestRender?.()
       return true
     }
-    if (matchesKey(e, "escape")) {
+    const typing = this.#ui?.typing && isTypingKey(e)
+    if (this.#keys.is(e, "view.back") && !typing) {
       if (this.#ui?.releaseInput()) {
         this.#uiDirty = true
         this.#opts.requestRender?.()
@@ -273,14 +285,14 @@ export class ExtensionViewer implements Component {
       else this.#close()
       return true
     }
-    if (matchesKey(e, "q") && !this.#ui?.typing) {
+    if (this.#keys.is(e, "view.close") && !typing) {
       this.#close()
       return true
     }
     if (this.#ui) {
       this.#uiDirty = true
       const input = e.type === "mouse" ? { ...e, y: e.y - this.#uiOffset } : e
-      if (this.#call("ui input", () => this.#ui!.handleInput(input))) {
+      if (this.#call("ui input", () => this.#ui!.handleInput(input, false))) {
         this.#opts.requestRender?.()
         return true
       }
@@ -298,8 +310,27 @@ export class ExtensionViewer implements Component {
       this.#opts.requestRender?.()
       return true
     }
-    if (this.#ui) return false
-    return this.scroll.handleInput(e)
+    if (this.#ui) {
+      const handled = !!this.#call("ui scroll", () => this.#ui!.handleScroll(e))
+      if (handled) this.#opts.requestRender?.()
+      return handled
+    }
+    if (e.type === "mouse") {
+      if (e.action !== "wheel" || (e.button !== "up" && e.button !== "down")) return false
+      this.scroll.scrollBy(e.button === "up" ? -3 : 3)
+      return true
+    }
+    const action = viewScrollAction(this.#keys, e)
+    const scroll = this.scroll
+    const page = Math.max(1, scroll.height - 1)
+    if (action === "up") scroll.scrollBy(-1)
+    else if (action === "down") scroll.scrollBy(1)
+    else if (action === "page-up") scroll.scrollBy(-page)
+    else if (action === "page-down") scroll.scrollBy(page)
+    else if (action === "top") scroll.scrollToTop()
+    else if (action === "bottom") scroll.scrollToEnd()
+    else return false
+    return true
   }
 
   #uiControl(): UiControl {
@@ -535,26 +566,54 @@ export class ExtensionViewer implements Component {
     return this.#footerHeight ? [this.#keyBar(theme, width)] : []
   }
 
+  #navigationLabel(action: "view.back" | "view.close", typing = !!this.#ui?.typing): string | undefined {
+    const spec = this.#keys
+      .keys(action)
+      .find((s) => !typing || s.ctrl || s.alt || (s.name.length > 1 && s.name !== "space"))
+    return spec && bindingLabel(spec)
+  }
+
+  #backHint(): string {
+    const back = this.#navigationLabel("view.back")
+    const close = this.#navigationLabel("view.close")
+    return back ? `${back} ${this.#pages.length > 1 ? "back" : "close"}` : close ? `${close} close` : ""
+  }
+
+  #scrollHint(): string {
+    const keys = this.#keys
+    const labels = [keys.label("scroll.page-up"), keys.label("scroll.page-down")]
+    if (!this.#ui) {
+      labels.unshift(
+        keys.pairLabel("view.scroll-up", "view.scroll-down") ?? keys.pairLabel("scroll.up", "scroll.down"),
+      )
+      // Prefer the familiar Home/End hints when those keys are still bound.
+      const plain = (s: { ctrl: boolean; alt: boolean; shift?: boolean }) => !s.ctrl && !s.alt && !s.shift
+      labels.push(keys.label("scroll.top", plain), keys.label("scroll.bottom", plain))
+    }
+    const label = labels.filter(Boolean).join(" ")
+    return label ? `${label} scroll` : ""
+  }
+
   #keyBar(theme: Theme, width: number): string {
     if (this.#confirm) return theme.warning(truncateToWidth(this.#confirm.text, width, glyphs.more))
     const asking = this.#prompt
     if (asking) {
       const label = truncateToWidth(`${asking.title} `, Math.max(1, Math.floor(width / 2)), glyphs.more)
       const room = Math.max(1, width - visibleWidth(label))
-      return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder: "Enter send · Esc cancel" })}`
+      const back = this.#navigationLabel("view.back", true)
+      const placeholder = `Enter send${back ? ` ${glyphs.separator} ${back} cancel` : ""}`
+      return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder })}`
     }
     if (this.#view.hostKeys === "minimal")
-      return theme.muted(
-        truncateToWidth(this.#pages.length > 1 ? "Esc back" : "Esc close", width, glyphs.more),
-      )
+      return theme.muted(truncateToWidth(this.#backHint(), width, glyphs.more))
     if (this.#ui)
       return theme.muted(
         fitHint(
           [
             ...keyHints(this.#view.keys ?? []),
             { text: "Tab focus · arrows navigate · Enter open/send", priority: 2 },
-            { text: "PgUp PgDn scroll", priority: 1 },
-            { text: this.#pages.length > 1 ? "Esc back" : "Esc close", priority: 5 },
+            { text: this.#scrollHint(), priority: 1 },
+            { text: this.#backHint(), priority: 5 },
           ],
           width,
         ),
@@ -566,8 +625,8 @@ export class ExtensionViewer implements Component {
       [
         (p.total > p.height || !!this.#view.scrollKey) && { text: scrollPosition(scroll), priority: 3 },
         ...keyHints(this.#view.keys ?? []),
-        { text: "↑↓ PgUp PgDn Home End scroll", priority: 1 },
-        { text: this.#pages.length > 1 ? "Esc back" : "Esc close", priority: 5 },
+        { text: this.#scrollHint(), priority: 1 },
+        { text: this.#backHint(), priority: 5 },
       ],
       width,
     )

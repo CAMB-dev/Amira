@@ -108,6 +108,14 @@ export function createInlineView(host: ViewHost): TranscriptView {
    * its echo and then each thing it prints, and a redraw for each of those flickered.
    */
   const pendingCommits: string[] = []
+  /** An answered picker stays live until output follows; a session boundary replaces it. */
+  let pendingDialog: ((width: number) => string[]) | undefined
+  function flushDialog(): void {
+    if (!pendingDialog) return
+    const draw = pendingDialog
+    pendingDialog = undefined
+    commit(transcript.block("dialog", draw(Math.max(1, terminal.columns))))
+  }
   const commit = (lines: string[]) => {
     pendingCommits.push(...lines)
     renderer.requestRender()
@@ -117,6 +125,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
    * row go first: what comes after them ends their run.
    */
   const commitBlock = (kind: BlockKind, lines: string[]) => {
+    flushDialog()
     flushExplored()
     commit(transcript.block(kind, lines))
   }
@@ -249,10 +258,17 @@ export function createInlineView(host: ViewHost): TranscriptView {
     // Live tool rows sit above the dialog (often the call that asked it), with the blank row
     // before the rest; the dialog fits in what they leave. No reply streams while tools are live.
     // Many calls at once take at most half the screen, so the input stays where it is.
+    const dialog = pendingDialog?.(width) ?? []
+    const dialogRows = Math.max(1, Math.floor(ctx.rows / 4))
+    if (dialog.length > dialogRows) {
+      dialog.length = dialogRows
+      dialog[dialogRows - 1] = truncateToWidth(`${dialog[dialogRows - 1]} ${glyphs.more}`, width, glyphs.more)
+    }
+    if (dialog.length && transcript.gapBefore("dialog")) dialog.unshift("")
     const tools = liveToolRows(width, ctx, Math.max(4, Math.floor(ctx.rows / 2)))
-    const budget = ctx.rows - 1 - (tools.length ? tools.length + 1 : 0)
+    const budget = ctx.rows - 1 - dialog.length - (tools.length ? tools.length + 1 : 0)
     const rest = host.bottom(width, ctx, budget, background)
-    streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - 3)
+    streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - dialog.length - 3)
     const commit = ctx.commit
     const replyCtx: RenderContext = commit
       ? {
@@ -262,7 +278,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       : ctx
     const reply = streaming.render(Math.max(1, width - visibleWidth(gutter)), replyCtx)
     const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
-    return [...lead, ...replyRows(reply), ...tools, "", ...rest]
+    return [...dialog, ...lead, ...replyRows(reply), ...tools, "", ...rest]
   })
   const reflow = host.settings.reflow ?? "auto"
   const renderer = new LiveRenderer(terminal, root, {
@@ -440,6 +456,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       subagents.clear()
       spawnGroups.clear()
       tickSubagents()
+      flushDialog()
       flushExplored()
       // What was committed but not drawn yet still belongs in the scrollback.
       if (pendingCommits.length) renderer.render()
@@ -457,16 +474,19 @@ export function createInlineView(host: ViewHost): TranscriptView {
       ]),
     user: (m) => commitBlock("user", userLines(theme, m, terminal.columns)),
     replyDelta(text) {
+      flushDialog()
       // The reply goes on: what it thought, and the calls held before it, go first.
       commitThought()
       flushExplored()
       streaming.append(text)
     },
     reasoningDelta(text) {
+      flushDialog()
       thought ??= { text: "", startedAt: Date.now() }
       thought.text += text
     },
     replyEnd(calls) {
+      flushDialog()
       // The rows still live are committed as they are shown; earlier ones already were.
       const early = streaming.committedRows > 0
       const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(gutter)))
@@ -478,6 +498,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       return rows.length > 0 || early || thoughtShown
     },
     toolStart(id, name, args, at) {
+      flushDialog()
       toolCalls.start(id, name, args, at)
       callNames.set(id, name)
     },
@@ -506,12 +527,18 @@ export function createInlineView(host: ViewHost): TranscriptView {
       ]),
     commandEcho: (line) => commitBlock("command", commandEchoLines(theme, line, terminal.columns)),
     commandOutput(level, text) {
+      flushDialog()
       // Right after its command it hangs under the echo; on its own it is a notice.
       if (transcript.last === "command" || transcript.last === "command-output") {
         commitBlock("command-output", commandOutputLines(theme, level, text, terminal.columns))
       } else commitBlock("notice", note(level, text))
     },
-    dialogEcho: (draw) => commitBlock("dialog", draw(Math.max(1, terminal.columns))),
+    dialogEcho(draw) {
+      flushDialog()
+      flushExplored()
+      pendingDialog = draw
+      renderer.requestRender()
+    },
     openSession(boundary, messages: Message[], _switched, compactionInfo) {
       // The scrollback keeps what was committed: the boundary says where this session starts.
       flushExplored()
@@ -530,6 +557,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       )
     },
     leaveSession() {
+      pendingDialog = undefined
       toolCalls.flush()
       thought = undefined
       flushExplored()

@@ -296,14 +296,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   const syncCompletions = (): Promise<void> | undefined => {
     const recalled = historyNav.recalling
-    const line =
-      editor.lineCount === 1 &&
-      !recalled &&
-      !editor.getParts().some((p) => typeof p !== "string" && "image" in p)
-        ? editor.getText()
-        : ""
+    const hasImages = editor.getParts().some((p) => typeof p !== "string" && "image" in p)
+    const line = editor.lineCount === 1 && !recalled && !hasImages ? editor.getText() : ""
     const commandsPending = popups.map((p) => p.update(line)).find(Boolean)
-    filePicker.update(recalled ? "" : editor.textBeforeCaret())
+    const claimed = !hasImages && commands?.inputLine(editor.getText())
+    filePicker.update(recalled || claimed ? "" : editor.textBeforeCaret())
     return commandsPending
   }
   // Shift+Enter is no use where the terminal sends it as plain Enter.
@@ -426,6 +423,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (viewer instanceof ExtensionViewer && viewer.kind === v.kind) viewer.show(v.data, v.state)
     else {
       const next = new ExtensionViewer(definition, v.data, {
+        keys,
         state: v.state,
         waiting: waitingTitles,
         onClose: () => viewer === next && closeView(),
@@ -462,7 +460,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (viewer !== next) return
     if (next instanceof ExtensionViewer) next.mount()
     if (viewer !== next) return
-    view.openOverlay(next instanceof ExtensionViewer && next.declarative)
+    view.openOverlay(next instanceof ExtensionViewer)
     if (!viewerTimer) viewerTimer = setInterval(() => view.requestOverlayRender(), 1000)
     waitingChanged("visibility")
   }
@@ -1128,10 +1126,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return
     }
     // A form or the viewer owns the keyboard while open: the rest is hidden. Ctrl+L repaints it.
-    // The wheel scrolls them like ↑↓, as it does on the alternate screen without mouse reporting.
+    // Forms and the key reference use wheel arrows; extension views receive pointer coordinates.
     if (form || viewer) {
       if (keys.is(e, "redraw")) return view.redrawOverlay()
-      for (const k of overlayKeys(e, !form && viewer instanceof ExtensionViewer && viewer.declarative)) {
+      for (const k of overlayKeys(e, !form && viewer instanceof ExtensionViewer)) {
         if (form) form.handleInput(k)
         else viewer?.handleInput(k)
       }

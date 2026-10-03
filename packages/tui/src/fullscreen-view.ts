@@ -147,15 +147,17 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const root = new View((width, ctx) => {
     // Covered by a full-screen overlay, the transcript's images are not placed: they are cleared.
     if (overlay) return host.overlay.render(width, ctx)
+    const barRows = findSelect.finding || pane.selected ? 1 : 0
+    const budget = Math.max(1, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - barRows)
+    const bottom = host.bottom(width, ctx, budget)
+    paneRows = Math.max(1, ctx.rows - bottom.length - barRows - 1)
+    const rows = pane.render(env(width), paneRows)
+    // Rendering refreshes matches as text streams in; the bar uses this frame's counts.
     const bar = findSelect.finding
       ? [findSelect.findBar(width)]
       : pane.selected
         ? [findSelect.selectBar(width)]
         : []
-    const budget = Math.max(1, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - bar.length)
-    const bottom = host.bottom(width, ctx, budget)
-    paneRows = Math.max(1, ctx.rows - bottom.length - bar.length - 1)
-    const rows = pane.render(env(width), paneRows)
     // The transcript is at the top of the screen: its rows are the screen's.
     for (const p of pane.placements) ctx.place?.(p)
     // The row under the transcript says how much is below.

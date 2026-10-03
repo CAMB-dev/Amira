@@ -25,6 +25,7 @@ const SCOPES: { scope: KeyScope; title: string; fullscreenOnly?: boolean }[] = [
   { scope: "popup", title: "Command and file lists" },
   { scope: "search", title: "History search" },
   { scope: "dialog", title: "Dialogs" },
+  { scope: "view", title: "Extension views" },
   { scope: "transcript", title: "Transcript", fullscreenOnly: true },
   { scope: "select", title: "Block selection", fullscreenOnly: true },
   { scope: "find", title: "Find", fullscreenOnly: true },
@@ -112,7 +113,11 @@ export class KeyReference implements Component {
     const groups = SCOPES.filter((s) => this.opts.fullscreen || !s.fullscreenOnly).map((s) => ({
       ...s,
       rows: (Object.keys(ACTIONS) as Action[])
-        .filter((a) => ACTIONS[a].scope === s.scope)
+        .filter(
+          (a) =>
+            ACTIONS[a].scope === s.scope ||
+            (!this.opts.fullscreen && s.scope === "view" && a.startsWith("scroll.")),
+        )
         .map((a) => ({ keys: this.#labels(a), description: `${ACTIONS[a].description} · ${a}` })),
     }))
     const widest = Math.max(...groups.flatMap((g) => g.rows.map((r) => visibleWidth(r.keys ?? "not bound"))))
