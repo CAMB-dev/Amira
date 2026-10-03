@@ -53,6 +53,7 @@ import { ContextManager } from "./agent/context-manager.ts"
 import { History, keptHistoryViews } from "./agent/history.ts"
 import { joinMessages, modelRef } from "./agent/messages.ts"
 import { modelCall, Thinking } from "./agent/model-call.ts"
+import { NoticeInbox } from "./agent/notices.ts"
 import { ToolRunner } from "./agent/tool-runner.ts"
 import {
   AgentAbortedError,
@@ -180,21 +181,7 @@ export class Agent {
   #steering: UserMessage[] = []
   /** Aborts waits that can return partial output as soon as steering arrives. */
   #steerAbort: AbortController | undefined
-  /**
-   * Delivered notices (expectNotice) waiting for a model call. Unlike steering they are never
-   * dropped: after an interrupted or failed turn they wait for the next one.
-   */
-  #notices: UserMessage[] = []
-  /** Notices announced and not yet delivered or cancelled. */
-  #expected = 0
-  /** Delays between resends of notices after failed turns. */
-  #noticeRetryMs: number[]
-  /** The scheduled resend, if any. */
-  #retry: { timer: ReturnType<typeof setTimeout>; attempt: number; at: number } | undefined
-  /** Resends in a row whose turn failed. */
-  #retries = 0
-  /** A notice arrived during a manual compaction: it is sent once that ends. */
-  #noticedDuringCompaction = false
+  #inbox: NoticeInbox
   /**
    * What holds the session (busy, but no turn): "compaction" during a manual compaction, or
    * the work hold() runs, e.g. "reload".
@@ -204,8 +191,6 @@ export class Agent {
   #afterCompaction: AfterCompaction | undefined
   #onIdleNotice: (() => void) | undefined
   #endTurn: (() => boolean) | undefined
-  #jobNoticeTarget: Agent | undefined
-  #pendingNotices = new Set<{ target: Agent }>()
   /** The running turn's promise, for owners that wait for whatever turn runs. */
   #current: Promise<TurnResult> | undefined
   #disposePromise: Promise<void> | undefined
@@ -264,7 +249,7 @@ export class Agent {
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
     this.#abortGraceMs = opts.abortGraceMs ?? 2000
-    this.#noticeRetryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
+    const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
     this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
     this.tree = opts.tree
     this.backgroundJobs = opts.backgroundJobs?.forSession({
@@ -310,6 +295,16 @@ export class Agent {
       emit: (turn, type, data) => this.#emit(turn, type, data),
     })
     this.#onIdleNotice = opts.onIdleNotice
+    this.#inbox = new NoticeInbox({
+      retryMs,
+      disposed: () => this.#disposed,
+      turn: () => this.#turn,
+      holding: () => this.#holding,
+      busy: () => this.#abort !== undefined,
+      onIdleNotice: this.#onIdleNotice?.bind(this),
+      prompt: (message) => this.prompt(message),
+      emit: (turn, type, data) => this.#emit(turn, type, data),
+    })
     this.#endTurn = opts.endTurn
 
     let history: ConstructorParameters<typeof History>[1]
@@ -433,7 +428,7 @@ export class Agent {
       // persistent (its owner wakes it for the notices it gets).
       ...(this.depth === 0 || this.#onIdleNotice
         ? {
-            expectNotice: () => agent.#noticeTarget().expectNotice(),
+            expectNotice: () => agent.#inbox.target().expect(),
           }
         : {}),
     }
@@ -447,51 +442,22 @@ export class Agent {
    * that an interrupted or failed turn did not reach waits for the next turn.
    */
   expectNotice(): PendingNotice {
-    if (this.#disposed) return { deliver: () => {}, cancel: () => {} }
-    const pending = { target: this }
-    this.#pendingNotices.add(pending)
-    this.#expected++
-    const close = () => {
-      if (!pending.target.#pendingNotices.delete(pending)) return false
-      pending.target.#expected--
-      return true
-    }
-    return {
-      deliver: (message, opts) => {
-        if (close()) pending.target.#receive(message, opts?.wake !== false)
-      },
-      cancel: () => void close(),
-    }
-  }
-
-  /** The session that gets this one's notices: its latest replacement after switches, if any. */
-  #noticeTarget(): Agent {
-    let target: Agent = this
-    while (target.#jobNoticeTarget) target = target.#jobNoticeTarget
-    return target
+    return this.#inbox.expect()
   }
 
   /** Sends notices for top-level background work to the replacement session after a switch. */
   handoverBackgroundNotices(next: Agent): void {
-    if (this.depth !== 0) return
-    this.#jobNoticeTarget = next
-    for (const pending of this.#pendingNotices) {
-      this.#pendingNotices.delete(pending)
-      this.#expected--
-      pending.target = next
-      next.#pendingNotices.add(pending)
-      next.#expected++
-    }
+    if (this.depth === 0) this.#inbox.handover(next.#inbox)
   }
 
   /** Notices announced (expectNotice) and not yet delivered or cancelled. */
   get expectedNotices(): number {
-    return this.#expected
+    return this.#inbox.expected
   }
 
   /** Delivered notices that have not reached the model yet. */
   get waitingNotices(): number {
-    return this.#notices.length
+    return this.#inbox.waiting
   }
 
   /**
@@ -499,23 +465,7 @@ export class Agent {
    * an owner that ends the session, to report them.
    */
   takeNotices(): UserMessage[] {
-    return this.#notices.splice(0)
-  }
-
-  #receive(message: UserMessage, wake = true) {
-    if (this.#disposed) return
-    this.#notices.push(message)
-    const turn = this.#turn
-    if (turn) this.#emit(turn, "turn.steer", { message, state: "queued" })
-    else if (this.#holding) {
-      // A manual compaction (or other held work) runs: it is sent once that ends.
-      if (wake) this.#noticedDuringCompaction = true
-      this.#emit(undefined, "turn.steer", { message, state: "queued" })
-    } else if (!wake) {
-      // It waits for the next turn, which the user's next message starts.
-      this.#emit(undefined, "turn.steer", { message, state: "queued" })
-    } else if (this.#onIdleNotice) this.#onIdleNotice()
-    else this.#wake()
+    return this.#inbox.take()
   }
 
   /**
@@ -523,8 +473,7 @@ export class Agent {
    * owners that passed `onIdleNotice`. Returns the turn, or undefined when none started.
    */
   wake(): Promise<TurnResult> | undefined {
-    if (this.#disposed || this.#abort || this.#holding || !this.#notices.length) return undefined
-    return this.prompt(joinMessages(this.#notices.splice(0)))
+    return this.#inbox.wake()
   }
 
   /** The turn running now, if any: settles with its result. */
@@ -534,72 +483,12 @@ export class Agent {
 
   /** When held notices are sent again after a failed turn, if they will be. */
   get noticeRetry(): { attempt: number; at: number } | undefined {
-    return this.#retry && { attempt: this.#retry.attempt, at: this.#retry.at }
+    return this.#inbox.retry
   }
 
   /** Stops a scheduled resend of held notices, e.g. when the session is left (/clear, quit). */
   cancelNoticeRetry(): void {
-    this.#cancelRetry()
-  }
-
-  #cancelRetry() {
-    if (!this.#retry) return
-    clearTimeout(this.#retry.timer)
-    this.#retry = undefined
-  }
-
-  /**
-   * A turn carrying notices failed before the model answered them (or left some unsent): send
-   * them again later, starting a turn, with growing delays. After the last retry fails they
-   * wait for the user's next message.
-   */
-  #scheduleRetry(error: string | undefined) {
-    if (this.#disposed) return
-    this.#cancelRetry()
-    const delays = this.#noticeRetryMs
-    if (this.#retries >= delays.length) return
-    const delayMs = delays[this.#retries]!
-    const attempt = this.#retries + 1
-    const timer = setTimeout(() => this.#redeliver(), delayMs)
-    // Never what keeps a process alive: print and rpc wait for it on their own terms.
-    ;(timer as { unref?: () => void }).unref?.()
-    this.#retry = { timer, attempt, at: Date.now() + delayMs }
-    this.#emit(undefined, "notice.retry", {
-      attempt,
-      attempts: delays.length,
-      delayMs,
-      ...(error !== undefined ? { error } : {}),
-    })
-  }
-
-  #redeliver() {
-    if (this.#disposed) return
-    this.#retry = undefined
-    this.#retries++
-    const message = this.#notices.length
-      ? joinMessages(this.#notices.splice(0))
-      : userMessage(
-          "The previous turn failed before you handled the results of your background sub-agents above. Handle them now. (Sent automatically; the user did not write this message.)",
-          {
-            text: `◆ sending the sub-agents' results again (retry ${this.#retries} of ${this.#noticeRetryMs.length})`,
-            origin: "subagent",
-          },
-        )
-    // A turn cancels the timer, so only a manual compaction can be running: the message then
-    // waits for it like any notice arriving meanwhile.
-    if (this.#holding) {
-      this.#notices.push(message)
-      this.#noticedDuringCompaction = true
-      this.#emit(undefined, "turn.steer", { message, state: "queued" })
-      return
-    }
-    this.prompt(message).catch(() => {})
-  }
-
-  /** Starts a turn with the waiting notices. */
-  #wake() {
-    if (this.#disposed || this.#abort || !this.#notices.length) return
-    this.prompt(joinMessages(this.#notices.splice(0))).catch(() => {})
+    this.#inbox.cancelRetry()
   }
 
   /** Notes a sub-agent in this session's file, so its branch points at the child's session. */
@@ -737,13 +626,12 @@ export class Agent {
     } finally {
       this.#abort = undefined
       this.#holding = undefined
-      const noticed = this.#noticedDuringCompaction
-      this.#noticedDuringCompaction = false
+      const noticed = this.#inbox.takeNoticedDuringHold()
       // Held prompts and steers start their turn (an abort drops them); notices that came
       // meanwhile join it before its first model call. Notices are never dropped: without such
       // a turn they start one, unless the work was aborted: then they wait for the next.
       this.#startAfterCompaction(abort.signal.aborted, what)
-      if (noticed && !abort.signal.aborted) this.#wake()
+      if (noticed && !abort.signal.aborted) this.#inbox.wakeQuietly()
     }
   }
 
@@ -999,18 +887,14 @@ export class Agent {
   }
 
   async #dispose(reason: EventMap["session.end"]["reason"]): Promise<void> {
-    this.#cancelRetry()
+    this.#inbox.cancelRetry()
     this.#abort?.abort()
     this.#steerAbort?.abort()
     ;(this.backgroundJobs as { dispose?: () => void } | undefined)?.dispose?.()
     this.#steering.splice(0)
-    this.#notices.splice(0)
-    this.#pendingNotices.clear()
-    this.#expected = 0
+    this.#inbox.clear()
     // Messages held for a running hold are dropped as an abort of it drops them.
     this.#startAfterCompaction(true, this.#holding ?? "session")
-    // #jobNoticeTarget stays: a job that asks for its notice after this switch must still reach
-    // the replacement session.
     // A sub-agent's end is subagent.end; session.end means the conversation itself ended.
     if (this.depth === 0) this.#emit(undefined, "session.end", { reason })
 
@@ -1048,7 +932,7 @@ export class Agent {
       return
     }
     this.#steerAbort?.abort()
-    if (opts?.notice) this.#receive(message)
+    if (opts?.notice) this.#inbox.receive(message)
     else {
       this.#steering.push(message)
       this.#emit(turn, "turn.steer", { message, state: "queued" })
@@ -1089,7 +973,7 @@ export class Agent {
     this.#turn = turn
     const user = typeof input === "string" ? userMessage(input) : input
     // Whatever starts now takes the held notices along: no retry is needed any more.
-    this.#cancelRetry()
+    this.#inbox.cancelRetry()
     if (user.display?.origin) turn.unanswered = true
 
     let steps = 0
@@ -1185,7 +1069,7 @@ export class Agent {
       const leftover = this.#steering.splice(0)
       // Notices are never dropped: after an interrupted or failed turn they wait for the next.
       // An owner that decides when turns run (onIdleNotice) starts the next one itself.
-      const notices = result.reason === "done" && !this.#onIdleNotice ? this.#notices.splice(0) : []
+      const notices = result.reason === "done" && !this.#onIdleNotice ? this.#inbox.take() : []
       const nextTurnId =
         result.reason === "done" && (leftover.length || notices.length) ? newTurnId() : undefined
       for (const message of leftover) {
@@ -1209,8 +1093,9 @@ export class Agent {
       })
       this.#setStatus(turn, "idle")
       // A success resets the notice retries; after an interrupt the user decides when to go on.
-      if (result.reason !== "error") this.#retries = 0
-      else if (!this.#disposed && (turn.unanswered || this.#notices.length)) this.#scheduleRetry(result.error)
+      if (result.reason !== "error") this.#inbox.resetRetries()
+      else if (!this.#disposed && (turn.unanswered || this.#inbox.waiting))
+        this.#inbox.scheduleRetry(result.error)
       if (nextTurnId && !this.#disposed) {
         this.prompt(joinMessages(leftover), { turnId: nextTurnId }).catch(() => {})
       }
@@ -1219,7 +1104,7 @@ export class Agent {
   }
 
   #injectSteering(turn: Turn) {
-    const notices = this.#notices.splice(0)
+    const notices = this.#inbox.take()
     if (notices.length) turn.unanswered = true
     // The steers reach the model now: later waits in this turn wait again.
     if (this.#steerAbort?.signal.aborted) this.#steerAbort = new AbortController()
@@ -1268,7 +1153,7 @@ export class Agent {
     let ctx = await this.#buildContext(turn.signal)
     for (let rebuilds = 0; ; rebuilds++) {
       if (await this.execution.wait(turn.signal)) return { kind: "aborted" }
-      if (this.depth === 0 || rebuilds >= 3 || !(this.#steering.length || this.#notices.length)) break
+      if (this.depth === 0 || rebuilds >= 3 || !(this.#steering.length || this.#inbox.waiting)) break
       this.#injectSteering(turn)
       ctx = await this.#buildContext(turn.signal)
     }
