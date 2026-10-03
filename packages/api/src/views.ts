@@ -1,5 +1,6 @@
 import type { CommandOutputLevel } from "./commands.ts"
 import type { ToolCallView, ToolDetailLevel, ToolLine } from "./tool-renderers.ts"
+import type { UiContext, UiControl, UiEvent, UiNode } from "./views-ui.ts"
 
 /**
  * Experimental: full-screen views extensions add to frontends, such as a workflow's progress
@@ -70,7 +71,8 @@ export interface ViewKey<D = unknown> {
   /** One printable character or a named navigation key. Esc, q and scrolling remain host-owned. */
   key: ViewKeyName
   label: string
-  run(data: D, view: ViewControl): void
+  /** Legacy line-view handler. Experimental ui views declare keys here and use onEvent instead. */
+  run?(data: D, view: ViewControl): void
 }
 
 export type ViewKeyName = "left" | "right" | "tab" | "shift-tab" | (string & {})
@@ -92,7 +94,18 @@ export interface ViewDefinition<D = any> {
   /** Lines under the title that stay in place while the body scrolls, e.g. totals. */
   header?(data: D, opts: ViewRenderOptions): ViewLine[]
   /** The body, scrolled by the frontend. Called again whenever the view is redrawn. */
-  render(data: D, opts: ViewRenderOptions): ViewLine[]
+  render?(data: D, opts: ViewRenderOptions): ViewLine[]
+  /**
+   * Experimental D104 L3: replaces title/header/render screen content with semantic widgets.
+   * Title remains required for window/fallback presentation. Supply ui or render. Existing
+   * line-only views are unchanged. Esc, q and Ctrl+C still close, even inside a UI input;
+   * only ViewControl.prompt temporarily takes those keys. Tab moves focus, arrows operate
+   * the focused widget, Enter activates/submits, and the wheel scrolls under the pointer.
+   * Keep ui free of side effects: state reconciliation can rebuild it within the same frame.
+   */
+  ui?(data: D, ctx: UiContext): UiNode
+  /** Experimental semantic events; host state changes first, then this handler may override it. */
+  onEvent?(event: UiEvent, data: D, view: UiControl): void
   keys?: ViewKey<D>[]
   /**
    * Whether the body keeps to its end as it grows, like a log (the default), or starts at

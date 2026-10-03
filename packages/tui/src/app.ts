@@ -462,8 +462,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (viewer instanceof ExtensionViewer) viewer.dispose()
     viewer = next
     waitingChanged("visibility")
+    view.openOverlay(next instanceof ExtensionViewer && next.declarative)
     if (opened) return
-    view.openOverlay()
     // Elapsed times move even when no event comes.
     viewerTimer = setInterval(() => view.requestOverlayRender(), 1000)
   }
@@ -1131,7 +1131,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // The wheel scrolls them like ↑↓, as it does on the alternate screen without mouse reporting.
     if (form || viewer) {
       if (keys.is(e, "redraw")) return view.redrawOverlay()
-      for (const k of overlayKeys(e)) {
+      for (const k of overlayKeys(e, !form && viewer instanceof ExtensionViewer && viewer.declarative)) {
         if (form) form.handleInput(k)
         else viewer?.handleInput(k)
       }

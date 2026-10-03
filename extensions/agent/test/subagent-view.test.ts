@@ -196,6 +196,12 @@ function lineText(line: string | ViewLine): string {
   return line.kind === "segments" ? line.parts.map((part) => part.text).join("") : line.text
 }
 
+function requireRenderer<D>(
+  view: ViewDefinition<D>,
+): asserts view is ViewDefinition<D> & Required<Pick<ViewDefinition<D>, "render">> {
+  if (!view.render) throw new Error("The legacy subagent view must provide render")
+}
+
 async function snapshotView() {
   const bus = new EventBus()
   const tools = new ToolRegistry()
@@ -233,6 +239,7 @@ async function snapshotView() {
     definition = subagentView(api)
     api.registerView(definition)
   }, "builtin:agent")
+  requireRenderer(definition)
   const data = { sessionId: "a" }
   const context = { theme: monoTheme, color: false, rows: 20 }
   const viewer = new ExtensionViewer(definition, data, { now: () => 6500 })
