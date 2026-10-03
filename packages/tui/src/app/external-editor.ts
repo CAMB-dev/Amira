@@ -9,8 +9,13 @@ export function externalEditor(env: Record<string, string | undefined>, cwd: str
     encoding: "utf8",
     env: { ...process.env, ...env },
   })
-  return (
-    (configured.status === 0 && configured.stdout?.trim()) ||
-    (process.platform === "win32" ? "notepad" : "vi")
-  )
+  const command = configured.status === 0 ? configured.stdout?.trim() : ""
+  if (command) return process.platform === "win32" ? cmdQuotes(command) : command
+  return process.platform === "win32" ? "notepad" : "vi"
+}
+
+/** Git for Windows writes `'C:/Program Files/app.exe' -w`; cmd.exe only understands double quotes. */
+function cmdQuotes(command: string): string {
+  const quoted = /^'([^']*)'/.exec(command)
+  return quoted ? `"${quoted[1]}"${command.slice(quoted[0].length)}` : command
 }
