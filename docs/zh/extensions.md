@@ -178,6 +178,10 @@ amira
 | `notify`、`reportError` | 显示提示或报告后台错误 |
 | `registerFileRestoration` | 接管回退时的文件恢复（例如 checkpoints 扩展）：选择器显示你提供的选项，core 不再恢复文件；同一时间只能有一个扩展接管，卸载时释放 |
 
+### 命令回显
+
+命令默认会将输入的 slash 命令行回显到对话记录中。在传给 `api.registerCommand()` 的 `CommandDefinition` 上设置 `echo: false`，即可在内联和全屏 TUI 模式下省略这一行，例如用于 `/btw <question>`。这只隐藏前端的输入回显：命令自身的输出（`ctx.print`、通知和视图）仍照常显示，输入历史（↑）也仍会记录该行。打印模式和 RPC 的行为不变。
+
 ### 全屏视图
 
 通过 `api.registerView()` 注册 `ViewDefinition`，命令用 `ctx.openView?.({ kind, data, state })` 打开它，可选的 `state` 为初始 `Partial<UiState>`。视图返回结构化的 `ViewLine` 对象；前端负责终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent 扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。

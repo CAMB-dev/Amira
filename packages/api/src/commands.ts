@@ -50,6 +50,12 @@ export interface CommandDefinition {
      */
     complete?(prefix: string, ctx: CommandCompleteContext): CommandCandidate[] | Promise<CommandCandidate[]>
   }
+  /**
+   * Whether the frontend writes the typed line into the transcript (default true).
+   * False hides only that echo: ctx.print, notices and views still show as usual,
+   * and prompt history (↑) still records the line.
+   */
+  echo?: boolean
   /** Must be true to replace a command of the same name registered earlier. */
   override?: boolean
   /** `args` is the text after the name, trimmed. Throwing reports the message to the user. */
