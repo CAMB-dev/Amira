@@ -4,6 +4,7 @@ import {
   type ScreenImage,
   stripAnsi,
   type Theme,
+  truncateToWidth,
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
@@ -59,6 +60,32 @@ export interface ImageRow {
   image: ScreenImage
   /** What shows in its place when it cannot be drawn: its alt text, as a row. */
   alt: string
+  /** Text retained for copying an extension-rendered image. */
+  fallback?: string[]
+  /** Invalidate its layout if encoding fails and the fallback needs a different row count. */
+  changed?: () => void
+}
+
+/** Accessible text for an image that is loading, broken, or cannot be drawn at this crop. */
+export function setImageFallback(
+  rows: Map<number, string>,
+  at: number,
+  image: Pick<ImageRow, "col" | "alt" | "fallback">,
+  height: number,
+  width: number,
+  note = "",
+): void {
+  if (!image.fallback) {
+    rows.set(at, `${" ".repeat(image.col)}${image.alt}${note}`)
+    return
+  }
+  const text = image.fallback
+  for (let i = 0; i < Math.min(height, text.length); i++)
+    rows.set(
+      at + i,
+      " ".repeat(image.col) +
+        truncateToWidth(text[i]! + (i ? "" : note), Math.max(1, width - image.col), glyphs.more),
+    )
 }
 
 /** The images in lines a block returned, by those lines. */

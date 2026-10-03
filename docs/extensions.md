@@ -186,13 +186,25 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `registerView` | Register a full-screen view kind; commands open it through `openView` when the frontend supports it |
 | `registerToolRenderer`, `decorateToolRenderer` | Present tool calls and results, or wrap an existing presenter |
 | `serverToolView` | Turn provider-hosted tool blocks, such as native web search, into the same tool-call view shape used by presenters |
-| `registerMarkdownRenderer`, `registerImageProvider` | Render matching reply code blocks or standalone images and supply terminal image data |
+| `registerMarkdownRenderer`, `registerImageProvider` | Render matching reply code blocks, math or standalone images and supply terminal image data |
 | `provideService`, `useService` | Share named extension services; look them up when needed because a provider may be absent or unloaded |
 | `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, provenance layers for each top-level key, the working directory, the user directory and API version |
 | `backgroundJobs` | Start and inspect only this extension's background jobs; built-in frontend code uses the host-only `hostBackgroundJobs()` capability |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
+
+### Markdown and math renderers
+
+`api.registerMarkdownRenderer({ id, match, render })` claims completed reply nodes. Use `match: { codeLang: ["latex", "tex"] }` for fences, `{ image: true }` for standalone images, or `{ math: "inline" | "display" | "both" }` for math. Math nodes are `{ type: "math", display: boolean, source: string }`; `source` excludes the delimiters. Renderers run by descending priority, then registration order. Returning `undefined`, throwing, or returning an invalid result lets the next renderer try; if none claims the node, its existing Markdown rendering is unchanged.
+
+Display math uses `$$…$$` or `\[…\]` as a block, including multiline blocks; `$$` on its own line opens a block. Like a claimed fence, a display block stays source while streaming and is rendered only after its closing delimiter arrives. Unclosed math stays source at the end of the reply. Inline math uses `$…$` or `\(…\)` inside paragraph text, never inside code spans or code blocks. A dollar opener cannot be followed by whitespace, a dollar closer cannot be preceded by whitespace or followed by a digit, and `\$` is literal: currency such as `$5 and $10` is not math.
+
+Inline math must return `{ segments: [{ kind: "text", text: "x²" }] }`: styled text fragments concatenated into the paragraph and wrapped with it. Inline images and block `lines` results are rejected. Display math, fences and standalone images return `{ lines: ToolLine[] }` or `{ image: ImageInput, alt?: string, fallback?: ToolLine[] }`. Use `alt` to describe the image and `fallback` for a readable text rendering. Fallback lines take precedence over alt text when graphics are unavailable or the transcript is copied or printed; without either, the original node remains the fallback. Core removes escape/control sequences from renderer text and limits block results to 2000 lines.
+
+The context includes `width`, `images`, `maxImageRows`, and `theme: { dark: boolean, foreground?: string, background?: string }`. Check `images` before doing image work. Plain `amira -p` runs completed nodes through the same registry with `images: false`, preserving unclaimed source; return text there. Image results with fallback or alt text are converted to text. A renderer that has not answered within its `waitMs` is skipped and the source is printed. `--json` keeps the original events and does not run renderers.
+
+The TUI's light/dark theme is selected at startup using its terminal background probe (OSC 11, then `COLORFGBG`, default dark), and is fixed for the session. The renderer context uses that same selection, including in monochrome mode. Exact foreground/background colors are currently unknown and omitted. Non-interactive print mode defaults to `{ dark: true }`. Cached renderings include the theme in their key. Full-screen replies redraw when async results arrive; the inline transcript waits for block results up to `waitMs` (default 3000, maximum 15000 ms), then commits source instead. Inline math should return segments synchronously so it is available before its paragraph enters scrollback.
 
 ### Command echo
 
