@@ -72,7 +72,8 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
     async run(line) {
       const commands = options.commands
       if (!commands) return
-      options.commandEcho(line)
+      const echo = commands.shouldEcho(line)
+      if (echo) options.commandEcho(line)
       const abort = new AbortController()
       commandAborts.set(abort, commands.commandName(line))
       let sent = false
@@ -85,7 +86,7 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
           keys: keyHelp,
           signal: abort.signal,
           onSend: (text, sendOptions) => {
-            if (sent || sendOptions?.display?.text !== line) return
+            if (!echo || sent || sendOptions?.display?.text !== line) return
             commandEchoes.set(abort, { line, text })
             sent = true
             return () => void commandEchoes.delete(abort)
