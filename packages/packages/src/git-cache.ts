@@ -723,6 +723,12 @@ export function gitCachePins(where: { home?: string; cwd: string }): {
   const unreadable: string[] = []
   for (const file of knownProjectLocks(where)) {
     try {
+      // readLock treats any read failure as an empty lock; only a missing file really is one.
+      try {
+        readFileSync(file)
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e
+      }
       for (const e of Object.values(readLock(file).packages))
         if (e.source.type === "git") urls.add(e.source.url)
     } catch {
