@@ -153,6 +153,32 @@ Esc on an approval denies the call and stops the turn.
 | `dialog.prev-question` | `left` | Go back to the previous question of several |
 | `dialog.next-question` | `right` | Go on to the next question of several, up to the first one not answered yet |
 
+### Extension views
+
+Full-screen views opened by commands use these host actions. Their hints show your current
+bindings, including in views with a minimal footer. An empty list unbinds an action; there
+is no hidden Esc or Ctrl+C fallback, so keep a way to leave the view bound.
+
+| Action | Default | What it does |
+| --- | --- | --- |
+| `view.back` | `escape` | Release an activated text field, go back one page, or close the root page; cancel a view's prompt |
+| `view.close` | `q`, `ctrl+c` | Close the whole view, including any nested pages |
+| `view.scroll-up` | `up` | Scroll view text up a line |
+| `view.scroll-down` | `down` | Scroll view text down a line |
+
+Views also use the shared `scroll.*` actions below: Shift+↑/↓, PgUp/PgDn and Home/End by
+default. Rebinding or unbinding them affects both the transcript and views. The separate
+`view.scroll-up`/`view.scroll-down` actions keep plain arrows available in views without
+changing how arrows recall prompt history. To disable all line scrolling in views, unbind
+both the view and shared line-scroll actions.
+
+Extension-defined shortcuts stay as the extension defines them and take precedence over
+scrolling. In widget-based views, Tab, arrows and Enter still navigate and activate widgets;
+scroll actions apply to the focused scrollable region. A focused text field owns printable
+characters, including `q` and printable back/close bindings. Non-printable close bindings
+(such as Ctrl+C) still close from a text field or prompt. In a confirmation, printable keys
+answer the confirmation instead of closing the view.
+
 ### Transcript (full-screen mode)
 
 In full-screen mode (the default, see `tui.mode` below) Amira keeps the conversation and
