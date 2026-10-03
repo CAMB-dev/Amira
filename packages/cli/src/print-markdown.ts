@@ -158,7 +158,7 @@ export class PrintMarkdown {
   private async render(node: MarkdownNode, source: string, ending: string): Promise<string> {
     if (node.type === "math" && !this.registry.claimsMath(node.display)) return source
     // A renderer that never settles must not hang `amira -p`: it gets the node's wait, then source.
-    let timer: ReturnType<typeof setTimeout> | undefined
+    let timer: Timer | undefined
     const result = await Promise.race([
       this.registry.render(node, {
         width: process.stdout.columns || 80,
