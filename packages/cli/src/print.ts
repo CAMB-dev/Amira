@@ -4,11 +4,13 @@ import { type AnyEvent, type BackgroundJobInfo, type BackgroundJobRegistry, fall
 import {
   type Agent,
   type CommandHost,
+  type MarkdownRendererRegistry,
   parseCommandLine,
   type TurnResult,
   toolTraits,
   type UiRequests,
 } from "@amira/core"
+import { PrintMarkdown } from "./print-markdown.ts"
 
 export interface PrintIO {
   stdout: (s: string) => void
@@ -28,6 +30,8 @@ type PrintBackgroundJobs = Pick<BackgroundJobRegistry, "list" | "subscribe">
 
 export interface PrintOptions {
   io?: PrintIO
+  /** Plain output only: completed claimed nodes, with images off and a non-TTY dark theme. */
+  markdownRenderers?: MarkdownRendererRegistry
   /** Events emitted before this frontend subscribed (e.g. extension load errors). */
   pending?: AnyEvent[]
   /** How long to wait for slow event subscribers after the turn. Default 2000 ms. */
@@ -131,6 +135,16 @@ export async function runPrint(
   // Tools that need a UI are not even offered: nobody is there to answer them.
   if (opts.ui) opts.ui.unavailable = "print mode"
   let endedWithNewline = true
+  const markdown =
+    !json && opts.markdownRenderers
+      ? new PrintMarkdown(opts.markdownRenderers, (text) => {
+          if (!text) return
+          io.stdout(text)
+          endedWithNewline = text.endsWith("\n")
+        })
+      : undefined
+  // Keep the bus subscriber fast: rendering may be async, but no later output can overtake it.
+  let plainQueue = Promise.resolve()
   /** Hosted web searches already printed, by id. */
   const searched = new Set<string>()
   /** Name, role and line indent of each sub-agent, by session id. */
@@ -204,7 +218,7 @@ export async function runPrint(
     }
     return undefined
   }
-  const handle = (e: AnyEvent) => {
+  const handleEvent = async (e: AnyEvent) => {
     if (e.type === "turn.end" && e.sessionId === agent.sessionId) {
       lastEnd = {
         reason: e.data.reason,
@@ -263,11 +277,24 @@ export async function runPrint(
       }
       return
     }
+    if (
+      markdown &&
+      (e.type === "message.end" ||
+        e.type === "turn.end" ||
+        e.type === "tool.execute.start" ||
+        e.type === "compact.start" ||
+        e.type === "command.output" ||
+        (e.type === "message.delta" && e.data.kind === "serverTool" && e.data.block.status !== "running"))
+    )
+      await markdown.finish()
     switch (e.type) {
       case "message.delta":
         if (e.data.kind === "text") {
-          io.stdout(e.data.text)
-          endedWithNewline = e.data.text.endsWith("\n")
+          if (markdown) await markdown.write(e.data.text)
+          else {
+            io.stdout(e.data.text)
+            endedWithNewline = e.data.text.endsWith("\n")
+          }
         } else if (e.data.kind === "serverTool" && e.data.block.status !== "running") {
           // The provider's own search: one line once it finished, as a tool call gets.
           if (searched.has(e.data.block.id)) break
@@ -346,6 +373,10 @@ export async function runPrint(
         break
     }
   }
+  const handle = (e: AnyEvent) => {
+    if (!markdown) return handleEvent(e)
+    plainQueue = plainQueue.then(() => handleEvent(e))
+  }
   for (const e of opts.pending ?? []) handle(e)
   const off = agent.bus.subscribe(handle)
   opts.onReady?.()
@@ -405,6 +436,7 @@ export async function runPrint(
     // decide the exit code the same way.
     if (code === 0 && ((await backgroundTurns(agent, () => interrupted)) || jobs.waited)) {
       await agent.bus.flush()
+      await plainQueue
       code = interrupted ? 130 : lastEnd ? exitCode(lastEnd) : code
     }
     const flushed = await Promise.race([
@@ -412,6 +444,8 @@ export async function runPrint(
       Bun.sleep(opts.flushTimeoutMs ?? 2000).then(() => false),
     ])
     if (!flushed) io.stderr("amira: some event handlers did not finish; exiting anyway\n")
+    await plainQueue
+    await markdown?.finish()
     flushJson()
     jsonFileOpen = false
     if (jsonFile)

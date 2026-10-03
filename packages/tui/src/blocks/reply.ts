@@ -14,7 +14,8 @@ import {
 import { expandTabs } from "../diff-view.ts"
 import { replyRows } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
-import { apiNode, nodeRows, type ReplyRenderers } from "../markdown-nodes.ts"
+import { apiNode, imageFallback, nodeRows, type ReplyRenderers } from "../markdown-nodes.ts"
+import { ReplyAlternatives } from "../reply-alternatives.ts"
 import type { CopyRow } from "../text-selection.ts"
 import {
   Block,
@@ -124,11 +125,12 @@ export class ReplyBlock extends Block {
   private streamImages: BlockImages | undefined
   private streamImageRows = 0
   /** Images laid out by their marks' ids, with their alt text. */
-  private marks = new Map<number, { image: ScreenImage; alt: string }>()
+  private marks = new Map<number, { image: ScreenImage; alt: string; fallback?: string[] }>()
   #hasImages = false
   #streaming: boolean
   private lastImages: BlockImages | undefined
   private lastRenders: BlockRenders | undefined
+  private alternatives = new ReplyAlternatives()
   /** What the stream was made with from the renderers: their generation, or -1 without them. */
   private streamRenders = -1
   /** An image file came in (or failed): its rows change. */
@@ -226,34 +228,67 @@ export class ReplyBlock extends Block {
     theme: Theme,
     images: BlockImages | undefined,
     renders: ReplyRenderers | undefined,
+    textOnly = false,
   ): MarkdownNodes {
     return {
       images: true,
-      claimsCode: (lang) => !!renders?.claimsCode(lang),
+      claimsCode: (lang) => !!renders?.claimsCode(lang) || (textOnly && this.alternatives.claimsCode(lang)),
+      claimsMath: (display) =>
+        !!renders?.claimsMath(display) || (textOnly && this.alternatives.claimsMath(display)),
+      inline: (node, fallback, width) => {
+        if (!renders) return fallback
+        const r = renders.get(apiNode(node), {
+          width,
+          images: false,
+          maxImageRows: 0,
+          theme: renders.theme,
+        })
+        if (!r.done) r.onDone(this.rendered)
+        return r.result && "segments" in r.result
+          ? nodeRows(r.result.segments, theme, width, true).join("")
+          : fallback
+      },
       render: (node, fallback, col, width) => {
         const room = Math.max(1, width - col)
-        const alt =
-          node.type === "image" ? undefined : `${defaultGlyphs.image} ${node.lang || "diagram"}`.trim()
+        const retained = textOnly ? this.alternatives.get(node) : undefined
+        if (retained) return nodeRows(retained, theme, room).map((row) => " ".repeat(col) + row)
         if (node.type === "image" && !renders?.claimsImages)
-          return images ? this.imageRows(images, { url: node.url }, fallback, col, width) : fallback
+          return images && !textOnly
+            ? this.imageRows(images, { url: node.url }, fallback, col, width)
+            : fallback
         if (!renders) return fallback
         const r = renders.get(apiNode(node), {
           width: room,
           images: !!images,
           maxImageRows: images?.store.maxRows() ?? 0,
+          theme: renders.theme,
         })
         if (!r.done) {
-          r.onDone(this.rendered)
+          this.alternatives.watch(node, r, renders.source, this.rendered)
           return fallback
         }
         const out = r.result
         if (!out) {
-          if (node.type === "image" && images)
+          if (node.type === "image" && images && !textOnly)
             return this.imageRows(images, { url: node.url }, fallback, col, width)
           return fallback
         }
+        this.alternatives.remember(node, out, renders.source)
         if ("lines" in out) return nodeRows(out.lines, theme, room).map((row) => " ".repeat(col) + row)
-        return images ? this.imageRows(images, out.image, fallback, col, width, alt) : fallback
+        if ("segments" in out) return fallback
+        const text = imageFallback(
+          out,
+          fallback.map((row) => row.slice(col)),
+          theme,
+          room,
+        )
+        const shown = text.map((row) => " ".repeat(col) + row)
+        const raw = this.alternatives.get(node)?.map((line) => stripAnsi(line.text))
+        const alt =
+          out.alt ??
+          raw?.join(" ") ??
+          (node.type === "code" ? `${defaultGlyphs.image} ${node.lang || "diagram"}`.trim() : undefined)
+        return images && !textOnly ? this.imageRows(images, out.image, shown, col, width, alt, raw) : shown
       },
     }
   }
@@ -266,15 +301,16 @@ export class ReplyBlock extends Block {
     col: number,
     width: number,
     altText?: string,
+    text?: string[],
   ): string[] {
     const source = images.store.screen(input)
     if (source.state === "loading") source.onSettled(this.imageLoaded)
     const image = source.image(Math.max(1, width - col), images.store.maxRows())
-    if (!image) return fallback
+    if (!image || image.broken) return fallback
     const indent = " ".repeat(col)
     const first = fallback[0] ?? ""
     const alt = altText ?? (first.startsWith(indent) ? first.slice(col) : first)
-    this.marks.set(image.id, { image, alt })
+    this.marks.set(image.id, { image, alt, ...(text ? { fallback: text } : {}) })
     return Array.from({ length: image.rows }, (_, k) => indent + mark(image.id, k))
   }
 
@@ -295,6 +331,7 @@ export class ReplyBlock extends Block {
           col: visibleWidth(glyphs.assistant) + m[1]!.length,
           image: at.image,
           alt: at.alt,
+          ...(at.fallback ? { fallback: at.fallback, changed: this.imageLoaded } : {}),
         })
     }
     this.#hasImages = found.length > 0
@@ -303,7 +340,7 @@ export class ReplyBlock extends Block {
   }
 
   copyText(): string {
-    return this.source.trim()
+    return this.alternatives.copy(this.source).trim()
   }
 
   /**
@@ -343,7 +380,7 @@ export class ReplyBlock extends Block {
       }
     }
     for (const im of imagesIn(lines) ?? []) {
-      const text = stripAnsi(im.alt).trim()
+      const text = stripAnsi(im.fallback?.join("\n") ?? im.alt).trim()
       for (let k = 0; k < im.image.rows && im.line + k < rows.length; k++)
         rows[im.line + k] = k ? { from: 0, text, repeats: true } : { from: 0, text }
     }
@@ -369,13 +406,14 @@ export class ReplyBlock extends Block {
   }
 
   override printLines(env: BlockEnv): string[] {
-    const folded = this.folded
-    this.folded = false
-    try {
-      return this.lines(env)
-    } finally {
-      this.folded = folded
-    }
+    const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
+    const { text } = foldMarkdown(this.source, false)
+    return replyRows(
+      renderMarkdown(text, width, env.theme, {
+        hyperlinks: this.hyperlinks,
+        nodes: this.nodes(env.theme, undefined, env.renders?.renders, true),
+      }),
+    )
   }
 }
 
