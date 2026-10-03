@@ -21,8 +21,8 @@ export function segmentText(parts: ViewSegment[], theme: Theme): string {
       const text = terminalText(part.text)
       if (part.kind !== "chip") return theme[part.kind](text)
       const style = themeToken(theme, CHIP_TOKENS[part.tone ?? "neutral"])
-      // Mono and older/custom themes have no chip colors; brackets keep the label distinct.
-      return style ? style(text) : `[${text}]`
+      // Mono and older/custom themes have no chip colors; thin bars keep the label distinct.
+      return style ? style(text) : `▏${text}▕`
     })
     .join("")
 }

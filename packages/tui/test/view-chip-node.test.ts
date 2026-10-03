@@ -13,7 +13,7 @@ test("tree node chips fit the two-cell disclosure slot without losing their ends
   for (const theme of [defaultTheme, monoTheme]) {
     const runtime = new UiRuntime(() => {})
     const rows = runtime.render(node, 30, 3, theme, (lines, width) => renderViewLines(lines, theme, width))
-    expect(rows.map(stripAnsi).join("\n")).toContain(theme === monoTheme ? "[]Ready" : "▐▌Ready")
+    expect(rows.map(stripAnsi).join("\n")).toContain(theme === monoTheme ? "▏▕Ready" : "▐▌Ready")
     runtime.dispose()
   }
 })
