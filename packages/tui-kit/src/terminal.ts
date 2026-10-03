@@ -130,6 +130,7 @@ export class ProcessTerminal extends BaseTerminal {
   private cleanup: (() => void)[] = []
   private lastWords = new Set<() => string>()
   private size: { columns: number; rows: number }
+  private outputFilter = (data: string) => data
 
   constructor(
     private stdin: Stdin = process.stdin,
@@ -147,8 +148,13 @@ export class ProcessTerminal extends BaseTerminal {
     return this.size.rows
   }
 
+  /** Filters both normal writes and synchronous emergency cleanup output. */
+  setOutputFilter(filter: (data: string) => string): void {
+    this.outputFilter = filter
+  }
+
   write(data: string): void {
-    this.stdout.write(data)
+    this.stdout.write(this.outputFilter(data))
   }
 
   /** Starts reading input and watching the size. */
@@ -221,14 +227,14 @@ export class ProcessTerminal extends BaseTerminal {
     const restoreNow = () => {
       const fd = (this.stdout as { fd?: number }).fd ?? 1
       try {
-        writeSync(fd, this.takeRestoreSequence())
+        writeSync(fd, this.outputFilter(this.takeRestoreSequence()))
       } catch {}
       this.setRawMode(false)
       const words = [...this.lastWords]
       this.lastWords.clear()
       for (const fn of words) {
         try {
-          writeSync(fd, fn())
+          writeSync(fd, this.outputFilter(fn()))
         } catch {}
       }
     }
