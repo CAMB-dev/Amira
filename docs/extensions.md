@@ -190,6 +190,10 @@ The context includes `width`, `images`, `maxImageRows`, and `theme: { dark: bool
 
 The TUI's light/dark theme is selected at startup using its terminal background probe (OSC 11, then `COLORFGBG`, default dark), and is fixed for the session. The renderer context uses that same selection, including in monochrome mode. Exact foreground/background colors are currently unknown and omitted. Non-interactive print mode defaults to `{ dark: true }`. Cached renderings include the theme in their key. Full-screen replies redraw when async results arrive; the inline transcript waits for block results up to `waitMs` (default 3000, maximum 15000 ms), then commits source instead. Inline math should return segments synchronously so it is available before its paragraph enters scrollback.
 
+### Command echo
+
+Commands echo the typed slash-command line into the transcript by default. Set `echo: false` on the `CommandDefinition` passed to `api.registerCommand()` to omit that line in both inline and full-screen TUI modes, for example for `/btw <question>`. This hides only the frontend's echo: the command's own output (`ctx.print`, notices and views) still shows as usual, and prompt history (↑) still records the line. Print mode and RPC behavior are unchanged.
+
 ### Full-screen views
 
 Register a `ViewDefinition` with `api.registerView()` and open it from a command with

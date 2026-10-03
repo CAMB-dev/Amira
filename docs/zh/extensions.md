@@ -190,6 +190,10 @@ amira
 
 TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次 COLORFGBG，默认深色），整个会话期间保持不变。渲染上下文使用同一选择，单色模式也如此。目前无法确定准确的前景色和背景色，因此省略这两个字段。非交互打印模式默认使用 `{ dark: true }`。渲染缓存的键包含主题。全屏回复在异步结果到达时重绘；内联对话记录等待块级结果的时间由 waitMs 指定（默认 3000 毫秒，最多 15000 毫秒），超时后提交源码。行内公式应同步返回 segments，以便段落进入滚动记录前完成替换。
 
+### 命令回显
+
+命令默认会将输入的 slash 命令行回显到对话记录中。在传给 `api.registerCommand()` 的 `CommandDefinition` 上设置 `echo: false`，即可在内联和全屏 TUI 模式下省略这一行，例如用于 `/btw <question>`。这只隐藏前端的输入回显：命令自身的输出（`ctx.print`、通知和视图）仍照常显示，输入历史（↑）也仍会记录该行。打印模式和 RPC 的行为不变。
+
 ### 全屏视图
 
 通过 `api.registerView()` 注册 `ViewDefinition`，命令用 `ctx.openView?.({ kind, data, state })` 打开它，可选的 `state` 为初始 `Partial<UiState>`。视图返回结构化的 `ViewLine` 对象；前端负责终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent 扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。

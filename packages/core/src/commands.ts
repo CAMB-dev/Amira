@@ -357,6 +357,13 @@ export class CommandHost {
     return resolved && "entry" in resolved ? resolved.entry.def.name : undefined
   }
 
+  /** Whether to echo the typed line, following registered and settings aliases; defaults to true. */
+  shouldEcho(line: string): boolean {
+    const parsed = parseCommandLine(line)
+    const resolved = parsed && this.#resolve(parsed.name)
+    return !(resolved && "entry" in resolved && resolved.entry.def.echo === false)
+  }
+
   /** The `$` skills, by name. */
   skills(): SkillInfo[] {
     return this.#opts.skills?.list() ?? []
