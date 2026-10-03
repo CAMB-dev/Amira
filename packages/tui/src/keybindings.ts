@@ -3,11 +3,20 @@ import { detectEnv, type InputEvent, type TerminalEnv } from "@amira/tui-kit"
 
 /**
  * Where an action applies: the input box, a completion list below it while open (commands
- * or files), the history search while it runs, or a dialog; in full-screen mode also the
+ * or files), the history search while it runs, a dialog, or an extension view; in full-screen mode also the
  * transcript (keys taken before the input's), a block selection, the find bar, and text
  * selected with the mouse.
  */
-export type KeyScope = "input" | "popup" | "search" | "dialog" | "transcript" | "select" | "find" | "text"
+export type KeyScope =
+  | "input"
+  | "popup"
+  | "search"
+  | "dialog"
+  | "view"
+  | "transcript"
+  | "select"
+  | "find"
+  | "text"
 
 interface ActionInfo {
   scope: KeyScope
@@ -124,17 +133,25 @@ export const ACTIONS = {
     scope: "dialog",
     description: "Go on to the next question of several, up to the first one not answered yet",
   },
-  "scroll.up": { scope: "transcript", description: "Scroll the transcript up a line" },
-  "scroll.down": { scope: "transcript", description: "Scroll the transcript down a line" },
-  "scroll.page-up": { scope: "transcript", description: "Scroll the transcript up a page" },
-  "scroll.page-down": { scope: "transcript", description: "Scroll the transcript down a page" },
+  "view.back": {
+    scope: "view",
+    description: "Release a view's input, go back a page, or close the root page",
+  },
+  "view.close": { scope: "view", description: "Close the whole extension view" },
+  "view.scroll-up": { scope: "view", description: "Scroll view text up a line" },
+  "view.scroll-down": { scope: "view", description: "Scroll view text down a line" },
+  "scroll.up": { scope: "transcript", description: "Scroll the transcript or view up a line" },
+  "scroll.down": { scope: "transcript", description: "Scroll the transcript or view down a line" },
+  "scroll.page-up": { scope: "transcript", description: "Scroll the transcript or view up a page" },
+  "scroll.page-down": { scope: "transcript", description: "Scroll the transcript or view down a page" },
   "scroll.top": {
     scope: "transcript",
-    description: "Go to the start of the transcript (Home only while the input is empty)",
+    description: "Go to the start of the transcript or view (transcript Home only with empty input)",
   },
   "scroll.bottom": {
     scope: "transcript",
-    description: "Go to the end of the transcript and follow it (End only while the input is empty)",
+    description:
+      "Go to the end of the transcript or view and follow it (transcript End only with empty input)",
   },
   "select.start": {
     scope: "transcript",
@@ -227,6 +244,10 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "dialog.toggle": ["space"],
     "dialog.prev-question": ["left"],
     "dialog.next-question": ["right"],
+    "view.back": ["escape"],
+    "view.close": ["q", "ctrl+c"],
+    "view.scroll-up": ["up"],
+    "view.scroll-down": ["down"],
     "scroll.up": ["shift+up"],
     "scroll.down": ["shift+down"],
     "scroll.page-up": ["pageup"],
@@ -388,6 +409,21 @@ export class Keybindings {
   }
 }
 
+/** Printable input belongs to a focused text field, not a view shortcut. */
+export function isTypingKey(e: InputEvent): boolean {
+  return e.type === "key" && !e.ctrl && !e.alt && (!!e.text || e.name.length === 1 || e.name === "space")
+}
+
+/** View-only arrows retain the legacy defaults without changing transcript navigation. */
+export function viewScrollAction(keys: Keybindings, e: InputEvent) {
+  for (const action of ["up", "down", "page-up", "page-down", "top", "bottom"] as const) {
+    if (keys.is(e, `scroll.${action}`)) return action
+  }
+  if (keys.is(e, "view.scroll-up")) return "up"
+  if (keys.is(e, "view.scroll-down")) return "down"
+  return undefined
+}
+
 /** The default keys for this terminal, for components not handed any. */
 export function defaultKeybindings(env: Pick<TerminalEnv, "vscode"> = detectEnv()): Keybindings {
   return new Keybindings(defaultKeys(env))
@@ -442,11 +478,15 @@ export function parseKeybindings(
   for (const action of Object.keys(ACTIONS) as Action[]) {
     for (const k of keys[action]) {
       const spec = parseKeySpec(k) as KeySpec
-      const id = `${ACTIONS[action].scope}:${specKey(spec)}`
-      const other = byScope.get(id)
-      if (other && (set.has(action) || set.has(other)) && other !== action) {
-        warnings.push(`${file}: ${keyLabel(spec)} is bound to both "${other}" and "${action}"`)
-      } else byScope.set(id, action)
+      const scopes = action.startsWith("scroll.") ? [ACTIONS[action].scope, "view"] : [ACTIONS[action].scope]
+      for (const scope of scopes) {
+        const id = `${scope}:${specKey(spec)}`
+        const other = byScope.get(id)
+        if (other && (set.has(action) || set.has(other)) && other !== action) {
+          const warning = `${file}: ${keyLabel(spec)} is bound to both "${other}" and "${action}"`
+          if (!warnings.includes(warning)) warnings.push(warning)
+        } else byScope.set(id, action)
+      }
     }
   }
   return { keys: new Keybindings(keys), warnings }

@@ -4,6 +4,41 @@ import { PromptHistory } from "../src/prompt-history.ts"
 import { closeImageApp, setup, waitFor } from "./app-harness.ts"
 
 for (const mode of ["fullscreen", "inline"] as const) {
+  for (const name of ["swarm", "workflow"]) {
+    test(`${mode}: /${name} task is echoed once when the command sends its display line`, async () => {
+      const line = `/${name} fix the build`
+      const prompt = `Use a ${name} (the ${name} tool) for this task: fix the build`
+      const s = await setup([{ text: "Done." }], {
+        settings: { mode },
+        commands: [
+          {
+            name,
+            description: `Run a ${name}`,
+            run: (args, ctx) =>
+              ctx.session.send(`Use a ${name} (the ${name} tool) for this task: ${args}`, {
+                display: { text: `/${name} ${args}` },
+              }),
+          },
+        ],
+        control: {
+          send: async (text, opts) => {
+            await s.agent.prompt(userMessage(text, opts?.display))
+          },
+        },
+      })
+      try {
+        s.terminal.send(`${line}\r`)
+        await s.shows("Done.")
+        await s.idle()
+        expect(s.all().split(`› ${line}`)).toHaveLength(2)
+        expect(s.all()).not.toContain(prompt)
+        expect(s.agent.messages[0]).toEqual(userMessage(prompt, { text: line }))
+      } finally {
+        await closeImageApp(s)
+      }
+    })
+  }
+
   for (const echo of [undefined, true, false]) {
     test(`${mode}: echo=${echo} controls only the typed command line`, async () => {
       const history = new PromptHistory()
