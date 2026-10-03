@@ -296,9 +296,16 @@ for (const path of editions) {
 
     test("abort stops a long command promptly", async () => {
       const abort = new AbortController()
-      const p = run("Start-Sleep -Seconds 60", abort.signal)
-      setTimeout(() => abort.abort(), 3000)
       const started = performance.now()
+      const p = tool.execute(
+        { command: "Write-Output 'started'; Start-Sleep -Seconds 60" },
+        {
+          ...makeCtx(process.cwd(), abort.signal),
+          update: (result) => {
+            if (textOf(result).includes("started")) abort.abort()
+          },
+        },
+      )
       expect(textOf(await p)).toContain("aborted")
       expect(performance.now() - started).toBeLessThan(30_000)
     })

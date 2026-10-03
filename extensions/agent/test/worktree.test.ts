@@ -1,5 +1,5 @@
-import { afterAll, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
+import { cpSync, existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -47,16 +47,23 @@ async function run(cwd: string, ...args: string[]) {
   if (!r.ok) throw new Error(`git ${args.join(" ")}: ${r.output}`)
 }
 
+let template: string
+beforeAll(async () => {
+  template = await tempDir("amira-wt-template-")
+  await run(template, "init", "-q")
+  writeFileSync(path.join(template, "f.txt"), "a\nb\nc\nd\ne\n")
+  await Bun.write(path.join(template, "src", "g.txt"), "g\n")
+  await run(template, "add", ".")
+  const id = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+  await run(template, ...id, "commit", "-q", "-m", "init")
+})
+
 /** A repository with one commit holding f.txt (lines a..e) and src/g.txt, plus an Amira home. */
 async function setup() {
   const root = await tempDir("amira-wt-repo-")
   const home = await tempDir("amira-wt-home-")
-  await run(root, "init", "-q")
-  writeFileSync(path.join(root, "f.txt"), "a\nb\nc\nd\ne\n")
-  await Bun.write(path.join(root, "src", "g.txt"), "g\n")
-  await run(root, "add", ".")
-  const id = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
-  await run(root, ...id, "commit", "-q", "-m", "init")
+  // Copy .git too: each test owns its objects, index and worktree registrations.
+  cpSync(template, root, { recursive: true })
   return { root, home }
 }
 
