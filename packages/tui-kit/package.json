@@ -5,7 +5,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./math-source": "./src/markdown/math-source.ts"
   },
   "dependencies": {
     "@amira/text-width": "workspace:*"

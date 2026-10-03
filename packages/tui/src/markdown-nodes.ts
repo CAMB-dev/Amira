@@ -19,6 +19,7 @@ export interface MarkdownRenderSource {
   readonly version: number
   readonly claimsImages: boolean
   claimsCode(lang: string): boolean
+  claimsMath(display: boolean): boolean
   waitMs(node: MarkdownNode): number
   render(
     node: MarkdownNode,
@@ -92,7 +93,14 @@ export class ReplyRenderers {
   private cache = new Map<string, Entry>()
   private version = -1
 
-  constructor(readonly source: MarkdownRenderSource | undefined) {}
+  readonly theme: MarkdownRenderContext["theme"]
+
+  constructor(
+    readonly source: MarkdownRenderSource | undefined,
+    background: "dark" | "light" = "dark",
+  ) {
+    this.theme = { dark: background !== "light" }
+  }
 
   /** Changes whenever what nodes render as may have: a renderer came or went. */
   get generation(): number {
@@ -107,6 +115,10 @@ export class ReplyRenderers {
     return !!this.source?.claimsImages
   }
 
+  claimsMath(display: boolean): boolean {
+    return !!this.source?.claimsMath(display)
+  }
+
   /** The node's rendering at `ctx`, started now or kept from before. */
   get(node: MarkdownNode, ctx: MarkdownRenderContext): Rendering {
     const source = this.source
@@ -115,9 +127,7 @@ export class ReplyRenderers {
       this.cache.clear()
       this.version = source.version
     }
-    const what =
-      node.type === "image" ? `i\0${node.url}\0${node.alt}` : `c\0${node.lang}\0${node.info}\0${node.code}`
-    const key = `${ctx.width}\0${ctx.images ? 1 : 0}\0${ctx.maxImageRows}\0${what}`
+    const key = JSON.stringify([ctx, node])
     const hit = this.cache.get(key)
     if (hit) {
       this.cache.delete(key)
@@ -135,9 +145,11 @@ export class ReplyRenderers {
 }
 
 /** A rendered node's lines as rows of `width`: plain text as it is, other kinds in the theme's colors. */
-export function nodeRows(lines: ToolLine[], theme: Theme, width: number): string[] {
+export function nodeRows(lines: ToolLine[], theme: Theme, width: number, segments = false): string[] {
   return lines.map((l) => {
-    const text = truncateToWidth(stripAnsi(l.text).replace(/\s+$/, ""), Math.max(1, width), glyphs.more)
+    const text = segments
+      ? stripAnsi(l.text)
+      : truncateToWidth(stripAnsi(l.text).replace(/\s+$/, ""), Math.max(1, width), glyphs.more)
     switch (l.kind) {
       case "muted":
       case "diff-context":
@@ -161,9 +173,19 @@ export function nodeRows(lines: ToolLine[], theme: Theme, width: number): string
 
 /** The node as the registry takes it. */
 export function apiNode(node: MarkdownNodeRef): MarkdownNode {
-  return node.type === "image"
-    ? { type: "image", url: node.url, alt: node.alt }
-    : { type: "code", lang: node.lang, info: node.info, code: node.code }
+  return { ...node }
+}
+
+/** Text retained with a rendered image, for every text-only view and failed image load. */
+export function imageFallback(
+  out: Extract<MarkdownRenderResult, { image: unknown }>,
+  rows: string[],
+  theme: Theme,
+  width: number,
+): string[] {
+  if (out.fallback) return nodeRows(out.fallback, theme, width)
+  if (out.alt !== undefined) return nodeRows([{ kind: "text", text: out.alt }], theme, width)
+  return rows
 }
 
 export interface InlineNodesOptions {
@@ -187,36 +209,54 @@ export function inlineNodes(opts: InlineNodesOptions): MarkdownNodes {
   return {
     images: true,
     claimsCode: (lang) => renders.claimsCode(lang),
+    claimsMath: (display) => renders.claimsMath(display),
+    inline(node, fallback, width) {
+      const r = renders.get(apiNode(node), {
+        width,
+        images: false,
+        maxImageRows: 0,
+        theme: renders.theme,
+      })
+      return r.result && "segments" in r.result
+        ? nodeRows(r.result.segments, theme, width, true).join("")
+        : fallback
+    },
     render(node, rows, col, width, commit) {
       const room = Math.max(1, width - col)
       const store = opts.images()
       const indent = " ".repeat(col)
       const bare = () => rows.map((r) => (r.startsWith(indent) ? r.slice(col) : r))
-      const image = (input: { url: string } | { data: Uint8Array }) => {
-        if (!store) return rows
+      const image = (input: { url: string } | { data: Uint8Array }, fallback = bare()) => {
+        const shown = fallback.map((row) => indent + row)
+        if (!store) return shown
         // Asked for while it is live too, so it is often ready by the time it is committed.
         const load = store.inline(input, room)
-        return commit ? [indent + pendingImage(load, bare(), opts.imageWaitMs ?? 3000)] : rows
+        return commit ? [indent + pendingImage(load, fallback, opts.imageWaitMs ?? 3000)] : shown
       }
       if (node.type === "image" && !renders.claimsImages) return image({ url: node.url })
       const r = renders.get(apiNode(node), {
         width: room,
         images: !!store,
         maxImageRows: store?.maxRows() ?? 0,
+        theme: renders.theme,
       })
       if (r.done) {
         const out = r.result
         if (!out) return node.type === "image" ? image({ url: node.url }) : rows
         if ("lines" in out) return nodeRows(out.lines, theme, room).map((row) => indent + row)
-        return image(out.image)
+        if ("segments" in out) return rows
+        return image(out.image, imageFallback(out, bare(), theme, room))
       }
       if (!commit) return rows
+      let fallback = bare()
       const load = r.promise.then((out): PendingResult | undefined | Promise<PendingResult | undefined> => {
         if (!out) return node.type === "image" && store ? store.inline({ url: node.url }, room) : undefined
         if ("lines" in out) return nodeRows(out.lines, theme, room)
-        return store?.inline(out.image, room)
+        if ("segments" in out) return undefined
+        fallback = imageFallback(out, fallback, theme, room)
+        return store ? store.inline(out.image, room) : fallback
       })
-      return [indent + pendingBlock(load, bare(), r.waitMs)]
+      return [indent + pendingBlock(load, () => fallback, r.waitMs)]
     },
   }
 }

@@ -19,6 +19,7 @@ interface RendererEntry {
   seq: number
   /** Lowercased languages, for code renderers. */
   langs?: Set<string>
+  math?: "inline" | "display" | "both"
   reported: boolean
 }
 
@@ -58,6 +59,8 @@ export class MarkdownRendererRegistry {
   #entries: RendererEntry[] = []
   #seq = 0
   #version = 0
+  /** No-graphics results keep their image provenance without changing their public shape. */
+  #imageAlternatives = new WeakSet<MarkdownRenderResult>()
 
   constructor(private readonly report: Report = () => {}) {}
 
@@ -67,12 +70,18 @@ export class MarkdownRendererRegistry {
       throw new Error("a markdown renderer needs an id")
     if (typeof def.render !== "function")
       throw new Error(`markdown renderer "${def.id}" needs a render function`)
-    const match = def.match as { image?: unknown; codeLang?: unknown } | undefined
+    const match = def.match as { image?: unknown; codeLang?: unknown; math?: unknown } | undefined
     let langs: Set<string> | undefined
+    let math: RendererEntry["math"]
     if (match?.image === true) langs = undefined
     else if (Array.isArray(match?.codeLang) && match.codeLang.every((l) => typeof l === "string" && l.trim()))
       langs = new Set(match.codeLang.map((l: string) => l.trim().toLowerCase()))
-    else throw new Error(`markdown renderer "${def.id}" needs match: { image: true } or { codeLang: [...] }`)
+    else if (match?.math === "inline" || match?.math === "display" || match?.math === "both")
+      math = match.math
+    else
+      throw new Error(
+        `markdown renderer "${def.id}" needs match: { image: true }, { codeLang: [...] } or { math: "inline" | "display" | "both" }`,
+      )
     if (this.#entries.some((e) => e.source === source && e.def.id === def.id))
       throw new Error(`markdown renderer "${def.id}" is already registered`)
     const entry: RendererEntry = {
@@ -81,6 +90,7 @@ export class MarkdownRendererRegistry {
       seq: this.#seq++,
       reported: false,
       ...(langs ? { langs } : {}),
+      ...(math ? { math } : {}),
     }
     this.#entries.push(entry)
     this.#entries.sort((a, b) => (b.def.priority ?? 0) - (a.def.priority ?? 0) || a.seq - b.seq)
@@ -110,7 +120,17 @@ export class MarkdownRendererRegistry {
 
   /** Whether standalone images are rendered by an extension. */
   get claimsImages(): boolean {
-    return this.#entries.some((e) => !e.langs)
+    return this.#entries.some((e) => !e.langs && !e.math)
+  }
+
+  /** Whether inline or display math is rendered by an extension. */
+  claimsMath(display: boolean): boolean {
+    return this.#entries.some((e) => e.math === "both" || e.math === (display ? "display" : "inline"))
+  }
+
+  /** Whether a text result is an image's alternative rather than a renderer's ordinary lines. */
+  isImageAlternative(result: MarkdownRenderResult): boolean {
+    return this.#imageAlternatives.has(result)
   }
 
   /** How long the inline transcript waits for the node's async result: the longest its renderers ask. */
@@ -134,7 +154,11 @@ export class MarkdownRendererRegistry {
   }
 
   #matching(node: MarkdownNode): RendererEntry[] {
-    if (node.type === "image") return this.#entries.filter((e) => !e.langs)
+    if (node.type === "image") return this.#entries.filter((e) => !e.langs && !e.math)
+    if (node.type === "math")
+      return this.#entries.filter(
+        (e) => e.math === "both" || e.math === (node.display ? "display" : "inline"),
+      )
     const lang = node.lang.trim().toLowerCase()
     return lang ? this.#entries.filter((e) => e.langs?.has(lang)) : []
   }
@@ -149,59 +173,99 @@ export class MarkdownRendererRegistry {
       const entry = list[i]!
       let out: unknown
       try {
-        out = entry.def.render(copyNode(node), { ...ctx })
+        out = entry.def.render(copyNode(node), { ...ctx, theme: { ...ctx.theme } })
       } catch (err) {
         this.#fail(entry, err)
         continue
       }
       if (out && typeof (out as Promise<unknown>).then === "function") {
         return (out as Promise<unknown>).then(
-          (value) => this.#checked(entry, value) ?? this.#from(list, i + 1, node, ctx),
+          (value) => this.#checked(entry, value, node, ctx) ?? this.#from(list, i + 1, node, ctx),
           (err) => {
             this.#fail(entry, err)
             return this.#from(list, i + 1, node, ctx)
           },
         )
       }
-      const result = this.#checked(entry, out)
+      const result = this.#checked(entry, out, node, ctx)
       if (result) return result
     }
     return undefined
   }
 
   /** The result as frontends get it, or undefined for none (or one that is not a result). */
-  #checked(entry: RendererEntry, value: unknown): MarkdownRenderResult | undefined {
+  #checked(
+    entry: RendererEntry,
+    value: unknown,
+    node: MarkdownNode,
+    ctx: MarkdownRenderContext,
+  ): MarkdownRenderResult | undefined {
     if (value === undefined || value === null) return undefined
-    const v = value as { lines?: unknown; image?: unknown }
-    if (Array.isArray(v.lines)) {
-      const lines: ToolLine[] = []
-      for (const raw of v.lines as unknown[]) {
-        const l = (raw ?? {}) as { kind?: unknown; text?: unknown }
-        const kind = KINDS.has(l.kind as ToolLine["kind"]) ? (l.kind as ToolLine["kind"]) : "text"
-        const text = String(l.text ?? "")
-          .replace(/\r\n?/g, "\n")
-          .replace(/\t/g, "  ")
-        for (const row of text.split("\n"))
-          lines.push({ kind, text: row.replace(ESCAPES, "").replace(CONTROLS, "") })
-        if (lines.length > MAX_LINES) break
-      }
-      if (lines.length > MAX_LINES) {
-        this.#fail(entry, new Error(`render returned more than ${MAX_LINES} lines; the rest were left out`))
-        lines.length = MAX_LINES
-      }
-      return { lines }
+    const v = value as {
+      lines?: unknown
+      segments?: unknown
+      image?: unknown
+      alt?: unknown
+      fallback?: unknown
     }
-    const image = v.image as { url?: unknown; data?: unknown; mimeType?: unknown } | undefined
-    if (image && typeof image.url === "string" && image.url) return { image: { url: image.url } }
-    if (image && image.data instanceof Uint8Array)
-      return {
-        image: {
-          data: image.data,
-          ...(typeof image.mimeType === "string" ? { mimeType: image.mimeType } : {}),
-        },
+    if (node.type === "math" && !node.display) {
+      if (v.image !== undefined || v.lines !== undefined || !Array.isArray(v.segments)) {
+        this.#fail(entry, new Error("inline math render must return { segments }"))
+        return undefined
       }
+      return {
+        segments: v.segments.map((raw: unknown) => {
+          const line = checkedLine(raw)
+          return { kind: line.kind, text: line.text.replace(/\n/g, " ") }
+        }),
+      }
+    }
+    if (v.segments !== undefined) {
+      this.#fail(entry, new Error("block render must return { lines } or { image }, not { segments }"))
+      return undefined
+    }
+    if (Array.isArray(v.lines)) return { lines: this.#lines(entry, v.lines) }
+    const rawImage = v.image as { url?: unknown; data?: unknown; mimeType?: unknown } | undefined
+    let image: ImageInput | undefined
+    if (rawImage && typeof rawImage.url === "string" && rawImage.url) image = { url: rawImage.url }
+    else if (rawImage && rawImage.data instanceof Uint8Array)
+      image = {
+        data: rawImage.data,
+        ...(typeof rawImage.mimeType === "string" ? { mimeType: rawImage.mimeType } : {}),
+      }
+    if (image) {
+      const alt =
+        typeof v.alt === "string" ? checkedLine({ text: v.alt }).text.replace(/\n/g, " ") : undefined
+      const fallback = Array.isArray(v.fallback) ? this.#lines(entry, v.fallback) : undefined
+      if (!ctx.images) {
+        const lines = fallback ?? (alt !== undefined ? [{ kind: "text" as const, text: alt }] : undefined)
+        if (!lines) return undefined
+        const result = { lines }
+        this.#imageAlternatives.add(result)
+        return result
+      }
+      return {
+        image,
+        ...(alt !== undefined ? { alt } : {}),
+        ...(fallback !== undefined ? { fallback } : {}),
+      }
+    }
     this.#fail(entry, new Error("render returned neither { lines } nor { image }"))
     return undefined
+  }
+
+  #lines(entry: RendererEntry, rawLines: unknown[]): ToolLine[] {
+    const lines: ToolLine[] = []
+    for (const raw of rawLines) {
+      const line = checkedLine(raw)
+      for (const text of line.text.split("\n")) lines.push({ kind: line.kind, text })
+      if (lines.length > MAX_LINES) break
+    }
+    if (lines.length > MAX_LINES) {
+      this.#fail(entry, new Error(`render returned more than ${MAX_LINES} lines; the rest were left out`))
+      lines.length = MAX_LINES
+    }
+    return lines
   }
 
   #fail(entry: RendererEntry, err: unknown) {
@@ -211,6 +275,19 @@ export class MarkdownRendererRegistry {
       entry.source,
       `markdown renderer "${entry.def.id}" failed: ${err instanceof Error ? err.message : String(err)}`,
     )
+  }
+}
+
+/** Keep known styles and plain text, leaving line breaks for the result's shape to handle. */
+function checkedLine(raw: unknown): ToolLine {
+  const line = (raw ?? {}) as { kind?: unknown; text?: unknown }
+  return {
+    kind: KINDS.has(line.kind as ToolLine["kind"]) ? (line.kind as ToolLine["kind"]) : "text",
+    text: String(line.text ?? "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/\t/g, "  ")
+      .replace(ESCAPES, "")
+      .replace(CONTROLS, ""),
   }
 }
 
