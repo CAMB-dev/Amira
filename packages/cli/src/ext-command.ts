@@ -25,7 +25,6 @@ import {
   pruneGitCaches,
   readLock,
   rememberProjectTrust,
-  removeGitCache,
   removePackage,
   repoLabel,
   restorePackages,
@@ -51,8 +50,8 @@ export const EXT_USAGE = `Usage:
   amira ext update [name]...     Fetch the newest version and re-pin (all by default)
   amira ext search [query]       Search the extensions index
   amira ext cache [list]         Show the cached git repositories
-  amira ext cache prune          Delete the caches no installed package uses (also: ext gc)
-  amira ext cache clean          Delete every cached repository
+  amira ext cache prune          Delete caches not pinned by any known project (also: ext gc)
+  amira ext cache clean          Delete every cached repository (also: cache prune --all)
 
 Sources: a directory, a git URL with an optional #ref (https://, ssh://, git@,
 file://), an npm package (npm:name[@range], @scope/name, name@range), or a
@@ -63,6 +62,8 @@ Options:
   --refresh     search: download the index even if the cached copy is fresh
   --quiet       install, update, remove: print only the results
   --json        install, update, remove: one JSON object per line
+  --all         cache prune, gc: include repositories pinned in lock files
+  --dry-run     cache prune, clean, gc: list what would be removed without deleting
 
 Each scope pins exact commits and versions in its packages.lock. Project
 packages replace user packages of the same name, and load only once you
@@ -107,6 +108,8 @@ export async function runExtCommand(
     throw new UsageError(`${err instanceof Error ? err.message : String(err)}\n\n${EXT_USAGE}`)
   }
   const [sub, ...rest] = parsed.positionals
+  if ((parsed.values.all || parsed.values["dry-run"]) && sub !== "cache" && sub !== "gc")
+    throw new UsageError(`--all and --dry-run are only for ext cache prune, clean or ext gc\n\n${EXT_USAGE}`)
   const home = opts.home ?? amiraHome()
   const cwd = opts.cwd ?? process.cwd()
   const cacheDir = opts.cacheDir ?? defaultGitCacheDir(home)
@@ -310,10 +313,10 @@ export async function runExtCommand(
         return 0
       }
       case "cache":
-        return cacheCommand(rest, io, { cacheDir, home, cwd })
+        return cacheCommand(rest, io, { cacheDir, home, cwd }, parsed.values)
       case "gc":
         noArgs(sub, rest)
-        return cacheCommand(["prune"], io, { cacheDir, home, cwd })
+        return cacheCommand(["prune"], io, { cacheDir, home, cwd }, parsed.values)
       case undefined:
       case "help":
         io.stdout(`${EXT_USAGE}\n`)
@@ -392,10 +395,13 @@ function cacheCommand(
   argv: string[],
   io: PrintIO,
   where: { cacheDir: string; home: string; cwd: string },
+  opts: { all?: boolean; "dry-run"?: boolean } = {},
 ): number {
   const [what = "list", ...extra] = argv
   if (extra.length) throw new UsageError(`ext cache ${what} takes no arguments\n\n${EXT_USAGE}`)
-  const used = gitUrlsInUse(where)
+  if ((opts.all || opts["dry-run"]) && what !== "prune" && what !== "clean")
+    throw new UsageError(`--all and --dry-run are only for ext cache prune, clean or ext gc\n\n${EXT_USAGE}`)
+  const used = opts.all || what === "clean" ? [] : gitUrlsInUse(where)
   const usedKeys = new Set(used.map(gitCacheKey))
   const entries = listGitCaches(where.cacheDir)
   switch (what) {
@@ -417,15 +423,19 @@ function cacheCommand(
     }
     case "prune":
     case "clean": {
-      const removed =
-        what === "clean"
-          ? entries.filter((e) => removeGitCache(where.cacheDir, e.key))
-          : pruneGitCaches(where.cacheDir, { keepUrls: used })
-      const busy = what === "clean" ? entries.length - removed.length : 0
+      const dryRun = !!opts["dry-run"]
+      const removed = pruneGitCaches(where.cacheDir, { keepUrls: used, dryRun })
+      const removedDirs = new Set(removed.map((e) => e.dir))
+      const busy = entries.filter((e) => !usedKeys.has(e.key) && !removedDirs.has(e.dir)).length
       const bytes = removed.reduce((n, e) => n + e.bytes, 0)
+      if (dryRun)
+        for (const e of removed) {
+          const label = e.dir.endsWith(".git") ? (e.url ?? e.key) : `interrupted clone ${e.dir}`
+          io.stdout(`Would remove ${label} (${formatBytes(e.bytes)}).\n`)
+        }
       io.stdout(
         removed.length
-          ? `Removed ${removed.length} cached ${removed.length === 1 ? "repository" : "repositories"} (${formatBytes(bytes)}).\n`
+          ? `${dryRun ? "Would remove" : "Removed"} ${removed.length} cached ${removed.length === 1 ? "repository" : "repositories"} (${formatBytes(bytes)}).\n`
           : "Nothing to remove.\n",
       )
       if (busy) io.stderr(`amira: ${busy} in use by another amira process; kept\n`)
@@ -506,6 +516,8 @@ function parse(argv: string[]) {
       refresh: { type: "boolean" },
       quiet: { type: "boolean", short: "q" },
       json: { type: "boolean" },
+      all: { type: "boolean" },
+      "dry-run": { type: "boolean" },
     },
   })
 }

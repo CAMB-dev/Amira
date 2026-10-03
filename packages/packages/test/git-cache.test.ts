@@ -386,7 +386,9 @@ test("cache clean and prune: unused caches go, used and busy ones stay", async (
   utimesSync(leftover, new Date(0), new Date(0))
 
   // Recently used: kept although nothing uses it.
-  expect(pruneGitCaches(cacheDir, { keepUrls: [url, otherUrl], unusedForMs: 30 * 86_400_000 })).toEqual([])
+  expect(
+    pruneGitCaches(cacheDir, { keepUrls: [url, otherUrl], unusedForMs: 30 * 86_400_000 }).map((e) => e.dir),
+  ).toEqual([leftover])
   const pruned = pruneGitCaches(cacheDir, { keepUrls: [url], unusedForMs: 30 * 86_400_000 })
   expect(pruned.map((e) => e.url)).toEqual([otherUrl])
   expect(existsSync(leftover)).toBe(false)

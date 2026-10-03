@@ -28,4 +28,5 @@ test("progress is only sent where OSC 9;4 is known to mean progress", () => {
   expect(progressSupported({ TERM_PROGRAM: "vscode" })).toBe(true)
   expect(progressSupported({ TERM_PROGRAM: "iTerm.app", WT_SESSION: "x" })).toBe(false)
   expect(progressSupported({})).toBe(false)
+  expect(progressSupported({ TERM: "dumb", WT_SESSION: "x" })).toBe(false)
 })

@@ -34,6 +34,22 @@ amira ext remove <name>
 
 安装、更新、删除、启用或禁用后，重启 Amira，或在空闲时运行 `/reload`。`/help` 会列出已加载扩展注册的命令。
 
+### Git 仓库缓存
+
+Git 扩展包共用 `~/.amira/cache/git` 中的裸仓库（设置 `AMIRA_HOME` 后位于该目录下）。用户锁文件和任何已知项目锁文件引用的缓存都会保留，即使扩展包文件缺失或项目不受信任。已知路径来自会话头和受信任／不受信任项目设置；Amira 也会检查这些路径下的项目锁文件。未被锁文件引用的缓存闲置 30 天后会自动删除。
+
+```sh
+amira ext cache list
+amira ext cache prune --dry-run
+amira ext cache prune
+amira ext cache prune --all --dry-run
+amira ext cache prune --all
+```
+
+`prune` 立即删除未被锁文件引用的仓库，无需等待 30 天；`ext gc` 是它的别名。`--dry-run` 列出将被删除的仓库和中断后遗留的克隆目录，但不实际删除。`--all` 也删除锁文件引用的仓库；`cache clean` 等同于 `cache prune --all`。被其他 Amira 操作锁定的仓库始终保留。删除缓存不会改动已安装的扩展包或锁文件，但恢复缺失的扩展包时可能需要再次联网。
+
+检查缓存不会下载缺失的对象。Git 2.45 及更高版本支持 `GIT_NO_LAZY_FETCH`；旧版本在检查时使用仅对当前命令有效的设置，禁用 origin promisor 并阻止传输，不改动缓存仓库的配置。获取更新和检出扩展包文件仍可下载所需对象。
+
 ### 在 Amira 中管理扩展包
 
 `/ext` 无需离开会话就能完成同样的操作。不带参数时，它打开一个列表：先是已安装的包（显示作用域、是否启用、是否受信任，以及索引中是否有新版本），然后是索引中可安装的包。在已安装的包上按 Enter 可以更新、启用或禁用、删除、查看详情；在可安装的包上按 Enter 会询问安装到用户作用域还是项目作用域，然后安装。按 `d` 查看详情。列表中的按键见[快捷键](keybindings.md#对话框)。

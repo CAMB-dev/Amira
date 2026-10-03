@@ -18,8 +18,9 @@ import {
   tryFileLock,
   waitFileLock,
 } from "@amira/core"
-import { packageScope, readLock } from "./lock.ts"
+import { readLock } from "./lock.ts"
 import { PackageError } from "./manifest.ts"
+import { knownProjectLocks } from "./project-locks.ts"
 import { COMMAND_TIMEOUT_MS, lastLines, runTool, ToolError } from "./run.ts"
 
 /**
@@ -386,9 +387,24 @@ function firstLine(s: string): string {
  * object on the spot (git 2.45 and later honour this).
  */
 const NO_LAZY = { GIT_NO_LAZY_FETCH: "1" }
+const noLazySupport = new WeakMap<GitContext, Promise<boolean>>()
+
+async function supportsNoLazyFetch(dir: string, ctx: GitContext): Promise<boolean> {
+  try {
+    const version = await runTool(["git", "--version"], path.dirname(dir), "git --version", {
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+      stdoutOnly: true,
+    })
+    const match = /git version (\d+)\.(\d+)/.exec(version)
+    return !!match && (Number(match[1]) > 2 || (Number(match[1]) === 2 && Number(match[2]) >= 45))
+  } catch (err) {
+    if (err instanceof ToolError && err.aborted) throw err
+    return false
+  }
+}
 
 /** `git --git-dir=<dir> ...`: never searched for, so nothing around the cache is picked up. */
-function git(
+async function git(
   dir: string,
   args: string[],
   what: string,
@@ -397,7 +413,30 @@ function git(
   env?: Record<string, string>,
   stdoutOnly = false,
 ): Promise<string> {
-  return runTool(["git", `--git-dir=${dir}`, ...args], path.dirname(dir), what, {
+  let guard: string[] = []
+  if (env === NO_LAZY) {
+    let supported = noLazySupport.get(ctx)
+    if (!supported) {
+      supported = supportsNoLazyFetch(dir, ctx)
+      noLazySupport.set(ctx, supported)
+    }
+    if (!(await supported)) {
+      // Old git ignores GIT_NO_LAZY_FETCH. Disable the usual promisor and forbid transports
+      // for legacy partialClone settings or other promisors. Supply the filter too: a legacy
+      // lazy fetch otherwise writes it to the cache config before trying a transport.
+      guard = [
+        "-c",
+        "remote.origin.partialclonefilter=blob:none",
+        "-c",
+        "remote.origin.promisor=false",
+        "-c",
+        "protocol.allow=never",
+      ]
+      // This whitelist overrides even protocol.<name>.allow=always in user or cache config.
+      env = { GIT_ALLOW_PROTOCOL: "" }
+    }
+  }
+  return runTool(["git", `--git-dir=${dir}`, ...guard, ...args], path.dirname(dir), what, {
     ...(ctx.signal ? { signal: ctx.signal } : {}),
     ...(onChunk ? { onChunk } : {}),
     ...(env ? { env } : {}),
@@ -618,6 +657,10 @@ function sizeOf(p: string): number {
 
 /** Deletes one cached repository; false when another amira process is using it. */
 export function removeGitCache(cacheDir: string, key: string): boolean {
+  return removeCache(cacheDir, key, false)
+}
+
+function removeCache(cacheDir: string, key: string, dryRun: boolean): boolean {
   if (!/^[0-9a-f]{24}$/.test(key)) throw new PackageError(`not a git cache key: ${key}`)
   let lock: FileLock | undefined
   try {
@@ -627,7 +670,7 @@ export function removeGitCache(cacheDir: string, key: string): boolean {
   }
   if (!lock) return false
   try {
-    rmSync(path.join(cacheDir, `${key}.git`), { recursive: true, force: true, maxRetries: 3 })
+    if (!dryRun) rmSync(path.join(cacheDir, `${key}.git`), { recursive: true, force: true, maxRetries: 3 })
     return true
   } finally {
     lock.release()
@@ -639,6 +682,8 @@ export interface PruneOptions {
   keepUrls?: Iterable<string>
   /** Only caches unused for longer than this; default all that are not kept. */
   unusedForMs?: number
+  /** Lists removable repositories and interrupted clones without deleting them. */
+  dryRun?: boolean
   now?: number
 }
 
@@ -655,25 +700,22 @@ export function pruneGitCaches(cacheDir: string, opts: PruneOptions = {}): GitCa
     // No record of use: judged by when the directory last changed.
     const used = e.lastUsed?.getTime() ?? mtimeOf(e.dir)
     if (opts.unusedForMs !== undefined && now - used < opts.unusedForMs) continue
-    if (removeGitCache(cacheDir, e.key)) removed.push(e)
+    if (removeCache(cacheDir, e.key, !!opts.dryRun)) removed.push(e)
   }
-  removeStaleClones(cacheDir)
+  removed.push(...removeStaleClones(cacheDir, !!opts.dryRun))
   return removed
 }
 
-/**
- * The git repositories the packages of the user scope and of this project come from. A broken
- * lock file counts as none (pruning only takes caches unused for weeks, so little is lost).
- */
+/** Git repositories pinned by the user lock and locks beneath every known project path. */
 export function gitUrlsInUse(where: { home?: string; cwd: string }): string[] {
-  const urls: string[] = []
-  for (const kind of ["user", "project"] as const) {
+  const urls = new Set<string>()
+  for (const file of knownProjectLocks(where)) {
     try {
-      for (const e of Object.values(readLock(packageScope(kind, where).lockFile).packages))
-        if (e.source.type === "git") urls.push(e.source.url)
+      for (const e of Object.values(readLock(file).packages))
+        if (e.source.type === "git") urls.add(e.source.url)
     } catch {}
   }
-  return urls
+  return [...urls]
 }
 
 function mtimeOf(p: string): number {
@@ -684,16 +726,21 @@ function mtimeOf(p: string): number {
   }
 }
 
-function removeStaleClones(cacheDir: string) {
+function removeStaleClones(cacheDir: string, dryRun: boolean): GitCacheEntry[] {
   let names: string[]
   try {
     names = readdirSync(cacheDir)
   } catch {
-    return
+    return []
   }
-  for (const n of names) {
-    const pid = /^[0-9a-f]{24}\.git\.tmp-(\d+)$/.exec(n)?.[1]
-    if (pid && !isProcessAlive(Number(pid)))
-      rmSync(path.join(cacheDir, n), { recursive: true, force: true, maxRetries: 3 })
+  const removed: GitCacheEntry[] = []
+  for (const n of names.sort()) {
+    const match = /^([0-9a-f]{24})\.git\.tmp-(\d+)$/.exec(n)
+    if (!match || isProcessAlive(Number(match[2]))) continue
+    const dir = path.join(cacheDir, n)
+    const bytes = sizeOf(dir)
+    if (!dryRun) rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+    removed.push({ key: match[1]!, dir, bytes })
   }
+  return removed
 }
