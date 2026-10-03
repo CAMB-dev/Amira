@@ -56,7 +56,7 @@ const allowedTypeOnlyDependenciesByDirectory: Record<string, readonly string[]> 
 }
 
 const sourceLineAllowlist = new Map<string, number>([
-  ["packages/core/src/agent.ts", 2328],
+  ["packages/core/src/agent.ts", 2026],
   ["packages/core/src/subagents.ts", 969],
   ["packages/tui/src/app.ts", 1395],
   ["packages/tui/src/transcript-pane.ts", 1100],
