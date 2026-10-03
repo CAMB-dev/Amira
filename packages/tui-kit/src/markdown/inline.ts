@@ -1,5 +1,8 @@
 import { defaultGlyphs } from "../glyphs.ts"
 import { compose, type MarkdownToken, markdownTheme, type StyleFn, type Theme } from "../style.ts"
+import { cellText, toCells } from "./layout.ts"
+import { mathRuns } from "./math-inline.ts"
+import { inlineMathAt, type MathCodeRange } from "./math-source.ts"
 
 /**
  * The Markdown tokens, and two a theme may add: `heading1`, the style of level 1 headings when
@@ -91,6 +94,10 @@ export interface InlineOptions {
   /** A run's rest at offset `leadAt`: for a bare URL, the source there; otherwise `len` source characters. */
   lead?: Lead
   leadAt?: number
+  /** A claimed inline expression, rendered as styled text, never an image marker. */
+  math?: ((source: string, fallback: string) => string) | undefined
+  /** Multiline code spans keep their legacy rendering, but cannot contain claimed math. */
+  mathCode?: MathCodeRange[] | undefined
 }
 
 /** Runs, and where the first delimiter that may still open a span once more text comes is. */
@@ -98,6 +105,8 @@ export interface Parsed {
   runs: Run[]
   /** Offset of that delimiter, or Infinity: rows after it may still change. */
   open: number
+  /** An incomplete claimed math expression may not be committed even under live-region pressure. */
+  mathOpen: boolean
 }
 
 interface Context {
@@ -106,6 +115,10 @@ interface Context {
   lead?: Lead
   leadAt: number
   open: number
+  /** An incomplete claimed math expression may not be committed even under live-region pressure. */
+  mathOpen: boolean
+  /** Do not reinterpret inner/closing delimiters of an expression whose renderer declined it. */
+  mathThrough: number
   /** The whole text's length: only a delimiter scanned to it may still match. */
   length: number
 }
@@ -146,11 +159,13 @@ export function parseLine(s: string, opts: InlineOptions): Parsed {
     out: [],
     leadAt: opts.leadAt ?? 0,
     open: Number.POSITIVE_INFINITY,
+    mathOpen: false,
+    mathThrough: 0,
     length: s.length,
   }
   if (opts.lead) ctx.lead = opts.lead
   parse(s, 0, s.length, { styles: opts.base ? [opts.base] : [], carry: "" }, ctx)
-  return { runs: ctx.out, open: ctx.open }
+  return { runs: ctx.out, open: ctx.open, mathOpen: ctx.mathOpen }
 }
 
 function styleOf(styles: StyleFn[]): StyleFn | undefined {
@@ -183,6 +198,42 @@ function parse(s: string, start: number, end: number, scope: Scope, ctx: Context
       }
     }
     const c = s[i]!
+    if (
+      opts.math &&
+      i >= ctx.mathThrough &&
+      (c === "$" || c === "\\") &&
+      !opts.mathCode?.some(({ start, end }) => i >= start && i < end)
+    ) {
+      const math = inlineMathAt(s, i, end)
+      if (math === "open" || (c === "\\" && i + 1 === end)) {
+        mayOpen(i)
+        if (end === ctx.length) ctx.mathOpen = true
+      } else if (math) {
+        // A following digit or dollar can still invalidate a closing dollar at the chunk's end.
+        if (c === "$" && math.end === ctx.length) ctx.mathOpen = true
+        const fallbackRuns = parseInline(s.slice(i, math.end), {
+          ...opts,
+          math: undefined,
+          ...(style ? { base: style } : {}),
+        })
+        const cells = toCells(fallbackRuns)
+        const fallback = cellText(cells, fallbackRuns, 0, cells.length)
+        const rendered = opts.math(math.source, fallback)
+        ctx.mathThrough = math.end
+        // Declining keeps the original parser, including spans crossing the raw delimiters.
+        if (rendered !== fallback) {
+          flush(i)
+          for (const part of mathRuns(rendered, i, math.end, scope.carry)) {
+            if (style) part.style = part.style ? compose(style, part.style) : style
+            if (scope.link) part.link = scope.link
+            out.push(part)
+          }
+          i = math.end
+          textStart = i
+          continue
+        }
+      }
+    }
     if (c === "\\" && i + 1 < end && PUNCT.test(s[i + 1]!)) {
       flush(i)
       out.push(run(s[i + 1]!, i + 1, style, scope, true))

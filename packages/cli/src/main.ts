@@ -207,6 +207,7 @@ async function run(argv: string[]): Promise<number> {
         forceExit: () => forceExit(130),
         ui: host.ui,
         commands,
+        markdownRenderers: host.markdown,
         backgroundJobs: host.backgroundJobs,
         ...(config.settings.backgroundJobs?.printWaitMs !== undefined
           ? { backgroundJobTimeoutMs: config.settings.backgroundJobs.printWaitMs }
