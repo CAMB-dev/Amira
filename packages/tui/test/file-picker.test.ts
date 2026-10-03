@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test"
+import { afterAll, expect, spyOn, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -104,8 +104,6 @@ test("withDirectories adds each directory once", () => {
   ])
 })
 
-const tick = () => Bun.sleep(1)
-
 /**
  * Waits for the setImmediate work an `emit` starts: first the listing adds the paths, then the
  * picker schedules the search those additions trigger. `Bun.sleep(1)` does not always let both
@@ -124,7 +122,7 @@ test("the picker opens for @, inserts the chosen path with a space, and a direct
     () => updates++,
   )
   picker.update("see @")
-  await tick()
+  await waitUntil(() => picker.open)
   expect(picker.open).toBe(true)
   picker.update("see @edit")
   expect(picker.render(60, plain)).toEqual(["❯ packages/tui-kit/src/components/editor.ts"])
@@ -198,7 +196,8 @@ test("while the project is listed the picker shows a status row, then matches as
   await flushScheduledWork()
   expect(picker.render(60, plain)).toEqual(["❯ app.ts", "  src/app.ts", "  ⠋ indexing… 3 files"])
   src.finish()
-  await tick()
+  await waitUntil(() => src.index.listing().done)
+  await flushScheduledWork()
   expect(picker.render(60, plain)).toEqual(["❯ app.ts", "  src/app.ts"])
   expect(updates).toBeGreaterThan(0)
   picker.dispose()
@@ -313,19 +312,29 @@ test("FileIndex lists once, then answers from its cache and refreshes in the bac
   })
   let changes = 0
   index.subscribe(() => changes++)
-  const first = index.listing()
-  await tick()
-  expect(first.done).toBe(true)
-  expect(index.listing().entries).toEqual(["a.ts"])
-  expect(calls).toBe(1)
-  expect(changes).toBeGreaterThan(0)
-  await Bun.sleep(30)
-  answer = ["a.ts", "b/c.ts"]
-  // Stale: the old listing is answered at once, the fresh one replaces it once complete.
-  expect(index.listing()).toBe(first)
-  await tick()
-  expect(index.listing().entries).toEqual(["a.ts", "b/c.ts", "b/"])
-  expect(calls).toBe(2)
+  const clock = spyOn(performance, "now").mockReturnValue(1000)
+  try {
+    const first = index.listing()
+    await flushScheduledWork()
+    expect(first.done).toBe(true)
+    clock.mockReturnValue(1020)
+    expect(index.listing().entries).toEqual(["a.ts"])
+    expect(calls).toBe(1)
+    expect(changes).toBeGreaterThan(0)
+    answer = ["a.ts", "b/c.ts"]
+    clock.mockReturnValue(1021)
+    // Stale: the old listing is answered at once, the fresh one replaces it once complete.
+    expect(index.listing()).toBe(first)
+    expect(calls).toBe(2)
+    // Restore the real clock before waiting for ingestion, which also uses it for slice budgets.
+    clock.mockRestore()
+    await waitUntil(() => index.listing() !== first)
+    expect(index.listing().entries).toEqual(["a.ts", "b/c.ts", "b/"])
+    expect(calls).toBe(2)
+  } finally {
+    clock.mockRestore()
+    index.dispose()
+  }
 })
 
 test("FileIndex grows its listing in place, each directory once, and stops at its cap", async () => {
@@ -348,18 +357,18 @@ test("FileIndex grows its listing in place, each directory once, and stops at it
   emit(["a/b.ts", "a/b.ts", "a/c.ts"])
   // Added between keys and frames, not while the paths arrive.
   expect(listing.entries).toEqual([])
-  await tick()
+  await waitUntil(() => listing.files === 2)
   expect(index.listing()).toBe(listing)
   expect(listing.entries).toEqual(["a/b.ts", "a/", "a/c.ts"])
   expect(listing.files).toBe(2)
   expect(listing.done).toBe(false)
   emit(["x/d.ts", "e.ts", "f.ts"])
-  await tick()
+  await waitUntil(() => listing.partial)
   expect(listing.entries).toEqual(["a/b.ts", "a/", "a/c.ts", "x/d.ts", "x/"])
   expect(listing.files).toBe(3)
   expect(listing.partial).toBe(true)
   expect(aborted).toBe(true)
-  await tick()
+  await waitUntil(() => listing.done)
   expect(listing.done).toBe(true)
   // A capped listing says so under the list.
   const picker = new FilePicker(index, () => {})
@@ -411,7 +420,7 @@ test("a disposed FileIndex stops its listing and tells no one", async () => {
   index.subscribe(() => changes++)
   index.listing()
   index.dispose()
-  await tick()
+  await flushScheduledWork()
   expect(aborted).toBe(true)
   expect(changes).toBe(0)
 })
