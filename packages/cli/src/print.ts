@@ -375,7 +375,10 @@ export async function runPrint(
   }
   const handle = (e: AnyEvent) => {
     if (!markdown) return handleEvent(e)
-    plainQueue = plainQueue.then(() => handleEvent(e))
+    plainQueue = plainQueue
+      .then(() => handleEvent(e))
+      .catch((err) => io.stderr(`amira: print output failed: ${err instanceof Error ? err.message : err}
+`))
   }
   for (const e of opts.pending ?? []) handle(e)
   const off = agent.bus.subscribe(handle)

@@ -296,3 +296,14 @@ test("every delimiter can arrive across one-character writes", async () => {
   await stream.finish()
   expect(out).toBe("display(x)\ndisplay(y)\nA inline(z) and inline(w).\n")
 })
+
+test("a renderer that never settles falls back to source after its wait", async () => {
+  const renderers = registry({
+    id: "stuck",
+    match: { math: "both" },
+    waitMs: 50,
+    render: () => new Promise(() => {}),
+  })
+  const source = "before $x$ after\n$$\ny\n$$\n"
+  expect((await print(source, renderers)).out).toBe(source)
+})

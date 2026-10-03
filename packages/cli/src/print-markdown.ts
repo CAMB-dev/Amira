@@ -157,13 +157,20 @@ export class PrintMarkdown {
 
   private async render(node: MarkdownNode, source: string, ending: string): Promise<string> {
     if (node.type === "math" && !this.registry.claimsMath(node.display)) return source
-    const result = await this.registry.render(node, {
-      width: process.stdout.columns || 80,
-      images: false,
-      maxImageRows: 0,
-      // Print mode never probes a terminal: dark is its stable, non-TTY theme default.
-      theme: { dark: true },
-    })
+    // A renderer that never settles must not hang `amira -p`: it gets the node's wait, then source.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const result = await Promise.race([
+      this.registry.render(node, {
+        width: process.stdout.columns || 80,
+        images: false,
+        maxImageRows: 0,
+        // Print mode never probes a terminal: dark is its stable, non-TTY theme default.
+        theme: { dark: true },
+      }),
+      new Promise<undefined>((done) => {
+        timer = setTimeout(done, this.registry.waitMs(node))
+      }),
+    ]).finally(() => clearTimeout(timer))
     if (!result) return source
     if ("segments" in result) return result.segments.map((segment) => segment.text).join("")
     if ("lines" in result) return result.lines.map((line) => line.text).join("\n") + ending
