@@ -2,6 +2,7 @@ import type { UiNode, UiState, ViewLine } from "@amira/api"
 import { type LineInput, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { terminalText } from "../diff-view.ts"
 import { segmentText, viewTitle } from "../view-lines.ts"
+import { detailContent } from "./detail.ts"
 import { allocate, cells, fit, type Rect, sides } from "./layout.ts"
 import { expandable, TreeIndex, treeIndent } from "./tree.ts"
 
@@ -36,13 +37,20 @@ export const scrollable = (node: UiNode): boolean =>
   node.type === "text" || node.type === "tree" || node.type === "table"
 
 /** Reconcile and lay out once. Only active tab bodies and nonempty rectangles are visited. */
-export function prepare(node: UiNode, rect: Rect, host: WidgetHost, widgets: Plan[], path = "root"): Plan {
+export function prepare(
+  node: UiNode,
+  rect: Rect,
+  host: WidgetHost,
+  widgets: Plan[],
+  path = "root",
+  displayOnly = false,
+): Plan {
   const plan: Plan = { node, rect, children: [], total: 0, viewport: rect.height }
   if (!rect.width || !rect.height) return plan
   const id = widgetId(node)
   if (id !== undefined) widgets.push(plan)
   const child = (n: UiNode, r: Rect, key = String(plan.children.length)) =>
-    plan.children.push(prepare(n, r, host, widgets, `${path}/${key}`))
+    plan.children.push(prepare(n, r, host, widgets, `${path}/${key}`, displayOnly))
   switch (node.type) {
     case "column":
     case "row": {
@@ -89,7 +97,30 @@ export function prepare(node: UiNode, rect: Rect, host: WidgetHost, widgets: Pla
         tree = new TreeIndex()
         host.trees.set(node.id, tree)
       }
-      tree.prepare(node.items, host.state.expanded[node.id], rect.width, host.lines)
+      tree.prepare(
+        node.items,
+        host.state.expanded[node.id],
+        rect.width,
+        host.lines,
+        (node, width) => {
+          const content = detailContent(node, width, host.lines)
+          return {
+            height: content.height,
+            render: (top, height) => {
+              const detail = prepare(
+                content.node,
+                { x: 0, y: 0, width, height: content.height },
+                host,
+                [],
+                "detail",
+                true,
+              )
+              return paint(detail, host, top, height)
+            },
+          }
+        },
+        (parts) => visibleWidth(segmentText(parts, host.theme)),
+      )
       plan.tree = tree
       plan.total = tree.total
       const selected = host.state.selected[node.id]
@@ -113,7 +144,7 @@ export function prepare(node: UiNode, rect: Rect, host: WidgetHost, widgets: Pla
       host.input(node.id)
       break
   }
-  if (scrollable(node)) {
+  if (scrollable(node) && !displayOnly) {
     const max = Math.max(0, plan.total - plan.viewport)
     const scroll = (id !== undefined ? host.state.scroll[id] : host.anonymousScroll.get(path)) ?? {
       top: 0,
@@ -143,9 +174,10 @@ function reconcile(
 }
 
 /** Paint only viewport rows for trees/tables; layouts compose already-clipped child rectangles. */
-export function paint(plan: Plan, host: WidgetHost): string[] {
+export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect.height): string[] {
   const { node, rect } = plan
-  const { width: w, height: h } = rect
+  const w = rect.width
+  const h = Math.max(0, Math.min(height, rect.height - from))
   if (!w || !h) return []
   const { theme, state } = host
   const id = widgetId(node)
@@ -153,35 +185,40 @@ export function paint(plan: Plan, host: WidgetHost): string[] {
   const top = plan.scroll?.top ?? 0
   const marker = focused ? theme.accent("❯ ") : "  "
   let out: string[] = []
+  if (from > 0 && ["bar", "progress", "rule", "input", "spacer"].includes(node.type))
+    return Array<string>(h).fill(" ".repeat(w))
   switch (node.type) {
     case "column":
     case "row": {
       const horizontal = node.type === "row"
-      if (horizontal) out = Array<string>(h).fill("")
+      out = Array<string>(h).fill("")
       for (const [i, c] of plan.children.entries()) {
-        const lines = paint(c, host)
         const start = horizontal ? c.rect.x - rect.x : c.rect.y - rect.y
-        if (start >= (horizontal ? w : h)) break
         if (horizontal) {
+          if (start >= w) break
+          const lines = paint(c, host, from, h)
           for (let y = 0; y < h; y++) {
             let between = " ".repeat(Math.max(0, start - visibleWidth(out[y]!)))
             if (node.divider && i > 0 && between.length) between = theme.border("│") + between.slice(1)
             out[y] += between + (lines[y] ?? " ".repeat(c.rect.width))
           }
         } else {
-          while (out.length < start && out.length < h)
-            out.push(
-              node.divider && out.length === start - cells(node.gap ?? 0) - 1
-                ? theme.border("─".repeat(w))
-                : "",
-            )
-          out.push(...lines)
+          const divider = start - cells(node.gap ?? 0) - 1 - from
+          if (node.divider && i > 0 && divider >= 0 && divider < h) out[divider] = theme.border("─".repeat(w))
+          const begin = Math.max(from, start)
+          const end = Math.min(from + h, start + c.rect.height)
+          if (end <= begin) continue
+          const lines = paint(c, host, begin - start, end - begin)
+          for (let y = 0; y < lines.length; y++) out[begin - from + y] = lines[y]!
         }
       }
       break
     }
     case "box": {
-      out = plan.children[0] ? paint(plan.children[0], host) : []
+      const inset = plan.border ? 1 : 0
+      const begin = Math.max(from, inset)
+      const end = Math.min(from + h, rect.height - inset)
+      out = plan.children[0] && end > begin ? paint(plan.children[0], host, begin - inset, end - begin) : []
       if (plan.border) {
         const color = node.tone === "accent" || node.tone === "focus" ? theme.accent : theme.border
         const title =
@@ -198,31 +235,49 @@ export function paint(plan: Plan, host: WidgetHost): string[] {
           : ""
         const head =
           label + color(rule.repeat(Math.max(0, w - 2 - visibleWidth(label) - visibleWidth(aside)))) + aside
-        out = [
-          color(strong ? "┏" : "╭") + head + color(strong ? "┓" : "╮"),
-          ...out.map((s) => color(strong ? "┃" : "│") + s + color(strong ? "┃" : "│")),
-          color((strong ? "┗" : "╰") + rule.repeat(w - 2) + (strong ? "┛" : "╯")),
-        ]
+        out = out.map((s) => color(strong ? "┃" : "│") + s + color(strong ? "┃" : "│"))
+        if (from === 0) out.unshift(color(strong ? "┏" : "╭") + head + color(strong ? "┓" : "╮"))
+        if (from + h === rect.height)
+          out.push(color((strong ? "┗" : "╰") + rule.repeat(w - 2) + (strong ? "┛" : "╯")))
       }
       break
     }
     case "tree": {
       const tree = plan.tree!
-      for (let i = tree.atOffset(top); i < tree.rows.length && out.length < h; i++) {
+      const offset = top + from
+      for (let i = tree.atOffset(offset); i < tree.rows.length && out.length < h; i++) {
         const row = tree.rows[i]!
         const pad = treeIndent(tree, i, w)
-        if (row.start >= top) {
+        if (row.start >= offset) {
           const selected = state.selected[node.id] === row.item.key
-          const lead = selected ? (focused ? "❯ " : "› ") : focused && out.length === 0 ? "» " : "  "
-          const disclosure = expandable(row.item) ? (row.open ? "▾ " : "▸ ") : row.item.rail ? "│ " : "  "
-          const left = lead + pad + disclosure + segmentText(row.item.row, theme)
+          const marker = selected ? (focused ? "❯ " : "› ") : focused && out.length === 0 ? "» " : "  "
+          const lead = fit(segmentText(row.item.lead ?? [], theme), tree.leadWidth)
+          const disclosure = row.item.node
+            ? fit(segmentText(row.item.node, theme), 2)
+            : expandable(row.item)
+              ? row.open
+                ? "▾ "
+                : "▸ "
+              : row.item.rail
+                ? "│ "
+                : "  "
+          const left = marker + lead + pad + disclosure + segmentText(row.item.row, theme)
           const line = sides(left, segmentText(row.item.aside ?? [], theme), w)
           out.push(selected ? (theme.selection?.(line) ?? line) : line)
         }
-        for (let j = Math.max(0, top - row.start - 1); j < row.detail.length && out.length < h; j++)
-          out.push(
-            `${focused && out.length === 0 ? "» " : "  "}${treeIndent(tree, i, w, true)}${row.item.rail ? "│ " : "  "}${row.detail[j]}`,
-          )
+        const prefix = () =>
+          `${focused && out.length === 0 ? "» " : "  "}${" ".repeat(tree.leadWidth)}${treeIndent(tree, i, w, true)}${row.item.rail ? "│ " : "  "}`
+        const start = Math.max(0, offset - row.start - 1)
+        const count = Math.min(h - out.length, (row.widget?.height ?? row.detail.length) - start)
+        if (count > 0) {
+          const lines = row.widget ? row.widget.render(start, count) : row.detail.slice(start, start + count)
+          for (const line of lines) out.push(prefix() + line)
+        }
+        const underline = row.start + 1 + (row.widget?.height ?? row.detail.length)
+        if (row.item.underline && underline >= offset && out.length < h) {
+          const pad = prefix()
+          out.push(pad + theme.border("─".repeat(Math.max(0, w - visibleWidth(pad)))))
+        }
       }
       if (!out.length && focused) out.push(marker)
       break
@@ -249,10 +304,11 @@ export function paint(plan: Plan, host: WidgetHost): string[] {
     case "table": {
       const row = (values: string[]) =>
         values.map((v, i) => fit(v, plan.columns![i]!, node.columns[i]!.align === "right")).join(" ")
-      out.push(
-        (id !== undefined ? marker : "") + theme.muted(row(node.columns.map((c) => terminalText(c.label)))),
-      )
-      for (let i = top; i < node.rows.length && out.length < h; i++) {
+      if (from === 0)
+        out.push(
+          (id !== undefined ? marker : "") + theme.muted(row(node.columns.map((c) => terminalText(c.label)))),
+        )
+      for (let i = top + Math.max(0, from - 1); i < node.rows.length && out.length < h; i++) {
         const r = node.rows[i]!
         const selected = id !== undefined && state.selected[id] === r.key
         const lead = id === undefined ? "" : selected ? (focused ? "❯ " : "› ") : "  "
@@ -270,7 +326,7 @@ export function paint(plan: Plan, host: WidgetHost): string[] {
     }
     case "text":
       out = plan
-        .lines!.slice(top, top + h)
+        .lines!.slice(top + from, top + from + h)
         .map((s, i) => (id !== undefined ? (i === 0 ? marker : "  ") : "") + s)
       if (!out.length && focused) out.push(marker)
       break
