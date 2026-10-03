@@ -114,9 +114,48 @@ export class Child implements ChildSession {
     this.tree.stopChild(this, reason)
   }
 
-  send(message: string | UserMessage): boolean {
+  /** User controls are independent of an extension's own message-holding policy. */
+  message(text: string): boolean {
+    if (!text.trim() || this.ended || this.stopReason || this.abortReason) return false
+    const message = userMessage(text)
+    if (this.persistent) {
+      const sent = this.send(message, true)
+      if (sent && !this.agent.turnId)
+        this.agent.bus.emit("turn.steer", { message, state: "queued" }, metaOf(this.agent))
+      return sent
+    }
+    // steer() on an idle agent starts a turn: buffer queued input without bypassing admission.
+    if (!this.started) this.agent.expectNotice().deliver(message, { wake: false })
+    else if (this.agent.turnId) this.agent.steer(message)
+    else return false
+    return true
+  }
+
+  pause(): boolean {
+    if (this.ended || this.stopReason || this.abortReason || this.state !== "working") return false
+    if (!this.agent.busy || !this.agent.execution.pause()) return false
+    this.#emitState("paused")
+    return true
+  }
+
+  resume(): boolean {
+    if (this.ended || this.stopReason || this.abortReason || !this.agent.execution.resume()) return false
+    this.#emitState("working")
+    return true
+  }
+
+  #emitState(state: "paused" | Exclude<ChildState, "ended">) {
+    this.agent.bus.emit(
+      "subagent.state",
+      { childSessionId: this.id, state, turns: this.turns },
+      this.parentMeta,
+    )
+  }
+
+  send(message: string | UserMessage, steer = false): boolean {
     if (!this.persistent || this.ended || this.stopReason || this.abortReason) return false
-    this.agent.expectNotice().deliver(typeof message === "string" ? userMessage(message) : message)
+    if (steer && this.agent.turnId) this.agent.steer(message, { notice: true })
+    else this.agent.expectNotice().deliver(typeof message === "string" ? userMessage(message) : message)
     return true
   }
 

@@ -60,6 +60,20 @@ export const COMMAND_PARAMS = {
       "Aborts the running turn (it still ends with turn.end) or /compact (messages queued meanwhile are dropped: turn.steer dropped).",
     params: {},
   },
+  "subagent.message": {
+    description:
+      "Sends a user message to a descendant before its next model call, waking an idle persistent child. Queued children receive it when admitted. False when unknown or ended.",
+    params: { sessionId: str, text: str },
+  },
+  "subagent.pause": {
+    description:
+      "Holds a running descendant before its next model call without aborting current work, retaining its admission slot. False when unknown, queued, idle, ended or already paused.",
+    params: { sessionId: str },
+  },
+  "subagent.resume": {
+    description: "Releases a paused descendant. False when unknown, ended or not paused.",
+    params: { sessionId: str },
+  },
   "ui.respond": {
     description:
       "Answers a ui.request. `value` is required; an explicit null cancels the dialog, and a missing value fails with `invalid_params`. A form is answered with an object of values by field id (missing fields take their defaults, hidden ones are ignored); values that do not pass its checks fail with `invalid_params` naming each problem, and the form stays open.",
@@ -148,6 +162,9 @@ const RESULTS: Record<keyof typeof COMMAND_PARAMS, Record<string, Schema>> = {
     },
   },
   abort: { aborted: bool },
+  "subagent.message": { delivered: bool },
+  "subagent.pause": { paused: bool },
+  "subagent.resume": { resumed: bool },
   "ui.respond": {},
   "ui.action": { result: ref("FormActionResult") },
   "ui.configure": {},
@@ -439,8 +456,8 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     durationMs: num,
   }),
   "subagent.state": obj(
-    { childSessionId: str, state: strings("queued", "working", "idle"), turns: num },
-    "A persistent sub-agent started a turn (working), waits for a place to run one (queued), or waits for a message (idle).",
+    { childSessionId: str, state: strings("queued", "working", "idle", "paused"), turns: num },
+    "A sub-agent is paused or resumed; persistent children also report working, queued and idle transitions.",
   ),
   "group.start": obj({ group: spawnGroup }),
   "group.update": obj({ group: spawnGroup }),

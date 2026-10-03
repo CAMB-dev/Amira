@@ -94,6 +94,28 @@ async function setup(
   return { session, host, run, enabled, announced, home }
 }
 
+test("subagent controls are descendant-scoped and can stop a paused child", async () => {
+  const { host, session } = await setup([{ text: "done", delayMs: 100 }])
+  const group = host.control.createGroup!({ name: "controls" })
+  const child = group.spawn({ prompt: "work", persistent: true })
+  while (child.state !== "working") await Bun.sleep(1)
+  expect(host.control.pauseSubagent(child.id)).toBe(true)
+  expect(host.control.subagents().find((s) => s.id === child.id)?.status).toBe("paused")
+  expect(host.control.pauseSubagent(child.id)).toBe(false)
+  expect(host.control.messageSubagent(child.id, "from the user")).toBe(true)
+  expect(host.control.resumeSubagent(child.id)).toBe(true)
+  expect(host.control.resumeSubagent(child.id)).toBe(false)
+  expect(host.control.pauseSubagent(child.id)).toBe(true)
+  expect(host.control.stopSubagent(child.id)).toBe(true)
+  expect((await child.result()).status).toBe("aborted")
+  for (const id of ["unknown", child.id, session.agent.sessionId]) {
+    expect(host.control.messageSubagent(id, "ignored")).toBe(false)
+    expect(host.control.pauseSubagent(id)).toBe(false)
+    expect(host.control.resumeSubagent(id)).toBe(false)
+  }
+  group.end()
+})
+
 test("/shell and /tools decide the tools together; the shell mode wins for the shell tools", async () => {
   const { host, run, enabled } = await setup()
   host.control.setShell("auto")
