@@ -1,19 +1,8 @@
 import { existsSync, realpathSync } from "node:fs"
 import path from "node:path"
-import {
-  type Ai,
-  type AssistantMessage,
-  type Message,
-  type ModelInfo,
-  type Usage,
-  type UserMessage,
-  userMessage,
-} from "@amira/ai"
+import type { Ai, Message, ModelInfo, Usage, UserMessage } from "@amira/ai"
 import {
   type AnyEvent,
-  type ApprovalRequest,
-  type AskOutcome,
-  type AskRequest,
   type Budget,
   type ChildSession,
   type ChildState,
@@ -29,15 +18,15 @@ import {
   type SubagentResult,
   type SubagentStatus,
 } from "@amira/api"
-import { Agent, type ApprovalDecision, type TurnResult } from "./agent.ts"
+import { Agent, type TurnResult } from "./agent.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions } from "./context.ts"
 import { instructionsSection, loadInstructions } from "./instructions.ts"
-import { addNonInteractive, defaultSections, type PromptSection, renderPrompt, setSection } from "./prompt.ts"
+import { addNonInteractive, defaultSections, type PromptSection, setSection } from "./prompt.ts"
 import { SessionStore } from "./session-store.ts"
 import { addUsage, BudgetLedger, overBudget, usageTokens } from "./subagents/budget.ts"
 import { Child, Group, type SpawnedSubagent } from "./subagents/child.ts"
-import { askParentPrompt, parseParentAnswers } from "./subagents/consult-parent.ts"
+import { ParentConsultant, parseParentAnswers } from "./subagents/consult-parent.ts"
 import { followChild, metaOf, parentMeta } from "./subagents/events.ts"
 import { finalText, forkHistory } from "./subagents/fork.ts"
 import {
@@ -118,8 +107,7 @@ export class AgentTree {
   #running = new Set<Child>()
   /** How many queued or running children each session has; sessions without any are left out. */
   #liveKids = new Map<string, number>()
-  /** The last approval question queued for each parent, by its session id. */
-  #asking = new Map<string, Promise<unknown>>()
+  #consultant: ParentConsultant
   #groups = new Map<string, Group>()
   /** Ended sub-agents whose dispose is still running, by session id. */
   #disposals = new Map<string, { parent: string; done: Promise<void> }>()
@@ -130,6 +118,10 @@ export class AgentTree {
     this.maxConcurrent = Math.max(1, opts.maxConcurrent ?? 4)
     this.budget = opts.budget
     this.#ledger = new BudgetLedger(opts.budget)
+    this.#consultant = new ParentConsultant({
+      ai: opts.ai,
+      recordUsage: (parent, usage) => this.recordUsage(parent, usage),
+    })
     this.resultRetries = Math.max(0, opts.resultRetries ?? 2)
   }
 
@@ -343,8 +335,8 @@ export class AgentTree {
       // the policy's questions skip the parent's model and go to the user (Agent).
       permissions: parent.permissions,
       ...(parent.permissionApprover ? { permissionApprover: parent.permissionApprover } : {}),
-      approve: (request, signal) => this.#askParent(parent, request, signal),
-      ask: (request, signal) => this.#askParentQuestions(parent, request, signal),
+      approve: (request, signal) => this.#consultant.approve(parent, request, signal),
+      ask: (request, signal) => this.#consultant.ask(parent, request, signal),
       ...(this.#opts.compaction ? { compaction: this.#opts.compaction } : {}),
       ...(this.#opts.context ? { context: this.#opts.context } : {}),
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
@@ -810,118 +802,6 @@ export class AgentTree {
     for (const g of child.groups) g.live.delete(child)
     this.#groupsChanged(child)
     child.settle(result)
-  }
-
-  /**
-   * One question to a parent at a time: each is a call with the parent's whole context, and
-   * children asking together would otherwise start that many such calls at once.
-   */
-  #askParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
-    return this.#oneAtATime(
-      parent,
-      signal,
-      { approved: false, reason: "aborted before the parent was asked" },
-      () => this.#consultParent(parent, req, signal),
-    )
-  }
-
-  /** A child's questions (ask_user) go to its commander the same way, in the same line. */
-  #askParentQuestions(parent: Agent, req: AskRequest, signal: AbortSignal): Promise<AskOutcome> {
-    return this.#oneAtATime(parent, signal, { declined: true }, () =>
-      this.#consultParentQuestions(parent, req, signal),
-    )
-  }
-
-  async #oneAtATime<T>(parent: Agent, signal: AbortSignal, aborted: T, ask: () => Promise<T>): Promise<T> {
-    const before = this.#asking.get(parent.sessionId) ?? Promise.resolve()
-    // One aborted while it waits for its place leaves at once: the one before it may be a
-    // question passed on to the user, open for minutes.
-    let onAbort: (() => void) | undefined
-    const abandoned = new Promise<T>((resolve) => {
-      onAbort = () => resolve(aborted)
-      signal.addEventListener("abort", onAbort, { once: true })
-    })
-    const inLine = before.then(() => {
-      signal.removeEventListener("abort", onAbort!)
-      return signal.aborted ? aborted : ask()
-    })
-    const mine = Promise.race([inLine, abandoned])
-    // The next in line still waits for this one's model call to end, not only its abort.
-    const tail = inLine.catch(() => {})
-    this.#asking.set(parent.sessionId, tail)
-    // The line ends when its last one is really done: one that left early (aborted) is still
-    // waiting on those before it, and whoever asks next must too.
-    void tail.then(() => {
-      if (this.#asking.get(parent.sessionId) === tail) this.#asking.delete(parent.sessionId)
-    })
-    try {
-      return await mine
-    } finally {
-      signal.removeEventListener("abort", onAbort!)
-    }
-  }
-
-  /**
-   * The parent's model answers a child's questions like it decides its approvals (D14): with
-   * its conversation, without tools. It may answer them, decline, or reply ASK_USER to pass
-   * them on to whoever answers for itself (the user, or its own commander).
-   */
-  async #consultParentQuestions(parent: Agent, req: AskRequest, signal: AbortSignal): Promise<AskOutcome> {
-    const reply = await this.#consult(parent, askParentPrompt(req), signal)
-    if (!reply.text) return { unavailable: `the commander could not answer: ${reply.failure ?? "no reply"}` }
-    // The word on the first line, or alone on a line after some prose.
-    const lines = reply.text.split("\n").map((l) => l.replace(/[*`\s.]/g, "").toUpperCase())
-    const says = (word: string) => lines[0]?.startsWith(word) || lines.includes(word)
-    if (says("ASK_USER")) return parent.askQuestions(req, signal)
-    if (says("DECLINE")) return { declined: true, by: "the commander" }
-    const answers = parseParentAnswers(req.questions, reply.text)
-    return answers ? { answers, by: "the commander" } : { declined: true, by: "the commander" }
-  }
-
-  /** One call to the parent's model with its conversation and `question`, without tools. */
-  async #consult(parent: Agent, question: string, signal: AbortSignal) {
-    if (parent.execution.paused) await parent.execution.wait(signal)
-    if (signal.aborted) return { text: undefined, failure: "aborted" }
-    let reply: AssistantMessage | undefined
-    let failure: string | undefined
-    for await (const ev of this.#opts.ai.stream(
-      {
-        model: parent.model,
-        systemPrompt: renderPrompt([...parent.sections]),
-        // As the parent's own requests send its history (context management).
-        messages: [...forkHistory(parent.projectedMessages()), userMessage(question)],
-        tools: [],
-      },
-      signal,
-    )) {
-      if (ev.type === "done") reply = ev.message
-      if (ev.type === "error") failure = ev.error.message
-    }
-    if (reply?.usage) this.recordUsage(parent, reply.usage)
-    return { text: reply ? finalText([reply]) : undefined, failure }
-  }
-
-  /**
-   * D14: a child's approval request goes to its parent's model, not to the user. It gets the
-   * parent's conversation and the request, without tools, and must answer APPROVE or DENY.
-   * Only interceptors' questions come here: the permission policy's go to the user (Agent).
-   */
-  async #consultParent(parent: Agent, req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
-    const args = JSON.stringify(req.args, null, 2)
-    const question = [
-      `A sub-agent you started (session ${req.sessionId}) wants to call the tool "${req.name}" and needs your approval.`,
-      `Why it needs approval: ${req.reason}`,
-      `Arguments:\n${args.length > 4000 ? `${args.slice(0, 4000)}\n[...]` : args}`,
-      "Reply with APPROVE or DENY on the first line, then one short sentence with your reason.",
-    ].join("\n\n")
-    const { text, failure } = await this.#consult(parent, question, signal)
-    if (text === undefined)
-      return { approved: false, reason: `the parent could not decide: ${failure ?? "no reply"}` }
-    const verdict = /\b(APPROVE|DENY)\b/i.exec(text)?.[1]?.toUpperCase()
-    const why = text.replace(/^[^\n]*\n?/, "").trim()
-    return verdict === "APPROVE"
-      ? { approved: true }
-      : { approved: false, reason: `the parent agent denied it${why ? `: ${why}` : ""}` }
   }
 }
 
