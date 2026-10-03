@@ -1,6 +1,7 @@
 import type {
   CommandOutputLevel,
   ToolLine,
+  UiControl,
   ViewControl,
   ViewDefinition,
   ViewKey,
@@ -25,6 +26,7 @@ import { terminalText } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
 import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
+import { UiRuntime } from "./ui-runtime/runtime.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
 import { renderViewLines, viewTitle } from "./view-lines.ts"
 
@@ -109,6 +111,9 @@ export class ExtensionViewer implements Component {
   /** Host-rendered tool lines retain their styles without exposing terminal escapes to views. */
   #toolLines = new WeakMap<ViewLine, string>()
   #now: () => number
+  #ui: UiRuntime | undefined
+  #uiFrame: { width: number; ctx: RenderContext } | undefined
+  #uiDirty = true
   /** The last error of each part of the view, so one that keeps throwing is reported once. */
   #failed = new Map<string, string>()
   /** A line of text a key handler asked for (ViewControl.prompt), while it is open. */
@@ -122,6 +127,15 @@ export class ExtensionViewer implements Component {
     this.#data = data
     this.#opts = opts
     this.#now = opts.now ?? Date.now
+    if (view.ui)
+      this.#ui = new UiRuntime((event) => {
+        this.#call("onEvent", () => view.onEvent?.(event, this.#data, this.#uiControl()))
+      })
+  }
+
+  /** Declarative views keep pointer coordinates; legacy views retain wheel-to-arrow routing. */
+  get declarative(): boolean {
+    return !!this.#ui
   }
 
   /** Shows other data, e.g. when a command opens the same kind again. */
@@ -132,6 +146,7 @@ export class ExtensionViewer implements Component {
       this.#confirmed(false)
     }
     this.#data = data
+    this.#uiDirty = true
   }
 
   get scroll(): ScrollView {
@@ -153,6 +168,7 @@ export class ExtensionViewer implements Component {
 
   handleInput(e: InputEvent): boolean {
     if (this.#confirm) {
+      if (e.type === "mouse") return true
       // y confirms; any other key says no.
       this.#confirmed(matchesKey(e, "y"))
       this.#opts.requestRender?.()
@@ -170,6 +186,15 @@ export class ExtensionViewer implements Component {
       this.#opts.onClose?.()
       return true
     }
+    if (this.#ui) {
+      // A burst of keys can arrive before the scheduled frame: refresh changed tab/tree topology.
+      if (this.#uiDirty && this.#uiFrame) this.render(this.#uiFrame.width, this.#uiFrame.ctx)
+      this.#uiDirty = true
+      if (this.#call("ui input", () => this.#ui!.handleInput(e))) {
+        this.#opts.requestRender?.()
+        return true
+      }
+    }
     for (const k of this.#view.keys ?? []) {
       if (!usable(k.key)) continue
       const named = NAMED.has(k.key)
@@ -178,11 +203,29 @@ export class ExtensionViewer implements Component {
           ? matchesKey(e, "tab", { shift: true })
           : matchesKey(e, k.key, named ? { shift: false } : {})
       if (!match) continue
-      this.#call(`key ${k.key}`, () => k.run(this.#data, this.#control()))
+      if (this.#ui) this.#call(`key ${k.key}`, () => this.#ui!.key(k.key))
+      else this.#call(`key ${k.key}`, () => k.run?.(this.#data, this.#control()))
       this.#opts.requestRender?.()
       return true
     }
+    if (this.#ui) return false
     return this.scroll.handleInput(e)
+  }
+
+  #uiControl(): UiControl {
+    return {
+      ...this.#control(),
+      setState: (patch) => {
+        this.#ui?.setState(patch)
+        this.#uiDirty = true
+        this.#opts.requestRender?.()
+      },
+      focus: (id) => {
+        this.#ui?.focus(id)
+        this.#uiDirty = true
+        this.#opts.requestRender?.()
+      },
+    }
   }
 
   /** What a key handler gets to act on the view with. */
@@ -193,13 +236,16 @@ export class ExtensionViewer implements Component {
         this.#confirmed(false)
         this.#opts.onClose?.()
       },
-      requestRender: () => this.#opts.requestRender?.(),
+      requestRender: () => {
+        this.#uiDirty = true
+        this.#opts.requestRender?.()
+      },
       print: (text, level) => this.#opts.onPrint?.(text, level),
       prompt: (title, opts) => {
         this.#answer(undefined)
         this.#confirmed(false)
         const input = new LineInput()
-        if (opts?.initial) input.value = opts.initial
+        if (opts?.initial) input.value = terminalText(opts.initial)
         return new Promise<string | undefined>((resolve) => {
           this.#prompt = { title: oneLine(title), input, resolve }
           this.#opts.requestRender?.()
@@ -208,7 +254,7 @@ export class ExtensionViewer implements Component {
       confirm: (question, opts) => {
         this.#answer(undefined)
         this.#confirmed(false)
-        const text = `${oneLine(question)} y ${opts?.yes ?? "yes"} ${glyphs.separator} any other key ${opts?.no ?? "cancels"}`
+        const text = `${oneLine(question)} y ${oneLine(opts?.yes ?? "yes")} ${glyphs.separator} any other key ${oneLine(opts?.no ?? "cancels")}`
         return new Promise<boolean>((resolve) => {
           this.#confirm = { text, resolve }
           this.#opts.requestRender?.()
@@ -239,9 +285,12 @@ export class ExtensionViewer implements Component {
     this.#answer(undefined)
     this.#confirmed(false)
     this.#scrolls.clear()
+    this.#ui?.dispose()
+    this.#uiFrame = undefined
   }
 
   render(width: number, ctx: RenderContext): string[] {
+    if (this.#ui) return this.#renderUi(width, ctx)
     const { theme } = ctx
     const opts = this.#renderOptions(width, theme)
     const head: string[] = []
@@ -280,9 +329,58 @@ export class ExtensionViewer implements Component {
     return [...head, ...body, this.#footer(theme, width)].slice(0, ctx.rows)
   }
 
+  #renderUi(width: number, ctx: RenderContext): string[] {
+    const runtime = this.#ui!
+    this.#uiFrame = { width, ctx }
+    this.#uiDirty = false
+    const waiting = (this.#opts.waiting?.() ?? [])
+      .slice(0, Math.max(0, ctx.rows - 1))
+      .map((t) => waitingLine(ctx.theme, terminalText(t), width))
+    const height = Math.max(0, ctx.rows - waiting.length - 1)
+    let body = this.#call("ui", () => {
+      // A repaired selection/tab/focus may change extension-built details in this same frame.
+      // Bound stabilization so a view whose content oscillates with state cannot spin forever.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const node = this.#view.ui!(this.#data, {
+          ...this.#renderOptions(width, ctx.theme),
+          state: runtime.state,
+        })
+        const frame = runtime.render(
+          node,
+          width,
+          height,
+          ctx.theme,
+          (lines, w) => this.#renderLines(lines, w, ctx.theme),
+          !this.#prompt && !this.#confirm,
+        )
+        if (!runtime.reconciled) return frame
+      }
+      throw new Error("UI state did not stabilize")
+    })
+    if (!body) {
+      runtime.clearFrame()
+      const title =
+        this.#call("title", () => this.#view.title(this.#data, this.#renderOptions(width, ctx.theme))) ??
+        this.kind
+      body = this.#renderLines(
+        [
+          typeof title === "string" ? { kind: "accent", text: title } : title,
+          {
+            kind: "error",
+            text: `The ${this.kind} view failed: ${this.#failed.get("ui") ?? "unknown error"}`,
+          },
+        ],
+        width,
+        ctx.theme,
+      )
+    }
+    while (body.length < height) body.push("")
+    return [...body.slice(0, height), ...waiting, this.#footer(ctx.theme, width)].slice(0, ctx.rows)
+  }
+
   #body(width: number, theme: Theme): string[] {
     const lines: ViewLine[] = this.#call("render", () =>
-      this.#view.render(this.#data, this.#renderOptions(width, theme)),
+      this.#view.render?.(this.#data, this.#renderOptions(width, theme)),
     ) ?? [
       {
         kind: "error",
@@ -333,6 +431,18 @@ export class ExtensionViewer implements Component {
       const room = Math.max(1, width - visibleWidth(label))
       return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder: "Enter send · Esc cancel" })}`
     }
+    if (this.#ui)
+      return theme.muted(
+        fitHint(
+          [
+            ...keyHints(this.#view.keys ?? []),
+            { text: "Tab focus · arrows navigate · Enter open/send", priority: 2 },
+            { text: "PgUp PgDn scroll", priority: 1 },
+            { text: "Esc back", priority: 5 },
+          ],
+          width,
+        ),
+      )
     const scroll = this.scroll
     const p = scroll.position
     // The way back stays longest, then the view's own keys; the scroll keys go first.
@@ -391,9 +501,9 @@ function keyHints(keys: readonly ViewKey[]): HintItem[] {
 
 function keyLabel(key: string): string {
   const labels: Record<string, string> = { left: "←", right: "→", tab: "Tab", "shift-tab": "Shift+Tab" }
-  return labels[key] ?? key
+  return labels[key] ?? terminalText(key)
 }
 
 function oneLine(s: string): string {
-  return s.replace(/\s+/g, " ").trim()
+  return terminalText(s).replace(/\s+/g, " ").trim()
 }
