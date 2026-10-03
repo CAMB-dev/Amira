@@ -24,7 +24,8 @@ export function inlineMathAt(text: string, at: number, end = text.length): MathS
   const from = at + (dollar ? 1 : 2)
   if (dollar && from < end && /\s/.test(text[from]!)) return
   // A closer does not depend on its opener, so a scan that found none rules out every later opener.
-  if (dollar && failed && failed.text === text && failed.end === end && failed.from <= from) return failed.result
+  if (dollar && failed && failed.text === text && failed.end === end && failed.from <= from)
+    return failed.result
   for (let i = from; i < end; i++) {
     const ch = text[i]
     if (ch === "\n") {
