@@ -246,9 +246,12 @@ export class MarkdownStream implements Component {
         commitOpenBlocks(this.state, env, sink)
         live = this.live(liveEnv)
       }
-      if (live.length > this.maxRows && this.commitPartial(env, sink)) live = this.live(liveEnv)
-      // A code block held for its renderer cannot be committed in parts: its end shows.
-      if (live.length > this.maxRows && holdsCode(this.state)) live = live.slice(live.length - this.maxRows)
+      // A chunk-final emphasis delimiter may grow into a different opener or closer next frame.
+      const emphasis = !this.state.fence && /[*_~]$/.test(this.src)
+      if (live.length > this.maxRows && !emphasis && this.commitPartial(env, sink)) live = this.live(liveEnv)
+      // Held code and ambiguous emphasis cannot be committed in parts: their end shows.
+      if (live.length > this.maxRows && (holdsCode(this.state) || emphasis))
+        live = live.slice(live.length - this.maxRows)
     }
     return this.done.length ? [...this.done, ...live] : live
   }

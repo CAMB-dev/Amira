@@ -75,7 +75,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `edit.yank` | `ctrl+y` | Paste the text cut last; cuts in a row join into one. Folded pastes stay folded |
 | `edit.undo` | `ctrl+z` | Undo the last change to the input: a word typed, a run of deletes, a cut, a paste, a recalled prompt |
 | `edit.redo` | `ctrl+shift+z` | Redo the change undone last. Terminals without the kitty keyboard protocol send Ctrl+Shift+Z as Ctrl+Z; bind another key there |
-| `edit.external` | `ctrl+g` | Edit the message in your editor: `$VISUAL`, else `$EDITOR` (a command, e.g. `code --wait`), else Notepad on Windows and vi elsewhere. The terminal is the editor's until it exits; the saved text becomes the input |
+| `edit.external` | `ctrl+g` | Edit the message in your editor: `$VISUAL`, else `$EDITOR`, else Git's `core.editor` (a command, e.g. `code --wait`), else Notepad on Windows and vi elsewhere. The terminal is the editor's until it exits; the saved text becomes the input |
 
 ### Completion lists
 

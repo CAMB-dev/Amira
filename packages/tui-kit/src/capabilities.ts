@@ -25,9 +25,10 @@ export function detectEnv(env: Env = process.env): TerminalEnv {
  * support them mostly ignore them, but some print them. `FORCE_HYPERLINK=1` or `=0` overrides.
  */
 export function supportsHyperlinks(env: Env = process.env): boolean {
+  if (env.TERM === "dumb") return false
   const force = env.FORCE_HYPERLINK
   if (force !== undefined && force !== "") return force !== "0"
-  if (env.TMUX || env.STY || env.TERM === "dumb") return false
+  if (env.TMUX || env.STY) return false
   if (env.WT_SESSION) return true
   const program = env.TERM_PROGRAM ?? ""
   if (["vscode", "iTerm.app", "WezTerm", "ghostty", "Hyper"].includes(program)) return true
@@ -266,6 +267,17 @@ export async function setupTerminalInput(
   if (hasInputReader(term)) throw new Error("setupTerminalInput must run before an InputReader is started")
   if (term instanceof ProcessTerminal) term.start()
   term.setRawMode(true)
+  if (env.TERM === "dumb") {
+    return {
+      capabilities: {
+        win32InputMode: false,
+        kittyKeyboard: false,
+        synchronizedOutput: false,
+        shiftEnter: false,
+      },
+      leftoverInput: "",
+    }
+  }
   const info = detectEnv(env)
   const win32InputMode = info.windowsTerminal
   const probe = await probeTerminal(term, {
@@ -321,7 +333,7 @@ export function chooseImageSupport(
   graphics: GraphicsReplies | undefined,
   env: Env = process.env,
 ): ImageSupport | undefined {
-  if (setting === "off") return undefined
+  if (setting === "off" || env.TERM === "dumb") return undefined
   if (setting === "auto" && (env.TMUX || env.STY)) return undefined
   const info = detectEnv(env)
   const program = env.TERM_PROGRAM ?? ""

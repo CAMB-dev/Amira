@@ -54,7 +54,7 @@ type Env = Record<string, string | undefined>
  * Ghostty. Elsewhere it is left out, since iTerm2 shows OSC 9 as a notification.
  */
 export function progressSupported(env: Env = process.env): boolean {
-  if (env.TERM_PROGRAM === "iTerm.app") return false
+  if (env.TERM === "dumb" || env.TERM_PROGRAM === "iTerm.app") return false
   return (
     !!env.WT_SESSION || !!env.ConEmuPID || env.TERM_PROGRAM === "vscode" || env.TERM_PROGRAM === "ghostty"
   )
