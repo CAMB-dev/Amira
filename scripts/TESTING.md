@@ -72,17 +72,10 @@ full-check duration to compare against.
 | Full serial bun test #2 | 378.26 | Passed |
 | bun run check | 393.14 | Passed |
 
-resume-final-test-1: 3063 pass, 14 skip, 0 fail.
-
-resume-final-test-2: 3063 pass, 14 skip, 0 fail.
-
-resume-final-check: 3063 pass, 14 skip, 0 fail.
-
 The under-three-minute target remains unmet. One exploratory four-worker check
 finished in 153.22 s, but repeat runs failed. Both per-file VM isolation and registry
 reuse were tried; six workers were also unreliable. No parallel configuration is
-retained, and the underlying native-process failures remain undiagnosed. Independent
-test activity was observed during some exploratory measurements; it was not stopped.
+retained, and the underlying native-process failures remain undiagnosed.
 
 The file-picker hardening passed 20 repetitions (460 tests); its remaining timing race
 was identified from scheduling and history, not independently reproduced. A reproduced
