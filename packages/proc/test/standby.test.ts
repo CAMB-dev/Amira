@@ -15,8 +15,8 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }))
 /** A gated program: prints `early`, optionally records its pid, then waits for the gate line. */
 function gated(after = "", pidFile?: string): string[] {
   const script = [
-    pidFile ? `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))` : "",
     "console.log('early')",
+    pidFile ? `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))` : "",
     "let line",
     "for await (const l of console) { line = l; break }",
     "if (line === undefined) process.exit(125)",
@@ -61,8 +61,9 @@ async function pidFrom(file: string): Promise<number> {
 }
 
 test("a prepared command runs when released, keeping output from before the release", async () => {
-  const standby = prepareCommand(gated(), { cwd, gated: true })
-  await Bun.sleep(300)
+  const pidFile = join(dir, "prepared.pid")
+  const standby = prepareCommand(gated("", pidFile), { cwd, gated: true })
+  await pidFrom(pidFile)
   expect(standby.alive).toBe(true)
   const chunks: string[] = []
   const run = await standby.run({ ...release("hello"), onChunk: (c) => void chunks.push(c) })
@@ -121,8 +122,16 @@ test("dispose kills the waiting process", async () => {
 test("abort during a released standby kills it", async () => {
   const standby = prepareCommand(gated("await Bun.sleep(60_000)"), { cwd, gated: true })
   const abort = new AbortController()
-  const p = standby.run({ gateLine: "x", timeoutMs: 60_000, signal: abort.signal })
-  setTimeout(() => abort.abort(), 500)
+  let output = ""
+  const p = standby.run({
+    gateLine: "x",
+    timeoutMs: 60_000,
+    signal: abort.signal,
+    onChunk: (chunk) => {
+      output += chunk
+      if (output.includes("got:x")) abort.abort()
+    },
+  })
   expect((await p).aborted).toBe(true)
 })
 
@@ -130,8 +139,14 @@ test("losing the worker after a release is a failure, not a gone standby that ma
   // Its tree is no longer contained once the worker is gone, so it must end on its own.
   const standby = prepareCommand(gated("await Bun.sleep(3000)"), { cwd, gated: true })
   const idle = prepareCommand(gated(), { cwd, gated: true })
-  const run = standby.run(release("x"))
-  await Bun.sleep(500)
+  let output = ""
+  const run = standby.run({
+    ...release("x"),
+    onChunk: (chunk) => {
+      output += chunk
+    },
+  })
+  await until(() => output.includes("got:x"))
   resetCommandWorker()
   const err = await run.then(
     () => undefined,
