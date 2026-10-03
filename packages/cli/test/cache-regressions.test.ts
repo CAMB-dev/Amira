@@ -123,3 +123,17 @@ test("cache regression guard: clean keeps a repository locked by another operati
     lock.release()
   }
 })
+
+test("cache regression: prune refuses while a lock can't be read, --all still works", async () => {
+  const lock = packageScope("project", { home, cwd }).lockFile
+  mkdirSync(path.dirname(lock), { recursive: true })
+  writeFileSync(lock, "{ not json")
+  const unused = cached("https://example.test/unused")
+  const refused = await ext(["cache", "prune"])
+  expect(refused.code).toBe(1)
+  expect(refused.err).toContain("can't be read")
+  expect(refused.err).toContain(lock)
+  expect(existsSync(unused)).toBe(true)
+  expect((await ext(["cache", "prune", "--all"])).code).toBe(0)
+  expect(existsSync(unused)).toBe(false)
+})
