@@ -178,6 +178,10 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
 
+### Command echo
+
+Commands echo the typed slash-command line into the transcript by default. Set `echo: false` on the `CommandDefinition` passed to `api.registerCommand()` to omit that line in both inline and full-screen TUI modes, for example for `/btw <question>`. This hides only the frontend's echo: the command's own output (`ctx.print`, notices and views) still shows as usual, and prompt history (↑) still records the line. Print mode and RPC behavior are unchanged.
+
 ### Full-screen views
 
 Register a `ViewDefinition` with `api.registerView()` and open it from a command with
