@@ -190,6 +190,36 @@ function hostSetup(control: Partial<SessionControl> = {}, aliases?: Record<strin
   return { bus, agent, ai, registry, host, outputs }
 }
 
+test("command echo follows aliases and overrides, and defaults to true", () => {
+  const { registry, host } = hostSetup({}, { aside: "btw fixed", broken: "missing", loop: "loop" })
+  registry.register(cmd("btw", { aliases: ["b"], echo: false }), "test")
+  registry.register(cmd("status"), "test")
+  for (const line of ["/btw question", "/b question", "/aside question"]) {
+    expect(host.shouldEcho(line)).toBe(false)
+  }
+  for (const line of ["/status", "/missing", "/broken", "/loop", "not a command"]) {
+    expect(host.shouldEcho(line)).toBe(true)
+  }
+  const off = registry.register(cmd("btw", { override: true, echo: true }), "override")
+  expect(host.shouldEcho("/b question")).toBe(true)
+  expect(host.shouldEcho("/aside question")).toBe(true)
+  off()
+  expect(host.shouldEcho("/aside question")).toBe(false)
+})
+
+for (const frontend of ["print", "rpc"] as const) {
+  test(`${frontend}: echo=false leaves command output unchanged`, async () => {
+    const { registry, host, outputs } = hostSetup()
+    registry.register(cmd("btw", { echo: false, run: (_args, ctx) => ctx.print("Side answer") }), "test")
+    expect(await host.run("/btw question", { frontend })).toEqual({
+      ok: true,
+      command: "btw",
+      output: ["Side answer"],
+    })
+    expect(await outputs()).toEqual([{ command: "btw", text: "Side answer", level: "info" }])
+  })
+}
+
 test("a frontend with full-screen views hands openView to commands; others leave it unset", async () => {
   const { registry, host } = hostSetup()
   const seen: (boolean | string)[] = []
