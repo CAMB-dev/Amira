@@ -406,6 +406,72 @@ function streamed(
   return [...committed, ...m.take(width)]
 }
 
+test("a frozen table followed immediately by a setext marker keeps its cells and the marker", () => {
+  const header = "| h1 | h2 |\n|----|:--:|\n"
+  const body = "| another cell here | x |\n"
+  const rows = replay(
+    [
+      [header, 1],
+      [body, 3],
+      ["===", 1],
+    ],
+    32,
+  )
+  // Frozen columns wrap independently: x shares the first physical row with part of the first
+  // cell, rather than following all of its text. This is table layout, not reordered cell content.
+  expect(rows).toEqual(["h1     │   h2", "───────┼───────", "anothe │   x", "r cell │", "here   │", "==="])
+  expect(md(`${header}${body}===`, 32)).toEqual([
+    "h1                │ h2",
+    "──────────────────┼───",
+    "another cell here │ x",
+    "===",
+  ])
+})
+
+test("an emphasis marker split between chunks leaves no stray delimiter", () => {
+  for (const width of [8, 16, 32]) {
+    for (let length = 0; length <= 80; length++) {
+      const prefix = "a ".repeat(length)
+      const rows = replay(
+        [
+          [`${prefix}*`, 1],
+          ["*bold**", 1],
+        ],
+        width,
+      )
+      expect({ width, length, delimiter: rows.some((row) => row.includes("*")) }).toEqual({
+        width,
+        length,
+        delimiter: false,
+      })
+      expect(letters(rows)).toBe(letters(md(`${prefix}**bold**`, width)))
+    }
+  }
+})
+
+test("a split closing emphasis marker is not committed as a weaker span", () => {
+  for (const width of [8, 16, 32]) {
+    for (const marker of ["**", "***", "__", "___", "~~"]) {
+      const text = `before ${marker}one two three four five six seven eight nine ten${marker} after`
+      for (let n = 1; n < marker.length; n++) {
+        const at = text.lastIndexOf(marker) + n
+        for (const theme of [plain.theme, defaultTheme]) {
+          const { ctx, committed } = committing()
+          const m = new MarkdownStream({ hyperlinks: false })
+          m.maxRows = 1
+          for (const chunk of [text.slice(0, at), text.slice(at)]) {
+            m.append(chunk)
+            expect(m.render(width, { ...ctx, theme }).length).toBeLessThanOrEqual(1)
+          }
+          expect([...committed, ...m.take(width)]).toEqual(
+            renderMarkdown(text, width, theme, { hyperlinks: false }),
+          )
+        }
+      }
+    }
+  }
+})
+
 test("a URL longer than the live region is cut inside, and the rest still shows as the URL", () => {
   const url = `https://example.com/${Array.from({ length: 80 }, (_, i) => `L${i + 1}`).join("/")}`
   const text = `See ${url} for details.\nNext`
