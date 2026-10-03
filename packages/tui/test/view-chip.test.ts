@@ -20,7 +20,7 @@ for (const tone of tones) {
     expect(output).toEndWith(`\x1b[38;5;${edge![1]}m▌\x1b[39m`)
     expect(stripAnsi(output)).toBe("▐Ready▌")
     expect(visibleWidth(output)).toBe(7)
-    expect(segmentText([{ kind: "chip", text: "Ready", tone }], monoTheme)).toBe("[Ready]")
+    expect(segmentText([{ kind: "chip", text: "Ready", tone }], monoTheme)).toBe("▏Ready▕")
   })
 }
 
@@ -36,13 +36,13 @@ test("chips default to neutral and preserve adjacent segment styles", () => {
   expect(segmentText(parts, defaultTheme)).toBe(
     defaultTheme.muted("State: ") + defaultTheme.chipNeutral!("Ready") + defaultTheme.success(" next"),
   )
-  expect(stripAnsi(segmentText(parts, monoTheme))).toBe("State: [Ready] next")
+  expect(stripAnsi(segmentText(parts, monoTheme))).toBe("State: ▏Ready▕ next")
   expect(
     new Set(tones.map((tone) => segmentText([{ kind: "chip", text: "x", tone }], defaultTheme))).size,
   ).toBe(6)
 })
 
-test("custom and older themes without chip tokens fall back to bracketed labels", () => {
+test("custom and older themes without chip tokens fall back to thin-bar labels", () => {
   const plain = (text: string) => text
   const theme: Theme = {
     text: plain,
@@ -53,8 +53,8 @@ test("custom and older themes without chip tokens fall back to bracketed labels"
     error: plain,
     border: plain,
   }
-  for (const tone of tones) expect(segmentText([{ kind: "chip", text: "x", tone }], theme)).toBe("[x]")
-  expect(segmentText(chip(""), theme)).toBe("[]")
+  for (const tone of tones) expect(segmentText([{ kind: "chip", text: "x", tone }], theme)).toBe("▏x▕")
+  expect(segmentText(chip(""), theme)).toBe("▏▕")
   const custom = { ...theme, chipInfo: (text: string) => `<${text}>` }
   expect(segmentText([{ kind: "chip", text: "x", tone: "info" }], custom)).toBe("<x>")
 })
@@ -63,7 +63,7 @@ test("chip text is sanitized before the host supplies styling", () => {
   const dirty = "gone\r\x1b[31mclean\b!\x1b[0m\tend\nrow\x1b]0;injected\x07"
   const clean = terminalText(dirty)
   expect(segmentText(chip(dirty), defaultTheme)).toBe(defaultTheme.chipNeutral!(clean))
-  expect(segmentText(chip(dirty), monoTheme)).toBe(`[${clean}]`)
+  expect(segmentText(chip(dirty), monoTheme)).toBe(`▏${clean}▕`)
 })
 
 test("chips fit terminal cells in lines and titles, including wide and combining text", () => {
@@ -134,7 +134,7 @@ test("every declarative segment consumer retains chips with and without colors",
       const runtime = new UiRuntime(() => {})
       runtime.setState({ expanded: { tree: ["x"] } })
       const rows = runtime.render(node, 40, 8, theme, (lines, width) => renderViewLines(lines, theme, width))
-      expect(rows.map(stripAnsi).join("\n")).toContain(theme === monoTheme ? "[Ready]" : "▐Ready▌")
+      expect(rows.map(stripAnsi).join("\n")).toContain(theme === monoTheme ? "▏Ready▕" : "▐Ready▌")
       expect(rows.every((row) => visibleWidth(row) <= 40)).toBe(true)
       runtime.dispose()
     }

@@ -1,5 +1,13 @@
 import type { UiNode, UiState, ViewLine } from "@amira/api"
-import { type LineInput, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import {
+  bold,
+  inverse,
+  type LineInput,
+  stripColors,
+  type Theme,
+  truncateToWidth,
+  visibleWidth,
+} from "@amira/tui-kit"
 import { terminalText } from "../diff-view.ts"
 import { segmentText, viewTitle } from "../view-lines.ts"
 import { detailContent } from "./detail.ts"
@@ -285,21 +293,31 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       break
     }
     case "tabs": {
-      const labels = node.tabs.map((t) =>
-        t.key === state.activeTabs[node.id]
-          ? theme.accent(`[${terminalText(t.label)}]`)
-          : theme.muted(terminalText(t.label)),
-      )
+      const divided = node.style === "divided"
+      const accent = divided ? theme.accent(" ") : ""
+      const color = accent !== stripColors(accent)
+      const labels = node.tabs.map((t) => {
+        const label = terminalText(t.label)
+        const selected = t.key === state.activeTabs[node.id]
+        const text = selected
+          ? divided && color
+            ? bold(inverse(theme.accent(label)))
+            : theme.accent(`[${label}]`)
+          : theme.muted(label)
+        return text + (divided ? "  " : "")
+      })
+      const separator = divided ? `${theme.border("│")}  ` : "  "
+      const gap = divided ? 3 : 2
       const active = Math.max(
         0,
         node.tabs.findIndex((t) => t.key === state.activeTabs[node.id]),
       )
       let start = active
       let used = visibleWidth(labels[active] ?? "")
-      while (start > 0 && used + visibleWidth(labels[start - 1]!) + 2 <= w - 2) {
-        used += visibleWidth(labels[--start]!) + 2
+      while (start > 0 && used + visibleWidth(labels[start - 1]!) + gap <= w - 2) {
+        used += visibleWidth(labels[--start]!) + gap
       }
-      out.push(marker + labels.slice(start).join("  "))
+      out.push(marker + labels.slice(start).join(separator))
       if (plan.children[0]) out.push(...paint(plan.children[0], host))
       break
     }
@@ -355,7 +373,11 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       const room = Math.max(1, w - 2 - Math.min(visibleWidth(hint) + 1, Math.floor(w / 3)))
       const input = host.input(node.id).render(room, theme, {
         focused: focused && host.cursor && w > 2,
-        placeholder: terminalText(node.placeholder ?? ""),
+        placeholder: terminalText(
+          [node.placeholder, !focused && node.activate !== undefined ? `(${node.activate} to type)` : ""]
+            .filter(Boolean)
+            .join(" "),
+        ),
       })
       out.push(marker + fit(input, room) + (hint ? ` ${theme.muted(hint)}` : ""))
       break

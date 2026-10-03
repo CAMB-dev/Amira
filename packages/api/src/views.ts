@@ -13,7 +13,7 @@ import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.
 /** A piece of a line, styled by meaning rather than by a frontend-specific color. */
 export type ViewSegment =
   | { text: string; kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }
-  /** A pill with half-block ends in color, or [text] without colors. Defaults to neutral. */
+  /** A pill with half-block ends in color, or ▏text▕ without colors. Defaults to neutral. */
   | {
       kind: "chip"
       text: string
@@ -112,7 +112,8 @@ export interface ViewDefinition<D = any> {
   /**
    * Experimental D104 L3: replaces title/header/render screen content with semantic widgets.
    * Title remains required for window/fallback presentation. Supply ui or render. Existing
-   * line-only views are unchanged. Esc goes back a page or closes the root; Ctrl+C always closes.
+   * line-only views are unchanged. Esc leaves an activate-gated input first, otherwise goes back
+   * a page or closes the root; Ctrl+C always closes.
    * q closes unless a UI input has focus (it types q). Prompts take keys except Ctrl+C; Esc cancels
    * the prompt. Tab moves focus, arrows operate
    * the focused widget, Enter activates/submits, and the wheel scrolls under the pointer.
@@ -122,6 +123,8 @@ export interface ViewDefinition<D = any> {
   /** Experimental semantic events; host state changes first, then this handler may override it. */
   onEvent?(event: UiEvent, data: D, view: UiControl): void
   keys?: ViewKey<D>[]
+  /** Experimental host key bar: full (default), only Esc back/close, or hidden. Questions still show. */
+  hostKeys?: "full" | "minimal" | "none"
   /**
    * Whether the body keeps to its end as it grows, like a log (the default), or starts at
    * its top, like a tree whose rows change in place.

@@ -266,7 +266,10 @@ export class ExtensionViewer implements Component {
       return true
     }
     if (matchesKey(e, "escape")) {
-      if (this.#pages.length > 1) this.#popPage()
+      if (this.#ui?.releaseInput()) {
+        this.#uiDirty = true
+        this.#opts.requestRender?.()
+      } else if (this.#pages.length > 1) this.#popPage()
       else this.#close()
       return true
     }
@@ -409,7 +412,7 @@ export class ExtensionViewer implements Component {
     head.push(theme.muted(glyphs.rule.repeat(width)))
     const state = this.#scrollState()
     const scroll = state.scroll
-    scroll.height = Math.max(1, ctx.rows - head.length - 1)
+    scroll.height = Math.max(1, ctx.rows - head.length - this.#footerHeight)
     let body = scroll.render(width, ctx)
     if (!state.placed) {
       // Content is known only after a render: then it can start at the top.
@@ -417,7 +420,7 @@ export class ExtensionViewer implements Component {
       scroll.scrollToTop()
       body = scroll.render(width, ctx)
     }
-    return [...head, ...body, this.#footer(theme, width)].slice(0, ctx.rows)
+    return [...head, ...body, ...this.#footer(theme, width)].slice(0, ctx.rows)
   }
 
   #renderUi(width: number, ctx: RenderContext): string[] {
@@ -430,9 +433,9 @@ export class ExtensionViewer implements Component {
         : []
     this.#uiOffset = head.length
     const waiting = (this.#opts.waiting?.() ?? [])
-      .slice(0, Math.max(0, ctx.rows - head.length - 1))
+      .slice(0, Math.max(0, ctx.rows - head.length - this.#footerHeight))
       .map((t) => waitingLine(ctx.theme, terminalText(t), width))
-    const height = Math.max(0, ctx.rows - head.length - waiting.length - 1)
+    const height = Math.max(0, ctx.rows - head.length - waiting.length - this.#footerHeight)
     let body = this.#call("ui", () => {
       // A repaired selection/tab/focus may change extension-built details in this same frame.
       // Bound stabilization so a view whose content oscillates with state cannot spin forever.
@@ -472,7 +475,10 @@ export class ExtensionViewer implements Component {
       )
     }
     while (body.length < height) body.push("")
-    return [...head, ...body.slice(0, height), ...waiting, this.#footer(ctx.theme, width)].slice(0, ctx.rows)
+    return [...head, ...body.slice(0, height), ...waiting, ...this.#footer(ctx.theme, width)].slice(
+      0,
+      ctx.rows,
+    )
   }
 
   #body(width: number, theme: Theme): string[] {
@@ -521,7 +527,15 @@ export class ExtensionViewer implements Component {
     return out
   }
 
-  #footer(theme: Theme, width: number): string {
+  get #footerHeight(): number {
+    return this.#prompt || this.#confirm || this.#view.hostKeys !== "none" ? 1 : 0
+  }
+
+  #footer(theme: Theme, width: number): string[] {
+    return this.#footerHeight ? [this.#keyBar(theme, width)] : []
+  }
+
+  #keyBar(theme: Theme, width: number): string {
     if (this.#confirm) return theme.warning(truncateToWidth(this.#confirm.text, width, glyphs.more))
     const asking = this.#prompt
     if (asking) {
@@ -529,6 +543,10 @@ export class ExtensionViewer implements Component {
       const room = Math.max(1, width - visibleWidth(label))
       return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder: "Enter send · Esc cancel" })}`
     }
+    if (this.#view.hostKeys === "minimal")
+      return theme.muted(
+        truncateToWidth(this.#pages.length > 1 ? "Esc back" : "Esc close", width, glyphs.more),
+      )
     if (this.#ui)
       return theme.muted(
         fitHint(
