@@ -15,35 +15,30 @@ import {
   modelMessages,
   type Signature,
   type ToolCallBlock,
-  type ToolResultMessage,
   type ToolSpec,
   type Usage,
   type UserMessage,
   userMessage,
 } from "@amira/ai"
-import {
-  type AskOutcome,
-  type AskQuestion,
-  type AskRequest,
-  artifactIdOf,
-  type BackgroundJobHost,
-  type BackgroundJobSession,
-  type CompactionInfo,
-  type CompactionReason,
-  type CompactionUsage,
-  type EventMap,
-  outputPreview,
-  outputSize,
-  type PendingNotice,
-  type ProviderSettings,
-  type SessionData,
-  type SessionStatus,
-  type Settings,
-  type SpawnGroupOptions,
-  type SpawnOptions,
-  type ToolDefinition,
-  type ToolResult,
-  type ToolSession,
+import type {
+  AskOutcome,
+  AskQuestion,
+  AskRequest,
+  BackgroundJobHost,
+  BackgroundJobSession,
+  CompactionInfo,
+  CompactionReason,
+  CompactionUsage,
+  EventMap,
+  PendingNotice,
+  ProviderSettings,
+  SessionData,
+  SessionStatus,
+  Settings,
+  SpawnGroupOptions,
+  SpawnOptions,
+  ToolDefinition,
+  ToolSession,
 } from "@amira/api"
 import { ApprovalGate } from "./agent/approvals.ts"
 import {
@@ -60,8 +55,9 @@ import {
   offeredDeferredTools,
   offeredTools,
 } from "./agent/context-builder.ts"
+import { ContextManager } from "./agent/context-manager.ts"
 import { History, keptHistoryViews } from "./agent/history.ts"
-import { formatK, joinMessages, modelRef } from "./agent/messages.ts"
+import { joinMessages, modelRef } from "./agent/messages.ts"
 import { compactionFallback, modelCall, Thinking } from "./agent/model-call.ts"
 import { ToolRunner } from "./agent/tool-runner.ts"
 import {
@@ -102,7 +98,6 @@ import {
   checkpointOf,
   contextTokens,
   estimateAfter,
-  estimateTokens,
   isSummaryMessage,
   KEEP_USER_TOKENS,
   recentUserMessages,
@@ -113,18 +108,7 @@ import {
   summaryOf,
   windowGuessNotice,
 } from "./compaction.ts"
-import {
-  AGING_DEFAULTS,
-  agedStub,
-  agingCandidates,
-  type ContextOptions,
-  type ContextView,
-  duplicateView,
-  lastSealedIndex,
-  pairCalls,
-  projectMessages,
-  resultText,
-} from "./context.ts"
+import { type ContextOptions, type ContextView, projectMessages } from "./context.ts"
 import { createToolSession } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
@@ -143,7 +127,6 @@ import { PauseGate } from "./subagents/pause.ts"
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
-import { toolTraits } from "./tool-traits.ts"
 
 /** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
 interface AfterCompaction {
@@ -189,6 +172,7 @@ export class Agent {
   #approvals: ApprovalGate
   #toolRunner: ToolRunner
   #history: History
+  #contextManager: ContextManager
   #status: SessionStatus = "idle"
   #abort: AbortController | undefined
   #maxSteps: number
@@ -197,18 +181,10 @@ export class Agent {
   #sections: PromptSection[]
   #compaction: CompactionOptions
   #context: ContextOptions
-  /** Aging rounds so far (A3), for the next round's number. */
-  #agingEpoch = 0
-  /** Tokens aging freed since the last reply told the context size (an estimate). */
-  #contextFreed = 0
-  /** The aging round the last reported context size was counted after. */
-  #epochAtReply = 0
   /** This session's saved tool outputs (A1). */
   readonly artifacts: ArtifactStore
   /** Compaction costs the session file does not hold (no file, or a compaction that failed). */
   #compactionCosts: CompactionUsage[] = []
-  /** Context size reported with the last reply; unknown right after a compaction. */
-  #contextTokens: number | undefined
   /** The next reply's context size tells whether the last compaction shrank the context enough. */
   #checkCompaction = false
   /** The notice that the context window is a guess was shown (once a session). */
@@ -355,7 +331,7 @@ export class Agent {
       steerSignal: () => this.#steerAbort?.signal,
       storeFailed: () => this.#history.storeFailed,
       callSession: (turn, toolCallId) => this.#callSession(turn, toolCallId),
-      keepLarge: (call, result) => this.#keepLarge(call, result),
+      keepLarge: (call, result) => this.#contextManager.keepLarge(call, result),
       interruptTurn: (turn) => {
         if (this.#turn === turn) this.#abort?.abort()
       },
@@ -365,18 +341,19 @@ export class Agent {
     this.#endTurn = opts.endTurn
 
     let history: ConstructorParameters<typeof History>[1]
+    let tokens: number | undefined
     if (opts.messages || !opts.session) {
       const messages = opts.messages ?? []
       // An interrupted reply may carry no usage counted; the one before it tells the context.
       const last = messages.findLast(
         (m) => m.role === "assistant" && m.usage && contextTokens(m.usage) > 0,
       ) as AssistantMessage | undefined
-      if (last?.usage) this.#contextTokens = contextTokens(last.usage)
+      if (last?.usage) tokens = contextTokens(last.usage)
       history = { messages, views: keptHistoryViews(messages, opts.views) }
     } else {
       const restored = opts.session.restore()
       history = restored
-      this.#contextTokens = restored.contextTokens
+      tokens = restored.contextTokens
       for (const name of restored.loadedTools) this.#loadedTools.add(name)
       if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
     }
@@ -391,10 +368,6 @@ export class Agent {
     )
     this.messages = this.#history.messages
     this.data = this.#history.data
-    for (const v of this.#history.views.values()) {
-      if (v.kind === "aged") this.#agingEpoch = Math.max(this.#agingEpoch, v.epoch)
-    }
-    this.#epochAtReply = this.#agingEpoch
     // A session forked from another (beside it) still finds the artifacts its copied history names.
     const forkedFrom = opts.session?.header.parent
     const outputsParent =
@@ -415,6 +388,21 @@ export class Agent {
       ...(this.#context.quotaBytes !== undefined ? { quotaBytes: this.#context.quotaBytes } : {}),
       ...(outputsParent ? { parent: outputsParent } : {}),
     })
+    this.#contextManager = new ContextManager(
+      {
+        history: this.#history,
+        artifacts: this.artifacts,
+        tools: this.tools,
+        toolFor: (call) => this.#toolRunner.toolFor(call),
+        cwd: this.cwd,
+        options: this.#context,
+        model: () => this.model,
+        replayTarget: () => this.#ai.replayTarget(this.model),
+        fixedChars: () => renderPrompt(this.#sections).length + JSON.stringify(this.#offeredTools()).length,
+        emit: (turn, type, data) => this.#emit(turn, type, data),
+      },
+      { contextTokens: tokens },
+    )
     const stored = opts.session?.model()
     // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
     const changed = stored?.provider !== this.model.provider || stored.model !== this.model.id
@@ -817,7 +805,7 @@ export class Agent {
 
   /** Tokens the context held at the last reply; unknown before one and right after a compaction. */
   get contextTokens(): number | undefined {
-    return this.#contextTokens
+    return this.#contextManager.tokens
   }
 
   /**
@@ -988,8 +976,8 @@ export class Agent {
   ): void {
     // A cleared session starts empty, whatever this agent held.
     const context =
-      this.#contextTokens !== undefined && reason !== "clear"
-        ? { contextTokens: this.#contextTokens, contextWindow: this.model.contextWindow }
+      this.#contextManager.tokens !== undefined && reason !== "clear"
+        ? { contextTokens: this.#contextManager.tokens, contextWindow: this.model.contextWindow }
         : {}
     this.bus.emit(
       "session.start",
@@ -1130,7 +1118,7 @@ export class Agent {
       while (true) {
         this.#noteWindowGuess(turn)
         // Planned synchronously: a turn with nothing to age goes on without waiting.
-        const aging = this.#age(turn)
+        const aging = this.#contextManager.age(turn)
         if (aging) await aging
         if (!compactFailed && this.#needsCompaction()) {
           compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
@@ -1155,7 +1143,7 @@ export class Agent {
           const overflow = reply.model && isContextOverflow(reply.model)
           if (overflow && !overflowAged) {
             overflowAged = true
-            const aging = this.#age(turn, true)
+            const aging = this.#contextManager.age(turn, true)
             if (aging && (await aging)) continue
           }
           if (overflow && !overflowRetried && this.#compaction.auto !== false) {
@@ -1184,7 +1172,7 @@ export class Agent {
           break
         }
         await this.#toolRunner.run(turn, calls, (results) => {
-          const views = this.#dedupe(results)
+          const views = this.#contextManager.dedupe(results)
           this.#history.push(...results)
           this.#history.storeViews(views)
         })
@@ -1283,15 +1271,6 @@ export class Agent {
     })
   }
 
-  #readKey(call: ToolCallBlock, cwd = this.cwd): string | undefined {
-    const tool = this.#toolRunner.toolFor(call)
-    if (!tool?.readKey) return undefined
-    try {
-      return tool.readKey(call.args, { cwd })
-    } catch {
-      return undefined
-    }
-  }
   /** Rebuilt for a sub-agent's user messages, a few times at most: a stream of them cannot starve the model. */
   async #callModel(turn: Turn): Promise<ModelReply> {
     const unreadable = await this.#fillSummaries(turn, turn.signal)
@@ -1363,196 +1342,6 @@ export class Agent {
   }
 
   /**
-   * A1: a result whose text is over the size limit (a tool that does not cut its own output,
-   * such as an MCP server's) is saved whole as an artifact; the model gets a preview with the
-   * artifact's id. Saving that fails leaves a preview that says so. Images stay as they are.
-   */
-  async #keepLarge(call: ToolCallBlock, result: ToolResult): Promise<ToolResult> {
-    const reader = this.#toolRunner.toolFor(call)
-    if (reader && toolTraits(reader)?.artifactReader) return result
-    const texts = result.content.flatMap((b) => (b.type === "text" ? [b.text] : []))
-    const text = texts.join("\n")
-    if (outputSize(text) <= this.artifacts.limits.saveAbove) return result
-    let artifact: Awaited<ReturnType<ArtifactStore["save"]>> | undefined
-    let saveError: string | undefined
-    try {
-      artifact = await this.artifacts.save({ text, tool: call.name, toolCallId: call.id })
-    } catch (err) {
-      saveError = err instanceof Error ? err.message : String(err)
-    }
-    const preview = outputPreview({
-      text,
-      ...(artifact ? { artifact } : {}),
-      ...(saveError ? { saveError } : {}),
-      ...(result.isError ? { facts: ["the tool reported an error"] } : {}),
-      previewChars: this.artifacts.limits.previewChars,
-    })
-    const images = result.content.filter((b) => b.type !== "text")
-    return { ...result, content: [{ type: "text", text: preview }, ...images] }
-  }
-
-  /** A2: views for the reads among a batch's results that repeat an earlier read still in context. */
-  #dedupe(results: ToolResultMessage[]): [ToolResultMessage, ContextView][] {
-    if (this.#context.dedupeReads === false) return []
-    // Only a tool that names repeatable reads can repeat one.
-    if (!results.some((r) => this.tools.get(r.toolName)?.readKey)) return []
-    const all = [...this.messages, ...results]
-    const pairs = pairCalls(all)
-    const out: [ToolResultMessage, ContextView][] = []
-    for (const [i, result] of results.entries()) {
-      const call = pairs.get(result)
-      if (!call || !this.#readKey(call)) continue
-      const history = all.slice(0, this.messages.length + i)
-      const view = duplicateView(history, this.#history.views, pairs, result, call, this.cwd, (c, cwd) =>
-        this.#readKey(c, cwd),
-      )
-      if (!view) continue
-      this.#history.views.set(result, view)
-      out.push([result, view])
-    }
-    return out
-  }
-
-  /**
-   * The size of the next request, estimated: the context the last reply reported, less what
-   * aging freed since, plus what was added after it, counted in characters and scaled by how
-   * the model's own count compared for what it saw (so text of any script comes out close).
-   */
-  #estimateNext(): number {
-    const projected = projectMessages(this.messages, this.#history.views)
-    const fixed = Math.ceil(
-      (renderPrompt(this.#sections).length + JSON.stringify(this.#offeredTools()).length) / 4,
-    )
-    const last = this.messages.findLastIndex(
-      (m) => m.role === "assistant" && m.usage !== undefined && contextTokens(m.usage) > 0,
-    )
-    const observed = this.#contextTokens
-    if (observed === undefined || last === -1) return fixed + estimateTokens(projected)
-    const seen = fixed + estimateTokens(projectMessages(this.messages.slice(0, last + 1), this.#seenViews()))
-    const scale = Math.min(4, Math.max(0.5, observed / Math.max(1, seen)))
-    return (
-      Math.max(0, observed - this.#contextFreed) +
-      Math.round(scale * estimateTokens(projected.slice(last + 1)))
-    )
-  }
-
-  /** How the model's count compares with estimateTokens for this session's history. */
-  #tokenScale(): number {
-    const observed = this.#contextTokens
-    const last = this.messages.findLastIndex(
-      (m) => m.role === "assistant" && m.usage !== undefined && contextTokens(m.usage) > 0,
-    )
-    if (observed === undefined || last === -1) return 1
-    const seen = estimateTokens(projectMessages(this.messages.slice(0, last + 1), this.#seenViews()))
-    return Math.min(4, Math.max(0.5, observed / Math.max(1, seen)))
-  }
-
-  /**
-   * The views the last reported context size was counted with: aging rounds since then are
-   * left out (that size is from before them), so comparing it with an estimate stays fair.
-   */
-  #seenViews(): ReadonlyMap<Message, ContextView> {
-    const since = [...this.#history.views].filter(
-      ([, v]) => v.kind === "aged" && v.epoch > this.#epochAtReply,
-    )
-    if (!since.length) return this.#history.views
-    const out = new Map(this.#history.views)
-    for (const [m] of since) out.delete(m)
-    return out
-  }
-
-  /**
-   * A3: when the next request would pass `start` of the window (or passed it: `overflow`), old
-   * tool results are cleared in one batch down to `target`: each is sent from then on as a short
-   * stub that says how to get it back, and its whole text is kept as an artifact. Only where the
-   * history may be rewritten: nothing before signed or encrypted provider data that a request
-   * would send back. A round freeing less than minSavedTokens is skipped, keeping the prompt
-   * prefix as it is. Undefined when there is nothing to age; else resolves whether it cleared
-   * anything.
-   */
-  #age(turn: Turn, overflow = false): Promise<boolean> | undefined {
-    const o = { ...AGING_DEFAULTS, ...this.#context.aging }
-    if (!o.enabled || isNoModel(this.model)) return undefined
-    const window = this.model.contextWindow
-    const estimate = this.#estimateNext()
-    const pressure = overflow || estimate > o.start * window
-    if (!pressure && o.afterTurns <= 0) return undefined
-    const sealed = lastSealedIndex(this.messages, this.#ai.replayTarget(this.model))
-    const candidates = agingCandidates(this.messages, this.#history.views, {
-      keepTurns: o.keepTurns,
-      keepSteps: o.keepSteps,
-      sealed,
-      cwd: this.cwd,
-      ...(pressure ? {} : { olderThanTurns: o.afterTurns }),
-    })
-    if (!candidates.length) return undefined
-    const scale = this.#tokenScale()
-    // After an overflow the window or the estimate was wrong: free a good part whatever they say.
-    const down = estimate - Math.min(o.target, o.start) * window
-    const goal = overflow ? Math.max(down, 0.3 * estimate) : pressure ? down : Number.POSITIVE_INFINITY
-    const picks: { m: ToolResultMessage; call: ToolCallBlock | undefined; saved: number }[] = []
-    let saved = 0
-    for (const c of candidates) {
-      if (saved >= goal) break
-      // A stub is about 100 tokens.
-      const gain = Math.max(0, Math.round(scale * (c.tokens - 100)))
-      picks.push({ m: c.message, call: c.call, saved: gain })
-      saved += gain
-    }
-    // A window whose aging band is narrower than minSavedTokens still ages: never ask for more than the band.
-    const minSaved = Math.min(o.minSavedTokens, Math.max(0, (o.start - Math.min(o.target, o.start)) * window))
-    if (saved <= 0 || (!overflow && saved < minSaved)) return undefined
-    return this.#applyAging(turn, picks)
-  }
-
-  /** Sends the picked results as stubs from now on, each with its whole text kept as an artifact. */
-  async #applyAging(
-    turn: Turn,
-    picks: { m: ToolResultMessage; call: ToolCallBlock | undefined; saved: number }[],
-  ): Promise<boolean> {
-    const epoch = this.#agingEpoch + 1
-    const aged: [Message, ContextView][] = []
-    let freed = 0
-    for (const p of picks) {
-      if (turn.signal.aborted) break
-      const text = resultText(p.m) ?? ""
-      let artifact = artifactIdOf(text)
-      if (!artifact) {
-        try {
-          artifact = (await this.artifacts.save({ text, tool: p.m.toolName, toolCallId: p.m.toolCallId })).id
-        } catch {
-          // Without its artifact only a file read can be read again.
-          if (!p.call || !this.#readKey(p.call)) continue
-        }
-      }
-      const tool = p.call ? this.#toolRunner.toolFor(p.call) : undefined
-      // A tool no longer registered (disabled, unloaded) is judged by its name, as built-ins were.
-      const traits = toolTraits(tool ?? { name: p.m.toolName })
-      const view: ContextView = {
-        kind: "aged",
-        text: agedStub(p.m, p.call, artifact, {
-          read: tool ? tool.readKey !== undefined : p.m.toolName === "read",
-          shell: traits?.shell !== undefined || tool?.shellKind !== undefined,
-        }),
-        epoch,
-      }
-      this.#history.views.set(p.m, view)
-      aged.push([p.m, view])
-      freed += p.saved
-    }
-    if (!aged.length) return false
-    this.#agingEpoch = epoch
-    this.#contextFreed += freed
-    this.#history.storeViews(aged)
-    this.#emit(turn, "extension.notice", {
-      source: "context",
-      text: `Cleared ${aged.length} old tool ${aged.length === 1 ? "result" : "results"} from the context (about ${formatK(freed)} tokens); the model can read them again with output_read or read.`,
-      level: "info",
-    })
-    return true
-  }
-
-  /**
    * Who answers this session's permission questions, for its sub-agents to ask the same: the
    * tree's user (Permissions.approver), else the one handed down from the top-level session,
    * else a top-level session's own approver.
@@ -1585,16 +1374,16 @@ export class Agent {
     if (this.#windowGuessNoted || this.parentSessionId !== undefined) return
     if (this.#compaction.auto === false || this.model.contextWindowSource !== "default") return
     if (isNoModel(this.model)) return
-    if (!overflow && (this.#contextTokens ?? 0) <= this.model.contextWindow / 2) return
+    if (!overflow && (this.#contextManager.tokens ?? 0) <= this.model.contextWindow / 2) return
     this.#windowGuessNoted = true
     const text = windowGuessNotice(this.model, amiraPath("settings.json"))
     this.#emit(turn, "extension.notice", { source: "compaction", text, level: "info" })
   }
 
   #needsCompaction(): boolean {
-    if (this.#compaction.auto === false || this.#contextTokens === undefined) return false
+    if (this.#compaction.auto === false || this.#contextManager.tokens === undefined) return false
     // What aging freed since the last reply no longer counts.
-    const tokens = this.#contextTokens - this.#contextFreed
+    const tokens = this.#contextManager.tokens - this.#contextManager.freed
     if (this.#compactFloor !== undefined && tokens <= this.#compactFloor) return false
     return this.#overThreshold(tokens)
   }
@@ -1606,9 +1395,7 @@ export class Agent {
    * window, which gives the next summary new steps to fold in.
    */
   #noteContext(tokens: number) {
-    this.#contextTokens = tokens
-    this.#contextFreed = 0
-    this.#epochAtReply = this.#agingEpoch
+    this.#contextManager.noteReply(tokens)
     if (!this.#checkCompaction) return
     this.#checkCompaction = false
     this.#compactFloor = this.#overThreshold(tokens) ? tokens + this.model.contextWindow / 20 : undefined
@@ -1676,7 +1463,7 @@ export class Agent {
         reason,
         replacing: older.length - retained.length,
         kept: kept.length,
-        ...(this.#contextTokens !== undefined ? { tokens: this.#contextTokens } : {}),
+        ...(this.#contextManager.tokens !== undefined ? { tokens: this.#contextManager.tokens } : {}),
         ...(native ? { native: true } : {}),
       })
 
@@ -1765,7 +1552,7 @@ export class Agent {
       const replaces = ids(replacedMessages)
       const retainedIds = recent ? ids(retained) : []
       const replacement = summaryMessages(summary, modelRef(checkpoint ? this.model : writer), checkpoint)
-      const before = this.#contextTokens
+      const before = this.#contextManager.tokens
       const nativeRef = checkpoint ? modelRef(this.model) : undefined
       const info: CompactionInfo = {
         reason,
@@ -1815,8 +1602,7 @@ export class Agent {
         const rest = this.messages.filter((m) => !replaced.has(m))
         this.messages.splice(0, this.messages.length, ...replacement, ...rest)
       }
-      this.#contextTokens = undefined
-      this.#contextFreed = 0
+      this.#contextManager.reset()
       this.#checkCompaction = true
       this.#emit(turn, "compact.end", {
         summary,
