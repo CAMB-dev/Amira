@@ -19,7 +19,6 @@ import {
   type ToolSpec,
   type Usage,
   type UserMessage,
-  unansweredCalls,
   userMessage,
 } from "@amira/ai"
 import {
@@ -61,7 +60,8 @@ import {
   offeredDeferredTools,
   offeredTools,
 } from "./agent/context-builder.ts"
-import { formatK, joinMessages, modelRef, toolError } from "./agent/messages.ts"
+import { History, keptHistoryViews } from "./agent/history.ts"
+import { formatK, joinMessages, modelRef } from "./agent/messages.ts"
 import { compactionFallback, modelCall, Thinking } from "./agent/model-call.ts"
 import { ToolRunner } from "./agent/tool-runner.ts"
 import {
@@ -124,7 +124,6 @@ import {
   pairCalls,
   projectMessages,
   resultText,
-  type StoredView,
 } from "./context.ts"
 import { createToolSession } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
@@ -139,7 +138,7 @@ import {
   renderPrompt,
   setSection,
 } from "./prompt.ts"
-import { newSessionId, type SessionEntryData, SessionStore } from "./session-store.ts"
+import { newSessionId, SessionStore } from "./session-store.ts"
 import { PauseGate } from "./subagents/pause.ts"
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
@@ -189,6 +188,7 @@ export class Agent {
   #ai: Ai
   #approvals: ApprovalGate
   #toolRunner: ToolRunner
+  #history: History
   #status: SessionStatus = "idle"
   #abort: AbortController | undefined
   #maxSteps: number
@@ -197,11 +197,6 @@ export class Agent {
   #sections: PromptSection[]
   #compaction: CompactionOptions
   #context: ContextOptions
-  /**
-   * How tool results are sent instead of their content (context management, A0): decided once
-   * per result and kept, so later requests repeat the same text.
-   */
-  #views = new Map<Message, ContextView>()
   /** Aging rounds so far (A3), for the next round's number. */
   #agingEpoch = 0
   /** Tokens aging freed since the last reply told the context size (an estimate). */
@@ -210,12 +205,6 @@ export class Agent {
   #epochAtReply = 0
   /** This session's saved tool outputs (A1). */
   readonly artifacts: ArtifactStore
-  /** The session entry each message was stored as. */
-  #entryIds = new Map<Message, string>()
-  /** Why each compaction in `messages` happened, by its summary's user message. */
-  #compactions = new WeakMap<Message, CompactionInfo>()
-  /** The history each server checkpoint made in this run stands for, by its summary's user message. */
-  #compacted = new WeakMap<Message, Message[]>()
   /** Compaction costs the session file does not hold (no file, or a compaction that failed). */
   #compactionCosts: CompactionUsage[] = []
   /** Context size reported with the last reply; unknown right after a compaction. */
@@ -226,7 +215,6 @@ export class Agent {
   #windowGuessNoted = false
   /** Automatic compaction waits until the context passes this, after one that did not help. */
   #compactFloor: number | undefined
-  #storeFailed = false
   #maxParallelTools: number
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
@@ -268,7 +256,6 @@ export class Agent {
   #afterCompaction: AfterCompaction | undefined
   #onIdleNotice: (() => void) | undefined
   #endTurn: (() => boolean) | undefined
-  #originals: ((summary: Message) => Message[] | undefined) | undefined
   #jobNoticeTarget: Agent | undefined
   #pendingNotices = new Set<{ target: Agent }>()
   /** The running turn's promise, for owners that wait for whatever turn runs. */
@@ -276,26 +263,12 @@ export class Agent {
   #disposePromise: Promise<void> | undefined
   #disposed = false
   #sessionLease = false
-  /** Extension records of a session without a file (see `data`). */
-  #records: { key: string; data: unknown }[] = []
 
   /**
    * Records extensions keep in this session (SessionData): custom entries of its file, or
    * kept in memory when it has none.
    */
-  readonly data: SessionData = {
-    append: (key, data) => {
-      const copy = JSON.parse(JSON.stringify(data ?? null)) as unknown
-      if (this.session) this.#store({ type: "custom", ext: key, data: copy })
-      else this.#records.push({ key, data: copy })
-    },
-    read: (key) => {
-      const all = this.session
-        ? this.session.branch().flatMap((e) => (e.type === "custom" && e.ext === key ? [e.data] : []))
-        : this.#records.filter((r) => r.key === key).map((r) => r.data)
-      return all.map((d) => structuredClone(d))
-    },
-  }
+  readonly data: SessionData
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -380,7 +353,7 @@ export class Agent {
       backgroundJobs: this.backgroundJobs,
       allowsTool: (tool) => this.#allowsTool(tool),
       steerSignal: () => this.#steerAbort?.signal,
-      storeFailed: () => this.#storeFailed,
+      storeFailed: () => this.#history.storeFailed,
       callSession: (turn, toolCallId) => this.#callSession(turn, toolCallId),
       keepLarge: (call, result) => this.#keepLarge(call, result),
       interruptTurn: (turn) => {
@@ -390,32 +363,35 @@ export class Agent {
     })
     this.#onIdleNotice = opts.onIdleNotice
     this.#endTurn = opts.endTurn
-    this.#originals = opts.originals
 
+    let history: ConstructorParameters<typeof History>[1]
     if (opts.messages || !opts.session) {
-      this.messages = opts.messages ?? []
+      const messages = opts.messages ?? []
       // An interrupted reply may carry no usage counted; the one before it tells the context.
-      const last = this.messages.findLast(
+      const last = messages.findLast(
         (m) => m.role === "assistant" && m.usage && contextTokens(m.usage) > 0,
       ) as AssistantMessage | undefined
       if (last?.usage) this.#contextTokens = contextTokens(last.usage)
-      if (opts.views) {
-        const kept = new Set(this.messages)
-        for (const [m, v] of opts.views) {
-          if (kept.has(m) && (v.kind !== "duplicate" || kept.has(v.of))) this.#views.set(m, v)
-        }
-      }
+      history = { messages, views: keptHistoryViews(messages, opts.views) }
     } else {
       const restored = opts.session.restore()
-      this.messages = restored.messages
-      this.#entryIds = restored.entryIds
-      for (const [m, info] of restored.compactions) this.#compactions.set(m, info)
+      history = restored
       this.#contextTokens = restored.contextTokens
       for (const name of restored.loadedTools) this.#loadedTools.add(name)
       if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
-      this.#views = restored.views
     }
-    for (const v of this.#views.values()) {
+    this.#history = new History(
+      {
+        session: this.session,
+        reportStoreError: (error) =>
+          this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId }),
+        originals: opts.originals?.bind(this),
+      },
+      history,
+    )
+    this.messages = this.#history.messages
+    this.data = this.#history.data
+    for (const v of this.#history.views.values()) {
       if (v.kind === "aged") this.#agingEpoch = Math.max(this.#agingEpoch, v.epoch)
     }
     this.#epochAtReply = this.#agingEpoch
@@ -443,7 +419,7 @@ export class Agent {
     // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
     const changed = stored?.provider !== this.model.provider || stored.model !== this.model.id
     if (opts.session && changed && !isNoModel(this.model)) {
-      this.#store({ type: "model_change", model: modelRef(this.model) })
+      this.#history.store({ type: "model_change", model: modelRef(this.model) })
     }
     const agent = this
     const tree = opts.tree
@@ -459,7 +435,7 @@ export class Agent {
       // Recorded in the session, so resuming it offers the same tools again.
       loadTools: (names) => {
         const added = deferred.loadTools(names)
-        if (added.length) this.#store({ type: "tools_loaded", names: added })
+        if (added.length) this.#history.store({ type: "tools_loaded", names: added })
         return added
       },
       depth: this.depth,
@@ -651,7 +627,7 @@ export class Agent {
 
   /** Notes a sub-agent in this session's file, so its branch points at the child's session. */
   recordSubagent(childSessionId: string, role: string | undefined, title?: string): void {
-    this.#store({ type: "subagent", childSessionId, role: role ?? "", ...(title ? { title } : {}) })
+    this.#history.store({ type: "subagent", childSessionId, role: role ?? "", ...(title ? { title } : {}) })
   }
 
   /**
@@ -700,7 +676,7 @@ export class Agent {
    * that is the compaction entry. Undefined without a session file or for an unknown message.
    */
   entryId(message: Message): string | undefined {
-    return this.#entryIds.get(message)
+    return this.#history.entryId(message)
   }
 
   /**
@@ -708,7 +684,7 @@ export class Agent {
    * isSummaryMessage). Undefined for other messages and for compactions stored without it.
    */
   compactionInfo(message: Message): CompactionInfo | undefined {
-    return this.#compactions.get(message)
+    return this.#history.compactionInfo(message)
   }
 
   get status(): SessionStatus {
@@ -750,7 +726,7 @@ export class Agent {
     if (from.provider === model.provider && from.model === model.id) return
     // The floor was measured against the old model's window.
     this.#compactFloor = undefined
-    if (!isNoModel(model)) this.#store({ type: "model_change", model: modelRef(model) })
+    if (!isNoModel(model)) this.#history.store({ type: "model_change", model: modelRef(model) })
     this.#emit(undefined, "model.changed", { from, to: modelRef(model) })
   }
 
@@ -875,7 +851,7 @@ export class Agent {
 
   /** How tool results are sent instead of their content, by message (see AgentOptions.views). */
   get contextViews(): ReadonlyMap<Message, ContextView> {
-    return this.#views
+    return this.#history.views
   }
 
   /**
@@ -883,7 +859,7 @@ export class Agent {
    * that sends this session's conversation on its own, such as a consultation of its model.
    */
   projectedMessages(): Message[] {
-    return projectMessages(this.messages, this.#views)
+    return this.#history.project()
   }
 
   /** Whether this text is in the context the model sees now: not compacted or aged away. */
@@ -1144,7 +1120,7 @@ export class Agent {
     this.#emit(turn, "turn.start", { prompt: user })
     this.#setStatus(turn, "working")
     try {
-      this.#push(user)
+      this.#history.push(user)
       let compactFailed = false
       /** A request over the context window is compacted and sent again, once a turn. */
       let overflowRetried = false
@@ -1209,8 +1185,8 @@ export class Agent {
         }
         await this.#toolRunner.run(turn, calls, (results) => {
           const views = this.#dedupe(results)
-          this.#push(...results)
-          this.#storeViews(views)
+          this.#history.push(...results)
+          this.#history.storeViews(views)
         })
         if (this.execution.paused) await this.execution.wait(abort.signal)
         if (abort.signal.aborted) {
@@ -1225,7 +1201,7 @@ export class Agent {
     } catch (err) {
       result = { reason: "error", steps, error: err instanceof Error ? err.message : String(err) }
     } finally {
-      this.#repairHistory()
+      this.#history.repair()
       this.#abort = undefined
       this.#turn = undefined
       this.#steerAbort = undefined
@@ -1271,7 +1247,7 @@ export class Agent {
     // The steers reach the model now: later waits in this turn wait again.
     if (this.#steerAbort?.signal.aborted) this.#steerAbort = new AbortController()
     for (const message of [...this.#steering.splice(0), ...(notices.length ? [joinMessages(notices)] : [])]) {
-      this.#push(message)
+      this.#history.push(message)
       this.#emit(turn, "turn.steer", { message, state: "injected" })
     }
   }
@@ -1300,7 +1276,7 @@ export class Agent {
       sections: this.#sections,
       offeredDeferred: () => this.#offeredDeferred(),
       messages: () => this.messages,
-      views: () => this.#views,
+      views: () => this.#history.views,
       interceptors: this.interceptors,
       sessionId: this.sessionId,
       signal,
@@ -1349,7 +1325,7 @@ export class Agent {
     const { message, aborted, error, modelError } = call
     if (!aborted && !error)
       message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
-    if (message.content.length) this.#push(message)
+    if (message.content.length) this.#history.push(message)
     // An interrupted reply may end with no usage counted: the context is still what it was.
     if (message.usage && contextTokens(message.usage) > 0) this.#noteContext(contextTokens(message.usage))
     this.#emit(turn, "message.end", { message })
@@ -1427,28 +1403,14 @@ export class Agent {
       const call = pairs.get(result)
       if (!call || !this.#readKey(call)) continue
       const history = all.slice(0, this.messages.length + i)
-      const view = duplicateView(history, this.#views, pairs, result, call, this.cwd, (c, cwd) =>
+      const view = duplicateView(history, this.#history.views, pairs, result, call, this.cwd, (c, cwd) =>
         this.#readKey(c, cwd),
       )
       if (!view) continue
-      this.#views.set(result, view)
+      this.#history.views.set(result, view)
       out.push([result, view])
     }
     return out
-  }
-
-  /** Records views in the session file, so a resumed session sends the same. */
-  #storeViews(views: [Message, ContextView][]) {
-    const stored: StoredView[] = []
-    for (const [m, v] of views) {
-      const entry = this.#entryIds.get(m)
-      if (!entry) continue
-      if (v.kind === "duplicate") {
-        const of = this.#entryIds.get(v.of)
-        if (of) stored.push({ entry, kind: "duplicate", text: v.text, of })
-      } else stored.push({ entry, kind: "aged", text: v.text, epoch: v.epoch })
-    }
-    if (stored.length) this.#store({ type: "context", views: stored })
   }
 
   /**
@@ -1457,7 +1419,7 @@ export class Agent {
    * the model's own count compared for what it saw (so text of any script comes out close).
    */
   #estimateNext(): number {
-    const projected = projectMessages(this.messages, this.#views)
+    const projected = projectMessages(this.messages, this.#history.views)
     const fixed = Math.ceil(
       (renderPrompt(this.#sections).length + JSON.stringify(this.#offeredTools()).length) / 4,
     )
@@ -1490,9 +1452,11 @@ export class Agent {
    * left out (that size is from before them), so comparing it with an estimate stays fair.
    */
   #seenViews(): ReadonlyMap<Message, ContextView> {
-    const since = [...this.#views].filter(([, v]) => v.kind === "aged" && v.epoch > this.#epochAtReply)
-    if (!since.length) return this.#views
-    const out = new Map(this.#views)
+    const since = [...this.#history.views].filter(
+      ([, v]) => v.kind === "aged" && v.epoch > this.#epochAtReply,
+    )
+    if (!since.length) return this.#history.views
+    const out = new Map(this.#history.views)
     for (const [m] of since) out.delete(m)
     return out
   }
@@ -1514,7 +1478,7 @@ export class Agent {
     const pressure = overflow || estimate > o.start * window
     if (!pressure && o.afterTurns <= 0) return undefined
     const sealed = lastSealedIndex(this.messages, this.#ai.replayTarget(this.model))
-    const candidates = agingCandidates(this.messages, this.#views, {
+    const candidates = agingCandidates(this.messages, this.#history.views, {
       keepTurns: o.keepTurns,
       keepSteps: o.keepSteps,
       sealed,
@@ -1572,14 +1536,14 @@ export class Agent {
         }),
         epoch,
       }
-      this.#views.set(p.m, view)
+      this.#history.views.set(p.m, view)
       aged.push([p.m, view])
       freed += p.saved
     }
     if (!aged.length) return false
     this.#agingEpoch = epoch
     this.#contextFreed += freed
-    this.#storeViews(aged)
+    this.#history.storeViews(aged)
     this.#emit(turn, "extension.notice", {
       source: "context",
       text: `Cleared ${aged.length} old tool ${aged.length === 1 ? "result" : "results"} from the context (about ${formatK(freed)} tokens); the model can read them again with output_read or read.`,
@@ -1603,36 +1567,6 @@ export class Agent {
    */
   askQuestions(request: AskRequest, signal: AbortSignal): Promise<AskOutcome> {
     return this.#approvals.askQuestions(request, signal)
-  }
-
-  /** Guarantees every tool call in history has a result, so the next request is valid. */
-  #repairHistory() {
-    const missing = [...unansweredCalls(this.messages)]
-    this.#push(...missing.map((b) => toolError(b, "This tool call did not complete.", "aborted")))
-  }
-
-  /** Adds messages to the history and persists each one. */
-  #push(...messages: Message[]) {
-    for (const m of messages) {
-      this.messages.push(m)
-      const id = this.#store({ type: "message", message: m })
-      if (id) this.#entryIds.set(m, id)
-    }
-  }
-
-  /** Appends to the session file. A failing disk is reported once and never breaks the turn. */
-  #store(data: SessionEntryData): string | undefined {
-    if (!this.session) return undefined
-    try {
-      return this.session.append(data)
-    } catch (err) {
-      if (!this.#storeFailed) {
-        this.#storeFailed = true
-        const error = `could not save the session: ${err instanceof Error ? err.message : String(err)}`
-        this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId })
-      }
-      return undefined
-    }
   }
 
   #overThreshold(tokens: number): boolean {
@@ -1777,7 +1711,7 @@ export class Agent {
             model: this.model,
             systemPrompt,
             // Sent as requests send them; `compacted` keeps the messages themselves.
-            messages: projectMessages(input, this.#views),
+            messages: projectMessages(input, this.#history.views),
             tools: this.#offeredTools(),
           },
           signal,
@@ -1801,7 +1735,7 @@ export class Agent {
             : await summarize(
                 this.#ai,
                 writer,
-                projectMessages(this.#readable(split.older), this.#views),
+                projectMessages(this.#readable(split.older), this.#history.views),
                 signal,
                 instructions,
                 split.prompt,
@@ -1821,7 +1755,12 @@ export class Agent {
       const replacedMessages = recent ? older : split.older
       const keptMessages = recent ? retained : split.kept
       const ids = (ms: Message[]) => [
-        ...new Set(ms.flatMap((m) => (this.#entryIds.has(m) ? [this.#entryIds.get(m)!] : []))),
+        ...new Set(
+          ms.flatMap((m) => {
+            const id = this.#history.entryId(m)
+            return id !== undefined ? [id] : []
+          }),
+        ),
       ]
       const replaces = ids(replacedMessages)
       const retainedIds = recent ? ids(retained) : []
@@ -1837,9 +1776,9 @@ export class Agent {
                 before,
                 projectMessages(
                   replacedMessages.filter((m) => !retained.includes(m)),
-                  this.#views,
+                  this.#history.views,
                 ),
-                projectMessages(keptMessages, this.#views),
+                projectMessages(keptMessages, this.#history.views),
                 // The checkpoint replaces both summary messages on the wire. Its size is
                 // already in tokens; without usage, estimate from its encrypted length.
                 checkpoint ? checkpointTokens || Math.ceil(checkpoint.value.length / 16) : replacement,
@@ -1852,7 +1791,7 @@ export class Agent {
         ...(nativeRef ? { native: nativeRef, layout } : {}),
         ...(fallback ? { fallback } : {}),
       }
-      const entryId = this.#store({
+      const entryId = this.#history.store({
         type: "compaction",
         summary,
         replaces,
@@ -1863,10 +1802,9 @@ export class Agent {
       })
       if (counted)
         this.#recordCompactionUsage(usage, nativeRef ?? modelRef(writer), Boolean(checkpoint), true)
-      this.#compactions.set(replacement[0]!, info)
-      if (compacted) this.#compacted.set(replacement[0]!, compacted)
-      for (const m of replacement) if (entryId) this.#entryIds.set(m, entryId)
-      for (const m of replacedMessages) if (!retained.includes(m)) this.#entryIds.delete(m)
+      this.#history.noteCompaction(replacement[0]!, info, compacted)
+      for (const m of replacement) if (entryId) this.#history.setEntryId(m, entryId)
+      for (const m of replacedMessages) if (!retained.includes(m)) this.#history.forgetEntry(m)
       if (recent) {
         // Codex's layout: the latest user messages, then the checkpoint last.
         this.messages.splice(0, this.messages.length, ...retained, ...replacement)
@@ -1914,17 +1852,9 @@ export class Agent {
     return messages.flatMap((m) => {
       if (!isSummaryMessage(m) || !checkpointOf(m) || summaryOf(m)) return [m]
       if (m.role === "assistant") return []
-      const originals = this.#originalsOf(m)
+      const originals = this.#history.originalsOf(m)
       return originals ? this.#readable(originals, depth + 1) : [m]
     })
-  }
-
-  /** The history a checkpoint's summary message stands for, if it can still be found. */
-  #originalsOf(m: Message): Message[] | undefined {
-    const known = this.#compacted.get(m)
-    if (known) return known
-    const id = this.#entryIds.get(m)
-    return (id ? this.session?.compacted(id) : undefined) ?? this.#originals?.(m)
   }
 
   /**
@@ -1932,7 +1862,7 @@ export class Agent {
    * it can still be found: for agents forked from this one (AgentOptions.originals).
    */
   compactedHistory(summary: Message): Message[] | undefined {
-    return this.#originalsOf(summary)
+    return this.#history.originalsOf(summary)
   }
 
   /**
@@ -1950,7 +1880,7 @@ export class Agent {
       const cp = m.role === "user" && isSummaryMessage(m) ? checkpointOf(m) : undefined
       if (!cp || summaryOf(m) || this.#ai.canReplay(cp, this.model)) continue
       const target = `${this.model.provider}/${this.model.id}`
-      const originals = this.#originalsOf(m)
+      const originals = this.#history.originalsOf(m)
       if (!originals?.length) {
         return `the conversation was compacted by ${cp.provider}'s server for ${cp.model}, which ${target} cannot read, and the messages it stands for are not in the session any more; switch back with /model ${cp.provider}/${cp.model}`
       }
@@ -1962,7 +1892,7 @@ export class Agent {
         written = await summarize(
           this.#ai,
           writer,
-          projectMessages(this.#readable(originals), this.#views),
+          projectMessages(this.#readable(originals), this.#history.views),
           signal,
         )
       } catch (err) {
@@ -1971,12 +1901,12 @@ export class Agent {
         const why = err instanceof Error ? err.message : String(err)
         return `${target} cannot read the server-side compaction made by ${cp.provider} for ${cp.model}, and writing a text summary for it failed: ${why}`
       }
-      const oldId = this.#entryIds.get(m)
+      const oldId = this.#history.entryId(m)
       const original = oldId ? this.session?.get(oldId) : undefined
       const pair = summaryMessages(written.summary, modelRef(writer), cp)
-      const prior = this.#compactions.get(m)
+      const prior = this.#history.compactionInfo(m)
       const info: CompactionInfo | undefined = prior ? { ...prior, model: modelRef(writer) } : undefined
-      const entryId = this.#store({
+      const entryId = this.#history.store({
         type: "compaction",
         summary: written.summary,
         replaces: oldId ? [oldId] : [],
@@ -1990,9 +1920,8 @@ export class Agent {
       const ack = this.messages[i + 1]
       const pairLength = ack?.role === "assistant" && isSummaryMessage(ack) ? 2 : 1
       this.messages.splice(i, pairLength, ...pair)
-      if (info) this.#compactions.set(pair[0]!, info)
-      this.#compacted.set(pair[0]!, originals)
-      for (const p of pair) if (entryId) this.#entryIds.set(p, entryId)
+      this.#history.noteCompaction(pair[0]!, info, originals)
+      for (const p of pair) if (entryId) this.#history.setEntryId(p, entryId)
       this.#emit(turn, "extension.notice", {
         source: "compaction",
         text: `${target} cannot use the server-side compaction made by ${cp.provider} for ${cp.model}, so a text summary of it was written for it.`,
