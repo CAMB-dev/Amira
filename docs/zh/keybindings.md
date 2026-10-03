@@ -54,7 +54,7 @@
 | `edit.yank` | `ctrl+y` | 粘贴最后剪切的文本；连续剪切会合并，折叠的粘贴内容仍保持折叠 |
 | `edit.undo` | `ctrl+z` | 撤销最近一次输入操作，包括输入、连续删除、剪切、粘贴或历史调取 |
 | `edit.redo` | `ctrl+shift+z` | 重做。没有 kitty keyboard protocol 的终端可能把它报告为 Ctrl+Z，需要另行绑定 |
-| `edit.external` | `ctrl+g` | 用 `$VISUAL`、其次 `$EDITOR` 指定的命令编辑消息（如 `code --wait`）；未指定则 Windows 使用 Notepad，其他系统使用 vi。编辑器退出后，保存的文本回到输入框 |
+| `edit.external` | `ctrl+g` | 依次使用 `$VISUAL`、`$EDITOR`、Git 的 `core.editor` 指定的命令编辑消息（如 `code --wait`）；均未指定则 Windows 使用 Notepad，其他系统使用 vi。编辑器退出后，保存的文本回到输入框 |
 
 ## 补全列表
 

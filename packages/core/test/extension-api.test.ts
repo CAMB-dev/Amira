@@ -1,5 +1,9 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { AnyEvent, ExtensionAPI } from "@amira/api"
+import { resetCommandWorker } from "@amira/proc"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { amiraHome } from "../src/home.ts"
@@ -147,6 +151,90 @@ test("runCommand streams output while the command runs, and an abort stops it", 
   expect(stopped.output).toContain("one")
   expect(performance.now() - started).toBeLessThan(20_000)
 })
+
+for (const mode of ["interleaved", "stdoutOnly", ...(process.platform === "win32" ? ["viaCmd"] : [])]) {
+  test(`runCommand streams incremental git stdout before git exits (${mode})`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "amira-git-stream-"))
+    const script = join(dir, "stream.ts")
+    const acknowledgements = [join(dir, "one.ack"), join(dir, "two.ack")]
+    // Each piece must reach onChunk before git can produce the next one or exit. A sleep
+    // alone would let a callback delivered after child exit (but before promise resolution) pass.
+    writeFileSync(
+      script,
+      [
+        'import { existsSync } from "node:fs"',
+        `const acknowledgements = ${JSON.stringify(acknowledgements)}`,
+        'for (const [i, text] of ["one\\n", "two\\n"].entries()) {',
+        "  await Bun.write(Bun.stdout, text)",
+        "  const deadline = performance.now() + 15_000",
+        "  while (!existsSync(acknowledgements[i]!)) {",
+        "    if (performance.now() >= deadline) process.exit(7)",
+        "    await Bun.sleep(10)",
+        "  }",
+        "}",
+        'await Bun.write(Bun.stdout, "done\\n")',
+      ].join("\n"),
+    )
+    const host = new ExtensionHost({
+      bus: new EventBus(),
+      interceptors: new InterceptorRegistry(),
+      tools: new ToolRegistry(),
+      cwd: dir,
+    })
+    let api: ExtensionAPI | undefined
+    await host.load((a) => {
+      api = a
+    }, "ext:git-stream")
+    const quote = (s: string) => `'${s.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`
+    const chunks: string[] = []
+    let output = ""
+    resetCommandWorker()
+    // The real worker has its own Bun globals. If it cannot load, the inline fallback must
+    // fail instead of silently turning this into a main-thread stdout test.
+    const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+      throw new Error("git streaming must run in the actual command worker")
+    })
+    try {
+      const run = await api!.runCommand(
+        ["git", "-c", `alias.amira-stream=!${quote(process.execPath)} ${quote(script)}`, "amira-stream"],
+        {
+          cwd: dir,
+          env: {
+            ...process.env,
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+          },
+          timeoutMs: 30_000,
+          signal: new AbortController().signal,
+          stdoutOnly: mode === "stdoutOnly",
+          viaCmd: mode === "viaCmd",
+          onChunk: (chunk) => {
+            chunks.push(chunk)
+            output += chunk
+            for (const [i, text] of ["one\n", "two\n"].entries()) {
+              if (output.includes(text)) writeFileSync(acknowledgements[i]!, "received")
+            }
+          },
+        },
+      )
+      expect(spawn).not.toHaveBeenCalled()
+      expect(run).toMatchObject({
+        output: "one\ntwo\ndone\n",
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+        settled: true,
+      })
+      expect(chunks.join("")).toBe(run.output)
+      expect(chunks.length).toBeGreaterThanOrEqual(3)
+    } finally {
+      spawn.mockRestore()
+      resetCommandWorker()
+      host.unload("ext:git-stream")
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 60_000)
+}
 
 test("runCommand caps output at 1,000,000 characters by default, keeping the end", async () => {
   const host = new ExtensionHost({
