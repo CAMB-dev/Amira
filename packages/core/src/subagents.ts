@@ -604,8 +604,9 @@ export class AgentTree {
   /** Ends a persistent child cleanly: at once while idle or queued, after its running turn otherwise. */
   stopChild(child: Child, reason: string): void {
     if (!child.persistent || !this.#live.has(child.id) || child.abortReason || child.stopReason) return
+    // A paused one runs its turn to the end first: it is working again, and screens hear so.
+    if (child.resume()) this.#admit()
     child.stopReason = reason
-    if (child.agent.execution.resume()) this.#admit()
     if (child.started) {
       child.waiting?.()
       return

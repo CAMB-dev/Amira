@@ -402,3 +402,43 @@ test("a stream of user messages during request preparation is dispatched after a
   expect(mock.requests).toHaveLength(3)
   expect(textOf(mock.requests[2]!.messages)).toContain("message 8")
 })
+
+test("a clean stop of a paused persistent child reports it working again before it ends", async () => {
+  let calls = 0
+  const { tree, root, tools, bus, events } = setup(() =>
+    ++calls === 1 ? { toolCalls: [{ name: "hold", args: {} }] } : { text: "done" },
+  )
+  const tool = heldTool(tools)
+  const child = tree.spawn(root, { prompt: "work", persistent: true })
+  await tool.entered
+  expect(tree.pause(child.id)).toBe(true)
+  child.stop("enough")
+  expect(tree.subagent(child.id)!.info.status).toBe("running")
+  await bus.flush()
+  const states = events
+    .filter((e) => e.type === "subagent.state")
+    .filter((e) => e.data.childSessionId === child.id)
+    .map((e) => e.data.state)
+  expect(states).toEqual(["working", "paused", "working"])
+  tool.release()
+  expect(await child.result()).toMatchObject({ status: "done", note: "enough" })
+  expect(tree.resume(child.id)).toBe(false)
+})
+
+test("aborting a paused persistent child ends it instead of leaving it paused", async () => {
+  const release = Promise.withResolvers<void>()
+  const { tree, root, mock } = setup(() => ({
+    text: "complete",
+    hold: { chunks: 0, until: release.promise },
+  }))
+  const child = tree.spawn(root, { prompt: "work", persistent: true })
+  await until(() => mock.requests.length === 1)
+  expect(tree.pause(child.id)).toBe(true)
+  release.resolve()
+  await until(() => tree.subagent(child.id)!.messages?.some((m) => m.role === "assistant") === true)
+  expect(tree.subagent(child.id)!.info.status).toBe("paused")
+  expect(tree.stop(child.id, "stopped by the user")).toBe(true)
+  expect(await child.result()).toMatchObject({ status: "aborted", error: "stopped by the user" })
+  expect(tree.subagent(child.id)!.info.status).toBe("aborted")
+  expect(tree.resume(child.id)).toBe(false)
+})
