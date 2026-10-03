@@ -8,7 +8,7 @@ import {
   GIT_CACHE_UNUSED_DAYS,
   GitCache,
   gitCacheKey,
-  gitUrlsInUse,
+  gitCachePins,
   type IndexOptions,
   type InstalledPackage,
   type InstallOptions,
@@ -384,8 +384,11 @@ function onSigint(abort: AbortController, progress: ExtProgress): () => void {
 /** Caches of repositories no package uses any more go after GIT_CACHE_UNUSED_DAYS. */
 function autoPrune(cacheDir: string, home: string, cwd: string) {
   try {
+    const pins = gitCachePins({ home, cwd })
+    // A lock that can't be read may pin anything: keep every cache until it is fixed.
+    if (pins.unreadable.length) return
     pruneGitCaches(cacheDir, {
-      keepUrls: gitUrlsInUse({ home, cwd }),
+      keepUrls: pins.urls,
       unusedForMs: GIT_CACHE_UNUSED_DAYS * 86_400_000,
     })
   } catch {}
@@ -401,7 +404,8 @@ function cacheCommand(
   if (extra.length) throw new UsageError(`ext cache ${what} takes no arguments\n\n${EXT_USAGE}`)
   if ((opts.all || opts["dry-run"]) && what !== "prune" && what !== "clean")
     throw new UsageError(`--all and --dry-run are only for ext cache prune, clean or ext gc\n\n${EXT_USAGE}`)
-  const used = opts.all || what === "clean" ? [] : gitUrlsInUse(where)
+  const pins = opts.all || what === "clean" ? { urls: [], unreadable: [] } : gitCachePins(where)
+  const used = pins.urls
   const usedKeys = new Set(used.map(gitCacheKey))
   const entries = listGitCaches(where.cacheDir)
   switch (what) {
@@ -423,6 +427,18 @@ function cacheCommand(
     }
     case "prune":
     case "clean": {
+      if (pins.unreadable.length) {
+        io.stderr(
+          `amira: these lock files can't be read, so any cached repository may still be needed; nothing was removed (fix them, or prune with --all):
+${pins.unreadable
+  .map(
+    (f) => `  ${f}
+`,
+  )
+  .join("")}`,
+        )
+        return 1
+      }
       const dryRun = !!opts["dry-run"]
       const removed = pruneGitCaches(where.cacheDir, { keepUrls: used, dryRun })
       const removedDirs = new Set(removed.map((e) => e.dir))

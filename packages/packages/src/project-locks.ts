@@ -43,6 +43,13 @@ export function knownProjectLocks(where: { home?: string; cwd: string }): Set<st
   return locks
 }
 
+/**
+ * How far below a recorded path to look for nested projects, and how many directories to read in
+ * all: a session started in a home or drive root must not make every prune walk the whole disk.
+ */
+const MAX_DEPTH = 4
+const MAX_DIRECTORIES = 20_000
+
 /** Resolve recorded roots, but do not follow other links or search dependency and git stores. */
 function* directories(root: string, seen = new Set<string>()): Generator<{ dir: string; entries: Dirent[] }> {
   let resolved: string
@@ -51,9 +58,9 @@ function* directories(root: string, seen = new Set<string>()): Generator<{ dir: 
   } catch {
     return
   }
-  const pending = [resolved]
-  while (pending.length) {
-    const dir = pending.pop()!
+  const pending: [string, number][] = [[resolved, 0]]
+  while (pending.length && seen.size < MAX_DIRECTORIES) {
+    const [dir, depth] = pending.pop()!
     const key = process.platform === "win32" ? dir.toLowerCase() : dir
     if (seen.has(key)) continue
     seen.add(key)
@@ -66,9 +73,10 @@ function* directories(root: string, seen = new Set<string>()): Generator<{ dir: 
       continue
     }
     yield { dir, entries }
+    if (depth >= MAX_DEPTH) continue
     for (const entry of entries)
       if (entry.isDirectory() && ![".amira", ".git", "node_modules"].includes(entry.name))
-        pending.push(path.join(dir, entry.name))
+        pending.push([path.join(dir, entry.name), depth + 1])
   }
 }
 
