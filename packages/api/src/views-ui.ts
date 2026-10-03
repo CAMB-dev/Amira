@@ -15,6 +15,8 @@ export interface UiTreeItem {
   aside?: ViewSegment[]
   /** Fixed column before the rail, sized to the widest lead among expanded/visible tree rows. */
   lead?: ViewSegment[]
+  /** Cells after lead, included in the shared column width. Defaults to 1; invalid sizes become 0. */
+  gap?: number
   /** Replaces the two-cell disclosure/rail slot (e.g. ○ or ◉); navigation still expands/collapses. */
   node?: ViewSegment[]
   /** Thin rule after the row's expanded detail, before children; rail continues through it. */
@@ -61,7 +63,13 @@ export type UiNode =
       /** Expands untouched and newly added rows. Explicit expanded state and user toggles win. */
       expanded?: "all"
     }
-  | { type: "tabs"; id: string; tabs: { key: string; label: string; body: UiNode }[] }
+  | {
+      type: "tabs"
+      id: string
+      /** Divided labels with a highlighted selection; defaults to brackets. */
+      style?: "brackets" | "divided"
+      tabs: { key: string; label: string; body: UiNode }[]
+    }
   | {
       type: "table"
       id?: string
@@ -72,7 +80,14 @@ export type UiNode =
   /** Value is a fraction from 0 to 1, clamped; width is the bar's maximum cell count. */
   | { type: "progress"; value: number; width?: number; label?: string }
   | { type: "rule"; label?: string }
-  | { type: "input"; id: string; placeholder?: string; hint?: string }
+  | {
+      type: "input"
+      id: string
+      placeholder?: string
+      hint?: string
+      /** Skip automatic focus; this key, Tab or explicit focus enables typing. Esc leaves the input. */
+      activate?: string
+    }
   /** Blank content; size supplies the default main-axis size inside a row or column. */
   | { type: "spacer"; size?: number }
 
@@ -112,6 +127,6 @@ export type UiEvent =
 export interface UiControl extends ViewControl {
   /** Shallow patch: supplied top-level maps replace those maps, not their individual entries. */
   setState(patch: Partial<UiState>): void
-  /** Focus a visible widget by ID; absent/hidden IDs fall back to the first visible widget. */
+  /** Focus a visible widget by ID; absent/hidden IDs fall back to the first without input activation. */
   focus(id: string): void
 }
