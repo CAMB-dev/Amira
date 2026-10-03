@@ -2,21 +2,15 @@ import path from "node:path"
 import {
   type Ai,
   type AssistantMessage,
-  addUsage,
-  type CompactionLayout,
   describeModelError,
-  emptyUsage,
   isContextOverflow,
   isNoModel,
   type Message,
   type ModelError,
   type ModelInfo,
-  type ModelRef,
   modelMessages,
-  type Signature,
   type ToolCallBlock,
   type ToolSpec,
-  type Usage,
   type UserMessage,
   userMessage,
 } from "@amira/ai"
@@ -27,7 +21,6 @@ import type {
   BackgroundJobHost,
   BackgroundJobSession,
   CompactionInfo,
-  CompactionReason,
   CompactionUsage,
   EventMap,
   PendingNotice,
@@ -49,6 +42,7 @@ import {
   type ManagedArtifactGroup,
   summarizeArtifactUsage,
 } from "./agent/artifact-usage.ts"
+import { Compactor } from "./agent/compactor.ts"
 import {
   buildContext,
   toolRestriction as modelToolRestriction,
@@ -58,7 +52,7 @@ import {
 import { ContextManager } from "./agent/context-manager.ts"
 import { History, keptHistoryViews } from "./agent/history.ts"
 import { joinMessages, modelRef } from "./agent/messages.ts"
-import { compactionFallback, modelCall, Thinking } from "./agent/model-call.ts"
+import { modelCall, Thinking } from "./agent/model-call.ts"
 import { ToolRunner } from "./agent/tool-runner.ts"
 import {
   AgentAbortedError,
@@ -93,26 +87,11 @@ export {
   type TurnResult,
 } from "./agent/types.ts"
 
-import {
-  type CompactionOptions,
-  checkpointOf,
-  contextTokens,
-  estimateAfter,
-  isSummaryMessage,
-  KEEP_USER_TOKENS,
-  recentUserMessages,
-  SummaryError,
-  splitHistory,
-  summarize,
-  summaryMessages,
-  summaryOf,
-  windowGuessNotice,
-} from "./compaction.ts"
-import { type ContextOptions, type ContextView, projectMessages } from "./context.ts"
+import { type CompactionOptions, contextTokens } from "./compaction.ts"
+import type { ContextOptions, ContextView } from "./context.ts"
 import { createToolSession } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
-import { amiraPath } from "./home.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { Permissions } from "./permissions/policy.ts"
 import {
@@ -173,6 +152,7 @@ export class Agent {
   #toolRunner: ToolRunner
   #history: History
   #contextManager: ContextManager
+  #compactor: Compactor
   #status: SessionStatus = "idle"
   #abort: AbortController | undefined
   #maxSteps: number
@@ -183,14 +163,6 @@ export class Agent {
   #context: ContextOptions
   /** This session's saved tool outputs (A1). */
   readonly artifacts: ArtifactStore
-  /** Compaction costs the session file does not hold (no file, or a compaction that failed). */
-  #compactionCosts: CompactionUsage[] = []
-  /** The next reply's context size tells whether the last compaction shrank the context enough. */
-  #checkCompaction = false
-  /** The notice that the context window is a guess was shown (once a session). */
-  #windowGuessNoted = false
-  /** Automatic compaction waits until the context passes this, after one that did not help. */
-  #compactFloor: number | undefined
   #maxParallelTools: number
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
@@ -403,6 +375,23 @@ export class Agent {
       },
       { contextTokens: tokens },
     )
+    this.#compactor = new Compactor({
+      ai: this.#ai,
+      model: () => this.model,
+      options: this.#compaction,
+      history: this.#history,
+      context: this.#contextManager,
+      interceptors: this.interceptors,
+      session: this.session,
+      sessionId: this.sessionId,
+      isSubAgent: this.parentSessionId !== undefined,
+      execution: this.execution,
+      buildContext: (signal) => this.#buildContext(signal),
+      renderSections: () => renderPrompt(this.#sections),
+      offeredTools: () => this.#offeredTools(),
+      recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+      emit: (turn, type, data) => this.#emit(turn, type, data),
+    })
     const stored = opts.session?.model()
     // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
     const changed = stored?.provider !== this.model.provider || stored.model !== this.model.id
@@ -713,7 +702,7 @@ export class Agent {
     this.model = model
     if (from.provider === model.provider && from.model === model.id) return
     // The floor was measured against the old model's window.
-    this.#compactFloor = undefined
+    this.#compactor.modelChanged()
     if (!isNoModel(model)) this.#history.store({ type: "model_change", model: modelRef(model) })
     this.#emit(undefined, "model.changed", { from, to: modelRef(model) })
   }
@@ -728,7 +717,7 @@ export class Agent {
   async compact(instructions?: string): Promise<boolean> {
     return this.hold(
       "compaction",
-      async (signal) => (await this.#compact("manual", signal, undefined, instructions)) === true,
+      async (signal) => (await this.#compactor.compact("manual", signal, undefined, instructions)) === true,
     )
   }
 
@@ -1116,12 +1105,12 @@ export class Agent {
       /** A request over the window first gets one aging round (A3), once a turn. */
       let overflowAged = false
       while (true) {
-        this.#noteWindowGuess(turn)
+        this.#compactor.noteWindowGuess(turn)
         // Planned synchronously: a turn with nothing to age goes on without waiting.
         const aging = this.#contextManager.age(turn)
         if (aging) await aging
-        if (!compactFailed && this.#needsCompaction()) {
-          compactFailed = (await this.#compact("threshold", abort.signal, turn)) === false
+        if (!compactFailed && this.#compactor.needsCompaction()) {
+          compactFailed = (await this.#compactor.compact("threshold", abort.signal, turn)) === false
         }
         if (abort.signal.aborted) {
           result = { reason: "aborted", steps }
@@ -1148,8 +1137,8 @@ export class Agent {
           }
           if (overflow && !overflowRetried && this.#compaction.auto !== false) {
             overflowRetried = true
-            this.#noteWindowGuess(turn, true)
-            overflowCompacted = await this.#compact("overflow", abort.signal, turn)
+            this.#compactor.noteWindowGuess(turn, true)
+            overflowCompacted = await this.#compactor.compact("overflow", abort.signal, turn)
             if (overflowCompacted === true) continue
           }
           const failure = reply.model
@@ -1273,7 +1262,7 @@ export class Agent {
 
   /** Rebuilt for a sub-agent's user messages, a few times at most: a stream of them cannot starve the model. */
   async #callModel(turn: Turn): Promise<ModelReply> {
-    const unreadable = await this.#fillSummaries(turn, turn.signal)
+    const unreadable = await this.#compactor.fillSummaries(turn, turn.signal)
     if (turn.signal.aborted) return { kind: "aborted" }
     if (unreadable) return { kind: "error", error: unreadable }
     let ctx = await this.#buildContext(turn.signal)
@@ -1306,7 +1295,8 @@ export class Agent {
       message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
     if (message.content.length) this.#history.push(message)
     // An interrupted reply may end with no usage counted: the context is still what it was.
-    if (message.usage && contextTokens(message.usage) > 0) this.#noteContext(contextTokens(message.usage))
+    if (message.usage && contextTokens(message.usage) > 0)
+      this.#compactor.noteContext(contextTokens(message.usage))
     this.#emit(turn, "message.end", { message })
     if (message.usage) this.tree?.recordUsage(this, message.usage)
 
@@ -1358,373 +1348,17 @@ export class Agent {
     return this.#approvals.askQuestions(request, signal)
   }
 
-  #overThreshold(tokens: number): boolean {
-    return tokens > (this.#compaction.threshold ?? 0.8) * this.model.contextWindow
-  }
-
-  /**
-   * Once a session, when automatic compaction goes by a context window that is only a guess
-   * (no settings or catalog entry for the model): a notice on where to set it. Only once it
-   * starts to matter, when the context passes half the guessed window or the model rejects a
-   * request as too long (`overflow`), so short sessions stay quiet and a catalog still
-   * loading in the background can name the window first. Sub-agents leave it to their
-   * commander's session.
-   */
-  #noteWindowGuess(turn: Turn, overflow = false) {
-    if (this.#windowGuessNoted || this.parentSessionId !== undefined) return
-    if (this.#compaction.auto === false || this.model.contextWindowSource !== "default") return
-    if (isNoModel(this.model)) return
-    if (!overflow && (this.#contextManager.tokens ?? 0) <= this.model.contextWindow / 2) return
-    this.#windowGuessNoted = true
-    const text = windowGuessNotice(this.model, amiraPath("settings.json"))
-    this.#emit(turn, "extension.notice", { source: "compaction", text, level: "info" })
-  }
-
-  #needsCompaction(): boolean {
-    if (this.#compaction.auto === false || this.#contextManager.tokens === undefined) return false
-    // What aging freed since the last reply no longer counts.
-    const tokens = this.#contextManager.tokens - this.#contextManager.freed
-    if (this.#compactFloor !== undefined && tokens <= this.#compactFloor) return false
-    return this.#overThreshold(tokens)
-  }
-
-  /**
-   * Notes the context size of a reply. The first one after a compaction shows whether it
-   * worked: still over the threshold means summarizing again right away would not help
-   * either, so automatic compaction waits until the context has grown by a twentieth of the
-   * window, which gives the next summary new steps to fold in.
-   */
-  #noteContext(tokens: number) {
-    this.#contextManager.noteReply(tokens)
-    if (!this.#checkCompaction) return
-    this.#checkCompaction = false
-    this.#compactFloor = this.#overThreshold(tokens) ? tokens + this.model.contextWindow / 20 : undefined
-  }
-
-  /**
-   * Replaces older history with a summary (D19, D57). Never throws; failures emit compact.failed.
-   * compact.before runs first, so a compaction it blocks never starts and is reported as blocked.
-   * Resolves true when it compacted, false when it failed or was blocked, and undefined when
-   * there was nothing to compact yet (a long turn may have enough a few steps later).
-   */
-  async #compact(
-    reason: CompactionReason,
-    signal: AbortSignal,
-    turn: Turn | undefined,
-    instructions?: string,
-  ): Promise<boolean | undefined> {
-    // What is compacted must be readable by this model first (an earlier checkpoint of another).
-    const unreadable = await this.#fillSummaries(turn, signal)
-    if (unreadable || signal.aborted) {
-      this.#emit(turn, "compact.failed", { error: unreadable ?? "aborted" })
-      return false
-    }
-    const split = splitHistory(
-      this.messages,
-      this.#compaction.keepTurns ?? 2,
-      this.#compaction.keepSteps ?? 2,
-    )
-    if (!split) {
-      if (reason === "manual")
-        this.#emit(turn, "compact.failed", { error: "nothing to compact yet", empty: true })
-      return undefined
-    }
-    try {
-      const gate = await this.interceptors.run(
-        "compact.before",
-        { messages: split.older, kept: split.kept },
-        { sessionId: this.sessionId, signal },
-      )
-      if (signal.aborted) throw new Error("aborted")
-      if (gate.blocked) {
-        this.#emit(turn, "compact.failed", { error: gate.reason, blocked: true })
-        return false
-      }
-      const supplied = gate.value.summary?.trim()
-      // The server compacts when the provider has it on, unless the summary is the user's or
-      // an extension's to shape (/compact instructions, compact.model, an interceptor's).
-      const server =
-        supplied || instructions?.trim() || this.#compaction.model
-          ? undefined
-          : this.#ai.nativeCompaction(this.model)
-      const wanted = this.#compaction.layout ?? "tail"
-      const layout: CompactionLayout = server?.layouts.includes(wanted) ? wanted : "tail"
-      // A "tail" checkpoint over the first steps of a long turn only where the dialect allows.
-      const native =
-        server && (layout === "recent-user" || !split.prompt || server.midTurn) ? server : undefined
-      // What is compacted, and what stays verbatim (before the summary for "recent-user").
-      const retained =
-        native && layout === "recent-user"
-          ? recentUserMessages(this.messages, this.#compaction.keepUserTokens ?? KEEP_USER_TOKENS)
-          : []
-      const older = native && layout === "recent-user" ? [...this.messages] : split.older
-      const kept = native && layout === "recent-user" ? retained : split.kept
-      this.#emit(turn, "compact.start", {
-        reason,
-        replacing: older.length - retained.length,
-        kept: kept.length,
-        ...(this.#contextManager.tokens !== undefined ? { tokens: this.#contextManager.tokens } : {}),
-        ...(native ? { native: true } : {}),
-      })
-
-      let usage = emptyUsage()
-      let counted = false
-      const count = (u: Usage | undefined) => {
-        if (!u) return
-        usage = addUsage(usage, u)
-        counted = true
-      }
-      let summary: string | undefined
-      let checkpoint: Signature | undefined
-      /** Tokens the server wrote for the checkpoint: about what it takes up in the context. */
-      let checkpointTokens = 0
-      let fallback: string | undefined
-      let compacted: Message[] | undefined
-      if (native) {
-        // The history as the server compacts it: in a long turn its prompt goes along in place.
-        const olderSet = new Set(older)
-        const input =
-          layout === "recent-user"
-            ? older
-            : this.messages.filter((m) => olderSet.has(m) || m === split.prompt)
-        const built = await this.#buildContext(signal).catch(() => undefined)
-        const systemPrompt = built && !built.blocked ? built.value.systemPrompt : renderPrompt(this.#sections)
-        // The same tools a reply would get: the client web_search stays hidden from a model
-        // with the hosted search, which the dialect adds beside them as in every request.
-        if (this.execution.paused) await this.execution.wait(signal)
-        if (signal.aborted) throw new Error("aborted")
-        const r = await this.#ai.compact(
-          {
-            model: this.model,
-            systemPrompt,
-            // Sent as requests send them; `compacted` keeps the messages themselves.
-            messages: projectMessages(input, this.#history.views),
-            tools: this.#offeredTools(),
-          },
-          signal,
-        )
-        count(r.usage)
-        if (signal.aborted) throw new Error("aborted")
-        if (r.ok) {
-          summary = r.summary ?? ""
-          checkpoint = r.checkpoint
-          compacted = input
-          checkpointTokens = r.usage.output
-        } else fallback = compactionFallback(r, (notice) => this.#emit(turn, "extension.notice", notice))
-      }
-      const writer = this.#compaction.model ?? this.model
-      if (summary === undefined) {
-        try {
-          if (this.execution.paused) await this.execution.wait(signal)
-          if (signal.aborted) throw new Error("aborted")
-          const written = supplied
-            ? { summary: supplied }
-            : await summarize(
-                this.#ai,
-                writer,
-                projectMessages(this.#readable(split.older), this.#history.views),
-                signal,
-                instructions,
-                split.prompt,
-              )
-          count(written.usage)
-          summary = written.summary
-        } catch (err) {
-          // What the failed compaction still cost: the server attempts before it, and its own.
-          if (err instanceof SummaryError) count(err.usage)
-          if (counted) this.#recordCompactionUsage(usage, modelRef(writer), false)
-          throw err
-        }
-      }
-      if (signal.aborted) throw new Error("aborted")
-      // A text summary replaces the older part and keeps the tail, whatever the layout.
-      const recent = checkpoint && layout === "recent-user"
-      const replacedMessages = recent ? older : split.older
-      const keptMessages = recent ? retained : split.kept
-      const ids = (ms: Message[]) => [
-        ...new Set(
-          ms.flatMap((m) => {
-            const id = this.#history.entryId(m)
-            return id !== undefined ? [id] : []
-          }),
-        ),
-      ]
-      const replaces = ids(replacedMessages)
-      const retainedIds = recent ? ids(retained) : []
-      const replacement = summaryMessages(summary, modelRef(checkpoint ? this.model : writer), checkpoint)
-      const before = this.#contextManager.tokens
-      const nativeRef = checkpoint ? modelRef(this.model) : undefined
-      const info: CompactionInfo = {
-        reason,
-        ...(before !== undefined
-          ? {
-              tokensBefore: before,
-              tokensAfter: estimateAfter(
-                before,
-                projectMessages(
-                  replacedMessages.filter((m) => !retained.includes(m)),
-                  this.#history.views,
-                ),
-                projectMessages(keptMessages, this.#history.views),
-                // The checkpoint replaces both summary messages on the wire. Its size is
-                // already in tokens; without usage, estimate from its encrypted length.
-                checkpoint ? checkpointTokens || Math.ceil(checkpoint.value.length / 16) : replacement,
-              ),
-            }
-          : {}),
-        ...(isNoModel(this.model) ? {} : { contextWindow: this.model.contextWindow }),
-        // Separate objects: a JSON writer that marks repeated references as cycles would drop one.
-        ...(supplied ? {} : { model: nativeRef ? { ...nativeRef } : modelRef(writer) }),
-        ...(nativeRef ? { native: nativeRef, layout } : {}),
-        ...(fallback ? { fallback } : {}),
-      }
-      const entryId = this.#history.store({
-        type: "compaction",
-        summary,
-        replaces,
-        ...info,
-        ...(checkpoint ? { checkpoint } : {}),
-        ...(retainedIds.length ? { retained: retainedIds } : {}),
-        ...(counted ? { usage } : {}),
-      })
-      if (counted)
-        this.#recordCompactionUsage(usage, nativeRef ?? modelRef(writer), Boolean(checkpoint), true)
-      this.#history.noteCompaction(replacement[0]!, info, compacted)
-      for (const m of replacement) if (entryId) this.#history.setEntryId(m, entryId)
-      for (const m of replacedMessages) if (!retained.includes(m)) this.#history.forgetEntry(m)
-      if (recent) {
-        // Codex's layout: the latest user messages, then the checkpoint last.
-        this.messages.splice(0, this.messages.length, ...retained, ...replacement)
-      } else {
-        // The summary goes first; everything it does not replace keeps its order after it (in
-        // a long turn that is the turn's prompt and its latest steps).
-        const replaced = new Set(split.older)
-        const rest = this.messages.filter((m) => !replaced.has(m))
-        this.messages.splice(0, this.messages.length, ...replacement, ...rest)
-      }
-      this.#contextManager.reset()
-      this.#checkCompaction = true
-      this.#emit(turn, "compact.end", {
-        summary,
-        replaced: replacedMessages.length - retained.length,
-        kept: keptMessages.length,
-        ...(counted ? { usage } : {}),
-        ...info,
-      })
-      return true
-    } catch (err) {
-      this.#emit(turn, "compact.failed", { error: err instanceof Error ? err.message : String(err) })
-      return false
-    }
-  }
-
-  /**
-   * Counts what a compaction's requests cost toward the tree's budget and, without a session
-   * file to read it from later, keeps it for compactionUsage. `stored` says the session file
-   * has it (in the compaction entry).
-   */
-  #recordCompactionUsage(usage: Usage | undefined, model: ModelRef, native: boolean, stored = false) {
-    if (!usage || usage.input + usage.output + usage.cacheRead + usage.cacheWrite === 0) return
-    this.tree?.recordUsage(this, usage)
-    if (!stored || !this.session) this.#compactionCosts.push({ model, usage, ...(native ? { native } : {}) })
-  }
-
-  /**
-   * History a model can read as text: a summary pair whose checkpoint has no readable text
-   * stands as the history it compacted instead (from memory, or rebuilt from the session file).
-   */
-  #readable(messages: Message[], depth = 0): Message[] {
-    if (depth > 8) return messages
-    return messages.flatMap((m) => {
-      if (!isSummaryMessage(m) || !checkpointOf(m) || summaryOf(m)) return [m]
-      if (m.role === "assistant") return []
-      const originals = this.#history.originalsOf(m)
-      return originals ? this.#readable(originals, depth + 1) : [m]
-    })
-  }
-
   /**
    * The history a compaction's summary message (the user message of the pair) stands for, if
    * it can still be found: for agents forked from this one (AgentOptions.originals).
    */
   compactedHistory(summary: Message): Message[] | undefined {
-    return this.#history.originalsOf(summary)
-  }
-
-  /**
-   * Makes sure the model can read every compaction in the history: a server checkpoint it
-   * cannot be sent (another provider, host or model; canReplay) and that has no readable
-   * summary gets one written now from the history it stands for, once, and stored as a
-   * compaction entry that fills in the original (it keeps the checkpoint, so switching back
-   * uses it again). Resolves an error message when that was not possible.
-   */
-  async #fillSummaries(turn: Turn | undefined, signal: AbortSignal): Promise<string | undefined> {
-    // Without a model nothing can be read or written; the request fails on its own terms.
-    if (isNoModel(this.model)) return undefined
-    for (let i = 0; i < this.messages.length; i++) {
-      const m = this.messages[i]!
-      const cp = m.role === "user" && isSummaryMessage(m) ? checkpointOf(m) : undefined
-      if (!cp || summaryOf(m) || this.#ai.canReplay(cp, this.model)) continue
-      const target = `${this.model.provider}/${this.model.id}`
-      const originals = this.#history.originalsOf(m)
-      if (!originals?.length) {
-        return `the conversation was compacted by ${cp.provider}'s server for ${cp.model}, which ${target} cannot read, and the messages it stands for are not in the session any more; switch back with /model ${cp.provider}/${cp.model}`
-      }
-      const writer = this.#compaction.model ?? this.model
-      let written: { summary: string; usage?: Usage }
-      try {
-        if (this.execution.paused) await this.execution.wait(signal)
-        if (signal.aborted) return undefined
-        written = await summarize(
-          this.#ai,
-          writer,
-          projectMessages(this.#readable(originals), this.#history.views),
-          signal,
-        )
-      } catch (err) {
-        if (err instanceof SummaryError) this.#recordCompactionUsage(err.usage, modelRef(writer), false)
-        if (signal.aborted) return undefined
-        const why = err instanceof Error ? err.message : String(err)
-        return `${target} cannot read the server-side compaction made by ${cp.provider} for ${cp.model}, and writing a text summary for it failed: ${why}`
-      }
-      const oldId = this.#history.entryId(m)
-      const original = oldId ? this.session?.get(oldId) : undefined
-      const pair = summaryMessages(written.summary, modelRef(writer), cp)
-      const prior = this.#history.compactionInfo(m)
-      const info: CompactionInfo | undefined = prior ? { ...prior, model: modelRef(writer) } : undefined
-      const entryId = this.#history.store({
-        type: "compaction",
-        summary: written.summary,
-        replaces: oldId ? [oldId] : [],
-        ...(info ?? { model: modelRef(writer) }),
-        checkpoint: cp,
-        ...(original?.type === "compaction" && original.retained ? { retained: original.retained } : {}),
-        ...(written.usage ? { usage: written.usage } : {}),
-        ...(oldId ? { fills: oldId } : {}),
-      })
-      if (written.usage) this.#recordCompactionUsage(written.usage, modelRef(writer), false, true)
-      const ack = this.messages[i + 1]
-      const pairLength = ack?.role === "assistant" && isSummaryMessage(ack) ? 2 : 1
-      this.messages.splice(i, pairLength, ...pair)
-      this.#history.noteCompaction(pair[0]!, info, originals)
-      for (const p of pair) if (entryId) this.#history.setEntryId(p, entryId)
-      this.#emit(turn, "extension.notice", {
-        source: "compaction",
-        text: `${target} cannot use the server-side compaction made by ${cp.provider} for ${cp.model}, so a text summary of it was written for it.`,
-        level: "info",
-      })
-    }
-    return undefined
+    return this.#compactor.compactedHistory(summary)
   }
 
   /** What this session's compactions cost, one entry each (SessionControl.compactions). */
   get compactionUsage(): CompactionUsage[] {
-    const stored: CompactionUsage[] = (this.session?.entries ?? []).flatMap((e) => {
-      if (e.type !== "compaction" || !e.usage) return []
-      const model = e.model ?? e.native ?? { provider: "", model: "" }
-      return [{ model, usage: e.usage, ...(e.native && !e.fills ? { native: true } : {}) }]
-    })
-    return [...stored, ...this.#compactionCosts]
+    return this.#compactor.usage
   }
 
   #setStatus(turn: Turn, status: SessionStatus, reason?: string) {
