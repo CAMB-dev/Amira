@@ -708,14 +708,28 @@ export function pruneGitCaches(cacheDir: string, opts: PruneOptions = {}): GitCa
 
 /** Git repositories pinned by the user lock and locks beneath every known project path. */
 export function gitUrlsInUse(where: { home?: string; cwd: string }): string[] {
+  return gitCachePins(where).urls
+}
+
+/**
+ * The repositories known locks pin, and the lock files that could not be read: a lock that
+ * can't be read may pin anything, so callers keep every cache while one is listed here.
+ */
+export function gitCachePins(where: { home?: string; cwd: string }): {
+  urls: string[]
+  unreadable: string[]
+} {
   const urls = new Set<string>()
+  const unreadable: string[] = []
   for (const file of knownProjectLocks(where)) {
     try {
       for (const e of Object.values(readLock(file).packages))
         if (e.source.type === "git") urls.add(e.source.url)
-    } catch {}
+    } catch {
+      unreadable.push(file)
+    }
   }
-  return [...urls]
+  return { urls: [...urls], unreadable }
 }
 
 function mtimeOf(p: string): number {
