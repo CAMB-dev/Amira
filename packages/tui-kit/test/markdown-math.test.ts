@@ -370,3 +370,37 @@ test("source parser exposes source offsets and uses the same delimiter and code 
   expect(inlineMathAt("$ x$", 0)).toBeUndefined()
   expect(inlineMathAt("$x$2", 0)).toBe("open")
 })
+
+test("ordinary dollar signs stay text with a claiming renderer", () => {
+  for (const text of [
+    "It costs $5 and $10 total",
+    "echo $HOME and $PATH now",
+    "use $1 and $2, price $5.50 vs $6",
+    "cost $5, then unclosed $x + y",
+    "unclosed $ at end",
+    "see http://x.com/a$b$c",
+    "| a | b |\n|---|---|\n| $1 | $2 |",
+    "```\n$$\nx\n```\ntext",
+  ]) {
+    const { nodes, calls } = renderer()
+    expect(renderMarkdown(text, 80, defaultTheme, { nodes })).toEqual(renderMarkdown(text, 80, defaultTheme))
+    expect(calls).toEqual([])
+  }
+})
+
+test("an unclosed inline dollar does not swallow the following lines", () => {
+  const { nodes } = renderer()
+  const rows = renderMarkdown("cost $x + y\nthen $a$ here", 80, defaultTheme, { nodes }).map(stripAnsi)
+  expect(rows).toEqual(["cost $x + y", "then M(a) here"])
+})
+
+test("long lines with many unmatched delimiters are scanned in linear time", () => {
+  const { nodes } = renderer()
+  for (const unit of ["$a ", "\(a ", "$a\\", "\\"]) {
+    const text = unit.repeat(40000)
+    const start = performance.now()
+    mathSources(text)
+    renderMarkdown(text, 80, defaultTheme, { nodes })
+    expect(performance.now() - start).toBeLessThan(2000)
+  }
+})
