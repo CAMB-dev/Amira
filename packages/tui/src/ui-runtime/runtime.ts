@@ -120,6 +120,12 @@ export class UiRuntime {
     return input
   }
 
+  /** Whether the focused widget is a text input, which owns printable keys such as q. */
+  get typing(): boolean {
+    if (this.#dirty) this.#prepare()
+    return this.#widgets.some((p) => p.node.type === "input" && widgetId(p.node) === this.state.focused)
+  }
+
   /** The viewer matches declared shortcuts only after host/widget key handling. */
   key(key: ViewKeyName): void {
     this.#event({ type: "key", key, focused: this.state.focused })
