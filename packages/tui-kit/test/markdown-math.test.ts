@@ -396,7 +396,7 @@ test("an unclosed inline dollar does not swallow the following lines", () => {
 
 test("long lines with many unmatched delimiters are scanned in linear time", () => {
   const { nodes } = renderer()
-  for (const unit of ["$a ", "\(a ", "$a\\", "\\"]) {
+  for (const unit of ["$a ", "(a ", "$a\\", "\\"]) {
     const text = unit.repeat(40000)
     const start = performance.now()
     mathSources(text)
