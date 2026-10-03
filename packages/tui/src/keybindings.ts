@@ -91,7 +91,8 @@ export const ACTIONS = {
   "edit.redo": { scope: "input", description: "Redo the change undone last" },
   "edit.external": {
     scope: "input",
-    description: "Edit the message in your editor ($VISUAL, else $EDITOR; Notepad on Windows, else vi)",
+    description:
+      "Edit the message in your editor ($VISUAL, $EDITOR, git core.editor; Notepad on Windows, else vi)",
     help: "Edit the message in your editor",
   },
   "popup.up": { scope: "popup", description: "Select the previous command, argument or file" },
