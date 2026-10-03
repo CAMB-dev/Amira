@@ -397,6 +397,9 @@ test("amira --rpc-schema prints a JSON Schema covering every command", async () 
       "skill.run",
       "state",
       "steer",
+      "subagent.message",
+      "subagent.pause",
+      "subagent.resume",
       "ui.action",
       "ui.configure",
       "ui.focus",
@@ -545,6 +548,66 @@ function inProcess(s: Awaited<ReturnType<typeof session>>, commands?: ReturnType
   }
   return { out, until, call, end }
 }
+
+test("the rpc schema includes subagent controls and paused state", () => {
+  const defs = (rpcSchema() as any).$defs
+  for (const [method, resultKey] of [
+    ["message", "delivered"],
+    ["pause", "paused"],
+    ["resume", "resumed"],
+  ]) {
+    const cmd = `subagent.${method}`
+    const command = defs.Command.oneOf.find((c: any) => c.properties.cmd.enum[0] === cmd)
+    expect(command.required).toContain("sessionId")
+    if (method === "message") expect(command.required).toContain("text")
+    const response = defs.Response.oneOf.find((r: any) => r.description === `Answer to ${cmd}.`)
+    expect(response.properties[resultKey!].type).toBe("boolean")
+  }
+  const event = defs.Event.anyOf.find((e: any) => e.properties.type.enum[0] === "subagent.state")
+  expect(event.properties.data.properties.state.enum).toContain("paused")
+})
+
+test("subagent RPC controls validate parameters and return applicability booleans", async () => {
+  const s = await session([{ text: "first", delayMs: 100 }, { text: "done" }])
+  const commands = createCommandHost({ session: s, cwd: here })
+  const rpc = inProcess(s, commands)
+  let id = 0
+  const call = (cmd: string, params: Record<string, unknown> = {}) => rpc.call({ id: ++id, cmd, ...params })
+  try {
+    for (const method of ["message", "pause", "resume"]) {
+      expect((await call(`subagent.${method}`, { sessionId: 12, text: "hello" })).error.code).toBe(
+        "invalid_params",
+      )
+    }
+    expect((await call("subagent.message", { sessionId: "missing" })).error.code).toBe("invalid_params")
+    expect(await call("subagent.message", { sessionId: "missing", text: "hello" })).toMatchObject({
+      ok: true,
+      delivered: false,
+    })
+    expect(await call("subagent.pause", { sessionId: "missing" })).toMatchObject({ ok: true, paused: false })
+    expect(await call("subagent.resume", { sessionId: "missing" })).toMatchObject({
+      ok: true,
+      resumed: false,
+    })
+    const child = commands.control.createGroup!({ name: "RPC controls" }).spawn({ prompt: "work" })
+    expect(await call("subagent.pause", { sessionId: child.id })).toMatchObject({ ok: true, paused: true })
+    expect(await call("subagent.pause", { sessionId: child.id })).toMatchObject({ ok: true, paused: false })
+    expect(await call("subagent.message", { sessionId: child.id, text: "user instruction" })).toMatchObject({
+      ok: true,
+      delivered: true,
+    })
+    expect(await call("subagent.resume", { sessionId: child.id })).toMatchObject({ ok: true, resumed: true })
+    await child.result()
+    expect(await call("subagent.message", { sessionId: child.id, text: "too late" })).toMatchObject({
+      ok: true,
+      delivered: false,
+    })
+    expect(await call("subagent.pause", { sessionId: child.id })).toMatchObject({ ok: true, paused: false })
+    expect(await call("subagent.resume", { sessionId: child.id })).toMatchObject({ ok: true, resumed: false })
+  } finally {
+    await rpc.end()
+  }
+})
 
 test.each([false, true])("thinking.set reaches requests and overrides settings (flag=%s)", async (flag) => {
   const mock = createMockDialect(Array.from({ length: 10 }, () => ({ text: "done" })))

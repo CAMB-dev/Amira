@@ -318,13 +318,15 @@ export interface EventMap {
     durationMs: number
   }
   /**
-   * A persistent sub-agent changed state: `working` when a turn starts (or it waits for a
-   * place to run one: `queued`), `idle` when a turn ended and it waits for a message. Its end
-   * is subagent.end. Sent with the parent's session id; `turns` counts the turns started.
+   * A sub-agent changed state: persistent children report `working` when a turn starts,
+   * `queued` when waiting for a place, and `idle` when waiting for a message. Any running
+   * child may report `paused`: the current call finishes, but further calls wait for resume.
+   * A pause retains its admission slot. Its end is subagent.end. Sent with the parent's
+   * session id; `turns` counts the turns started.
    */
   "subagent.state": {
     childSessionId: string
-    state: Exclude<ChildState, "ended">
+    state: Exclude<ChildState, "ended"> | "paused"
     turns: number
   }
   /** An extension created a spawn group (SpawnGroup); sent with the creating session's id. */

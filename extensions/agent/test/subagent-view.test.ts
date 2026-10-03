@@ -306,6 +306,10 @@ test("queued, idle, finished, failed and stopped children retain their status, u
   s.list[0]!.status = "idle"
   expect(s.render()).toContain("idle, waiting for a message")
   expect(s.definition.keys?.map((key) => key.key)).toContain("x")
+  s.list[0]!.status = "paused"
+  expect(s.render()).toContain("… paused")
+  expect(s.render()).not.toContain("… working")
+  expect(s.definition.keys?.map((key) => key.key)).toContain("x")
   s.list[0]!.status = "error"
   s.list[0]!.error = "failed to start"
   expect(s.render()).toContain("✗ failed to start")
@@ -611,7 +615,7 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   await waitFor(() => s.view().includes("● wait"), "the viewer")
   // The generic footer lists a view's keys before the scroll keys (dropped first when narrow).
   expect(s.screen.lines.at(-1)).toContain("following · ←→ switch · x stop · p print · ")
-  expect(s.screen.lines.at(-1)).toMatch(/ · Esc back$/)
+  expect(s.screen.lines.at(-1)).toMatch(/ · Esc close$/)
   s.terminal.send("x")
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer (explorer s_"), "the question")
   expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")

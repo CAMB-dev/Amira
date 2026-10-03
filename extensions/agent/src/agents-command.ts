@@ -199,10 +199,11 @@ function openOrPrint(ctx: CommandContext, s: SubagentInfo) {
 
 /** Not ended: running, waiting for a place to run, or (a persistent one) idle between turns. */
 function live(s: SubagentInfo): boolean {
-  return s.status === "running" || s.status === "queued" || s.status === "idle"
+  return s.status === "running" || s.status === "queued" || s.status === "idle" || s.status === "paused"
 }
 
 function waitingFor(s: SubagentInfo): string {
+  if (s.status === "paused") return "paused"
   if (s.status === "queued") return "waiting for a free slot"
   return s.status === "idle" ? "idle, waiting for a message" : "still running"
 }

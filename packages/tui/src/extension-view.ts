@@ -2,6 +2,7 @@ import type {
   CommandOutputLevel,
   ToolLine,
   UiControl,
+  UiState,
   ViewControl,
   ViewDefinition,
   ViewKey,
@@ -35,7 +36,16 @@ export interface ViewSource {
   get(kind: string): ViewDefinition | undefined
 }
 
+interface ViewPage {
+  title?: string
+  data?: unknown
+  ui?: UiRuntime
+  scrolls: Map<string | undefined, { scroll: ScrollView; placed: boolean }>
+}
+
 export interface ExtensionViewerOptions {
+  /** Initial root-page widget state, applied before lifecycle hooks and the first render. */
+  state?: Partial<UiState>
   /** Titles of main-session dialogs waiting for an answer; shown as a banner. */
   waiting?: () => string[]
   now?: () => number
@@ -99,19 +109,22 @@ export function wrapViewLines(lines: readonly ViewLine[], width: number): ViewLi
 /**
  * A full-screen view an extension registered (ViewDefinition), over the data a command
  * opened it with: the title and header stay at the top, the body scrolls (ScrollView), and the
- * footer lists the view's own keys. Esc, q and Ctrl+C ask to close it. It only renders and
- * routes keys; the frontend opens it on a FullScreenRenderer and redraws it as events come.
+ * footer lists the view's own keys. Esc goes back a page or closes the root; q and Ctrl+C close.
+ * The frontend mounts it on a FullScreenRenderer and redraws it as events come.
  */
 export class ExtensionViewer implements Component {
   readonly kind: string
   #view: ViewDefinition
   #data: unknown
   #opts: ExtensionViewerOptions
-  #scrolls = new Map<string | undefined, { scroll: ScrollView; placed: boolean }>()
+  #pages: ViewPage[]
+  #mounted = false
+  #opening = false
+  #disposed = false
   /** Host-rendered tool lines retain their styles without exposing terminal escapes to views. */
   #toolLines = new WeakMap<ViewLine, string>()
   #now: () => number
-  #ui: UiRuntime | undefined
+  #uiOffset = 0
   #uiFrame: { width: number; ctx: RenderContext } | undefined
   #uiDirty = true
   /** The last error of each part of the view, so one that keeps throwing is reported once. */
@@ -127,10 +140,69 @@ export class ExtensionViewer implements Component {
     this.#data = data
     this.#opts = opts
     this.#now = opts.now ?? Date.now
-    if (view.ui)
-      this.#ui = new UiRuntime((event) => {
-        this.#call("onEvent", () => view.onEvent?.(event, this.#data, this.#uiControl()))
-      })
+    this.#pages = [this.#newPage({ state: opts.state })]
+  }
+
+  /** Called after the frontend installs this overlay, before rendering, so onOpen can close it. */
+  mount(): void {
+    if (this.#mounted || this.#disposed) return
+    this.#mounted = true
+    this.#opening = true
+    try {
+      this.#call("onOpen", () => this.#view.onOpen?.(this.#data, this.#uiControl()))
+    } finally {
+      this.#opening = false
+    }
+  }
+
+  /** Reentrant opens must not render before initialization finishes. */
+  get ready(): boolean {
+    return this.#mounted && !this.#opening && !this.#disposed
+  }
+
+  get #page(): ViewPage {
+    return this.#pages[this.#pages.length - 1]!
+  }
+
+  get #ui(): UiRuntime | undefined {
+    return this.#page.ui
+  }
+
+  #newPage(page: Parameters<ViewControl["pushPage"]>[0]): ViewPage {
+    const ui = this.#view.ui
+      ? new UiRuntime((event) => {
+          this.#call("onEvent", () => this.#view.onEvent?.(event, this.#data, this.#uiControl()))
+        })
+      : undefined
+    if (page.state) ui?.setState(page.state)
+    return { title: page.title, data: page.data, ui, scrolls: new Map() }
+  }
+
+  #pushPage(page: Parameters<ViewControl["pushPage"]>[0]): void {
+    if (this.#disposed) return
+    this.#answer(undefined)
+    this.#confirmed(false)
+    this.#pages.push(this.#newPage(page))
+    this.#uiDirty = true
+    this.#opts.requestRender?.()
+  }
+
+  #popPage(): void {
+    if (this.#disposed || this.#pages.length === 1) return
+    this.#answer(undefined)
+    this.#confirmed(false)
+    this.#pages.pop()!.ui?.dispose()
+    this.#uiDirty = true
+    this.#opts.requestRender?.()
+  }
+
+  #close(): void {
+    if (this.#disposed) return
+    try {
+      this.#opts.onClose?.()
+    } finally {
+      this.dispose()
+    }
   }
 
   /** Declarative views keep pointer coordinates; legacy views retain wheel-to-arrow routing. */
@@ -139,13 +211,18 @@ export class ExtensionViewer implements Component {
   }
 
   /** Shows other data, e.g. when a command opens the same kind again. */
-  show(data: unknown): void {
+  show(data: unknown, state?: Partial<UiState>): void {
+    if (this.#disposed) return
     // A prompt asked about the data shown before is cancelled, not answered for the new one.
-    if (data !== this.#data) {
+    if (data !== this.#data || state !== undefined) {
       this.#answer(undefined)
       this.#confirmed(false)
     }
     this.#data = data
+    if (state !== undefined) {
+      for (const page of this.#pages) page.ui?.dispose()
+      this.#pages = [this.#newPage({ state })]
+    }
     this.#uiDirty = true
   }
 
@@ -155,18 +232,24 @@ export class ExtensionViewer implements Component {
 
   #scrollState() {
     const key = this.#call("scrollKey", () => this.#view.scrollKey?.(this.#data))
-    let state = this.#scrolls.get(key)
+    let state = this.#page.scrolls.get(key)
     if (!state) {
       state = {
         scroll: new ScrollView((width, ctx) => this.#body(width, ctx.theme)),
         placed: this.#view.follow !== false,
       }
-      this.#scrolls.set(key, state)
+      this.#page.scrolls.set(key, state)
     }
     return state
   }
 
   handleInput(e: InputEvent): boolean {
+    if (this.#disposed) return false
+    if (matchesKey(e, "c", { ctrl: true })) {
+      this.#close()
+      return true
+    }
+    if (this.#uiDirty && this.#uiFrame) this.render(this.#uiFrame.width, this.#uiFrame.ctx)
     if (this.#confirm) {
       if (e.type === "mouse") return true
       // y confirms; any other key says no.
@@ -176,25 +259,25 @@ export class ExtensionViewer implements Component {
     }
     const asking = this.#prompt
     if (asking) {
-      if (matchesKey(e, "escape") || matchesKey(e, "c", { ctrl: true })) this.#answer(undefined)
+      if (matchesKey(e, "escape")) this.#answer(undefined)
       else if (isSubmitKey(e)) this.#answer(asking.input.value)
       else asking.input.handleInput(e)
       this.#opts.requestRender?.()
       return true
     }
-    if (
-      matchesKey(e, "escape") ||
-      (matchesKey(e, "q") && !this.#ui?.typing) ||
-      matchesKey(e, "c", { ctrl: true })
-    ) {
-      this.#opts.onClose?.()
+    if (matchesKey(e, "escape")) {
+      if (this.#pages.length > 1) this.#popPage()
+      else this.#close()
+      return true
+    }
+    if (matchesKey(e, "q") && !this.#ui?.typing) {
+      this.#close()
       return true
     }
     if (this.#ui) {
-      // A burst of keys can arrive before the scheduled frame: refresh changed tab/tree topology.
-      if (this.#uiDirty && this.#uiFrame) this.render(this.#uiFrame.width, this.#uiFrame.ctx)
       this.#uiDirty = true
-      if (this.#call("ui input", () => this.#ui!.handleInput(e))) {
+      const input = e.type === "mouse" ? { ...e, y: e.y - this.#uiOffset } : e
+      if (this.#call("ui input", () => this.#ui!.handleInput(input))) {
         this.#opts.requestRender?.()
         return true
       }
@@ -235,11 +318,9 @@ export class ExtensionViewer implements Component {
   /** What a key handler gets to act on the view with. */
   #control(): ViewControl {
     return {
-      close: () => {
-        this.#answer(undefined)
-        this.#confirmed(false)
-        this.#opts.onClose?.()
-      },
+      close: () => this.#close(),
+      pushPage: (page) => this.#pushPage(page),
+      popPage: () => this.#popPage(),
       requestRender: () => {
         this.#uiDirty = true
         this.#opts.requestRender?.()
@@ -286,11 +367,16 @@ export class ExtensionViewer implements Component {
 
   /** The view is being closed by the frontend: an open prompt is cancelled, a question answered no. */
   dispose(): void {
+    if (this.#disposed) return
+    this.#disposed = true
     this.#answer(undefined)
     this.#confirmed(false)
-    this.#scrolls.clear()
-    this.#ui?.dispose()
+    for (const page of this.#pages) {
+      page.scrolls.clear()
+      page.ui?.dispose()
+    }
     this.#uiFrame = undefined
+    if (this.#mounted) this.#call("onClose", () => this.#view.onClose?.(this.#data))
   }
 
   render(width: number, ctx: RenderContext): string[] {
@@ -298,7 +384,8 @@ export class ExtensionViewer implements Component {
     const { theme } = ctx
     const opts = this.#renderOptions(width, theme)
     const head: string[] = []
-    const title = this.#call("title", () => this.#view.title(this.#data, opts)) ?? this.kind
+    const title =
+      this.#page.title ?? this.#call("title", () => this.#view.title(this.#data, opts)) ?? this.kind
     const asideText = this.#view.titleAside
       ? oneLine(this.#call("titleAside", () => this.#view.titleAside?.(this.#data)) ?? "")
       : ""
@@ -337,16 +424,22 @@ export class ExtensionViewer implements Component {
     const runtime = this.#ui!
     this.#uiFrame = { width, ctx }
     this.#uiDirty = false
+    const head =
+      this.#page.title !== undefined && ctx.rows > 1
+        ? [viewTitle({ kind: "accent", text: oneLine(this.#page.title) }, ctx.theme, width)]
+        : []
+    this.#uiOffset = head.length
     const waiting = (this.#opts.waiting?.() ?? [])
-      .slice(0, Math.max(0, ctx.rows - 1))
+      .slice(0, Math.max(0, ctx.rows - head.length - 1))
       .map((t) => waitingLine(ctx.theme, terminalText(t), width))
-    const height = Math.max(0, ctx.rows - waiting.length - 1)
+    const height = Math.max(0, ctx.rows - head.length - waiting.length - 1)
     let body = this.#call("ui", () => {
       // A repaired selection/tab/focus may change extension-built details in this same frame.
       // Bound stabilization so a view whose content oscillates with state cannot spin forever.
       for (let attempt = 0; attempt < 8; attempt++) {
         const node = this.#view.ui!(this.#data, {
           ...this.#renderOptions(width, ctx.theme),
+          height,
           state: runtime.state,
         })
         const frame = runtime.render(
@@ -379,7 +472,7 @@ export class ExtensionViewer implements Component {
       )
     }
     while (body.length < height) body.push("")
-    return [...body.slice(0, height), ...waiting, this.#footer(ctx.theme, width)].slice(0, ctx.rows)
+    return [...head, ...body.slice(0, height), ...waiting, this.#footer(ctx.theme, width)].slice(0, ctx.rows)
   }
 
   #body(width: number, theme: Theme): string[] {
@@ -398,6 +491,7 @@ export class ExtensionViewer implements Component {
     return {
       width,
       now: this.#now(),
+      ...(this.#pages.length > 1 ? { page: { depth: this.#pages.length - 1, data: this.#page.data } } : {}),
       renderTool: (name, call, detail) =>
         finishedToolLines(theme, this.#opts.presenters?.get(name), { ...call, name }, detail, width).map(
           (text) => {
@@ -442,7 +536,7 @@ export class ExtensionViewer implements Component {
             ...keyHints(this.#view.keys ?? []),
             { text: "Tab focus · arrows navigate · Enter open/send", priority: 2 },
             { text: "PgUp PgDn scroll", priority: 1 },
-            { text: "Esc back", priority: 5 },
+            { text: this.#pages.length > 1 ? "Esc back" : "Esc close", priority: 5 },
           ],
           width,
         ),
@@ -455,7 +549,7 @@ export class ExtensionViewer implements Component {
         (p.total > p.height || !!this.#view.scrollKey) && { text: scrollPosition(scroll), priority: 3 },
         ...keyHints(this.#view.keys ?? []),
         { text: "↑↓ PgUp PgDn Home End scroll", priority: 1 },
-        { text: "Esc back", priority: 5 },
+        { text: this.#pages.length > 1 ? "Esc back" : "Esc close", priority: 5 },
       ],
       width,
     )

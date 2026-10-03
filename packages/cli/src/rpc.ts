@@ -209,6 +209,11 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
       agent.abort()
       return { aborted }
     },
+    "subagent.message": (p) => ({
+      delivered: needCommands().control.messageSubagent(text(p, "sessionId"), text(p)),
+    }),
+    "subagent.pause": (p) => ({ paused: needCommands().control.pauseSubagent(text(p, "sessionId")) }),
+    "subagent.resume": (p) => ({ resumed: needCommands().control.resumeSubagent(text(p, "sessionId")) }),
     "ui.respond": (p) => {
       const requestId = text(p, "requestId")
       // A misspelt key must not cancel the dialog; only an explicit null does.

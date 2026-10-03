@@ -143,6 +143,7 @@ import {
   setSection,
 } from "./prompt.ts"
 import { newSessionId, type SessionEntryData, SessionStore } from "./session-store.ts"
+import { PauseGate } from "./subagents/pause.ts"
 import type { AgentTree } from "./subagents.ts"
 import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
@@ -188,6 +189,7 @@ export class Agent {
   /** 0 for a top-level session, 1 for its sub-agents, and so on. */
   readonly depth: number
   readonly tree: AgentTree | undefined
+  readonly execution = new PauseGate()
   /** The session-scoped background-job capability, when this host provides it. */
   readonly backgroundJobs: BackgroundJobSession | undefined
   /** The host implementation handed to child agents and lifecycle cleanup. */
@@ -1068,13 +1070,10 @@ export class Agent {
   }
 
   /**
-   * Adds a message to the running turn without interrupting it (D29): it joins the history
-   * before the next model call, and a running tool finishes first. Queued messages the turn
-   * never reached become the next prompt; with no turn running, the message starts one.
-   * During a manual compaction it is queued (a turn.steer without a turn id) and promoted to
-   * the turn that starts when the compaction ends.
+   * Steers before the next call (D29); notice ownership preserves persistent-child admission.
+   * Idle input starts a turn; compaction holds input until the next turn.
    */
-  steer(input: string | UserMessage): void {
+  steer(input: string | UserMessage, opts?: { notice?: boolean }): void {
     if (this.#disposed) return
     const message = typeof input === "string" ? userMessage(input) : input
     const turn = this.#turn
@@ -1088,8 +1087,11 @@ export class Agent {
       return
     }
     this.#steerAbort?.abort()
-    this.#steering.push(message)
-    this.#emit(turn, "turn.steer", { message, state: "queued" })
+    if (opts?.notice) this.#receive(message)
+    else {
+      this.#steering.push(message)
+      this.#emit(turn, "turn.steer", { message, state: "queued" })
+    }
   }
 
   /**
@@ -1160,7 +1162,8 @@ export class Agent {
         steps++
         this.#injectSteering(turn)
         const reply = await this.#callModel(turn)
-        if (reply.kind === "aborted") {
+        if (this.execution.paused) await this.execution.wait(abort.signal)
+        if (reply.kind === "aborted" || (this.execution.paused && abort.signal.aborted)) {
           result = { reason: "aborted", steps }
           break
         }
@@ -1197,6 +1200,7 @@ export class Agent {
           break
         }
         await this.#runTools(turn, calls)
+        if (this.execution.paused) await this.execution.wait(abort.signal)
         if (abort.signal.aborted) {
           result = { reason: "aborted", steps }
           break
@@ -1300,12 +1304,18 @@ export class Agent {
       return undefined
     }
   }
-
+  /** Child controls promise the next dispatch; root steering keeps its turn-start batching. */
   async #callModel(turn: Turn): Promise<ModelReply> {
     const unreadable = await this.#fillSummaries(turn, turn.signal)
     if (turn.signal.aborted) return { kind: "aborted" }
     if (unreadable) return { kind: "error", error: unreadable }
     const ctx = await this.#buildContext(turn.signal)
+    if (this.execution.paused || (this.depth > 0 && (this.#steering.length || this.#notices.length))) {
+      await this.execution.wait(turn.signal)
+      if (turn.signal.aborted) return { kind: "aborted" }
+      this.#injectSteering(turn)
+      return this.#callModel(turn)
+    }
     this.#checkRestoredTools()
     if (turn.signal.aborted) return { kind: "aborted" }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
@@ -1343,8 +1353,7 @@ export class Agent {
     const restored = this.#restoredTools
     if (!restored) return
     this.#restoredTools = undefined
-    // A disabled tool stays loaded for when it is turned back on; one that became active is
-    // offered anyway.
+    // Disabled tools stay loaded for later; tools that became active are offered anyway.
     const unavailable = restored.filter((name) => !this.tools.has(name))
     for (const name of restored) {
       const tool = this.tools.get(name)
@@ -1366,9 +1375,8 @@ export class Agent {
   }
 
   /**
-   * Runs tool calls concurrently where it is safe (D71): calls start in order, a `serial` tool
-   * waits for everything before it and runs alone, calls with the same concurrency key (e.g. the
-   * same file) run one after another, and at most maxParallelTools run at once. Every call gets
+   * Starts calls in order, concurrently up to maxParallelTools (D71). Serial tools wait for
+   * earlier calls and run alone; equal concurrency keys run sequentially. Every call gets
    * exactly one result, even if a tool throws, misbehaves or ignores abort.
    */
   async #runTools(turn: Turn, calls: ToolCallBlock[]): Promise<void> {
@@ -2064,6 +2072,8 @@ export class Agent {
         const systemPrompt = built && !built.blocked ? built.value.systemPrompt : renderPrompt(this.#sections)
         // The same tools a reply would get: the client web_search stays hidden from a model
         // with the hosted search, which the dialect adds beside them as in every request.
+        if (this.execution.paused) await this.execution.wait(signal)
+        if (signal.aborted) throw new Error("aborted")
         const r = await this.#ai.compact(
           {
             model: this.model,
@@ -2086,6 +2096,8 @@ export class Agent {
       const writer = this.#compaction.model ?? this.model
       if (summary === undefined) {
         try {
+          if (this.execution.paused) await this.execution.wait(signal)
+          if (signal.aborted) throw new Error("aborted")
           const written = supplied
             ? { summary: supplied }
             : await summarize(
@@ -2247,6 +2259,8 @@ export class Agent {
       const writer = this.#compaction.model ?? this.model
       let written: { summary: string; usage?: Usage }
       try {
+        if (this.execution.paused) await this.execution.wait(signal)
+        if (signal.aborted) return undefined
         written = await summarize(
           this.#ai,
           writer,

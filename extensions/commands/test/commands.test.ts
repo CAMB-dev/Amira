@@ -86,6 +86,9 @@ function fakeControl(over: Partial<SessionControl> = {}) {
     subagents: () => [],
     subagentMessages: () => undefined,
     stopSubagent: () => false,
+    messageSubagent: () => false,
+    pauseSubagent: () => false,
+    resumeSubagent: () => false,
     models: () => ["deepseek/deepseek-flash", "deepseek/deepseek-pro", "openai/gpt-5"],
     setModel: (ref) => {
       if (!ref.includes("/")) throw new Error(`unknown model "${ref}"`)

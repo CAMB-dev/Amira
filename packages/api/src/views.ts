@@ -1,6 +1,6 @@
 import type { CommandOutputLevel } from "./commands.ts"
 import type { ToolCallView, ToolDetailLevel, ToolLine } from "./tool-renderers.ts"
-import type { UiContext, UiControl, UiEvent, UiNode } from "./views-ui.ts"
+import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.ts"
 
 /**
  * Experimental: full-screen views extensions add to frontends, such as a workflow's progress
@@ -37,6 +37,8 @@ export interface ViewRenderOptions {
   width: number
   /** The current time, in ms since the epoch, for elapsed times. */
   now: number
+  /** Present only on a pushed page; depth starts at 1. View data remains unchanged. */
+  page?: { depth: number; data?: unknown }
   /** Presents a finished tool call with the host's current presenter and fallback renderer. */
   renderTool?: (toolName: string, call: ToolCallView, detail: ToolDetailLevel) => ViewLine[]
 }
@@ -45,6 +47,10 @@ export interface ViewRenderOptions {
 export interface ViewControl {
   /** Closes the view, back to where the user was. */
   close(): void
+  /** Pushes a fresh page with its own widget and scroll state; only an explicit title adds UI chrome. */
+  pushPage(page: { title?: string; state?: Partial<UiState>; data?: unknown }): void
+  /** Restores the preceding page and its state. Does nothing at the root. */
+  popPage(): void
   /** Redraws it, e.g. after the handler changed the data. */
   requestRender(): void
   /** Prints into the conversation, at the same levels as CommandContext.print. */
@@ -84,6 +90,10 @@ export type ViewKeyName = "left" | "right" | "tab" | "shift-tab" | (string & {})
 export interface ViewDefinition<D = any> {
   /** The name commands open it by. */
   kind: string
+  /** Called once after the host mounts the view. May set state, request a render or close it. */
+  onOpen?(data: D, view: UiControl): void
+  /** Called once when the mounted view closes, not when changing pages or replacing its data. */
+  onClose?(data: D): void
   /**
    * The first line of the screen; `opts` gives the time for an elapsed time shown there.
    * A string gets the frontend's default marker. A semantic line supplies the whole title,
@@ -102,8 +112,9 @@ export interface ViewDefinition<D = any> {
   /**
    * Experimental D104 L3: replaces title/header/render screen content with semantic widgets.
    * Title remains required for window/fallback presentation. Supply ui or render. Existing
-   * line-only views are unchanged. Esc and Ctrl+C always close, and so does q unless a UI input
-   * has focus (it types q); ViewControl.prompt temporarily takes all of those keys. Tab moves focus, arrows operate
+   * line-only views are unchanged. Esc goes back a page or closes the root; Ctrl+C always closes.
+   * q closes unless a UI input has focus (it types q). Prompts take keys except Ctrl+C; Esc cancels
+   * the prompt. Tab moves focus, arrows operate
    * the focused widget, Enter activates/submits, and the wheel scrolls under the pointer.
    * Keep ui free of side effects: state reconciliation can rebuild it within the same frame.
    */
