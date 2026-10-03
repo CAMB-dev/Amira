@@ -253,15 +253,19 @@ api.registerView(review)
 
 `Size` 为 `number | \`${number}%\` | "fill"`：分别表示固定终端格数、扣除间距及分隔线后主轴空间的百分比，以及均分剩余空间。省略尺寸时使用 fill，但 spacer 显式提供的 size 会成为默认值。每条分隔线在 `gap` 之外另占一格。先保留可满足的 `min`，再按比例缩小超出部分；只有最小尺寸之和也无法容纳时才缩小最小尺寸，并按声明顺序分配取整余量。矩形尺寸不会变成负数；不足八列或三行时隐藏框边。表头和单元格共用列宽分配，列间隔为一格。可根据 `ctx.width` 为窄终端选择不同的组合。
 
-`UiTreeItem` 包含稳定的 `key`、语义片段 `row`，以及可选的 `aside`、`detail: ViewLine[]`、`children`、`rail` 和 `expandable`。详情和子项只在展开时显示；`expandable: true` 可在子项尚未加载时显示展开标记，扩展通过 toggle 事件加载数据。树默认折叠。工作者卡片应使用树旁边或下方的独立 box；树的 detail 是行，不是任意组件子树（这是第二阶段已知的缺口）。
+`UiTreeItem` 包含稳定的 `key`、语义片段 `row`，以及可选的 `aside`、`detail: ViewLine[] | UiNode`、`children`、`rail` 和 `expandable`。详情仅在展开时显示，位于该行下方、子项之前。组件详情位于树的连接线和缩进内，宽度为缩进后的剩余空间，高度由内容决定：文本换行，表格包含表头和所有行，box 加上边框，row 取最高子项，column 累加子项高度、间距和分隔线。column 子项的数值尺寸和最小高度仍生效；由于没有固定的垂直空间预算，省略尺寸、fill 和百分比高度均使用内容高度；row 的宽度仍按普通 Size 规则分配。详情支持 box（含 title、aside、border、tone）、row、column、text、progress、bar、rule、table 及空白 spacer，均为只读展示：忽略 ID 和 follow，不接管焦点或滚轮，也不渲染嵌套的 tree、tabs、input。焦点仍在树上，select/activate 事件仍携带树项键；可用工作者树项的 detail 显示卡片。`expandable: true` 可在子项尚未加载时显示展开标记，扩展通过 toggle 事件加载数据；树默认折叠。
+
+时间线行可增加 `lead?: ViewSegment[]`、`node?: ViewSegment[]` 和 `underline?: boolean`。lead 位于焦点标记之后、连接线之前，形成所有可见树项共用的固定宽度列：宽度为当前未被折叠隐藏的项中最长 lead 加一格，并限制上限以保留正文空间；没有 lead 的行及详情、下划线也保留该列。它适合显示时间和状态标记。node 替代该行两格宽的展开标记或连接线位置（例如 ○、◉），按两格裁剪或补齐；左右键仍可折叠和展开。`rail: true` 在详情和下划线旁延续 │，并用 ├─、└─ 连接子项；lead 和 node 本身不会启用连接线。underline 在展开详情之后（折叠时紧接该行）、子项之前增加细横线，连接线穿过缩进区域。
+
+任何接受 ViewSegment 的位置均可用 `{ kind: "chip", text: "TypeScript", tone: "info" }` 显示小标签。tone 可省略，默认为 neutral，也可为 info、success、warning、danger 或 accent。颜色由宿主决定，显示为 ▐text▌，两端半方块使用标签背景色；无颜色或主题没有 chip 令牌时使用 [text]。标签与其他片段一样经过清理和裁剪。原有纯文本及 print 路径仍受支持；print 模式不打开交互式视图。
 
 `UiContext` 在 `ViewRenderOptions` 基础上增加宿主持有的 `state: UiState`。所有映射以稳定、整个视图内唯一的组件 ID 为键：`selected` 保存树或表格的选中项键，`expanded` 保存树中展开项的键数组，`activeTabs` 保存标签页键，`scroll` 保存 `{ top, following }`，`inputValues` 保存输入字符串；可选的 `focused` 保存焦点组件 ID。重绘、同类型视图的数据替换和非活动标签页均保留状态，直到视图关闭。选中项或标签页消失时选择第一个可见项或标签页；焦点无效时选择第一个可见组件。请将上下文状态视为只读，并保持 `ui` 无副作用：宿主修复选中项、标签页或焦点后可能在同一帧重建内容，确保详情与控件一致；八次尝试后仍不稳定时安全地显示错误。没有 ID 的文本和表格可用滚轮滚动，但键盘焦点和显式状态管理需要稳定的 ID。
 
 `onEvent(event, data, view)` 接收以 `type` 区分的事件：带 `{ id, key }` 的 select/activate、带 `{ id, key, expanded }` 的 toggle、带 `{ id, key }` 的 tab、带 `{ id, value }` 的 submit，以及已声明按键的 `{ key, focused? }`。在 `keys` 中声明快捷键（例如 `keys: [{ key: "x", label: "停止" }]`）；声明式视图通过 `onEvent` 接收它们，不调用旧的 `run` 回调。未声明的按键不产生事件。宿主先更新状态，再调用处理函数，因此 `view.setState(patch)` 可以覆盖默认结果。补丁为浅层替换：提供的顶层映射会替换整个映射，而不是合并其中条目；需要保留其他条目时使用 `{ ...ctx.state.selected, [id]: key }`。`view.focus(id)` 聚焦可见组件。原有 close、requestRender、print、prompt 和 confirm 方法仍可使用。提交输入不会自动清空内容。
 
-Tab/Shift+Tab 在可见的树、带 ID 的表格及文本、标签栏和输入框之间移动焦点。树用上下键选择，右键展开，左键折叠或选择父项，Enter 激活；表格用上下键选择，Enter 激活；标签栏用左右键切换；输入框用 Enter 提交。翻页键及 Home/End 滚动当前可滚动组件，滚轮作用于指针下的组件，不改变焦点或选中项。文本仅在 `follow: true` 或滚到末尾后跟随增长，向上滚动会停止跟随。组件按键优先于声明的快捷键，其余已声明按键交给 onEvent。Esc、q、Ctrl+C 仍按宿主规则关闭视图，但获得焦点的声明式输入框会把 q 当作文本输入（Esc 和 Ctrl+C 仍然关闭）；原有 prompt 覆盖层也会临时接管这些键。prompt/confirm 覆盖层暂停组件输入，并独占光标。
+Tab/Shift+Tab 在可见的树、带 ID 的表格及文本、标签栏和输入框之间移动焦点。没有可聚焦组件时，它们会通过 onEvent 交给已声明的 tab/shift-tab 快捷键；未声明的键不产生事件。树用上下键选择，右键展开，左键折叠或选择父项，Enter 激活；表格用上下键选择，Enter 激活；标签栏用左右键切换；输入框用 Enter 提交。翻页键及 Home/End 滚动当前可滚动组件，滚轮作用于指针下的组件，不改变焦点或选中项。文本仅在 `follow: true` 或滚到末尾后跟随增长，向上滚动会停止跟随。组件按键优先于声明的快捷键，其余已声明按键交给 onEvent。Esc、q、Ctrl+C 仍按宿主规则关闭视图，但获得焦点的声明式输入框会把 q 当作文本输入（Esc 和 Ctrl+C 仍然关闭）；原有 prompt 覆盖层也会临时接管这些键。prompt/confirm 覆盖层暂停组件输入，并独占光标。
 
-输入、数据更新和 requestRender 会触发重绘，不增加组件动画计时器。树在每次准备布局时仅索引展开的行，只绘制视口内的行。纯语义组件仪表盘测试、180×52 和 80×24 快照位于 `packages/tui/test/ui-runtime`；运行 `bun packages/tui/test/ui-runtime/benchmark.ts` 可复现 180×50 下的 500 项嵌套树基准测试。
+输入、数据更新和 requestRender 会触发重绘，不增加组件动画计时器。树在每次准备布局时仅索引展开的行，只绘制视口内的行。纯语义组件仪表盘测试、180×52 和 80×24 快照位于 `packages/tui/test/ui-runtime`；运行 `bun packages/tui/test/ui-runtime/benchmark.ts` 可复现 180×50 下的 500 项嵌套树基准测试，覆盖 80 个组件卡片详情、时间线样式、展开及折叠状态，以及完整的 ExtensionViewer 路径。组件详情仅在所属项展开时测量，只绘制与视口相交的部分。
 
 ### 工具能力
 
