@@ -1,6 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs"
-import os from "node:os"
-import path from "node:path"
+import { afterAll } from "bun:test"
+import { isolateTestHome } from "./test-home"
+
+// Capture the launching shell's homes before sanitizing any environment variables.
+afterAll(isolateTestHome())
 
 // Tests must not depend on the shell that runs them. They decide colors, the terminal and
 // Amira's settings themselves (passing `color`, an `env` or a home where it matters).
@@ -34,17 +36,5 @@ for (const name of [
   delete process.env[name]
 }
 
-// Amira's own variables (AMIRA_MODEL, AMIRA_BASH, ...) and its user directory: without this,
-// anything left to default reads the real ~/.amira (settings, AGENTS.md, keybindings,
-// providers). Each run gets an empty one; tests that need a particular home still set theirs.
-// AMIRA_LIVE_* stay: they turn on the live tests, which are skipped without them.
-for (const name of Object.keys(process.env)) {
-  if (name.startsWith("AMIRA_") && !name.startsWith("AMIRA_LIVE_")) delete process.env[name]
-}
-const home = mkdtempSync(path.join(os.tmpdir(), "amira-test-home-"))
-process.env.AMIRA_HOME = home
-process.on("exit", () => {
-  try {
-    rmSync(home, { recursive: true, force: true })
-  } catch {}
-})
+// Home isolation and AMIRA_* sanitization live in test-home.ts. AMIRA_LIVE_* stay:
+// they turn on the live tests, which are skipped without them.

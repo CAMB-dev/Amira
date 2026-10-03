@@ -154,6 +154,7 @@ async function setup(
   over: Partial<SessionControl> = {},
   answers: (string | boolean | { option: string; key?: string } | undefined)[] = [],
   aliases?: Record<string, string>,
+  workspaceReady = true,
 ) {
   const bus = new EventBus()
   const ext = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
@@ -164,6 +165,13 @@ async function setup(
   })
   const agent = new Agent({ ai, model: ai.model("mock/m"), cwd: "/work", bus })
   const { control, calls } = fakeControl(over)
+  // This harness has no workspace provider. Publish its empty result instead of waiting
+  // two seconds for one on every /status; tests can still publish their own git facts.
+  if (workspaceReady) {
+    const { id, cwd } = control.info()
+    bus.emit("workspace.changed", { cwd }, { sessionId: id })
+    await bus.flush()
+  }
   const host = new CommandHost({
     registry: ext.commands,
     skills: ext.skills,
@@ -371,7 +379,7 @@ test("/help lists the skills in their own section, run with $", async () => {
 })
 
 test("/status finishes with unknown git facts when no workspace provider is loaded", async () => {
-  const { run, ext } = await setup()
+  const { run, ext } = await setup({}, [], undefined, false)
   const started = performance.now()
   try {
     expect((await run("/status")).text).toMatch(/Git\s+unknown/)
@@ -382,7 +390,7 @@ test("/status finishes with unknown git facts when no workspace provider is load
 })
 
 test("/status right at startup waits briefly for the git facts", async () => {
-  const { run, bus } = await setup()
+  const { run, bus } = await setup({}, [], undefined, false)
   const status = run("/status")
   await Bun.sleep(20)
   bus.emit(

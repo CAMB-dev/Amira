@@ -46,10 +46,27 @@ test.skipIf(bun.includes(" "))(
     const isChild = (req: ModelRequest) => req.systemPrompt.includes("ROLE child")
     const answered = (req: ModelRequest) => req.messages.at(-1)?.role === "toolResult"
     const mock = createMockDialect()
+    // A slow spawn can outlast the tool's startup observation. Keep the model working
+    // until its job is running, rather than assuming it starts within that observation.
     for (let i = 0; i < 20; i++)
       mock.push((req) =>
         answered(req)
-          ? { text: isChild(req) ? "server started" : "main server started" }
+          ? {
+              text: isChild(req) ? "server started" : "main server started",
+              hold: {
+                chunks: 0,
+                until: waitUntil(
+                  () =>
+                    backgroundJobs
+                      .list()
+                      .some(
+                        (j) =>
+                          j.cwd === dir && (j.owner !== undefined) === isChild(req) && j.status === "running",
+                      ),
+                  "the server to start",
+                ),
+              },
+            }
           : { toolCalls: [{ name: "bash", args: { command, background: true } }] },
       )
     const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })

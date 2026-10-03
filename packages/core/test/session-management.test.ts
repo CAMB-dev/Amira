@@ -232,14 +232,27 @@ test("delete refuses a live session lease, then takes over a stale crash lease",
   const s = SessionStore.create({ cwd: "/project", dir })
   s.appendMessage(userMessage("to delete"))
   const lock = sessionLockFile(s.file)
-  writeFileSync(lock, `${process.ppid}\n`)
-  expect(() => deleteSession("/project", s.id, undefined, dir)).toThrow("open in another Amira process")
-  expect(existsSync(s.file)).toBe(true)
+  const holder = process.pid + 1
+  // Test lease age/rejection, not Windows' slow process probe. The CLI suite exercises
+  // a real lease held by a different process; here the holder stays deterministically alive.
+  const probe = spyOn(process, "kill").mockImplementation((pid, signal) => {
+    expect(pid).toBe(holder)
+    expect(signal).toBe(0)
+    return true
+  })
+  try {
+    writeFileSync(lock, `${holder}\n`)
+    expect(() => deleteSession("/project", s.id, undefined, dir)).toThrow("open in another Amira process")
+    expect(existsSync(s.file)).toBe(true)
+    expect(probe).toHaveBeenCalledWith(holder, 0)
 
-  utimesSync(lock, new Date(0), new Date(0))
-  deleteSession("/project", s.id, undefined, dir)
-  expect(existsSync(s.file)).toBe(false)
-  rmSync(lock, { force: true })
+    utimesSync(lock, new Date(0), new Date(0))
+    deleteSession("/project", s.id, undefined, dir)
+    expect(existsSync(s.file)).toBe(false)
+    rmSync(lock, { force: true })
+  } finally {
+    probe.mockRestore()
+  }
 })
 
 test("untrusted sub-agent ids cannot cause files outside the session directory to be removed", () => {

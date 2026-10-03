@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -85,20 +86,38 @@ function makePackage(at: string, name: string, version: string) {
   writeFileSync(path.join(at, "index.ts"), "export default () => {}\n")
 }
 
+let templateDir: string
+const templates = new Map<string, { repo: string; head: string }>()
+
+beforeAll(async () => {
+  templateDir = mkdtempSync(path.join(os.tmpdir(), "amira-git-cache-templates-"))
+  for (const names of [["alpha"], ["alpha", "beta"], ["alpha", "beta", "gamma"]]) {
+    const key = names.join(",")
+    const repo = path.join(templateDir, key)
+    for (const n of names) makePackage(path.join(repo, "extensions", n), n, "1.0.0")
+    writeFileSync(path.join(repo, "README.md"), "big file outside every package\n".repeat(1000))
+    await git(repo, "init", "-q", "-b", "main")
+    await git(repo, "config", "uploadpack.allowFilter", "true")
+    await git(repo, "config", "uploadpack.allowAnySHA1InWant", "true")
+    await git(repo, "add", "-A")
+    await git(repo, "commit", "-q", "-m", "one")
+    templates.set(key, { repo, head: await git(repo, "rev-parse", "HEAD") })
+  }
+})
+
+afterAll(() => rmSync(templateDir, { recursive: true, force: true, maxRetries: 3 }))
+
 /**
  * A monorepo like amira-extensions: packages under extensions/<name>. It serves partial clones
  * (as GitHub does), so the cache is blobless.
  */
 async function monorepo(names: string[]): Promise<{ repo: string; url: string; head: string }> {
+  const template = templates.get(names.join(","))
+  if (!template) throw new Error(`no monorepo template for ${names.join(",")}`)
   const repo = path.join(dir, "exts")
-  for (const n of names) makePackage(path.join(repo, "extensions", n), n, "1.0.0")
-  writeFileSync(path.join(repo, "README.md"), "big file outside every package\n".repeat(1000))
-  await git(repo, "init", "-q", "-b", "main")
-  await git(repo, "config", "uploadpack.allowFilter", "true")
-  await git(repo, "config", "uploadpack.allowAnySHA1InWant", "true")
-  await git(repo, "add", "-A")
-  await git(repo, "commit", "-q", "-m", "one")
-  return { repo, url: pathToFileURL(repo).href, head: await git(repo, "rev-parse", "HEAD") }
+  // Never share mutable Git state or object storage between tests.
+  cpSync(template.repo, repo, { recursive: true })
+  return { repo, url: pathToFileURL(repo).href, head: template.head }
 }
 
 function writeIndex(url: string, names: string[]): string {
