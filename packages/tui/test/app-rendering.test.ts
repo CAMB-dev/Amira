@@ -833,6 +833,7 @@ test("Ctrl+G edits the message in $VISUAL and takes the text back", async () => 
   )
   try {
     const { terminal, live, exited } = await setup([], {
+      cwd: dir,
       env: { VISUAL: `"${process.execPath}" "${script}"` },
     })
     terminal.send("draft")

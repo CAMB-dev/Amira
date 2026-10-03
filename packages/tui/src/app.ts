@@ -34,6 +34,7 @@ import {
 import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
 import { createBottomArea } from "./app/bottom-area.ts"
 import { createCommandRunner } from "./app/command-runner.ts"
+import { externalEditor } from "./app/external-editor.ts"
 import {
   createNoticeStrip,
   draftMessage,
@@ -58,6 +59,7 @@ import {
   tildePath,
   welcomeCard,
 } from "./app/startup.ts"
+import { interactiveTerminal } from "./app/terminal.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { CommandPopup } from "./command-popup.ts"
 import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
@@ -102,9 +104,9 @@ export { tildePath } from "./app/startup.ts"
  */
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
   let { agent } = opts
-  const terminal = opts.terminal ?? new ProcessTerminal()
-  const presenters = opts.toolRenderers
   const env = opts.env ?? process.env
+  const terminal = interactiveTerminal(opts.terminal, env)
+  const presenters = opts.toolRenderers
   const settings = opts.settings ?? {}
   const imageSetting = settings.images ?? "auto"
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal, env, {
@@ -382,7 +384,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       openView({ kind: "subagent", data: { sessionId } })
     },
   }
-  // A dumb terminal has no alternate screen to draw the full-screen view on.
   const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
   const noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
@@ -1256,17 +1257,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     return true
   }
 
-  /**
-   * Edits the message in the user's editor ($VISUAL, else $EDITOR; Notepad on Windows, else vi):
-   * the terminal is handed over until it exits, then the file's text is the input's.
-   */
+  // Edits the message in $VISUAL, $EDITOR, git core.editor, or the platform's default editor.
+  // The terminal is handed over until it exits, then the file's text is the input's.
   function editExternally() {
     if (editor.getParts().some((p) => typeof p !== "string" && "image" in p)) {
       showNote("Remove image attachments before using the external text editor.")
       return
     }
-    const command =
-      env.VISUAL?.trim() || env.EDITOR?.trim() || (process.platform === "win32" ? "notepad" : "vi")
+    const command = externalEditor(env, agent.cwd)
     const file = join(tmpdir(), `amira-message-${process.pid}-${Date.now()}.md`)
     try {
       writeFileSync(file, editor.getText())
@@ -1280,6 +1278,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       const resume = terminal.suspend?.()
       try {
         result = spawnSync(`${command} "${file}"`, {
+          cwd: agent.cwd,
           stdio: "inherit",
           shell: true,
           env: { ...process.env, ...env },

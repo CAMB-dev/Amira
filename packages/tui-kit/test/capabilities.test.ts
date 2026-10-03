@@ -38,6 +38,29 @@ test("parseProbeReplies reads kitty, DECRQM and DA1 replies and keeps other inpu
   expect(parseProbeReplies("\x1b[?2026;1$y").complete).toBe(false)
 })
 
+test("TERM=dumb skips probes and terminal modes, even inside Windows Terminal", async () => {
+  const term = new FakeTerminal()
+  const result = await setupTerminalInput(
+    term,
+    { TERM: "dumb", WT_SESSION: "1" },
+    { images: true, background: true, timeoutMs: 10 },
+  )
+  expect(term.output).toBe("")
+  expect(result).toEqual({
+    capabilities: {
+      win32InputMode: false,
+      kittyKeyboard: false,
+      synchronizedOutput: false,
+      shiftEnter: false,
+    },
+    leftoverInput: "",
+  })
+  expect(supportsHyperlinks({ TERM: "dumb", FORCE_HYPERLINK: "1" })).toBe(false)
+  expect(
+    chooseImageSupport("on", { answered: true, sixel: true, kitty: true }, { TERM: "dumb" }),
+  ).toBeUndefined()
+})
+
 test("Windows Terminal: win32-input-mode, no kitty query", async () => {
   const term = new FakeTerminal()
   const pending = setupTerminalInput(term, { WT_SESSION: "1" })

@@ -34,6 +34,22 @@ Install copies a local directory into the package scope; it is not a live link. 
 
 Restart Amira or run `/reload` while idle to load package installs, updates, removals and enable/disable changes. `/help` lists the commands registered by loaded extensions.
 
+### Git repository cache
+
+Git packages share bare repositories in `~/.amira/cache/git` (under `AMIRA_HOME` when set). Caches pinned by the user lock or any known project's lock are kept, even if the package files are missing or the project is untrusted. Known paths come from session headers and trusted/untrusted project settings; Amira also checks project locks beneath those paths. Unpinned caches are automatically removed after 30 unused days.
+
+```sh
+amira ext cache list
+amira ext cache prune --dry-run
+amira ext cache prune
+amira ext cache prune --all --dry-run
+amira ext cache prune --all
+```
+
+`prune` removes unpinned repositories without waiting 30 days; `ext gc` is an alias. `--dry-run` lists the repositories and interrupted clones that would be removed without deleting them. `--all` also removes pinned repositories; `cache clean` is an alias for `cache prune --all`. Repositories locked by another Amira operation are always kept. Removing a cache does not change installed packages or lock files, but restoring missing packages may need the network again.
+
+Cache inspection never downloads missing objects. Git 2.45 and later support `GIT_NO_LAZY_FETCH`; older Git uses command-local settings to disable the origin promisor and block transports during inspection, without changing the cached repository's configuration. Fetches and package checkouts can still download the objects they need.
+
 ### Managing packages inside Amira
 
 `/ext` does the same work without leaving a session. On its own it opens a list of installed packages (with their scope, whether they are enabled or trusted, and whether the index has a newer version) followed by the packages available from the index. Enter on an installed package offers update, enable or disable, remove and details; Enter on an available one asks for user or project scope and installs it. `d` shows details. See [Keybindings](keybindings.md#dialogs) for the keys in the list.
