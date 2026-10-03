@@ -1304,17 +1304,17 @@ export class Agent {
       return undefined
     }
   }
-  /** Child controls promise the next dispatch; root steering keeps its turn-start batching. */
+  /** Rebuilt for a sub-agent's user messages, a few times at most: a stream of them cannot starve the model. */
   async #callModel(turn: Turn): Promise<ModelReply> {
     const unreadable = await this.#fillSummaries(turn, turn.signal)
     if (turn.signal.aborted) return { kind: "aborted" }
     if (unreadable) return { kind: "error", error: unreadable }
-    const ctx = await this.#buildContext(turn.signal)
-    if (this.execution.paused || (this.depth > 0 && (this.#steering.length || this.#notices.length))) {
-      await this.execution.wait(turn.signal)
-      if (turn.signal.aborted) return { kind: "aborted" }
+    let ctx = await this.#buildContext(turn.signal)
+    for (let rebuilds = 0; ; rebuilds++) {
+      if (await this.execution.wait(turn.signal)) return { kind: "aborted" }
+      if (this.depth === 0 || rebuilds >= 3 || !(this.#steering.length || this.#notices.length)) break
       this.#injectSteering(turn)
-      return this.#callModel(turn)
+      ctx = await this.#buildContext(turn.signal)
     }
     this.#checkRestoredTools()
     if (turn.signal.aborted) return { kind: "aborted" }

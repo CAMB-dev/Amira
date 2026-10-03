@@ -21,7 +21,9 @@ export class PauseGate {
     return true
   }
 
-  async wait(signal: AbortSignal): Promise<void> {
+  /** Waits while paused; true when `signal` aborted (at once when not paused). */
+  async wait(signal: AbortSignal): Promise<boolean> {
+    if (!this.#held) return signal.aborted
     const { promise: aborted, resolve } = Promise.withResolvers<void>()
     const onAbort = () => resolve()
     signal.addEventListener("abort", onAbort, { once: true })
@@ -31,5 +33,6 @@ export class PauseGate {
     } finally {
       signal.removeEventListener("abort", onAbort)
     }
+    return signal.aborted
   }
 }
