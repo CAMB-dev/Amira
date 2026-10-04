@@ -124,8 +124,12 @@ test.if(gated)(
   30_000,
 )
 
-test.if(gated)("a gated command does not run when stdin closes without a line", () =>
-  checkGate(false, undefined, false),
+// Direct MSYS startup can block for seconds on Windows, in addition to the gate
+// observation interval. Give EOF the same real-process budget as the other gate cases.
+test.if(gated)(
+  "a gated command does not run when stdin closes without a line",
+  () => checkGate(false, undefined, false),
+  30_000,
 )
 
 test.if(gated)("through cmd, the gate is held by cmd", () => checkGate(true, "go", true), 30_000)

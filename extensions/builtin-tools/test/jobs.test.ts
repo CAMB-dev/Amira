@@ -235,15 +235,19 @@ test.if(hasBash)("a background pipeline fails when a command before the last one
 })
 
 test.if(hasBash)("SIGPIPE-only background pipelines succeed and other pipeline failures fail", async () => {
-  const ok = await bashTool.execute(
-    { command: "yes | head -n 1", background: true },
-    ctxIn(session("s_main")),
-  )
+  // Pipeline semantics, not startup speed: under load a valid start response can
+  // still say "starting". Wait for the real job's exit before checking its status.
+  const run = async (command: string) => {
+    const ctx = ctxIn(session("s_main"))
+    const started = await bashTool.execute({ command, background: true }, ctx)
+    return jobOutputTool.execute({ job_id: detailsOf(started).jobId, timeout: 30_000 }, ctx)
+  }
+  const ok = await run("yes | head -n 1")
   expect(ok.isError).toBe(false)
   expect(detailsOf(ok)).toMatchObject({ status: "exited", exitCode: 0 })
 
   for (const command of ["false | cat", "cat missing | wc -l", "true | false"]) {
-    const failed = await bashTool.execute({ command, background: true }, ctxIn(session("s_main")))
+    const failed = await run(command)
     expect(failed.isError).toBe(true)
     expect(detailsOf(failed)).toMatchObject({ status: "exited", exitCode: 1 })
   }

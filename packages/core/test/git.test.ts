@@ -28,6 +28,8 @@ test("Agent.start cannot be tricked into overriding cwd and carries no turn id",
   expect(ev.sessionId).toBe(agent.sessionId)
 })
 
+// Four probes launch fourteen real Git commands plus init. Their Windows startup
+// waits compound under parallel load; the individual command deadlines stay unchanged.
 test("deprecated gitInfo still probes git standalone, without any provider", async () => {
   const d = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-"))
   try {
@@ -43,7 +45,7 @@ test("deprecated gitInfo still probes git standalone, without any provider", asy
   } finally {
     await rm(d, { recursive: true, force: true })
   }
-}, 30_000)
+}, 60_000)
 
 test("deprecated trackWorkspace starts the bus's host tracker, which emits from its provider", async () => {
   const bus = new EventBus()

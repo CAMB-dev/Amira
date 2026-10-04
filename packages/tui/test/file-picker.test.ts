@@ -425,20 +425,26 @@ test("a disposed FileIndex stops its listing and tells no one", async () => {
   expect(changes).toBe(0)
 })
 
+// Both listing integration cases wait for real Git (even the non-repository fallback).
+// Leave time for Windows subprocess startup rather than ending before its 15 s deadline.
 test("outside a repository the files are walked, skipping .git and node_modules", async () => {
   const root = path.join(tmp, "plain")
   tree(root, ["b.ts", "a/x.ts", "node_modules/m/i.js", "a/node_modules/y.js"])
   expect(await listProjectFiles(root)).toEqual(["b.ts", "a/x.ts"])
   expect(await listProjectFiles(root, { limit: 1 })).toEqual(["b.ts"])
-})
+}, 40_000)
 
 const hasGit = Bun.which("git") !== null
 
-test.skipIf(!hasGit)("in a repository git lists the files, leaving out what .gitignore ignores", async () => {
-  const root = path.join(tmp, "repo")
-  tree(root, [".gitignore", "src/app.ts", "dist/out.js", "notes.md"])
-  writeFileSync(path.join(root, ".gitignore"), "dist/\n")
-  const init = Bun.spawnSync(["git", "init", "-q"], { cwd: root })
-  expect(init.exitCode).toBe(0)
-  expect((await listProjectFiles(root)).sort()).toEqual([".gitignore", "notes.md", "src/app.ts"])
-})
+test.skipIf(!hasGit)(
+  "in a repository git lists the files, leaving out what .gitignore ignores",
+  async () => {
+    const root = path.join(tmp, "repo")
+    tree(root, [".gitignore", "src/app.ts", "dist/out.js", "notes.md"])
+    writeFileSync(path.join(root, ".gitignore"), "dist/\n")
+    const init = Bun.spawnSync(["git", "init", "-q"], { cwd: root })
+    expect(init.exitCode).toBe(0)
+    expect((await listProjectFiles(root)).sort()).toEqual([".gitignore", "notes.md", "src/app.ts"])
+  },
+  30_000,
+)

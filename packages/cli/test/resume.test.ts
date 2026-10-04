@@ -84,7 +84,7 @@ for (const mode of ["startup", "slash", "select"] as const) {
           new Response(child.stderr).text(),
           child.exited,
         ])
-        expect({ code, err }).toEqual({ code: 0, err: "" })
+        expect({ code, err }, out).toEqual({ code: 0, err: "" })
         expect(out).toContain(`startup stored: ${mode === "slash"}`)
         expect(out).toContain("picker exited: 0")
         expect(await readdir(dir)).toEqual(before)
