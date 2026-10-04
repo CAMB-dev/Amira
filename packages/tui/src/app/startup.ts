@@ -1,3 +1,4 @@
+// Owns interactive options, shared UI constants and startup helpers.
 import { homedir } from "node:os"
 import type { AnyEvent, CommandDefinition, TerminalApi, TuiSettings } from "@amira/api"
 import type { Agent, CommandHost, PanelRegistry, StatusRegistry, UiRequests } from "@amira/core"

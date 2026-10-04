@@ -1,3 +1,4 @@
+// Owns bottom-area layout: panels, activity, pending messages, input, status and hints.
 import type { Agent, PanelRegistry, StatusRegistry } from "@amira/core"
 import {
   type Component,
