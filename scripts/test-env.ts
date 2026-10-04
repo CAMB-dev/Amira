@@ -1,4 +1,3 @@
-import "../node_modules/.cache/test-parallel-followup/trace.ts" // [DEBUG-parallel]
 import { afterAll } from "bun:test"
 import { isolateTestHome } from "./test-home"
 

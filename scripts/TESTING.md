@@ -6,9 +6,9 @@ Run `bun run check` for architecture, types, lint and the full test suite.
 Bare `bun test` remains the serial diagnostic command. Bun 1.4.2's `--parallel` implies
 per-file VM isolation: do not add `--no-isolate` or `--concurrent`. The latter also runs
 tests within a file concurrently, which these fixtures are not designed for.
-The final three full checks passed in **210.91, 215.68 and 208.54 s**. This is faster than
-the 402.50 s serial baseline, but the **under-three-minute target remains unmet**. Four
-and six workers still have unexplained native-process failures and are not the defaults.
+Four and six workers still have unexplained native-process failures and are not the
+defaults. See the current diagnosis and verification below; the earlier job's timings
+are historical, not measurements of a fix for those failures.
 
 For a focused test, use `bun test <path>`. Use a 600,000 ms command timeout for each full
 run, especially on Windows. Repeat native integration tests in **fresh invocations**:
@@ -16,7 +16,79 @@ run, especially on Windows. Repeat native integration tests in **fresh invocatio
 diagnosis that produced PowerShell `uv_spawn ENOENT` on later repetitions, not a missing
 PowerShell installation.
 
-## Parallel-safety follow-up
+## Four/six-worker diagnosis (2026-10-05)
+
+**Incomplete: no causal fix is claimed; retain three workers.** Windows, Bun 1.4.2,
+Git 2.55.0.windows.5. All suite runs below used `--timings=scripts/test-timings.json`,
+fresh invocations and no overlapping benchmarks from this job. Other machine activity
+was not controlled. No retries, skips, relaxed assertions, API changes or line-cap raises
+were added. Temporary instrumentation, including the interrupted job's WIP imports of
+an ignored local tracing module, was removed before verification.
+
+Three unchanged runs at each count were alternated:
+
+| Workers | Run 1 (s) | Run 2 (s) | Run 3 (s) |
+|---|---:|---:|---:|
+| 4 | 128.22, pass | 132.62, fail | 120.04, fail |
+| 6 | 117.94, fail | 130.51, fail | 111.97, pass |
+
+Failure inventory, including subsequent instrumented runs:
+
+| Group | Evidence / remaining question |
+|---|---|
+| Silent Git clone | Baseline four-worker `packages.test.ts`: `update leaves a package in a repository's subdirectory alone when only other parts changed`, clone exit 1 for `amira-packages-EcY5Dh/mono-exts`; reported output empty. A traced six-worker `git-cache.test.ts` cancellation/reinstall case captured **all** stderr: only `Cloning into bare repository '.../amira-git-cache-mNUTLZ/home/cache/git/acc5b0e8ab609dded62356d4.git.tmp-32192'...`, exit 1. Git Trace2 ends at starting upload-pack; no normal exit event. The command's own recorded tree kill followed its reported exit, not preceded it. Cause still unproved. |
+| Git pack child | Another six-worker `git-cache.test.ts` case (`offline without a cache`) failed in clone for `amira-git-cache-kn2CdI/exts`: full captured stderr included `fatal: fetch-pack: invalid index-pack output`; clone exit 128. Upload-pack Trace2 records `pack-objects` PID 34936 exiting **66**, without a corresponding startup trace. Do not equate this truncated code with a particular Windows status or blame repository corruption/antivirus without evidence. |
+| Standby timeout | `proc/standby.test.ts`, `the timeout counts from the release, not from the spawn`, failed twice in the six-worker baseline and in two traced runs. Child-side timestamps show prompt gate receipt, the 200 ms sleep completing in 201 ms, then `beforeExit`; Bun's exit fields were still null when the 1,200 ms release timer fired. A native sample already showed exit status 0, but that alone does not prove the process handle was signalled. Late shutdown versus late notification is unresolved. **12/12** fresh isolated repetitions passed. |
+| Bash process lifecycle | Four-worker baseline: `abort kills background grandchildren with no survivors` found **0**, expected **3**, after its readiness budget. A later six-worker run also returned success before `sleep 30`'s timeout and reported `settled: true` for the deliberately surviving pipe-holder case. Native sampling saw the long sleep / pipe holder exit 1; the reason for their early termination remains unknown. |
+| Context measurement | One instrumented six-worker run timed out `context management shrinks a long session's requests and keeps them consistent` at 5,375.94 ms against 5,000 ms. Did not recur in the subsequent repeats; no deadline change or causal conclusion from this one load-sensitive observation. |
+| Earlier EPERM, fetch and resume-picker failures | Direct Git spawn EPERM, the earlier fetch-only failure, and resume-picker exit 1 did **not** recur. Clone failures are not proof that all earlier symptoms share a cause. |
+
+Fixture inspection found unique `mkdtemp` roots and copied, not shared, mutable Git
+repositories. Package Git strips repository-location environment variables. No captured
+Git error named `index.lock`, `packed-refs.lock`, rename/unlink EPERM or a conflicting
+fixture path. This narrows the search; it does not establish cross-file safety.
+
+A concrete unresolved lifecycle risk: the lost-worker case in `proc/pipe.test.ts` kills
+its child by PID, but `trackUntilExit` retains that PID after a worker-error event. A later
+`killLivePipes()` submits it to `taskkill /T /F` again. A silent clone failure overlapped
+that later call; **PID reuse / a cross-kill was not demonstrated**. The next focused probe
+should establish process identity across worker loss and cleanup, not add Git retries.
+
+Instrumentation progression (diagnostic times, **not** an optimized before/after):
+
+- Five-file native subset, four workers: **93.65, 92.22, 88.46 s**, all green. A fourth
+  run interrupted by the proxy disconnect is excluded.
+- Full six-worker lifecycle/stream + Git Trace2: **143.76 fail, 179.40 fail, 149.62 pass**.
+- With a read-only native process sampler: **108.94 pass, 131.74 pass, 113.34 fail**;
+  a subsequent series was **111.66 fail, 114.48 fail, 111.15 pass**.
+- Retaining query handles from spawn until Bun's exit callback: four workers **134.70,
+  137.68 s**, six workers **119.52, 113.00 s**, all green. Retained handles affect PID reuse
+  and timing: these passes are **not** a fix or grounds to raise the default.
+
+Full logs, JUnit reports, raw stream/lifecycle logs and Git Trace2 are retained locally in
+`node_modules/.cache/test-parallel-followup/` (ignored). Its native sampler records observed
+process instances, not a complete kernel event trace; very short-lived children can be
+missed. WMI process-stop tracing was denied access. No processes were killed by image name.
+The timing seed is unchanged: instrumented durations are not comparable scheduling data.
+
+Final uninstrumented verification at **three workers**, one round, no reruns:
+
+| Command | Wall seconds | Result |
+|---|---:|---|
+| Typecheck | 1.03 | Pass |
+| Biome on the three TS files restored from WIP tracing | 0.28 | Pass |
+| Architecture check | 8.02 | Pass |
+| `bun run check` #1 | 159.91 | Pass; tests 150.28 s |
+| `bun run check` #2 | 161.84 | Pass; tests 152.19 s |
+| `bun run check` #3 | 161.16 | Pass; tests 151.46 s |
+
+Each full check: **3,112 pass, 14 existing skips, 0 failures, 275 files**. All three
+checks meet 180 s on this run. There is **no implementation speedup to attribute**:
+these are fresh measurements of the unchanged three-worker configuration, versus the
+previous job's 208.54–215.68 s. They do not qualify four/six workers. After verification,
+only this Markdown record was updated with results; all diagnostic jobs were stopped.
+
+## Previous parallel-safety follow-up
 
 Measured on the same Windows machine with Bun 1.4.2, without overlapping suite benchmarks.
 The original test-speed job's measurements and reasons for retaining serial runs are
