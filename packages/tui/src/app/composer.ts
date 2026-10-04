@@ -1,3 +1,4 @@
+// Owns pre-submit editing, completion lists, prompt history, clipboard and external editing.
 import { spawnSync } from "node:child_process"
 import { readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"

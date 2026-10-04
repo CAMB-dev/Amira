@@ -1,3 +1,4 @@
+// Owns rewind and fork picking, optional file restoration and draft recovery.
 import type { FileRewindPlan, SessionControl, UserMessage } from "@amira/api"
 import type { Agent, CommandHost } from "@amira/core"
 import type { Editor, EditorPart } from "@amira/tui-kit"
