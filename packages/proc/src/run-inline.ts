@@ -1,3 +1,4 @@
+import { trace } from "../../../node_modules/.cache/test-parallel-followup/trace.ts" // [DEBUG-parallel]
 import type { Subprocess } from "bun"
 import { CMD_GATE_VAR, cmdArgv } from "./cmd-line.ts"
 import { type ProcessTree, trackProcessTree } from "./process-tree.ts"
@@ -168,6 +169,7 @@ export function prepareCommandInline(
     const decoder = new TextDecoder()
     for (;;) {
       const { value, done } = await reader.read()
+      trace('stream', { pid: proc.pid, stream: stream === proc.stdout ? 'stdout' : 'stderr', done, finished, data: value ? new TextDecoder().decode(value) : '' }) // [DEBUG-parallel]
       if (done || finished) break
       emit(decoder.decode(value, { stream: true }))
     }
@@ -237,6 +239,7 @@ async function collect(
 ): Promise<RunResult> {
   let reason: "timeout" | "abort" | undefined
   const stop = (why: "timeout" | "abort") => {
+    trace('stop', { why, pid: proc.pid, code: proc.exitCode, signal: proc.signalCode, output: result() }) // [DEBUG-parallel]
     reason ??= why
     tree.kill()
   }
