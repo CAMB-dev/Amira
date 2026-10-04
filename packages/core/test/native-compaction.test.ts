@@ -455,7 +455,7 @@ for (const fill of [false, true]) {
 }
 
 for (const path of ["native", "native-model", "text", "fill", "fill-error", "fallback-error"] as const) {
-  test(`aborted ${path} compaction records its spend exactly once without changing history`, async () => {
+  test(`aborted ${path} compaction records its spend exactly once`, async () => {
     const filling = path.startsWith("fill")
     const { agent, ai, session, tree, events, bus } = await setup(
       [
@@ -513,15 +513,19 @@ for (const path of ["native", "native-model", "text", "fill", "fill-error", "fal
     try {
       expect(await agent.compact(path === "text" ? "write a summary" : undefined)).toBe(false)
       await bus.flush()
-      expect(agent.messages).toEqual(before)
-      expect(session.entries.filter((e) => e.type === "compaction")).toHaveLength(filling ? 1 : 0)
+      // A fill summary that came back before the abort is kept (it is paid for); the
+      // compaction that needed it still stops.
+      const kept = path === "fill"
+      if (kept) expect(agent.messages).not.toEqual(before)
+      else expect(agent.messages).toEqual(before)
+      expect(session.entries.filter((e) => e.type === "compaction")).toHaveLength(kept ? 2 : filling ? 1 : 0)
       const expected = path.startsWith("native") ? 2000 : path === "fallback-error" ? 2070 : 70
       expect(agent.compactionUsage.map((u) => u.usage.input)).toEqual(filling ? [2000, 70] : [expected])
       expect(tree.usage.input - spent).toBe(expected)
       if (path === "native-model")
         expect(agent.compactionUsage[0]!.model).toEqual({ provider: "mock", model: "m2" })
       expect(ofType(events, "compact.end")).toEqual([])
-      if (path !== "fallback-error") expect(ofType(events, "extension.notice")).toEqual([])
+      if (path !== "fallback-error") expect(ofType(events, "extension.notice")).toHaveLength(kept ? 1 : 0)
     } finally {
       call.mockRestore()
       change?.mockRestore()
