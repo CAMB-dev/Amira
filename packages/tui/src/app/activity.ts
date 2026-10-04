@@ -1,3 +1,4 @@
+// Owns turn activity, retry labels and the activity line's clocks and rendering.
 import type { RenderContext, Spinner } from "@amira/tui-kit"
 import { italic, truncateToWidth } from "@amira/tui-kit"
 import { compactTokens } from "../format.ts"

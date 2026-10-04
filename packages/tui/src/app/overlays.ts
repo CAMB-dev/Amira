@@ -1,3 +1,4 @@
+// Owns dialogs, full-screen viewers, waiting forms and their input and lifecycle.
 import { type AnyEvent, type EventMap, type FrontendView, isSubagentView } from "@amira/api"
 import type { UiRequests } from "@amira/core"
 import type { InputEvent, RenderContext, Theme } from "@amira/tui-kit"

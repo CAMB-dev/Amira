@@ -1,3 +1,4 @@
+// Owns external-editor command selection and Windows shell quoting.
 import { spawnSync } from "node:child_process"
 
 /** Selects an editor command, keeping its arguments for the shell that launches it. */

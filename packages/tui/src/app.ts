@@ -66,6 +66,7 @@ export { tildePath } from "./app/startup.ts"
  * is kept and scrolled by Amira). Resolves with the process exit code when the user quits.
  */
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
+  // Wiring and collaborators: terminal setup and the UI's shared services.
   let { agent } = opts
   const env = opts.env ?? process.env
   const terminal = interactiveTerminal(opts.terminal, env)
@@ -107,19 +108,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const renders = new ReplyRenderers(opts.markdownRenderers, capabilities.background)
   const spinner = new Spinner()
   const activity = createTurnActivity()
-  /** Whether the current turn showed anything besides the user's message. */
-  let turnShowedOutput = false
+  // Turn display state: provider tool rows and transient hint notes.
   /**
    * The provider's own tool calls (hosted web search) shown as rows this turn: when each
    * started, and whether it ended.
    */
   const serverRows = new Map<string, { startedAt: number; ended: boolean }>()
-  /** Reply text streamed since the last such row started. */
-  let textSinceRow = true
-  /** The user interrupted this turn: the failures of calls it cut short are not the tools'. */
-  let interrupted = false
-  /** How much of each finished tool call is shown; Ctrl+O and /verbose change it. */
-  let detail: ToolDetailLevel = "summary"
   /** A short note shown in place of the key hints, such as the new tool output level. */
   let hintNote: { text: string; until: number } | undefined
   let hintTimer: ReturnType<typeof setTimeout> | undefined
@@ -142,8 +136,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     },
     env,
   )
-  /** What the terminal last reported about its focus; unknown until it reports. */
-  let focused: boolean | undefined
   const editor = new Editor({
     prompt: theme.accent("› "),
     placeholder: "Message Amira",
@@ -175,6 +167,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   })
   // Shift+Enter is no use where the terminal sends it as plain Enter.
   const reaches = (s: KeySpec) => capabilities.shiftEnter || !(s.shift && s.name === "enter")
+  /** Whether the conversation can be rewound: the host keeps a session file. */
+  function canRewind(): boolean {
+    return commands?.control.rewind !== undefined
+  }
   const bottomArea = createBottomArea({
     agent: () => agent,
     activity: () => activity,
@@ -215,8 +211,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     interrupt: () => outbox.interrupt(),
     quitting: () => quitting,
   })
-  const openView: OverlayManager["openView"] = (v) => overlays.openView(v)
-
+  // Turn display state: the detail level read by the transcript view.
+  let detail: ToolDetailLevel = "summary"
   const host: ViewHost = {
     terminal,
     theme,
@@ -240,7 +236,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         view.requestRender()
         return
       }
-      openView({ kind: "subagent", data: { sessionId } })
+      overlays.openView({ kind: "subagent", data: { sessionId } })
     },
   }
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
@@ -255,7 +251,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     echoedNote: (message) => commandRunner.echoedNote(message),
     noModelYet,
     canRewind,
-    openRewind: () => openRewind(),
+    openRewind: () => rewind.openRewind(),
     onInterrupt: () => {
       interrupted = true
     },
@@ -274,7 +270,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     redraw,
     waitingChanged: (change) => overlays.waitingChanged(change),
   })
-  const openRewind = () => rewind.openRewind()
   const commandRunner = createCommandRunner({
     commands,
     keys,
@@ -284,16 +279,25 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     commandOutput: (level, text) => view.commandOutput(level, text),
     requestRender: () => view.requestRender(),
     quit: () => quit(),
-    openView,
-    openRewind,
+    openView: (v) => overlays.openView(v),
+    openRewind: () => rewind.openRewind(),
     isCompacting: () => activity.compacting,
     interrupt: () => outbox.interrupt(),
   })
 
+  // Lifecycle: the exit result resolved by shutdown.
   let resolveExit!: (code: number) => void
   const exited = new Promise<number>((r) => {
     resolveExit = r
   })
+
+  // Turn display state: output and interruptions in the current turn.
+  /** Whether the current turn showed anything besides the user's message. */
+  let turnShowedOutput = false
+  /** Reply text streamed since the last such row started. */
+  let textSinceRow = true
+  /** The user interrupted this turn: the failures of calls it cut short are not the tools'. */
+  let interrupted = false
 
   /**
    * A tool the provider runs (its hosted web search) as a tool row: it starts when first seen,
@@ -481,12 +485,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     view.notice("error", f.hint ? `${f.summary}\n${f.hint}` : modelErrorNotice(f.summary), f.detail)
   }
 
-  /** Sub-agents (also a workflow's or a swarm's) still running in the background. */
-  const runningSubagents = () => agent.tree?.children.length ?? 0
-
   /** "Interrupted", and that sub-agents run on in the background (an interrupt stops only the turn). */
   function interruptedText(): string {
-    const n = runningSubagents()
+    const n = agent.tree?.children.length ?? 0
     return n
       ? `${INTERRUPTED_NOTICE} · ${n} sub-agent${n === 1 ? "" : "s"} still running · /agents`
       : INTERRUPTED_NOTICE
@@ -501,6 +502,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
   }
 
+  // Lifecycle: confirmation before quitting with background work still running.
   /** Until when a second Ctrl+C or Ctrl+D quits although sub-agents or background jobs run. */
   let quitArmedUntil = 0
   /**
@@ -508,7 +510,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * run; then the first press says so and a second one (while the note shows) quits.
    */
   function quitOrWarn(action: "cancel" | "exit") {
-    const n = runningSubagents()
+    const n = agent.tree?.children.length ?? 0
     const jobs = runningJobs()
     if ((!n && !jobs) || Date.now() < quitArmedUntil) return quit()
     quitArmedUntil = Date.now() + HINT_NOTE_MS
@@ -597,7 +599,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    */
   function runSkill(line: string) {
     void commands!
-      .runSkill(line, { frontend: "tui", quit: () => quit(), openView })
+      .runSkill(line, { frontend: "tui", quit: () => quit(), openView: (v) => overlays.openView(v) })
       .then(() => view.requestRender())
   }
 
@@ -608,7 +610,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function runInput(line: string, display?: string) {
     view.commandEcho(display ?? line)
     void commands!
-      .runInput(line, { frontend: "tui", quit: () => quit(), openView })
+      .runInput(line, { frontend: "tui", quit: () => quit(), openView: (v) => overlays.openView(v) })
       .then(() => view.requestRender())
   }
 
@@ -648,11 +650,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     return view.detailNote(level)
   }
 
-  /** Whether the conversation can be rewound: the host keeps a session file. */
-  function canRewind(): boolean {
-    return commands?.control.rewind !== undefined
-  }
-
+  // Lifecycle: shutdown is idempotent and resolves the exit result.
   let quitting = false
   function quit(code = 0) {
     composer.abortClipboard()
@@ -679,6 +677,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     resolveExit(code)
   }
 
+  // Lifecycle: terminal focus is unknown until the first report.
+  let focused: boolean | undefined
   function onInput(e: InputEvent) {
     // Focus reaches extensions even over the viewer.
     if (e.type === "focus") {
@@ -776,14 +776,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     else view.requestRender()
   }
 
+  // Lifecycle: subscriptions and terminal startup, in registration order.
   const off = agent.bus.subscribe(onEvent)
   const offSwitch = commands?.onSwitch(followAgent)
-  const offCommand = opts.registerCommand?.(
-    detailCommand(
-      () => detail,
-      (level) => setDetail(level),
-    ),
-  )
+  const offCommand = opts.registerCommand?.(detailCommand(() => detail, setDetail))
   termStatus.start()
   const unbindTerminal = opts.bindTerminal?.(termStatus)
   opts.onReady?.()
@@ -810,7 +806,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   if (opts.notice && !(welcome && opts.notice.startsWith("No providers"))) view.notice("warning", opts.notice)
   // The first frame carries the banner, history and startup messages.
   view.start()
-  if (opts.resumePicker) resumeAtStartup({ run: (line) => commandRunner.run(line), agent: () => agent, quit })
+  if (opts.resumePicker) resumeAtStartup({ run: commandRunner.run, agent: () => agent, quit })
   else if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)
 

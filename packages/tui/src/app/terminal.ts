@@ -1,3 +1,4 @@
+// Owns interactive terminal selection and plain-text output for dumb terminals.
 import { ProcessTerminal, stripAnsi, type Terminal } from "@amira/tui-kit"
 
 /** No escapes, carriage returns or bell: a dumb terminal gets plain text only. */
