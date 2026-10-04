@@ -104,8 +104,8 @@ removed from the separate tests that cover that behavior.
 ### Scheduling
 
 Four workers without timing hints passed two complete checks in **188.07 s** and
-**186.89 s**, but missed the three-minute target; a third check was interrupted by the
-agent's proxy disconnect and is not counted. The known long native files starting late
+**186.89 s**, but missed the three-minute target; a third check was interrupted
+by an environment disconnect and is not counted. The known long native files starting late
 leave workers idle near the end. `scripts/test-timings.json` seeds Bun's built-in scheduler
 with rounded millisecond estimates for the twelve longest files from the successful
 four-worker JUnit profile. This changes order only, not discovery or concurrency. Unlisted
