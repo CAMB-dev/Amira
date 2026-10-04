@@ -473,6 +473,8 @@ test("switching sessions gives up the lease on the one left behind", async () =>
   expect(existsSync(sessionLockFile(store.file))).toBe(false)
 })
 
+// The CLI probes the real foreign PID: the first Windows process.kill(pid, 0) alone
+// takes about 4 s here, before contention and CLI startup. Keep this an OS integration test.
 test("amira sessions rm refuses a session leased by another process", async () => {
   const home = mkdtempSync(path.join(tmpdir(), "amira-sessions-rm-live-"))
   const cwd = path.join(home, "project")
@@ -501,4 +503,4 @@ test("amira sessions rm refuses a session leased by another process", async () =
   } finally {
     rmSync(lock, { force: true })
   }
-})
+}, 15_000)
