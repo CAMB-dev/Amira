@@ -91,6 +91,8 @@ test("cache regression: dry-run lists candidates without deleting caches or stal
   expect(existsSync(leftover)).toBe(true)
 })
 
+// This case starts real Git for setup, config and tree queries; parallel Windows
+// process startup can exceed the default 5 s even without any network access.
 test("cache regression: old git fallback blocks legacy promisors even when a transport is allowed", async () => {
   const url = "https://example.test/legacy"
   const commit = "a".repeat(40)
@@ -125,7 +127,7 @@ test("cache regression: old git fallback blocks legacy promisors even when a tra
   } finally {
     run.mockRestore()
   }
-})
+}, 30_000)
 
 for (const version of ["2.44.0", "2.45.0", "2.55.0.windows.5", "3.0.0"]) {
   test(`cache regression: git ${version} uses the supported no-lazy-fetch guard`, async () => {

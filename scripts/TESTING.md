@@ -1,15 +1,158 @@
 # Tests
 
 Run `bun run check` for architecture, types, lint and the full test suite.
-`bun test` and `bun run test` remain serial. Four-worker runs, both with and without
-per-file VM isolation, sometimes finished below three minutes but also produced
-intermittent native Git and PowerShell failures. Six workers additionally hit process
-startup timeouts. Parallelism is therefore not enabled; no retries, raised timeouts or
-removed assertions are used to disguise those failures. The under-three-minute target
-remains unmet in the reliable serial configuration.
+`bun run test` uses **three workers** with longest-file-first scheduling
+(`bun test --parallel=3 --timings=scripts/test-timings.json`); `check` calls that script.
+Bare `bun test` remains the serial diagnostic command. Bun 1.4.2's `--parallel` implies
+per-file VM isolation: do not add `--no-isolate` or `--concurrent`. The latter also runs
+tests within a file concurrently, which these fixtures are not designed for.
+The final three full checks passed in **210.91, 215.68 and 208.54 s**. This is faster than
+the 402.50 s serial baseline, but the **under-three-minute target remains unmet**. Four
+and six workers still have unexplained native-process failures and are not the defaults.
 
 For a focused test, use `bun test <path>`. Use a 600,000 ms command timeout for each full
-run, especially on Windows.
+run, especially on Windows. Repeat native integration tests in **fresh invocations**:
+`--rerun-each` can reuse a home after the preload's `afterAll` has removed it. During
+diagnosis that produced PowerShell `uv_spawn ENOENT` on later repetitions, not a missing
+PowerShell installation.
+
+## Parallel-safety follow-up
+
+Measured on the same Windows machine with Bun 1.4.2, without overlapping suite benchmarks.
+The original test-speed job's measurements and reasons for retaining serial runs are
+preserved below. This follow-up changes only test timing/fixtures and scripts: no
+production code, public exports, API version or line caps changed; no assertions were
+weakened and no skips were added.
+There are no retries or global timeout increases, and no separate serial group is needed
+for the selected three-worker configuration.
+
+### Reproduction and failure groups
+
+Three unchanged runs at each worker count were alternated before editing:
+
+| Command | Run 1 (s) | Run 2 (s) | Run 3 (s) |
+|---|---:|---:|---:|
+| `bun test --parallel=4` | 155.22, fail | 156.06, pass | 153.74, pass |
+| `bun test --parallel=6` | 145.69, fail | 138.44, fail | 149.94, fail |
+
+Every failing test from those runs is listed here. Deadlines belong to the integration
+tests, not the commands being tested; the latter's timeout assertions remain unchanged.
+
+| Group / test | Error and cause | Change |
+|---|---|---|
+| CLI `session-management`: `amira sessions rm refuses a session leased by another process` | 5,000 ms timeout. A diagnostic launcher measured the first real Windows `process.kill(pid, 0)` at 3.84–3.93 s; replacing only that probe reduced the child from 3.98–4.18 s to 0.15–0.17 s. | Keep the real foreign-process probe and CLI, with a documented 15 s test budget. No stub in the shipped test. |
+| Package `git-cache-regressions`: `cache regression: old git fallback blocks legacy promisors even when a transport is allowed` | 5,000 ms timeout across real Git init/config/tree subprocesses. Fixture paths are unique; this is not a shared template or network request. | 30 s for this real-Git case only. Mock-only cases keep their old deadlines. |
+| Builtin `shell`: `a gated command does not run when stdin closes without a line` | 5,000 ms timeout. Direct MSYS startup plus the intentional 1.5 s gate observation exceeded it; successful focused runs took 7.88–10.63 s. | The same 30 s budget as its sibling gate integration tests. The gate observation and exit/marker assertions remain. |
+| TUI `file-picker`: `outside a repository the files are walked, skipping .git and node_modules`; `in a repository git lists the files, leaving out what .gitignore ignores` | 5,000 ms timeouts. Even the walk first awaits native Git. The former does two listings; the latter also initializes a repository. | 40 s and 30 s respectively, allowing the existing 15 s listing deadlines plus native startup. Pure picker/search tests are unchanged. |
+| Core `git`: `deprecated gitInfo still probes git standalone, without any provider` | 30,000 ms timeout. Four probes launch fourteen Git commands plus init. | 60 s for the multi-process scenario; command deadlines and all Git assertions unchanged. |
+| Secondary cleanup errors | File-picker `afterAll`: `EBUSY ... rm amira-files-*`; shell unhandled assertion: expected 125, received 143. Timed-out work was still active during cleanup; Bun killed a dangling child before its assertion resumed. | Allow the actual subprocess waits above to finish; do not retry cleanup/assertions or accept a killed exit code. |
+
+The unchanged serial baseline also failed `packages/proc/test/jobs.test.ts`:
+`ended jobs are forgotten oldest end first; one that just ended is kept for its waiters`
+expected `"exited"`, received `undefined`. It reproduced **10/20** times in a focused
+81 ms run. The fake jobs could all end in the same millisecond, whereas the test expected
+distinct chronological end times. The test now sets those times explicitly with a
+scoped/restored `Date.now` spy; **100/100** repetitions passed. Production tie-breaking is
+unchanged; this test covers ordering by distinct end timestamps, not a new tie policy.
+
+A focused five-file native run reproduced the lease and gate timeouts. After the changes,
+three fresh runs passed **74/74** tests each in **22.18, 19.32, 19.36 s**. No evidence of
+cross-file path/port collisions, shared session leases or a shared background-job registry
+was found with per-file VM isolation enabled.
+
+### Higher-concurrency stress: not the selected configuration
+
+A subsequent full six-worker run passed in **137.97 s**, but later stress runs were not
+all green. These are not claimed fixed by choosing three workers:
+
+- `packages/cli/test/resume.test.ts`: `slash resume picker with Ctrl+C leaves sessions
+  unchanged` returned **code 1, empty stderr** once (156.68 s full run). The cause is still
+  unconfirmed. It did not recur in **280 focused repetitions**, including six simultaneous
+  runners, or the next two full six-worker runs. The assertion now includes captured stdout
+  for diagnosis, without accepting another exit code.
+- `packages/core/test/trace.test.ts`: `process.exit emergency hook saves delivered records
+  without an async flush` exceeded its **10 s** deadline twice (11.77–12.45 s), followed by
+  an unhandled expected-0/received-143 assertion after Bun killed the child. It must run
+  a real subprocess; its documented test budget is now **30 s**, without changing the
+  emergency-flush assertions.
+- The later six-worker runs took **149.76 s** and **148.84 s**. The latter also failed
+  `extensions/commands/test/ext.test.ts`'s `/ext local file git install, reinstall, update,
+  disable, enable and remove use the core` with **`EPERM ... uv_spawn 'git'`**, and
+  `packages/packages/test/git-cache.test.ts`'s `the first install makes a blobless cache
+  of the repository; an update fetches into it` with **`PackageError: cannot download
+  file:///...: Cloning into bare repository ...`**. Their causes remain unconfirmed;
+  do not promote six workers based on its best timing. No retries were added.
+
+A seeded **four-worker** release check also failed (165.96 s):
+`packages/packages/test/packages.test.ts`'s `update follows the index when a package moved
+to another directory of its repository` received `git fetch failed (exit 1)` instead of
+a successful update. The unexplained native failures are therefore **not specific to six
+workers**. Four was rejected as the default, rather than rerun until three checks passed.
+
+Temporary process-tree tracing across three focused four-file native runs found no
+cross-worker kills among the tracked processes, but did not reproduce the Git failure;
+it does not establish or rule out its cause. All production instrumentation was removed.
+Those runs did reproduce another test assumption twice:
+`extensions/builtin-tools/test/jobs.test.ts`'s `SIGPIPE-only background pipelines succeed
+and other pipeline failures fail` received `starting`/null exit code (or `isError: false`
+for an unfinished failing pipeline). A background start is only observed for 1.5 s;
+it does not promise completion. The test now awaits `job_output`'s bounded completion
+signal before asserting the **same** final success/failure status and exit codes. It
+passed in the subsequent full-suite diagnostic run; no startup-window assertion was
+removed from the separate tests that cover that behavior.
+
+### Scheduling
+
+Four workers without timing hints passed two complete checks in **188.07 s** and
+**186.89 s**, but missed the three-minute target; a third check was interrupted
+by an environment disconnect and is not counted. The known long native files starting late
+leave workers idle near the end. `scripts/test-timings.json` seeds Bun's built-in scheduler
+with rounded millisecond estimates for the twelve longest files from the successful
+four-worker JUnit profile. This changes order only, not discovery or concurrency. Unlisted
+and newly added tests still run. The first seeded full-suite trial passed in **146.45 s**.
+
+The seed is deliberately small and read-only in normal runs (no `--update-timings` in the
+scripts). If the slow files change, profile to a local cache as below, then update the
+seed deliberately. Keep three workers and per-file isolation; timing hints do not make
+four/six workers qualified or make intra-file concurrent tests safe. The three-worker
+trial passed in **214.01 s**. The under-three-minute target is not met by that run;
+reliability takes precedence over the faster, failing higher-concurrency configurations.
+
+### Follow-up timings
+
+The suite contains 3,112 tests in 275 files (3,098 pass and 14 pre-existing skips on a
+successful run). Wall times use a monotonic stopwatch, including command startup.
+
+| Command | Before (s) | After (s) | Result |
+|---|---:|---:|---|
+| Bare serial `bun test` | 394.21 | 404.50 (intermediate) | Before failed the fake-clock case; after the deadline/clock fixes passed. This measurement predates the pipeline-wait fix. The bare command remains serial. |
+| Test phase inside `check` (Bun-reported time) | 392.50, serial | 191.61–197.50, parallel | Successful before/after suite measurements. |
+| `bun test --parallel=4` (no seed) | 153.74–156.06 | 154.03 | Before failed 1/3; after passed. |
+| Four workers, seeded order | — | 146.45 | Trial passed, but the later release check failed; not retained. |
+| `bun run test` (three workers, seeded order) | — | 214.01 | Full-suite trial passed; target not met. |
+| `bun run check` | 402.50 | 208.54–215.68 | Three consecutive final runs passed; median 210.91 s, about 48% faster. |
+
+Final verification on the unchanged three-worker script, with no retries:
+
+| Command | Wall seconds | Result |
+|---|---:|---|
+| Typecheck | 2.56 | Passed |
+| Biome on changed TS/JSON files | 0.44 | Passed; no fixes applied |
+| Architecture check | 14.42 | Passed |
+| `bun run check` #1 | 210.91 | Passed; test phase 197.47 s |
+| `bun run check` #2 | 215.68 | Passed; test phase 197.50 s |
+| `bun run check` #3 | 208.54 | Passed; test phase 191.61 s |
+
+Each final check includes all 275 test files: **3,098 pass, 14 existing skips, 0 failures**.
+After the gate, only this Markdown record was updated with its measurements. Validation
+is for Windows/Bun 1.4.2, not a claim of unlimited-concurrency safety or a cross-platform
+performance guarantee. Remaining work is to diagnose the native failures at four/six
+workers and reach the three-minute target without hiding them.
+
+Raw reproduction logs, JUnit timings and diagnostic output are retained locally under
+`node_modules/.cache/test-parallel/` (ignored, not part of the repository). To reproduce,
+alternate three fresh `bun test --parallel=4` / `bun test --parallel=6` commands, without
+other test runs in flight; do not infer reliability from the fastest run alone.
 
 ## Timing a run
 
@@ -52,7 +195,10 @@ Prefer readiness signals or bounded condition waits to fixed sleeps. The histori
 file-picker race (`d0fb241`, `f9cc40e`) required waiting for scheduled ingestion/search,
 not sleeping for 1 ms. Tests specifically covering timeout behavior retain that coverage.
 
-## Measurements
+## Previous test-speed measurements
+
+The remainder of this document records the preceding serial optimization job, before the
+parallel-safety follow-up above.
 
 Measured on Windows with Bun 1.4.2. The baseline serial suite passed in **433.75 s**
 (3,052 pass, 13 skip). An intermediate post-optimization serial profile passed in

@@ -1,4 +1,4 @@
-import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
+import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -434,17 +434,25 @@ test("a matching line is seen even when the same chunk floods the buffer past it
 })
 
 test("ended jobs are forgotten oldest end first; one that just ended is kept for its waiters", async () => {
-  const { registry, procs } = fakeRegistry({ maxRunning: 100 })
-  const first = registry.start({ command: "long", argv: ["a"], cwd })
-  procs[0]!.emit({ type: "spawned", pid: 1, contained: true })
-  for (let i = 1; i <= 50; i++) {
-    registry.start({ command: `short ${i}`, argv: ["a"], cwd })
-    procs[i]!.emit({ type: "exit", code: 0, signal: null })
+  // Model distinct end times: these fake processes can all finish in one clock tick.
+  const clock = spyOn(Date, "now").mockReturnValue(1000)
+  try {
+    const { registry, procs } = fakeRegistry({ maxRunning: 100 })
+    const first = registry.start({ command: "long", argv: ["a"], cwd })
+    procs[0]!.emit({ type: "spawned", pid: 1, contained: true })
+    for (let i = 1; i <= 50; i++) {
+      registry.start({ command: `short ${i}`, argv: ["a"], cwd })
+      clock.mockReturnValue(1000 + i)
+      procs[i]!.emit({ type: "exit", code: 0, signal: null })
+    }
+    const waiting = registry.waitFor(first.id, { timeoutMs: 2000 })
+    clock.mockReturnValue(1051)
+    procs[0]!.emit({ type: "exit", code: 0, signal: null })
+    expect((await waiting).reason).toBe("exit")
+    expect(registry.get(first.id)?.status).toBe("exited")
+    expect(registry.get("job2")).toBeUndefined()
+    expect(registry.list()).toHaveLength(50)
+  } finally {
+    clock.mockRestore()
   }
-  const waiting = registry.waitFor(first.id, { timeoutMs: 2000 })
-  procs[0]!.emit({ type: "exit", code: 0, signal: null })
-  expect((await waiting).reason).toBe("exit")
-  expect(registry.get(first.id)?.status).toBe("exited")
-  expect(registry.get("job2")).toBeUndefined()
-  expect(registry.list()).toHaveLength(50)
 })
