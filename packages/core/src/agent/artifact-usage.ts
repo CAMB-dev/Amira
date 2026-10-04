@@ -1,3 +1,4 @@
+// Owns artifact reference classification, usage aggregation and prune selection.
 import type { Message } from "@amira/ai"
 import type { ArtifactGroupUsage, ArtifactInfo } from "@amira/api"
 import { type ArtifactScope, type ArtifactStore, type ArtifactUsage, artifactIdsIn } from "../artifacts.ts"

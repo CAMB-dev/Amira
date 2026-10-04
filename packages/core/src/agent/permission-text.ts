@@ -1,3 +1,4 @@
+// Owns permission-policy explanations for model results and approval dialogs.
 import type { ApprovalPermission, PermissionMode } from "@amira/api"
 import type { PermissionVerdict } from "../permissions/policy.ts"
 

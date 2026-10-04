@@ -1,3 +1,4 @@
+// Owns tool-batch scheduling, execution and abort settlement.
 import { invalidArgs, type ToolCallBlock, type ToolResultMessage } from "@amira/ai"
 import type {
   BackgroundJobSession,

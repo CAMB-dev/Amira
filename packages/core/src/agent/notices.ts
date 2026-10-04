@@ -1,3 +1,4 @@
+// Owns expected/delivered notices, inbox handover and failed-turn retries.
 import { type UserMessage, userMessage } from "@amira/ai"
 import type { PendingNotice } from "@amira/api"
 import { joinMessages } from "./messages.ts"

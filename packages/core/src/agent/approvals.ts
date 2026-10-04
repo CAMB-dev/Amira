@@ -1,3 +1,4 @@
+// Owns approval/question routing and per-turn blocked waits.
 import type { ApprovalRequest, AskOutcome, AskQuestion, AskRequest } from "@amira/api"
 import type { Permissions, PermissionVerdict } from "../permissions/policy.ts"
 import { approvalPermission } from "./permission-text.ts"
