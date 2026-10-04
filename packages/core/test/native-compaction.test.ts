@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -425,6 +425,113 @@ test("a resumed session on another provider writes the summary from the session 
   expect(textOf(mock.requests[0]!.messages[0])).toContain("q1")
   expect(textOf(mock.requests[1]!.messages[0])).toContain("FROM FILE")
 })
+
+for (const fill of [false, true]) {
+  test(`compaction usage survives a failed session write${fill ? " when filling a checkpoint" : ""}`, async () => {
+    const { agent, ai, session, tree } = await setup(
+      [{ text: "r1" }, { text: "r2" }, { text: "SUMMARY", usage: { input: 70, output: 7 } }],
+      [checkpoint],
+      { compaction: { auto: false } },
+    )
+    await agent.prompt("q1")
+    await agent.prompt("q2")
+    if (fill) {
+      expect(await agent.compact()).toBe(true)
+      agent.setModel(ai.model("other/x"))
+    }
+    const before = tree.usage.input
+    const append = spyOn(session, "append").mockImplementation(() => {
+      throw new Error("disk full")
+    })
+    try {
+      expect(await agent.compact()).toBe(!fill)
+      expect(session.entries.filter((e) => e.type === "compaction")).toHaveLength(fill ? 1 : 0)
+      expect(agent.compactionUsage.map((u) => u.usage.input)).toEqual(fill ? [2000, 70] : [2000])
+      expect(tree.usage.input - before).toBe(fill ? 70 : 2000)
+    } finally {
+      append.mockRestore()
+    }
+  })
+}
+
+for (const path of ["native", "native-model", "text", "fill", "fill-error", "fallback-error"] as const) {
+  test(`aborted ${path} compaction records its spend exactly once`, async () => {
+    const filling = path.startsWith("fill")
+    const { agent, ai, session, tree, events, bus } = await setup(
+      [
+        { text: "r1" },
+        { text: "r2" },
+        path.endsWith("error")
+          ? { error: { message: "aborted" }, usage: { input: 70, output: 7 } }
+          : { text: "SUMMARY", usage: { input: 70, output: 7 } },
+      ],
+      [
+        path === "fallback-error"
+          ? {
+              ok: false,
+              error: { message: "unsupported" },
+              unsupported: true,
+              retryable: false,
+              usage: { input: 2000, output: 100, cacheRead: 0, cacheWrite: 0 },
+            }
+          : checkpoint,
+      ],
+      { compaction: { auto: false } },
+    )
+    await agent.prompt("q1")
+    await agent.prompt("q2")
+    if (filling) {
+      expect(await agent.compact()).toBe(true)
+      agent.setModel(ai.model("other/x"))
+    }
+    await bus.flush()
+    events.length = 0
+    const before = [...agent.messages]
+    const spent = tree.usage.input
+    const compact = ai.compact.bind(ai)
+    const stream = ai.stream.bind(ai)
+    const native = ai.nativeCompaction.bind(ai)
+    const change =
+      path === "native-model"
+        ? spyOn(ai, "nativeCompaction").mockImplementation((model) => {
+            agent.setModel(ai.model("mock/m2"))
+            return native(model)
+          })
+        : undefined
+    const call = path.startsWith("native")
+      ? spyOn(ai, "compact").mockImplementation(async (...args) => {
+          const result = await compact(...args)
+          agent.abort()
+          return result
+        })
+      : spyOn(ai, "stream").mockImplementation(async function* (...args) {
+          for await (const event of stream(...args)) {
+            if (event.type === "done" || event.type === "error") agent.abort()
+            yield event
+          }
+        })
+    try {
+      expect(await agent.compact(path === "text" ? "write a summary" : undefined)).toBe(false)
+      await bus.flush()
+      // A fill summary that came back before the abort is kept (it is paid for); the
+      // compaction that needed it still stops.
+      const kept = path === "fill"
+      if (kept) expect(agent.messages).not.toEqual(before)
+      else expect(agent.messages).toEqual(before)
+      expect(session.entries.filter((e) => e.type === "compaction")).toHaveLength(kept ? 2 : filling ? 1 : 0)
+      const expected = path.startsWith("native") ? 2000 : path === "fallback-error" ? 2070 : 70
+      expect(agent.compactionUsage.map((u) => u.usage.input)).toEqual(filling ? [2000, 70] : [expected])
+      expect(tree.usage.input - spent).toBe(expected)
+      if (path === "native-model")
+        expect(agent.compactionUsage[0]!.model).toEqual({ provider: "mock", model: "m2" })
+      expect(ofType(events, "compact.end")).toEqual([])
+      if (path !== "fallback-error") expect(ofType(events, "extension.notice")).toHaveLength(kept ? 1 : 0)
+    } finally {
+      call.mockRestore()
+      change?.mockRestore()
+    }
+  })
+}
 
 test("aborting a server compaction leaves the conversation as it was", async () => {
   const started = Promise.withResolvers<void>()
