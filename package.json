@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "amira": "bun packages/cli/src/main.ts",
-    "test": "bun test --parallel=4",
+    "test": "bun test --parallel=3 --timings=scripts/test-timings.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",

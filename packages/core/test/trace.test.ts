@@ -496,6 +496,8 @@ test("a loss marker makes first-token timing unknown even if a later delta survi
   expect(result).not.toHaveProperty("firstToken")
 })
 
+// This must be a real process.exit, not a mock. Waiting for this native child under
+// parallel Windows load has exceeded 10 s; allow startup and the emergency hook to finish.
 test("process.exit emergency hook saves delivered records without an async flush", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "amira-trace-exit-"))
   cleanups.push(async () => {
@@ -531,7 +533,7 @@ test("process.exit emergency hook saves delivered records without an async flush
     .map((line) => JSON.parse(line))
   expect(lines.map((record) => record.type)).toEqual(["trace", "status"])
   expect(lines[0].sessionId).toBe("exit")
-}, 10000)
+}, 30_000)
 
 test("opening a session without activity writes no trace file", async () => {
   const { start, recorder, file, bus } = setup()
