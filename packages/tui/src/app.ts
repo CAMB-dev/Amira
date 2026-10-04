@@ -1,7 +1,4 @@
-import { spawnSync } from "node:child_process"
-import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { statSync } from "node:fs"
 import { isNoModel, type ServerToolBlock } from "@amira/ai"
 import { type AnyEvent, type EventMap, modelLabel, type ToolDetailLevel } from "@amira/api"
 import { type Agent, MODE_SUMMARY, parseCommandLine } from "@amira/core"
@@ -11,7 +8,6 @@ import {
   defaultTheme,
   detectEnv,
   Editor,
-  type EditorImage,
   type EditorPart,
   ImageStore,
   type InputEvent,
@@ -27,7 +23,7 @@ import {
 import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
 import { createBottomArea } from "./app/bottom-area.ts"
 import { createCommandRunner } from "./app/command-runner.ts"
-import { externalEditor } from "./app/external-editor.ts"
+import { createComposer } from "./app/composer.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
 import { RewindFlow } from "./app/rewind.ts"
@@ -43,25 +39,14 @@ import {
 } from "./app/startup.ts"
 import { interactiveTerminal } from "./app/terminal.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
-import { CommandPopup } from "./command-popup.ts"
-import { FileIndex } from "./file-index.ts"
-import { FilePicker } from "./file-picker.ts"
 import { compactionNotice } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
-import { HistorySearch } from "./history-search.ts"
-import {
-  imageBytes,
-  imageMimeType,
-  MAX_IMAGE_BYTES,
-  pastedImagePaths,
-  readClipboard,
-  readImage,
-} from "./image-input.ts"
+import { imageBytes, MAX_IMAGE_BYTES } from "./image-input.ts"
 import { createInlineView } from "./inline-view.ts"
 import { defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
-import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
+import { PromptHistory } from "./prompt-history.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import { TerminalStatus } from "./terminal-status.ts"
 import { INTERRUPTED_NOTICE, modelErrorNotice } from "./transcript.ts"
@@ -167,97 +152,27 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     isSubmit: (e) => keys.is(e, "submit"),
     isNewline: (e) => keys.is(e, "newline"),
   })
-  const clipboardAbort = new AbortController()
-  let clipboardRead: AbortController | undefined
-
-  function cancelClipboard() {
-    clipboardRead?.abort()
-    clipboardRead = undefined
-  }
-
-  function attachImages(attachments: EditorImage[]): boolean {
-    const bytes = imageBytes([...editor.getParts(), ...attachments.map((image) => ({ image }))])
-    if (bytes > MAX_IMAGE_BYTES) {
-      showNote("Images in a message are limited to 5 MB total. Remove an attachment or resize it first.")
-      return false
-    }
-    for (const image of attachments) editor.insertImage(image)
-    showNote(
-      `Attached ${attachments.map((image) => image.name.replace(/\p{Cc}/gu, " ")).join(", ")}. Backspace removes an attachment.`,
-    )
-    return true
-  }
-
-  function pasteText(text: string) {
-    const paths = pastedImagePaths(text, agent.cwd)
-    let images: EditorImage[] | undefined
-    try {
-      images = paths?.map(readImage)
-    } catch (err) {
-      // An image that cannot be attached stays a path in the text rather than vanishing.
-      showNote(`${err instanceof Error ? err.message : String(err)} Pasted as text.`)
-    }
-    if (!images || !attachImages(images)) editor.handleInput({ type: "paste", text })
-    redraw()
-  }
-
-  async function pasteClipboard() {
-    if (clipboardRead) return
-    const read = new AbortController()
-    clipboardRead = read
-    const signal = AbortSignal.any([clipboardAbort.signal, read.signal])
-    const session = agent
-    try {
-      const result = await (opts.clipboard
-        ? opts.clipboard(agent.cwd, signal)
-        : readClipboard({ cwd: agent.cwd, env: { ...process.env, ...env }, signal }))
-      if (signal.aborted || agent !== session) return
-      if (result.type === "image") attachImages([result.image])
-      else if (result.type === "text") pasteText(result.text)
-      else showNote("No image or text on the clipboard. You can also paste an image file path.")
-    } catch (err) {
-      if (!signal.aborted) showNote(err instanceof Error ? err.message : String(err))
-    } finally {
-      if (clipboardRead === read) clipboardRead = undefined
-      if (!clipboardAbort.signal.aborted) redraw()
-    }
-  }
   const commands = opts.commands
-  // The "/" popup lists commands, the "$" one skills; at most one is open, by the first character.
-  const popups = commands
-    ? [
-        new CommandPopup(commands, () => view.requestRender(), keys),
-        new CommandPopup(
-          { complete: (line) => commands.completeSkill(line), list: () => commands.skills() },
-          () => view.requestRender(),
-          keys,
-          "$",
-        ),
-      ]
-    : []
-  const openPopup = () => popups.find((p) => p.open)
   const history = opts.history ?? new PromptHistory()
-  const historyNav = new HistoryNavigator(history, editor)
-  const search = new HistorySearch(history, editor, keys)
-  /** The project's files for the @ picker; one the UI made itself it also stops on quit. */
-  const ownFiles = opts.files ? undefined : new FileIndex(agent.cwd)
-  const filePicker = new FilePicker(opts.files ?? ownFiles!, () => view.requestRender(), keys)
-  /**
-   * Tells the completion lists what the editor holds; a promise while commands' candidates are
-   * on their way. Cheap on any text: the command popup only looks at a single line, the file
-   * picker at the caret's line up to the caret, and it never waits for the project's files.
-   * A prompt ↑/↓ recalled opens no list until it is edited: the list would take ↑/↓, and the
-   * walk would stop at the first "/status", "$skill" or "@file" in the history.
-   */
-  const syncCompletions = (): Promise<void> | undefined => {
-    const recalled = historyNav.recalling
-    const hasImages = editor.getParts().some((p) => typeof p !== "string" && "image" in p)
-    const line = editor.lineCount === 1 && !recalled && !hasImages ? editor.getText() : ""
-    const commandsPending = popups.map((p) => p.update(line)).find(Boolean)
-    const claimed = !hasImages && commands?.inputLine(editor.getText())
-    filePicker.update(recalled || claimed ? "" : editor.textBeforeCaret())
-    return commandsPending
-  }
+  const composer = createComposer({
+    editor,
+    keys,
+    history,
+    commands,
+    files: opts.files,
+    agent: () => agent,
+    env,
+    terminal,
+    clipboard: opts.clipboard,
+    showNote,
+    requestRender: () => view.requestRender(),
+    redraw,
+    redrawTerminal: () => view.redraw(),
+    runPopup: (line) => {
+      if (line.startsWith("$")) runSkill(line)
+      else commandRunner.run(line)
+    },
+  })
   // Shift+Enter is no use where the terminal sends it as plain Enter.
   const reaches = (s: KeySpec) => capabilities.shiftEnter || !(s.shift && s.name === "enter")
   const bottomArea = createBottomArea({
@@ -279,9 +194,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     reaches,
     enterDoes,
     spinner,
-    search,
-    popups,
-    filePicker,
+    search: composer.search,
+    popups: composer.popups,
+    filePicker: composer.filePicker,
   })
 
   const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
@@ -644,14 +559,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const trimmed = text.trim()
     const hasImages = parts.some((p) => typeof p !== "string" && "image" in p)
     if (
-      clipboardRead ||
+      composer.clipboardPending ||
       (hasImages &&
         (imageBytes(parts) > MAX_IMAGE_BYTES || (!isNoModel(agent.model) && !agent.model.caps.images)))
     ) {
       editor.setParts(parts)
       view.notice(
         "warning",
-        clipboardRead
+        composer.clipboardPending
           ? "Clipboard paste is still loading. Send the message once it finishes."
           : imageBytes(parts) > MAX_IMAGE_BYTES
             ? "Images in a message are limited to 5 MB total. Remove an attachment or resize it first."
@@ -662,7 +577,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (!trimmed && !hasImages) return
     editor.clear()
     history.add(parts)
-    historyNav.reset()
+    composer.resetHistory()
     const message = outbox.prepare(trimmed, parts, display)
     if (!hasImages && commands && parseCommandLine(trimmed)) commandRunner.run(trimmed)
     else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed)
@@ -716,7 +631,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
-    cancelClipboard()
+    composer.cancelClipboard()
     outbox.reset()
     view.leaveSession()
     agent = next
@@ -740,7 +655,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   let quitting = false
   function quit(code = 0) {
-    clipboardAbort.abort()
+    composer.abortClipboard()
     if (quitting) return
     quitting = true
     commandRunner.abortAll(new Error("quitting"))
@@ -750,8 +665,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     offCommand?.()
     clearTimeout(hintTimer)
     outbox.dispose()
-    filePicker.dispose()
-    ownFiles?.dispose()
+    composer.dispose()
     for (const d of overlays.dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     overlays.waitingChanged("resolved")
     spinner.stop()
@@ -776,26 +690,19 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     }
     if (overlays.handleInput(e)) return
     const dialog = overlays.dialogs[0]
-    // Recalled skills use the same Enter guard as typed ones, without taking the history's arrows.
-    if (
-      !dialog &&
-      !search.active &&
-      historyNav.recalling &&
-      editor.lineCount === 1 &&
-      editor.getText().startsWith("$") &&
-      keys.is(e, "popup.accept")
-    )
-      historyNav.reset()
-    // Keys of one input chunk arrive before the next frame; the popup must not answer Enter
-    // with candidates for text the editor no longer holds.
-    if (!dialog && !search.active) syncCompletions()
+    if (!dialog) composer.prepareInput(e)
     if (keys.is(e, "redraw")) {
       // Also over a dialog or the search: they are part of the screen.
       return view.redraw()
     }
     // While a dialog or the history search has the keyboard, the wheel still scrolls the
     // transcript but clicks do not select in it; a drag started before still ends.
-    if (e.type === "mouse" && (dialog || search.active) && e.action !== "wheel" && e.action !== "release")
+    if (
+      e.type === "mouse" &&
+      (dialog || composer.search.active) &&
+      e.action !== "wheel" &&
+      e.action !== "release"
+    )
       return
     // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
     // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
@@ -806,26 +713,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (dialog) {
       // Ctrl+C closes the dialog like Esc (dialog.cancel).
       dialog.handleInput(e)
-    } else if (search.active) {
+    } else if (composer.search.active) {
       // Keys like the arrows end the search and then do what they do.
-      if (search.handleKey(e) === "accepted-pass") return onInput(e)
-    } else if (openPopup() && handlePopupKey(e)) {
-      // The popup took one of its keys (popup.*).
-    } else if (filePicker.visible && handleFileKey(e)) {
-      // The file picker took one of its keys (popup.*).
+      if (composer.handleSearchKey(e) === "accepted-pass") return onInput(e)
+    } else if (composer.handleCompletionKey(e)) {
+      // The popup or file picker took one of its keys (popup.*).
     } else if (!viewFirst && view.handleInput(e)) {
       // The view took one of its keys (scrolling, find, selecting, copying).
-    } else if (keys.is(e, "paste.image") || (e.type === "paste" && !e.text)) {
-      void pasteClipboard()
-    } else if (e.type === "paste") {
-      pasteText(e.text)
-    } else if (keys.is(e, "history.search")) {
-      search.start()
-    } else if (
-      (keys.is(e, "history.prev") || keys.is(e, "history.next")) &&
-      historyNav.move(keys.is(e, "history.prev") ? -1 : 1)
-    ) {
-      // The key walked the prompt history.
+    } else if (composer.handleInput(e)) {
+      // Paste or prompt history handled the input.
     } else if (keys.is(e, "queue")) {
       // Alt+Enter or Ctrl+Q: the other of what Enter does while a turn runs.
       submitDraft(otherWay(enterDoes))
@@ -834,7 +730,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (keys.is(e, "submit.queue")) {
       submitDraft("queue")
     } else if (keys.is(e, "cancel")) {
-      cancelClipboard()
+      composer.cancelClipboard()
       if (commandRunner.cancel()) {
         // A slash command runs alongside the turn; cancellation leaves the input intact.
       } else if (activity.working) outbox.interrupt()
@@ -857,13 +753,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (keys.is(e, "help") && editor.isEmpty) {
       // Lists open only on text, so an empty input has none; a dialog took the key above.
       return overlays.openKeyReference()
-    } else if (editKey(e)) {
+    } else if (composer.editKey(e)) {
       // An editing key of the input (cut, paste back, undo, the external editor).
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too. Twice in a row: rewind.
       if (!commandRunner.cancel()) outbox.pressInterrupt()
     } else {
-      editor.handleInput(e)
+      composer.handleEditorInput(e)
     }
     redraw()
   }
@@ -875,116 +771,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * Completion runs here, on input, never while rendering.
    */
   function redraw() {
-    const pending = syncCompletions()
+    const pending = composer.syncCompletions()
     if (pending) setTimeout(() => view.requestRender(), FRAME_MS)
     else view.requestRender()
-  }
-
-  /** The input's editing keys beyond typing: the kill ring, undo and redo, the external editor. */
-  function editKey(e: InputEvent): boolean {
-    if (keys.is(e, "edit.kill-to-start")) editor.killToLineStart()
-    else if (keys.is(e, "edit.kill-to-end")) editor.killToLineEnd()
-    else if (keys.is(e, "edit.kill-word")) editor.killWordBefore()
-    else if (keys.is(e, "edit.yank")) editor.yank()
-    else if (keys.is(e, "edit.undo")) editor.undo()
-    else if (keys.is(e, "edit.redo")) editor.redo()
-    else if (keys.is(e, "edit.external")) editExternally()
-    else return false
-    return true
-  }
-
-  // Edits the message in $VISUAL, $EDITOR, git core.editor, or the platform's default editor.
-  // The terminal is handed over until it exits, then the file's text is the input's.
-  function editExternally() {
-    if (editor.getParts().some((p) => typeof p !== "string" && "image" in p)) {
-      showNote("Remove image attachments before using the external text editor.")
-      return
-    }
-    const command = externalEditor(env, agent.cwd)
-    const file = join(tmpdir(), `amira-message-${process.pid}-${Date.now()}.md`)
-    try {
-      writeFileSync(file, editor.getText())
-    } catch (err) {
-      showNote(`Cannot write the message for the editor: ${err instanceof Error ? err.message : String(err)}`)
-      return
-    }
-    let result: ReturnType<typeof spawnSync> | undefined
-    let failed: unknown
-    try {
-      const resume = terminal.suspend?.()
-      try {
-        result = spawnSync(`${command} "${file}"`, {
-          cwd: agent.cwd,
-          stdio: "inherit",
-          shell: true,
-          env: { ...process.env, ...env },
-        })
-      } finally {
-        resume?.()
-      }
-    } catch (err) {
-      failed = err
-    }
-    try {
-      if (!result)
-        showNote(`Cannot start ${command}: ${failed instanceof Error ? failed.message : String(failed)}`)
-      else if (result.error) showNote(`Cannot start ${command}: ${result.error.message}`)
-      else if (result.status !== 0)
-        showNote(`${command} exited with ${result.status ?? result.signal}; the message is unchanged`)
-      else {
-        // Editors end the file with a line break the message did not have.
-        const text = readFileSync(file, "utf8").replace(/\r\n?/g, "\n").replace(/\n$/, "")
-        if (text !== editor.getText()) editor.setText(text)
-      }
-    } catch (err) {
-      showNote(`Cannot read the message back: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      rmSync(file, { force: true })
-    }
-    view.redraw()
-  }
-
-  /** Applies what the popup did with a key; false when it left the key to the editor. */
-  function handlePopupKey(e: InputEvent): boolean {
-    const action = openPopup()!.handleKey(e)
-    if (!action) return false
-    if (action.type === "replace") editor.setText(action.text)
-    else if (action.type === "run") {
-      history.add([action.line])
-      historyNav.reset()
-      editor.clear()
-      if (action.line.startsWith("$")) runSkill(action.line)
-      else commandRunner.run(action.line)
-    }
-    return true
-  }
-
-  /** Applies what the file picker did with a key; false when it left the key to the editor. */
-  function handleFileKey(e: InputEvent): boolean {
-    const action = filePicker.handleKey(e)
-    if (!action) return false
-    if (action.type === "insert") {
-      const path = action.text
-        .slice(1)
-        .trim()
-        .replace(/^"(.*)"$/, "$1")
-      if (!path.endsWith("/") && imageMimeType(path)) {
-        try {
-          const image = readImage(join(agent.cwd, path))
-          if (imageBytes([...editor.getParts(), { image }]) > MAX_IMAGE_BYTES)
-            showNote(
-              "Images in a message are limited to 5 MB total. Remove an attachment or resize it first.",
-            )
-          else {
-            editor.replaceBeforeCaret(action.replace, "")
-            attachImages([image])
-          }
-        } catch (err) {
-          showNote(err instanceof Error ? err.message : String(err))
-        }
-      } else editor.replaceBeforeCaret(action.replace, action.text)
-    }
-    return true
   }
 
   const off = agent.bus.subscribe(onEvent)
