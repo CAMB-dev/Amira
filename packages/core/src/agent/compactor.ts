@@ -1,3 +1,4 @@
+// Owns session compaction, checkpoint readability and compaction accounting.
 import {
   type Ai,
   addUsage,

@@ -1,3 +1,4 @@
+// Owns provider-stream translation, reasoning effort and compaction fallback reporting.
 import type {
   Ai,
   AssistantMessage,

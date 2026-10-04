@@ -126,6 +126,7 @@ type ModelReply =
 
 /** One agent session: a conversation, a model and the loop that drives tool use. */
 export class Agent {
+  // Wiring/collaborators: session capabilities, configuration and their owners.
   readonly sessionId: string
   readonly parentSessionId: string | undefined
   readonly bus: EventBus
@@ -147,41 +148,52 @@ export class Agent {
   /** The permission policy of this session's tree. */
   readonly permissions: Permissions
   model: ModelInfo
-
+  /** This session's saved tool outputs (A1). */
+  readonly artifacts: ArtifactStore
+  readonly providerSettings: Record<string, ProviderSettings>
+  /** The effort for each model, with the /thinking override; new sub-agents inherit it. */
+  readonly thinking: Thinking
+  /**
+   * Records extensions keep in this session (SessionData): custom entries of its file, or
+   * kept in memory when it has none.
+   */
+  readonly data: SessionData
   #ai: Ai
   #approvals: ApprovalGate
   #toolRunner: ToolRunner
   #history: History
   #contextManager: ContextManager
   #compactor: Compactor
-  #status: SessionStatus = "idle"
-  #abort: AbortController | undefined
+  #inbox: NoticeInbox
   #maxSteps: number
   #maxTokens: number | undefined
-  #abortGraceMs: number
+  #maxParallelTools: number
   #sections: PromptSection[]
   #compaction: CompactionOptions
   #context: ContextOptions
-  /** This session's saved tool outputs (A1). */
-  readonly artifacts: ArtifactStore
-  #maxParallelTools: number
   /** Deferred tools this session loaded (via tool_search), in load order. */
   #loadedTools = new Set<string>()
-  readonly providerSettings: Record<string, ProviderSettings>
-  /** The effort for each model, with the /thinking override; new sub-agents inherit it. */
-  readonly thinking: Thinking
   /**
    * Loaded tools restored from the session file, checked at the first model call: by then
    * system.build has waited for tools that register late (MCP servers).
    */
   #restoredTools: string[] | undefined
   #toolSession: ToolSession
+  #onIdleNotice: (() => void) | undefined
+  #endTurn: (() => boolean) | undefined
+
+  // Turn state: execution, status and steering (the abort controller also guards holds).
+  #status: SessionStatus = "idle"
+  #abort: AbortController | undefined
   #turn: Turn | undefined
   /** Steering messages waiting for the next model call of the running turn. */
   #steering: UserMessage[] = []
   /** Aborts waits that can return partial output as soon as steering arrives. */
   #steerAbort: AbortController | undefined
-  #inbox: NoticeInbox
+  /** The running turn's promise, for owners that wait for whatever turn runs. */
+  #current: Promise<TurnResult> | undefined
+
+  // Hold state: work between turns and the messages queued behind it.
   /**
    * What holds the session (busy, but no turn): "compaction" during a manual compaction, or
    * the work hold() runs, e.g. "reload".
@@ -189,19 +201,11 @@ export class Agent {
   #holding: string | undefined
   /** Messages sent during a manual compaction; they start one turn when it ends. */
   #afterCompaction: AfterCompaction | undefined
-  #onIdleNotice: (() => void) | undefined
-  #endTurn: (() => boolean) | undefined
-  /** The running turn's promise, for owners that wait for whatever turn runs. */
-  #current: Promise<TurnResult> | undefined
+
+  // Lifecycle: disposal and ownership of the session lease.
   #disposePromise: Promise<void> | undefined
   #disposed = false
   #sessionLease = false
-
-  /**
-   * Records extensions keep in this session (SessionData): custom entries of its file, or
-   * kept in memory when it has none.
-   */
-  readonly data: SessionData
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
@@ -248,7 +252,6 @@ export class Agent {
     this.#ai = opts.ai
     this.#maxSteps = opts.maxSteps ?? 200
     this.#maxTokens = opts.maxTokens
-    this.#abortGraceMs = opts.abortGraceMs ?? 2000
     const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
     this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
     this.tree = opts.tree
@@ -281,7 +284,7 @@ export class Agent {
       cwd: this.cwd,
       sessionId: this.sessionId,
       maxParallelTools: this.#maxParallelTools,
-      abortGraceMs: this.#abortGraceMs,
+      abortGraceMs: opts.abortGraceMs ?? 2000,
       fileRewind: this.fileRewind,
       backgroundJobs: this.backgroundJobs,
       allowsTool: (tool) => this.#allowsTool(tool),
@@ -864,7 +867,7 @@ export class Agent {
         reason,
         cwd: this.cwd,
         ...(this.session?.title ? { title: this.session.title } : {}),
-        model: { provider: this.model.provider, model: this.model.id },
+        model: modelRef(this.model),
       },
       {
         sessionId: this.sessionId,
@@ -1127,16 +1130,11 @@ export class Agent {
     return offeredTools(this.tools, this.#loadedTools, (tool) => this.#allowsTool(tool))
   }
 
-  /** Deferred tools this model may load, after its provider and model choices. */
-  #offeredDeferred() {
-    return offeredDeferredTools(this.tools, (tool) => this.#allowsTool(tool))
-  }
-
   /** The system prompt and history for a model call, through the system.build and context.build interceptors. */
   async #buildContext(signal: AbortSignal) {
     return buildContext({
       sections: this.#sections,
-      offeredDeferred: () => this.#offeredDeferred(),
+      offeredDeferred: () => offeredDeferredTools(this.tools, (tool) => this.#allowsTool(tool)),
       messages: () => this.messages,
       views: () => this.#history.views,
       interceptors: this.interceptors,
@@ -1161,7 +1159,7 @@ export class Agent {
     if (turn.signal.aborted) return { kind: "aborted" }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
-    const requestModelRef = { provider: this.model.provider, model: this.model.id }
+    const requestModelRef = modelRef(this.model)
     this.#emit(turn, "message.start", { model: requestModelRef, contextWindow: this.model.contextWindow })
     const call = await modelCall({
       ai: this.#ai,
