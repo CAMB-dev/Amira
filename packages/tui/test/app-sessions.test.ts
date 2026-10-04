@@ -1,9 +1,116 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { userMessage } from "@amira/ai"
 import { defineTool, textResult } from "@amira/api"
-import { Agent } from "@amira/core"
+import { Agent, AgentBusyError } from "@amira/core"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
-import { closeImageApp, lastUserText, QUEUE_HINT, setup, waitFor } from "./app-harness.ts"
+import {
+  ALT_ENTER,
+  closeImageApp,
+  lastUserText,
+  paste,
+  QUEUE_HINT,
+  setup,
+  userTexts,
+  waitFor,
+} from "./app-harness.ts"
+
+for (const held of ["queued", "Esc flush", "microtask", "nine pastes"] as const) {
+  test(`session switching restores ${held} messages before the draft and never sends them automatically`, async () => {
+    const release = Promise.withResolvers<void>()
+    const s = await setup(
+      [{ text: "0123456789ABCDEFGHIJKLMNOPQRSTUV", hold: { chunks: 1, until: release.promise } }],
+      { rows: 60, commands: [{ name: "quit", description: "Quit", run: (_args, ctx) => ctx.quit() }] },
+    )
+    const next = new Agent({ ai: s.ai, model: s.ai.model("mock/m1"), cwd: "/work/proj", bus: s.bus })
+    const folded = "queued paste ".repeat(100)
+    const extras =
+      held === "nine pastes" ? Array.from({ length: 8 }, (_, i) => `paste ${i} `.repeat(200)) : []
+    let off = () => {}
+    try {
+      s.terminal.send("go\r")
+      await s.shows("01234567")
+      s.terminal.send(`${paste(folded)}${ALT_ENTER}`)
+      await waitFor(() => s.live().includes("queued ›"), "queued paste")
+      for (const text of extras) s.terminal.send(`${paste(text)}${ALT_ENTER}`)
+      s.terminal.send(`second${ALT_ENTER}`)
+      await s.shows(extras.length ? "+7 more waiting" : "queued › second")
+      if (held === "Esc flush") {
+        s.terminal.send("third\r")
+        await s.shows("steering › third")
+      }
+      s.terminal.send("draft")
+      await waitFor(() => s.live().includes("draft"), "draft")
+      if (held === "Esc flush" || held === "microtask") {
+        off = s.bus.subscribe((event) => {
+          if (event.type === "turn.end" && event.sessionId === s.agent.sessionId) s.commands!.switchTo(next)
+        })
+        if (held === "Esc flush") s.terminal.send("\x1b[27u")
+        release.resolve()
+        await waitFor(() => s.commands!.agent === next, "switch during flush")
+      } else s.commands!.switchTo(next)
+      s.agent.abort()
+      release.resolve()
+      await s.idle()
+      await Bun.sleep(550)
+      expect(next.messages).toEqual([])
+      expect(s.live()).not.toContain("queued ›")
+      expect(s.live()).not.toContain("steering ›")
+      if (!extras.length) expect(s.live()).toContain("[pasted 1300 chars #1]")
+      s.mock.push({ text: "new session reply" })
+      await next.prompt("new session question")
+      await s.bus.flush()
+      expect(userTexts(next)).toEqual(["new session question"])
+      s.mock.push({ text: "restored input sent" })
+      s.terminal.send("\r")
+      await s.shows("restored input sent")
+      expect(next.messages[2]).toMatchObject({
+        display: { text: expect.stringContaining("[pasted 1300 chars #1]") },
+      })
+      expect(userTexts(next)).toEqual([
+        "new session question",
+        [folded, ...extras, "second", ...(held === "Esc flush" ? ["third"] : []), "draft"].join("\n\n"),
+      ])
+    } finally {
+      off()
+      release.resolve()
+      s.agent.abort()
+      next.abort()
+      await next.prompt("cleanup")
+      await s.bus.flush()
+      s.terminal.send("\x03/quit\r")
+      expect(await s.exited).toBe(0)
+    }
+  })
+}
+
+for (const error of [new AgentBusyError("busy"), new Error("old session failure")]) {
+  test(`a late ${error.name} rejection after switching restores the input without a notice`, async () => {
+    const s = await setup([], {
+      commands: [{ name: "quit", description: "Quit", run: (_args, ctx) => ctx.quit() }],
+    })
+    const next = new Agent({ ai: s.ai, model: s.ai.model("mock/m1"), cwd: "/work/proj", bus: s.bus })
+    const prompt = spyOn(s.agent, "prompt").mockRejectedValue(error)
+    try {
+      s.terminal.send("pending input\r")
+      s.commands!.switchTo(next)
+      await Bun.sleep(30)
+      expect(s.live()).toContain("│ › pending input")
+      expect(s.live()).not.toContain("queued ›")
+      expect(s.all()).not.toContain(error.message)
+      s.mock.push({ text: "new session reply" })
+      await next.prompt("new session question")
+      await s.bus.flush()
+      expect(userTexts(next)).toEqual(["new session question"])
+    } finally {
+      prompt.mockRestore()
+      next.abort()
+      await next.prompt("cleanup")
+      await s.bus.flush()
+      s.terminal.send("\x03/quit\r")
+      expect(await s.exited).toBe(0)
+    }
+  })
+}
 
 for (const mode of ["fullscreen", "inline"] as const) {
   test(`${mode}: /resume names the resumed session once in its boundary`, async () => {

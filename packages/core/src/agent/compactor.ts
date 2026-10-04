@@ -152,6 +152,15 @@ export class Compactor {
         this.#deps.emit(turn, "compact.failed", { error: "nothing to compact yet", empty: true })
       return undefined
     }
+    let usage = emptyUsage()
+    let counted = false
+    let recorded = false
+    let writer = this.#deps.options.model ?? this.#deps.model()
+    const count = (u: Usage | undefined) => {
+      if (!u) return
+      usage = addUsage(usage, u)
+      counted = true
+    }
     try {
       const gate = await this.#deps.interceptors.run(
         "compact.before",
@@ -193,13 +202,6 @@ export class Compactor {
         ...(native ? { native: true } : {}),
       })
 
-      let usage = emptyUsage()
-      let counted = false
-      const count = (u: Usage | undefined) => {
-        if (!u) return
-        usage = addUsage(usage, u)
-        counted = true
-      }
       let summary: string | undefined
       let checkpoint: Signature | undefined
       /** Tokens the server wrote for the checkpoint: about what it takes up in the context. */
@@ -219,9 +221,10 @@ export class Compactor {
         // with the hosted search, which the dialect adds beside them as in every request.
         if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
         if (signal.aborted) throw new Error("aborted")
+        writer = this.#deps.model()
         const r = await this.#deps.ai.compact(
           {
-            model: this.#deps.model(),
+            model: writer,
             systemPrompt,
             // Sent as requests send them; `compacted` keeps the messages themselves.
             messages: projectMessages(input, this.#deps.history.views),
@@ -238,7 +241,7 @@ export class Compactor {
           checkpointTokens = r.usage.output
         } else fallback = compactionFallback(r, (notice) => this.#deps.emit(turn, "extension.notice", notice))
       }
-      const writer = this.#deps.options.model ?? this.#deps.model()
+      writer = this.#deps.options.model ?? this.#deps.model()
       if (summary === undefined) {
         try {
           if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
@@ -258,7 +261,6 @@ export class Compactor {
         } catch (err) {
           // What the failed compaction still cost: the server attempts before it, and its own.
           if (err instanceof SummaryError) count(err.usage)
-          if (counted) this.#recordCompactionUsage(usage, modelRef(writer), false)
           throw err
         }
       }
@@ -318,7 +320,13 @@ export class Compactor {
         ...(counted ? { usage } : {}),
       })
       if (counted)
-        this.#recordCompactionUsage(usage, nativeRef ?? modelRef(writer), Boolean(checkpoint), true)
+        this.#recordCompactionUsage(
+          usage,
+          nativeRef ?? modelRef(writer),
+          Boolean(checkpoint),
+          Boolean(entryId),
+        )
+      recorded = true
       this.#deps.history.noteCompaction(replacement[0]!, info, compacted)
       for (const m of replacement) if (entryId) this.#deps.history.setEntryId(m, entryId)
       for (const m of replacedMessages) if (!retained.includes(m)) this.#deps.history.forgetEntry(m)
@@ -343,6 +351,7 @@ export class Compactor {
       })
       return true
     } catch (err) {
+      if (counted && !recorded) this.#recordCompactionUsage(usage, modelRef(writer), false)
       this.#deps.emit(turn, "compact.failed", { error: err instanceof Error ? err.message : String(err) })
       return false
     }
@@ -418,6 +427,10 @@ export class Compactor {
         const why = err instanceof Error ? err.message : String(err)
         return `${target} cannot read the server-side compaction made by ${cp.provider} for ${cp.model}, and writing a text summary for it failed: ${why}`
       }
+      if (signal.aborted) {
+        this.#recordCompactionUsage(written.usage, modelRef(writer), false)
+        return undefined
+      }
       const oldId = this.#deps.history.entryId(m)
       const original = oldId ? this.#deps.session?.get(oldId) : undefined
       const pair = summaryMessages(written.summary, modelRef(writer), cp)
@@ -433,7 +446,7 @@ export class Compactor {
         ...(written.usage ? { usage: written.usage } : {}),
         ...(oldId ? { fills: oldId } : {}),
       })
-      if (written.usage) this.#recordCompactionUsage(written.usage, modelRef(writer), false, true)
+      if (written.usage) this.#recordCompactionUsage(written.usage, modelRef(writer), false, Boolean(entryId))
       const ack = this.#deps.history.messages[i + 1]
       const pairLength = ack?.role === "assistant" && isSummaryMessage(ack) ? 2 : 1
       this.#deps.history.messages.splice(i, pairLength, ...pair)

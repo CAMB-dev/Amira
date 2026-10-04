@@ -717,6 +717,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
     cancelClipboard()
+    outbox.reset()
     view.leaveSession()
     agent = next
     commandRunner.clearEchoes()
@@ -724,7 +725,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     showSession(next, true)
     view.requestRender()
   }
-
   /** Sets how much of tool results is shown; returns the note that says so. */
   function setDetail(level: ToolDetailLevel): string {
     detail = level
