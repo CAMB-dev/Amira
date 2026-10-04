@@ -9,12 +9,12 @@
   ],
   "scripts": {
     "amira": "bun packages/cli/src/main.ts",
-    "test": "bun test",
+    "test": "bun test --parallel=4",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",
     "architecture:check": "bun scripts/architecture-check.ts",
-    "check": "bun run architecture:check && bun run typecheck && bun run lint && bun test"
+    "check": "bun run architecture:check && bun run typecheck && bun run lint && bun run test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
