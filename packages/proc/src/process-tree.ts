@@ -1,4 +1,3 @@
-import { trace } from "../../../node_modules/.cache/test-parallel-followup/trace.ts" // [DEBUG-parallel]
 import { dlopen, FFIType, ptr } from "bun:ffi"
 import type { Subprocess } from "bun"
 
@@ -35,7 +34,6 @@ export function terminateJobHandle(handle: number): void {
   const k = getKernel32()
   if (!k) return
   const job = handle as unknown as NonNullable<ReturnType<Kernel32["CreateJobObjectW"]>>
-  trace('lost-job-kill', { job: Number(job), stack: new Error().stack }) // [DEBUG-parallel]
   k.TerminateJobObject(job, 1)
   k.CloseHandle(job)
 }
@@ -148,7 +146,6 @@ function windowsJobTree(proc: Subprocess, opts: TrackOptions): ProcessTree {
   // Kill-on-close is set before the process joins, so there is no moment it could escape it.
   const limited = !opts.killOnClose || !!(k && job && setKillOnClose(k, job))
   const contained = !!(k && job && limited && assignToJob(k, job, proc.pid))
-  trace('job-created', { job: Number(job), pid: proc.pid, contained, opts }) // [DEBUG-parallel]
   if (k && job && !contained) {
     k.CloseHandle(job)
     job = null
@@ -158,7 +155,6 @@ function windowsJobTree(proc: Subprocess, opts: TrackOptions): ProcessTree {
     ...(job ? { jobHandle: Number(job) } : {}),
     kill() {
       if (k && job) {
-        trace('job-kill', { job: Number(job), pid: proc.pid, code: proc.exitCode, signal: proc.signalCode, stack: new Error().stack }) // [DEBUG-parallel]
         k.TerminateJobObject(job, 1)
         proc.kill()
         return
@@ -183,7 +179,6 @@ function windowsJobTree(proc: Subprocess, opts: TrackOptions): ProcessTree {
     },
     terminate: () => false,
     dispose() {
-      trace('job-close', { job: Number(job), pid: proc.pid }) // [DEBUG-parallel]
       if (k && job) k.CloseHandle(job)
       job = null
     },
