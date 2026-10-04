@@ -57,7 +57,7 @@ should establish process identity across worker loss and cleanup, not add Git re
 Instrumentation progression (diagnostic times, **not** an optimized before/after):
 
 - Five-file native subset, four workers: **93.65, 92.22, 88.46 s**, all green. A fourth
-  run interrupted by the proxy disconnect is excluded.
+  run interrupted by an environment disconnect is excluded.
 - Full six-worker lifecycle/stream + Git Trace2: **143.76 fail, 179.40 fail, 149.62 pass**.
 - With a read-only native process sampler: **108.94 pass, 131.74 pass, 113.34 fail**;
   a subsequent series was **111.66 fail, 114.48 fail, 111.15 pass**.
