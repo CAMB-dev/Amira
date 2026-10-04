@@ -1014,8 +1014,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   view.banner(theme.muted(starts.join(` ${glyphs.separator} `)))
   if (agent.messages.length) showSession(agent, false)
   for (const e of opts.startupEvents ?? []) onEvent(e)
-  // With no provider yet, a welcome card with the steps to a first message says what the
-  // notice would.
+  // With no provider yet, a welcome card with the steps to a first message replaces the notice.
   const welcome = isNoModel(agent.model) && noProviders()
   if (welcome) view.notice("info", welcomeCard())
   // A notice about something else (a broken settings file, say) still shows under the card.
