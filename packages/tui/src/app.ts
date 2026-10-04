@@ -717,6 +717,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
     cancelClipboard()
+    outbox.reset()
     view.leaveSession()
     agent = next
     commandRunner.clearEchoes()
