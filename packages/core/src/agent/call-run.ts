@@ -1,3 +1,4 @@
+// Owns the per-call state shared by tool execution and approval timing.
 import type { ToolCallBlock, ToolResultMessage } from "@amira/ai"
 import type { ToolApproval, ToolDefinition } from "@amira/api"
 import type { ApprovalTiming } from "./approvals.ts"

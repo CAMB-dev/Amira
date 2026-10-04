@@ -1,3 +1,4 @@
+// Owns shared message, model-reference and tool-result helpers.
 import type { ModelInfo, ModelRef, ToolCallBlock, ToolResultMessage, UserMessage } from "@amira/ai"
 import type { ToolDefinition, ToolRejection, ToolResult } from "@amira/api"
 

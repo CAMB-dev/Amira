@@ -1,3 +1,4 @@
+// Owns tool-result projections, aging and context-size estimates.
 import {
   isNoModel,
   type Message,
