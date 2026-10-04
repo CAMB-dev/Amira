@@ -1,3 +1,4 @@
+// Owns Agent contracts, shared turn types, errors and notice-retry defaults.
 import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort } from "@amira/ai"
 import type {
   ApprovalRequest,

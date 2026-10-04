@@ -1,3 +1,4 @@
+// Owns the live conversation, its projections and session persistence.
 import { type Message, unansweredCalls } from "@amira/ai"
 import type { CompactionInfo, SessionData } from "@amira/api"
 import { type ContextView, projectMessages, type StoredView } from "../context.ts"

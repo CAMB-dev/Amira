@@ -1,3 +1,4 @@
+// Owns model-visible tool selection and intercepted request context construction.
 import { hasNativeWebSearch, type Message, type ModelInfo, type ToolSpec } from "@amira/ai"
 import type { ProviderSettings, ToolDefinition } from "@amira/api"
 import { type ContextView, projectMessages } from "../context.ts"
