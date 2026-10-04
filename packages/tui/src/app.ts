@@ -3,15 +3,8 @@ import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { isNoModel, type ServerToolBlock } from "@amira/ai"
-import {
-  type AnyEvent,
-  type EventMap,
-  type FrontendView,
-  isSubagentView,
-  modelLabel,
-  type ToolDetailLevel,
-} from "@amira/api"
-import { type Agent, AgentBusyError, MODE_SUMMARY, parseCommandLine, type UiRequests } from "@amira/core"
+import { type AnyEvent, type EventMap, modelLabel, type ToolDetailLevel } from "@amira/api"
+import { type Agent, AgentBusyError, MODE_SUMMARY, parseCommandLine } from "@amira/core"
 import {
   chooseImageSupport,
   colorSupported,
@@ -46,6 +39,7 @@ import {
   toPrompt,
   type WhileWorking,
 } from "./app/outbox.ts"
+import { OverlayManager } from "./app/overlays.ts"
 import { RewindFlow } from "./app/rewind.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
 import {
@@ -54,7 +48,6 @@ import {
   FRAME_MS,
   HINT_NOTE_MS,
   HOST_EVENTS,
-  overlayKeys,
   resumeAtStartup,
   tildePath,
   welcomeCard,
@@ -62,11 +55,8 @@ import {
 import { interactiveTerminal } from "./app/terminal.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { CommandPopup } from "./command-popup.ts"
-import { Dialog, type DialogAnswer, dialogEchoLines } from "./dialog.ts"
-import { ExtensionViewer } from "./extension-view.ts"
 import { FileIndex } from "./file-index.ts"
 import { FilePicker } from "./file-picker.ts"
-import { type FormRequest, FormView, uiFormBackend } from "./form-view.ts"
 import { compactionNotice, userText } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
@@ -80,7 +70,6 @@ import {
   readImage,
 } from "./image-input.ts"
 import { createInlineView } from "./inline-view.ts"
-import { KeyReference } from "./key-reference.ts"
 import { defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
 import { HistoryNavigator, PromptHistory } from "./prompt-history.ts"
@@ -167,8 +156,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   let flushTimer: { next: Outgoing[]; timer: ReturnType<typeof setTimeout> } | undefined
   /** When the interrupt key was last pressed, to tell a double press. */
   let lastInterruptAt = 0
-  /** Open extension dialogs; the first one has the keyboard. */
-  const dialogs: Dialog[] = []
   /** Whether the current turn showed anything besides the user's message. */
   let turnShowedOutput = false
   /**
@@ -312,7 +299,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     activity: () => activity,
     view: () => view,
     noticeStrip: () => noticeStrip,
-    dialogs: () => dialogs,
+    dialogs: () => overlays.dialogs,
     steering: () => steering,
     queued: () => queued,
     mode: () => mode,
@@ -331,29 +318,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     filePicker,
   })
 
-  /**
-   * An extension's full-screen view, open over the conversation. Inline,
-   * the UI is suspended meanwhile: what the main session commits is held and printed when it closes.
-   */
-  let viewer: ExtensionViewer | KeyReference | undefined
-  let viewerTimer: ReturnType<typeof setInterval> | undefined
-  /**
-   * Forms (ui.form) waiting to be shown full screen, oldest first; the first one is open while
-   * `form` is set. A form waits while an inline dialog or the viewer is up, and inline dialogs
-   * that arrive while a form is open wait behind it.
-   */
-  const forms: FormRequest[] = []
-  let form: FormView | undefined
-  function waitingChanged(change: EventMap["ui.waiting"]["change"]) {
-    const pending = dialogs.length + forms.length
-    const hidden = pending > 0 && (viewer !== undefined || (form !== undefined && pending > 1))
-    agent.bus.emit("ui.waiting", { pending, hidden, change }, { sessionId: "host" })
-  }
-  /** Titles of everything waiting for an answer, for the banners of full-screen views. */
-  const waitingTitles = () => [
-    ...dialogs.map((d) => d.request.title),
-    ...forms.slice(form ? 1 : 0).map((f) => f.title),
-  ]
+  const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
+  const overlays = new OverlayManager({
+    ui: opts.ui,
+    views: opts.views,
+    keys,
+    theme,
+    presenters,
+    mode,
+    env,
+    reaches,
+    view: () => view,
+    emitWaiting: (data) => agent.bus.emit("ui.waiting", data, { sessionId: "host" }),
+    working: () => activity.working,
+    interrupt: () => interrupt(),
+    quitting: () => quitting,
+  })
+  const openView: OverlayManager["openView"] = (v) => overlays.openView(v)
 
   const host: ViewHost = {
     terminal,
@@ -369,7 +350,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     sessionId: () => agent.sessionId,
     detail: () => detail,
     bottom: bottomArea.layout,
-    overlay: new View((width, ctx) => (form ? form.render(width, ctx) : (viewer?.render(width, ctx) ?? []))),
+    overlay: new View((width, ctx) => overlays.render(width, ctx)),
     editorEmpty: () => editor.isEmpty,
     showNote,
     openSubagent: (sessionId: string) => {
@@ -381,13 +362,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       openView({ kind: "subagent", data: { sessionId } })
     },
   }
-  const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
   const noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
   const rewind = new RewindFlow({
     agent: () => agent,
     commands,
-    dialogs,
+    dialogs: overlays.dialogs,
     keys,
     editor,
     sentParts,
@@ -396,7 +376,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     showNote,
     view,
     redraw,
-    waitingChanged,
+    waitingChanged: (change) => overlays.waitingChanged(change),
   })
   const openRewind = () => rewind.openRewind()
   const commandRunner = createCommandRunner({
@@ -413,95 +393,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     isCompacting: () => activity.compacting,
     interrupt: () => interrupt(),
   })
-
-  /** Shows a full-screen view; false when it cannot be shown now (see CommandContext.openView). */
-  function openView(v: FrontendView): boolean {
-    // Keep old command requests working through the same extension lookup.
-    if (isSubagentView(v)) v = { ...v, data: { sessionId: v.sessionId } }
-    const definition = opts.views?.get(v.kind)
-    if (!definition) throw new Error(`there is no "${v.kind}" view`)
-    if (quitting || form || env.TERM === "dumb") return false
-    if (viewer instanceof ExtensionViewer && viewer.kind === v.kind) viewer.show(v.data, v.state)
-    else {
-      const next = new ExtensionViewer(definition, v.data, {
-        keys,
-        state: v.state,
-        waiting: waitingTitles,
-        onClose: () => viewer === next && closeView(),
-        requestRender: () => next.ready && view.requestOverlayRender(),
-        onError: (error) => view.notice("warning", `View ${v.kind}: ${error}`),
-        onPrint: (text, level) => {
-          view.commandOutput(level ?? "info", text)
-          view.requestRender()
-        },
-        ...(presenters ? { presenters } : {}),
-      })
-      showOverlay(next)
-    }
-    if (!(viewer instanceof ExtensionViewer) || viewer.ready) view.renderOverlay()
-    return true
-  }
-  /** Opens the key reference over the conversation (the help key); a form keeps the screen. */
-  function openKeyReference() {
-    if (form) return
-    const next = new KeyReference(keys, {
-      fullscreen: mode === "fullscreen",
-      onClose: () => viewer === next && closeView(),
-      usable: (action, s) => action !== "newline" || reaches(s),
-    })
-    showOverlay(next)
-    view.renderOverlay()
-  }
-
-  /** Puts `next` over the conversation, in place of the viewer open there if any. */
-  function showOverlay(next: ExtensionViewer | KeyReference) {
-    const previous = viewer
-    viewer = next
-    if (previous instanceof ExtensionViewer) previous.dispose()
-    if (viewer !== next) return
-    if (next instanceof ExtensionViewer) next.mount()
-    if (viewer !== next) return
-    view.openOverlay(next instanceof ExtensionViewer)
-    if (!viewerTimer) viewerTimer = setInterval(() => view.requestOverlayRender(), 1000)
-    waitingChanged("visibility")
-  }
-
-  function closeView() {
-    const previous = viewer
-    if (!previous) return
-    viewer = undefined
-    clearInterval(viewerTimer)
-    viewerTimer = undefined
-    view.closeOverlay()
-    if (previous instanceof ExtensionViewer) previous.dispose()
-    openNextForm()
-    waitingChanged("visibility")
-  }
-
-  /** Shows the first waiting form, unless a dialog, the viewer or another form is up. */
-  function openNextForm() {
-    const ui = opts.ui
-    const next = forms[0]
-    if (!ui || !next || form || viewer || dialogs.length) return
-    form = new FormView(uiFormBackend(ui, next), {
-      requestRender: () => view.requestOverlayRender(),
-      waiting: waitingTitles,
-      onClose: () => closeForm(next),
-    })
-    view.openOverlay()
-    view.renderOverlay()
-  }
-
-  /** The open form was answered, cancelled, or resolved elsewhere: back to the conversation. */
-  function closeForm(request: FormRequest) {
-    const i = forms.indexOf(request)
-    if (i !== -1) forms.splice(i, 1)
-    if (!form) return
-    form = undefined
-    view.closeOverlay()
-    openNextForm()
-    waitingChanged("resolved")
-  }
 
   let resolveExit!: (code: number) => void
   const exited = new Promise<number>((r) => {
@@ -538,9 +429,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const onEvent = (e: AnyEvent) => {
     if (view.subagentEvent(e)) view.requestRender()
-    // An extension's view may show anything: it is drawn again at each event (at most once a frame).
-    if (viewer instanceof ExtensionViewer || viewer?.handleEvent()) view.requestOverlayRender()
-    if (form && (e.type === "ui.request" || e.type === "ui.resolved")) view.requestOverlayRender()
+    overlays.onEvent(e)
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
@@ -726,32 +615,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         // A promoted one shows up again as the next turn's prompt.
         break
       }
-      case "ui.request": {
-        const ui = opts.ui
-        if (!ui) break
-        if (e.data.kind === "form") {
-          forms.push(e.data)
-          openNextForm()
-          waitingChanged("opened")
-          break
-        }
-        const dialog = new Dialog(e.data, (answer) => answerDialog(ui, dialog, answer), keys)
-        dialogs.push(dialog)
-        // Over the viewer or a form it shows only as a banner; the bell rings so it is noticed.
-        waitingChanged("opened")
+      case "ui.request":
+        overlays.onUiRequest(e.data)
         break
-      }
-      case "ui.resolved": {
-        const i = dialogs.findIndex((d) => d.request.requestId === e.data.requestId)
-        if (i !== -1) dialogs.splice(i, 1)
-        const f = forms.find((r) => r.requestId === e.data.requestId)
-        // Answered or cancelled elsewhere (another client, a timeout): close it without answering.
-        if (f && form && forms[0] === f) form.close()
-        else if (f) forms.splice(forms.indexOf(f), 1)
-        openNextForm()
-        waitingChanged("resolved")
+      case "ui.resolved":
+        overlays.onUiResolved(e.data)
         break
-      }
       case "command.output":
         view.commandOutput(e.data.level, e.data.text)
         break
@@ -1069,34 +938,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (!activity.compacting) openRewind()
   }
 
-  function answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
-    const i = dialogs.indexOf(dialog)
-    if (i !== -1) dialogs.splice(i, 1)
-    const { requestId } = dialog.request
-    const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
-    if (answer === undefined || refused) ui.cancel(requestId)
-    // Esc on an approval denies the call and stops the whole turn, as the dialog's keys say.
-    if (answer === undefined && dialog.request.source === "approval" && activity.working) interrupt()
-    const echoed = refused ? undefined : answer
-    // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
-    // declined, the answer). A command's picker or input keeps one, since nothing else shows it.
-    const kind = dialog.request.kind
-    if (kind !== "confirm" && kind !== "ask")
-      view.dialogEcho((width) => dialogEchoLines(dialog.request, echoed, theme, width))
-    view.requestRender()
-    openNextForm()
-    waitingChanged("resolved")
-  }
-
   let quitting = false
   function quit(code = 0) {
     clipboardAbort.abort()
     if (quitting) return
     quitting = true
     commandRunner.abortAll(new Error("quitting"))
-    for (const f of forms.splice(0)) opts.ui?.cancel(f.requestId)
-    form?.close()
-    closeView()
+    overlays.dispose()
     off()
     offSwitch?.()
     offCommand?.()
@@ -1104,8 +952,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (flushTimer) clearTimeout(flushTimer.timer)
     filePicker.dispose()
     ownFiles?.dispose()
-    for (const d of dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
-    waitingChanged("resolved")
+    for (const d of overlays.dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
+    overlays.waitingChanged("resolved")
     spinner.stop()
     noticeStrip.dispose()
     reader.stop()
@@ -1126,18 +974,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       return
     }
-    // A form or the viewer owns the keyboard while open: the rest is hidden. Ctrl+L repaints it.
-    // Forms and the key reference use wheel arrows; extension views receive pointer coordinates.
-    if (form || viewer) {
-      if (keys.is(e, "redraw")) return view.redrawOverlay()
-      for (const k of overlayKeys(e, !form && viewer instanceof ExtensionViewer)) {
-        if (form) form.handleInput(k)
-        else viewer?.handleInput(k)
-      }
-      view.requestOverlayRender()
-      return
-    }
-    const dialog = dialogs[0]
+    if (overlays.handleInput(e)) return
+    const dialog = overlays.dialogs[0]
     // Recalled skills use the same Enter guard as typed ones, without taking the history's arrows.
     if (
       !dialog &&
@@ -1218,7 +1056,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       showNote(`Permission mode: ${next} — ${MODE_SUMMARY[next]}`)
     } else if (keys.is(e, "help") && editor.isEmpty) {
       // Lists open only on text, so an empty input has none; a dialog took the key above.
-      return openKeyReference()
+      return overlays.openKeyReference()
     } else if (editKey(e)) {
       // An editing key of the input (cut, paste back, undo, the external editor).
     } else if (keys.is(e, "interrupt")) {
