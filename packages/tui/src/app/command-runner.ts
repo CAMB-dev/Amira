@@ -1,3 +1,4 @@
+// Owns slash-command execution, cancellation, key help and command echo correlation.
 import type { FrontendView, KeyHelp, UserMessage } from "@amira/api"
 import type { CommandHost } from "@amira/core"
 import { userText } from "../format.ts"

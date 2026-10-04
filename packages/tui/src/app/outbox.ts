@@ -1,3 +1,4 @@
+// Owns queued and steering messages, interrupt flushing and the pending-notice strip.
 import type { UserMessage } from "@amira/api"
 import { type Agent, AgentBusyError } from "@amira/core"
 import {
