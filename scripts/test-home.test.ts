@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -66,6 +66,9 @@ function fixture() {
     },
   }
 }
+
+// Each test starts bun subprocesses (30 s limit each); under a loaded machine 5 s is too short.
+setDefaultTimeout(30_000)
 
 describe("test home isolation", () => {
   test("redirects every home, preserves executable lookup, and removes only its own directory", () => {
