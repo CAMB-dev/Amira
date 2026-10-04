@@ -427,10 +427,8 @@ export class Compactor {
         const why = err instanceof Error ? err.message : String(err)
         return `${target} cannot read the server-side compaction made by ${cp.provider} for ${cp.model}, and writing a text summary for it failed: ${why}`
       }
-      if (signal.aborted) {
-        this.#recordCompactionUsage(written.usage, modelRef(writer), false)
-        return undefined
-      }
+      // A summary that came back is kept even if the turn was aborted meanwhile: it is paid
+      // for, and it only replaces a checkpoint this model cannot read with readable text.
       const oldId = this.#deps.history.entryId(m)
       const original = oldId ? this.#deps.session?.get(oldId) : undefined
       const pair = summaryMessages(written.summary, modelRef(writer), cp)
