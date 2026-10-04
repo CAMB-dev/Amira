@@ -84,6 +84,8 @@ export interface Outbox {
   turnEnded(): void
   /** Handles user steering after NoticeStrip; true means the restored editor needs a redraw. */
   steer(message: UserMessage, state: NoticeSteerState): boolean
+  /** Returns waiting messages to the editor when following another session. */
+  reset(): void
   interrupt(): void
   pressInterrupt(): void
   dispose(): void
@@ -118,8 +120,8 @@ export function createOutbox(deps: OutboxDeps): Outbox {
   const steering: string[] = []
   /** Counts the messages typed, so that steering and queued ones merge in the order they were. */
   let typed = 0
-  /** When each recent steering message was typed, by its text. */
-  const steerSeq = new Map<string, number>()
+  /** Pending steering's typing order and folded parts, by its text. */
+  const steered = new Map<string, Outgoing>()
   /**
    * Set when the user stopped a turn while messages waited: the steering it drops is collected
    * here, to go out with the queued messages at turn.end (or back into the editor to rewind).
@@ -127,6 +129,9 @@ export function createOutbox(deps: OutboxDeps): Outbox {
   let flush: { dropped: Outgoing[]; rewind: boolean } | undefined
   /** The merged messages about to go, while a second Esc may still turn the stop into a rewind. */
   let flushTimer: { next: Outgoing[]; timer: ReturnType<typeof setTimeout> } | undefined
+  /** A normal turn's queue also waits a microtask before sending. */
+  let pending: Outgoing[] | undefined
+  let generation = 0
   /** When the interrupt key was last pressed, to tell a double press. */
   let lastInterruptAt = 0
 
@@ -142,11 +147,17 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       return
     }
     const clock = activity.beginSend()
+    const sentIn = generation
     view.requestRender()
     deps
       .agent()
       .prompt(toPrompt(message))
       .catch((err) => {
+        if (sentIn !== generation) {
+          putBack([message])
+          view.requestRender()
+          return
+        }
         const busy = err instanceof AgentBusyError
         activity.sendFailed(clock, busy)
         if (busy) {
@@ -179,14 +190,14 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     const display = next.some((q) => q.display) ? shown.join("\n\n") : undefined
     mergedQueue = next.length > 1 ? shown : undefined
     const message = outgoing(text, display)
+    message.parts = next.flatMap((q, i) => [
+      ...(i ? ["\n\n"] : []),
+      ...(q.parts ?? sentParts.get(q.text) ?? [q.text]),
+    ])
     if (next.some((q) => q.content)) {
       message.content = next.flatMap((q, i) => [
         ...(i ? [{ type: "text" as const, text: "\n\n" }] : []),
         ...(q.content ?? [{ type: "text" as const, text: q.text }]),
-      ])
-      message.parts = next.flatMap((q, i) => [
-        ...(i ? ["\n\n"] : []),
-        ...(q.parts ?? sentParts.get(q.text) ?? [q.text]),
       ])
       if (imageBytes(message.parts) > MAX_IMAGE_BYTES) {
         putBack(next)
@@ -225,7 +236,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     steering,
     sentParts,
     prepare(text, parts, display) {
-      const message: Outgoing = { ...draftMessage(text, display, parts), seq: ++typed }
+      const message: Outgoing = { ...draftMessage(text, display, parts), parts, seq: ++typed }
       remember(message, parts)
       // Messages an Esc released still wait out a double press: they were typed first, so they go
       // first, and this one joins the turn they start (or is queued after it).
@@ -237,11 +248,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     },
     dispatch(message, parts, how) {
       if (activity.working && how === "steer") {
-        steerSeq.set(message.text, message.seq!)
-        for (const k of steerSeq.keys()) {
-          if (steerSeq.size <= 16) break
-          steerSeq.delete(k)
-        }
+        steered.set(message.text, message)
         deps.agent().steer(toPrompt(message))
       } else if (activity.working) queued.push(message)
       else if (!deps.noModelYet(parts)) send(message)
@@ -255,6 +262,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     clearSteering() {
       // Steering the turn never reached becomes the next turn, which shows it again.
       steering.length = 0
+      steered.clear()
     },
     turnEnded() {
       if (flush) {
@@ -273,7 +281,12 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         }
       } else if (queued.length) {
         const next = queued.splice(0, queued.length)
-        queueMicrotask(() => sendMerged(next))
+        pending = next
+        queueMicrotask(() => {
+          if (pending !== next) return
+          pending = undefined
+          sendMerged(next)
+        })
       }
     },
     steer(message, state) {
@@ -282,6 +295,8 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         steering.push(text)
         return false
       }
+      const pendingSteer = steered.get(userText(message))
+      steered.delete(userText(message))
       const i = steering.indexOf(text)
       if (i !== -1) steering.splice(i, 1)
       const echoed = state !== "promoted" && deps.takeEcho(message)
@@ -294,7 +309,8 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         const m = message
         flush.dropped.push({
           ...draftMessage(userText(m), m.display?.text, messageParts(m)),
-          seq: steerSeq.get(userText(m)) ?? 0,
+          parts: pendingSteer?.parts ?? sentParts.get(userText(m)) ?? messageParts(m),
+          seq: pendingSteer?.seq ?? 0,
         })
       }
       // Put a message the turn dropped back into the editor rather than losing it.
@@ -302,12 +318,33 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         // A message with folded pastes comes back folded.
         const back = message.content.some((b) => b.type === "image")
           ? messageParts(message)
-          : (sentParts.get(userText(message)) ?? [text])
+          : (pendingSteer?.parts ?? sentParts.get(userText(message)) ?? [text])
         editor.setParts(editor.isEmpty ? back : [...editor.getParts(), "\n", ...back])
         return true
       }
       // A promoted one shows up again as the next turn's prompt.
       return false
+    },
+    reset() {
+      generation++
+      if (flushTimer) clearTimeout(flushTimer.timer)
+      putBack(
+        [
+          ...queued.splice(0),
+          ...(flush?.dropped ?? []),
+          ...(flushTimer?.next ?? []),
+          ...(pending ?? []),
+        ].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)),
+      )
+      flush = undefined
+      flushTimer = undefined
+      pending = undefined
+      mergedQueue = undefined
+      steering.length = 0
+      steered.clear()
+      sentParts.clear()
+      typed = 0
+      lastInterruptAt = 0
     },
     interrupt,
     /**
