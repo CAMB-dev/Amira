@@ -29,6 +29,7 @@ import { Child, Group, type SpawnedSubagent } from "./subagents/child.ts"
 import { ParentConsultant, parseParentAnswers } from "./subagents/consult-parent.ts"
 import { followChild, metaOf, parentMeta } from "./subagents/events.ts"
 import { finalText, forkHistory } from "./subagents/fork.ts"
+import { Admission } from "./subagents/scheduler.ts"
 import {
   checkResult,
   isObjectSchema,
@@ -101,12 +102,7 @@ export class AgentTree {
   #live = new Map<string, Child>()
   /** Every child this tree started, finished ones too, in spawn order. */
   #spawned = new Map<string, Child | SpawnedSubagent>()
-  /** Children waiting for a place to run, in order, with what starts them. */
-  #queue: { child: Child; go: () => void }[] = []
-  /** Children whose turn is running (or about to start). */
-  #running = new Set<Child>()
-  /** How many queued or running children each session has; sessions without any are left out. */
-  #liveKids = new Map<string, number>()
+  #admission: Admission
   #consultant: ParentConsultant
   #groups = new Map<string, Group>()
   /** Ended sub-agents whose dispose is still running, by session id. */
@@ -116,6 +112,7 @@ export class AgentTree {
     this.#opts = opts
     this.maxDepth = Math.max(0, opts.maxDepth ?? 2)
     this.maxConcurrent = Math.max(1, opts.maxConcurrent ?? 4)
+    this.#admission = new Admission({ maxConcurrent: this.maxConcurrent })
     this.budget = opts.budget
     this.#ledger = new BudgetLedger(opts.budget)
     this.#consultant = new ParentConsultant({
@@ -381,14 +378,11 @@ export class AgentTree {
     child.result$ = spec
     this.#live.set(child.id, child)
     this.#spawned.set(child.id, child)
-    this.#liveKids.set(parent.sessionId, (this.#liveKids.get(parent.sessionId) ?? 0) + 1)
     for (const g of groups) {
       g.total++
       g.live.add(child)
     }
-    this.#queue.push({ child, go: () => void this.#run(child) })
-    // A parent with children is waiting for them, so it stops counting against the limit.
-    this.#admit()
+    this.#admission.enqueue(child, parent.sessionId, () => void this.#run(child))
     const queued = !child.admitted
     parent.bus.emit(
       "subagent.start",
@@ -410,40 +404,6 @@ export class AgentTree {
     )
     this.#groupsChanged(child)
     return child
-  }
-
-  /** Busy children: running a turn, and not just waiting for children of their own. */
-  #busy(among: Iterable<Child>): number {
-    let n = 0
-    for (const c of among)
-      if (this.#running.has(c) && (c.agent.execution.paused || !this.#liveKids.has(c.id))) n++
-    return n
-  }
-
-  /**
-   * Starts queued children, oldest first, while fewer than maxConcurrent are busy tree-wide
-   * (D63) and in each of their groups. A running child that has children of its own is not
-   * busy: it waits for them, and counting it could leave its children queued forever behind
-   * it. A child whose group is full waits without holding up those behind it.
-   */
-  #admit() {
-    let busy = this.#busy(this.#running)
-    for (let i = 0; i < this.#queue.length && busy < this.maxConcurrent; ) {
-      const entry = this.#queue[i]!
-      const full = entry.child.groups.some(
-        (g) => g.limits.maxConcurrent !== undefined && this.#busy(g.live) >= g.limits.maxConcurrent,
-      )
-      if (full) {
-        i++
-        continue
-      }
-      this.#queue.splice(i, 1)
-      entry.child.admitted = true
-      this.#running.add(entry.child)
-      busy++
-      // Started a microtask later, so the caller can subscribe to child.events first.
-      queueMicrotask(entry.go)
-    }
   }
 
   /** Adds a reply's usage to the tree and its groups, reports it, and stops what went over budget. */
@@ -533,7 +493,7 @@ export class AgentTree {
   /** Releases a user pause; it does not affect extension-level message holds. */
   resume(id: string): boolean {
     if (!this.#live.get(id)?.resume()) return false
-    this.#admit()
+    this.#admission.admit()
     return true
   }
 
@@ -589,7 +549,7 @@ export class AgentTree {
       child.waiting?.()
       return
     }
-    this.#queue = this.#queue.filter((e) => e.child !== child)
+    this.#admission.dequeue(child)
     this.#finish(child, { status: "aborted", error: reason, steps: 0, durationMs: 0 })
   }
 
@@ -597,13 +557,13 @@ export class AgentTree {
   stopChild(child: Child, reason: string): void {
     if (!child.persistent || !this.#live.has(child.id) || child.abortReason || child.stopReason) return
     // A paused one runs its turn to the end first: it is working again, and screens hear so.
-    if (child.resume()) this.#admit()
+    if (child.resume()) this.#admission.admit()
     child.stopReason = reason
     if (child.started) {
       child.waiting?.()
       return
     }
-    this.#queue = this.#queue.filter((e) => e.child !== child)
+    this.#admission.dequeue(child)
     child.note = reason
     this.#finish(child, { status: "done", steps: 0, durationMs: 0 })
   }
@@ -653,21 +613,6 @@ export class AgentTree {
     return { ...r, steps }
   }
 
-  /** Waits for a place to run the child's next turn; a stop or an abort ends the wait too. */
-  #acquire(child: Child): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const entry = { child, go: resolve }
-      child.waiting = () => {
-        this.#queue = this.#queue.filter((e) => e !== entry)
-        resolve()
-      }
-      this.#queue.push(entry)
-      this.#admit()
-    }).finally(() => {
-      child.waiting = undefined
-    })
-  }
-
   /** Runs a child: its turn, the retries for its result, and a persistent one's later turns. */
   async #run(child: Child) {
     const startedAt = performance.now()
@@ -697,16 +642,16 @@ export class AgentTree {
           }
           if (!child.agent.waitingNotices) {
             // Idle: its place goes to the next child until a message comes.
-            this.#running.delete(child)
+            this.#admission.release(child)
             this.#setState(child, "idle")
-            this.#admit()
+            this.#admission.admit()
             await new Promise<void>((resolve) => {
               child.waiting = resolve
             })
             child.waiting = undefined
             if (child.abortReason || child.stopReason) break
             this.#setState(child, "queued")
-            await this.#acquire(child)
+            await this.#admission.acquire(child)
             if (child.abortReason || child.stopReason) break
           }
           r = await this.#turn(child)
@@ -730,14 +675,14 @@ export class AgentTree {
       error = err instanceof Error ? err.message : String(err)
     } finally {
       if (status === "aborted") error = child.abortReason ?? error
-      this.#running.delete(child)
+      this.#admission.release(child)
       this.#finish(child, {
         status,
         ...(error !== undefined ? { error } : {}),
         steps,
         durationMs: Math.round(performance.now() - startedAt),
       })
-      this.#admit()
+      this.#admission.admit()
     }
   }
 
@@ -751,9 +696,7 @@ export class AgentTree {
     for (const c of [...this.#live.values()]) {
       if (c.parentSessionId === child.id) this.abortChild(c, "its parent ended")
     }
-    const kids = (this.#liveKids.get(child.parentSessionId) ?? 1) - 1
-    if (kids > 0) this.#liveKids.set(child.parentSessionId, kids)
-    else this.#liveKids.delete(child.parentSessionId)
+    this.#admission.childEnded(child)
     const returned = r.status === "done" ? child.result$?.returned : undefined
     const turns = child.turns
     const result: SubagentResult = {
