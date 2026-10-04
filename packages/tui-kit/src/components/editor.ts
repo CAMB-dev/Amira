@@ -1,37 +1,23 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { type InputEvent, isNewlineKey, isSubmitKey } from "../keys.ts"
 import { graphemes, TAB_WIDTH, textWidth, truncateToWidth, visibleWidth } from "../width.ts"
+import {
+  type EditorImage,
+  type EditorPart,
+  EditorPastes,
+  escapeTokens,
+  normalize,
+  type PasteInfo,
+  type PasteSnapshot,
+} from "./editor-pastes.ts"
 
-/** Editor content: text, a folded paste, or an image kept as one placeholder. */
-export type EditorPart = string | { paste: string } | { image: EditorImage }
-
-export interface EditorImage {
-  name: string
-  mimeType: string
-  data: string
-}
-
-export function imageLabel(image: EditorImage, n: number): string {
-  const bytes =
-    Math.floor((image.data.length * 3) / 4) -
-    (image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0)
-  const size = bytes < 1024 ? `${bytes} B` : `${Math.ceil(bytes / 1024)} KB`
-  return `[image ${n}: ${image.name.replace(/\p{Cc}/gu, " ")} ${size}]`
-}
-
-/** What a folded paste's placeholder says. */
-export interface PasteInfo {
-  /** Lines of the pasted text (a trailing line break does not start another). */
-  lines: number
-  chars: number
-  /** Numbers the editor's placeholders from 1; restarts when the editor is emptied. */
-  n: number
-}
-
-/** "[pasted 2000 lines #1]", or "[pasted 1500 chars #1]" for a single long line. */
-export function defaultPasteLabel({ lines, chars, n }: PasteInfo): string {
-  return lines > 1 ? `[pasted ${lines} lines #${n}]` : `[pasted ${chars} chars #${n}]`
-}
+export {
+  defaultPasteLabel,
+  type EditorImage,
+  type EditorPart,
+  imageLabel,
+  type PasteInfo,
+} from "./editor-pastes.ts"
 
 export interface SubmitInfo {
   /** The text with folded pastes shown as their placeholders, for display. */
@@ -77,22 +63,12 @@ interface LineLayout {
   full: boolean
 }
 
-interface Paste {
-  text: string
-  part: Exclude<EditorPart, string>
-  label: string
-  width: number
-}
-
 /** The content and caret at one point, for undo and redo. */
 interface Snapshot {
   lines: string[]
   line: number
   col: number
-  pastes: Map<string, Paste>
-  nextPaste: number
-  nextImage: number
-  nextToken: number
+  pastes: PasteSnapshot
 }
 
 /** What the last change was, so that a run of typing (or of deleting) undoes as one step. */
@@ -105,14 +81,6 @@ const KILL_RING = 10
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
-/**
- * Folded pastes are stored in the text as one code point each from Supplementary Private Use
- * Area-B, which fonts (Nerd Fonts included) leave unused, so a grapheme is a whole placeholder.
- */
-const TOKEN_BASE = 0x100000
-const TOKEN_LAST = 0x10fffd
-const TOKEN_PATTERN = /[\u{100000}-\u{10fffd}]/gu
-const TOKEN_TEST = /[\u{100000}-\u{10fffd}]/u
 /** Printable ASCII: one cell per character, so a line wraps every `max` characters. */
 const ASCII_PRINTABLE = /^[\x20-\x7e]*$/
 
@@ -150,10 +118,7 @@ export class Editor implements Component {
   private prefixValid = 0
   /** The full text, until the next change. */
   private textCache: string | undefined
-  private pastes = new Map<string, Paste>()
-  private nextPaste = 1
-  private nextImage = 1
-  private nextToken = TOKEN_BASE
+  private pastes: EditorPastes
   private changes = 0
   private readonly promptWidth: number
   private undoStack: Snapshot[] = []
@@ -169,13 +134,14 @@ export class Editor implements Component {
 
   constructor(private opts: EditorOptions = {}) {
     this.promptWidth = visibleWidth(opts.prompt ?? "")
+    this.pastes = new EditorPastes(opts)
   }
 
   /** The text, folded pastes expanded and images omitted. Cached until the next change. */
   getText(): string {
     if (this.textCache === undefined) {
       const joined = this.lines.join("\n")
-      this.textCache = this.pastes.size ? this.expand(joined, (p) => p.text) : joined
+      this.textCache = this.pastes.size ? this.pastes.expand(joined, (p) => p.text) : joined
     }
     return this.textCache
   }
@@ -183,24 +149,12 @@ export class Editor implements Component {
   /** The text with folded pastes as their placeholders. */
   getDisplayText(): string {
     const joined = this.lines.join("\n")
-    return this.pastes.size ? this.expand(joined, (p) => p.label) : joined
+    return this.pastes.size ? this.pastes.expand(joined, (p) => p.label) : joined
   }
 
   /** The content with folded pastes kept apart; `setParts` restores it. */
   getParts(): EditorPart[] {
-    const joined = this.lines.join("\n")
-    if (!this.pastes.size) return joined ? [joined] : []
-    const parts: EditorPart[] = []
-    let last = 0
-    for (const m of joined.matchAll(TOKEN_PATTERN)) {
-      const paste = this.pastes.get(m[0])
-      if (!paste) continue
-      if (m.index > last) parts.push(joined.slice(last, m.index))
-      parts.push(paste.part)
-      last = m.index + m[0].length
-    }
-    if (last < joined.length) parts.push(joined.slice(last))
-    return parts
+    return this.pastes.parts(this.lines.join("\n"))
   }
 
   /**
@@ -209,9 +163,9 @@ export class Editor implements Component {
    */
   setParts(parts: EditorPart[]): void {
     this.record("other")
-    this.resetPastes()
+    this.pastes.reset()
     const text = parts
-      .map((p) => (typeof p === "string" ? escapeTokens(normalize(p)) : this.addPart(p)))
+      .map((p) => (typeof p === "string" ? escapeTokens(normalize(p)) : this.pastes.addPart(p)))
       .join("")
     this.replaceAll(text.split("\n"))
     this.line = this.lines.length - 1
@@ -314,7 +268,7 @@ export class Editor implements Component {
     this.record("other")
     this.batching = true
     try {
-      this.insertRaw(this.addPaste(normalize(text)))
+      this.insertRaw(this.pastes.addPaste(normalize(text)))
     } finally {
       this.batching = false
     }
@@ -325,7 +279,7 @@ export class Editor implements Component {
     this.record("other")
     this.batching = true
     try {
-      this.insertRaw(this.addPart({ image }))
+      this.insertRaw(this.pastes.addPart({ image }))
     } finally {
       this.batching = false
     }
@@ -337,7 +291,7 @@ export class Editor implements Component {
    */
   handleInput(e: InputEvent): boolean {
     if (e.type === "paste") {
-      if (this.shouldFold(e.text)) this.insertPaste(e.text)
+      if (this.pastes.shouldFold(e.text)) this.insertPaste(e.text)
       else this.insert(e.text)
       return true
     }
@@ -446,7 +400,7 @@ export class Editor implements Component {
     try {
       for (const p of parts) {
         if (typeof p === "string") this.insertRaw(escapeTokens(normalize(p)))
-        else this.insertRaw(this.addPart(p))
+        else this.insertRaw(this.pastes.addPart(p))
       }
     } finally {
       this.batching = false
@@ -489,7 +443,7 @@ export class Editor implements Component {
         body = body.slice(0, at) + caret + body.slice(at)
       }
       if (this.pastes.size) {
-        body = this.expand(body, (p) => theme.accent(truncateToWidth(p.label, max, "…")))
+        body = this.pastes.expand(body, (p) => theme.accent(truncateToWidth(p.label, max, "…")))
       }
       out.push((i === 0 ? theme.accent(prompt) : indent) + body)
     }
@@ -502,56 +456,6 @@ export class Editor implements Component {
 
   private get contentWidth(): number {
     return Math.max(2, this.width - this.promptWidth)
-  }
-
-  private shouldFold(text: string): boolean {
-    const fold = this.opts.foldPastes
-    if (!fold) return false
-    return text.length >= fold.chars || lineCount(normalize(text)) >= fold.lines
-  }
-
-  /** Registers a folded paste and returns the character that stands for it. */
-  private addPaste(text: string): string {
-    return this.addPart({ paste: text })
-  }
-
-  private addPart(part: Exclude<EditorPart, string>): string {
-    let cp = this.nextToken
-    // Skip characters still in use once the range wraps around (only after 1M placeholders).
-    while (this.pastes.has(String.fromCodePoint(cp))) cp = cp >= TOKEN_LAST ? TOKEN_BASE : cp + 1
-    this.nextToken = cp >= TOKEN_LAST ? TOKEN_BASE : cp + 1
-    const token = String.fromCodePoint(cp)
-    const text = "paste" in part ? normalize(part.paste) : ""
-    const label =
-      "image" in part
-        ? imageLabel(part.image, this.nextImage++)
-        : (this.opts.pasteLabel ?? defaultPasteLabel)({
-            lines: lineCount(text),
-            chars: text.length,
-            n: this.nextPaste++,
-          })
-    this.pastes.set(token, {
-      text,
-      part: "paste" in part ? { paste: text } : part,
-      label,
-      width: visibleWidth(label),
-    })
-    return token
-  }
-
-  private resetPastes(): void {
-    this.pastes.clear()
-    this.nextPaste = 1
-    this.nextImage = 1
-    this.nextToken = TOKEN_BASE
-  }
-
-  /** Replaces the placeholders in `s`. */
-  private expand(s: string, as: (p: Paste) => string): string {
-    return s.replace(TOKEN_PATTERN, (t) => {
-      const p = this.pastes.get(t)
-      return p ? as(p) : t
-    })
   }
 
   /**
@@ -585,10 +489,7 @@ export class Editor implements Component {
       lines: this.lines.slice(),
       line: this.line,
       col: this.col,
-      pastes: new Map(this.pastes),
-      nextPaste: this.nextPaste,
-      nextImage: this.nextImage,
-      nextToken: this.nextToken,
+      pastes: this.pastes.snapshot(),
     }
   }
 
@@ -596,10 +497,7 @@ export class Editor implements Component {
     this.replaceAll(s.lines.slice())
     this.line = s.line
     this.col = s.col
-    this.pastes = new Map(s.pastes)
-    this.nextPaste = s.nextPaste
-    this.nextImage = s.nextImage
-    this.nextToken = s.nextToken
+    this.pastes.restore(s.pastes)
     this.lastEdit = undefined
     this.changed()
   }
@@ -652,19 +550,7 @@ export class Editor implements Component {
       const text = this.lines[i]!
       rows.push(text.slice(i === a.line ? a.col : 0, i === b.line ? b.col : text.length))
     }
-    const joined = rows.join("\n")
-    if (!this.pastes.size) return joined ? [joined] : []
-    const parts: EditorPart[] = []
-    let last = 0
-    for (const m of joined.matchAll(TOKEN_PATTERN)) {
-      const paste = this.pastes.get(m[0])
-      if (!paste) continue
-      if (m.index > last) parts.push(joined.slice(last, m.index))
-      parts.push(paste.part)
-      last = m.index + m[0].length
-    }
-    if (last < joined.length) parts.push(joined.slice(last))
-    return parts
+    return this.pastes.parts(rows.join("\n"))
   }
 
   // --- Lines and their layout cache ---
@@ -727,7 +613,7 @@ export class Editor implements Component {
       return { text, max, starts, full: text.length > 0 && text.length - s === max }
     }
     // Most lines fit on one row; the whole line's width says so without splitting it.
-    if (!text.includes("\t") && !(this.pastes.size && TOKEN_TEST.test(text))) {
+    if (!text.includes("\t") && !(this.pastes.size && this.pastes.hasTokens(text))) {
       const w = textWidth(text)
       if (w <= max) return { text, max, starts: [0], full: w === max }
     }
@@ -880,7 +766,7 @@ export class Editor implements Component {
     for (let i = a.line; i <= b.line; i++) {
       const text = this.lines[i]!
       const part = text.slice(i === a.line ? a.col : 0, i === b.line ? b.col : text.length)
-      for (const m of part.matchAll(TOKEN_PATTERN)) this.pastes.delete(m[0])
+      this.pastes.drop(part)
     }
   }
 
@@ -925,22 +811,6 @@ function sameLines(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
   return true
-}
-
-function normalize(text: string): string {
-  return text.replace(/\r\n?/g, "\n")
-}
-
-/** `text` with placeholder-range characters replaced by U+FFFD (see `insert`). */
-function escapeTokens(text: string): string {
-  return TOKEN_TEST.test(text) ? text.replace(TOKEN_PATTERN, "�") : text
-}
-
-/** Lines of `text`; a trailing line break does not start another. */
-function lineCount(text: string): number {
-  let n = 1
-  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) n++
-  return text.endsWith("\n") ? n - 1 : n
 }
 
 /** Index of the last element of the ascending `xs[0..hi]` that is at most `x` (0 if none). */
