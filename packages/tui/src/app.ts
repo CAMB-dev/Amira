@@ -725,6 +725,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     showSession(next, true)
     view.requestRender()
   }
+
   /** Sets how much of tool results is shown; returns the note that says so. */
   function setDetail(level: ToolDetailLevel): string {
     detail = level
