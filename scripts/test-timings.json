@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "files": {
+    "extensions/builtin-tools/test/powershell.test.ts": 65000,
+    "packages/packages/test/git-cache.test.ts": 51000,
+    "packages/packages/test/packages.test.ts": 29000,
+    "extensions/builtin-tools/test/jobs.test.ts": 20000,
+    "extensions/agent/test/agent.test.ts": 18000,
+    "extensions/agent/test/worktree.test.ts": 17000,
+    "packages/tui/test/app-external-editor.test.ts": 15000,
+    "extensions/builtin-tools/test/bash.test.ts": 12000,
+    "extensions/commands/test/ext.test.ts": 12000,
+    "packages/proc/test/pipe.test.ts": 10000,
+    "packages/tui/test/app-turns.test.ts": 10000,
+    "packages/tui/test/app-rendering.test.ts": 9000
+  }
+}
