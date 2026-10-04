@@ -21,7 +21,6 @@ import {
   LinesBlock,
   ReasoningBlock,
   ReplyBlock,
-  SubagentGroupBlock,
   ToolBlock,
   userBlock,
 } from "./blocks.ts"
@@ -29,18 +28,9 @@ import { commandEchoLines } from "./format.ts"
 import { createFindSelect } from "./fullscreen/find-select.ts"
 import { historyBlocks } from "./fullscreen/history-blocks.ts"
 import { createMouse } from "./fullscreen/mouse.ts"
+import { createSubagentBlocks } from "./fullscreen/subagent-blocks.ts"
 import { glyphs } from "./glyphs.ts"
 import { sessionBoundary } from "./history.ts"
-import {
-  endNode,
-  isActive,
-  type SpawnGroups,
-  type SubagentNode,
-  startedNode,
-  stateNode,
-  trackGroup,
-  updateNode,
-} from "./subagents.ts"
 import { OUTPUT_LINES } from "./tool-view.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
 import { TranscriptPane } from "./transcript-pane.ts"
@@ -63,16 +53,19 @@ const MIN_TRANSCRIPT_ROWS = 3
 export function createFullscreenView(host: ViewHost): TranscriptView {
   const { terminal, theme, keys } = host
   const pane = new TranscriptPane()
-  /** Every sub-agent seen, by id; tool calls draw theirs from here. */
-  const nodes = new Map<string, SubagentNode>()
-  /** Spawn groups of the sub-agents seen, as their latest event had them. */
-  const groups: SpawnGroups = new Map()
   /** Tool calls by id, for their sub-agents; kept after their turn. */
   const callBlocks = new Map<string, ToolBlock>()
-  /** The block each sub-agent shows in, by its id: the call that started it (or its top ancestor), or one of its own. */
-  const owners = new Map<string, Block>()
-  /** The block of each spawn group whose members started without a call of this session. */
-  const groupBlocks = new Map<string, SubagentGroupBlock>()
+  const subagents = createSubagentBlocks({
+    sessionId: () => host.sessionId(),
+    callBlock: (id) => callBlocks.get(id),
+    add,
+    requestRender: () => renderer.requestRender(),
+    notice,
+    get presenters() {
+      return host.presenters
+    },
+  })
+  const { nodes, groups } = subagents
   /** Calls of the running step, in call order. */
   let stepCalls: ToolBlock[] = []
   let reply: ReplyBlock | undefined
@@ -193,20 +186,6 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     return end ? ` · ${end} follows` : ""
   }
 
-  /** Redraws once a second while sub-agents run, so their elapsed time moves. */
-  let subagentTimer: ReturnType<typeof setInterval> | undefined
-  const tickSubagents = () => {
-    const running = [...nodes.values()].some(isActive)
-    if (running && !subagentTimer) subagentTimer = setInterval(() => renderer.requestRender(), 1000)
-    else if (!running && subagentTimer) {
-      clearInterval(subagentTimer)
-      subagentTimer = undefined
-    }
-  }
-
-  /** The block a sub-agent shows in: its top ancestor's call, or a block of its own. */
-  const ownerOf = (n: SubagentNode): Block | undefined => owners.get(n.id)
-
   function add(block: Block): void {
     pane.add(block)
     renderer.requestRender()
@@ -252,12 +231,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     findSelect.closeFind()
     pane.clear((b) => b.kind === "banner")
     // The old session's calls and sub-agents are not shown under the new one.
-    nodes.clear()
-    groups.clear()
     callBlocks.clear()
-    owners.clear()
-    groupBlocks.clear()
-    tickSubagents()
+    subagents.reset()
   }
 
   let offEmergency: (() => void) | undefined
@@ -295,8 +270,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     redrawOverlay: () => renderer.redraw(),
     renderOverlay: () => renderer.render(),
     stop() {
-      if (subagentTimer) clearInterval(subagentTimer)
-      subagentTimer = undefined
+      subagents.stop()
       mouseHandlers.stopEdgeScroll()
       offEmergency?.()
       if (!started) return
@@ -384,76 +358,10 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     },
     turnEnd() {
       settleStep()
-      tickSubagents()
+      subagents.tick()
       return false
     },
-    subagentEvent(e) {
-      const mine = e.sessionId === host.sessionId() || nodes.has(e.sessionId)
-      switch (e.type) {
-        case "subagent.start": {
-          if (!mine) return false
-          const node = startedNode(e)
-          nodes.set(node.id, node)
-          const main = node.parent === host.sessionId()
-          const call = main && node.toolCallId ? callBlocks.get(node.toolCallId) : undefined
-          const owner = owners.get(node.parent) ?? call
-          if (owner) {
-            owners.set(node.id, owner)
-            owner.touch()
-          } else if (main) {
-            // Started without a call of this session (by a command, say): a block of its own,
-            // shared by the members of its spawn group (a workflow's agents, a swarm's members).
-            const shared = node.groupId !== undefined ? groupBlocks.get(node.groupId) : undefined
-            if (shared) {
-              shared.roots.push(node.id)
-              owners.set(node.id, shared)
-              shared.touch()
-            } else {
-              const group = new SubagentGroupBlock(node.id)
-              owners.set(node.id, group)
-              if (node.groupId !== undefined) groupBlocks.set(node.groupId, group)
-              add(group)
-            }
-          }
-          break
-        }
-        case "subagent.end": {
-          const node = nodes.get(e.data.childSessionId)
-          if (!node) return false
-          endNode(node, e)
-          ownerOf(node)?.touch()
-          break
-        }
-        case "subagent.state": {
-          const node = nodes.get(e.data.childSessionId)
-          if (!node) return false
-          stateNode(node, e)
-          ownerOf(node)?.touch()
-          break
-        }
-        case "group.start":
-        case "group.update":
-        case "group.end": {
-          if (!mine || !trackGroup(groups, e)) return false
-          // A compact group's line is drawn by the blocks its members show in.
-          for (const n of nodes.values()) if (n.groupId === e.data.group.id) ownerOf(n)?.touch()
-          renderer.requestRender()
-          return true
-        }
-        case "budget.exceeded":
-          notice("warning", `Budget spent (${e.data.tokens} tokens); sub-agents were stopped.`)
-          return true
-        default: {
-          const node = nodes.get(e.sessionId)
-          if (!node) return false
-          updateNode(node, e, host.presenters)
-          ownerOf(node)?.touch()
-          return true
-        }
-      }
-      tickSubagents()
-      return true
-    },
+    subagentEvent: subagents.event,
     notice,
     commandEcho(line) {
       add(new LinesBlock("command", (width, t) => commandEchoLines(t, line, width), line))
