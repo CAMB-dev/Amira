@@ -57,6 +57,12 @@ export interface ExtensionAPI {
   readonly cwd: string
   /** Amira's per-user directory: `$AMIRA_HOME`, or `~/.amira`. */
   readonly home: string
+  /**
+   * Persistent extension state under home/extension-data/<host-known sanitized identity>.
+   * Absolute and created on load; unloading leaves it intact, deleting it resets state.
+   * Use for this extension's own state, not user files. Ownership is assigned by the host.
+   */
+  readonly dataDir: string
   /** Returns a function that removes this registration. */
   registerTool(tool: ToolDefinition): () => void
   /**
