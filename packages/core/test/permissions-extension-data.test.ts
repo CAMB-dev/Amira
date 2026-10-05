@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test"
-import { execFileSync } from "node:child_process"
+import { execSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -44,6 +44,40 @@ for (const mode of [undefined, "auto", "edits"] as const) {
     expect(extensionDataContainment(owner, cwd, owner.dataDir)).toBe("inside")
   })
 }
+
+test("owned data still protects Git metadata, configured hooks and nested Amira settings", async () => {
+  const { cwd, owner, own, check } = fixture()
+  const hooks = path.join(owner.dataDir, "custom-hooks")
+  mkdirSync(path.join(cwd, ".git"))
+  writeFileSync(path.join(cwd, ".git", "config"), `[core]\n hooksPath = ${hooks.replaceAll("\\", "/")}\n`)
+  for (const target of [
+    path.join(owner.dataDir, ".git", "hooks", "pre-commit"),
+    path.join(owner.dataDir, ".git", "config"),
+    path.join(owner.dataDir, ".gitmodules"),
+    path.join(hooks, "pre-commit"),
+    path.join(owner.dataDir, ".amira", "settings.json"),
+    path.join(owner.dataDir, ".amira", "settings.local.json"),
+  ]) {
+    expect((await check([target])).decision, target).toBe("ask")
+    expect((await check([own, target])).decision, target).toBe("ask")
+  }
+  expect((await check([own])).decision).toBe("allow")
+})
+
+test("the default .amira home is exempted only above the data root", async () => {
+  const { cwd } = fixture()
+  const owner = extensionDataOwner(path.join(cwd, ".amira"), "default-home")
+  const policy = new Permissions({ protect: { amiraHome: owner.home } })
+  for (const [suffix, decision] of [
+    ["state.json", "allow"],
+    [".amira/settings.json", "ask"],
+    [".git/hooks/pre-commit", "ask"],
+  ] as const) {
+    expect(
+      (await policy.check(writer, { paths: [path.join(owner.dataDir, suffix)] }, cwd, owner)).decision,
+    ).toBe(decision)
+  }
+})
 
 test("other extension data, home files, sibling prefixes and .. escapes ask", async () => {
   const { home, owner, other, own, check } = fixture()
@@ -242,6 +276,18 @@ const directoryLinks = canLink(process.platform === "win32" ? "junction" : "dir"
 const symbolicLinks = canLink("dir")
 const linkType = process.platform === "win32" ? "junction" : "dir"
 
+test.skipIf(!directoryLinks)("an unrelated .amira alias into owned data still asks", async () => {
+  const { cwd, owner, check } = fixture()
+  const alias = path.join(cwd, ".amira")
+  symlinkSync(owner.dataDir, alias, linkType)
+  const target = path.join(alias, "settings.json")
+  expect(extensionDataContainment(owner, cwd, target)).toBe("inside")
+  expect((await check([target])).decision).toBe("ask")
+  const ordinaryAlias = path.join(cwd, "ordinary-alias")
+  symlinkSync(owner.dataDir, ordinaryAlias, linkType)
+  expect((await check([path.join(ordinaryAlias, "state.json")])).decision).toBe("allow")
+})
+
 test.skipIf(!directoryLinks)("native symlink/junction escapes ask, including missing children", async () => {
   const { cwd, owner, other, home, check } = fixture()
   for (const [name, target] of [
@@ -352,8 +398,9 @@ test.skipIf(process.platform !== "win32")(
 )
 
 function shortName(dir: string): string {
-  return execFileSync("cmd.exe", ["/d", "/s", "/c", `for %I in ("${dir}") do @echo %~sI`], {
+  return execSync(`for %I in ("${dir}") do @echo %~sI`, {
     encoding: "utf8",
+    shell: "cmd.exe",
   }).trim()
 }
 
@@ -374,6 +421,14 @@ test.skipIf(!hasShortNames())("native Windows 8.3 aliases expand before ownershi
   const alias = path.join(shortName(owner.dataDir), "missing", "state.json")
   expect(extensionDataContainment(owner, cwd, alias)).toBe("inside")
   expect((await check([alias])).decision).toBe("allow")
+  const defaultOwner = extensionDataOwner(path.join(cwd, ".amira"), "short-default-home")
+  const shortRoot = path.join(
+    path.dirname(defaultOwner.dataDir),
+    path.basename(shortName(defaultOwner.dataDir)),
+  )
+  const target = path.join(shortRoot, "state.json")
+  const policy = new Permissions({ protect: { amiraHome: defaultOwner.home } })
+  expect((await policy.check(writer, { paths: [target] }, cwd, defaultOwner)).decision).toBe("allow")
 })
 
 // A real writable share is required: POSIX path simulation cannot verify UNC filesystem identity.
