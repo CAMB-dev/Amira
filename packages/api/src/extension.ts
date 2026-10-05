@@ -59,7 +59,7 @@ export interface ExtensionAPI {
   readonly home: string
   /**
    * Persistent extension state under home/extension-data/<host-known sanitized identity>.
-   * Absolute and created on load; unloading leaves it intact, deleting it resets state.
+   * Absolute and created on first access; unloading leaves it intact, deleting it resets state.
    * Use for this extension's own state, not user files. Ownership is assigned by the host.
    */
   readonly dataDir: string
