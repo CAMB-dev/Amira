@@ -1,11 +1,13 @@
 import type { ToolSpec } from "@amira/ai"
 import type { ToolDefinition } from "@amira/api"
+import type { ExtensionDataOwner } from "./extension-data.ts"
 
 export class ToolConflictError extends Error {}
 
 interface Registered {
-  tool: ToolDefinition
-  source: string
+  readonly tool: ToolDefinition
+  readonly source: string
+  readonly dataOwner?: ExtensionDataOwner
 }
 
 export class ToolRegistry {
@@ -57,9 +59,10 @@ export class ToolRegistry {
   /**
    * Replacing an existing tool requires `override: true`; otherwise it is a conflict.
    * The returned function removes exactly this registration, whatever its position.
+   * `dataOwner` is host-assigned context retained with this registration; core remains unowned.
    */
-  register(tool: ToolDefinition, source: string): () => void {
-    if (this.#base) return this.#base.register(tool, source)
+  register(tool: ToolDefinition, source: string, dataOwner?: ExtensionDataOwner): () => void {
+    if (this.#base) return this.#base.register(tool, source, dataOwner)
     const stack = this.#tools.get(tool.name) ?? []
     const top = stack.at(-1)
     if (top && !tool.override) {
@@ -67,7 +70,11 @@ export class ToolRegistry {
         `tool "${tool.name}" from ${source} conflicts with the one from ${top.source}; set override: true to replace it`,
       )
     }
-    const entry = { tool, source }
+    const entry = Object.freeze({
+      tool,
+      source,
+      ...(source !== "core" && dataOwner ? { dataOwner: Object.freeze({ ...dataOwner }) } : {}),
+    })
     stack.push(entry)
     this.#tools.set(tool.name, stack)
     return () => {
@@ -80,11 +87,16 @@ export class ToolRegistry {
   }
 
   get(name: string): ToolDefinition | undefined {
+    return this.getRegistration(name)?.tool
+  }
+
+  /** The selected definition and its host-owned context, captured as one registration. */
+  getRegistration(name: string): Registered | undefined {
     const own = this.#own.get(name)
-    if (own) return own.tool
-    if (this.#base) return this.#allow(name) ? this.#base.get(name) : undefined
+    if (own) return own
+    if (this.#base) return this.#allow(name) ? this.#base.getRegistration(name) : undefined
     if (this.#disabled.has(name)) return undefined
-    return this.#tools.get(name)?.at(-1)?.tool
+    return this.#tools.get(name)?.at(-1)
   }
 
   #current(): Registered[] {
@@ -120,12 +132,18 @@ export class ToolRegistry {
   /** Every usable tool, deferred ones included, with where it came from. Disabled tools are left out. */
   all(): { tool: ToolDefinition; source: string }[] {
     const disabled = this.disabled
-    return this.#current().filter((r) => !disabled.has(r.tool.name))
+    return this.#current()
+      .filter((r) => !disabled.has(r.tool.name))
+      .map(({ tool, source }) => ({ tool, source }))
   }
 
   /** Every registered tool, disabled ones included, with where it came from. */
   list(): { tool: ToolDefinition; source: string; disabled: boolean }[] {
-    return this.#current().map((r) => ({ ...r, disabled: this.#disabled.has(r.tool.name) }))
+    return this.#current().map(({ tool, source }) => ({
+      tool,
+      source,
+      disabled: this.#disabled.has(tool.name),
+    }))
   }
 
   /** Whether a tool with this name is registered, disabled or not. */

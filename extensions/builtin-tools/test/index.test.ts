@@ -13,6 +13,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     apiVersion: "0.1.0",
     cwd: process.cwd(),
     home: process.cwd(),
+    dataDir: process.cwd(),
     reportError: () => {},
     notify: () => {},
     onExit: () => () => {},

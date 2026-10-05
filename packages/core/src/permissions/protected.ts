@@ -5,8 +5,9 @@ import type { ToolDefinition } from "@amira/api"
 import { builtinWrittenPaths } from "../tool-traits.ts"
 
 /**
- * Files declared by file-writing tools always ask before changing, whatever the
- * mode: Amira's own settings, packages and lock files (any `.amira` directory and Amira's user
+ * Files declared by file-writing tools ask before changing, whatever the mode, unless
+ * policy proves the whole report belongs to the registering extension's data directory:
+ * Amira's own settings, packages and lock files (any `.amira` directory and Amira's user
  * directory), Git's metadata (`.git`, where hooks and config live, and a `.git` file pointing
  * elsewhere), `.gitmodules`, the directories `core.hooksPath` names and the user's Git config.
  * Shell commands can still change them until commands run in a sandbox.
@@ -202,6 +203,11 @@ export function protectedPath(cwd: string, p: string, opts: ProtectOptions = {})
     .filter((x): x is string => !!x)
     .map((x) => comparable(x, platform))
   const cmp = (x: string) => comparable(path.resolve(x), platform)
+  const amiraHomes = opts.amiraHome
+    ? [opts.amiraHome, realName(path.resolve(opts.amiraHome), platform)]
+        .filter((x): x is string => !!x)
+        .map(cmp)
+    : []
 
   const gitConfigs = globalGitConfigs(home, env)
   const dirs = gitDirs(cwd)
@@ -216,7 +222,7 @@ export function protectedPath(cwd: string, p: string, opts: ProtectOptions = {})
   for (const name of names) {
     const segs = segments(name)
     const base = segs.at(-1) ?? ""
-    if (segs.includes(".amira") || (opts.amiraHome && within(name, cmp(opts.amiraHome)))) {
+    if (segs.includes(".amira") || amiraHomes.some((h) => within(name, h))) {
       return { path: abs, what: "Amira's settings, packages and lock files (.amira)" }
     }
     const git = segs.indexOf(".git")

@@ -37,6 +37,7 @@ import type { Agent } from "./agent.ts"
 import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { EventBus } from "./event-bus.ts"
+import { extensionDataOwner } from "./extension-data.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { PanelRegistry } from "./panel-registry.ts"
@@ -199,11 +200,12 @@ export class ExtensionHost {
     this.#agent = agent
   }
 
-  async load(ext: Extension, source: string): Promise<boolean> {
+  /** `name` is a host-known state identity; package modules may share it. */
+  async load(ext: Extension, source: string, name = source): Promise<boolean> {
     if (this.#disposers.has(source)) return this.#fail(source, "already loaded")
     const disposers: (() => void)[] = []
     try {
-      await ext(this.#apiFor(source, disposers))
+      await ext(this.#apiFor(source, disposers, name))
     } catch (err) {
       for (const d of disposers.reverse()) d()
       this.#requestRender()
@@ -216,8 +218,9 @@ export class ExtensionHost {
 
   /**
    * Imports an extension file and loads it. `source` names it in errors, /help and the like
-   * (default: the file's path); `name` labels its dialogs (default: the file's basename), and
-   * `hint` is added to its failures, e.g. how to turn it off.
+   * (default: the file's path); `name` labels its dialogs and supplies a host-known state
+   * identity (otherwise the absolute file path is the identity). Dialogs default to the file's
+   * basename; `hint` is added to its failures, e.g. how to turn it off.
    */
   async loadFile(
     file: string,
@@ -240,7 +243,7 @@ export class ExtensionHost {
     if (typeof mod.default !== "function")
       return this.#fail(source, "extension must default-export a function")
     this.ui.setSourceLabel(source, label.name ?? path.basename(file))
-    return this.load(mod.default as Extension, source)
+    return this.load(mod.default as Extension, source, label.name ?? abs)
   }
 
   /**
@@ -451,8 +454,10 @@ export class ExtensionHost {
     }
   }
 
-  #apiFor(source: string, disposers: (() => void)[]): ExtensionAPI {
+  #apiFor(source: string, disposers: (() => void)[], name: string): ExtensionAPI {
     const { bus, interceptors, tools } = this.#opts
+    const home = amiraHome()
+    const dataOwner = extensionDataOwner(home, name)
     const track = (d: () => void) => {
       disposers.push(d)
       return d
@@ -478,7 +483,8 @@ export class ExtensionHost {
     return {
       apiVersion: API_VERSION,
       cwd: this.#opts.cwd ?? process.cwd(),
-      home: amiraHome(),
+      home,
+      dataDir: dataOwner.dataDir,
       backgroundJobs,
       terminal,
       reportError: (error) => void this.#fail(source, error),
@@ -493,7 +499,7 @@ export class ExtensionHost {
         this.#exitHandlers.add(entry)
         return track(() => void this.#exitHandlers.delete(entry))
       },
-      registerTool: (tool) => track(tools.register(tool, source)),
+      registerTool: (tool) => track(tools.register(tool, source, dataOwner)),
       registerWorkspaceProvider: (provider) =>
         track(workspaceFor(bus).register(provider, source, (error) => void this.#fail(source, error))),
       registerFileRestoration: (owner) => {

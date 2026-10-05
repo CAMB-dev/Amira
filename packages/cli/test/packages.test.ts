@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
@@ -48,6 +49,31 @@ function makePackage(name: string, version: string, tool: string, amira: object 
 export default (amira) => { amira.registerTool(defineTool({ name: ${JSON.stringify(tool)}, description: "", parameters: {}, execute: async () => ({ content: [] }) })) }\n`,
   )
   return at
+}
+
+function makeWriterPackage(name: string, version: string, tools: string[]) {
+  const src = makePackage(name, version, tools[0]!, { extensions: tools.map((t) => `./${t}.ts`) })
+  for (const t of tools) {
+    writeFileSync(
+      path.join(src, `${t}.ts`),
+      `import { defineTool } from "@amira/api"
+import { statSync, writeFileSync } from "node:fs"
+import path from "node:path"
+export default (api) => {
+  if (!statSync(api.dataDir).isDirectory()) throw new Error("dataDir must exist before loading")
+  const file = path.join(api.dataDir, ${JSON.stringify(`${t}.txt`)})
+  api.registerTool(defineTool({
+    name: ${JSON.stringify(t)}, description: api.dataDir, parameters: {},
+    traits: { writesFiles: "paths" }, getWrittenPaths: () => [file],
+    execute: async () => {
+      writeFileSync(file, api.dataDir)
+      return { content: [], details: { dataDir: api.dataDir } }
+    },
+  }))
+}\n`,
+    )
+  }
+  return src
 }
 
 const ext = (argv: string[], io = capture(), index?: string) =>
@@ -128,6 +154,124 @@ test("disabled packages and an untrusted project's packages do not load; a reloa
   const report = await session.reload()
   expect(report).toMatchObject({ loaded: ["extra"], unloaded: [], failed: [], extensions: 2 })
   expect(session.agent.tools.all().map((t) => t.tool.name)).toEqual(["extra_tool", "user_tool"])
+})
+
+test("installed package modules share data by package name and keep it across reloads", async () => {
+  const previous = process.env.AMIRA_HOME
+  process.env.AMIRA_HOME = home
+  try {
+    const name = "@scope/shared.writer"
+    const src = makeWriterPackage(name, "1.0.0", ["first_writer", "second_writer"])
+    expect((await ext(["install", src])).code).toBe(0)
+    const ai = createAi({
+      dialects: [
+        createMockDialect([
+          {
+            toolCalls: [
+              { name: "first_writer", args: {} },
+              { name: "second_writer", args: {} },
+            ],
+          },
+          { text: "done" },
+        ]),
+      ],
+      providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    })
+    const session = await createSession({
+      model: "mock/m",
+      cwd,
+      extensions: [],
+      packages: () => activePackages({ home, cwd }),
+      noBuiltins: true,
+      nonInteractive: true,
+      ai,
+    })
+    const digest = createHash("sha256").update(name).digest("hex")
+    const dataDir = path.join(home, "extension-data", `ext--scope-shared-writer-${digest}`)
+    expect(path.isAbsolute(dataDir)).toBe(true)
+    expect(statSync(dataDir).isDirectory()).toBe(true)
+    expect(session.startupEvents.filter((e) => e.type === "extension.error")).toEqual([])
+    const registrations = ["first_writer", "second_writer"].map((t) => session.agent.tools.getRegistration(t))
+    for (const [i, t] of ["first_writer", "second_writer"].entries()) {
+      expect(registrations[i]).toMatchObject({
+        source: `${name}/${t}.ts`,
+        tool: { description: dataDir },
+        dataOwner: { home, dataDir },
+      })
+    }
+    // Go through the agent's protected-write policy, not directly through execute.
+    await session.agent.prompt("write package state")
+    for (const t of ["first_writer", "second_writer"]) {
+      expect(readFileSync(path.join(dataDir, `${t}.txt`), "utf8")).toBe(dataDir)
+    }
+    expect(await session.reload()).toMatchObject({ loaded: [], unloaded: [], failed: [], extensions: 2 })
+    for (const [i, t] of ["first_writer", "second_writer"].entries()) {
+      const registration = session.agent.tools.getRegistration(t)
+      expect(registration).not.toBe(registrations[i])
+      expect(registration).toMatchObject({ tool: { description: dataDir }, dataOwner: { home, dataDir } })
+      expect(readFileSync(path.join(dataDir, `${t}.txt`), "utf8")).toBe(dataDir)
+    }
+  } finally {
+    if (previous === undefined) delete process.env.AMIRA_HOME
+    else process.env.AMIRA_HOME = previous
+  }
+})
+
+test("package data ownership follows trust, disable and project precedence, not the package home", async () => {
+  const previous = process.env.AMIRA_HOME
+  const dataHome = path.join(dir, "data-home")
+  process.env.AMIRA_HOME = dataHome
+  try {
+    expect((await ext(["install", makeWriterPackage("shared", "1.0.0", ["user_writer"])])).code).toBe(0)
+    const projectShared = makeWriterPackage("shared", "2.0.0", ["project_writer"])
+    const projectLocal = makeWriterPackage("local", "1.0.0", ["local_writer"])
+    expect((await ext(["install", "--project", projectShared])).code).toBe(0)
+    expect((await ext(["install", "--project", projectLocal])).code).toBe(0)
+    expect((await ext(["install", makeWriterPackage("quiet", "1.0.0", ["quiet_writer"])])).code).toBe(0)
+    let trusted = false
+    let disabled = ["quiet"]
+    const ai = createAi({
+      dialects: [createMockDialect([])],
+      providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+    })
+    const session = await createSession({
+      model: "mock/m",
+      cwd,
+      extensions: [],
+      packages: () => activePackages({ home, cwd }, { project: trusted, disabled }),
+      noBuiltins: true,
+      ai,
+    })
+    const digest = createHash("sha256").update("shared").digest("hex")
+    const dataDir = path.join(dataHome, "extension-data", `ext-shared-${digest}`)
+    expect(session.agent.tools.getRegistration("user_writer")).toMatchObject({
+      source: "shared",
+      tool: { description: dataDir },
+      dataOwner: { home: dataHome, dataDir },
+    })
+    for (const t of ["project_writer", "local_writer", "quiet_writer"]) {
+      expect(session.agent.tools.getRegistration(t)).toBeUndefined()
+    }
+    trusted = true
+    expect((await session.reload()).failed).toEqual([])
+    expect(session.agent.tools.getRegistration("user_writer")).toBeUndefined()
+    expect(session.agent.tools.getRegistration("project_writer")).toMatchObject({
+      source: "shared",
+      tool: { description: dataDir },
+      dataOwner: { home: dataHome, dataDir },
+    })
+    expect(session.agent.tools.getRegistration("local_writer")?.dataOwner?.home).toBe(dataHome)
+    expect(session.agent.tools.getRegistration("quiet_writer")).toBeUndefined()
+    disabled = ["quiet", "shared", "local"]
+    expect((await session.reload()).failed).toEqual([])
+    for (const t of ["user_writer", "project_writer", "local_writer", "quiet_writer"]) {
+      expect(session.agent.tools.getRegistration(t)).toBeUndefined()
+    }
+    expect(statSync(dataDir).isDirectory()).toBe(true)
+  } finally {
+    if (previous === undefined) delete process.env.AMIRA_HOME
+    else process.env.AMIRA_HOME = previous
+  }
 })
 
 test("ext disable, enable, trust and untrust change the user settings, never a lock file", async () => {

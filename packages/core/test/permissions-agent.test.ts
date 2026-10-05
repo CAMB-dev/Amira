@@ -1,11 +1,20 @@
 import { expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync } from "node:fs"
+import { mkdirSync, mkdtempSync, statSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep, type ModelRequest } from "@amira/ai"
-import { type AnyEvent, type ApprovalRequest, defineTool, type ShellKind, textResult } from "@amira/api"
+import {
+  type AnyEvent,
+  type ApprovalRequest,
+  defineTool,
+  type ExtensionAPI,
+  type ShellKind,
+  textResult,
+} from "@amira/api"
 import { Agent, type ApprovalDecision, type Approver } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
+import { ExtensionHost } from "../src/extensions.ts"
+import { amiraHome } from "../src/home.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
 import { type PermissionRule, Permissions } from "../src/permissions/policy.ts"
 import { AgentTree } from "../src/subagents.ts"
@@ -54,7 +63,12 @@ function fakeTools(ran: string[]) {
 
 function setup(
   steps: MockStep[],
-  opts: { permissions?: Permissions; approve?: Approver; cwd?: string } = {},
+  opts: {
+    permissions?: Permissions
+    approve?: Approver
+    cwd?: string
+    tools?: ToolRegistry
+  } = {},
 ) {
   const ai = createAi({
     dialects: [createMockDialect(steps)],
@@ -73,11 +87,55 @@ function setup(
     systemPrompt: "sys",
     bus,
     interceptors,
-    tools: fakeTools(ran),
+    tools: opts.tools ?? fakeTools(ran),
     ...(opts.permissions ? { permissions: opts.permissions } : {}),
     ...(opts.approve ? { approve: opts.approve } : {}),
   })
   return { agent, bus, events, ran, interceptors }
+}
+
+function extensionSetup(steps: MockStep[], opts: Parameters<typeof setup>[1] = {}) {
+  const tools = new ToolRegistry()
+  const session = setup(steps, { ...opts, tools })
+  const host = new ExtensionHost({
+    bus: session.bus,
+    interceptors: session.interceptors,
+    tools,
+    cwd: session.agent.cwd,
+  })
+  return { ...session, host }
+}
+
+function extensionWriter(ran: string[], opts: { override?: boolean; shell?: boolean } = {}) {
+  return defineTool<{ path: string; command?: string }>({
+    name: "extension_write",
+    description: "",
+    parameters: { type: "object" },
+    ...(opts.override ? { override: true } : {}),
+    traits: { writesFiles: "paths", ...(opts.shell ? { shell: "bash" as const } : {}) },
+    getWrittenPaths: (p) => [p.path],
+    execute: async (p) => {
+      ran.push(`extension_write: ${p.path}`)
+      return textResult("done")
+    },
+  })
+}
+
+async function loadWriter(
+  host: ExtensionHost,
+  source: string,
+  ran: string[],
+  opts: { override?: boolean; shell?: boolean } = {},
+) {
+  let api!: ExtensionAPI
+  expect(
+    await host.load((a) => {
+      api = a
+      expect(statSync(api.dataDir).isDirectory()).toBe(true)
+      api.registerTool(extensionWriter(ran, opts))
+    }, source),
+  ).toBe(true)
+  return api
 }
 
 const rule = (command: string[], decision: PermissionRule["decision"]): PermissionRule => ({
@@ -289,8 +347,171 @@ test("auto mode still asks before a protected file changes", async () => {
   expect(asked[0]!.reason).toContain("Git hooks")
 })
 
-/** A tree whose root's model answers approval questions APPROVE; children run `command`. */
-function treeSetup(permissions: Permissions, command: string) {
+for (const mode of ["default", "auto"] as const) {
+  test(`an extension's own data directory writes run without an approver (${mode})`, async () => {
+    const call = { name: "extension_write", args: { path: "" } }
+    const { agent, host, ran } = extensionSetup(
+      [{ toolCalls: [call] }, { text: "ok" }],
+      mode === "auto" ? { permissions: new Permissions({ mode }) } : {},
+    )
+    const api = await loadWriter(host, path.join(agent.cwd, "writer.ts"), ran)
+    call.args.path = path.join(api.dataDir, "state.json")
+    await agent.prompt("go")
+    expect(ran).toEqual([`extension_write: ${call.args.path}`])
+    expect(resultText(agent)).toBe("done")
+  })
+}
+
+test("an extension's own data writes are still denied in plan mode", async () => {
+  const call = { name: "extension_write", args: { path: "" } }
+  const { agent, host, ran } = extensionSetup([{ toolCalls: [call] }, { text: "ok" }], {
+    permissions: new Permissions({ mode: "plan" }),
+  })
+  const api = await loadWriter(host, path.join(agent.cwd, "writer.ts"), ran)
+  call.args.path = path.join(api.dataDir, "state.json")
+  await agent.prompt("go")
+  expect(ran).toEqual([])
+  expect(resultText(agent)).toContain('mode "plan" is read-only')
+})
+
+test("rewriting an extension's own write to user settings still asks about the final path", async () => {
+  const asked: ApprovalRequest[] = []
+  const approve: Approver = async (r) => {
+    asked.push(r)
+    return { approved: false, reason: "the user said no" }
+  }
+  const call = { name: "extension_write", args: { path: "" } }
+  const { agent, host, ran, interceptors } = extensionSetup([{ toolCalls: [call] }, { text: "ok" }], {
+    approve,
+  })
+  const api = await loadWriter(host, path.join(agent.cwd, "writer.ts"), ran)
+  call.args.path = path.join(api.dataDir, "state.json")
+  const settings = path.join(amiraHome(), "settings.json")
+  interceptors.add("tool.call.before", (v) => ({
+    action: "modify",
+    value: { ...v, args: { path: settings } },
+  }))
+  await agent.prompt("go")
+  expect(ran).toEqual([])
+  expect(asked).toHaveLength(1)
+  expect(asked[0]!.args).toEqual({ path: settings })
+  expect(asked[0]!.permission).toEqual({ mode: "auto", cause: "protected" })
+  expect(resultText(agent)).toContain("Tool call not approved: the user said no")
+})
+
+test("an independent interceptor's question survives an extension's own data write allowance", async () => {
+  const asked: ApprovalRequest[] = []
+  const approve: Approver = async (r) => {
+    asked.push(r)
+    return { approved: false, reason: "the user said no" }
+  }
+  const call = { name: "extension_write", args: { path: "" } }
+  const { agent, host, ran, interceptors } = extensionSetup([{ toolCalls: [call] }, { text: "ok" }], {
+    approve,
+  })
+  const api = await loadWriter(host, path.join(agent.cwd, "writer.ts"), ran)
+  call.args.path = path.join(api.dataDir, "state.json")
+  interceptors.add("tool.call.before", () => ({ action: "ask", reason: "extension policy" }))
+  await agent.prompt("go")
+  expect(ran).toEqual([])
+  expect(asked).toHaveLength(1)
+  expect(asked[0]!.reason).toBe("extension policy")
+  expect(asked[0]!.permission).toBeUndefined()
+})
+
+test("a tool that writes its extension's data and runs a shell command still asks in edits mode", async () => {
+  const asked: ApprovalRequest[] = []
+  const approve: Approver = async (r) => {
+    asked.push(r)
+    return { approved: false, reason: "the user said no" }
+  }
+  const call = { name: "extension_write", args: { path: "", command: "npm test" } }
+  const { agent, host, ran } = extensionSetup([{ toolCalls: [call] }, { text: "ok" }], {
+    permissions: new Permissions({ mode: "edits" }),
+    approve,
+  })
+  const api = await loadWriter(host, path.join(agent.cwd, "writer.ts"), ran, { shell: true })
+  call.args.path = path.join(api.dataDir, "state.json")
+  await agent.prompt("go")
+  expect(ran).toEqual([])
+  expect(asked).toHaveLength(1)
+  expect(asked[0]!.reason).toBe('mode "edits": shell commands ask first')
+  expect(asked[0]!.permission).toEqual({ mode: "edits", cause: "mode" })
+})
+
+test("unloading an extension during an awaited interceptor retains the selected tool's data allowance", async () => {
+  const call = { name: "extension_write", args: { path: "" } }
+  const { agent, host, ran, interceptors } = extensionSetup([{ toolCalls: [call] }, { text: "ok" }])
+  const source = path.join(agent.cwd, "writer.ts")
+  const api = await loadWriter(host, source, ran)
+  call.args.path = path.join(api.dataDir, "state.json")
+  interceptors.add("tool.call.before", async () => {
+    await Promise.resolve()
+    expect(host.unload(source)).toBe(true)
+    return { action: "pass" }
+  })
+  await agent.prompt("go")
+  expect(ran).toEqual([`extension_write: ${call.args.path}`])
+  expect(resultText(agent)).toBe("done")
+})
+
+for (const replacement of ["override", "unload"] as const) {
+  test(`an awaited interceptor cannot substitute a replacement's ownership (${replacement})`, async () => {
+    const asked: ApprovalRequest[] = []
+    const approve: Approver = async (r) => {
+      asked.push(r)
+      return { approved: true, by: "user" }
+    }
+    const args = { path: "" }
+    const { agent, host, ran, interceptors } = extensionSetup(
+      [
+        { toolCalls: [{ name: "extension_write", args, id: "old" }] },
+        { toolCalls: [{ name: "extension_write", args, id: "new" }] },
+        { text: "ok" },
+      ],
+      { approve },
+    )
+    const oldSource = path.join(agent.cwd, "old.ts")
+    const oldApi = await loadWriter(host, oldSource, ran)
+    let newApi!: ExtensionAPI
+    expect(
+      await host.load(
+        (a) => {
+          newApi = a
+        },
+        path.join(agent.cwd, "new.ts"),
+      ),
+    ).toBe(true)
+    expect(newApi.dataDir).not.toBe(oldApi.dataDir)
+    // The selected old tool targets the new owner's directory, never its own.
+    args.path = path.join(newApi.dataDir, "state.json")
+    const replacementRan: string[] = []
+    interceptors.add("tool.call.before", async (v) => {
+      if (v.toolCallId !== "old") return { action: "pass" }
+      await Promise.resolve()
+      if (replacement === "unload") expect(host.unload(oldSource)).toBe(true)
+      newApi.registerTool(extensionWriter(replacementRan, { override: true }))
+      return { action: "pass" }
+    })
+    await agent.prompt("go")
+    expect(asked).toHaveLength(1)
+    expect(asked[0]!.toolCallId).toBe("old")
+    expect(asked[0]!.args).toEqual({ path: args.path })
+    expect(asked[0]!.permission).toEqual({ mode: "auto", cause: "protected" })
+    // Approval runs the captured old tool; the following call uses the new owner's allowance.
+    expect(ran).toEqual([`extension_write: ${args.path}`])
+    expect(replacementRan).toEqual([`extension_write: ${args.path}`])
+    expect(resultText(agent, 0)).toBe("done")
+    expect(resultText(agent, 1)).toBe("done")
+  })
+}
+
+/** A tree whose root's model answers approval questions APPROVE; children run `command` or `call`. */
+function treeSetup(
+  permissions: Permissions,
+  command: string,
+  opts: { tools?: ToolRegistry; call?: { name: string; args: Record<string, unknown> } } = {},
+) {
   const mock = createMockDialect()
   const parentAsked: string[] = []
   const reply = (req: ModelRequest): MockReply => {
@@ -301,7 +522,7 @@ function treeSetup(permissions: Permissions, command: string) {
       return { text: "APPROVE\nsure" }
     }
     if (last?.role === "toolResult") return { text: "finished" }
-    return { toolCalls: [{ name: "bash", args: { command } }] }
+    return { toolCalls: [opts.call ?? { name: "bash", args: { command } }] }
   }
   for (let i = 0; i < 50; i++) mock.push(reply)
   const ai = createAi({
@@ -319,10 +540,64 @@ function treeSetup(permissions: Permissions, command: string) {
     systemPrompt: "commander",
     tree,
     interceptors,
-    tools: fakeTools(ran),
+    tools: opts.tools ?? fakeTools(ran),
     permissions,
   })
   return { tree, root, ran, parentAsked, interceptors }
+}
+
+test("nested registry views retain an extension's data allowance in a child with a different cwd", async () => {
+  const tools = new ToolRegistry()
+  const call = { name: "extension_write", args: { path: "" } }
+  const { tree, root, parentAsked, interceptors } = treeSetup(new Permissions(), "", {
+    tools: ToolRegistry.view(tools, (name) => name === call.name),
+    call,
+  })
+  const host = new ExtensionHost({ bus: root.bus, interceptors, tools, cwd: root.cwd })
+  const ran: string[] = []
+  const api = await loadWriter(host, path.join(root.cwd, "writer.ts"), ran)
+  const cwd = mkdtempSync(path.join(os.tmpdir(), "amira-perm-child-"))
+  expect(cwd).not.toBe(root.cwd)
+  call.args.path = path.relative(cwd, path.join(api.dataDir, "state.json"))
+  // AgentTree adds another live registry view and resolves the path against the child's cwd.
+  const child = tree.spawn(root, { prompt: "save state", cwd, tools: [call.name] })
+  await child.result()
+  expect(ran).toEqual([`extension_write: ${call.args.path}`])
+  expect(parentAsked).toEqual([])
+})
+
+for (const scenario of ["plan", "other-owner"] as const) {
+  test(`a child's extension data exemption cannot bypass ${scenario}`, async () => {
+    const asked: ApprovalRequest[] = []
+    const permissions = new Permissions({
+      mode: scenario === "plan" ? "plan" : "auto",
+      approver: async (request) => {
+        asked.push(request)
+        return { approved: false }
+      },
+    })
+    const tools = new ToolRegistry()
+    const call = { name: "extension_write", args: { path: "" } }
+    const { tree, root, interceptors } = treeSetup(permissions, "", { tools, call })
+    const host = new ExtensionHost({ bus: root.bus, interceptors, tools })
+    const ran: string[] = []
+    const api = await loadWriter(host, path.join(root.cwd, "writer.ts"), ran)
+    let other!: ExtensionAPI
+    expect(
+      await host.load(
+        (a) => {
+          other = a
+        },
+        path.join(root.cwd, "other.ts"),
+      ),
+    ).toBe(true)
+    call.args.path = path.join(scenario === "plan" ? api.dataDir : other.dataDir, "state.json")
+    const child = tree.spawn(root, { prompt: "save state", tools: [call.name] })
+    await child.result()
+    expect(ran).toEqual([])
+    expect(asked).toHaveLength(scenario === "plan" ? 0 : 1)
+    if (scenario === "other-owner") expect(asked[0]!.sessionId).toBe(child.id)
+  })
 }
 
 test("a sub-agent's permission question goes to the user, never to the parent's model", async () => {
