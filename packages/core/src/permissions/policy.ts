@@ -2,7 +2,7 @@ import type { CommandRule, PermissionDecision, PermissionMode, ShellKind, ToolDe
 import type { Approver } from "../agent.ts"
 import { type ExtensionDataOwner, extensionDataContainment } from "../extension-data.ts"
 import { toolTraits } from "../tool-traits.ts"
-import { type ProtectOptions, protectedPath, writtenPaths } from "./protected.ts"
+import { type ProtectOptions, protectedWritePath, writtenPaths } from "./protected.ts"
 import { commandName, isWrapper, type ParsedLine, parseBash, parsePowerShell } from "./shell-parse.ts"
 
 /** The modes in the order Shift+Tab cycles them, starting from the default. */
@@ -252,6 +252,7 @@ export class Permissions {
         cause: "protected",
       }
     }
+    let dataRoot: string | undefined
     if (dataOwner && exemptData) {
       const containment = paths.map((p) => extensionDataContainment(dataOwner, cwd, p, this.#protect))
       if (containment.includes("unknown")) {
@@ -262,14 +263,14 @@ export class Permissions {
         }
       }
       // All-or-nothing: a mixed report receives the normal checks for every path.
-      if (containment.every((result) => result === "inside")) return ALLOW
+      if (containment.every((result) => result === "inside")) dataRoot = dataOwner.dataDir
     }
     for (const p of paths) {
-      let hit: ReturnType<typeof protectedPath>
+      let hit: ReturnType<typeof protectedWritePath>
       try {
-        hit = protectedPath(cwd, p, this.#protect)
+        hit = protectedWritePath(cwd, p, this.#protect, dataRoot)
         if (!hit && dataOwner && dataOwner.home !== this.#protect.amiraHome) {
-          hit = protectedPath(cwd, p, { ...this.#protect, amiraHome: dataOwner.home })
+          hit = protectedWritePath(cwd, p, { ...this.#protect, amiraHome: dataOwner.home }, dataRoot)
         }
       } catch {
         return {

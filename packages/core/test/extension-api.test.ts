@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test"
 import { createHash } from "node:crypto"
+import * as fs from "node:fs"
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import os, { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative } from "node:path"
@@ -55,7 +56,62 @@ async function withExtensionDataHost(
   }
 }
 
-test("each extension interface captures home once, with eager absolute data directories under AMIRA_HOME", async () => {
+test("extensions that never read dataDir create no directories, even when registering tools", async () => {
+  await withExtensionDataHost(async (host, tools, home) => {
+    let api!: ExtensionAPI
+    expect(
+      await host.load((a) => {
+        api = a
+        a.registerTool(
+          defineTool({
+            name: "unused_data",
+            description: "No persistent data",
+            parameters: { type: "object" },
+            execute: async () => textResult("ok"),
+          }),
+        )
+      }, "ext:builtin-unused"),
+    ).toBe(true)
+    const owner = tools.getRegistration("unused_data")!.dataOwner!
+    expect(existsSync(join(home, "extension-data"))).toBe(false)
+    process.env.AMIRA_HOME = join(home, "changed-before-access")
+    expect(api.dataDir).toBe(owner.dataDir)
+    expect(statSync(owner.dataDir).isDirectory()).toBe(true)
+    expect(existsSync(process.env.AMIRA_HOME)).toBe(false)
+  })
+})
+
+test("first dataDir access checks the namespace before and after mkdir, and failures can retry", async () => {
+  await withExtensionDataHost(async (host, _tools, home) => {
+    let api!: ExtensionAPI
+    expect(
+      await host.load((a) => {
+        api = a
+      }, "ext:lazy-checks"),
+    ).toBe(true)
+    const namespace = join(home, "extension-data")
+    writeFileSync(namespace, "not a directory")
+    expect(() => api.dataDir).toThrow("safely resolve")
+    rmSync(namespace)
+    const mkdir = fs.mkdirSync
+    const redirected = spyOn(fs, "mkdirSync").mockImplementation((dir, opts) => {
+      const result = mkdir(dir, opts)
+      rmSync(String(dir), { recursive: true })
+      writeFileSync(String(dir), "replaced during creation")
+      return result
+    })
+    try {
+      expect(() => api.dataDir).toThrow("safely resolve")
+      expect(redirected).toHaveBeenCalledTimes(1)
+    } finally {
+      redirected.mockRestore()
+    }
+    rmSync(namespace, { recursive: true })
+    expect(statSync(api.dataDir).isDirectory()).toBe(true)
+  })
+})
+
+test("each extension interface captures home once, with absolute data directories under AMIRA_HOME", async () => {
   await withExtensionDataHost(async (host, tools, home) => {
     const apis: ExtensionAPI[] = []
     const tool = defineTool({
@@ -328,11 +384,31 @@ test("host package names share data across sources, including loadFile labels", 
     // Without an explicit host name, use the absolute file identity, not a display label or basename.
     expect(await host.loadFile(file, { source: "package:unlabelled" })).toBe(true)
     const owner = tools.getRegistration("package_tool")!.dataOwner!
-    const hash = createHash("sha256").update(file).digest("hex")
+    const hash = createHash("sha256")
+      .update(process.platform === "win32" ? file.toLowerCase() : file)
+      .digest("hex")
     expect(basename(owner.dataDir).endsWith(`-${hash}`)).toBe(true)
     expect(owner.dataDir).not.toBe(api.dataDir)
   })
 })
+
+test.skipIf(process.platform !== "win32")(
+  "file data identities ignore Windows drive and path case",
+  async () => {
+    await withExtensionDataHost(async (host, tools, home) => {
+      const file = join(home, "CaseExtension.ts")
+      writeFileSync(
+        file,
+        'export default (api) => api.registerTool({ name: "case_file", description: "", parameters: { type: "object" }, execute: async () => ({ content: [] }) })',
+      )
+      expect(await host.loadFile(file, { source: "file:first" })).toBe(true)
+      const first = tools.getRegistration("case_file")!.dataOwner!.dataDir
+      host.unload("file:first")
+      expect(await host.loadFile(file.toUpperCase(), { source: "file:second" })).toBe(true)
+      expect(tools.getRegistration("case_file")!.dataOwner!.dataDir).toBe(first)
+    })
+  },
+)
 
 test("tool renderers: the last one registered for a tool wins, and unloading restores the one before", async () => {
   const host = new ExtensionHost({

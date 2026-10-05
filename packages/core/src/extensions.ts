@@ -243,7 +243,8 @@ export class ExtensionHost {
     if (typeof mod.default !== "function")
       return this.#fail(source, "extension must default-export a function")
     this.ui.setSourceLabel(source, label.name ?? path.basename(file))
-    return this.load(mod.default as Extension, source, label.name ?? abs)
+    const identity = process.platform === "win32" ? abs.toLowerCase() : abs
+    return this.load(mod.default as Extension, source, label.name ?? identity)
   }
 
   /**
@@ -457,7 +458,8 @@ export class ExtensionHost {
   #apiFor(source: string, disposers: (() => void)[], name: string): ExtensionAPI {
     const { bus, interceptors, tools } = this.#opts
     const home = amiraHome()
-    const dataOwner = extensionDataOwner(home, name)
+    const dataOwner = extensionDataOwner(home, name, false)
+    let dataReady = false
     const track = (d: () => void) => {
       disposers.push(d)
       return d
@@ -484,7 +486,13 @@ export class ExtensionHost {
       apiVersion: API_VERSION,
       cwd: this.#opts.cwd ?? process.cwd(),
       home,
-      dataDir: dataOwner.dataDir,
+      get dataDir() {
+        if (!dataReady) {
+          extensionDataOwner(home, name)
+          dataReady = true
+        }
+        return dataOwner.dataDir
+      },
       backgroundJobs,
       terminal,
       reportError: (error) => void this.#fail(source, error),

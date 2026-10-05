@@ -6,8 +6,9 @@ import { builtinWrittenPaths } from "../tool-traits.ts"
 
 /**
  * Files declared by file-writing tools ask before changing, whatever the mode, unless
- * policy proves the whole report belongs to the registering extension's data directory:
- * Amira's own settings, packages and lock files (any `.amira` directory and Amira's user
+ * policy proves the whole report belongs to the registering extension's data directory
+ * (exempting only the enclosing Amira home): Amira's own settings, packages and lock files
+ * (any `.amira` directory and Amira's user
  * directory), Git's metadata (`.git`, where hooks and config live, and a `.git` file pointing
  * elsewhere), `.gitmodules`, the directories `core.hooksPath` names and the user's Git config.
  * Shell commands can still change them until commands run in a sandbox.
@@ -95,6 +96,49 @@ function within(child: string, parent: string): boolean {
   const c = segments(child)
   const p = segments(parent)
   return p.length <= c.length && p.every((s, i) => s === c[i])
+}
+
+/** Local administrative shares name drive paths; other local shares need a realpath mapping. */
+function localShare(abs: string, platform: string): { drive?: string } | undefined {
+  if (platform !== "win32") return undefined
+  const p = abs.replaceAll("/", "\\").replace(/^\\\\[?.]\\UNC\\/i, "\\\\")
+  const share = /^\\\\([^\\]+)\\([^\\]+)(.*)$/.exec(p)
+  if (!share) return undefined
+  const server = share[1]!.toLowerCase().replace(/\.$/, "")
+  const hostname = os.hostname().toLowerCase()
+  const local = [
+    "", // `\\\\.\\share` names this machine.
+    "localhost",
+    "[::1]",
+    "--1.ipv6-literal.net",
+    hostname,
+    hostname.split(".")[0],
+    process.env.COMPUTERNAME?.toLowerCase(),
+    process.env.USERDNSDOMAIN && `${hostname.split(".")[0]}.${process.env.USERDNSDOMAIN.toLowerCase()}`,
+  ]
+  const loopback = /^127(?:\.\d{1,3}){3}$/.test(server)
+  const address = Object.values(os.networkInterfaces())
+    .flat()
+    .some((entry) => {
+      if (!entry) return false
+      const ip = entry.address.toLowerCase()
+      return [ip, `[${ip}]`, `${ip.replaceAll(":", "-").replace("%", "s")}.ipv6-literal.net`].includes(server)
+    })
+  if (!local.includes(server) && !loopback && !address) return undefined
+  return /^[a-z]\$$/i.test(share[2]!) ? { drive: `${share[2]![0]}:${share[3] || "\\"}` } : {}
+}
+
+/** Keep lexical names too, so resolving a link cannot erase a protected spelling. */
+function pathNames(abs: string, platform: string): string[] | undefined {
+  const real = realName(abs, platform)
+  const names = [abs, real]
+  const local = localShare(abs, platform)
+  if (local) {
+    const drive = local.drive && realName(local.drive, platform)
+    if (drive) names.push(local.drive, drive)
+    else if (!real || !/^[a-z]:\\/i.test(comparable(real, platform))) return undefined
+  }
+  return names.filter((x): x is string => !!x).map((x) => comparable(x, platform))
 }
 
 /** The repository's Git directory and its common directory (they differ in a linked worktree). */
@@ -195,19 +239,31 @@ function globalGitConfigs(home: string, env: Record<string, string | undefined>)
  * fresh on every call, so a hooks directory configured a moment ago counts.
  */
 export function protectedPath(cwd: string, p: string, opts: ProtectOptions = {}): ProtectedMatch | undefined {
+  return protectedWritePath(cwd, p, opts)
+}
+
+/** Internal policy seam: a proven data root exempts only the enclosing Amira home. */
+export function protectedWritePath(
+  cwd: string,
+  p: string,
+  opts: ProtectOptions = {},
+  dataRoot?: string,
+): ProtectedMatch | undefined {
   const platform = opts.platform ?? process.platform
   const env = opts.env ?? process.env
   const home = opts.homedir ?? os.homedir()
   const abs = toolPath(cwd, p, opts)
-  const names = [abs, realName(abs, platform)]
-    .filter((x): x is string => !!x)
-    .map((x) => comparable(x, platform))
-  const cmp = (x: string) => comparable(path.resolve(x), platform)
-  const amiraHomes = opts.amiraHome
-    ? [opts.amiraHome, realName(path.resolve(opts.amiraHome), platform)]
-        .filter((x): x is string => !!x)
-        .map(cmp)
-    : []
+  // Normalizing a device/UNC spelling can erase a local server segment (for example `.`).
+  const names = localShare(p, platform) && !localShare(abs, platform) ? undefined : pathNames(abs, platform)
+  if (!names) return { path: abs, what: "a local UNC path whose protected roots cannot be resolved safely" }
+  const mod = platform === "win32" ? path.win32 : path.posix
+  const cmp = (x: string) => pathNames(mod.resolve(x), platform) ?? [comparable(mod.resolve(x), platform)]
+  const amiraHomes = opts.amiraHome ? cmp(opts.amiraHome) : []
+  const dataRoots = dataRoot ? cmp(dataRoot) : []
+  const enclosingHomes = dataRoot ? cmp(mod.dirname(mod.dirname(dataRoot))) : []
+  if (dataRoot && !names.some((name) => dataRoots.some((root) => within(name, root)))) {
+    return { path: abs, what: "an extension data path whose protected roots cannot be resolved safely" }
+  }
 
   const gitConfigs = globalGitConfigs(home, env)
   const dirs = gitDirs(cwd)
@@ -222,7 +278,9 @@ export function protectedPath(cwd: string, p: string, opts: ProtectOptions = {})
   for (const name of names) {
     const segs = segments(name)
     const base = segs.at(-1) ?? ""
-    if (segs.includes(".amira") || amiraHomes.some((h) => within(name, h))) {
+    const exemptParent = [...dataRoots, ...enclosingHomes].find((root) => within(name, root))
+    const amiraSegments = exemptParent ? segs.slice(segments(exemptParent).length) : segs
+    if (amiraSegments.includes(".amira") || (!dataRoot && amiraHomes.some((h) => within(name, h)))) {
       return { path: abs, what: "Amira's settings, packages and lock files (.amira)" }
     }
     const git = segs.indexOf(".git")
@@ -237,13 +295,14 @@ export function protectedPath(cwd: string, p: string, opts: ProtectOptions = {})
     }
     if (base === ".gitmodules") return { path: abs, what: "Git submodule config (.gitmodules)" }
     for (const d of dirs) {
-      if (within(name, cmp(d))) return { path: abs, what: "Git metadata, where hooks and config live" }
+      if (cmp(d).some((root) => within(name, root)))
+        return { path: abs, what: "Git metadata, where hooks and config live" }
     }
     for (const h of hookDirs) {
-      if (within(name, cmp(h))) return { path: abs, what: "Git hooks (core.hooksPath)" }
+      if (cmp(h).some((root) => within(name, root))) return { path: abs, what: "Git hooks (core.hooksPath)" }
     }
     for (const g of gitConfigs) {
-      if (name === cmp(g)) return { path: abs, what: "your Git config" }
+      if (cmp(g).includes(name)) return { path: abs, what: "your Git config" }
     }
   }
   return undefined

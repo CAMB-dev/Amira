@@ -12,7 +12,7 @@ export interface ExtensionDataOwner {
 type Containment = "inside" | "outside" | "unknown"
 
 /** One safe segment, including a digest of the original (not case-folded or truncated) identity. */
-export function extensionDataOwner(home: string, identity: string): ExtensionDataOwner {
+export function extensionDataOwner(home: string, identity: string, create = true): ExtensionDataOwner {
   if (!identity.isWellFormed()) throw new Error("Extension data identity must be well-formed Unicode")
   const slug =
     identity
@@ -21,10 +21,12 @@ export function extensionDataOwner(home: string, identity: string): ExtensionDat
       .slice(0, 48) || "extension"
   const digest = createHash("sha256").update(identity).digest("hex")
   const owner = Object.freeze({ home, dataDir: path.join(home, "extension-data", `ext-${slug}-${digest}`) })
-  // Loading creates the persistent directory, but must not follow a redirected data namespace.
+  // Registration checks the namespace; first API access checks again before and after creation.
   if (!ownerRoot(owner)) throw new Error("Cannot safely resolve the extension data directory")
-  mkdirSync(owner.dataDir, { recursive: true })
-  if (!ownerRoot(owner)) throw new Error("Cannot safely resolve the extension data directory")
+  if (create) {
+    mkdirSync(owner.dataDir, { recursive: true })
+    if (!ownerRoot(owner)) throw new Error("Cannot safely resolve the extension data directory")
+  }
   return owner
 }
 
