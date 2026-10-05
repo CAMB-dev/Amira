@@ -167,7 +167,9 @@ export class ToolRunner {
           `Invalid JSON in tool arguments. Retry with valid JSON. Received: ${bad.slice(0, 500)}`,
         )
       }
-      const tool = this.#deps.tools.get(call.name)
+      // Capture the definition and its registration owner together before awaited interceptors.
+      const registration = this.#deps.tools.getRegistration(call.name)
+      const tool = registration?.tool
       run.tool = tool
       // A tool hidden from this model is not available even if it calls the name anyway.
       if (!tool || !this.#deps.allowsTool(tool)) {
@@ -191,7 +193,7 @@ export class ToolRunner {
       const args = gate.value.args
       // The core policy decides on the arguments the tool will get, whatever the interceptors
       // made of them; no extension can take it away.
-      const policy = await this.#deps.permissions.check(tool, args, this.#deps.cwd)
+      const policy = await this.#deps.permissions.check(tool, args, this.#deps.cwd, registration?.dataOwner)
       if (turn.signal.aborted)
         return await reject("aborted", "Aborted by the user before this tool ran.", args)
       if (policy.decision === "deny") return await reject("blocked", refusedText(policy), args)

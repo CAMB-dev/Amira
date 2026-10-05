@@ -1,5 +1,6 @@
 import type { CommandRule, PermissionDecision, PermissionMode, ShellKind, ToolDefinition } from "@amira/api"
 import type { Approver } from "../agent.ts"
+import { type ExtensionDataOwner, extensionDataContainment } from "../extension-data.ts"
 import { toolTraits } from "../tool-traits.ts"
 import { type ProtectOptions, protectedPath, writtenPaths } from "./protected.ts"
 import { commandName, isWrapper, type ParsedLine, parseBash, parsePowerShell } from "./shell-parse.ts"
@@ -239,6 +240,8 @@ export class Permissions {
     tool: Pick<ToolDefinition, "name" | "getWrittenPaths">,
     args: Record<string, unknown>,
     cwd: string,
+    dataOwner?: ExtensionDataOwner,
+    exemptData = false,
   ): Promise<PermissionVerdict> {
     const name = tool.name
     const paths = await writtenPaths(tool, args, cwd)
@@ -249,10 +252,25 @@ export class Permissions {
         cause: "protected",
       }
     }
+    if (dataOwner && exemptData) {
+      const containment = paths.map((p) => extensionDataContainment(dataOwner, cwd, p, this.#protect))
+      if (containment.includes("unknown")) {
+        return {
+          decision: "ask",
+          reason: `${name} returned a write path whose extension data ownership could not be resolved safely`,
+          cause: "protected",
+        }
+      }
+      // All-or-nothing: a mixed report receives the normal checks for every path.
+      if (containment.every((result) => result === "inside")) return ALLOW
+    }
     for (const p of paths) {
       let hit: ReturnType<typeof protectedPath>
       try {
         hit = protectedPath(cwd, p, this.#protect)
+        if (!hit && dataOwner && dataOwner.home !== this.#protect.amiraHome) {
+          hit = protectedPath(cwd, p, { ...this.#protect, amiraHome: dataOwner.home })
+        }
       } catch {
         return {
           decision: "ask",
@@ -263,7 +281,7 @@ export class Permissions {
       if (hit)
         return {
           decision: "ask",
-          reason: `it changes ${hit.what}, which always asks first`,
+          reason: `it changes ${hit.what}, which requires approval`,
           cause: "protected",
         }
     }
@@ -291,6 +309,8 @@ export class Permissions {
     tool: Pick<ToolDefinition, "name" | "traits" | "shellKind" | "getWrittenPaths">,
     args: Record<string, unknown>,
     cwd: string,
+    /** Host context captured with the selected registration, never taken from the tool. */
+    dataOwner?: ExtensionDataOwner,
   ): Promise<PermissionVerdict> {
     const mode = this.#mode
     const name = tool.name
@@ -311,7 +331,10 @@ export class Permissions {
     }
     // A tool that writes files and also runs commands is checked as both.
     const verdicts: PermissionVerdict[] = []
-    if (writes) verdicts.push(await this.#protectedWrites(tool, args, cwd))
+    if (writes) {
+      const exemptData = tool.traits?.writesFiles === "paths" && tool.getWrittenPaths !== undefined
+      verdicts.push(await this.#protectedWrites(tool, args, cwd, dataOwner, exemptData))
+    }
     if (shell) verdicts.push(await this.#shellCall(tool, args, mode))
     if (writes || shell) return strictest(verdicts)
     if (mode === "plan" && traits?.readOnly !== true) {
