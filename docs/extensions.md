@@ -189,10 +189,23 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `registerMarkdownRenderer`, `registerImageProvider` | Render matching reply code blocks, math or standalone images and supply terminal image data |
 | `provideService`, `useService` | Share named extension services; look them up when needed because a provider may be absent or unloaded |
 | `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, provenance layers for each top-level key, the working directory, the user directory and API version |
+| `dataDir` | Required, read-only absolute path to this extension's persistent state directory, created during load |
 | `backgroundJobs` | Start and inspect only this extension's background jobs; built-in frontend code uses the host-only `hostBackgroundJobs()` capability |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
+
+### Extension state directory
+
+D111 adds the required `readonly dataDir: string` property to `ExtensionAPI`. `api.dataDir` is an absolute path at `<api.home>/extension-data/<sanitized host-known identity>`. The directory name combines a deterministic, readable sanitized slug with a SHA-256 hash of the original identity, so identities that sanitize to the same slug remain distinct. The host's explicit `loadFile` name (the installed package name) selects the identity; otherwise file loads use their absolute path, not a basename or display label. A direct load without an explicit name defaults to its source. All extension modules in one installed package share the same directory. Extensions do not choose their own owner identity.
+
+The host eagerly creates the directory during load, before calling the extension entry point. Its contents survive unload and reload; deleting that directory resets the extension's stored state, and a later load recreates it. Use it for extension state such as caches and bookkeeping, not user files or project output.
+
+An extension tool gets a protected-write approval exemption only when it explicitly declares `traits.writesFiles: "paths"`, supplies `getWrittenPaths`, and every path in the union of its write reports is securely contained in its own `api.dataDir`. For tools registered under built-in file-tool names, that union also includes paths named by their arguments. Reports follow file-tool path semantics: relative paths resolve from the calling agent's `cwd`, not from `api.dataDir`. A mixed inside/outside report gets no partial exemption; the entire call keeps normal protected-path checks, including for outside paths. Missing, invalid, unknown or unsafe path resolution asks for approval rather than granting the exemption.
+
+Containment uses native filesystem realpaths for existing path prefixes, not just a string-prefix comparison, so new files can be checked through their existing parents. Redirecting the `extension-data` namespace or the owner's directory is rejected, even if the redirect stays under the user directory; a symlink for `api.home` itself is allowed. Symlink or junction escapes and ambiguous Windows path forms cannot qualify for the exemption. A symlink followed by `..`, or a parent that cannot be resolved safely before `..`, asks rather than trusting a normalized path.
+
+This only exempts protected-write approval. Plan mode still denies writes; shell permission rules and interceptor requests for approval are unchanged, and sub-agents use the same policy. Path reports are trusted extension declarations, not a shell sandbox, race-free authorization or proof of exclusive ownership: a hard link may refer to the same file from outside the directory. Custom tools must resolve reports and actual file accesses consistently with file-tool semantics. See [Permissions](usage.md#permissions).
 
 ### Markdown and math renderers
 
@@ -330,7 +343,7 @@ Views redraw on input, data updates and `requestRender`; no widget animation tim
 
 ### Tool capabilities
 
-Declare a tool's host-visible capabilities in `traits` instead of relying on its name. `readOnly: true` allows the tool in plan mode; `writesFiles: true` marks a file writer, while `writesFiles: "paths"` declares that `getWrittenPaths(params, { cwd })` returns every path the call may write, relative to `cwd` or absolute. A writer with a valid path report receives the same protected-path checks as built-in file tools, and the host captures its pre- and post-images for rewind; a missing or invalid report is treated conservatively and asks for approval. A tool that already uses `ctx.mutateFiles` should set `usesMutationHook: true` so the host does not add a second rewind boundary.
+Declare a tool's host-visible capabilities in `traits` instead of relying on its name. `readOnly: true` allows the tool in plan mode; `writesFiles: true` marks a file writer, while `writesFiles: "paths"` declares that `getWrittenPaths(params, { cwd })` returns every path the call may write, relative to `cwd` or absolute. A writer with a valid path report receives the same protected-path checks as built-in file tools, except for the narrow [extension state directory](#extension-state-directory) exemption, and the host captures its pre- and post-images for rewind; a missing or invalid report is treated conservatively and asks for approval. A tool that already uses `ctx.mutateFiles` should set `usesMutationHook: true` so the host does not add a second rewind boundary.
 
 Set `shell: "bash"` or `shell: "powershell"` for a command-running tool; use `shellKind()` as well when the actual shell is selected at runtime. Set `editor: "edit"` or `editor: "apply_patch"` when the tool is an editing-tool replacement, `artifactReader: true` for a tool that reads saved output, `toolSearch: true` for the deferred-tool loader, or `interactive: true` for a tool that needs a UI. `readKey(params, { cwd })` can identify repeatable direct file reads for context deduplication. Omitted traits remain unknown: permission checks, rewind and workspace refresh keep their conservative behavior, and MCP tools currently declare no known traits.
 

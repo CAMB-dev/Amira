@@ -1,8 +1,9 @@
 import { expect, spyOn, test } from "bun:test"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import type { AnyEvent, ExtensionAPI } from "@amira/api"
+import { createHash } from "node:crypto"
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import os, { tmpdir } from "node:os"
+import { basename, dirname, isAbsolute, join, relative } from "node:path"
+import { type AnyEvent, defineTool, type ExtensionAPI, textResult } from "@amira/api"
 import { resetCommandWorker } from "@amira/proc"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
@@ -31,6 +32,305 @@ test("extensions get the cwd, the user directory and a way to report later failu
   expect(events.at(-1)).toMatchObject({
     type: "extension.error",
     data: { source: "ext:test", error: "server x failed" },
+  })
+})
+
+async function withExtensionDataHost(
+  run: (host: ExtensionHost, tools: ToolRegistry, home: string) => Promise<void>,
+): Promise<void> {
+  const home = mkdtempSync(join(tmpdir(), "amira-extension-data-"))
+  const previous = process.env.AMIRA_HOME
+  let host: ExtensionHost | undefined
+  try {
+    // Use a relative override when the temporary directory is on the same drive.
+    process.env.AMIRA_HOME = relative(process.cwd(), home)
+    const tools = new ToolRegistry()
+    host = new ExtensionHost({ bus: new EventBus(), interceptors: new InterceptorRegistry(), tools })
+    await run(host, tools, home)
+  } finally {
+    host?.unloadAll()
+    if (previous === undefined) delete process.env.AMIRA_HOME
+    else process.env.AMIRA_HOME = previous
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+test("each extension interface captures home once, with eager absolute data directories under AMIRA_HOME", async () => {
+  await withExtensionDataHost(async (host, tools, home) => {
+    const apis: ExtensionAPI[] = []
+    const tool = defineTool({
+      name: "owned",
+      description: "An extension-owned tool",
+      parameters: { type: "object" },
+      execute: async () => textResult("ok"),
+    })
+    expect(
+      await host.load((api) => {
+        apis.push(api)
+        expect(api.home).toBe(home)
+        expect(isAbsolute(api.dataDir)).toBe(true)
+        expect(dirname(api.dataDir)).toBe(join(home, "extension-data"))
+        expect(statSync(api.dataDir).isDirectory()).toBe(true)
+        process.env.AMIRA_HOME = join(home, "changed-during-load")
+        api.registerTool(tool)
+      }, "ext:owned"),
+    ).toBe(true)
+    expect(tools.getRegistration("owned")).toEqual({
+      tool,
+      source: "ext:owned",
+      dataOwner: { home, dataDir: apis[0]!.dataDir },
+    })
+    const nextHome = join(home, "changed-again")
+    process.env.AMIRA_HOME = nextHome
+    expect(await host.load((api) => void apis.push(api), "ext:other")).toBe(true)
+    expect(apis[1]!.home).toBe(nextHome)
+    expect(dirname(apis[1]!.dataDir)).toBe(join(nextHome, "extension-data"))
+    expect(apis[1]!.dataDir).not.toBe(apis[0]!.dataDir)
+    expect(apis[0]!.home).toBe(home)
+    expect(tools.getRegistration("owned")?.dataOwner?.home).toBe(home)
+  })
+})
+
+test("extension data directories default to ~/.amira when AMIRA_HOME is unset", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "amira-extension-default-home-"))
+  const previous = process.env.AMIRA_HOME
+  const homedir = spyOn(os, "homedir").mockReturnValue(dir)
+  let host: ExtensionHost | undefined
+  try {
+    delete process.env.AMIRA_HOME
+    host = new ExtensionHost({
+      bus: new EventBus(),
+      interceptors: new InterceptorRegistry(),
+      tools: new ToolRegistry(),
+    })
+    let api!: ExtensionAPI
+    expect(
+      await host.load((a) => {
+        api = a
+      }, "ext:default-home"),
+    ).toBe(true)
+    expect(api.home).toBe(join(dir, ".amira"))
+    expect(isAbsolute(api.dataDir)).toBe(true)
+    expect(dirname(api.dataDir)).toBe(join(dir, ".amira", "extension-data"))
+    expect(statSync(api.dataDir).isDirectory()).toBe(true)
+  } finally {
+    host?.unloadAll()
+    homedir.mockRestore()
+    if (previous === undefined) delete process.env.AMIRA_HOME
+    else process.env.AMIRA_HOME = previous
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("extension identities produce safe bounded slugs and full case-sensitive identity hashes", async () => {
+  await withExtensionDataHost(async (host, _tools, home) => {
+    const identities = [
+      "@scope/package",
+      join(home, "nested", "extension.ts"),
+      "C:\\extensions\\tool.ts",
+      "../../outside",
+      "CON",
+      "NUL.",
+      '\u0000\u0001\r\n\t<>:"|?*',
+      "a/b",
+      "a:b",
+      "a_b",
+      "a-b",
+      "Case",
+      "case",
+      "a".repeat(200),
+      `${"a".repeat(200)}b`,
+      "工具🚀",
+      "\uFFFD",
+      "",
+    ]
+    const paths: string[] = []
+    for (const [index, identity] of identities.entries()) {
+      let api!: ExtensionAPI
+      const source = `ext:identity-${index}`
+      expect(
+        await host.load(
+          (a) => {
+            api = a
+          },
+          source,
+          identity,
+        ),
+      ).toBe(true)
+      const hash = createHash("sha256").update(identity).digest("hex")
+      expect(isAbsolute(api.dataDir)).toBe(true)
+      expect(dirname(api.dataDir)).toBe(join(home, "extension-data"))
+      expect(basename(api.dataDir)).toMatch(new RegExp(`^ext-[a-z0-9_-]{1,48}-${hash}$`))
+      expect(statSync(api.dataDir).isDirectory()).toBe(true)
+      paths.push(api.dataDir)
+      expect(host.unload(source)).toBe(true)
+      let reloaded!: ExtensionAPI
+      expect(
+        await host.load(
+          (a) => {
+            reloaded = a
+          },
+          source,
+          identity,
+        ),
+      ).toBe(true)
+      expect(reloaded.dataDir).toBe(api.dataDir)
+    }
+    expect(new Set(paths).size).toBe(identities.length)
+  })
+})
+
+test("malformed Unicode host identities fail before the extension entry point", async () => {
+  await withExtensionDataHost(async (host) => {
+    let called = false
+    for (const identity of ["\uD800", "\uD801"]) {
+      expect(
+        await host.load(
+          () => {
+            called = true
+          },
+          "ext:malformed",
+          identity,
+        ),
+      ).toBe(false)
+    }
+    expect(called).toBe(false)
+    expect(host.loaded).toEqual([])
+  })
+})
+
+test("extension data survives unload and reload while tool ownership is removed and restored", async () => {
+  await withExtensionDataHost(async (host, tools, home) => {
+    const tool = defineTool({
+      name: "persistent",
+      description: "A tool with persistent extension data",
+      parameters: { type: "object" },
+      execute: async () => textResult("ok"),
+    })
+    let first!: ExtensionAPI
+    expect(
+      await host.load((api) => {
+        first = api
+        api.registerTool(tool)
+        writeFileSync(join(api.dataDir, "state.json"), '{"count":1}')
+      }, "ext:persistent"),
+    ).toBe(true)
+    const hash = createHash("sha256").update("ext:persistent").digest("hex")
+    expect(basename(first.dataDir).endsWith(`-${hash}`)).toBe(true)
+    expect(host.unload("ext:persistent")).toBe(true)
+    expect(tools.get("persistent")).toBeUndefined()
+    expect(tools.getRegistration("persistent")).toBeUndefined()
+    expect(existsSync(first.dataDir)).toBe(true)
+    let second!: ExtensionAPI
+    expect(
+      await host.load((api) => {
+        second = api
+        expect(readFileSync(join(api.dataDir, "state.json"), "utf8")).toBe('{"count":1}')
+        api.registerTool(tool)
+      }, "ext:persistent"),
+    ).toBe(true)
+    expect(second.dataDir).toBe(first.dataDir)
+    expect(tools.getRegistration("persistent")?.dataOwner).toEqual({ home, dataDir: first.dataDir })
+    expect(host.unload("ext:persistent")).toBe(true)
+    rmSync(first.dataDir, { recursive: true })
+    let apiAfterReset!: ExtensionAPI
+    expect(
+      await host.load((a) => {
+        apiAfterReset = a
+      }, "ext:persistent"),
+    ).toBe(true)
+    expect(apiAfterReset.dataDir).toBe(first.dataDir)
+    expect(statSync(first.dataDir).isDirectory()).toBe(true)
+    expect(existsSync(join(first.dataDir, "state.json"))).toBe(false)
+  })
+})
+
+test("an unusable data namespace prevents the entry point from registering anything", async () => {
+  await withExtensionDataHost(async (host, tools, home) => {
+    writeFileSync(join(home, "extension-data"), "not a directory")
+    let called = false
+    expect(
+      await host.load(() => {
+        called = true
+      }, "ext:blocked-data"),
+    ).toBe(false)
+    expect(called).toBe(false)
+    expect(host.loaded).toEqual([])
+    expect(tools.all()).toEqual([])
+  })
+})
+
+test("failed loads roll back owned tool registrations but preserve their data directory", async () => {
+  await withExtensionDataHost(async (host, tools) => {
+    const tool = defineTool({
+      name: "rollback",
+      description: "A tool whose extension fails to load",
+      parameters: { type: "object" },
+      override: true,
+      execute: async () => textResult("ok"),
+    })
+    tools.register(tool, "core")
+    let api!: ExtensionAPI
+    expect(
+      await host.load((a) => {
+        api = a
+        a.registerTool(tool)
+        a.registerTool({ ...tool, name: "failed-only" })
+        expect(tools.getRegistration("rollback")?.dataOwner?.dataDir).toBe(a.dataDir)
+        writeFileSync(join(a.dataDir, "retained.txt"), "retained")
+        throw new Error("failed after registering")
+      }, "ext:rollback"),
+    ).toBe(false)
+    expect(host.loaded).not.toContain("ext:rollback")
+    expect(tools.get("rollback")).toBe(tool)
+    expect(tools.getRegistration("rollback")).toEqual({ tool, source: "core" })
+    expect(tools.get("failed-only")).toBeUndefined()
+    expect(tools.getRegistration("failed-only")).toBeUndefined()
+    expect(tools.has("failed-only")).toBe(false)
+    expect(readFileSync(join(api.dataDir, "retained.txt"), "utf8")).toBe("retained")
+    expect(await host.load((a) => void a.registerTool(tool), "ext:rollback")).toBe(true)
+    expect(tools.getRegistration("rollback")?.dataOwner?.dataDir).toBe(api.dataDir)
+  })
+})
+
+test("host package names share data across sources, including loadFile labels", async () => {
+  await withExtensionDataHost(async (host, tools, home) => {
+    const identity = "@scope/shared-package"
+    let api!: ExtensionAPI
+    expect(
+      await host.load(
+        (a) => {
+          api = a
+        },
+        "package:direct",
+        identity,
+      ),
+    ).toBe(true)
+    const file = join(home, "extension.ts")
+    writeFileSync(
+      file,
+      [
+        "export default (api) => {",
+        '  api.registerTool({ name: "package_tool", description: "package tool",',
+        '    parameters: { type: "object" }, execute: async () => ({ content: [] }) })',
+        "}",
+      ].join("\n"),
+    )
+    for (const source of ["package:user", "package:project"]) {
+      expect(await host.loadFile(file, { source, name: identity })).toBe(true)
+      expect(tools.getRegistration("package_tool")).toMatchObject({
+        source,
+        dataOwner: { home, dataDir: api.dataDir },
+      })
+      expect(host.unload(source)).toBe(true)
+      expect(tools.getRegistration("package_tool")).toBeUndefined()
+    }
+    // Without an explicit host name, use the absolute file identity, not a display label or basename.
+    expect(await host.loadFile(file, { source: "package:unlabelled" })).toBe(true)
+    const owner = tools.getRegistration("package_tool")!.dataOwner!
+    const hash = createHash("sha256").update(file).digest("hex")
+    expect(basename(owner.dataDir).endsWith(`-${hash}`)).toBe(true)
+    expect(owner.dataDir).not.toBe(api.dataDir)
   })
 })
 
