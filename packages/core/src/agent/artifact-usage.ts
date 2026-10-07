@@ -1,7 +1,27 @@
-// Owns artifact reference classification, usage aggregation and prune selection.
+// Owns artifact discovery, reference classification, usage aggregation and pruning.
 import type { Message } from "@amira/ai"
 import type { ArtifactGroupUsage, ArtifactInfo } from "@amira/api"
-import { type ArtifactScope, type ArtifactStore, type ArtifactUsage, artifactIdsIn } from "../artifacts.ts"
+import {
+  type ArtifactScope,
+  ArtifactStore,
+  type ArtifactUsage,
+  artifactDir,
+  artifactIdsIn,
+  referencedArtifacts,
+  subagentSessionFiles,
+} from "../artifacts.ts"
+import { SessionStore } from "../session-store.ts"
+
+/** Internal session view; getters keep discovery reads lazy and pruning's child check first. */
+export interface ArtifactSession {
+  readonly sessionId: string
+  readonly artifacts: ArtifactStore
+  readonly session: { file: string; entries: readonly object[] } | undefined
+  readonly messages: readonly Message[]
+  projectedMessages(): readonly Message[]
+  readonly children: readonly { id: string; title: string }[]
+  subagent(id: string): { readonly messages?: readonly Message[] } | undefined
+}
 
 export interface ManagedArtifactGroup {
   store: ArtifactStore
@@ -15,6 +35,93 @@ export interface ArtifactUsageGroupInput {
   id: string
   label: string
   protectedStore: boolean
+}
+
+/** Builds the parent and sub-agent stores with one consistent reference snapshot. */
+export function discoverArtifactGroups(session: ArtifactSession): ManagedArtifactGroup[] {
+  const initiallyActive = activeArtifactIds([session.messages, session.projectedMessages()])
+  const referenced = session.session ? referencedArtifacts(session.session) : initiallyActive
+  const labels = new Map<string, string>()
+  const rememberLabels = (entries: readonly object[]) => {
+    for (const e of entries) {
+      if ((e as { type?: unknown }).type !== "subagent") continue
+      const id = (e as { childSessionId?: unknown }).childSessionId
+      if (typeof id !== "string") continue
+      const role = (e as { role?: unknown }).role
+      const title = (e as { title?: unknown }).title
+      labels.set(
+        id,
+        `Sub-agent: ${typeof title === "string" && title ? title : typeof role === "string" && role ? role : id} (${id})`,
+      )
+    }
+  }
+  const files = session.session ? subagentSessionFiles(session.session) : []
+  if (session.session) {
+    rememberLabels(session.session.entries)
+    for (const child of files) rememberLabels(child.entries)
+  }
+  const live = new Set(session.children.map((child) => child.id))
+  for (const child of session.children) labels.set(child.id, `Sub-agent: ${child.title} (${child.id})`)
+  const childMessages: (readonly Message[])[] = []
+  for (const child of files) {
+    const known = session.subagent(child.id)
+    if (known?.messages) childMessages.push(known.messages)
+    else {
+      try {
+        childMessages.push(SessionStore.open(child.file).restore().messages)
+      } catch {
+        // A torn or foreign child file has no current context to classify as active.
+      }
+    }
+  }
+
+  const active = new Set(initiallyActive)
+  for (const id of activeArtifactIds(childMessages)) active.add(id)
+  const inputs: ArtifactUsageGroupInput[] = [
+    {
+      store: session.artifacts,
+      artifacts: session.artifacts.list(),
+      id: session.sessionId,
+      label: "This session",
+      protectedStore: live.size > 0,
+    },
+  ]
+  for (const child of files) {
+    const store = new ArtifactStore({
+      dir: artifactDir(child.file, child.id),
+      sessionId: child.id,
+      limits: session.artifacts.limits,
+      quotaBytes: session.artifacts.quotaBytes,
+    })
+    inputs.push({
+      store,
+      artifacts: store.list(),
+      id: child.id,
+      label: labels.get(child.id) ?? `Sub-agent: ${child.id} (${child.id})`,
+      protectedStore: live.has(child.id),
+    })
+  }
+  return buildArtifactUsageGroups(active, referenced, inputs)
+}
+
+/** Deletes selected artifacts sequentially, retaining their metadata, only with no live children. */
+export async function pruneArtifacts(
+  session: ArtifactSession,
+  scope: ArtifactScope,
+): Promise<{ removed: number; bytes: number }> {
+  if (session.children.length) {
+    throw new Error(
+      "cannot prune artifacts while a sub-agent is running, queued or idle; wait for it to finish or stop it (/agents stop)",
+    )
+  }
+  let removed = 0
+  let bytes = 0
+  for (const { group, ids } of artifactIdsToPrune(discoverArtifactGroups(session), scope)) {
+    const result = await group.store.prune(ids)
+    removed += result.removed
+    bytes += result.bytes
+  }
+  return { removed, bytes }
 }
 
 /** Every artifact id mentioned by the supplied context message lists. */

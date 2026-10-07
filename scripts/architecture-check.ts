@@ -55,7 +55,7 @@ const allowedTypeOnlyDependenciesByDirectory: Record<string, readonly string[]> 
   "packages/api": ["@amira/ai"],
 }
 
-const sourceLineAllowlist = new Map<string, number>([["packages/core/src/agent.ts", 1258]])
+const sourceLineAllowlist = new Map<string, number>()
 
 const hostBackgroundJobsPattern = /\bhostBackgroundJobs\b/
 const hostBackgroundJobsAllowlist = new Set([
