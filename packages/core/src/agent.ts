@@ -1,22 +1,14 @@
-import path from "node:path"
 import {
-  type Ai,
-  type AssistantMessage,
-  describeModelError,
-  isContextOverflow,
   isNoModel,
   type Message,
-  type ModelError,
   type ModelInfo,
   modelMessages,
-  type ToolCallBlock,
   type ToolSpec,
   type UserMessage,
   userMessage,
 } from "@amira/ai"
 import type {
   AskOutcome,
-  AskQuestion,
   AskRequest,
   BackgroundJobHost,
   BackgroundJobSession,
@@ -28,34 +20,41 @@ import type {
   SessionData,
   SessionStatus,
   Settings,
-  SpawnGroupOptions,
-  SpawnOptions,
   ToolDefinition,
   ToolSession,
 } from "@amira/api"
 import { ApprovalGate } from "./agent/approvals.ts"
 import {
-  type ArtifactUsageGroupInput,
-  activeArtifactIds,
-  artifactIdsToPrune,
-  buildArtifactUsageGroups,
-  type ManagedArtifactGroup,
+  type ArtifactSession,
+  discoverArtifactGroups,
+  pruneArtifacts,
   summarizeArtifactUsage,
 } from "./agent/artifact-usage.ts"
-import { Compactor } from "./agent/compactor.ts"
+import type { Compactor } from "./agent/compactor.ts"
 import {
   buildContext,
   toolRestriction as modelToolRestriction,
   offeredDeferredTools,
   offeredTools,
 } from "./agent/context-builder.ts"
-import { ContextManager } from "./agent/context-manager.ts"
-import { History, keptHistoryViews } from "./agent/history.ts"
-import { joinMessages, modelRef } from "./agent/messages.ts"
-import { modelCall, Thinking } from "./agent/model-call.ts"
+import type { ContextManager } from "./agent/context-manager.ts"
+import { History } from "./agent/history.ts"
+import { modelRef } from "./agent/messages.ts"
+import { Thinking } from "./agent/model-call.ts"
 import { NoticeInbox } from "./agent/notices.ts"
-import { ToolRunner } from "./agent/tool-runner.ts"
 import {
+  callToolSession,
+  createSessionArtifacts,
+  recoverFileRewind,
+  reportFileRewind,
+  restoreHistory,
+  setupContext,
+  setupToolSession,
+} from "./agent/setup.ts"
+import { ToolRunner } from "./agent/tool-runner.ts"
+import { TurnRunner, type TurnState } from "./agent/turn-runner.ts"
+import {
+  type AfterCompaction,
   AgentAbortedError,
   AgentBusyError,
   type AgentOptions,
@@ -66,14 +65,7 @@ import {
   type Turn,
   type TurnResult,
 } from "./agent/types.ts"
-import {
-  type ArtifactScope,
-  ArtifactStore,
-  type ArtifactUsage,
-  artifactDir,
-  referencedArtifacts,
-  subagentSessionFiles,
-} from "./artifacts.ts"
+import type { ArtifactScope, ArtifactStore, ArtifactUsage } from "./artifacts.ts"
 
 export {
   AgentAbortedError,
@@ -88,11 +80,10 @@ export {
   type TurnResult,
 } from "./agent/types.ts"
 
-import { type CompactionOptions, contextTokens } from "./compaction.ts"
+import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions, ContextView } from "./context.ts"
-import { createToolSession } from "./deferred-tools.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
-import { FILE_REWIND_COVERAGE, FileRewind } from "./file-rewind.ts"
+import { FileRewind } from "./file-rewind.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { Permissions } from "./permissions/policy.ts"
 import {
@@ -102,27 +93,10 @@ import {
   renderPrompt,
   setSection,
 } from "./prompt.ts"
-import { newSessionId, SessionStore } from "./session-store.ts"
+import { newSessionId, type SessionStore } from "./session-store.ts"
 import { PauseGate } from "./subagents/pause.ts"
 import type { AgentTree } from "./subagents.ts"
-import { resolveToolName } from "./tool-names.ts"
 import { ToolRegistry } from "./tool-registry.ts"
-
-/** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
-interface AfterCompaction {
-  /** In the order they were sent; `steered` ones came through steer(). */
-  messages: { message: UserMessage; steered: boolean }[]
-  /** The id a prompt() call asked for. */
-  turnId?: string
-  /** A prompt() call is waiting; a second one is refused as busy. */
-  prompted: boolean
-  waiters: { resolve: (r: TurnResult) => void; reject: (err: unknown) => void }[]
-}
-
-type ModelReply =
-  | { kind: "ok"; message: AssistantMessage }
-  | { kind: "error"; error: string; model?: ModelError }
-  | { kind: "aborted" }
 
 /** One agent session: a conversation, a model and the loop that drives tool use. */
 export class Agent {
@@ -158,15 +132,11 @@ export class Agent {
    * kept in memory when it has none.
    */
   readonly data: SessionData
-  #ai: Ai
   #approvals: ApprovalGate
-  #toolRunner: ToolRunner
   #history: History
   #contextManager: ContextManager
   #compactor: Compactor
   #inbox: NoticeInbox
-  #maxSteps: number
-  #maxTokens: number | undefined
   #maxParallelTools: number
   #sections: PromptSection[]
   #compaction: CompactionOptions
@@ -184,12 +154,8 @@ export class Agent {
 
   // Turn state: execution, status and steering (the abort controller also guards holds).
   #status: SessionStatus = "idle"
-  #abort: AbortController | undefined
-  #turn: Turn | undefined
-  /** Steering messages waiting for the next model call of the running turn. */
-  #steering: UserMessage[] = []
-  /** Aborts waits that can return partial output as soon as steering arrives. */
-  #steerAbort: AbortController | undefined
+  #turnState: TurnState = { abort: undefined, turn: undefined, steering: [], steerAbort: undefined }
+  #turnRunner: TurnRunner
   /** The running turn's promise, for owners that wait for whatever turn runs. */
   #current: Promise<TurnResult> | undefined
 
@@ -214,31 +180,12 @@ export class Agent {
     this.fileRewindSettings = opts.fileRewindSettings
     this.fileRewind =
       opts.fileRewind ?? (opts.session ? new FileRewind(opts.session, opts.fileRewindSettings) : undefined)
-    let recovered: ReturnType<FileRewind["recover"]>
-    let unrecovered: string | undefined
-    try {
-      recovered = !opts.fileRewind ? this.fileRewind?.recover() : undefined
-    } catch (error) {
-      // The session must still open: the user resolves the conflicts or abandons the restore.
-      unrecovered = (error as Error).message
-    }
+    const rewind = recoverFileRewind(this.fileRewind, opts)
     this.sessionId = opts.session?.id ?? opts.sessionId ?? newSessionId()
     this.parentSessionId = opts.parentSessionId
     this.backgroundJobsHost = opts.backgroundJobs
     this.bus = opts.bus ?? new EventBus()
-    if (recovered || unrecovered) {
-      this.bus.emit(
-        "extension.notice",
-        {
-          source: "file-rewind",
-          level: recovered ? "info" : "warning",
-          text: recovered
-            ? `Finished interrupted file restore: ${recovered.restored} restored, ${recovered.removed} removed. ${FILE_REWIND_COVERAGE}`
-            : `An interrupted file restore could not finish, and file tools cannot write until it does. ${unrecovered}\nResolve the conflicts and rewind to the same message with files, or rewind the conversation only to abandon it.`,
-        },
-        { sessionId: this.sessionId },
-      )
-    }
+    reportFileRewind(this.bus, this.sessionId, rewind)
     this.interceptors = opts.interceptors ?? new InterceptorRegistry()
     this.tools = opts.tools ?? new ToolRegistry()
     this.permissions = opts.permissions ?? new Permissions()
@@ -249,9 +196,9 @@ export class Agent {
     this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
     this.#compaction = opts.compaction ?? {}
     this.#context = opts.context ?? {}
-    this.#ai = opts.ai
-    this.#maxSteps = opts.maxSteps ?? 200
-    this.#maxTokens = opts.maxTokens
+    const ai = opts.ai
+    const maxSteps = opts.maxSteps ?? 200
+    const maxTokens = opts.maxTokens
     const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
     this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
     this.tree = opts.tree
@@ -269,14 +216,14 @@ export class Agent {
       forwardAsk: opts.ask?.bind(this),
       resolvePermissionApprover: () => this.permissionApprover,
       permissions: this.permissions,
-      isCurrentTurn: (turn) => this.#turn === turn,
+      isCurrentTurn: (turn) => this.#turnState.turn === turn,
       blocked: (turn, reason, pending) => {
         this.#status = "blocked"
         this.#emit(turn, "status.changed", { status: "blocked", reason, pending })
       },
       working: (turn) => this.#setStatus(turn, "working"),
     })
-    this.#toolRunner = new ToolRunner({
+    const toolRunner = new ToolRunner({
       tools: this.tools,
       interceptors: this.interceptors,
       permissions: this.permissions,
@@ -288,12 +235,12 @@ export class Agent {
       fileRewind: this.fileRewind,
       backgroundJobs: this.backgroundJobs,
       allowsTool: (tool) => this.#allowsTool(tool),
-      steerSignal: () => this.#steerAbort?.signal,
+      steerSignal: () => this.#turnState.steerAbort?.signal,
       storeFailed: () => this.#history.storeFailed,
       callSession: (turn, toolCallId) => this.#callSession(turn, toolCallId),
       keepLarge: (call, result) => this.#contextManager.keepLarge(call, result),
       interruptTurn: (turn) => {
-        if (this.#turn === turn) this.#abort?.abort()
+        if (this.#turnState.turn === turn) this.#turnState.abort?.abort()
       },
       emit: (turn, type, data) => this.#emit(turn, type, data),
     })
@@ -301,32 +248,17 @@ export class Agent {
     this.#inbox = new NoticeInbox({
       retryMs,
       disposed: () => this.#disposed,
-      turn: () => this.#turn,
+      turn: () => this.#turnState.turn,
       holding: () => this.#holding,
-      busy: () => this.#abort !== undefined,
+      busy: () => this.#turnState.abort !== undefined,
       onIdleNotice: this.#onIdleNotice?.bind(this),
       prompt: (message) => this.prompt(message),
       emit: (turn, type, data) => this.#emit(turn, type, data),
     })
     this.#endTurn = opts.endTurn
 
-    let history: ConstructorParameters<typeof History>[1]
-    let tokens: number | undefined
-    if (opts.messages || !opts.session) {
-      const messages = opts.messages ?? []
-      // An interrupted reply may carry no usage counted; the one before it tells the context.
-      const last = messages.findLast(
-        (m) => m.role === "assistant" && m.usage && contextTokens(m.usage) > 0,
-      ) as AssistantMessage | undefined
-      if (last?.usage) tokens = contextTokens(last.usage)
-      history = { messages, views: keptHistoryViews(messages, opts.views) }
-    } else {
-      const restored = opts.session.restore()
-      history = restored
-      tokens = restored.contextTokens
-      for (const name of restored.loadedTools) this.#loadedTools.add(name)
-      if (restored.loadedTools.length) this.#restoredTools = restored.loadedTools
-    }
+    const { history, tokens, restoredTools } = restoreHistory(opts, this.#loadedTools)
+    this.#restoredTools = restoredTools
     this.#history = new History(
       {
         session: this.session,
@@ -338,103 +270,87 @@ export class Agent {
     )
     this.messages = this.#history.messages
     this.data = this.#history.data
-    // A session forked from another (beside it) still finds the artifacts its copied history names.
-    const forkedFrom = opts.session?.header.parent
-    const outputsParent =
-      opts.outputsParent ??
-      (forkedFrom && opts.session
-        ? new ArtifactStore({
-            dir: artifactDir(path.join(path.dirname(opts.session.file), `${forkedFrom}.jsonl`), forkedFrom),
-            sessionId: forkedFrom,
-          })
-        : undefined)
-    this.artifacts = new ArtifactStore({
-      dir: artifactDir(opts.session?.file, this.sessionId),
-      sessionId: this.sessionId,
-      limits: {
-        ...(this.#context.saveAbove !== undefined ? { saveAbove: this.#context.saveAbove } : {}),
-        ...(this.#context.previewChars !== undefined ? { previewChars: this.#context.previewChars } : {}),
-      },
-      ...(this.#context.quotaBytes !== undefined ? { quotaBytes: this.#context.quotaBytes } : {}),
-      ...(outputsParent ? { parent: outputsParent } : {}),
-    })
-    this.#contextManager = new ContextManager(
+    this.artifacts = createSessionArtifacts(opts, this.sessionId, this.#context)
+    const { contextManager, compactor } = setupContext(
       {
+        ai,
+        model: () => this.model,
+        context: this.#context,
+        compaction: this.#compaction,
         history: this.#history,
         artifacts: this.artifacts,
         tools: this.tools,
-        toolFor: (call) => this.#toolRunner.toolFor(call),
+        toolFor: (call) => toolRunner.toolFor(call),
         cwd: this.cwd,
-        options: this.#context,
-        model: () => this.model,
-        replayTarget: () => this.#ai.replayTarget(this.model),
-        fixedChars: () => renderPrompt(this.#sections).length + JSON.stringify(this.#offeredTools()).length,
+        interceptors: this.interceptors,
+        session: this.session,
+        sessionId: this.sessionId,
+        isSubAgent: this.parentSessionId !== undefined,
+        execution: this.execution,
+        buildContext: (signal) => this.#buildContext(signal),
+        renderSections: () => renderPrompt(this.#sections),
+        offeredTools: () => this.#offeredTools(),
+        recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
         emit: (turn, type, data) => this.#emit(turn, type, data),
       },
-      { contextTokens: tokens },
+      tokens,
     )
-    this.#compactor = new Compactor({
-      ai: this.#ai,
-      model: () => this.model,
-      options: this.#compaction,
-      history: this.#history,
-      context: this.#contextManager,
-      interceptors: this.interceptors,
-      session: this.session,
-      sessionId: this.sessionId,
-      isSubAgent: this.parentSessionId !== undefined,
-      execution: this.execution,
-      buildContext: (signal) => this.#buildContext(signal),
-      renderSections: () => renderPrompt(this.#sections),
-      offeredTools: () => this.#offeredTools(),
-      recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
-      emit: (turn, type, data) => this.#emit(turn, type, data),
-    })
+    this.#contextManager = contextManager
+    this.#compactor = compactor
     const stored = opts.session?.model()
     // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
     const changed = stored?.provider !== this.model.provider || stored.model !== this.model.id
     if (opts.session && changed && !isNoModel(this.model)) {
       this.#history.store({ type: "model_change", model: modelRef(this.model) })
     }
-    const agent = this
     const tree = opts.tree
-    const deferred = createToolSession(this.sessionId, this.tools, this.#loadedTools, (t) =>
-      this.#allowsTool(t),
-    )
-    this.#toolSession = {
-      ...deferred,
-      ...(opts.session ? { dir: opts.session.file.replace(/\.jsonl$/, "") } : {}),
-      data: this.data,
-      outputs: this.artifacts,
-      contextHas: (text) => agent.contextHas(text),
-      // Recorded in the session, so resuming it offers the same tools again.
-      loadTools: (names) => {
-        const added = deferred.loadTools(names)
-        if (added.length) this.#history.store({ type: "tools_loaded", names: added })
-        return added
-      },
+    this.#toolSession = setupToolSession({
+      sessionId: this.sessionId,
+      tools: this.tools,
+      loadedTools: this.#loadedTools,
+      allowsTool: (tool) => this.#allowsTool(tool),
+      session: opts.session,
+      history: this.#history,
+      artifacts: this.artifacts,
+      contextHas: (text) => this.contextHas(text),
       depth: this.depth,
-      get maxDepth() {
-        return tree?.maxDepth ?? 0
-      },
-      get model() {
-        return modelRef(agent.model)
-      },
-      ...(tree
+      maxDepth: () => tree?.maxDepth ?? 0,
+      model: () => this.model,
+      spawning: tree
         ? {
-            spawn: (o: SpawnOptions) => tree.spawn(agent, o),
-            createGroup: (o: SpawnGroupOptions) => tree.createGroup(agent, o),
+            spawn: (o) => tree.spawn(this, o),
+            createGroup: (o) => tree.createGroup(this, o),
             groups: () => tree.groups(),
           }
-        : {}),
-      // A sub-agent's life is one turn, and nothing may wake it afterwards, unless it is
-      // persistent (its owner wakes it for the notices it gets).
-      ...(this.depth === 0 || this.#onIdleNotice
-        ? {
-            expectNotice: () => agent.#inbox.target().expect(),
-          }
-        : {}),
-    }
+        : undefined,
+      expectNotice: this.depth === 0 || this.#onIdleNotice ? () => this.#inbox.target().expect() : undefined,
+    })
+    this.#turnRunner = new TurnRunner(this.#turnState, {
+      ai,
+      history: this.#history,
+      compactor: this.#compactor,
+      contextManager: this.#contextManager,
+      toolRunner,
+      inbox: this.#inbox,
+      execution: this.execution,
+      tools: this.tools,
+      thinking: this.thinking,
+      model: () => this.model,
+      maxSteps,
+      maxTokens,
+      depth: this.depth,
+      compaction: this.#compaction,
+      buildContext: (signal) => this.#buildContext(signal),
+      offeredTools: () => this.#offeredTools(),
+      checkRestoredTools: () => this.#checkRestoredTools(),
+      emit: (turn, type, data) => this.#emit(turn, type, data),
+      setStatus: (turn, status, reason) => this.#setStatus(turn, status, reason),
+      prompt: (input, options) => this.prompt(input, options),
+      disposed: () => this.#disposed,
+      ownsIdleNotices: () => !!this.#onIdleNotice,
+      endTurn: () => this.#endTurn?.(),
+      recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+    })
   }
 
   /**
@@ -504,31 +420,14 @@ export class Agent {
    * show them under that call without guessing.
    */
   #callSession(turn: Turn, toolCallId: string): ToolSession {
-    const base = this.#toolSession
-    const spawn = base.spawn
     const tree = this.tree
-    const props: PropertyDescriptorMap = {
-      ...(this.#approvals.hasAsker
-        ? {
-            askUser: {
-              value: (questions: AskQuestion[], signal?: AbortSignal) =>
-                this.#approvals.askFromTool(turn, toolCallId, questions, signal),
-              enumerable: true,
-            },
-          }
-        : {}),
-    }
-    if (spawn && tree) {
-      props.spawn = {
-        value: (o: SpawnOptions) => spawn({ ...o, toolCallId: o.toolCallId ?? toolCallId }),
-        enumerable: true,
-      }
-      props.createGroup = {
-        value: (o: SpawnGroupOptions) => tree.createGroup(this, o, { toolCallId }),
-        enumerable: true,
-      }
-    }
-    return Object.keys(props).length ? (Object.create(base, props) as ToolSession) : base
+    return callToolSession(
+      this.#toolSession,
+      this.#approvals,
+      turn,
+      toolCallId,
+      tree ? (o) => tree.createGroup(this, o, { toolCallId }) : undefined,
+    )
   }
 
   /** Offers deferred tools to the model from its next call on, e.g. when restoring a session. */
@@ -620,14 +519,14 @@ export class Agent {
    * tools. `what` names it (holdingFor).
    */
   async hold<T>(what: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
+    if (this.#turnState.abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
-    this.#abort = abort
+    this.#turnState.abort = abort
     this.#holding = what
     try {
       return await work(abort.signal)
     } finally {
-      this.#abort = undefined
+      this.#turnState.abort = undefined
       this.#holding = undefined
       const noticed = this.#inbox.takeNoticedDuringHold()
       // Held prompts and steers start their turn (an abort drops them); notices that came
@@ -743,95 +642,38 @@ export class Agent {
    * away, a sub-agent's), "unused" ones nothing mentions.
    */
   artifactUsage(): ArtifactUsage {
-    return summarizeArtifactUsage(this.#artifactGroups())
+    return summarizeArtifactUsage(discoverArtifactGroups(this.#artifactSession()))
   }
 
-  /** Builds the parent and sub-agent stores with one consistent reference snapshot. */
-  #artifactGroups(): ManagedArtifactGroup[] {
-    const initiallyActive = activeArtifactIds([this.messages, this.projectedMessages()])
-    const referenced = this.session ? referencedArtifacts(this.session) : initiallyActive
-    const labels = new Map<string, string>()
-    const rememberLabels = (entries: readonly object[]) => {
-      for (const e of entries) {
-        if ((e as { type?: unknown }).type !== "subagent") continue
-        const id = (e as { childSessionId?: unknown }).childSessionId
-        if (typeof id !== "string") continue
-        const role = (e as { role?: unknown }).role
-        const title = (e as { title?: unknown }).title
-        labels.set(
-          id,
-          `Sub-agent: ${typeof title === "string" && title ? title : typeof role === "string" && role ? role : id} (${id})`,
-        )
-      }
-    }
-    const files = this.session ? subagentSessionFiles(this.session) : []
-    if (this.session) {
-      rememberLabels(this.session.entries)
-      for (const child of files) rememberLabels(child.entries)
-    }
-    const live = new Set(this.tree?.children.map((child) => child.id) ?? [])
-    for (const child of this.tree?.children ?? [])
-      labels.set(child.id, `Sub-agent: ${child.title} (${child.id})`)
-    const childMessages: (readonly Message[])[] = []
-    for (const child of files) {
-      const known = this.tree?.subagent(child.id)
-      if (known?.messages) childMessages.push(known.messages)
-      else {
-        try {
-          childMessages.push(SessionStore.open(child.file).restore().messages)
-        } catch {
-          // A torn or foreign child file has no current context to classify as active.
-        }
-      }
-    }
-
-    const active = new Set(initiallyActive)
-    for (const id of activeArtifactIds(childMessages)) active.add(id)
-    const inputs: ArtifactUsageGroupInput[] = [
-      {
-        store: this.artifacts,
-        artifacts: this.artifacts.list(),
-        id: this.sessionId,
-        label: "This session",
-        protectedStore: live.size > 0,
+  #artifactSession(): ArtifactSession {
+    const agent = this
+    return {
+      get sessionId() {
+        return agent.sessionId
       },
-    ]
-    for (const child of files) {
-      const store = new ArtifactStore({
-        dir: artifactDir(child.file, child.id),
-        sessionId: child.id,
-        limits: this.artifacts.limits,
-        quotaBytes: this.artifacts.quotaBytes,
-      })
-      inputs.push({
-        store,
-        artifacts: store.list(),
-        id: child.id,
-        label: labels.get(child.id) ?? `Sub-agent: ${child.id} (${child.id})`,
-        protectedStore: live.has(child.id),
-      })
+      get artifacts() {
+        return agent.artifacts
+      },
+      get session() {
+        return agent.session
+      },
+      get messages() {
+        return agent.messages
+      },
+      projectedMessages: () => agent.projectedMessages(),
+      get children() {
+        return agent.tree?.children ?? []
+      },
+      subagent: (id) => agent.tree?.subagent(id),
     }
-    return buildArtifactUsageGroups(active, referenced, inputs)
   }
 
   /**
    * Deletes artifacts on request (/prune): "unused" ones, "inactive" ones too, or "all".
    * Their metadata stays, so reading one says it was pruned.
    */
-  async pruneArtifacts(scope: ArtifactScope): Promise<{ removed: number; bytes: number }> {
-    if (this.tree?.children.length) {
-      throw new Error(
-        "cannot prune artifacts while a sub-agent is running, queued or idle; wait for it to finish or stop it (/agents stop)",
-      )
-    }
-    let removed = 0
-    let bytes = 0
-    for (const { group, ids } of artifactIdsToPrune(this.#artifactGroups(), scope)) {
-      const result = await group.store.prune(ids)
-      removed += result.removed
-      bytes += result.bytes
-    }
-    return { removed, bytes }
+  pruneArtifacts(scope: ArtifactScope): Promise<{ removed: number; bytes: number }> {
+    return pruneArtifacts(this.#artifactSession(), scope)
   }
 
   /** Most tool calls this agent runs at once. */
@@ -841,12 +683,12 @@ export class Agent {
 
   /** True while a turn or a manual compaction runs; a compaction has no turn id. */
   get busy(): boolean {
-    return this.#abort !== undefined
+    return this.#turnState.abort !== undefined
   }
 
   /** Id of the running turn, if any. */
   get turnId(): string | undefined {
-    return this.#turn?.id
+    return this.#turnState.turn?.id
   }
 
   /** Announces the session to subscribers. Frontends call this once they are listening. */
@@ -878,7 +720,7 @@ export class Agent {
 
   /** Aborts the running turn, if any. The turn still ends with a turn.end event. */
   abort(): void {
-    this.#abort?.abort()
+    this.#turnState.abort?.abort()
   }
 
   /** Ends this agent and all of its owned resources. Safe to call more than once. */
@@ -891,10 +733,10 @@ export class Agent {
 
   async #dispose(reason: EventMap["session.end"]["reason"]): Promise<void> {
     this.#inbox.cancelRetry()
-    this.#abort?.abort()
-    this.#steerAbort?.abort()
+    this.#turnState.abort?.abort()
+    this.#turnState.steerAbort?.abort()
     ;(this.backgroundJobs as { dispose?: () => void } | undefined)?.dispose?.()
-    this.#steering.splice(0)
+    this.#turnState.steering.splice(0)
     this.#inbox.clear()
     // Messages held for a running hold are dropped as an abort of it drops them.
     this.#startAfterCompaction(true, this.#holding ?? "session")
@@ -924,7 +766,7 @@ export class Agent {
   steer(input: string | UserMessage, opts?: { notice?: boolean }): void {
     if (this.#disposed) return
     const message = typeof input === "string" ? userMessage(input) : input
-    const turn = this.#turn
+    const turn = this.#turnState.turn
     if (!turn && this.#holding) {
       this.#holdForCompaction(message, true)
       this.#emit(undefined, "turn.steer", { message, state: "queued" })
@@ -934,10 +776,10 @@ export class Agent {
       this.prompt(message).catch(() => {})
       return
     }
-    this.#steerAbort?.abort()
+    this.#turnState.steerAbort?.abort()
     if (opts?.notice) this.#inbox.receive(message)
     else {
-      this.#steering.push(message)
+      this.#turnState.steering.push(message)
       this.#emit(turn, "turn.steer", { message, state: "queued" })
     }
   }
@@ -955,166 +797,13 @@ export class Agent {
       next.prompted = true
       return new Promise((resolve, reject) => next.waiters.push({ resolve, reject }))
     }
-    const turn = this.#runTurn(input, opts)
+    const turn = this.#turnRunner.run(input, opts)
     this.#current = turn
     const clear = () => {
       if (this.#current === turn) this.#current = undefined
     }
     turn.then(clear, clear)
     return turn
-  }
-
-  async #runTurn(input: string | UserMessage, opts: PromptOptions): Promise<TurnResult> {
-    if (this.#abort) throw new AgentBusyError("a turn or compaction is already running")
-    const abort = new AbortController()
-    this.#abort = abort
-    this.#steerAbort = new AbortController()
-    const turn: Turn = {
-      id: opts.turnId ?? newTurnId(),
-      signal: abort.signal,
-    }
-    this.#turn = turn
-    const user = typeof input === "string" ? userMessage(input) : input
-    // Whatever starts now takes the held notices along: no retry is needed any more.
-    this.#inbox.cancelRetry()
-    if (user.display?.origin) turn.unanswered = true
-
-    let steps = 0
-    let result: TurnResult = { reason: "done", steps: 0 }
-    this.#emit(turn, "turn.start", { prompt: user })
-    this.#setStatus(turn, "working")
-    try {
-      this.#history.push(user)
-      let compactFailed = false
-      /** A request over the context window is compacted and sent again, once a turn. */
-      let overflowRetried = false
-      let overflowCompacted: boolean | undefined
-      /** A request over the window first gets one aging round (A3), once a turn. */
-      let overflowAged = false
-      while (true) {
-        this.#compactor.noteWindowGuess(turn)
-        // Planned synchronously: a turn with nothing to age goes on without waiting.
-        const aging = this.#contextManager.age(turn)
-        if (aging) await aging
-        if (!compactFailed && this.#compactor.needsCompaction()) {
-          compactFailed = (await this.#compactor.compact("threshold", abort.signal, turn)) === false
-        }
-        if (abort.signal.aborted) {
-          result = { reason: "aborted", steps }
-          break
-        }
-        if (steps >= this.#maxSteps) {
-          result = { reason: "error", steps, error: `stopped after ${this.#maxSteps} model calls` }
-          break
-        }
-        steps++
-        this.#injectSteering(turn)
-        const reply = await this.#callModel(turn)
-        if (this.execution.paused) await this.execution.wait(abort.signal)
-        if (reply.kind === "aborted" || (this.execution.paused && abort.signal.aborted)) {
-          result = { reason: "aborted", steps }
-          break
-        }
-        if (reply.kind === "error") {
-          const overflow = reply.model && isContextOverflow(reply.model)
-          if (overflow && !overflowAged) {
-            overflowAged = true
-            const aging = this.#contextManager.age(turn, true)
-            if (aging && (await aging)) continue
-          }
-          if (overflow && !overflowRetried && this.#compaction.auto !== false) {
-            overflowRetried = true
-            this.#compactor.noteWindowGuess(turn, true)
-            overflowCompacted = await this.#compactor.compact("overflow", abort.signal, turn)
-            if (overflowCompacted === true) continue
-          }
-          const failure = reply.model
-            ? describeModelError(reply.model, { provider: this.model.provider })
-            : undefined
-          // Compacted once already, or nothing could be: the user decides what to leave out.
-          if (failure && overflow && overflowRetried) {
-            failure.hint =
-              overflowCompacted === undefined
-                ? "Nothing older to compact: /clear starts over, or /model switches to a model with a larger window"
-                : "Run /compact with what to keep, /clear to start over, or /model for a larger window"
-          }
-          result = { reason: "error", steps, error: reply.error, ...(failure ? { failure } : {}) }
-          break
-        }
-        turn.unanswered = false
-        const calls = reply.message.content.filter((b): b is ToolCallBlock => b.type === "toolCall")
-        if (calls.length === 0) {
-          result = { reason: "done", steps }
-          break
-        }
-        await this.#toolRunner.run(turn, calls, (results) => {
-          const views = this.#contextManager.dedupe(results)
-          this.#history.push(...results)
-          this.#history.storeViews(views)
-        })
-        if (this.execution.paused) await this.execution.wait(abort.signal)
-        if (abort.signal.aborted) {
-          result = { reason: "aborted", steps }
-          break
-        }
-        if (this.#endTurn?.()) {
-          result = { reason: "done", steps }
-          break
-        }
-      }
-    } catch (err) {
-      result = { reason: "error", steps, error: err instanceof Error ? err.message : String(err) }
-    } finally {
-      this.#history.repair()
-      this.#abort = undefined
-      this.#turn = undefined
-      this.#steerAbort = undefined
-      const leftover = this.#steering.splice(0)
-      // Notices are never dropped: after an interrupted or failed turn they wait for the next.
-      // An owner that decides when turns run (onIdleNotice) starts the next one itself.
-      const notices = result.reason === "done" && !this.#onIdleNotice ? this.#inbox.take() : []
-      const nextTurnId =
-        result.reason === "done" && (leftover.length || notices.length) ? newTurnId() : undefined
-      for (const message of leftover) {
-        this.#emit(
-          turn,
-          "turn.steer",
-          nextTurnId ? { message, state: "promoted", nextTurnId } : { message, state: "dropped" },
-        )
-      }
-      if (notices.length && nextTurnId) {
-        const message = joinMessages(notices)
-        this.#emit(turn, "turn.steer", { message, state: "promoted", nextTurnId })
-        leftover.push(message)
-      }
-      if (result.reason === "error") this.#setStatus(turn, "error", result.error)
-      this.#emit(turn, "turn.end", {
-        reason: result.reason,
-        steps,
-        ...(result.error !== undefined ? { error: result.error } : {}),
-        ...(result.failure ? { failure: result.failure } : {}),
-      })
-      this.#setStatus(turn, "idle")
-      // A success resets the notice retries; after an interrupt the user decides when to go on.
-      if (result.reason !== "error") this.#inbox.resetRetries()
-      else if (!this.#disposed && (turn.unanswered || this.#inbox.waiting))
-        this.#inbox.scheduleRetry(result.error)
-      if (nextTurnId && !this.#disposed) {
-        this.prompt(joinMessages(leftover), { turnId: nextTurnId }).catch(() => {})
-      }
-    }
-    return result
-  }
-
-  #injectSteering(turn: Turn) {
-    const notices = this.#inbox.take()
-    if (notices.length) turn.unanswered = true
-    // The steers reach the model now: later waits in this turn wait again.
-    if (this.#steerAbort?.signal.aborted) this.#steerAbort = new AbortController()
-    for (const message of [...this.#steering.splice(0), ...(notices.length ? [joinMessages(notices)] : [])]) {
-      this.#history.push(message)
-      this.#emit(turn, "turn.steer", { message, state: "injected" })
-    }
   }
 
   /** Why this model cannot use a registered tool, independent of explicit disabled tools. */
@@ -1143,51 +832,6 @@ export class Agent {
     })
   }
 
-  /** Rebuilt for a sub-agent's user messages, a few times at most: a stream of them cannot starve the model. */
-  async #callModel(turn: Turn): Promise<ModelReply> {
-    const unreadable = await this.#compactor.fillSummaries(turn, turn.signal)
-    if (turn.signal.aborted) return { kind: "aborted" }
-    if (unreadable) return { kind: "error", error: unreadable }
-    let ctx = await this.#buildContext(turn.signal)
-    for (let rebuilds = 0; ; rebuilds++) {
-      if (await this.execution.wait(turn.signal)) return { kind: "aborted" }
-      if (this.depth === 0 || rebuilds >= 3 || !(this.#steering.length || this.#inbox.waiting)) break
-      this.#injectSteering(turn)
-      ctx = await this.#buildContext(turn.signal)
-    }
-    this.#checkRestoredTools()
-    if (turn.signal.aborted) return { kind: "aborted" }
-    if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
-
-    const requestModelRef = modelRef(this.model)
-    this.#emit(turn, "message.start", { model: requestModelRef, contextWindow: this.model.contextWindow })
-    const call = await modelCall({
-      ai: this.#ai,
-      model: this.model,
-      modelRef: requestModelRef,
-      systemPrompt: ctx.value.systemPrompt,
-      messages: ctx.value.messages,
-      tools: () => this.#offeredTools(),
-      maxTokens: this.#maxTokens,
-      thinking: this.thinking.for(this.model),
-      signal: turn.signal,
-      emit: <K extends keyof EventMap>(type: K, data: EventMap[K]) => this.#emit(turn, type, data),
-    })
-    const { message, aborted, error, modelError } = call
-    if (!aborted && !error)
-      message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
-    if (message.content.length) this.#history.push(message)
-    // An interrupted reply may end with no usage counted: the context is still what it was.
-    if (message.usage && contextTokens(message.usage) > 0)
-      this.#compactor.noteContext(contextTokens(message.usage))
-    this.#emit(turn, "message.end", { message })
-    if (message.usage) this.tree?.recordUsage(this, message.usage)
-
-    if (aborted) return { kind: "aborted" }
-    if (error) return { kind: "error", error, ...(modelError ? { model: modelError } : {}) }
-    return { kind: "ok", message }
-  }
-
   /** Drops restored tools that are gone (e.g. an MCP server removed since), with a note. */
   #checkRestoredTools() {
     const restored = this.#restoredTools
@@ -1202,16 +846,6 @@ export class Agent {
     if (!unavailable.length) return
     const error = `tools loaded earlier in this session are no longer available: ${unavailable.join(", ")}`
     this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId })
-  }
-
-  /** Renames a call to a tool the model misspelled, so history, events and results agree. */
-  #fixToolName(call: ToolCallBlock): ToolCallBlock {
-    if (this.tools.get(call.name)) return call
-    const name = resolveToolName(
-      call.name,
-      this.tools.active().map((t) => t.name),
-    )
-    return name ? { ...call, name } : call
   }
 
   /**

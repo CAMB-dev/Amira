@@ -1,5 +1,5 @@
 // Owns Agent contracts, shared turn types, errors and notice-retry defaults.
-import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort } from "@amira/ai"
+import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort, UserMessage } from "@amira/ai"
 import type {
   ApprovalRequest,
   AskOutcome,
@@ -29,6 +29,17 @@ export interface Turn {
   signal: AbortSignal
   /** Notices joined this turn and no model reply has come since. */
   unanswered?: boolean
+}
+
+/** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
+export interface AfterCompaction {
+  /** In the order they were sent; `steered` ones came through steer(). */
+  messages: { message: UserMessage; steered: boolean }[]
+  /** The id a prompt() call asked for. */
+  turnId?: string
+  /** A prompt() call is waiting; a second one is refused as busy. */
+  prompted: boolean
+  waiters: { resolve: (r: TurnResult) => void; reject: (err: unknown) => void }[]
 }
 
 export type Emit = <K extends keyof EventMap>(turn: Turn | undefined, type: K, data: EventMap[K]) => void
