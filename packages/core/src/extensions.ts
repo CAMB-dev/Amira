@@ -560,6 +560,22 @@ export class ExtensionHost {
             { types: [type], ...(this.#replay ? { replay: this.#replay } : {}) },
           ),
         ),
+      onEvents: (types, handler) =>
+        track(
+          bus.subscribe(
+            async (e) => {
+              try {
+                await handler(e)
+              } catch (err) {
+                this.#handlerFailed(source, e.type, err)
+              }
+            },
+            {
+              types: [...new Set([...types, "events.lost" as const])],
+              ...(this.#replay ? { replay: this.#replay } : {}),
+            },
+          ),
+        ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
       // Each extension gets its own frozen copy, so none can change what another reads.
       settings: settingsView(this.#opts.settings ?? {}, this.#opts.settingsLayers ?? {}),

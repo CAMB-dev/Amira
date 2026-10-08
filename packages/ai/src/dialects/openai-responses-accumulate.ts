@@ -8,7 +8,6 @@ import type {
   ThinkingBlock,
   Usage,
 } from "../types.ts"
-import { emptyUsage } from "../types.ts"
 import type { ErrorEvent } from "./http-stream.ts"
 import { responsesError } from "./openai-responses-errors.ts"
 import {
@@ -34,6 +33,8 @@ interface Reasoning {
   block: ThinkingBlock
   /** Summary parts seen so far, so a new part starts on its own paragraph. */
   parts: Set<number>
+  index?: number
+  closed: boolean
 }
 
 /**
@@ -55,7 +56,7 @@ export class ResponsesAccumulator {
 
   /** `onProgress` is called for the server's compaction progress events. */
   constructor(model: ModelRef, onProgress?: () => void) {
-    this.message = { role: "assistant", content: [], model, usage: emptyUsage() }
+    this.message = { role: "assistant", content: [], model }
     this.#onProgress = onProgress
   }
 
@@ -67,6 +68,10 @@ export class ResponsesAccumulator {
   *apply(ev: any): Generator<StreamEvent> {
     switch (ev?.type) {
       case "response.output_item.added":
+        yield {
+          type: "content.start",
+          ...(typeof ev.output_index === "number" ? { index: ev.output_index } : {}),
+        }
         yield* this.#added(ev.item, ev.output_index)
         break
       case "response.output_item.done":
@@ -87,10 +92,10 @@ export class ResponsesAccumulator {
         yield* this.#text(itemKey(ev), ev.delta)
         break
       case "response.reasoning_summary_text.delta":
-        yield* this.#thinking(itemKey(ev), ev.delta, ev.summary_index)
+        yield* this.#thinking(itemKey(ev), ev.delta, ev.summary_index, ev.output_index)
         break
       case "response.reasoning_text.delta":
-        yield* this.#thinking(itemKey(ev), ev.delta, ev.content_index)
+        yield* this.#thinking(itemKey(ev), ev.delta, ev.content_index, ev.output_index)
         break
       // A hosted web search runs on the server, inside the response: its completion is not the
       // response's, which goes on (the answer follows) until response.completed.
@@ -111,10 +116,12 @@ export class ResponsesAccumulator {
         break
       }
       case "response.completed":
+        yield* this.#closeReasoning()
         this.#usage(ev.response)
         this.#terminal = this.end()
         break
       case "response.incomplete":
+        yield* this.#closeReasoning()
         this.#usage(ev.response)
         this.#terminal = this.end(ev.response?.incomplete_details?.reason)
         break
@@ -158,8 +165,8 @@ export class ResponsesAccumulator {
     if (item?.type === "function_call") yield* this.#call(key, item)
     else if (item?.type === "reasoning") {
       const starts = !this.#reasoning.has(key)
-      this.#reasoningFor(key)
-      if (starts) yield { type: "thinking.start" }
+      const r = this.#reasoningFor(key, outputIndex)
+      if (starts) yield { type: "thinking.start", ...(r.index !== undefined ? { index: r.index } : {}) }
     } else if (item?.type === "message") this.#noteMessage(key, item)
     else if (item?.type === "web_search_call") yield* this.#webSearch.item(key, item, false)
   }
@@ -176,8 +183,8 @@ export class ResponsesAccumulator {
       this.#pushCall(call)
     } else if (item?.type === "reasoning") {
       const starts = !this.#reasoning.has(key)
-      const r = this.#reasoningFor(key)
-      if (starts) yield { type: "thinking.start" }
+      const r = this.#reasoningFor(key, outputIndex)
+      if (starts) yield { type: "thinking.start", ...(r.index !== undefined ? { index: r.index } : {}) }
       if (!r.block.text) {
         const summary = (item.summary ?? [])
           .map((s: any) => s?.text ?? "")
@@ -195,6 +202,7 @@ export class ResponsesAccumulator {
         }
         if (!r.block.text) r.block.redacted = true
       }
+      yield* this.#closeReasoning(r)
     } else if (item?.type === "message") {
       this.#noteMessage(key, item)
       if (!this.#texts.has(key)) {
@@ -239,23 +247,36 @@ export class ResponsesAccumulator {
     yield { type: "text.delta", text: delta }
   }
 
-  *#thinking(key: string, delta: unknown, part: unknown): Generator<StreamEvent> {
+  *#thinking(key: string, delta: unknown, part: unknown, index?: unknown): Generator<StreamEvent> {
     const starts = !this.#reasoning.has(key)
-    const r = this.#reasoningFor(key)
-    if (starts) yield { type: "thinking.start" }
-    if (typeof delta !== "string" || !delta) return
+    const r = this.#reasoningFor(key, index)
+    if (starts) yield { type: "thinking.start", ...(r.index !== undefined ? { index: r.index } : {}) }
+    if (typeof delta !== "string") return
     const n = typeof part === "number" ? part : 0
-    const text = !r.parts.has(n) && r.block.text ? `\n\n${delta}` : delta
-    r.parts.add(n)
+    const text = delta && !r.parts.has(n) && r.block.text ? `\n\n${delta}` : delta
+    if (delta) r.parts.add(n)
     r.block.text += text
-    if (r.block.redacted) delete r.block.redacted
+    if (text && r.block.redacted) delete r.block.redacted
     yield { type: "thinking.delta", text }
   }
 
-  #reasoningFor(key: string): Reasoning {
+  *#closeReasoning(reasoning?: Reasoning): Generator<StreamEvent> {
+    for (const r of reasoning ? [reasoning] : this.#reasoning.values()) {
+      if (r.closed) continue
+      r.closed = true
+      yield { type: "thinking.end", ...(r.index !== undefined ? { index: r.index } : {}) }
+    }
+  }
+
+  #reasoningFor(key: string, index?: unknown): Reasoning {
     let r = this.#reasoning.get(key)
     if (!r) {
-      r = { block: { type: "thinking", text: "" }, parts: new Set() }
+      r = {
+        block: { type: "thinking", text: "" },
+        parts: new Set(),
+        ...(typeof index === "number" ? { index } : {}),
+        closed: false,
+      }
       this.#reasoning.set(key, r)
       this.message.content.push(r.block)
     }

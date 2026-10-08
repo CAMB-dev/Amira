@@ -17,12 +17,15 @@ export const openaiResponses: Dialect = {
   id: RESPONSES_DIALECT,
   stream(req: ModelRequest, ctx: DialectContext): AsyncGenerator<StreamEvent> {
     const { apiKey, baseUrl } = ctx.endpoint
+    const body = responsesBody(req)
+    const reasoning = body.reasoning as { summary?: string } | undefined
     return postStream({
       ctx,
       acc: new ResponsesAccumulator({ provider: req.model.provider, model: req.model.id }),
       url: `${baseUrl.replace(/\/$/, "")}/responses`,
       headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
-      body: responsesBody(req),
+      body,
+      thinkingDisplay: reasoning?.summary === "auto" ? "summarized" : undefined,
       readSSE,
       readPlain,
     })
@@ -115,6 +118,7 @@ async function* readPlain(
   }
   yield { type: "start" }
   for (const [i, item] of json.output.entries()) {
+    yield* acc.apply({ type: "response.output_item.added", output_index: i, item })
     yield* acc.apply({ type: "response.output_item.done", output_index: i, item })
   }
   const status =

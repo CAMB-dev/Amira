@@ -26,7 +26,7 @@ export function req(
 }
 
 /** SSE with a named event per chunk, as the Responses API sends it. */
-export function namedSSE(chunks: { type: string }[]): string {
+export function namedSSE(chunks: { type: string; [key: string]: unknown }[]): string {
   return chunks.map((c) => `event: ${c.type}\ndata: ${JSON.stringify(c)}\n\n`).join("")
 }
 

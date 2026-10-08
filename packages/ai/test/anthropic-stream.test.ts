@@ -35,7 +35,14 @@ test("streams text and ignores pings", async () => {
       messageStop,
     ]),
   )
-  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "text.delta", "done"])
+  expect(evs.map((e) => e.type)).toEqual([
+    "request.start",
+    "start",
+    "content.start",
+    "text.delta",
+    "text.delta",
+    "done",
+  ])
   const e = last(evs) as DoneEvent
   expect(e.message.content).toEqual([{ type: "text", text: "Hello" }])
   expect(e.message.stopReason).toBe("end")
@@ -136,7 +143,16 @@ test("records redacted thinking with its encrypted data as the signature", async
       messageStop,
     ]),
   )
-  expect(evs.map((e) => e.type)).toEqual(["start", "thinking.start", "text.delta", "done"])
+  expect(evs.map((e) => e.type)).toEqual([
+    "request.start",
+    "start",
+    "content.start",
+    "thinking.start",
+    "thinking.end",
+    "content.start",
+    "text.delta",
+    "done",
+  ])
   expect((last(evs) as DoneEvent).message.content).toEqual([
     {
       type: "thinking",
@@ -284,8 +300,8 @@ test("HTTP errors keep status and code; 429 and 5xx retry", async () => {
     const evs = await run(
       () => new Response(body, { status, headers: { "content-type": "application/json" } }),
     )
-    expect(evs).toHaveLength(1)
-    return evs[0] as ErrorEvent
+    expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+    return evs.at(-1) as ErrorEvent
   }
   const rate = await httpErr(429, "rate_limit_error")
   expect(rate.error).toMatchObject({
@@ -302,7 +318,7 @@ test("HTTP errors keep status and code; 429 and 5xx retry", async () => {
   const bad = await httpErr(400, "invalid_request_error")
   expect(bad.retryable).toBe(false)
   expect(bad.message.stopReason).toBe("error")
-  const plain = (await run(() => new Response("gateway down", { status: 502 })))[0] as ErrorEvent
+  const plain = (await run(() => new Response("gateway down", { status: 502 }))).at(-1) as ErrorEvent
   expect(plain.error).toMatchObject({ message: "HTTP 502: gateway down", status: 502 })
   expect(plain.retryable).toBe(true)
 })
@@ -310,8 +326,8 @@ test("HTTP errors keep status and code; 429 and 5xx retry", async () => {
 test("a JSON error body with status 200 becomes an error event", async () => {
   const body = JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "busy" } })
   const evs = await run(() => new Response(body, { headers: { "content-type": "application/json" } }))
-  expect(evs).toHaveLength(1)
-  const e = evs[0] as ErrorEvent
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  const e = evs.at(-1) as ErrorEvent
   expect(e.error.code).toBe("overloaded_error")
   expect(e.retryable).toBe(true)
 })
@@ -333,10 +349,15 @@ test("a whole JSON message with status 200 is replayed as a stream", async () =>
     () => new Response(JSON.stringify(msg), { headers: { "content-type": "application/json" } }),
   )
   expect(evs.map((e) => e.type)).toEqual([
+    "request.start",
     "start",
+    "content.start",
     "thinking.start",
     "thinking.delta",
+    "thinking.end",
+    "content.start",
     "text.delta",
+    "content.start",
     "toolCall.delta",
     "toolCall.delta",
     "done",
@@ -357,8 +378,8 @@ test("a whole JSON message with status 200 is replayed as a stream", async () =>
 
 test("a non-JSON 200 body is a non-retryable error", async () => {
   const evs = await run(() => new Response("<html>", { headers: { "content-type": "text/html" } }))
-  expect(evs).toHaveLength(1)
-  expect((evs[0] as ErrorEvent).error.message).toContain("expected an event stream, got text/html")
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  expect((evs.at(-1) as ErrorEvent).error.message).toContain("expected an event stream, got text/html")
 })
 
 test("a stream cut before the message ends is a retryable error with the partial message", async () => {
@@ -379,7 +400,7 @@ test("a stream cut before the message ends is a retryable error with the partial
 
 test("an empty event stream is a retryable error", async () => {
   const evs = await run(() => new Response("", { headers: SSE_HEADERS }))
-  expect(evs.map((e) => e.type)).toEqual(["start", "error"])
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "start", "error"])
   expect((last(evs) as ErrorEvent).retryable).toBe(true)
 })
 

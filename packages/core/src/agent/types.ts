@@ -35,6 +35,8 @@ export interface Turn {
 export interface AfterCompaction {
   /** In the order they were sent; `steered` ones came through steer(). */
   messages: { message: UserMessage; steered: boolean }[]
+  /** When the first held prompt was sent. */
+  sentAt?: number
   /** The id a prompt() call asked for. */
   turnId?: string
   /** A prompt() call is waiting; a second one is refused as busy. */
@@ -165,6 +167,8 @@ export interface TurnResult {
 }
 
 export interface PromptOptions {
+  /** Original prompt time when a held prompt starts after compaction. */
+  sentAt?: number
   /** Id for the new turn, so a caller can report it before the turn runs. Default: a fresh one. */
   turnId?: string
 }

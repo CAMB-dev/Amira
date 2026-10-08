@@ -2,6 +2,7 @@ import type { AssistantMessage, Message, Usage } from "@amira/ai"
 import type { BackgroundJobExtension } from "./background-jobs.ts"
 import type { CommandDefinition, InputHandler, SessionControl } from "./commands.ts"
 import type {
+  AnyEvent,
   EventEnvelope,
   EventMap,
   Intercept,
@@ -183,6 +184,10 @@ export interface ExtensionAPI {
    * to recover it. Returns a function that removes the handler.
    */
   on<K extends keyof EventMap>(type: K, handler: (event: EventEnvelope<K>) => void): () => void
+  /** One ordered queue for related event types, including subscriber-local events.lost.
+   * Optional for compatibility with older hosts; prefer it for cross-event timing/state.
+   */
+  onEvents?(types: readonly (keyof EventMap)[], handler: (event: AnyEvent) => void): () => void
   intercept<K extends keyof InterceptorMap>(
     point: K,
     handler: (

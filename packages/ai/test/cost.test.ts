@@ -22,6 +22,15 @@ test("reasoning is included in output, not added to costs or token totals", () =
   expect(addUsage(usage, usage).output).toBe(200)
 })
 
+test("search metadata without an output count cannot give a complete cost", () => {
+  expect(
+    usageCost(
+      { ...emptyUsage(), outputReported: false, webSearchRequests: 1 },
+      { input: 1, output: 2, webSearch: 0.01 },
+    ),
+  ).toBeUndefined()
+})
+
 test("addUsage sums costs only when there are any", () => {
   expect(addUsage(emptyUsage(), emptyUsage()).cost).toBeUndefined()
   expect(addUsage({ ...emptyUsage(), cost: 0.5 }, emptyUsage()).cost).toBe(0.5)

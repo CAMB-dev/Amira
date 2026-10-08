@@ -1,5 +1,12 @@
 import { isGemini3, NATIVE_WEB_SEARCH, serverToolSnapshot } from "../server-tools.ts"
-import type { AssistantMessage, ServerToolBlock, StreamEvent, TextBlock, ThinkingBlock } from "../types.ts"
+import {
+  type AssistantMessage,
+  emptyUsage,
+  type ServerToolBlock,
+  type StreamEvent,
+  type TextBlock,
+  type ThinkingBlock,
+} from "../types.ts"
 
 const DIALECT = "google-gemini"
 
@@ -25,6 +32,7 @@ export class GeminiWebSearch {
   readonly #chunks: any[] = []
   readonly #supports: any[] = []
   readonly #queries = new Set<string>()
+  #queryUsage = false
   readonly #parts: { block?: TextBlock | ThinkingBlock; text: string; offset: number }[] = []
   #metadata: ServerToolBlock | undefined
   #firstPart = true
@@ -129,14 +137,18 @@ export class GeminiWebSearch {
       }
     }
     // Gemini 2.x bills per grounded prompt, so a query list is not a per-search usage count there.
-    if (isGemini3(this.message.model.model) && Array.isArray(raw.webSearchQueries))
-      this.message.usage!.webSearchRequests = this.#queries.size
+    if (isGemini3(this.message.model.model) && Array.isArray(raw.webSearchQueries)) this.#queryUsage = true
     this.citations()
     yield serverToolSnapshot(block)
   }
 
   /** Applied again at EOF for metadata that preceded its text or sources. */
   citations() {
+    // Search metadata can precede token usage. Never fabricate output counters for it.
+    if (this.#queryUsage) {
+      this.message.usage ??= { ...emptyUsage(), outputReported: false }
+      this.message.usage.webSearchRequests = this.#queries.size
+    }
     for (const support of this.#supports) {
       const segment = support?.segment
       const part = this.#parts[segment?.partIndex ?? 0]

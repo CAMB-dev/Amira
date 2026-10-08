@@ -103,7 +103,10 @@ export class TurnRunner {
 
     let steps = 0
     let result: TurnResult = { reason: "done", steps: 0 }
-    this.#deps.emit(turn, "turn.start", { prompt: user })
+    this.#deps.emit(turn, "turn.start", {
+      prompt: user,
+      ...(opts.sentAt !== undefined ? { sentAt: opts.sentAt } : {}),
+    })
     this.#deps.setStatus(turn, "working")
     try {
       this.#deps.history.push(user)

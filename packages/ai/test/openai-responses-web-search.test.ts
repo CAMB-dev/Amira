@@ -159,11 +159,15 @@ test("web search events stream in order, the reply goes on after the search, cit
     e.type === "serverTool" ? `serverTool:${e.block.id}:${e.block.status}` : e.type,
   )
   expect(kinds).toEqual([
+    "request.start",
     "start",
+    "content.start",
     "serverTool:ws_1:running",
     "serverTool:ws_1:done",
+    "content.start",
     "serverTool:ws_2:running",
     "serverTool:ws_2:done",
+    "content.start",
     "text.delta",
     "text.delta",
     "done",

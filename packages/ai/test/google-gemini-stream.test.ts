@@ -31,7 +31,7 @@ test("streams text and maps usage: cached tokens split out, thoughts count as ou
       totalTokenCount: 128,
     }),
   ])
-  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "text.delta", "done"])
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "start", "text.delta", "text.delta", "done"])
   const { message } = done(evs)
   expect(message.content).toEqual([{ type: "text", text: "Hello" }])
   expect(message.stopReason).toBe("end")
@@ -88,7 +88,15 @@ test("thoughts stream as thinking; signatures on thoughts, text and empty parts 
 
 test("announces a thought part before any thought text", async () => {
   const { evs } = await go([chunk([{ text: "", thought: true }]), chunk([{ text: "answer" }], "STOP")])
-  expect(evs.map((e) => e.type)).toEqual(["start", "thinking.start", "text.delta", "done"])
+  expect(evs.map((e) => e.type)).toEqual([
+    "request.start",
+    "start",
+    "thinking.start",
+    "thinking.delta",
+    "thinking.end",
+    "text.delta",
+    "done",
+  ])
   expect(done(evs).message.content).toEqual([{ type: "text", text: "answer" }])
 })
 
@@ -215,8 +223,8 @@ test("a stream that ends without a finish reason is a retryable error", async ()
 test("HTTP errors keep status and the Google status name", async () => {
   const body = { error: { code: 429, message: "Resource has been exhausted", status: "RESOURCE_EXHAUSTED" } }
   const { evs } = await run(googleGemini, req("google-gemini"), () => Response.json([body], { status: 429 }))
-  expect(evs).toHaveLength(1)
-  const e = evs[0] as ErrorEvent
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  const e = evs.at(-1) as ErrorEvent
   expect(e.error.status).toBe(429)
   expect(e.error.code).toBe("RESOURCE_EXHAUSTED")
   expect(e.retryable).toBe(true)
@@ -235,7 +243,13 @@ test("a non-SSE 200 with a chunk array or one response is read as the stream", a
     chunk([{ text: "b" }], "STOP", { promptTokenCount: 3, candidatesTokenCount: 2 }),
   ]
   const fromArray = await run(googleGemini, req("google-gemini"), () => Response.json(array))
-  expect(fromArray.evs.map((e) => e.type)).toEqual(["start", "text.delta", "text.delta", "done"])
+  expect(fromArray.evs.map((e) => e.type)).toEqual([
+    "request.start",
+    "start",
+    "text.delta",
+    "text.delta",
+    "done",
+  ])
   expect(done(fromArray.evs).message.content).toEqual([{ type: "text", text: "ab" }])
   expect(done(fromArray.evs).message.usage).toEqual({ input: 3, output: 2, cacheRead: 0, cacheWrite: 0 })
   const single = await run(googleGemini, req("google-gemini"), () =>

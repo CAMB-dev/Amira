@@ -34,9 +34,9 @@ export const SERVER_TOOL_IDLE_MS = 600_000
 // Content already streamed: sending again would repeat it. A hosted search already shown (and
 // paid for) counts too: sending again would search again.
 const CONTENT = new Set<StreamEvent["type"]>(["text.delta", "thinking.delta", "toolCall.delta", "serverTool"])
-// A reasoning start ends the first-content wait (the model is working, silently), but nothing was
-// shown or kept yet, so the attempt can still be sent again.
-const ACTIVITY = new Set<StreamEvent["type"]>([...CONTENT, "thinking.start"])
+// Native block starts and reasoning boundaries end the first-content wait (the model is working,
+// silently), but nothing was shown or kept yet, so the attempt can still be sent again.
+const ACTIVITY = new Set<StreamEvent["type"]>([...CONTENT, "content.start", "thinking.start", "thinking.end"])
 
 /**
  * Sends a request again after a retryable failure, as long as nothing was streamed yet (D52):
@@ -131,7 +131,13 @@ export async function* withRetry(
         }
         if (ACTIVITY.has(ev.type)) {
           active = true
-          if (CONTENT.has(ev.type)) content = true
+          if (
+            CONTENT.has(ev.type) &&
+            ((ev.type !== "text.delta" && ev.type !== "thinking.delta") || ev.text.length > 0) &&
+            (ev.type !== "toolCall.delta" || Boolean(ev.name || ev.argsDelta))
+          ) {
+            content = true
+          }
           partial = notePartial(partial, ev, model)
           if (ev.type === "serverTool") {
             if (ev.block.status === "running") runningServerTools.add(ev.block.id)
@@ -158,6 +164,7 @@ export async function* withRetry(
       yield attempt > 0 ? retried(failed, attempt) : failed
       return
     }
+    yield { type: "request.end", message: failed.message }
     yield { type: "retry", attempt: attempt + 1, maxRetries: retries, delayMs, error: failed.error }
     if (!(await sleep(delayMs, signal))) {
       yield {
@@ -179,7 +186,7 @@ function notePartial(
   ev: StreamEvent,
   model: ModelRef | undefined,
 ): AssistantMessage | undefined {
-  if (ev.type !== "text.delta" && ev.type !== "thinking.delta") return partial
+  if ((ev.type !== "text.delta" && ev.type !== "thinking.delta") || !ev.text) return partial
   const base =
     partial ??
     ({
