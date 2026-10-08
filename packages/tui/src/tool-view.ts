@@ -62,7 +62,7 @@ export const FAILURE_LINES = 8
 export const BODY_LINES = 20
 /** Most live output lines under a running call. */
 export const RUNNING_LINES = 3
-/** Output lines a successful shell command shows by default: as many as while it ran. */
+/** Output lines a successful shell command shows by default (the shellOutputLines default, kept equal to RUNNING_LINES by a test). */
 export const OUTPUT_LINES = DEFAULT_SHELL_OUTPUT_LINES
 
 /** Indent of a call's body, under the text of its result line. */
