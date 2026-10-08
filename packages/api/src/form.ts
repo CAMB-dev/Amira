@@ -124,6 +124,13 @@ export interface ActionField extends FieldBase {
    * Without it the default is no, which suits actions with side effects or costs.
    */
   recommended?: boolean
+  /** Full-screen forms may run this action when ready; the callback stays with the host. */
+  auto?: {
+    /** Visible dependencies; conditions travel to frontends and must never contain secret values. */
+    watch: Array<string | { field: string; when: Record<string, FormValue> }>
+    /** Checks readiness without starting the action or requiring the whole form to be valid. */
+    ready: (values: FormValues) => boolean
+  }
 }
 
 export type FormField =
@@ -183,7 +190,7 @@ export interface FormSpec {
 }
 
 type Serializable<F> = F extends ActionField
-  ? Omit<F, "run" | "validate">
+  ? Omit<F, "run" | "validate" | "auto"> & { auto?: { watch: NonNullable<F["auto"]>["watch"] } }
   : F extends { validate?: unknown }
     ? Omit<F, "validate">
     : F
@@ -205,8 +212,8 @@ export function toFormSchema(spec: FormSpec): FormSchema {
   const fields = spec.fields.map((f) => {
     const { validate: _v, ...rest } = f as FormField & { validate?: unknown }
     if (rest.type === "action") {
-      const { run: _r, ...action } = rest as ActionField
-      return action
+      const { run: _r, auto, ...action } = rest as ActionField
+      return { ...action, ...(auto ? { auto: { watch: structuredClone(auto.watch) } } : {}) }
     }
     return rest
   }) as FormFieldSchema[]
@@ -401,6 +408,21 @@ export function describeFormErrors(
   return Object.entries(errors)
     .map(([id, m]) => `${label(id)}: ${m}`)
     .join("; ")
+}
+
+/** Visible automatic actions ready for the values so far; does not run actions or validators. */
+export function autoFormActions(
+  spec: FormSpec,
+  values: Record<string, unknown>,
+  options: Record<string, FormOption[]> = {},
+): string[] {
+  const checked = checkForm(toFormSchema(spec), values, options).values
+  return spec.fields
+    .filter(
+      (f): f is ActionField =>
+        f.type === "action" && !!f.auto && isFieldVisible(spec, f, checked) && f.auto.ready(checked),
+    )
+    .map((f) => f.id)
 }
 
 /** Runs one of a form's actions, catching failures into an error result. */

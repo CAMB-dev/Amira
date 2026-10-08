@@ -1,4 +1,5 @@
 import {
+  autoFormActions,
   checkForm,
   describeFormErrors,
   type EventMap,
@@ -35,6 +36,8 @@ export interface FormBackend {
   schema: FormSchema
   /** Problems by field id; empty when the values may be submitted. */
   validate(values: FormValues): Record<string, string>
+  /** Eligible automatic actions; readiness checks remain on the host. */
+  autoActions?(values: FormValues): string[]
   runAction(
     id: string,
     values: FormValues,
@@ -53,6 +56,7 @@ export function uiFormBackend(ui: UiRequests, request: FormRequest): FormBackend
   return {
     schema,
     validate: (values) => ui.validateForm(requestId, values) ?? {},
+    autoActions: (values) => ui.autoFormActions(requestId, values),
     runAction: (id, values, opts) => ui.runFormAction(requestId, id, values, opts),
     submit: (values) => ui.respond(requestId, values),
     cancel: () => void ui.cancel(requestId),
@@ -65,10 +69,11 @@ export function specFormBackend(spec: FormSpec, done: (values: FormValues | unde
   return {
     schema: toFormSchema(spec),
     validate: (values) => checkForm(spec, values, options).errors,
+    autoActions: (values) => autoFormActions(spec, values, options),
     runAction: async (id, values, opts) => {
       const current = checkForm(spec, values, options).values
       const r = await runFormAction(spec, id, current, { signal: opts.signal, progress: opts.onProgress })
-      if (r.options) Object.assign(options, r.options)
+      if (!opts.signal.aborted && r.options) Object.assign(options, r.options)
       return r
     },
     submit: (values) => {
@@ -98,13 +103,16 @@ export class FormView implements Component {
   readonly form: Form
   #backend: FormBackend
   #opts: FormViewOptions
-  #running = new Map<string, AbortController>()
+  #running = new Map<string, { controller: AbortController; key: string; automatic: boolean }>()
+  #automatic = new Map<string, { key: string; attempted: boolean }>()
+  #confirmed: FormValues
   #closed = false
 
   constructor(backend: FormBackend, opts: FormViewOptions) {
     this.#backend = backend
     this.#opts = opts
     const { schema } = backend
+    this.#confirmed = formDefaults(schema)
     const byId = new Map(schema.fields.map((f) => [f.id, f]))
     this.form = new Form({
       title: schema.title,
@@ -112,7 +120,7 @@ export class FormView implements Component {
       fields: schema.fields.map(toView),
       ...(schema.sections ? { sections: schema.sections } : {}),
       ...(schema.submitLabel !== undefined ? { submitLabel: schema.submitLabel } : {}),
-      values: formDefaults(schema),
+      values: this.#confirmed,
       visible: (f, values) => isFieldVisible(schema, byId.get(f.id)!, values as FormValues),
       validate: (values) => backend.validate(values as FormValues),
       onSubmit: (values) => this.#submit(values),
@@ -121,7 +129,7 @@ export class FormView implements Component {
         backend.cancel()
       },
       onAction: (id, values) => this.#run(id, values),
-      onActionCancel: (id) => this.#running.get(id)?.abort(),
+      onActionCancel: (id) => this.#running.get(id)?.controller.abort(),
       notice: () => {
         const titles = opts.waiting?.() ?? []
         if (!titles.length) return []
@@ -129,6 +137,8 @@ export class FormView implements Component {
         return [`${glyphs.warning} ${what} behind this form: ${titles.join(" · ")}`]
       },
     })
+    // Let the renderer finish mounting before starting an action or reporting progress.
+    queueMicrotask(() => this.#syncAutomatic())
   }
 
   get closed(): boolean {
@@ -139,14 +149,18 @@ export class FormView implements Component {
   close(): void {
     if (this.#closed) return
     this.#closed = true
-    for (const c of this.#running.values()) c.abort()
+    for (const { controller } of this.#running.values()) controller.abort()
     this.#running.clear()
+    this.#automatic.clear()
+    this.#confirmed = {}
     this.#opts.onClose()
   }
 
   handleInput(e: InputEvent): boolean {
     if (this.#closed) return false
-    return this.form.handleInput(e)
+    const handled = this.form.handleInput(e)
+    this.#syncAutomatic()
+    return handled
   }
 
   render(width: number, ctx: RenderContext): string[] {
@@ -164,11 +178,71 @@ export class FormView implements Component {
     this.form.setStatus(problem, "error")
   }
 
-  #run(id: string, values: Record<string, FormInputValue>) {
+  /** Text (especially a secret) is committed on leaving its field, not on each keystroke. */
+  #syncAutomatic() {
+    if (this.#closed) return
+    const schema = this.#backend.schema
+    if (!schema.fields.some((f) => f.type === "action" && f.auto)) return
+    const live = this.form.values as FormValues
+    const values = { ...live }
+    const focused = schema.fields.find((f) => f.id === this.form.focused)
+    if (focused && ["text", "secret", "textarea", "number"].includes(focused.type)) {
+      const confirmed = this.#confirmed[focused.id]
+      if (confirmed === undefined) delete values[focused.id]
+      else values[focused.id] = confirmed
+    }
+    this.#confirmed = structuredClone(values)
+    const eligible = this.#backend.autoActions?.(values) ?? []
+    for (const action of schema.fields) {
+      if (action.type !== "action" || !action.auto) continue
+      const key = this.#actionKey(action.id, values)
+      const liveKey = this.#actionKey(action.id, live)
+      let state = this.#automatic.get(action.id)
+      if (!state || state.key !== key) {
+        state = { key, attempted: false }
+        this.#automatic.set(action.id, state)
+      }
+      const ready = eligible.includes(action.id)
+      const running = this.#running.get(action.id)
+      if (running && ((running.automatic && !ready) || running.key !== key)) {
+        running.controller.abort()
+        // An interrupted attempt produced no usable result, even if the edit is reverted.
+        state.attempted = false
+      }
+      if (running || !ready || liveKey !== key || state.attempted) continue
+      this.#run(action.id, structuredClone(values), true)
+    }
+  }
+
+  /** A private in-memory fingerprint; secrets never reach status messages or events. */
+  #actionKey(id: string, values: FormValues): string {
+    const schema = this.#backend.schema
+    const action = schema.fields.find((f) => f.id === id)
+    if (action?.type !== "action" || !action.auto) return ""
+    return JSON.stringify(
+      action.auto.watch.map((dependency) => {
+        const name = typeof dependency === "string" ? dependency : dependency.field
+        const applies =
+          typeof dependency === "string" ||
+          Object.entries(dependency.when).every(([field, value]) => values[field] === value)
+        const field = schema.fields.find((f) => f.id === name)
+        return applies && field && isFieldVisible(schema, field, values) ? values[name] : undefined
+      }),
+    )
+  }
+
+  #run(id: string, values: Record<string, FormInputValue>, automatic = false) {
     if (this.#running.has(id)) return
     const controller = new AbortController()
-    this.#running.set(id, controller)
+    const key = this.#actionKey(id, values as FormValues)
+    const action = this.#backend.schema.fields.find((f) => f.id === id)
+    if (action?.type === "action" && action.auto) {
+      this.#automatic.set(id, { key, attempted: true })
+    }
+    const running = { controller, key, automatic }
+    this.#running.set(id, running)
     this.form.setActionState(id, { running: true })
+    this.#opts.requestRender()
     const onProgress = (text: string) => {
       if (controller.signal.aborted || this.#closed) return
       this.form.setActionState(id, { running: true, text })
@@ -183,8 +257,15 @@ export class FormView implements Component {
         }),
       )
       .then((r) => {
+        if (this.#running.get(id) !== running) return
         this.#running.delete(id)
         if (this.#closed) return
+        if (controller.signal.aborted) {
+          this.form.setActionState(id, { running: false })
+          this.#opts.requestRender()
+          this.#syncAutomatic()
+          return
+        }
         for (const [field, options] of Object.entries(r.options ?? {})) this.form.setOptions(field, options)
         if (r.values) this.form.setValues(r.values)
         this.form.setActionState(id, {
@@ -193,6 +274,7 @@ export class FormView implements Component {
           ...(r.tone ? { tone: r.tone } : {}),
         })
         this.#opts.requestRender()
+        this.#syncAutomatic()
       })
   }
 }

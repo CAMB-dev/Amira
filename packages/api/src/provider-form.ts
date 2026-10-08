@@ -1,5 +1,11 @@
 import type { FormOption, FormSpec, FormValues } from "./form.ts"
-import type { ProviderAdmin, ProviderDraft, ProviderKeySource, ProviderModelInfo } from "./providers.ts"
+import type {
+  ProviderAdmin,
+  ProviderDraft,
+  ProviderKeySource,
+  ProviderModelInfo,
+  ProviderVendor,
+} from "./providers.ts"
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_OUTPUT,
@@ -44,14 +50,16 @@ export function modelDescription(m: ProviderModelInfo): string {
   return parts.join(" · ")
 }
 
-/** The draft the values describe; `id` comes from the provider edited when the form has none. */
-export function draftFromValues(values: FormValues, id?: string): ProviderDraft {
+/** The draft the values describe; fallback id and non-editable catalog identity come from the caller. */
+export function draftFromValues(values: FormValues, id?: string, catalogId?: string | false): ProviderDraft {
+  const finalId = String(values.id ?? id ?? "").trim()
   const keySource = (values.keySource as ProviderKeySource | undefined) ?? "none"
   const num = (v: unknown) => (typeof v === "number" && v > 0 ? v : undefined)
   const contextWindow = num(values.contextWindow)
   const maxOutput = num(values.maxOutput)
   return {
-    id: String(values.id ?? id ?? "").trim(),
+    id: finalId,
+    ...(catalogId !== undefined && catalogId !== finalId ? { catalogId } : {}),
     dialect: String(values.dialect ?? ""),
     baseUrl: String(values.baseUrl ?? "")
       .trim()
@@ -74,15 +82,61 @@ export function draftFromValues(values: FormValues, id?: string): ProviderDraft 
 
 /** What a new provider's form starts with, e.g. from `amira provider add` flags. */
 export type ProviderFormInitial = Partial<
-  Pick<ProviderDraft, "dialect" | "id" | "baseUrl" | "keySource" | "apiKeyEnv" | "models">
+  Pick<ProviderDraft, "dialect" | "id" | "catalogId" | "baseUrl" | "keySource" | "apiKeyEnv" | "models">
 >
+
+/** A searchable vendor label; unsupported vendors still provide id and key presets. */
+export function providerVendorLabel(vendor: ProviderVendor): string {
+  return `${vendor.name} (${vendor.id})${vendor.dialect ? "" : " — pick the protocol yourself"}`
+}
+
+/** Presets for adding a catalog vendor, without reading or exposing an API key. */
+export function providerVendorInitial(admin: ProviderAdmin, vendor: ProviderVendor): ProviderFormInitial {
+  let id = vendor.id
+  for (let n = 2; admin.exists(id); n++) id = `${vendor.id}-${n}`
+  const setEnv = vendor.env.find((name) => admin.envIsSet(name))
+  const apiKeyEnv = setEnv ?? vendor.env[0]
+  return {
+    id,
+    catalogId: vendor.id,
+    ...(vendor.dialect ? { dialect: vendor.dialect } : {}),
+    ...(vendor.baseUrl ? { baseUrl: vendor.baseUrl } : {}),
+    keySource: setEnv ? "env" : "auth",
+    ...(apiKeyEnv ? { apiKeyEnv } : {}),
+  }
+}
+
+function validateBaseUrl(value: string): string | undefined {
+  const placeholder = value.match(/\$\{[^}]*\}?/)?.[0]
+  if (placeholder) return `replace ${placeholder} in the base URL with its value`
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? undefined
+      : "must start with http:// or https://"
+  } catch {
+    return "must be a URL, e.g. https://api.example.com/v1"
+  }
+}
+
+/** Automatic requests may send a key without a click, so remote endpoints must use TLS. */
+function safeAutoFetchUrl(value: string): boolean {
+  const url = new URL(value)
+  return (
+    url.protocol === "https:" ||
+    (url.protocol === "http:" &&
+      (url.hostname === "localhost" ||
+        url.hostname === "[::1]" ||
+        /^127(?:\.\d{1,3}){3}$/.test(url.hostname)))
+  )
+}
 
 /**
  * The form of /provider add and /provider edit: where the provider is, how it gets its key,
  * which models it offers (fetched from it, or typed), defaults for models the catalog does
- * not know, and an opt-in connection test. Nothing is sent anywhere unless the user presses
- * Fetch models or Test connection. `initial` fills in a new provider's form, such as the
- * protocol picked before it.
+ * not know, and an opt-in connection test. Full-screen forms fetch models when ready on add
+ * or when editing a provider with no models; dialogs keep fetching manual. `initial` fills
+ * in a new provider's form, such as the protocol picked before it.
  */
 export function providerFormSpec(
   admin: ProviderAdmin,
@@ -101,6 +155,7 @@ export function providerFormSpec(
     ? admin.describeModels(
         existing ?? {
           id: initial.id ?? "",
+          ...(initial.catalogId !== undefined ? { catalogId: initial.catalogId } : {}),
           dialect: initial.dialect ?? "",
           baseUrl: initial.baseUrl ?? "",
           keySource: "none",
@@ -109,7 +164,7 @@ export function providerFormSpec(
         startModels,
       )
     : []
-  const draft = (values: FormValues) => draftFromValues(values, existing?.id)
+  const draft = (values: FormValues) => draftFromValues(values, existing?.id, start.catalogId)
   return {
     title: editing ? `Edit provider ${existing.id}` : "Add a provider",
     description: editing
@@ -158,16 +213,8 @@ export function providerFormSpec(
         required: true,
         placeholder: "https://api.example.com/v1",
         ...(start.baseUrl ? { default: start.baseUrl } : {}),
-        validate: (v) => {
-          try {
-            const u = new URL(v.trim())
-            return u.protocol === "http:" || u.protocol === "https:"
-              ? undefined
-              : "must start with http:// or https://"
-          } catch {
-            return "must be a URL, e.g. https://api.example.com/v1"
-          }
-        },
+        help: "Non-loopback HTTP would send the key unencrypted. Use Fetch models manually.",
+        validate: validateBaseUrl,
       },
       {
         type: "select",
@@ -205,7 +252,36 @@ export function providerFormSpec(
         label: "Fetch models",
         section: "Models",
         recommended: true,
-        help: "Asks the provider which models it has, with the key above.",
+        ...(!editing || !existing.models.length
+          ? {
+              auto: {
+                watch: [
+                  "dialect",
+                  "baseUrl",
+                  "keySource",
+                  "apiKey",
+                  "apiKeyEnv",
+                  { field: "id", when: { keySource: "auth", apiKey: "" } },
+                ],
+                ready: (values: FormValues) => {
+                  const d = draft(values)
+                  if (
+                    !dialects.some((option) => option.value === d.dialect) ||
+                    validateBaseUrl(d.baseUrl) ||
+                    !safeAutoFetchUrl(d.baseUrl)
+                  )
+                    return false
+                  if (values.keySource === "none") return true
+                  if (values.keySource === "auth") return !!(d.apiKey?.trim() || admin.storedKeyHint(d.id))
+                  const env = d.apiKeyEnv ?? ""
+                  return (
+                    values.keySource === "env" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(env) && admin.envIsSet(env)
+                  )
+                },
+              },
+            }
+          : {}),
+        help: "Lists models from the provider with the key above; models.dev adds context window and price.",
         run: async ({ values, signal, progress }) => {
           const d = draft(values)
           progress(`asking ${d.baseUrl || "the provider"}…`)
@@ -213,7 +289,7 @@ export function providerFormSpec(
           const inCatalog = models.filter((m) => m.inCatalog).length
           return {
             message: models.length
-              ? `Found ${models.length} models; ${inCatalog} are in the model catalog. Pick them in the list below.`
+              ? `The provider listed ${models.length} models; models.dev adds context window and price for ${inCatalog}. Pick them in the list below.`
               : "The provider listed no models; type their ids into the list below.",
             tone: models.length ? "success" : "warning",
             options: {

@@ -21,7 +21,7 @@ The CLI package provides the global `amira` command; make sure Bun's executable 
 
 ## First run
 
-Run `amira` in your project. Add a provider with `/provider add`, choose its protocol, base URL, models and key source, then pick a model with `/model`. The built-in protocols are `openai-chat`, `openai-responses`, `anthropic-messages` and `google-gemini`. For environment-based keys, select `Read it from an environment variable`, enter the variable name (`apiKeyEnv`), and set it in the shell that launches Amira. There are no preconfigured providers.
+Run `amira` in your project. Add a provider with `/provider add`, search for a vendor by name or ID in the models.dev catalog, then review its prefilled settings, models and key source. Choose `Custom` for a local or unlisted service, or if the catalog is unavailable offline, and select its protocol and base URL manually. The built-in protocols are `openai-chat`, `openai-responses`, `anthropic-messages` and `google-gemini`. For environment-based keys, select `Read it from an environment variable`, enter the variable name (`apiKeyEnv`), and set it in the shell that launches Amira. Then pick a model with `/model`. See [providers](docs/providers.md) for setup details.
 
 Type a request and press Enter. By default, during a turn Enter steers it and Alt+Enter queues a message for the next turn (Windows may use Ctrl+Q; follow the hint line). Esc interrupts; if messages are waiting, they are sent immediately. Esc twice opens rewind for stored sessions; rewind changes the conversation, not files. Type `@` to pick a file path, `$` to select a skill, `/` to browse commands, or `?` with an empty input to see the keys. `/ext` browses, installs and manages extensions.
 

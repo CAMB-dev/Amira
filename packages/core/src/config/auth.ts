@@ -16,8 +16,9 @@ export function authFile(home = amiraHome()): string {
 }
 
 /**
- * Reads auth.json: `{"<provider>": {"apiKey": "..."}}`. A missing file means no keys. On
- * POSIX systems a file others can read is reported; Windows ACLs are not checked.
+ * Reads auth.json: `{"<provider>": {"type": "api_key", "apiKey": "..."}}`; entries without
+ * a type are API keys too. A missing file means no keys. On POSIX systems a file others
+ * can read is reported; Windows ACLs are not checked.
  */
 export function loadAuth(file = authFile(), platform: string = process.platform): LoadedAuth {
   const raw = readJsonFile(file)

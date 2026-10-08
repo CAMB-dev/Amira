@@ -40,6 +40,11 @@ export function helpCommand(): CommandDefinition {
         groups.push(`Aliases from settings (commandAliases):\n${table(rows)}`)
       }
       groups.push(
+        "Providers: /provider add picks a catalog vendor or Custom (choose a protocol).\n" +
+          "/provider add <vendor|protocol> skips the picker (protocol names win on a clash).\n" +
+          "Use /provider edit <id>, remove <id> or key <id> to manage configured providers.",
+      )
+      groups.push(
         "Extensions: /ext opens installed and available packages.\n" +
           "/ext install <name> [--project], update [name…], remove <name>, disable <name>, enable <name>, search <query>.\n" +
           "Changes apply with /reload while idle.",

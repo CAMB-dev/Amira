@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { AnyEvent, EventEnvelope, FormSpec } from "@amira/api"
+import type { AnyEvent, EventEnvelope, FormActionResult, FormSpec, FormValues } from "@amira/api"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
@@ -218,6 +218,152 @@ test("a form travels as a schema; answers are checked and never echoed", async (
   expect(JSON.stringify(events)).not.toContain("sk-secret")
 })
 
+test("automatic form eligibility uses host-only readiness and normalized pending values", async () => {
+  const { ui, next, events, bus } = setup()
+  const checked: FormValues[] = []
+  let runs = 0
+  let hiddenChecks = 0
+  const run = async () => {
+    runs++
+    return {}
+  }
+  const answer = ui.form({
+    title: "Connection",
+    fields: [
+      { type: "checkbox", id: "enabled", label: "Enabled", default: true },
+      { type: "secret", id: "key", label: "Key", required: true },
+      { type: "number", id: "attempts", label: "Attempts", default: 3 },
+      { type: "text", id: "hidden", label: "Hidden", when: { field: "enabled", is: false } },
+      {
+        type: "action",
+        id: "fetch",
+        label: "Fetch",
+        when: { field: "enabled", is: true },
+        auto: {
+          watch: ["key", "attempts"],
+          ready: (values) => {
+            checked.push(values)
+            return values.key === "sk-host-only" && values.attempts === 3
+          },
+        },
+        run,
+      },
+      {
+        type: "action",
+        id: "hidden-action",
+        label: "Hidden action",
+        when: { field: "enabled", is: false },
+        auto: {
+          watch: ["key"],
+          ready: () => {
+            hiddenChecks++
+            return true
+          },
+        },
+        run,
+      },
+      { type: "action", id: "manual", label: "Manual", run },
+    ],
+  })
+  const request = (await next()).data
+  if (request.kind !== "form") throw new Error("expected a form")
+  expect(request.fields.find((field) => field.id === "fetch")).toMatchObject({
+    auto: { watch: ["key", "attempts"] },
+  })
+  for (const field of request.fields) {
+    expect(field).not.toHaveProperty("run")
+    expect(field).not.toHaveProperty("auto.ready")
+  }
+  const id = request.requestId
+  expect(ui.autoFormActions(id, {})).toEqual([])
+  const input = { key: "sk-host-only", attempts: "3", hidden: "omit", unknown: "omit" }
+  expect(ui.autoFormActions(id, input)).toEqual(["fetch"])
+  expect(checked.at(-1)).toEqual({ enabled: true, key: "sk-host-only", attempts: 3 })
+  expect(ui.autoFormActions(id, { key: "sk-host-only", attempts: "invalid" })).toEqual([])
+  expect(hiddenChecks).toBe(0)
+  expect(ui.autoFormActions(id, { ...input, enabled: false })).toEqual(["hidden-action"])
+  expect(hiddenChecks).toBe(1)
+  expect(runs).toBe(0)
+  expect(ui.respond(id, input)).toBeUndefined()
+  expect(await answer).toEqual({ enabled: true, key: "sk-host-only", attempts: 3 })
+  expect(ui.autoFormActions(id, input)).toEqual([])
+  await bus.flush()
+  expect(JSON.stringify(events)).not.toContain("sk-host-only")
+  expect(events.filter((event) => event.type === "ui.progress")).toEqual([])
+  expect(events.find((event) => event.type === "ui.resolved")?.data).toEqual({
+    requestId: id,
+    cancelled: false,
+  })
+})
+
+test("automatic form eligibility is empty for unknown, non-form and cancelled requests", async () => {
+  const { ui, next } = setup()
+  expect(ui.autoFormActions("unknown", {})).toEqual([])
+  const input = ui.api().input("Name")
+  const inputId = (await next()).data.requestId
+  expect(ui.autoFormActions(inputId, {})).toEqual([])
+  ui.cancel(inputId)
+  expect(await input).toBeUndefined()
+  const answer = ui.form(keyForm())
+  const formId = (await next()).data.requestId
+  ui.cancel(formId)
+  expect(await answer).toBeUndefined()
+  expect(ui.autoFormActions(formId, {})).toEqual([])
+})
+
+test("an aborted action cannot replace options from a newer action", async () => {
+  const { ui, next, events, bus } = setup()
+  const started = Promise.withResolvers<AbortSignal>()
+  const stale = Promise.withResolvers<FormActionResult>()
+  const answer = ui.form({
+    title: "Models",
+    fields: [
+      { type: "secret", id: "key", label: "Key" },
+      { type: "select", id: "model", label: "Model", options: [{ value: "initial" }] },
+      {
+        type: "action",
+        id: "fetch",
+        label: "Fetch",
+        run: async ({ values, signal, progress }) => {
+          if (values.key === "old-key") {
+            started.resolve(signal)
+            const result = await stale.promise
+            progress("stale response")
+            return result
+          }
+          return { options: { model: [{ value: "new" }] } }
+        },
+      },
+      {
+        type: "action",
+        id: "check",
+        label: "Check",
+        auto: { watch: ["model"], ready: (values) => values.model === "new" },
+        run: async () => ({}),
+      },
+    ],
+  })
+  const id = (await next()).data.requestId
+  const controller = new AbortController()
+  const running = ui.runFormAction(id, "fetch", { key: "old-key" }, { signal: controller.signal })
+  const signal = await started.promise
+  controller.abort()
+  expect(signal.aborted).toBe(true)
+  await ui.runFormAction(id, "fetch", { key: "new-key" })
+  expect(ui.autoFormActions(id, { model: "new" })).toEqual(["check"])
+  stale.resolve({ options: { model: [{ value: "stale" }] } })
+  await running
+  expect(ui.validateForm(id, { model: "new" })).toEqual({})
+  expect(ui.validateForm(id, { model: "stale" })).toEqual({ model: "must be one of the options" })
+  expect(ui.autoFormActions(id, { model: "new" })).toEqual(["check"])
+  expect(ui.respond(id, { model: "new" })).toBeUndefined()
+  expect(await answer).toEqual({ key: "", model: "new" })
+  await bus.flush()
+  expect(events.filter((event) => event.type === "ui.progress")).toEqual([])
+  expect(JSON.stringify(events)).not.toContain("old-key")
+  expect(JSON.stringify(events)).not.toContain("new-key")
+})
+
 test("closing a form aborts its running actions; secret inputs keep their answer out of events", async () => {
   const { ui, next, events, bus } = setup()
   const values = ui.api().form(keyForm())
@@ -256,6 +402,45 @@ test("in dialogs mode a form is asked one field at a time", async () => {
   const kinds = events.filter((e) => e.type === "ui.request").map((e) => (e.data as { kind: string }).kind)
   expect(kinds).toEqual(["input", "input", "select", "select"])
   expect(JSON.stringify(events)).not.toContain("sk-1")
+})
+
+test("dialogs mode keeps automatic actions manual", async () => {
+  const { ui, bus } = setup()
+  ui.formMode = "dialogs"
+  let readinessChecks = 0
+  let runs = 0
+  bus.subscribe(
+    (event) => {
+      if (event.type !== "ui.request" || event.data.kind !== "select") return
+      ui.respond(event.data.requestId, event.data.options[0]!)
+    },
+    { types: ["ui.request"] },
+  )
+  expect(
+    await ui.form({
+      title: "Manual",
+      fields: [
+        {
+          type: "action",
+          id: "check",
+          label: "Check",
+          auto: {
+            watch: [],
+            ready: () => {
+              readinessChecks++
+              return true
+            },
+          },
+          run: async () => {
+            runs++
+            return {}
+          },
+        },
+      ],
+    }),
+  ).toEqual({})
+  expect(readinessChecks).toBe(0)
+  expect(runs).toBe(0)
 })
 
 test("ask questions are answered with one AskAnswer per question, checked against the options", async () => {

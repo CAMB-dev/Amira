@@ -50,11 +50,141 @@ test("auth keys are stored and removed one provider at a time, owner-only on POS
   expect(setAuthKey(file, "b", "sk-b")).toBe(true)
   expect(setAuthKey(file, "a", "sk-a")).toBe(false)
   expect(setAuthKey(file, "a", "sk-a2")).toBe(true)
+  expect(read(file)).toEqual({
+    a: { type: "api_key", apiKey: "sk-a2" },
+    b: { type: "api_key", apiKey: "sk-b" },
+  })
   expect(loadAuth(file, process.platform).keys).toEqual({ a: "sk-a2", b: "sk-b" })
   if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600)
   expect(setAuthKey(file, "a", undefined)).toBe(true)
   expect(setAuthKey(file, "zz", undefined)).toBe(false)
-  expect(read(file)).toEqual({ b: { apiKey: "sk-b" } })
+  expect(read(file)).toEqual({ b: { type: "api_key", apiKey: "sk-b" } })
+})
+
+test("setting an auth key upgrades legacy entries and keeps other entries", () => {
+  const file = path.join(dir, "auth.json")
+  writeFileSync(
+    file,
+    JSON.stringify({
+      legacy: { apiKey: "sk-legacy" },
+      replacement: { apiKey: "sk-old", extra: true },
+      future: { type: "oauth", apiKey: "sk-future" },
+      untouched: { apiKey: "sk-other" },
+    }),
+  )
+  expect(setAuthKey(file, "legacy", "sk-legacy")).toBe(true)
+  expect(setAuthKey(file, "replacement", "sk-new")).toBe(true)
+  expect(() => setAuthKey(file, "future", "sk-future")).toThrow(SettingsError)
+  expect(read(file)).toEqual({
+    legacy: { type: "api_key", apiKey: "sk-legacy" },
+    replacement: { type: "api_key", apiKey: "sk-new", extra: true },
+    future: { type: "oauth", apiKey: "sk-future" },
+    untouched: { apiKey: "sk-other" },
+  })
+  expect(setAuthKey(file, "legacy", "sk-legacy")).toBe(false)
+  expect(loadAuth(file, "win32").keys).toEqual({
+    legacy: "sk-legacy",
+    replacement: "sk-new",
+    untouched: "sk-other",
+  })
+})
+
+test("setting an auth key refuses unsupported types without exposing credentials or changing bytes", () => {
+  const file = path.join(dir, "auth.json")
+  for (const type of ["oauth", "sk-secret-type", "", null, false, 0, { token: "sk-type" }, ["oauth"]]) {
+    writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          future: { type, apiKey: "sk-existing", accessToken: "sk-token" },
+          untouched: { type: "api_key", apiKey: "sk-other" },
+          legacy: { apiKey: "sk-legacy" },
+        },
+        null,
+        4,
+      )}\r\n`,
+    )
+    const before = readFileSync(file)
+    for (const apiKey of ["sk-existing", "sk-replacement"]) {
+      let error: unknown
+      try {
+        setAuthKey(file, "future", apiKey)
+      } catch (err) {
+        error = err
+      }
+      expect(error).toBeInstanceOf(SettingsError)
+      expect(error instanceof Error ? error.message : "").toBe(
+        `${file}: cannot set API key for provider "future": existing auth entry has an unsupported type`,
+      )
+      expect(readFileSync(file)).toEqual(before)
+    }
+  }
+})
+
+test("setting an auth key refuses nonplain entries without exposing credentials or changing bytes", () => {
+  const file = path.join(dir, "auth.json")
+  for (const entry of ["sk-existing", ["sk-existing"], null, 42, true, false]) {
+    writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          future: entry,
+          untouched: { type: "api_key", apiKey: "sk-other" },
+          legacy: { apiKey: "sk-legacy" },
+        },
+        null,
+        4,
+      )}\r\n`,
+    )
+    const before = readFileSync(file)
+    for (const apiKey of ["sk-existing", "sk-replacement"]) {
+      let error: unknown
+      try {
+        setAuthKey(file, "future", apiKey)
+      } catch (err) {
+        error = err
+      }
+      expect(error).toBeInstanceOf(SettingsError)
+      expect(error instanceof Error ? error.message : "").toBe(
+        `${file}: cannot set API key for provider "future": existing auth entry has an unsupported type`,
+      )
+      expect(readFileSync(file)).toEqual(before)
+    }
+    expect(setAuthKey(file, "future", undefined)).toBe(true)
+    expect(read(file)).toEqual({
+      untouched: { type: "api_key", apiKey: "sk-other" },
+      legacy: { apiKey: "sk-legacy" },
+    })
+  }
+})
+
+test("setting an auth key named constructor treats inherited properties as missing", () => {
+  const file = path.join(dir, "auth.json")
+  writeFileSync(file, JSON.stringify({ untouched: { type: "api_key", apiKey: "sk-other" } }))
+  const before = readFileSync(file)
+  expect(setAuthKey(file, "constructor", undefined)).toBe(false)
+  expect(readFileSync(file)).toEqual(before)
+  expect(setAuthKey(file, "constructor", "sk-constructor")).toBe(true)
+  expect(read(file)).toEqual({
+    untouched: { type: "api_key", apiKey: "sk-other" },
+    constructor: { type: "api_key", apiKey: "sk-constructor" },
+  })
+  expect(setAuthKey(file, "constructor", "sk-constructor")).toBe(false)
+  expect(setAuthKey(file, "constructor", undefined)).toBe(true)
+  expect(read(file)).toEqual({ untouched: { type: "api_key", apiKey: "sk-other" } })
+})
+
+test("removing an unsupported auth entry keeps other entries", () => {
+  const file = path.join(dir, "auth.json")
+  writeFileSync(
+    file,
+    JSON.stringify({
+      future: { type: "oauth", accessToken: "sk-token" },
+      untouched: { type: "api_key", apiKey: "sk-other" },
+    }),
+  )
+  expect(setAuthKey(file, "future", undefined)).toBe(true)
+  expect(read(file)).toEqual({ untouched: { type: "api_key", apiKey: "sk-other" } })
 })
 
 test("restrictToCurrentUser runs icacls for the current user on Windows only", async () => {

@@ -4,6 +4,7 @@ import {
   type EventMap,
   type ProviderAdmin,
   type ProviderDraft,
+  type ProviderVendor,
   providerFormSpec,
   type SessionControl,
 } from "@amira/api"
@@ -25,6 +26,7 @@ function fakeAdmin() {
   const calls: string[] = []
   const drafts: ProviderDraft[] = []
   const admin: ProviderAdmin = {
+    vendors: async () => [],
     dialects: () => ["openai-chat", "anthropic-messages"],
     exists: (id) => id === "deepseek",
     draft: (id) =>
@@ -78,7 +80,7 @@ const CONFIGURED: Listed = [
 
 async function setup(
   answer: (r: Request) => unknown,
-  opts: { dialogs?: boolean; current?: string; providers?: Listed } = {},
+  opts: { dialogs?: boolean; current?: string; providers?: Listed; admin?: Partial<ProviderAdmin> } = {},
 ) {
   const bus = new EventBus()
   const ext = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
@@ -90,6 +92,7 @@ async function setup(
   })
   const agent = new Agent({ ai, model: ai.model("mock/m"), cwd: "/work", bus })
   const { admin, calls, drafts } = fakeAdmin()
+  Object.assign(admin, opts.admin)
   const control = {
     info: () => ({
       id: "s1",
@@ -125,10 +128,10 @@ async function setup(
     await bus.flush()
     return { ...r, text: r.output.join("\n") }
   }
-  return { run, calls, drafts, asked, host, events }
+  return { run, calls, drafts, asked, host, events, bus }
 }
 
-test("/provider add asks for the protocol, then opens the provider form with it picked", async () => {
+test("/provider add falls back to the protocol picker when the catalog is unavailable", async () => {
   const { run, asked, drafts, calls } = await setup((r) => {
     if (r.kind === "select") return r.options[1]
     if (r.kind === "form") {
@@ -146,7 +149,7 @@ test("/provider add asks for the protocol, then opens the provider form with it 
   })
   const r = await run("/provider add")
   expect(r.ok).toBe(true)
-  // Only protocols are offered: no vendors, no presets.
+  // An empty catalog uses the existing custom protocol flow.
   expect(asked[0]).toMatchObject({
     kind: "select",
     title: "Which protocol does the provider speak?",
@@ -189,7 +192,9 @@ test("/provider add asks for the protocol, then opens the provider form with it 
     models: ["deepseek-chat", "my-own"],
     defaults: { contextWindow: 32000, thinking: false, images: false, promptCache: false },
   })
-  expect(r.text).toBe('Saved provider "ds-test".')
+  expect(r.text).toBe(
+    'Provider catalog unavailable; choose a protocol to add a custom provider.\nSaved provider "ds-test".',
+  )
 })
 
 test("/provider add <protocol> skips the question; an unknown one or a cancel saves nothing", async () => {
@@ -206,13 +211,197 @@ test("/provider add <protocol> skips the question; an unknown one or a cancel sa
 
   const unknown = await setup(() => undefined)
   expect((await unknown.run("/provider add deepseek")).error).toBe(
-    'unknown protocol "deepseek"; protocols: openai-chat, anthropic-messages',
+    'Vendor catalog unavailable (offline?); cannot look up "deepseek". Choose a protocol instead: openai-chat, anthropic-messages',
   )
   expect(unknown.asked).toEqual([])
 
   const cancelled = await setup(() => undefined)
-  expect((await cancelled.run("/provider add")).text).toBe("Cancelled; nothing was saved.")
+  expect((await cancelled.run("/provider add")).text).toBe(
+    "Provider catalog unavailable; choose a protocol to add a custom provider.\nCancelled; nothing was saved.",
+  )
   expect(cancelled.calls).toEqual([])
+})
+
+const VENDORS: ProviderVendor[] = [
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    env: ["DEEPSEEK_API_KEY", "ALTERNATE_KEY"],
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+  },
+  { id: "unsupported", name: "Unsupported vendor", env: ["OTHER_API_KEY"] },
+]
+
+test("/provider add picks a vendor and saves its catalog identity after renaming", async () => {
+  let loads = 0
+  const { run, asked, drafts, calls } = await setup(
+    (r) => {
+      if (r.kind === "select") return r.options[0]
+      if (r.kind === "form") return { id: "my-deepseek", models: ["deepseek-chat"] }
+      return undefined
+    },
+    {
+      admin: {
+        vendors: async () => {
+          loads++
+          return VENDORS
+        },
+        envIsSet: (name) => name === "ALTERNATE_KEY",
+      },
+    },
+  )
+  expect((await run("/provider add")).text).toBe('Saved provider "my-deepseek".')
+  expect(loads).toBe(1)
+  expect(asked[0]).toMatchObject({
+    kind: "select",
+    title: "Which provider do you want to add?",
+    options: [
+      "DeepSeek (deepseek)",
+      "Unsupported vendor (unsupported) — pick the protocol yourself",
+      "Custom (choose a protocol)",
+    ],
+  })
+  const form = asked[1] as Extract<Request, { kind: "form" }>
+  const fields = Object.fromEntries(form.fields.map((f) => [f.id, f as Record<string, unknown>]))
+  expect(fields.id!.default).toBe("deepseek-2")
+  expect(fields.dialect!.default).toBe("openai-chat")
+  expect(fields.baseUrl!.default).toBe("https://api.deepseek.com")
+  expect(fields.keySource!.default).toBe("env")
+  expect(fields.apiKeyEnv!.default).toBe("ALTERNATE_KEY")
+  expect(fields.catalogId).toBeUndefined()
+  expect(drafts[0]).toMatchObject({
+    id: "my-deepseek",
+    catalogId: "deepseek",
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    keySource: "env",
+    apiKeyEnv: "ALTERNATE_KEY",
+  })
+  expect(calls).toEqual(["save my-deepseek"])
+})
+
+test("an unavailable catalog explains positional vendor lookup failures", async () => {
+  const unavailable = await setup(() => undefined, { admin: { vendors: async () => [] } })
+  const result = await unavailable.run("/provider add deepseek")
+  expect(result.error).toContain("Vendor catalog unavailable (offline?)")
+  expect(result.error).toContain("Choose a protocol instead: openai-chat")
+  expect(result.error).not.toContain("unknown vendor or protocol")
+  expect(unavailable.asked).toEqual([])
+  const available = await setup(() => undefined, { admin: { vendors: async () => VENDORS } })
+  expect((await available.run("/provider add not-a-vendor")).error).toContain("unknown vendor or protocol")
+})
+
+test("loading vendors is printed while the catalog request is still pending", async () => {
+  const started = Promise.withResolvers<void>()
+  const loaded = Promise.withResolvers<void>()
+  const session = await setup(() => undefined, {
+    admin: {
+      vendors: async (opts) => {
+        opts?.onLoading?.()
+        started.resolve()
+        await loaded.promise
+        return VENDORS
+      },
+    },
+  })
+  const running = session.run("/provider add")
+  await started.promise
+  try {
+    await session.bus.flush()
+    expect(session.events).toContainEqual(
+      expect.objectContaining({
+        type: "command.output",
+        data: expect.objectContaining({ text: "Loading vendors from models.dev…" }),
+      }),
+    )
+    expect(session.asked).toEqual([])
+  } finally {
+    loaded.resolve()
+  }
+  expect((await running).text).toBe("Loading vendors from models.dev…\nCancelled; nothing was saved.")
+})
+
+test("an explicit vendor skips the picker and an unsupported vendor opens the full form", async () => {
+  const { run, asked, drafts } = await setup(
+    (r) =>
+      r.kind === "form"
+        ? { dialect: "anthropic-messages", baseUrl: "https://api.unsupported.example", models: ["m"] }
+        : undefined,
+    { admin: { vendors: async () => VENDORS } },
+  )
+  expect((await run("/provider add unsupported")).ok).toBe(true)
+  expect(asked.map((r) => r.kind)).toEqual(["form"])
+  const form = asked[0] as Extract<Request, { kind: "form" }>
+  const fields = Object.fromEntries(form.fields.map((f) => [f.id, f as Record<string, unknown>]))
+  expect(fields.id!.default).toBe("unsupported")
+  expect(fields.dialect!.options).toHaveLength(2)
+  expect(fields.baseUrl!.default).toBeUndefined()
+  expect(fields.keySource!.default).toBe("auth")
+  expect(fields.apiKeyEnv!.default).toBe("OTHER_API_KEY")
+  expect(drafts[0]).toMatchObject({ id: "unsupported", dialect: "anthropic-messages" })
+  expect(drafts[0]!.catalogId).toBeUndefined()
+})
+
+test("Custom keeps the prior protocol picker and cancelling the vendor picker saves nothing", async () => {
+  const custom = await setup(
+    (r) => {
+      if (r.kind === "select") {
+        return r.title === "Which provider do you want to add?" ? r.options.at(-1) : r.options[1]
+      }
+      if (r.kind === "form") return { id: "custom", baseUrl: "http://localhost:1234", keySource: "none" }
+      return undefined
+    },
+    { admin: { vendors: async () => VENDORS } },
+  )
+  expect((await custom.run("/provider add")).ok).toBe(true)
+  expect(custom.asked.map((r) => r.kind)).toEqual(["select", "select", "form"])
+  expect(custom.asked[1]!.title).toBe("Which protocol does the provider speak?")
+  expect(custom.drafts[0]).toMatchObject({ dialect: "anthropic-messages", keySource: "none" })
+  expect(custom.drafts[0]!.catalogId).toBeUndefined()
+
+  const cancelled = await setup(() => undefined, { admin: { vendors: async () => VENDORS } })
+  expect((await cancelled.run("/provider add")).text).toBe("Cancelled; nothing was saved.")
+  expect(cancelled.asked).toHaveLength(1)
+  expect(cancelled.calls).toEqual([])
+})
+
+test("an explicit protocol wins a vendor-id clash without fetching the catalog", async () => {
+  let loads = 0
+  const { run, asked, drafts } = await setup(
+    (r) => (r.kind === "form" ? { id: "x", baseUrl: "http://x", keySource: "none" } : undefined),
+    {
+      admin: {
+        vendors: async () => {
+          loads++
+          return [{ id: "openai-chat", name: "Clash", env: [] }]
+        },
+      },
+    },
+  )
+  expect((await run("/provider add openai-chat")).ok).toBe(true)
+  expect(loads).toBe(0)
+  expect(asked.map((r) => r.kind)).toEqual(["form"])
+  expect(drafts[0]!.catalogId).toBeUndefined()
+})
+
+test("older admins without vendors fall back to the protocol picker", async () => {
+  const { run, asked } = await setup(() => undefined, { admin: { vendors: undefined } })
+  expect((await run("/provider add")).text).toContain("Provider catalog unavailable")
+  expect(asked[0]!.title).toBe("Which protocol does the provider speak?")
+})
+
+test("/provider edit preserves catalog identity, including explicit opt-out", async () => {
+  for (const catalogId of ["vendor", false] as const) {
+    const { admin } = fakeAdmin()
+    const existing = admin.draft("deepseek")!
+    const { run, drafts } = await setup(
+      (r) => (r.kind === "form" ? { baseUrl: "https://api.deepseek.com/v1" } : undefined),
+      { admin: { draft: () => ({ ...existing, catalogId }) } },
+    )
+    expect((await run("/provider edit deepseek")).ok).toBe(true)
+    expect(drafts[0]!.catalogId).toBe(catalogId)
+  }
 })
 
 test("/provider lists only configured providers; with none it says how to add one", async () => {
@@ -244,7 +433,9 @@ test("the form refuses an id that exists and a base URL that is no URL", async (
     baseUrl: "https://api.deepseek.com",
     apiKey: "k",
   })
-  expect(fetched.message).toBe("Found 2 models; 1 are in the model catalog. Pick them in the list below.")
+  expect(fetched.message).toBe(
+    "The provider listed 2 models; models.dev adds context window and price for 1. Pick them in the list below.",
+  )
   expect(fetched.options?.models).toEqual([
     { value: "deepseek-chat", description: "128k ctx · $0.27/$1.1 per M" },
     { value: "deepseek-new", description: "not in catalog: defaults apply" },

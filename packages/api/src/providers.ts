@@ -1,9 +1,20 @@
 /** Where a provider's API key comes from. */
 export type ProviderKeySource = "auth" | "env" | "none"
 
+/** A vendor from the model catalog, with a protocol and endpoint when supported. */
+export interface ProviderVendor {
+  id: string
+  name: string
+  env: string[]
+  dialect?: string
+  baseUrl?: string
+}
+
 /** A provider as `/provider add` and `/provider edit` fill it in. */
 export interface ProviderDraft {
   id: string
+  /** Catalog vendor id when different from `id`; false disables catalog matching. */
+  catalogId?: string | false
   dialect: string
   baseUrl: string
   /** auth: stored in ~/.amira/auth.json; env: read from `apiKeyEnv`; none: no key (a local server). */
@@ -49,7 +60,9 @@ export interface ProviderTestResult {
  * exist. Keys never come back out: only a hint of the last characters of a stored one.
  */
 export interface ProviderAdmin {
-  /** The dialects (protocols) providers can speak; adding a provider starts by picking one. */
+  /** Catalog vendors; the host fetches once if missing. onLoading runs before that fetch starts. */
+  vendors?(opts?: { onLoading?: () => void }): Promise<ProviderVendor[]>
+  /** The dialects (protocols) providers can speak. */
   dialects(): string[]
   /** A provider configured now. */
   exists(id: string): boolean
