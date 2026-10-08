@@ -1,6 +1,7 @@
 import path from "node:path"
 import { parseArgs } from "node:util"
 import type { Settings } from "@amira/api"
+import { DEFAULT_PACKAGES_DISABLED } from "@amira/api"
 import { amiraHome, loadSettings } from "@amira/core"
 import {
   defaultGitCacheDir,
@@ -483,7 +484,7 @@ function formatList(
   where: { home: string; cwd: string; settings: Settings },
 ): string {
   let out = ""
-  const disabled = new Set(where.settings.packages?.disabled ?? [])
+  const disabled = new Set(where.settings.packages?.disabled ?? [...DEFAULT_PACKAGES_DISABLED])
   const trust = projectTrust(where.cwd, where.settings)
   for (const kind of ["user", "project"] as const) {
     const scope = packageScope(kind, where)

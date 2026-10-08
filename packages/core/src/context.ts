@@ -7,7 +7,16 @@ import {
   type ToolCallBlock,
   type ToolResultMessage,
 } from "@amira/ai"
-import { artifactIdOf } from "@amira/api"
+import {
+  artifactIdOf,
+  DEFAULT_AGING_AFTER_TURNS,
+  DEFAULT_AGING_ENABLED,
+  DEFAULT_AGING_KEEP_STEPS,
+  DEFAULT_AGING_KEEP_TURNS,
+  DEFAULT_AGING_MIN_SAVED_TOKENS,
+  DEFAULT_AGING_START,
+  DEFAULT_AGING_TARGET,
+} from "@amira/api"
 import { estimateTokens, isSummaryMessage } from "./compaction.ts"
 
 /**
@@ -42,36 +51,36 @@ export interface ContextOptions {
   previewChars?: number
   /** Most bytes of artifacts the session keeps. */
   quotaBytes?: number
-  /** A2 on (default true). */
+  /** A2 on (DEFAULT_DEDUPE_READS). */
   dedupeReads?: boolean
   aging?: AgingOptions
 }
 
 export interface AgingOptions {
-  /** Default true. */
+  /** See DEFAULT_AGING_ENABLED. */
   enabled?: boolean
-  /** Share of the context window that starts an aging round. Default 0.7. */
+  /** Share of the context window that starts an aging round. See DEFAULT_AGING_START. */
   start?: number
-  /** Share of the window a round frees down to. Default 0.6. */
+  /** Share of the window a round frees down to. See DEFAULT_AGING_TARGET. */
   target?: number
-  /** A round that would free less is skipped, so the prompt prefix stays. Default 8000. */
+  /** A round that would free less is skipped, so the prompt prefix stays. See DEFAULT_AGING_MIN_SAVED_TOKENS. */
   minSavedTokens?: number
-  /** Most recent user turns never aged. Default 2. */
+  /** Most recent user turns never aged. See DEFAULT_AGING_KEEP_TURNS. */
   keepTurns?: number
-  /** In a long current turn, its most recent model steps never aged. Default 2. */
+  /** In a long current turn, its most recent model steps never aged. See DEFAULT_AGING_KEEP_STEPS. */
   keepSteps?: number
-  /** Experimental: results older than this many user turns are aged whatever the pressure. 0 (default) is off. */
+  /** Experimental: results older than this many user turns are aged whatever the pressure. 0 is off; see DEFAULT_AGING_AFTER_TURNS. */
   afterTurns?: number
 }
 
 export const AGING_DEFAULTS: Required<AgingOptions> = {
-  enabled: true,
-  start: 0.7,
-  target: 0.6,
-  minSavedTokens: 8000,
-  keepTurns: 2,
-  keepSteps: 2,
-  afterTurns: 0,
+  enabled: DEFAULT_AGING_ENABLED,
+  start: DEFAULT_AGING_START,
+  target: DEFAULT_AGING_TARGET,
+  minSavedTokens: DEFAULT_AGING_MIN_SAVED_TOKENS,
+  keepTurns: DEFAULT_AGING_KEEP_TURNS,
+  keepSteps: DEFAULT_AGING_KEEP_STEPS,
+  afterTurns: DEFAULT_AGING_AFTER_TURNS,
 }
 
 /** Results smaller than this are never aged: the stub would save next to nothing. */

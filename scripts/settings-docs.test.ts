@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import * as aiDefaults from "../packages/ai/src/settings-defaults.ts"
+import * as defaults from "../packages/api/src/settings-defaults.ts"
 import { loadSettings } from "../packages/core/src/config/load.ts"
 import { validateSettings } from "../packages/core/src/config/schema.ts"
+import { DEFAULT_MAX_LOG_BYTES } from "../packages/proc/src/job-inline.ts"
+import { DEFAULT_BUFFER_CHARS, DEFAULT_MAX_RUNNING } from "../packages/proc/src/jobs.ts"
 import {
   docFiles,
   endMarker,
@@ -15,7 +19,14 @@ import {
   startMarker,
   typeFiles,
 } from "./gen-settings-docs.ts"
-import { annotations, collapsed, omitted } from "./settings-docs-data.ts"
+import { type Annotation, annotations, collapsed, extraRows, omitted } from "./settings-docs-data.ts"
+import { type DefaultKey, documentedDefault, settingsDefaults } from "./settings-docs-defaults.ts"
+
+function assertDocumentedDefaults(data: Record<string, Annotation>): void {
+  for (const key of Object.keys(settingsDefaults) as DefaultKey[]) {
+    expect(data[key]?.default, `documented default for ${key}`).toEqual(documentedDefault(key))
+  }
+}
 
 const read = (file: string) => readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n")
 const generated = (doc: string) =>
@@ -64,6 +75,56 @@ describe("settings reference", () => {
     expect(renderReference("en", settingsRows(changed))).not.toBe(generated(read(docFiles.en)))
     const added = sources().map((s) => s.replace("bell?: boolean", "bell?: boolean\n  chime?: boolean"))
     expect(() => renderReference("en", settingsRows(added))).toThrow("tui.chime")
+  })
+
+  test("every fixed documented default equals the runtime constant", () => {
+    assertDocumentedDefaults(annotations)
+    for (const key of Object.keys(settingsDefaults)) {
+      expect(
+        [...rows, ...extraRows].some((row) => row.key === key),
+        `default has no settings row: ${key}`,
+      ).toBe(true)
+    }
+  })
+
+  test("a changed documented default fails with the setting's key", () => {
+    for (const key of Object.keys(settingsDefaults)) {
+      const changed = { ...annotations, [key]: { ...annotations[key]!, default: "wrong" } }
+      expect(() => assertDocumentedDefaults(changed)).toThrow(`documented default for ${key}`)
+    }
+  })
+
+  test("new fixed defaults cannot bypass the constant checks", () => {
+    const inherited = new Set([
+      "providers.<id>.compat.webSearch",
+      "providers.<id>.catalogId",
+      "providers.<id>.models[].dialect",
+      "providers.<id>.models[].caps.webSearch",
+      "providers.<id>.models[].thinking",
+      "providers.<id>.models[].tools.edit",
+      "compact.model",
+      "agents.<role>.model",
+      "mcpServers.<name>.type",
+    ])
+    for (const [key, annotation] of Object.entries(annotations)) {
+      if (key in settingsDefaults || inherited.has(key)) continue
+      const text = typeof annotation.default === "string" ? annotation.default : annotation.default.en
+      expect(text, `missing runtime default assertion for ${key}`).toMatch(
+        /^(none|unlimited|unknown|catalog|required(?: for (?:this backend|stdio|http))?)$/,
+      )
+    }
+  })
+
+  test("dependency-independent packages keep the same defaults", () => {
+    const central = { ...defaults }
+    for (const [name, value] of Object.entries(aiDefaults)) {
+      expect(value, `ai default ${name}`).toEqual(central[name as keyof typeof aiDefaults])
+    }
+    expect(DEFAULT_MAX_RUNNING, "backgroundJobs.maxRunning").toBe(defaults.DEFAULT_BACKGROUND_MAX_RUNNING)
+    expect(DEFAULT_BUFFER_CHARS, "backgroundJobs.bufferChars").toBe(defaults.DEFAULT_BACKGROUND_BUFFER_CHARS)
+    expect(DEFAULT_MAX_LOG_BYTES, "backgroundJobs.maxLogBytes").toBe(
+      defaults.DEFAULT_BACKGROUND_MAX_LOG_BYTES,
+    )
   })
 
   test("the settings schema accepts every documented key", () => {

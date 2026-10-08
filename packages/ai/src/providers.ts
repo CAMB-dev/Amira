@@ -1,6 +1,15 @@
 import type { CatalogModel } from "./catalog.ts"
 import type { ProviderCompat } from "./dialect.ts"
 import { defaultWebSearch } from "./server-tools.ts"
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_OUTPUT,
+  DEFAULT_MODEL_IMAGES,
+  DEFAULT_MODEL_PARALLEL_TOOL_CALLS,
+  DEFAULT_MODEL_PROMPT_CACHE,
+  DEFAULT_MODEL_THINKING,
+  DEFAULT_MODEL_TOOLS,
+} from "./settings-defaults.ts"
 import type { ContextWindowSource, ModelCaps, ModelInfo } from "./types.ts"
 
 /** Model settings a provider overrides; caps are merged key by key over the defaults. */
@@ -30,11 +39,11 @@ export interface ProviderConfig {
 }
 
 export const DEFAULT_CAPS: ModelCaps = {
-  tools: "native",
-  images: false,
-  thinking: false,
-  promptCache: false,
-  parallelToolCalls: true,
+  tools: DEFAULT_MODEL_TOOLS,
+  images: DEFAULT_MODEL_IMAGES,
+  thinking: DEFAULT_MODEL_THINKING,
+  promptCache: DEFAULT_MODEL_PROMPT_CACHE,
+  parallelToolCalls: DEFAULT_MODEL_PARALLEL_TOOL_CALLS,
 }
 
 /**
@@ -45,8 +54,8 @@ export const NO_MODEL: ModelInfo = {
   id: "",
   provider: "",
   dialect: "",
-  contextWindow: 128_000,
-  maxOutput: 8_192,
+  contextWindow: DEFAULT_CONTEXT_WINDOW,
+  maxOutput: DEFAULT_MAX_OUTPUT,
   caps: DEFAULT_CAPS,
 }
 
@@ -74,7 +83,7 @@ export function resolveModelInfo(
         ? [catalog.contextWindow, "catalog"]
         : d?.contextWindow !== undefined
           ? [d.contextWindow, "settings"]
-          : [128_000, "default"]
+          : [DEFAULT_CONTEXT_WINDOW, "default"]
   const dialect = known?.dialect ?? d?.dialect ?? provider.dialect
   const caps: ModelCaps = { ...DEFAULT_CAPS, ...d?.caps, ...catalog?.caps, ...known?.caps }
   // Hosted web search: the model's caps, then the provider's compat, then on only at the vendor.
@@ -90,7 +99,7 @@ export function resolveModelInfo(
     dialect,
     contextWindow: window[0],
     contextWindowSource: window[1],
-    maxOutput: known?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? 8_192,
+    maxOutput: known?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? DEFAULT_MAX_OUTPUT,
     caps,
     ...(cost ? { cost } : {}),
   }

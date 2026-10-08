@@ -1,5 +1,6 @@
 import path from "node:path"
 import type { ExtensionAdmin, ExtensionOperationOptions, ExtensionScope } from "@amira/api"
+import { DEFAULT_PACKAGES_DISABLED } from "@amira/api"
 import { amiraHome, loadSettings } from "@amira/core"
 import { defaultGitCacheDir, GitCache } from "./git-cache.ts"
 import { type IndexOptions, loadIndex, searchIndex } from "./index-file.ts"
@@ -40,7 +41,7 @@ export function createExtensionAdmin(
   return {
     list() {
       const settings = loadSettings(location).settings
-      const disabled = new Set(settings.packages?.disabled ?? [])
+      const disabled = new Set(settings.packages?.disabled ?? [...DEFAULT_PACKAGES_DISABLED])
       const trusted = projectScopeIsUser(location) || projectTrust(where.cwd, settings) === true
       return installed().map((p) => ({
         name: p.name,

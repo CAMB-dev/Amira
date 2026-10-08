@@ -23,6 +23,7 @@ import type {
   ToolDefinition,
   ToolSession,
 } from "@amira/api"
+import { DEFAULT_MAX_PARALLEL_TOOLS } from "@amira/api"
 import { ApprovalGate } from "./agent/approvals.ts"
 import {
   type ArtifactSession,
@@ -200,7 +201,7 @@ export class Agent {
     const maxSteps = opts.maxSteps ?? 200
     const maxTokens = opts.maxTokens
     const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
-    this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? 8)
+    this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)
     this.tree = opts.tree
     this.backgroundJobs = opts.backgroundJobs?.forSession({
       sessionId: this.sessionId,

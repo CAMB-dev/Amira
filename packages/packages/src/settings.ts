@@ -1,5 +1,6 @@
 import path from "node:path"
 import type { Settings } from "@amira/api"
+import { DEFAULT_PACKAGES_TRUSTED_PROJECTS, DEFAULT_PACKAGES_UNTRUSTED_PROJECTS } from "@amira/api"
 import { amiraHome, updateSettingsFile } from "@amira/core"
 
 /**
@@ -8,11 +9,11 @@ import { amiraHome, updateSettingsFile } from "@amira/core"
  * these lists from the user file.
  */
 export function projectTrust(cwd: string, settings: Settings): boolean | undefined {
-  const trusted = settings.packages?.trustedProjects
-  const untrusted = settings.packages?.untrustedProjects
+  const trusted = settings.packages?.trustedProjects ?? DEFAULT_PACKAGES_TRUSTED_PROJECTS
+  const untrusted = settings.packages?.untrustedProjects ?? DEFAULT_PACKAGES_UNTRUSTED_PROJECTS
   // The closest directory decides: a trusted parent with an untrusted child is untrusted there.
-  const depth = (list: string[] | undefined) =>
-    Math.max(-1, ...(list ?? []).filter((dir) => within(cwd, dir)).map((dir) => norm(dir).length))
+  const depth = (list: readonly string[]) =>
+    Math.max(-1, ...list.filter((dir) => within(cwd, dir)).map((dir) => norm(dir).length))
   const yes = depth(trusted)
   const no = depth(untrusted)
   if (yes < 0 && no < 0) return undefined

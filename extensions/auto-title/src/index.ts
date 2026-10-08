@@ -1,4 +1,4 @@
-import { defineExtension, type ExtensionAPI, type Message } from "@amira/api"
+import { DEFAULT_AUTO_TITLE, defineExtension, type ExtensionAPI, type Message } from "@amira/api"
 
 const TITLE_MAX_CHARS = 60
 const TITLE_SYSTEM =
@@ -43,7 +43,12 @@ export default defineExtension((api: ExtensionAPI) => {
     const sessionId = event.sessionId
     if (!pending.get(sessionId)) return
     // Not marked as asked: a session titled by hand and cleared again may still be titled.
-    if (!session.info().file || session.info().title || api.settings.sessions?.autoTitle === false) return
+    if (
+      !session.info().file ||
+      session.info().title ||
+      (api.settings.sessions?.autoTitle ?? DEFAULT_AUTO_TITLE) === false
+    )
+      return
     pending.set(sessionId, false)
     const transcript = session
       .messages()

@@ -22,6 +22,11 @@ import {
 } from "node:fs"
 import path from "node:path"
 import type { FileMutation, FileRewindPlan, MutateFiles, Settings } from "@amira/api"
+import {
+  DEFAULT_FILE_REWIND_ENABLED,
+  DEFAULT_FILE_REWIND_MAX_FILE_BYTES,
+  DEFAULT_FILE_REWIND_QUOTA_BYTES,
+} from "@amira/api"
 import { toolPath } from "./permissions/protected.ts"
 import type { SessionEntry, SessionStore } from "./session-store.ts"
 
@@ -83,9 +88,9 @@ export class FileRewind {
     settings: Settings["fileRewind"] = {},
   ) {
     this.directory = fileHistoryDir(store.file)
-    this.enabled = settings.enabled !== false
-    this.maxFileBytes = settings.maxFileBytes ?? 10 * 1024 * 1024
-    this.quotaBytes = settings.quotaBytes ?? 256 * 1024 * 1024
+    this.enabled = (settings.enabled ?? DEFAULT_FILE_REWIND_ENABLED) !== false
+    this.maxFileBytes = settings.maxFileBytes ?? DEFAULT_FILE_REWIND_MAX_FILE_BYTES
+    this.quotaBytes = settings.quotaBytes ?? DEFAULT_FILE_REWIND_QUOTA_BYTES
   }
 
   get busy(): boolean {
