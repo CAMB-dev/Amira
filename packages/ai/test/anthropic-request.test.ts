@@ -116,6 +116,73 @@ test.each([
   expect(body).not.toHaveProperty("output_config")
 })
 
+test.each(["adaptive", "budget"] as const)(
+  "%s thinking requests readable summaries on Anthropic, with an omitted override",
+  async (thinking) => {
+    for (const thinkingDisplay of [undefined, "summarized", "omitted"] as const) {
+      const { body } = await sent(
+        { reasoning: { effort: "low" } },
+        { baseUrl: "https://api.anthropic.com", compat: { thinking, thinkingDisplay } },
+      )
+      expect(body.thinking.display).toBe(thinkingDisplay ?? "summarized")
+    }
+  },
+)
+
+test.each(["https://api.deepseek.com/anthropic", "https://api.minimax.io/anthropic"])(
+  "thinking display is opt-in on the compatible server %s",
+  async (baseUrl) => {
+    const reasoning = { effort: "low" as const }
+    for (const thinking of ["adaptive", "budget"] as const) {
+      expect(
+        (await sent({ reasoning }, { baseUrl, compat: { thinking } })).body.thinking.display,
+      ).toBeUndefined()
+      const { body } = await sent(
+        { reasoning },
+        { baseUrl, compat: { thinking, thinkingDisplay: "summarized" } },
+      )
+      expect(body.thinking.display).toBe("summarized")
+    }
+  },
+)
+
+test("a model's thinking display overrides the provider and defaultModel", async () => {
+  const provider: Partial<ProviderConfig> = {
+    baseUrl: "https://api.anthropic.com",
+    compat: { thinkingDisplay: "summarized" },
+    defaultModel: { compat: { thinkingDisplay: "summarized" } },
+    models: [{ id: "claude", caps: { thinking: true }, compat: { thinkingDisplay: "omitted" } }],
+  }
+  expect((await sent({ reasoning: { effort: "low" } }, provider)).body.thinking.display).toBe("omitted")
+  provider.models = [{ id: "claude", caps: { thinking: true } }]
+  provider.defaultModel = { compat: { thinkingDisplay: "omitted" } }
+  expect((await sent({ reasoning: { effort: "low" } }, provider)).body.thinking.display).toBe("omitted")
+})
+
+test.each(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"])(
+  "server-default thinking on %s still requests a summary without overriding effort",
+  async (id) => {
+    const seen: Seen = {}
+    const ai = anthropicAi(
+      fakeFetch(() => anthropicResponse(textReply("ok")), seen),
+      "https://api.anthropic.com",
+    )
+    const provider = ai.providers()[0]!
+    ai.registerProvider({ ...provider, models: [{ id, caps: { thinking: true } }] })
+    await collect(ai.stream({ ...anthropicRequest(ai), model: ai.model(`anth/${id}`) }))
+    expect(seen.body.thinking).toEqual({ type: "adaptive", display: "summarized" })
+    expect(seen.body.output_config).toBeUndefined()
+  },
+)
+
+test("disabled thinking never carries display, even with an explicit override", async () => {
+  const { body } = await sent(
+    { reasoning: { effort: "low" }, messages: toolTurn(false), tools: [tool("read")] },
+    { baseUrl: "https://api.anthropic.com", compat: { thinking: "budget", thinkingDisplay: "summarized" } },
+  )
+  expect(body.thinking).toEqual({ type: "disabled" })
+})
+
 test("sends no thinking when the model lacks the capability", async () => {
   const seen: Seen = {}
   const ai = anthropicAi(fakeFetch(() => anthropicResponse(textReply("ok")), seen))

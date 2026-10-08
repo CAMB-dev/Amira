@@ -199,6 +199,8 @@ export class MessagesAccumulator {
     const pick = (v: unknown, prev: number) => (typeof v === "number" ? v : prev)
     usage.input = pick(u.input_tokens, usage.input)
     usage.output = pick(u.output_tokens, usage.output)
+    const thinking = u.output_tokens_details?.thinking_tokens
+    if (typeof thinking === "number") usage.reasoning = thinking
     usage.cacheRead = pick(u.cache_read_input_tokens, usage.cacheRead)
     usage.cacheWrite = pick(u.cache_creation_input_tokens, usage.cacheWrite)
     const searches = u.server_tool_use?.web_search_requests

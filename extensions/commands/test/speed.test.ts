@@ -73,6 +73,22 @@ test("a streamed summary far shorter than the reported reasoning times thinking 
   )
 })
 
+test("Anthropic thinking counts make omitted and summarized reply speed exact", () => {
+  for (const text of ["", "short summary"]) {
+    const anthropic = message(600)
+    anthropic.model = { provider: "anthropic", model: "claude-opus-5-5" }
+    anthropic.usage!.output = 1000
+    anthropic.content.unshift({
+      type: "thinking",
+      text,
+      signature: { dialect: "anthropic-messages", value: "sig" },
+    })
+    expect(replySpeed(anthropic, { start: 0, ...(text ? { thinking: 2000 } : {}), reply: 3000 }, 5000)).toBe(
+      text ? "reply 200 tok/s · thinking ~200 tok/s" : "reply 200 tok/s (hidden reasoning)",
+    )
+  }
+})
+
 test("tool-call arguments count as the reply", () => {
   const call: AssistantMessage = {
     role: "assistant",

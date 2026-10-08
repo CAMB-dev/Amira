@@ -97,6 +97,8 @@ describe("settings reference", () => {
   test("new fixed defaults cannot bypass the constant checks", () => {
     const inherited = new Set([
       "providers.<id>.compat.webSearch",
+      "providers.<id>.compat.thinkingDisplay",
+      "providers.<id>.models[].compat.thinkingDisplay",
       "providers.<id>.catalogId",
       "providers.<id>.models[].dialect",
       "providers.<id>.models[].caps.webSearch",

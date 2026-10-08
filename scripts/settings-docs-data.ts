@@ -139,8 +139,8 @@ export const annotations: Record<string, Annotation> = {
   },
   thinking: {
     default: none,
-    en: "Reasoning effort for main conversation requests on models with `caps.thinking`. Unset sends nothing (the server default). A model's `thinking` overrides this; `--thinking` overrides both. Sub-agents inherit the parent's selected effort; titles and compaction do not.",
-    zh: "对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置时不发送参数，沿用服务端默认值。模型的 `thinking` 优先于此项，`--thinking` 优先于两者。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。",
+    en: "Reasoning effort for main conversation requests on models with `caps.thinking`. Unset leaves effort to the server; it does not turn thinking off. A model's `thinking` overrides this; `--thinking` overrides both. Sub-agents inherit the parent's selected effort; titles and compaction do not.",
+    zh: "对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置时沿用服务端默认强度，不会关闭思考。模型的 `thinking` 优先于此项，`--thinking` 优先于两者。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。",
   },
   shell: {
     default: documentedDefault("shell"),
@@ -266,8 +266,21 @@ export const annotations: Record<string, Annotation> = {
   },
   "providers.<id>.compat.thinking": {
     default: documentedDefault("providers.<id>.compat.thinking"),
-    en: '`anthropic-messages`: `"adaptive"` sends an effort, as current Claude models require; `"budget"` sends `budget_tokens`, for Claude 4.5 and older and compatible servers such as DeepSeek.',
-    zh: '`anthropic-messages`：`"adaptive"` 发送 effort，当前的 Claude 模型要求这种方式；`"budget"` 发送 `budget_tokens`，适用于 Claude 4.5 及更早的模型和 DeepSeek 等兼容服务。',
+    en: '`anthropic-messages`: `"adaptive"` uses adaptive thinking with an optional effort; `"budget"` sends `budget_tokens`, for Claude 4.5 and older and compatible servers such as DeepSeek.',
+    zh: '`anthropic-messages`：`"adaptive"` 使用自适应思考，可选 effort；`"budget"` 发送 `budget_tokens`，适用于 Claude 4.5 及更早的模型和 DeepSeek 等兼容服务。',
+  },
+  "providers.<id>.compat.thinkingDisplay": {
+    default: {
+      en: '`"summarized"` at api.anthropic.com; otherwise not sent',
+      zh: 'api.anthropic.com 使用 `"summarized"`；其他地址不发送',
+    },
+    en: '`anthropic-messages`: request readable thinking summaries (`"summarized"`) or signed blocks without text (`"omitted"`), in adaptive and budget modes. Never sent with disabled thinking. Compatible servers and proxies must opt in; `models[].compat.thinkingDisplay` overrides it.',
+    zh: '`anthropic-messages`：在 adaptive 和 budget 模式下请求可读的思考摘要（`"summarized"`），或仅含签名、不含文字的块（`"omitted"`）。禁用思考时不发送。兼容服务与代理需显式设置；`models[].compat.thinkingDisplay` 优先。',
+  },
+  "providers.<id>.models[].compat.thinkingDisplay": {
+    default: { en: "defaultModel, then the provider's", zh: "先取 defaultModel，再取 provider 设置" },
+    en: "Thinking display for this model; overrides the provider's setting. Otherwise uses defaultModel, then the provider, then the endpoint default.",
+    zh: "该模型的思考显示方式，优先于 provider 设置。未设置时依次取 defaultModel、provider、地址默认值。",
   },
   "providers.<id>.compat.compaction": {
     default: documentedDefault("providers.<id>.compat.compaction"),

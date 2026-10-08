@@ -179,6 +179,8 @@ export interface ModelInfo {
    */
   contextWindowSource?: ContextWindowSource
   maxOutput: number
+  /** Per-model thinking display; overrides the provider's compat setting. */
+  compat?: { thinkingDisplay?: "summarized" | "omitted" }
   caps: ModelCaps
   /** USD per million tokens; webSearch is USD per search request. */
   cost?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; webSearch?: number }

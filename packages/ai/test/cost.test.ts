@@ -16,6 +16,12 @@ test("prices each kind of token per million", () => {
   expect(usageCost(emptyUsage(), { input: 1, output: 2 })).toBe(0)
 })
 
+test("reasoning is included in output, not added to costs or token totals", () => {
+  const usage = { ...emptyUsage(), output: 100, reasoning: 80 }
+  expect(usageCost(usage, { input: 0, output: 10 })).toBe(0.001)
+  expect(addUsage(usage, usage).output).toBe(200)
+})
+
 test("addUsage sums costs only when there are any", () => {
   expect(addUsage(emptyUsage(), emptyUsage()).cost).toBeUndefined()
   expect(addUsage({ ...emptyUsage(), cost: 0.5 }, emptyUsage()).cost).toBe(0.5)
