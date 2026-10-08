@@ -1,4 +1,5 @@
 import type { Dialect, DialectContext } from "../dialect.ts"
+import { requestHeaders } from "../request-headers.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
 import { MessagesAccumulator } from "./anthropic-accumulate.ts"
@@ -26,12 +27,15 @@ export const anthropicMessages: Dialect = {
     let res: Response
     try {
       const payload = requestBody(req, ctx.compat)
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-        "anthropic-version": ANTHROPIC_VERSION,
-        ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
-        ...ctx.endpoint.headers,
-      }
+      const headers = requestHeaders(
+        {
+          "content-type": "application/json",
+          "anthropic-version": ANTHROPIC_VERSION,
+          ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
+        },
+        ctx.endpoint.headers,
+        ctx.userAgent,
+      )
       res = await ctx.fetch(messagesUrl(ctx.endpoint.baseUrl), {
         method: "POST",
         // Every request that carries a compaction block needs the beta that made it.

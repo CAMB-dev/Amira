@@ -37,6 +37,7 @@ import {
   withPackageSkills,
 } from "./session/settings-adapters.ts"
 import { testAiOptions } from "./test-hooks.ts"
+import { USER_AGENT } from "./user-agent.ts"
 
 export type { ApproverOptions } from "./session/approvals.ts"
 export { approvalPreview, userApprover, userAsker } from "./session/approvals.ts"
@@ -181,6 +182,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const ai =
     opts.ai ??
     createAi({
+      userAgent: USER_AGENT,
       providers: [...(opts.providers ?? []), ...(mock.providers ?? [])],
       ...(mock.dialects ? { dialects: mock.dialects } : {}),
       apiKeys: opts.apiKeys ?? {},

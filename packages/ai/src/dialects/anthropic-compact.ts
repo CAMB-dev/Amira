@@ -1,5 +1,6 @@
 import type { DialectCompaction, DialectCompactOutcome, DialectContext } from "../dialect.ts"
 import { isUnsupportedCompaction } from "../native-compaction.ts"
+import { requestHeaders } from "../request-headers.ts"
 import type { ModelError, ModelRequest, Usage } from "../types.ts"
 import { anthropicError, isRetryableStatus } from "./anthropic-errors.ts"
 import type { AnthropicMessage } from "./anthropic-messages.ts"
@@ -74,12 +75,15 @@ async function summarize(req: ModelRequest, ctx: DialectContext): Promise<Dialec
     res = await ctx.fetch(messagesUrlOf(ctx.endpoint.baseUrl), {
       method: "POST",
       headers: withBeta(
-        {
-          "content-type": "application/json",
-          "anthropic-version": "2023-06-01",
-          ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
-          ...ctx.endpoint.headers,
-        },
+        requestHeaders(
+          {
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
+          },
+          ctx.endpoint.headers,
+          ctx.userAgent,
+        ),
         COMPACT_BETA,
       ),
       body: JSON.stringify(body),

@@ -1,5 +1,6 @@
 import type { DialectCompaction, DialectCompactOutcome, DialectContext } from "../dialect.ts"
 import { isUnsupportedCompaction } from "../native-compaction.ts"
+import { requestHeaders } from "../request-headers.ts"
 import { isOpenAIVendorUrl } from "../server-tools.ts"
 import { adaptThinking } from "../thinking.ts"
 import type { ModelError, ModelRequest, StreamEvent, Usage } from "../types.ts"
@@ -87,11 +88,14 @@ async function viaEndpoint(req: ModelRequest, ctx: DialectContext): Promise<Dial
   try {
     res = await ctx.fetch(`${baseUrl.replace(/\/$/, "")}/responses/compact`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
-        ...headers,
-      },
+      headers: requestHeaders(
+        {
+          "content-type": "application/json",
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
+        },
+        headers,
+        ctx.userAgent,
+      ),
       body: JSON.stringify(payload),
       signal: ctx.signal,
     })
