@@ -3,6 +3,7 @@ import type { AnyEvent } from "@amira/api"
 import { DEFAULT_TUI_MODE } from "@amira/api"
 import { type Agent, amiraPath, listSessions, SessionStore } from "@amira/core"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
+import { consoleCodePage } from "@amira/tui-kit/console-code-page"
 import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { resolveConfig } from "./config.ts"
@@ -162,6 +163,13 @@ async function run(argv: string[]): Promise<number> {
   })
   const { agent, host, startupEvents, catalogRefresh, ai, modelNotice } = session
   agentRef = agent
+  const stopConsoleTrace = consoleCodePage.onChange(({ kind, codePage }) => {
+    const current = agentRef ?? agent
+    session.traceRecorder?.diagnostic(
+      current.sessionId,
+      `Windows console ${kind} code page changed from 65001 to ${codePage}; reasserting UTF-8`,
+    )
+  })
 
   // Announce the session once the frontend listens, the host probes workspace facts in the background.
   const announce = (a: Agent, reason: "startup" | "resume" | "clear" | "fork") => {
@@ -256,6 +264,7 @@ async function run(argv: string[]): Promise<number> {
     try {
       await Promise.race([Promise.all([disposing, catalogRefresh, exiting]), Bun.sleep(5000)])
     } finally {
+      stopConsoleTrace()
       await closeTrace(last.bus, session.traceRecorder)
     }
   }

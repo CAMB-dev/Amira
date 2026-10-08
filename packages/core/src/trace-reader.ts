@@ -69,6 +69,8 @@ function failure(value: unknown): boolean {
 function isRecord(value: Record<string, unknown>): value is Record<string, unknown> & TraceRecord {
   const { required, optional } = fields(value)
   switch (value.type) {
+    case "diagnostic":
+      return required(number, "at") && required(string, "message")
     case "trace":
       return (
         value.v === 1 &&

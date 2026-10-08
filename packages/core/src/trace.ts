@@ -15,6 +15,7 @@ interface State {
   announced: boolean
   /** The run's header, written with its first record so opening a session leaves no file behind. */
   header?: TraceRecord
+  diagnostics?: TraceRecord[]
   turns: Map<string, number>
   models: Map<string, ModelStart>
   tools: Map<string, ToolStart[]>
@@ -91,6 +92,23 @@ export class TraceRecorder {
         { sessionId },
       )
     })
+  }
+
+  /** Host-only logging, including diagnostics observed before session.start is delivered. */
+  diagnostic(sessionId: string, message: string): void {
+    if (this.#retired.has(sessionId)) return
+    const state = this.#state(sessionId)
+    const record: TraceRecord = { type: "diagnostic", at: Date.now(), message }
+    if (!state.announced) {
+      state.diagnostics ??= []
+      state.diagnostics.push(record)
+      return
+    }
+    if (state.header) state.writer?.push(state.header)
+    state.header = undefined
+    state.writer?.push(record)
+    // Diagnostics are rare and may arrive during exit, after the trace's exit listener ran.
+    state.writer?.emergencyFlush()
   }
 
   /** Flushes completed records already delivered to this subscriber, never the whole bus. */
@@ -201,6 +219,12 @@ export class TraceRecorder {
         role: child?.role,
         title: event.data.title ?? child?.title,
         startedAt: at,
+      }
+      if (state.diagnostics?.length) {
+        state.writer?.push(state.header)
+        state.header = undefined
+        for (const record of state.diagnostics) state.writer?.push(record)
+        state.diagnostics = undefined
       }
       return
     }

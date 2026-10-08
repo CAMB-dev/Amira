@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import { modes } from "../src/ansi.ts"
+import { createConsoleCodePage } from "../src/console-code-page.ts"
 import { FakeTerminal, PASSIVE_SIGNAL_LISTENER, ProcessTerminal } from "../src/terminal.ts"
 
 test("restore leaves enabled modes in reverse order, shows the cursor and leaves raw mode", () => {
@@ -50,6 +51,7 @@ describe("ProcessTerminal restores itself when the process goes away", () => {
   let file: string
   let term: ProcessTerminal
   let fd: number
+  let codePages: { output: number; input: number }
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "tui-kit-"))
@@ -59,9 +61,30 @@ describe("ProcessTerminal restores itself when the process goes away", () => {
       fd,
       columns: 80,
       rows: 24,
-      write: () => true,
+      write: () => {
+        expect(codePages).toEqual({ output: 65001, input: 65001 })
+        return true
+      },
     })
-    term = new ProcessTerminal(new PassThrough() as any, stdout as any)
+    codePages = { output: 936, input: 950 }
+    const codePage = createConsoleCodePage({
+      platform: "win32",
+      stdoutIsTTY: true,
+      stdinIsTTY: true,
+      load: () => ({
+        GetConsoleOutputCP: () => codePages.output,
+        SetConsoleOutputCP: (value) => {
+          codePages.output = value
+          return 1
+        },
+        GetConsoleCP: () => codePages.input,
+        SetConsoleCP: (value) => {
+          codePages.input = value
+          return 1
+        },
+      }),
+    })
+    term = new ProcessTerminal(new PassThrough() as any, stdout as any, codePage)
   })
 
   afterEach(() => {
@@ -71,6 +94,40 @@ describe("ProcessTerminal restores itself when the process goes away", () => {
   })
 
   const counts = () => [...signals, "exit", "uncaughtExceptionMonitor"].map((s) => process.listenerCount(s))
+
+  test("every normal write reasserts console code pages before sending UTF-8", () => {
+    term.write("❯ ● ✓ └ 中文\n")
+    codePages.output = 936
+    codePages.input = 950
+    term.write("❯ ● ✓ └ 中文\n")
+    expect(codePages).toEqual({ output: 65001, input: 65001 })
+    term.restore()
+    expect(codePages).toEqual({ output: 936, input: 950 })
+  })
+
+  test("external terminal handoff restores our changes and resume reclaims even without modes", () => {
+    term.start()
+    const resume = term.suspend()
+    expect(codePages).toEqual({ output: 936, input: 950 })
+    codePages.output = 437
+    codePages.input = 437
+    resume()
+    expect(codePages).toEqual({ output: 65001, input: 65001 })
+    term.stop()
+    expect(codePages).toEqual({ output: 936, input: 950 })
+  })
+
+  test("emergency output reasserts after callbacks and relinquishes code pages afterwards", () => {
+    term.start()
+    term.onEmergencyExit(() => {
+      codePages.output = 936
+      codePages.input = 950
+      return "❯ ● ✓ └ 中文\n"
+    })
+    process.emit("uncaughtExceptionMonitor", new Error("x"), "uncaughtException")
+    expect(readFileSync(file, "utf8")).toEndWith("❯ ● ✓ └ 中文\n")
+    expect(codePages).toEqual({ output: 936, input: 950 })
+  })
 
   test("handlers are added by start and removed by stop, once", () => {
     const before = counts()

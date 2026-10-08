@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./console-code-page": "./src/console-code-page.ts",
     "./math-source": "./src/markdown/math-source.ts"
   },
   "dependencies": {

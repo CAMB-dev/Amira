@@ -51,6 +51,39 @@ function records<T extends TraceRecord["type"]>(all: TraceRecord[], type: T) {
   return all.filter((record): record is Extract<TraceRecord, { type: T }> => record.type === type)
 }
 
+test("host diagnostics are trace-only and retain the header before early console drift", async () => {
+  const { recorder, bus, start, read } = setup()
+  const events: string[] = []
+  const off = bus.subscribe((event) => void events.push(event.type))
+  recorder.diagnostic("root", "Windows console output code page changed from 65001 to 936")
+  start(100)
+  const early = await read()
+  expect(early.map((record) => record.type)).toEqual(["trace", "diagnostic"])
+  recorder.diagnostic("root", "later host diagnostic")
+  const all = await read()
+  expect(records(all, "diagnostic")).toEqual([
+    { type: "diagnostic", at: expect.any(Number), message: expect.stringContaining("936") },
+    { type: "diagnostic", at: expect.any(Number), message: "later host diagnostic" },
+  ])
+  expect(events).toEqual(["session.start"])
+  off()
+})
+
+test("late exit diagnostics are saved synchronously even after the trace exit flush", async () => {
+  const { recorder, bus, start, file } = setup()
+  start()
+  await bus.flush()
+  recorder.emergencyFlush()
+  await recorder.close()
+  recorder.diagnostic("root", "Windows console output code page changed from 65001 to 936")
+  const saved = readFileSync(`${file}.trace.jsonl`, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+  expect(saved.map((record) => record.type)).toEqual(["trace", "diagnostic"])
+  expect(saved[1].message).toContain("936")
+})
+
 test("maps a timestamped main run with retry, parallel dispositions and compaction", async () => {
   const { start, emit, read } = setup()
   start(100)
