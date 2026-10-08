@@ -43,12 +43,15 @@ export const googleGemini: Dialect = {
   stream(req: ModelRequest, ctx: DialectContext): AsyncGenerator<StreamEvent> {
     const { apiKey, baseUrl } = ctx.endpoint
     const model = req.model.id.replace(/^models\//, "")
+    const body = geminiBody(req)
+    const config = body.generationConfig as { thinkingConfig?: { includeThoughts?: boolean } } | undefined
     return postStream({
       ctx,
       acc: new GeminiAccumulator({ provider: req.model.provider, model: req.model.id }),
       url: `${baseUrl.replace(/\/$/, "")}/models/${model}:streamGenerateContent?alt=sse`,
       headers: apiKey ? { "x-goog-api-key": apiKey } : {},
-      body: geminiBody(req),
+      body,
+      thinkingDisplay: config?.thinkingConfig?.includeThoughts ? "summarized" : undefined,
       readSSE,
       readPlain,
       errorOf: geminiError,

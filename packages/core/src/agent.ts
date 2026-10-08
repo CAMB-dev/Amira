@@ -545,7 +545,7 @@ export class Agent {
 
   /** Holds a message sent during a manual compaction for the turn that follows it. */
   #holdForCompaction(message: UserMessage, steered: boolean, turnId?: string): AfterCompaction {
-    this.#afterCompaction ??= { messages: [], prompted: false, waiters: [] }
+    this.#afterCompaction ??= { messages: [], prompted: false, waiters: [], sentAt: Date.now() }
     const next = this.#afterCompaction
     next.messages.push({ message, steered })
     if (turnId !== undefined) next.turnId = turnId
@@ -573,7 +573,7 @@ export class Agent {
       only && !more.length
         ? only.message
         : { role: "user", content: next.messages.flatMap((m) => m.message.content) }
-    this.prompt(prompt, { turnId }).then(
+    this.prompt(prompt, { turnId, sentAt: next.sentAt }).then(
       (r) => {
         for (const w of next.waiters) w.resolve(r)
       },

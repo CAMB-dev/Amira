@@ -122,7 +122,7 @@ test("a reader failure mid-stream yields one retryable error with the partial me
   })
   const ai = anthropicAi(fakeFetch(new Response(body, { headers: SSE_HEADERS })))
   const evs = await events(ai.stream(anthropicRequest(ai)))
-  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "error"])
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "start", "content.start", "text.delta", "error"])
   const e = evs.at(-1) as ErrorEvent
   expect(e.error.message).toContain("ECONNRESET")
   expect(e.retryable).toBe(true)
@@ -135,6 +135,6 @@ test("a network failure before the response is retryable", async () => {
     throw new Error("ECONNREFUSED")
   }) as unknown as typeof fetch)
   const evs = await events(ai.stream(anthropicRequest(ai)))
-  expect(evs).toHaveLength(1)
-  expect((evs[0] as ErrorEvent).retryable).toBe(true)
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  expect((evs.at(-1) as ErrorEvent).retryable).toBe(true)
 })

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import type { EventMap } from "../src/index.ts"
 
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
@@ -152,4 +153,41 @@ test("the public API exports stay stable", async () => {
     "toolResultText",
     "withSection",
   ])
+})
+
+test("the additive provider-stream event contract preserves optional timing metadata", () => {
+  const events: EventMap["message.stream"][] = [
+    { kind: "request" },
+    { kind: "request", thinkingDisplay: "summarized" },
+    { kind: "contentStart" },
+    { kind: "thinkingStart", index: 0 },
+    { kind: "thinkingEnd", index: 0 },
+    { kind: "end", outputTokens: 856 },
+  ]
+  expect(events).toMatchInlineSnapshot(`
+    [
+      {
+        "kind": "request",
+      },
+      {
+        "kind": "request",
+        "thinkingDisplay": "summarized",
+      },
+      {
+        "kind": "contentStart",
+      },
+      {
+        "index": 0,
+        "kind": "thinkingStart",
+      },
+      {
+        "index": 0,
+        "kind": "thinkingEnd",
+      },
+      {
+        "kind": "end",
+        "outputTokens": 856,
+      },
+    ]
+  `)
 })

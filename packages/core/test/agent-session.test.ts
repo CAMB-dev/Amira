@@ -517,7 +517,12 @@ test("a failed summary emits compact.failed and the turn continues uncompacted",
   await bus.flush()
   expect(r.reason).toBe("done")
   expect(events.filter((e) => e.type === "compact.failed").map((e) => e.data)).toEqual([
-    { error: "summary broke" },
+    {
+      error: "summary broke",
+      requested: true,
+      usageIncomplete: false,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
   ])
   expect(types(events).filter((t) => t.startsWith("compact."))).toEqual(["compact.start", "compact.failed"])
   expect(mock.requests[3]!.messages.length).toBe(5)

@@ -691,7 +691,7 @@ test("/status names the scope of each number: the session's output, cache and sp
   const { text } = await run("/status")
   expect(text).toMatch(/Output\s+300 tokens written by this session's replies/)
   expect(text).toMatch(/Cache\s+80% of this session's prompt tokens read from the cache/)
-  expect(text).toMatch(/Speed\s+reply \d+(\.\d)? tok\/s in this session's last reply/)
+  expect(text).toMatch(/Speed\s+output \d+(\.\d)? tok\/s · TTFT [\d.]+s \(last request\)/)
   // The sub-agents' replies count in the cost the status shows; this session's own is named too.
   expect(text).toMatch(/Cost\s+\$0\.014 with sub-agents; this session alone \$0\.010/)
   expect(text).toMatch(/Git\s+main in \/work, with uncommitted changes/)
@@ -711,7 +711,7 @@ test("/status names only the session's cost when it had no sub-agents, and a sub
   expect(text).toMatch(/Speed\s+not measured yet/)
 })
 
-test("/status tracks thinking and text separately and clears an unmeasurable last reply", async () => {
+test("/status times output from even empty content and clears a zero-duration last reply", async () => {
   const { run, bus } = await setup()
   const meta = { sessionId: "s1" }
   const model = { provider: "mock", model: "m" }
@@ -744,7 +744,7 @@ test("/status tracks thinking and text separately and clears an unmeasurable las
     clock.mockRestore()
   }
   await bus.flush()
-  expect((await run("/status")).text).toContain("reply 20 tok/s · thinking 20 tok/s")
+  expect((await run("/status")).text).toContain("output 17 tok/s · TTFT 0.10s")
 
   const shortClock = spyOn(Date, "now")
   try {
@@ -753,13 +753,13 @@ test("/status tracks thinking and text separately and clears an unmeasurable las
     await bus.flush()
     bus.emit("message.delta", { kind: "text", text: "hi" }, meta)
     await bus.flush()
-    shortClock.mockReturnValue(7100)
+    shortClock.mockReturnValue(7000)
     bus.emit("message.end", { message: reply("mock/m", 0, 2) }, meta)
   } finally {
     shortClock.mockRestore()
   }
   await bus.flush()
-  expect((await run("/status")).text).toMatch(/Speed\s+not measured yet/)
+  expect((await run("/status")).text).toMatch(/Speed\s+output speed unavailable · TTFT 0\.00s/)
 
   // A reply that only calls a tool is timed from its first arguments.
   const toolClock = spyOn(Date, "now")
@@ -780,7 +780,7 @@ test("/status tracks thinking and text separately and clears an unmeasurable las
     toolClock.mockRestore()
   }
   await bus.flush()
-  expect((await run("/status")).text).toMatch(/Speed\s+reply 100 tok\/s in this session's last reply/)
+  expect((await run("/status")).text).toMatch(/Speed\s+output 100 tok\/s · TTFT 0\.50s \(last request\)/)
 })
 
 test("/clear starts a new session; /resume switches, or asks among the other sessions", async () => {

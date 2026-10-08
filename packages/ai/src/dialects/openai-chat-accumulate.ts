@@ -8,7 +8,6 @@ import type {
   TextBlock,
   Usage,
 } from "../types.ts"
-import { emptyUsage } from "../types.ts"
 import { ToolCallAssembler } from "./openai-chat-tool-calls.ts"
 
 type ErrorEvent = Extract<StreamEvent, { type: "error" }>
@@ -18,12 +17,13 @@ export class ChatAccumulator {
   readonly message: AssistantMessage
   #text: TextBlock | undefined
   #thinking: { type: "thinking"; text: string } | undefined
-  #thinkingStarted = false
+  #thinkingIndex: number | undefined
+  #thinkingBlocks = 0
   readonly #calls = new ToolCallAssembler()
   #finish: string | undefined
 
   constructor(model: ModelRef) {
-    this.message = { role: "assistant", content: [], model, usage: emptyUsage() }
+    this.message = { role: "assistant", content: [], model }
   }
 
   /** True once a chunk said why the reply ended. */
@@ -38,9 +38,10 @@ export class ChatAccumulator {
     const delta = choice.delta ?? {}
     const reasoning: unknown = delta.reasoning_content ?? delta.reasoning
     if (typeof reasoning === "string") {
-      if (!this.#thinkingStarted) {
-        this.#thinkingStarted = true
-        yield { type: "thinking.start" }
+      if (this.#thinkingIndex === undefined) {
+        this.#thinkingIndex = this.#thinkingBlocks++
+        this.#text = undefined
+        yield { type: "thinking.start", index: this.#thinkingIndex }
       }
       if (reasoning) {
         if (!this.#thinking) {
@@ -48,8 +49,14 @@ export class ChatAccumulator {
           this.message.content.push(this.#thinking)
         }
         this.#thinking.text += reasoning
-        yield { type: "thinking.delta", text: reasoning }
       }
+      yield { type: "thinking.delta", text: reasoning }
+    }
+    if (
+      (typeof delta.content === "string" && delta.content) ||
+      (Array.isArray(delta.tool_calls) && delta.tool_calls.length)
+    ) {
+      yield* this.finishThinking()
     }
     if (typeof delta.content === "string" && delta.content) {
       if (!this.#text) {
@@ -60,7 +67,19 @@ export class ChatAccumulator {
       yield { type: "text.delta", text: delta.content }
     }
     yield* this.#calls.apply(delta.tool_calls)
-    if (choice.finish_reason) this.#finish = choice.finish_reason
+    if (choice.finish_reason) {
+      yield* this.finishThinking()
+      this.#finish = choice.finish_reason
+    }
+  }
+
+  /** Chat has no native block stops: a transition or finish closes the current reasoning block. */
+  *finishThinking(): Generator<StreamEvent> {
+    if (this.#thinkingIndex === undefined) return
+    const index = this.#thinkingIndex
+    this.#thinkingIndex = undefined
+    this.#thinking = undefined
+    yield { type: "thinking.end", index }
   }
 
   fail(error: ModelError, retryable: boolean): ErrorEvent {

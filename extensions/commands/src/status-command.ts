@@ -5,16 +5,8 @@ import {
   hasUnpricedSearch,
   modelLabel,
 } from "@amira/api"
-import {
-  cacheHitRate,
-  costByModel,
-  formatCost,
-  formatTokens,
-  type ReplyTiming,
-  replySpeed,
-  table,
-  windowLabel,
-} from "./format.ts"
+import { cacheHitRate, costByModel, formatCost, formatTokens, table, windowLabel } from "./format.ts"
+import { trackSpeed } from "./status-speed.ts"
 
 /**
  * Creates /status and installs the event tracking it needs. Tracking is installed when this
@@ -45,31 +37,7 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
     return workspace.get(sessionId)
   }
 
-  // For /status: time thinking and the answer separately in each top-level session's last reply.
-  // Sub-agents (their events carry parentSessionId) are left out.
-  const timing = new Map<string, ReplyTiming>()
-  const speed = new Map<string, string>()
-  api.on("message.start", (e) => {
-    if (e.parentSessionId === undefined) timing.set(e.sessionId, { start: e.ts })
-  })
-  api.on("message.delta", (e) => {
-    if (e.parentSessionId !== undefined) return
-    const t = timing.get(e.sessionId)
-    if (!t) return
-    if (e.data.kind === "thinking") {
-      if (e.data.text) t.thinking ??= e.ts
-    } else if (e.data.kind === "toolCall" ? e.data.argsDelta : e.data.kind === "text" && e.data.text) {
-      t.reply ??= e.ts
-    }
-  })
-  api.on("message.end", (e) => {
-    if (e.parentSessionId !== undefined) return
-    const t = timing.get(e.sessionId)
-    timing.delete(e.sessionId)
-    const tps = t === undefined ? undefined : replySpeed(e.data.message, t, e.ts)
-    speed.delete(e.sessionId)
-    if (tps !== undefined) speed.set(e.sessionId, tps)
-  })
+  const speed = trackSpeed(api)
 
   return {
     name: "status",
@@ -124,7 +92,6 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
         { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       )
       const cacheRate = cacheHitRate(usage.input, usage.cacheRead, usage.cacheWrite)
-      const tps = speed.get(info.id)
       const context =
         info.contextTokens !== undefined
           ? `${formatTokens(info.contextTokens)} of ${formatTokens(info.contextWindow)} tokens (${Math.round((info.contextTokens / info.contextWindow) * 100)}%)`
@@ -153,7 +120,7 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
               ? "nothing sent yet"
               : `${Math.round(cacheRate * 100)}% of this session's prompt tokens read from the cache`,
           ],
-          ["Speed", tps === undefined ? "not measured yet" : `${tps} in this session's last reply`],
+          ...speed(info.id),
           ["Cost", cost],
           ["Shell", info.shell],
           ...(info.permissions

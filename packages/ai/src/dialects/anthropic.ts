@@ -36,13 +36,24 @@ export const anthropicMessages: Dialect = {
         ctx.endpoint.headers,
         ctx.userAgent,
       )
-      res = await ctx.fetch(messagesUrl(ctx.endpoint.baseUrl), {
+      const init = {
         method: "POST",
         // Every request that carries a compaction block needs the beta that made it.
         headers: carriesCompaction(payload.messages) ? withBeta(headers, COMPACT_BETA) : headers,
         body: JSON.stringify(payload),
         signal: ctx.signal,
-      })
+      }
+      const thinking = payload.thinking as { type: string; display?: "summarized" | "omitted" } | undefined
+      const official =
+        URL.canParse(ctx.endpoint.baseUrl) && new URL(ctx.endpoint.baseUrl).hostname === "api.anthropic.com"
+      const thinkingDisplay =
+        thinking?.display ?? (official || thinking?.type === "disabled" ? undefined : "raw")
+      if (ctx.signal.aborted) {
+        yield aborted()
+        return
+      }
+      yield { type: "request.start", ...(thinkingDisplay ? { thinkingDisplay } : {}) }
+      res = await ctx.fetch(messagesUrl(ctx.endpoint.baseUrl), init)
     } catch (e) {
       if (ctx.signal.aborted) yield aborted()
       else yield acc.fail({ message: `request failed: ${(e as Error).message}` }, true)

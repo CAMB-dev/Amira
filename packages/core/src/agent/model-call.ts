@@ -122,6 +122,21 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
         options.emit("status.changed", { status: "working" })
       }
       switch (ev.type) {
+        case "request.start":
+          options.emit("message.stream", { kind: "request", thinkingDisplay: ev.thinkingDisplay })
+          break
+        case "content.start":
+          options.emit("message.stream", { kind: "contentStart", index: ev.index })
+          break
+        case "thinking.end":
+          options.emit("message.stream", { kind: "thinkingEnd", index: ev.index })
+          break
+        case "request.end":
+          options.emit("message.stream", {
+            kind: "end",
+            outputTokens: ev.message.usage?.outputReported === false ? undefined : ev.message.usage?.output,
+          })
+          break
         case "retry":
           retrying = true
           options.emit("model.retry", {
@@ -141,7 +156,7 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
           options.emit("message.delta", { kind: "text", text: ev.text })
           break
         case "thinking.start":
-          // Reasoning has begun, but there is no visible delta to forward to the UI.
+          options.emit("message.stream", { kind: "thinkingStart", index: ev.index })
           break
         case "thinking.delta":
           options.emit("message.delta", { kind: "thinking", text: ev.text })
@@ -160,6 +175,10 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
           options.emit("message.delta", { kind: "serverTool", block: ev.block })
           break
         case "done":
+          options.emit("message.stream", {
+            kind: "end",
+            outputTokens: ev.message.usage?.outputReported === false ? undefined : ev.message.usage?.output,
+          })
           final = ev.message
           // A reply that ends well after the turn was interrupted is still an interrupted
           // one: a dialect may finish what it had already read without looking at the signal.
@@ -169,6 +188,10 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
           }
           break
         case "error":
+          options.emit("message.stream", {
+            kind: "end",
+            outputTokens: ev.message.usage?.outputReported === false ? undefined : ev.message.usage?.output,
+          })
           final = ev.message
           if (ev.error.code === "aborted" || options.signal.aborted) aborted = true
           else {

@@ -482,6 +482,10 @@ host 注册表向内置 host 代码提供 `maxRunning`、`configure`、`stopAll`
 
 事件包括 `session.start`（携带可选的初始 `title`）、`workspace.changed`、`tool.execute.start` 和 `tool.execute.end`（两者都带有工具的 `traits`，写文件工具还带有它报告的 `writtenPaths`）。监听器收到的事件封装包含数据和会话 ID，维护会话状态时应按会话筛选。重新加载后，新注册的监听器会收到当前会话、工作区、预算事件以及最新的 `ui.focus` 和 `ui.waiting` 状态。等待状态以 visibility 变化重放，不会再次宣布问题打开。自行创建的原生资源仍需自行清理。
 
+`message.stream` 新增结构化计时事件，不改变可见的 `message.delta` 类型。`kind` 为 `request`（每次 provider 请求尝试发送前产生，可选 `thinkingDisplay: "summarized" | "omitted" | "raw"` 取自实际请求）、`contentStart`、`thinkingStart`、`thinkingEnd`（可选块 `index`），或 `end`（最后一个 provider 事件，可选上报的 `outputTokens`）。没有可读文字的块也会产生边界。使用封装中的 `ts`，而非监听器执行时间；重试的请求分别计时。可选的 `turn.start.sentAt` 在提示等待压缩时保留最初发送时间。RPC schema 也描述了这些新增字段；客户端应容忍新事件类型和缺失的可选字段。`Usage.outputReported: false` 区分仅搜索用量元数据与明确上报的零输出；输出量已上报时省略该字段。`compact.failed` 现在可携带 `usage` 与 `requested`；`compact.end` 和 `compact.failed` 可携带 `usageIncomplete`，表示部分请求未上报计数，避免把部分合计当成完整合计。
+
+跨事件计时或维护状态时，使用可选的 `api.onEvents(types, handler)`。选定类型通过同一有序队列送达，并包含该订阅的 `events.lost`、重放匹配的当前状态事件；卸载时移除。单独的 `api.on` 订阅各有自己的队列，不能保证不同类型之间的顺序。没有 `onEvents` 的 host 无法提供有序计时收集器。
+
 `api.terminal` 是稳定的结构化能力，提供 `setTitle(title: string)`、`setProgress(state: "none" | "indeterminate" | "paused")` 和 `bell()`，不暴露原始写入或转义序列。在 print 和 RPC 前端，这些方法不执行任何操作。TUI 清理标题中的控制字符，将其限制为 128 个终端单元格，在帧写入之外的微任务边界合并输出，遵守 `tui.title`、`tui.progress` 和 `tui.bell` 设置，检测进度支持，并在退出时恢复终端。
 
 内置 `@amira/ext-terminal-status` 负责标题组合、工作与等待进度以及响铃策略；`--no-builtins` 会禁用它。问题（包括本地 rewind 对话框）、表单及覆盖视图变化后，TUI 发出 `ui.waiting`：`{ pending: number, hidden: boolean, change: "opened" | "resolved" | "visibility" }`。`hidden` 表示覆盖视图挡住了待回答的问题。隐藏问题打开时只响铃一次，可见性变化不再响铃。焦点通过 `ui.focus` 传递；完成回合或打开可见问题时，窗口失焦则响铃，焦点未知则在回合持续 15 秒后响铃。中断的回合不响铃。

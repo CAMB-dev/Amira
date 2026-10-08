@@ -73,6 +73,8 @@ export type ToolResultContent = TextBlock | ImageBlock
 export interface Usage {
   input: number
   output: number
+  /** False when usage contains only non-token metadata, not a reported output count. */
+  outputReported?: boolean
   /** Reasoning tokens included in output, when reported by the provider. */
   reasoning?: number
   cacheRead: number
@@ -215,10 +217,18 @@ export interface ModelError {
 
 export type StreamEvent =
   | { type: "start" }
+  /** An actual provider request is about to be sent, once per attempt. */
+  | { type: "request.start"; thinkingDisplay?: "summarized" | "omitted" | "raw" }
+  /** A failed attempt that will be retried; terminal done/error covers the final attempt. */
+  | { type: "request.end"; message: AssistantMessage }
+  /** The provider started a native content block or output item, even if it stays empty. */
+  | { type: "content.start"; index?: number }
   | { type: "text.delta"; text: string }
   /** A reasoning block began; may be followed by no visible text. */
-  | { type: "thinking.start" }
+  | { type: "thinking.start"; index?: number }
   | { type: "thinking.delta"; text: string }
+  /** A reasoning block stopped, or the provider transitioned to answer/tool output. */
+  | { type: "thinking.end"; index?: number }
   | {
       type: "toolCall.delta"
       /** May change once while streaming (placeholder, then the real id); key on index instead. */

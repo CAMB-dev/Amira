@@ -247,7 +247,18 @@ Closing stdin waits for active work, including background results and their foll
 
 ## Status and costs
 
-`/status` reports the model and provider, session ID and file, context use and window, output tokens, cache hit rate, last-reply speed, known costs, shell, permission mode and rule count, and Git workspace. The speed shows reply and thinking tokens per second separately; `~` marks an estimate: tokens counted from the text because the provider reported no separate reasoning count, or thinking timed from the request because only a summary of it streamed. `(hidden reasoning)` means the model reasoned without streaming its thinking. With a reported reasoning count, reply speed is `(output − reasoning) / seconds from first reply delta to message end`; summary thinking speed uses `reasoning / seconds from request start to first reply delta` and remains approximate because that interval includes request latency. The TUI activity line shows elapsed turn time and output tokens, not tok/s; its streaming token estimate is replaced by reported output (including reasoning) as each reply ends. The footer has no speed display. Resumed sessions include usage from earlier runs. The status bar reports tree usage since the current run started; `/status` can include the stored session and its sub-agents.
+`/status` reports the model and provider, session, context use, output tokens, cache hit rate, costs, permissions and workspace. Speed occupies up to three short lines: total output speed and TTFT for the last provider request, an optional thinking/reply split, and effective TPS for the last completed turn.
+
+All durations use our event timestamps, in seconds. Let `O` be reported `usage.output`, `R` reported `usage.reasoning` (already included in `O`), `T` the interval from the first content block start or delta to the last provider event, and `H` the sum of thinking-block start/end durations:
+
+- **Output speed:** `O / T`. This is the primary metric, including thinking and tool-call output.
+- **TTFT:** first content event minus request sent. An empty thinking block or delta counts; this is not time to first visible answer text. Retries start a new request clock.
+- **Split:** thinking `R / H`; reply `(O − R) / (T − H)`. These require reported reasoning counts, complete block timing, and omitted thinking display or raw streamed reasoning. Requested summaries suppress the split: server buffering makes its timings meaningless. Summary mode comes from the request metadata, never from summary length.
+- **Turn effective TPS:** sum of reported output over the turn’s provider requests divided by prompt-sent-to-turn-end wall time, including tools, retry waits and compaction. It excludes sub-agents and background title requests.
+
+Missing output counts use marked text estimates (`~`); a reported total output count remains exact even when reasoning counts are missing. Missing reasoning counts retain marked split estimates for raw or omitted displays. Unknown display mode has no split. No split is invented when reported reasoning has incomplete block timing.
+
+The TUI activity line shows elapsed turn time and output tokens, not tok/s; its streaming estimate is replaced by reported output as each reply ends. The footer has no speed display. Resumed sessions include earlier usage, but speed is measured only from events in this run. The status bar reports tree usage since the current run started; `/status` can include stored session and sub-agent costs.
 
 `/cost` reports this session's replies by model, and compaction and session-title requests separately; it does not aggregate child-agent costs. Use `/status` and `/agents` for those. Costs depend on known model pricing and reported usage; unknown prices are identified, and totals with unpriced rows are partial estimates. Provider billing remains the source for actual charges.
 
