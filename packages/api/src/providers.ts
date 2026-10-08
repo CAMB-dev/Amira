@@ -60,8 +60,8 @@ export interface ProviderTestResult {
  * exist. Keys never come back out: only a hint of the last characters of a stored one.
  */
 export interface ProviderAdmin {
-  /** Catalog vendors; the host fetches once if the catalog is missing. Empty means use the custom flow. */
-  vendors?(): Promise<ProviderVendor[]>
+  /** Catalog vendors; the host fetches once if missing. onLoading runs before that fetch starts. */
+  vendors?(opts?: { onLoading?: () => void }): Promise<ProviderVendor[]>
   /** The dialects (protocols) providers can speak. */
   dialects(): string[]
   /** A provider configured now. */

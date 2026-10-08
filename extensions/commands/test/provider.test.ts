@@ -128,7 +128,7 @@ async function setup(
     await bus.flush()
     return { ...r, text: r.output.join("\n") }
   }
-  return { run, calls, drafts, asked, host, events }
+  return { run, calls, drafts, asked, host, events, bus }
 }
 
 test("/provider add falls back to the protocol picker when the catalog is unavailable", async () => {
@@ -211,7 +211,7 @@ test("/provider add <protocol> skips the question; an unknown one or a cancel sa
 
   const unknown = await setup(() => undefined)
   expect((await unknown.run("/provider add deepseek")).error).toBe(
-    'unknown vendor or protocol "deepseek"; protocols: openai-chat, anthropic-messages',
+    'Vendor catalog unavailable (offline?); cannot look up "deepseek". Choose a protocol instead: openai-chat, anthropic-messages',
   )
   expect(unknown.asked).toEqual([])
 
@@ -279,6 +279,47 @@ test("/provider add picks a vendor and saves its catalog identity after renaming
     apiKeyEnv: "ALTERNATE_KEY",
   })
   expect(calls).toEqual(["save my-deepseek"])
+})
+
+test("an unavailable catalog explains positional vendor lookup failures", async () => {
+  const unavailable = await setup(() => undefined, { admin: { vendors: async () => [] } })
+  const result = await unavailable.run("/provider add deepseek")
+  expect(result.error).toContain("Vendor catalog unavailable (offline?)")
+  expect(result.error).toContain("Choose a protocol instead: openai-chat")
+  expect(result.error).not.toContain("unknown vendor or protocol")
+  expect(unavailable.asked).toEqual([])
+  const available = await setup(() => undefined, { admin: { vendors: async () => VENDORS } })
+  expect((await available.run("/provider add not-a-vendor")).error).toContain("unknown vendor or protocol")
+})
+
+test("loading vendors is printed while the catalog request is still pending", async () => {
+  const started = Promise.withResolvers<void>()
+  const loaded = Promise.withResolvers<void>()
+  const session = await setup(() => undefined, {
+    admin: {
+      vendors: async (opts) => {
+        opts?.onLoading?.()
+        started.resolve()
+        await loaded.promise
+        return VENDORS
+      },
+    },
+  })
+  const running = session.run("/provider add")
+  await started.promise
+  try {
+    await session.bus.flush()
+    expect(session.events).toContainEqual(
+      expect.objectContaining({
+        type: "command.output",
+        data: expect.objectContaining({ text: "Loading vendors from models.dev…" }),
+      }),
+    )
+    expect(session.asked).toEqual([])
+  } finally {
+    loaded.resolve()
+  }
+  expect((await running).text).toBe("Loading vendors from models.dev…\nCancelled; nothing was saved.")
 })
 
 test("an explicit vendor skips the picker and an unsupported vendor opens the full form", async () => {
@@ -392,7 +433,9 @@ test("the form refuses an id that exists and a base URL that is no URL", async (
     baseUrl: "https://api.deepseek.com",
     apiKey: "k",
   })
-  expect(fetched.message).toBe("Found 2 models; 1 are in the model catalog. Pick them in the list below.")
+  expect(fetched.message).toBe(
+    "The provider listed 2 models; models.dev adds context window and price for 1. Pick them in the list below.",
+  )
   expect(fetched.options?.models).toEqual([
     { value: "deepseek-chat", description: "128k ctx · $0.27/$1.1 per M" },
     { value: "deepseek-new", description: "not in catalog: defaults apply" },

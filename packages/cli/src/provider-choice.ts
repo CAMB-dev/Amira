@@ -25,8 +25,16 @@ export async function providerChoice(
 ): Promise<ProviderFormInitial | undefined> {
   const protocols = admin.dialects()
   if (name && protocols.includes(name)) return { dialect: name }
-  const vendors = (await admin.vendors?.()) ?? []
+  const vendors =
+    (await admin.vendors?.({
+      onLoading: () => io.stderr("Loading vendors from models.dev…\n"),
+    })) ?? []
   if (name) {
+    if (!vendors.length) {
+      throw new UsageError(
+        `Vendor catalog unavailable (offline?); cannot look up "${name}". Choose a protocol instead: ${protocols.join(", ")}`,
+      )
+    }
     const vendor = vendors.find((v) => v.id === name)
     if (!vendor) {
       const close = closeIds(

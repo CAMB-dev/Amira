@@ -85,13 +85,16 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
   }
   const config = (id: string) => ai.providers().find((p) => p.id === id)
   let vendorRefresh: Promise<ModelCatalog | undefined> | undefined
-  const vendors = async () => {
+  const vendors = async (request: { onLoading?: () => void } = {}) => {
     let catalog = ai.catalog?.()
     if (!catalog?.vendors?.().length) {
-      vendorRefresh ??= refreshCatalog({
-        file: path.join(home, "cache", "models.json"),
-        ...opts.catalog,
-      })
+      if (!vendorRefresh) {
+        request.onLoading?.()
+        vendorRefresh = refreshCatalog({
+          file: path.join(home, "cache", "models.json"),
+          ...opts.catalog,
+        })
+      }
       const refreshed = await vendorRefresh
       if (refreshed) {
         ai.setCatalog?.(refreshed)
@@ -99,8 +102,19 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       }
     }
     return (catalog?.vendors?.() ?? [])
-      .map((v) => ({ id: v.id, name: v.name, env: v.env, ...vendorPreset(v) }))
+      .map((v) => ({
+        id: v.id,
+        name: v.name,
+        env: v.env,
+        ...(v.api?.includes("${") ? { baseUrl: v.api.trim().replace(/\/+$/, "") } : {}),
+        ...vendorPreset(v),
+      }))
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+  }
+
+  const checkPlaceholders = (baseUrl: string) => {
+    const placeholder = /\$\{[^}]*\}?/.exec(baseUrl)?.[0]
+    if (placeholder) throw new Error(`replace ${placeholder} in the base URL with its value`)
   }
 
   /** The key a probe of the draft should use: the one typed, the stored one, or the variable's. */
@@ -110,6 +124,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     return d.apiKey || storedKeys()[d.id] || undefined
   }
   const endpoint = (d: ProviderDraft): ProbeEndpoint => {
+    checkPlaceholders(d.baseUrl)
     const current = config(d.id)
     const key = keyFor(d)
     return {
@@ -170,6 +185,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     if (!dialectIds(ai).includes(d.dialect)) {
       throw new Error(`unknown dialect "${d.dialect}"; one of: ${dialectIds(ai).join(", ")}`)
     }
+    checkPlaceholders(d.baseUrl)
     let url: URL
     try {
       url = new URL(d.baseUrl)

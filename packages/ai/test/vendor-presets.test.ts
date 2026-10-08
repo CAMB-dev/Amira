@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: Catalog URL placeholders are literal fixtures.
 import { expect, test } from "bun:test"
 import { type CatalogVendor, createCatalog, vendorPreset } from "../src/index.ts"
 import { listModels, testConnection } from "../src/probe.ts"
@@ -50,6 +51,21 @@ test.each([
   ["@ai-sdk/google", "https://api.example/custom/gemini/", "https://api.example/custom/gemini"],
 ])("%s normalizes %s to %s", (npm, api, expected) => {
   expect(vendorPreset(vendor(npm!, api))?.baseUrl).toBe(expected)
+})
+
+test.each([
+  ["@ai-sdk/openai-compatible", "${NEON_AI_GATEWAY_BASE_URL}/v1", "openai-chat"],
+  [
+    "@ai-sdk/openai-compatible",
+    "https://gateway.ai.cloudflare.com/v1/${CLOUDFLARE_ACCOUNT_ID}/${CLOUDFLARE_GATEWAY_ID}/compat",
+    "openai-chat",
+  ],
+  ["@ai-sdk/openai", "${OPENAI_BASE_URL}", "openai-responses"],
+  ["@ai-sdk/anthropic", "${ANTHROPIC_BASE_URL}", "anthropic-messages"],
+  ["@ai-sdk/google", "${GOOGLE_BASE_URL}", "google-gemini"],
+])("%s preserves placeholders in %s without expanding them", (npm, api, dialect) => {
+  expect(vendorPreset(vendor(npm!, api))).toEqual({ dialect, baseUrl: api })
+  expect(vendorPreset(vendor(npm!, ` ${api}/// `))).toEqual({ dialect, baseUrl: api })
 })
 
 test.each([

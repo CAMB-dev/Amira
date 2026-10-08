@@ -114,8 +114,16 @@ async function add(ctx: CommandContext, choice: string | undefined) {
   if (choice !== undefined && dialects.includes(choice)) {
     initial.dialect = choice
   } else {
-    const vendors = (await a.vendors?.()) ?? []
+    const vendors =
+      (await a.vendors?.({
+        onLoading: () => ctx.print("Loading vendors from models.dev…"),
+      })) ?? []
     if (choice !== undefined) {
+      if (!vendors.length) {
+        throw new Error(
+          `Vendor catalog unavailable (offline?); cannot look up "${choice}". Choose a protocol instead: ${dialects.join(", ")}`,
+        )
+      }
       const vendor = vendors.find((v) => v.id === choice)
       if (!vendor) {
         throw new Error(`unknown vendor or protocol "${choice}"; protocols: ${dialects.join(", ")}`)
