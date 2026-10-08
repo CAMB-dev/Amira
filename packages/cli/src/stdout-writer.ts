@@ -1,3 +1,5 @@
+import { consoleCodePage } from "@amira/tui-kit/console-code-page"
+
 export type ToStdoutWorker = { seq: number; text: string }
 export type FromStdoutWorker =
   | { type: "ready" }
@@ -45,7 +47,10 @@ export function stdoutWriter(opts: StdoutWriterOptions = {}): StdoutWriter {
   const fallback = () => {
     worker?.terminate()
     worker = undefined
-    for (const item of queue.splice(0)) process.stdout.write(item.text)
+    for (const item of queue.splice(0)) {
+      consoleCodePage.ensure()
+      process.stdout.write(item.text)
+    }
     inflight = 0
     wake()
   }
@@ -92,6 +97,8 @@ export function stdoutWriter(opts: StdoutWriterOptions = {}): StdoutWriter {
   return {
     write(text) {
       if (closed) return Promise.resolve()
+      // Console CPs are shared across threads; assert before posting each worker batch too.
+      consoleCodePage.ensure()
       if (!worker) {
         process.stdout.write(text)
         return Promise.resolve()

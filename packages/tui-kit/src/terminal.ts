@@ -1,6 +1,7 @@
 import { writeSync } from "node:fs"
 import { constants } from "node:os"
 import { cursor, modes, RESET, type TerminalMode } from "./ansi.ts"
+import { type ConsoleCodePage, consoleCodePage, createConsoleCodePage } from "./console-code-page.ts"
 
 /**
  * Marks a signal listener that only cleans up (e.g. kills background jobs) and leaves ending
@@ -135,6 +136,13 @@ export class ProcessTerminal extends BaseTerminal {
   constructor(
     private stdin: Stdin = process.stdin,
     private stdout: Stdout = process.stdout,
+    private codePage: ConsoleCodePage = stdout === process.stdout
+      ? consoleCodePage
+      : createConsoleCodePage({
+          platform: process.platform,
+          stdoutIsTTY: !!stdout.isTTY,
+          stdinIsTTY: !!stdin.isTTY,
+        }),
   ) {
     super()
     this.size = this.readSize()
@@ -154,12 +162,22 @@ export class ProcessTerminal extends BaseTerminal {
   }
 
   write(data: string): void {
+    this.codePage.ensure()
     this.stdout.write(this.outputFilter(data))
+  }
+
+  override restore(): void {
+    try {
+      super.restore()
+    } finally {
+      this.codePage.restore()
+    }
   }
 
   /** Starts reading input and watching the size. */
   start(): void {
     if (this.cleanup.length > 0) return
+    this.codePage.ensure()
     const onData = (data: string | Buffer) => this.input.emit(data.toString())
     this.stdin.setEncoding("utf8")
     this.stdin.on("data", onData)
@@ -191,6 +209,7 @@ export class ProcessTerminal extends BaseTerminal {
   }
 
   protected applyRawMode(on: boolean): void {
+    if (on) this.codePage.ensure()
     if (this.stdin.isTTY) this.stdin.setRawMode(on)
   }
 
@@ -199,6 +218,7 @@ export class ProcessTerminal extends BaseTerminal {
   }
 
   protected override resumeInput(): void {
+    this.codePage.ensure()
     if (this.cleanup.length) this.stdin.resume()
   }
 
@@ -227,6 +247,7 @@ export class ProcessTerminal extends BaseTerminal {
     const restoreNow = () => {
       const fd = (this.stdout as { fd?: number }).fd ?? 1
       try {
+        this.codePage.ensure()
         writeSync(fd, this.outputFilter(this.takeRestoreSequence()))
       } catch {}
       this.setRawMode(false)
@@ -234,9 +255,12 @@ export class ProcessTerminal extends BaseTerminal {
       this.lastWords.clear()
       for (const fn of words) {
         try {
-          writeSync(fd, this.outputFilter(fn()))
+          const text = this.outputFilter(fn())
+          this.codePage.ensure()
+          writeSync(fd, text)
         } catch {}
       }
+      this.codePage.restore()
     }
     const onUncaught = () => {
       if (process.listenerCount("uncaughtException") > 0) return

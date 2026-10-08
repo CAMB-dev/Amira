@@ -44,6 +44,19 @@ const usage = (overrides: Partial<Usage> = {}): Usage => ({
   ...overrides,
 })
 
+test("host diagnostics change neither the timing nor the agent accounting", () => {
+  const summary = summarizeTrace([
+    header(),
+    { type: "diagnostic", at: 10, message: "Windows console output code page changed to 936" },
+  ])
+  expect(summary.wallTimeMs).toBe(0)
+  expect(summary.tools).toEqual({})
+  expect(summary.failures).toEqual([])
+  expect(summary.modelTimeMs).toBe(0)
+  expect(summary.toolTimeMs).toBe(0)
+  expect(summary.usage.input).toBe(0)
+})
+
 test("empty traces have zero metrics, no times, and no invented price", () => {
   const summary = summarizeTrace([])
   expect(summary.wallTimeMs).toBe(0)
