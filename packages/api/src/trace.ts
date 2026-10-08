@@ -364,6 +364,7 @@ export function summarizeTrace(records: TraceRecord[]): TraceSummary {
       runs.push([])
       continue
     }
+    if (record.type === "diagnostic") continue
     if ("at" in record) time(record.at)
     else {
       time(record.start)

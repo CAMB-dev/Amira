@@ -44,12 +44,12 @@ const usage = (overrides: Partial<Usage> = {}): Usage => ({
   ...overrides,
 })
 
-test("host diagnostics contribute a timestamp but no agent accounting", () => {
+test("host diagnostics change neither the timing nor the agent accounting", () => {
   const summary = summarizeTrace([
     header(),
     { type: "diagnostic", at: 10, message: "Windows console output code page changed to 936" },
   ])
-  expect(summary.wallTimeMs).toBe(10)
+  expect(summary.wallTimeMs).toBe(0)
   expect(summary.tools).toEqual({})
   expect(summary.failures).toEqual([])
   expect(summary.modelTimeMs).toBe(0)
