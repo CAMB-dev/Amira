@@ -26,7 +26,7 @@ export const anthropicMessages: Dialect = {
     }
     let res: Response
     try {
-      const payload = requestBody(req, ctx.compat)
+      const payload = requestBody(req, ctx.compat, ctx.endpoint.baseUrl)
       const headers = requestHeaders(
         {
           "content-type": "application/json",

@@ -172,6 +172,40 @@ test("merges usage from message_start and message_delta", async () => {
   })
 })
 
+test("reads raw thinking tokens included in output from streamed usage", async () => {
+  const evs = await run(() =>
+    anthropicResponse([
+      messageStart(),
+      blockStart(0, { type: "thinking", thinking: "", signature: "" }),
+      blockDelta(0, { type: "thinking_delta", thinking: "" }),
+      blockDelta(0, { type: "signature_delta", signature: "sig" }),
+      blockStop(0),
+      messageDelta("end_turn", { output_tokens: 100, output_tokens_details: { thinking_tokens: 80 } }),
+      messageStop,
+    ]),
+  )
+  expect((last(evs) as DoneEvent).message.usage).toMatchObject({ output: 100, reasoning: 80 })
+})
+
+test.each([undefined, 0, 80])(
+  "keeps the last thinking usage count (%j), including zero",
+  async (thinking) => {
+    const evs = await run(() =>
+      anthropicResponse([
+        messageStart({ output_tokens: 100, output_tokens_details: { thinking_tokens: 20 } }),
+        messageDelta("end_turn", {
+          output_tokens: 100,
+          ...(thinking !== undefined ? { output_tokens_details: { thinking_tokens: thinking } } : {}),
+        }),
+        messageDelta("end_turn", { output_tokens_details: { thinking_tokens: "invalid" } }),
+        messageDelta("end_turn", { output_tokens: 100 }),
+        messageStop,
+      ]),
+    )
+    expect((last(evs) as DoneEvent).message.usage).toMatchObject({ output: 100, reasoning: thinking ?? 20 })
+  },
+)
+
 test("maps stop reasons", async () => {
   const stopOf = async (reason: string) => {
     const e = last(await run(() => anthropicResponse(textReply("hi", reason))))

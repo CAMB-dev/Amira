@@ -241,13 +241,13 @@ RPC 在 stdin 和 stdout 使用 JSON Lines，不能与 `-p` 或命令行提示�
 
 参数和界面回答格式以生成的 schema 为准。例如确认框使用布尔 `value`；显式 `null` 取消对话框，省略 `value` 则无效。请求等待回答时，客户端仍可发送后续输入行。如果慢速客户端收到 `events.lost`，用 `state` 与 `session.read` 重新同步。工作期间持续读取 stdout。
 
-`thinking.set` 必须显式提供 `level`；缺失或无效时返回 `invalid_params`。`default` 表示不发送推理强度，覆盖命令行参数和设置，而非恢复它们。其响应和 `state` 包含 `supportsThinking`，并用 `thinkingLevel` 表示有效强度（即使模型不支持思考）；只有向当前模型发送强度时才包含 `thinking`。使用服务端默认值时，两个强度字段均省略。
+`thinking.set` 必须显式提供 `level`；缺失或无效时返回 `invalid_params`。`default` 表示不发送推理强度，覆盖命令行参数和设置，而非恢复它们。其响应和 `state` 包含 `supportsThinking`，并用 `thinkingLevel` 表示有效强度（即使模型不支持思考）；只有向当前模型发送强度时才包含 `thinking`。使用服务端默认值时，两个强度字段均省略。`default` 不会关闭思考：Claude 5.x 默认开启思考，Amira 没有 `off` 选项。Anthropic 不允许 Opus 5.5、Fable 和 Mythos 禁用思考；Sonnet 5.5 需使用 `between_tools` 才能跳过回复前的思考（仍可在工具调用之间思考）。
 
 关闭 stdin 后，Amira 会等待正在进行的工作，包括后台结果及其触发的后续轮次；无人能回答的对话框会取消。需要对话框的命令应在结束前保持 stdin 打开。
 
 ## 状态与费用
 
-`/status` 显示模型、provider、会话 ID 与文件、上下文用量和窗口、输出 token、缓存命中率、最近回复速度、已知费用、shell、权限模式与规则数量，以及 Git 工作区。速度分别显示回复和思考每秒的 token 数；`~` 表示估算值：provider 没有单独上报推理 token 数时按文字估算 token 数，只流式输出了推理摘要时思考速度从发出请求开始计时。`(hidden reasoning)` 表示模型进行了推理但没有流式输出思考内容。恢复的会话会包含之前运行的用量。状态栏显示本次运行以来的 agent 树用量；`/status` 可以包含已保存会话及其子 agent 的费用。
+`/status` 显示模型、provider、会话 ID 与文件、上下文用量和窗口、输出 token、缓存命中率、最近回复速度、已知费用、shell、权限模式与规则数量，以及 Git 工作区。速度分别显示回复和思考每秒的 token 数；`~` 表示估算值：provider 没有单独上报推理 token 数时按文字估算 token 数，只流式输出了推理摘要时思考速度从发出请求开始计时。`(hidden reasoning)` 表示模型进行了推理但没有流式输出思考内容。有推理 token 数时，回复速度为 `(输出 − 推理) / 从首个回复 delta 到消息结束的秒数`；思考摘要的速度使用 `推理 / 从请求开始到首个回复 delta 的秒数`，由于包含请求延迟，仍标为估算。TUI 活动行显示整轮耗时和输出 token 数，不显示 tok/s；每条回复结束后，用上报的输出量（包含推理）替换流式文字估算。底部状态栏不显示速度。恢复的会话会包含之前运行的用量。状态栏显示本次运行以来的 agent 树用量；`/status` 可以包含已保存会话及其子 agent 的费用。
 
 `/cost` 按模型列出当前会话回复的费用，并单独列出压缩和会话标题请求的用量，不合计子 agent 费用；子 agent 信息见 `/status` 与 `/agents`。费用依赖已知模型定价和上报用量：未知价格会明确标出，含未知价格行的合计只是部分估算。实际收费以 provider 账单为准。
 

@@ -76,6 +76,7 @@ export function resolveModelInfo(
   const known = provider.models?.find((m) => m.id === modelId)
   const d = provider.defaultModel
   const cost = known?.cost ?? catalog?.cost ?? d?.cost
+  const compat = { ...d?.compat, ...known?.compat }
   const window: [number, ContextWindowSource] =
     known?.contextWindow !== undefined
       ? [known.contextWindow, "settings"]
@@ -102,5 +103,6 @@ export function resolveModelInfo(
     maxOutput: known?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? DEFAULT_MAX_OUTPUT,
     caps,
     ...(cost ? { cost } : {}),
+    ...(Object.keys(compat).length ? { compat } : {}),
   }
 }

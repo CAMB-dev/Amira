@@ -82,7 +82,7 @@ export function replySpeed(
     (n, b) => n + (b.type === "thinking" ? estimateTokens(b.text) : 0),
     0,
   )
-  // A reported count far above what streamed means only a summary streamed (OpenAI Responses):
+  // A reported count far above what streamed means only a summary streamed (OpenAI or Anthropic):
   // the reasoning ran before the summary began, so time it from the request and mark it.
   const summary = reasoning !== undefined && streamed < reasoning / 2
   const thought =
