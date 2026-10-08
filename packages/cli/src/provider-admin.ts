@@ -225,6 +225,9 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         entryFor(cur ?? {}, d, catalogId && catalogId !== d.id ? catalogId : undefined),
       )
       const lines = [`Saved provider "${d.id}" (${d.dialect}, ${d.baseUrl}) to ${settingsFile}.`]
+      if (catalogId && catalogId !== d.id && catalogId !== catalogProviderId({ id: d.id })) {
+        lines.push(`Model details from ${catalogId} (metadata only; model list unchanged).`)
+      }
       let key: string | undefined
       if (d.keySource === "auth") {
         if (d.apiKey) {
