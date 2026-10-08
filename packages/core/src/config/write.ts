@@ -88,8 +88,8 @@ export function setAuthKey(file: string, id: string, apiKey: string | undefined)
       if (current === undefined) return false
       delete next[id]
     } else {
-      if (isPlainObject(current) && current.apiKey === apiKey) return false
-      next[id] = { ...(isPlainObject(current) ? current : {}), apiKey }
+      if (isPlainObject(current) && current.type === "api_key" && current.apiKey === apiKey) return false
+      next[id] = { ...(isPlainObject(current) ? current : {}), type: "api_key", apiKey }
     }
     writeJsonAtomic(file, next, 0o600)
     return true

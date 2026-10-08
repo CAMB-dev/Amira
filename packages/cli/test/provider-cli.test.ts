@@ -12,6 +12,38 @@ beforeEach(() => {
   home = mkdtempSync(path.join(os.tmpdir(), "amira-pcli-"))
   cwd = path.join(home, "work")
   mkdirSync(cwd)
+  mkdirSync(path.join(home, "cache"))
+  writeFileSync(
+    path.join(home, "cache", "models.json"),
+    JSON.stringify({
+      fetchedAt: Date.now(),
+      data: {
+        deepseek: {
+          id: "deepseek",
+          name: "DeepSeek",
+          env: ["DEEPSEEK_API_KEY"],
+          npm: "@ai-sdk/openai-compatible",
+          api: "https://api.deepseek.com",
+          models: {},
+        },
+        google: {
+          id: "google",
+          name: "Google",
+          env: ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+          npm: "@ai-sdk/google",
+          models: {},
+        },
+        unusual: {
+          id: "unusual",
+          name: "Unusual",
+          env: ["UNUSUAL_KEY"],
+          npm: "@vendor/unknown",
+          api: "https://unknown.example",
+          models: {},
+        },
+      },
+    }),
+  )
 })
 afterEach(() => rmSync(home, { recursive: true, force: true }))
 
@@ -47,6 +79,8 @@ test("provider add from piped stdin asks field by field and saves", async () => 
     env: {},
     interactive: false,
     readLine: script([
+      "custom", // vendor
+      "", // protocol
       "ds-test", // id
       "", // dialect: the first, openai-chat
       "https://api.deepseek.com",
@@ -71,7 +105,7 @@ test("provider add from piped stdin asks field by field and saves", async () => 
     baseUrl: "https://api.deepseek.com",
     models: [{ id: "deepseek-chat" }, { id: "deepseek-reasoner" }],
   })
-  expect(auth()).toEqual({ "ds-test": { apiKey: KEY } })
+  expect(auth()).toEqual({ "ds-test": { type: "api_key", apiKey: KEY } })
 })
 
 test("provider edit shows the prefilled form; remove and key work without a session", async () => {
@@ -210,7 +244,7 @@ test("provider add --key-stdin stores the piped key in auth.json and never print
     { io: out, home, cwd, env: {}, interactive: false, readLine: script([` ${KEY} `]) },
   )
   expect(code).toBe(0)
-  expect(auth()).toEqual({ g: { apiKey: KEY } })
+  expect(auth()).toEqual({ g: { type: "api_key", apiKey: KEY } })
   expect(settings().providers.g).toEqual({
     dialect: "google-gemini",
     baseUrl: "https://llm.example.com/v1beta",
@@ -251,14 +285,17 @@ test("provider add refuses unknown protocols, clashing flags and ids that exist"
   const { io: out } = io()
   const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: noInput }
   const full = ["--id", "x", "--base-url", "http://x", "--no-key"]
-  await expect(runProviderAdminCommand(["add", "deepseek", ...full], opts)).rejects.toThrow(
-    'unknown protocol "deepseek"; protocols: openai-chat, openai-responses, anthropic-messages, google-gemini',
+  await expect(runProviderAdminCommand(["add", "not-a-vendor", ...full], opts)).rejects.toThrow(
+    'unknown vendor or protocol "not-a-vendor"; protocols: openai-chat, openai-responses, anthropic-messages, google-gemini',
   )
   await expect(
     runProviderAdminCommand(["add", "openai-chat", ...full, "--key-env", "K"], opts),
   ).rejects.toThrow("pass one of --key-env, --key-stdin and --no-key")
   await expect(runProviderAdminCommand(["add", "openai-chat", "--key-stdin"], opts)).rejects.toThrow(
-    "--key-stdin needs the protocol, --id and --base-url too",
+    "--key-stdin needs a supported vendor, or a protocol with --id and --base-url",
+  )
+  await expect(runProviderAdminCommand(["add", "--key-stdin"], opts)).rejects.toThrow(
+    "--key-stdin needs a supported vendor, or a protocol with --id and --base-url",
   )
   await expect(runProviderAdminCommand(["add", "openai-chat", "--id"], opts)).rejects.toThrow(
     "--id needs a value",
@@ -290,4 +327,180 @@ test("line dialogs: numbers, the default, and retries", async () => {
   expect(seen.stderr).toContain("Type a number from 1 to 2.")
   expect(await d.input("Name", { initial: "keep" })).toBe("keep")
   expect(await d.input("More")).toBeUndefined()
+})
+
+test("vendor flags fill the endpoint and id without asking; renamed ids retain catalog facts", async () => {
+  const { io: out, out: seen } = io()
+  const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: noInput }
+  expect(await runProviderAdminCommand(["add", "deepseek", "--key-env", "DEEPSEEK_API_KEY"], opts)).toBe(0)
+  expect(settings().providers.deepseek).toEqual({
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+  })
+  expect(seen.stderr).toBe("")
+  expect(
+    await runProviderAdminCommand(
+      ["add", "deepseek", "--id", "mine", "--base-url", "https://proxy.example/v1", "--no-key"],
+      opts,
+    ),
+  ).toBe(0)
+  expect(settings().providers.mine).toEqual({
+    dialect: "openai-chat",
+    baseUrl: "https://proxy.example/v1",
+    catalogId: "deepseek",
+  })
+  expect(
+    await runProviderAdminCommand(["add", "google", "--key-stdin"], {
+      ...opts,
+      readLine: script([KEY]),
+    }),
+  ).toBe(0)
+  expect(auth()).toEqual({ google: { type: "api_key", apiKey: KEY } })
+  expect(seen.stdout + seen.stderr).not.toContain(KEY)
+})
+
+test("the terminal starts with a filterable vendor list including Custom", async () => {
+  const shown: FormSpec[] = []
+  const { io: out } = io()
+  expect(
+    await runProviderAdminCommand(["add"], {
+      io: out,
+      home,
+      cwd,
+      env: {},
+      interactive: true,
+      runForm: async (spec) => {
+        shown.push(spec)
+        return shown.length === 1 ? { vendor: "deepseek" } : undefined
+      },
+    }),
+  ).toBe(1)
+  expect(shown[0]?.title).toBe("Choose a vendor")
+  const list = shown[0]?.fields[0]
+  if (list?.type !== "select") throw new Error("expected a filterable select")
+  expect(list.options).toContainEqual({ value: "deepseek", label: "DeepSeek (deepseek)" })
+  expect(list.options).toContainEqual({ value: "", label: "Custom (choose a protocol)" })
+  expect(shown[1]?.title).toBe("Add a provider")
+  expect(shown[1]?.fields.find((f) => f.id === "baseUrl")).toMatchObject({
+    default: "https://api.deepseek.com",
+  })
+})
+
+test("vendor forms suggest a free id and select only the name of a set environment variable", async () => {
+  writeFileSync(
+    path.join(home, "settings.json"),
+    JSON.stringify({
+      providers: { google: { dialect: "google-gemini", baseUrl: "https://existing.example/v1beta" } },
+    }),
+  )
+  let shown: FormSpec | undefined
+  const { io: out, out: seen } = io()
+  expect(
+    await runProviderAdminCommand(["add", "google"], {
+      io: out,
+      home,
+      cwd,
+      env: { GEMINI_API_KEY: KEY },
+      interactive: true,
+      runForm: async (spec) => {
+        shown = spec
+        return {
+          id: "renamed-google",
+          dialect: "google-gemini",
+          baseUrl: "https://proxy.example/v1beta",
+          keySource: "env",
+          apiKeyEnv: "GEMINI_API_KEY",
+          models: [],
+        }
+      },
+    }),
+  ).toBe(0)
+  const fields = Object.fromEntries(shown!.fields.map((f) => [f.id, f]))
+  expect(fields.id).toMatchObject({ default: "google-2" })
+  expect(fields.dialect).toMatchObject({ default: "google-gemini" })
+  expect(fields.baseUrl).toMatchObject({ default: "https://generativelanguage.googleapis.com/v1beta" })
+  expect(fields.keySource).toMatchObject({ default: "env" })
+  expect(fields.apiKeyEnv).toMatchObject({ default: "GEMINI_API_KEY" })
+  expect(settings().providers["renamed-google"].catalogId).toBe("google")
+  expect(JSON.stringify(shown) + seen.stdout + seen.stderr).not.toContain(KEY)
+})
+
+test("vendor picker supports piped ids and lists close matches before retrying", async () => {
+  const { io: out, out: seen } = io()
+  expect(
+    await runProviderAdminCommand(["add"], {
+      io: out,
+      home,
+      cwd,
+      env: {},
+      interactive: false,
+      readLine: script([
+        "deepsek",
+        "deepseek", // vendor retry
+        "",
+        "",
+        "", // prefilled id, protocol, endpoint
+        "3", // no key
+        "2", // no fetch
+        "1", // models: done
+        "",
+        "",
+        "1", // no defaults, no test, save
+      ]),
+    }),
+  ).toBe(0)
+  expect(seen.stderr).toContain("DeepSeek (deepseek)")
+  expect(seen.stderr).toContain("Unusual (unusual) — pick the protocol yourself")
+  expect(seen.stderr).toContain("Close matches: deepseek")
+  expect(settings().providers.deepseek.baseUrl).toBe("https://api.deepseek.com")
+})
+
+test("unsupported vendor keeps id and key hints but asks for protocol and URL", async () => {
+  let shown: FormSpec | undefined
+  const { io: out } = io()
+  expect(
+    await runProviderAdminCommand(["add", "unusual"], {
+      io: out,
+      home,
+      cwd,
+      env: {},
+      interactive: true,
+      runForm: async (spec) => {
+        shown = spec
+        return undefined
+      },
+    }),
+  ).toBe(1)
+  const fields = Object.fromEntries(shown!.fields.map((f) => [f.id, f]))
+  expect(fields.id).toMatchObject({ default: "unusual" })
+  expect(fields.baseUrl).not.toHaveProperty("default")
+  expect(fields.keySource).toMatchObject({ default: "auth" })
+  expect(fields.apiKeyEnv).toMatchObject({ default: "UNUSUAL_KEY" })
+})
+
+test("an offline missing catalog falls straight into Custom with one note", async () => {
+  rmSync(path.join(home, "cache"), { recursive: true })
+  let calls = 0
+  const { io: out, out: seen } = io()
+  expect(
+    await runProviderAdminCommand(["add"], {
+      io: out,
+      home,
+      cwd,
+      env: {},
+      interactive: false,
+      catalog: {
+        fetch: (async () => {
+          calls++
+          throw new Error("offline")
+        }) as unknown as typeof fetch,
+      },
+      readLine: script([undefined]),
+    }),
+  ).toBe(1)
+  expect(calls).toBe(1)
+  expect(seen.stderr).toContain("Vendor catalog unavailable; choose a custom provider.")
+  expect(seen.stderr).toContain("Which protocol does the provider speak?")
+  expect(seen.stderr).not.toContain("Choose a vendor")
 })

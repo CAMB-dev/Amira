@@ -451,13 +451,36 @@ test("fully defined entries such as deepseek and deepseek-anthropic load unchang
   ])
 })
 
-test("auth.json keys load, and bad entries are errors", () => {
+test("auth.json typed and legacy API keys load, and bad entries are errors", () => {
   const file = path.join(home, "auth.json")
   expect(loadAuth(file, "win32")).toEqual({ keys: {}, warnings: [] })
-  put(file, { deepseek: { apiKey: "sk-1" }, other: { apiKey: "sk-2" } })
+  put(file, { deepseek: { type: "api_key", apiKey: "sk-1" }, other: { apiKey: "sk-2" } })
   expect(loadAuth(file, "win32")).toEqual({ keys: { deepseek: "sk-1", other: "sk-2" }, warnings: [] })
   put(file, { deepseek: { key: "sk-1" } })
   expect(() => loadAuth(file, "win32")).toThrow('"deepseek.apiKey" is required')
+  put(file, { deepseek: { type: "api_key" } })
+  expect(() => loadAuth(file, "win32")).toThrow('"deepseek.apiKey" is required')
+})
+
+test("auth.json unknown types warn by provider and are ignored without exposing credentials", () => {
+  const file = path.join(home, "auth.json")
+  put(file, {
+    supported: { type: "api_key", apiKey: "sk-valid" },
+    future: { type: "oauth", apiKey: "sk-secret", accessToken: "secret-token" },
+    noKey: { type: "oauth", accessToken: "another-secret" },
+    invalidType: { type: { secret: "secret-type" }, apiKey: "hidden-key" },
+  })
+  const loaded = loadAuth(file, "win32")
+  expect(loaded.keys).toEqual({ supported: "sk-valid" })
+  expect(loaded.warnings).toEqual([
+    `${file}: unknown auth type for provider "future" (ignored)`,
+    `${file}: unknown auth type for provider "noKey" (ignored)`,
+    `${file}: unknown auth type for provider "invalidType" (ignored)`,
+  ])
+  const shown = JSON.stringify(loaded)
+  for (const secret of ["sk-secret", "secret-token", "another-secret", "secret-type", "hidden-key"]) {
+    expect(shown).not.toContain(secret)
+  }
 })
 
 test("auth.json readable by others is reported on POSIX", () => {

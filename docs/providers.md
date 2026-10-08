@@ -2,7 +2,7 @@
 
 [简体中文](zh/providers.md) · [Documentation](../README.md)
 
-A provider combines a protocol, an endpoint and credentials. Amira has no built-in providers: add one before sending your first task. You choose models as `provider/model`, where the provider name is the ID you assigned.
+A provider combines a protocol, an endpoint and credentials. Add one before sending your first task; vendor defaults from the models.dev catalog help you configure it. You choose models as `provider/model`, where the provider name is the ID you assigned.
 
 ## Choose a protocol
 
@@ -17,9 +17,9 @@ Use the base URL your service supplies for that protocol. A compatible chat endp
 
 ## Add, edit and remove
 
-In an interactive session, `/provider` lists configured providers and their key availability. `/provider add` asks for a protocol, then opens the provider form. You can preselect it with `/provider add openai-chat`.
+In an interactive session, `/provider` lists configured providers and their key availability. `/provider add` opens a vendor-first list, searchable by name or ID, from the models.dev catalog. Select a supported vendor to prefill the ID, protocol and base URL; all remain editable. If the ID is already in use, Amira suggests a suffix such as `-2`. Choose `Custom` for a local or unlisted service, then select a protocol and enter its URL. If the catalog is unavailable offline, use `Custom`. Unsupported vendors require a manually chosen protocol and URL. You can preselect a vendor with `/provider add deepseek` or keep the explicit protocol flow with `/provider add openai-chat`.
 
-Fill in the ID, base URL and key source. Choose **Fetch models** to request a model list, or enter model IDs yourself. Choose **Test connection** to send a small request with the first selected model. These two actions contact the provider; opening or saving the form does not test it. **Save** writes the provider to the user settings and makes it available immediately.
+Review the ID, protocol, base URL and key source. The default is a stored API key with a masked input. If one of the vendor's listed environment variables is set, the form instead selects environment authentication and shows only its name, not its value. Otherwise, the first listed variable name is prefilled when you choose environment authentication. Choose **Fetch models** to request a model list, or enter model IDs yourself. Choose **Test connection** to send a small request with the first selected model. Both remain opt-in and contact the provider; opening or saving the form does not fetch models or test it. **Save** writes the provider to the user settings and makes it available immediately.
 
 Use `/model` to choose a model from the configured list, or `/model <provider/model>` to select one directly. The list is a convenience: an unlisted model ID can also be selected. After saving the first provider, Amira selects its first model if the session has no model yet and the provider has a model list.
 
@@ -41,7 +41,13 @@ amira provider remove <id>
 amira provider help
 ```
 
-For setup without questions, provide a protocol, ID, URL and exactly one key option. This example uses an environment variable; replace the endpoint and model with your service's values:
+`amira provider add <vendor-or-protocol>` accepts a catalog vendor ID or a protocol; protocol names win if the names clash. For a supported vendor, this command uses its defaults without asking questions:
+
+```sh
+amira provider add deepseek --key-env DEEPSEEK_API_KEY
+```
+
+Use `--id`, `--base-url` and `--model` to override the vendor's ID, URL and models. Unsupported vendors require an explicit protocol and URL. The existing protocol flow is unchanged: for setup without questions, provide a protocol, ID, URL and exactly one key option. Replace the endpoint and model below with your service's values:
 
 ```sh
 amira provider add openai-chat --id my-provider --base-url https://api.example.com/v1 --key-env MY_PROVIDER_API_KEY --model my-model
@@ -51,9 +57,9 @@ Repeat the model option to list multiple models. The other key options are `--ke
 
 ## Credentials and settings
 
-You can store a key in `~/.amira/auth.json`, read it from an environment variable, or use no key. The interactive key field is masked. `AMIRA_HOME` changes the user directory, including the locations of settings and stored credentials.
+You can store an API key in `~/.amira/auth.json`, read it from an environment variable, or use no key. OAuth is not supported. The interactive key field is masked. `AMIRA_HOME` changes the user directory, including the locations of settings and stored credentials.
 
-For an environment key, set the variable in the process environment before starting Amira. The configuration stores its name in `apiKeyEnv`, not its value. Requests try that variable, then the variables in `apiKeyEnvFallbacks` in order, then the stored key for that provider. No vendor-specific environment variable is assumed automatically.
+For an environment key, set the variable in the process environment before starting Amira. The configuration stores its name in `apiKeyEnv`, not its value. Requests try that variable, then the variables in `apiKeyEnvFallbacks` in order, then the stored key for that provider. Vendor setup offers the environment variable names listed in the catalog; custom protocol setup requires you to supply the name.
 
 For example, in PowerShell:
 

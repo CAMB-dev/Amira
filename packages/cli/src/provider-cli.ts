@@ -15,9 +15,10 @@ import {
 import { amiraHome, authFile, loadAuth, loadSettings, providersFromSettings } from "@amira/core"
 import { runFormScreen } from "@amira/tui"
 import { UsageError } from "./args.ts"
-import { readCatalogCache } from "./catalog.ts"
+import { type CatalogCacheOptions, readCatalogCache } from "./catalog.ts"
 import type { PrintIO } from "./print.ts"
 import { createProviderAdmin } from "./provider-admin.ts"
+import { providerChoice } from "./provider-choice.ts"
 import { PROVIDER_USAGE as USAGE } from "./provider-command.ts"
 
 /** Reads one answer from the user; undefined at the end of input. */
@@ -36,6 +37,8 @@ export interface ProviderCliOptions {
   readLine?: ReadLine
   /** Replaces the admin built from the settings; for tests. */
   admin?: ProviderAdmin
+  /** Catalog download options; tests supply a fake fetch. */
+  catalog?: CatalogCacheOptions
 }
 
 /** The flags of `amira provider add`; with all of them no question is asked. */
@@ -55,7 +58,7 @@ const VALUE_FLAGS: Record<string, "id" | "baseUrl" | "keyEnv" | "model"> = {
   "--model": "model",
 }
 
-/** Splits `add` arguments into the protocol and the flags (`--flag value` or `--flag=value`). */
+/** Splits `add` arguments into the vendor/protocol and flags (`--flag value` or `--flag=value`). */
 function parseAdd(args: string[]): { protocol?: string; flags: AddFlags } {
   const flags: AddFlags = { keyStdin: false, noKey: false, models: [] }
   const positional: string[] = []
@@ -93,13 +96,18 @@ function parseAdd(args: string[]): { protocol?: string; flags: AddFlags } {
 function draftFromFlags(
   protocol: string | undefined,
   f: AddFlags,
+  initial: ProviderFormInitial = {},
 ): Omit<ProviderDraft, "apiKey"> | undefined {
   const keyGiven = f.keyEnv !== undefined || f.keyStdin || f.noKey
-  if (!protocol || !f.id || !f.baseUrl || !keyGiven) return undefined
+  const id = f.id ?? initial.id
+  const baseUrl = f.baseUrl ?? initial.baseUrl
+  const dialect = protocol ?? initial.dialect
+  if (!dialect || !id || !baseUrl || !keyGiven) return undefined
   return {
-    id: f.id,
-    dialect: protocol,
-    baseUrl: f.baseUrl.trim().replace(/\/+$/, ""),
+    id,
+    dialect,
+    baseUrl: baseUrl.trim().replace(/\/+$/, ""),
+    ...(initial.catalogId && initial.catalogId !== id ? { catalogId: initial.catalogId } : {}),
     keySource: f.keyEnv !== undefined ? "env" : f.keyStdin ? "auth" : "none",
     ...(f.keyEnv !== undefined ? { apiKeyEnv: f.keyEnv } : {}),
     models: f.models,
@@ -108,8 +116,13 @@ function draftFromFlags(
 }
 
 /** What the form starts with when the flags leave something out. */
-function formInitial(protocol: string | undefined, f: AddFlags): ProviderFormInitial {
+function formInitial(
+  protocol: string | undefined,
+  f: AddFlags,
+  initial: ProviderFormInitial,
+): ProviderFormInitial {
   return {
+    ...initial,
     ...(protocol ? { dialect: protocol } : {}),
     ...(f.id ? { id: f.id } : {}),
     ...(f.baseUrl ? { baseUrl: f.baseUrl } : {}),
@@ -122,7 +135,8 @@ function formInitial(protocol: string | undefined, f: AddFlags): ProviderFormIni
 /**
  * `amira provider add | edit | remove | key`, the same as /provider in a session: forms show
  * full screen on a terminal and are asked line by line from piped stdin. `add` with the
- * protocol, --id, --base-url and a key flag asks nothing. Undefined for other subcommands.
+ * vendor and a key flag, or protocol, --id, --base-url and a key flag, asks nothing.
+ * Undefined for other subcommands.
  */
 export async function runProviderAdminCommand(
   argv: string[],
@@ -140,11 +154,6 @@ export async function runProviderAdminCommand(
     if (extra.length || unknown.length)
       throw new UsageError(`unexpected "${[...extra, ...unknown].join(" ")}"\n\n${USAGE}`)
   }
-  const complete = added ? draftFromFlags(added.protocol, added.flags) : undefined
-  if (added?.flags.keyStdin && !complete) {
-    throw new UsageError(`--key-stdin needs the protocol, --id and --base-url too\n\n${USAGE}`)
-  }
-
   const { io } = opts
   const interactive = opts.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY)
   const lines = opts.readLine ? undefined : stdinLines(io)
@@ -157,11 +166,20 @@ export async function runProviderAdminCommand(
     const home = opts.home ?? amiraHome()
     const { admin, model } = opts.admin
       ? { admin: opts.admin, model: undefined }
-      : await adminFor(home, opts.cwd ?? process.cwd(), opts.env ?? process.env)
+      : await adminFor(home, opts.cwd ?? process.cwd(), opts.env ?? process.env, io, opts.catalog)
     if (added) {
-      const protocols = admin.dialects()
-      if (added.protocol && !protocols.includes(added.protocol)) {
-        throw new UsageError(`unknown protocol "${added.protocol}"; protocols: ${protocols.join(", ")}`)
+      if (added.flags.keyStdin && !added.protocol) {
+        throw new UsageError(
+          `--key-stdin needs a supported vendor, or a protocol with --id and --base-url\n\n${USAGE}`,
+        )
+      }
+      const initial = await providerChoice(admin, added.protocol, ask, io, readLine, interactive)
+      if (!initial) return cancelled(io)
+      const complete = draftFromFlags(undefined, added.flags, initial)
+      if (added.flags.keyStdin && !complete) {
+        throw new UsageError(
+          `--key-stdin needs a supported vendor, or a protocol with --id and --base-url\n\n${USAGE}`,
+        )
       }
       if (complete) {
         if (admin.exists(complete.id)) {
@@ -181,9 +199,10 @@ export async function runProviderAdminCommand(
         io.stdout(`${await admin.save({ ...complete, ...(apiKey ? { apiKey } : {}) })}\n`)
         return 0
       }
-      const values = await ask(providerFormSpec(admin, undefined, formInitial(added.protocol, added.flags)))
+      const start = formInitial(undefined, added.flags, initial)
+      const values = await ask(providerFormSpec(admin, undefined, start))
       if (!values) return cancelled(io)
-      io.stdout(`${await admin.save(draftFromValues(values))}\n`)
+      io.stdout(`${await admin.save(draftFromValues(values, undefined, start.catalogId))}\n`)
       return 0
     }
     const pid = id!
@@ -192,7 +211,7 @@ export async function runProviderAdminCommand(
       const existing = admin.draft(pid)!
       const values = await ask(providerFormSpec(admin, existing))
       if (!values) return cancelled(io)
-      io.stdout(`${await admin.save(draftFromValues(values, pid))}\n`)
+      io.stdout(`${await admin.save(draftFromValues(values, pid, existing.catalogId))}\n`)
       return 0
     }
     if (sub === "remove") {
@@ -252,10 +271,16 @@ async function adminFor(
   home: string,
   cwd: string,
   env: Record<string, string | undefined>,
+  io: PrintIO,
+  catalogOptions?: CatalogCacheOptions,
 ): Promise<{ admin: ProviderAdmin; model?: string }> {
   const { settings } = loadSettings({ cwd, home })
-  const { keys } = loadAuth(authFile(home))
-  const { catalog } = await readCatalogCache({ file: path.join(home, "cache", "models.json") })
+  const { keys, warnings } = loadAuth(authFile(home))
+  for (const warning of warnings) io.stderr(`amira: warning: ${warning}\n`)
+  const { catalog } = await readCatalogCache({
+    file: path.join(home, "cache", "models.json"),
+    ...catalogOptions,
+  })
   const ai = createAi({
     providers: providersFromSettings(settings.providers),
     apiKeys: keys,
@@ -263,7 +288,7 @@ async function adminFor(
     ...(catalog ? { catalog } : {}),
   })
   // Outside a session no model is in use; the configured one's provider is only warned about.
-  const admin = createProviderAdmin({ ai, home, env })
+  const admin = createProviderAdmin({ ai, home, env, ...(catalogOptions ? { catalog: catalogOptions } : {}) })
   return { admin, ...(settings.model ? { model: settings.model } : {}) }
 }
 
