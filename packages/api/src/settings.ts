@@ -47,7 +47,7 @@ export interface ProviderSettings {
   compat?: ProviderCompat
   /** The model catalog's (models.dev) id for this provider, or false to not use the catalog (D51). */
   catalogId?: string | false
-  /** Editing tools for this provider; defaults to "edit". write remains available. */
+  /** Editing tools for this provider (DEFAULT_EDITING_TOOL). write remains available. */
   tools?: { edit?: EditingTool }
   models?: ModelSettings[]
   defaultModel?: ModelOverrides
@@ -59,7 +59,7 @@ export interface ProviderSettings {
  * are replaced.
  */
 export interface Settings {
-  /** File-tool rewind: 10 MiB per image, 256 MiB of unique images per session by default. */
+  /** File-tool rewind; see DEFAULT_FILE_REWIND_* in settings-defaults.ts. */
   fileRewind?: { enabled?: boolean; maxFileBytes?: number; quotaBytes?: number }
   /** Default model as "provider/model". */
   model?: string
@@ -79,9 +79,9 @@ export interface Settings {
   /** Most tool calls running at once (D71). */
   maxParallelTools?: number
   /**
-   * Compaction (D19): `threshold` is the share of the context window that triggers it (0.8),
+   * Compaction (D19): `threshold` is the share of the context window that triggers it (DEFAULT_COMPACT_THRESHOLD),
    * `model` writes text summaries (default the session's model). `layout` places a
-   * server-side checkpoint (providers.<id>.compat.compaction): "tail" (the default for now)
+   * server-side checkpoint (providers.<id>.compat.compaction): "tail" (see DEFAULT_COMPACT_LAYOUT)
    * keeps the last turns verbatim after it; "recent-user" compacts everything and puts the
    * most recent user messages (up to about 64k tokens) before it, as Codex does. Text
    * summaries always use "tail". A set `model`, like /compact with instructions, always
@@ -90,7 +90,7 @@ export interface Settings {
   compact?: { threshold?: number; model?: string; layout?: "tail" | "recent-user" }
   /** What the model is sent of the session's history, besides compaction (see ContextSettings). */
   context?: ContextSettings
-  /** Generate a short name in the background after the first turn. Default true. */
+  /** Generate a short name in the background after the first turn. See DEFAULT_AUTO_TITLE. */
   sessions?: { autoTitle?: boolean }
   /**
    * Retrying failed model requests (D52): retries after the first try, backoff, Retry-After and
@@ -102,7 +102,7 @@ export interface Settings {
     maxDelayMs?: number
     firstContentTimeoutMs?: number
     idleTimeoutMs?: number
-    /** Native compaction deadline in milliseconds. Default 300000 (5 minutes); 0 disables it. */
+    /** Native compaction deadline in milliseconds. See DEFAULT_NATIVE_COMPACTION_TIMEOUT_MS; 0 disables it. */
     nativeCompactionTimeoutMs?: number
   }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */
@@ -123,16 +123,17 @@ export interface Settings {
   /** Per sub-agent role (D61): the model it runs on, ahead of the role file's. */
   agents?: Record<string, { model?: string }>
   /**
-   * Nesting depth (D15, default 2) and children running at once per parent (D63, default 4).
-   * `background` (default true): the main session's `agent` tool runs sub-agents in the
+   * Nesting depth (D15, DEFAULT_SUBAGENT_MAX_DEPTH) and children running at once in the
+   * whole agent tree (D63, DEFAULT_SUBAGENT_MAX_CONCURRENT).
+   * `background` (DEFAULT_SUBAGENT_BACKGROUND): the main session's `agent` tool runs sub-agents in the
    * background unless the call says otherwise; their results come back as a message.
    */
   subagents?: { maxDepth?: number; maxConcurrent?: number; background?: boolean }
   /**
    * Commands the shell tools run in the background (`background: true`), such as dev servers
-   * and watchers. `maxRunning`: jobs running at once (default 8). `bufferChars`: output each job
-   * keeps in memory for reading (default 1,000,000); `maxLogBytes`: how much of it goes to the
-   * job's log file (default 50 MB).
+   * and watchers. `maxRunning`: jobs running at once. `bufferChars`: output each job keeps in
+   * memory for reading; `maxLogBytes`: how much goes to its log file.
+   * See DEFAULT_BACKGROUND_* in settings-defaults.ts.
    */
   backgroundJobs?: { maxRunning?: number; bufferChars?: number; maxLogBytes?: number; printWaitMs?: number }
   /** A limit for the whole agent tree (D37); unlimited by default. */
@@ -151,7 +152,7 @@ export interface Settings {
 /**
  * How much the model may do without asking: "plan" is read-only (no file changes, no shell
  * commands), "edits" changes files without asking and asks before shell commands, "auto"
- * (the default) asks about nothing beyond the rules and protected paths.
+ * (see DEFAULT_PERMISSION_MODE) asks about nothing beyond the rules and protected paths.
  */
 export type PermissionMode = "plan" | "edits" | "auto"
 
@@ -173,7 +174,7 @@ export interface CommandRule {
 
 export interface PermissionSettings {
   /**
-   * The mode a session starts in (default "auto"); Shift+Tab cycles it in the TUI and
+   * The mode a session starts in (DEFAULT_PERMISSION_MODE); Shift+Tab cycles it in the TUI and
    * --permission-mode wins. A project file can choose a stricter mode, never a looser one.
    */
   mode?: PermissionMode
@@ -185,21 +186,21 @@ export interface PermissionSettings {
 }
 
 /**
- * Context management (all optional; defaults in brackets). The session file always keeps
+ * Context management (all optional; defaults in settings-defaults.ts). The session file always keeps
  * everything; these only change what requests carry.
  */
 export interface ContextSettings {
   outputs?: {
-    /** Tool output longer than this many characters is saved as an artifact [16000]. */
+    /** Tool output longer than this many characters is saved as an artifact (DEFAULT_SAVE_ABOVE). */
     saveAbove?: number
-    /** Characters of the preview the model gets for it instead [8000]. */
+    /** Characters of the preview the model gets for it instead (DEFAULT_PREVIEW_CHARS). */
     previewChars?: number
-    /** Most megabytes of artifacts one session keeps; past it outputs are only previewed [256]. */
+    /** Most megabytes of artifacts one session keeps; past it outputs are only previewed (DEFAULT_ARTIFACT_QUOTA_MB). */
     quotaMB?: number
   }
   /**
    * A read that returns exactly what an earlier read of the same range, still in context,
-   * returned is sent as a short note pointing to it [true].
+   * returned is sent as a short note pointing to it (DEFAULT_DEDUPE_READS).
    */
   dedupeReads?: boolean
   /**
@@ -207,19 +208,19 @@ export interface ContextSettings {
    * Only for models whose history may be rewritten (no signed reasoning after the result).
    */
   aging?: {
-    /** [true] */
+    /** See DEFAULT_AGING_ENABLED. */
     enabled?: boolean
-    /** Share of the context window that starts it [0.7]. */
+    /** Share of the context window that starts it (DEFAULT_AGING_START). */
     start?: number
-    /** Share of the window it frees down to [0.6]. */
+    /** Share of the window it frees down to (DEFAULT_AGING_TARGET). */
     target?: number
-    /** Skipped unless it frees at least this many tokens at once [8000]. */
+    /** Skipped unless it frees at least this many tokens at once (DEFAULT_AGING_MIN_SAVED_TOKENS). */
     minSavedTokens?: number
-    /** Most recent user turns never touched [2]. */
+    /** Most recent user turns never touched (DEFAULT_AGING_KEEP_TURNS). */
     keepTurns?: number
-    /** In a long turn, most recent model steps never touched [2]. */
+    /** In a long turn, most recent model steps never touched (DEFAULT_AGING_KEEP_STEPS). */
     keepSteps?: number
-    /** Experimental: also stub results older than this many user turns, whatever the pressure. 0 is off [0]. */
+    /** Experimental: also stub results older than this many user turns, whatever the pressure. 0 is off (DEFAULT_AGING_AFTER_TURNS). */
     afterTurns?: number
   }
 }
@@ -244,40 +245,39 @@ export interface TuiSettings {
   /**
    * "fullscreen" keeps the conversation on the alternate screen, scrolled and searched by
    * Amira, and prints it to the normal screen on exit; "inline" leaves finished output in the
-   * terminal's own scrollback (for SSH, tmux, or native scrolling and copying). Default
-   * "fullscreen"; the --inline and --fullscreen flags win.
+   * terminal's own scrollback (for SSH, tmux, or native scrolling and copying). See
+   * DEFAULT_TUI_MODE; the --inline and --fullscreen flags win.
    */
   mode?: "fullscreen" | "inline"
   /**
    * Ring the bell when a turn ends or a dialog opens while the terminal is in the background
-   * (or, where the terminal does not report focus, after a long turn). Default true.
+   * (or, where the terminal does not report focus, after a long turn). See DEFAULT_TUI_BELL.
    */
   bell?: boolean
-  /** Set the terminal title to the folder, session title when present, and branch, marked while working. Default true. */
+  /** Set the terminal title to the folder, session title when present, and branch, marked while working. See DEFAULT_TUI_TITLE. */
   title?: boolean
-  /** Show work on the tab and taskbar progress indicator (OSC 9;4). Default true. */
+  /** Show work on the tab and taskbar progress indicator (OSC 9;4). See DEFAULT_TUI_PROGRESS. */
   progress?: boolean
   /**
    * Whether the terminal re-wraps lines when it gets narrower. "off" for terminals that do not
-   * (legacy conhost with wrap-on-resize off, some tmux setups). Default "auto" (assumes it does).
+   * (legacy conhost with wrap-on-resize off, some tmux setups). See DEFAULT_TUI_REFLOW.
    */
   reflow?: "auto" | "on" | "off"
   /**
    * What plain Enter does while a turn runs: "steer" sends the message into the running turn,
-   * "queue" sends it after the turn. The queue key does the other. Default "steer".
+   * "queue" sends it after the turn. The queue key does the other. See DEFAULT_TUI_SUBMIT_WHILE_WORKING.
    */
   submitWhileWorking?: "steer" | "queue"
   /**
    * Draw images that stand on a line of their own in replies (local files, and http(s) URLs
    * fetched like web_fetch does): "auto" where the terminal says it can (Sixel, kitty graphics,
    * iTerm2 inline images; VS Code with terminal.integrated.enableImages), "on" everywhere, "off"
-   * never. Otherwise, and until one loads, an image shows as its alt text. Default "auto".
+   * never. Otherwise, and until one loads, an image shows as its alt text. See DEFAULT_TUI_IMAGES.
    */
   images?: "auto" | "on" | "off"
   /**
    * How many of its last output lines a shell command that succeeded shows under its result
-   * (the tool output level "summary"; "full" shows all). 0 shows none. Default 3, as many as
-   * show while it runs.
+   * (the tool output level "summary"; "full" shows all). 0 shows none. See DEFAULT_SHELL_OUTPUT_LINES.
    */
   shellOutputLines?: number
 }
@@ -291,35 +291,35 @@ export type WebSearchBackend = "exa" | "brave" | "tavily" | "searxng"
 export interface WebSettings {
   /**
    * false: never use a provider's hosted web search (providers.<id>.compat.webSearch), so
-   * every model gets the web_search tool. Default true.
+   * every model gets the web_search tool. See DEFAULT_WEB_NATIVE_SEARCH.
    */
   nativeSearch?: boolean
   search?: {
-    /** Default "exa" (Exa's hosted MCP server, no key needed). */
+    /** See DEFAULT_WEB_SEARCH_BACKEND (Exa's hosted MCP server, no key needed). */
     backend?: WebSearchBackend
     /** Backends tried in order when the one before fails. Default none. */
     fallback?: WebSearchBackend[]
-    /** Results returned when the call does not say. Default 8. */
+    /** Results returned when the call does not say. See DEFAULT_WEB_SEARCH_MAX_RESULTS. */
     maxResults?: number
-    /** Per-backend request timeout. Default 20000. */
+    /** Per-backend request timeout. See DEFAULT_WEB_SEARCH_TIMEOUT_MS. */
     timeoutMs?: number
-    /** url default https://mcp.exa.ai/mcp; apiKeyEnv (optional) raises the free rate limit. */
+    /** url: DEFAULT_EXA_URL; apiKeyEnv (optional) raises the free rate limit. */
     exa?: { url?: string; apiKeyEnv?: string }
-    /** apiKeyEnv default BRAVE_API_KEY. */
+    /** apiKeyEnv: DEFAULT_BRAVE_API_KEY_ENV. */
     brave?: { apiKeyEnv?: string }
-    /** apiKeyEnv default TAVILY_API_KEY; searchDepth default "basic". */
+    /** apiKeyEnv: DEFAULT_TAVILY_API_KEY_ENV; searchDepth: DEFAULT_TAVILY_SEARCH_DEPTH. */
     tavily?: { apiKeyEnv?: string; searchDepth?: "basic" | "advanced" }
     /** url of a SearXNG instance with the JSON format enabled; required for this backend. */
     searxng?: { url?: string }
   }
   fetch?: {
-    /** Characters of converted text returned per call. Default 20000. */
+    /** Characters of converted text returned per call. See DEFAULT_WEB_FETCH_MAX_CHARS. */
     maxChars?: number
-    /** Largest response body read. Default 5 MB. */
+    /** Largest response body read. See DEFAULT_WEB_FETCH_MAX_BYTES. */
     maxBytes?: number
-    /** Default 30000. */
+    /** See DEFAULT_WEB_FETCH_TIMEOUT_MS. */
     timeoutMs?: number
-    /** Allow localhost and private-network addresses. Default false. */
+    /** Allow localhost and private-network addresses. See DEFAULT_WEB_FETCH_ALLOW_PRIVATE_NETWORK. */
     allowPrivateNetwork?: boolean
   }
 }

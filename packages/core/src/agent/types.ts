@@ -94,7 +94,7 @@ export interface AgentOptions {
   maxTokens?: number
   /** How long tools get to stop after an abort before they are abandoned. Default 2000 ms. */
   abortGraceMs?: number
-  /** Most tool calls running at once (D71). Default 8. */
+  /** Most tool calls running at once (D71). See DEFAULT_MAX_PARALLEL_TOOLS. */
   maxParallelTools?: number
   /**
    * After a turn carrying notices fails, they are sent again after each of these delays in

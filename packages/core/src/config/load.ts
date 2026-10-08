@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import type { Settings, SettingsLayer, SettingsLayerScope, SettingsLayers } from "@amira/api"
+import { DEFAULT_DISABLED_TOOLS, DEFAULT_MAX_PARALLEL_TOOLS, DEFAULT_SHELL } from "@amira/api"
 import { amiraHome, projectAmiraDir } from "../home.ts"
 import type { PermissionLayer } from "../permissions/settings.ts"
 import { deepMerge } from "./merge.ts"
@@ -8,9 +9,9 @@ import { SettingsError, validateSettings } from "./schema.ts"
 
 /** Used where no layer sets a value. */
 export const DEFAULT_SETTINGS: Settings = {
-  shell: "auto",
-  tools: { disabled: [] },
-  maxParallelTools: 8,
+  shell: DEFAULT_SHELL,
+  tools: { disabled: [...DEFAULT_DISABLED_TOOLS] },
+  maxParallelTools: DEFAULT_MAX_PARALLEL_TOOLS,
 }
 
 export interface SettingsSources {

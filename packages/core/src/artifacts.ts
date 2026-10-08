@@ -7,6 +7,7 @@ import {
   type ArtifactGroupUsage,
   type ArtifactInfo,
   countLines,
+  DEFAULT_ARTIFACT_QUOTA_MB,
   DEFAULT_PREVIEW_CHARS,
   DEFAULT_SAVE_ABOVE,
   MAX_ARTIFACT_CHARS,
@@ -16,7 +17,7 @@ import {
 } from "@amira/api"
 
 /** Megabytes of artifacts a session keeps by default (settings context.outputs.quotaMB). */
-export const DEFAULT_ARTIFACT_QUOTA_MB = 256
+export { DEFAULT_ARTIFACT_QUOTA_MB } from "@amira/api"
 
 const ID = /^a_[0-9a-f]{6,32}$/
 

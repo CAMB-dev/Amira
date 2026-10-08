@@ -14,6 +14,12 @@ import {
 import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import { type RetryOptions, sleep, withRetry } from "./retry.ts"
 import { hasNativeWebSearch } from "./server-tools.ts"
+import {
+  DEFAULT_NATIVE_COMPACTION,
+  DEFAULT_NATIVE_COMPACTION_TIMEOUT_MS,
+  DEFAULT_RETRY_ATTEMPTS,
+  DEFAULT_RETRY_BASE_DELAY_MS,
+} from "./settings-defaults.ts"
 import { withTextTools } from "./text-tools.ts"
 import { canReplay, forReplay, type ReplayTarget, withSignatureHost } from "./thinking.ts"
 import {
@@ -83,7 +89,7 @@ export interface Ai {
    * Compacts `req.messages` on the server, trying each way nativeCompaction lists in order
    * and retrying transient failures. A way the endpoint turns out not to support is
    * remembered (compactionMemory) and skipped from then on. All attempts share the deadline
-   * retry.nativeCompactionTimeoutMs (5 minutes by default); a timeout aborts the native request
+   * retry.nativeCompactionTimeoutMs (DEFAULT_NATIVE_COMPACTION_TIMEOUT_MS); a timeout aborts the native request
    * and returns a failure for the caller to fall back to a text summary. Never throws.
    */
   compact(req: ModelRequest, signal?: AbortSignal, onProgress?: () => void): Promise<CompactResult>
@@ -143,7 +149,7 @@ export function createAi(opts: AiOptions = {}): Ai {
     const p = providers.get(model.provider)
     const native = dialects.get(model.dialect)?.compaction
     if (!p || !native || isNoModel(model)) return undefined
-    const mode = p.compat?.compaction ?? "auto"
+    const mode = p.compat?.compaction ?? DEFAULT_NATIVE_COMPACTION
     if (mode === "off" || (mode === "auto" && !native.official(p.baseUrl))) return undefined
     const skipped = failures.skipped(endpointKey(p.id, hostOf(p.baseUrl), model.id))
     const methods = native.methods.filter((m) => !skipped.has(m))
@@ -162,7 +168,10 @@ export function createAi(opts: AiOptions = {}): Ai {
     const aborted = (): CompactResult => ({ ok: false, error: "aborted", usage, tried, aborted: true })
     if (signal.aborted) return aborted()
     const controller = new AbortController()
-    const timeoutMs = Math.max(0, Math.floor(opts.retry?.nativeCompactionTimeoutMs ?? 300_000))
+    const timeoutMs = Math.max(
+      0,
+      Math.floor(opts.retry?.nativeCompactionTimeoutMs ?? DEFAULT_NATIVE_COMPACTION_TIMEOUT_MS),
+    )
     const stopped = Promise.withResolvers<CompactResult>()
     const onAbort = () => {
       stopped.resolve(aborted())
@@ -203,8 +212,8 @@ export function createAi(opts: AiOptions = {}): Ai {
       const key = endpointKey(p.id, target.host, model.id)
       const req = withoutDisplay(full)
       const sendable = { ...req, messages: forReplay(req.messages, target) }
-      const retries = opts.retry?.retries ?? 3
-      const base = opts.retry?.baseDelayMs ?? 1000
+      const retries = opts.retry?.retries ?? DEFAULT_RETRY_ATTEMPTS
+      const base = opts.retry?.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS
       const progress = onProgress ? () => !signal.aborted && onProgress() : undefined
       for (const method of support.methods) {
         for (let attempt = 0; ; attempt++) {

@@ -1,6 +1,7 @@
 import {
   ARTIFACT_HEADER,
   clipMiddle,
+  DEFAULT_SHELL_OUTPUT_LINES,
   plural,
   previewNoteLine,
   type ToolApproval,
@@ -62,7 +63,7 @@ export const BODY_LINES = 20
 /** Most live output lines under a running call. */
 export const RUNNING_LINES = 3
 /** Output lines a successful shell command shows by default: as many as while it ran. */
-export const OUTPUT_LINES = RUNNING_LINES
+export const OUTPUT_LINES = DEFAULT_SHELL_OUTPUT_LINES
 
 /** Indent of a call's body, under the text of its result line. */
 const BODY_INDENT = "    "

@@ -7,7 +7,14 @@ import {
   type ToolCallBlock,
   type ToolResultMessage,
 } from "@amira/ai"
-import { artifactIdOf, outputPreview, outputSize, type ToolDefinition, type ToolResult } from "@amira/api"
+import {
+  artifactIdOf,
+  DEFAULT_DEDUPE_READS,
+  outputPreview,
+  outputSize,
+  type ToolDefinition,
+  type ToolResult,
+} from "@amira/api"
 import type { ArtifactStore } from "../artifacts.ts"
 import { contextTokens, estimateTokens } from "../compaction.ts"
 import {
@@ -122,7 +129,7 @@ export class ContextManager {
 
   /** A2: views for the reads among a batch's results that repeat an earlier read still in context. */
   dedupe(results: ToolResultMessage[]): [ToolResultMessage, ContextView][] {
-    if (this.#deps.options.dedupeReads === false) return []
+    if ((this.#deps.options.dedupeReads ?? DEFAULT_DEDUPE_READS) === false) return []
     // Only a tool that names repeatable reads can repeat one.
     if (!results.some((r) => this.#deps.tools.get(r.toolName)?.readKey)) return []
     const all = [...this.#deps.history.messages, ...results]

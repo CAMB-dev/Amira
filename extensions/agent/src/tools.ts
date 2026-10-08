@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SUBAGENT_BACKGROUND,
   defineTool,
   type ExtensionAPI,
   MAX_TITLE_CHARS,
@@ -117,7 +118,9 @@ function mainAlwaysBackground(
   session: { expectNotice?: unknown; depth: number },
 ) {
   return (
-    session.depth === 0 && session.expectNotice !== undefined && api.settings.subagents?.background !== false
+    session.depth === 0 &&
+    session.expectNotice !== undefined &&
+    (api.settings.subagents?.background ?? DEFAULT_SUBAGENT_BACKGROUND) !== false
   )
 }
 
@@ -133,7 +136,7 @@ export function agentTool(deps: AgentToolDeps) {
 - A sub-agent sees only its prompt (context "fresh", the default), so write complete instructions: the goal, relevant paths, constraints and what to report back. context "fork" gives it this whole conversation instead.
 - isolation "worktree" runs it in its own git worktree; when it finishes its changes are merged into the working tree (a conflict goes to the user for review). Use it for coders that may touch the same files as others.
 ${
-  deps.api.settings.subagents?.background === false
+  (deps.api.settings.subagents?.background ?? DEFAULT_SUBAGENT_BACKGROUND) === false
     ? `- The call waits for the sub-agents and returns their results. background: true returns at once with their ids instead: in the main session their results then come to you by themselves as a message when they finish; a sub-agent must collect them with ${AGENT_RESULT_TOOL} before it finishes.`
     : `- In the main session sub-agents always run in the background: the call returns at once with their ids, and when they finish their results come to you by themselves as a message, in a new turn of your own. Do your summary or follow-up work then, even when you need the results to answer: end your turn now (or go on with other work) instead of waiting; background is ignored there and ${AGENT_RESULT_TOOL} only reports progress. A sub-agent's calls wait by default; with background: true it must collect the results with ${AGENT_RESULT_TOOL} before it finishes.`
 }

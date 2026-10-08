@@ -6,10 +6,8 @@
 
 import type { ToolLine } from "./tool-renderers.ts"
 
-/** Characters of tool output over which it is saved as an artifact (settings context.outputs.saveAbove). */
-export const DEFAULT_SAVE_ABOVE = 16_000
-/** Most characters of the preview the model gets instead (settings context.outputs.previewChars). */
-export const DEFAULT_PREVIEW_CHARS = 8_000
+/** Settings defaults for saving large outputs and sizing their previews (context.outputs). */
+export { DEFAULT_PREVIEW_CHARS, DEFAULT_SAVE_ABOVE } from "./settings-defaults.ts"
 /** Most characters one artifact captures; longer output is saved cut, marked incomplete. */
 export const MAX_ARTIFACT_CHARS = 16 * 1024 * 1024
 

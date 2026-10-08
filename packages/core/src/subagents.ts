@@ -6,6 +6,8 @@ import {
   type Budget,
   type ChildSession,
   type ChildState,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_MAX_DEPTH,
   fallbackTitle,
   MAX_TITLE_CHARS,
   RETURN_RESULT_TOOL,
@@ -48,11 +50,11 @@ export class SpawnError extends Error {}
 
 export interface AgentTreeOptions {
   ai: Ai
-  /** Deepest a sub-agent may be (D15). Default 2: children and grandchildren. */
+  /** Deepest a sub-agent may be (D15). See DEFAULT_SUBAGENT_MAX_DEPTH. */
   maxDepth?: number
   /**
    * Sub-agents of the whole tree working at once, not counting those waiting for children of
-   * their own; the rest wait in order (D63). Default 4.
+   * their own; the rest wait in order (D63). See DEFAULT_SUBAGENT_MAX_CONCURRENT.
    */
   maxConcurrent?: number
   /** Shared by every session of the tree (D37). Default: unlimited. */
@@ -110,8 +112,8 @@ export class AgentTree {
 
   constructor(opts: AgentTreeOptions) {
     this.#opts = opts
-    this.maxDepth = Math.max(0, opts.maxDepth ?? 2)
-    this.maxConcurrent = Math.max(1, opts.maxConcurrent ?? 4)
+    this.maxDepth = Math.max(0, opts.maxDepth ?? DEFAULT_SUBAGENT_MAX_DEPTH)
+    this.maxConcurrent = Math.max(1, opts.maxConcurrent ?? DEFAULT_SUBAGENT_MAX_CONCURRENT)
     this.#admission = new Admission({ maxConcurrent: this.maxConcurrent })
     this.budget = opts.budget
     this.#ledger = new BudgetLedger(opts.budget)

@@ -1,6 +1,16 @@
 import { statSync } from "node:fs"
 import { isNoModel, type ServerToolBlock } from "@amira/ai"
-import { type AnyEvent, type EventMap, modelLabel, type ToolDetailLevel } from "@amira/api"
+import {
+  type AnyEvent,
+  DEFAULT_TUI_BELL,
+  DEFAULT_TUI_IMAGES,
+  DEFAULT_TUI_PROGRESS,
+  DEFAULT_TUI_SUBMIT_WHILE_WORKING,
+  DEFAULT_TUI_TITLE,
+  type EventMap,
+  modelLabel,
+  type ToolDetailLevel,
+} from "@amira/api"
 import { type Agent, MODE_SUMMARY, parseCommandLine } from "@amira/core"
 import {
   chooseImageSupport,
@@ -72,7 +82,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const terminal = interactiveTerminal(opts.terminal, env)
   const presenters = opts.toolRenderers
   const settings = opts.settings ?? {}
-  const imageSetting = settings.images ?? "auto"
+  const imageSetting = settings.images ?? DEFAULT_TUI_IMAGES
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal, env, {
     images: imageSetting !== "off",
     background: true,
@@ -126,13 +136,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
   /** What Enter does with a message while a turn runs; the queue key does the other. */
-  const enterDoes: WhileWorking = settings.submitWhileWorking === "queue" ? "queue" : "steer"
+  const enterDoes: WhileWorking =
+    (settings.submitWhileWorking ?? DEFAULT_TUI_SUBMIT_WHILE_WORKING) === "queue" ? "queue" : "steer"
   const termStatus = new TerminalStatus(
     terminal,
     {
-      title: settings.title ?? true,
-      progress: settings.progress ?? true,
-      bell: settings.bell ?? true,
+      title: settings.title ?? DEFAULT_TUI_TITLE,
+      progress: settings.progress ?? DEFAULT_TUI_PROGRESS,
+      bell: settings.bell ?? DEFAULT_TUI_BELL,
     },
     env,
   )

@@ -1,5 +1,12 @@
 import type { FormOption, FormSpec, FormValues } from "./form.ts"
 import type { ProviderAdmin, ProviderDraft, ProviderKeySource, ProviderModelInfo } from "./providers.ts"
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_OUTPUT,
+  DEFAULT_MODEL_IMAGES,
+  DEFAULT_MODEL_PROMPT_CACHE,
+  DEFAULT_MODEL_THINKING,
+} from "./settings-defaults.ts"
 
 /** What each protocol is, next to its id wherever one is picked. */
 export const DIALECT_NOTES: Record<string, string> = {
@@ -236,7 +243,7 @@ export function providerFormSpec(
         section: DEFAULTS,
         integer: true,
         min: 1,
-        placeholder: "128000",
+        placeholder: String(DEFAULT_CONTEXT_WINDOW),
         ...(existing?.defaults?.contextWindow ? { default: existing.defaults.contextWindow } : {}),
       },
       {
@@ -246,7 +253,7 @@ export function providerFormSpec(
         section: DEFAULTS,
         integer: true,
         min: 1,
-        placeholder: "8192",
+        placeholder: String(DEFAULT_MAX_OUTPUT),
         ...(existing?.defaults?.maxOutput ? { default: existing.defaults.maxOutput } : {}),
       },
       {
@@ -254,21 +261,21 @@ export function providerFormSpec(
         id: "thinking",
         label: "Thinking (reasoning)",
         section: DEFAULTS,
-        default: existing?.defaults?.thinking ?? false,
+        default: existing?.defaults?.thinking ?? DEFAULT_MODEL_THINKING,
       },
       {
         type: "checkbox",
         id: "images",
         label: "Images in prompts",
         section: DEFAULTS,
-        default: existing?.defaults?.images ?? false,
+        default: existing?.defaults?.images ?? DEFAULT_MODEL_IMAGES,
       },
       {
         type: "checkbox",
         id: "promptCache",
         label: "Prompt cache markers",
         section: DEFAULTS,
-        default: existing?.defaults?.promptCache ?? false,
+        default: existing?.defaults?.promptCache ?? DEFAULT_MODEL_PROMPT_CACHE,
       },
       {
         type: "action",

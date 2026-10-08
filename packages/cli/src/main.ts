@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import type { AnyEvent } from "@amira/api"
+import { DEFAULT_TUI_MODE } from "@amira/api"
 import { type Agent, amiraPath, listSessions, SessionStore } from "@amira/core"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import pkg from "../package.json" with { type: "json" }
@@ -238,7 +239,7 @@ async function run(argv: string[]): Promise<number> {
       ...(keybindings ? { keybindings: keybindings.keys } : {}),
       ...(config.settings.tui ? { settings: config.settings.tui } : {}),
       // Full screen unless a flag or tui.mode says inline (D84).
-      mode: args.mode ?? config.settings.tui?.mode ?? "fullscreen",
+      mode: args.mode ?? config.settings.tui?.mode ?? DEFAULT_TUI_MODE,
       runningJobs: () => host.backgroundJobs.running().length,
     })
     process.stdout.write(

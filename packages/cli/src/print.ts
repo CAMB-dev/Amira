@@ -1,6 +1,12 @@
 import { createWriteStream, openSync, type WriteStream } from "node:fs"
 import { describeServerTool, messageCitations, userMessage } from "@amira/ai"
-import { type AnyEvent, type BackgroundJobInfo, type BackgroundJobRegistry, fallbackTitle } from "@amira/api"
+import {
+  type AnyEvent,
+  type BackgroundJobInfo,
+  type BackgroundJobRegistry,
+  DEFAULT_BACKGROUND_PRINT_WAIT_MS,
+  fallbackTitle,
+} from "@amira/api"
 import {
   type Agent,
   type CommandHost,
@@ -22,7 +28,6 @@ const defaultIO: PrintIO = {
   stderr: (s) => void process.stderr.write(s),
 }
 
-const DEFAULT_BACKGROUND_JOB_WAIT_MS = 30_000
 /** --json-coalesce writes a merged delta once it holds this many characters or is this old. */
 const COALESCE_MAX_CHARS = 4096
 const COALESCE_MAX_MS = 100
@@ -417,7 +422,7 @@ export async function runPrint(
         agent,
         opts.backgroundJobs,
         initialBackgroundJobIds,
-        opts.backgroundJobTimeoutMs ?? DEFAULT_BACKGROUND_JOB_WAIT_MS,
+        opts.backgroundJobTimeoutMs ?? DEFAULT_BACKGROUND_PRINT_WAIT_MS,
         () => interrupted,
         io,
       )

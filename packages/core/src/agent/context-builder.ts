@@ -1,6 +1,7 @@
 // Owns model-visible tool selection and intercepted request context construction.
 import { hasNativeWebSearch, type Message, type ModelInfo, type ToolSpec } from "@amira/ai"
 import type { ProviderSettings, ToolDefinition } from "@amira/api"
+import { DEFAULT_EDITING_TOOL } from "@amira/api"
 import { type ContextView, projectMessages } from "../context.ts"
 import { deferredToolsSection, offeredTools as registryOfferedTools } from "../deferred-tools.ts"
 import type { InterceptOutcome, InterceptorRegistry } from "../interceptors.ts"
@@ -19,7 +20,9 @@ export function toolRestriction(
   }
   const provider = providerSettings[model.provider]
   const editing =
-    provider?.models?.find((m) => m.id === model.id)?.tools?.edit ?? provider?.tools?.edit ?? "edit"
+    provider?.models?.find((m) => m.id === model.id)?.tools?.edit ??
+    provider?.tools?.edit ??
+    DEFAULT_EDITING_TOOL
   const editor = toolTraits(tool)?.editor
   if (editor !== undefined && editor !== editing && editing !== "both") {
     return `the editing tool choice for ${model.provider}/${model.id} is "${editing}". Set providers.${model.provider}.tools.edit or this model's models[].tools.edit to "${tool.name}" or "both" in settings.json and restart the session`

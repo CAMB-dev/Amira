@@ -1,4 +1,5 @@
 import type { TerminalApi, TerminalProgress } from "@amira/api"
+import { DEFAULT_TUI_BELL, DEFAULT_TUI_PROGRESS, DEFAULT_TUI_TITLE } from "@amira/api"
 import {
   focusReporting,
   osc,
@@ -33,9 +34,9 @@ export class TerminalStatus implements TerminalApi {
     env: Record<string, string | undefined> = process.env,
   ) {
     this.#opts = {
-      title: opts.title ?? true,
-      progress: (opts.progress ?? true) && progressSupported(env),
-      bell: opts.bell ?? true,
+      title: opts.title ?? DEFAULT_TUI_TITLE,
+      progress: (opts.progress ?? DEFAULT_TUI_PROGRESS) && progressSupported(env),
+      bell: opts.bell ?? DEFAULT_TUI_BELL,
     }
   }
 
