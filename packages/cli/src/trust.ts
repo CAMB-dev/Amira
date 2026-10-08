@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import type { Settings } from "@amira/api"
+import { DEFAULT_PACKAGES_DISABLED } from "@amira/api"
 import { loadSettings } from "@amira/core"
 import {
   type ActivePackages,
@@ -56,9 +57,9 @@ export async function planPackages(opts: PlanOptions): Promise<PackagePlan> {
   // Disabling is read again on a reload: `amira ext disable` may have run meanwhile.
   const disabled = () => {
     try {
-      return loadSettings({ ...where }).settings.packages?.disabled ?? []
+      return loadSettings({ ...where }).settings.packages?.disabled ?? [...DEFAULT_PACKAGES_DISABLED]
     } catch {
-      return opts.settings.packages?.disabled ?? []
+      return opts.settings.packages?.disabled ?? [...DEFAULT_PACKAGES_DISABLED]
     }
   }
   return {

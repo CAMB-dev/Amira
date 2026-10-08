@@ -1,5 +1,6 @@
 import type { ProviderCompat } from "../dialect.ts"
 import { hasNativeWebSearch } from "../server-tools.ts"
+import { DEFAULT_THINKING_MODE } from "../settings-defaults.ts"
 import type { ModelRequest, ReasoningEffort } from "../types.ts"
 import {
   type AnthropicMessage,
@@ -57,7 +58,7 @@ export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Rec
   if (cache) markCacheBreakpoints(messages, MAX_BREAKPOINTS - breakpoints)
   body.messages = messages
 
-  if (compat.thinking === "budget") budgetThinking(body, req, maxTokens, messages)
+  if ((compat.thinking ?? DEFAULT_THINKING_MODE) === "budget") budgetThinking(body, req, maxTokens, messages)
   else adaptiveThinking(body, req)
   return body
 }

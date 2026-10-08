@@ -1,4 +1,5 @@
 import type { CommandRule, PermissionDecision, PermissionMode, ShellKind, ToolDefinition } from "@amira/api"
+import { DEFAULT_PERMISSION_MODE, DEFAULT_PERMISSION_RULES } from "@amira/api"
 import type { Approver } from "../agent.ts"
 import { type ExtensionDataOwner, extensionDataContainment } from "../extension-data.ts"
 import { toolTraits } from "../tool-traits.ts"
@@ -162,7 +163,7 @@ function powershellName(word: string): string {
 }
 
 export interface PermissionsOptions {
-  /** The mode to start in. Default "auto". */
+  /** The mode to start in. See DEFAULT_PERMISSION_MODE. */
   mode?: PermissionMode
   rules?: PermissionRule[]
   /** Problems found reading the permission settings, for /permissions. */
@@ -194,8 +195,8 @@ export class Permissions {
   #listeners = new Set<(mode: PermissionMode) => void>()
 
   constructor(opts: PermissionsOptions = {}) {
-    this.#mode = opts.mode ?? "auto"
-    this.rules = opts.rules ?? []
+    this.#mode = opts.mode ?? DEFAULT_PERMISSION_MODE
+    this.rules = opts.rules ?? [...DEFAULT_PERMISSION_RULES]
     this.warnings = opts.warnings ?? []
     this.#modeSource = opts.modeSource ?? "default"
     this.#protect = opts.protect ?? {}

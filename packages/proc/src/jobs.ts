@@ -92,9 +92,9 @@ export class JobLimitError extends Error {
 export type StartJobFn = (spec: JobSpec, onEvent: (e: JobEvent) => void) => { stop(graceMs: number): void }
 
 export interface JobLimits {
-  /** Jobs starting or running at once; start() refuses more. Default 8. */
+  /** Jobs starting or running at once; start() refuses more. See DEFAULT_MAX_RUNNING. */
   maxRunning?: number
-  /** Output characters each job keeps in memory; older output only stays in the log. Default 1,000,000. */
+  /** Output characters each job keeps in memory; older output only stays in the log. See DEFAULT_BUFFER_CHARS. */
   bufferChars?: number
 }
 
@@ -105,6 +105,7 @@ export interface JobRegistryOptions extends JobLimits {
   keepEnded?: number
 }
 
+// This package cannot depend on api; scripts/settings-docs.test.ts checks these defaults.
 export const DEFAULT_MAX_RUNNING = 8
 export const DEFAULT_BUFFER_CHARS = 1_000_000
 /** How long stop() waits for the job's exit after its grace period before it gives up waiting. */

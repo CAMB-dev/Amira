@@ -1,4 +1,11 @@
-import { type AnyEvent, type Message, plural, type ToolDetailLevel, type ToolPresenter } from "@amira/api"
+import {
+  type AnyEvent,
+  DEFAULT_TUI_REFLOW,
+  type Message,
+  plural,
+  type ToolDetailLevel,
+  type ToolPresenter,
+} from "@amira/api"
 import {
   FullScreenRenderer,
   LiveRenderer,
@@ -280,7 +287,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
     return [...dialog, ...lead, ...replyRows(reply), ...tools, "", ...rest]
   })
-  const reflow = host.settings.reflow ?? "auto"
+  const reflow = host.settings.reflow ?? DEFAULT_TUI_REFLOW
   const renderer = new LiveRenderer(terminal, root, {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     frameIntervalMs: FRAME_MS,

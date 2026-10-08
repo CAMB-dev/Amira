@@ -1,4 +1,9 @@
 import {
+  DEFAULT_WEB_FETCH_ALLOW_PRIVATE_NETWORK,
+  DEFAULT_WEB_FETCH_MAX_BYTES,
+  DEFAULT_WEB_FETCH_MAX_CHARS,
+  DEFAULT_WEB_FETCH_TIMEOUT_MS,
+  DEFAULT_WEB_SEARCH_MAX_RESULTS,
   defineExtension,
   defineTool,
   type ExtensionAPI,
@@ -18,8 +23,6 @@ export { webFetchPresenter, webSearchPresenter }
 export const WEB_SEARCH_TOOL = "web_search"
 export const WEB_FETCH_TOOL = "web_fetch"
 
-const DEFAULT_MAX_RESULTS = 8
-const DEFAULT_MAX_CHARS = 20_000
 const LARGEST_MAX_CHARS = 100_000
 
 export interface WebExtensionOptions {
@@ -69,7 +72,7 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
           type: "integer",
           minimum: 1,
           maximum: 20,
-          description: `How many results to return (default ${searchSettings.maxResults ?? DEFAULT_MAX_RESULTS}).`,
+          description: `How many results to return (default ${searchSettings.maxResults ?? DEFAULT_WEB_SEARCH_MAX_RESULTS}).`,
         },
         allowedDomains: {
           type: "array",
@@ -94,7 +97,7 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
       const requested = Number.isInteger(p.maxResults) ? (p.maxResults as number) : undefined
       const maxResults = Math.min(
         20,
-        Math.max(1, requested ?? searchSettings.maxResults ?? DEFAULT_MAX_RESULTS),
+        Math.max(1, requested ?? searchSettings.maxResults ?? DEFAULT_WEB_SEARCH_MAX_RESULTS),
       )
       const q = {
         query,
@@ -115,7 +118,7 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
     },
   })
 
-  const maxChars = fetchSettings.maxChars ?? DEFAULT_MAX_CHARS
+  const maxChars = fetchSettings.maxChars ?? DEFAULT_WEB_FETCH_MAX_CHARS
   const webFetch = defineTool<{ url: string; prompt?: string; maxChars?: number; offset?: number }>({
     name: WEB_FETCH_TOOL,
     description: [
@@ -162,9 +165,10 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
           page = await fetchPage(
             url,
             {
-              maxBytes: fetchSettings.maxBytes ?? 5 * 1024 * 1024,
-              timeoutMs: fetchSettings.timeoutMs ?? 30_000,
-              allowPrivateNetwork: fetchSettings.allowPrivateNetwork ?? false,
+              maxBytes: fetchSettings.maxBytes ?? DEFAULT_WEB_FETCH_MAX_BYTES,
+              timeoutMs: fetchSettings.timeoutMs ?? DEFAULT_WEB_FETCH_TIMEOUT_MS,
+              allowPrivateNetwork:
+                fetchSettings.allowPrivateNetwork ?? DEFAULT_WEB_FETCH_ALLOW_PRIVATE_NETWORK,
               fetch: doFetch,
               ...(opts.resolve ? { resolve: opts.resolve } : {}),
             },

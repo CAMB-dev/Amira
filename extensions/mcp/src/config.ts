@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import type { SettingsLayer, SettingsLayerScope } from "@amira/api"
+import { DEFAULT_MCP_ARGS, DEFAULT_MCP_DISABLED, DEFAULT_MCP_TRUSTED_PROJECTS } from "@amira/api"
 
 interface Common {
   name: string
@@ -108,7 +109,7 @@ function parseLayeredServers(
   problems: string[],
 ): McpConfig {
   const byName = new Map<string, { server: ServerConfig; scope: SettingsLayerScope }>()
-  const trusted = isTrusted(cwd, trustedProjects)
+  const trusted = isTrusted(cwd, trustedProjects ?? DEFAULT_MCP_TRUSTED_PROJECTS)
   for (const layer of layers) {
     const fromProject = layer.scope === "project" || layer.scope === "project-local"
     const open = !fromProject || trusted
@@ -204,7 +205,7 @@ function parseServer(
 ): ServerConfig | string | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return "must be an object"
   const o = v as Record<string, unknown>
-  if (o.disabled === true) return undefined
+  if ((o.disabled ?? DEFAULT_MCP_DISABLED) === true) return undefined
   const x = (s: string) => expand(s, env)
   const common: Common = { name, source }
   if (o.timeout !== undefined) {
@@ -221,7 +222,7 @@ function parseServer(
       ...common,
       type: "stdio",
       command: x(o.command),
-      args: ((o.args as string[] | undefined) ?? []).map(x),
+      args: ((o.args as string[] | undefined) ?? DEFAULT_MCP_ARGS).map(x),
       env: Object.fromEntries(Object.entries(vars).map(([k, val]) => [k, x(val)])),
       ...(typeof o.cwd === "string" ? { cwd: x(o.cwd) } : {}),
     }

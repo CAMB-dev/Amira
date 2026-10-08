@@ -1,4 +1,5 @@
 import type { Dialect, DialectContext, ProviderCompat } from "../dialect.ts"
+import { DEFAULT_MAX_TOKENS_FIELD, DEFAULT_STREAM_USAGE } from "../settings-defaults.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
 import { ChatAccumulator } from "./openai-chat-accumulate.ts"
@@ -105,14 +106,14 @@ function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<str
     messages: toChatMessages(req.systemPrompt, req.messages, { images: req.model.caps.images }),
     stream: true,
   }
-  if (compat.streamUsage !== false) body.stream_options = { include_usage: true }
+  if ((compat.streamUsage ?? DEFAULT_STREAM_USAGE) !== false) body.stream_options = { include_usage: true }
   if (req.tools.length && req.model.caps.tools === "native") {
     body.tools = req.tools.map((t) => ({
       type: "function",
       function: { name: t.name, description: t.description, parameters: t.parameters },
     }))
   }
-  if (req.maxTokens) body[compat.maxTokensField ?? "max_tokens"] = req.maxTokens
+  if (req.maxTokens) body[compat.maxTokensField ?? DEFAULT_MAX_TOKENS_FIELD] = req.maxTokens
   if (req.temperature !== undefined) body.temperature = req.temperature
   return body
 }
