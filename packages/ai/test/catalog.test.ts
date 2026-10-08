@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { catalogProviderId, createCatalog, trimModelsDev } from "../src/catalog.ts"
+import { type CatalogVendor, catalogProviderId, createCatalog, trimModelsDev } from "../src/catalog.ts"
 import { createAi } from "../src/client.ts"
 import type { ProviderConfig } from "../src/providers.ts"
 import fixture from "./fixtures/models-dev.json" with { type: "json" }
@@ -61,8 +61,72 @@ test("the trimmed form reads the same and is much smaller", () => {
   ] as const) {
     expect(b.find(p, m)).toEqual(a.find(p, m)!)
   }
-  expect(JSON.stringify(trimmed).length).toBeLessThan(JSON.stringify(fixture).length / 3)
+  const modelFacts = Object.fromEntries(Object.entries(trimmed).map(([id, p]) => [id, { models: p.models }]))
+  expect(JSON.stringify(modelFacts).length).toBeLessThan(JSON.stringify(fixture).length / 3)
+  expect(JSON.stringify(trimmed).length).toBeLessThan(JSON.stringify(fixture).length)
   expect(trimModelsDev("junk")).toBeUndefined()
+})
+
+test("raw and cached catalogs expose only vendor connection metadata", () => {
+  const vendor: CatalogVendor = {
+    id: "synthetic",
+    name: "Synthetic vendor",
+    env: ["SYNTHETIC_API_KEY", "SYNTHETIC_TOKEN"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://synthetic.example/custom/v1",
+    doc: "https://synthetic.example/docs",
+  }
+  const data = {
+    synthetic: {
+      ...vendor,
+      secret: "not vendor metadata",
+      extra: { large: true },
+      models: { tiny: { limit: { context: 4096 }, name: "Tiny", tool_call: true } },
+    },
+    legacy: { models: { old: { limit: { context: 2048 } } } },
+  }
+  const trimmed = trimModelsDev(data)!
+  expect(Object.keys(trimmed.synthetic!).sort()).toEqual(["api", "doc", "env", "id", "models", "name", "npm"])
+  expect(Object.keys(trimmed.legacy!)).toEqual(["models"])
+  for (const source of [data, JSON.parse(JSON.stringify(trimmed))]) {
+    const catalog = createCatalog(source)
+    expect(catalog.vendor?.("synthetic")).toEqual(vendor)
+    expect(catalog.vendors?.()).toEqual([vendor])
+    expect(catalog.vendor?.("missing")).toBeUndefined()
+    expect(catalog.vendor?.("constructor")).toBeUndefined()
+    expect(catalog.vendor?.("legacy")).toBeUndefined()
+    expect(catalog.providers?.()).toEqual(["synthetic", "legacy"])
+    expect(catalog.find("legacy", "old")?.contextWindow).toBe(2048)
+    expect(catalog.find("synthetic", "tiny")?.caps?.tools).toBe("native")
+  }
+})
+
+test("vendor metadata without optional URLs survives trimming", () => {
+  const vendor: CatalogVendor = { id: "minimal", name: "Minimal", env: [], npm: "@ai-sdk/anthropic" }
+  const data = { minimal: { ...vendor, models: {} } }
+  expect(createCatalog(data).vendor?.("minimal")).toEqual(vendor)
+  expect(createCatalog(trimModelsDev(data)).vendors?.()).toEqual([vendor])
+})
+
+test("legacy caches and malformed vendor metadata expose no vendors", () => {
+  const legacy = { legacy: { models: { tiny: { limit: { context: 4096 } } } } }
+  for (const data of [legacy, trimModelsDev(legacy)]) {
+    const catalog = createCatalog(data)
+    expect(catalog.vendors?.()).toEqual([])
+    expect(catalog.vendor?.("legacy")).toBeUndefined()
+    expect(catalog.list?.("legacy")).toEqual(["tiny"])
+    expect(catalog.find("legacy", "tiny")?.contextWindow).toBe(4096)
+  }
+  for (const metadata of [
+    { id: "p", name: "P", env: [], npm: 1 },
+    { id: "p", name: "P", env: "KEY", npm: "@ai-sdk/openai" },
+    { id: "p", name: "P", env: [1], npm: "@ai-sdk/openai" },
+    { id: "p", env: [], npm: "@ai-sdk/openai" },
+  ]) {
+    const catalog = createCatalog({ p: { ...metadata, models: {} } })
+    expect(catalog.vendor?.("p")).toBeUndefined()
+    expect(catalog.vendors?.()).toEqual([])
+  }
 })
 
 test("provider ids map through config, then the table, then themselves", () => {

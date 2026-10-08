@@ -280,16 +280,25 @@ export function validateSettings(raw: unknown, file: string): { settings: Settin
   return { settings: value as Settings, warnings }
 }
 
-const auth = record(object({ apiKey: string }, ["apiKey"]))
+const apiKeyAuth = object({ type: oneOf("api_key"), apiKey: string }, ["apiKey"])
+const auth = record((v, key, out) => {
+  if (isPlainObject(v) && v.type !== undefined && v.type !== "api_key") {
+    out.warnings.push(`unknown auth type for provider "${key}" (ignored)`)
+    return undefined
+  }
+  return apiKeyAuth(v, key, out)
+})
 
-/** Checks auth.json: `{"<provider>": {"apiKey": "..."}}`. Returns the keys by provider id. */
+/** Checks auth.json, accepting API keys with no type for compatibility. Returns keys by provider id. */
 export function validateAuth(
   raw: unknown,
   file: string,
 ): { keys: Record<string, string>; warnings: string[] } {
   const { value, warnings } = run(auth, raw, file)
   const keys = Object.fromEntries(
-    Object.entries(value as Record<string, { apiKey: string }>).map(([k, v]) => [k, v.apiKey]),
+    Object.entries(value as Record<string, { apiKey: string } | undefined>).flatMap(([k, v]) =>
+      v === undefined ? [] : [[k, v.apiKey]],
+    ),
   )
   return { keys, warnings }
 }

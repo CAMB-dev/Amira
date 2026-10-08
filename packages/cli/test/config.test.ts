@@ -322,10 +322,11 @@ test("print mode needs a model: without one it is a usage error", async () => {
   expect(unpicked.message).toContain("no model selected. Pass -m provider/model")
 })
 
-test("amira provider help lists the commands; presets are gone", () => {
+test("amira provider help lists vendor setup without adding a presets command", () => {
   const io = capture()
   expect(runProviderCommand(["help"], io)).toBe(0)
-  expect(io.out).toContain("amira provider add [<protocol>]")
+  expect(io.out).toContain("amira provider add [<vendor-or-protocol>]")
+  expect(io.out).toContain("Protocol names win if they clash with a vendor id")
   expect(io.out).toContain("Amira has no built-in providers")
   expect(io.out).not.toContain("preset")
   expect(() => runProviderCommand(["presets"], capture())).toThrow('unknown provider command "presets"')

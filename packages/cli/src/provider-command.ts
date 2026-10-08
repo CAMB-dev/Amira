@@ -2,7 +2,11 @@ import { UsageError } from "./args.ts"
 import type { PrintIO } from "./print.ts"
 
 export const PROVIDER_USAGE = `Usage:
-  amira provider add [<protocol>]      Add a provider in a form (fetch models, test it)
+  amira provider add [<vendor-or-protocol>]
+                                       Pick a vendor, then edit its prefilled form
+  amira provider add <vendor> (--key-env <VAR> | --key-stdin | --no-key)
+      [--id <id>] [--base-url <url>] [--model <id>]...
+                                       Add a vendor without questions
   amira provider add <protocol> --id <id> --base-url <url>
       (--key-env <VAR> | --key-stdin | --no-key) [--model <id>]...
                                        Add one without questions
@@ -11,7 +15,9 @@ export const PROVIDER_USAGE = `Usage:
                                        Remove a provider from settings.json (and its key)
   amira provider key <id>              Store a new API key (masked; or piped on stdin)
 
+Vendors come from the models.dev catalog. Choose Custom for local servers.
 Protocols: openai-chat, openai-responses, anthropic-messages, google-gemini.
+Protocol names win if they clash with a vendor id. Unmapped vendors need a protocol and URL.
 Amira has no built-in providers; only the ones you add exist.`
 
 /** `amira provider help`, and the error for a subcommand provider-cli does not handle. */

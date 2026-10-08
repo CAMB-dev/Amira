@@ -82,14 +82,20 @@ export function setAuthKey(file: string, id: string, apiKey: string | undefined)
   return withLock(file, () => {
     const raw = readJsonFile(file) ?? {}
     if (!isPlainObject(raw)) throw new SettingsError(file, ["must hold a JSON object"])
-    const current = raw[id]
+    const exists = Object.hasOwn(raw, id)
+    const current = exists ? raw[id] : undefined
     const next: Record<string, unknown> = { ...raw }
     if (apiKey === undefined) {
       if (current === undefined) return false
       delete next[id]
     } else {
-      if (isPlainObject(current) && current.apiKey === apiKey) return false
-      next[id] = { ...(isPlainObject(current) ? current : {}), apiKey }
+      if (exists && (!isPlainObject(current) || (current.type !== undefined && current.type !== "api_key"))) {
+        throw new SettingsError(file, [
+          `cannot set API key for provider "${id}": existing auth entry has an unsupported type`,
+        ])
+      }
+      if (isPlainObject(current) && current.type === "api_key" && current.apiKey === apiKey) return false
+      next[id] = { ...(isPlainObject(current) ? current : {}), type: "api_key", apiKey }
     }
     writeJsonAtomic(file, next, 0o600)
     return true

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
+  autoFormActions,
   checkForm,
   type FormDialogs,
   type FormSpec,
+  type FormValues,
   formDefaults,
   isFieldVisible,
   runFormAction,
@@ -35,6 +37,7 @@ const spec = (): FormSpec => ({
       id: "fetch",
       label: "Fetch",
       recommended: true,
+      auto: { watch: ["auth", "key", "env"], ready: (values) => values.auth === "env" || !!values.key },
       run: async ({ values, progress }) => {
         progress("asking")
         return {
@@ -58,8 +61,12 @@ const spec = (): FormSpec => ({
 })
 
 describe("schema and values", () => {
-  test("toFormSchema drops validators and action callbacks", () => {
-    const schema = toFormSchema(spec())
+  test("toFormSchema drops validators and action callbacks, copying only automatic watches", () => {
+    const form = spec()
+    const action = form.fields.find((f) => f.id === "fetch")!
+    if (action.type !== "action" || !action.auto) throw new Error("Missing automatic action")
+    Object.assign(action, { validate: () => "not serializable" })
+    const schema = toFormSchema(form)
     const json = JSON.parse(JSON.stringify(schema))
     expect(json).toEqual(schema)
     expect(schema.fields.find((f) => f.id === "fetch")).toEqual({
@@ -67,8 +74,96 @@ describe("schema and values", () => {
       id: "fetch",
       label: "Fetch",
       recommended: true,
+      auto: { watch: ["auth", "key", "env"] },
     })
     expect("validate" in schema.fields.find((f) => f.id === "note")!).toBe(false)
+    const serialized = schema.fields.find((f) => f.id === "fetch")!
+    if (serialized.type !== "action" || !serialized.auto) throw new Error("Missing automatic metadata")
+    expect(serialized.auto.watch).not.toBe(action.auto.watch)
+    serialized.auto.watch.push("name")
+    expect(action.auto.watch).toEqual(["auth", "key", "env"])
+  })
+
+  test("automatic readiness sees sanitized partial values without running actions or validators", () => {
+    let effects = 0
+    const received: FormValues[] = []
+    const form: FormSpec = {
+      title: "t",
+      fields: [
+        {
+          type: "text",
+          id: "name",
+          label: "Name",
+          required: true,
+          validate: () => {
+            effects++
+            return undefined
+          },
+        },
+        { type: "checkbox", id: "enabled", label: "Enabled", default: true },
+        { type: "secret", id: "hidden", label: "Hidden", when: { field: "enabled", is: false } },
+        {
+          type: "action",
+          id: "ready",
+          label: "Ready",
+          auto: {
+            watch: ["enabled"],
+            ready: (values) => {
+              received.push(values)
+              return values.enabled === true
+            },
+          },
+          run: async () => {
+            effects++
+            return undefined
+          },
+        },
+        {
+          type: "action",
+          id: "hiddenAction",
+          label: "Hidden action",
+          when: { field: "enabled", is: false },
+          auto: {
+            watch: ["enabled"],
+            ready: () => {
+              effects++
+              return true
+            },
+          },
+          run: async () => {
+            effects++
+            return undefined
+          },
+        },
+        {
+          type: "action",
+          id: "notReady",
+          label: "Not ready",
+          auto: { watch: [], ready: () => false },
+          run: async () => {
+            effects++
+            return undefined
+          },
+        },
+        {
+          type: "action",
+          id: "manual",
+          label: "Manual",
+          run: async () => {
+            effects++
+            return undefined
+          },
+        },
+      ],
+      validate: () => {
+        effects++
+        return undefined
+      },
+    }
+    expect(autoFormActions(form, { hidden: "secret", extra: "unknown" })).toEqual(["ready"])
+    expect(received).toEqual([{ name: "", enabled: true }])
+    expect(autoFormActions(form, { enabled: true })).toEqual(["ready"])
+    expect(effects).toBe(0)
   })
 
   test("defaults: first option, empty secret, no number", () => {
@@ -165,6 +260,30 @@ function scripted(answers: (string | undefined)[]) {
 }
 
 describe("runFormDialogs", () => {
+  test("automatic metadata never starts actions in one-question-at-a-time dialogs", async () => {
+    let runs = 0
+    const form: FormSpec = {
+      title: "t",
+      fields: [
+        {
+          type: "action",
+          id: "fetch",
+          label: "Fetch",
+          recommended: true,
+          auto: { watch: [], ready: () => true },
+          run: async () => {
+            runs++
+            return undefined
+          },
+        },
+      ],
+    }
+    const { ui, asked } = scripted(["No", "Save"])
+    expect(await runFormDialogs(form, ui)).toEqual({})
+    expect(asked).toEqual(["Fetch? [Yes|No]", "t: Save? [Save|Cancel]"])
+    expect(runs).toBe(0)
+  })
+
   test("asks each shown field, runs a chosen action and ends with Save", async () => {
     const { ui, asked } = scripted([
       "Abc", // bad pattern, asked again

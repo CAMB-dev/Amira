@@ -34,9 +34,9 @@ Welcome to Amira. Three steps to a first message:
 
 ## 添加 provider
 
-输入 `/provider add` 并按 Enter。协议选择器会询问 `Which protocol does the provider speak?`。根据服务端实现，选择 `openai-chat`、`openai-responses`、`anthropic-messages` 或 `google-gemini`，随后进入 `Add a provider` 表单。
+输入 `/provider add` 并按 Enter。按名称或 ID 搜索服务商列表；服务商来自 models.dev 目录。选择支持的服务商后，会打开 `Add a provider` 表单，预填可编辑的 `Id`（本地使用的 provider 名称）、协议和 `Base URL`。如果 ID 已被使用，Amira 会建议带 `-2` 等后缀的 ID。本地服务或未列出的服务选择 `Custom`，再选择 `openai-chat`、`openai-responses`、`anthropic-messages` 或 `google-gemini` 并填写 URL。离线时无法获取目录，也可以使用 `Custom`。不支持的服务商需要手动选择协议并填写 URL。
 
-填写 `Id`（本地使用的 provider 名称）、`Base URL` 和密钥来源。使用环境变量时，选择 `Read it from an environment variable`，在 `Environment variable` 中填变量名。对应设置是 `apiKeyEnv`，这里填写的是变量名，不是密钥内容；请在启动 Amira 的 shell 中提前设置该变量。不需要鉴权的本地服务可以选择 `No key (a local server)`。
+密钥来源默认是保存 API 密钥，输入内容会被遮蔽。如果服务商列出的某个环境变量已经设置，表单会选择环境变量鉴权，只显示变量名，不显示值。否则，选择 `Read it from an environment variable` 时，会预填第一个列出的变量名。`Environment variable` 可以编辑；对应设置是 `apiKeyEnv`，只保存变量名，不保存密钥内容。请在启动 Amira 的 shell 中提前设置该变量。不需要鉴权的本地服务可以选择 `No key (a local server)`。鉴权仅支持保存 API 密钥、环境变量或无密钥，不支持 OAuth。
 
 在 `Models` 中点击 `Fetch models`，向服务端查询模型列表，也可以自己填入准确的模型 ID。查询会使用表单指定的密钥发送请求。Space 勾选模型；输入列表中没有的 ID 后按 Enter 可以添加。模型 ID 和上下文窗口应与服务端一致。目录没有收录模型时，可以展开 `Defaults for models the catalog does not know`，补充模型限制。`Test connection` 会发送一个小型模型请求，可能产生费用，可以跳过。`Save` 把 provider 保存到用户设置；Esc 取消而不保存。服务地址、密钥优先级和兼容选项见[provider 文档](providers.md)。
 
