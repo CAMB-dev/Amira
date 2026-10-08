@@ -311,6 +311,9 @@ test("/help lists every command with its argument hint", async () => {
   const { run } = await setup()
   const { text } = await run("/help")
   expect(text).toContain("/model [provider/model]")
+  expect(text).toContain("/provider [add|edit|remove|key]")
+  expect(text).toContain("/provider add picks a catalog vendor or Custom (choose a protocol).")
+  expect(text).toContain("/provider add <vendor|protocol> skips the picker")
   expect(text).toMatch(/\/quit \(\/exit, \/q\)\s+Leave Amira/)
   expect(text).toMatch(/\/resume \(\/continue\) \[session id\]\s+Switch/)
   expect(text).not.toContain("Aliases from settings")
@@ -343,7 +346,7 @@ test("/help lists the settings aliases with what they run", async () => {
   const { text } = await run("/help")
   // /q is a built-in alias, so the settings one is left out.
   expect(text).toMatch(
-    /Aliases from settings \(commandAliases\):\n\/ds\s+→ \/model deepseek\/deepseek-flash\n\/m\s+→ \/model\n\nExtensions:/,
+    /Aliases from settings \(commandAliases\):\n\/ds\s+→ \/model deepseek\/deepseek-flash\n\/m\s+→ \/model\n\nProviders:/,
   )
   expect((await run("/ds")).text).toBe("Model: deepseek/deepseek-flash")
 })

@@ -133,6 +133,8 @@ test("the public API exports stay stable", async () => {
     "plural",
     "previewNoteLine",
     "providerFormSpec",
+    "providerVendorInitial",
+    "providerVendorLabel",
     "readCapped",
     "runFormAction",
     "runFormDialogs",

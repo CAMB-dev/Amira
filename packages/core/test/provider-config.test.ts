@@ -50,11 +50,39 @@ test("auth keys are stored and removed one provider at a time, owner-only on POS
   expect(setAuthKey(file, "b", "sk-b")).toBe(true)
   expect(setAuthKey(file, "a", "sk-a")).toBe(false)
   expect(setAuthKey(file, "a", "sk-a2")).toBe(true)
+  expect(read(file)).toEqual({
+    a: { type: "api_key", apiKey: "sk-a2" },
+    b: { type: "api_key", apiKey: "sk-b" },
+  })
   expect(loadAuth(file, process.platform).keys).toEqual({ a: "sk-a2", b: "sk-b" })
   if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600)
   expect(setAuthKey(file, "a", undefined)).toBe(true)
   expect(setAuthKey(file, "zz", undefined)).toBe(false)
-  expect(read(file)).toEqual({ b: { apiKey: "sk-b" } })
+  expect(read(file)).toEqual({ b: { type: "api_key", apiKey: "sk-b" } })
+})
+
+test("setting an auth key adds its type to legacy or unsupported entries and keeps other entries", () => {
+  const file = path.join(dir, "auth.json")
+  writeFileSync(
+    file,
+    JSON.stringify({
+      legacy: { apiKey: "sk-legacy" },
+      future: { type: "oauth", apiKey: "sk-future" },
+      untouched: { apiKey: "sk-other" },
+    }),
+  )
+  expect(setAuthKey(file, "legacy", "sk-legacy")).toBe(true)
+  expect(setAuthKey(file, "future", "sk-future")).toBe(true)
+  expect(read(file)).toEqual({
+    legacy: { type: "api_key", apiKey: "sk-legacy" },
+    future: { type: "api_key", apiKey: "sk-future" },
+    untouched: { apiKey: "sk-other" },
+  })
+  expect(setAuthKey(file, "legacy", "sk-legacy")).toBe(false)
+  expect(loadAuth(file, "win32")).toEqual({
+    keys: { legacy: "sk-legacy", future: "sk-future", untouched: "sk-other" },
+    warnings: [],
+  })
 })
 
 test("restrictToCurrentUser runs icacls for the current user on Windows only", async () => {

@@ -13,6 +13,7 @@ import {
   ProbeError,
   type ProviderConfig,
   testConnection,
+  vendorPreset,
 } from "@amira/ai"
 import type { ProviderAdmin, ProviderDraft, ProviderModelInfo, ProviderSettings } from "@amira/api"
 import {
@@ -25,6 +26,7 @@ import {
   setAuthKey,
   updateProviderInSettings,
 } from "@amira/core"
+import { type CatalogCacheOptions, refreshCatalog } from "./catalog.ts"
 
 export interface ProviderAdminOptions {
   /** The session's providers; saved ones are registered on it at once. */
@@ -33,6 +35,8 @@ export interface ProviderAdminOptions {
   home?: string
   env?: Record<string, string | undefined>
   fetch?: typeof fetch
+  /** Catalog download options; separate from provider probes, and injectable for offline tests. */
+  catalog?: CatalogCacheOptions
   platform?: string
   /** The provider of the model in use, which cannot be removed. */
   currentProvider?: () => string | undefined
@@ -80,6 +84,24 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     return raw?.providers?.[id]
   }
   const config = (id: string) => ai.providers().find((p) => p.id === id)
+  let vendorRefresh: Promise<ModelCatalog | undefined> | undefined
+  const vendors = async () => {
+    let catalog = ai.catalog?.()
+    if (!catalog?.vendors?.().length) {
+      vendorRefresh ??= refreshCatalog({
+        file: path.join(home, "cache", "models.json"),
+        ...opts.catalog,
+      })
+      const refreshed = await vendorRefresh
+      if (refreshed) {
+        ai.setCatalog?.(refreshed)
+        catalog = refreshed
+      }
+    }
+    return (catalog?.vendors?.() ?? [])
+      .map((v) => ({ id: v.id, name: v.name, env: v.env, ...vendorPreset(v) }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+  }
 
   /** The key a probe of the draft should use: the one typed, the stored one, or the variable's. */
   const keyFor = (d: ProviderDraft): string | undefined => {
@@ -102,12 +124,13 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
   /** Which catalog provider describes these models: the provider's own, or the one that knows most of them. */
   const catalogFor = (d: ProviderDraft, ids: string[]): { catalogId?: string; catalog?: ModelCatalog } => {
     const catalog = ai.catalog?.()
-    if (!catalog) return {}
-    const existing = userEntry(d.id)?.catalogId ?? config(d.id)?.catalogId
+    const existing = d.catalogId ?? userEntry(d.id)?.catalogId ?? config(d.id)?.catalogId
     if (existing === false) return {}
+    if (existing !== undefined) return { catalogId: existing, ...(catalog ? { catalog } : {}) }
+    if (!catalog) return {}
     const own = catalogProviderId({ id: d.id, ...(existing !== undefined ? { catalogId: existing } : {}) })
     const known = (cid: string) => ids.filter((m) => catalog.find(cid, m)).length
-    if (own && (known(own) > 0 || !ids.length)) return { catalogId: own, catalog }
+    if (own && (catalog.vendor?.(own) || known(own) > 0 || !ids.length)) return { catalogId: own, catalog }
     const where = host(d.baseUrl).toLowerCase()
     const hits = (catalog.providers?.() ?? [])
       .map((cid) => ({ id: cid, n: known(cid), near: where.includes(cid.toLowerCase()) }))
@@ -162,6 +185,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
 
   return {
     dialects: () => dialectIds(ai),
+    vendors,
     exists: (id) => config(id) !== undefined,
     draft: (id) => {
       const p = config(id)
@@ -181,6 +205,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         id,
         dialect: p.dialect,
         baseUrl: p.baseUrl,
+        ...(p.catalogId !== undefined ? { catalogId: p.catalogId } : {}),
         keySource,
         ...(p.apiKeyEnv ? { apiKeyEnv: p.apiKeyEnv } : {}),
         models: (p.models ?? []).flatMap((m) => (m.id ? [m.id] : [])),
@@ -334,7 +359,9 @@ function entryFor(cur: ProviderSettings, d: ProviderDraft, catalogId: string | u
   const models: ModelOverrides[] = d.models.map((id) => old.get(id) ?? { id })
   if (models.length) next.models = models
   else delete next.models
-  if (catalogId) next.catalogId = catalogId
+  if (d.catalogId === false) next.catalogId = false
+  else if (catalogId) next.catalogId = catalogId
+  else if (d.catalogId !== undefined) delete next.catalogId
   const caps: NonNullable<ModelOverrides["caps"]> = { ...cur.defaultModel?.caps }
   for (const cap of ["thinking", "images", "promptCache"] as const) {
     const want = d.defaults?.[cap]

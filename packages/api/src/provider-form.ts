@@ -1,5 +1,11 @@
 import type { FormOption, FormSpec, FormValues } from "./form.ts"
-import type { ProviderAdmin, ProviderDraft, ProviderKeySource, ProviderModelInfo } from "./providers.ts"
+import type {
+  ProviderAdmin,
+  ProviderDraft,
+  ProviderKeySource,
+  ProviderModelInfo,
+  ProviderVendor,
+} from "./providers.ts"
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_OUTPUT,
@@ -44,14 +50,16 @@ export function modelDescription(m: ProviderModelInfo): string {
   return parts.join(" · ")
 }
 
-/** The draft the values describe; `id` comes from the provider edited when the form has none. */
-export function draftFromValues(values: FormValues, id?: string): ProviderDraft {
+/** The draft the values describe; fallback id and non-editable catalog identity come from the caller. */
+export function draftFromValues(values: FormValues, id?: string, catalogId?: string | false): ProviderDraft {
+  const finalId = String(values.id ?? id ?? "").trim()
   const keySource = (values.keySource as ProviderKeySource | undefined) ?? "none"
   const num = (v: unknown) => (typeof v === "number" && v > 0 ? v : undefined)
   const contextWindow = num(values.contextWindow)
   const maxOutput = num(values.maxOutput)
   return {
-    id: String(values.id ?? id ?? "").trim(),
+    id: finalId,
+    ...(catalogId !== undefined && catalogId !== finalId ? { catalogId } : {}),
     dialect: String(values.dialect ?? ""),
     baseUrl: String(values.baseUrl ?? "")
       .trim()
@@ -74,8 +82,30 @@ export function draftFromValues(values: FormValues, id?: string): ProviderDraft 
 
 /** What a new provider's form starts with, e.g. from `amira provider add` flags. */
 export type ProviderFormInitial = Partial<
-  Pick<ProviderDraft, "dialect" | "id" | "baseUrl" | "keySource" | "apiKeyEnv" | "models">
+  Pick<ProviderDraft, "dialect" | "id" | "catalogId" | "baseUrl" | "keySource" | "apiKeyEnv" | "models">
 >
+
+/** A searchable vendor label; unsupported vendors still provide id and key presets. */
+export function providerVendorLabel(vendor: ProviderVendor): string {
+  return `${vendor.name} (${vendor.id})${vendor.dialect ? "" : " — pick the protocol yourself"}`
+}
+
+/** Presets for adding a catalog vendor, without reading or exposing an API key. */
+export function providerVendorInitial(admin: ProviderAdmin, vendor: ProviderVendor): ProviderFormInitial {
+  let id = vendor.id
+  for (let n = 2; admin.exists(id); n++) id = `${vendor.id}-${n}`
+  const setEnv = vendor.env.find((name) => admin.envIsSet(name))
+  const apiKeyEnv = setEnv ?? vendor.env[0]
+  return {
+    id,
+    catalogId: vendor.id,
+    ...(vendor.dialect
+      ? { dialect: vendor.dialect, ...(vendor.baseUrl ? { baseUrl: vendor.baseUrl } : {}) }
+      : {}),
+    keySource: setEnv ? "env" : "auth",
+    ...(apiKeyEnv ? { apiKeyEnv } : {}),
+  }
+}
 
 /**
  * The form of /provider add and /provider edit: where the provider is, how it gets its key,
@@ -101,6 +131,7 @@ export function providerFormSpec(
     ? admin.describeModels(
         existing ?? {
           id: initial.id ?? "",
+          ...(initial.catalogId !== undefined ? { catalogId: initial.catalogId } : {}),
           dialect: initial.dialect ?? "",
           baseUrl: initial.baseUrl ?? "",
           keySource: "none",
@@ -109,7 +140,7 @@ export function providerFormSpec(
         startModels,
       )
     : []
-  const draft = (values: FormValues) => draftFromValues(values, existing?.id)
+  const draft = (values: FormValues) => draftFromValues(values, existing?.id, start.catalogId)
   return {
     title: editing ? `Edit provider ${existing.id}` : "Add a provider",
     description: editing

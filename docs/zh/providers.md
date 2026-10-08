@@ -2,7 +2,7 @@
 
 [English](../providers.md) · [文档首页](../../README.zh-CN.md)
 
-Provider 定义请求使用的协议、地址和凭据。Amira 没有内置 provider，发送第一个任务前需要添加一个。模型使用 `provider/model` 格式选择，其中 provider 名称是你设置的 ID。
+Provider 定义请求使用的协议、地址和凭据。发送第一个任务前需要添加一个；models.dev 目录提供服务商默认值，帮助你完成配置。模型使用 `provider/model` 格式选择，其中 provider 名称是你设置的 ID。
 
 ## 选择协议
 
@@ -17,9 +17,9 @@ Provider 定义请求使用的协议、地址和凭据。Amira 没有内置 prov
 
 ## 添加、编辑与删除
 
-在交互会话中，`/provider` 列出已配置的 provider 和密钥是否可用。`/provider add` 先让你选择协议，再打开配置表单；也可以用 `/provider add openai-chat` 预选协议。
+在交互会话中，`/provider` 列出已配置的 provider 和密钥是否可用。`/provider add` 先打开来自 models.dev 目录的服务商列表，支持按名称或 ID 搜索。选择支持的服务商后，会预填 ID、协议和 Base URL，三者都可以编辑。如果 ID 已被使用，Amira 会建议带 `-2` 等后缀的 ID。本地服务或未列出的服务选择 `Custom`，再选择协议并填写 URL。离线时无法获取目录，也可以使用 `Custom`。不支持的服务商需要手动选择协议并填写 URL。可以用 `/provider add deepseek` 预选服务商，也可以继续用 `/provider add openai-chat` 进入指定协议的流程。
 
-填写 ID、Base URL 和密钥来源。**Fetch models** 向服务请求模型列表，也可以手动填写模型 ID。**Test connection** 使用选中的第一个模型发送一个小请求。这两个操作会访问服务；仅打开或保存表单不会测试连接。点击 **Save** 后，配置写入用户设置，并立即在当前会话生效。
+确认 ID、协议、Base URL 和密钥来源。默认是保存 API 密钥，输入内容会被遮蔽。如果服务商列出的某个环境变量已经设置，表单会改为选择环境变量鉴权，只显示变量名，不显示值。否则，选择环境变量鉴权时，会预填第一个列出的变量名。**Fetch models** 向服务请求模型列表，也可以手动填写模型 ID。**Test connection** 使用选中的第一个模型发送一个小请求。这两个操作仍需主动选择，都会访问服务；仅打开或保存表单不会获取模型或测试连接。点击 **Save** 后，配置写入用户设置，并立即在当前会话生效。
 
 用 `/model` 从列表中选择模型，或用 `/model <provider/model>` 直接指定。列表便于选择，也支持输入未列出的模型 ID。如果当前会话尚未选择模型，保存第一个 provider 后会选用其列表中的第一个模型；列表为空时不会自动选择。
 
@@ -41,7 +41,13 @@ amira provider remove <id>
 amira provider help
 ```
 
-无需交互的添加方式要指定协议、ID、URL 和一种密钥来源。下面通过环境变量读取密钥，地址和模型请替换成实际服务的值：
+`amira provider add <vendor-or-protocol>` 接受目录中的服务商 ID 或协议名；名称冲突时，协议名优先。对于支持的服务商，下面的命令会使用其默认值，不提出交互问题：
+
+```sh
+amira provider add deepseek --key-env DEEPSEEK_API_KEY
+```
+
+用 `--id`、`--base-url` 和 `--model` 覆盖服务商默认的 ID、URL 和模型。不支持的服务商需要明确指定协议和 URL。原有的协议流程不变：无需交互的添加方式要指定协议、ID、URL 和一种密钥来源。下面的地址和模型请替换成实际服务的值：
 
 ```sh
 amira provider add openai-chat --id my-provider --base-url https://api.example.com/v1 --key-env MY_PROVIDER_API_KEY --model my-model
@@ -51,9 +57,9 @@ amira provider add openai-chat --id my-provider --base-url https://api.example.c
 
 ## 凭据与设置
 
-密钥可以保存在 `~/.amira/auth.json`，也可以从环境变量读取，或不使用密钥。交互表单的密钥输入会被遮蔽。`AMIRA_HOME` 可以更改用户目录，设置文件和凭据文件的位置也随之改变。
+API 密钥可以保存在 `~/.amira/auth.json`，也可以从环境变量读取，或不使用密钥。不支持 OAuth。交互表单的密钥输入会被遮蔽。`AMIRA_HOME` 可以更改用户目录，设置文件和凭据文件的位置也随之改变。
 
-使用环境变量时，在启动 Amira 前设置好变量。配置的 `apiKeyEnv` 只保存变量名。请求先读取该变量，再按顺序尝试 `apiKeyEnvFallbacks`，最后使用该 provider 已保存的密钥。Amira 不会自动猜测服务商的密钥环境变量名。
+使用环境变量时，在启动 Amira 前设置好变量。配置的 `apiKeyEnv` 只保存变量名。请求先读取该变量，再按顺序尝试 `apiKeyEnvFallbacks`，最后使用该 provider 已保存的密钥。按服务商配置时，会提供目录中列出的环境变量名；自定义协议配置需要你自行填写变量名。
 
 PowerShell 示例：
 

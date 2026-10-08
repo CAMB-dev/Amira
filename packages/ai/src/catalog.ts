@@ -8,6 +8,16 @@ export interface CatalogModel {
   cost?: NonNullable<ModelInfo["cost"]>
 }
 
+/** Connection metadata for one models.dev vendor, separate from configured providers. */
+export interface CatalogVendor {
+  id: string
+  name: string
+  env: string[]
+  npm: string
+  api?: string
+  doc?: string
+}
+
 /** Model facts by catalog provider id and model id (D51). */
 export interface ModelCatalog {
   find(catalogProvider: string, modelId: string): CatalogModel | undefined
@@ -15,6 +25,9 @@ export interface ModelCatalog {
   list?(catalogProvider: string): string[]
   /** Every catalog provider id. */
   providers?(): string[]
+  /** Connection metadata, when available (older caches contain only models). */
+  vendor?(id: string): CatalogVendor | undefined
+  vendors?(): CatalogVendor[]
 }
 
 /**
@@ -58,6 +71,12 @@ export function createCatalog(data: unknown): ModelCatalog {
       return isObject(models) ? Object.keys(models) : []
     },
     providers: () => Object.keys(providers).filter((p) => isObject(providers[p]?.models)),
+    vendor: (id) => (Object.hasOwn(providers, id) ? toCatalogVendor(providers[id]) : undefined),
+    vendors: () =>
+      Object.values(providers).flatMap((p) => {
+        const vendor = toCatalogVendor(p)
+        return vendor ? [vendor] : []
+      }),
   }
 }
 
@@ -90,10 +109,33 @@ export function toCatalogModel(raw: unknown): CatalogModel | undefined {
   return Object.keys(out).length ? out : undefined
 }
 
+function toCatalogVendor(raw: unknown): CatalogVendor | undefined {
+  if (
+    !isObject(raw) ||
+    typeof raw.id !== "string" ||
+    typeof raw.name !== "string" ||
+    typeof raw.npm !== "string" ||
+    !Array.isArray(raw.env) ||
+    !raw.env.every((v: unknown) => typeof v === "string")
+  ) {
+    return undefined
+  }
+  return {
+    id: raw.id,
+    name: raw.name,
+    env: [...raw.env],
+    npm: raw.npm,
+    ...(typeof raw.api === "string" ? { api: raw.api } : {}),
+    ...(typeof raw.doc === "string" ? { doc: raw.doc } : {}),
+  }
+}
+
+type TrimmedProvider = Partial<CatalogVendor> & { models: Record<string, Raw> }
+
 /** Keeps only the fields the catalog reads, so the cached copy stays small. */
-export function trimModelsDev(data: unknown): Record<string, { models: Record<string, Raw> }> | undefined {
+export function trimModelsDev(data: unknown): Record<string, TrimmedProvider> | undefined {
   if (!isObject(data)) return undefined
-  const out: Record<string, { models: Record<string, Raw> }> = {}
+  const out: Record<string, TrimmedProvider> = {}
   for (const [pid, p] of Object.entries(data)) {
     if (!isObject(p) || !isObject(p.models)) continue
     const models: Record<string, Raw> = {}
@@ -108,7 +150,11 @@ export function trimModelsDev(data: unknown): Record<string, { models: Record<st
         ...(isObject(m.cost) ? { cost: { input, output, cache_read, cache_write } } : {}),
       }
     }
-    out[pid] = { models }
+    const metadata: Raw = {}
+    for (const field of ["id", "name", "env", "npm", "api", "doc"]) {
+      if (Object.hasOwn(p, field)) metadata[field] = p[field]
+    }
+    out[pid] = { ...metadata, models }
   }
   return Object.keys(out).length ? out : undefined
 }

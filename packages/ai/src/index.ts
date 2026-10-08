@@ -30,3 +30,4 @@ export {
 } from "./thinking.ts"
 export { INVALID_ARGS_KEY, invalidArgs, parseToolArgs } from "./tool-args.ts"
 export * from "./types.ts"
+export { vendorPreset } from "./vendor-presets.ts"
