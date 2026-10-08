@@ -99,7 +99,8 @@ function draftFromFlags(
   initial: ProviderFormInitial = {},
 ): Omit<ProviderDraft, "apiKey"> | undefined {
   const keyGiven = f.keyEnv !== undefined || f.keyStdin || f.noKey
-  const id = f.id ?? initial.id
+  // Suggested suffixes belong to the form, not unattended setup.
+  const id = f.id ?? (typeof initial.catalogId === "string" ? initial.catalogId : initial.id)
   const baseUrl = f.baseUrl ?? initial.baseUrl
   const dialect = protocol ?? initial.dialect
   if (!dialect || !id || !baseUrl || !keyGiven) return undefined
@@ -182,6 +183,12 @@ export async function runProviderAdminCommand(
         )
       }
       if (complete) {
+        const placeholder = /\$\{[^}]*\}?/.exec(complete.baseUrl)?.[0]
+        if (placeholder && !added.flags.baseUrl) {
+          throw new UsageError(
+            `vendor "${initial.catalogId}" needs --base-url; replace ${placeholder} with its value`,
+          )
+        }
         if (admin.exists(complete.id)) {
           throw new UsageError(
             `provider "${complete.id}" exists already; change it with amira provider edit ${complete.id}`,

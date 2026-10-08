@@ -99,20 +99,32 @@ export function providerVendorInitial(admin: ProviderAdmin, vendor: ProviderVend
   return {
     id,
     catalogId: vendor.id,
-    ...(vendor.dialect
-      ? { dialect: vendor.dialect, ...(vendor.baseUrl ? { baseUrl: vendor.baseUrl } : {}) }
-      : {}),
+    ...(vendor.dialect ? { dialect: vendor.dialect } : {}),
+    ...(vendor.baseUrl ? { baseUrl: vendor.baseUrl } : {}),
     keySource: setEnv ? "env" : "auth",
     ...(apiKeyEnv ? { apiKeyEnv } : {}),
+  }
+}
+
+function validateBaseUrl(value: string): string | undefined {
+  const placeholder = value.match(/\$\{[^}]*\}?/)?.[0]
+  if (placeholder) return `replace ${placeholder} in the base URL with its value`
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? undefined
+      : "must start with http:// or https://"
+  } catch {
+    return "must be a URL, e.g. https://api.example.com/v1"
   }
 }
 
 /**
  * The form of /provider add and /provider edit: where the provider is, how it gets its key,
  * which models it offers (fetched from it, or typed), defaults for models the catalog does
- * not know, and an opt-in connection test. Nothing is sent anywhere unless the user presses
- * Fetch models or Test connection. `initial` fills in a new provider's form, such as the
- * protocol picked before it.
+ * not know, and an opt-in connection test. Full-screen forms fetch models when ready on add
+ * or when editing a provider with no models; dialogs keep fetching manual. `initial` fills
+ * in a new provider's form, such as the protocol picked before it.
  */
 export function providerFormSpec(
   admin: ProviderAdmin,
@@ -189,16 +201,7 @@ export function providerFormSpec(
         required: true,
         placeholder: "https://api.example.com/v1",
         ...(start.baseUrl ? { default: start.baseUrl } : {}),
-        validate: (v) => {
-          try {
-            const u = new URL(v.trim())
-            return u.protocol === "http:" || u.protocol === "https:"
-              ? undefined
-              : "must start with http:// or https://"
-          } catch {
-            return "must be a URL, e.g. https://api.example.com/v1"
-          }
-        },
+        validate: validateBaseUrl,
       },
       {
         type: "select",
@@ -236,7 +239,32 @@ export function providerFormSpec(
         label: "Fetch models",
         section: "Models",
         recommended: true,
-        help: "Asks the provider which models it has, with the key above.",
+        ...(!editing || !existing.models.length
+          ? {
+              auto: {
+                watch: [
+                  "dialect",
+                  "baseUrl",
+                  "keySource",
+                  "apiKey",
+                  "apiKeyEnv",
+                  { field: "id", when: { keySource: "auth", apiKey: "" } },
+                ],
+                ready: (values: FormValues) => {
+                  const d = draft(values)
+                  if (!dialects.some((option) => option.value === d.dialect) || validateBaseUrl(d.baseUrl))
+                    return false
+                  if (values.keySource === "none") return true
+                  if (values.keySource === "auth") return !!(d.apiKey?.trim() || admin.storedKeyHint(d.id))
+                  const env = d.apiKeyEnv ?? ""
+                  return (
+                    values.keySource === "env" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(env) && admin.envIsSet(env)
+                  )
+                },
+              },
+            }
+          : {}),
+        help: "Lists models from the provider with the key above; models.dev adds context window and price.",
         run: async ({ values, signal, progress }) => {
           const d = draft(values)
           progress(`asking ${d.baseUrl || "the provider"}…`)
@@ -244,7 +272,7 @@ export function providerFormSpec(
           const inCatalog = models.filter((m) => m.inCatalog).length
           return {
             message: models.length
-              ? `Found ${models.length} models; ${inCatalog} are in the model catalog. Pick them in the list below.`
+              ? `The provider listed ${models.length} models; models.dev adds context window and price for ${inCatalog}. Pick them in the list below.`
               : "The provider listed no models; type their ids into the list below.",
             tone: models.length ? "success" : "warning",
             options: {

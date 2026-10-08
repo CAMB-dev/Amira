@@ -88,6 +88,11 @@ export function setAuthKey(file: string, id: string, apiKey: string | undefined)
       if (current === undefined) return false
       delete next[id]
     } else {
+      if (isPlainObject(current) && current.type !== undefined && current.type !== "api_key") {
+        throw new SettingsError(file, [
+          `cannot set API key for provider "${id}": existing auth entry has an unsupported type`,
+        ])
+      }
       if (isPlainObject(current) && current.type === "api_key" && current.apiKey === apiKey) return false
       next[id] = { ...(isPlainObject(current) ? current : {}), type: "api_key", apiKey }
     }

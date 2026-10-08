@@ -23,6 +23,8 @@ export function vendorPreset(vendor: CatalogVendor): { dialect: string; baseUrl:
   const api = vendor.api?.trim() || defaults.baseUrl
   if (!api) return undefined
   const base = api.replace(/\/+$/, "")
+  // Catalog placeholders are editable prefills, not environment variable lookups.
+  if (base.includes("${")) return { dialect, baseUrl: base }
   let url: URL
   try {
     url = new URL(base)

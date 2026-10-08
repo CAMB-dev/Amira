@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: Catalog URL placeholders are literal fixtures.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -95,7 +96,7 @@ test("provider add from piped stdin asks field by field and saves", async () => 
       "1", // Save
     ]),
   })
-  expect(seen.stderr).toContain("Fetch models? Asks the provider")
+  expect(seen.stderr).toContain("Fetch models? Lists models from the provider")
   expect(seen.stderr).toContain("Test connection?")
   expect(code).toBe(0)
   expect(seen.stdout).toContain('Saved provider "ds-test"')
@@ -360,6 +361,41 @@ test("vendor flags fill the endpoint and id without asking; renamed ids retain c
   expect(seen.stdout + seen.stderr).not.toContain(KEY)
 })
 
+test.each([false, true])(
+  "complete vendor flags refuse a duplicate id (terminal: %s)",
+  async (interactive) => {
+    const { io: out } = io()
+    const opts = { io: out, home, cwd, env: {}, interactive, readLine: noInput }
+    const args = ["add", "deepseek", "--key-env", "X"]
+    expect(await runProviderAdminCommand(args, opts)).toBe(0)
+    const before = readFileSync(path.join(home, "settings.json"), "utf8")
+    await expect(runProviderAdminCommand(args, opts)).rejects.toThrow(
+      'provider "deepseek" exists already; change it with amira provider edit deepseek',
+    )
+    expect(readFileSync(path.join(home, "settings.json"), "utf8")).toBe(before)
+    expect(Object.keys(settings().providers)).toEqual(["deepseek"])
+  },
+)
+
+test("line-by-line forms keep the suggested suffix for a duplicate vendor id", async () => {
+  const { io: out } = io()
+  const opts = { io: out, home, cwd, env: {}, interactive: false }
+  expect(
+    await runProviderAdminCommand(["add", "deepseek", "--key-env", "X"], {
+      ...opts,
+      readLine: noInput,
+    }),
+  ).toBe(0)
+  expect(
+    await runProviderAdminCommand(["add", "deepseek"], {
+      ...opts,
+      readLine: script(["", "", "", "3", "2", "1", "", "", "1"]),
+    }),
+  ).toBe(0)
+  expect(Object.keys(settings().providers)).toEqual(["deepseek", "deepseek-2"])
+  expect(settings().providers["deepseek-2"].catalogId).toBe("deepseek")
+})
+
 test("the terminal starts with a filterable vendor list including Custom", async () => {
   const shown: FormSpec[] = []
   const { io: out } = io()
@@ -503,4 +539,95 @@ test("an offline missing catalog falls straight into Custom with one note", asyn
   expect(seen.stderr).toContain("Vendor catalog unavailable; choose a custom provider.")
   expect(seen.stderr).toContain("Which protocol does the provider speak?")
   expect(seen.stderr).not.toContain("Choose a vendor")
+  expect(seen.stderr.split("Loading vendors from models.dev…")).toHaveLength(2)
 })
+
+test.each([false, true])(
+  "offline positional lookup explains an unavailable catalog (legacy: %s)",
+  async (legacy) => {
+    if (legacy) {
+      writeFileSync(
+        path.join(home, "cache", "models.json"),
+        JSON.stringify({
+          fetchedAt: Date.now(),
+          data: { deepseek: { models: {} } },
+        }),
+      )
+    } else {
+      rmSync(path.join(home, "cache"), { recursive: true })
+    }
+    const { io: out, out: seen } = io()
+    let calls = 0
+    await expect(
+      runProviderAdminCommand(["add", "deepseek"], {
+        io: out,
+        home,
+        cwd,
+        env: {},
+        interactive: false,
+        readLine: noInput,
+        catalog: {
+          fetch: (async () => {
+            expect(seen.stderr).toBe("Loading vendors from models.dev…\n")
+            calls++
+            throw new Error("offline")
+          }) as unknown as typeof fetch,
+        },
+      }),
+    ).rejects.toThrow(
+      'Vendor catalog unavailable (offline?); cannot look up "deepseek". Choose a protocol instead: openai-chat',
+    )
+    expect(calls).toBe(1)
+    expect(seen.stdout).toBe("")
+  },
+)
+
+test.each([
+  [
+    "cloudflare",
+    "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+    "CLOUDFLARE_ACCOUNT_ID",
+  ],
+  ["neon", "${NEON_AI_GATEWAY_BASE_URL}/v1", "NEON_AI_GATEWAY_BASE_URL"],
+])(
+  "%s URL placeholders prefill the form but need --base-url for complete flags",
+  async (id, api, placeholder) => {
+    writeFileSync(
+      path.join(home, "cache", "models.json"),
+      JSON.stringify({
+        fetchedAt: Date.now(),
+        data: { [id!]: { id, name: id, env: ["X"], npm: "@ai-sdk/openai-compatible", api, models: {} } },
+      }),
+    )
+    const { io: out, out: seen } = io()
+    const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: noInput }
+    await expect(runProviderAdminCommand(["add", id!, "--key-env", "X"], opts)).rejects.toThrow(
+      "needs --base-url",
+    )
+    await expect(runProviderAdminCommand(["add", id!, "--key-stdin"], opts)).rejects.toThrow(
+      "needs --base-url",
+    )
+    let shown: FormSpec | undefined
+    expect(
+      await runProviderAdminCommand(["add", id!], {
+        ...opts,
+        interactive: true,
+        runForm: async (spec) => {
+          shown = spec
+          return undefined
+        },
+      }),
+    ).toBe(1)
+    expect(shown!.fields.find((f) => f.id === "baseUrl")).toMatchObject({ default: api })
+    expect(shown!.fields.find((f) => f.id === "dialect")).toMatchObject({ default: "openai-chat" })
+    expect(await runProviderAdminCommand(["add", id!, "--key-env", "X", "--base-url", api!], opts)).toBe(1)
+    expect(seen.stderr).toContain(`replace \${${placeholder}} in the base URL with its value`)
+    expect(
+      await runProviderAdminCommand(
+        ["add", id!, "--key-env", "X", "--base-url", "https://resolved.example/v1"],
+        opts,
+      ),
+    ).toBe(0)
+    expect(settings().providers[id!].baseUrl).toBe("https://resolved.example/v1")
+  },
+)

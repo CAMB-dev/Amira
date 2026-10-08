@@ -1,6 +1,7 @@
 import {
   type AskAnswer,
   type AskQuestion,
+  autoFormActions,
   checkForm,
   describeFormErrors,
   type EventMap,
@@ -163,6 +164,13 @@ export class UiRequests {
     return checkForm(form.spec, values, form.options).errors
   }
 
+  /** Eligible automatic actions of a pending form; readiness callbacks stay with the host. */
+  autoFormActions(requestId: string, values: Record<string, unknown>): string[] {
+    const form = this.#pending.get(requestId)?.form
+    if (!form) return []
+    return autoFormActions(form.spec, values, form.options)
+  }
+
   /**
    * Runs an action of a pending form with the values so far. Progress goes out as ui.progress
    * (and to `onProgress`); the result never carries secret values. Aborted by `signal` and
@@ -192,7 +200,7 @@ export class UiRequests {
           this.#bus.emit("ui.progress", { requestId, action, text }, { sessionId: this.#sessionId })
         },
       })
-      if (result.options) Object.assign(form.options, result.options)
+      if (!controller.signal.aborted && result.options) Object.assign(form.options, result.options)
       return result
     } finally {
       form.running.delete(controller)

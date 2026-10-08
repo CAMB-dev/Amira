@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: Catalog URL placeholders are literal fixtures.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -272,6 +273,7 @@ test("a deleted or replaced stored key stops being used at once, and auth.json i
 test("vendor metadata refreshes a legacy catalog once, with the existing timeout", async () => {
   const ai = createAi({ catalog, env: {} })
   let calls = 0
+  let loading = 0
   let signal: AbortSignal | undefined
   const admin = createProviderAdmin({
     ai,
@@ -279,6 +281,7 @@ test("vendor metadata refreshes a legacy catalog once, with the existing timeout
     env: {},
     catalog: {
       fetch: (async (_url: unknown, init?: RequestInit) => {
+        expect(loading).toBe(1)
         calls++
         signal = init?.signal ?? undefined
         return Response.json({
@@ -309,7 +312,8 @@ test("vendor metadata refreshes a legacy catalog once, with the existing timeout
       }) as typeof fetch,
     },
   })
-  const vendors = await admin.vendors!()
+  const request = { onLoading: () => loading++ }
+  const vendors = await admin.vendors!(request)
   expect(vendors).toEqual([
     {
       id: "deepseek",
@@ -322,14 +326,16 @@ test("vendor metadata refreshes a legacy catalog once, with the existing timeout
     { id: "unsupported", name: "Unsupported", env: [] },
   ])
   expect(signal).toBeInstanceOf(AbortSignal)
-  expect(await admin.vendors!()).toEqual(vendors)
+  expect(await admin.vendors!(request)).toEqual(vendors)
   expect(calls).toBe(1)
+  expect(loading).toBe(1)
   expect(ai.catalog?.()?.vendor?.("deepseek")?.env).toEqual(["DEEPSEEK_API_KEY"])
 })
 
 test("failed vendor refresh is attempted once and keeps legacy model facts", async () => {
   const ai = createAi({ catalog, env: {} })
   let calls = 0
+  let loading = 0
   const admin = createProviderAdmin({
     ai,
     home,
@@ -341,9 +347,11 @@ test("failed vendor refresh is attempted once and keeps legacy model facts", asy
       }) as unknown as typeof fetch,
     },
   })
-  expect(await admin.vendors!()).toEqual([])
-  expect(await admin.vendors!()).toEqual([])
+  const request = { onLoading: () => loading++ }
+  expect(await admin.vendors!(request)).toEqual([])
+  expect(await admin.vendors!(request)).toEqual([])
   expect(calls).toBe(1)
+  expect(loading).toBe(1)
   expect(ai.catalog?.()?.find("deepseek", "deepseek-chat")?.contextWindow).toBe(128000)
 })
 
@@ -360,4 +368,50 @@ test("explicit catalog identity survives renaming and empty model lists", async 
   await admin.save(draft({ id: "local", catalogId: false, models: ["deepseek-chat"] }))
   expect(settings().providers.local.catalogId).toBe(false)
   expect(admin.describeModels(admin.draft("local")!, ["deepseek-chat"])[0]?.inCatalog).toBe(false)
+})
+
+test("cached vendor fields skip the loading status and preserve unsupported placeholders", async () => {
+  const ai = createAi({
+    env: {},
+    catalog: createCatalog({
+      unsupported: {
+        id: "unsupported",
+        name: "Unsupported",
+        env: [],
+        npm: "@other/sdk",
+        api: "${ENDPOINT}/v1",
+        models: {},
+      },
+    }),
+  })
+  let loading = 0
+  const admin = createProviderAdmin({
+    ai,
+    home,
+    env: {},
+    catalog: {
+      fetch: (async () => {
+        throw new Error("must not fetch a populated vendor catalog")
+      }) as unknown as typeof fetch,
+    },
+  })
+  expect(await admin.vendors!({ onLoading: () => loading++ })).toEqual([
+    { id: "unsupported", name: "Unsupported", env: [], baseUrl: "${ENDPOINT}/v1" },
+  ])
+  expect(loading).toBe(0)
+})
+
+test.each([
+  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+  "${NEON_AI_GATEWAY_BASE_URL}/v1",
+  "https://api.example/${UNCLOSED",
+])("saving and probing reject unresolved URL placeholders: %s", async (baseUrl) => {
+  const { admin, seen } = setup()
+  const d = draft({ baseUrl })
+  await expect(admin.save(d)).rejects.toThrow("in the base URL with its value")
+  await expect(admin.listModels(d)).rejects.toThrow("in the base URL with its value")
+  await expect(admin.test(d, "tiny")).rejects.toThrow("in the base URL with its value")
+  expect(seen).toEqual([])
+  expect(() => settings()).toThrow()
+  expect(() => auth()).toThrow()
 })

@@ -93,6 +93,7 @@ test("the public API exports stay stable", async () => {
     "USER_STOP_REASON",
     "addUsage",
     "artifactIdOf",
+    "autoFormActions",
     "checkForm",
     "clip",
     "clipMiddle",
