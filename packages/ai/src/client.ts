@@ -37,6 +37,8 @@ export interface AiOptions {
   providers?: ProviderConfig[]
   dialects?: Dialect[]
   fetch?: typeof fetch
+  /** User-Agent for HTTP requests; provider headers can override it. */
+  userAgent?: string
   env?: Record<string, string | undefined>
   /** Stored API keys by provider id (e.g. from auth.json), used when the key variables are unset. */
   apiKeys?: Record<string, string>
@@ -138,6 +140,7 @@ export function createAi(opts: AiOptions = {}): Ai {
       },
       signal,
       fetch: doFetch,
+      ...(opts.userAgent !== undefined ? { userAgent: opts.userAgent } : {}),
       ...(p.compat ? { compat: p.compat } : {}),
     }
   }

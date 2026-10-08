@@ -109,6 +109,7 @@
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
         "@amira/core": "workspace:*",
+        "@amira/net": "workspace:*",
         "@amira/packages": "workspace:*",
         "@amira/proc": "workspace:*",
         "@amira/tui": "workspace:*",

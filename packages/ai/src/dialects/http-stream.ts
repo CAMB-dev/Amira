@@ -1,4 +1,5 @@
 import type { DialectContext } from "../dialect.ts"
+import { requestHeaders } from "../request-headers.ts"
 import type { ModelError, StreamEvent } from "../types.ts"
 import { bodyError, isRetryableBodyError, isRetryableStatus } from "./openai-chat-errors.ts"
 import { withRetryAfter } from "./retry-after.ts"
@@ -40,7 +41,11 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
   try {
     res = await ctx.fetch(r.url, {
       method: "POST",
-      headers: { "content-type": "application/json", ...r.headers, ...ctx.endpoint.headers },
+      headers: requestHeaders(
+        { "content-type": "application/json", ...r.headers },
+        ctx.endpoint.headers,
+        ctx.userAgent,
+      ),
       body: JSON.stringify(r.body),
       signal: ctx.signal,
     })

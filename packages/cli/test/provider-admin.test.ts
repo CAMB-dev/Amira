@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { createAi, createCatalog } from "@amira/ai"
 import type { ProviderDraft } from "@amira/api"
+import pkg from "../package.json" with { type: "json" }
 import { createProviderAdmin, keyHint, modelNote } from "../src/provider-admin.ts"
 
 let home: string
@@ -29,8 +30,10 @@ const catalog = createCatalog({
 
 function setup(env: Record<string, string> = {}) {
   const seen: { url: string; auth?: string }[] = []
+  const userAgents: (string | null)[] = []
   const fetch = (async (url: string, init: RequestInit = {}) => {
     const h = (init.headers ?? {}) as Record<string, string>
+    userAgents.push(new Headers(init.headers).get("user-agent"))
     seen.push({ url, ...(h.authorization ? { auth: h.authorization } : {}) })
     if (url.endsWith("/models"))
       return Response.json({ data: [{ id: "deepseek-chat" }, { id: "deepseek-new" }] })
@@ -53,7 +56,7 @@ function setup(env: Record<string, string> = {}) {
       return undefined
     },
   })
-  return { admin, ai, seen, restricted, setCurrent: (p: string) => (current = p) }
+  return { admin, ai, seen, userAgents, restricted, setCurrent: (p: string) => (current = p) }
 }
 
 const draft = (over: Partial<ProviderDraft> = {}): ProviderDraft => ({
@@ -69,6 +72,13 @@ const draft = (over: Partial<ProviderDraft> = {}): ProviderDraft => ({
 
 const settings = () => JSON.parse(readFileSync(path.join(home, "settings.json"), "utf8"))
 const auth = () => JSON.parse(readFileSync(path.join(home, "auth.json"), "utf8"))
+
+test("provider probes and model lists identify Amira with the CLI version", async () => {
+  const { admin, userAgents } = setup()
+  await admin.listModels(draft())
+  expect((await admin.test(draft(), "deepseek-chat")).ok).toBe(true)
+  expect(userAgents).toEqual([`Amira/${pkg.version}`, `Amira/${pkg.version}`])
+})
 
 test("fetching models uses the typed key and says what the catalog knows", async () => {
   const { admin, seen } = setup()

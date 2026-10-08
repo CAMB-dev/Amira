@@ -3,7 +3,13 @@ import { assertPublicHost, dnsResolver, type Resolver } from "./address.ts"
 /** A refusal or failure whose message can be shown as it is. */
 export class NetError extends Error {}
 
-export const USER_AGENT = "Mozilla/5.0 (compatible; Amira/0.1; +https://github.com/CAMB-dev/Amira)"
+// The composition root supplies the bundled application version before making requests.
+export let USER_AGENT = "Mozilla/5.0 (compatible; Amira; +https://github.com/CAMB-dev/Amira)"
+
+export function setUserAgentVersion(version: string): void {
+  USER_AGENT = `Mozilla/5.0 (compatible; Amira/${version}; +https://github.com/CAMB-dev/Amira)`
+}
+
 const MAX_REDIRECTS = 10
 
 /** Checks a URL: plain http(s) only, without credentials; the fragment is dropped. */
