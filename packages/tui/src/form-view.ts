@@ -103,7 +103,7 @@ export class FormView implements Component {
   readonly form: Form
   #backend: FormBackend
   #opts: FormViewOptions
-  #running = new Map<string, { controller: AbortController; key: string }>()
+  #running = new Map<string, { controller: AbortController; key: string; automatic: boolean }>()
   #automatic = new Map<string, { key: string; attempted: boolean }>()
   #confirmed: FormValues
   #closed = false
@@ -204,13 +204,13 @@ export class FormView implements Component {
       }
       const ready = eligible.includes(action.id)
       const running = this.#running.get(action.id)
-      if (running && (!ready || running.key !== key || running.key !== liveKey)) {
+      if (running && ((running.automatic && !ready) || running.key !== key)) {
         running.controller.abort()
         // An interrupted attempt produced no usable result, even if the edit is reverted.
         state.attempted = false
       }
       if (running || !ready || liveKey !== key || state.attempted) continue
-      this.#run(action.id, structuredClone(values))
+      this.#run(action.id, structuredClone(values), true)
     }
   }
 
@@ -231,7 +231,7 @@ export class FormView implements Component {
     )
   }
 
-  #run(id: string, values: Record<string, FormInputValue>) {
+  #run(id: string, values: Record<string, FormInputValue>, automatic = false) {
     if (this.#running.has(id)) return
     const controller = new AbortController()
     const key = this.#actionKey(id, values as FormValues)
@@ -239,7 +239,7 @@ export class FormView implements Component {
     if (action?.type === "action" && action.auto) {
       this.#automatic.set(id, { key, attempted: true })
     }
-    const running = { controller, key }
+    const running = { controller, key, automatic }
     this.#running.set(id, running)
     this.form.setActionState(id, { running: true })
     this.#opts.requestRender()

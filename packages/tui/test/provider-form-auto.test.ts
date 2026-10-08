@@ -214,6 +214,60 @@ test.each(["auth", "env"] as const)("existing %s credentials allow an automatic 
   }
 })
 
+test("remote HTTP warns about plaintext keys and keeps fetching manual", async () => {
+  const form = setup({
+    initial: { baseUrl: "http://remote.example/v1", keySource: "env", apiKeyEnv: "SET_KEY" },
+    admin: { envIsSet: (name) => name === "SET_KEY" },
+  })
+  try {
+    await tick()
+    expect(form.calls).toEqual([])
+    expect(form.screen()).toContain("Non-loopback HTTP would send the key unencrypted.")
+    form.focus("fetchModels")
+    form.view.handleInput(key("enter"))
+    await waitFor(() => form.screen().includes("The provider listed"), "manual HTTP fetch")
+    expect(form.calls).toHaveLength(1)
+    expect(form.calls[0]?.signal?.aborted).toBe(false)
+    expect(form.calls[0]?.draft.baseUrl).toBe("http://remote.example/v1")
+  } finally {
+    await form.close()
+  }
+})
+
+test("editing an auth key leaves the stored-key fetch running until confirmation", async () => {
+  const pending: ReturnType<typeof Promise.withResolvers<ProviderModelInfo[]>>[] = []
+  const form = setup({
+    initial: { keySource: "auth" },
+    admin: {
+      storedKeyHint: () => "(set)",
+      listModels: async () => {
+        const next = Promise.withResolvers<ProviderModelInfo[]>()
+        pending.push(next)
+        return next.promise
+      },
+    },
+  })
+  try {
+    await waitFor(() => pending.length === 1, "stored-key request")
+    form.focus("apiKey")
+    form.type("sk-confirmed-fake")
+    await tick()
+    expect(form.calls).toHaveLength(1)
+    expect(form.calls[0]?.signal?.aborted).toBe(false)
+    form.view.handleInput(key("tab"))
+    expect(form.calls[0]?.signal?.aborted).toBe(true)
+    expect(form.calls).toHaveLength(1)
+    pending[0]!.resolve(MODELS)
+    await waitFor(() => pending.length === 2, "confirmed replacement key")
+    expect(form.calls[1]?.draft.apiKey).toBe("sk-confirmed-fake")
+    pending[1]!.resolve(MODELS)
+    await waitFor(() => form.screen().includes("The provider listed"), "replacement results")
+  } finally {
+    for (const p of pending) p.resolve([])
+    await form.close()
+  }
+})
+
 test.each([false, true])(
   "a stale fetch is aborted and settled before refetching (hosted: %s)",
   async (hosted) => {
@@ -234,8 +288,9 @@ test.each([false, true])(
       form.focus("baseUrl")
       form.view.handleInput(key("u", { ctrl: true }))
       form.type("https://new.example/v1")
-      expect(form.calls[0]?.signal?.aborted).toBe(true)
+      expect(form.calls[0]?.signal?.aborted).toBe(false)
       form.view.handleInput(key("tab"))
+      expect(form.calls[0]?.signal?.aborted).toBe(true)
       await tick()
       expect(form.calls).toHaveLength(1)
       pending[0]!.resolve([{ id: "stale-model", inCatalog: false }])
@@ -254,7 +309,7 @@ test.each([false, true])(
   },
 )
 
-test("restoring an edited URL restarts its interrupted fetch without overlap", async () => {
+test("restoring an in-progress URL edit does not interrupt or repeat its fetch", async () => {
   const pending: ReturnType<typeof Promise.withResolvers<ProviderModelInfo[]>>[] = []
   const form = setup({
     admin: {
@@ -270,15 +325,14 @@ test("restoring an edited URL restarts its interrupted fetch without overlap", a
     form.focus("baseUrl")
     form.view.handleInput(key("backspace"))
     form.type("1")
-    expect(form.calls[0]?.signal?.aborted).toBe(true)
+    expect(form.calls[0]?.signal?.aborted).toBe(false)
+    form.view.handleInput(key("tab"))
     await tick()
     expect(form.calls).toHaveLength(1)
-    pending[0]!.resolve([{ id: "discarded", inCatalog: false }])
-    await waitFor(() => pending.length === 2, "restored URL replacement")
-    expect(form.calls[1]?.draft.baseUrl).toBe(INITIAL.baseUrl)
-    pending[1]!.resolve(MODELS)
-    await waitFor(() => form.screen().includes("The provider listed"), "replacement result")
-    expect(form.calls).toHaveLength(2)
+    pending[0]!.resolve(MODELS)
+    await waitFor(() => form.screen().includes("The provider listed"), "original result")
+    expect(form.calls).toHaveLength(1)
+    expect(form.calls[0]?.signal?.aborted).toBe(false)
   } finally {
     for (const p of pending) p.resolve([])
     await form.close()
@@ -303,6 +357,7 @@ test("changing the id holding a stored key aborts the old credential's request",
     form.focus("id")
     form.view.handleInput(key("u", { ctrl: true }))
     form.type("b")
+    expect(form.calls[0]?.signal?.aborted).toBe(false)
     form.view.handleInput(key("tab"))
     expect(form.calls[0]?.signal?.aborted).toBe(true)
     expect(form.calls).toHaveLength(1)

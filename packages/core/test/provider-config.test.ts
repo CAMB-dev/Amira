@@ -121,6 +121,59 @@ test("setting an auth key refuses unsupported types without exposing credentials
   }
 })
 
+test("setting an auth key refuses nonplain entries without exposing credentials or changing bytes", () => {
+  const file = path.join(dir, "auth.json")
+  for (const entry of ["sk-existing", ["sk-existing"], null, 42, true, false]) {
+    writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          future: entry,
+          untouched: { type: "api_key", apiKey: "sk-other" },
+          legacy: { apiKey: "sk-legacy" },
+        },
+        null,
+        4,
+      )}\r\n`,
+    )
+    const before = readFileSync(file)
+    for (const apiKey of ["sk-existing", "sk-replacement"]) {
+      let error: unknown
+      try {
+        setAuthKey(file, "future", apiKey)
+      } catch (err) {
+        error = err
+      }
+      expect(error).toBeInstanceOf(SettingsError)
+      expect(error instanceof Error ? error.message : "").toBe(
+        `${file}: cannot set API key for provider "future": existing auth entry has an unsupported type`,
+      )
+      expect(readFileSync(file)).toEqual(before)
+    }
+    expect(setAuthKey(file, "future", undefined)).toBe(true)
+    expect(read(file)).toEqual({
+      untouched: { type: "api_key", apiKey: "sk-other" },
+      legacy: { apiKey: "sk-legacy" },
+    })
+  }
+})
+
+test("setting an auth key named constructor treats inherited properties as missing", () => {
+  const file = path.join(dir, "auth.json")
+  writeFileSync(file, JSON.stringify({ untouched: { type: "api_key", apiKey: "sk-other" } }))
+  const before = readFileSync(file)
+  expect(setAuthKey(file, "constructor", undefined)).toBe(false)
+  expect(readFileSync(file)).toEqual(before)
+  expect(setAuthKey(file, "constructor", "sk-constructor")).toBe(true)
+  expect(read(file)).toEqual({
+    untouched: { type: "api_key", apiKey: "sk-other" },
+    constructor: { type: "api_key", apiKey: "sk-constructor" },
+  })
+  expect(setAuthKey(file, "constructor", "sk-constructor")).toBe(false)
+  expect(setAuthKey(file, "constructor", undefined)).toBe(true)
+  expect(read(file)).toEqual({ untouched: { type: "api_key", apiKey: "sk-other" } })
+})
+
 test("removing an unsupported auth entry keeps other entries", () => {
   const file = path.join(dir, "auth.json")
   writeFileSync(
