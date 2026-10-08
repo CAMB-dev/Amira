@@ -13,6 +13,7 @@ import {
   type Usage,
 } from "@amira/ai"
 import type { CompactionInfo, CompactionReason, CompactionUsage } from "@amira/api"
+import { DEFAULT_COMPACT_LAYOUT, DEFAULT_COMPACT_THRESHOLD } from "@amira/api"
 import {
   type CompactionOptions,
   checkpointOf,
@@ -80,7 +81,9 @@ export class Compactor {
   }
 
   #overThreshold(tokens: number): boolean {
-    return tokens > (this.#deps.options.threshold ?? 0.8) * this.#deps.model().contextWindow
+    return (
+      tokens > (this.#deps.options.threshold ?? DEFAULT_COMPACT_THRESHOLD) * this.#deps.model().contextWindow
+    )
   }
 
   /**
@@ -179,7 +182,7 @@ export class Compactor {
         supplied || instructions?.trim() || this.#deps.options.model
           ? undefined
           : this.#deps.ai.nativeCompaction(this.#deps.model())
-      const wanted = this.#deps.options.layout ?? "tail"
+      const wanted = this.#deps.options.layout ?? DEFAULT_COMPACT_LAYOUT
       const layout: CompactionLayout = server?.layouts.includes(wanted) ? wanted : "tail"
       // A "tail" checkpoint over the first steps of a long turn only where the dialect allows.
       const native =

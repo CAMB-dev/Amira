@@ -22,10 +22,11 @@ export interface JobSpec {
   viaCmd?: boolean
   /** All output is also written to this file (its directory is created), up to `maxLogBytes`. */
   logPath?: string
-  /** Default 50 MB; the log then says it stopped there. */
+  /** See DEFAULT_MAX_LOG_BYTES; the log then says it stopped there. */
   maxLogBytes?: number
 }
 
+// Asserted equal to the central settings default by scripts/settings-docs.test.ts.
 export const DEFAULT_MAX_LOG_BYTES = 50 * 1024 * 1024
 
 /** What a job reports, in order: "spawned" (unless it cannot start), output, then one "exit". */

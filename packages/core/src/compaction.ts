@@ -13,7 +13,7 @@ import {
 import { formatTokens } from "@amira/api"
 
 export interface CompactionOptions {
-  /** Compact once the context passes this fraction of the model's window. Default 0.8. */
+  /** Compact once the context passes this fraction of the model's window. See DEFAULT_COMPACT_THRESHOLD. */
   threshold?: number
   /** User turns kept verbatim. Default 2; fewer when the history is short. */
   keepTurns?: number
@@ -30,8 +30,7 @@ export interface CompactionOptions {
   /** Set false to never compact automatically. agent.compact() still works. */
   auto?: boolean
   /**
-   * Where a server-side checkpoint goes (CompactionLayout); "tail" by default until live
-   * tests pick one. Used when the provider's dialect can replay it there, else "tail". Text
+   * Where a server-side checkpoint goes (CompactionLayout); DEFAULT_COMPACT_LAYOUT by default. Used when the provider's dialect can replay it there, else "tail". Text
    * summaries always go at the tail.
    */
   layout?: CompactionLayout

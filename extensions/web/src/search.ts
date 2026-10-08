@@ -1,4 +1,12 @@
 import type { WebSearchBackend, WebSettings } from "@amira/api"
+import {
+  DEFAULT_BRAVE_API_KEY_ENV,
+  DEFAULT_EXA_URL,
+  DEFAULT_TAVILY_API_KEY_ENV,
+  DEFAULT_TAVILY_SEARCH_DEPTH,
+  DEFAULT_WEB_SEARCH_BACKEND,
+  DEFAULT_WEB_SEARCH_TIMEOUT_MS,
+} from "@amira/api"
 
 export interface SearchResult {
   title: string
@@ -27,7 +35,7 @@ export type Backend = (q: SearchQuery, ctx: BackendContext) => Promise<SearchRes
 /** A backend failure: the message is shown to the model, so it must not contain a key. */
 export class SearchError extends Error {}
 
-export const EXA_URL = "https://mcp.exa.ai/mcp"
+export const EXA_URL = DEFAULT_EXA_URL
 export const BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 export const TAVILY_URL = "https://api.tavily.com/search"
 
@@ -115,7 +123,7 @@ const stripTags = (s: string) =>
 
 /** Brave Search API: https://api-dashboard.search.brave.com/app/documentation/web-search */
 export const brave: Backend = async (q, ctx) => {
-  const key = apiKey(ctx, "Brave", ctx.settings.brave?.apiKeyEnv ?? "BRAVE_API_KEY")
+  const key = apiKey(ctx, "Brave", ctx.settings.brave?.apiKeyEnv ?? DEFAULT_BRAVE_API_KEY_ENV)
   const url = new URL(BRAVE_URL)
   url.searchParams.set("q", siteOperators(q))
   url.searchParams.set("count", String(Math.min(overfetch(q), 20)))
@@ -134,14 +142,14 @@ export const brave: Backend = async (q, ctx) => {
 
 /** Tavily: https://docs.tavily.com/documentation/api-reference/endpoint/search */
 export const tavily: Backend = async (q, ctx) => {
-  const key = apiKey(ctx, "Tavily", ctx.settings.tavily?.apiKeyEnv ?? "TAVILY_API_KEY")
+  const key = apiKey(ctx, "Tavily", ctx.settings.tavily?.apiKeyEnv ?? DEFAULT_TAVILY_API_KEY_ENV)
   const res = await ctx.fetch(TAVILY_URL, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
     body: JSON.stringify({
       query: q.query,
       max_results: Math.min(q.maxResults, 20),
-      search_depth: ctx.settings.tavily?.searchDepth ?? "basic",
+      search_depth: ctx.settings.tavily?.searchDepth ?? DEFAULT_TAVILY_SEARCH_DEPTH,
       ...(q.allowedDomains.length ? { include_domains: q.allowedDomains } : {}),
       ...(q.blockedDomains.length ? { exclude_domains: q.blockedDomains } : {}),
     }),
@@ -300,8 +308,10 @@ export async function search(
   signal: AbortSignal,
   backends: Record<WebSearchBackend, Backend> = BACKENDS,
 ): Promise<SearchOutcome> {
-  const chain = [...new Set([ctx.settings.backend ?? "exa", ...(ctx.settings.fallback ?? [])])]
-  const timeoutMs = ctx.settings.timeoutMs ?? 20_000
+  const chain = [
+    ...new Set([ctx.settings.backend ?? DEFAULT_WEB_SEARCH_BACKEND, ...(ctx.settings.fallback ?? [])]),
+  ]
+  const timeoutMs = ctx.settings.timeoutMs ?? DEFAULT_WEB_SEARCH_TIMEOUT_MS
   const failures: string[] = []
   for (const name of chain) {
     signal.throwIfAborted()

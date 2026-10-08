@@ -1,5 +1,6 @@
 import path from "node:path"
 import type { SessionControl, ShellMode } from "@amira/api"
+import { DEFAULT_DISABLED_TOOLS, DEFAULT_SHELL } from "@amira/api"
 import { type Agent, CommandHost, listSubagents } from "@amira/core"
 import { createAdminControl } from "./control/admin.ts"
 import type { ControlContext, ControlTrace } from "./control/context.ts"
@@ -15,7 +16,7 @@ export interface ControlOptions {
   /** The process-owned recorder, for fresh snapshots and deletion coordination. */
   trace?: ControlTrace
   cwd: string
-  /** Shell mode the session starts with (D68). Default auto. */
+  /** Shell mode the session starts with (D68). See DEFAULT_SHELL. */
   shell?: ShellMode
   /** Tools settings or flags disabled explicitly (tools.disabled, --disable-tools). */
   disabled?: string[]
@@ -37,7 +38,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
   const { ai } = session
   const tools = session.agent.tools
   const platform = opts.platform ?? process.platform
-  let shell: ShellMode = opts.shell ?? "auto"
+  let shell: ShellMode = opts.shell ?? DEFAULT_SHELL
   // Per-session choices from /tools; they win over settings and the shell mode.
   const turnedOff = new Set<string>()
   const turnedOn = new Set<string>()
@@ -45,7 +46,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     const off = new Set([
       ...toolsToDisable(
         shell,
-        opts.disabled ?? [],
+        opts.disabled ?? [...DEFAULT_DISABLED_TOOLS],
         tools.list().map(({ tool }) => tool),
       ),
       ...turnedOff,

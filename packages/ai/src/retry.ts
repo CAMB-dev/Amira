@@ -1,23 +1,30 @@
 import { IDLE_TIMEOUT_HINT } from "./errors.ts"
+import {
+  DEFAULT_FIRST_CONTENT_TIMEOUT_MS,
+  DEFAULT_IDLE_TIMEOUT_MS,
+  DEFAULT_RETRY_ATTEMPTS,
+  DEFAULT_RETRY_BASE_DELAY_MS,
+  DEFAULT_RETRY_MAX_DELAY_MS,
+} from "./settings-defaults.ts"
 import type { AssistantMessage, ModelRef, StreamEvent } from "./types.ts"
 
 type ErrorEvent = Extract<StreamEvent, { type: "error" }>
 
 export interface RetryOptions {
-  /** Attempts after the first. Default 3; 0 turns retrying off. */
+  /** Attempts after the first. See DEFAULT_RETRY_ATTEMPTS; 0 turns retrying off. */
   retries?: number
-  /** Backoff before the first retry, doubling each time. Default 1000 ms. */
+  /** Backoff before the first retry, doubling each time. See DEFAULT_RETRY_BASE_DELAY_MS. */
   baseDelayMs?: number
-  /** A Retry-After longer than this is not waited out; the error is returned instead. Default 60 s. */
+  /** A Retry-After longer than this is not waited out; the error is returned instead. See DEFAULT_RETRY_MAX_DELAY_MS. */
   maxDelayMs?: number
-  /** Maximum time to wait for the first content event. Default 150 s; 0 disables it. */
+  /** Maximum time to wait for the first content event. See DEFAULT_FIRST_CONTENT_TIMEOUT_MS; 0 disables it. */
   firstContentTimeoutMs?: number
   /**
-   * Maximum silence after content has streamed. Default 100 s; 0 disables it. While a hosted
+   * Maximum silence after content has streamed. See DEFAULT_IDLE_TIMEOUT_MS; 0 disables it. While a hosted
    * tool (a web search the provider runs) is in progress, at least SERVER_TOOL_IDLE_MS.
    */
   idleTimeoutMs?: number
-  /** Deadline for all native compaction attempts and backoff. Default 5 min; 0 disables it. */
+  /** Deadline for all native compaction attempts and backoff. See DEFAULT_NATIVE_COMPACTION_TIMEOUT_MS; 0 disables it. */
   nativeCompactionTimeoutMs?: number
 }
 
@@ -49,11 +56,11 @@ export async function* withRetry(
   opts: RetryOptions = {},
   model?: ModelRef,
 ): AsyncGenerator<StreamEvent> {
-  const retries = opts.retries ?? 3
-  const base = opts.baseDelayMs ?? 1000
-  const max = opts.maxDelayMs ?? 60_000
-  const firstContentTimeoutMs = timeoutValue(opts.firstContentTimeoutMs, 150_000)
-  const idleTimeoutMs = timeoutValue(opts.idleTimeoutMs, 100_000)
+  const retries = opts.retries ?? DEFAULT_RETRY_ATTEMPTS
+  const base = opts.baseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS
+  const max = opts.maxDelayMs ?? DEFAULT_RETRY_MAX_DELAY_MS
+  const firstContentTimeoutMs = timeoutValue(opts.firstContentTimeoutMs, DEFAULT_FIRST_CONTENT_TIMEOUT_MS)
+  const idleTimeoutMs = timeoutValue(opts.idleTimeoutMs, DEFAULT_IDLE_TIMEOUT_MS)
   let started = false
   for (let attempt = 0; ; attempt++) {
     if (signal.aborted) {

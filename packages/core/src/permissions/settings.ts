@@ -1,4 +1,5 @@
 import type { PermissionMode, PermissionSettings } from "@amira/api"
+import { DEFAULT_PERMISSION_MODE } from "@amira/api"
 import { type PermissionRule, stricterMode } from "./policy.ts"
 
 /** One settings layer's permissions, lowest precedence first (see loadSettings). */
@@ -30,7 +31,7 @@ export function resolvePermissions(
 ): ResolvedPermissions {
   const warnings: string[] = []
   const rules: PermissionRule[] = []
-  let mode: PermissionMode = "auto"
+  let mode: PermissionMode = DEFAULT_PERMISSION_MODE
   let modeSource = "default"
   for (const layer of layers.filter((l) => l.scope === "user")) {
     if (layer.permissions.mode) {

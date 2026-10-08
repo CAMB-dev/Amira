@@ -1,5 +1,6 @@
 import { type Ai, createAi, isNoModel, type ModelInfo, NO_MODEL, type ProviderConfig } from "@amira/ai"
 import type { AnyEvent, Extension, ReloadReport, Settings, SettingsLayers, ShellMode } from "@amira/api"
+import { DEFAULT_SHELL, DEFAULT_WEB_NATIVE_SEARCH } from "@amira/api"
 import {
   Agent,
   AgentTree,
@@ -186,7 +187,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...(cached?.catalog ? { catalog: cached.catalog } : {}),
       ...(retry ? { retry } : {}),
       // Hosted web search is per provider (compat.webSearch); this turns it off for all.
-      ...(settings.web?.nativeSearch === false ? { webSearch: false } : {}),
+      ...((settings.web?.nativeSearch ?? DEFAULT_WEB_NATIVE_SEARCH) === false ? { webSearch: false } : {}),
       compactionMemory: fileCompactionMemory(amiraPath("cache", "native-compaction.json")),
     })
   const modelRef = opts.model ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
@@ -248,7 +249,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   }
   const disabled = new Set(
     toolsToDisable(
-      opts.shell ?? settings.shell ?? "auto",
+      opts.shell ?? settings.shell ?? DEFAULT_SHELL,
       opts.disabledTools ?? [],
       tools.list().map(({ tool }) => tool),
     ),

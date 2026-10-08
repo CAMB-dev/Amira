@@ -1,5 +1,6 @@
 import type { ProviderConfig } from "@amira/ai"
 import type { Settings, SettingsLayers, ShellMode } from "@amira/api"
+import { DEFAULT_DISABLED_TOOLS, DEFAULT_SHELL } from "@amira/api"
 import {
   amiraHome,
   authFile,
@@ -64,7 +65,7 @@ export function resolveConfig(
   const permissions = resolvePermissions(permissionLayers, { trusted })
   warnings.push(...permissions.warnings)
   const auth = loadAuth(authFile(home), platform)
-  let shell: ShellMode = settings.shell ?? "auto"
+  let shell: ShellMode = settings.shell ?? DEFAULT_SHELL
   if (shell === "powershell" && platform !== "win32") {
     warnings.push('settings: shell "powershell" is only available on Windows; using auto')
     shell = "auto"
@@ -76,9 +77,9 @@ export function resolveConfig(
     apiKeys: auth.keys,
     permissions,
     shell,
-    disabledTools: settings.tools?.disabled ?? [],
+    disabledTools: settings.tools?.disabled ?? [...DEFAULT_DISABLED_TOOLS],
     requestedDisabled: {
-      names: settings.tools?.disabled ?? [],
+      names: settings.tools?.disabled ?? [...DEFAULT_DISABLED_TOOLS],
       from: args.disabledTools ? "--disable-tools" : "settings tools.disabled",
     },
     warnings: [...warnings, ...auth.warnings],
