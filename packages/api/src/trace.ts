@@ -14,6 +14,12 @@ export type ToolOutcome = "ok" | "error" | "denied" | "aborted" | "invalid" | "u
  */
 export type TraceRecord =
   | {
+      /** Host-only diagnostic; never shown as a user-facing notice. */
+      type: "diagnostic"
+      at: number
+      message: string
+    }
+  | {
       /** Starts a recording run; resuming appends another header. */
       type: "trace"
       /** Format version for this run. */
