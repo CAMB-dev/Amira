@@ -7,5 +7,6 @@ export {
   NetError,
   parseHttpUrl,
   readCapped,
+  setUserAgentVersion,
   USER_AGENT,
 } from "./guarded-fetch.ts"

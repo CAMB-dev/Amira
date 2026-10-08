@@ -19,6 +19,7 @@ import { readCatalogCache } from "./catalog.ts"
 import type { PrintIO } from "./print.ts"
 import { createProviderAdmin } from "./provider-admin.ts"
 import { PROVIDER_USAGE as USAGE } from "./provider-command.ts"
+import { USER_AGENT } from "./user-agent.ts"
 
 /** Reads one answer from the user; undefined at the end of input. */
 export type ReadLine = (prompt: string) => Promise<string | undefined>
@@ -257,6 +258,7 @@ async function adminFor(
   const { keys } = loadAuth(authFile(home))
   const { catalog } = await readCatalogCache({ file: path.join(home, "cache", "models.json") })
   const ai = createAi({
+    userAgent: USER_AGENT,
     providers: providersFromSettings(settings.providers),
     apiKeys: keys,
     env,

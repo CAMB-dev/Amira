@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { createCatalog, type ModelCatalog, trimModelsDev } from "@amira/ai"
 import { amiraPath } from "@amira/core"
+import { USER_AGENT } from "./user-agent.ts"
 
 export const MODELS_URL = "https://models.dev/api.json"
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -53,7 +54,10 @@ export async function refreshCatalog(opts: CatalogCacheOptions = {}): Promise<Mo
   const file = opts.file ?? amiraPath("cache", "models.json")
   const url = opts.url ?? MODELS_URL
   try {
-    const res = await (opts.fetch ?? fetch)(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000) })
+    const res = await (opts.fetch ?? fetch)(url, {
+      headers: { "user-agent": USER_AGENT },
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
+    })
     if (!res.ok) return undefined
     const data = trimModelsDev(await res.json())
     if (!data) return undefined
