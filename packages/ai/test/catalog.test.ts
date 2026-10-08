@@ -118,6 +118,78 @@ test("without a catalog, or after replacing it, models resolve as before", () =>
   expect(ai.model("ollama/deepseek-flash").contextWindow).toBe(128_000)
 })
 
+test("a borrowed catalog supplies metadata, not additional models", () => {
+  const ai = createAi({
+    catalog: createCatalog({
+      llmgateway: {
+        models: {
+          "gpt-fast": { limit: { context: 200_000 }, tool_call: false, cost: { input: 1, output: 2 } },
+          mistral: { limit: { context: 32_000 } },
+        },
+      },
+    }),
+    providers: [
+      {
+        id: "local-fast",
+        dialect: "openai-responses",
+        baseUrl: "http://localhost:1234/v1",
+        catalogId: "llmgateway",
+        models: [{ id: "gpt-fast" }],
+      },
+    ],
+  })
+  expect(ai.knownModels()).toEqual(["local-fast/gpt-fast"])
+  expect(ai.model("local-fast/gpt-fast")).toMatchObject({
+    contextWindow: 200_000,
+    contextWindowSource: "catalog",
+    caps: { tools: "none" },
+    cost: { input: 1, output: 2 },
+  })
+})
+
+test.each([
+  { id: "deepseek", catalogId: undefined, listsCatalog: true },
+  { id: "deepseek", catalogId: "deepseek", listsCatalog: true },
+  { id: "gemini", catalogId: undefined, listsCatalog: true },
+  { id: "gemini", catalogId: "google", listsCatalog: true },
+  { id: "gemini", catalogId: "gemini", listsCatalog: true },
+  { id: "deepseek-anthropic", catalogId: undefined, listsCatalog: true },
+  { id: "local-fast", catalogId: "deepseek", listsCatalog: false },
+  { id: "gemini", catalogId: "deepseek", listsCatalog: false },
+  { id: "deepseek", catalogId: false as const, listsCatalog: false },
+  { id: "ollama", catalogId: undefined, listsCatalog: false },
+  { id: "ollama", catalogId: "deepseek", listsCatalog: false },
+  { id: "constructor", catalogId: undefined, listsCatalog: true },
+])("catalog listing for $id with catalogId=$catalogId", ({ id, catalogId, listsCatalog }) => {
+  const models = { "catalog-only": { limit: { context: 200_000 } } }
+  const ai = createAi({
+    catalog: createCatalog({
+      deepseek: { models },
+      google: { models },
+      gemini: { models },
+      ollama: { models },
+      constructor: { models },
+    }),
+    providers: [
+      {
+        id,
+        dialect: "openai-chat",
+        baseUrl: "http://local",
+        ...(catalogId !== undefined ? { catalogId } : {}),
+        models: [{ id: "explicit" }],
+      },
+    ],
+  })
+  expect(ai.knownModels()).toEqual([`${id}/explicit`, ...(listsCatalog ? [`${id}/catalog-only`] : [])])
+  ai.registerProvider({
+    id,
+    dialect: "openai-chat",
+    baseUrl: "http://local",
+    ...(catalogId !== undefined ? { catalogId } : {}),
+  })
+  expect(ai.knownModels()).toEqual(listsCatalog ? [`${id}/catalog-only`] : [])
+})
+
 test("lists a provider's models, and the ai offers them only for providers with a key", () => {
   const catalog = createCatalog(fixture)
   expect(catalog.list?.("deepseek")).toContain("deepseek-flash")

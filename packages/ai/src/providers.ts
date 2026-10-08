@@ -20,7 +20,8 @@ export interface ProviderConfig {
   compat?: ProviderCompat
   /**
    * The model catalog's id for this provider (models.dev), or false to not use the catalog.
-   * Defaults to CATALOG_PROVIDER_IDS, then to the provider id.
+   * Defaults to CATALOG_PROVIDER_IDS, then to the provider id. A catalog matching neither
+   * supplies metadata only; it does not add models to the provider's offered model list.
    */
   catalogId?: string | false
   /** Known models. Unlisted models get defaultModel values. */

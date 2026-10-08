@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdtempSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep, NO_MODEL } from "@amira/ai"
+import { createAi, createCatalog, createMockDialect, type MockStep, NO_MODEL } from "@amira/ai"
 import { defineTool, type Extension, textResult } from "@amira/api"
 import { type Agent, SessionStore } from "@amira/core"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
@@ -327,6 +327,32 @@ test("/provider lists only the configured providers; an unknown one says how to 
   expect(r.error).toBe(
     'unknown provider "anthropic" (configured: mock); add it with /provider add (or amira provider add)',
   )
+})
+
+test("the /model list and completions do not offer models from a borrowed catalog", async () => {
+  const { host, session } = await setup()
+  session.ai.setCatalog?.(
+    createCatalog({
+      llmgateway: {
+        models: {
+          "gpt-fast": { limit: { context: 200_000 } },
+          mistral: { limit: { context: 32_000 } },
+        },
+      },
+    }),
+  )
+  session.ai.registerProvider({
+    id: "local-fast",
+    dialect: "openai-responses",
+    baseUrl: "http://localhost:1234/v1",
+    catalogId: "llmgateway",
+    models: [{ id: "gpt-fast" }],
+  })
+  expect(host.control.models()).toEqual(["mock/m", "local-fast/gpt-fast"])
+  const completions = await host.complete("/model local-fast/")
+  expect(completions.candidates.map((c) => c.value)).toEqual(["local-fast/gpt-fast"])
+  host.control.setModel("local-fast/gpt-fast")
+  expect(host.control.info().contextWindow).toBe(200_000)
 })
 
 test("while no model is selected, /model offers only real models", async () => {

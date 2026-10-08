@@ -95,7 +95,9 @@ Amira uses a models.dev catalog to describe models. Explicit entries in `models`
 
 The provider form's defaults apply to models the catalog does not describe. For a particular model, set its `contextWindow`, `maxOutput` or `caps` in settings. A capability configured under `caps` describes what the server supports; it does not add that capability to a model.
 
-Use `catalogId` to select a catalog provider when your own provider ID differs; set it to `false` to ignore the catalog for this provider. Selecting or describing a model does not by itself verify that the endpoint serves it. **Test connection** is the explicit check.
+Use `catalogId` to select a models.dev provider for model details (context window, capabilities and pricing); set it to `false` to ignore the catalog for this provider. For a custom provider such as `local-fast`, `"catalogId": "llmgateway"` borrows metadata for its models without adding the gateway's other models to the picker, `/model` list or completions. List the models your endpoint serves in `models`. A provider's own catalog—matching its ID or a built-in mapping such as `gemini` → `google`—still adds catalog models to these lists.
+
+When you add or edit a provider, `/provider` may infer `catalogId` from the model IDs. If it borrows another provider's catalog, the save summary names it as “Model details from …”. Selecting or describing a model does not by itself verify that the endpoint serves it. **Test connection** is the explicit check.
 
 ## Compatibility and native features
 
