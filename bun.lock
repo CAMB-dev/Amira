@@ -101,7 +101,7 @@
     },
     "packages/cli": {
       "name": "amira",
-      "version": "0.0.0",
+      "version": "0.1.0",
       "bin": {
         "amira": "./src/main.ts",
       },
@@ -188,6 +188,7 @@
     "@amira/ext-skills": ["@amira/ext-skills@workspace:extensions/skills"],
 
     "@amira/ext-status": ["@amira/ext-status@workspace:extensions/status"],
+
     "@amira/ext-terminal-status": ["@amira/ext-terminal-status@workspace:extensions/terminal-status"],
 
     "@amira/ext-web": ["@amira/ext-web@workspace:extensions/web"],
