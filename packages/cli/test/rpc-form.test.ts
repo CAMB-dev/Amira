@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import { defineExtension, defineTool, type Extension, type FormSpec, textResult } from "@amira/api"
+import {
+  type AnyEvent,
+  defineExtension,
+  defineTool,
+  type Extension,
+  type FormSpec,
+  textResult,
+} from "@amira/api"
 import terminalStatus from "../../../extensions/terminal-status/src/index.ts"
 import { runRpc } from "../src/rpc.ts"
 import { rpcSchema } from "../src/rpc-schema.ts"
@@ -34,7 +41,7 @@ function channel() {
   }
 }
 
-async function rpcWith(steps: MockStep[], extension: Extension) {
+async function rpcWith(steps: MockStep[], extension: Extension, pending?: AnyEvent[]) {
   const ai = createAi({
     dialects: [createMockDialect(steps)],
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
@@ -51,7 +58,7 @@ async function rpcWith(steps: MockStep[], extension: Extension) {
   const out: Line[] = []
   const done = runRpc(
     { agent: s.agent, ai: s.ai, ui: s.host.ui },
-    { io: { lines: input.lines, write: (line) => void out.push(JSON.parse(line)) } },
+    { pending, io: { lines: input.lines, write: (line) => void out.push(JSON.parse(line)) } },
   )
   const until = async (match: (l: Line) => boolean) => {
     while (!out.some(match)) await Bun.sleep(5)
@@ -159,6 +166,110 @@ test("rpc: a form arrives as a schema; ui.action runs its button while other lin
   expect(missing.error.code).toBe("not_found")
   expect(await rpc.end()).toBe(0)
 })
+
+test.each(["live", "replayed"])(
+  "rpc: %s forms omit auto metadata without changing host requests or manual actions",
+  async (delivery) => {
+    let readyCalls = 0
+    let actionCalls = 0
+    const auto = {
+      watch: ["host"],
+      ready: () => {
+        readyCalls++
+        return true
+      },
+    }
+    const form: FormSpec = {
+      title: "Auto probe",
+      fields: [
+        { type: "text", id: "host", label: "Host", default: "h1", required: true },
+        {
+          type: "action",
+          id: "probe",
+          label: "Probe",
+          auto,
+          run: async ({ values, progress }) => {
+            actionCalls++
+            progress(`probing ${values.host}`)
+            return { message: "reachable", tone: "success", values: { host: "h2" } }
+          },
+        },
+      ],
+    }
+    const requests: AnyEvent[] = []
+    const extension = defineExtension((api) => {
+      api.on("ui.request", (event) => void requests.push(event))
+      api.registerTool(
+        defineTool({
+          name: "configure",
+          description: "",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            const values = await api.ui.form(form)
+            return textResult(values ? `host=${values.host}` : "cancelled")
+          },
+        }),
+      )
+      if (delivery === "replayed") void api.ui.form(form)
+    })
+    const rpc = await rpcWith(
+      [{ toolCalls: [{ name: "configure", args: {} }] }, { text: "done" }],
+      extension,
+      delivery === "replayed" ? requests : undefined,
+    )
+    try {
+      if (delivery === "live") await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+      const req = await rpc.until((line) => line.type === "ui.request")
+      const requestId = req.data.requestId
+      expect(req.data).toMatchObject({ kind: "form", title: "Auto probe", source: "forms" })
+      expect(req.data.fields).toEqual([
+        { type: "text", id: "host", label: "Host", default: "h1", required: true },
+        { type: "action", id: "probe", label: "Probe" },
+      ])
+      const state = await rpc.call({ id: 2, cmd: "state" })
+      expect(state.uiRequests).toEqual([req.data])
+      const hostPending = rpc.session.host.ui.pending[0]!
+      if (hostPending.kind !== "form") throw new Error("expected a pending host form")
+      expect(hostPending.fields[1]).toEqual({
+        type: "action",
+        id: "probe",
+        label: "Probe",
+        auto: { watch: ["host"] },
+      })
+      expect(requests.find((event) => event.type === "ui.request")!.data).toEqual(hostPending)
+      expect(readyCalls).toBe(0)
+      expect(actionCalls).toBe(0)
+      expect(rpc.out.some((line) => line.type === "ui.progress")).toBe(false)
+
+      const action = await rpc.call({
+        id: 3,
+        cmd: "ui.action",
+        requestId,
+        action: "probe",
+        values: { host: "h1" },
+      })
+      expect(action.ok).toBe(true)
+      expect(action.result).toEqual({
+        message: "reachable",
+        tone: "success",
+        values: { host: "h2" },
+      })
+      const progress = await rpc.until((line) => line.type === "ui.progress")
+      expect(progress.data).toEqual({ requestId, action: "probe", text: "probing h1" })
+      expect(actionCalls).toBe(1)
+      expect(readyCalls).toBe(0)
+      expect(rpc.session.host.ui.pending[0]).toBe(hostPending)
+      expect(hostPending.fields[1]).toHaveProperty("auto", { watch: ["host"] })
+      expect(form.fields[1]).toHaveProperty("auto", auto)
+      expect((await rpc.call({ id: 4, cmd: "ui.respond", requestId, value: { host: "h2" } })).ok).toBe(true)
+      if (delivery === "live") await rpc.until((line) => line.type === "turn.end")
+      expect(readyCalls).toBe(0)
+      expect(actionCalls).toBe(1)
+    } finally {
+      expect(await rpc.end()).toBe(0)
+    }
+  },
+)
 
 test("rpc: ui.configure dialogs asks a form one field at a time", async () => {
   const rpc = await rpcWith([{ toolCalls: [{ name: "configure", args: {} }] }, { text: "done" }], formTool)

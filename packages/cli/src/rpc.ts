@@ -6,7 +6,7 @@ import {
   type UserMessage,
   userMessage,
 } from "@amira/ai"
-import { type AnyEvent, modelLabel, type TurnEndReason } from "@amira/api"
+import { type AnyEvent, type EventMap, modelLabel, type TurnEndReason } from "@amira/api"
 import { type Agent, type CommandHost, newTurnId, toolTraits, UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
 import type { COMMAND_PARAMS } from "./rpc-schema.ts"
@@ -146,6 +146,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   let focused: boolean | undefined
 
   const send = (value: unknown) => io.write(`${safeJson(value)}\n`)
+  const sendEvent = (event: AnyEvent) =>
+    send(event.type === "ui.request" ? { ...event, data: rpcUiRequest(event.data) } : event)
   const reply = (id: Id, result: Record<string, unknown>) => void send({ id, ok: true, ...result })
   const fail = (id: Id, code: ErrorCode, message: string) =>
     void send({ id, ok: false, error: { code, message } })
@@ -173,9 +175,9 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     },
     { types: ["turn.start", "turn.end", "ui.request"] },
   )
-  for (const e of opts.pending ?? []) await send(e)
+  for (const e of opts.pending ?? []) await sendEvent(e)
   // Streaming deltas are dropped (and events.lost sent) once this queue fills up.
-  const offEvents = agent.bus.subscribe((e) => send(e), { maxQueue: opts.maxQueue ?? 2000 })
+  const offEvents = agent.bus.subscribe(sendEvent, { maxQueue: opts.maxQueue ?? 2000 })
   opts.onReady?.()
 
   const text = (p: Params, key = "text"): string => {
@@ -303,7 +305,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
         ...(last !== undefined ? { lastAssistantText: last } : {}),
         busy: agent.busy,
         ...agent.thinking.state(agent.model),
-        uiRequests: ui.pending,
+        uiRequests: ui.pending.map(rpcUiRequest),
       }
     },
     "session.rename": (p) => {
@@ -448,6 +450,19 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     offTurns()
     offSwitch?.()
     io.close?.()
+  }
+}
+
+/** Automatic actions belong to the TUI; RPC clients can still invoke them with ui.action. */
+function rpcUiRequest(request: EventMap["ui.request"]): EventMap["ui.request"] {
+  if (request.kind !== "form") return request
+  return {
+    ...request,
+    fields: request.fields.map((field) => {
+      if (field.type !== "action") return { ...field }
+      const { auto: _auto, ...manual } = field
+      return manual
+    }),
   }
 }
 

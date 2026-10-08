@@ -119,6 +119,18 @@ function validateBaseUrl(value: string): string | undefined {
   }
 }
 
+/** Automatic requests may send a key without a click, so remote endpoints must use TLS. */
+function safeAutoFetchUrl(value: string): boolean {
+  const url = new URL(value)
+  return (
+    url.protocol === "https:" ||
+    (url.protocol === "http:" &&
+      (url.hostname === "localhost" ||
+        url.hostname === "[::1]" ||
+        /^127(?:\.\d{1,3}){3}$/.test(url.hostname)))
+  )
+}
+
 /**
  * The form of /provider add and /provider edit: where the provider is, how it gets its key,
  * which models it offers (fetched from it, or typed), defaults for models the catalog does
@@ -201,6 +213,7 @@ export function providerFormSpec(
         required: true,
         placeholder: "https://api.example.com/v1",
         ...(start.baseUrl ? { default: start.baseUrl } : {}),
+        help: "Non-loopback HTTP would send the key unencrypted. Use Fetch models manually.",
         validate: validateBaseUrl,
       },
       {
@@ -252,7 +265,11 @@ export function providerFormSpec(
                 ],
                 ready: (values: FormValues) => {
                   const d = draft(values)
-                  if (!dialects.some((option) => option.value === d.dialect) || validateBaseUrl(d.baseUrl))
+                  if (
+                    !dialects.some((option) => option.value === d.dialect) ||
+                    validateBaseUrl(d.baseUrl) ||
+                    !safeAutoFetchUrl(d.baseUrl)
+                  )
                     return false
                   if (values.keySource === "none") return true
                   if (values.keySource === "auth") return !!(d.apiKey?.trim() || admin.storedKeyHint(d.id))

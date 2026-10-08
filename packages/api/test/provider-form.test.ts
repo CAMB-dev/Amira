@@ -181,6 +181,36 @@ test.each(FETCH_READY_CASES)("fetch readiness for partial inputs $values is $rea
   expect(envChecks.every((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name))).toBe(true)
 })
 
+test.each([
+  ["https://remote.example/v1", true],
+  ["http://localhost:8000/v1", true],
+  ["http://LOCALHOST:8000/v1", true],
+  ["http://127.0.0.1:8000/v1", true],
+  ["http://127.42.0.9:8000/v1", true],
+  ["http://127.255.255.255:8000/v1", true],
+  ["http://[::1]:8000/v1", true],
+  ["http://[0:0:0:0:0:0:0:1]:8000/v1", true],
+  ["http://remote.example/v1", false],
+  ["http://192.168.1.10:8000/v1", false],
+  ["http://128.0.0.1:8000/v1", false],
+  ["http://localhost.evil.example/v1", false],
+  ["http://127.example/v1", false],
+  ["http://localhost@remote.example/v1", false],
+  ["http://[::2]:8000/v1", false],
+])("automatic fetch transport safety for %s is %s", (baseUrl, ready) => {
+  const { admin, seen } = fakeAdmin()
+  const form = providerFormSpec(admin, undefined, {
+    baseUrl: String(baseUrl),
+    keySource: "env",
+    apiKeyEnv: "ALTERNATE_KEY",
+  })
+  expect(autoFormActions(form, {})).toEqual(ready ? ["fetchModels"] : [])
+  expect(form.fields.find((field) => field.id === "baseUrl")).toMatchObject({
+    help: "Non-loopback HTTP would send the key unencrypted. Use Fetch models manually.",
+  })
+  expect(seen).toEqual([])
+})
+
 test("fetch readiness uses the draft id's stored key and does not fall back for an unset environment", () => {
   const { admin, seen } = fakeAdmin()
   admin.storedKeyHint = (id) => (id === "stored" ? "…abcd" : undefined)
