@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import fixture from "../../ai/test/fixtures/models-dev.json" with { type: "json" }
+import pkg from "../package.json" with { type: "json" }
 import { readCatalogCache, refreshCatalog } from "../src/catalog.ts"
 import { createSession } from "../src/session.ts"
 
@@ -56,6 +57,17 @@ test("a refresh caches a trimmed copy that is fresh for 24 hours, then stale but
   const later = await readCatalogCache({ file, now: () => t0 + 25 * 3600_000 })
   expect(later.stale).toBe(true)
   expect(later.catalog?.find("deepseek", "deepseek-flash")).toBeDefined()
+})
+
+test("catalog requests identify Amira with the CLI version", async () => {
+  const { file } = await tmpFile()
+  const headers: Headers[] = []
+  const fetch = (async (_input, init) => {
+    headers.push(new Headers(init?.headers))
+    return Response.json(fixture)
+  }) as typeof globalThis.fetch
+  expect(await refreshCatalog({ file, fetch })).toBeDefined()
+  expect(headers[0]?.get("user-agent")).toBe(`Amira/${pkg.version}`)
 })
 
 test("a corrupt cache counts as missing", async () => {

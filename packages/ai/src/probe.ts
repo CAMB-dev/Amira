@@ -1,6 +1,7 @@
 import { createAi } from "./client.ts"
 import type { ProviderCompat } from "./dialect.ts"
 import { ANTHROPIC_VERSION } from "./dialects/anthropic.ts"
+import { requestHeaders } from "./request-headers.ts"
 import { userMessage } from "./types.ts"
 
 /** Where to reach a provider that may not be registered yet, e.g. one being set up in a form. */
@@ -14,6 +15,8 @@ export interface ProbeEndpoint {
 
 export interface ProbeOptions {
   fetch?: typeof fetch
+  /** User-Agent for HTTP requests; endpoint headers can override it. */
+  userAgent?: string
   /** Gives up after this long. Default 15 s for listing, 30 s for a test request. */
   timeoutMs?: number
   signal?: AbortSignal
@@ -61,7 +64,13 @@ const PAGES = 20
 export async function listModels(ep: ProbeEndpoint, opts: ProbeOptions = {}): Promise<ListedModel[]> {
   const base = ep.baseUrl.replace(/\/+$/, "")
   const get = (url: string, headers: Record<string, string>) =>
-    getJson(url, { ...headers, ...ep.headers }, ep.apiKey, opts, opts.timeoutMs ?? 15_000)
+    getJson(
+      url,
+      requestHeaders({ accept: "application/json", ...headers }, ep.headers, opts.userAgent),
+      ep.apiKey,
+      opts,
+      opts.timeoutMs ?? 15_000,
+    )
   switch (ep.dialect) {
     case "openai-chat":
     case "openai-responses": {
@@ -172,6 +181,7 @@ export async function testConnection(
     env: {},
     retry: { retries: 0 },
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
+    ...(opts.userAgent !== undefined ? { userAgent: opts.userAgent } : {}),
   })
   const started = performance.now()
   const elapsed = () => Math.round(performance.now() - started)
@@ -262,7 +272,7 @@ async function getJson(
   const where = host(url)
   let res: Response
   try {
-    res = await (opts.fetch ?? fetch)(url, { headers: { accept: "application/json", ...headers }, signal })
+    res = await (opts.fetch ?? fetch)(url, { headers, signal })
   } catch (err) {
     if (opts.signal?.aborted) throw new ProbeError("cancelled", "aborted")
     if (timeout.aborted)

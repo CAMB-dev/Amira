@@ -25,6 +25,7 @@ import {
   setAuthKey,
   updateProviderInSettings,
 } from "@amira/core"
+import { USER_AGENT } from "./user-agent.ts"
 
 export interface ProviderAdminOptions {
   /** The session's providers; saved ones are registered on it at once. */
@@ -195,6 +196,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     listModels: async (d, signal) => {
       try {
         const listed = await listModels(endpoint(d), {
+          userAgent: USER_AGENT,
           ...(opts.fetch ? { fetch: opts.fetch } : {}),
           ...(signal ? { signal } : {}),
         })
@@ -213,6 +215,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       ),
     test: async (d, model, signal) => {
       const r = await testConnection(endpoint(d), model, {
+        userAgent: USER_AGENT,
         ...(opts.fetch ? { fetch: opts.fetch } : {}),
         ...(signal ? { signal } : {}),
       })

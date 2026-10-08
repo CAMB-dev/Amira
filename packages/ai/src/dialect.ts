@@ -42,6 +42,7 @@ export interface DialectContext {
   endpoint: Endpoint
   signal: AbortSignal
   fetch: typeof fetch
+  userAgent?: string
   compat?: ProviderCompat
 }
 

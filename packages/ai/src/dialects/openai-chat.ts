@@ -1,4 +1,5 @@
 import type { Dialect, DialectContext, ProviderCompat } from "../dialect.ts"
+import { requestHeaders } from "../request-headers.ts"
 import { DEFAULT_MAX_TOKENS_FIELD, DEFAULT_STREAM_USAGE } from "../settings-defaults.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
@@ -23,11 +24,14 @@ export const openaiChat: Dialect = {
     try {
       res = await ctx.fetch(`${ctx.endpoint.baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(ctx.endpoint.apiKey ? { authorization: `Bearer ${ctx.endpoint.apiKey}` } : {}),
-          ...ctx.endpoint.headers,
-        },
+        headers: requestHeaders(
+          {
+            "content-type": "application/json",
+            ...(ctx.endpoint.apiKey ? { authorization: `Bearer ${ctx.endpoint.apiKey}` } : {}),
+          },
+          ctx.endpoint.headers,
+          ctx.userAgent,
+        ),
         body: JSON.stringify(requestBody(req, ctx.compat)),
         signal: ctx.signal,
       })
