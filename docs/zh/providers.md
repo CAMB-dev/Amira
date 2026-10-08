@@ -95,7 +95,9 @@ Amira 通过 models.dev 目录获取模型信息。优先级是：`models` 中�
 
 Provider 表单中的默认参数用于目录中没有描述的模型。要调整某一个模型，在设置中指定其 `contextWindow`、`maxOutput` 或 `caps`。`caps` 描述服务已支持的能力，并不能让模型获得新能力。
 
-自己的 provider ID 与目录不同，可通过 `catalogId` 指定目录中的 provider；设为 `false` 则停用该 provider 的目录信息。选择模型或查看信息不会验证服务是否实际提供该模型，明确的连接检查是 **Test connection**。
+通过 `catalogId` 指定 models.dev 中用于获取模型信息（上下文窗口、能力和价格）的 provider；设为 `false` 则停用该 provider 的目录信息。对于 `local-fast` 这样的自定义 provider，`"catalogId": "llmgateway"` 只借用目录中对应模型的信息，不会把网关的其他模型加入模型选择器、`/model` 列表或补全候选。请在 `models` 中列出服务实际提供的模型。如果目录 ID 与 provider ID 相同，或属于内置映射（如 `gemini` → `google`），仍会将该目录的模型加入这些列表。
+
+添加或编辑 provider 时，`/provider` 可能根据模型 ID 推断 `catalogId`。如果借用了其他 provider 的目录，保存摘要会用“Model details from …”标明来源。选择模型或查看信息不会验证服务是否实际提供该模型，明确的连接检查是 **Test connection**。
 
 ## 兼容选项与原生功能
 

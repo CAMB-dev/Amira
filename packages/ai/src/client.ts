@@ -55,7 +55,7 @@ export interface Ai {
   hasKey(providerId: string): boolean
   /**
    * "provider/model" refs worth offering, e.g. for completion: the models each provider lists
-   * and the catalog's models for it, from providers that have a key or need none.
+   * and its own catalog's models (not a borrowed catalog's), from providers that have a key or need none.
    */
   knownModels(): string[]
   /** Replaces the catalog, e.g. after a refresh; affects models resolved from now on. */
@@ -325,6 +325,8 @@ export function createAi(opts: AiOptions = {}): Ai {
         if (!hasKey(p)) continue
         for (const m of p.models ?? []) if (m.id) out.add(`${p.id}/${m.id}`)
         const catalogId = catalogProviderId(p)
+        // A borrowed catalog describes the provider's models, not which models it serves.
+        if (catalogId !== p.id && catalogId !== catalogProviderId({ id: p.id })) continue
         for (const id of catalogId ? (catalog?.list?.(catalogId) ?? []) : []) out.add(`${p.id}/${id}`)
       }
       return [...out]

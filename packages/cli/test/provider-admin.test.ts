@@ -21,6 +21,7 @@ const catalog = createCatalog({
         cost: { input: 0.27, output: 1.1 },
         tool_call: true,
       },
+      "catalog-only": { limit: { context: 64000 } },
     },
   },
   other: { models: { "deepseek-chat": {} } },
@@ -95,6 +96,7 @@ test("saving writes settings and auth.json, and the provider works at once", asy
   expect(out).not.toContain(KEY)
   expect(out).toContain(keyHint(KEY))
   expect(out).toContain("Switch to it with /model ds-test/deepseek-chat.")
+  expect(out).toContain("Model details from deepseek (metadata only; model list unchanged).")
   expect(settings().providers["ds-test"]).toEqual({
     dialect: "openai-chat",
     baseUrl: "https://api.deepseek.com",
@@ -106,11 +108,30 @@ test("saving writes settings and auth.json, and the provider works at once", asy
   expect(auth()).toEqual({ "ds-test": { apiKey: KEY } })
   expect(restricted).toEqual([path.join(home, "auth.json")])
   expect(ai.hasKey("ds-test")).toBe(true)
-  expect(ai.knownModels()).toContain("ds-test/deepseek-new")
+  expect(ai.knownModels()).toEqual(["ds-test/deepseek-chat", "ds-test/deepseek-new"])
+  expect(admin.describeModels(draft(), ["deepseek-chat"])).toEqual([
+    {
+      id: "deepseek-chat",
+      contextWindow: 128000,
+      maxOutput: 8192,
+      cost: { input: 0.27, output: 1.1 },
+      inCatalog: true,
+    },
+  ])
   expect(ai.model("ds-test/deepseek-chat").contextWindow).toBe(128000)
   expect(ai.model("ds-test/deepseek-new").contextWindow).toBe(64000)
   expect(admin.storedKeyHint("ds-test")).toBe("…5678")
 })
+
+test.each(["deepseek", "deepseek-anthropic"])(
+  "%s uses its own catalog, not borrowed metadata",
+  async (id) => {
+    const { admin, ai } = setup()
+    const out = await admin.save(draft({ id }))
+    expect(out).not.toContain("Model details from")
+    expect(ai.knownModels()).toContain(`${id}/catalog-only`)
+  },
+)
 
 test("a saved provider the session starts using, or the one in use, needs no /model", async () => {
   const saved: [string, string[]][] = []
@@ -134,6 +155,8 @@ test("a saved provider the session starts using, or the one in use, needs no /mo
   current = "ds-test"
   const edited = await admin.save(draft({ models: ["deepseek-new"] }))
   expect(edited).toContain("In use: the changes apply now (ds-test/deepseek-new).")
+  expect(edited).toContain("Model details from deepseek (metadata only; model list unchanged).")
+  expect(ai.knownModels()).toEqual(["ds-test/deepseek-new"])
   expect(edited).not.toContain("run /model again")
 })
 
