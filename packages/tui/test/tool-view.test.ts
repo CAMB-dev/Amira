@@ -375,3 +375,8 @@ test("a failure whose one line of output is its result line says it once", () =>
   expect(lines.filter((l) => l.includes(text))).toHaveLength(1)
   expect(lines[0]).toBe("✗ bash make clean")
 })
+
+test("a finished shell command shows as many lines by default as while it ran", async () => {
+  const { OUTPUT_LINES, RUNNING_LINES } = await import("../src/tool-view.ts")
+  expect(OUTPUT_LINES).toBe(RUNNING_LINES)
+})
