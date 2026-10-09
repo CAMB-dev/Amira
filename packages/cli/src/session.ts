@@ -229,6 +229,17 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
     types: ["extension.error", "extension.loaded", "extension.notice"],
   })
+  if (missingProvider) {
+    bus.emit(
+      "extension.notice",
+      {
+        source: "settings",
+        level: "warning",
+        text: `settings model "${opts.model}" ignored: provider "${opts.model!.split("/")[0]}" is not configured; ${modelRef ? `using ${modelRef}` : "no model selected"}.`,
+      },
+      { sessionId: "host" },
+    )
+  }
   for (const error of opts.warnings ?? []) {
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
   }

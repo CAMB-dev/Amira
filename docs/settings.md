@@ -24,9 +24,9 @@ In an interactive session, `/model` opens a model picker and then a thinking pic
 
 `--model`, `AMIRA_MODEL` and `--thinking` are one-run overrides, not saved defaults. If you later change the model or thinking interactively, both current choices are saved, including any choice initially supplied by a flag or environment variable. Print mode, RPC, child agents and changes made by extensions do not save these defaults.
 
-Project saves use cwd, never the Git root. In a repository, `settings.local.json` must be ignored by Git and not tracked; otherwise Amira skips the project save and warns you. It never edits ignore files for you. Outside a repository, an existing `.amira` directory allows a project save; without one, only the user file is saved. The home/user scope also saves only the user file.
+Project saves use cwd, never the Git root. In a repository, `settings.local.json` must be ignored by Git and not tracked; otherwise Amira skips the project save and warns you once per session. The Git check runs asynchronously on the first save and is cached for the session: the user file is saved immediately, and project writes keep change order. Start a new session after changing ignore or tracking rules. Amira never edits ignore files for you. Outside a repository, an existing `.amira` directory allows a project save; without one, only the user file is saved. The home/user scope also saves only the user file.
 
-Existing files must be strict JSON. An invalid file is left untouched with a warning, not overwritten. Saves are atomic and preserve unrelated settings, formatting and key order.
+Existing files must be strict JSON. An invalid file is left untouched with a warning, not overwritten. Saves are atomic and preserve unrelated settings, formatting and key order. Adding keys to an empty or single-line object uses the normal two-space multiline layout, preserving its line ending. Edited text is checked before writing; if it does not match the intended settings, Amira rewrites the full object instead.
 
 `/thinking default` saves the top-level `"thinking": "default"` sentinel. This overrides effort set by earlier top-level settings layers and sends no explicit effort, leaving it to the server; it does not disable thinking. Per-model `thinking` keeps its existing precedence over the top-level setting.
 

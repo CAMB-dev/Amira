@@ -289,6 +289,8 @@ export interface CommandHostOptions {
   ui: UiRequests
   /** What commands act on; supplied by the process that owns the sessions. */
   control: SessionControl
+  /** Selects controls for command/skill sources; undefined is an extension input handler. */
+  contextControl?: (source: string | undefined) => SessionControl
   agent: Agent
   /**
    * The user's aliases (settings `commandAliases`): name to a command line without the slash.
@@ -477,7 +479,10 @@ export class CommandHost {
     })
     let all: CommandCandidate[] | Promise<CommandCandidate[]>
     try {
-      all = complete(prefix, { cwd: this.#agent.cwd, session: this.#opts.control })
+      all = complete(prefix, {
+        cwd: this.#agent.cwd,
+        session: this.#opts.contextControl?.(entry.source) ?? this.#opts.control,
+      })
     } catch {
       return { command, candidates: [] }
     }
@@ -511,7 +516,7 @@ export class CommandHost {
     const { entry: command, prepend } = resolved
     const args = [prepend, parsed.args].filter(Boolean).join(" ")
     try {
-      await command.def.run(args, this.#context(opts, print))
+      await command.def.run(args, this.#context(opts, print, command.source))
       return { ok: true, command: name, output }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -538,7 +543,7 @@ export class CommandHost {
       return { ok: false, ...(parsed ? { command: parsed.name } : {}), output, error }
     }
     try {
-      await skill.def.run(parsed.args, this.#context(opts, print))
+      await skill.def.run(parsed.args, this.#context(opts, print, skill.source))
       return { ok: true, command: parsed.name, output }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -588,23 +593,24 @@ export class CommandHost {
     }
   }
 
-  #context(opts: CommandRunOptions, print: CommandContext["print"]): CommandContext {
+  #context(opts: CommandRunOptions, print: CommandContext["print"], source?: string): CommandContext {
+    const control = this.#opts.contextControl?.(source) ?? this.#opts.control
     return {
       cwd: this.#agent.cwd,
       session: opts.onSend
         ? {
-            ...this.#opts.control,
+            ...control,
             send: async (text, sendOpts) => {
               const failed = opts.onSend!(text, sendOpts)
               try {
-                await this.#opts.control.send(text, sendOpts)
+                await control.send(text, sendOpts)
               } catch (error) {
                 failed?.()
                 throw error
               }
             },
           }
-        : this.#opts.control,
+        : control,
       frontend: opts.frontend,
       signal: opts.signal ?? new AbortController().signal,
       ui: this.#opts.ui.api(),

@@ -200,7 +200,10 @@ async function run(argv: string[]): Promise<number> {
     // Give aborted tools a moment to finish after session.end, then drain their queued events.
     const disposing = last.dispose("exit").catch(() => {})
     void Promise.race([disposing, Bun.sleep(250)])
-      .then(() => closeTrace(last.bus, session.traceRecorder, 125))
+      .then(async () => {
+        await commands.flushChoices()
+        await closeTrace(last.bus, session.traceRecorder, 125)
+      })
       .finally(() => process.exit(code))
   }
   try {
@@ -256,6 +259,7 @@ async function run(argv: string[]): Promise<number> {
     )
     return code
   } finally {
+    await commands.flushChoices()
     const last = agentRef ?? agent
     const disposing = last.dispose("exit")
     // Extensions' exit handlers (e.g. a hook for the session's end) get the same few seconds,
