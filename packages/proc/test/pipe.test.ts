@@ -171,16 +171,19 @@ for (const where of ["the worker", "this thread"]) {
 }
 
 test("a lost worker ends its piped processes with an error", async () => {
-  const p = open([bun, "-e", ECHO])
+  // Stay alive even if losing the worker closes stdin; cleanup still owns this process.
+  const p = open([bun, "-e", "process.stdin.resume(); setTimeout(() => {}, 60_000)"])
   await p.spawned
   const pid = (p.events[0] as { pid: number }).pid
-  resetCommandWorker()
-  await p.exited
-  expect(p.events.at(-1)).toMatchObject({ type: "exit", code: null, error: expect.any(String) })
-  // The error tells the caller the process may survive; it is theirs to kill by pid.
   try {
-    process.kill(pid, "SIGKILL")
-  } catch {}
+    resetCommandWorker()
+    await p.exited
+    expect(p.events.at(-1)).toMatchObject({ type: "exit", code: null, error: expect.any(String) })
+  } finally {
+    // A direct kill leaves the lost worker's PID registered: later cleanup could kill a reused PID.
+    killLivePipes()
+  }
+  expect(livePipePids()).not.toContain(pid)
 })
 
 test("piped processes are tracked until they exit, so killLivePipes can end what is left at exit", async () => {
