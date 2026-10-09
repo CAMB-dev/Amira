@@ -8,6 +8,7 @@ import { createInfoControl } from "./control/info.ts"
 import { createRewindControl } from "./control/rewind.ts"
 import { createSessionsControl } from "./control/sessions.ts"
 import { createToolControl } from "./control/tools.ts"
+import { rememberingControl } from "./remember-choice.ts"
 import { toolsToDisable } from "./session/settings-adapters.ts"
 import type { Session } from "./session.ts"
 
@@ -16,6 +17,8 @@ export interface ControlOptions {
   /** The process-owned recorder, for fresh snapshots and deletion coordination. */
   trace?: ControlTrace
   cwd: string
+  /** Remember user selections only on the interactive frontend, never extension controls. */
+  interactive?: boolean
   /** Shell mode the session starts with (D68). See DEFAULT_SHELL. */
   shell?: ShellMode
   /** Tools settings or flags disabled explicitly (tools.disabled, --disable-tools). */
@@ -33,7 +36,7 @@ export interface ControlOptions {
  * The session control handed to slash commands, and the CommandHost frontends use. It owns
  * which agent is active: /clear and /resume make new agents on the same bus and registries.
  */
-export function createCommandHost(opts: ControlOptions): CommandHost {
+export function createCommandHost(opts: ControlOptions): CommandHost & { flushChoices(): Promise<void> } {
   const { session, cwd } = opts
   const { ai } = session
   const tools = session.agent.tools
@@ -149,6 +152,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
   }
 
   session.host.setSessionControl(control, agent)
+  const choices = opts.interactive ? rememberingControl(control, agent, cwd, opts.home) : undefined
+  const userControl = choices?.control ?? control
 
   const host = new CommandHost({
     registry: session.host.commands,
@@ -156,9 +161,11 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     inputs: session.host.inputs,
     bus: session.agent.bus,
     ui: session.host.ui,
-    control,
+    control: userControl,
+    contextControl: (source) =>
+      source === "builtin:commands" || source === "builtin:tui" ? userControl : control,
     agent: session.agent,
     ...(opts.aliases ? { aliases: opts.aliases } : {}),
   })
-  return host
+  return Object.assign(host, { flushChoices: () => choices?.flush() ?? Promise.resolve() })
 }

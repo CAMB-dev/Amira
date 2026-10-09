@@ -195,7 +195,15 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...((settings.web?.nativeSearch ?? DEFAULT_WEB_NATIVE_SEARCH) === false ? { webSearch: false } : {}),
       compactionMemory: fileCompactionMemory(amiraPath("cache", "native-compaction.json")),
     })
-  const modelRef = opts.model ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
+  // A settings choice whose provider was removed falls back like a stored session's model.
+  // Explicit flags/env still report a bad reference; never erase the saved setting.
+  const missingProvider =
+    opts.model === settings.model &&
+    opts.model !== undefined &&
+    !opts.settingsLayers?.model?.some((layer) => layer.scope === "flags") &&
+    !ai.providers().some((provider) => provider.id === opts.model!.split("/")[0])
+  const modelRef =
+    (missingProvider ? undefined : opts.model) ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
   const model = modelRef ? resolveModel(ai, modelRef) : NO_MODEL
   const modelNotice = modelRef ? undefined : noModelNotice(ai)
   if (modelNotice && opts.requireModel) throw new UsageError(noModelError(ai))
@@ -221,6 +229,17 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
     types: ["extension.error", "extension.loaded", "extension.notice"],
   })
+  if (missingProvider) {
+    bus.emit(
+      "extension.notice",
+      {
+        source: "settings",
+        level: "warning",
+        text: `settings model "${opts.model}" ignored: provider "${opts.model!.split("/")[0]}" is not configured; ${modelRef ? `using ${modelRef}` : "no model selected"}.`,
+      },
+      { sessionId: "host" },
+    )
+  }
   for (const error of opts.warnings ?? []) {
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
   }
@@ -317,10 +336,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ai,
       model: m,
       providerSettings: settings.providers,
-      defaultThinking: settings.thinking,
-      thinking: opts.settingsLayers?.thinking?.some((layer) => layer.scope === "flags")
-        ? settings.thinking
-        : undefined,
+      defaultThinking: settings.thinking === "default" ? undefined : settings.thinking,
+      thinking:
+        settings.thinking !== "default" &&
+        opts.settingsLayers?.thinking?.some((layer) => layer.scope === "flags")
+          ? settings.thinking
+          : undefined,
       fileRewindSettings: settings.fileRewind,
       cwd: opts.cwd,
       sections: defaultSections({
