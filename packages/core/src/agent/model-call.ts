@@ -153,13 +153,13 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
           })
           break
         case "text.delta":
-          options.emit("message.delta", { kind: "text", text: ev.text })
+          if (ev.text) options.emit("message.delta", { kind: "text", text: ev.text })
           break
         case "thinking.start":
           options.emit("message.stream", { kind: "thinkingStart", index: ev.index })
           break
         case "thinking.delta":
-          options.emit("message.delta", { kind: "thinking", text: ev.text })
+          if (ev.text) options.emit("message.delta", { kind: "thinking", text: ev.text })
           break
         case "toolCall.delta":
           options.emit("message.delta", {

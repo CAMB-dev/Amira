@@ -99,7 +99,6 @@ test("announces reasoning when a Chat Completions server sends no reasoning text
     "request.start",
     "start",
     "thinking.start",
-    "thinking.delta",
     "thinking.end",
     "text.delta",
     "done",

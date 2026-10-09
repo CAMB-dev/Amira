@@ -49,8 +49,8 @@ export class ChatAccumulator {
           this.message.content.push(this.#thinking)
         }
         this.#thinking.text += reasoning
+        yield { type: "thinking.delta", text: reasoning }
       }
-      yield { type: "thinking.delta", text: reasoning }
     }
     if (
       (typeof delta.content === "string" && delta.content) ||

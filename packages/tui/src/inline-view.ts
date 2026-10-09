@@ -488,6 +488,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       streaming.append(text)
     },
     reasoningDelta(text) {
+      if (!text) return
       flushDialog()
       thought ??= { text: "", startedAt: Date.now() }
       thought.text += text

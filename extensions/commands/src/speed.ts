@@ -20,6 +20,17 @@ export function tokensPerSecond(tokens: number, first: number, end: number): num
 }
 
 const estimate = (text: string) => Math.ceil(text.length / 4)
+const estimateReply = (message: AssistantMessage) =>
+  message.content.reduce(
+    (n, b) =>
+      n +
+      (b.type === "text"
+        ? estimate(b.text)
+        : b.type === "toolCall"
+          ? estimate(b.name + JSON.stringify(b.args))
+          : 0),
+    0,
+  )
 const rate = (n: number) => (n < 10 ? n.toFixed(1) : String(Math.round(n)))
 const measuredRate = (tokens: number, ms: number) =>
   tokens >= 0 && ms > 0 ? (tokens * 1000) / ms : undefined
@@ -96,11 +107,16 @@ export function requestSpeed(
         ...(thinking !== undefined ? [`thinking ${rate(thinking)} tok/s`] : []),
       ]
       if (parts.length) result.split = parts.join(" · ")
+    } else if (t.thinkingDisplay === undefined && reasoning > 0 && t.reply !== undefined) {
+      // Counts are real, but an unknown display cannot give an exact phase duration.
+      const tokens = total.estimated ? estimateReply(message) : Math.max(0, total.tokens - reasoning)
+      const reply = tokensPerSecond(tokens, t.reply, last)
+      if (reply !== undefined)
+        result.split = `reply ~${rate(reply)} tok/s${t.thinking === undefined ? " (hidden reasoning)" : ""}`
     }
     return result
   }
-  if (t.thinkingDisplay !== "raw" && t.thinkingDisplay !== "omitted") return result
-  // Providers without reasoning counts retain explicitly marked text estimates.
+  // Providers without reasoning counts retain marked estimates, also for unknown display.
   const hidden =
     t.thinking === undefined &&
     (message.content.some((b) => b.type === "thinking") ||
@@ -109,16 +125,7 @@ export function requestSpeed(
     (n, b) => n + (b.type === "thinking" ? estimate(b.text) : 0),
     0,
   )
-  const replyTokens = message.content.reduce(
-    (n, b) =>
-      n +
-      (b.type === "text"
-        ? estimate(b.text)
-        : b.type === "toolCall"
-          ? estimate(b.name + JSON.stringify(b.args))
-          : 0),
-    0,
-  )
+  const replyTokens = estimateReply(message)
   const reasoned = hidden || t.thinking !== undefined
   const reply =
     t.reply === undefined

@@ -43,9 +43,9 @@ test("a requested summary suppresses the split even if the summary text is long"
   )
 })
 
-test("reported reasoning is never replaced by a text estimate when block timing is unavailable", () => {
+test("unknown display marks reply timing approximate; known display needs complete block timing", () => {
   expect(replySpeed(message(80, true), { start: 0, first: 1000, thinking: 1000, reply: 5000 }, 6000)).toBe(
-    "output 20 tok/s · TTFT 1.00s",
+    "output 20 tok/s · TTFT 1.00s · reply ~20 tok/s",
   )
   expect(
     requestSpeed(
@@ -115,11 +115,11 @@ test("no usage estimates output and reply; turn estimates are marked too", () =>
   expect(turnSpeed(40, 0, 2000, true)).toBe("effective ~20 tok/s (includes tools and waits)")
 })
 
-test("unknown display mode never invents a phase split, even without reasoning counts", () => {
+test("unknown display mode retains marked text estimates, never exact phase speeds", () => {
   expect(
     requestSpeed(message(undefined, true), { start: 0, first: 1000, thinking: 1000, reply: 3000 }, 5000)
       .split,
-  ).toBeUndefined()
+  ).toBe("reply ~10 tok/s · thinking ~40 tok/s")
 })
 
 test("an orphan thinking end invalidates the split, not just the missing block", () => {
@@ -132,6 +132,21 @@ test("an orphan thinking end invalidates the split, not just the missing block",
   streamTiming(t, { kind: "thinkingEnd", index: 1 }, 3000)
   expect(requestSpeed(message(80), t, 5000).split).toBeUndefined()
 })
+
+test.each(["openai-responses", "google-gemini"])(
+  "%s with unknown display retains a marked hidden-reasoning reply estimate",
+  (provider) => {
+    for (const reasoning of [80, undefined]) {
+      const hidden = message(reasoning)
+      hidden.model.provider = provider
+      if (reasoning !== undefined) hidden.content[0] = { type: "text", text: "x".repeat(400) }
+      hidden.content.unshift({ type: "thinking", text: "", signature: { dialect: provider, value: "sig" } })
+      expect(replySpeed(hidden, { start: 0, first: 1000, reply: 5000 }, 6000)).toBe(
+        "output 20 tok/s · TTFT 1.00s · reply ~20 tok/s (hidden reasoning)",
+      )
+    }
+  },
+)
 
 test("search-only usage metadata cannot turn an unreported output count into an exact rate", () => {
   const searchOnly = message()
