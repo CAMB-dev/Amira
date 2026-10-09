@@ -4,7 +4,7 @@ import type { EventMap } from "../src/index.ts"
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
   const actual = Object.keys(api).sort()
-  expect(api.API_VERSION).toBe("0.1.33")
+  expect(api.API_VERSION).toBe("0.1.34")
   expect(actual).toEqual([
     "API_VERSION",
     "ARTIFACT_HEADER",
