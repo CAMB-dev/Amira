@@ -1,5 +1,6 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { isDeepStrictEqual } from "node:util"
 import type { ProviderSettings } from "@amira/api"
 import { type FileLock, tryFileLock } from "../file-lock.ts"
 import { editJsonValues } from "./json-edit.ts"
@@ -57,8 +58,9 @@ export function updateProviderInSettings(
 /**
  * Changes a settings file under its lock, keeping everything `change` leaves alone: it gets
  * the parsed object ({} for a missing file) and returns the new one. Nothing is written when
- * the result is the same. Returns whether the file changed. With preserveFormatting, added
- * and replaced top-level values leave the rest of the text alone (removals use the normal writer).
+ * the result is the same. Returns whether the file changed. With preserveFormatting, top-level
+ * edits leave unrelated text alone; removals and insertions into empty/single-line objects use
+ * the normal layout. Edited JSON is validated before writing, with a full rewrite as fallback.
  */
 export function updateSettingsFile(
   file: string,
@@ -72,10 +74,15 @@ export function updateSettingsFile(
     if (!isPlainObject(raw)) throw new SettingsError(file, ["must hold a JSON object"])
     const next = change(structuredClone(raw))
     if (JSON.stringify(next) === JSON.stringify(raw)) return false
-    const text =
-      options.preserveFormatting && parsed !== undefined
-        ? editJsonValues(readFileSync(file, "utf8"), raw, next)
-        : undefined
+    let text: string | undefined
+    if (options.preserveFormatting && parsed !== undefined) {
+      try {
+        const edited = editJsonValues(readFileSync(file, "utf8"), raw, next)
+        if (isDeepStrictEqual(JSON.parse(edited.replace(/^\uFEFF/, "")), next)) text = edited
+      } catch {
+        // A faulty minimal edit must never corrupt settings; use the full atomic rewrite.
+      }
+    }
     writeJsonAtomic(file, next, undefined, text)
     return true
   })

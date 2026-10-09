@@ -4,9 +4,15 @@ export function editJsonValues(
   before: Record<string, unknown>,
   after: Record<string, unknown>,
 ): string {
-  // Removal is not used for remembered choices; other settings callers keep the normal writer.
-  if (Object.keys(before).some((key) => !Object.hasOwn(after, key))) {
-    return `${JSON.stringify(after, null, 2)}\n`
+  const newline = text.includes("\r\n") ? "\r\n" : "\n"
+  const addsKeys = Object.keys(after).some((key) => !Object.hasOwn(before, key))
+  // Removals use the normal writer. Inserting into an empty/single-line object also gets
+  // the usual two-space multiline layout, keeping its BOM and line ending.
+  if (
+    Object.keys(before).some((key) => !Object.hasOwn(after, key)) ||
+    (addsKeys && (Object.keys(before).length === 0 || !text.trim().includes("\n")))
+  ) {
+    return `${text.startsWith("\uFEFF") ? "\uFEFF" : ""}${JSON.stringify(after, null, 2).replaceAll("\n", newline)}${newline}`
   }
   const tokens = [...text.matchAll(/"(?:[^"\\]|\\.)*"|[{}[\],:]|[^\s{}[\],:]+/g)]
   const edits: { start: number; end: number; value: string }[] = []
@@ -42,12 +48,10 @@ export function editJsonValues(
   }
   const added = Object.keys(after).filter((key) => !found.has(key))
   if (added.length) {
-    const newline = text.includes("\r\n") ? "\r\n" : "\n"
     const indent = /(?:\r?\n)([\t ]+)"/.exec(text)?.[1] ?? "  "
-    const multiline = text.includes("\n")
     // Insert before the trailing whitespace, leaving the closing brace and its indent alone.
     const at = text.slice(0, close).trimEnd().length
-    const separator = multiline ? `${newline}${indent}` : " "
+    const separator = `${newline}${indent}`
     const values = added.map((key) => `${JSON.stringify(key)}: ${JSON.stringify(after[key])}`)
     edits.push({
       start: at,
