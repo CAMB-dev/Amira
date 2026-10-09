@@ -10,7 +10,7 @@ import { registerJobs } from "./jobs-ui.ts"
 import { outputReadTool } from "./output-read.ts"
 import { builtinPresenters } from "./presenters.ts"
 import { readTool } from "./read.ts"
-import { warmUpShell } from "./shell.ts"
+import { availableShellTools, warmUpShell } from "./shell.ts"
 import { toolSearchExtension, toolSearchTool } from "./tool-search.ts"
 import { writeTool } from "./write.ts"
 
@@ -51,11 +51,15 @@ export const builtinTools = [
   ...jobTools,
 ]
 
-export default defineExtension((api) => {
-  for (const tool of builtinTools) api.registerTool(tool)
+export default defineExtension(async (api) => {
+  const tools = await availableShellTools(
+    builtinTools,
+    () => api.session()?.info().shell ?? api.settings.shell,
+  )
+  for (const tool of tools) api.registerTool(tool)
   for (const [name, presenter] of Object.entries(builtinPresenters)) api.registerToolRenderer(name, presenter)
   registerJobs(api)
-  // Not awaited: loading must not wait for shell discovery or the Win32 bindings.
+  // Warm processes and Win32 bindings in the background after shell discovery.
   setTimeout(() => {
     warmUpShell()
     hostWarmUpCommands()

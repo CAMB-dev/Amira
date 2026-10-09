@@ -23,7 +23,7 @@ for (const tool of [bashTool, powershellTool]) {
     try {
       expect(DEFAULT_TIMEOUT_MS).toBe(600_000)
       expect(MAX_TIMEOUT_MS).toBe(600_000)
-      expect(tool.description).toContain("default 600000, max 600000")
+      expect(tool.description).toContain("default/max 600000")
       expect(tool.parameters).toMatchObject({
         properties: {
           timeout: { type: "integer", minimum: 1, maximum: 600_000 },

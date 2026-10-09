@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, win32 } from "node:path"
-import { hostRunCommand } from "@amira/api"
+import { hostRunCommand, type ShellMode, type ToolDefinition } from "@amira/api"
 import {
   findPowerShell,
   gatedPowerShell,
@@ -238,6 +238,37 @@ export function resolveShell(): Promise<Shell> {
       ? findGitBash().then((bash) => (bash ? windowsBashShell(bash) : fallbackPowerShell()))
       : Promise.resolve(posixBashShell("/bin/bash"))
   return cached
+}
+
+/** Windows auto offers both shells only when Git Bash is available; Windows includes PowerShell. */
+export async function shellToolNames(
+  mode: "auto" | "bash" | "powershell" = "auto",
+  platform: string = process.platform,
+  resolve: () => Promise<Pick<Shell, "kind">> = resolveShell,
+): Promise<string[]> {
+  if (platform !== "win32") return ["bash"]
+  if (mode !== "auto") return [mode]
+  return (await resolve()).kind === "bash" ? ["bash", "powershell"] : ["powershell"]
+}
+
+/** Keep the bash fallback callable by explicit choice, without advertising two PowerShell tools in auto. */
+export async function availableShellTools(
+  tools: readonly ToolDefinition[],
+  mode: () => ShellMode | undefined,
+  platform: string = process.platform,
+  resolve: () => Promise<Pick<Shell, "kind">> = resolveShell,
+): Promise<ToolDefinition[]> {
+  const shells = await shellToolNames("auto", platform, resolve)
+  return tools.map((tool) =>
+    tool.name === "bash" && !shells.includes("bash")
+      ? {
+          ...tool,
+          get exposure() {
+            return mode() === "bash" ? "active" : "inactive"
+          },
+        }
+      : tool,
+  )
 }
 
 /**

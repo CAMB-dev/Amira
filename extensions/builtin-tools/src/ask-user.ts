@@ -24,14 +24,9 @@ export interface AskUserDetails {
 export const askUserTool = defineTool<AskUserParams>({
   name: ASK_USER_TOOL,
   description: [
-    "Ask the user one to four multiple-choice questions and wait for the answers.",
-    "- Use it only for genuine decisions that are the user's to make: a preference, a trade-off, which of several reasonable approaches to take, or a requirement that is really unclear. Never ask what you can find out yourself by reading files, running commands or searching.",
-    '- Each question has 2 to 4 options that are mutually exclusive (unless multiSelect), with a short label and a description of what choosing it means. Put the option you recommend first and end its label with "(Recommended)".',
-    '- The user can always answer in their own words instead ("Other"); do not add such an option yourself.',
-    '- `header` is a very short name for the question (at most 12 characters), such as "Approach" or "Database".',
-    "- Set multiSelect when several options may be chosen together.",
-    "- Ask all related questions in one call rather than one after another. The result lists each question with the chosen label(s) or the user's own words; the user may also decline to answer.",
-    "- In a sub-agent the questions go to the agent that started you, which answers them or passes them on to the user.",
+    "Ask related multiple-choice questions together and wait. Only ask genuine user decisions (preferences/trade-offs/unclear requirements), never what files, commands or search can answer.",
+    'Options are mutually exclusive unless multiSelect. Put recommended option first, label ending "(Recommended)". Do not add "Other": free-text answers are built in.',
+    "Result: each question with chosen labels/free text, or declined. Sub-agent questions go to its parent, which answers or forwards to user.",
   ].join("\n"),
   parameters: {
     type: "object",
@@ -40,7 +35,6 @@ export const askUserTool = defineTool<AskUserParams>({
         type: "array",
         minItems: 1,
         maxItems: 4,
-        description: "The questions, asked one after another and answered together",
         items: {
           type: "object",
           properties: {
@@ -52,13 +46,12 @@ export const askUserTool = defineTool<AskUserParams>({
             header: {
               type: "string",
               maxLength: 12,
-              description: "A short name for it, at most 12 characters",
+              description: "Short question name",
             },
             options: {
               type: "array",
               minItems: 2,
               maxItems: 4,
-              description: "2 to 4 mutually exclusive choices; the recommended one first",
               items: {
                 type: "object",
                 properties: {

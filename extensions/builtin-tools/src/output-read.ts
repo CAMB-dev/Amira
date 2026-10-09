@@ -25,20 +25,17 @@ const n = (x: number) => x.toLocaleString("en-US")
 export const outputReadTool = defineTool<OutputReadParams>({
   name: "output_read",
   description: [
-    "Read a tool output that was too long to return whole and was saved as an artifact (its id, `a_…`, is in the output's first line).",
-    `- Returns numbered lines like read: \`offset\` is the 1-based line to start at, \`limit\` how many lines (default ${DEFAULT_OUTPUT_READ_LIMIT}).`,
-    `- \`grep\` returns only the lines matching a JavaScript regular expression (from \`offset\` on, at most \`limit\`, default ${DEFAULT_GREP_LIMIT}), with their line numbers; \`ignore_case\` makes it case-insensitive.`,
-    `- Lines longer than ${MAX_LINE_CHARS} characters are cut; \`column\` (1-based) starts every shown line further in, to page through a long line.`,
-    "- The artifact is what the tool returned at the time. To see a file as it is now, use read on the file instead.",
+    "Read saved tool output; artifact id (a_…) is in its first line. Returns numbered lines like read. This is historical output: use read for current file contents.",
+    `Default ${DEFAULT_OUTPUT_READ_LIMIT} lines, or ${DEFAULT_GREP_LIMIT} matching grep (JavaScript RegExp) from offset onward. Lines cut at ${MAX_LINE_CHARS} chars; column pages through long lines.`,
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
-      id: { type: "string", description: "The artifact id, e.g. a_1f2e3d4c5b" },
+      id: { type: "string" },
       offset: { type: "integer", minimum: 1, description: "1-based line number to start at" },
       limit: { type: "integer", minimum: 1, description: "Maximum number of lines to return" },
-      grep: { type: "string", description: "Only return lines matching this JavaScript regular expression" },
-      ignore_case: { type: "boolean", description: "Case-insensitive grep (default false)" },
+      grep: { type: "string", description: "Filter matching lines" },
+      ignore_case: { type: "boolean", description: "Case-insensitive (default false)" },
       column: { type: "integer", minimum: 1, description: "1-based character to start each line at" },
     },
     required: ["id"],

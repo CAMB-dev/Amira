@@ -47,7 +47,7 @@ test("the description names the edition and its syntax", () => {
     "\n",
   )
   expect(legacy).toContain("Windows PowerShell 5.1")
-  expect(legacy).toContain("`cd dir; cmd`")
+  expect(legacy).toContain("cd dir; cmd")
   expect(legacy).not.toContain("cd dir &&")
   expect(legacy).toContain("$LASTEXITCODE")
 })

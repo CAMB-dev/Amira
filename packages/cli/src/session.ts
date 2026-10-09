@@ -170,8 +170,11 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
   const readPackages = () => (typeof opts.packages === "function" ? opts.packages() : opts.packages)
   let packages = readPackages()
   const settings = withPackageSkills(opts.settings ?? {}, packages)
-  const extensionSettings = (value: Settings): Settings =>
-    opts.autoTitle === false ? { ...value, sessions: { ...value.sessions, autoTitle: false } } : value
+  const extensionSettings = (value: Settings): Settings => ({
+    ...value,
+    shell: opts.shell ?? value.shell ?? DEFAULT_SHELL,
+    ...(opts.autoTitle === false ? { sessions: { ...value.sessions, autoTitle: false } } : {}),
+  })
   // AMIRA_TEST_MOCK (end-to-end tests only) adds a scripted "mock" provider and keeps the
   // catalog download out of the test run.
   const mock = testAiOptions()

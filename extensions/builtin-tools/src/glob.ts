@@ -15,17 +15,15 @@ export interface GlobParams {
 export const globTool = defineTool<GlobParams>({
   name: "glob",
   description: [
-    'Find files by name with a glob pattern such as "**/*.ts" or "src/**/test_*.py".',
-    "- The pattern is matched against paths relative to `path` (default: the working directory). Use `**/` to match at any depth; `*.ts` alone only matches the top level.",
-    "- Supports `*`, `**`, `?`, `[abc]` and `{a,b}`. A pattern may also start with an absolute directory or `../`, which then becomes the search root.",
-    `- Returns matching file paths, newest modification time first, at most ${GLOB_LIMIT}. A long list is saved whole as an artifact that output_read can read or search.`,
-    "- Skips .git, node_modules, Git-ignored files and nested repositories other than submodules. Paths outside the working directory stay absolute and are marked.",
+    "Find file names; pattern relative to path (default working directory). **/ matches any depth; *.ts only top level. Supports *, **, ?, [abc], {a,b}; leading absolute directory or ../ sets search root.",
+    `Newest-modified first, at most ${GLOB_LIMIT} paths. Long lists saved whole as output_read artifacts.`,
+    "Skips .git, node_modules, Git-ignored files and nested repos except submodules. Outside paths stay absolute/marked.",
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
       pattern: { type: "string", description: "Glob pattern" },
-      path: { type: "string", description: "Directory to search in (default: the working directory)" },
+      path: { type: "string" },
     },
     required: ["pattern"],
     additionalProperties: false,

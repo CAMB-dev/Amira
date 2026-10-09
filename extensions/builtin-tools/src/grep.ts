@@ -28,25 +28,21 @@ export interface GrepParams {
 export const grepTool = defineTool<GrepParams>({
   name: "grep",
   description: [
-    "Search file contents with a JavaScript regular expression, line by line.",
-    "- `pattern` uses JavaScript RegExp syntax (e.g. `function\\s+\\w+`, `log.*Error`). Escape regex metacharacters to match them literally.",
-    "- `path` is a file or directory (default: the working directory). `glob` filters the files of a directory, e.g. `*.ts` or `src/**/*.{ts,tsx}`; a glob without `/` matches file names at any depth.",
-    "- `output_mode`: `files_with_matches` (default) lists matching files; `content` shows `file:line:text` for each matching line; `count` shows `file:count`.",
-    `- \`head_limit\` caps the number of output lines (default ${DEFAULT_HEAD_LIMIT}). When all results are long they are saved as an artifact that output_read can read or search.`,
-    "- Skips .git, node_modules, Git-ignored files, nested repositories other than submodules, binary files and files over 5 MB, and only searches the first 10,000 characters of each line. Paths are relative to the working directory; outside paths stay absolute and are marked.",
-    "- Use glob to find files by name.",
+    "Search file contents line-by-line with JavaScript RegExp; escape metacharacters for literals. Use glob for file names.",
+    "path: file/directory, default working directory. glob filters directory files; without / it matches names at any depth.",
+    "output_mode: files_with_matches lists paths (default), content gives file:line:text, count gives file:count. Long results: artifact readable/searchable via output_read.",
+    "Skips .git, node_modules, Git-ignored files, nested repos except submodules, binaries and files >5 MB; searches only first 10,000 chars per line. Paths relative to working directory; outside paths absolute/marked.",
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
-      pattern: { type: "string", description: "JavaScript regular expression to search for" },
-      path: { type: "string", description: "File or directory to search (default: the working directory)" },
-      glob: { type: "string", description: "Only search files matching this glob" },
+      pattern: { type: "string" },
+      path: { type: "string" },
+      glob: { type: "string" },
       ignore_case: { type: "boolean", description: "Case-insensitive search (default false)" },
       output_mode: {
         type: "string",
         enum: ["files_with_matches", "content", "count"],
-        description: "What to output (default files_with_matches)",
       },
       head_limit: {
         type: "integer",
