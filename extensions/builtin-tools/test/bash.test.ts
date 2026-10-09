@@ -186,10 +186,16 @@ async function marked(marker: string): Promise<{ pid: number; cmd: string }[]> {
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%${marker}%'" | Where-Object { $_.ProcessId -ne $PID } | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`,
+        `$ErrorActionPreference = 'Stop'; Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%${marker}%'" | Where-Object { $_.ProcessId -ne $PID } | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`,
       ]
     : ["ps", "-eo", "pid=,args="]
-  const out = await new Response(Bun.spawn(argv, { stdout: "pipe", stderr: "ignore" }).stdout).text()
+  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" })
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  if (code !== 0) throw new Error(`Process listing exited ${code}: ${err}`)
   return out
     .split(/\r?\n/)
     .map((l) => l.trim().match(/^(\d+)\s+(.*)$/))
@@ -221,20 +227,32 @@ test.if(hasBash)(
   "abort kills background grandchildren with no survivors",
   async () => {
     const marker = newMarker(97)
-    // The sleep processes themselves: the shells running the command have `sleep <marker>` in
-    // their command lines too, and the one that checks the pipeline status stays alive.
-    const isSleep = new RegExp(`(^|[\\\\/"])sleep(\\.exe)?"?\\s+${marker.replace(".", "\\.")}$`)
-    const sleeps = async () => (await marked(marker)).filter((p) => isSleep.test(p.cmd.trim()))
     const ac = new AbortController()
-    const run = bashTool.execute(
-      { command: `(sleep ${marker} &); sleep ${marker} & echo started; sleep ${marker}` },
-      makeCtx(dir, ac.signal),
-    )
+    const ready = Promise.withResolvers<void>()
+    const ctx = makeCtx(dir, ac.signal)
+    ctx.update = (r) => {
+      if (/^three sleeps started$/m.test(textOf(r))) ready.resolve()
+    }
+    // MSYS's /proc reports exec, not just fork. Confirm each sleep locally before signalling:
+    // spawning PowerShell/CIM for every readiness poll competes with shell startup under load.
+    const check = isWindows
+      ? `while IFS= read -r -d '' name < /proc/$pid/cmdline; do [[ $name == sleep ]] && return; sleep 0.05; done`
+      : `while kill -0 "$pid" 2>/dev/null; do [[ $(ps -p "$pid" -o comm=) == *sleep ]] && return; sleep 0.05; done`
+    const command = [
+      `start_sleep() { sleep ${marker} & local pid=$! name; ${check}; return 1; }`,
+      // The first sleep is orphaned by its subshell, just as in the original abort scenario.
+      "(start_sleep) && start_sleep && start_sleep && echo 'three sleeps started'; wait",
+    ].join("\n")
+    const run = bashTool.execute({ command }, ctx)
+    const timer = setTimeout(() => ready.reject(new Error("Sleeps did not start within 15 s")), 15_000)
     try {
-      const deadline = Date.now() + 15_000
-      while ((await sleeps()).length < 3 && Date.now() < deadline) await Bun.sleep(200)
-      expect((await sleeps()).length).toBe(3)
-
+      await Promise.race([
+        ready.promise,
+        run.then((r) => {
+          throw new Error(`Command ended before the sleeps were ready: ${textOf(r)}`)
+        }),
+      ])
+      clearTimeout(timer)
       ac.abort()
       const r = await run
       expect(r.isError).toBe(true)
@@ -243,6 +261,7 @@ test.if(hasBash)(
       // No sleep, and no shell that ran one, is left.
       expect(await survivors(marker)).toEqual([])
     } finally {
+      clearTimeout(timer)
       ac.abort()
       await run.catch(() => {})
       killMarked(await marked(marker))
