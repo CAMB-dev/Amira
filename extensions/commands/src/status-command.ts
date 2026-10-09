@@ -6,6 +6,7 @@ import {
   modelLabel,
 } from "@amira/api"
 import { cacheHitRate, costByModel, formatCost, formatTokens, table, windowLabel } from "./format.ts"
+import { liveSpeed } from "./live-speed.ts"
 import { trackSpeed } from "./status-speed.ts"
 
 /**
@@ -37,7 +38,7 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
     return workspace.get(sessionId)
   }
 
-  const speed = trackSpeed(api)
+  const speed = trackSpeed(api, liveSpeed(api))
 
   return {
     name: "status",

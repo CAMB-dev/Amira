@@ -19,7 +19,8 @@ export function tokensPerSecond(tokens: number, first: number, end: number): num
   return tokens > 0 && seconds >= 0.2 ? tokens / seconds : undefined
 }
 
-const estimate = (text: string) => Math.ceil(text.length / 4)
+export const estimateChars = (chars: number) => Math.ceil(chars / 4)
+const estimate = (text: string) => estimateChars(text.length)
 const estimateReply = (message: AssistantMessage) =>
   message.content.reduce(
     (n, b) =>
@@ -31,7 +32,7 @@ const estimateReply = (message: AssistantMessage) =>
           : 0),
     0,
   )
-const rate = (n: number) => (n < 10 ? n.toFixed(1) : String(Math.round(n)))
+export const rate = (n: number) => (n < 10 ? n.toFixed(1) : String(Math.round(n)))
 const measuredRate = (tokens: number, ms: number) =>
   tokens >= 0 && ms > 0 ? (tokens * 1000) / ms : undefined
 
