@@ -63,8 +63,8 @@ export interface Settings {
   fileRewind?: { enabled?: boolean; maxFileBytes?: number; quotaBytes?: number }
   /** Default model as "provider/model". */
   model?: string
-  /** Reasoning effort for thinking models. Unset uses the server default. */
-  thinking?: ReasoningEffort
+  /** Reasoning effort for thinking models; "default" explicitly leaves effort to the server. */
+  thinking?: ReasoningEffort | "default"
   /** baseUrl, apiKeyEnv, apiKeyEnvFallbacks and headers are only taken from the user file. */
   providers?: Record<string, ProviderSettings>
   /** Which shell tools the model gets on Windows (D68). */

@@ -180,6 +180,7 @@ async function run(argv: string[]): Promise<number> {
   const commands = createCommandHost({
     session,
     cwd: args.cwd,
+    interactive,
     shell: config.shell,
     disabled: config.requestedDisabled.names,
     ...(config.settings.commandAliases ? { aliases: config.settings.commandAliases } : {}),

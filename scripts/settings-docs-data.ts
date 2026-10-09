@@ -134,13 +134,13 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
 export const annotations: Record<string, Annotation> = {
   model: {
     default: none,
-    en: 'Default model as `"provider/model"`. Without it, Amira uses the resumed session\'s model, or the first model of the only provider. `--model` and `/model` choose another.',
-    zh: '默认模型，格式为 `"provider/model"`。未设置时，Amira 使用恢复的会话上次用的模型；只配置了一个 provider 时则用它的第一个模型。`--model` 和 `/model` 可以另选。',
+    en: 'Default model as `"provider/model"`. Without it, Amira uses the resumed session\'s model, or the first model of the only provider. `--model` and `AMIRA_MODEL` override it for one run; interactive `/model` changes save the model and thinking choice (see [Saving model and thinking choices](#saving-model-and-thinking-choices)).',
+    zh: '默认模型，格式为 `"provider/model"`。未设置时，Amira 使用恢复的会话上次用的模型；只配置了一个 provider 时则用它的第一个模型。`--model` 和 `AMIRA_MODEL` 只在单次运行中覆盖；交互式 `/model` 的更改会保存模型和思考设置（见[保存模型与思考设置](#保存模型与思考设置)）。',
   },
   thinking: {
     default: none,
-    en: "Reasoning effort for main conversation requests on models with `caps.thinking`. Unset leaves effort to the server; it does not turn thinking off. A model's `thinking` overrides this; `--thinking` overrides both. Sub-agents inherit the parent's selected effort; titles and compaction do not.",
-    zh: "对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置时沿用服务端默认强度，不会关闭思考。模型的 `thinking` 优先于此项，`--thinking` 优先于两者。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。",
+    en: 'Reasoning effort for main conversation requests on models with `caps.thinking`. Unset or `"default"` leaves effort to the server; it does not turn thinking off. `"default"` overrides earlier top-level layers. A model\'s `thinking` still overrides this; `--thinking` overrides both for one run. Interactive `/thinking` changes save the model and thinking choice; `/thinking default` saves `"default"`. Sub-agents inherit the parent\'s selected effort; titles and compaction do not.',
+    zh: '对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置或设为 `"default"` 时沿用服务端默认强度，不会关闭思考。`"default"` 覆盖之前各层的顶层设置。模型的 `thinking` 仍优先于此项，`--thinking` 在单次运行中优先于两者。交互式 `/thinking` 的更改会保存模型和思考设置；`/thinking default` 保存 `"default"`。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。',
   },
   shell: {
     default: documentedDefault("shell"),

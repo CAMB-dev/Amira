@@ -8,6 +8,7 @@ import { createInfoControl } from "./control/info.ts"
 import { createRewindControl } from "./control/rewind.ts"
 import { createSessionsControl } from "./control/sessions.ts"
 import { createToolControl } from "./control/tools.ts"
+import { rememberingControl } from "./remember-choice.ts"
 import { toolsToDisable } from "./session/settings-adapters.ts"
 import type { Session } from "./session.ts"
 
@@ -16,6 +17,8 @@ export interface ControlOptions {
   /** The process-owned recorder, for fresh snapshots and deletion coordination. */
   trace?: ControlTrace
   cwd: string
+  /** Remember user selections only on the interactive frontend, never extension controls. */
+  interactive?: boolean
   /** Shell mode the session starts with (D68). See DEFAULT_SHELL. */
   shell?: ShellMode
   /** Tools settings or flags disabled explicitly (tools.disabled, --disable-tools). */
@@ -156,7 +159,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost {
     inputs: session.host.inputs,
     bus: session.agent.bus,
     ui: session.host.ui,
-    control,
+    control: opts.interactive ? rememberingControl(control, agent, cwd, opts.home) : control,
     agent: session.agent,
     ...(opts.aliases ? { aliases: opts.aliases } : {}),
   })
