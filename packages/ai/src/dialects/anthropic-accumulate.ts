@@ -161,7 +161,7 @@ export class MessagesAccumulator {
     ) {
       open.json += d.partial_json
     } else if (open.kind === "thinking" && d?.type === "thinking_delta") {
-      if (typeof d.thinking !== "string") return
+      if (typeof d.thinking !== "string" || !d.thinking) return
       open.block.text += d.thinking
       yield { type: "thinking.delta", text: d.thinking }
     } else if (open.kind === "thinking" && d?.type === "signature_delta") {
