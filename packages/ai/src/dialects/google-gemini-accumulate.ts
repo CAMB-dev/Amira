@@ -8,7 +8,6 @@ import type {
   ThinkingBlock,
   Usage,
 } from "../types.ts"
-import { emptyUsage } from "../types.ts"
 import { GEMINI_DIALECT, SYNTHETIC_ID } from "./google-gemini-contents.ts"
 import { GeminiWebSearch } from "./google-gemini-web-search.ts"
 import type { ErrorEvent } from "./http-stream.ts"
@@ -38,17 +37,23 @@ export class GeminiAccumulator {
   /** The block the next text or thought part may extend. */
   #open: TextBlock | ThinkingBlock | undefined
   #calls = 0
+  #thinkingIndex: number | undefined
+  readonly #thinkingIndices = new Set<number>()
+  #thinkingBlocks = 0
   #finish: string | undefined
   #blocked: string | undefined
   readonly #tag = Math.random().toString(36).slice(2, 8)
 
   constructor(model: ModelRef) {
-    this.message = { role: "assistant", content: [], model, usage: emptyUsage() }
+    this.message = { role: "assistant", content: [], model }
     this.#search = new GeminiWebSearch(this.message)
   }
 
   *apply(chunk: any): Generator<StreamEvent> {
-    if (chunk?.usageMetadata) this.message.usage = { ...this.message.usage, ...mapUsage(chunk.usageMetadata) }
+    if (chunk?.usageMetadata) {
+      this.message.usage = { ...this.message.usage, ...mapUsage(chunk.usageMetadata) }
+      delete this.message.usage.outputReported
+    }
     const block = chunk?.promptFeedback?.blockReason
     if (typeof block === "string" && block) this.#blocked = block
     const candidate = chunk?.candidates?.[0]
@@ -58,8 +63,10 @@ export class GeminiAccumulator {
       for (const part of parts) yield* this.#part(part ?? {})
     }
     yield* this.#search.metadata(candidate?.groundingMetadata)
-    if (typeof candidate?.finishReason === "string" && candidate.finishReason)
+    if (typeof candidate?.finishReason === "string" && candidate.finishReason) {
+      yield* this.#endThinking()
       this.#finish = candidate.finishReason
+    }
   }
 
   fail(error: ModelError, retryable: boolean): ErrorEvent {
@@ -99,26 +106,33 @@ export class GeminiAccumulator {
       typeof part.thoughtSignature === "string" && part.thoughtSignature ? part.thoughtSignature : undefined
     const text = typeof part.text === "string" ? part.text : ""
     if (part.toolCall || part.toolResponse) {
+      yield* this.#endThinking()
       this.#open = undefined
       this.#search.part(part)
       yield* this.#search.serverPart(part)
       return
     }
     if (part.functionCall) {
+      yield* this.#endThinking()
       this.#search.part(part)
       yield this.#call(part.functionCall)
     } else if (part.thought) {
       const starts = this.#open?.type !== "thinking"
+      if (starts) {
+        this.#thinkingIndex = this.#thinkingBlocks++
+        this.#thinkingIndices.add(this.#thinkingIndex)
+      }
       const block = this.#extend("thinking", text) as ThinkingBlock
       this.#search.part(part, block)
-      if (starts) yield { type: "thinking.start" }
-      if (text) yield { type: "thinking.delta", text }
+      if (starts) yield { type: "thinking.start", index: this.#thinkingIndex }
+      if (typeof part.text === "string") yield { type: "thinking.delta", text }
       if (sig) {
         block.signature = { dialect: GEMINI_DIALECT, value: sig }
         this.#open = undefined
       }
       return
     } else if (text) {
+      yield* this.#endThinking()
       const block = this.#extend("text", text) as TextBlock
       this.#search.part(part, block)
       yield { type: "text.delta", text }
@@ -133,6 +147,16 @@ export class GeminiAccumulator {
       })
       this.#open = undefined
     }
+  }
+
+  *#endThinking(): Generator<StreamEvent> {
+    // A signature closes a stored part, not its timing: only answer/tool output or finish
+    // says that thinking stopped. Keep all signed parts pending until that observation.
+    const indices = [...this.#thinkingIndices]
+    this.#thinkingIndices.clear()
+    this.#thinkingIndex = undefined
+    if (this.#open?.type === "thinking") this.#open = undefined
+    for (const index of indices) yield { type: "thinking.end", index }
   }
 
   #extend(kind: "text" | "thinking", text: string): TextBlock | ThinkingBlock {

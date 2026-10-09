@@ -109,7 +109,7 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
 | --- | --- | --- | --- | --- |
 | `model` | `string` | 无 | 默认模型，格式为 `"provider/model"`。未设置时，Amira 使用恢复的会话上次用的模型；只配置了一个 provider 时则用它的第一个模型。`--model` 和 `/model` 可以另选。 |  |
-| `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | 无 | 对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置时不发送参数，沿用服务端默认值。模型的 `thinking` 优先于此项，`--thinking` 优先于两者。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。 |  |
+| `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | 无 | 对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置时沿用服务端默认强度，不会关闭思考。模型的 `thinking` 优先于此项，`--thinking` 优先于两者。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。 |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Windows 上模型可用的 shell 工具：`"auto"` 同时提供 `bash` 和 `powershell`，`"bash"` 或 `"powershell"` 会隐藏另一个。其他平台只有 `bash`。`--shell` 优先。 |  |
 | `tools.disabled` | `string[]` | `[]` | 对模型隐藏的工具名。`--disable-tools` 在单次运行中替换这个列表，`/tools` 只修改当前会话。 |  |
 | `maxParallelTools` | `number` | `8` | 同时运行的工具调用数上限。 |  |
@@ -135,7 +135,8 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `providers.<id>.compat.maxTokensField` | `"max_tokens" \| "max_completion_tokens"` | `"max_tokens"` | `openai-chat`：携带输出 token 上限的字段。 |  |
 | `providers.<id>.compat.webSearch` | `boolean` | 仅在 api.openai.com、Azure OpenAI、api.anthropic.com 和 generativelanguage.googleapis.com 上开启 | `openai-responses`、`anthropic-messages`、`google-gemini`：使用 provider 托管的网页搜索，此时模型不再获得 `web_search` 工具（`web_fetch` 保留）。同时带有 Amira 的工具时，Gemini 需要 Gemini 3 模型。模型的 `caps.webSearch` 优先；`web.nativeSearch: false` 会全局关闭它。 |  |
 | `providers.<id>.compat.streamUsage` | `boolean` | `true` | `openai-chat`：在流式响应中请求 token 用量。 |  |
-| `providers.<id>.compat.thinking` | `"adaptive" \| "budget"` | `"adaptive"` | `anthropic-messages`：`"adaptive"` 发送 effort，当前的 Claude 模型要求这种方式；`"budget"` 发送 `budget_tokens`，适用于 Claude 4.5 及更早的模型和 DeepSeek 等兼容服务。 |  |
+| `providers.<id>.compat.thinking` | `"adaptive" \| "budget"` | `"adaptive"` | `anthropic-messages`：`"adaptive"` 使用自适应思考，可选 effort；`"budget"` 发送 `budget_tokens`，适用于 Claude 4.5 及更早的模型和 DeepSeek 等兼容服务。 |  |
+| `providers.<id>.compat.thinkingDisplay` | `"summarized" \| "omitted"` | api.anthropic.com 使用 `"summarized"`；其他地址不发送 | `anthropic-messages`：在 adaptive 和 budget 模式下请求可读的思考摘要（`"summarized"`），或仅含签名、不含文字的块（`"omitted"`）。禁用思考时不发送。兼容服务与代理需显式设置；`models[].compat.thinkingDisplay` 优先。 |  |
 | `providers.<id>.compat.compaction` | `"auto" \| "on" \| "off"` | `"auto"` | 服务端（原生）压缩，适用于 `openai-responses` 和 `anthropic-messages`。`"auto"` 只在厂商自己的地址上使用，`"on"` 在任何地址上使用（例如会转发该功能的代理），`"off"` 从不使用。失败时退回文字摘要。 | 是 |
 | `providers.<id>.catalogId` | `string \| false` | provider ID（少数有内置映射） | 该 provider 在 models.dev 模型目录中的 ID（与你的 ID 不同时设置）；`false` 表示不使用模型目录。内置映射包括 `gemini` → `google`、`moonshot` → `moonshotai`、`ollama` 和 `lmstudio` → `false` 等。 |  |
 | `providers.<id>.tools.edit` | `"edit" \| "apply_patch" \| "both"` | `"edit"` | 该 provider 的模型使用的编辑工具：`"edit"`、`"apply_patch"` 或 `"both"`。`write` 始终可用。见[编辑工具](providers.md#编辑工具)。 |  |
@@ -144,6 +145,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `providers.<id>.models[].dialect` | `string` | 沿用 provider 的设置 | 为该模型单独指定协议。 |  |
 | `providers.<id>.models[].contextWindow` | `number` | 取模型目录，否则为 `128000` | 上下文窗口大小（token）。压缩和 `/context` 依据这个值。 |  |
 | `providers.<id>.models[].maxOutput` | `number` | 取模型目录，否则为 `8192` | 单次回复的输出 token 上限。 |  |
+| `providers.<id>.models[].compat.thinkingDisplay` | `"summarized" \| "omitted"` | 先取 defaultModel，再取 provider 设置 | 该模型的思考显示方式，优先于 provider 设置。未设置时依次取 defaultModel、provider、地址默认值。 |  |
 | `providers.<id>.models[].cost.input` | `number` | 取模型目录 | 每百万输入 token 的价格（美元）；设置 `cost` 时 `input` 和 `output` 必填。 |  |
 | `providers.<id>.models[].cost.output` | `number` | 取模型目录 | 每百万输出 token 的价格（美元）。 |  |
 | `providers.<id>.models[].cost.cacheRead` | `number` | 取模型目录 | 每百万缓存读取 token 的价格（美元）。 |  |

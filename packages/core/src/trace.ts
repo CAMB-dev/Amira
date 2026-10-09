@@ -271,6 +271,7 @@ export class TraceRecorder {
         })
         break
       case "message.delta": {
+        if ((event.data.kind === "text" || event.data.kind === "thinking") && !event.data.text) break
         const model = state.models.get(turn)
         if (model && !state.lost && model.firstToken === undefined) model.firstToken = at
         break

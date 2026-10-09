@@ -50,7 +50,18 @@ test("retries a retryable failure with exponential backoff, then succeeds", asyn
   const { calls, stream } = scripted([status(500), status(503), ok])
   const evs = await stream()
   expect(calls.n).toBe(3)
-  expect(types(evs)).toEqual(["retry", "retry", "start", "text.delta", "done"])
+  expect(types(evs)).toEqual([
+    "request.start",
+    "request.end",
+    "retry",
+    "request.start",
+    "request.end",
+    "retry",
+    "request.start",
+    "start",
+    "text.delta",
+    "done",
+  ])
   expect(evs.filter((e) => e.type === "retry")).toEqual([
     { type: "retry", attempt: 1, maxRetries: 3, delayMs: 5, error: expect.objectContaining({ status: 500 }) },
     {
@@ -69,7 +80,15 @@ test("retries a timeout body error returned before any content", async () => {
   const { calls, stream } = scripted([timeout, ok], { retries: 1, baseDelayMs: 1 })
   const evs = await stream()
   expect(calls.n).toBe(2)
-  expect(types(evs)).toEqual(["start", "retry", "text.delta", "done"])
+  expect(types(evs)).toEqual([
+    "request.start",
+    "start",
+    "request.end",
+    "retry",
+    "request.start",
+    "text.delta",
+    "done",
+  ])
   expect(evs.find((e) => e.type === "retry")).toMatchObject({
     error: { message: expect.stringContaining("unable to start processing") },
   })
@@ -95,7 +114,15 @@ test("times out a keep-alive-only attempt and retries it", async () => {
   const evs = await stream()
   expect(calls.n).toBe(2)
   expect(signals[0]?.aborted).toBe(true)
-  expect(types(evs)).toEqual(["start", "retry", "text.delta", "done"])
+  expect(types(evs)).toEqual([
+    "request.start",
+    "start",
+    "request.end",
+    "retry",
+    "request.start",
+    "text.delta",
+    "done",
+  ])
   expect(evs.find((e) => e.type === "retry")).toMatchObject({
     error: { code: "timeout", message: "model produced no content within 15 ms" },
   })
@@ -143,8 +170,16 @@ test("a reasoning start alone that then goes idle is sent again", async () => {
     }),
   )
   expect(n).toBe(2)
-  expect(types(evs)).toEqual(["start", "thinking.start", "retry", "thinking.start", "text.delta", "done"])
-  expect(evs[2]).toMatchObject({
+  expect(types(evs)).toEqual([
+    "start",
+    "thinking.start",
+    "request.end",
+    "retry",
+    "thinking.start",
+    "text.delta",
+    "done",
+  ])
+  expect(evs.find((e) => e.type === "retry")).toMatchObject({
     type: "retry",
     error: { code: "timeout", message: "model stream was idle for 20 ms" },
   })
@@ -172,7 +207,7 @@ test("a reasoning start alone does not stop a retryable error from being retried
   }
   const evs = await events(withRetry(attempt, new AbortController().signal, { retries: 1, baseDelayMs: 1 }))
   expect(n).toBe(2)
-  expect(types(evs)).toEqual(["start", "thinking.start", "retry", "thinking.start", "done"])
+  expect(types(evs)).toEqual(["start", "thinking.start", "request.end", "retry", "thinking.start", "done"])
 })
 
 test("streamed reasoning text that then goes idle is not sent again", async () => {
@@ -242,7 +277,7 @@ test("ends a stream that goes silent after content without sending it again", as
   // The partial text was already shown: a second attempt would show it twice.
   expect(calls.n).toBe(1)
   expect(signals[0]?.aborted).toBe(true)
-  expect(types(evs)).toEqual(["start", "text.delta", "error"])
+  expect(types(evs)).toEqual(["request.start", "start", "text.delta", "error"])
   expect(evs.at(-1)).toMatchObject({
     error: {
       code: "timeout",
@@ -313,7 +348,7 @@ test("a visible-content idle timeout after a retry retains the retry count and r
     }),
   )
   expect(calls).toBe(2)
-  expect(types(evs)).toEqual(["start", "retry", "text.delta", "error"])
+  expect(types(evs)).toEqual(["start", "request.end", "retry", "text.delta", "error"])
   expect(evs.at(-1)).toMatchObject({
     error: {
       code: "timeout",
@@ -328,12 +363,21 @@ test("gives up after the configured number of retries", async () => {
   const { calls, stream } = scripted([status(500)], { retries: 2, baseDelayMs: 1 })
   const evs = await stream()
   expect(calls.n).toBe(3)
-  expect(types(evs)).toEqual(["retry", "retry", "error"])
+  expect(types(evs)).toEqual([
+    "request.start",
+    "request.end",
+    "retry",
+    "request.start",
+    "request.end",
+    "retry",
+    "request.start",
+    "error",
+  ])
 })
 
 test("does not retry errors that are not retryable", async () => {
   const { calls, stream } = scripted([status(400), ok])
-  expect(types(await stream())).toEqual(["error"])
+  expect(types(await stream())).toEqual(["request.start", "error"])
   expect(calls.n).toBe(1)
 })
 
@@ -341,14 +385,15 @@ test("waits as long as Retry-After says", async () => {
   const { stream } = scripted([status(429, { "retry-after": "0.05" }), ok])
   const started = performance.now()
   const evs = await stream()
-  expect(evs[0]).toMatchObject({ type: "retry", delayMs: 50 })
+  expect(evs[0]).toEqual({ type: "request.start", thinkingDisplay: "raw" })
+  expect(evs.find((e) => e.type === "retry")).toMatchObject({ type: "retry", delayMs: 50 })
   expect(performance.now() - started).toBeGreaterThanOrEqual(45)
   expect(evs.at(-1)?.type).toBe("done")
 })
 
 test("returns the error instead of waiting out a very long Retry-After", async () => {
   const { calls, stream } = scripted([status(429, { "retry-after": "3600" }), ok])
-  expect(types(await stream())).toEqual(["error"])
+  expect(types(await stream())).toEqual(["request.start", "error"])
   expect(calls.n).toBe(1)
 })
 
@@ -363,13 +408,21 @@ test("never retries once content has streamed", async () => {
   const { calls, stream } = scripted([cut, ok])
   const evs = await stream()
   expect(calls.n).toBe(1)
-  expect(types(evs)).toEqual(["start", "text.delta", "error"])
+  expect(types(evs)).toEqual(["request.start", "start", "text.delta", "error"])
 })
 
 test("a stream that failed after start but before content is retried with one start event", async () => {
   const empty = () => new Response("", { headers: SSE_HEADERS })
   const { calls, stream } = scripted([empty, ok])
-  expect(types(await stream())).toEqual(["start", "retry", "text.delta", "done"])
+  expect(types(await stream())).toEqual([
+    "request.start",
+    "start",
+    "request.end",
+    "retry",
+    "request.start",
+    "text.delta",
+    "done",
+  ])
   expect(calls.n).toBe(2)
 })
 
@@ -440,4 +493,96 @@ test("a running hosted search keeps a quiet stream alive past the idle timeout",
   }
   const evs = await events(withRetry(attempt, new AbortController().signal, { idleTimeoutMs: 15 }))
   expect(types(evs)).toEqual(["start", "serverTool", "serverTool", "text.delta", "done"])
+})
+
+for (const activity of [
+  { type: "content.start", index: 0 },
+  { type: "thinking.end", index: 0 },
+] as const) {
+  test(`${activity.type} switches to idle timing without preventing a retry`, async () => {
+    let attempts = 0
+    const attempt = async function* (): AsyncGenerator<StreamEvent> {
+      attempts++
+      yield { type: "request.start", thinkingDisplay: "omitted" }
+      yield { type: "start" }
+      yield activity
+      await Bun.sleep(35)
+      if (attempts === 1) {
+        yield {
+          type: "error",
+          error: { message: "busy", status: 503 },
+          retryable: true,
+          message: { role: "assistant", content: [], model: { provider: "p", model: "m" } },
+        }
+      } else {
+        yield {
+          type: "done",
+          message: { role: "assistant", content: [], model: { provider: "p", model: "m" } },
+        }
+      }
+    }
+    const evs = await events(
+      withRetry(attempt, new AbortController().signal, {
+        retries: 1,
+        baseDelayMs: 1,
+        firstContentTimeoutMs: 15,
+        idleTimeoutMs: 100,
+      }),
+    )
+    expect(attempts).toBe(2)
+    expect(types(evs)).toEqual([
+      "request.start",
+      "start",
+      activity.type,
+      "request.end",
+      "retry",
+      "request.start",
+      activity.type,
+      "done",
+    ])
+    expect(evs.filter((e) => e.type === "request.start")).toEqual([
+      { type: "request.start", thinkingDisplay: "omitted" },
+      { type: "request.start", thinkingDisplay: "omitted" },
+    ])
+  })
+}
+
+test("empty deltas and structural reasoning events are observable but do not prevent retry", async () => {
+  let attempts = 0
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    attempts++
+    yield { type: "content.start", index: 0 }
+    yield { type: "thinking.start", index: 0 }
+    yield { type: "thinking.delta", text: "" }
+    yield { type: "thinking.end", index: 0 }
+    yield { type: "text.delta", text: "" }
+    yield { type: "toolCall.delta", id: "placeholder", argsDelta: "" }
+    if (attempts === 1) {
+      yield {
+        type: "error",
+        error: { message: "busy", status: 503 },
+        retryable: true,
+        message: { role: "assistant", content: [], model: { provider: "p", model: "m" } },
+      }
+    } else {
+      yield { type: "text.delta", text: "answer" }
+      yield {
+        type: "done",
+        message: { role: "assistant", content: [], model: { provider: "p", model: "m" } },
+      }
+    }
+  }
+  const evs = await events(withRetry(attempt, new AbortController().signal, { retries: 1, baseDelayMs: 1 }))
+  expect(attempts).toBe(2)
+  const structural = [
+    "content.start",
+    "thinking.start",
+    "thinking.delta",
+    "thinking.end",
+    "text.delta",
+    "toolCall.delta",
+  ] as const
+  expect(types(evs)).toEqual([...structural, "request.end", "retry", ...structural, "text.delta", "done"])
+  expect(evs[2]).toEqual({ type: "thinking.delta", text: "" })
+  expect(evs[4]).toEqual({ type: "text.delta", text: "" })
 })

@@ -11,7 +11,7 @@ export function anthropicResponse(events: { type: string; [k: string]: unknown }
   return new Response(anthropicSSE(events), { headers: SSE_HEADERS })
 }
 
-export const messageStart = (usage: Record<string, number> = { input_tokens: 10, output_tokens: 1 }) => ({
+export const messageStart = (usage: Record<string, unknown> = { input_tokens: 10, output_tokens: 1 }) => ({
   type: "message_start",
   message: {
     id: "msg_1",
@@ -38,7 +38,7 @@ export const blockDelta = (index: number, delta: Record<string, unknown>) => ({
 
 export const blockStop = (index: number) => ({ type: "content_block_stop", index })
 
-export const messageDelta = (stop_reason: string, usage: Record<string, number> = { output_tokens: 5 }) => ({
+export const messageDelta = (stop_reason: string, usage: Record<string, unknown> = { output_tokens: 5 }) => ({
   type: "message_delta",
   delta: { stop_reason, stop_sequence: null },
   usage,

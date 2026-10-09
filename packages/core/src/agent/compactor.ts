@@ -158,10 +158,16 @@ export class Compactor {
     let usage = emptyUsage()
     let counted = false
     let recorded = false
+    let requested = false
+    let usageIncomplete = false
     let writer = this.#deps.options.model ?? this.#deps.model()
     const count = (u: Usage | undefined) => {
-      if (!u) return
+      if (!u) {
+        usageIncomplete = true
+        return
+      }
       usage = addUsage(usage, u)
+      usageIncomplete ||= u.outputReported === false
       counted = true
     }
     try {
@@ -225,6 +231,7 @@ export class Compactor {
         if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
         if (signal.aborted) throw new Error("aborted")
         writer = this.#deps.model()
+        requested = true
         const r = await this.#deps.ai.compact(
           {
             model: writer,
@@ -236,6 +243,7 @@ export class Compactor {
           signal,
         )
         count(r.usage)
+        usageIncomplete ||= !!r.usageIncomplete
         if (signal.aborted) throw new Error("aborted")
         if (r.ok) {
           summary = r.summary ?? ""
@@ -249,6 +257,7 @@ export class Compactor {
         try {
           if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
           if (signal.aborted) throw new Error("aborted")
+          if (!supplied) requested = true
           const written = supplied
             ? { summary: supplied }
             : await summarize(
@@ -259,11 +268,17 @@ export class Compactor {
                 instructions,
                 split.prompt,
               )
-          count(written.usage)
+          if (!supplied) {
+            count(written.usage)
+            usageIncomplete ||= "usageIncomplete" in written && !!written.usageIncomplete
+          }
           summary = written.summary
         } catch (err) {
           // What the failed compaction still cost: the server attempts before it, and its own.
-          if (err instanceof SummaryError) count(err.usage)
+          if (err instanceof SummaryError) {
+            count(err.usage)
+            usageIncomplete ||= !!err.usageIncomplete
+          }
           throw err
         }
       }
@@ -349,13 +364,18 @@ export class Compactor {
         summary,
         replaced: replacedMessages.length - retained.length,
         kept: keptMessages.length,
+        ...(usageIncomplete ? { usageIncomplete: true } : {}),
         ...(counted ? { usage } : {}),
         ...info,
       })
       return true
     } catch (err) {
       if (counted && !recorded) this.#recordCompactionUsage(usage, modelRef(writer), false)
-      this.#deps.emit(turn, "compact.failed", { error: err instanceof Error ? err.message : String(err) })
+      this.#deps.emit(turn, "compact.failed", {
+        error: err instanceof Error ? err.message : String(err),
+        ...(counted ? { usage } : {}),
+        ...(requested ? { requested: true, usageIncomplete: usageIncomplete || !counted } : {}),
+      })
       return false
     }
   }

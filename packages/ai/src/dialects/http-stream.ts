@@ -17,6 +17,8 @@ export interface StreamRequest<A extends Failable> {
   url: string
   headers: Record<string, string>
   body: unknown
+  /** How readable reasoning was requested in the actual body, not its eventual text length. */
+  thinkingDisplay?: Extract<StreamEvent, { type: "request.start" }>["thinkingDisplay"]
   /** Reads an event stream; must end with one done or error event. */
   readSSE(body: ReadableStream<Uint8Array>, acc: A, signal: AbortSignal): AsyncGenerator<StreamEvent>
   /** Reads a 200 response that is not an event stream. */
@@ -39,7 +41,7 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
   }
   let res: Response
   try {
-    res = await ctx.fetch(r.url, {
+    const init = {
       method: "POST",
       headers: requestHeaders(
         { "content-type": "application/json", ...r.headers },
@@ -48,7 +50,16 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
       ),
       body: JSON.stringify(r.body),
       signal: ctx.signal,
-    })
+    }
+    if (ctx.signal.aborted) {
+      yield aborted()
+      return
+    }
+    yield {
+      type: "request.start",
+      ...(r.thinkingDisplay ? { thinkingDisplay: r.thinkingDisplay } : {}),
+    }
+    res = await ctx.fetch(r.url, init)
   } catch (e) {
     if (ctx.signal.aborted) yield aborted()
     else yield acc.fail({ message: `request failed: ${(e as Error).message}` }, true)

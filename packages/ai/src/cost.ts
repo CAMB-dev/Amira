@@ -11,6 +11,7 @@ export const hasUnpricedSearch: (message: Pick<AssistantMessage, "content" | "us
  * Cache reads and writes without a price of their own are charged as input.
  */
 export function usageCost(usage: Usage, cost: NonNullable<ModelInfo["cost"]>): number | undefined {
+  if (usage.outputReported === false) return undefined
   if ((usage.webSearchRequests ?? 0) > 0 && cost.webSearch === undefined) return undefined
   const tokens =
     usage.input * cost.input +
@@ -26,12 +27,13 @@ export async function* withCost(
   model: ModelInfo,
 ): AsyncGenerator<StreamEvent> {
   for await (const ev of stream) {
-    const usage = ev.type === "done" || ev.type === "error" ? ev.message.usage : undefined
+    const usage =
+      ev.type === "done" || ev.type === "error" || ev.type === "request.end" ? ev.message.usage : undefined
     if (usage && model.cost) {
       if (usage.webSearchRequests !== undefined && model.cost.webSearch !== undefined)
         usage.webSearchCost = usage.webSearchRequests * model.cost.webSearch
       const searched =
-        (ev.type === "done" || ev.type === "error") &&
+        (ev.type === "done" || ev.type === "error" || ev.type === "request.end") &&
         ev.message.content.some((b) => b.type === "serverTool" && b.name === NATIVE_WEB_SEARCH)
       const cost =
         searched && usage.webSearchRequests === undefined ? undefined : usageCost(usage, model.cost)

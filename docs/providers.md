@@ -118,8 +118,11 @@ Set compatibility options under a provider's `compat` object:
 | `maxTokensField` | Chat output limit field: `max_tokens` by default, or `max_completion_tokens` |
 | `streamUsage` | Request usage in chat streams; defaults to `true` |
 | `thinking` | Anthropic thinking mode: `adaptive` by default, or `budget` for compatible servers that expect a token budget |
+| `thinkingDisplay` | Anthropic thinking text: `summarized` or `omitted`; defaults to `summarized` at `api.anthropic.com`, not sent to other hosts unless configured. Override per model with `models[].compat.thinkingDisplay` |
 | `webSearch` | Offer hosted web search (Responses, Anthropic Messages, Gemini); a model's `caps.webSearch` takes precedence |
 | `compaction` | Native compaction: `auto`, `on` or `off`; defaults to `auto` |
+
+Thinking display does not change billed tokens. With `omitted`, signed thinking blocks still round-trip unchanged; only the readable text is hidden. On default-on Claude 5.x models, Amira requests summaries even without an explicit effort and leaves the server's effort default unchanged. `/thinking default` means server-default effort, not thinking off. See [Anthropic's thinking documentation](https://platform.claude.com/docs/en/build-with-claude/thinking). DeepSeek and MiniMax do not document `display` support, so their requests remain unchanged unless you set this option.
 
 Hosted web search is implemented for `openai-responses`, `anthropic-messages` and `google-gemini`. It defaults on for the vendor endpoints: OpenAI and URLs Amira recognizes as Azure OpenAI, `api.anthropic.com`, and `generativelanguage.googleapis.com`; it defaults off for other hosts. Gemini combines Google Search with Amira's tools only on Gemini 3 models, so older Gemini models keep client search. When active, Amira hides its client `web_search` tool from that model; `web_fetch` remains available. Set `web.nativeSearch` to `false` to use client search instead. This is separate from choosing a client search backend in the web settings. Model catalogs list no search fees, so a reply that searched shows its cost as unknown unless the model's `cost.webSearch` (USD per search) is set.
 

@@ -118,8 +118,11 @@ Provider 表单中的默认参数用于目录中没有描述的模型。要调�
 | `maxTokensField` | Chat 输出限制字段，默认 `max_tokens`，也可用 `max_completion_tokens` |
 | `streamUsage` | 请求 Chat 流中的用量信息，默认 `true` |
 | `thinking` | Anthropic 思考模式，默认 `adaptive`；需要 token 预算的兼容服务使用 `budget` |
+| `thinkingDisplay` | Anthropic 思考文字：`summarized` 或 `omitted`；`api.anthropic.com` 默认使用 `summarized`，其他地址需显式设置才发送。可用 `models[].compat.thinkingDisplay` 为单个模型覆盖 |
 | `webSearch` | 提供服务端搜索（Responses、Anthropic Messages、Gemini），模型的 `caps.webSearch` 优先 |
 | `compaction` | 原生压缩模式：`auto`、`on` 或 `off`，默认 `auto` |
+
+思考显示方式不改变计费 token 数。使用 `omitted` 时，带签名的思考块仍原样传回，仅隐藏可读文字。对于默认开启思考的 Claude 5.x，即使未设置强度，Amira 也请求摘要，并保留服务端默认强度。`/thinking default` 表示使用服务端默认强度，不是关闭思考。详见 [Anthropic 思考文档](https://platform.claude.com/docs/en/build-with-claude/thinking)。DeepSeek 和 MiniMax 未明确说明支持 `display`，因此未设置此选项时，它们的请求保持不变。
 
 服务端搜索在 `openai-responses`、`anthropic-messages` 和 `google-gemini` 中实现。官方地址默认开启：OpenAI 和 Amira 识别为 Azure OpenAI 的 URL、`api.anthropic.com`、`generativelanguage.googleapis.com`；其他地址默认关闭。Gemini 只有 Gemini 3 模型能同时使用 Google 搜索和 Amira 的工具，较早的 Gemini 模型仍用客户端搜索。开启后，模型不再看到客户端 `web_search` 工具，`web_fetch` 仍可用。将 `web.nativeSearch` 设为 `false` 可改用客户端搜索；客户端搜索后端通过 web 设置另行选择。模型目录不提供搜索费用，因此搜索过的回复费用显示为未知，除非设置了模型的 `cost.webSearch`（每次搜索的美元价格）。
 

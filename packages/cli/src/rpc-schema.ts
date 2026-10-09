@@ -254,6 +254,7 @@ const toolResult = obj({
 const usage = obj({
   input: num,
   output: num,
+  "outputReported?": bool,
   "reasoning?": num,
   cacheRead: num,
   cacheWrite: num,
@@ -308,7 +309,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     "reason?": str,
     "pending?": num,
   }),
-  "turn.start": obj({ prompt: ref("UserMessage") }),
+  "turn.start": obj({ prompt: ref("UserMessage"), "sentAt?": num }),
   "turn.end": obj({
     reason: strings("done", "error", "aborted"),
     "error?": str,
@@ -342,6 +343,11 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     ),
   ),
   "message.start": obj({ model: modelRef, "contextWindow?": num }),
+  "message.stream": oneOf(
+    obj({ kind: strings("request"), "thinkingDisplay?": strings("summarized", "omitted", "raw") }),
+    obj({ kind: strings("contentStart", "thinkingStart", "thinkingEnd"), "index?": num }),
+    obj({ kind: strings("end"), "outputTokens?": num }),
+  ),
   "message.delta": oneOf(
     obj({ kind: strings("text"), text: str }),
     obj({ kind: strings("thinking"), text: str }),
@@ -423,8 +429,16 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     "layout?": strings("tail", "recent-user"),
     "fallback?": { ...str, description: "Why server-side compaction was not used though it is on." },
     "usage?": { ...usage, description: "What the compaction's requests cost." },
+    "usageIncomplete?": bool,
   }),
-  "compact.failed": obj({ error: str, "blocked?": bool, "empty?": bool }),
+  "compact.failed": obj({
+    error: str,
+    "blocked?": bool,
+    "empty?": bool,
+    "usage?": usage,
+    "requested?": bool,
+    "usageIncomplete?": bool,
+  }),
   "command.output": obj({
     command: { ...str, description: 'The command that printed it, or "$<name>" for a skill.' },
     text: str,

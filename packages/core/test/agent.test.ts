@@ -42,6 +42,7 @@ test("a text-only turn emits a well-formed event sequence", async () => {
     "turn.start",
     "status.changed",
     "message.start",
+    "message.stream",
     "message.end",
     "turn.end",
     "status.changed",
