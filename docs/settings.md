@@ -12,11 +12,23 @@ Amira reads its settings from JSON files when it starts. Every key is optional; 
 | `<project>/.amira/settings.json` | Project settings, usually committed with the repository |
 | `<project>/.amira/settings.local.json` | Your own settings for this project, usually not committed |
 
-`<project>` is the directory Amira starts in. `AMIRA_HOME` moves the user directory: with it set, the user settings are `$AMIRA_HOME/settings.json`, next to `auth.json`, `keybindings.json`, sessions and installed packages.
+`<project>` is the working directory Amira starts in (cwd), not the Git root. The home/user scope has no project. A directory outside a repository with no existing `.amira` directory also has no project. `AMIRA_HOME` moves the user directory: with it set, the user settings are `$AMIRA_HOME/settings.json`, next to `auth.json`, `keybindings.json`, sessions and installed packages.
 
 Layers apply in this order, each one winning over the ones before: built-in defaults, the user file, the project file, `settings.local.json`, then command-line flags such as `--model` or `--disable-tools`. Objects merge key by key; lists and other values replace what an earlier layer set, so a project's `tools.disabled` replaces the user's list rather than adding to it.
 
 A file that is not valid JSON, or a key with a value of the wrong type, stops Amira with an error naming the file and the key. Unknown keys only produce a warning and are ignored, so a newer settings file still loads. A `$schema` key is allowed. API keys never go in settings files: store them with `/provider` or `amira provider` (they go to `auth.json`) or read them from an environment variable named by `apiKeyEnv`.
+
+## Saving model and thinking choices
+
+In an interactive session, `/model` opens a model picker and then a thinking picker if the model supports thinking. You can also use `/model provider/model` or `/thinking` (with a picker or an explicit level). Each actual model or thinking change saves both current choices to the user file (`$AMIRA_HOME/settings.json`, or `~/.amira/settings.json` by default) and, when there is a project, `<cwd>/.amira/settings.local.json`. Choosing the current value or cancelling a picker does not save. Changes apply to the session even if a save is skipped or fails.
+
+`--model`, `AMIRA_MODEL` and `--thinking` are one-run overrides, not saved defaults. If you later change the model or thinking interactively, both current choices are saved, including any choice initially supplied by a flag or environment variable. Print mode, RPC, child agents and changes made by extensions do not save these defaults.
+
+Project saves use cwd, never the Git root. In a repository, `settings.local.json` must be ignored by Git and not tracked; otherwise Amira skips the project save and warns you once per session. The Git check runs asynchronously on the first save and is cached for the session: the user file is saved immediately, and project writes keep change order. Start a new session after changing ignore or tracking rules. Amira never edits ignore files for you. Outside a repository, an existing `.amira` directory allows a project save; without one, only the user file is saved. The home/user scope also saves only the user file.
+
+Existing files must be strict JSON. An invalid file is left untouched with a warning, not overwritten. Saves are atomic and preserve unrelated settings, formatting and key order. Adding keys to an empty or single-line object uses the normal two-space multiline layout, preserving its line ending. Edited text is checked before writing; if it does not match the intended settings, Amira rewrites the full object instead.
+
+`/thinking default` saves the top-level `"thinking": "default"` sentinel. This overrides effort set by earlier top-level settings layers and sends no explicit effort, leaving it to the server; it does not disable thinking. Per-model `thinking` keeps its existing precedence over the top-level setting.
 
 ## User-only keys
 
@@ -108,8 +120,8 @@ Keys are not set here: they live in `keybindings.json` in the user directory. Se
 
 | Key | Type | Default | Description | User file only |
 | --- | --- | --- | --- | --- |
-| `model` | `string` | none | Default model as `"provider/model"`. Without it, Amira uses the resumed session's model, or the first model of the only provider. `--model` and `/model` choose another. |  |
-| `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | none | Reasoning effort for main conversation requests on models with `caps.thinking`. Unset leaves effort to the server; it does not turn thinking off. A model's `thinking` overrides this; `--thinking` overrides both. Sub-agents inherit the parent's selected effort; titles and compaction do not. |  |
+| `model` | `string` | none | Default model as `"provider/model"`. Without it, Amira uses the resumed session's model, or the first model of the only provider. `--model` and `AMIRA_MODEL` override it for one run; interactive `/model` changes save the model and thinking choice (see [Saving model and thinking choices](#saving-model-and-thinking-choices)). |  |
+| `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "default"` | none | Reasoning effort for main conversation requests on models with `caps.thinking`. Unset or `"default"` leaves effort to the server; it does not turn thinking off. `"default"` overrides earlier top-level layers. A model's `thinking` still overrides this; `--thinking` overrides both for one run. Interactive `/thinking` changes save the model and thinking choice; `/thinking default` saves `"default"`. Sub-agents inherit the parent's selected effort; titles and compaction do not. |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Which shell tools the model gets on Windows: `"auto"` offers both `bash` and `powershell`, `"bash"` or `"powershell"` hides the other one. Elsewhere only `bash` exists. `--shell` wins. |  |
 | `tools.disabled` | `string[]` | `[]` | Tool names to hide from the model. `--disable-tools` replaces the list for one run; `/tools` changes the current session only. |  |
 | `maxParallelTools` | `number` | `8` | Most tool calls running at once. |  |

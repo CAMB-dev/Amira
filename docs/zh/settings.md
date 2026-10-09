@@ -12,11 +12,23 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 | `<project>/.amira/settings.json` | 项目设置，通常随仓库提交 |
 | `<project>/.amira/settings.local.json` | 你在这个项目中的个人设置，通常不提交 |
 
-`<project>` 指启动 Amira 时所在的目录。`AMIRA_HOME` 可以更改用户目录：设置后，用户设置文件变为 `$AMIRA_HOME/settings.json`，与 `auth.json`、`keybindings.json`、会话和已安装的包放在一起。
+`<project>` 指启动 Amira 时所在的工作目录（cwd），不是 Git 根目录。主目录/用户作用域没有项目。仓库外的目录如果没有现成的 `.amira` 目录，也视为没有项目。`AMIRA_HOME` 可以更改用户目录：设置后，用户设置文件变为 `$AMIRA_HOME/settings.json`，与 `auth.json`、`keybindings.json`、会话和已安装的包放在一起。
 
 各层按以下顺序叠加，后面的覆盖前面的：内置默认值、用户文件、项目文件、`settings.local.json`，最后是 `--model`、`--disable-tools` 等命令行参数。对象逐键合并；列表和其他值则整体替换，所以项目的 `tools.disabled` 会替换用户的列表，而不是追加。
 
 文件不是合法 JSON，或者某个键的值类型不对，Amira 会报错并停止，错误信息中包含文件和键名。未知的键只会产生警告并被忽略，因此较新版本的设置文件仍能加载。允许使用 `$schema` 键。API 密钥不要写在设置文件里：用 `/provider` 或 `amira provider` 保存（写入 `auth.json`），或者通过 `apiKeyEnv` 指定的环境变量读取。
+
+## 保存模型与思考设置
+
+在交互式会话中，`/model` 打开模型选择器；如果模型支持思考，接着打开思考强度选择器。也可以使用 `/model provider/model` 或 `/thinking`（打开选择器或直接指定档位）。每次模型或思考设置实际改变时，都会将当前的两项设置保存到用户文件（`$AMIRA_HOME/settings.json`，默认为 `~/.amira/settings.json`），有项目时也保存到 `<cwd>/.amira/settings.local.json`。选择当前值或取消选择器不会保存。即使跳过保存或保存失败，更改仍对当前会话生效。
+
+`--model`、`AMIRA_MODEL` 和 `--thinking` 只覆盖单次运行，不会保存为默认设置。如果之后在交互式会话中更改模型或思考设置，就会保存当前的两项设置，包括最初通过参数或环境变量指定的值。print 模式、RPC、子 agent 和扩展发起的更改不会保存这些默认设置。
+
+项目保存位置以 cwd 为准，绝不使用 Git 根目录。在仓库中，`settings.local.json` 必须被 Git 忽略且未被跟踪，否则 Amira 会跳过项目保存，每个会话只警告一次。首次保存时会异步检查 Git 状态，并在该会话中缓存结果：用户文件立即保存，项目文件按更改顺序写入。更改忽略或跟踪规则后，请启动新会话。Amira 不会替你修改忽略文件。仓库外的目录如果已有 `.amira` 目录，可以保存项目设置；没有则只保存用户文件。主目录/用户作用域也只保存用户文件。
+
+已有文件必须是严格的 JSON。无效文件会保持原样并给出警告，不会被覆盖。保存采用原子写入，保留无关设置、格式和键的顺序。向空对象或单行对象添加键时，会使用标准的双空格缩进、多行布局，并保留原有换行符。编辑后的文本会在写入前检查；如果与目标设置不一致，Amira 会改为重写整个对象。
+
+`/thinking default` 将顶层设置保存为 `"thinking": "default"`。这个标记会覆盖之前各层的顶层推理强度设置，不发送明确的强度，沿用服务端默认值；它不会关闭思考。模型单独设置的 `thinking` 仍按原有优先级覆盖顶层设置。
 
 ## 仅限用户文件的键
 
@@ -108,8 +120,8 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
 | --- | --- | --- | --- | --- |
-| `model` | `string` | 无 | 默认模型，格式为 `"provider/model"`。未设置时，Amira 使用恢复的会话上次用的模型；只配置了一个 provider 时则用它的第一个模型。`--model` 和 `/model` 可以另选。 |  |
-| `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | 无 | 对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置时沿用服务端默认强度，不会关闭思考。模型的 `thinking` 优先于此项，`--thinking` 优先于两者。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。 |  |
+| `model` | `string` | 无 | 默认模型，格式为 `"provider/model"`。未设置时，Amira 使用恢复的会话上次用的模型；只配置了一个 provider 时则用它的第一个模型。`--model` 和 `AMIRA_MODEL` 只在单次运行中覆盖；交互式 `/model` 的更改会保存模型和思考设置（见[保存模型与思考设置](#保存模型与思考设置)）。 |  |
+| `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "default"` | 无 | 对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置或设为 `"default"` 时沿用服务端默认强度，不会关闭思考。`"default"` 覆盖之前各层的顶层设置。模型的 `thinking` 仍优先于此项，`--thinking` 在单次运行中优先于两者。交互式 `/thinking` 的更改会保存模型和思考设置；`/thinking default` 保存 `"default"`。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。 |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Windows 上模型可用的 shell 工具：`"auto"` 同时提供 `bash` 和 `powershell`，`"bash"` 或 `"powershell"` 会隐藏另一个。其他平台只有 `bash`。`--shell` 优先。 |  |
 | `tools.disabled` | `string[]` | `[]` | 对模型隐藏的工具名。`--disable-tools` 在单次运行中替换这个列表，`/tools` 只修改当前会话。 |  |
 | `maxParallelTools` | `number` | `8` | 同时运行的工具调用数上限。 |  |

@@ -1,7 +1,9 @@
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { isDeepStrictEqual } from "node:util"
 import type { ProviderSettings } from "@amira/api"
 import { type FileLock, tryFileLock } from "../file-lock.ts"
+import { editJsonValues } from "./json-edit.ts"
 import { readJsonFile } from "./load.ts"
 import { isPlainObject } from "./merge.ts"
 import { SettingsError } from "./schema.ts"
@@ -56,19 +58,32 @@ export function updateProviderInSettings(
 /**
  * Changes a settings file under its lock, keeping everything `change` leaves alone: it gets
  * the parsed object ({} for a missing file) and returns the new one. Nothing is written when
- * the result is the same. Returns whether the file changed.
+ * the result is the same. Returns whether the file changed. With preserveFormatting, top-level
+ * edits leave unrelated text alone; removals and insertions into empty/single-line objects use
+ * the normal layout. Edited JSON is validated before writing, with a full rewrite as fallback.
  */
 export function updateSettingsFile(
   file: string,
   change: (current: Record<string, unknown>) => Record<string, unknown>,
+  options: { preserveFormatting?: boolean } = {},
 ): boolean {
   mkdirSync(path.dirname(file), { recursive: true })
   return withLock(file, () => {
-    const raw = readJsonFile(file) ?? {}
+    const parsed = readJsonFile(file)
+    const raw = parsed === undefined ? {} : parsed
     if (!isPlainObject(raw)) throw new SettingsError(file, ["must hold a JSON object"])
     const next = change(structuredClone(raw))
     if (JSON.stringify(next) === JSON.stringify(raw)) return false
-    writeJsonAtomic(file, next)
+    let text: string | undefined
+    if (options.preserveFormatting && parsed !== undefined) {
+      try {
+        const edited = editJsonValues(readFileSync(file, "utf8"), raw, next)
+        if (isDeepStrictEqual(JSON.parse(edited.replace(/^\uFEFF/, "")), next)) text = edited
+      } catch {
+        // A faulty minimal edit must never corrupt settings; use the full atomic rewrite.
+      }
+    }
+    writeJsonAtomic(file, next, undefined, text)
     return true
   })
 }
@@ -126,9 +141,9 @@ function withLock<T>(file: string, fn: () => T): T {
 /** A write takes milliseconds, so an older lock was left by a process that died. */
 const STALE_LOCK_MS = 10_000
 
-function writeJsonAtomic(file: string, value: unknown, mode?: number): void {
+function writeJsonAtomic(file: string, value: unknown, mode?: number, text?: string): void {
   const tmp = `${file}.${process.pid}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, mode !== undefined ? { mode } : {})
+  writeFileSync(tmp, text ?? `${JSON.stringify(value, null, 2)}\n`, mode !== undefined ? { mode } : {})
   // The mode given to writeFileSync only applies to a new file, and the umask may cut it.
   if (mode !== undefined && process.platform !== "win32") chmodSync(tmp, mode)
   try {
