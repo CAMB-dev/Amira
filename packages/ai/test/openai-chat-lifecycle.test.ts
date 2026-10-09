@@ -90,7 +90,7 @@ test("a reader failure mid-stream yields one retryable error with the partial me
   })
   const ai = testAi(fakeFetch(new Response(body, { headers: SSE_HEADERS })))
   const evs = await events(ai.stream(request(ai)))
-  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "error"])
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "start", "text.delta", "error"])
   const e = evs.at(-1) as ErrorEvent
   expect(e.error.message).toContain("ECONNRESET")
   expect(e.retryable).toBe(true)

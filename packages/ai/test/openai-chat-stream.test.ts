@@ -109,8 +109,8 @@ test("keeps the reported reasoning share of completion tokens, including zero", 
 
 test("reports a JSON error body sent with status 200", async () => {
   const evs = await run(json({ error: { message: "model not found", code: 404 } }))
-  expect(evs).toHaveLength(1)
-  const e = evs[0] as ErrorEvent
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  const e = evs.at(-1) as ErrorEvent
   expect(e.type).toBe("error")
   expect(e.error.message).toBe("model not found")
 })
@@ -131,7 +131,7 @@ test("translates a whole non-streamed completion into a done message", async () 
       usage: { prompt_tokens: 10, completion_tokens: 3 },
     }),
   )
-  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "toolCall.delta", "done"])
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "start", "text.delta", "toolCall.delta", "done"])
   const e = last(evs)
   if (e.type !== "done") throw new Error("expected done")
   expect(e.message.content).toEqual([
@@ -144,8 +144,8 @@ test("translates a whole non-streamed completion into a done message", async () 
 
 test("reports an unexpected non-stream body with its first 500 characters", async () => {
   const evs = await run(new Response(`<p>${"x".repeat(1000)}`, { headers: { "content-type": "text/html" } }))
-  expect(evs).toHaveLength(1)
-  const e = evs[0] as ErrorEvent
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  const e = evs.at(-1) as ErrorEvent
   expect(e.type).toBe("error")
   expect(e.error.message).toContain("text/html")
   expect(e.error.message).toContain("<p>xxx")
@@ -164,12 +164,12 @@ test("reports an event stream without any events as an error", async () => {
 
 test("accepts a bare [DONE] stream as an empty reply", async () => {
   const evs = await run(() => sseResponse([]))
-  expect(evs.map((e) => e.type)).toEqual(["start", "done"])
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "start", "done"])
 })
 
 test("finishes normally when the body ends without [DONE]", async () => {
   const evs = await run(() => sseResponse([delta({ content: "hi" }, "stop")], false))
-  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "done"])
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "start", "text.delta", "done"])
 })
 
 test("a stream cut off before any finish_reason or [DONE] is a retryable error", async () => {
@@ -230,13 +230,13 @@ test("accepts an error that is a plain string", async () => {
 
 test("marks a 5xx error body sent with status 200 as retryable", async () => {
   const evs = await run(json({ error: { message: "overloaded", code: 503 } }))
-  const e = evs[0] as ErrorEvent
+  const e = evs.at(-1) as ErrorEvent
   expect(e.error.status).toBe(503)
   expect(e.retryable).toBe(true)
 })
 
 test("reports a 200 response without a body", async () => {
   const evs = await run(new Response(null, { status: 200 }))
-  expect(evs).toHaveLength(1)
-  expect(evs[0]?.type).toBe("error")
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  expect(evs.at(-1)?.type).toBe("error")
 })

@@ -1,6 +1,7 @@
 import {
   type Ai,
   type AssistantMessage,
+  addUsage,
   type CompactionLayout,
   type Message,
   type ModelInfo,
@@ -248,7 +249,7 @@ export async function summarize(
   signal: AbortSignal,
   instructions?: string,
   prompt?: Message,
-): Promise<{ summary: string; usage?: Usage }> {
+): Promise<{ summary: string; usage?: Usage; usageIncomplete?: boolean }> {
   const extra = instructions?.trim() ? `\n\nThe user asked for this summary: ${instructions.trim()}` : ""
   const current = prompt
     ? `The transcript ends with steps taken for the user's current request, which stays in the conversation after the summary; say what has been done for it so far:\n\n<current_request>\n${renderTranscript([prompt])}\n</current_request>\n\n`
@@ -256,6 +257,13 @@ export async function summarize(
   const request = `${current}Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>${extra}`
   let text = ""
   let usage: Usage | undefined
+  let usageIncomplete = false
+  const count = (u: Usage | undefined) => {
+    if (u) {
+      usage = usage ? addUsage(usage, u) : u
+      usageIncomplete ||= u.outputReported === false
+    } else usageIncomplete = true
+  }
   // The summary comes from the transcript alone: no tools, and no hosted web search either.
   const writer: ModelInfo = { ...model, caps: { ...model.caps, webSearch: false } }
   for await (const ev of ai.stream(
@@ -267,14 +275,22 @@ export async function summarize(
     },
     signal,
   )) {
-    if (ev.type === "error") throw new SummaryError(ev.error.message, ev.message.usage)
+    if (ev.type === "request.end") count(ev.message.usage)
+    if (ev.type === "error") {
+      count(ev.message.usage)
+      throw new SummaryError(ev.error.message, usage, usageIncomplete)
+    }
     if (ev.type === "done") {
       text = ev.message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")
-      usage = ev.message.usage
+      count(ev.message.usage)
     }
   }
-  if (!text.trim()) throw new SummaryError("the model returned an empty summary", usage)
-  return { summary: text.trim(), ...(usage ? { usage } : {}) }
+  if (!text.trim()) throw new SummaryError("the model returned an empty summary", usage, usageIncomplete)
+  return {
+    summary: text.trim(),
+    ...(usage ? { usage } : {}),
+    ...(usageIncomplete ? { usageIncomplete } : {}),
+  }
 }
 
 /** Writing a summary failed; `usage` is what the request still cost, when it said. */
@@ -282,6 +298,7 @@ export class SummaryError extends Error {
   constructor(
     message: string,
     readonly usage?: Usage,
+    readonly usageIncomplete?: boolean,
   ) {
     super(message)
   }

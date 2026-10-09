@@ -10,7 +10,6 @@ import type {
   TextBlock,
   ThinkingBlock,
   ToolCallBlock,
-  Usage,
 } from "../types.ts"
 import { emptyUsage } from "../types.ts"
 import { anthropicError } from "./anthropic-errors.ts"
@@ -22,7 +21,7 @@ type ErrorEvent = Extract<StreamEvent, { type: "error" }>
 
 type Open =
   | { kind: "text"; block: TextBlock; raw: Record<string, any> }
-  | { kind: "thinking"; block: ThinkingBlock }
+  | { kind: "thinking"; block: ThinkingBlock; closed: boolean }
   | { kind: "tool"; block: ToolCallBlock; index: number; json: string; initial: unknown; closed: boolean }
   | { kind: "search"; block: ServerToolBlock; raw: Record<string, any>; json: string; closed: boolean }
 
@@ -37,7 +36,7 @@ export class MessagesAccumulator {
   #finished = false
 
   constructor(model: ModelRef) {
-    this.message = { role: "assistant", content: [], model, usage: emptyUsage() }
+    this.message = { role: "assistant", content: [], model }
   }
 
   /** True once the stream said how the message ended. */
@@ -57,9 +56,15 @@ export class MessagesAccumulator {
       case "content_block_delta":
         yield* this.#delta(ev.index, ev.delta)
         return
-      case "content_block_stop":
-        this.#close(this.#blocks.get(ev.index))
+      case "content_block_stop": {
+        const open = this.#blocks.get(ev.index)
+        if (open?.kind === "thinking" && !open.closed) {
+          open.closed = true
+          yield { type: "thinking.end", index: ev.index }
+        }
+        this.#close(open)
         return
+      }
       case "message_delta":
         this.#usage(ev.usage)
         if (typeof ev.delta?.stop_reason === "string") this.#stop = ev.delta.stop_reason
@@ -76,6 +81,7 @@ export class MessagesAccumulator {
   }
 
   *#start(index: number, cb: any): Generator<StreamEvent> {
+    yield { type: "content.start", index }
     if (cb?.type === "text") {
       const block: TextBlock = { type: "text", text: "" }
       this.message.content.push(block)
@@ -86,15 +92,16 @@ export class MessagesAccumulator {
     } else if (cb?.type === "thinking") {
       const block: ThinkingBlock = { type: "thinking", text: "" }
       this.message.content.push(block)
-      this.#blocks.set(index, { kind: "thinking", block })
-      yield { type: "thinking.start" }
-      yield* this.#delta(index, { type: "thinking_delta", thinking: cb.thinking })
+      this.#blocks.set(index, { kind: "thinking", block, closed: false })
+      yield { type: "thinking.start", index }
+      if (cb.thinking) yield* this.#delta(index, { type: "thinking_delta", thinking: cb.thinking })
       this.#sign(block, cb.signature)
     } else if (cb?.type === "redacted_thinking") {
       const block: ThinkingBlock = { type: "thinking", text: "", redacted: true }
       this.#sign(block, cb.data)
       this.message.content.push(block)
-      yield { type: "thinking.start" }
+      this.#blocks.set(index, { kind: "thinking", block, closed: false })
+      yield { type: "thinking.start", index }
     } else if (cb?.type === "server_tool_use" && cb.name === NATIVE_WEB_SEARCH) {
       const block: ServerToolBlock = {
         type: "serverTool",
@@ -195,10 +202,13 @@ export class MessagesAccumulator {
 
   #usage(u: any) {
     if (!u || typeof u !== "object") return
-    const usage = this.message.usage as Usage
+    this.message.usage ??= emptyUsage()
+    const usage = this.message.usage
     const pick = (v: unknown, prev: number) => (typeof v === "number" ? v : prev)
     usage.input = pick(u.input_tokens, usage.input)
     usage.output = pick(u.output_tokens, usage.output)
+    const thinking = u.output_tokens_details?.thinking_tokens
+    if (typeof thinking === "number") usage.reasoning = thinking
     usage.cacheRead = pick(u.cache_read_input_tokens, usage.cacheRead)
     usage.cacheWrite = pick(u.cache_creation_input_tokens, usage.cacheWrite)
     const searches = u.server_tool_use?.web_search_requests

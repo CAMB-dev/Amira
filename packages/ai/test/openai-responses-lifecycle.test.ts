@@ -69,8 +69,8 @@ test("a network failure is one retryable error", async () => {
     throw new Error("ECONNREFUSED")
   }) as unknown as typeof fetch
   const evs = await events(openaiResponses.stream(req("openai-responses"), context))
-  expect(evs).toHaveLength(1)
-  const e = evs[0] as ErrorEvent
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  const e = evs.at(-1) as ErrorEvent
   expect(e.error.message).toContain("ECONNREFUSED")
   expect(e.retryable).toBe(true)
 })

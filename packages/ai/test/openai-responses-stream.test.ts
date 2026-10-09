@@ -99,7 +99,14 @@ test("streams text and maps usage with cached tokens", async () => {
       total_tokens: 112,
     }),
   ])
-  expect(evs.map((e) => e.type)).toEqual(["start", "text.delta", "text.delta", "done"])
+  expect(evs.map((e) => e.type)).toEqual([
+    "request.start",
+    "start",
+    "content.start",
+    "text.delta",
+    "text.delta",
+    "done",
+  ])
   const { message } = done(evs)
   expect(message.content).toEqual([said("Hello")])
   expect(message.stopReason).toBe("end")
@@ -222,7 +229,7 @@ test("round trips reasoning: the streamed message replays as the same reasoning 
     ...callEvents("fc_1", "call_a", "read", 1, ["{}"]),
     completed(),
   ])
-  expect(evs.filter((e) => e.type === "thinking.start")).toEqual([{ type: "thinking.start" }])
+  expect(evs.filter((e) => e.type === "thinking.start")).toEqual([{ type: "thinking.start", index: 0 }])
   const first = done(evs).message
   expect(first.content[0]).toEqual({
     type: "thinking",
@@ -379,8 +386,8 @@ test("HTTP errors keep status and code", async () => {
       },
     )
   const { evs } = await run(openaiResponses, req("openai-responses"), res)
-  expect(evs).toHaveLength(1)
-  const e = evs[0] as ErrorEvent
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "error"])
+  const e = evs.at(-1) as ErrorEvent
   expect(e.error.status).toBe(429)
   expect(e.error.code).toBe("rate_limit_exceeded")
   expect(e.retryable).toBe(true)
@@ -416,10 +423,15 @@ test("a non-SSE 200 with a whole response is read as one", async () => {
     new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } })
   const { evs } = await run(openaiResponses, req("openai-responses"), res)
   expect(evs.map((e) => e.type)).toEqual([
+    "request.start",
     "start",
+    "content.start",
     "thinking.start",
     "thinking.delta",
+    "thinking.end",
+    "content.start",
     "text.delta",
+    "content.start",
     "toolCall.delta",
     "toolCall.delta",
     "done",

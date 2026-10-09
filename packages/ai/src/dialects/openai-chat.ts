@@ -22,7 +22,7 @@ export const openaiChat: Dialect = {
     }
     let res: Response
     try {
-      res = await ctx.fetch(`${ctx.endpoint.baseUrl.replace(/\/$/, "")}/chat/completions`, {
+      const init = {
         method: "POST",
         headers: requestHeaders(
           {
@@ -34,7 +34,13 @@ export const openaiChat: Dialect = {
         ),
         body: JSON.stringify(requestBody(req, ctx.compat)),
         signal: ctx.signal,
-      })
+      }
+      if (ctx.signal.aborted) {
+        yield aborted()
+        return
+      }
+      yield { type: "request.start", thinkingDisplay: "raw" }
+      res = await ctx.fetch(`${ctx.endpoint.baseUrl.replace(/\/$/, "")}/chat/completions`, init)
     } catch (e) {
       if (ctx.signal.aborted) yield aborted()
       else yield acc.fail({ message: `request failed: ${(e as Error).message}` }, true)
@@ -93,6 +99,7 @@ export const openaiChat: Dialect = {
         yield acc.fail({ message: "the event stream ended before the reply was complete" }, true)
         return
       }
+      yield* acc.finishThinking()
       yield acc.end()
     } catch (e) {
       if (ctx.signal.aborted) yield aborted()
@@ -146,5 +153,6 @@ async function* readPlain(res: Response, acc: ChatAccumulator): AsyncGenerator<S
     usage: json.usage,
     choices: [{ delta: choice.message, finish_reason: choice.finish_reason }],
   })
+  yield* acc.finishThinking()
   yield acc.end()
 }

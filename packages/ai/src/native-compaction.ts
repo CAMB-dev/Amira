@@ -43,11 +43,21 @@ export type CompactResult =
       /** Readable summary text, when the server gives one. */
       summary?: string
       usage: Usage
+      /** At least one attempt did not report usage. */
+      usageIncomplete?: boolean
       method: string
       /** Ways that failed before this one worked. */
       tried: CompactAttempt[]
     }
-  | { ok: false; error: string; usage: Usage; tried: CompactAttempt[]; aborted?: boolean; timedOut?: boolean }
+  | {
+      ok: false
+      error: string
+      usage: Usage
+      usageIncomplete?: boolean
+      tried: CompactAttempt[]
+      aborted?: boolean
+      timedOut?: boolean
+    }
 
 /**
  * Remembers ways of compacting that an endpoint does not support: for the rest of the

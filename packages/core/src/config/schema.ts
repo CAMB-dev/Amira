@@ -105,6 +105,8 @@ const modelRef = expect(
 const editingTools = object({ edit: oneOf("edit", "apply_patch", "both") })
 const thinking = oneOf("low", "medium", "high", "xhigh", "max")
 
+const thinkingDisplay = oneOf("summarized", "omitted")
+
 const modelOverrides = (required: string[], tools = false) =>
   object(
     {
@@ -112,6 +114,7 @@ const modelOverrides = (required: string[], tools = false) =>
       dialect: string,
       contextWindow: integer(1),
       maxOutput: integer(1),
+      compat: object({ thinkingDisplay }),
       ...(tools ? { tools: editingTools, thinking } : {}),
       caps: object({
         tools: oneOf("native", "none"),
@@ -142,6 +145,7 @@ const provider = object(
       webSearch: boolean,
       streamUsage: boolean,
       thinking: oneOf("adaptive", "budget"),
+      thinkingDisplay,
       compaction: oneOf("auto", "on", "off"),
     }),
     tools: editingTools,

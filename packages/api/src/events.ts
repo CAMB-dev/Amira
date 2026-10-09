@@ -139,7 +139,10 @@ export interface EventMap {
   "session.title": { title: string }
   "session.end": { reason: "exit" | "error" | "switch" }
   "status.changed": { status: SessionStatus; reason?: string; pending?: number }
-  "turn.start": { prompt: UserMessage }
+  "turn.start": {
+    prompt: UserMessage /** When the prompt was sent, including a wait for compaction. */
+    sentAt?: number
+  }
   /**
    * Always emitted once per turn, including after errors and aborts. `failure` reads a failed
    * model request for the user: one line, the next step, and the provider's text as detail
@@ -161,6 +164,17 @@ export interface EventMap {
   }
   /** `contextWindow` is the model's context size in tokens, when known. */
   "message.start": { model: ModelRef; contextWindow?: number }
+  /** Structural provider-stream events for timing, not visible text. Each request (including
+   * retries) starts at `request`; block boundaries include blocks with no readable content.
+   * `end` is the last provider event, before message.end processing. Times are envelope `ts`.
+   */
+  "message.stream":
+    | { kind: "request"; thinkingDisplay?: "summarized" | "omitted" | "raw" }
+    | { kind: "contentStart" | "thinkingStart" | "thinkingEnd"; index?: number }
+    | {
+        kind: "end" /** Reported output for this attempt; absent when no usage was reported. */
+        outputTokens?: number
+      }
   "message.delta":
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
@@ -240,13 +254,26 @@ export interface EventMap {
    * Older history was replaced by `summary`; the rest tells why and how (also stored with it).
    * `usage` is what the compaction's requests cost, failed server attempts included.
    */
-  "compact.end": { summary: string; replaced: number; kept: number; usage?: Usage } & CompactionInfo
+  "compact.end": {
+    summary: string
+    replaced: number
+    kept: number
+    usage?: Usage
+    usageIncomplete?: boolean
+  } & CompactionInfo
   /**
    * Compaction did not happen; the conversation continues uncompacted. `blocked` means a
    * compact.before interceptor cancelled it on purpose (`error` is its reason); no
    * compact.start precedes it then. `empty` means there was nothing old enough to summarize yet.
    */
-  "compact.failed": { error: string; blocked?: boolean; empty?: boolean }
+  "compact.failed": {
+    error: string
+    blocked?: boolean
+    empty?: boolean
+    usage?: Usage
+    requested?: boolean
+    usageIncomplete?: boolean
+  }
   /**
    * A message sent while a turn runs (D29): `queued` when accepted, `injected` when added to
    * the history before the next model call, `dropped` when the turn failed or was aborted

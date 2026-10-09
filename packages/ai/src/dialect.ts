@@ -22,11 +22,15 @@ export interface ProviderCompat {
   /** Whether to ask for usage in the stream. Defaults to true. */
   streamUsage?: boolean
   /**
-   * How anthropic-messages asks for thinking. "adaptive" (the default) sends an effort, as
-   * current Claude models require; "budget" sends budget_tokens, for Claude 4.5 and older
+   * How anthropic-messages asks for thinking. "adaptive" (the default) uses adaptive thinking
+   * with an optional effort; "budget" sends budget_tokens, for Claude 4.5 and older
    * and for compatible servers such as DeepSeek.
    */
   thinking?: "adaptive" | "budget"
+  /** Thinking text on anthropic-messages: summarized by default at api.anthropic.com;
+   * omitted from requests to compatible servers unless explicitly set. A model's compat wins.
+   */
+  thinkingDisplay?: "summarized" | "omitted"
   /**
    * Server-side (native) compaction, where the dialect has it (openai-responses,
    * anthropic-messages). "auto" (the default) uses it only on the vendor's own endpoints

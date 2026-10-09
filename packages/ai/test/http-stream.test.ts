@@ -33,8 +33,8 @@ test("a reader that returns without a terminal event still ends with one retryab
   const evs = await drive(async function* () {
     yield { type: "start" }
   })
-  expect(evs.map((e) => e.type)).toEqual(["start", "error"])
-  expect((evs[1] as ErrorEvent).retryable).toBe(true)
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "start", "error"])
+  expect((evs.at(-1) as ErrorEvent).retryable).toBe(true)
 })
 
 test("events a reader yields after its terminal event are dropped", async () => {
@@ -43,5 +43,5 @@ test("events a reader yields after its terminal event are dropped", async () => 
     yield { type: "done", message: a.message }
     yield a.fail({ message: "late" }, false)
   })
-  expect(evs.map((e) => e.type)).toEqual(["done"])
+  expect(evs.map((e) => e.type)).toEqual(["request.start", "done"])
 })

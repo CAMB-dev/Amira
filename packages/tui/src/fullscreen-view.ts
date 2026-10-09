@@ -288,6 +288,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       add(userBlock(m))
     },
     reasoningDelta(text) {
+      if (!text) return
       if (!reasoning) {
         // Thinking after some text: that text is a reply of its own, before it.
         if (reply?.source.trim()) {

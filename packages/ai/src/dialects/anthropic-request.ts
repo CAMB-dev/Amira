@@ -25,7 +25,11 @@ export const THINKING_BUDGET: Record<ReasoningEffort, number> = {
 
 const EPHEMERAL: CacheControl = { type: "ephemeral" }
 
-export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<string, unknown> {
+export function requestBody(
+  req: ModelRequest,
+  compat: ProviderCompat = {},
+  baseUrl = "",
+): Record<string, unknown> {
   const sendTools = req.tools.length > 0 && req.model.caps.tools === "native"
   const webSearch = hasNativeWebSearch(req.model)
   const messages = toAnthropicMessages(req.messages, { tools: sendTools, webSearch })
@@ -58,16 +62,25 @@ export function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Rec
   if (cache) markCacheBreakpoints(messages, MAX_BREAKPOINTS - breakpoints)
   body.messages = messages
 
+  const official = URL.canParse(baseUrl) && new URL(baseUrl).hostname === "api.anthropic.com"
   if ((compat.thinking ?? DEFAULT_THINKING_MODE) === "budget") budgetThinking(body, req, maxTokens, messages)
-  else adaptiveThinking(body, req)
+  else adaptiveThinking(body, req, official)
+  const display =
+    req.model.compat?.thinkingDisplay ?? compat.thinkingDisplay ?? (official ? "summarized" : undefined)
+  const thinking = body.thinking as { type: string; display?: string } | undefined
+  if (display && (thinking?.type === "adaptive" || thinking?.type === "enabled")) thinking.display = display
   return body
 }
 
-/** Current Claude models: an effort level, and no temperature, budget or `disabled` at all. */
-function adaptiveThinking(body: Record<string, unknown>, req: ModelRequest) {
-  if (!req.reasoning || !req.model.caps.thinking) return
+/** Current Claude models: adaptive thinking, with an optional effort, never a budget or temperature. */
+function adaptiveThinking(body: Record<string, unknown>, req: ModelRequest, official: boolean) {
+  // /thinking default leaves effort to the server, not thinking off. On default-on Claude
+  // models ask for its text even without an explicit effort; compatible servers stay unchanged.
+  const defaultOn =
+    official && /^claude-(?:opus|sonnet|haiku|fable|mythos)-(?:5(?:[.-]|$)|preview(?:-|$))/.test(req.model.id)
+  if (!req.model.caps.thinking || (!req.reasoning && !defaultOn)) return
   body.thinking = { type: "adaptive" }
-  body.output_config = { effort: req.reasoning.effort }
+  if (req.reasoning) body.output_config = { effort: req.reasoning.effort }
 }
 
 /** Claude 4.5 and older, and DeepSeek: a token budget below max_tokens. */

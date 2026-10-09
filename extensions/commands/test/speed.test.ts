@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import type { AssistantMessage } from "@amira/api"
-import { replySpeed } from "../src/format.ts"
+import { type ReplyTiming, replySpeed } from "../src/format.ts"
+import { requestSpeed, streamTiming, turnSpeed } from "../src/speed.ts"
 
 const message = (reasoning?: number, thinking = false): AssistantMessage => ({
   role: "assistant",
@@ -18,81 +19,137 @@ const message = (reasoning?: number, thinking = false): AssistantMessage => ({
   },
 })
 
-test("streamed thinking and text use separate counts and durations", () => {
-  expect(replySpeed(message(80, true), { start: 0, thinking: 1000, reply: 5000 }, 6000, 5000)).toBe(
-    "reply 20 tok/s · thinking 20 tok/s",
+test("raw reasoning counts use the sum of block durations, not text length", () => {
+  expect(
+    replySpeed(
+      message(80),
+      {
+        start: 0,
+        first: 1000,
+        thinkingDisplay: "raw",
+        thinkingBlocks: [
+          { start: 1000, end: 3000 },
+          { start: 3500, end: 5500 },
+        ],
+      },
+      6000,
+    ),
+  ).toBe("output 20 tok/s · TTFT 1.00s · reply 20 tok/s · thinking 20 tok/s")
+})
+
+test("a requested summary suppresses the split even if the summary text is long", () => {
+  expect(replySpeed(message(80, true), { start: 0, first: 1000, thinkingDisplay: "summarized" }, 6000)).toBe(
+    "output 20 tok/s · TTFT 1.00s · summarized thinking; no split",
   )
 })
 
-test("streamed thinking without a count uses marked estimates for both phases", () => {
-  expect(replySpeed(message(undefined, true), { start: 0, thinking: 1000, reply: 5000 }, 6000, 5000)).toBe(
-    "reply ~20 tok/s · thinking ~20 tok/s",
+test("unknown display marks reply timing approximate; known display needs complete block timing", () => {
+  expect(replySpeed(message(80, true), { start: 0, first: 1000, thinking: 1000, reply: 5000 }, 6000)).toBe(
+    "output 20 tok/s · TTFT 1.00s · reply ~20 tok/s",
+  )
+  expect(
+    requestSpeed(
+      message(80),
+      {
+        start: 0,
+        first: 1000,
+        thinkingDisplay: "omitted",
+        thinkingBlocks: [{ start: 1000 }],
+      },
+      6000,
+    ).split,
+  ).toBeUndefined()
+})
+
+test("missing reasoning counts keep marked split estimates but reported output remains exact", () => {
+  expect(
+    replySpeed(
+      message(undefined, true),
+      { start: 0, thinking: 1000, reply: 5000, thinkingDisplay: "raw" },
+      6000,
+    ),
+  ).toBe("output 20 tok/s · TTFT 1.00s · reply ~20 tok/s · thinking ~20 tok/s")
+})
+
+test("hidden or redacted reasoning without a count retains a marked reply estimate", () => {
+  const hidden = message()
+  hidden.content.unshift({ type: "thinking", text: "", redacted: true })
+  expect(replySpeed(hidden, { start: 0, reply: 100, thinkingDisplay: "raw" }, 1100)).toBe(
+    "output 100 tok/s · TTFT 0.10s · reply ~20 tok/s (hidden reasoning)",
+  )
+  expect(replySpeed(message(), { start: 0, reply: 5000, thinkingDisplay: "raw" }, 6000, 5000)).toBe(
+    "output 100 tok/s · TTFT 5.00s · reply ~20 tok/s (hidden reasoning)",
   )
 })
 
-test("hidden reasoning with a count is excluded from reply speed", () => {
-  expect(replySpeed(message(80), { start: 0, reply: 5000 }, 6000, 5000)).toBe(
-    "reply 20 tok/s (hidden reasoning)",
+test("reported zero reasoning rules out the hidden-reasoning heuristic", () => {
+  expect(replySpeed(message(0), { start: 0, first: 5000, thinkingDisplay: "raw" }, 6000, 5000)).toBe(
+    "output 100 tok/s · TTFT 5.00s · reply 100 tok/s",
   )
 })
 
-test("a long silent gap without a count uses a text estimate", () => {
-  expect(replySpeed(message(), { start: 0, reply: 5000 }, 6000, 5000)).toBe(
-    "reply ~20 tok/s (hidden reasoning)",
-  )
+test("reported counts use even short positive intervals; zero duration cannot give a rate", () => {
+  expect(replySpeed(message(0), { start: 0, first: 5000 }, 5100)).toBe("output 1000 tok/s · TTFT 5.00s")
+  expect(replySpeed(message(0), { start: 0, first: 5000 }, 5000)).toBeUndefined()
+  expect(replySpeed(message(), { start: 0 }, 5000)).toBeUndefined()
 })
 
-test("redacted thinking without a count or a delta uses a text estimate", () => {
-  const encrypted = message()
-  encrypted.content.unshift({ type: "thinking", text: "", redacted: true })
-  expect(replySpeed(encrypted, { start: 0, reply: 100 }, 1100)).toBe("reply ~20 tok/s (hidden reasoning)")
-})
-
-test("no thinking uses output tokens; a reported zero rules out the gap heuristic", () => {
-  expect(replySpeed(message(), { start: 0, reply: 100 }, 1100, 5000)).toBe("reply 100 tok/s")
-  expect(replySpeed(message(0), { start: 0, reply: 5000 }, 6000, 5000)).toBe("reply 100 tok/s")
-})
-
-test("very short replies and missing text are not assigned a reply speed", () => {
-  expect(replySpeed(message(80), { start: 0, reply: 5000 }, 5100, 5000)).toBeUndefined()
-  expect(replySpeed(message(80, true), { start: 0, thinking: 1000 }, 5000, 5000)).toBe("thinking 20 tok/s")
-  expect(replySpeed(message(), { start: 0 }, 5000, 5000)).toBeUndefined()
-})
-
-test("a signed thinking block with no text and no count is hidden reasoning", () => {
-  const omitted = message()
-  omitted.content.unshift({ type: "thinking", text: "", signature: { dialect: "anthropic", value: "sig" } })
-  expect(replySpeed(omitted, { start: 0, reply: 100 }, 1100)).toBe("reply ~20 tok/s (hidden reasoning)")
-})
-
-test("a streamed summary far shorter than the reported reasoning times thinking from the request", () => {
-  const summarized = message(80)
-  summarized.content.unshift({ type: "thinking", text: "x".repeat(40) })
-  expect(replySpeed(summarized, { start: 0, thinking: 3000, reply: 4000 }, 5000)).toBe(
-    "reply 20 tok/s · thinking ~20 tok/s",
-  )
-})
-
-test("tool-call arguments count as the reply", () => {
+test("tool-call-only replies include the empty tool start in output timing", () => {
   const call: AssistantMessage = {
     role: "assistant",
     model: { provider: "mock", model: "m" },
     content: [{ type: "toolCall", id: "t", name: "read", args: { path: "x".repeat(72) } }],
-    usage: { input: 0, output: 50, cacheRead: 0, cacheWrite: 0 },
+    usage: { input: 0, output: 50, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
   }
-  expect(replySpeed(call, { start: 0, reply: 500 }, 1000)).toBe("reply 100 tok/s")
-  expect(
-    replySpeed(
-      { ...call, usage: { input: 0, output: 50, reasoning: 30, cacheRead: 0, cacheWrite: 0 } },
-      { start: 0, reply: 500 },
-      1000,
-    ),
-  ).toBe("reply 40 tok/s (hidden reasoning)")
-  const thought = {
-    ...call,
-    content: [{ type: "thinking" as const, text: "x".repeat(400) }, ...call.content],
-  }
-  expect(replySpeed(thought, { start: 0, thinking: 100, reply: 500 }, 1000)).toBe(
-    "reply ~44 tok/s · thinking ~250 tok/s",
+  expect(replySpeed(call, { start: 0, first: 500, reply: 900, thinkingDisplay: "raw" }, 1000)).toBe(
+    "output 100 tok/s · TTFT 0.50s · reply 100 tok/s",
   )
+})
+
+test("no usage estimates output and reply; turn estimates are marked too", () => {
+  const unreported = message()
+  delete unreported.usage
+  expect(replySpeed(unreported, { start: 0, first: 1000, reply: 1000, thinkingDisplay: "raw" }, 2000)).toBe(
+    "output ~20 tok/s · TTFT 1.00s · reply ~20 tok/s",
+  )
+  expect(turnSpeed(40, 0, 2000, true)).toBe("effective ~20 tok/s (includes tools and waits)")
+})
+
+test("unknown display mode retains marked text estimates, never exact phase speeds", () => {
+  expect(
+    requestSpeed(message(undefined, true), { start: 0, first: 1000, thinking: 1000, reply: 3000 }, 5000)
+      .split,
+  ).toBe("reply ~10 tok/s · thinking ~40 tok/s")
+})
+
+test("an orphan thinking end invalidates the split, not just the missing block", () => {
+  const t: ReplyTiming = {
+    start: 0,
+    first: 1000,
+    thinkingDisplay: "raw",
+    thinkingBlocks: [{ index: 0, start: 1000, end: 2000 }],
+  }
+  streamTiming(t, { kind: "thinkingEnd", index: 1 }, 3000)
+  expect(requestSpeed(message(80), t, 5000).split).toBeUndefined()
+})
+
+test.each(["openai-responses", "google-gemini"])(
+  "%s with unknown display retains a marked hidden-reasoning reply estimate",
+  (provider) => {
+    for (const reasoning of [80, undefined]) {
+      const hidden = message(reasoning)
+      hidden.model.provider = provider
+      if (reasoning !== undefined) hidden.content[0] = { type: "text", text: "x".repeat(400) }
+      hidden.content.unshift({ type: "thinking", text: "", signature: { dialect: provider, value: "sig" } })
+      expect(replySpeed(hidden, { start: 0, first: 1000, reply: 5000 }, 6000)).toBe(
+        "output 20 tok/s · TTFT 1.00s · reply ~20 tok/s (hidden reasoning)",
+      )
+    }
+  },
+)
+
+test("search-only usage metadata cannot turn an unreported output count into an exact rate", () => {
+  const searchOnly = message()
+  searchOnly.usage!.outputReported = false
+  expect(requestSpeed(searchOnly, { start: 0, first: 1000 }, 2000).output).toBe("output ~20 tok/s")
 })

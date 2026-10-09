@@ -167,8 +167,17 @@ export function createAi(opts: AiOptions = {}): Ai {
     onProgress?: () => void,
   ): Promise<CompactResult> => {
     const usage = emptyUsage()
+    let usageIncomplete = false
+    let inFlight = false
     const tried: CompactAttempt[] = []
-    const aborted = (): CompactResult => ({ ok: false, error: "aborted", usage, tried, aborted: true })
+    const aborted = (): CompactResult => ({
+      ok: false,
+      error: "aborted",
+      usage,
+      tried,
+      aborted: true,
+      ...(usageIncomplete || inFlight ? { usageIncomplete: true } : {}),
+    })
     if (signal.aborted) return aborted()
     const controller = new AbortController()
     const timeoutMs = Math.max(
@@ -189,6 +198,7 @@ export function createAi(opts: AiOptions = {}): Ai {
               ok: false,
               error: `native compaction timed out after ${timeoutMs} ms`,
               timedOut: true,
+              ...(usageIncomplete || inFlight ? { usageIncomplete: true } : {}),
               usage,
               tried,
             })
@@ -221,9 +231,12 @@ export function createAi(opts: AiOptions = {}): Ai {
       for (const method of support.methods) {
         for (let attempt = 0; ; attempt++) {
           if (signal.aborted) return aborted()
+          inFlight = true
           const out = await native.compact(method, sendable, ctx, progress)
           if (signal.aborted) return aborted()
+          inFlight = false
           if (out.usage) addTo(usage, withPrice(out.usage, model))
+          else usageIncomplete = true
           if (out.ok) {
             const checkpoint: Signature = {
               dialect: model.dialect,
@@ -240,6 +253,7 @@ export function createAi(opts: AiOptions = {}): Ai {
               usage,
               method,
               tried,
+              ...(usageIncomplete ? { usageIncomplete: true } : {}),
             }
           }
           if (out.retryable && !out.unsupported && attempt < retries) {
@@ -252,7 +266,7 @@ export function createAi(opts: AiOptions = {}): Ai {
         }
       }
       const error = tried.map((t) => `${t.method}: ${t.error}`).join("; ")
-      return { ok: false, error, usage, tried }
+      return { ok: false, error, usage, tried, ...(usageIncomplete ? { usageIncomplete: true } : {}) }
     }
     try {
       // Do not wait for a dialect that ignores abort; local summary compaction can start now.
