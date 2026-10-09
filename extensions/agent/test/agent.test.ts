@@ -374,7 +374,7 @@ test("project role files are offered and used", async () => {
     "- scribe: Writes notes",
   )
   expect(mock.requests[0]!.tools?.find((t) => t.name === "agent")?.description).toContain(
-    "Use a reviewer only when the change is large or risky",
+    "Reviewer: large/risky changes only",
   )
   expect(mock.requests.find((q) => q.systemPrompt.includes("scribe"))?.tools?.map((t) => t.name)).toEqual([
     "read",
@@ -976,7 +976,7 @@ test("settings subagents.background false makes calls wait again", async () => {
   expect(agentResult(root)).toContain("waited answer")
   expect(notices(root)).toEqual([])
   expect(mock.requests[0]!.tools?.find((t) => t.name === "agent")?.description).toContain(
-    "The call waits for the sub-agents",
+    "Calls wait by default",
   )
 })
 

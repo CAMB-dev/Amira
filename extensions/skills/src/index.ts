@@ -117,12 +117,12 @@ export function createSkillsExtension(opts: Partial<DiscoverOptions> = {}) {
 
     const skillTool = defineTool<{ name: string; args?: string }>({
       name: SKILL_TOOL,
-      description: `Loads a skill's full instructions by name. Skills are listed in the system prompt under "Skills"; use one when a task matches its description.`,
+      description: `Load full instructions by name from system "Skills" when a task matches.`,
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string", description: "The skill's name, as listed." },
-          args: { type: "string", description: "Optional arguments or context for the skill." },
+          name: { type: "string" },
+          args: { type: "string", description: "Arguments/context for the skill." },
         },
         required: ["name"],
       },

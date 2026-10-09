@@ -77,32 +77,57 @@ export async function* withRetry(
     signal.addEventListener("abort", abortAttempt, { once: true })
 
     const iterator = open(attemptController.signal)[Symbol.asyncIterator]()
-    let stop: (() => void) | undefined
-    let timeout: Promise<{ timedOut: true }> | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let deadline = 0
+    let timerDeadline = 0
     let armedMs = 0
-    const arm = (ms: number) => {
-      armedMs = ms
-      stop?.()
-      if (ms <= 0) {
-        timeout = undefined
-        stop = undefined
+    let timedOut = false
+    let resolveTimeout: (() => void) | undefined
+    const checkTimeout = () => {
+      const remaining = deadline - performance.now()
+      if (remaining > 0) {
+        timerDeadline = deadline
+        timer = setTimeout(checkTimeout, remaining)
         return
       }
-      let timer: ReturnType<typeof setTimeout>
-      timeout = new Promise((resolve) => {
-        timer = setTimeout(() => {
-          attemptController.abort()
-          resolve({ timedOut: true })
-        }, ms)
-      })
-      stop = () => clearTimeout(timer)
+      timer = undefined
+      timedOut = true
+      attemptController.abort()
+      resolveTimeout?.()
+    }
+    const arm = (ms: number) => {
+      armedMs = ms
+      if (ms <= 0) {
+        clearTimeout(timer)
+        timer = undefined
+        return
+      }
+      deadline = performance.now() + ms
+      // Extensions only move the deadline; the existing timer will recheck it. A shorter
+      // allowance (notably after a hosted tool finishes) must take effect immediately.
+      if (timer !== undefined && deadline >= timerDeadline) return
+      clearTimeout(timer)
+      timerDeadline = deadline
+      timer = setTimeout(checkTimeout, ms)
     }
     arm(firstContentTimeoutMs)
 
     try {
       while (true) {
         const next = iterator.next().then((result) => ({ result }))
-        const outcome = timeout ? await Promise.race([next, timeout]) : await next
+        // Keep only the current wait's resolver, not one pending promise accumulating a
+        // Promise.race reaction for every delta in a long stream.
+        const outcome =
+          armedMs > 0
+            ? await new Promise<{ result: IteratorResult<StreamEvent> } | { timedOut: true }>(
+                (resolve, reject) => {
+                  resolveTimeout = () => resolve({ timedOut: true })
+                  if (timedOut) resolveTimeout()
+                  next.then(resolve, reject)
+                },
+              )
+            : await next
+        resolveTimeout = undefined
         if ("timedOut" in outcome) {
           void Promise.resolve(iterator.return?.()).catch(() => {})
           if (signal.aborted) {
@@ -153,7 +178,7 @@ export async function* withRetry(
         yield ev.type === "error" && attempt > 0 && ev.error.code !== "aborted" ? retried(ev, attempt) : ev
       }
     } finally {
-      stop?.()
+      clearTimeout(timer)
       if (!signal.aborted) attemptController.abort()
       if (failed) void Promise.resolve(iterator.return?.()).catch(() => {})
       signal.removeEventListener("abort", abortAttempt)
