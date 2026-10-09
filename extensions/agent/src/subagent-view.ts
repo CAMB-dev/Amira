@@ -209,8 +209,23 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
           break
       }
     }
+    let changed = false
+    if (
+      (event.type === "session.start" || event.type === "session.end") &&
+      event.parentSessionId === undefined
+    ) {
+      changed = streams.size > 0
+      streams.clear()
+    }
     if (event.type === "subagent.end") streams.delete(event.data.childSessionId)
-    api.requestRender()
+    if (
+      event.parentSessionId !== undefined ||
+      event.type === "subagent.start" ||
+      event.type === "subagent.end" ||
+      event.type === "subagent.state" ||
+      changed
+    )
+      api.requestRender()
   }
   api.on("message.start", onEvent)
   api.on("message.delta", onEvent)
@@ -221,12 +236,8 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
   api.on("subagent.state", onEvent)
   api.on("ui.request", onEvent)
   api.on("ui.resolved", onEvent)
-  api.on("session.start", (event) => {
-    if (event.parentSessionId === undefined) streams.clear()
-  })
-  api.on("session.end", (event) => {
-    if (event.parentSessionId === undefined) streams.clear()
-  })
+  api.on("session.start", onEvent)
+  api.on("session.end", onEvent)
   const switchTo = (data: SubagentData, step: number) => {
     const list = api.session()?.subagents() ?? []
     if (!list.length) return

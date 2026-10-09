@@ -32,30 +32,25 @@ export interface BashParams {
 /** Notes for every shell tool; `cd` and `chain` show how that shell sequences commands. */
 function sharedNotes(cd: string, chain: string): string[] {
   return [
-    `- Commands already start in the working directory. Each call is a fresh shell: \`cd\`, variables and functions do not persist between calls. Use \`${cd}\` only when you need to change directories within a call.`,
-    `- \`timeout\` is in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}). On timeout the command and everything it started are killed. For longer runs, use \`background: true\`.`,
-    "- Processes the command leaves running are killed when it finishes. For commands that keep running (dev servers, watchers, long builds you want to check on later), pass `background: true`: the call returns at once with a job id and the output so far, and the job keeps running. Read its new output with job_output (use wait_for to wait for a line such as a ready message instead of polling) and stop it with job_stop. Do not append `&` or use nohup yourself. Top-level background jobs survive `/clear`, `/resume` and `/fork` and become available in the new session; they are stopped when Amira exits, and a sub-agent's when it ends.",
-    `- Several calls issued together run at the same time. Put commands that depend on each other in one call (${chain}) or in separate turns.`,
-    "- stdin is closed, so interactive commands (editors, prompts, `git rebase -i`) will not work; pass flags that avoid prompts.",
-    "- Very long output is saved whole as an artifact: you get its start and end, and output_read reads the rest.",
-    "- Prefer the available file reading, editing and search tools over shell commands for those tasks.",
+    `Fresh shell in working directory; cd, variables/functions do not persist. To change directory: ${cd}. Concurrent calls run in parallel; chain dependencies (${chain}) or use separate turns.`,
+    `timeout: ms, default/max ${MAX_TIMEOUT_MS}; kills command and descendants. Leftover processes are killed on completion too. For longer/persistent commands use background:true (ignores timeout): returns job id/output immediately. Read via job_output with wait_for, not polling; stop via job_stop. Never use &/nohup. Root jobs survive /clear, /resume, /fork until Amira exits; child jobs end with their sub-agent.`,
+    "stdin closed: use non-interactive flags. Long output: artifact with start/end preview; output_read reads the rest. Prefer file/search tools for reading, editing and searching.",
   ]
 }
 
 const PARAMETERS = {
   type: "object",
   properties: {
-    command: { type: "string", description: "The command to run" },
+    command: { type: "string" },
     timeout: {
       type: "integer",
       minimum: 1,
       maximum: MAX_TIMEOUT_MS,
-      description: `Timeout in milliseconds (default ${DEFAULT_TIMEOUT_MS}, max ${MAX_TIMEOUT_MS}); not for background commands`,
+      description: `Milliseconds; default ${DEFAULT_TIMEOUT_MS}, ignored in background.`,
     },
     background: {
       type: "boolean",
-      description:
-        "Run in the background and return at once with a job id (for dev servers, watchers and other commands that keep running); see job_output and job_stop",
+      description: "Persistent job; returns immediately.",
     },
   },
   required: ["command"],
@@ -164,10 +159,9 @@ export const bashTool = shellTool(
   "bash",
   "bash",
   [
-    "Run a shell command and return its combined stdout and stderr plus the exit code.",
-    "- Runs in bash (Git Bash on Windows, so use POSIX syntax and forward slashes). If Git Bash is not installed, Windows falls back to PowerShell: every result then starts with a `Shell:` line naming the PowerShell edition, and you must use PowerShell syntax.",
-    "- Bash runs with `pipefail`: a pipeline fails when any command in it fails, so `cmd | tail` reports cmd's failure. A pipeline whose last command succeeds and whose earlier commands only succeeded or were killed by SIGPIPE (141), such as `git log | head`, is treated as successful. Other non-zero pipeline statuses still fail. Inside the command such a pipeline still fails, so a following `&&` does not run; when more commands follow, limit output with the command's own options (`git log -n 5`) instead.",
-    "- Output is decoded as UTF-8. Windows programs that print in a legacy console code page may show garbled non-ASCII text.",
+    "Run bash; returns combined stdout/stderr and exit code. Windows: Git Bash, POSIX syntax/forward slashes; without Git Bash, PowerShell fallback labels results with Shell: edition; use PowerShell syntax then.",
+    "pipefail: any pipeline failure fails the call, except a successful last command with earlier statuses only 0/SIGPIPE(141). That exception still fails inside the shell, so subsequent && won't run; use command output-limit options when chaining. Other nonzero statuses fail.",
+    "UTF-8 output; legacy Windows code pages may garble non-ASCII.",
     ...sharedNotes("cd dir && cmd", "`a && b`"),
   ],
   resolveShell,
@@ -178,11 +172,10 @@ export function powershellDescription(path: string): string[] {
   const edition = powershellEdition(path)
   const legacy = edition.startsWith("Windows")
   return [
-    `Run a command in ${edition} and return its output plus the exit code.`,
-    "- Use it for Windows-specific work: the registry, services, processes, Windows paths and APIs, .ps1 scripts, or tools that only behave well from PowerShell. For general work (git, package managers, POSIX tools) prefer the bash tool when it is available.",
-    `- Use PowerShell syntax: \`;\` or newlines between statements, \`$env:NAME\` for environment variables.${legacy ? " `&&` and `||` do not exist in this edition; test `$LASTEXITCODE` after native commands instead." : ""}`,
-    "- All output streams (output, errors, warnings, Write-Host) are combined as plain text. Output is UTF-8.",
-    `- The exit code is \`$LASTEXITCODE\` of the last native command, or 1 if the final statement failed; an earlier failing cmdlet only prints its error. Exit codes are reported mod 256 (\`exit 300\` shows 44, -1 shows 255). For fail-fast scripts start with \`$ErrorActionPreference = 'Stop'\`${legacy ? " (in this edition a native command writing to stderr then also stops the script)" : ""}.`,
+    `Run ${edition}; returns all streams (errors/warnings/Write-Host included) as UTF-8 text and exit code.`,
+    "Use for Windows-specific work (registry/services/processes, Windows paths/APIs, .ps1); prefer bash for general git/package/POSIX work when available.",
+    `PowerShell syntax: ; or newlines, $env:NAME.${legacy ? " No &&/||; test $LASTEXITCODE after native commands." : ""}`,
+    `Exit: last native $LASTEXITCODE, or 1 if final statement failed; earlier cmdlet failure only prints error. Codes mod 256. Fail-fast: $ErrorActionPreference = 'Stop'.${legacy ? " Native stderr also stops scripts in this edition." : ""}`,
     ...sharedNotes("cd dir; cmd", legacy ? "`a; if ($LASTEXITCODE -eq 0) { b }`" : "`a && b`"),
   ]
 }

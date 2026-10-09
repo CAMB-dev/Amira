@@ -35,15 +35,13 @@ function pickNames(tools: DeferredToolInfo[], names: string[]): DeferredToolInfo
 
 export const toolSearchTool = defineTool<{ query?: string; names?: string[]; max_results?: number }>({
   name: TOOL_SEARCH,
-  description: `Loads deferred tools (listed by name in the system prompt) so you can call them, and returns their full definitions.
-Pass exact tool names in "names", or a "query": keywords to search names and descriptions, or "select:a,b" for exact names.
-Loaded tools stay available for the rest of the session.`,
+  description: `Load deferred tools listed in the system prompt; returns full definitions, callable for the session. Use names for exact names, query for name/description keywords or "select:a,b".`,
   parameters: {
     type: "object",
     properties: {
-      query: { type: "string", description: 'Keywords, or "select:name1,name2".' },
-      names: { type: "array", items: { type: "string" }, description: "Exact tool names to load." },
-      max_results: { type: "number", description: "Most tools a keyword query loads. Default 5." },
+      query: { type: "string" },
+      names: { type: "array", items: { type: "string" } },
+      max_results: { type: "number", description: "Keyword result limit; default 5." },
     },
   },
   traits: { readOnly: true, toolSearch: true },

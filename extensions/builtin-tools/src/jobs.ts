@@ -293,25 +293,23 @@ export interface JobOutputParams {
 export const jobOutputTool = defineTool<JobOutputParams>({
   name: "job_output",
   description: [
-    "Read what a background job (started by a shell tool with `background: true`) printed since you last read it, and whether it still runs.",
-    "- To wait for something, pass `wait_for`: a regular expression matched case-insensitively against each line printed since your previous job_output call on the job (the first call also looks at the output the start returned), e.g. `ready|listening on|error`. The call returns as soon as a line matches, the job ends, or `timeout` passes.",
-    `- \`timeout\` is in milliseconds (default ${DEFAULT_WAIT_MS} with wait_for, max ${MAX_WAIT_MS}). Given without wait_for, it waits for the job to end (e.g. a build running in the background).`,
-    "- Do not call this repeatedly in a loop to see whether something happened: use wait_for with a timeout, or go on with other work and check later.",
-    `- At most ${MAX_OUTPUT_CHARS} characters come back per call (the end of what is new); the job's log file has everything.`,
+    "Read new output/status of a shell background job. wait_for matches each new line case-insensitively (first call includes start output); returns on match, exit or timeout. Without wait_for, timeout waits for exit.",
+    "Do not poll: use wait_for/timeout or do other work before checking.",
+    `Returns at most ${MAX_OUTPUT_CHARS} chars (new output's tail); log file has all output.`,
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
-      job_id: { type: "string", description: 'The job id, e.g. "job1"' },
+      job_id: { type: "string" },
       wait_for: {
         type: "string",
-        description: "Regular expression to wait for in the new output (case-insensitive, per line)",
+        description: "Regular expression to await",
       },
       timeout: {
         type: "integer",
         minimum: 0,
         maximum: MAX_WAIT_MS,
-        description: `How long to wait in milliseconds (default ${DEFAULT_WAIT_MS} with wait_for, else no wait)`,
+        description: `Milliseconds; default ${DEFAULT_WAIT_MS} with wait_for, else 0`,
       },
     },
     required: ["job_id"],
@@ -389,10 +387,10 @@ export interface JobStopParams {
 export const jobStopTool = defineTool<JobStopParams>({
   name: "job_stop",
   description:
-    "Stop a background job and every process it started (a dev server, a watcher). Returns how it ended and the output you had not read yet. Stop jobs you no longer need; all of them are stopped when Amira exits anyway.",
+    "Stop a background job and descendants; returns end status/unread output. Stop unneeded jobs; all stop on Amira exit.",
   parameters: {
     type: "object",
-    properties: { job_id: { type: "string", description: 'The job id, e.g. "job1"' } },
+    properties: { job_id: { type: "string" } },
     required: ["job_id"],
     additionalProperties: false,
   },

@@ -26,8 +26,7 @@ const READ_ONLY_RULE =
 export const BUILTIN_ROLES: Role[] = [
   {
     name: "explorer",
-    description:
-      "Read-only research: finds code, traces how something works, answers questions about the project.",
+    description: "Read-only code research, tracing and project questions.",
     tools: READ_ONLY_TOOLS,
     prompt: `You are an explorer. Investigate the codebase to answer the task.
 ${READ_ONLY_RULE}
@@ -36,7 +35,7 @@ Finish with a concise report: the answer, the relevant file paths (with line num
   },
   {
     name: "coder",
-    description: "Implements a clearly specified change, with every tool.",
+    description: "Implements specified changes; all tools.",
     prompt: `You are a coder. Implement exactly what the task specifies, matching the surrounding code's style, and nothing more.
 Check your change when it is practical (type check, tests, running it).
 Finish with the outcome, then summarize in three sentences what you changed.`,
@@ -44,7 +43,7 @@ Finish with the outcome, then summarize in three sentences what you changed.`,
   },
   {
     name: "reviewer",
-    description: "Read-only review of code or a change for correctness problems.",
+    description: "Read-only code/change correctness review.",
     tools: READ_ONLY_TOOLS,
     prompt: `You are a reviewer. Review the code or change named in the task for correctness: bugs, unhandled edge cases, broken contracts, missing error handling, tests that do not test what they claim.
 ${READ_ONLY_RULE}

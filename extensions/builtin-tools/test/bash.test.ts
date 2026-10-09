@@ -40,12 +40,12 @@ test.if(hasBash)("finds coreutils and other tools on PATH", async () => {
 })
 
 test("the shell description says commands already start in the working directory", () => {
-  expect(bashTool.description).toContain("Commands already start in the working directory")
+  expect(bashTool.description).toContain("Fresh shell in working directory")
   expect(bashTool.description).not.toContain("Prefer absolute paths")
-  expect(bashTool.description).toContain("SIGPIPE (141)")
-  expect(bashTool.description).toContain("treated as successful")
+  expect(bashTool.description).toContain("0/SIGPIPE(141)")
+  expect(bashTool.description).toContain("except a successful last command")
   expect(bashTool.description).not.toContain("exit 141 (SIGPIPE)")
-  expect(bashTool.description).toContain("a following `&&` does not run")
+  expect(bashTool.description).toContain("subsequent && won't run")
 })
 
 test.if(hasBash)("a failed command before a pipeline keeps the bash error status", async () => {
