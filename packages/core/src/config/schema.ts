@@ -194,7 +194,7 @@ const permissions = object({
 const settings = object({
   $schema: string,
   model: modelRef,
-  thinking,
+  thinking: oneOf("low", "medium", "high", "xhigh", "max", "default"),
   providers: record(provider),
   shell: oneOf("auto", "bash", "powershell"),
   tools: object({ disabled: list(string) }),

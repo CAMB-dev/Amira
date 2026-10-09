@@ -195,7 +195,15 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...((settings.web?.nativeSearch ?? DEFAULT_WEB_NATIVE_SEARCH) === false ? { webSearch: false } : {}),
       compactionMemory: fileCompactionMemory(amiraPath("cache", "native-compaction.json")),
     })
-  const modelRef = opts.model ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
+  // A settings choice whose provider was removed falls back like a stored session's model.
+  // Explicit flags/env still report a bad reference; never erase the saved setting.
+  const missingProvider =
+    opts.model === settings.model &&
+    opts.model !== undefined &&
+    !opts.settingsLayers?.model?.some((layer) => layer.scope === "flags") &&
+    !ai.providers().some((provider) => provider.id === opts.model!.split("/")[0])
+  const modelRef =
+    (missingProvider ? undefined : opts.model) ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
   const model = modelRef ? resolveModel(ai, modelRef) : NO_MODEL
   const modelNotice = modelRef ? undefined : noModelNotice(ai)
   if (modelNotice && opts.requireModel) throw new UsageError(noModelError(ai))
@@ -317,10 +325,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ai,
       model: m,
       providerSettings: settings.providers,
-      defaultThinking: settings.thinking,
-      thinking: opts.settingsLayers?.thinking?.some((layer) => layer.scope === "flags")
-        ? settings.thinking
-        : undefined,
+      defaultThinking: settings.thinking === "default" ? undefined : settings.thinking,
+      thinking:
+        settings.thinking !== "default" &&
+        opts.settingsLayers?.thinking?.some((layer) => layer.scope === "flags")
+          ? settings.thinking
+          : undefined,
       fileRewindSettings: settings.fileRewind,
       cwd: opts.cwd,
       sections: defaultSections({
