@@ -16,18 +16,14 @@ export interface EditParams {
 export const editTool = defineTool<EditParams>({
   name: "edit",
   description: [
-    "Replace an exact string in a file.",
-    "- `path` may be absolute or relative to the working directory. Read the file first.",
-    "- `old_string` must match the file exactly, including whitespace and indentation. Do not include the line-number prefix from read output.",
-    "- `old_string` must occur exactly once. If it occurs more than once, include more surrounding lines to make it unique, or set `replace_all` to replace every occurrence (useful for renaming).",
-    "- `new_string` must differ from `old_string`. Use the write tool to create new files.",
-    "- Files with CRLF line endings keep them; write `\\n` in both strings as usual.",
-    "- UTF-8 and UTF-16 files keep their encoding and BOM. Files that are not valid UTF-8 are refused rather than corrupted.",
+    "Replace exact text in a file; read first. path absolute or relative to working directory.",
+    "old_string must match exactly (whitespace/indentation included, no read line-number prefix) and occur once: add context or use replace_all for repeats. new_string must differ; create files with write.",
+    "CRLF preserved: use \\n as usual in both strings. UTF-8/UTF-16 encoding/BOM preserved; invalid UTF-8 refused.",
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
-      path: { type: "string", description: "Absolute path, or path relative to the working directory" },
+      path: { type: "string" },
       old_string: { type: "string", description: "Exact text to replace" },
       new_string: { type: "string", description: "Replacement text" },
       replace_all: { type: "boolean", description: "Replace every occurrence (default false)" },

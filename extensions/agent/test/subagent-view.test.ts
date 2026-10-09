@@ -250,6 +250,172 @@ async function snapshotView() {
   return { bus, host, agent, list, histories, stopped, definition, data, viewer, render, meta }
 }
 
+test("subagent view does not request renders for unrelated main-session events", async () => {
+  const s = await snapshotView()
+  let renders = 0
+  const unsubscribe = s.bus.subscribe(
+    () => {
+      renders++
+    },
+    { types: ["ui.render"] },
+  )
+  const settle = async () => {
+    await s.bus.flush()
+    await Bun.sleep(5)
+    await s.bus.flush()
+  }
+  try {
+    await settle()
+    renders = 0
+    const meta = { sessionId: s.agent.sessionId }
+    s.bus.emit("message.delta", { kind: "text", text: "main reply" }, meta)
+    await settle()
+    expect(renders).toBe(0)
+
+    s.bus.emit("message.start", { model: { provider: "mock", model: "m1" } }, meta)
+    s.bus.emit(
+      "message.end",
+      { message: { role: "assistant", model: { provider: "mock", model: "m1" }, content: [] } },
+      meta,
+    )
+    s.bus.emit("turn.end", { reason: "aborted", steps: 1 }, meta)
+    s.bus.emit("ui.request", { kind: "confirm", requestId: "main", title: "Continue?" }, meta)
+    s.bus.emit("ui.resolved", { requestId: "main", cancelled: false, value: true }, meta)
+    s.bus.emit(
+      "session.start",
+      { reason: "clear", cwd: "/work", model: { provider: "mock", model: "m1" } },
+      meta,
+    )
+    s.bus.emit("session.end", { reason: "switch" }, meta)
+    await settle()
+    expect(renders).toBe(0)
+  } finally {
+    unsubscribe()
+    s.host.unload("builtin:agent")
+  }
+})
+
+test("subagent view requests renders for child activity and parent-reported child status", async () => {
+  const s = await snapshotView()
+  let renders = 0
+  const unsubscribe = s.bus.subscribe(
+    () => {
+      renders++
+    },
+    { types: ["ui.render"] },
+  )
+  const expectRender = async (emit: () => void) => {
+    await s.bus.flush()
+    await Bun.sleep(5)
+    await s.bus.flush()
+    const before = renders
+    emit()
+    await s.bus.flush()
+    await Bun.sleep(5)
+    await s.bus.flush()
+    expect(renders).toBe(before + 1)
+  }
+  try {
+    await expectRender(() =>
+      s.bus.emit("message.start", { model: { provider: "mock", model: "m1" } }, s.meta),
+    )
+    await expectRender(() => s.bus.emit("message.delta", { kind: "thinking", text: "reason" }, s.meta))
+    expect(s.render()).toContain("… thinking")
+    await expectRender(() => s.bus.emit("message.delta", { kind: "text", text: "child reply" }, s.meta))
+    expect(s.render()).toContain("child reply")
+    await expectRender(() =>
+      s.bus.emit("ui.request", { kind: "confirm", requestId: "child", title: "Continue?" }, s.meta),
+    )
+    await expectRender(() =>
+      s.bus.emit("ui.resolved", { requestId: "child", cancelled: false, value: true }, s.meta),
+    )
+    await expectRender(() =>
+      s.bus.emit(
+        "message.end",
+        { message: { role: "assistant", model: { provider: "mock", model: "m1" }, content: [] } },
+        s.meta,
+      ),
+    )
+    expect(s.render()).not.toContain("child reply")
+    await expectRender(() => s.bus.emit("turn.end", { reason: "aborted", steps: 1 }, s.meta))
+    const meta = { sessionId: s.agent.sessionId }
+    await expectRender(() =>
+      s.bus.emit(
+        "subagent.start",
+        {
+          childSessionId: "a",
+          prompt: "Task a",
+          model: { provider: "mock", model: "m1" },
+          depth: 1,
+          cwd: "/work",
+          context: "fresh",
+          queued: false,
+        },
+        meta,
+      ),
+    )
+    s.list[0]!.status = "paused"
+    await expectRender(() =>
+      s.bus.emit("subagent.state", { childSessionId: "a", state: "paused", turns: 1 }, meta),
+    )
+    expect(s.render()).toContain("… paused")
+    await expectRender(() => s.bus.emit("message.delta", { kind: "text", text: "partial reply" }, s.meta))
+    s.list[0]!.status = "done"
+    await expectRender(() =>
+      s.bus.emit(
+        "subagent.end",
+        { childSessionId: "a", status: "done", usage: emptyUsage(), durationMs: 1000 },
+        meta,
+      ),
+    )
+    expect(s.render()).not.toContain("partial reply")
+    expect(s.render()).toContain("── done ──")
+  } finally {
+    unsubscribe()
+    s.host.unload("builtin:agent")
+  }
+})
+
+test("subagent view requests a render when main-session lifecycle clears live streams", async () => {
+  const s = await snapshotView()
+  let renders = 0
+  const unsubscribe = s.bus.subscribe(
+    () => {
+      renders++
+    },
+    { types: ["ui.render"] },
+  )
+  const settle = async () => {
+    await s.bus.flush()
+    await Bun.sleep(5)
+    await s.bus.flush()
+  }
+  try {
+    for (const type of ["session.start", "session.end"] as const) {
+      s.bus.emit("message.delta", { kind: "text", text: "stale reply" }, s.meta)
+      await settle()
+      expect(s.render()).toContain("stale reply")
+      const before = renders
+      const meta = { sessionId: s.agent.sessionId }
+      const clear = () => {
+        if (type === "session.start")
+          s.bus.emit(type, { reason: "clear", cwd: "/work", model: { provider: "mock", model: "m1" } }, meta)
+        else s.bus.emit(type, { reason: "switch" }, meta)
+      }
+      clear()
+      await settle()
+      expect(renders).toBe(before + 1)
+      expect(s.render()).not.toContain("stale reply")
+      clear()
+      await settle()
+      expect(renders).toBe(before + 1)
+    }
+  } finally {
+    unsubscribe()
+    s.host.unload("builtin:agent")
+  }
+})
+
 test("streaming before opening is visible, thinking changes live, and snapshots replace deltas", async () => {
   const s = await snapshotView()
   s.bus.emit("message.start", { model: { provider: "mock", model: "m1" } }, s.meta)

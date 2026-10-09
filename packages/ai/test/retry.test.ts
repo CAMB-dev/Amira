@@ -288,6 +288,122 @@ test("ends a stream that goes silent after content without sending it again", as
   })
 })
 
+test("activity extends the idle deadline across timer rechecks", async () => {
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    yield { type: "text.delta", text: "a" }
+    await Bun.sleep(35)
+    yield { type: "text.delta", text: "b" }
+    await Bun.sleep(35)
+    yield { type: "text.delta", text: "c" }
+    await Bun.sleep(35)
+    yield {
+      type: "done",
+      message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "end" },
+    }
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 0,
+      firstContentTimeoutMs: 100,
+      idleTimeoutMs: 60,
+    }),
+  )
+  expect(types(evs)).toEqual(["text.delta", "text.delta", "text.delta", "done"])
+})
+
+test("an extended idle deadline eventually times out and retains all partial text", async () => {
+  let lastActivity = 0
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    yield { type: "text.delta", text: "a" }
+    await Bun.sleep(35)
+    lastActivity = performance.now()
+    yield { type: "text.delta", text: "b" }
+    await new Promise<never>(() => {})
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 1,
+      firstContentTimeoutMs: 100,
+      idleTimeoutMs: 60,
+    }),
+  )
+  expect(performance.now() - lastActivity).toBeGreaterThanOrEqual(55)
+  expect(types(evs)).toEqual(["text.delta", "text.delta", "error"])
+  expect(evs.at(-1)).toMatchObject({
+    error: { code: "timeout", message: expect.stringContaining("idle for 60 ms") },
+    message: { content: [{ type: "text", text: "ab" }], stopReason: "error" },
+  })
+})
+
+test("idle timeout is retained while the stream consumer pauses between events", async () => {
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    yield { type: "text.delta", text: "partial" }
+    await new Promise<never>(() => {})
+  }
+  const stream = withRetry(attempt, new AbortController().signal, {
+    retries: 0,
+    firstContentTimeoutMs: 100,
+    idleTimeoutMs: 15,
+  })
+  expect((await stream.next()).value).toEqual({ type: "text.delta", text: "partial" })
+  await Bun.sleep(35)
+  expect((await stream.next()).value).toMatchObject({
+    type: "error",
+    error: { code: "timeout", message: expect.stringContaining("idle for 15 ms") },
+    message: { content: [{ type: "text", text: "partial" }] },
+  })
+  expect((await stream.next()).done).toBe(true)
+})
+
+test("disabling the first-content timeout still enables the idle timeout after activity", async () => {
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    await Bun.sleep(35)
+    yield { type: "text.delta", text: "partial" }
+    await new Promise<never>(() => {})
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 0,
+      firstContentTimeoutMs: 0,
+      idleTimeoutMs: 15,
+    }),
+  )
+  expect(types(evs)).toEqual(["text.delta", "error"])
+  expect(evs.at(-1)).toMatchObject({
+    error: { code: "timeout", message: expect.stringContaining("idle for 15 ms") },
+    message: { content: [{ type: "text", text: "partial" }] },
+  })
+})
+
+test("disabling idle timing cancels the first-content timer and stays disabled for hosted tools", async () => {
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    yield { type: "thinking.start" }
+    await Bun.sleep(35)
+    yield {
+      type: "serverTool",
+      block: { type: "serverTool", id: "ws1", name: "web_search", input: {}, status: "running" },
+    }
+    await Bun.sleep(35)
+    yield {
+      type: "serverTool",
+      block: { type: "serverTool", id: "ws1", name: "web_search", input: {}, status: "done" },
+    }
+    await Bun.sleep(35)
+    yield {
+      type: "done",
+      message: { role: "assistant", content: [], model: { provider: "", model: "" }, stopReason: "end" },
+    }
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 0,
+      firstContentTimeoutMs: 15,
+      idleTimeoutMs: 0,
+    }),
+  )
+  expect(types(evs)).toEqual(["thinking.start", "serverTool", "serverTool", "done"])
+})
+
 test("a timeout after a visible tool event waits for the user instead of sending again", async () => {
   const visible: StreamEvent[] = [
     { type: "toolCall.delta", id: "call1", name: "echo", argsDelta: "{}" },
@@ -493,6 +609,39 @@ test("a running hosted search keeps a quiet stream alive past the idle timeout",
   }
   const evs = await events(withRetry(attempt, new AbortController().signal, { idleTimeoutMs: 15 }))
   expect(types(evs)).toEqual(["start", "serverTool", "serverTool", "text.delta", "done"])
+})
+
+test("the hosted-tool allowance shrinks only after the last running tool finishes", async () => {
+  const block = (id: string, status: "running" | "done") =>
+    ({
+      type: "serverTool",
+      block: { type: "serverTool", id, name: "web_search", input: {}, status },
+    }) as const
+  let calls = 0
+  const attempt = async function* (): AsyncGenerator<StreamEvent> {
+    calls++
+    yield { type: "text.delta", text: "partial" }
+    yield block("ws1", "running")
+    yield block("ws2", "running")
+    await Bun.sleep(35)
+    yield block("ws1", "done")
+    await Bun.sleep(35)
+    yield block("ws2", "done")
+    await new Promise<never>(() => {})
+  }
+  const evs = await events(
+    withRetry(attempt, new AbortController().signal, {
+      retries: 1,
+      firstContentTimeoutMs: 100,
+      idleTimeoutMs: 15,
+    }),
+  )
+  expect(calls).toBe(1)
+  expect(types(evs)).toEqual(["text.delta", "serverTool", "serverTool", "serverTool", "serverTool", "error"])
+  expect(evs.at(-1)).toMatchObject({
+    error: { code: "timeout", message: expect.stringContaining("idle for 15 ms") },
+    message: { content: [{ type: "text", text: "partial" }], stopReason: "error" },
+  })
 })
 
 for (const activity of [

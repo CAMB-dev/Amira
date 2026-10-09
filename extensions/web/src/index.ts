@@ -59,15 +59,13 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
   }>({
     name: WEB_SEARCH_TOOL,
     description: [
-      "Searches the web and returns numbered results: title, URL, publication date when known, and a snippet.",
-      "Use it for anything that may have changed since your training data: news, releases, current versions, prices, docs of recent tools. The current date is in the system prompt; put the year in queries about recent events instead of assuming your training cutoff is now.",
-      "Snippets are short. To read a page, call web_fetch with its URL.",
-      "When you use what you found, cite the URLs of the pages you relied on in your answer.",
+      "Search web: numbered title/URL/date (when known)/snippet results. Use for facts that may have changed since training. Use current year from system date in recent-event queries; don't assume training cutoff is now.",
+      "Short snippets: web_fetch reads pages. Cite relied-on page URLs in your answer.",
     ].join("\n"),
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "The search query." },
+        query: { type: "string" },
         maxResults: {
           type: "integer",
           minimum: 1,
@@ -77,12 +75,12 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
         allowedDomains: {
           type: "array",
           items: { type: "string" },
-          description: 'Only return results from these domains and their subdomains, e.g. ["bun.com"].',
+          description: "Only these domains/subdomains.",
         },
         blockedDomains: {
           type: "array",
           items: { type: "string" },
-          description: "Never return results from these domains and their subdomains.",
+          description: "Exclude these domains/subdomains.",
         },
       },
       required: ["query"],
@@ -122,10 +120,8 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
   const webFetch = defineTool<{ url: string; prompt?: string; maxChars?: number; offset?: number }>({
     name: WEB_FETCH_TOOL,
     description: [
-      "Fetches a web page (http or https) and returns its content as Markdown; JSON and plain text come back as text. PDFs and other binary files are not supported.",
-      "Redirects are followed and the final URL is reported. Long pages are cut: the result ends with the offset to pass to read the next part. Pages are cached for 15 minutes, so paging does not refetch.",
-      "Local and private-network addresses are refused.",
-      "Cite the URL when you use what a page says.",
+      "Fetch http(s) pages as Markdown; JSON/plain text as text. No PDFs/binaries. Follows redirects, reports final URL. Refuses local/private networks. Cite used URLs.",
+      "Long pages end with continuation offset. Cached 15 minutes; paging doesn't refetch.",
     ].join("\n"),
     parameters: {
       type: "object",
@@ -133,8 +129,7 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
         url: { type: "string", description: "The full URL, including https://." },
         prompt: {
           type: "string",
-          description:
-            "What you are looking for on the page. When the page is cut, the result lists later passages that mention it, with their offsets.",
+          description: "What to look for; cut pages list matching later passages/offsets.",
         },
         maxChars: {
           type: "integer",

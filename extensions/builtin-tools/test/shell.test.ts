@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test"
-import "../../../packages/core/src/index.ts"
 import { existsSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { ToolRegistry } from "../../../packages/core/src/index.ts"
 import { cmdArgv, runCommand } from "../../../packages/proc/src/index.ts"
+import { bashTool, powershellTool } from "../src/bash.ts"
 import {
+  availableShellTools,
   bashFromGitExecPath,
   fallbackPowerShell,
   findGitBash,
@@ -14,6 +16,7 @@ import {
   gitBashLayout,
   isRejectedShellPath,
   resolveShell,
+  shellToolNames,
 } from "../src/shell.ts"
 
 const norm = (p: string) => p.replaceAll("\\", "/")
@@ -21,6 +24,43 @@ const fakeFs = (...files: string[]) => {
   const set = new Set(files.map(norm))
   return (p: string) => set.has(norm(p))
 }
+
+test("shell tool selection preserves POSIX and explicit modes, and deduplicates Windows auto", async () => {
+  const bash = async () => ({ kind: "bash" as const })
+  const fallback = async () => ({ kind: "powershell" as const })
+  expect(await shellToolNames("auto", "win32", bash)).toEqual(["bash", "powershell"])
+  expect(await shellToolNames("auto", "win32", fallback)).toEqual(["powershell"])
+  expect(await shellToolNames("bash", "win32", fallback)).toEqual(["bash"])
+  expect(await shellToolNames("powershell", "win32", bash)).toEqual(["powershell"])
+  for (const platform of ["linux", "darwin"]) {
+    expect(await shellToolNames("auto", platform, fallback)).toEqual(["bash"])
+    expect(await shellToolNames("bash", platform, fallback)).toEqual(["bash"])
+  }
+})
+
+test("Windows auto hides the bash fallback but explicit bash and switching still work", async () => {
+  let mode: "auto" | "bash" | "powershell" = "auto"
+  const tools = await availableShellTools(
+    [bashTool, powershellTool],
+    () => mode,
+    "win32",
+    async () => ({ kind: "powershell" }),
+  )
+  const registry = new ToolRegistry()
+  for (const tool of tools) registry.register(tool, "test")
+  const names = () => registry.specs().map((tool) => tool.name)
+  expect(names()).toEqual(["powershell"])
+  expect(registry.has("bash")).toBe(true)
+  mode = "bash"
+  registry.setDisabled(["powershell"])
+  expect(names()).toEqual(["bash"])
+  mode = "powershell"
+  registry.setDisabled(["bash"])
+  expect(names()).toEqual(["powershell"])
+  mode = "auto"
+  registry.setDisabled([])
+  expect(names()).toEqual(["powershell"])
+})
 
 test("rejects WSL and Store aliases", () => {
   expect(isRejectedShellPath("C:\\Windows\\System32\\bash.exe")).toBe(true)

@@ -24,42 +24,34 @@ export const AGENT_PARAMETERS = {
     tasks: {
       type: "array",
       minItems: 1,
-      description: "The sub-agents to run, each with its own task.",
       items: {
         type: "object",
         properties: {
           title: {
             type: "string",
             maxLength: MAX_TITLE_CHARS,
-            description:
-              'A title of 3–6 words naming the task for the user, e.g. "US market trend" or "Add status bar test".',
+            description: "3–6-word task title for the user.",
           },
-          role: { type: "string", description: "Role name (see the list above)." },
-          prompt: { type: "string", description: "The complete task for the sub-agent." },
+          role: { type: "string" },
+          prompt: { type: "string" },
           model: {
             type: "string",
-            description: 'Optional "provider/model" to run it on; default: the role\'s model or yours.',
+            description: '"provider/model"; default: role model or yours.',
           },
           context: {
             type: "string",
             enum: ["fresh", "fork"],
-            description: "fresh (default): only the prompt; fork: this whole conversation too.",
           },
           isolation: {
             type: "string",
             enum: ["none", "worktree"],
-            description:
-              "worktree: work in a separate git worktree and merge back. Default: the role's, else none.",
+            description: "Default: role isolation or none.",
           },
         },
         required: ["title", "prompt"],
       },
     },
-    background: {
-      type: "boolean",
-      description:
-        "true: return right away with the sub-agents' ids; false: wait for their results. Ignored in the main session, which always runs them in the background (see above).",
-    },
+    background: { type: "boolean" },
   },
   required: ["tasks"],
 }
@@ -131,16 +123,14 @@ export function agentTool(deps: AgentToolDeps) {
       const list = [...deps.roles().values()].map(
         (r) => `- ${r.name}: ${r.description || "(no description)"}`,
       )
-      return `Delegates work to sub-agents: separate agents with their own context that do one task and report back. Use them for self-contained work such as research across many files (explorer), implementing a well-specified change (coder) or reviewing code (reviewer), and to do independent tasks in parallel. Use a reviewer only when the change is large or risky, not for small or mechanical edits.
-- Several tasks in one call run in parallel (a few at a time; the rest wait their turn).
-- A sub-agent sees only its prompt (context "fresh", the default), so write complete instructions: the goal, relevant paths, constraints and what to report back. context "fork" gives it this whole conversation instead.
-- isolation "worktree" runs it in its own git worktree; when it finishes its changes are merged into the working tree (a conflict goes to the user for review). Use it for coders that may touch the same files as others.
+      return `Delegate self-contained tasks to sub-agents in parallel (limited slots). Results include final answers and changes. Reviewer: large/risky changes only.
+Fresh (default) sees only prompt: give complete goal, paths, constraints and report requirements. Fork also sees this conversation.
+Worktree isolates edits in a git worktree and auto-merges into your working tree; conflicts go to user for review. Choose it for concurrent coders touching the same files.
 ${
   (deps.api.settings.subagents?.background ?? DEFAULT_SUBAGENT_BACKGROUND) === false
-    ? `- The call waits for the sub-agents and returns their results. background: true returns at once with their ids instead: in the main session their results then come to you by themselves as a message when they finish; a sub-agent must collect them with ${AGENT_RESULT_TOOL} before it finishes.`
-    : `- In the main session sub-agents always run in the background: the call returns at once with their ids, and when they finish their results come to you by themselves as a message, in a new turn of your own. Do your summary or follow-up work then, even when you need the results to answer: end your turn now (or go on with other work) instead of waiting; background is ignored there and ${AGENT_RESULT_TOOL} only reports progress. A sub-agent's calls wait by default; with background: true it must collect the results with ${AGENT_RESULT_TOOL} before it finishes.`
+    ? `Calls wait by default. background:true returns ids immediately; main results arrive automatically as messages; children must collect ${AGENT_RESULT_TOOL} before finishing.`
+    : `Main always backgrounds, ignoring background, returning ids immediately. Results arrive automatically as messages in a new turn: do other work or end your turn, never wait; summarize/follow up then. ${AGENT_RESULT_TOOL} only reports progress. Child calls wait by default; background:true returns ids and requires collecting ${AGENT_RESULT_TOOL} before finishing.`
 }
-- A result holds each sub-agent's final answer and what it changed.
 Roles:
 ${list.join("\n")}`
     },
@@ -205,7 +195,7 @@ ${list.join("\n")}`
 export function resultTool(deps: ResultToolDeps) {
   return defineTool<{ ids?: string[]; wait?: boolean }>({
     name: AGENT_RESULT_TOOL,
-    description: `Gets the results of sub-agents started in the background with ${AGENT_TOOL}. Waits for them to finish unless wait is false. Without ids, covers every background sub-agent you started whose result you have not received yet. A result is handed out once: one that already came to you as a message is not repeated. In the main session results come by themselves and this never waits: it only reports which are still running.`,
+    description: `Collect background ${AGENT_TOOL} results once; results already delivered as messages are not repeated. Omitted ids: all your unreceived results. Waits unless wait:false. Main: results arrive automatically; never waits, only reports progress.`,
     parameters: AGENT_RESULT_PARAMETERS,
     traits: { readOnly: true },
     concurrency: "parallel",
