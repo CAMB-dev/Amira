@@ -104,6 +104,17 @@ test("provider and model editing choices are validated and merge like other tool
   ).toThrow('"providers.p.models[0].tools.edit" must be one of')
 })
 
+test("live token speed is a boolean setting that project files can override", () => {
+  put(userFile(), { tui: { tokenSpeed: true } })
+  put(projectFile(), { tui: { tokenSpeed: false } })
+  const result = loadSettings({ cwd, home })
+  expect(result.warnings).toEqual([])
+  expect(result.settings.tui?.tokenSpeed).toBe(false)
+  expect(() => validateSettings({ tui: { tokenSpeed: "off" } }, "settings.json")).toThrow(
+    '"tui.tokenSpeed" must be true or false',
+  )
+})
+
 test("server-side compaction and its layout are settings; a project file cannot turn it on", () => {
   put(userFile(), {
     providers: {

@@ -46,8 +46,8 @@ export function placeLabel(ws: {
  * its window, the cost of the whole agent tree, and the git branch. They keep to the front
  * (negative orders) and to the bar when it narrows (priorities 10 to 40, the model last to
  * go), so other extensions' items follow them and give way first. The activity and running
- * sub-agents are left to the activity line and the transcript; output tokens, the cache hit
- * rate and the speed to /status.
+ * sub-agents are left to the activity line and the transcript; output tokens and the cache
+ * hit rate to /status. The commands extension adds a lower-priority live token-speed item.
  */
 export default defineExtension((api) => {
   let model = ""

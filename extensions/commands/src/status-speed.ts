@@ -8,8 +8,13 @@ import {
   turnSpeed,
 } from "./speed.ts"
 
+export type SpeedObserver = (e: AnyEvent, timing?: ReplyTiming, speed?: RequestSpeed) => void
+
 /** Installs dialect-neutral timing collection; never includes a child session's events. */
-export function trackSpeed(api: Pick<ExtensionAPI, "onEvents">): (sessionId: string) => string[][] {
+export function trackSpeed(
+  api: Pick<ExtensionAPI, "onEvents">,
+  observe?: SpeedObserver,
+): (sessionId: string) => string[][] {
   const handlers = new Map<keyof EventMap, (e: AnyEvent) => void>()
   const on = <K extends keyof EventMap>(type: K, handler: (e: EventEnvelope<K>) => void) => {
     handlers.set(type, (e) => handler(e as EventEnvelope<K>))
@@ -112,7 +117,14 @@ export function trackSpeed(api: Pick<ExtensionAPI, "onEvents">): (sessionId: str
     chars.delete(e.sessionId)
   })
   // Separate subscriptions have independent queues: boundaries and end must share one.
-  api.onEvents?.([...handlers.keys()], (e) => handlers.get(e.type)?.(e))
+  api.onEvents?.(
+    [...handlers.keys(), ...(observe ? (["session.start", "session.end"] as const) : [])],
+    (e) => {
+      if (e.parentSessionId !== undefined) return
+      handlers.get(e.type)?.(e)
+      observe?.(e, timing.get(e.sessionId), speed.get(e.sessionId))
+    },
+  )
   return (sessionId) => {
     const last = speed.get(sessionId)
     const turn = effective.get(sessionId)

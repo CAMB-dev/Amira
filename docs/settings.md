@@ -247,6 +247,7 @@ Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tool
 | `tui.bell` | `boolean` | `true` | Ring the bell when a turn ends or a dialog opens while the terminal is in the background. |  |
 | `tui.title` | `boolean` | `true` | Set the terminal title to the folder, session title when present, and branch, marked while working. |  |
 | `tui.progress` | `boolean` | `true` | Show work on the tab and taskbar progress indicator (OSC 9;4). |  |
+| `tui.tokenSpeed` | `boolean` | `true` | Show live token speed on the right of the status bar: `~N tok/s` estimates visible reply text and tool arguments, `thinking Ns` shows thinking time, and reported usage replaces the estimate with the exact output speed after the request. The last speed stays while idle; this item hides first when space is tight. Set to `false` to hide it. |  |
 | `tui.reflow` | `"auto" \| "on" \| "off"` | `"auto"` | `"off"` for terminals that do not re-wrap lines when they get narrower (legacy conhost, some tmux setups). |  |
 | `tui.submitWhileWorking` | `"steer" \| "queue"` | `"steer"` | What Enter does while a turn runs: `"steer"` sends the message into the running turn, `"queue"` sends it after the turn. The queue key does the other. |  |
 | `tui.images` | `"auto" \| "on" \| "off"` | `"auto"` | Draw images in replies (with the `images` extension): `"auto"` where the terminal supports it, `"on"` everywhere, `"off"` never. |  |
