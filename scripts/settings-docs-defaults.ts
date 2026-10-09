@@ -65,6 +65,7 @@ export const settingsDefaults = {
   "tui.bell": d.DEFAULT_TUI_BELL,
   "tui.title": d.DEFAULT_TUI_TITLE,
   "tui.progress": d.DEFAULT_TUI_PROGRESS,
+  "tui.tokenSpeed": d.DEFAULT_TUI_TOKEN_SPEED,
   "tui.reflow": d.DEFAULT_TUI_REFLOW,
   "tui.submitWhileWorking": d.DEFAULT_TUI_SUBMIT_WHILE_WORKING,
   "tui.images": d.DEFAULT_TUI_IMAGES,

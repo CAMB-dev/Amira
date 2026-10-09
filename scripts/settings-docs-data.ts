@@ -654,6 +654,11 @@ export const annotations: Record<string, Annotation> = {
     en: "Show work on the tab and taskbar progress indicator (OSC 9;4).",
     zh: "在标签页和任务栏进度指示器上显示工作状态（OSC 9;4）。",
   },
+  "tui.tokenSpeed": {
+    default: documentedDefault("tui.tokenSpeed"),
+    en: "Show live token speed on the right of the status bar: `~N tok/s` estimates visible reply text and tool arguments, `thinking Ns` shows thinking time, and reported usage replaces the estimate with the exact output speed after the request. The last speed stays while idle; this item hides first when space is tight. Set to `false` to hide it.",
+    zh: "在状态栏右侧显示实时 token 速度：`~N tok/s` 根据可见回复文字和工具参数估算，`thinking Ns` 显示思考时长；请求结束后，若有用量报告则改为精确的输出速度。空闲时保留上次速度，空间不足时优先隐藏此项。设为 `false` 可关闭。",
+  },
   "tui.reflow": {
     default: documentedDefault("tui.reflow"),
     en: '`"off"` for terminals that do not re-wrap lines when they get narrower (legacy conhost, some tmux setups).',

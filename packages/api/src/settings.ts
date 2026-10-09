@@ -258,6 +258,8 @@ export interface TuiSettings {
   title?: boolean
   /** Show work on the tab and taskbar progress indicator (OSC 9;4). See DEFAULT_TUI_PROGRESS. */
   progress?: boolean
+  /** Show live token speed and thinking time in the status bar. See DEFAULT_TUI_TOKEN_SPEED. */
+  tokenSpeed?: boolean
   /**
    * Whether the terminal re-wraps lines when it gets narrower. "off" for terminals that do not
    * (legacy conhost with wrap-on-resize off, some tmux setups). See DEFAULT_TUI_REFLOW.
