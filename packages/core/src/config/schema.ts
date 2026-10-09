@@ -267,6 +267,7 @@ const settings = object({
     bell: boolean,
     title: boolean,
     progress: boolean,
+    tokenSpeed: boolean,
     reflow: oneOf("auto", "on", "off"),
     submitWhileWorking: oneOf("steer", "queue"),
     images: oneOf("auto", "on", "off"),
