@@ -9,7 +9,7 @@ import type {
   ThemeRegistry,
   UiRequests,
 } from "@amira/core"
-import type { InputEvent, SetupResult, Terminal, Theme } from "@amira/tui-kit"
+import type { InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
 import type { ViewSource } from "../extension-view.ts"
 import type { FileSource } from "../file-index.ts"
 import type { ClipboardContent } from "../image-input.ts"
@@ -61,8 +61,8 @@ export interface InteractiveOptions {
   theme?: Theme
   /** Named themes, live across file reloads and extension registration/disposal. */
   themes?: Pick<ThemeRegistry, "get" | "list" | "subscribe"> & Partial<Pick<ThemeRegistry, "source">>
-  /** Persists an applied selection; preview and cancellation never call it. */
-  saveTheme?: (name: string) => void | Promise<void>
+  /** Persists the applied name and appearance together; preview and cancellation never call it. */
+  saveTheme?: (name: string, variant: ThemeVariant) => void | Promise<void>
   /**
    * Prompts sent before, for ↑/↓ and Ctrl+R; the CLI passes the project's persisted history.
    * Default: one kept in memory for this run.

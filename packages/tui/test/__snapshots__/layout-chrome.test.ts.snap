@@ -5,7 +5,7 @@ exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
 
   › The status bar feels cramped, can you make it clearer?                                   20:19  
 
-  ∴ Thought for 4.2s  ctrl+o to expand                                                       20:19  
+  ∴ Thought for 4.2s  Ctrl+O to expand
 
   # Status bar layout                                                                        20:19  
   The header now carries context and cost.
@@ -25,7 +25,7 @@ exports[`a composed batch2 frame at 50 columns keeps the chosen layout 1`] = `
   › The status bar feels cramped, can      20:19  
     you make it clearer?                          
 
-  ∴ Thought for 4.2s  ctrl+o to expand     20:19  
+  ∴ Thought for 4.2s  Ctrl+O to expand
 
   # Status bar layout                      20:19  
   The header now carries context and cost.

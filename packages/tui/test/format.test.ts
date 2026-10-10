@@ -106,30 +106,26 @@ test("without the band token (NO_COLOR, or a theme without it) the message is as
   expect(plain(userLines(banded, message))).toEqual(["  › hi there"])
 })
 
-test("a command's echo is on the band too, muted", () => {
+test("a command's echo stays plain and muted even with a banded theme", () => {
   const rows = commandEchoLines(banded, "/status", 20)
-  expectBand(rows, 20)
-  expect(rows[0]).toBe(`${BAND}  ${banded.surfaceMuted!("› /status")}${" ".repeat(9)}\x1b[49m`)
+  expect(rows).toEqual([`  ${banded.muted("› /status")}`])
   expect(commandEchoLines(defaultTheme, "/status", 20)).toEqual([`  ${defaultTheme.muted("› /status")}`])
   expect(bandRows(["abc"], 2, banded.userBg).map(visibleWidth)).toEqual([2])
 })
 
-test("a wrapped echo keeps the band after the reset that ends its style on a row", () => {
+test("a wrapped echo uses the whole row and hangs under the command without a band", () => {
   const rows = commandEchoLines(banded, `/model ${"x".repeat(30)}`, 20)
-  expectBand(rows, 20)
-  expect(rows.length).toBeGreaterThan(1)
-  // Its rows after the first hang under the command, past "› ".
-  expect(rows.slice(1).every((r) => stripAnsi(r).startsWith("    x"))).toBe(true)
+  expect(rows.map(stripAnsi)).toEqual(["  › /model", `    ${"x".repeat(16)}`, `    ${"x".repeat(14)}`])
   for (const r of rows) {
-    const resets = r.split("\x1b[0m").slice(1)
-    for (const after of resets) expect(after.startsWith(BAND)).toBe(true)
+    expect(r).not.toContain(BAND)
+    expect(visibleWidth(r)).toBeLessThanOrEqual(20)
   }
 })
 
-test("with an unknown background, the dark band and secondary text are used", () => {
+test("with an unknown background, command echoes still use plain muted text", () => {
   const unknown = { ...defaultTheme, ...surfaceTheme(undefined) }
   const rows = commandEchoLines(unknown, "/status", 20)
-  expect(rows[0]).toBe(`${BAND}  \x1b[38;2;189;189;189m› /status\x1b[39m${" ".repeat(9)}\x1b[49m`)
+  expect(rows).toEqual([`  ${unknown.muted("› /status")}`])
 })
 
 test("a resumed history starts at a boundary naming the session, then the transcript's blocks and presenters", () => {
@@ -307,11 +303,11 @@ test("a sub-agent's end line says how it ended, its time, tokens and the start o
         defaultTheme,
       ),
     )
-  expect(line("done")).toBe("  └ ◆ US market trend ✓ explorer · 41.0s · 12k tok · Found it in a.ts")
+  expect(line("done")).toBe("  └ ✓ US market trend · explorer · 41.0s · 12k tok · Found it in a.ts")
   expect(line("error", "model failed")).toBe(
-    "  └ ◆ US market trend ✗ explorer · 41.0s · 12k tok · model failed",
+    "  └ ✗ US market trend · explorer · 41.0s · 12k tok · model failed",
   )
-  expect(line("aborted")).toBe("  └ ◆ US market trend ⊘ explorer · 41.0s · 12k tok · stopped")
+  expect(line("aborted")).toBe("  └ ⊘ US market trend · explorer · 41.0s · 12k tok · stopped")
 })
 
 test("nested sub-agents keep the tree lines of the levels above them", () => {
@@ -363,8 +359,13 @@ test("a background sub-agent's notice marks how it ended and wraps under its mar
   }
   const rows = userLines(defaultTheme, message, 40)
   const shown = rows.map(stripAnsi)
-  expect(shown[0]).toStartWith("  ◆ Scan the code ✗ explorer")
-  expect(shown.slice(1).every((r) => r.startsWith("  "))).toBe(true)
+  expect(shown).toEqual([
+    "  └ ✗ Scan the code · explorer · 3s ·",
+    "      1.2k tok · HTTP 429 rate limited,",
+    "      try again later",
+    "      changes kept: 2 files ·",
+    "      /tmp/x.patch",
+  ])
   expect(shown.join(" ").replace(/\s+/g, " ")).toContain("changes kept: 2 files · /tmp/x.patch")
   expect(rows.every((r) => visibleWidth(r) <= 40)).toBe(true)
   // The cross in the error color, not muted like the rest.
@@ -376,28 +377,28 @@ test("a sub-agent's live rows: title, role, time and tokens, then its current to
     subagentRows(sub, 13_500, width, defaultTheme).map(stripAnsi)
   const base = { title: "US market trend", role: "explorer", depth: 1, tokens: 4_100 }
   // Queued: no time yet, and no tool.
-  expect(rows(base)).toEqual(["  └ ◆ US market trend · explorer · queued"])
-  expect(rows({ ...base, startedAt: 1_000 })).toEqual(["  └ ◆ US market trend · explorer · 12s · 4.1k tok"])
+  expect(rows(base)).toEqual(["  └ US market trend · explorer · queued"])
+  expect(rows({ ...base, startedAt: 1_000 })).toEqual(["  └ ⠋ US market trend · explorer · 12s · 4.1k tok"])
   const busy = { ...base, startedAt: 1_000, activity: { name: "grep", summary: '"LiveRenderer"' } }
   expect(rows(busy)).toEqual([
-    "  └ ◆ US market trend · explorer · 12s · 4.1k tok",
-    '    └ ● grep "LiveRenderer"',
+    "  └ ⠋ US market trend · explorer · 12s · 4.1k tok",
+    '    └ ⠋ grep "LiveRenderer"',
   ])
   // With a row of the same tree after it: "├", and "│" carries the tree past its tool row.
   expect(subagentRows(busy, 13_500, 80, defaultTheme, false).map(stripAnsi)).toEqual([
-    "  ├ ◆ US market trend · explorer · 12s · 4.1k tok",
-    '  │ └ ● grep "LiveRenderer"',
+    "  ├ ⠋ US market trend · explorer · 12s · 4.1k tok",
+    '  │ └ ⠋ grep "LiveRenderer"',
   ])
   // One level deeper per nesting; a long summary is cut to 40 characters.
   const deep = { ...busy, depth: 2, activity: { name: "read", summary: "x".repeat(60) } }
   expect(rows(deep)).toEqual([
-    "    └ ◆ US market trend · explorer · 12s · 4.1k tok",
-    `      └ ● read ${"x".repeat(39)}…`,
+    "    └ ⠋ US market trend · explorer · 12s · 4.1k tok",
+    `      └ ⠋ read ${"x".repeat(39)}…`,
   ])
   // Narrow: cut to the width.
   for (const r of rows(deep, 30)) expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
   // A persistent one between turns says so, without a clock or a tool.
-  expect(rows({ ...busy, idle: true })).toEqual(["  └ ◆ US market trend · explorer · idle · 4.1k tok"])
+  expect(rows({ ...busy, idle: true })).toEqual(["  └ ✓ US market trend · explorer · idle · 4.1k tok"])
 })
 
 test("subagent.state: an idle persistent sub-agent is not active, and working again is", () => {

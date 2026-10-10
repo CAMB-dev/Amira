@@ -226,9 +226,7 @@ test("thinking shows folded as how long it took, and unfolds to the text", async
   terminal.send("go\r")
   await shows("It is 42.")
   await idle()
-  const thought = view().match(
-    / {2}∴ Thought for (\d+(?:\.\d+)?)s {2}ctrl\+o to expand +(?:[01]\d|2[0-3]):[0-5]\d\n\n {2}It is 42\./,
-  )
+  const thought = view().match(/ {2}∴ Thought for (\d+(?:\.\d+)?)s {2}Ctrl\+O to expand\n\n {2}It is 42\./)
   expect(thought).not.toBeNull()
   const duration = Number(thought![1])
   expect(duration).toBeGreaterThanOrEqual(0.1)
@@ -433,7 +431,7 @@ test("sub-agents stay under their call, also running in the background after the
   // The turn is over; the sub-agent runs on right under its call, updated in place.
   await waitFor(
     () =>
-      / {2}└ launch {2}✓ Started in the background\n {5}├ ◆ Scan the logs · explorer · \d+s · 0 tok\n {5}│ └ ● scan logs\/app\.log/.test(
+      / {2}└ launch {2}✓ Started in the background\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \d+s · 0 tok\n {5}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log/.test(
         view(),
       ),
     "rows under the call",
@@ -447,7 +445,7 @@ test("sub-agents stay under their call, also running in the background after the
   // It ends in place: its end line stays under the call.
   await waitFor(
     () =>
-      / {2}└ launch {2}✓ Started in the background\n {5}├ ◆ Scan the logs ✓ explorer [^\n]*scanned/.test(
+      / {2}└ launch {2}✓ Started in the background\n {5}├ ✓ Scan the logs · explorer · \d+\.\ds · 0 tok · scanned/.test(
         view(),
       ),
     "end line under the call",
@@ -506,17 +504,23 @@ test("a compact spawn group is one line under its call, with its owner's status,
   await idle()
   await waitFor(
     () =>
-      / {2}└ flow {2}✓ Started in the background\n {5}├ ◆ workflow demo · Explore · 0\/3 agents/.test(view()),
+      / {2}└ flow {2}✓ Started in the background\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/3 agents/.test(
+        view(),
+      ),
     "one line for the group under its call",
   )
   expect(view()).not.toContain("Scan api")
   group!.setStatus("Verify · 2/3 agents")
-  await shows("◆ workflow demo · Verify · 2/3 agents")
+  await waitFor(() => /├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Verify · 2\/3 agents/.test(view()), "the new status")
   release()
   await group!.ended()
   await bus.flush()
   // Its members never get rows of their own; the group's line stays with its last status.
-  await waitFor(() => !/Scan (api|core|tui)/.test(view()) && view().includes("workflow demo"), "ended")
+  await waitFor(
+    () =>
+      !/Scan (api|core|tui)/.test(view()) && /^ {5}├ ✓ workflow demo · Verify · 2\/3 agents$/m.test(view()),
+    "ended",
+  )
   terminal.send("\x03")
   await exited
 })
@@ -530,7 +534,7 @@ test("the members of a group a command started share one block: a compact group 
     req.messages.at(-1)?.role === "toolResult"
       ? { text: "step done" }
       : { toolCalls: [{ name: "hold", args: {} }] }
-  const { view, shows, exited, terminal, agent, tree, bus } = await setup(Array(6).fill(reply), {
+  const { view, exited, terminal, agent, tree, bus } = await setup(Array(6).fill(reply), {
     cols: 80,
     tree: true,
   })
@@ -551,10 +555,10 @@ test("the members of a group a command started share one block: a compact group 
   const kids = ["Scan api", "Scan core", "Scan tui"].map((title) =>
     group.spawn({ role: "explorer", title, prompt: `step ${title}` }),
   )
-  await shows("◆ workflow demo · Answer · 0/3 agents")
+  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Answer · 0\/3 agents/.test(view()), "the compact group")
   await bus.flush()
   await Bun.sleep(50)
-  expect(view().match(/◆ in the background/g)).toHaveLength(1)
+  expect(view().match(/└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] in the background/g)).toHaveLength(1)
   expect(view().match(/workflow demo/g)).toHaveLength(1)
   expect(view()).not.toContain("Scan api")
   // Selected, it is named as its head says, not as a tool call.
@@ -1072,7 +1076,7 @@ test("a selected call opens the sub-agent viewer on its sub-agent", async () => 
     "test",
   )
   terminal.send("go\r")
-  await shows("◆ Scan the logs")
+  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓] Scan the logs · explorer/.test(view()), "the child row")
   finish()
   await shows("started it")
   await idle()
@@ -1090,13 +1094,13 @@ test("a selected call opens the sub-agent viewer on its sub-agent", async () => 
 })
 
 test("a selected row of background sub-agents opens the viewer on them with →", async () => {
-  const { terminal, view, shows, exited, agent, tree, bus } = await setup([{ text: "scanned" }], {
+  const { terminal, view, exited, agent, tree, bus } = await setup([{ text: "scanned" }], {
     cols: 80,
     commands: true,
   })
   const group = tree!.createGroup(agent, { name: "workflow demo", compact: true })
   const kid = group.spawn({ role: "explorer", title: "Scan api", prompt: "scan" })
-  await shows("◆ workflow demo")
+  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓] workflow demo ·/.test(view()), "the compact group")
   await bus.flush()
   terminal.send(CTRL_UP)
   await waitFor(() => /background sub-agents \d+ of \d+ · .*→ sub-agent/.test(view()), "the row selected")
@@ -1120,7 +1124,7 @@ test("opening a child without the agent extension prints that its live view is u
   expect(host.commands.get("agents")).toBeUndefined()
   const group = tree!.createGroup(agent, { name: "workflow demo", compact: true })
   const kid = group.spawn({ role: "explorer", title: "Scan api", prompt: "scan" })
-  await shows("◆ workflow demo")
+  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓] workflow demo ·/.test(view()), "the compact group")
   await bus.flush()
   terminal.send(CTRL_UP)
   await waitFor(() => /background sub-agents \d+ of \d+ · .*→ sub-agent/.test(view()), "the row selected")
@@ -1706,7 +1710,9 @@ test("full screen: a renderer's image is drawn like a Markdown image; without a 
   none.terminal.send("go\r")
   await none.shows("bottom")
   await none.idle()
-  expect(none.view()).toContain("  ╭─ chart\n  │ pie\n  ╰─")
+  expect(none.view()).toContain(
+    `  ╭─ chart${"─".repeat(49)}╮\n  │ pie${" ".repeat(52)}│\n  ╰${"─".repeat(56)}╯`,
+  )
   expect(none.screen.images).toEqual([])
   none.terminal.send("\x03")
   await none.exited

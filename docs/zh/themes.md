@@ -6,7 +6,9 @@
 
 ## 选择主题
 
-输入 `/theme` 打开主题选择器，查看名称、来源和描述。方向键立即预览，Enter 应用，Esc 恢复原来的主题且不保存。`/theme <name>` 可直接选择主题。交互选择的保存方式与模型选择相同：写入用户设置，以及允许保存时的项目 `settings.local.json`。项目保存限制见[设置参考](settings.md#保存模型与思考设置)。
+输入 `/theme` 打开主题选择器，查看名称、来源和描述。列表先显示 `amira`、`amber`、`burnt`、`lavender`、`mono`、`ascii`，然后显示自定义主题，最后是 `terminal`；当前主题会标注。上下方向键立即预览主题，Tab 或左右方向键在独立的外观控制中循环选择 `auto`、`dark`、`light`（Shift+Tab 反向循环）。Enter 同时应用主题和外观；Esc 恢复两者且不保存，即使预览期间重新加载了主题定义。
+
+`/theme <name>` 可直接选择主题并保留外观。旧命令 `/theme auto`、`/theme dark`、`/theme light` 选择 Amira 及对应外观；旧设置仍有效，在选择器中映射为当前的 Amira 主题。交互选择同时保存 `tui.theme` 和 `tui.themeVariant`，方式与模型选择相同：写入用户设置，以及允许保存时的项目 `settings.local.json`。项目保存限制见[设置参考](settings.md#保存模型与思考设置)。
 
 也可以在 `settings.json` 中指定名称：
 

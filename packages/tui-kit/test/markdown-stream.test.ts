@@ -5,7 +5,7 @@ import { MarkdownStream, renderMarkdown } from "../src/components/markdown-strea
 import { defaultGlyphs } from "../src/glyphs.ts"
 import { commitOpenBlocks, type Env, newState, step } from "../src/markdown/blocks.ts"
 import { markdownStyles } from "../src/markdown/inline.ts"
-import { defaultTheme } from "../src/style.ts"
+import { defaultTheme, fg256 } from "../src/style.ts"
 import { presentEmoji, visibleWidth } from "../src/width.ts"
 import { plain } from "./context.ts"
 
@@ -23,12 +23,18 @@ function rng(seed: number) {
   }
 }
 
-/** Renders a whole text at once, as plain text. */
-function md(text: string, width = 40, opts: { hyperlinks?: boolean } = {}): string[] {
+// Mark only frame/label styling so the resize property can distinguish unframed labels from code.
+const frameStyle = fg256(255)
+const frameOpen = frameStyle("\0").split("\0")[0]!
+const labelledContext = { ...plain, theme: { ...plain.theme, codeFrame: frameStyle } }
+
+/** Renders a whole text at once; the resize property retains frame-label metadata. */
+function md(text: string, width = 40, opts: { hyperlinks?: boolean; markFrames?: boolean } = {}): string[] {
   const m = new MarkdownStream({ hyperlinks: opts.hyperlinks ?? false })
   m.append(text)
-  m.render(width, plain)
-  return m.take(width).map(stripAnsi)
+  m.render(width, opts.markFrames ? labelledContext : plain)
+  const rows = m.take(width)
+  return opts.markFrames ? rows : rows.map(stripAnsi)
 }
 
 test("paragraphs keep their line breaks and wrap; inline spans lose their delimiters", () => {
@@ -115,21 +121,32 @@ test("blockquotes get a bar per level", () => {
 
 test("code blocks get a frame and a label; their lines hard-wrap and keep their spaces", () => {
   expect(md("```ts\nconst x = 1\n\n  if (x) {}\nabcdefghijklmnopqrst\n```\nafter", 16)).toEqual([
-    "╭─ ts",
-    "│ const x = 1",
-    "│",
-    "│   if (x) {}",
-    "│ abcdefghijklmn",
-    "│ opqrst",
-    "╰─",
+    `╭─ ts${"─".repeat(10)}╮`,
+    "│ const x = 1  │",
+    `│${" ".repeat(14)}│`,
+    "│   if (x) {}  │",
+    "│ abcdefghijklm│",
+    "│ nopqrst      │",
+    `╰${"─".repeat(14)}╯`,
     "after",
   ])
   // Markdown inside is shown as it is; an unclosed block is closed at the end.
-  expect(md("~~~\n**not bold**\n# no heading")).toEqual(["╭─", "│ **not bold**", "│ # no heading", "╰─"])
+  expect(md("~~~\n**not bold**\n# no heading")).toEqual([
+    `╭${"─".repeat(38)}╮`,
+    `│ **not bold**${" ".repeat(25)}│`,
+    `│ # no heading${" ".repeat(25)}│`,
+    `╰${"─".repeat(38)}╯`,
+  ])
 })
 
 test("code blocks in list items are indented with the item", () => {
-  expect(md("- item\n  ```\n  code\n  ```\n- next")).toEqual(["• item", "  ╭─", "  │ code", "  ╰─", "• next"])
+  expect(md("- item\n  ```\n  code\n  ```\n- next")).toEqual([
+    "• item",
+    `  ╭${"─".repeat(36)}╮`,
+    `  │ code${" ".repeat(31)}│`,
+    `  ╰${"─".repeat(36)}╯`,
+    "• next",
+  ])
 })
 
 test("keywords, strings, numbers and comments are highlighted in known languages", () => {
@@ -138,11 +155,13 @@ test("keywords, strings, numbers and comments are highlighted in known languages
   const rows = m.render(40, { ...plain, theme: defaultTheme })
   const t = defaultTheme
   expect(rows[1]).toBe(
-    `${t.codeFrame!("│")} ${t.keyword!("def")} f(): ${t.keyword!("return")} ${t.string!("'x'")} ${t.comment!("# note")}`,
+    `${t.codeFrame!("│")} ${t.keyword!("def")} f(): ${t.keyword!("return")} ${t.string!("'x'")} ${t.comment!("# note")}${" ".repeat(37 - visibleWidth("def f(): return 'x' # note"))}${t.codeFrame!("│")}`,
   )
   const unknown = new MarkdownStream()
   unknown.append("```brainfuck\nif return\n```\n")
-  expect(unknown.render(40, { ...plain, theme: defaultTheme })[1]).toBe(`${t.codeFrame!("│")} if return`)
+  expect(unknown.render(40, { ...plain, theme: defaultTheme })[1]).toBe(
+    `${t.codeFrame!("│")} if return${" ".repeat(28)}${t.codeFrame!("│")}`,
+  )
 })
 
 test("tables are aligned by column, and shown raw when wider than the screen", () => {
@@ -262,13 +281,17 @@ test("each finished line of a code block is committed as soon as it ends", () =>
   const { ctx, committed } = committing()
   const m = new MarkdownStream({ highlight: false })
   m.append("```\nline 1\nline")
-  expect(m.render(40, ctx)).toEqual(["│ line"])
-  expect(committed).toEqual(["╭─", "│ line 1"])
+  expect(m.render(40, ctx)).toEqual([`│ line${" ".repeat(33)}│`])
+  expect(committed).toEqual([`╭${"─".repeat(38)}╮`, `│ line 1${" ".repeat(31)}│`])
   m.append(" 2\n")
   expect(m.render(40, ctx)).toEqual([])
-  expect(committed).toEqual(["╭─", "│ line 1", "│ line 2"])
+  expect(committed).toEqual([
+    `╭${"─".repeat(38)}╮`,
+    `│ line 1${" ".repeat(31)}│`,
+    `│ line 2${" ".repeat(31)}│`,
+  ])
   // Interrupted: the block is closed when the text is taken.
-  expect(m.take(40)).toEqual(["╰─"])
+  expect(m.take(40)).toEqual([`╰${"─".repeat(38)}╯`])
 })
 
 test("a table is laid out once complete; while open it re-renders live", () => {
@@ -570,8 +593,10 @@ function stream(
   rand: () => number,
   widthOf: () => number,
   maxRowsOf: () => number,
+  context = plain,
 ): { rows: string[]; lives: string[][]; widths: number[] } {
   const { ctx, committed } = committing()
+  ctx.theme = context.theme
   const m = new MarkdownStream({ hyperlinks: false })
   const points = Array.from(text)
   const lives: string[][] = []
@@ -593,8 +618,11 @@ function stream(
 /** The letters and digits shown, but not the code blocks' labels, which are cut to the width. */
 const letters = (rows: string[]) =>
   rows
+    .filter((row) => {
+      const bare = stripAnsi(row).trimStart()
+      return !bare.startsWith("╭─") && !(row.trimStart().startsWith(frameOpen) && !bare.startsWith("│"))
+    })
     .map(stripAnsi)
-    .filter((r) => !r.trimStart().startsWith("╭─"))
     .join("")
     .replace(/[^\p{L}\p{N}]/gu, "")
 
@@ -712,8 +740,9 @@ test("a width change mid-stream re-wraps only the live block and loses nothing",
       rand,
       () => 5 + Math.floor(rand() * 40),
       () => 1 + Math.floor(rand() * 8),
+      labelledContext,
     )
-    expect({ seed, text: letters(rows) }).toEqual({ seed, text: letters(md(text, 80)) })
+    expect({ seed, text: letters(rows) }).toEqual({ seed, text: letters(md(text, 80, { markFrames: true })) })
     lives.forEach((live, i) => {
       for (const r of live) expect(visibleWidth(r)).toBeLessThanOrEqual(widths[i]!)
     })

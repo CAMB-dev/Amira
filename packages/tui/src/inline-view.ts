@@ -106,7 +106,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
   let replyAt: number | undefined
   let replyStamped = false
   const replyWidth = (width: number) => {
-    streaming.firstRowWidth = Math.max(1, timestampRoom(width, replyAt) - visibleWidth(glyphs.assistant))
+    streaming.firstRowWidth = Math.max(
+      1,
+      timestampRoom(width, replyStamped ? undefined : replyAt) - visibleWidth(glyphs.assistant),
+    )
     return Math.max(1, width - visibleWidth(glyphs.assistant))
   }
   const drawReply = (rows: string[], width: number, t: Theme, committing = false) => {
@@ -203,7 +206,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const lines = reasoningLines(
       theme,
       text,
-      { durationMs: Date.now() - startedAt, expanded, timestamp: startedAt },
+      { durationMs: Date.now() - startedAt, expanded },
       terminal.columns,
     )
     commitBlock("reasoning", lines)
@@ -246,6 +249,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
             Math.max(1, width - visibleWidth(treeContinuation(ctx.theme, isLastTool(c.id)))),
             ctx.theme,
             spawnGroups,
+            true,
+            host.spinner.glyph,
           ).map((row) => treeContinuation(ctx.theme, isLastTool(c.id)) + row),
         ])
       }
@@ -277,15 +282,25 @@ export function createInlineView(host: ViewHost): TranscriptView {
     for (const n of roots) groups.set(n.toolCallId, [...(groups.get(n.toolCallId) ?? []), n])
     const sep = ` ${t.muted(glyphs.separator)} `
     const rows: string[] = []
-    for (const [callId, group] of groups) {
+    for (const [i, [callId, group]] of [...groups].entries()) {
+      const last = i === groups.size - 1
+      const arm = last ? glyphs.treeLast : glyphs.treeBranch
+      const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
+      const tree = t.muted(arm + " ".repeat(cells - visibleWidth(arm)))
+      const continuation = treeContinuation(t, last)
+      const treeWidth = Math.max(0, width - visibleWidth(continuation))
       const started = Math.min(...group.map((n) => n.startedAt ?? now))
       const count = plural(group.length, "sub-agent")
       const head =
         callId === undefined
-          ? `${t.accent(glyphs.subagent)} ${t.muted(backgroundLabel(spawnGroups, group))}`
-          : `${t.success(glyphs.toolRunning)} ${t.accent(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
+          ? `  ${tree} ${t.accent(host.spinner.glyph)} ${t.muted(backgroundLabel(spawnGroups, group))}`
+          : `  ${tree} ${t.accent(host.spinner.glyph)} ${t.fg2(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
       rows.push(truncateToWidth(head, width, glyphs.more))
-      rows.push(...treeRows(group.flatMap(subtree), now, width, t, spawnGroups))
+      rows.push(
+        ...treeRows(group.flatMap(subtree), now, treeWidth, t, spawnGroups, true, host.spinner.glyph).map(
+          (row) => truncateToWidth(continuation + row, width, glyphs.more),
+        ),
+      )
     }
     return [...rows, ""]
   }
@@ -319,7 +334,11 @@ export function createInlineView(host: ViewHost): TranscriptView {
           ...reasoningLines(
             ctx.theme,
             thought.text,
-            { thinking: true, expanded: host.detail() === "full", timestamp: thought.startedAt },
+            {
+              thinking: true,
+              expanded: host.detail() === "full",
+              expandKey: host.detail() === "summary" ? host.keys.label("tool-output") : undefined,
+            },
             width,
           ),
         ]
@@ -569,7 +588,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       // The reply goes on: what it thought, and the calls held before it, go first.
       commitThought()
       flushExplored()
-      if (text) replyAt ??= Date.now()
+      if (text.trim() && !replyStamped) replyAt ??= Date.now()
       streaming.append(text)
     },
     reasoningDelta(text) {
@@ -587,7 +606,6 @@ export function createInlineView(host: ViewHost): TranscriptView {
       if (rows.length)
         commit(transcript.continue("assistant", drawReply(rows, terminal.columns, theme, true)))
       replyAt = undefined
-      replyStamped = false
       transcript.end()
       // Thinking that came after the text (or with none) goes after it.
       const thoughtShown = commitThought()
@@ -604,6 +622,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
     toolUpdate: (id, partial) => toolCalls.update(id, partial),
     toolEnd: (id, end) => commitCalls(toolCalls.end(id, end)),
     turnEnd() {
+      replyAt = undefined
+      replyStamped = false
       const shown = commitCalls(toolCalls.flush())
       // A run of exploring calls ends with the turn.
       flushExplored()

@@ -1,6 +1,7 @@
-import { truncateToWidth } from "@amira/tui-kit"
+import { truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { glyphs } from "../glyphs.ts"
 import { backgroundLabel, isActive, type SubagentNode, subtree, treeRows } from "../subagents.ts"
+import { treeContinuation } from "../tool-view.ts"
 import { Block, type BlockEnv } from "./base.ts"
 
 /**
@@ -12,6 +13,19 @@ export class SubagentGroupBlock extends Block {
   running = true
   /** The sub-agents it shows, with theirs, in start order. */
   readonly roots: string[]
+
+  #last = false
+
+  /** Views mark the last tool/group in a run; changing it invalidates cached rows. */
+  get last(): boolean {
+    return this.#last
+  }
+
+  set last(value: boolean) {
+    if (value === this.#last) return
+    this.#last = value
+    this.touch()
+  }
 
   constructor(root: string) {
     super()
@@ -39,10 +53,18 @@ export class SubagentGroupBlock extends Block {
     if (!list.length) return []
     this.running = list.some(isActive)
     const roots = this.roots.flatMap((id) => env.nodes.get(id) ?? [])
-    const head = `${env.theme.accent(glyphs.subagent)} ${env.theme.muted(backgroundLabel(env.groups, roots))}`
+    const { theme, width } = env
+    const arm = this.last ? glyphs.treeLast : glyphs.treeBranch
+    const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
+    const tree = theme.muted(arm + " ".repeat(cells - visibleWidth(arm)))
+    const continuation = treeContinuation(theme, this.last)
+    const treeWidth = Math.max(0, width - visibleWidth(continuation))
+    const head = `  ${tree} ${this.running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(backgroundLabel(env.groups, roots))}`
     return [
-      truncateToWidth(head, env.width, glyphs.more),
-      ...treeRows(list, env.now, env.width, env.theme, env.groups),
+      truncateToWidth(head, width, glyphs.more),
+      ...treeRows(list, env.now, treeWidth, theme, env.groups, true, env.spinner).map((row) =>
+        truncateToWidth(continuation + row, width, glyphs.more),
+      ),
     ]
   }
 

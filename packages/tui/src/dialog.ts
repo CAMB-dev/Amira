@@ -14,7 +14,7 @@ import {
 } from "@amira/tui-kit"
 import { parseUnifiedDiff, renderToolLines } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
-import { fitHint } from "./hint.ts"
+import { fitHint, type HintItem } from "./hint.ts"
 import { type Action, defaultKeybindings, type Keybindings } from "./keybindings.ts"
 
 export type DialogRequest = EventMap["ui.request"]
@@ -115,7 +115,13 @@ export class Dialog implements Component {
     readonly request: DialogRequest,
     private onDone: (answer: DialogAnswer) => void,
     private keys: Keybindings = defaultKeybindings(),
-    private selection: { changed?: (option: string) => void } = {},
+    private selection: {
+      changed?: (option: string) => void
+      /** A local picker's independent control, shown below its title. */
+      header?: () => string
+      footer?: HintItem[]
+      handleInput?: (event: InputEvent) => boolean
+    } = {},
   ) {
     this.#pages = pagesOf(request)
     if (request.kind === "select") this.#searchTexts = request.searchTexts?.map((s) => s.toLowerCase()) ?? []
@@ -145,6 +151,7 @@ export class Dialog implements Component {
       }
       return this.#finish(undefined)
     }
+    if (this.selection.handleInput?.(e)) return true
     const r = this.request
     if (r.kind === "input") {
       if (this.#secret) {
@@ -319,7 +326,11 @@ export class Dialog implements Component {
       while (!fits() && can()) take()
     }
     const room = this.maxRows - layout(0).length
-    return layout(Number.isFinite(room) ? Math.max(0, room) : diff.length)
+    const rows = layout(Number.isFinite(room) ? Math.max(0, room) : diff.length)
+    // Local pickers keep their explicit control hints even below the usual three-row minimum.
+    return this.selection.footer?.length && rows.length > this.maxRows
+      ? rows.slice(-Math.max(1, this.maxRows))
+      : rows
   }
 
   /** The options around the selected one, as many as `fit` allows, then where the window is. */
@@ -389,7 +400,10 @@ export class Dialog implements Component {
     const from = sourceLabel ? theme.muted(` (${sourceLabel})`) : ""
     const question = this.#current?.question ?? r.title
     const rows = wrapText(`${question}${from}`, Math.max(1, width - 2))
-    return rows.map((l, i) => (i === 0 ? `${theme.accent(glyphs.question)} ${l}` : `  ${l}`))
+    const title = rows.map((l, i) => (i === 0 ? `${theme.accent(glyphs.question)} ${l}` : `  ${l}`))
+    const header = this.selection.header?.()
+    if (header) title.push(truncateToWidth(theme.muted(header), width, glyphs.more))
+    return title
   }
 
   /** The keys at the bottom, the most useful kept longest as the width shrinks. */
@@ -426,6 +440,7 @@ export class Dialog implements Component {
         text: `${r.kind === "select" && r.searchTexts ? `Ctrl+${k.key}` : k.key} ${k.label}`,
         priority: 4,
       })),
+      ...(this.selection.footer ?? []),
       this.#hint("dialog.cancel", cancel, 3),
     ]
   }

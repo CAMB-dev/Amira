@@ -93,6 +93,17 @@ for (const env of [{ TERM_PROGRAM: "iTerm.app", WT_SESSION: "1" }, { TERM_PROGRA
   })
 }
 
+test("terminal titles remove inline Markdown markers before coalescing", async () => {
+  const { screen, status } = setup()
+  status.setTitle("Amira · Fixing `add` **Subtraction** _Bug_")
+  await flush()
+  expect(screen.oscs).toEqual(["0;Amira · Fixing add Subtraction Bug"])
+  status.setTitle("Amira · Fixing add Subtraction Bug")
+  await flush()
+  expect(screen.oscs).toHaveLength(1)
+  status.stop()
+})
+
 test("adapter sanitizes titles and clamps progress to the structured states", async () => {
   const { screen, status } = setup()
   status.setTitle(`safe\x1b\x07\n${"界".repeat(100)}`)

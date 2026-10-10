@@ -29,30 +29,33 @@ export function historyBlocks(
     if (m.role === "toolResult") results.set(m.toolCallId, m)
   }
   const blocks: Block[] = []
+  let replySeen = false
   for (const m of messages) {
     // A compaction's summary is a folded block of its own; the reply that took it goes with it.
     if (isSummaryMessage(m)) {
       if (m.role === "user") blocks.push(new SummaryBlock(summaryText(m), deps.compactionInfo?.(m)))
-    } else if (m.role === "user") blocks.push(userBlock(m))
-    else if (m.role === "assistant") {
+    } else if (m.role === "user") {
+      replySeen = false
+      blocks.push(userBlock(m))
+    } else if (m.role === "assistant") {
       // The sources the reply cited follow its last text, as they did live.
       const sources = replyCitations(m.content)
       const timestamp = messageTimestamp(m)
-      const firstText = m.content.findIndex((b) => b.type === "text" && b.text.trim() !== "")
       const lastText = m.content.findLastIndex((b) => b.type === "text" && b.text.trim() !== "")
       for (const [i, b] of m.content.entries()) {
         if (b.type === "thinking" && (b.text.trim() || b.redacted))
-          blocks.push(new ReasoningBlock(b.text, undefined, timestamp))
-        else if (b.type === "text" && b.text.trim())
+          blocks.push(new ReasoningBlock(b.text, undefined))
+        else if (b.type === "text" && b.text.trim()) {
           blocks.push(
             new ReplyBlock(
               i === lastText ? b.text + sources : b.text,
               false,
               deps.hyperlinks,
-              i === firstText ? timestamp : undefined,
+              replySeen ? undefined : timestamp,
             ),
           )
-        else if (b.type === "serverTool") {
+          replySeen = true
+        } else if (b.type === "serverTool") {
           // A search the provider ran shows as the tool row it was live.
           const { rejected, ...call } = serverToolCall(b)
           const row = new ToolBlock(b.id, call.name, call.args, deps.sessionId())
