@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, expect, mock, setDefaultTimeout, test } from "bun:test"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -12,6 +12,9 @@ import { resolveConfig } from "../src/config.ts"
 import { createCommandHost } from "../src/control.ts"
 import { rememberingControl } from "../src/remember-choice.ts"
 import { createSession, type Session } from "../src/session.ts"
+
+// Each case spawns real git probes (3s timeout each); a loaded machine can exceed the 5s default.
+setDefaultTimeout(30_000)
 
 let root: string
 let home: string
