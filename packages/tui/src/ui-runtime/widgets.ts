@@ -10,6 +10,7 @@ import {
   visibleWidth,
 } from "@amira/tui-kit"
 import { terminalText } from "../diff-view.ts"
+import { glyphs } from "../glyphs.ts"
 import { segmentText, viewTitle } from "../view-lines.ts"
 import { detailContent } from "./detail.ts"
 import { allocate, cells, fit, type Rect, sides } from "./layout.ts"
@@ -212,12 +213,12 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
           const lines = paint(c, host, from, h)
           for (let y = 0; y < h; y++) {
             let between = " ".repeat(Math.max(0, start - visibleWidth(out[y]!)))
-            if (node.divider && i > 0 && between.length) between = dim("│") + between.slice(1)
+            if (node.divider && i > 0 && between.length) between = dim(glyphs.output) + between.slice(1)
             out[y] += between + (lines[y] ?? " ".repeat(c.rect.width))
           }
         } else {
           const divider = start - cells(node.gap ?? 0) - 1 - from
-          if (node.divider && i > 0 && divider >= 0 && divider < h) out[divider] = dim("─".repeat(w))
+          if (node.divider && i > 0 && divider >= 0 && divider < h) out[divider] = dim(glyphs.rule.repeat(w))
           const begin = Math.max(from, start)
           const end = Math.min(from + h, start + c.rect.height)
           if (end <= begin) continue
@@ -242,17 +243,29 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
               ? terminalText(node.title)
               : viewTitle(node.title, theme, w - 2)
         const strong = node.tone === "focus"
-        const rule = strong ? "━" : "─"
+        const rule = strong && glyphs.rule === "─" ? "━" : glyphs.rule
         const aside = node.aside ? truncateToWidth(` ${terminalText(node.aside)} `, w - 2, "…") : ""
         const label = title
           ? truncateToWidth(` ${title} `, Math.max(0, w - 2 - visibleWidth(aside)), "…")
           : ""
         const head =
           label + color(rule.repeat(Math.max(0, w - 2 - visibleWidth(label) - visibleWidth(aside)))) + aside
-        out = out.map((s) => color(strong ? "┃" : "│") + s + color(strong ? "┃" : "│"))
-        if (from === 0) out.unshift(color(strong ? "┏" : "╭") + head + color(strong ? "┓" : "╮"))
+        const side = strong && glyphs.output === "│" ? "┃" : glyphs.output
+        const corner = (value: string, normal: string, heavy: string) =>
+          strong && value === normal ? heavy : value
+        out = out.map((s) => color(side) + s + color(side))
+        if (from === 0)
+          out.unshift(
+            color(corner(glyphs.boxTopLeft, "╭", "┏")) + head + color(corner(glyphs.boxTopRight, "╮", "┓")),
+          )
         if (from + h === rect.height)
-          out.push(color((strong ? "┗" : "╰") + rule.repeat(w - 2) + (strong ? "┛" : "╯")))
+          out.push(
+            color(
+              corner(glyphs.boxBottomLeft, "╰", "┗") +
+                rule.repeat(w - 2) +
+                corner(glyphs.boxBottomRight, "╯", "┛"),
+            ),
+          )
       }
       break
     }
@@ -273,14 +286,14 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
                 ? "▾ "
                 : "▸ "
               : row.item.rail
-                ? "│ "
+                ? `${glyphs.output} `
                 : "  "
           const left = marker + lead + pad + disclosure + segmentText(row.item.row, theme)
           const line = sides(left, segmentText(row.item.aside ?? [], theme), w)
           out.push(selected ? (theme.selection?.(line) ?? line) : line)
         }
         const prefix = () =>
-          `${focused && out.length === 0 ? "» " : "  "}${" ".repeat(tree.leadWidth)}${treeIndent(tree, i, w, true)}${row.item.rail ? "│ " : "  "}`
+          `${focused && out.length === 0 ? "» " : "  "}${" ".repeat(tree.leadWidth)}${treeIndent(tree, i, w, true)}${row.item.rail ? `${glyphs.output} ` : "  "}`
         const start = Math.max(0, offset - row.start - 1)
         const count = Math.min(h - out.length, (row.widget?.height ?? row.detail.length) - start)
         if (count > 0) {
@@ -290,7 +303,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
         const underline = row.start + 1 + (row.widget?.height ?? row.detail.length)
         if (row.item.underline && underline >= offset && out.length < h) {
           const pad = prefix()
-          out.push(pad + dim("─".repeat(Math.max(0, w - visibleWidth(pad)))))
+          out.push(pad + dim(glyphs.rule.repeat(Math.max(0, w - visibleWidth(pad)))))
         }
       }
       if (!out.length && focused) out.push(marker)
@@ -310,7 +323,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
           : theme.muted(label)
         return text + (divided ? "  " : "")
       })
-      const separator = divided ? `${dim("│")}  ` : "  "
+      const separator = divided ? `${dim(glyphs.output)}  ` : "  "
       const gap = divided ? 3 : 2
       const active = Math.max(
         0,
@@ -363,13 +376,16 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       const size = Math.min(cells(node.width ?? 20), Math.max(0, w - visibleWidth(label) - 1))
       const done = Math.round(value * size)
       out.push(
-        theme.success("━".repeat(done)) + theme.muted("─".repeat(size - done)) + (size ? " " : "") + label,
+        theme.success((glyphs.rule === "─" ? "━" : glyphs.rule).repeat(done)) +
+          theme.muted(glyphs.rule.repeat(size - done)) +
+          (size ? " " : "") +
+          label,
       )
       break
     }
     case "rule": {
       const label = node.label ? ` ${terminalText(node.label)} ` : ""
-      out.push(dim(label + "─".repeat(Math.max(0, w - visibleWidth(label)))))
+      out.push(dim(label + glyphs.rule.repeat(Math.max(0, w - visibleWidth(label)))))
       break
     }
     case "input": {

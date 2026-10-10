@@ -1,5 +1,6 @@
 import type { ToolDetailLevel, UserMessage } from "@amira/api"
 import {
+  type Glyphs,
   type ImageStore,
   type ScreenImage,
   stripAnsi,
@@ -19,6 +20,7 @@ import { type BlockKind, type NoticeLevel, noticeDetailLines, noticeLines } from
 /** What blocks need to draw themselves, the same for every block of a frame. */
 export interface BlockEnv {
   theme: Theme
+  glyphs?: Glyphs
   width: number
   now: number
   /** The glyph running tools show. */

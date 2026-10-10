@@ -120,7 +120,8 @@ export class Editor implements Component {
   private textCache: string | undefined
   private pastes: EditorPastes
   private changes = 0
-  private readonly promptWidth: number
+  private prompt: string
+  private promptWidth: number
   private undoStack: Snapshot[] = []
   private redoStack: Snapshot[] = []
   /** The kind of the last recorded change; a different one (or a caret move) starts a new undo step. */
@@ -133,7 +134,8 @@ export class Editor implements Component {
   private batching = false
 
   constructor(private opts: EditorOptions = {}) {
-    this.promptWidth = visibleWidth(opts.prompt ?? "")
+    this.prompt = opts.prompt ?? ""
+    this.promptWidth = visibleWidth(this.prompt)
     this.pastes = new EditorPastes(opts)
   }
 
@@ -409,12 +411,18 @@ export class Editor implements Component {
     return true
   }
 
+  /** Changes the unstyled prompt without replacing the draft or its undo history. */
+  setPrompt(prompt: string): void {
+    this.prompt = prompt
+    this.promptWidth = visibleWidth(prompt)
+  }
+
   render(width: number, { theme }: RenderContext): string[] {
     if (width !== this.width) {
       this.width = width
       this.prefixValid = 0
     }
-    const prompt = this.opts.prompt ?? ""
+    const prompt = this.prompt
     const indent = " ".repeat(this.promptWidth)
     const caret = this.focused ? CURSOR_MARKER : ""
     if (this.isEmpty && this.opts.placeholder) {

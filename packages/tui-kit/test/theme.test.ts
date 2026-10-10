@@ -3,7 +3,8 @@ import { readdirSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { stripAnsi } from "../src/ansi.ts"
 import { blend, detectColorDepth, nearest256, quantize } from "../src/colors.ts"
-import { renderMarkdown } from "../src/components/markdown-stream.ts"
+import { MarkdownStream, renderMarkdown } from "../src/components/markdown-stream.ts"
+import { defaultGlyphs } from "../src/glyphs.ts"
 import { boostSurface, consoleHost, palettes, surfacePalette } from "../src/palette.ts"
 import {
   createTheme,
@@ -242,4 +243,46 @@ test("UI source modules never bypass semantic tokens with colour functions or ra
   }
   for (const dir of ["packages/tui/src", "packages/tui-kit/src", "extensions"]) visit(resolve(root, dir))
   expect(offenders).toEqual([])
+})
+
+test("named definitions merge partial palettes for the selected variant and override shimmer stops", () => {
+  const definition = {
+    dark: { accent: "#010203", shimmer: "#112233", shimmerEnd: "#445566", userBg: "#151515" },
+  } as const
+  const dark = createTheme({ ...options, theme: "custom", themeVariant: "dark", definition })
+  expect(dark.accent("x")).toBe("\x1b[38;2;1;2;3mx\x1b[39m")
+  expect(dark.warning("x")).toBe(createTheme({ ...options, theme: "dark" }).warning("x"))
+  expect(dark.userBg!("x")).toBe("\x1b[48;2;21;21;21mx\x1b[49m")
+  expect(dark.shimmer0!("x")).toBe("\x1b[38;2;17;34;51mx\x1b[39m")
+  expect(dark.shimmer15!("x")).toBe("\x1b[38;2;68;85;102mx\x1b[39m")
+  const light = createTheme({ ...options, theme: "custom", themeVariant: "light", definition })
+  expect(light.accent("x")).toBe(createTheme({ ...options, theme: "light" }).accent("x"))
+  expect(createTheme({ ...options, theme: "custom", definition, env: { NO_COLOR: "1" } })).toBe(monoTheme)
+})
+
+test("Markdown streams use runtime context glyphs and fall back when the context omits them", () => {
+  const stream = new MarkdownStream()
+  stream.append("- live item")
+  const ctx = { theme: defaultTheme, color: true, rows: 20 }
+  expect(stream.render(40, ctx).map(stripAnsi).join("\n")).toContain("• live item")
+  expect(
+    stream
+      .render(40, { ...ctx, glyphs: { ...defaultGlyphs, bullets: ["*"] } })
+      .map(stripAnsi)
+      .join("\n"),
+  ).toContain("* live item")
+  expect(stream.render(40, ctx).map(stripAnsi).join("\n")).toContain("• live item")
+})
+
+test.each(["dark", "light"] as const)("named palettes follow detected %s backgrounds", (background) => {
+  const definition = { dark: { accent: "#010203" }, light: { accent: "#040506" } } as const
+  const detected = createTheme({ ...options, theme: "custom", capabilities: { background }, definition })
+  const forced = createTheme({ ...options, theme: "custom", themeVariant: background, definition })
+  expect(detected.accent("x")).toBe(forced.accent("x"))
+})
+
+test("named palettes accept shorthand hex, and omitted shimmer stops keep their independent defaults", () => {
+  const theme = createTheme({ ...options, theme: "custom", definition: { dark: { accent: "#123" } } })
+  expect(theme.accent("x")).toBe("\x1b[38;2;17;34;51mx\x1b[39m")
+  expect(theme.shimmer0!("x")).toBe(createTheme(options).shimmer0!("x"))
 })

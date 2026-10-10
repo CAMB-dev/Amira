@@ -8,6 +8,7 @@ import type {
 } from "@amira/api"
 import { isSummaryMessage } from "@amira/core"
 import {
+  type Glyphs as MarkdownGlyphs,
   type MarkdownNodes,
   MarkdownStream,
   type MarkdownStreamOptions,
@@ -38,6 +39,7 @@ export interface HistoryOptions {
   hyperlinks?: boolean
   /** Images and what extensions render (D88), committed as the inline transcript does. */
   nodes?: MarkdownNodes
+  glyphs?: MarkdownGlyphs
   /** Spacing continues from the blocks committed before; a fresh one when left out. */
   transcript?: Transcript
   /** Output lines a successful shell command shows at `summary` detail (tui.shellOutputLines). */
@@ -94,7 +96,10 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     if (isSummaryMessage(m)) {
       // The summary reads as what it is, not as a message of the user's; its reply goes with it.
       if (m.role === "user") {
-        block("summary", summaryLines(theme, summaryText(m), opts.width, true, opts.compactionInfo?.(m)))
+        block(
+          "summary",
+          summaryLines(theme, summaryText(m), opts.width, true, opts.compactionInfo?.(m), opts.glyphs),
+        )
       }
     } else if (m.role === "user") {
       block("user", userLines(theme, m, opts.width))
@@ -189,6 +194,7 @@ export function summaryLines(
   width: number,
   folded: boolean,
   info?: CompactionInfo,
+  markdownGlyphs?: MarkdownGlyphs,
 ): string[] {
   const n = summary ? summary.split("\n").length : 0
   // A server's checkpoint may have no readable text (OpenAI's is encrypted).
@@ -219,7 +225,9 @@ export function summaryLines(
     const note =
       "The server keeps this summary encrypted, so it cannot be shown. Only the model it was made for can read it; for another one Amira writes a text summary when it needs one. /compact with instructions writes a readable summary now."
     const indent = " ".repeat(visibleWidth(glyphs.assistant))
-    const body = renderMarkdown(note, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)
+    const body = renderMarkdown(note, Math.max(1, width - visibleWidth(glyphs.assistant)), theme, {
+      glyphs: markdownGlyphs,
+    })
     const detail = facts.length
       ? [truncateToWidth(`${indent}${theme.muted(facts.join(" · "))}`, width, glyphs.more)]
       : []
@@ -234,7 +242,9 @@ export function summaryLines(
         ),
       ]
     : []
-  const body = renderMarkdown(summary, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)
+  const body = renderMarkdown(summary, Math.max(1, width - visibleWidth(glyphs.assistant)), theme, {
+    glyphs: markdownGlyphs,
+  })
   return [head, ...detail, "", ...replyRows(body)]
 }
 
@@ -254,6 +264,7 @@ function committedMarkdown(text: string, width: number, theme: Theme, opts: Mark
 
 function markdownOptions(opts: HistoryOptions): MarkdownStreamOptions {
   return {
+    glyphs: opts.glyphs,
     ...(opts.hyperlinks === undefined ? {} : { hyperlinks: opts.hyperlinks }),
     ...(opts.nodes ? { nodes: opts.nodes } : {}),
   }

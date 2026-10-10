@@ -1,0 +1,28 @@
+{
+  "name": "amber",
+  "description": "Warm gold accents with copper paths",
+  "dark": {
+    "accent": "#e9a23b",
+    "heading1": "#f2b85c",
+    "heading": "#dd8f63",
+    "path": "#e58a5a",
+    "command": "#f0c77b",
+    "shimmer": "#e9a23b",
+    "shimmerEnd": "#f5d6a0",
+    "keyword": "#dd8f63",
+    "string": "#c6cd8a",
+    "number": "#e5b783"
+  },
+  "light": {
+    "accent": "#b86e0a",
+    "heading1": "#a8610a",
+    "heading": "#b3532a",
+    "path": "#b5532a",
+    "command": "#85530b",
+    "shimmer": "#b86e0a",
+    "shimmerEnd": "#885407",
+    "keyword": "#a8610a",
+    "string": "#576c24",
+    "number": "#9a5128"
+  }
+}

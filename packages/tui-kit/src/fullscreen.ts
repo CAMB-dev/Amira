@@ -46,6 +46,7 @@ export class FullScreenRenderer {
     this.frameIntervalMs = opts.frameIntervalMs ?? 16
     this.context = {
       theme: opts.theme ?? defaultTheme,
+      glyphs: opts.glyphs,
       color: opts.color ?? isColorEnabled(),
       rows: terminal.rows,
     }

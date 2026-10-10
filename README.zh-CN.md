@@ -33,6 +33,7 @@ CLI 包提供全局 `amira` 命令；请确认 Bun 的可执行文件目录已�
 - [子 agent 与 worktree](docs/zh/subagents.md)
 - [使用和编写扩展](docs/zh/extensions.md)
 - [快捷键](docs/zh/keybindings.md)
+- [主题](docs/zh/themes.md)
 - [设置参考](docs/zh/settings.md)
 
 ## 许可证

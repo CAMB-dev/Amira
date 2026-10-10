@@ -37,6 +37,7 @@ import {
   withPackageSkills,
 } from "./session/settings-adapters.ts"
 import { testAiOptions } from "./test-hooks.ts"
+import { loadThemeFiles } from "./theme-files.ts"
 import { USER_AGENT } from "./user-agent.ts"
 
 export type { ApproverOptions } from "./session/approvals.ts"
@@ -244,6 +245,18 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
   }
 
+  const reloadThemes = () => {
+    const { notices } = loadThemeFiles(host.themes, {
+      home: amiraHome(),
+      cwd: opts.cwd,
+      packageThemes: packages?.packages.flatMap((pkg) => pkg.manifest.themes ?? []),
+    })
+    for (const text of notices) {
+      bus.emit("extension.notice", { source: "themes", text, level: "warning" }, { sessionId: "host" })
+    }
+  }
+  reloadThemes()
+
   const loadExtensions = createExtensionLoader({
     host,
     bus,
@@ -259,6 +272,15 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     bus.emit("extension.notice", { source: "packages", text, level: "warning" }, { sessionId: "host" })
   }
   await loadExtensions()
+  const themeName = settings.tui?.theme
+  if (
+    themeName &&
+    !["auto", "dark", "light", "terminal"].includes(themeName) &&
+    !host.themes.get(themeName)
+  ) {
+    const text = `Theme "${themeName}" from settings tui.theme was not found; using the default theme.`
+    bus.emit("extension.notice", { source: "themes", text, level: "warning" }, { sessionId: "host" })
+  }
   const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
   for (const name of requested) {
     if (tools.has(name)) continue
@@ -392,6 +414,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
       }
       host.unloadAll()
+      reloadThemes()
       host.setSettings(
         extensionSettings(withPackageSkills(reloaded?.settings ?? opts.settings ?? {}, packages)),
         reloaded?.layers ?? opts.settingsLayers,

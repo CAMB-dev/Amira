@@ -36,7 +36,10 @@ export interface ControlOptions {
  * The session control handed to slash commands, and the CommandHost frontends use. It owns
  * which agent is active: /clear and /resume make new agents on the same bus and registries.
  */
-export function createCommandHost(opts: ControlOptions): CommandHost & { flushChoices(): Promise<void> } {
+export function createCommandHost(opts: ControlOptions): CommandHost & {
+  rememberTheme(name: string): void
+  flushChoices(): Promise<void>
+} {
   const { session, cwd } = opts
   const { ai } = session
   const tools = session.agent.tools
@@ -167,5 +170,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost & { flushCh
     agent: session.agent,
     ...(opts.aliases ? { aliases: opts.aliases } : {}),
   })
-  return Object.assign(host, { flushChoices: () => choices?.flush() ?? Promise.resolve() })
+  return Object.assign(host, {
+    rememberTheme: (name: string) => choices?.rememberTheme(name),
+    flushChoices: () => choices?.flush() ?? Promise.resolve(),
+  })
 }

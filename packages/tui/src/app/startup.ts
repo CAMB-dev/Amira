@@ -1,7 +1,14 @@
 // Owns interactive options, shared UI constants and startup helpers.
 import { homedir } from "node:os"
 import type { AnyEvent, CommandDefinition, TerminalApi, TuiSettings } from "@amira/api"
-import type { Agent, CommandHost, PanelRegistry, StatusRegistry, UiRequests } from "@amira/core"
+import type {
+  Agent,
+  CommandHost,
+  PanelRegistry,
+  StatusRegistry,
+  ThemeRegistry,
+  UiRequests,
+} from "@amira/core"
 import type { InputEvent, SetupResult, Terminal, Theme } from "@amira/tui-kit"
 import type { ViewSource } from "../extension-view.ts"
 import type { FileSource } from "../file-index.ts"
@@ -52,6 +59,10 @@ export interface InteractiveOptions {
     opts?: { images?: boolean; background?: boolean },
   ) => Promise<SetupResult>
   theme?: Theme
+  /** Named themes, live across file reloads and extension registration/disposal. */
+  themes?: Pick<ThemeRegistry, "get" | "list" | "subscribe"> & Partial<Pick<ThemeRegistry, "source">>
+  /** Persists an applied selection; preview and cancellation never call it. */
+  saveTheme?: (name: string) => void | Promise<void>
   /**
    * Prompts sent before, for ↑/↓ and Ctrl+R; the CLI passes the project's persisted history.
    * Default: one kept in memory for this run.

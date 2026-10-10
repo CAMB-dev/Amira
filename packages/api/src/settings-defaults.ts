@@ -72,6 +72,7 @@ export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 4
 export const DEFAULT_SUBAGENT_BACKGROUND = true
 export const DEFAULT_TUI_MODE = "fullscreen"
 export const DEFAULT_TUI_THEME = "auto"
+export const DEFAULT_TUI_THEME_VARIANT = "auto"
 export const DEFAULT_TUI_COLOR_DEPTH = "auto"
 export const DEFAULT_TUI_BELL = true
 export const DEFAULT_TUI_TITLE = true

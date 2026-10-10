@@ -1,4 +1,6 @@
 import type { UiNode, UiTreeItem, ViewLine, ViewSegment } from "@amira/api"
+import { graphemes, textWidth } from "@amira/tui-kit"
+import { glyphs } from "../glyphs.ts"
 import { cells } from "./layout.ts"
 
 const EMPTY: string[] = []
@@ -113,13 +115,29 @@ export function treeIndent(tree: TreeIndex, index: number, width: number, detail
   let row = tree.rows[index]!
   const widthLimit = indent(row.depth, width - tree.leadWidth)
   let prefix = ""
-  while (row.parent >= 0 && prefix.length < widthLimit) {
-    const continuation = prefix.length > 0 || detail
-    const branch = !row.rail ? "  " : continuation ? (row.last ? "  " : "│ ") : row.last ? "└─" : "├─"
+  let prefixWidth = 0
+  while (row.parent >= 0 && prefixWidth < widthLimit) {
+    const continuation = prefixWidth > 0 || detail
+    const branch = !row.rail
+      ? "  "
+      : continuation
+        ? row.last
+          ? "  "
+          : `${glyphs.output} `
+        : `${row.last ? glyphs.result : glyphs.treeBranch}${glyphs.rule}`
     prefix = branch + prefix
+    prefixWidth += textWidth(branch)
     row = tree.rows[row.parent]!
   }
-  return prefix.slice(Math.max(0, prefix.length - widthLimit))
+  // Trim display cells, not UTF-16 units: a one-cell replacement may contain a surrogate pair.
+  let skip = Math.max(0, prefixWidth - widthLimit)
+  let start = 0
+  for (const glyph of graphemes(prefix)) {
+    if (skip <= 0) break
+    skip -= textWidth(glyph)
+    start += glyph.length
+  }
+  return prefix.slice(start)
 }
 
 export const indent = (depth: number, width: number): number => Math.min(depth * 2, Math.max(0, width - 6))

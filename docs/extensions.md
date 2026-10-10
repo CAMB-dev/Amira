@@ -90,7 +90,7 @@ Use `--no-packages` to skip every installed package for one run. Explicit files 
 
 ## Package manifest
 
-A package describes its contributions in `amira-package.json`, or in the `amira` object inside `package.json`. Extension and skill paths stay inside the package. The manifest can declare:
+A package describes its contributions in `amira-package.json`, or in the `amira` object inside `package.json`. Extension, skill and theme paths stay inside the package. The manifest can declare:
 
 | Field | Purpose |
 | --- | --- |
@@ -99,9 +99,10 @@ A package describes its contributions in `amira-package.json`, or in the `amira`
 | `engines.amira` | Supported extension API version range |
 | `extensions` | Extension module paths |
 | `skills` | Skill directory paths |
+| `themes` | Theme JSON file paths; defaults to `[]` (see [Themes](themes.md)) |
 | `commands` | Top-level CLI command names mapped to modules |
 
-The engine range describes the extension API, not the CLI release version. The exported `API_VERSION` in [the public API](../packages/api/src/index.ts) gives the current value. Without an extension list, Amira looks for `index.ts`, then `src/index.ts`. A command-only package can omit an extension entry.
+The engine range describes the extension API, not the CLI release version. The exported `API_VERSION` in [the public API](../packages/api/src/index.ts) gives the current value. Without an extension list, Amira looks for `index.ts`, then `src/index.ts`. A command-only or theme-only package can omit an extension entry.
 
 ## A complete small extension
 
