@@ -455,7 +455,7 @@ export interface NoticeStrip {
 
 export function createNoticeStrip(options: { theme: Theme; requestRender: () => void }): NoticeStrip {
   /** Lines of notices (background results) waiting to reach the model. */
-  const pendingNotices: string[] = []
+  const pendingNotices: UserMessage[] = []
   /** When held notices are sent again after a failed turn (notice.retry); redrawn each second. */
   let noticeRetryAt: number | undefined
   let retryTimer: ReturnType<typeof setInterval> | undefined
@@ -478,7 +478,7 @@ export function createNoticeStrip(options: { theme: Theme; requestRender: () => 
     },
     steer(message, state) {
       if (!message.display?.origin) return false
-      if (state === "queued") pendingNotices.push(...userLines(options.theme, message))
+      if (state === "queued") pendingNotices.push(message)
       else pendingNotices.length = 0
       return true
     },
@@ -493,9 +493,9 @@ export function createNoticeStrip(options: { theme: Theme; requestRender: () => 
           ? ""
           : ` · retry in ${Math.max(0, Math.ceil((noticeRetryAt - Date.now()) / 1000))}s`
       const lines = pendingNotices.length
-        ? pendingNotices
+        ? pendingNotices.flatMap((message) => userLines(theme, message))
         : noticeRetryAt !== undefined
-          ? [`${theme.accent("◆")}${theme.muted(" sub-agents' results")}`]
+          ? [`${theme.accent(glyphs.subagent)}${theme.muted(" sub-agents' results")}`]
           : []
       return lines.map((line) => `${line}${theme.muted(` · pending${retry}`)}`)
     },

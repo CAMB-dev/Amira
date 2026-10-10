@@ -1,4 +1,5 @@
 import type { Component, RenderContext } from "../component.ts"
+import { defaultGlyphs } from "../glyphs.ts"
 import { closeStyles, truncateToWidth, visibleWidth } from "../width.ts"
 
 export interface BoxOptions {
@@ -29,25 +30,29 @@ export class Box implements Component {
     if (width < MIN_WIDTH) return this.child.render(width, ctx)
     const border = ctx.theme.border
     const inner = width - 4
-    const side = border("│")
+    const glyphs = ctx.glyphs ?? defaultGlyphs
+    const side = border(glyphs.codeSide)
     const rows = this.child.render(inner, ctx).map((line) => {
       // Closed, so the child's styles cannot reach the padding or the border.
       const fitted = closeStyles(truncateToWidth(line, inner))
       return `${side} ${fitted}${" ".repeat(Math.max(0, inner - visibleWidth(fitted)))} ${side}`
     })
     const labels = this.opts.labels?.() ?? {}
-    const bottom = this.opts.bottom?.(width, ctx) ?? edge("╰", "╯", labels.bottom, width, ctx)
-    return [edge("╭", "╮", labels.top, width, ctx), ...rows, bottom]
+    const bottom =
+      this.opts.bottom?.(width, ctx) ??
+      edge(glyphs.boxBottomLeft, glyphs.boxBottomRight, labels.bottom, width, ctx)
+    return [edge(glyphs.boxTopLeft, glyphs.boxTopRight, labels.top, width, ctx), ...rows, bottom]
   }
 }
 
 /** A horizontal border with its corners, and a label near the right corner when it fits. */
 function edge(left: string, right: string, label: string | undefined, width: number, ctx: RenderContext) {
   const border = ctx.theme.border
+  const rule = (ctx.glyphs ?? defaultGlyphs).rule
   const text = label ? ` ${label} ` : ""
   const room = width - 2 - visibleWidth(text) - 1
   if (text && room >= 1) {
-    return border(`${left}${"─".repeat(room)}`) + ctx.theme.muted(text) + border(`─${right}`)
+    return border(`${left}${rule.repeat(room)}`) + ctx.theme.muted(text) + border(`${rule}${right}`)
   }
-  return border(`${left}${"─".repeat(width - 2)}${right}`)
+  return border(`${left}${rule.repeat(width - 2)}${right}`)
 }

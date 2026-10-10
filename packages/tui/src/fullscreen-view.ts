@@ -51,7 +51,8 @@ const MIN_TRANSCRIPT_ROWS = 3
  * printed to the normal screen, as the inline view would have left it.
  */
 export function createFullscreenView(host: ViewHost): TranscriptView {
-  const { terminal, theme, keys } = host
+  const { terminal, keys } = host
+  let theme = host.theme
   const pane = new TranscriptPane()
   /** Tool calls by id, for their sub-agents; kept after their turn. */
   const callBlocks = new Map<string, ToolBlock>()
@@ -101,6 +102,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     const images = imagesNow()
     return {
       theme,
+      glyphs: host.glyphs,
       width,
       now: Date.now(),
       spinner: host.spinner.glyph,
@@ -124,7 +126,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     render: () => renderer.render(),
     showNote: (text) => host.showNote(text),
     terminal,
-    theme,
+    get theme() {
+      return theme
+    },
   })
 
   /** Makes the exploring calls in a row around `block` one "Explored" row. */
@@ -170,6 +174,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const renderer = new FullScreenRenderer(terminal, root, {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     theme,
+    glyphs: host.glyphs,
     frameIntervalMs: FRAME_MS,
   })
 
@@ -255,6 +260,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     },
     requestRender: () => renderer.requestRender(),
     render: () => renderer.render(),
+    setTheme(next, nextGlyphs) {
+      theme = next
+      host.theme = next
+      host.glyphs = nextGlyphs
+      renderer.context = { ...renderer.context, theme: next, glyphs: nextGlyphs }
+      pane.invalidate()
+      renderer.redraw()
+    },
     redraw: () => renderer.redraw(),
     openOverlay() {
       overlay = true
@@ -281,7 +294,12 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       terminal.write(printout())
     },
 
-    banner: (line) => add(fixedLine("banner", line)),
+    banner: (line) =>
+      add(
+        typeof line === "string"
+          ? fixedLine("banner", line)
+          : new LinesBlock("banner", (width, t) => [truncateToWidth(line(t), width, glyphs.more)]),
+      ),
     user(m) {
       // A message sent: the selection has done its work (and Esc goes back to stopping turns).
       pane.clearText()

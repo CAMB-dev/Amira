@@ -1,4 +1,6 @@
-/** Replaces/adds top-level values without rewriting unrelated JSON. Input must be valid JSON. */
+import { isPlainObject } from "./merge.ts"
+
+/** Replaces/adds values without rewriting unrelated JSON. Input must be valid JSON. */
 export function editJsonValues(
   text: string,
   before: Record<string, unknown>,
@@ -42,7 +44,19 @@ export function editJsonValues(
       }
       i--
       if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
-        edits.push({ start, end, value: JSON.stringify(after[key]) })
+        const previous = before[key]
+        const next = after[key]
+        // Existing nested choices (such as tui.theme) keep the surrounding object's layout too.
+        const sameKeys =
+          isPlainObject(previous) &&
+          isPlainObject(next) &&
+          Object.keys(previous).every((name) => Object.hasOwn(next, name)) &&
+          Object.keys(next).every((name) => Object.hasOwn(previous, name))
+        edits.push({
+          start,
+          end,
+          value: sameKeys ? editJsonValues(text.slice(start, end), previous, next) : JSON.stringify(next),
+        })
       }
     }
   }

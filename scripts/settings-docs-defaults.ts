@@ -63,6 +63,7 @@ export const settingsDefaults = {
   "subagents.background": d.DEFAULT_SUBAGENT_BACKGROUND,
   "tui.mode": d.DEFAULT_TUI_MODE,
   "tui.theme": d.DEFAULT_TUI_THEME,
+  "tui.themeVariant": d.DEFAULT_TUI_THEME_VARIANT,
   "tui.colorDepth": d.DEFAULT_TUI_COLOR_DEPTH,
   "tui.bell": d.DEFAULT_TUI_BELL,
   "tui.title": d.DEFAULT_TUI_TITLE,

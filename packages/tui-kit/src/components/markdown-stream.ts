@@ -167,7 +167,8 @@ export class MarkdownStream implements Component {
   maxRows = Number.POSITIVE_INFINITY
   /** Rows committed to the scrollback since the text was last taken. */
   committedRows = 0
-  private readonly glyphs: Glyphs
+  private glyphs: Glyphs
+  private readonly configuredGlyphs: Glyphs
   private readonly hyperlinks: boolean
   private readonly highlight: boolean
   private readonly nodes: MarkdownNodes | undefined
@@ -185,7 +186,8 @@ export class MarkdownStream implements Component {
   private theme = defaultTheme
 
   constructor(opts: MarkdownStreamOptions = {}) {
-    this.glyphs = opts.glyphs ?? defaultGlyphs
+    this.configuredGlyphs = opts.glyphs ?? defaultGlyphs
+    this.glyphs = this.configuredGlyphs
     this.hyperlinks = opts.hyperlinks ?? supportsHyperlinks()
     this.highlight = opts.highlight ?? true
     const rowsFor = opts.imageRows
@@ -225,6 +227,7 @@ export class MarkdownStream implements Component {
 
   render(width: number, ctx: RenderContext): string[] {
     this.theme = ctx.theme
+    this.glyphs = ctx.glyphs ?? this.configuredGlyphs
     // Rows that cannot be committed now are shown live, so they get no image markers.
     const env = this.env(width, !!ctx.commit)
     const liveEnv = ctx.commit ? this.env(width, false) : env

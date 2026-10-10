@@ -90,7 +90,7 @@ amira ext untrust
 
 ## 包清单
 
-包通过 `amira-package.json`，或 `package.json` 内的 `amira` 对象描述其内容。扩展和 skill 路径必须位于包目录内。清单支持以下字段：
+包通过 `amira-package.json`，或 `package.json` 内的 `amira` 对象描述其内容。扩展、skill 和主题路径必须位于包目录内。清单支持以下字段：
 
 | 字段 | 用途 |
 | --- | --- |
@@ -99,9 +99,10 @@ amira ext untrust
 | `engines.amira` | 支持的扩展 API 版本范围 |
 | `extensions` | 扩展模块路径 |
 | `skills` | Skill 目录路径 |
+| `themes` | 主题 JSON 文件路径，默认为 `[]`（见[主题](themes.md)） |
 | `commands` | 顶层 CLI 命令名到模块的映射 |
 
-版本范围针对扩展 API，而不是 CLI 发布版本。[公共 API](../../packages/api/src/index.ts) 导出的 `API_VERSION` 是当前版本。未指定扩展列表时，Amira 依次查找 `index.ts` 和 `src/index.ts`；只提供 CLI 命令的包可以不带扩展入口。
+版本范围针对扩展 API，而不是 CLI 发布版本。[公共 API](../../packages/api/src/index.ts) 导出的 `API_VERSION` 是当前版本。未指定扩展列表时，Amira 依次查找 `index.ts` 和 `src/index.ts`；只提供 CLI 命令或主题的包可以不带扩展入口。
 
 ## 一个完整的小扩展
 

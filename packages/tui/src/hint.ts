@@ -7,15 +7,13 @@ export interface HintItem {
   priority: number
 }
 
-const SEPARATOR = ` ${glyphs.separator} `
-
 /**
  * Joins hint items to fit `width`, dropping whole items, lowest priority first (the later one
  * of equals), rather than cutting one off mid-word. Only a lone item still too wide is cut.
  */
 export function fitHint(items: (HintItem | false | "" | null | undefined)[], width: number): string {
   const kept = items.filter((i): i is HintItem => !!i && i.text !== "")
-  const join = () => kept.map((i) => i.text).join(SEPARATOR)
+  const join = () => kept.map((i) => i.text).join(` ${glyphs.separator} `)
   while (kept.length > 1 && visibleWidth(join()) > width) {
     let drop = 0
     for (let i = 1; i < kept.length; i++) if (kept[i]!.priority <= kept[drop]!.priority) drop = i
