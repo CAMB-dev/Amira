@@ -6,8 +6,9 @@ import {
   type ToolPresenter,
   textResult,
 } from "@amira/api"
-import { createTheme, defaultTheme, monoTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
+import { bold, createTheme, defaultTheme, monoTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
+import { webFetchPresenter, webSearchPresenter } from "../../../extensions/web/src/presenters.ts"
 import ascii from "../../cli/themes/ascii.json"
 import mono from "../../cli/themes/mono.json"
 import type { BlockEnv } from "../src/blocks/base.ts"
@@ -33,6 +34,91 @@ const show = (
 ) => plain(finishedToolLines(theme, presenter, call, detail, width))
 
 const numbered = (n: number) => Array.from({ length: n }, (_, i) => `out ${i + 1}`).join("\n")
+
+test("built-in heads use bold text verbs while targets keep their semantic tokens", () => {
+  for (const [name, args, past, running, target, style] of [
+    ["read", { path: "a.ts" }, "Read", "Reading", "a.ts", theme.path],
+    ["edit", { path: "a.ts" }, "Edited", "Editing", "a.ts", theme.path],
+    ["write", { path: "a.ts" }, "Wrote", "Writing", "a.ts", theme.path],
+    ["bash", { command: "bun test" }, "Ran", "Running", "bun test", theme.command],
+    ["grep", { pattern: "TODO" }, "Searched", "Searching", "/TODO/", theme.text],
+    ["glob", { pattern: "*.ts" }, "Found", "Finding", "*.ts", theme.text],
+  ] as const) {
+    const presenter = builtinPresenters[name]
+    const call = { name, args, result: textResult("ok") }
+    for (const detail of ["collapsed", "summary", "full"] as const) {
+      const head = finishedToolLines(theme, presenter, call, detail, 100)[0]!
+      expect(head).toContain(bold(theme.text(past)))
+      expect(head).toContain(style(target))
+      expect(stripAnsi(head)).toStartWith(`  ├ ${past} ${target}`)
+    }
+    const live = runningToolLines(theme, presenter, { name, args, startedAt: 0 }, 0, "⠋", 100)[0]!
+    expect(live).toContain(bold(theme.text(running)))
+    expect(live).toContain(style(target))
+    expect(stripAnsi(live)).toStartWith(`  ├ ⠋ ${running} ${target}`)
+    const failed = finishedToolLines(
+      theme,
+      presenter,
+      { ...call, result: textResult("bad", true) },
+      "summary",
+      100,
+    )[0]!
+    expect(failed).toContain(bold(theme.text(past)))
+    expect(failed).toContain(theme.error("✗ bad"))
+  }
+})
+
+test("bundled web heads use search and fetch verbs while preserving queries and URLs", () => {
+  for (const [name, presenter, args, past, running, target] of [
+    ["web_search", webSearchPresenter, { query: "bun releases" }, "Searched", "Searching", '"bun releases"'],
+    ["web_fetch", webFetchPresenter, { url: "https://x.dev" }, "Fetched", "Fetching", "https://x.dev"],
+  ] as const) {
+    const call = { name, args, result: textResult("ok") }
+    for (const detail of ["collapsed", "summary", "full"] as const) {
+      const head = finishedToolLines(theme, presenter, call, detail, 100)[0]!
+      expect(head).toContain(bold(theme.text(past)))
+      expect(stripAnsi(head)).toStartWith(`  ├ ${past} ${target}`)
+    }
+    const live = runningToolLines(theme, presenter, { name, args, startedAt: 0 }, 0, "⠋", 100)[0]!
+    expect(live).toContain(bold(theme.text(running)))
+    expect(stripAnsi(live)).toStartWith(`  ├ ⠋ ${running} ${target}`)
+  }
+})
+
+test("successful diff results use a slash without a redundant mark; failures and commands keep marks", () => {
+  const call = { name: "edit", args: { path: "a.ts" }, result: textResult("changed") }
+  for (const result of ["+12 -3", "+12 / -3", "✓ +12 -3"]) {
+    const presenter: ToolPresenter = { verbs: { past: "Edited", running: "Editing" }, result: () => result }
+    for (const detail of ["collapsed", "summary"] as const) {
+      expect(show(presenter, call, detail, 100)).toEqual(["  ├ Edited a.ts  +12 / -3"])
+      expect(show(presenter, call, detail, 24)).toEqual(["  ├ Edited a.ts", "  │  +12 / -3"])
+    }
+    expect(show(presenter, call, "full", 100)).toEqual(["  ├ Edited a.ts", "  │  +12 / -3"])
+    expect(show(presenter, { ...call, result: textResult("bad", true) }, "collapsed", 100)).toEqual([
+      `  ├ Edited a.ts  ✗ ${result}`,
+    ])
+  }
+  expect(show({ result: () => "+12 -3 · 2 replacements" }, call)).toEqual([
+    "  ├ edit a.ts  +12 / -3 · 2 replacements",
+  ])
+  expect(show({ result: () => "2 files · +12 -3" }, call)).toEqual(["  ├ edit a.ts  2 files · +12 / -3"])
+  const command = { name: "bash", args: { command: "git diff --stat" }, result: textResult("ok") }
+  expect(show({ result: () => "412 pass" }, command)).toEqual(["  ├ bash git diff --stat  ✓ 412 pass"])
+  expect(show({ result: () => "+12 -3" }, command)).toEqual(["  ├ bash git diff --stat  ✓ +12 / -3"])
+})
+
+test("extension and MCP presenters without verbs keep the existing name fallback", () => {
+  const presenter: ToolPresenter = { summary: () => "target", result: () => "ok" }
+  for (const [name, label] of [
+    ["extension_tool", "extension_tool"],
+    ["mcp__server__tool", "server · tool"],
+  ]) {
+    const call = { name: name!, args: {}, result: textResult("ok") }
+    expect(show(presenter, call)).toEqual([`  ├ ${label} target  ✓ ok`])
+    const running = plain(runningToolLines(theme, presenter, { ...call, startedAt: 0 }, 0, "⠋", 100))[0]!
+    expect(running).toStartWith(`  ├ ⠋ ${label} target`)
+  }
+})
 
 test("compact completions append the whole marked result with two spaces, only when it fits", () => {
   const call = {
@@ -314,7 +400,7 @@ test("a call rejected at its approval prompt reads as interrupted or blocked, wi
     args: { command: "npm publish" },
     result: textResult("Aborted by the user before this tool ran.", true),
   })
-  expect(before[0]).toBe("  ├ bash npm publish")
+  expect(before[0]).toBe("  ├ Ran npm publish")
 })
 
 test("an edit shows +added −removed and a compact numbered diff, cut after 20 lines", () => {
@@ -333,7 +419,7 @@ test("an edit shows +added −removed and a compact numbered diff, cut after 20 
       details: { path: "/p/src/a.ts", replacements: 1, added: 1, removed: 1, hunks: [hunk(9, 2)] },
     },
   })
-  expect(small).toEqual(["  ├ edit src/a.ts  ✓ +1 -1", "  │  9 - line 9", "  │  9 + line 10"])
+  expect(small).toEqual(["  ├ Edited src/a.ts  +1 / -1", "  │  9 - line 9", "  │  9 + line 10"])
   const big = show(builtinPresenters.edit, {
     name: "edit",
     args: { path: "a.ts", old_string: "x", new_string: "y" },
@@ -393,7 +479,7 @@ test("a failed built-in call shows why under its result, whatever its presenter 
     result: textResult("File not found: gone.ts\nDid you mean done.ts?", true),
   })
   expect(lines).toEqual([
-    "  ├ read gone.ts  ✗ File not found: gone.ts (+1 line)",
+    "  ├ Read gone.ts  ✗ File not found: gone.ts (+1 line)",
     "  │  Did you mean done.ts?",
   ])
 })
@@ -406,7 +492,7 @@ test("a long path in the head is cut in its middle, keeping the file name; the w
     "summary",
     50,
   )
-  expect(head).toStartWith("  ├ read packages/")
+  expect(head).toStartWith("  ├ Read packages/")
   expect(head).toEndWith("/file-name.ts")
   expect(head).toContain("…")
   expect(visibleWidth(head!)).toBeLessThanOrEqual(50)
@@ -484,11 +570,11 @@ test("successful exploring calls read as one row: what was done, in order, each 
     { name: "read", args: { path: "a.ts" } },
   ].map((c) => ({ call: { ...c, result: textResult("x") }, presenter: builtinPresenters[c.name] }))
   expect(plain(exploredLines(theme, calls, false, "summary", 80))).toEqual([
-    "  ├ Read 3 files (a.ts, b.ts) · Searched 1 pattern (foo)  ▸",
+    "  ├ Read 3 files · Searched 1 pattern  ▸",
   ])
   // Unfolded, each call takes its original place without an extra summary row.
   const open = plain(exploredLines(theme, calls, true, "summary", 80))
-  expect(open[0]).toBe("  ├ read a.ts")
+  expect(open[0]).toBe("  ├ Read a.ts")
   expect(open).toHaveLength(4 * 2)
   // A failed one is no exploring: it keeps its own lines.
   const failed = { name: "read", args: { path: "c.ts" }, result: textResult("gone", true) }
@@ -538,7 +624,7 @@ test("a failure whose one line of output is its result line says it once", () =>
   }
   const lines = show(builtinPresenters.bash, call)
   expect(lines.filter((l) => l.includes(text))).toHaveLength(1)
-  expect(lines).toEqual(["  ├ bash make clean", "  │  ✗ Aborted by the user before this tool ran."])
+  expect(lines).toEqual(["  ├ Ran make clean", "  │  ✗ Aborted by the user before this tool ran."])
 })
 
 test("views can change the last tool flag without leaving cached tree rows stale", () => {

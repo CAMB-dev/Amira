@@ -17,6 +17,7 @@ import { reasoningLines, timestampRow, userLines } from "../src/format.ts"
 import { contextStyle, headerLine } from "../src/header.ts"
 import { InputBox } from "../src/input-box.ts"
 import { finishedToolLines } from "../src/tool-view.ts"
+import { withSnapshotClock } from "./clock-fixture.ts"
 
 const info = {
   cwd: "~/dev/Amira",
@@ -30,7 +31,7 @@ const info = {
 
 test("header aligns workspace/title and cost/context at opposite edges", () => {
   const row = headerLine(info, 100, plain)
-  expect(row).toBe(` ⎇ main*  ~/dev/Amira  ·  remember last model${" ".repeat(33)}$0.42  │  124k / 200k `)
+  expect(row).toBe(` ⎇ main*  ~/dev/Amira  ·  remember last model${" ".repeat(33)}$0.42  │  124K / 200K `)
   expect(visibleWidth(row)).toBe(100)
 })
 
@@ -46,10 +47,10 @@ test("narrow headers drop title, then shorten cwd, with context the last survivo
   expect(headerLine(info, 60, plain)).not.toContain(info.title)
   expect(headerLine(info, 60, plain)).toContain(info.cwd)
   expect(headerLine(info, 40, plain)).not.toContain(info.cwd)
-  expect(headerLine(info, 40, plain)).toContain("124k / 200k")
+  expect(headerLine(info, 40, plain)).toContain("124K / 200K")
   for (let width = 1; width <= 100; width++) {
     expect(visibleWidth(headerLine(info, width, plain))).toBeLessThanOrEqual(width)
-    if (width >= 12) expect(headerLine(info, width, plain)).toContain("124k / 200k")
+    if (width >= 12) expect(headerLine(info, width, plain)).toContain("124K / 200K")
   }
 })
 
@@ -163,55 +164,58 @@ test("activity rate uses the message clock, not the newly reset activity clock",
   }
 })
 
-test.each([100, 50])("a composed batch2 frame at %i columns keeps the chosen layout", (width) => {
-  const at = new Date(2026, 9, 10, 20, 19).getTime()
-  const box = new InputBox(new Editor({ prompt: "› ", placeholder: "Message Amira" }), () => [
-    { id: "model", text: "claude-opus-5-5 (high) · ask", align: "right", tone: "accent", priority: 40 },
-  ])
-  const frame = [
-    headerLine(info, width, plain),
-    "",
-    ...userLines(
-      { ...plain.theme, userBg: surfaceTheme("dark").userBg },
-      {
-        role: "user",
-        content: [{ type: "text", text: "The status bar feels cramped, can you make it clearer?" }],
-      },
-      width,
-      at,
-    ),
-    "",
-    ...reasoningLines(
-      plain.theme,
-      "Move context into the header.",
-      { durationMs: 4200, expandKey: "Ctrl+O" },
-      width,
-    ),
-    "",
-    timestampRow("  # Status bar layout", plain.theme, width, at),
-    "  The header now carries context and cost.",
-    "",
-    ...finishedToolLines(
-      plain.theme,
-      undefined,
-      { name: "Edited", args: { path: "packages/tui/src/status-bar.ts" }, result: textResult("+12 / -3") },
-      "summary",
-      width,
-    ),
-    ...finishedToolLines(
-      plain.theme,
-      undefined,
-      { name: "Ran", args: { command: "bun test packages/tui" }, result: textResult("✓ 412 pass · 3.1s") },
-      "summary",
-      width,
-      { last: true },
-    ),
-    "",
-    activityRow(status, width, plain),
-    ...box.render(width, plain),
-  ]
-  expect(frame.map(stripAnsi).join("\n")).toMatchSnapshot()
-})
+test.each([100, 50])(
+  "a composed batch2 frame at %i columns keeps the chosen layout",
+  withSnapshotClock((width: number) => {
+    const at = new Date(2026, 9, 10, 20, 19).getTime()
+    const box = new InputBox(new Editor({ prompt: "› ", placeholder: "Message Amira" }), () => [
+      { id: "model", text: "claude-opus-5-5 (high) · ask", align: "right", tone: "accent", priority: 40 },
+    ])
+    const frame = [
+      headerLine(info, width, plain),
+      "",
+      ...userLines(
+        { ...plain.theme, userBg: surfaceTheme("dark").userBg },
+        {
+          role: "user",
+          content: [{ type: "text", text: "The status bar feels cramped, can you make it clearer?" }],
+        },
+        width,
+        at,
+      ),
+      "",
+      ...reasoningLines(
+        plain.theme,
+        "Move context into the header.",
+        { durationMs: 4200, expandKey: "Ctrl+O" },
+        width,
+      ),
+      "",
+      timestampRow("  # Status bar layout", plain.theme, width, at),
+      "  The header now carries context and cost.",
+      "",
+      ...finishedToolLines(
+        plain.theme,
+        undefined,
+        { name: "Edited", args: { path: "packages/tui/src/status-bar.ts" }, result: textResult("+12 / -3") },
+        "summary",
+        width,
+      ),
+      ...finishedToolLines(
+        plain.theme,
+        undefined,
+        { name: "Ran", args: { command: "bun test packages/tui" }, result: textResult("✓ 412 pass · 3.1s") },
+        "summary",
+        width,
+        { last: true },
+      ),
+      "",
+      activityRow(status, width, plain),
+      ...box.render(width, plain),
+    ]
+    expect(frame.map(stripAnsi).join("\n")).toMatchSnapshot()
+  }),
+)
 
 test("current step clocks restart for repeated compactions and retry attempts", () => {
   let now = 1000

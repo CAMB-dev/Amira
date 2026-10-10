@@ -1,4 +1,5 @@
 import { type DeferredToolInfo, defineExtension, defineTool, textResult } from "@amira/api"
+import { toolSearchPresenter } from "./presenters.ts"
 
 export const TOOL_SEARCH = "tool_search"
 
@@ -73,4 +74,5 @@ export const toolSearchTool = defineTool<{ query?: string; names?: string[]; max
 /** Registers tool_search like any other built-in tool. */
 export const toolSearchExtension = defineExtension((api) => {
   api.registerTool(toolSearchTool)
+  api.registerToolRenderer(TOOL_SEARCH, toolSearchPresenter)
 })

@@ -463,12 +463,23 @@ test("a background result wakes the idle session as a notice line; a draft in th
 })
 
 test("a background result during a turn shows as a notice where it joins, not as steering", async () => {
-  const { terminal, live, all, agent, shows, idle, exited } = await setup([
-    { text: "looking", delayMs: 60, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
-    (req) => ({ text: `then saw ${lastUserText(req)}` }),
-  ])
+  const { terminal, live, all, agent, shows, idle, exited } = await setup(
+    [
+      { text: "looking", delayMs: 60, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+      (req) => ({ text: `then saw ${lastUserText(req)}` }),
+    ],
+    { cols: 100 },
+  )
   terminal.send("go\r")
-  await waitFor(() => live().includes(`Enter steer · ${QUEUE_HINT} queue`), "working")
+  await waitFor(
+    () =>
+      live()
+        .split("\n")
+        .includes(
+          ` shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys  │  enter steer  │  ${QUEUE_HINT.toLowerCase()} queue`,
+        ),
+    "working",
+  )
   agent.expectNotice().deliver(subagentNotice("B"))
   await Bun.sleep(20)
   expect(live()).not.toContain("steering ›")

@@ -9,6 +9,7 @@ const view = <A>(args: A, result: ReturnType<typeof textResult> & { details?: un
 })
 
 test("web_search: the query as head, the number of results and the backend as result", () => {
+  expect(webSearchPresenter.verbs).toEqual({ past: "Searched", running: "Searching" })
   expect(webSearchPresenter.summary!({ query: "bun 1.4 release" })).toBe('"bun 1.4 release"')
   const r = {
     ...textResult("1. A\n2. B"),
@@ -28,6 +29,7 @@ test("web_search: the query as head, the number of results and the backend as re
 })
 
 test("web_fetch: the URL as head, where it ended up and its size as result", () => {
+  expect(webFetchPresenter.verbs).toEqual({ past: "Fetched", running: "Fetching" })
   expect(webFetchPresenter.summary!({ url: "https://x.dev" })).toBe("https://x.dev")
   const d = { url: "https://x.dev/", finalUrl: "https://x.dev/", status: 200, length: 12_345 }
   const same = { ...textResult("page"), details: d }

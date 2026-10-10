@@ -328,6 +328,7 @@ test("ASCII glyphs replace input-frame and status corners as well as Markdown sy
       glyphs: {
         user: ">",
         rule: "-",
+        treePipe: "|",
         codeSide: "|",
         boxTopLeft: "+",
         boxTopRight: "+",
@@ -340,6 +341,7 @@ test("ASCII glyphs replace input-frame and status corners as well as Markdown sy
   const s = await setup([], { themes, settings: { theme: "plain" } })
   try {
     expect(s.live()).toContain("+---")
+    expect(s.live()).toContain(" shift+tab mode  |  ctrl+o detail  |  ? keys")
     expect(s.live()).not.toMatch(/[╭╮╰╯│─]/u)
   } finally {
     s.terminal.send("\x03\x03")

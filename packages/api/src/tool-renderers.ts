@@ -74,7 +74,9 @@ export interface ToolExploration {
  * presentation for what a presenter leaves out, and for calls a method throws on.
  */
 export interface ToolPresenter<A = Record<string, unknown>, D = unknown> {
-  /** The call's head after the tool name: the arguments that matter, e.g. a path or a command. */
+  /** Plain-text head labels for finished and running calls; omitted labels keep the tool's name. */
+  verbs?: { past: string; running: string }
+  /** The call's head after its label: the arguments that matter, e.g. a path or a command. */
   summary?(args: A): string
   /**
    * One line about the outcome, e.g. "12 lines" or "exit 1 · 5 lines". Undefined falls back to

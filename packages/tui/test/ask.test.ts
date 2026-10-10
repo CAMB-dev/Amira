@@ -243,7 +243,7 @@ for (const mode of MODES) {
       'The user answered:\n1. Which approach do you prefer?\n   → (own words) "both, 2 steps"',
     )
     expect(s.all()).toMatch(
-      /^ {2}└ ask_user Which approach do you prefer\?\n {5}✓ \(own words\) "both, 2 steps"$/m,
+      /^ {2}└ Asked Which approach do you prefer\?\n {5}✓ \(own words\) "both, 2 steps"$/m,
     )
     s.terminal.send("again\r")
     await waitFor(() => s.dialog().length > 0, "the second dialog")
@@ -309,8 +309,8 @@ for (const mode of MODES) {
     await s.shows("b")
     await s.idle()
     // The echo wraps like any line: the answer follows the question.
-    expect(s.all()).toMatch(/^ {2}└ ask_user 你想用哪种…个功能？\n {5}✓ 修补$/m)
-    expect(s.all()).toMatch(/^ {2}└ ask_user Which app…u prefer\?\n {5}✓ Rewrite \(Recommended\)$/m)
+    expect(s.all()).toMatch(/^ {2}└ Asked 你想用哪种…这个功能？\n {5}✓ 修补$/m)
+    expect(s.all()).toMatch(/^ {2}└ Asked Which appr…you prefer\?\n {5}✓ Rewrite \(Recommended\)$/m)
     s.terminal.send("\x03")
     await s.exited
   })

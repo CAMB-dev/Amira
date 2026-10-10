@@ -1,15 +1,26 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Catalog URL placeholders are literal fixtures.
-import { afterEach, beforeEach, expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { FormSpec } from "@amira/api"
 import { UsageError } from "../src/args.ts"
+import type { CatalogCacheOptions } from "../src/catalog.ts"
 import { lineDialogs, runProviderAdminCommand } from "../src/provider-cli.ts"
+import catalogFixture from "./fixtures/provider-catalog.json" with { type: "json" }
 
 let home: string
 let cwd: string
+let networkFetch: ReturnType<typeof spyOn<typeof globalThis, "fetch">>
 beforeEach(() => {
+  networkFetch = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async () => {
+        throw new Error("provider CLI tests must not access the network")
+      },
+      { preconnect: () => {} },
+    ),
+  )
   home = mkdtempSync(path.join(os.tmpdir(), "amira-pcli-"))
   cwd = path.join(home, "work")
   mkdirSync(cwd)
@@ -18,35 +29,24 @@ beforeEach(() => {
     path.join(home, "cache", "models.json"),
     JSON.stringify({
       fetchedAt: Date.now(),
-      data: {
-        deepseek: {
-          id: "deepseek",
-          name: "DeepSeek",
-          env: ["DEEPSEEK_API_KEY"],
-          npm: "@ai-sdk/openai-compatible",
-          api: "https://api.deepseek.com",
-          models: {},
-        },
-        google: {
-          id: "google",
-          name: "Google",
-          env: ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-          npm: "@ai-sdk/google",
-          models: {},
-        },
-        unusual: {
-          id: "unusual",
-          name: "Unusual",
-          env: ["UNUSUAL_KEY"],
-          npm: "@vendor/unknown",
-          api: "https://unknown.example",
-          models: {},
-        },
-      },
+      data: catalogFixture,
     }),
   )
 })
-afterEach(() => rmSync(home, { recursive: true, force: true }))
+afterEach(() => {
+  try {
+    expect(networkFetch).not.toHaveBeenCalled()
+  } finally {
+    networkFetch.mockRestore()
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+/** Both cache reads and refreshes stay in the temporary home and use the tiny fixture. */
+const catalogOptions = (): CatalogCacheOptions => ({
+  file: path.join(home, "cache", "models.json"),
+  fetch: Object.assign(async () => Response.json(catalogFixture), { preconnect: () => {} }),
+})
 
 const KEY = "sk-cli-typed-12345678"
 
@@ -77,6 +77,7 @@ test("provider add from piped stdin asks field by field and saves", async () => 
     io: out,
     home,
     cwd,
+    catalog: catalogOptions(),
     env: {},
     interactive: false,
     readLine: script([
@@ -125,6 +126,7 @@ test("provider edit shows the prefilled form; remove and key work without a sess
       io: edit.io,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: {},
       interactive: true,
       runForm: async (spec) => {
@@ -152,6 +154,7 @@ test("provider edit shows the prefilled form; remove and key work without a sess
       io: key.io,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: {},
       interactive: false,
       readLine: script(["sk-piped-in-87654321\n".trim()]),
@@ -166,6 +169,7 @@ test("provider edit shows the prefilled form; remove and key work without a sess
       io: kept.io,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: {},
       interactive: false,
       readLine: script([""]),
@@ -179,6 +183,7 @@ test("provider edit shows the prefilled form; remove and key work without a sess
       io: gone.io,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: {},
       interactive: false,
     }),
@@ -212,7 +217,7 @@ test("provider add <protocol> with every flag saves without asking anything", as
       "--model",
       "deepseek-flash",
     ],
-    { io: out, home, cwd, env: {}, interactive: false, readLine: noInput },
+    { io: out, home, cwd, catalog: catalogOptions(), env: {}, interactive: false, readLine: noInput },
   )
   expect(seen.stderr).toBe("")
   expect(code).toBe(0)
@@ -229,7 +234,7 @@ test("provider add <protocol> with every flag saves without asking anything", as
   expect(
     await runProviderAdminCommand(
       ["add", "anthropic-messages", "--id", "proxy", "--base-url", "http://localhost:4000", "--no-key"],
-      { io: local.io, home, cwd, env: {}, interactive: false, readLine: noInput },
+      { io: local.io, home, cwd, catalog: catalogOptions(), env: {}, interactive: false, readLine: noInput },
     ),
   ).toBe(0)
   expect(settings().providers.proxy).toEqual({
@@ -242,7 +247,15 @@ test("provider add --key-stdin stores the piped key in auth.json and never print
   const { io: out, out: seen } = io()
   const code = await runProviderAdminCommand(
     ["add", "google-gemini", "--id", "g", "--base-url", "https://llm.example.com/v1beta", "--key-stdin"],
-    { io: out, home, cwd, env: {}, interactive: false, readLine: script([` ${KEY} `]) },
+    {
+      io: out,
+      home,
+      cwd,
+      catalog: catalogOptions(),
+      env: {},
+      interactive: false,
+      readLine: script([` ${KEY} `]),
+    },
   )
   expect(code).toBe(0)
   expect(auth()).toEqual({ g: { type: "api_key", apiKey: KEY } })
@@ -262,6 +275,7 @@ test("provider add with some flags opens the form with them filled in", async ()
       io: out,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: {},
       interactive: true,
       runForm: async (spec) => {
@@ -284,7 +298,15 @@ test("provider add with some flags opens the form with them filled in", async ()
 
 test("provider add refuses unknown protocols, clashing flags and ids that exist", async () => {
   const { io: out } = io()
-  const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: noInput }
+  const opts = {
+    io: out,
+    home,
+    cwd,
+    catalog: catalogOptions(),
+    env: {},
+    interactive: false,
+    readLine: noInput,
+  }
   const full = ["--id", "x", "--base-url", "http://x", "--no-key"]
   await expect(runProviderAdminCommand(["add", "not-a-vendor", ...full], opts)).rejects.toThrow(
     'unknown vendor or protocol "not-a-vendor"; protocols: openai-chat, openai-responses, anthropic-messages, google-gemini',
@@ -313,7 +335,15 @@ test("provider add refuses unknown protocols, clashing flags and ids that exist"
 
 test("usage errors and subcommands left to the help command", async () => {
   const { io: out } = io()
-  const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: script([]) }
+  const opts = {
+    io: out,
+    home,
+    cwd,
+    catalog: catalogOptions(),
+    env: {},
+    interactive: false,
+    readLine: script([]),
+  }
   expect(await runProviderAdminCommand(["presets"], opts)).toBeUndefined()
   expect(await runProviderAdminCommand(["help"], opts)).toBeUndefined()
   await expect(runProviderAdminCommand(["edit"], opts)).rejects.toThrow(UsageError)
@@ -332,7 +362,15 @@ test("line dialogs: numbers, the default, and retries", async () => {
 
 test("vendor flags fill the endpoint and id without asking; renamed ids retain catalog facts", async () => {
   const { io: out, out: seen } = io()
-  const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: noInput }
+  const opts = {
+    io: out,
+    home,
+    cwd,
+    catalog: catalogOptions(),
+    env: {},
+    interactive: false,
+    readLine: noInput,
+  }
   expect(await runProviderAdminCommand(["add", "deepseek", "--key-env", "DEEPSEEK_API_KEY"], opts)).toBe(0)
   expect(settings().providers.deepseek).toEqual({
     dialect: "openai-chat",
@@ -365,7 +403,7 @@ test.each([false, true])(
   "complete vendor flags refuse a duplicate id (terminal: %s)",
   async (interactive) => {
     const { io: out } = io()
-    const opts = { io: out, home, cwd, env: {}, interactive, readLine: noInput }
+    const opts = { io: out, home, cwd, catalog: catalogOptions(), env: {}, interactive, readLine: noInput }
     const args = ["add", "deepseek", "--key-env", "X"]
     expect(await runProviderAdminCommand(args, opts)).toBe(0)
     const before = readFileSync(path.join(home, "settings.json"), "utf8")
@@ -379,7 +417,7 @@ test.each([false, true])(
 
 test("line-by-line forms keep the suggested suffix for a duplicate vendor id", async () => {
   const { io: out } = io()
-  const opts = { io: out, home, cwd, env: {}, interactive: false }
+  const opts = { io: out, home, cwd, catalog: catalogOptions(), env: {}, interactive: false }
   expect(
     await runProviderAdminCommand(["add", "deepseek", "--key-env", "X"], {
       ...opts,
@@ -404,6 +442,7 @@ test("the terminal starts with a filterable vendor list including Custom", async
       io: out,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: {},
       interactive: true,
       runForm: async (spec) => {
@@ -437,6 +476,7 @@ test("vendor forms suggest a free id and select only the name of a set environme
       io: out,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: { GEMINI_API_KEY: KEY },
       interactive: true,
       runForm: async (spec) => {
@@ -469,6 +509,7 @@ test("vendor picker supports piped ids and lists close matches before retrying",
       io: out,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: {},
       interactive: false,
       readLine: script([
@@ -500,6 +541,7 @@ test("unsupported vendor keeps id and key hints but asks for protocol and URL", 
       io: out,
       home,
       cwd,
+      catalog: catalogOptions(),
       env: {},
       interactive: true,
       runForm: async (spec) => {
@@ -515,6 +557,41 @@ test("unsupported vendor keeps id and key hints but asks for protocol and URL", 
   expect(fields.apiKeyEnv).toMatchObject({ default: "UNUSUAL_KEY" })
 })
 
+test("a missing catalog refreshes from the tiny fixture without network access", async () => {
+  rmSync(path.join(home, "cache"), { recursive: true })
+  const catalog = catalogOptions()
+  const fetchFixture = catalog.fetch!
+  let calls = 0
+  const { io: out, out: seen } = io()
+  let shown: FormSpec | undefined
+  expect(
+    await runProviderAdminCommand(["add", "deepseek"], {
+      io: out,
+      home,
+      cwd,
+      env: {},
+      interactive: true,
+      catalog: {
+        ...catalog,
+        fetch: (async (...args: Parameters<typeof fetch>) => {
+          calls++
+          return fetchFixture(...args)
+        }) as typeof fetch,
+      },
+      runForm: async (spec) => {
+        shown = spec
+        return undefined
+      },
+    }),
+  ).toBe(1)
+  expect(calls).toBe(1)
+  expect(shown?.fields.find((f) => f.id === "baseUrl")).toMatchObject({
+    default: "https://api.deepseek.com",
+  })
+  expect(JSON.parse(readFileSync(catalog.file!, "utf8")).data).toEqual(catalogFixture)
+  expect(seen.stderr).toContain("Loading vendors from models.dev…")
+})
+
 test("an offline missing catalog falls straight into Custom with one note", async () => {
   rmSync(path.join(home, "cache"), { recursive: true })
   let calls = 0
@@ -527,6 +604,7 @@ test("an offline missing catalog falls straight into Custom with one note", asyn
       env: {},
       interactive: false,
       catalog: {
+        ...catalogOptions(),
         fetch: (async () => {
           calls++
           throw new Error("offline")
@@ -567,6 +645,7 @@ test.each([false, true])(
         interactive: false,
         readLine: noInput,
         catalog: {
+          ...catalogOptions(),
           fetch: (async () => {
             expect(seen.stderr).toBe("Loading vendors from models.dev…\n")
             calls++
@@ -600,7 +679,15 @@ test.each([
       }),
     )
     const { io: out, out: seen } = io()
-    const opts = { io: out, home, cwd, env: {}, interactive: false, readLine: noInput }
+    const opts = {
+      io: out,
+      home,
+      cwd,
+      catalog: catalogOptions(),
+      env: {},
+      interactive: false,
+      readLine: noInput,
+    }
     await expect(runProviderAdminCommand(["add", id!, "--key-env", "X"], opts)).rejects.toThrow(
       "needs --base-url",
     )

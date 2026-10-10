@@ -3,6 +3,7 @@ import type { AssistantMessage, ToolDetailLevel } from "@amira/api"
 import { FakeTerminal, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
+import { localClock } from "../src/format.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
 import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
@@ -60,15 +61,15 @@ for (const mode of ["inline", "fullscreen"] as const) {
       view.replyDelta("Second paragraph.")
       view.replyEnd([])
       view.render()
-      expect(text().match(/20:09/g)).toHaveLength(2)
-      expect(text()).not.toContain("20:12")
+      expect(text().split(localClock(at)).slice(1)).toHaveLength(2)
+      expect(text()).not.toContain(localClock(at + 180_000))
       expect(text()).toContain(mode === "fullscreen" ? "Thought for 4s  Ctrl+O to expand" : "Thought for 4s")
       expect(text().includes("to expand")).toBe(mode === "fullscreen")
     } finally {
       view.stop()
       clock.mockRestore()
     }
-    expect(screen.mainText.match(/20:09/g)).toHaveLength(2)
+    expect(screen.mainText.split(localClock(at)).slice(1)).toHaveLength(2)
     expect(screen.mainText.includes("to expand")).toBe(mode === "fullscreen")
   })
 

@@ -6,6 +6,7 @@ import { editTool } from "../src/edit.ts"
 import { globTool } from "../src/glob.ts"
 import { grepTool } from "../src/grep.ts"
 import {
+  builtinPresenters,
   editPresenter,
   globPresenter,
   grepPresenter,
@@ -33,6 +34,29 @@ const view = <A>(args: A, result: ToolResult): ToolCallView<A, any> => ({
   text: toolResultText(result),
 })
 const opts = { detail: "summary" as const, width: 80 }
+
+test("every built-in presenter keeps its finished and running verbs next to its presentation", () => {
+  const expected: Record<string, [string, string]> = {
+    read: ["Read", "Reading"],
+    write: ["Wrote", "Writing"],
+    edit: ["Edited", "Editing"],
+    apply_patch: ["Patched", "Patching"],
+    bash: ["Ran", "Running"],
+    powershell: ["Ran", "Running"],
+    grep: ["Searched", "Searching"],
+    glob: ["Found", "Finding"],
+    output_read: ["Read", "Reading"],
+    ask_user: ["Asked", "Asking"],
+    job_output: ["Read", "Reading"],
+    job_stop: ["Stopped", "Stopping"],
+    job_list: ["Listed", "Listing"],
+    tool_search: ["Loaded", "Loading"],
+  }
+  expect(Object.keys(builtinPresenters).sort()).toEqual(Object.keys(expected).sort())
+  for (const [name, [past, running]] of Object.entries(expected)) {
+    expect(builtinPresenters[name]!.verbs).toEqual({ past, running })
+  }
+})
 
 test("read: the path and range as head, the lines read as result", async () => {
   expect(readPresenter.summary!({ path: "a.ts" })).toBe("a.ts")

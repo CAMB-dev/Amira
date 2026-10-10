@@ -3,7 +3,7 @@ import { bold, createTheme, Editor, visibleWidth } from "@amira/tui-kit"
 import { activityRow } from "../src/app/activity-row.ts"
 import { ReplyBlock } from "../src/blocks.ts"
 import { renderToolLines } from "../src/diff-view.ts"
-import { userLines } from "../src/format.ts"
+import { localClock, userLines } from "../src/format.ts"
 import { headerLine } from "../src/header.ts"
 import { InputBox } from "../src/input-box.ts"
 import { exploredLine, runningToolLines } from "../src/tool-view.ts"
@@ -24,7 +24,7 @@ test("prototype details: painted band padding and bold accent prompt preserve AN
   expect(rows[2]).toBe(theme.userBg!(" ".repeat(100)))
   expect(rows[1]).toContain(bold(theme.accent("›")))
   expect(rows[1]).toContain("\x1b[38;2;120;219;226m›")
-  expect(rows[1]).toContain(theme.muted("20:19"))
+  expect(rows[1]).toContain(theme.muted(localClock(at)))
 })
 
 test("prototype details: warning dirty marker, quiet divider, folded glyph and running accent", () => {
@@ -43,8 +43,8 @@ test("prototype details: warning dirty marker, quiet divider, folded glyph and r
     ],
     100,
   )
-  expect(grouped).toContain(theme.fg2("Read 2 files"))
-  expect(grouped).toContain(theme.path!("(a.ts)"))
+  expect(grouped).toContain(theme.muted("Read 2 files"))
+  expect(grouped).not.toContain("a.ts")
   expect(grouped).toContain(theme.muted("▸"))
   const running = runningToolLines(
     theme,

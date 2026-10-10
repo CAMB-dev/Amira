@@ -282,6 +282,7 @@ const outputBody = (text: string, detail: string, max = 3): ToolLine[] => {
 }
 
 export const jobOutputPresenter: ToolPresenter<JobOutputParams, BackgroundJobDetails> = {
+  verbs: { past: "Read", running: "Reading" },
   summary: (args) => `${str(args.job_id)}${args.wait_for ? ` · wait for /${str(args.wait_for)}/` : ""}`,
   result(call) {
     const d = jobDetails<BackgroundJobDetails>(call.result, "jobId")
@@ -293,6 +294,7 @@ export const jobOutputPresenter: ToolPresenter<JobOutputParams, BackgroundJobDet
 }
 
 export const jobStopPresenter: ToolPresenter<JobStopParams, BackgroundJobDetails> = {
+  verbs: { past: "Stopped", running: "Stopping" },
   summary: (args) => str(args.job_id),
   result(call) {
     const d = jobDetails<BackgroundJobDetails>(call.result, "jobId")
@@ -302,6 +304,7 @@ export const jobStopPresenter: ToolPresenter<JobStopParams, BackgroundJobDetails
 }
 
 export const jobListPresenter: ToolPresenter<Record<string, never>, JobListDetails> = {
+  verbs: { past: "Listed", running: "Listing" },
   summary: () => "",
   result(call) {
     const d = jobDetails<JobListDetails>(call.result, "jobs")

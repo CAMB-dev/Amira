@@ -145,6 +145,7 @@ function clipLabel(s: string, max: number): string {
  * with the answer under it, whole: a long label is cut, never the answer.
  */
 export const askUserPresenter: ToolPresenter<AskUserParams, AskUserDetails> = {
+  verbs: { past: "Asked", running: "Asking" },
   summary(args) {
     const qs = questionsOf(args)
     const first = qs[0]?.question ?? ""
