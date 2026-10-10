@@ -16,7 +16,9 @@ import {
   LineInput,
   matchesKey,
   type RenderContext,
+  renderMarkdown,
   ScrollView,
+  Spinner,
   stripAnsi,
   type Theme,
   truncateToWidth,
@@ -24,6 +26,7 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { terminalText } from "./diff-view.ts"
+import { replyRows } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
 import {
@@ -33,7 +36,7 @@ import {
   type Keybindings,
   viewScrollAction,
 } from "./keybindings.ts"
-import { finishedToolLines, type PresenterSource } from "./tool-view.ts"
+import { finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
 import { UiRuntime } from "./ui-runtime/runtime.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
 import { renderViewLines, viewTitle } from "./view-lines.ts"
@@ -131,8 +134,15 @@ export class ExtensionViewer implements Component {
   #mounted = false
   #opening = false
   #disposed = false
-  /** Host-rendered tool lines retain their styles without exposing terminal escapes to views. */
-  #toolLines = new WeakMap<ViewLine, string>()
+  /** Host-rendered transcript lines keep their styles without exposing escapes to views. */
+  #hostLines = new WeakMap<ViewLine, string>()
+  #animating = false
+  /** Running transcript rows need the same redraw cadence as the main spinner. */
+  get animating(): boolean {
+    return this.#animating
+  }
+  #spinner = new Spinner()
+  #spinnerFrame: number | undefined
   #now: () => number
   #uiOffset = 0
   #uiFrame: { width: number; ctx: RenderContext } | undefined
@@ -414,6 +424,7 @@ export class ExtensionViewer implements Component {
   }
 
   render(width: number, ctx: RenderContext): string[] {
+    this.#animating = false
     if (this.#ui) return this.#renderUi(width, ctx)
     const { theme } = ctx
     const opts = this.#renderOptions(width, theme)
@@ -524,18 +535,52 @@ export class ExtensionViewer implements Component {
     return this.#renderLines(lines, width, theme)
   }
 
+  #hostRows(rows: string[]): ViewLine[] {
+    return rows.map((text) => {
+      const line: ViewLine = { kind: "code", text: stripAnsi(text) }
+      this.#hostLines.set(line, text)
+      return line
+    })
+  }
+
   #renderOptions(width: number, theme: Theme): ViewRenderOptions {
+    const now = this.#now()
+    // Existing redraws drive the spinner at its usual cadence; no view-specific timer.
+    const frame = Math.floor(now / 80)
+    if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
+    this.#spinnerFrame = frame
     return {
       width,
-      now: this.#now(),
+      now,
       ...(this.#pages.length > 1 ? { page: { depth: this.#pages.length - 1, data: this.#page.data } } : {}),
-      renderTool: (name, call, detail) =>
-        finishedToolLines(theme, this.#opts.presenters?.get(name), { ...call, name }, detail, width).map(
-          (text) => {
-            const line: ViewLine = { kind: "code", text: stripAnsi(text) }
-            this.#toolLines.set(line, text)
-            return line
-          },
+      renderTool: (name, call, detail, options) =>
+        this.#hostRows(
+          finishedToolLines(
+            theme,
+            this.#opts.presenters?.get(name),
+            { ...call, name },
+            detail,
+            width,
+            options,
+          ),
+        ),
+      renderRunningTool: (name, call, options) => {
+        this.#animating = true
+        return this.#hostRows(
+          runningToolLines(
+            theme,
+            this.#opts.presenters?.get(name),
+            { ...call, name, startedAt: call.startedAt ?? now },
+            now,
+            this.#spinner.glyph,
+            width,
+            options,
+          ),
+        )
+      },
+      renderReply: (text) =>
+        this.#hostRows(
+          replyRows(renderMarkdown(text, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)),
         ),
     }
   }
@@ -548,7 +593,7 @@ export class ExtensionViewer implements Component {
       plain = []
     }
     for (const line of wrapViewLines(lines, width)) {
-      const tool = this.#toolLines.get(line)
+      const tool = this.#hostLines.get(line)
       if (tool !== undefined) {
         flush()
         out.push(tool)

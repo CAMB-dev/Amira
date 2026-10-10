@@ -7,6 +7,7 @@ import {
   clip,
   formatElapsed,
   formatTokens,
+  DEFAULT_THEME_GLYPHS as glyphs,
   type Message,
   plural,
   type SelectSection,
@@ -77,7 +78,7 @@ export function callKids(rest: SubagentInfo[], call: ToolCallBlock): SubagentInf
   return mine
 }
 
-function toolHead(call: ToolCallBlock, failed: boolean): string {
+function toolHead(call: ToolCallBlock): string {
   const summary = oneLine(
     Object.values(call.args)
       .filter((v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean")
@@ -85,7 +86,7 @@ function toolHead(call: ToolCallBlock, failed: boolean): string {
       .join(" "),
     80,
   )
-  return `${failed ? "✗" : "●"} ${call.name}${summary ? ` ${summary}` : ""}`
+  return `${call.name}${summary ? ` ${summary}` : ""}`
 }
 
 /**
@@ -99,7 +100,9 @@ export function transcriptText(
   all: SubagentInfo[],
   now = Date.now(),
 ): string {
-  const out = [`◆ ${info.title} · ${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)}`]
+  const out = [
+    `${glyphs.subagent} ${info.title} · ${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)}`,
+  ]
   // A forked child starts with its parent's history; its own part starts at its task.
   const from = Math.max(
     0,
@@ -108,54 +111,85 @@ export function transcriptText(
   const own = messages.slice(from)
   const task = own[0]?.role === "user" ? blockText(own[0].content).trim() : info.task
   for (const [i, line] of (task || "(no task)").split("\n").entries())
-    out.push(`${i === 0 ? "›" : " "} ${line}`)
+    out.push(`  ${i === 0 ? glyphs.user : " "} ${line}`)
   out.push("")
   const results = new Map<string, ToolResultMessage>()
   for (const m of own) if (m.role === "toolResult") results.set(m.toolCallId, m)
   const kids = all.filter((s) => s.parentSessionId === info.id)
   const last = own.findLast((m) => m.role === "assistant")
   const finished = !live(info)
-  for (const m of own) {
-    if (m.role !== "assistant") continue
-    for (const b of m.content) {
-      if (b.type === "text" && b.text.trim()) {
-        const text = b.text.trim()
-        const isFinal = m === last && !m.content.some((x) => x.type === "toolCall")
-        if (isFinal) out.push(...text.split("\n"), "")
-        else {
-          const first = text.split("\n")[0]!
-          out.push(text.includes("\n") ? `${oneLine(first, 98)} …` : oneLine(first, 100), "")
-        }
-      } else if (b.type === "serverTool") {
+  // Only visible blocks break a contiguous tool group, not results or thinking blocks.
+  const blocks = own.flatMap((m) =>
+    m.role === "assistant"
+      ? m.content
+          .filter(
+            (b) => b.type === "toolCall" || b.type === "serverTool" || (b.type === "text" && b.text.trim()),
+          )
+          .map((b) => ({ m, b }))
+      : [],
+  )
+  // Plain text has no animation or theme context; use a stable first spinner frame.
+  const spinner = "⠋"
+  for (const [i, { m, b }] of blocks.entries()) {
+    if (b.type === "text") {
+      const text = b.text.trim()
+      const isFinal = m === last && !m.content.some((x) => x.type === "toolCall")
+      if (isFinal) out.push(...text.split("\n").map((line) => (line ? `  ${line}` : "")), "")
+      else {
+        const first = text.split("\n")[0]!
+        out.push(
+          `  ${text.includes("\n") ? `${oneLine(first, 98)} ${glyphs.more}` : oneLine(first, 100)}`,
+          "",
+        )
+      }
+    } else if (b.type === "serverTool" || b.type === "toolCall") {
+      const next = blocks[i + 1]?.b
+      const isLast = next?.type !== "toolCall" && next?.type !== "serverTool"
+      const tree = `  ${isLast ? glyphs.treeLast : glyphs.treeBranch}`
+      if (b.type === "serverTool") {
         // A search the provider ran: what it searched or opened, and how it ended.
         const what = [b.input.query, b.input.url].find((v) => typeof v === "string" && v) as
           | string
           | undefined
-        out.push(`${b.status === "failed" ? "✗" : "●"} ${b.name}${what ? ` ${oneLine(what, 80)}` : ""}`)
-        out.push(`  └ ${b.status === "running" ? (finished ? "did not finish" : "running") : b.status}`, "")
-      } else if (b.type === "toolCall") {
+        const head = `${b.name}${what ? ` ${oneLine(what, 80)}` : ""}`
+        if (b.status === "running" && !finished) out.push(`${tree} ${spinner} ${head}`)
+        else {
+          const mark =
+            b.status === "running"
+              ? glyphs.toolInterrupted
+              : b.status === "failed"
+                ? glyphs.toolFailed
+                : glyphs.toolDone
+          out.push(`${tree} ${head}  ${mark} ${b.status === "running" ? "did not finish" : b.status}`)
+        }
+      } else {
         const r = results.get(b.id)
-        out.push(toolHead(b, r?.isError === true))
-        if (!r) out.push(finished ? "  └ no result" : "  └ running")
+        const head = toolHead(b)
+        if (!r)
+          out.push(
+            finished ? `${tree} ${head}  ${glyphs.toolInterrupted} no result` : `${tree} ${spinner} ${head}`,
+          )
         else {
           const lines = blockText(r.content).trim().split("\n")
           const more = lines.length > 1 ? ` (+${plural(lines.length - 1, "line")})` : ""
-          out.push(`  └ ${oneLine(lines[0] || "no output", 100)}${more}`)
+          const mark = r.rejected ? glyphs.toolInterrupted : r.isError ? glyphs.toolFailed : glyphs.toolDone
+          out.push(`${tree} ${head}  ${mark} ${oneLine(lines[0] || "no output", 100)}${more}`)
         }
         if (b.name === "agent") {
-          for (const kid of callKids(kids, b)) out.push(`  ◆ ${subagentSummary(kid, now)}`)
+          const rail = isLast ? "   " : `  ${glyphs.treePipe}`
+          for (const kid of callKids(kids, b))
+            out.push(`${rail}  ${glyphs.subagent} ${subagentSummary(kid, now)}`)
         }
-        out.push("")
       }
+      if (isLast) out.push("")
     }
   }
   // Sub-agents started some other way than the agent tool.
-  for (const kid of kids) out.push(`◆ ${subagentSummary(kid, now)}`)
+  for (const kid of kids) out.push(`${glyphs.subagent} ${subagentSummary(kid, now)}`)
   if (kids.length) out.push("")
-  if (info.error && info.status !== "done") out.push(`✗ ${info.error}`)
-  else if (!finished) out.push(`… ${waitingFor(info)}`)
-  else if (info.note) out.push(`⊘ ${info.note}`)
-  else if (!last) out.push("(no reply)")
+  if (info.error && info.status !== "done") out.push(`${glyphs.error} ${info.error}`)
+  else if (finished && info.note) out.push(`${glyphs.interrupted} ${info.note}`)
+  else if (finished && !last) out.push("(no reply)")
   while (out.at(-1) === "") out.pop()
   return out.join("\n")
 }
@@ -200,12 +234,6 @@ function openOrPrint(ctx: CommandContext, s: SubagentInfo) {
 /** Not ended: running, waiting for a place to run, or (a persistent one) idle between turns. */
 function live(s: SubagentInfo): boolean {
   return s.status === "running" || s.status === "queued" || s.status === "idle" || s.status === "paused"
-}
-
-function waitingFor(s: SubagentInfo): string {
-  if (s.status === "paused") return "paused"
-  if (s.status === "queued") return "waiting for a free slot"
-  return s.status === "idle" ? "idle, waiting for a message" : "still running"
 }
 
 /** Stops one sub-agent, or every live one with "all"; says what it did. */

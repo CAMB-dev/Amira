@@ -727,3 +727,36 @@ test("a key can ask for a line of text at the bottom of the view; Esc cancels it
   s.terminal.send("\x03")
   await s.exited
 })
+
+test("transcript helpers share main reply/tool styles, closing rails and running spinner", () => {
+  let now = 6500
+  const viewer = new ExtensionViewer(
+    {
+      kind: "transcript",
+      title: () => "Transcript",
+      render: (_data, opts) => [
+        ...opts.renderTool!(
+          "read",
+          { args: { path: "a.ts" }, result: textResult("done"), text: "done" },
+          "summary",
+          { last: true },
+        ),
+        { kind: "text", text: "" },
+        ...opts.renderReply!("**Now waiting.**"),
+        { kind: "text", text: "" },
+        ...opts.renderRunningTool!("wait", { args: {}, startedAt: 5500 }, { last: true }),
+      ],
+    },
+    {},
+    { now: () => now },
+  )
+  const ctx = { ...renderContext, theme: defaultTheme, color: true }
+  const rows = viewer.render(80, ctx)
+  expect(rows[2]).toContain(defaultTheme.path("a.ts"))
+  expect(stripAnsi(rows[2]!)).toBe("  └ read a.ts  ✓ done")
+  expect(rows[4]).toBe(`  ${defaultTheme.strong!("Now waiting.")}`)
+  expect(stripAnsi(rows[6]!)).toMatch(/^ {2}└ ⠋ wait +1s$/)
+  expect(visibleWidth(rows[6]!)).toBe(80)
+  now += 80
+  expect(stripAnsi(viewer.render(80, ctx)[6]!)).toMatch(/^ {2}└ ⠙ wait +1s$/)
+})

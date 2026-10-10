@@ -1,5 +1,6 @@
 import type { CommandOutputLevel } from "./commands.ts"
 import type { ToolCallView, ToolDetailLevel, ToolLine } from "./tool-renderers.ts"
+import type { ToolResult } from "./tools.ts"
 import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.ts"
 
 /**
@@ -39,8 +40,21 @@ export interface ViewRenderOptions {
   now: number
   /** Present only on a pushed page; depth starts at 1. View data remains unchanged. */
   page?: { depth: number; data?: unknown }
-  /** Presents a finished tool call with the host's current presenter and fallback renderer. */
-  renderTool?: (toolName: string, call: ToolCallView, detail: ToolDetailLevel) => ViewLine[]
+  /** Presents a finished call with the host's current transcript renderer and theme. */
+  renderTool?: (
+    toolName: string,
+    call: ToolCallView,
+    detail: ToolDetailLevel,
+    options?: { last?: boolean },
+  ) => ViewLine[]
+  /** Running calls use the same tree, spinner and output renderer as the main transcript. */
+  renderRunningTool?: (
+    toolName: string,
+    call: { args: Record<string, unknown>; startedAt?: number; partial?: ToolResult },
+    options?: { last?: boolean },
+  ) => ViewLine[]
+  /** Transcript Markdown with its standard content inset, without view chrome. */
+  renderReply?: (text: string) => ViewLine[]
 }
 
 /** What a view's key handler can do to the open view. */

@@ -88,9 +88,14 @@ test("a word is letters, digits and path characters, without the punctuation aft
 })
 
 test("the symbols in front of tool rows are chrome; rows under them keep their own indent", () => {
-  const rows = ["● read a.ts", "  └ contents of a.ts", "    line 2", "      indented", "  ├ ◆ explorer · 3s"]
+  const rows = [
+    "  └ read a.ts  ✓ contents of a.ts",
+    "     line 2",
+    "       indented",
+    "     └ ◆ explorer · 3s",
+  ]
   const from = chromeRows(rows).map((r) => r.from)
-  expect(from).toEqual([2, 4, 4, 4, 6])
+  expect(from).toEqual([4, 4, 4, 9])
 })
 
 /** A pane with a user message, a reply with a code block and a tool call, drawn 20 rows high. */
@@ -108,7 +113,7 @@ function conversation(width = 40) {
     "After.",
   ].join("\n")
   pane.add(new ReplyBlock(reply, false, false))
-  const tool = new Lines("tool", ["● read a.ts", "  └ contents of a.ts", "    line 2", "      nested"])
+  const tool = new Lines("tool", ["  └ read a.ts  ✓ contents of a.ts", "     line 2", "       nested"])
   pane.add(tool)
   const e = env(width)
   const rows = pane.render(e, 20)
@@ -131,7 +136,7 @@ test("dragging across rows and blocks marks them and copies what is shown, less 
   expect(drawn[from + 1]).toBe(end)
   expect(drawn[rowOf(drawn, "After.")]).toBe(`${ON}  After.${OFF}${end}`)
   // The last row up to the cell the drag ended on.
-  expect(drawn[to]).toBe(`${ON}      nested${OFF}`)
+  expect(drawn[to]).toBe(`${ON}       nested${OFF}`)
   pane.endDrag()
   expect(pane.selectedText()).toBe(
     [
@@ -145,10 +150,9 @@ test("dragging across rows and blocks marks them and copies what is shown, less 
       "",
       "After.",
       "",
-      "read a.ts",
-      "contents of a.ts",
-      "line 2",
-      "  nested",
+      "read a.ts  ✓ contents of a.ts",
+      " line 2",
+      "   nested",
     ].join("\n"),
   )
 })
@@ -161,7 +165,7 @@ test("a selection starting inside a row copies from there; one inside the chrome
   expect(pane.selectedText()).toBe("of a.ts")
   pane.startDrag(at, 0)
   pane.dragTo(at + 1, 100)
-  expect(pane.selectedText()).toBe("contents of a.ts\nline 2")
+  expect(pane.selectedText()).toBe("read a.ts  ✓ contents of a.ts\n line 2")
 })
 
 test("CJK and emoji are selected by the cells they take", () => {
@@ -225,21 +229,21 @@ class Running extends Lines {
 
 test("a change to a block it covers clears the selection; one elsewhere, or a ticking clock, does not", () => {
   const { pane, e, tool } = conversation()
-  const running = new Running("tool", ["● slow ⠋ 3s", "  │ output"])
+  const running = new Running("tool", ["  └ ⠋ slow 3s", "     output"])
   pane.add(running)
   let drawn = pane.render(e, 20)
   const at = rowOf(drawn, "contents")
-  pane.startDrag(at, 4)
+  pane.startDrag(at, colOf(drawn, "contents"))
   pane.dragTo(rowOf(drawn, "slow"), 100)
   pane.endDrag()
   // The user message above changes; the running call's spinner and time move on.
   pane.blocks[0]!.touch()
-  running.text = ["● slow ⠙ 4s", "  │ output"]
+  running.text = ["  └ ⠙ slow 4s", "     output"]
   drawn = pane.render(e, 20)
-  expect(pane.selectedText()).toBe("contents of a.ts\nline 2\n  nested\nslow ⠙ 4s")
+  expect(pane.selectedText()).toBe("contents of a.ts\n line 2\n   nested\n⠙ slow 4s")
   expect(drawn[at]).toContain(ON)
   // The call covered changes (it finished, say): the selection goes.
-  tool.text = ["● read a.ts", "  └ other result"]
+  tool.text = ["  └ read a.ts  ✓ other result"]
   tool.touch()
   pane.render(e, 20)
   expect(pane.hasText).toBe(false)
