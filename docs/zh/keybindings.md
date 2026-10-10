@@ -171,6 +171,8 @@ VS Code 自己处理 Ctrl+F、Ctrl+Home、Ctrl+End 和 Ctrl+↑↓（它们在 V
 | 设置 | 默认值 | 行为 |
 | --- | --- | --- |
 | `tui.mode` | `"fullscreen"` | `"fullscreen"` 使用 alternate screen，由 Amira 滚动、查找、折叠和复制，窗口改变时重绘，退出或崩溃时打印到普通屏幕；`"inline"` 将完成的输出留在终端滚动历史中。`--inline` 和 `--fullscreen` 优先 |
+| `tui.theme` | `"auto"` | `"auto"` 根据终端背景选择配色（无法判断时使用深色）；`"dark"` 和 `"light"` 分别指定深色和浅色配色；`"terminal"` 使用终端自身的 ANSI 颜色 |
+| `tui.colorDepth` | `"auto"` | 颜色深度：`"auto"` 检测终端支持情况；`"truecolor"`、`"256"` 和 `"16"` 手动指定。`"256"` 和 `"16"` 必须写成字符串，而不是数字 |
 | `tui.title` | `true` | 设置终端标题；会话有标题时为 `Amira · <folder> · <session title> ⎇ <branch>`，运行期间显示 `●`，退出时恢复旧标题。标题栏使用系统字体，输入框状态不使用部分终端字体缺少的 `⎇` |
 | `tui.progress` | `true` | 运行时显示终端标签或任务栏进度，对话框等待时显示暂停状态；使用 OSC 9;4，支持终端包括 Windows Terminal、ConEmu、VS Code、Ghostty |
 | `tui.bell` | `true` | 终端在后台时，轮次结束或对话框打开会响铃；无法报告焦点的终端中，只在持续至少 15 秒的轮次之后响铃 |

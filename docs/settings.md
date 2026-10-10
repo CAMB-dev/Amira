@@ -256,6 +256,8 @@ Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tool
 | Key | Type | Default | Description | User file only |
 | --- | --- | --- | --- | --- |
 | `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | `"fullscreen"` keeps the conversation on the alternate screen, scrolled and searched by Amira; `"inline"` leaves finished output in the terminal's scrollback. `--inline` and `--fullscreen` win. |  |
+| `tui.theme` | `"auto" \| "dark" \| "light" \| "terminal"` | `"auto"` | `"auto"` follows the terminal background (dark if unknown); `"dark"` and `"light"` choose a palette explicitly; `"terminal"` uses the terminal's own ANSI colors. |  |
+| `tui.colorDepth` | `"auto" \| "truecolor" \| "256" \| "16"` | `"auto"` | Color depth: `"auto"` detects terminal support; `"truecolor"`, `"256"` and `"16"` override it. Values are strings, including `"256"` and `"16"`. |  |
 | `tui.bell` | `boolean` | `true` | Ring the bell when a turn ends or a dialog opens while the terminal is in the background. |  |
 | `tui.title` | `boolean` | `true` | Set the terminal title to the folder, session title when present, and branch, marked while working. |  |
 | `tui.progress` | `boolean` | `true` | Show work on the tab and taskbar progress indicator (OSC 9;4). |  |

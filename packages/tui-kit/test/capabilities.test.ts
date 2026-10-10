@@ -256,7 +256,9 @@ test("COLORFGBG names the background when the terminal does not answer", async (
   expect(term.writes[0]).toContain(queries.background)
   term.send("\x1b]11;rgb:0000/0000/0000\x1b\\\x1b[?62c")
   // The terminal's answer wins.
-  expect((await pending).capabilities.background).toBe("dark")
+  const detected = (await pending).capabilities
+  expect(detected.background).toBe("dark")
+  expect(detected.backgroundRgb).toEqual({ r: 0, g: 0, b: 0 })
   const quiet = await setupTerminalInput(
     new FakeTerminal(),
     { COLORFGBG: "0;15" },
@@ -266,6 +268,7 @@ test("COLORFGBG names the background when the terminal does not answer", async (
     },
   )
   expect(quiet.capabilities.background).toBe("light")
+  expect(quiet.capabilities.backgroundRgb).toBeUndefined()
   const unasked = new FakeTerminal()
   const none = setupTerminalInput(unasked, { COLORFGBG: "0;15" })
   expect(unasked.writes[0]).not.toContain(queries.background)

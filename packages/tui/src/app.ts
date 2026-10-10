@@ -14,8 +14,7 @@ import {
 import { type Agent, MODE_SUMMARY, parseCommandLine } from "@amira/core"
 import {
   chooseImageSupport,
-  colorSupported,
-  defaultTheme,
+  createTheme,
   detectEnv,
   Editor,
   type EditorPart,
@@ -23,12 +22,10 @@ import {
   type InputEvent,
   InputReader,
   isColorEnabled,
-  monoTheme,
   ProcessTerminal,
   Spinner,
   setupTerminalInput,
   supportsHyperlinks,
-  surfaceTheme,
 } from "@amira/tui-kit"
 import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
 import { createBottomArea } from "./app/bottom-area.ts"
@@ -87,14 +84,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     images: imageSetting !== "off",
     background: true,
   })
-  // Surface colors (the band behind the user's messages, diff lines) for the terminal's
-  // background; none without colors, where the band would only be blank rows and attributes
-  // (dim, bold) tell apart what colors would.
   const theme =
     opts.theme ??
-    (isColorEnabled() && colorSupported(env)
-      ? { ...defaultTheme, ...surfaceTheme(capabilities.background) }
-      : monoTheme)
+    createTheme({
+      theme: settings.theme,
+      colorDepth: settings.colorDepth,
+      env,
+      capabilities,
+      color: isColorEnabled(),
+    })
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)

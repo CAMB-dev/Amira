@@ -1,6 +1,13 @@
 import type { StatusTone } from "@amira/api"
 import type { ResolvedStatusItem } from "@amira/core"
-import { type RenderContext, type StyleFn, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import {
+  type RenderContext,
+  type StyleFn,
+  type Theme,
+  themeToken,
+  truncateToWidth,
+  visibleWidth,
+} from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
 /**
@@ -66,7 +73,8 @@ function fitItems(
 }
 
 function join(xs: readonly StatusEntry[], theme: Theme): string {
-  return xs.map((x) => toneStyle(x.tone, theme)(x.text)).join(theme.muted(SEPARATOR))
+  const dim = themeToken(theme, "dim") ?? theme.muted
+  return xs.map((x) => toneStyle(x.tone, theme)(x.text)).join(dim(SEPARATOR))
 }
 
 /**

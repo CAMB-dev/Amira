@@ -50,6 +50,8 @@ export interface Capabilities {
    * `background`): from its answer to OSC 11, else from COLORFGBG. Unset when neither says.
    */
   background?: Background
+  /** Exact OSC 11 colour, retained so surfaces can adapt to nonstandard backgrounds. */
+  backgroundRgb?: Rgb
 }
 
 /** A terminal background, as far as colors drawn on it are concerned. */
@@ -304,6 +306,7 @@ export async function setupTerminalInput(
       shiftEnter: win32InputMode || kittyKeyboard,
       ...(opts.images ? { graphics: graphicsOf(probe, term) } : {}),
       ...(background ? { background } : {}),
+      ...(opts.background && probe.background ? { backgroundRgb: probe.background } : {}),
     },
     leftoverInput: probe.rest,
   }

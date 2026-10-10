@@ -57,7 +57,7 @@ for (const theme of [defaultTheme, monoTheme]) {
     const selected = mode === "mono" ? "[Diff]" : "Diff"
     expect(stripAnsi(line)).toBe(`  Summary  │  ${selected}  │  Logs  │  Actions  `.padEnd(60))
     expect(line).toContain(mode === "mono" ? theme.accent("[Diff]") : bold(inverse(theme.accent("Diff"))))
-    expect(line).toContain(theme.border("│"))
+    expect(line).toContain(theme.dim("│"))
     s.runtime.focus("tabs")
     expect(stripAnsi(s.render()[0]!)).toStartWith("❯ Summary")
     s.runtime.handleInput(key("right"))

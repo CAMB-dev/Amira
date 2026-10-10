@@ -341,9 +341,9 @@ for (const mode of MODES) {
     expect(s.host.ui.pending.length).toBe(1)
     s.terminal.send(`${DOWN}${DOWN}`)
     await waitFor(() => s.dialog().includes("┃ ❯ Yes, and don't ask again this session"), "moved")
-    // The bar is drawn in the warning color (yellow), the ❯ in the accent (cyan).
-    expect(s.terminal.output).toContain("\x1b[33m┃")
-    expect(s.terminal.output).toContain("\x1b[36m❯")
+    // The bar is drawn in the palette warning, the ❯ in the accent.
+    expect(s.terminal.output).toContain("\x1b[38;2;226;179;86m┃")
+    expect(s.terminal.output).toContain("\x1b[38;2;120;219;226m❯")
     s.terminal.send("\r")
     await s.shows("wiped twice")
     await s.idle()

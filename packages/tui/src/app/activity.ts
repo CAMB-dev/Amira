@@ -1,6 +1,6 @@
 // Owns turn activity, retry labels and the activity line's clocks and rendering.
 import type { RenderContext, Spinner } from "@amira/tui-kit"
-import { italic, truncateToWidth } from "@amira/tui-kit"
+import { italic, themeToken, truncateToWidth } from "@amira/tui-kit"
 import { compactTokens } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { formatElapsed } from "../tool-view.ts"
@@ -254,9 +254,13 @@ export function createTurnActivity(): TurnActivity {
         formatElapsed(Date.now() - (working ? turnStartedAt : compactStartedAt)),
         ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
       ].join(` ${glyphs.separator} `)
-      const head = `${ctx.theme.accent(options.spinner.glyph)} ${ctx.theme.muted(`${label} ${glyphs.separator} `)}`
+      const shimmer = themeToken(ctx.theme, "shimmer") ?? ctx.theme.accent
+      const labelStyle =
+        label === "thinking" ? (themeToken(ctx.theme, "thinking") ?? ctx.theme.muted) : ctx.theme.muted
+      const dim = themeToken(ctx.theme, "dim") ?? ctx.theme.muted
+      const head = `${shimmer(options.spinner.glyph)} ${labelStyle(label)}${dim(` ${glyphs.separator} `)}`
       const thought = label === "thinking" ? lastReasoningLine(reasoning) : ""
-      const tail = thought ? ctx.theme.muted(` ${glyphs.separator} `) + italic(ctx.theme.muted(thought)) : ""
+      const tail = thought ? dim(` ${glyphs.separator} `) + italic(ctx.theme.muted(thought)) : ""
       return [truncateToWidth(head + ctx.theme.muted(stats) + tail, width, glyphs.more), ""]
     },
   }

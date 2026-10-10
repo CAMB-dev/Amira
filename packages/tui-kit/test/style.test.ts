@@ -65,13 +65,13 @@ test("a theme can carry tokens of its own", () => {
 })
 
 test("surface colors suit the background, and are not in the default theme", () => {
-  expect(surfaceTheme("dark").userBg("x")).toBe("\x1b[48;5;236mx\x1b[49m")
-  expect(surfaceTheme("light").userBg("x")).toBe("\x1b[48;5;254mx\x1b[49m")
-  expect(surfaceTheme(undefined).diffRemovedBg("x")).toBe("\x1b[48;5;131mx\x1b[49m")
+  expect(surfaceTheme("dark").userBg("x")).toBe("\x1b[48;2;32;32;32mx\x1b[49m")
+  expect(surfaceTheme("light").userBg("x")).toBe("\x1b[48;2;232;230;225mx\x1b[49m")
+  expect(surfaceTheme(undefined).diffRemovedBg("x")).toBe("\x1b[48;2;71;20;26mx\x1b[49m")
   // A word's background inside a line's: the line's comes back after it.
   const s = surfaceTheme("dark")
   expect(s.diffAddedBg(`a${s.diffAddedWordBg("b")}c`)).toBe(
-    "\x1b[48;5;22ma\x1b[48;5;28mb\x1b[49m\x1b[48;5;22mc\x1b[49m",
+    "\x1b[48;2;15;58;18ma\x1b[48;2;23;85;28mb\x1b[49m\x1b[48;2;15;58;18mc\x1b[49m",
   )
   expect(stripColors(s.userBg("hi"))).toBe("hi")
   expect(themeToken(defaultTheme, "userBg")).toBeUndefined()
