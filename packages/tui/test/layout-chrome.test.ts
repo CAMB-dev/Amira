@@ -25,6 +25,14 @@ test("header aligns workspace/title and cost/context at opposite edges", () => {
   expect(visibleWidth(row)).toBe(100)
 })
 
+test("header titles display words without inline Markdown markers", () => {
+  const row = headerLine({ ...info, title: "Fixing `add` **Subtraction** _Bug_" }, 100, plain)
+  expect(row).toContain("Fixing add Subtraction Bug")
+  expect(row).not.toContain("`")
+  expect(row).not.toContain("_Bug_")
+  expect(row).toContain("main*")
+})
+
 test("narrow headers drop title, then shorten cwd, with context the last survivor", () => {
   expect(headerLine(info, 60, plain)).not.toContain(info.title)
   expect(headerLine(info, 60, plain)).toContain(info.cwd)
@@ -167,7 +175,7 @@ test.each([100, 50])("a composed batch2 frame at %i columns keeps the chosen lay
     ...reasoningLines(
       plain.theme,
       "Move context into the header.",
-      { durationMs: 4200, timestamp: at },
+      { durationMs: 4200, expandKey: "Ctrl+O" },
       width,
     ),
     "",

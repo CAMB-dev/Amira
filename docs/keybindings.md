@@ -231,8 +231,11 @@ the latest; `←`/`→` there switch between them.
 | `select.back` | `left` | Go back from a code block to its whole reply |
 | `select.exit` | `escape` | Stop selecting (from a code block: back to its reply) |
 
-`tool-output` (Ctrl+O) sets how much of every tool call shows; a call folded or unfolded by
-hand keeps its own level.
+`tool-output` (Ctrl+O) cycles summary → full → collapsed. Full also reveals thinking text:
+live thoughts in either mode, and retained thoughts in fullscreen. Inline thoughts already
+committed to scrollback cannot be expanded. The thinking hint appears only when the next
+press reveals text and names the current binding. Blocks folded or unfolded by hand keep
+their own level.
 
 ### Text selection
 

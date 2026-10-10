@@ -64,7 +64,9 @@ export class ReasoningBlock extends Block {
         ...(this.durationMs !== undefined ? { durationMs: this.durationMs } : {}),
         thinking: this.#thinking,
         expanded: this.shows(env),
-        ...(this.startedAt !== undefined ? { timestamp: this.startedAt } : {}),
+        // A manually folded block keeps its override when global detail changes.
+        expandKey:
+          this.expanded === undefined && env.detail === "summary" ? env.reasoningExpandKey : undefined,
       },
       env.width,
     )
@@ -101,7 +103,7 @@ export class ReasoningBlock extends Block {
     const expanded = this.expanded
     this.expanded = undefined
     try {
-      return this.lines(env)
+      return this.lines({ ...env, reasoningExpandKey: undefined })
     } finally {
       this.expanded = expanded
     }

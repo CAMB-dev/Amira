@@ -1,6 +1,7 @@
 import { bold, compose, type RenderContext, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { compactTokens } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { displayTitle } from "./title.ts"
 
 /** Already-known workspace and session facts: rendering never probes git. */
 export interface HeaderInfo {
@@ -40,7 +41,7 @@ export function headerLine(info: HeaderInfo, width: number, ctx: RenderContext):
   const room = Math.max(0, width - visibleWidth(right) - 3)
   const branch = info.branch ? theme.muted(`${glyphs.branch} ${info.branch}${info.dirty ? "*" : ""}  `) : ""
   const cwd = theme.fg2(info.cwd)
-  const title = info.title ? theme.muted(`  ${glyphs.separator}  ${info.title}`) : ""
+  const title = info.title ? theme.muted(`  ${glyphs.separator}  ${displayTitle(info.title)}`) : ""
   let left = branch + cwd + title
   if (visibleWidth(left) > room) left = branch + cwd
   if (visibleWidth(left) > room) {

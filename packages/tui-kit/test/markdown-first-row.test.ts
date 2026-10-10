@@ -38,7 +38,12 @@ test("partial streaming commits leave the remainder at full width", () => {
 
 test("code body and table body keep the full width after the first row", () => {
   const code = renderMarkdown(`\`\`\`txt\n${"x".repeat(18)}\n\`\`\``, 20, plain.theme, options)
-  expect(code[1]).toBe(`│ ${"x".repeat(18)}`)
+  expect(code).toEqual([
+    `╭─ txt${"─".repeat(13)}╮`,
+    `│ ${"x".repeat(17)}│`,
+    `│ x${" ".repeat(16)}│`,
+    `╰${"─".repeat(18)}╯`,
+  ])
   const source = "| title | second |\n| --- | --- |\n| abcdefghij | klmnop |"
   const table = renderMarkdown(source, 20, plain.theme, options)
   const full = renderMarkdown(source, 20, plain.theme, { hyperlinks: false })

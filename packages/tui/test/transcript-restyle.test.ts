@@ -27,6 +27,7 @@ const env = (width = 80): BlockEnv => ({
   now: at,
   spinner: "*",
   detail: "summary",
+  reasoningExpandKey: "Ctrl+O",
   presenters: undefined,
   hyperlinks: false,
   nodes: new Map(),
@@ -78,20 +79,34 @@ test("narrow bands omit clocks rather than collide with or lose the prompt text"
   }
 })
 
-test("thinking uses its semantic token, gray disclosure hint and a fixed start clock", () => {
-  const rows = reasoningLines(banded, "A thought.", { durationMs: 65_000, timestamp: at }, 80)
-  expect(stripAnsi(rows[0]!)).toStartWith("  ∴ Thought for 65s  ctrl+o to expand")
+test("thinking uses its semantic token and only an actionable gray disclosure hint, never a clock", () => {
+  const rows = reasoningLines(banded, "A thought.", { durationMs: 65_000, expandKey: "Ctrl+O" }, 80)
+  expect(stripAnsi(rows[0]!)).toBe("  ∴ Thought for 65s  Ctrl+O to expand")
   expect(rows[0]).toContain(banded.thinking!("Thought for 65s"))
-  expect(rows[0]).toContain(banded.muted("ctrl+o to expand"))
-  expect(stripAnsi(rows[0]!)).toEndWith("20:09  ")
-  const expanded = reasoningLines(banded, "A thought.", { expanded: true, timestamp: at }, 80)
-  expect(expanded.join("")).not.toContain("ctrl+o")
+  expect(rows[0]).toContain(banded.muted("Ctrl+O to expand"))
+  const expanded = reasoningLines(banded, "A thought.", { expanded: true, expandKey: "Ctrl+O" }, 80)
+  expect(expanded.join("")).not.toContain("to expand")
   expect(stripAnsi(expanded[1]!)).toBe("    A thought.")
-  const redacted = reasoningLines(banded, "", { timestamp: at }, 80)
-  expect(redacted.join("")).not.toContain("ctrl+o")
+  const redacted = reasoningLines(banded, "", { expandKey: "Ctrl+O" }, 80)
+  expect(redacted.join("")).not.toContain("to expand")
+  expect(reasoningLines(banded, "A thought.", {}, 80).map(stripAnsi)).toEqual(["  ∴ Thought"])
 })
 
-test("live thinking invalidates full-detail text and finishes without changing its clock", () => {
+test("manually folded thinking never advertises a global key that leaves it folded", () => {
+  const thought = new ReasoningBlock("A thought.", undefined)
+  const e = env()
+  expect(thought.lines(e)[0]).toContain("Ctrl+O to expand")
+  expect(thought.lines({ ...e, detail: "collapsed" })[0]).not.toContain("to expand")
+  expect(thought.lines({ ...e, reasoningExpandKey: undefined })[0]).not.toContain("to expand")
+  thought.expanded = false
+  expect(thought.lines(e)[0]).not.toContain("to expand")
+  expect(thought.lines({ ...e, detail: "full" })).toEqual(["  ∴ Thought"])
+  thought.toggleFold(e)
+  expect(thought.lines(e).map(stripAnsi)).toContain("    A thought.")
+  expect(thought.printLines(e)[0]).not.toContain("to expand")
+})
+
+test("live thinking invalidates full-detail text and finishes with its duration but no clock", () => {
   const pane = new TranscriptPane()
   const thought = new ReasoningBlock("", undefined, at, true)
   const e = { ...env(), detail: "full" as const }
@@ -102,7 +117,7 @@ test("live thinking invalidates full-detail text and finishes without changing i
   expect(pane.plain(thought, e)).toContain("    First second")
   thought.finish(at + 4200)
   expect(pane.plain(thought, e)[0]).toStartWith("  ∴ Thought for 4.2s")
-  expect(pane.plain(thought, e)[0]).toEndWith("20:09  ")
+  expect(pane.plain(thought, e)[0]).toBe("  ∴ Thought for 4.2s")
 })
 
 test("resumed inline and fullscreen transcripts use stored clocks, and never synthesize old ones", () => {
@@ -121,16 +136,16 @@ test("resumed inline and fullscreen transcripts use stored clocks, and never syn
       blocks.flatMap((b) => b.lines(e)).map(stripAnsi),
     ]
   }
-  for (const rows of render([user, assistant])) {
-    expect(rows.filter((r) => r.endsWith("20:09  "))).toHaveLength(3)
-    expect(rows.some((r) => r.startsWith("  ∴ Thought  ctrl+o to expand"))).toBe(true)
+  for (const [i, rows] of render([user, assistant]).entries()) {
+    expect(rows.filter((r) => r.endsWith("20:09  "))).toHaveLength(2)
+    expect(rows).toContain(i === 0 ? "  ∴ Thought" : "  ∴ Thought  Ctrl+O to expand")
     expect(rows.some((r) => r.trim() === "Second paragraph.")).toBe(true)
   }
   const { timestamp: _userTime, ...oldUser } = user
   const { timestamp: _replyTime, ...oldAssistant } = assistant
-  for (const rows of render([oldUser, oldAssistant])) {
+  for (const [i, rows] of render([oldUser, oldAssistant]).entries()) {
     expect(rows.join("\n")).not.toMatch(/\d{2}:\d{2}/)
-    expect(rows.some((r) => r === "  ∴ Thought  ctrl+o to expand")).toBe(true)
+    expect(rows).toContain(i === 0 ? "  ∴ Thought" : "  ∴ Thought  Ctrl+O to expand")
   }
 })
 
@@ -162,12 +177,14 @@ test("timestamp space belongs to just the first rendered row in live, printed an
       const rows = lines.map(stripAnsi)
       expect(rows[0]).toStartWith(`  ${"x".repeat(19)}`)
       expect(rows[1]).toBe(`  ${"x".repeat(28)}`)
-      expect(rows).toContain(`  │ ${"z".repeat(26)}`)
+      expect(rows).toContain(`  │ ${"z".repeat(25)}│`)
+      expect(rows).toContain(`  │ z${" ".repeat(24)}│`)
     }
   }
   const resumed = historyLines(plain.theme, [message], { width }).map(stripAnsi)
   expect(resumed[3]).toBe(`  ${"x".repeat(28)}`)
-  expect(resumed).toContain(`  │ ${"z".repeat(26)}`)
+  expect(resumed).toContain(`  │ ${"z".repeat(25)}│`)
+  expect(resumed).toContain(`  │ z${" ".repeat(24)}│`)
   const userRows = userLines(
     plain.theme,
     { ...user, content: [{ type: "text", text: "x".repeat(69) }] },
@@ -192,7 +209,8 @@ for (const mode of ["inline", "fullscreen"] as const) {
         true,
       )
       expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(28)}`)
-      expect(rows.map((r) => r.trimEnd())).toContain(`  │ ${"z".repeat(26)}`)
+      expect(rows).toContain(`  │ ${"z".repeat(25)}│`)
+      expect(rows).toContain(`  │ z${" ".repeat(24)}│`)
       expect(rows.map((r) => r.trimEnd())).toContain("  abcdefghij │ klmnop")
     } finally {
       app.terminal.send("\x03")

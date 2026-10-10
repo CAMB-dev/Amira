@@ -92,7 +92,7 @@ test("the symbols in front of tool rows are chrome; rows under them keep their o
     "  └ read a.ts  ✓ contents of a.ts",
     "     line 2",
     "       indented",
-    "     └ ◆ explorer · 3s",
+    "     └ ✓ explorer · 3s",
   ]
   const from = chromeRows(rows).map((r) => r.from)
   expect(from).toEqual([4, 4, 4, 9])
@@ -285,6 +285,27 @@ test("code copies as written: tabs kept when a line is selected whole; a fence t
   const text = pane.selectedText()
   expect(text.split("\n")[0]).toBe("quoted text")
   expect(text.split("\n").at(-1)).toBe("a line that is long enough to wrap at forty columns wide")
+})
+
+test("partial code selection excludes right borders and full selection rejoins wide-character padding", () => {
+  const pane = new TranscriptPane()
+  const source = "abcdef\n界界a b c界d\n\nx|"
+  const reply = new ReplyBlock(`\`\`\`\n${source}\n\`\`\``, false, false)
+  // Four content cells are the minimum framed layout; narrower blocks are unframed.
+  const e = env(9)
+  pane.add(reply)
+  const rows = pane.render(e, 30)
+  const code = rowOf(rows, "abcd")
+  expect(stripAnsi(rows[code]!)).toBe("  │ abcd│")
+  pane.startDrag(code, colOf(rows, "abcd") + 1)
+  pane.dragTo(code, 100)
+  expect(pane.selectedText()).toBe("bcd")
+  const lines = pane.lines(reply, e)
+  pane.selectText(
+    { block: reply, line: 0, col: 0 },
+    { block: reply, line: lines.length - 1, col: Number.POSITIVE_INFINITY },
+  )
+  expect(pane.selectedText()).toBe(source)
 })
 
 test("double and triple clicks off the text select nothing", () => {

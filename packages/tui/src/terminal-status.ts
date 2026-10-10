@@ -8,6 +8,7 @@ import {
   type TerminalMode,
   truncateToWidth,
 } from "@amira/tui-kit"
+import { displayTitle } from "./title.ts"
 
 export interface TerminalStatusOptions {
   title?: boolean
@@ -49,7 +50,7 @@ export class TerminalStatus implements TerminalApi {
   setTitle(title: string): void {
     if (!this.#started || !this.#opts.title) return
     // biome-ignore lint/suspicious/noControlCharactersInRegex: sanitize terminal title input
-    this.#title = truncateToWidth(title.replace(/[\x00-\x1f\x7f-\x9f]/g, ""), 128, "…")
+    this.#title = truncateToWidth(displayTitle(title.replace(/[\x00-\x1f\x7f-\x9f]/g, "")), 128, "…")
     this.#schedule()
   }
 

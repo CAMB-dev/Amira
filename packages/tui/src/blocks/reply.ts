@@ -389,18 +389,24 @@ export class ReplyBlock extends Block {
     for (const f of codeFrames(plain, this.lastGlyphs, this.lastAssistant)) {
       rows[f.top] = { from: 0, skip: true }
       if (f.bottom !== undefined) rows[f.bottom] = { from: 0, skip: true }
-      const shown = f.rows.map((r) => plain[r]!.slice(f.textCol ?? f.col))
-      let at: number[] | undefined
+      const side = this.lastGlyphs.codeSide
+      const shown = f.rows.map((r) => {
+        const text = plain[r]!.slice(f.textCol ?? f.col)
+        return side && text.endsWith(side) ? text.slice(0, -side.length) : text
+      })
+      let at: { line: number; length: number }[] | undefined
       for (let q = next; q < fences.length && !at; q++) {
         at = linesOf(shown, fences[q]!.shown)
         if (at) next = q + 1
       }
       const fence = at && fences[next - 1]!
       for (const [k, r] of f.rows.entries()) {
-        const line = at?.[k]
-        if (line === undefined) rows[r] = { from: f.col }
-        else if (k > 0 && at![k - 1] === line) rows[r] = { from: f.col, joins: true }
-        else rows[r] = { from: f.col, exact: fence!.exact[line]! }
+        const match = at?.[k]
+        const text = match ? shown[k]!.slice(0, match.length) : shown[k]!.trimEnd()
+        const bounds = { from: f.col, to: f.col + visibleWidth(text) }
+        if (!match) rows[r] = { ...bounds, exact: text }
+        else if (k > 0 && at![k - 1]!.line === match.line) rows[r] = { ...bounds, joins: true }
+        else rows[r] = { ...bounds, exact: fence!.exact[match.line]! }
       }
     }
     for (const im of imagesIn(lines) ?? []) {
@@ -545,18 +551,27 @@ function fencedCode(markdown: string): Fence[] {
  * The line of a code block's source each of its rows shows (a line wrapped over rows is shown
  * by several), found by matching the rows to the lines. Undefined when they do not match.
  */
-function linesOf(rows: string[], source: string[]): number[] | undefined {
-  const out: number[] = []
+function linesOf(rows: string[], source: string[]): { line: number; length: number }[] | undefined {
+  const out: { line: number; length: number }[] = []
   let r = 0
   for (const [i, line] of source.entries()) {
     if (r >= rows.length) break
-    let text = rows[r++]!
-    out.push(i)
-    while (r < rows.length && text.length < line.length && rows[r] && line.startsWith(text + rows[r])) {
-      text += rows[r++]
-      out.push(i)
-    }
-    if (text.trimEnd() !== line.trimEnd()) return undefined
+    let offset = 0
+    do {
+      if (r >= rows.length) return undefined
+      const rest = line.slice(offset)
+      let text = rows[r++]!
+      if (rest.length <= text.length && rest.trimEnd() === text.trimEnd()) {
+        out.push({ line: i, length: rest.length })
+        break
+      }
+      // A wide grapheme can leave a painted space before the next row's code. Remove only
+      // filler that cannot match the source; literal spaces at a wrap boundary stay code.
+      while (text.endsWith(" ") && !rest.startsWith(text)) text = text.slice(0, -1)
+      if (!text || !rest.startsWith(text)) return undefined
+      out.push({ line: i, length: text.length })
+      offset += text.length
+    } while (offset < line.length)
   }
   return r === rows.length ? out : undefined
 }

@@ -215,7 +215,7 @@ test("inline: a code block an extension renders is committed once as its lines, 
       "  line L2",
     ].join("\n"),
   )
-  expect(all()).toContain("  ╭─ js\n  │ x()\n  ╰─")
+  expect(all()).toContain(`  ╭─ js${"─".repeat(32)}╮\n  │ x()${" ".repeat(32)}│\n  ╰${"─".repeat(36)}╯`)
   expect(all()).not.toContain("╭─ box")
   // Asked once, when it closed: later nodes use the full width minus the reply gutter.
   expect(calls).toEqual([{ code: "A --> B\nB --> C", width: 38 }])
@@ -245,7 +245,9 @@ test("inline: a rendering on its way holds what follows; one that takes too long
   await slow.shows("after it")
   await slow.idle()
   await Bun.sleep(200)
-  expect(slow.all()).toContain("  ╭─ box\n  │ slow\n  ╰─\n\n  after it")
+  expect(slow.all()).toContain(
+    `  ╭─ box${"─".repeat(51)}╮\n  │ slow${" ".repeat(51)}│\n  ╰${"─".repeat(56)}╯\n\n  after it`,
+  )
   slow.terminal.send("\x03")
   await slow.exited
 })
@@ -316,7 +318,7 @@ test("inline: a renderer's image goes to the image providers; a renderer that th
   await waitFor(() => screen.images.length > 0, "the image")
   expect(opened).toEqual(["png of pie"])
   expect(screen.images).toEqual([expect.objectContaining({ protocol: "sixel", rows: 2, cols: 3 })])
-  expect(all()).toContain("  ╭─ broken\n  │ x\n  ╰─")
+  expect(all()).toContain(`  ╭─ broken${"─".repeat(48)}╮\n  │ x${" ".repeat(54)}│\n  ╰${"─".repeat(56)}╯`)
   await waitFor(() => errors.length > 0, "the error")
   expect(errors).toEqual(['markdown renderer "broken" failed: no parser'])
   terminal.send("\x03")

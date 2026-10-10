@@ -3,6 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi } from "@amira/ai"
+import { parseCliArgs } from "../src/args.ts"
+import { resolveConfig } from "../src/config.ts"
+import { createCommandHost } from "../src/control.ts"
 import { createSession, type Session } from "../src/session.ts"
 
 let root: string
@@ -82,6 +85,40 @@ test("reload re-reads files and removes themes from extensions no longer loaded"
   rmSync(file)
   await session.reload()
   expect(session.host.themes.get("example")).toBeUndefined()
+})
+
+test("saved theme and appearance reach the next session and remain paired through reload", async () => {
+  session = await createSession({ cwd, ai: createAi({ providers: [] }), extensions: [], noBuiltins: true })
+  const commands = createCommandHost({ session, cwd, home, interactive: true })
+  commands.rememberTheme("amber", "light")
+  await commands.flushChoices()
+  const config = resolveConfig(parseCliArgs([], cwd, {}), home)
+  expect(config.settings.tui).toMatchObject({ theme: "amber", themeVariant: "light" })
+  await session.agent.dispose()
+  session.host.unloadAll()
+  const seen: unknown[] = []
+  session = await createSession({
+    cwd,
+    ai: createAi({ providers: [] }),
+    extensions: [],
+    noBuiltins: false,
+    builtins: async () => [
+      {
+        source: "test:appearance",
+        extension: (api) => {
+          seen.push(api.settings.tui)
+        },
+      },
+    ],
+    settings: config.settings,
+    reloadSettings: () => ({ settings: config.settings, layers: config.settingsLayers, warnings: [] }),
+  })
+  await session.reload()
+  expect(seen).toEqual([
+    { theme: "amber", themeVariant: "light" },
+    { theme: "amber", themeVariant: "light" },
+  ])
+  expect(session.host.themes.get("amber")).toBeDefined()
 })
 
 test("an unknown tui.theme name is a startup notice", async () => {

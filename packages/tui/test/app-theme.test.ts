@@ -62,13 +62,13 @@ test("registry reload and removal replace full-screen styles, transcript caches 
 })
 
 test("/theme arrows preview immediately, Esc restores without saving, and Enter applies", async () => {
-  const saved: string[] = []
+  const saved: { name: string; variant: string }[] = []
   const s = await setup([], {
     commands: [],
     tuiCommands: true,
     settings: { mode: "fullscreen", theme: "dark", colorDepth: "truecolor" },
-    saveTheme: (name) => {
-      saved.push(name)
+    saveTheme: (name, variant) => {
+      saved.push({ name, variant })
     },
   })
   const dark = "\x1b[38;2;120;219;226m"
@@ -77,7 +77,8 @@ test("/theme arrows preview immediately, Esc restores without saving, and Enter 
     s.terminal.send("/theme\r")
     await s.shows("arrows preview")
     s.terminal.clearWrites()
-    s.terminal.send("\x1b[B")
+    expect(s.live()).toContain("[dark]")
+    s.terminal.send("\x1b[C")
     await waitFor(() => s.terminal.output.includes(light), "light preview")
     expect(saved).toEqual([])
     s.terminal.clearWrites()
@@ -86,11 +87,127 @@ test("/theme arrows preview immediately, Esc restores without saving, and Enter 
     expect(saved).toEqual([])
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("arrows preview"), "reopened theme picker")
-    s.terminal.send("\x1b[B\r")
+    s.terminal.send("\x1b[C\r")
     await waitFor(() => saved.length === 1, "applied theme")
-    expect(saved).toEqual(["light"])
+    expect(saved).toEqual([{ name: "amira", variant: "light" }])
     expect(s.terminal.output).toContain(`${light}› `)
   } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("theme picker lists built-ins first, custom themes next and terminal last", async () => {
+  const themes = new ThemeRegistry()
+  themes.register({ name: "custom", description: "User palette" }, "user")
+  for (const name of ["ascii", "mono", "lavender", "burnt", "amber", "amira"])
+    themes.register({ name }, "built-in")
+  const s = await setup([], {
+    themes,
+    commands: [],
+    tuiCommands: true,
+    rows: 60,
+    settings: { mode: "fullscreen", theme: "auto" },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await s.shows("arrows preview")
+    const rows = s.live().split("\n")
+    const names = rows.flatMap((row) => {
+      const name = row.match(
+        /^┃ [❯ ] (?:\d+ )?(amira|amber|burnt|lavender|mono|ascii|custom|terminal)(?=\s|$)/,
+      )?.[1]
+      return name ? [name] : []
+    })
+    expect(names).toEqual(["amira", "amber", "burnt", "lavender", "mono", "ascii", "custom", "terminal"])
+    expect(rows.find((row) => /\bamira\b/.test(row))).toContain("current")
+    expect(s.live()).toContain("[auto]")
+    expect(s.live()).toContain("user · User palette")
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("theme and variant preview survive reload and Esc restores both from the current registry", async () => {
+  const themes = new ThemeRegistry()
+  themes.register({ name: "custom", light: { accent: "#010203" } }, "user")
+  themes.register({ name: "amber", dark: { accent: "#040506" } }, "built-in")
+  const saved: string[] = []
+  const s = await setup([], {
+    themes,
+    commands: [],
+    tuiCommands: true,
+    settings: { mode: "fullscreen", theme: "custom", themeVariant: "light", colorDepth: "truecolor" },
+    saveTheme: (name) => {
+      saved.push(name)
+    },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await s.shows("arrows preview")
+    s.terminal.send("amber")
+    await waitFor(() => s.live().includes("filter"), "filtered theme")
+    s.terminal.clearWrites()
+    s.terminal.send("\x1b[D")
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;4;5;6m❯"), "amber dark preview")
+    themes.register({ name: "custom", light: { accent: "#070809" } }, "user")
+    s.terminal.clearWrites()
+    s.terminal.send("\x1b")
+    await waitFor(
+      () => s.terminal.output.includes("\x1b[38;2;7;8;9m› "),
+      "restored custom light after reload",
+    )
+    expect(saved).toEqual([])
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("arrows preview"), "reopened picker")
+    expect(s.live()).toContain("[light]")
+    s.terminal.send("\t")
+    await waitFor(() => s.live().includes("[auto]"), "Tab appearance preview")
+    s.terminal.send("\x1b")
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("legacy light opens as current Amira light and direct names keep the appearance", async () => {
+  const saved: { name: string; variant: string }[] = []
+  const s = await setup([], {
+    commands: [],
+    tuiCommands: true,
+    settings: { theme: "light", themeVariant: "dark", colorDepth: "truecolor" },
+    saveTheme: (name, variant) => {
+      saved.push({ name, variant })
+    },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await s.shows("arrows preview")
+    expect(s.live()).toContain("[light]")
+    expect(
+      s
+        .live()
+        .split("\n")
+        .find((row) => /\bamira\b/.test(row)),
+    ).toContain("current")
+    s.terminal.send("\r")
+    await waitFor(() => saved.length === 1, "normalized legacy theme save")
+    s.terminal.send("/theme amber\r")
+    await waitFor(() => saved.length === 2, "named theme save")
+    expect(saved).toEqual([
+      { name: "amira", variant: "light" },
+      { name: "amber", variant: "light" },
+    ])
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
     s.terminal.send("\x03\x03")
     await s.exited
   }
@@ -258,3 +375,38 @@ test("validated invalid glyph overrides fall back to the TUI and Markdown defaul
   }
   expect(glyphs.toolFailed).toBe("✗")
 })
+
+for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: short theme picker keeps the actual appearance key in its footer`, async () => {
+    const saved: { name: string; variant: string }[] = []
+    const s = await setup([], {
+      cols: 60,
+      rows: 6,
+      commands: [],
+      tuiCommands: true,
+      settings: { mode },
+      saveTheme: (name, variant) => {
+        saved.push({ name, variant })
+      },
+    })
+    try {
+      s.terminal.send("/theme\r")
+      await waitFor(() => s.live().includes("Tab appearance"), "visible appearance footer")
+      expect(s.live()).not.toContain("Appearance:")
+      expect(
+        s
+          .live()
+          .split("\n")
+          .find((line) => line.includes("Tab appearance")),
+      ).toContain("Enter choose")
+      s.terminal.send("\t\r")
+      await waitFor(() => saved.length === 1, "theme and appearance saved")
+      expect(saved).toEqual([{ name: "amira", variant: "dark" }])
+    } finally {
+      s.terminal.send("\x1b")
+      await Bun.sleep(40)
+      s.terminal.send("\x03\x03")
+      await s.exited
+    }
+  })
+}

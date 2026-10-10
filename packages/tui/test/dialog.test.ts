@@ -22,6 +22,58 @@ function open(request: DialogRequest, keys?: Keybindings) {
 
 const select = (options: string[]) => open({ kind: "select", requestId: "r1", title: "Model", options })
 
+test("local select header handles appearance keys without selecting or filtering", () => {
+  const answers: DialogAnswer[] = []
+  const previews: string[] = []
+  let appearance = "auto"
+  const dialog = new Dialog(
+    { kind: "select", requestId: "theme", title: "Theme", options: ["amira", "amber"] },
+    (answer) => answers.push(answer),
+    undefined,
+    {
+      changed: (name) => previews.push(name),
+      header: () => `Appearance: [${appearance}]`,
+      handleInput: (event) => {
+        if (event.type !== "key" || !["tab", "left", "right"].includes(event.name)) return false
+        appearance = "light"
+        return true
+      },
+    },
+  )
+  expect(stripAnsi(dialog.render(60, plain).join("\n"))).toContain("Appearance: [auto]")
+  for (const name of ["tab", "left", "right"] as const) expect(dialog.handleInput(key(name))).toBe(true)
+  expect(stripAnsi(dialog.render(60, plain).join("\n"))).toContain("Appearance: [light]")
+  expect(previews).toEqual([])
+  expect(answers).toEqual([])
+  dialog.handleInput(key("down"))
+  expect(previews).toEqual(["amber"])
+  dialog.maxRows = 3
+  const rows = dialog.render(20, plain)
+  expect(rows).toHaveLength(3)
+  expect(rows.every((row) => visibleWidth(row) <= 20)).toBe(true)
+  dialog.handleInput(key("escape"))
+  expect(answers).toEqual([undefined])
+})
+
+test("local picker footer keeps appearance discoverable when its header is trimmed", () => {
+  const dialog = new Dialog(
+    { kind: "select", requestId: "theme", title: "Theme", options: ["amira", "amber"] },
+    () => {},
+    undefined,
+    { header: () => "Appearance: [auto] / dark / light", footer: [{ text: "Tab appearance", priority: 6 }] },
+  )
+  for (const maxRows of [1, 2, 3]) {
+    dialog.maxRows = maxRows
+    for (const width of [20, 60]) {
+      const rows = dialog.render(width, plain).map(stripAnsi)
+      expect(rows).toHaveLength(maxRows)
+      expect(rows.join("\n")).not.toContain("Appearance:")
+      expect(rows.at(-1)).toContain("Tab appearance")
+      expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true)
+    }
+  }
+})
+
 test("select highlights its initial option, and Enter keeps it", () => {
   const d = open({
     kind: "select",
