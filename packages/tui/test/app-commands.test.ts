@@ -19,7 +19,7 @@ test("typing a slash opens the command list below the editor; Tab and Enter comp
   // The list takes the place of the status bar and the hint, and ends with its own hint.
   expect(rows.filter((l) => l.trim()).at(-1)).toContain("Tab complete · Enter run · Esc close")
   expect(rows.slice(editorRow).join("\n")).not.toContain("mock/m1")
-  expect(live()).not.toContain("Enter send")
+  expect(live()).not.toContain("shift+tab mode")
   // Prefix first: "/he" puts help on top; Tab completes it, Enter runs it.
   terminal.send("he")
   await waitFor(() => live().includes("❯ /help"), "help selected")
@@ -38,7 +38,10 @@ test("typing a command: the input box stays put and each key draws one frame wit
     commands: testCommands([]),
     onWrite: (screen) => void frames.push([...screen.lines]),
   })
-  await waitFor(() => live().includes("Enter send"), "first frame")
+  await waitFor(
+    () => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}\? keys$/m.test(live()),
+    "first frame",
+  )
   await Bun.sleep(40)
   const boxTop = (lines: string[]) => lines.findIndex((l) => l.startsWith("╭"))
   const top = boxTop(frames.at(-1)!)

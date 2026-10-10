@@ -97,6 +97,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
   const streaming = new MarkdownStream({
     hyperlinks: host.hyperlinks,
     nodes,
+    headingMarkers: true,
   })
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
@@ -228,7 +229,14 @@ export function createInlineView(host: ViewHost): TranscriptView {
   function liveToolRows(width: number, ctx: RenderContext, max = Number.POSITIVE_INFINITY): string[] {
     const live = toolCalls.live
     if (!live.length && !exploring.length) return []
-    const gap = transcript.gapBefore("tool") ? [""] : []
+    const runningAt = live.findIndex((c) => !c.end)
+    const separated =
+      runningAt >= 0 &&
+      (exploring.length > 0 ||
+        runningAt > 0 ||
+        ["tool", "assistant", "reasoning"].includes(transcript.last ?? ""))
+    const gap =
+      separated && !exploring.length && runningAt === 0 ? [] : transcript.gapBefore("tool") ? [""] : []
     const now = Date.now()
     const draw = (output: boolean) => {
       const calls: string[][] = []
@@ -240,7 +248,9 @@ export function createInlineView(host: ViewHost): TranscriptView {
           calls.push(output ? rows : rows.slice(0, 1))
         }
       } else if (exploring.length) calls.push(exploredRows(width, ctx.theme, "collapsed").slice(0, 1))
-      for (const c of live) {
+      for (const [i, c] of live.entries()) {
+        const boundary =
+          separated && i === runningAt ? ["", ctx.theme.muted(`  ${glyphs.rule.repeat(3)}`), ""] : []
         const presenter = presenters?.get(c.name)
         const head = c.end
           ? [heldToolLine(ctx.theme, presenter, finished(c), width, { last: isLastTool(c.id) })]
@@ -248,6 +258,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
               last: isLastTool(c.id),
             })
         calls.push([
+          ...boundary,
           ...(output ? head : head.slice(0, 1)),
           ...treeRows(
             callTree(c.id),

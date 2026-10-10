@@ -18,7 +18,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         s.terminal.send("first\r")
         await s.shows("First answer")
         await s.idle()
-        await waitFor(() => /^ \/work\/proj +13k \/ 128k$/m.test(s.live()), "known context fill")
+        await waitFor(() => /^ \/work\/proj +13K \/ 128K$/m.test(s.live()), "known context fill")
         s.terminal.send("second\r")
         await s.shows("A long")
         s.terminal.send(key!)
@@ -29,7 +29,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           stopReason: "aborted",
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         })
-        expect(s.live()).toMatch(/^ \/work\/proj +13k \/ 128k$/m)
+        expect(s.live()).toMatch(/^ \/work\/proj +13K \/ 128K$/m)
       } finally {
         await closeImageApp(s)
       }

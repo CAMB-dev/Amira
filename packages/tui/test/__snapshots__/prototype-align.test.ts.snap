@@ -1,0 +1,28 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`width-100 fullscreen running turn matches the chosen prototype details 1`] = `
+" ⎇ main*  ~/dev/Amira  ·  Status bar layout                                   $0.42  │  124K / 200K
+
+
+
+  › Make the status bar clearer.                                                           8:19 PM
+
+
+  # Status bar layout                                                                      8:19 PM
+
+  The header now carries context and cost.
+
+  ├ Read 3 files · Searched 2 patterns  ▸
+  ├ Edited packages/tui/src/status-bar.ts  +12 / -3
+  └ Ran bun test packages/tui  ✓ 412 pass · 3.1s
+
+  ───
+
+  └ ⠋ Running git diff --stat                                                                     0s
+
+ ⠋ Responding… 4.1s                                         1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ › Message Amira                                                                                  │
+╰─────────────────────────────────────────────────────────────────── claude-opus-5-5 (high) · ask ─╯
+ shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys"
+`;

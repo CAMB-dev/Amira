@@ -1,7 +1,72 @@
 import { expect, test } from "bun:test"
-import { setup } from "./app-harness.ts"
+import { setup, waitFor } from "./app-harness.ts"
 
 for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: real focus reports govern completion titles and alerts`, async () => {
+    const s = await setup(
+      ["unknown", "focused", "returned", "background"].map((text) => ({ text, delayMs: 50 })),
+      { settings: { mode }, env: { TERM_PROGRAM: "ghostty" } },
+    )
+    const focuses: boolean[] = []
+    const off = s.bus.subscribe((e) => {
+      if (e.type === "ui.focus") focuses.push(e.data.focused)
+    })
+    const title = () => s.screen.oscs.filter((o) => o.startsWith("0;")).at(-1)
+    const completions = () => s.screen.oscs.filter((o) => o === "9;Amira finished the turn")
+    try {
+      // Unknown focus is not evidence that the terminal is in the background.
+      s.terminal.send("go\r")
+      await s.shows("unknown")
+      await s.idle()
+      expect(title()).toBe("0;Amira · proj")
+      expect(s.screen.bells).toBe(0)
+      expect(completions()).toHaveLength(0)
+
+      s.terminal.send("\x1b[Igo\r")
+      await s.shows("focused")
+      await s.idle()
+      expect(focuses).toEqual([true])
+      expect(title()).toBe("0;Amira · proj")
+      expect(s.screen.bells).toBe(0)
+      expect(completions()).toHaveLength(0)
+
+      // Blurring an already completed foreground turn must not mark it waiting.
+      s.terminal.send("\x1b[O")
+      await s.bus.flush()
+      expect(title()).toBe("0;Amira · proj")
+      s.terminal.send("go\r")
+      await waitFor(() => s.agent.status === "working", "background turn start")
+      s.terminal.send("\x1b[I")
+      await s.shows("returned")
+      await s.idle()
+      expect(focuses).toEqual([true, false, true])
+      expect(title()).toBe("0;Amira · proj")
+      expect(s.screen.bells).toBe(0)
+      expect(completions()).toHaveLength(0)
+      expect(s.screen.oscs).not.toContain("0;? Amira · proj")
+
+      s.terminal.send("go\r")
+      await waitFor(() => s.agent.status === "working", "foreground turn start")
+      s.terminal.send("\x1b[O")
+      await s.shows("background")
+      await s.idle()
+      expect(focuses).toEqual([true, false, true, false])
+      expect(title()).toBe("0;? Amira · proj")
+      expect(s.screen.bells).toBe(1)
+      expect(completions()).toHaveLength(1)
+
+      s.terminal.send("\x1b[I")
+      await s.bus.flush()
+      expect(title()).toBe("0;Amira · proj")
+      expect(s.screen.bells).toBe(1)
+      expect(completions()).toHaveLength(1)
+    } finally {
+      off()
+      s.terminal.send("\x03\x03")
+      await s.exited
+    }
+  })
+
   test(`${mode}: unknown focus alerts for questions, not pickers, once per wait`, async () => {
     const s = await setup([], { settings: { mode }, env: { TERM_PROGRAM: "ghostty" } })
     try {

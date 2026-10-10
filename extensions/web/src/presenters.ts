@@ -24,6 +24,7 @@ export const webSearchPresenter: ToolPresenter<
   { query?: string; url?: string; pattern?: string },
   WebSearchDetails & { native?: boolean }
 > = {
+  verbs: { past: "Searched", running: "Searching" },
   summary(args) {
     if (args.query !== undefined) return `"${str(args.query)}"`
     if (str(args.url)) return str(args.pattern) ? `"${str(args.pattern)}" in ${str(args.url)}` : str(args.url)
@@ -42,6 +43,7 @@ export const webSearchPresenter: ToolPresenter<
 }
 
 export const webFetchPresenter: ToolPresenter<{ url: string }, WebFetchDetails> = {
+  verbs: { past: "Fetched", running: "Fetching" },
   summary: (args) => str(args.url),
   result(call) {
     if (call.result.isError) return undefined

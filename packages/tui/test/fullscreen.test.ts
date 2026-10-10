@@ -23,7 +23,7 @@ import {
   listSubagents,
   ToolRegistry,
 } from "@amira/core"
-import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
+import { FakeTerminal, type GraphicsReplies, visibleWidth } from "@amira/tui-kit"
 import { agentsCommand } from "../../../extensions/agent/src/index.ts"
 import { subagentView } from "../../../extensions/agent/src/subagent-view.ts"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
@@ -32,6 +32,7 @@ import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { fileList } from "../src/file-index.ts"
+import { localClock } from "../src/format.ts"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -54,8 +55,9 @@ const SHIFT_ENTER = "\x1b[13;2u"
 const WHEEL_UP = "\x1b[<64;5;5M"
 /** Full-screen workspace chrome occupies two rows above the transcript. */
 const PANE_TOP = 2
-/** Remove only a padded, valid 24-hour clock at the end of a row. */
-const withoutClocks = (text: string) => text.replace(/ {2,}(?:[01]\d|2[0-3]):[0-5]\d *$/gm, "")
+/** Remove only a padded, valid 12- or 24-hour clock at the end of a row. */
+const withoutClocks = (text: string) =>
+  text.replace(/ {2,}(?:(?:[01]\d|2[0-3]):[0-5]\d|(?:[1-9]|1[0-2]):[0-5]\d [AP]M) *$/gm, "")
 
 interface Options {
   cols?: number
@@ -203,16 +205,16 @@ test("reads in a row become one Explored row, which unfolds to the calls", async
   terminal.send("go\r")
   await shows("Both read.")
   await idle()
-  expect(withoutClocks(view())).toContain("  └ Read 2 files (a.ts, b.ts)  ▸\n\n  Both read.")
-  expect(view()).not.toContain("read a.ts")
+  expect(withoutClocks(view())).toContain("  └ Read 2 files  ▸\n\n  Both read.")
+  expect(view()).not.toContain("Read a.ts")
   // Selected, Enter replaces the folded row with each original call.
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
   await waitFor(() => /tool call \d+ of|Explored \d+ of/.test(view()), "the row selected")
   terminal.send("\r")
-  await waitFor(() => view().includes("├ read a.ts"), "unfolded")
+  await waitFor(() => view().includes("├ Read a.ts"), "unfolded")
   expect(view()).toMatch(
-    /▌ ├ read a\.ts\n▌ │ {2}✓ contents of a\.ts …\n▌ └ read b\.ts\n▌ {4}✓ contents of b\.ts …/,
+    /▌ ├ Read a\.ts\n▌ │ {2}✓ contents of a\.ts …\n▌ └ Read b\.ts\n▌ {4}✓ contents of b\.ts …/,
   )
   terminal.send(ESC)
   terminal.send("\x03")
@@ -271,14 +273,16 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   // Right above the bottom area, which stays at the bottom of the screen.
   expect(withoutClocks(view())).toContain(`${conversation}\n\n╭`)
   // Only user/reply first lines carry a clock, at the fixed right edge; tool rows do not.
-  const clockRows = screen.lines.filter((row) => /(?:[01]\d|2[0-3]):[0-5]\d$/.test(row))
+  const clock = localClock(Date.now())
+  const clockCells = visibleWidth(clock)
+  const clockRows = screen.lines.filter((row) => row.endsWith(clock))
   expect(clockRows).toHaveLength(2)
-  expect(clockRows[0]).toMatch(/^ {2}› what is in a\.ts\? {33}(?:[01]\d|2[0-3]):[0-5]\d$/)
-  expect(clockRows[1]).toMatch(/^ {2}The file has three lines\. {26}(?:[01]\d|2[0-3]):[0-5]\d$/)
-  expect(screen.lines[0]).toMatch(/^ \/work\/proj +0 \/ 128k$/)
+  expect(clockRows[0]).toBe(`  › what is in a.ts?${" ".repeat(38 - clockCells)}${clock}`)
+  expect(clockRows[1]).toBe(`  The file has three lines.${" ".repeat(31 - clockCells)}${clock}`)
+  expect(screen.lines[0]).toMatch(/^ \/work\/proj +0 \/ 128K$/)
   expect(screen.lines[1]).toBe("")
   expect(screen.lines.at(-2)).toMatch(/^╰─+ m1 · auto ─╯$/)
-  expect(screen.lines.at(-1)).toContain("Enter send")
+  expect(screen.lines.at(-1)).toBe(" shift+tab mode  │  ctrl+o detail  │  ? keys")
   terminal.send("\x03")
   expect(await exited).toBe(0)
   expect(screen.inAltScreen).toBe(false)
@@ -943,7 +947,7 @@ test("Ctrl+F finds text in the transcript, highlights matches and moves between 
   // The find bar keeps its essential keys; the input's hint row stays, blank.
   expect(view()).toMatch(/2\/2 · Enter older · Esc close$/m)
   expect(view()).not.toContain("newer")
-  expect(view()).not.toContain("Enter send")
+  expect(view()).not.toContain("shift+tab mode")
   expect(view()).toContain("needle 30")
   // The current match is marked (inverse and underlined), the other one inverse.
   expect(terminal.output).toContain("\x1b[7;4mneedle\x1b[27;24m")
@@ -1158,16 +1162,30 @@ test("a resize reflows the whole transcript to the new width", async () => {
     .filter((l) => l.includes("word"))
   expect(replyRows.length).toBeGreaterThan(3)
   expect(replyRows.every((l) => l.length <= 40)).toBe(true)
-  expect(replyRows[0]).toMatch(/ +(?:[01]\d|2[0-3]):[0-5]\d$/)
-  // Only the first row reserves nine clock cells; continuation rows use all 38 content cells.
-  expect(replyRows.map(withoutClocks)).toEqual([
-    "  word0 word1 word2 word3 word4",
-    "  word5 word6 word7 word8 word9 word10",
-    "  word11 word12 word13 word14 word15",
-    "  word16 word17 word18 word19 word20",
-    "  word21 word22 word23 word24 word25",
-    "  word26 word27 word28 word29",
-  ])
+  const clock = localClock(Date.now())
+  const clockCells = visibleWidth(clock)
+  const first = clockCells === 5 ? "  word0 word1 word2 word3 word4" : "  word0 word1 word2 word3"
+  expect(replyRows[0]).toBe(`${first}${" ".repeat(38 - visibleWidth(first) - clockCells)}${clock}`)
+  // Only the first row reserves the clock plus four inset cells; continuations use all 38 content cells.
+  expect(replyRows.map(withoutClocks)).toEqual(
+    clockCells === 5
+      ? [
+          first,
+          "  word5 word6 word7 word8 word9 word10",
+          "  word11 word12 word13 word14 word15",
+          "  word16 word17 word18 word19 word20",
+          "  word21 word22 word23 word24 word25",
+          "  word26 word27 word28 word29",
+        ]
+      : [
+          first,
+          "  word4 word5 word6 word7 word8 word9",
+          "  word10 word11 word12 word13 word14",
+          "  word15 word16 word17 word18 word19",
+          "  word20 word21 word22 word23 word24",
+          "  word25 word26 word27 word28 word29",
+        ],
+  )
   expect(withoutClocks(replyRows.join("\n")).replace(/\s+/g, " ").trim()).toBe(words)
   terminal.send("\x03")
   await exited

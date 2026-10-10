@@ -26,6 +26,8 @@ export interface Env {
   glyphs: Glyphs
   hyperlinks: boolean
   highlight: boolean
+  /** With it, headings show their # markers in this style. */
+  headingMarker?: StyleFn
   /** Reference definitions seen so far; the block state's, set by the functions here. */
   refs?: ReadonlyMap<string, LinkRef>
   /**
@@ -71,6 +73,8 @@ export interface LineRender {
    * Kept when `start` moves past the first rows, since the line may still grow.
    */
   heading?: number
+  /** Added before the text, once; measured as cells, not an unwrapped prefix. */
+  marker?: Run
 }
 
 interface ListEntry {
@@ -562,7 +566,26 @@ function headingRender(level: number, col: number, env: Env): LineRender {
       : level === 2
         ? env.styles.heading
         : env.styles.subheading
-  return { code: false, lang: "", base, prefix: pad(col), rest: pad(col), indent: col, start: 0 }
+  return {
+    code: false,
+    lang: "",
+    base,
+    prefix: pad(col),
+    rest: pad(col),
+    indent: col,
+    start: 0,
+    ...(env.headingMarker
+      ? {
+          marker: {
+            text: `${"#".repeat(level)} `,
+            style: env.headingMarker,
+            src: 0,
+            carry: "",
+            cuttable: false,
+          },
+        }
+      : {}),
+  }
 }
 
 function codeLine(f: Fence, line: string, env: Env): LineRender {
@@ -662,6 +685,9 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
     open = parsed.open
     mathOpen = parsed.mathOpen
   }
+  // Markers have no source offset to resume inside: partial commits cut only at text runs.
+  // A carried line has already committed its marker, so its continuation must not repeat it.
+  if (lr.marker && carry === undefined) runs.unshift(lr.marker)
   const cells = toCells(runs)
   if (lr.code) {
     const col = Math.max(0, lr.indent - visibleWidth(env.glyphs.codeSide) - 1)

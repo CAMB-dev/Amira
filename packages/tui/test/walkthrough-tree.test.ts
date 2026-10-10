@@ -88,6 +88,9 @@ for (const minus of ["-", "−"]) {
       )
       expect(rows.join("\n")).toContain(defaultTheme.success("+1"))
       expect(rows.join("\n")).toContain(defaultTheme.error(`${minus}1`))
+      expect(rows.join("\n")).toContain(defaultTheme.muted(" / "))
+      expect(rows.map(stripAnsi).join("\n")).toContain(`+1 / ${minus}1`)
+      expect(rows.map(stripAnsi).join("\n")).not.toContain("✓")
     }
   })
 }

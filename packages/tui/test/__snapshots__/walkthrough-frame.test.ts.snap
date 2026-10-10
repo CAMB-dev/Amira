@@ -1,15 +1,15 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`walkthrough frame at 100 columns 1`] = `
-" ⎇ main  ~/dev/Amira  ·  Fixing add Bug                                                  31k / 200k 
+" ⎇ main  ~/dev/Amira  ·  Fixing add Bug                                                  31K / 200K 
 
                                                                                                     
-  › Fix add and check the project.                                                           20:09  
+  › Fix add and check the project.                                                         8:09 PM  
                                                                                                     
 
   ∴ Thought for 4.2s
 
-  Here is the corrected function:                                                            20:09  
+  Here is the corrected function:                                                          8:09 PM  
 
   ╭─ ts────────────────────────────────────────────────────────────────────────────────────────────╮
   │ export function add(left: number, right: number): number {                                     │
@@ -20,7 +20,7 @@ exports[`walkthrough frame at 100 columns 1`] = `
   ├ ⠋ agent                                                                                       6s
   │  └ ⠋ List project files · explorer · 6s · 31k tok
   │    └ ⠋ bash ls src
-  ├ edit src/add.ts  ✓ +1 -1
+  ├ edit src/add.ts  +1 / -1
   ├ bash bun test src/add.test.ts  ✓ 12 pass · 1.2s
   └ ⠋ started by a command · in the background
      └ ⠋ Review project structure · explorer · 6s · 6.0k tok
@@ -28,15 +28,15 @@ exports[`walkthrough frame at 100 columns 1`] = `
 `;
 
 exports[`walkthrough frame at 50 columns 1`] = `
-" ⎇ main  ~/dev/Amira                   31k / 200k 
+" ⎇ main  ~/dev/Amira                   31K / 200K 
 
                                                   
-  › Fix add and check the project.         20:09  
+  › Fix add and check the project.       8:09 PM  
                                                   
 
   ∴ Thought for 4.2s
 
-  Here is the corrected function:          20:09  
+  Here is the corrected function:        8:09 PM  
 
   ╭─ ts──────────────────────────────────────────╮
   │ export function add(left: number, right: numb│
@@ -48,7 +48,7 @@ exports[`walkthrough frame at 50 columns 1`] = `
   ├ ⠋ agent                                     6s
   │  └ ⠋ List project f… · explorer · 6s · 31k tok
   │    └ ⠋ bash ls src
-  ├ edit src/add.ts  ✓ +1 -1
+  ├ edit src/add.ts  +1 / -1
   ├ bash bun test src/add.test.ts
   │  ✓ 12 pass · 1.2s
   └ ⠋ started by a command · in the background

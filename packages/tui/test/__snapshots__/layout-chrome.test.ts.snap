@@ -1,18 +1,18 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
-" ⎇ main*  ~/dev/Amira  ·  remember last model                                 $0.42  │  124k / 200k 
+" ⎇ main*  ~/dev/Amira  ·  remember last model                                 $0.42  │  124K / 200K 
 
                                                                                                     
-  › The status bar feels cramped, can you make it clearer?                                   20:19  
+  › The status bar feels cramped, can you make it clearer?                                 8:19 PM  
                                                                                                     
 
   ∴ Thought for 4.2s  Ctrl+O to expand
 
-  # Status bar layout                                                                        20:19  
+  # Status bar layout                                                                      8:19 PM  
   The header now carries context and cost.
 
-  ├ Edited packages/tui/src/status-bar.ts  ✓ +12 / -3
+  ├ Edited packages/tui/src/status-bar.ts  +12 / -3
   └ Ran bun test packages/tui  ✓ 412 pass · 3.1s
 
  ⠋ Responding… 4.1s                                         1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop 
@@ -22,20 +22,20 @@ exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
 `;
 
 exports[`a composed batch2 frame at 50 columns keeps the chosen layout 1`] = `
-" ⎇ main*  ~/dev/Amira       $0.42  │  124k / 200k 
+" ⎇ main*  ~/dev/Amira       $0.42  │  124K / 200K 
 
                                                   
-  › The status bar feels cramped, can      20:19  
+  › The status bar feels cramped, can    8:19 PM  
     you make it clearer?                          
                                                   
 
   ∴ Thought for 4.2s  Ctrl+O to expand
 
-  # Status bar layout                      20:19  
+  # Status bar layout                    8:19 PM  
   The header now carries context and cost.
 
   ├ Edited packages/tui/src/status-bar.ts
-  │  ✓ +12 / -3
+  │  +12 / -3
   └ Ran bun test packages/tui  ✓ 412 pass · 3.1s
 
  ⠋ Responding…           1m20s  ⇣12.4k   esc stop 

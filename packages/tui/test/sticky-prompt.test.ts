@@ -13,7 +13,7 @@ import {
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { type BlockEnv, LinesBlock, userBlock } from "../src/blocks.ts"
-import { rememberMessageTime } from "../src/format.ts"
+import { localClock, rememberMessageTime } from "../src/format.ts"
 import { historyBlocks } from "../src/fullscreen/history-blocks.ts"
 import { createMouse } from "../src/fullscreen/mouse.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
@@ -24,6 +24,8 @@ import { stickyPrompt, stickyPromptLine } from "../src/pane/sticky-prompt.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
 
 const at = new Date(2026, 9, 10, 20, 9).getTime()
+const clock = localClock(at)
+const clockCells = visibleWidth(clock)
 const env: BlockEnv = {
   theme: plain.theme,
   width: 100,
@@ -105,15 +107,15 @@ test("the single sticky row uses the band, accent, first-line ellipsis and origi
   const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
   const block = userBlock(message("First line\nHidden second line"))
   const row = stickyPromptLine(block, banded)
-  expect(stripAnsi(row)).toBe(`  › First line…${" ".repeat(78)}20:09  `)
+  expect(stripAnsi(row)).toBe(`  › First line…${" ".repeat(83 - clockCells)}${clock}  `)
   expect(row).toContain(banded.theme.accent("›"))
-  expect(row).toContain(banded.theme.muted("20:09"))
+  expect(row).toContain(banded.theme.muted(clock))
   expect(row).toContain("\x1b[48;2;")
   expect(visibleWidth(row)).toBe(100)
   const long = userBlock(message("界".repeat(100)))
   const longRow = stripAnsi(stickyPromptLine(long, banded))
   expect(longRow).toContain("…")
-  expect(longRow).toEndWith("20:09  ")
+  expect(longRow).toEndWith(`${clock}  `)
   expect(visibleWidth(longRow)).toBe(100)
   for (const width of [1, 8, 15, 16, 30]) {
     const narrow = stickyPromptLine(long, { ...banded, width })
@@ -121,7 +123,7 @@ test("the single sticky row uses the band, accent, first-line ellipsis and origi
     expect(narrow).not.toContain("\n")
   }
   const old = userBlock({ role: "user", content: [{ type: "text", text: "Old prompt" }] })
-  expect(stickyPromptLine(old, env)).not.toContain("20:09")
+  expect(stickyPromptLine(old, env)).not.toContain(clock)
 })
 
 test("the reserved sticky slot never changes scrolling, match counts, selection or rows-below math", () => {
@@ -187,7 +189,7 @@ test("clicking the sticky slot jumps to its full message, never starts a drag or
   mouse.mouse(mouseEvent("drag", 3, 24))
   mouse.mouse(mouseEvent("release", 3, 24))
   expect(pane.selectedText()).toContain("Entire second line")
-  expect(pane.selectedText()).not.toContain("20:09")
+  expect(pane.selectedText()).not.toContain(clock)
   mouse.stopEdgeScroll()
 })
 
@@ -229,7 +231,7 @@ test("fullscreen reserves the header gap, pins directly under the header and kee
     view.replyEnd([])
     view.render()
     expect(screen.lines[0]).toBe(" Amira · project")
-    expect(screen.lines[1]).toMatch(/^ {2}› Fix the transcript… +20:09$/)
+    expect(screen.lines[1]).toBe(`  › Fix the transcript…${" ".repeat(75 - clockCells)}${clock}`)
     const tail = screen.lines.slice(2, 10)
     view.handleInput(key("up", { shift: true }))
     view.render()
@@ -273,7 +275,7 @@ test("sticky previews sanitize controls and tabs just like user rows, and honor 
     expect(row).not.toContain("injected")
     expect(row).not.toContain("…")
     const long = stickyPromptLine(userBlock(message("long".repeat(30))), { ...env, width: 30 })
-    expect(stripAnsi(long)).toMatch(/\. +20:09/)
+    expect(stripAnsi(long)).toEndWith(`.  ${clock}  `)
     expect(visibleWidth(long)).toBe(30)
   } finally {
     setGlyphs(previous)
@@ -307,7 +309,7 @@ test("fullscreen without a header reserves no slot and never draws an offscreen 
     view.replyEnd([])
     view.handleInput(key("home"))
     view.render()
-    expect(screen.lines[0]).toMatch(/^ {2}› No header +20:09$/)
+    expect(screen.lines[0]).toBe(`  › No header${" ".repeat(85 - clockCells)}${clock}`)
     view.handleInput(key("end"))
     view.render()
     expect(screen.lines.slice(0, 10).filter((row) => row.includes("Result"))).toHaveLength(5)

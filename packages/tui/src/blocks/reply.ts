@@ -197,7 +197,12 @@ export class ReplyBlock extends Block {
     const renders = this.folded ? undefined : env.renders
     this.lastImages = images
     this.lastRenders = renders
-    const opts: MarkdownStreamOptions = { hyperlinks: this.hyperlinks, glyphs: env.glyphs, firstRowWidth }
+    const opts: MarkdownStreamOptions = {
+      hyperlinks: this.hyperlinks,
+      glyphs: env.glyphs,
+      firstRowWidth,
+      headingMarkers: true,
+    }
     if (images || renders?.renders.source) opts.nodes = this.nodes(env.theme, images, renders?.renders)
     const imageRows = images ? images.store.maxRows() : 0
     const generation = renders ? renders.renders.generation : -1
@@ -455,6 +460,7 @@ export class ReplyBlock extends Block {
         glyphs: env.glyphs,
         nodes: this.nodes(env.theme, undefined, env.renders?.renders, true),
         firstRowWidth,
+        headingMarkers: true,
       }),
     )
     return stampRows(lines, env.theme, env.width, this.timestamp)

@@ -535,13 +535,14 @@ test("a narrow hint drops whole items instead of cutting one", async () => {
   })
   terminal.send("go\r")
   await waitFor(() => agent.status === "working", "working")
-  // The hint keeps its most useful items whole: the queue key goes first.
-  await waitFor(() => /^Enter steer · Esc interrupt$/m.test(live()), "working hint")
+  // Stop and the first base key stay whole; the contextual submit and queue keys give way.
+  await waitFor(() => /^ shift\+tab mode {2}│ {2}esc stop$/m.test(live()), "working hint")
   expect(live()).not.toContain(" queue")
-  expect(live()).not.toContain("interr…")
+  expect(live()).not.toContain("enter steer")
+  expect(live()).not.toContain("sto…")
   await shows("slow answer")
   await idle()
-  await waitFor(() => /^Enter send · \? keys$/m.test(live()), "idle hint")
+  await waitFor(() => /^ shift\+tab mode {2}│ {2}ctrl\+o detail$/m.test(live()), "idle hint")
   terminal.send("\x03")
   await exited
 })
@@ -559,12 +560,21 @@ test("keybindings replace the default keys, and the hints name them", async () =
     [{ text: "first", delayMs: 40 }, { text: "later" }],
     { keybindings: keys, cols: 100 },
   )
-  await waitFor(() => live().includes("Enter send · F1 keys"), "idle hint")
+  await waitFor(() => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}f1 keys$/m.test(live()), "idle hint")
   terminal.send("go")
-  await waitFor(() => live().includes("Enter send · Ctrl+J newline"), "hint with text")
+  await waitFor(
+    () => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}f1 keys {2}│ {2}ctrl\+j newline$/m.test(live()),
+    "hint with text",
+  )
   terminal.send("\r")
   await waitFor(() => agent.status === "working", "working")
-  await waitFor(() => live().includes("Enter steer · Ctrl+T queue · Ctrl+G interrupt"), "working hint")
+  await waitFor(
+    () =>
+      /^ shift\+tab mode {2}│ {2}ctrl\+g stop {2}│ {2}ctrl\+o detail {2}│ {2}f1 keys {2}│ {2}enter steer {2}│ {2}ctrl\+t queue$/m.test(
+        live(),
+      ),
+    "working hint",
+  )
   terminal.send("next\x14")
   await shows("queued › next")
   await shows("later")

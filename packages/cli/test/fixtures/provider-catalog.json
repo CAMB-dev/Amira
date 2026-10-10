@@ -1,0 +1,25 @@
+{
+  "deepseek": {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "env": ["DEEPSEEK_API_KEY"],
+    "npm": "@ai-sdk/openai-compatible",
+    "api": "https://api.deepseek.com",
+    "models": {}
+  },
+  "google": {
+    "id": "google",
+    "name": "Google",
+    "env": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+    "npm": "@ai-sdk/google",
+    "models": {}
+  },
+  "unusual": {
+    "id": "unusual",
+    "name": "Unusual",
+    "env": ["UNUSUAL_KEY"],
+    "npm": "@vendor/unknown",
+    "api": "https://unknown.example",
+    "models": {}
+  }
+}
