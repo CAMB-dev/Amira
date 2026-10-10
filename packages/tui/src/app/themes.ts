@@ -9,19 +9,17 @@ import {
   isColorEnabled,
   type Glyphs as MarkdownGlyphs,
   type Theme,
+  type ThemeVariant,
 } from "@amira/tui-kit"
 import { Dialog } from "../dialog.ts"
 import { type Glyphs, glyphs, setGlyphs } from "../glyphs.ts"
-import type { Keybindings } from "../keybindings.ts"
+import { type Keybindings, keyLabel } from "../keybindings.ts"
 import type { OverlayManager } from "./overlays.ts"
 import type { InteractiveOptions } from "./startup.ts"
 
-const LEGACY = [
-  { name: "auto", description: "Default palette for the terminal background" },
-  { name: "dark", description: "Default dark palette" },
-  { name: "light", description: "Default light palette" },
-  { name: "terminal", description: "Use the terminal's ANSI colors" },
-]
+const BUILTINS = ["amira", "amber", "burnt", "lavender", "mono", "ascii"]
+const VARIANTS: ThemeVariant[] = ["auto", "dark", "light"]
+const LEGACY = new Set(["auto", "dark", "light"])
 
 interface Selection {
   name: string
@@ -29,6 +27,7 @@ interface Selection {
   markdownGlyphs: MarkdownGlyphs
   glyphs: Partial<Glyphs>
   variant: "dark" | "light"
+  themeVariant: ThemeVariant
 }
 
 export class RuntimeThemes {
@@ -43,7 +42,7 @@ export class RuntimeThemes {
     private readonly env: Record<string, string | undefined>,
     private readonly capabilities: Capabilities,
   ) {
-    this.selection = this.build(opts.settings?.theme ?? "auto")
+    this.selection = this.build(opts.settings?.theme ?? "auto", opts.settings?.themeVariant ?? "auto")
     if (opts.theme) this.selection.theme = opts.theme
     setGlyphs(this.selection.glyphs)
   }
@@ -57,32 +56,33 @@ export class RuntimeThemes {
     this.changed = changed
     this.off = this.opts.themes?.subscribe(() => {
       this.registryVersion++
-      this.select(this.selection.name)
+      this.select(this.selection.name, this.selection.themeVariant)
     })
   }
 
-  private build(name: string): Selection {
-    const definition = this.opts.themes?.get(
-      name === "auto" || name === "dark" || name === "light" ? "amira" : name,
-    )
+  private build(name: string, themeVariant: ThemeVariant): Selection {
+    if (LEGACY.has(name)) {
+      if (name === "dark" || name === "light") themeVariant = name
+      name = "amira"
+    }
+    const definition = this.opts.themes?.get(name)
     const setting = this.opts.settings
     const variant =
-      name === "dark" || name === "light"
-        ? name
-        : setting?.themeVariant === "dark" || setting?.themeVariant === "light"
-          ? setting.themeVariant
-          : (this.capabilities.background ??
-            (this.capabilities.backgroundRgb
-              ? backgroundOf(this.capabilities.backgroundRgb)
-              : backgroundFromEnv(this.env)) ??
-            "dark")
+      themeVariant === "dark" || themeVariant === "light"
+        ? themeVariant
+        : (this.capabilities.background ??
+          (this.capabilities.backgroundRgb
+            ? backgroundOf(this.capabilities.backgroundRgb)
+            : backgroundFromEnv(this.env)) ??
+          "dark")
     return {
       name,
       variant,
+      themeVariant,
       theme: createTheme({
         theme: name,
         definition,
-        themeVariant: setting?.themeVariant,
+        themeVariant,
         colorDepth: setting?.colorDepth,
         env: this.env,
         capabilities: this.capabilities,
@@ -109,13 +109,13 @@ export class RuntimeThemes {
     this.changed?.(selection)
   }
 
-  private select(name: string): void {
-    this.restore(this.build(name))
+  private select(name: string, themeVariant = this.selection.themeVariant): void {
+    this.restore(this.build(name, themeVariant))
   }
 
   private entries(): { name: string; description?: string }[] {
-    const entries = new Map(
-      LEGACY.map((entry) => [entry.name, { ...entry, description: `built-in · ${entry.description}` }]),
+    const entries = new Map<string, { name: string; description?: string }>(
+      BUILTINS.map((name) => [name, { name, description: "built-in" }]),
     )
     for (const entry of this.opts.themes?.list() ?? []) {
       const source = this.opts.themes?.source?.(entry.name) ?? "built-in"
@@ -124,6 +124,7 @@ export class RuntimeThemes {
         description: `${source}${entry.description ? ` · ${entry.description}` : ""}`,
       })
     }
+    entries.set("terminal", { name: "terminal", description: "built-in · Use the terminal's ANSI colors" })
     return [...entries.values()]
   }
 
@@ -145,11 +146,11 @@ export class RuntimeThemes {
           return ctx.print("/theme only changes the interactive terminal UI.", "warning")
         const name = args.trim()
         if (name) {
-          if (!this.entries().some((entry) => entry.name === name))
+          if (!LEGACY.has(name) && !this.entries().some((entry) => entry.name === name))
             return ctx.print(`Unknown theme "${name}". Use /theme to choose one.`, "error")
-          this.select(name)
-          await this.opts.saveTheme?.(name)
-          ctx.print(`Theme: ${name}`)
+          this.select(name, name === "auto" ? "auto" : this.selection.themeVariant)
+          await this.opts.saveTheme?.(this.selection.name, this.selection.themeVariant)
+          ctx.print(`Theme: ${this.selection.name} (${this.selection.themeVariant})`)
           return
         }
         if (deps.overlays.hasFullscreen || deps.overlays.dialogs.length)
@@ -166,6 +167,7 @@ export class RuntimeThemes {
     const previous = this.selection
     const registryVersion = this.registryVersion
     const entries = this.entries()
+    let themeVariant = previous.themeVariant
     return new Promise<void>((resolve, reject) => {
       let finished = false
       let close: (() => void) | undefined
@@ -180,15 +182,15 @@ export class RuntimeThemes {
         }
         if (name === undefined) {
           if (registryVersion === this.registryVersion) this.restore(previous)
-          else this.select(previous.name)
+          else this.select(previous.name, previous.themeVariant)
           resolve()
         } else {
           const applied = name
-          this.select(applied)
+          this.select(applied, themeVariant)
           Promise.resolve()
-            .then(() => this.opts.saveTheme?.(applied))
+            .then(() => this.opts.saveTheme?.(applied, themeVariant))
             .then(() => {
-              ctx.print(`Theme: ${applied}`)
+              ctx.print(`Theme: ${applied} (${themeVariant})`)
               resolve()
             }, reject)
         }
@@ -202,7 +204,9 @@ export class RuntimeThemes {
           title: "Choose a theme (arrows preview, Enter applies, Esc restores)",
           initial: previous.name,
           options: entries.map((entry) => entry.name),
-          descriptions: entries.map((entry) => entry.description ?? ""),
+          descriptions: entries.map(
+            (entry) => `${entry.description ?? ""}${entry.name === previous.name ? " · current" : ""}`,
+          ),
         },
         (answer) =>
           finish(
@@ -213,7 +217,26 @@ export class RuntimeThemes {
                 : undefined,
           ),
         deps.keys,
-        { changed: (name) => this.select(name) },
+        {
+          changed: (name) => this.select(name, themeVariant),
+          footer: [
+            {
+              text: `${keyLabel({ name: "tab", ctrl: false, alt: false, shift: false })} appearance`,
+              priority: 6,
+            },
+          ],
+          header: () =>
+            `Appearance: ${VARIANTS.map((variant) => (variant === themeVariant ? `[${variant}]` : variant)).join(" / ")} (Tab, left/right)`,
+          handleInput: (event) => {
+            if (event.type !== "key" || event.ctrl || event.alt) return false
+            if (!["tab", "left", "right"].includes(event.name)) return false
+            const step = event.name === "left" || (event.name === "tab" && event.shift) ? -1 : 1
+            themeVariant =
+              VARIANTS[(VARIANTS.indexOf(themeVariant) + step + VARIANTS.length) % VARIANTS.length]!
+            this.select(this.selection.name, themeVariant)
+            return true
+          },
+        },
       )
       if (ctx.signal.aborted) return cancel()
       ctx.signal.addEventListener("abort", cancel, { once: true })

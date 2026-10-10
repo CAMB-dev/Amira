@@ -3,7 +3,7 @@ import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { isNoModel } from "@amira/ai"
-import type { SessionControl } from "@amira/api"
+import type { SessionControl, TuiSettings } from "@amira/api"
 import { type Agent, amiraHome, projectAmiraDir, updateSettingsFile } from "@amira/core"
 
 /** Only the interactive command surface gets this wrapper, never extensions or RPC. */
@@ -13,7 +13,11 @@ export function rememberingControl(
   cwd: string,
   home = amiraHome(),
   probe = git,
-): { control: SessionControl; rememberTheme: (name: string) => void; flush: () => Promise<void> } {
+): {
+  control: SessionControl
+  rememberTheme: (name: string, variant: NonNullable<TuiSettings["themeVariant"]>) => void
+  flush: () => Promise<void>
+} {
   const warn = (a: Agent, error: string) =>
     a.bus.emit("extension.error", { source: "settings", error }, { sessionId: a.sessionId })
   const projects = new Map<string, Promise<string | undefined>>()
@@ -36,7 +40,7 @@ export function rememberingControl(
     }
     return existsSync(project) ? path.join(project, "settings.local.json") : undefined
   }
-  const save = (theme?: string) => {
+  const save = (theme?: { name: string; variant: NonNullable<TuiSettings["themeVariant"]> }) => {
     const a = agent()
     if (a.parentSessionId || a.depth > 0) return
     // Capture the choice now, not after a probe or another queued save finishes.
@@ -54,7 +58,7 @@ export function rememberingControl(
             const tui = settings.tui
             if (tui !== undefined && (typeof tui !== "object" || tui === null || Array.isArray(tui)))
               throw new Error("tui must be an object")
-            return { ...settings, tui: { ...tui, theme } }
+            return { ...settings, tui: { ...tui, theme: theme.name, themeVariant: theme.variant } }
           },
           { preserveFormatting: true },
         )
@@ -78,7 +82,7 @@ export function rememberingControl(
     })
   }
   return {
-    rememberTheme: (name) => save(name),
+    rememberTheme: (name, variant) => save({ name, variant }),
     flush: () => pending,
     control: {
       ...control,

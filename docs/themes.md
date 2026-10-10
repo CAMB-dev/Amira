@@ -6,7 +6,9 @@ Themes change semantic colors and symbols without changing the terminal's own ba
 
 ## Choose a theme
 
-Use `/theme` to open the theme picker with each theme's name, source and description. Arrow keys preview immediately, Enter applies, and Esc restores the previous theme without saving. `/theme <name>` selects a theme directly. Interactive choices are saved like model choices: in the user settings and, when allowed, the project's `settings.local.json`. See [Settings reference](settings.md#saving-model-and-thinking-choices) for project-save restrictions.
+Use `/theme` to open the theme picker with each theme's name, source and description. The list starts with `amira`, `amber`, `burnt`, `lavender`, `mono` and `ascii`, followed by custom themes, with `terminal` last. The current theme is marked. Up/down arrows preview themes immediately; Tab or left/right arrows cycle the separate appearance control between `auto`, `dark` and `light` (Shift+Tab cycles backward). Enter applies the theme and appearance together. Esc restores both without saving, including when theme definitions reload during a preview.
+
+`/theme <name>` selects a theme directly while keeping the chosen appearance. The legacy commands `/theme auto`, `/theme dark` and `/theme light` select Amira with that appearance. Legacy settings still work and appear as the current Amira theme in the picker. Interactive choices save both `tui.theme` and `tui.themeVariant` like model choices: in the user settings and, when allowed, the project's `settings.local.json`. See [Settings reference](settings.md#saving-model-and-thinking-choices) for project-save restrictions.
 
 You can also set a name in `settings.json`:
 

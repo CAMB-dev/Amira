@@ -107,6 +107,7 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     flush()
     out.push(...t.block(kind, lines))
   }
+  let replySeen = false
   for (const m of messages) {
     if (isSummaryMessage(m)) {
       // The summary reads as what it is, not as a message of the user's; its reply goes with it.
@@ -117,23 +118,21 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
         )
       }
     } else if (m.role === "user") {
+      replySeen = false
       block("user", userLines(theme, m, opts.width))
     } else if (m.role === "assistant") {
       // The sources the reply cited follow its last text, as they did live.
       const sources = replyCitations(m.content)
       const timestamp = messageTimestamp(m)
-      const firstText = m.content.findIndex((b) => b.type === "text" && b.text.trim() !== "")
       const lastTool = m.content.findLastIndex((b) => b.type === "toolCall" || b.type === "serverTool")
       const lastText = m.content.findLastIndex((b) => b.type === "text" && b.text.trim() !== "")
       for (const [i, b] of m.content.entries()) {
         if (b.type === "thinking" && (b.text.trim() || b.redacted)) {
-          block(
-            "reasoning",
-            reasoningLines(theme, b.text, { expanded: detail === "full", timestamp }, opts.width),
-          )
+          block("reasoning", reasoningLines(theme, b.text, { expanded: detail === "full" }, opts.width))
         } else if (b.type === "text" && b.text.trim()) {
           // Markdown, as the reply showed when it streamed in.
-          const at = i === firstText ? timestamp : undefined
+          const at = replySeen ? undefined : timestamp
+          replySeen = true
           const width = Math.max(1, opts.width - visibleWidth(gutter))
           const firstRowWidth = Math.max(1, timestampRoom(opts.width, at) - visibleWidth(gutter))
           const text = i === lastText ? b.text + sources : b.text

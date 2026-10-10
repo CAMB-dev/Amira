@@ -11,6 +11,7 @@ import {
 import {
   italic,
   RESET,
+  Spinner,
   type StyleFn,
   type Theme,
   themeToken,
@@ -150,20 +151,14 @@ export function userLines(
   return bg ? bandRows(lines, width, bg) : lines
 }
 
-/**
- * An echoed command (`› /status`), muted: on the band like the user's messages, since it was
- * typed too, but muted, since it went to Amira rather than to the model.
- */
+/** An echoed command (`› /status`): plain muted text, not a message band for the model. */
 export function commandEchoLines(theme: Theme, line: string, width: number): string[] {
-  const bg = themeToken(theme, "userBg")
-  const muted = (bg && themeToken(theme, "surfaceMuted")) || theme.muted
   // Its rows after the first hang under the text, past the prompt symbol, as a message's do.
   const gutter = visibleWidth(glyphs.user) + 1
-  const room = Math.max(1, width - (bg ? 2 : 0) - gutter - 2)
-  const rows = wrapText(line, room).map(
-    (r, i) => `  ${muted(`${i === 0 ? `${glyphs.user} ` : " ".repeat(gutter)}${r}`)}`,
+  const room = Math.max(1, width - gutter - 2)
+  return wrapText(line, room).map(
+    (r, i) => `  ${theme.muted(`${i === 0 ? `${glyphs.user} ` : " ".repeat(gutter)}${r}`)}`,
   )
-  return bg ? bandRows(rows, width, bg) : rows
 }
 
 /**
@@ -193,28 +188,26 @@ function endMark(theme: Theme, mark: string): string {
   return theme.muted(mark)
 }
 
-/**
- * A notice's lines, e.g. "◆ US market trend ✓ explorer · 41s · 12k tok": the marker accented,
- * how it ended in its color, the rest muted. Wrapped to `width`, later rows (and indented lines
- * such as "changes kept: …") hanging under the text after the marker.
- */
+/** Stored sub-agent notices use the same tree and outcome marks as live rows. */
 function originLines(theme: Theme, text: string, width = Number.POSITIVE_INFINITY): string[] {
-  const hang = " ".repeat(visibleWidth(`${glyphs.subagent} `))
+  const arm = treeArm(true)
+  const hang = " ".repeat(visibleWidth(arm) + 3)
   return text
     .trim()
     .split("\n")
-    .flatMap((l) => {
-      const m = /^\s*◆ (.*)$/.exec(l)
-      const body = (m ? m[1]! : l.trim()).trim()
-      const rows = Number.isFinite(width) ? wrapText(body, Math.max(10, width - hang.length)) : [body]
-      return rows.map((r, i) => {
-        const lead = i === 0 && m ? `${theme.accent(glyphs.subagent)} ` : hang
-        // The title, then how it ended: ✓ ✗ ⊘ in their colors.
-        const end = i === 0 && m ? /^(.*?) ([✓✗⊘]) (.*)$/.exec(r) : null
-        const shown = end
-          ? `${theme.muted(end[1]!)} ${endMark(theme, end[2]!)} ${theme.muted(end[3]!)}`
-          : theme.muted(r)
-        return `${lead}${shown}`
+    .flatMap((line) => {
+      const notice = /^\s*◆ (.*?) ([✓✗⊘]) (.*)$/.exec(line)
+      const body = notice ? `${notice[1]} ${glyphs.separator} ${notice[3]}` : line.trim()
+      const mark =
+        notice?.[2] === "✓"
+          ? glyphs.subagentDone
+          : notice?.[2] === "✗"
+            ? glyphs.subagentFailed
+            : glyphs.subagentAborted
+      const rows = Number.isFinite(width) ? wrapText(body, Math.max(1, width - hang.length)) : [body]
+      return rows.map((row, i) => {
+        const lead = i === 0 && notice ? `${theme.muted(arm)} ${endMark(theme, mark)} ` : hang
+        return `${lead}${theme.muted(row)}`
       })
     })
 }
@@ -227,7 +220,7 @@ function originLines(theme: Theme, text: string, width = Number.POSITIVE_INFINIT
 export function reasoningLines(
   theme: Theme,
   text: string,
-  opts: { durationMs?: number; thinking?: boolean; expanded?: boolean; timestamp?: number },
+  opts: { durationMs?: number; thinking?: boolean; expanded?: boolean; expandKey?: string },
   width: number,
 ): string[] {
   const time =
@@ -236,16 +229,10 @@ export function reasoningLines(
       : ` for ${opts.durationMs < 10_000 ? Math.max(0.1, Math.round(opts.durationMs / 100) / 10) : Math.round(opts.durationMs / 1000)}s`
   const thinking = themeToken(theme, "thinking") ?? theme.muted
   const body = text.trim()
-  const hint = body && !opts.expanded ? `  ${theme.muted("ctrl+o to expand")}` : ""
+  const hint =
+    body && !opts.expanded && opts.expandKey ? `  ${theme.muted(`${opts.expandKey} to expand`)}` : ""
   const head = `  ${thinking(glyphs.thought)} ${thinking(opts.thinking ? "Thinking" : `Thought${time}`)}${hint}`
-  const lines = [
-    timestampRow(
-      truncateToWidth(head, Math.max(1, timestampRoom(width, opts.timestamp)), glyphs.more),
-      theme,
-      width,
-      opts.timestamp,
-    ),
-  ]
+  const lines = [truncateToWidth(head, Math.max(1, width), glyphs.more)]
   if (!opts.expanded || !body) return lines
   const style = (s: string) => theme.muted(italic(s))
   const room = Math.max(1, width - 4)
@@ -387,9 +374,11 @@ function fitTitle(title: string, rest: string, room: number): string {
   return left >= 8 ? clip(title, left, glyphs.more) : title
 }
 
+const defaultSpinner = new Spinner().glyph
+
 /**
- * A queued or running sub-agent under its call: `└ ◆ title · role · 12s · 4.1k tok`
- * ("queued" while it waits), and once it has called a tool, `│   ● grep "TODO"` below. On a
+ * A queued or running sub-agent under its call: `└ ⠋ title · role · 12s · 4.1k tok`
+ * ("queued" while it waits), and once it has called a tool, `│ └ ⠋ grep "TODO"` below. On a
  * narrow screen the title gives way before its role, time and tokens.
  *
  * `last`: no row of the same tree follows at this level, so this one closes it ("└", not "├")
@@ -403,6 +392,7 @@ export function subagentRows(
   theme: Theme,
   last = true,
   indent = treeIndent(sub.depth),
+  spinner = defaultSpinner,
 ): string[] {
   const s = glyphs.separator
   const stats =
@@ -411,15 +401,16 @@ export function subagentRows(
       : sub.idle
         ? `idle ${s} ${compactTokens(sub.tokens)} tok`
         : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
-  const lead = `${indent}${treeArm(last)} ${glyphs.subagent} `
+  const mark = sub.idle ? glyphs.subagentDone : sub.startedAt === undefined ? "" : spinner
+  const lead = `${indent}${treeArm(last)} ${mark ? `${mark} ` : ""}`
   const rest = ` ${s} ${sub.role} ${s} ${stats}`
   const title = fitTitle(oneLine(sub.title), rest, width - visibleWidth(lead))
-  const head = `${theme.muted(`${indent}${treeArm(last)}`)} ${theme.accent(glyphs.subagent)} ${title}${theme.muted(rest)}`
+  const head = `${theme.muted(`${indent}${treeArm(last)}`)} ${mark ? `${sub.idle ? theme.success(mark) : theme.accent(mark)} ` : ""}${title}${theme.muted(rest)}`
   const rows = [truncateToWidth(head, width, glyphs.more)]
   if (sub.startedAt !== undefined && sub.activity && !sub.idle) {
     const summary = clip(oneLine(sub.activity.summary), ACTIVITY_CHARS)
-    const tree = `${indent}${treeRail(!last)}${glyphs.result}`
-    const tool = `${theme.muted(tree)} ${theme.accent(glyphs.toolRunning)} ${theme.accent(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
+    const tree = `${indent}${treeRail(!last)}${treeArm(true)}`
+    const tool = `${theme.muted(tree)} ${theme.accent(spinner)} ${theme.fg2(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
     rows.push(truncateToWidth(tool, width, glyphs.more))
   }
   return rows
@@ -459,15 +450,15 @@ export function subagentEndLine(
       : end.status === "aborted"
         ? theme.muted(oneLine(end.note ?? "") || "stopped")
         : theme.muted(oneLine(sub.lastText ?? "") || "(no answer)")
-  const lead = `${indent}${treeArm(last)} ${glyphs.subagent} `
-  const title = fitTitle(oneLine(sub.title), ` ✓ ${stats} ${s} …`, width - visibleWidth(lead))
-  const line = `${theme.muted(`${indent}${treeArm(last)}`)} ${theme.accent(glyphs.subagent)} ${title} ${mark} ${theme.muted(`${stats} ${s}`)} ${said}`
+  const lead = `${indent}${treeArm(last)} ${mark} `
+  const title = fitTitle(oneLine(sub.title), ` ${s} ${stats} ${s} …`, width - visibleWidth(lead))
+  const line = `${theme.muted(`${indent}${treeArm(last)}`)} ${mark} ${title} ${theme.muted(`${s} ${stats} ${s}`)} ${said}`
   return truncateToWidth(line, width, glyphs.more)
 }
 
 /**
  * The one line a compact spawn group (e.g. a workflow run) shows in place of its members'
- * rows: `└ ◆ workflow deep-review · Verify · 3/7 agents · 12.3k tok`, from its owner's status
+ * rows: `└ ⠋ workflow deep-review · Verify · 3/7 agents · 12.3k tok`, from its owner's status
  * line, or else from its counts.
  */
 export function spawnGroupRow(
@@ -477,6 +468,7 @@ export function spawnGroupRow(
   theme: Theme,
   last = true,
   indent = treeIndent(depth),
+  spinner = defaultSpinner,
 ): string {
   const s = glyphs.separator
   const a = group.agents
@@ -487,7 +479,8 @@ export function spawnGroupRow(
     `${compactTokens(group.tokens)} tok`,
   ].join(` ${s} `)
   const about = group.status ? oneLine(group.status) : counts
-  const line = `${theme.muted(`${indent}${treeArm(last)}`)} ${theme.accent(glyphs.subagent)} ${oneLine(group.name)} ${theme.muted(`${s} ${about}`)}`
+  const mark = a.working || a.queued ? theme.accent(spinner) : theme.success(glyphs.subagentDone)
+  const line = `${theme.muted(`${indent}${treeArm(last)}`)} ${mark} ${oneLine(group.name)} ${theme.muted(`${s} ${about}`)}`
   return truncateToWidth(line, width, glyphs.more)
 }
 

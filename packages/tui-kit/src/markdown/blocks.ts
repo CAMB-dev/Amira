@@ -1,6 +1,7 @@
 import type { Glyphs } from "../glyphs.ts"
 import type { StyleFn } from "../style.ts"
-import { truncateToWidth, visibleWidth, wrapText } from "../width.ts"
+import { visibleWidth, wrapText } from "../width.ts"
+import { codeRows, frameRow } from "./code.ts"
 import { highlightLine } from "./highlight.ts"
 import {
   type ImageRef,
@@ -189,12 +190,6 @@ function emit(s: BlockState, sink: Sink, rows: string[]) {
 
 const pad = (n: number) => " ".repeat(Math.max(0, n))
 
-/** A row of a code block's frame at `col`, cut to the width. */
-function frameRow(col: number, text: string, env: Env): string {
-  const row = truncateToWidth(pad(col) + env.styles.codeFrame(text), env.rowWidth?.() ?? env.width, "…")
-  return env.styles.codeBg ? env.styles.codeBg(row) : row
-}
-
 /** The environment with the state's reference definitions. */
 function withRefs(s: BlockState, env: Env): Env {
   return env.refs === s.refs ? env : { ...env, refs: s.refs }
@@ -210,7 +205,7 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     const m = line.match(FENCE_CLOSE_LIKE)
     if (m && m[1]![0] === f.char && m[1]!.length >= f.len) {
       s.fence = undefined
-      emit(s, sink, f.held ? closeHeld(f, env) : [frameRow(f.renderCol, env.glyphs.codeBottom, env)])
+      emit(s, sink, f.held ? closeHeld(f, env) : [frameRow(f.renderCol, true, env)])
       return
     }
     if (f.held) f.held.push(line)
@@ -331,7 +326,7 @@ export function finish(s: BlockState, env: Env, sink: Sink): void {
   if (s.fence) {
     const f = s.fence
     s.fence = undefined
-    emit(s, sink, f.held ? closeHeld(f, env) : [frameRow(f.renderCol, env.glyphs.codeBottom, env)])
+    emit(s, sink, f.held ? closeHeld(f, env) : [frameRow(f.renderCol, true, env)])
   }
 }
 
@@ -353,11 +348,10 @@ export function holdsCode(s: BlockState): boolean {
 
 /** A held code block's rows as a code block: its frame's top, its lines, and the bottom once closed. */
 function heldRows(f: Fence, env: Env, closed: boolean): string[] {
-  const label = f.lang ? ` ${f.lang}` : ""
-  const rows = [frameRow(f.renderCol, env.glyphs.codeTop + label, env)]
+  const rows = [frameRow(f.renderCol, false, env, f.lang)]
   const rest = { ...env, rowWidth: undefined }
   for (const line of f.held!) rows.push(...renderLine(codeLine(f, line, rest), line, rest).rows)
-  if (closed) rows.push(frameRow(f.renderCol, env.glyphs.codeBottom, rest))
+  if (closed) rows.push(frameRow(f.renderCol, true, rest))
   return rows
 }
 
@@ -473,8 +467,7 @@ function classify(s: BlockState, line: string, env: Env): Classified {
       s.fence.held = []
       return { rows: [] }
     }
-    const label = lang ? ` ${lang}` : ""
-    return { rows: [frameRow(col, glyphs.codeTop + label, env)] }
+    return { rows: [frameRow(col, false, env, lang)] }
   }
   if (rule) {
     const width = env.rowWidth?.() ?? env.width
@@ -670,6 +663,11 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
     mathOpen = parsed.mathOpen
   }
   const cells = toCells(runs)
+  if (lr.code) {
+    const col = Math.max(0, lr.indent - visibleWidth(env.glyphs.codeSide) - 1)
+    const { rows, layout } = codeRows(col, cells, runs, env)
+    return { rows, cells, runs, layout, carry: carry ?? "", open, mathOpen }
+  }
   let prefix = carry === undefined ? lr.prefix : lr.rest
   let rest = lr.rest
   let room = env.width - lr.indent
@@ -685,11 +683,10 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
     prefix = ""
     firstRoom = firstWidth
   }
-  const layout = wrapCells(cells, room, !lr.code, firstRoom)
+  const layout = wrapCells(cells, room, true, firstRoom)
   const rows = layout.map((r, i) => {
     const head = i === 0 ? prefix : rest
-    const row = r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
-    return lr.code && env.styles.codeBg ? env.styles.codeBg(row) : row
+    return r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
   })
   return { rows, cells, runs, layout, carry: carry ?? "", open, mathOpen }
 }

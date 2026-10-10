@@ -1,5 +1,5 @@
 import path from "node:path"
-import type { SessionControl, ShellMode } from "@amira/api"
+import type { SessionControl, ShellMode, TuiSettings } from "@amira/api"
 import { DEFAULT_DISABLED_TOOLS, DEFAULT_SHELL } from "@amira/api"
 import { type Agent, CommandHost, listSubagents } from "@amira/core"
 import { createAdminControl } from "./control/admin.ts"
@@ -37,7 +37,7 @@ export interface ControlOptions {
  * which agent is active: /clear and /resume make new agents on the same bus and registries.
  */
 export function createCommandHost(opts: ControlOptions): CommandHost & {
-  rememberTheme(name: string): void
+  rememberTheme(name: string, variant: NonNullable<TuiSettings["themeVariant"]>): void
   flushChoices(): Promise<void>
 } {
   const { session, cwd } = opts
@@ -171,7 +171,8 @@ export function createCommandHost(opts: ControlOptions): CommandHost & {
     ...(opts.aliases ? { aliases: opts.aliases } : {}),
   })
   return Object.assign(host, {
-    rememberTheme: (name: string) => choices?.rememberTheme(name),
+    rememberTheme: (name: string, variant: NonNullable<TuiSettings["themeVariant"]>) =>
+      choices?.rememberTheme(name, variant),
     flushChoices: () => choices?.flush() ?? Promise.resolve(),
   })
 }

@@ -111,7 +111,7 @@ export class ToolBlock extends Block {
       }
       return [
         ...runningToolLines(theme, presenter, call, now, env.spinner, width, { last: this.last }),
-        ...nested(treeRows(tree, now, treeWidth, theme, env.groups)),
+        ...nested(treeRows(tree, now, treeWidth, theme, env.groups, true, env.spinner)),
       ]
     }
     const detail = this.detail(env)
@@ -129,7 +129,7 @@ export class ToolBlock extends Block {
       const text = `${plural(own, "sub-agent")}${nested ? ` (+${nested} nested)` : ""}${running ? ` · ${running} running` : ""}`
       rows = [
         truncateToWidth(
-          `  ${theme.muted(glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${theme.muted(text)}`,
+          `  ${theme.muted(glyphs.treeBranch)} ${running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(text)}`,
           treeWidth,
           glyphs.more,
         ),
@@ -137,7 +137,7 @@ export class ToolBlock extends Block {
     } else {
       // Compact results live on the head; continuation results and output follow these rows.
       // Only a nested sub-agent can close a level before the call's own continuation.
-      rows = treeRows(tree, now, treeWidth, theme, env.groups, false)
+      rows = treeRows(tree, now, treeWidth, theme, env.groups, false, env.spinner)
     }
     lines.splice(1, 0, ...nested(rows))
     return lines

@@ -60,14 +60,16 @@ for (const mode of ["inline", "fullscreen"] as const) {
       view.replyDelta("Second paragraph.")
       view.replyEnd([])
       view.render()
-      expect(text().match(/20:09/g)).toHaveLength(3)
+      expect(text().match(/20:09/g)).toHaveLength(2)
       expect(text()).not.toContain("20:12")
-      expect(text()).toContain("Thought for 4s  ctrl+o to expand")
+      expect(text()).toContain(mode === "fullscreen" ? "Thought for 4s  Ctrl+O to expand" : "Thought for 4s")
+      expect(text().includes("to expand")).toBe(mode === "fullscreen")
     } finally {
       view.stop()
       clock.mockRestore()
     }
-    expect(screen.mainText.match(/20:09/g)).toHaveLength(3)
+    expect(screen.mainText.match(/20:09/g)).toHaveLength(2)
+    expect(screen.mainText.includes("to expand")).toBe(mode === "fullscreen")
   })
 
   for (const detail of ["summary", "full"] as const) {
