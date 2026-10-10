@@ -1,5 +1,7 @@
-import { Box, type Component, type Editor, type RenderContext } from "@amira/tui-kit"
+import { Box, type Component, type Editor, type RenderContext, type Theme, themeToken } from "@amira/tui-kit"
 import { type StatusEntry, statusBorder } from "./status-bar.ts"
+
+const focusedThemes = new WeakMap<Theme, Theme>()
 
 /** Most rows of text the input box shows before it scrolls. */
 export const MAX_INPUT_ROWS = 10
@@ -49,6 +51,13 @@ export class InputBox implements Component {
 
   render(width: number, ctx: RenderContext): string[] {
     this.editor.maxRows = inputRows(ctx.rows)
-    return this.box.render(width, ctx)
+    const border = this.editor.focused ? themeToken(ctx.theme, "borderFocused") : undefined
+    if (!border) return this.box.render(width, ctx)
+    let theme = focusedThemes.get(ctx.theme)
+    if (!theme) {
+      theme = { ...ctx.theme, border }
+      focusedThemes.set(ctx.theme, theme)
+    }
+    return this.box.render(width, { ...ctx, theme })
   }
 }

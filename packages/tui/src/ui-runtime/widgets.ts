@@ -5,6 +5,7 @@ import {
   type LineInput,
   stripColors,
   type Theme,
+  themeToken,
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
@@ -193,6 +194,8 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
   const id = widgetId(node)
   const focused = id !== undefined && state.focused === id
   const top = plan.scroll?.top ?? 0
+  const borderFocused = themeToken(theme, "borderFocused") ?? theme.accent
+  const dim = themeToken(theme, "dim") ?? theme.border
   const marker = focused ? theme.accent("❯ ") : "  "
   let out: string[] = []
   if (from > 0 && ["bar", "progress", "rule", "input", "spacer"].includes(node.type))
@@ -209,12 +212,12 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
           const lines = paint(c, host, from, h)
           for (let y = 0; y < h; y++) {
             let between = " ".repeat(Math.max(0, start - visibleWidth(out[y]!)))
-            if (node.divider && i > 0 && between.length) between = theme.border("│") + between.slice(1)
+            if (node.divider && i > 0 && between.length) between = dim("│") + between.slice(1)
             out[y] += between + (lines[y] ?? " ".repeat(c.rect.width))
           }
         } else {
           const divider = start - cells(node.gap ?? 0) - 1 - from
-          if (node.divider && i > 0 && divider >= 0 && divider < h) out[divider] = theme.border("─".repeat(w))
+          if (node.divider && i > 0 && divider >= 0 && divider < h) out[divider] = dim("─".repeat(w))
           const begin = Math.max(from, start)
           const end = Math.min(from + h, start + c.rect.height)
           if (end <= begin) continue
@@ -230,7 +233,8 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       const end = Math.min(from + h, rect.height - inset)
       out = plan.children[0] && end > begin ? paint(plan.children[0], host, begin - inset, end - begin) : []
       if (plan.border) {
-        const color = node.tone === "accent" || node.tone === "focus" ? theme.accent : theme.border
+        const color =
+          node.tone === "focus" ? borderFocused : node.tone === "accent" ? theme.accent : theme.border
         const title =
           node.title === undefined
             ? ""
@@ -286,7 +290,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
         const underline = row.start + 1 + (row.widget?.height ?? row.detail.length)
         if (row.item.underline && underline >= offset && out.length < h) {
           const pad = prefix()
-          out.push(pad + theme.border("─".repeat(Math.max(0, w - visibleWidth(pad)))))
+          out.push(pad + dim("─".repeat(Math.max(0, w - visibleWidth(pad)))))
         }
       }
       if (!out.length && focused) out.push(marker)
@@ -306,7 +310,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
           : theme.muted(label)
         return text + (divided ? "  " : "")
       })
-      const separator = divided ? `${theme.border("│")}  ` : "  "
+      const separator = divided ? `${dim("│")}  ` : "  "
       const gap = divided ? 3 : 2
       const active = Math.max(
         0,
@@ -365,7 +369,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
     }
     case "rule": {
       const label = node.label ? ` ${terminalText(node.label)} ` : ""
-      out.push(theme.border(label + "─".repeat(Math.max(0, w - visibleWidth(label)))))
+      out.push(dim(label + "─".repeat(Math.max(0, w - visibleWidth(label)))))
       break
     }
     case "input": {

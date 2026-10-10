@@ -250,6 +250,16 @@ export interface TuiSettings {
    */
   mode?: "fullscreen" | "inline"
   /**
+   * "auto" follows the terminal background (dark if unknown); "dark" and "light" choose a
+   * palette explicitly; "terminal" uses the terminal's own ANSI colors. See DEFAULT_TUI_THEME.
+   */
+  theme?: "auto" | "dark" | "light" | "terminal"
+  /**
+   * "auto" detects terminal color support; "truecolor", "256" and "16" override the color
+   * depth. See DEFAULT_TUI_COLOR_DEPTH.
+   */
+  colorDepth?: "auto" | "truecolor" | "256" | "16"
+  /**
    * Ring the bell when a turn ends or a dialog opens while the terminal is in the background
    * (or, where the terminal does not report focus, after a long turn). See DEFAULT_TUI_BELL.
    */

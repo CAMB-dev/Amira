@@ -14,7 +14,14 @@ import {
   type ToolResult,
   toolResultText,
 } from "@amira/api"
-import { stripAnsi, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import {
+  type StyleFn,
+  stripAnsi,
+  type Theme,
+  themeToken,
+  truncateToWidth,
+  visibleWidth,
+} from "@amira/tui-kit"
 import { renderToolLines, terminalText } from "./diff-view.ts"
 import { formatDuration, formatElapsed, summarizeArgs } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
@@ -204,6 +211,13 @@ function nameLabel(theme: Theme, name: string, style: (s: string) => string): st
   return mcp ? `${theme.muted(`${mcp.server} ${glyphs.separator}`)} ${style(mcp.tool)}` : style(name)
 }
 
+/** The argument's semantic role, without coloring a tool's plain-text presenter output. */
+function summaryStyle(theme: Theme, args: Record<string, unknown>): StyleFn {
+  if (typeof args.command === "string") return themeToken(theme, "command") ?? theme.text
+  if (typeof args.path === "string") return themeToken(theme, "path") ?? theme.text
+  return theme.text
+}
+
 /**
  * `● name summary`, fitted to `width`, with `right` against the right edge when it fits. A
  * summary too long is cut in its middle, so a path keeps its file name and a command its end.
@@ -214,7 +228,7 @@ function headLine(
   name: string,
   summary: string,
   width: number,
-  opts: { right?: string; muted?: boolean; nameStyle?: (s: string) => string } = {},
+  opts: { right?: string; muted?: boolean; nameStyle?: StyleFn; summaryStyle?: StyleFn } = {},
 ): string {
   const label = nameLabel(theme, name, opts.nameStyle ?? theme.accent)
   const right = opts.right ?? ""
@@ -222,7 +236,8 @@ function headLine(
   const fitsRight = right !== "" && width - reserved >= 12
   const room = (fitsRight ? width - reserved : width) - visibleWidth(`${bullet} ${label} `)
   const shown = summary && room >= 8 ? clipMiddle(summary, room) : summary
-  const text = shown ? ` ${opts.muted ? theme.muted(shown) : shown}` : ""
+  const style = opts.muted ? theme.muted : (opts.summaryStyle ?? theme.text)
+  const text = shown ? ` ${style(shown)}` : ""
   const left = `${bullet} ${label}${text}`
   if (!fitsRight) return truncateToWidth(left, width, glyphs.more)
   const cut = truncateToWidth(left, width - reserved, glyphs.more)
@@ -298,6 +313,7 @@ export function finishedToolLines(
   const out = [
     headLine(theme, bullet, call.name, summary, width, {
       muted: !ran,
+      summaryStyle: summaryStyle(theme, call.args),
       ...(ran ? {} : { nameStyle: theme.muted }),
     }),
   ]
@@ -378,15 +394,26 @@ export function runningToolLines(
   width: number,
 ): string[] {
   const summary = callSummary(presenter, call.args)
-  const right = `${theme.accent(spinner)} ${theme.muted(formatElapsed(now - call.startedAt))}`
-  const head = headLine(theme, theme.accent(glyphs.toolRunning), call.name, summary, width, { right })
+  const shimmer = themeToken(theme, "shimmer") ?? theme.accent
+  const right = `${shimmer(spinner)} ${theme.muted(formatElapsed(now - call.startedAt))}`
+  const head = headLine(theme, theme.accent(glyphs.toolRunning), call.name, summary, width, {
+    right,
+    summaryStyle: summaryStyle(theme, call.args),
+  })
   const live = attempt(presenter?.running && (() => presenter.running!(call.args, call.partial)), () =>
     fallbackPresenter.running(call.args, call.partial),
   ).slice(-RUNNING_LINES)
   const prefix = `  ${theme.muted(glyphs.output)} `
+  const output = themeToken(theme, "fg2") ?? theme.muted
   return [
     head,
-    ...live.map((l) => truncateToWidth(`${prefix}${theme.muted(terminalText(l.text))}`, width, glyphs.more)),
+    ...live.map((l) =>
+      truncateToWidth(
+        `${prefix}${(l.kind === "code" ? output : theme.muted)(terminalText(l.text))}`,
+        width,
+        glyphs.more,
+      ),
+    ),
   ]
 }
 

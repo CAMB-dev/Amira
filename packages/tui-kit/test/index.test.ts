@@ -18,6 +18,9 @@ test("the package exports its public API and not its internals", () => {
     "TAB_WIDTH",
     "FullScreenRenderer",
     "ScrollView",
+    "createTheme",
+    "detectColorDepth",
+    "terminalTheme",
   ]) {
     expect(api).toHaveProperty(name)
   }
