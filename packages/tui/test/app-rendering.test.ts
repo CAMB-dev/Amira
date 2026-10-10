@@ -111,7 +111,7 @@ test("without an image provider, one that cannot open it, or tui.images off, an 
   const local = await run("![secret](https://img.test/secret.png)\n\ndone", {})
   expect(local.images).toBe(0)
   // Windows Terminal makes links clickable: the URL is in the link, not shown.
-  expect(local.text).toContain("  🖼\uFE0F secret\n\n  done")
+  expect(local.text).toMatch(/^ {2}🖼\uFE0F secret +(?:[01]\d|2[0-3]):[0-5]\d\n\n {2}done$/m)
   const failing = await run("![gone](https://img.test/404.png)\n\ndone", {
     images: testImages(async () => {
       throw new Error("HTTP 404")
@@ -203,9 +203,9 @@ test("inline: a code block an extension renders is committed once as its lines, 
   await idle()
   expect(check.problems).toEqual([])
   check.final(screen)
-  expect(all()).toContain(
+  expect(all().replace(/(?:[01]\d|2[0-3]):[0-5]\d(?=\n|$)/g, "<time>")).toContain(
     [
-      "  line L1",
+      "  line L1                        <time>",
       "",
       "  ┌─────────┐",
       "  │ A --> B │",
@@ -217,7 +217,7 @@ test("inline: a code block an extension renders is committed once as its lines, 
   )
   expect(all()).toContain("  ╭─ js\n  │ x()\n  ╰─")
   expect(all()).not.toContain("╭─ box")
-  // Asked once, when it closed, for the reply's width less its indent.
+  // Asked once, when it closed: later nodes use the full width minus the reply gutter.
   expect(calls).toEqual([{ code: "A --> B\nB --> C", width: 38 }])
   terminal.send("\x03")
   await exited
@@ -522,7 +522,7 @@ test("cancelling an extension operation leaves concurrent compaction alone; comp
     expect(host.commands.has("compact")).toBe(true)
     if (viaCommand) terminal.send("/summarize\r")
     else compacted = agent.compact()
-    await waitFor(() => live().includes("compacting the conversation"), "concurrent compaction")
+    await waitFor(() => live().includes("Compacting the conversation…"), "concurrent compaction")
     let aborts = 0
     const abort = agent.abort.bind(agent)
     agent.abort = (...args) => {
@@ -634,31 +634,34 @@ test("an extension's notice shows in the transcript", async () => {
   await exited
 })
 
-const BORDER = /^╰─.*─╯$/m
-
 test("the status goes under a dialog that takes the input box's place, and back into the border", async () => {
   for (const mode of ["inline", "fullscreen"] as const) {
-    const { terminal, live, host, bus, exited } = await setup([], { settings: { mode } })
+    const { terminal, live, host, bus, agent, exited } = await setup([], { settings: { mode } })
     bus.emit(
       "workspace.changed",
       { cwd: "/work/proj", repoRoot: "/work/proj", branch: "main", dirty: true },
       {
-        sessionId: "host",
+        sessionId: agent.sessionId,
       },
     )
-    await waitFor(() => /^╰─ m1 ─+ main\* ─╯$/m.test(live()), `${mode}: the status in the border`)
+    await waitFor(
+      () => /^ ⎇ main\* {2}\/work\/proj +0 \/ 128k$/m.test(live()) && /^╰─+ m1 · auto ─╯$/m.test(live()),
+      `${mode}: header and input status`,
+    )
+    expect(live()).toMatch(/^ ⎇ main\* {2}\/work\/proj +0 \/ 128k$/m)
     const answer = host.ui.api("x").confirm("Proceed?")
     await waitFor(() => live().includes("Proceed?"), `${mode}: the dialog`)
     const rows = live().split("\n")
     // No input box: the status is a line of its own under the dialog, the hint is gone.
     expect(rows.some((r) => r.startsWith("╰"))).toBe(false)
-    const status = rows.findIndex((r) => /^m1 {2,}main\*$/.test(r))
+    const status = rows.findIndex((r) => /^ {51}m1 · auto$/.test(r))
     expect(status).toBeGreaterThan(rows.findIndex((r) => r.includes("Proceed?")))
     expect(live()).not.toContain("Enter send")
+    expect(live()).toMatch(/^ ⎇ main\* {2}\/work\/proj +0 \/ 128k$/m)
     terminal.send("\x1b[27u")
     expect(await answer).toBeUndefined()
-    await waitFor(() => BORDER.test(live()) && live().includes("main* ─╯"), `${mode}: back in the border`)
-    expect(live()).not.toMatch(/^m1 {2,}main\*$/m)
+    await waitFor(() => /^╰─+ m1 · auto ─╯$/m.test(live()), `${mode}: back in the border`)
+    expect(live()).not.toMatch(/^ {51}m1 · auto$/m)
     terminal.send("\x03")
     await exited
   }
@@ -668,12 +671,12 @@ test("a command list below the input box leaves the status in the border", async
   const { terminal, live, exited } = await setup([], { commands: testCommands([]) })
   terminal.send("/")
   await waitFor(() => live().includes("Tab complete · Enter run · Esc close"), "the list")
-  expect(live()).toMatch(/^╰─ m1 ─+ proj ─╯$/m)
+  expect(live()).toMatch(/^╰─+ m1 · auto ─╯$/m)
   terminal.send("\x03\x03")
   await exited
 })
 
-test("the status in the border keeps to the width and drops items by priority, in both modes", async () => {
+test("the right-aligned model stays in the border; workspace, cost and context fit the header in both modes", async () => {
   for (const mode of ["inline", "fullscreen"] as const) {
     for (const cols of [100, 44, 34, 12]) {
       const { terminal, live, agent, bus, idle, exited } = await setup(
@@ -698,16 +701,19 @@ test("the status in the border keeps to the width and drops items by priority, i
       expect([mode, cols, line.length]).toEqual([mode, cols, cols])
       expect(line.endsWith("╯")).toBe(true)
       for (const row of live().split("\n")) expect(row.length).toBeLessThanOrEqual(cols)
-      const shown = ["m1", "ctx 109k/128k (85%)", "$0.042", "feat/x*"].filter((t) => line.includes(t))
-      // Whole items only, the lowest priority gone first.
-      expect([mode, cols, shown]).toEqual([
-        mode,
-        cols,
-        ["m1", "ctx 109k/128k (85%)", "$0.042", "feat/x*"].slice(
-          0,
-          cols >= 100 ? 4 : cols >= 44 ? 3 : cols >= 34 ? 2 : 1,
-        ),
-      ])
+      expect(line).toBe(cols === 12 ? "╰── m1 ·… ─╯" : `╰${"─".repeat(cols - 14)} m1 · auto ─╯`)
+      const header = {
+        100: ` ⎇ feat/x*  /work/proj${" ".repeat(57)}$0.042 │ 109k / 128k`,
+        44: " ⎇ feat/x*  /work/proj $0.042 │ 109k / 128k",
+        34: " ⎇ feat/x*   $0.042 │ 109k / 128k",
+        12: " 109k / 128k",
+      }[cols]!
+      const rows = live().split("\n")
+      const headerRow = mode === "fullscreen" ? 0 : rows.findIndex((r) => r.startsWith("╭")) - 1
+      expect(rows[headerRow]).toBe(header)
+      // Fullscreen reserves the header and its separator; inline keeps it against the composer.
+      if (mode === "fullscreen") expect(rows[1]).toBe("")
+      for (const item of ["109k", "$0.042", "feat/x*", "/work/proj"]) expect(line).not.toContain(item)
       terminal.send("\x03")
       await exited
     }
@@ -950,9 +956,9 @@ for (const mode of ["inline", "fullscreen"] as const) {
     expect(text.indexOf("Let me check.")).toBeLessThan(text.indexOf("web_search"))
     expect(text.indexOf("web_search")).toBeLessThan(text.indexOf("v24 is the LTS."))
     expect(text.indexOf("v24 is the LTS.")).toBeLessThan(text.indexOf("Sources:"))
-    expect(text).toContain("● web_search")
+    expect(text).toMatch(/^ {2}└ web_search node lts {2}✓ Web search: "node lts"$/m)
     // The row is shown once, not once per state.
-    expect(text.split("● web_search").length).toBe(2)
+    expect(text.split("  └ web_search").length).toBe(2)
     terminal.send("\x03")
     await exited
   })

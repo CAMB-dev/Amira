@@ -75,6 +75,8 @@ export interface ViewHost {
    * first. A dialog gets what the rest leaves of `budget` rows.
    */
   bottom(width: number, ctx: RenderContext, budget: number, top?: Component): string[]
+  /** Fullscreen's fixed header; inline carries these facts in its bottom area. */
+  header?(width: number, ctx: RenderContext): string[]
   /** The full-screen view open over the conversation: a form or the sub-agent viewer. */
   overlay: Component
   /** Whether the input box is empty. */

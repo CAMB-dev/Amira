@@ -20,9 +20,12 @@ import {
 import {
   commandEchoLines,
   formatElapsed,
+  messageTimestamp,
   reasoningLines,
   replyRows,
   subagentEndLine,
+  timestampRoom,
+  timestampRow,
   treeLayout,
   userLines,
 } from "./format.ts"
@@ -55,6 +58,7 @@ import {
   heldToolLine,
   OUTPUT_LINES,
   runningToolLines,
+  treeContinuation,
 } from "./tool-view.ts"
 import {
   type BlockKind,
@@ -96,6 +100,23 @@ export function createInlineView(host: ViewHost): TranscriptView {
   })
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
+  let stepIds: string[] = []
+  const isLastTool = (id: string) => stepIds.at(-1) === id
+  /** A reply's clock is fixed at its first delta, and committed only with its first row. */
+  let replyAt: number | undefined
+  let replyStamped = false
+  const replyWidth = (width: number) => {
+    streaming.firstRowWidth = Math.max(1, timestampRoom(width, replyAt) - visibleWidth(glyphs.assistant))
+    return Math.max(1, width - visibleWidth(glyphs.assistant))
+  }
+  const drawReply = (rows: string[], width: number, t: Theme, committing = false) => {
+    const lines = replyRows(rows)
+    if (lines.length && !replyStamped) {
+      lines[0] = timestampRow(lines[0]!, t, width, replyAt)
+      if (committing) replyStamped = true
+    }
+    return lines
+  }
   /** Tool names by call id, for the head of sub-agents that outlive their committed call. */
   const callNames = new Map<string, string>()
   /**
@@ -146,20 +167,23 @@ export function createInlineView(host: ViewHost): TranscriptView {
   /** A system notice fitted to the terminal. */
   const note = (level: NoticeLevel, text: string) => noticeLines(theme, level, text, terminal.columns)
   /** How finished calls show besides the detail level: the user's settings. */
-  const toolOptions = () => ({ outputLines: host.settings.shellOutputLines ?? OUTPUT_LINES })
+  const toolOptions = (last = false) => ({
+    outputLines: host.settings.shellOutputLines ?? OUTPUT_LINES,
+    last,
+  })
 
   /**
    * Successful calls in a row that only looked around (read, grep, glob), held back from the
    * scrollback so that they go as one "Explored" row once something else comes.
    */
-  let exploring: { call: FinishedCall; presenter: ToolPresenter | undefined }[] = []
+  let exploring: { call: FinishedCall; presenter: ToolPresenter | undefined; last: boolean }[] = []
   /** The held exploring calls as they will be committed: one call as itself, more as one row. */
   const exploredRows = (width: number, t: Theme, detail: ToolDetailLevel) => {
     if (exploring.length === 1) {
       const [{ call, presenter }] = exploring as [(typeof exploring)[number]]
-      return finishedToolLines(t, presenter, call, detail, width, toolOptions())
+      return finishedToolLines(t, presenter, call, detail, width, toolOptions(exploring.at(-1)?.last))
     }
-    return exploredLines(t, exploring, detail === "full", detail, width, toolOptions())
+    return exploredLines(t, exploring, detail === "full", detail, width, toolOptions(exploring.at(-1)?.last))
   }
   function flushExplored(): void {
     if (!exploring.length) return
@@ -179,7 +203,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const lines = reasoningLines(
       theme,
       text,
-      { durationMs: Date.now() - startedAt, expanded },
+      { durationMs: Date.now() - startedAt, expanded, timestamp: startedAt },
       terminal.columns,
     )
     commitBlock("reasoning", lines)
@@ -210,11 +234,19 @@ export function createInlineView(host: ViewHost): TranscriptView {
       for (const c of live) {
         const presenter = presenters?.get(c.name)
         const head = c.end
-          ? [heldToolLine(ctx.theme, presenter, finished(c), width)]
-          : runningToolLines(ctx.theme, presenter, c, now, host.spinner.glyph, width)
+          ? [heldToolLine(ctx.theme, presenter, finished(c), width, { last: isLastTool(c.id) })]
+          : runningToolLines(ctx.theme, presenter, c, now, host.spinner.glyph, width, {
+              last: isLastTool(c.id),
+            })
         calls.push([
           ...(output ? head : head.slice(0, 1)),
-          ...treeRows(callTree(c.id), now, width, ctx.theme, spawnGroups),
+          ...treeRows(
+            callTree(c.id),
+            now,
+            Math.max(1, width - visibleWidth(treeContinuation(ctx.theme, isLastTool(c.id)))),
+            ctx.theme,
+            spawnGroups,
+          ).map((row) => treeContinuation(ctx.theme, isLastTool(c.id)) + row),
         ])
       }
       return calls
@@ -281,17 +313,38 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const tools = liveToolRows(width, ctx, Math.max(4, Math.floor(ctx.rows / 2)))
     const budget = ctx.rows - 1 - dialog.length - (tools.length ? tools.length + 1 : 0)
     const rest = host.bottom(width, ctx, budget, background)
-    streaming.maxRows = Math.max(1, ctx.rows - rest.length - tools.length - dialog.length - 3)
+    const thinking = thought
+      ? [
+          ...(transcript.gapBefore("reasoning") ? [""] : []),
+          ...reasoningLines(
+            ctx.theme,
+            thought.text,
+            { thinking: true, expanded: host.detail() === "full", timestamp: thought.startedAt },
+            width,
+          ),
+        ]
+      : []
+    // Thinking can be long at full detail, but must not push the input out of the live region.
+    const thoughtBudget = Math.max(1, ctx.rows - rest.length - tools.length - dialog.length - 2)
+    if (thinking.length > thoughtBudget && thinking[0] === "") thinking.shift()
+    if (thinking.length > thoughtBudget) {
+      thinking.length = thoughtBudget
+      if (thoughtBudget > 1) thinking[thoughtBudget - 1] = ctx.theme.muted(`  ${glyphs.more}`)
+    }
+    streaming.maxRows = Math.max(
+      1,
+      ctx.rows - rest.length - tools.length - dialog.length - thinking.length - 3,
+    )
     const commit = ctx.commit
     const replyCtx: RenderContext = commit
       ? {
           ...ctx,
-          commit: (rows) => commit(transcript.continue("assistant", replyRows(rows))),
+          commit: (rows) => commit(transcript.continue("assistant", drawReply(rows, width, ctx.theme, true))),
         }
       : ctx
-    const reply = streaming.render(Math.max(1, width - visibleWidth(glyphs.assistant)), replyCtx)
+    const reply = streaming.render(replyWidth(width), replyCtx)
     const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
-    return [...dialog, ...lead, ...replyRows(reply), ...tools, "", ...rest]
+    return [...dialog, ...thinking, ...lead, ...drawReply(reply, width, ctx.theme), ...tools, "", ...rest]
   })
   const reflow = host.settings.reflow ?? DEFAULT_TUI_REFLOW
   const renderer = new LiveRenderer(terminal, root, {
@@ -333,6 +386,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
   function commitCalls(calls: TrackedCall[]): boolean {
     for (const c of calls) {
       const tree = callTree(c.id)
+      const continuation = treeContinuation(theme, isLastTool(c.id))
+      const treeWidth = Math.max(1, terminal.columns - visibleWidth(continuation))
       const ends: string[] = []
       const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
       // The call's own result line comes after them, so only a nested one can close a level.
@@ -343,7 +398,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
           subagents.delete(n.id)
         } else if (n.end) {
           const { last, indent } = layout[i]!
-          ends.push(subagentEndLine(n, n.end, terminal.columns, theme, last, indent))
+          ends.push(continuation + subagentEndLine(n, n.end, treeWidth, theme, last, indent))
           subagents.delete(n.id)
         } else n.detached = cutShort ? "interrupted" : "background"
       }
@@ -351,10 +406,17 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const call = finished(c)
       // A call that only looked around waits for the next one: a run of them is one row.
       if (!tree.length && explorationOf(presenter, call)) {
-        exploring.push({ call, presenter })
+        exploring.push({ call, presenter, last: isLastTool(c.id) })
         continue
       }
-      const lines = finishedToolLines(theme, presenter, call, host.detail(), terminal.columns, toolOptions())
+      const lines = finishedToolLines(
+        theme,
+        presenter,
+        call,
+        host.detail(),
+        terminal.columns,
+        toolOptions(isLastTool(c.id)),
+      )
       lines.splice(1, 0, ...ends)
       commitBlock("tool", lines)
     }
@@ -499,12 +561,15 @@ export function createInlineView(host: ViewHost): TranscriptView {
           wrapText(typeof line === "function" ? line(theme) : line, Math.max(1, terminal.columns)),
         ),
       ]),
-    user: (m) => commitBlock("user", userLines(theme, m, terminal.columns)),
+    user: (m) =>
+      commitBlock("user", userLines(theme, m, terminal.columns, messageTimestamp(m) ?? Date.now())),
     replyDelta(text) {
+      if (thought && !text.trim()) return
       flushDialog()
       // The reply goes on: what it thought, and the calls held before it, go first.
       commitThought()
       flushExplored()
+      if (text) replyAt ??= Date.now()
       streaming.append(text)
     },
     reasoningDelta(text) {
@@ -512,21 +577,27 @@ export function createInlineView(host: ViewHost): TranscriptView {
       flushDialog()
       thought ??= { text: "", startedAt: Date.now() }
       thought.text += text
+      renderer.requestRender()
     },
     replyEnd(calls) {
       flushDialog()
       // The rows still live are committed as they are shown; earlier ones already were.
       const early = streaming.committedRows > 0
-      const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(glyphs.assistant)))
-      if (rows.length) commit(transcript.continue("assistant", replyRows(rows)))
+      const rows = streaming.take(replyWidth(terminal.columns))
+      if (rows.length)
+        commit(transcript.continue("assistant", drawReply(rows, terminal.columns, theme, true)))
+      replyAt = undefined
+      replyStamped = false
       transcript.end()
       // Thinking that came after the text (or with none) goes after it.
       const thoughtShown = commitThought()
-      toolCalls.expect(calls.map((c) => c.id))
+      stepIds = calls.map((c) => c.id)
+      toolCalls.expect(stepIds)
       return rows.length > 0 || early || thoughtShown
     },
     toolStart(id, name, args, at) {
       flushDialog()
+      if (!stepIds.includes(id)) stepIds.push(id)
       toolCalls.start(id, name, args, at)
       callNames.set(id, name)
     },
@@ -589,6 +660,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
       pendingDialog = undefined
       toolCalls.flush()
       thought = undefined
+      replyAt = undefined
+      replyStamped = false
       flushExplored()
       settleSubagents()
       callNames.clear()

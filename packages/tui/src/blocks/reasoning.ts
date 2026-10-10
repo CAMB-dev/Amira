@@ -14,12 +14,13 @@ export class ReasoningBlock extends Block {
   /** Set by folding it: whether its text shows, whatever the level. */
   expanded: boolean | undefined
   #thinking: boolean
+  #textVersion = 0
 
   constructor(
     public text: string,
     /** How long it thought; unknown for a resumed session. */
     public durationMs: number | undefined,
-    readonly startedAt = Date.now(),
+    readonly startedAt: number | undefined = undefined,
     thinking = false,
   ) {
     super()
@@ -31,20 +32,28 @@ export class ReasoningBlock extends Block {
   }
 
   append(text: string): void {
+    if (!text) return
+    const expandable = this.foldable()
     this.text += text
-    if (this.expanded) this.touch()
+    this.#textVersion++
+    // The disclosure hint is visible even collapsed; the streamed body is not.
+    if (this.foldable() !== expandable) this.touch()
   }
 
   /** The thinking is over, at `at`. */
   finish(at = Date.now()): void {
     if (!this.#thinking) return
     this.#thinking = false
-    this.durationMs = at - this.startedAt
+    this.durationMs = this.startedAt === undefined ? undefined : at - this.startedAt
     this.touch()
   }
 
   private shows(env: BlockEnv): boolean {
     return this.expanded ?? env.detail === "full"
+  }
+
+  override cacheVersion(env: BlockEnv): number | string {
+    return this.shows(env) ? `${this.version}/${this.#textVersion}` : this.version
   }
 
   lines(env: BlockEnv): string[] {
@@ -55,6 +64,7 @@ export class ReasoningBlock extends Block {
         ...(this.durationMs !== undefined ? { durationMs: this.durationMs } : {}),
         thinking: this.#thinking,
         expanded: this.shows(env),
+        ...(this.startedAt !== undefined ? { timestamp: this.startedAt } : {}),
       },
       env.width,
     )
@@ -66,7 +76,7 @@ export class ReasoningBlock extends Block {
 
   override copyRows(plain: readonly string[]): CopyRow[] {
     // The head is chrome; the text copies without its indent.
-    return plain.map((_, i) => (i === 0 ? { from: 0, skip: true } : { from: 2 }))
+    return plain.map((_, i) => (i === 0 ? { from: 0, skip: true } : { from: 4 }))
   }
 
   override foldable(): boolean {

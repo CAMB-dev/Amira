@@ -472,10 +472,10 @@ test("a background result during a turn shows as a notice where it joins, not as
   await shows("then saw report: B")
   await idle()
   const text = all()
-  expect(text.indexOf("● read")).toBeLessThan(text.indexOf("◆ explorer finished"))
+  expect(text.indexOf("  └ read")).toBeLessThan(text.indexOf("◆ explorer finished"))
   expect(text.indexOf("◆ explorer finished")).toBeLessThan(text.indexOf("then saw report: B"))
   // A block of the transcript like any other: one blank line before it and after it.
-  expect(text).toMatch(/[^\n]\n\n◆ explorer finished · 41s · 12\.3k tok\n\n {2}then saw/)
+  expect(text).toMatch(/[^\n]\n\n {2}◆ explorer finished · 41s · 12\.3k tok\n\n {2}then saw/)
   terminal.send("\x03")
   await exited
 })

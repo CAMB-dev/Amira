@@ -38,7 +38,7 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   // The first one runs its tool; the second waits for the slot.
   await waitFor(
     () =>
-      /● delegate +. \d+s\n {2}├ ◆ US market trend · explorer · \d+s · 4\.1k tok\n {2}│ └ ● read a\.ts\n {2}└ ◆ Add status bar test · coder · queued\n/.test(
+      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}├ ◆ US market trend · explorer · \d+s · 4\.1k tok\n {5}│ └ ● read a\.ts\n {5}└ ◆ Add status bar test · coder · queued\n/m.test(
         live(),
       ),
     "rows under the call",
@@ -50,7 +50,7 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   const text = all()
   // Each one's rows became its end line, committed with the call right under its head, in order.
   expect(text).toMatch(
-    /● delegate\n {2}├ ◆ US market trend ✓ explorer · \d+\.\ds · 4\.1k tok · trend is up\n {2}├ ◆ Add status bar test ✓ coder · \d+\.\ds · 1\.2k tok · test added\n {2}└ trend is up/,
+    /^ {2}└ delegate {2}✓ trend is up \(\+1 line\) · \d+\.\ds\n {5}├ ◆ US market trend ✓ explorer · \d+\.\ds · 4\.1k tok · trend is up\n {5}├ ◆ Add status bar test ✓ coder · \d+\.\ds · 1\.2k tok · test added$/m,
   )
   expect(text.match(/◆ US market trend/g)).toHaveLength(1)
   // Nothing is left of them in the live region below the transcript.
@@ -134,7 +134,10 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   terminal.send("go\r")
   // The child is done and so is its call, but both wait below the running slow call.
   await waitFor(
-    () => /● slow big\.log .*\n● delegate\n {2}└ ◆ Look around ✓ .*child answer/m.test(live()),
+    () =>
+      /^ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s\n {2}└ delegate {2}✓ child answer\n {5}└ ◆ Look around ✓ [^\n]*child answer/m.test(
+        live(),
+      ),
     "held",
   )
   release()
@@ -142,7 +145,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   await idle()
   const text = all()
   expect(text).toMatch(
-    /● slow big\.log\n {2}└ slow result\n● delegate\n {2}├ ◆ Look around ✓ [^\n]*child answer\n {2}└ child answer/,
+    /^ {2}├ slow big\.log {2}✓ slow result\n {2}└ delegate {2}✓ child answer\n {5}├ ◆ Look around ✓ [^\n]*child answer$/m,
   )
   expect(text.match(/◆ Look around ✓/g)).toHaveLength(1)
   terminal.send("\x03")
@@ -167,13 +170,16 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   agent.tools.register(delegateTool(), "test")
   terminal.send("go\r")
   await waitFor(
-    () => /● delegate .*\n {2}└ ◆ First pass · .*\n● delegate .*\n {2}└ ◆ Second pass · /.test(live()),
+    () =>
+      /^ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {2}│ {2}└ ◆ First pass · [^\n]*\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}└ ◆ Second pass · /m.test(
+        live(),
+      ),
     "each under its own call",
   )
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /● delegate\n {2}├ ◆ First pass ✓ [^\n]*\n {2}└ \w+\n● delegate\n {2}├ ◆ Second pass ✓ [^\n]*\n {2}└ \w+/,
+    /^ {2}├ delegate {2}✓ one\n {2}│ {2}├ ◆ First pass ✓ explorer · \d+\.\ds · 0 tok · one\n {2}└ delegate {2}✓ two\n {5}├ ◆ Second pass ✓ explorer · \d+\.\ds · 0 tok · two$/m,
   )
   terminal.send("\x03")
   await exited
@@ -194,7 +200,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   terminal.send("go\r")
   await waitFor(
     () =>
-      /● delegate +. \d+s\n {2}└ ◆ Outer task · explorer · \d+s · 0 tok\n {4}└ ● delegate\n {4}└ ◆ Inner check · explorer · \d+s · 0 tok\n/.test(
+      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}└ ◆ Outer task · explorer · \d+s · 0 tok\n {7}└ ● delegate\n {7}└ ◆ Inner check · explorer · \d+s · 0 tok\n/m.test(
         live(),
       ),
     "nested rows",
@@ -202,7 +208,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /● delegate\n {2}├ ◆ Outer task ✓ explorer [^\n]*outer done\n {2}│ └ ◆ Inner check ✓ explorer [^\n]*inner done\n {2}└ outer done/,
+    /^ {2}└ delegate {2}✓ outer done · \d+\.\ds\n {5}├ ◆ Outer task ✓ explorer [^\n]*outer done\n {5}│ └ ◆ Inner check ✓ explorer [^\n]*inner done$/m,
   )
   terminal.send("\x03")
   await exited
@@ -305,7 +311,7 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   await shows("started it")
   await idle()
   // The call is committed; its sub-agent runs on in the live region.
-  expect(all()).toMatch(/● launch\n {2}└ Started in the background/)
+  expect(all()).toMatch(/^ {2}└ launch {2}✓ Started in the background$/m)
   await waitFor(
     () =>
       /● launch · 1 sub-agent · running in background · \d+s\n {2}└ ◆ Scan the logs · explorer · \d+s · 0 tok\n {4}└ ● scan logs\/app\.log\n/.test(

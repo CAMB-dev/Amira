@@ -242,7 +242,9 @@ for (const mode of MODES) {
     expect(s.toolResult("ask_user")).toBe(
       'The user answered:\n1. Which approach do you prefer?\n   → (own words) "both, 2 steps"',
     )
-    expect(s.all()).toContain('└ (own words) "both, 2 steps"')
+    expect(s.all()).toMatch(
+      /^ {2}└ ask_user Which approach do you prefer\?\n {5}✓ \(own words\) "both, 2 steps"$/m,
+    )
     s.terminal.send("again\r")
     await waitFor(() => s.dialog().length > 0, "the second dialog")
     s.terminal.send(`${UP}\r`)
@@ -307,8 +309,8 @@ for (const mode of MODES) {
     await s.shows("b")
     await s.idle()
     // The echo wraps like any line: the answer follows the question.
-    expect(s.all()).toContain("└ 修补")
-    expect(s.all()).toContain("└ Rewrite (Recommended)")
+    expect(s.all()).toMatch(/^ {2}└ ask_user 你想用哪种…个功能？\n {5}✓ 修补$/m)
+    expect(s.all()).toMatch(/^ {2}└ ask_user Which app…u prefer\?\n {5}✓ Rewrite \(Recommended\)$/m)
     s.terminal.send("\x03")
     await s.exited
   })
@@ -352,8 +354,12 @@ for (const mode of MODES) {
     // Asked once for both calls.
     expect(s.all().split("? Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
     // Each call says who let it run.
-    expect(s.all()).toContain("└ wiped · allowed by you")
-    expect(s.all()).toContain("└ wiped · allowed · session rule")
+    expect(s.all()).toContain(
+      [
+        mode === "fullscreen" ? "  ├ wipe  ✓ wiped · allowed by you" : "  └ wipe  ✓ wiped · allowed by you",
+        "  └ wipe  ✓ wiped · allowed · session rule",
+      ].join("\n"),
+    )
     s.terminal.send("\x03")
     await s.exited
   })
@@ -366,7 +372,7 @@ test("Esc on an approval denies the call and stops the turn; meanwhile the activ
   })
   s.terminal.send("clean up\r")
   await waitFor(() => s.dialog().length > 0, "the approval")
-  expect(s.live()).toMatch(/waiting for you · \d+s/)
+  expect(s.live()).toMatch(/^ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s {3}Esc stop$/m)
   s.terminal.send(ESC)
   await s.idle()
   expect(s.host.ui.pending).toEqual([])
@@ -389,7 +395,9 @@ test("an approval refused with free text tells the model what to do instead", as
   await s.shows("ok, moving to trash")
   await s.idle()
   expect(s.toolResult("wipe")).toContain("the user said no: move them to the trash")
-  expect(s.all()).toContain("the user said no: move them to")
+  expect(s.all()).toContain(
+    "  └ wipe\n     ⊘ Tool call not approved: the user said no: move them\n     to the trash",
+  )
   s.terminal.send("\x03")
   await s.exited
 })
