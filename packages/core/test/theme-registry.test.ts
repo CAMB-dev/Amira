@@ -116,6 +116,22 @@ test("glyph overrides must match the default cell width, including wide emoji an
   expect(notices.some((notice) => notice.text.includes("bullets[1]"))).toBe(true)
 })
 
+test("tool tree glyph overrides allow one/two-cell branches and a one-cell continuation", () => {
+  const { themes, notices } = registry()
+  themes.register(
+    { name: "ascii-tree", glyphs: { treeBranch: "|-", treeLast: "`-", treePipe: "|" } },
+    "built-in",
+  )
+  expect(themes.get("ascii-tree")?.glyphs).toEqual({ treeBranch: "|-", treeLast: "`-", treePipe: "|" })
+  expect(notices).toEqual([])
+  themes.register(
+    { name: "wrong-tree", glyphs: { treeBranch: "---", treeLast: "---", treePipe: "||" } },
+    "user",
+  )
+  expect(themes.get("wrong-tree")?.glyphs).toEqual({})
+  expect(notices).toHaveLength(3)
+})
+
 test("warning glyphs may change width because their layouts measure the prefix", () => {
   const { themes, notices } = registry()
   themes.register({ name: "ascii-warning", glyphs: { warning: "!" } }, "built-in")

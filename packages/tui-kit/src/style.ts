@@ -325,8 +325,8 @@ export function createTheme(options: ThemeOptions = {}): Theme {
   const variant = background ?? "dark"
   const overrides = options.definition?.[variant]
   const p = { ...palettes[variant], ...overrides }
-  const shimmer = overrides?.shimmer ?? palettes[variant].accent
-  const shimmerEnd = overrides?.shimmerEnd ?? palettes[variant].heading1
+  const shimmer = p.shimmer
+  const shimmerEnd = p.shimmerEnd
   const fg = (hex: Hex, fallback = gray) => (depth === "16" ? fallback : sgr(quantize(hex, depth, 90), 39))
   const theme: Theme = {
     ...terminalTheme,
@@ -368,8 +368,15 @@ export function createTheme(options: ThemeOptions = {}): Theme {
     shimmer: fg(shimmer, cyan),
     shimmerEnd: fg(shimmerEnd, blue),
   }
-  for (let i = 0; i < 16; i++) theme[`shimmer${i}`] = fg(blend(shimmer, shimmerEnd, i / 15), cyan)
   if (depth === "16") return theme
+  for (let i = 0; i < 16; i++) {
+    const highlight = blend(shimmer, shimmerEnd, i / 15)
+    theme[`shimmer${i}`] = fg(highlight)
+    // Quantize the soft edges once, not on each spinner frame.
+    for (let fade = 1; fade <= 8; fade++) {
+      theme[`shimmer${i}Fade${fade}`] = fg(blend(p.muted, highlight, fade / 8))
+    }
+  }
   const chipStyle = (background: Hex, fallback: number) => {
     const edge = sgr(quantize(background, depth, fallback - 10), 39)
     const body = compose(sgr(quantize(background, depth, fallback, true), 49), fg(p.bg, black))

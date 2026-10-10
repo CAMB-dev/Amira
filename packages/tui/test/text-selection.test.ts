@@ -3,7 +3,7 @@ import type { UserMessage } from "@amira/api"
 import { bg256, defaultGlyphs, ImageStore, stripAnsi } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { fakeProvider } from "../../tui-kit/test/fake-images.ts"
-import { Block, type BlockEnv, type BlockImages, LinesBlock, ReplyBlock, userBlock } from "../src/blocks.ts"
+import { Block, type BlockEnv, type BlockImages, ReplyBlock, userBlock } from "../src/blocks.ts"
 import { cellsOf, chromeRows, markCells, sliceCells, wordAt } from "../src/text-selection.ts"
 import type { BlockKind } from "../src/transcript.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
@@ -96,7 +96,7 @@ test("the symbols in front of tool rows are chrome; rows under them keep their o
 /** A pane with a user message, a reply with a code block and a tool call, drawn 20 rows high. */
 function conversation(width = 40) {
   const pane = new TranscriptPane()
-  pane.add(new LinesBlock("user", (_w, t) => [`${t.accent("›")} hello there`], "hello there"))
+  pane.add(userBlock({ role: "user", content: [{ type: "text", text: "hello there" }] }))
   const reply = [
     "Some **bold** text.",
     "",
@@ -127,7 +127,7 @@ test("dragging across rows and blocks marks them and copies what is shown, less 
   // The rows in between are marked, the gutter of the first before the mark, and a cell after
   // each for its line break; blank rows show just that cell.
   const end = `${ON} ${OFF}`
-  expect(drawn[from]).toBe(`› ${ON}hello there${OFF}${end}`)
+  expect(drawn[from]).toBe(`  › ${ON}hello there${OFF}${end}`)
   expect(drawn[from + 1]).toBe(end)
   expect(drawn[rowOf(drawn, "After.")]).toBe(`${ON}  After.${OFF}${end}`)
   // The last row up to the cell the drag ended on.
@@ -335,22 +335,23 @@ test("an image copies as its alt text, once, from any of its rows", async () => 
   expect(pane.selectedText()).toBe(`${alt}\n\nAfter`)
 })
 
-test("a message on its band copies as its text: the band's blank rows and fill are chrome", () => {
+test("a message on its band copies as its text without the fill or inter-block gap", () => {
   const e = { ...env(40), theme: { ...plain.theme, userBg: bg256(236) } }
   const pane = new TranscriptPane()
   const message: UserMessage = { role: "user", content: [{ type: "text", text: "first line\nsecond line" }] }
   pane.add(userBlock(message))
   pane.add(new ReplyBlock("The reply.", false, false))
   const rows = pane.render(e, 12)
-  // The band: a blank row of it above and below, each row filled to the edge.
+  // Only content rows belong to the band; the transcript supplies the single gap.
   const first = rowOf(rows, "first line")
-  expect(stripAnsi(rows[first - 1]!)).toBe(" ".repeat(40))
-  expect(stripAnsi(rows[first + 2]!)).toBe(" ".repeat(40))
-  pane.startDrag(first - 1, 0)
+  expect(stripAnsi(rows[first]!)).toBe(`  › first line${" ".repeat(26)}`)
+  expect(stripAnsi(rows[first + 1]!)).toBe(`    second line${" ".repeat(25)}`)
+  expect(stripAnsi(rows[first + 2]!)).toBe("")
+  pane.startDrag(first, 0)
   pane.dragTo(rowOf(rows, "The reply."), 100)
   expect(pane.selectedText()).toBe("first line\nsecond line\n\nThe reply.")
-  // A message alone, from the band's top row to its bottom one: just its text.
-  pane.startDrag(first - 1, 5)
-  pane.dragTo(first + 2, 5)
+  // A message alone, from its first content row to its last: just its text.
+  pane.startDrag(first, 0)
+  pane.dragTo(first + 1, 100)
   expect(pane.selectedText()).toBe("first line\nsecond line")
 })

@@ -19,6 +19,8 @@ import { displayMathStart, type MathCodeRange } from "./math-source.ts"
 /** What rendering needs besides the text. */
 export interface Env {
   width: number
+  /** Current first-row budget; changes as the sink consumes rows. */
+  rowWidth?: (() => number) | undefined
   styles: MarkdownStyles
   glyphs: Glyphs
   hyperlinks: boolean
@@ -189,7 +191,7 @@ const pad = (n: number) => " ".repeat(Math.max(0, n))
 
 /** A row of a code block's frame at `col`, cut to the width. */
 function frameRow(col: number, text: string, env: Env): string {
-  const row = truncateToWidth(pad(col) + env.styles.codeFrame(text), env.width, "…")
+  const row = truncateToWidth(pad(col) + env.styles.codeFrame(text), env.rowWidth?.() ?? env.width, "…")
   return env.styles.codeBg ? env.styles.codeBg(row) : row
 }
 
@@ -353,8 +355,9 @@ export function holdsCode(s: BlockState): boolean {
 function heldRows(f: Fence, env: Env, closed: boolean): string[] {
   const label = f.lang ? ` ${f.lang}` : ""
   const rows = [frameRow(f.renderCol, env.glyphs.codeTop + label, env)]
-  for (const line of f.held!) rows.push(...renderLine(codeLine(f, line, env), line, env).rows)
-  if (closed) rows.push(frameRow(f.renderCol, env.glyphs.codeBottom, env))
+  const rest = { ...env, rowWidth: undefined }
+  for (const line of f.held!) rows.push(...renderLine(codeLine(f, line, rest), line, rest).rows)
+  if (closed) rows.push(frameRow(f.renderCol, env.glyphs.codeBottom, rest))
   return rows
 }
 
@@ -474,8 +477,9 @@ function classify(s: BlockState, line: string, env: Env): Classified {
     return { rows: [frameRow(col, glyphs.codeTop + label, env)] }
   }
   if (rule) {
-    const at = col < env.width ? col : 0
-    const n = Math.max(1, Math.floor((env.width - at) / Math.max(1, visibleWidth(glyphs.rule))))
+    const width = env.rowWidth?.() ?? env.width
+    const at = col < width ? col : 0
+    const n = Math.max(1, Math.floor((width - at) / Math.max(1, visibleWidth(glyphs.rule))))
     return { rows: [pad(at) + styles.rule(glyphs.rule.repeat(n))] }
   }
   if (heading) {
@@ -675,7 +679,13 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
     rest = ""
     room = env.width
   }
-  const layout = wrapCells(cells, room, !lr.code)
+  const firstWidth = env.rowWidth?.() ?? env.width
+  let firstRoom = firstWidth - (env.width - room)
+  if (firstRoom < 2 && firstWidth !== env.width) {
+    prefix = ""
+    firstRoom = firstWidth
+  }
+  const layout = wrapCells(cells, room, !lr.code, firstRoom)
   const rows = layout.map((r, i) => {
     const head = i === 0 ? prefix : rest
     const row = r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
@@ -797,7 +807,7 @@ function layoutTable(t: Table, env: Env, slack = false): { rows: string[]; width
   const rows = [
     ...tableRow(t, t.rows[0]!, widths, env, true),
     pad(t.renderCol) + styles.tableBorder(rule),
-    ...t.rows.slice(1).flatMap((r) => tableRow(t, r, widths, env, false)),
+    ...t.rows.slice(1).flatMap((r) => tableRow(t, r, widths, { ...env, rowWidth: undefined }, false)),
   ]
   return { rows, widths }
 }
@@ -825,7 +835,8 @@ function tableRow(t: Table, cells: string[], widths: number[], env: Env, header:
     })
     const line = pad(t.renderCol) + parts.join(sep)
     // After the screen got narrower than the frozen widths, the row wraps rather than overflowing.
-    if (visibleWidth(line) > env.width) out.push(...wrapText(line, env.width))
+    const firstWidth = out.length ? env.width : (env.rowWidth?.() ?? env.width)
+    if (visibleWidth(line) > firstWidth) out.push(...wrapText(line, env.width, firstWidth))
     else out.push(line.trimEnd())
   }
   return out
@@ -839,5 +850,10 @@ function rawRender(t: Table, line: string): LineRender {
 }
 
 function rawRows(t: Table, lines: string[], env: Env): string[] {
-  return lines.flatMap((l) => renderLine(rawRender(t, l), l, env).rows)
+  const rows: string[] = []
+  for (const line of lines) {
+    const current = rows.length ? { ...env, rowWidth: undefined } : env
+    rows.push(...renderLine(rawRender(t, line), line, current).rows)
+  }
+  return rows
 }

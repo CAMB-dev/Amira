@@ -1,9 +1,7 @@
 // Owns turn activity, retry labels and the activity line's clocks and rendering.
 import type { RenderContext, Spinner } from "@amira/tui-kit"
-import { italic, themeToken, truncateToWidth } from "@amira/tui-kit"
-import { compactTokens } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
-import { formatElapsed } from "../tool-view.ts"
+import { activityRow } from "./activity-row.ts"
 
 /** A model request waiting to be sent again: model.retry, and when the wait ends. */
 export interface RetryState {
@@ -32,6 +30,7 @@ export function activityLabel(s: {
   running: readonly string[]
   preparing: string | undefined
   thinking: boolean
+  responding?: boolean
   /** A failed model request waiting to be sent again (model.retry), and when it goes out. */
   retry?: RetryState | undefined
   /** A dialog waits for the user's answer. */
@@ -47,7 +46,7 @@ export function activityLabel(s: {
   if (s.retrying && !s.retry) return s.retrying
   if (s.running.length) return `${s.running.length} ${s.running.length === 1 ? "tool" : "tools"} running`
   if (s.preparing) return `preparing ${s.preparing}`
-  return s.thinking ? "thinking" : "working"
+  return s.thinking ? "thinking" : s.responding ? "responding" : "working"
 }
 
 /**
@@ -91,6 +90,7 @@ export interface TurnActivityRenderOptions {
   running: readonly string[]
   waiting: boolean
   spinner: Spinner
+  stop?: string
 }
 
 export interface TurnActivity {
@@ -139,11 +139,23 @@ export function createTurnActivity(): TurnActivity {
   let compactStartedAt = 0
   /** Characters of the reply streaming now: its tokens until its usage arrives. */
   let streamedChars = 0
+  let responding = false
+  let stepStartedAt = 0
+  let stepKind = ""
+  let lastRate = 0
+  let messageStartedAt = 0
+  let animationGlyph = ""
+  let animationMs = 0
 
   /** The activity line counts the turn's time and tokens from here. */
   const startClock = () => {
     turnStartedAt = Date.now()
     turnTokens = 0
+    stepStartedAt = turnStartedAt
+    stepKind = ""
+    lastRate = 0
+    responding = false
+    animationGlyph = ""
   }
 
   return {
@@ -177,6 +189,10 @@ export function createTurnActivity(): TurnActivity {
       streamedChars = 0
     },
     setRetry(next) {
+      if (next) {
+        stepStartedAt = Date.now()
+        stepKind = ""
+      }
       retry = next
     },
     messageStarted() {
@@ -185,16 +201,21 @@ export function createTurnActivity(): TurnActivity {
       reasoning = ""
       preparing = undefined
       streamedChars = 0
+      responding = false
+      stepStartedAt = Date.now()
+      messageStartedAt = stepStartedAt
     },
     textDelta(text, render) {
       retry = undefined
       thinking = false
+      responding = true
       render()
       streamedChars += text.length
     },
     thinkingDelta(text, render) {
       retry = undefined
       thinking = true
+      responding = false
       render()
       // Only the end is shown; keep enough of it to hold a whole line.
       reasoning = (reasoning + text).slice(-2000)
@@ -214,8 +235,11 @@ export function createTurnActivity(): TurnActivity {
       }
     },
     messageEnded(outputTokens) {
-      turnTokens += outputTokens ?? estimateTokens(streamedChars)
+      const tokens = outputTokens ?? estimateTokens(streamedChars)
+      lastRate = tokens / Math.max(0.001, (Date.now() - messageStartedAt) / 1000)
+      turnTokens += tokens
       streamedChars = 0
+      responding = false
     },
     toolStarted() {
       preparing = undefined
@@ -233,6 +257,9 @@ export function createTurnActivity(): TurnActivity {
       compacting = true
       compactingOnServer = onServer
       compactStartedAt = Date.now()
+      stepStartedAt = compactStartedAt
+      stepKind = ""
+      animationGlyph = ""
     },
     endCompaction() {
       compacting = false
@@ -245,23 +272,45 @@ export function createTurnActivity(): TurnActivity {
         running: options.running,
         preparing,
         thinking,
+        responding,
         waiting: options.waiting,
         retry,
         retrying,
       })
+      const now = Date.now()
+      // Countdown text/counts changing do not restart the step's clock.
+      const kind = label.replace(/\d+/g, "#")
+      if (kind !== stepKind) {
+        stepKind = kind
+        stepStartedAt = now
+      }
+      const turnMs = now - (working ? turnStartedAt : compactStartedAt)
+      // Stream/input redraws can be faster than the spinner: only its ticks move the highlight.
+      if (animationGlyph !== options.spinner.glyph) {
+        animationGlyph = options.spinner.glyph
+        animationMs = turnMs
+      }
+      const stepMs = now - stepStartedAt
       const tokens = turnTokens + estimateTokens(streamedChars)
-      const stats = [
-        formatElapsed(Date.now() - (working ? turnStartedAt : compactStartedAt)),
-        ...(tokens ? [`↓ ${compactTokens(tokens)} tokens`] : []),
-      ].join(` ${glyphs.separator} `)
-      const shimmer = themeToken(ctx.theme, "shimmer") ?? ctx.theme.accent
-      const labelStyle =
-        label === "thinking" ? (themeToken(ctx.theme, "thinking") ?? ctx.theme.muted) : ctx.theme.muted
-      const dim = themeToken(ctx.theme, "dim") ?? ctx.theme.muted
-      const head = `${shimmer(options.spinner.glyph)} ${labelStyle(label)}${dim(` ${glyphs.separator} `)}`
-      const thought = label === "thinking" ? lastReasoningLine(reasoning) : ""
-      const tail = thought ? dim(` ${glyphs.separator} `) + italic(ctx.theme.muted(thought)) : ""
-      return [truncateToWidth(head + ctx.theme.muted(stats) + tail, width, glyphs.more), ""]
+      const rate = streamedChars
+        ? estimateTokens(streamedChars) / Math.max(0.001, (now - messageStartedAt) / 1000)
+        : lastRate
+      return [
+        activityRow(
+          {
+            label,
+            spinner: options.spinner.glyph,
+            stepMs,
+            turnMs,
+            tokens,
+            rate,
+            stop: options.stop ?? "esc stop",
+            animationMs,
+          },
+          width,
+          ctx,
+        ),
+      ]
     },
   }
 }

@@ -129,6 +129,8 @@ export function wordAt(line: string, col: number): { from: number; to: number } 
  */
 export interface CopyRow {
   from: number
+  /** Trailing chrome (timestamps) starts here; partial selections stop before it too. */
+  to?: number
   skip?: boolean
   joins?: boolean
   repeats?: boolean
@@ -139,7 +141,7 @@ export interface CopyRow {
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 
 /** Symbols that start rows of tool calls, notices, sub-agents and command output. */
-const MARKS = [
+const marks = () => [
   glyphs.user,
   glyphs.toolDone,
   glyphs.toolRunning,
@@ -150,6 +152,8 @@ const MARKS = [
   glyphs.toolInvalid,
   glyphs.result,
   glyphs.treeBranch,
+  glyphs.treeLast,
+  glyphs.treePipe,
   glyphs.output,
   glyphs.subagent,
   glyphs.subagentDone,
@@ -161,7 +165,7 @@ const MARKS = [
   glyphs.error,
   glyphs.interrupted,
 ]
-const LEAD = new RegExp(`^ *(?:(?:${[...new Set(MARKS)].map(escapeRe).join("|")}) +)+`, "u")
+const leadPattern = () => new RegExp(`^ *(?:(?:${[...new Set(marks())].map(escapeRe).join("|")}) +)+`, "u")
 
 /**
  * Rows of a tool call, a notice or command output: the symbols in front (a bullet, a tree, a
@@ -170,8 +174,9 @@ const LEAD = new RegExp(`^ *(?:(?:${[...new Set(MARKS)].map(escapeRe).join("|")}
  */
 export function chromeRows(plain: readonly string[]): CopyRow[] {
   let textCol = 0
+  const pattern = leadPattern()
   return plain.map((p) => {
-    const m = LEAD.exec(p)
+    const m = pattern.exec(p)
     if (m) {
       textCol = visibleWidth(m[0])
       return { from: textCol }

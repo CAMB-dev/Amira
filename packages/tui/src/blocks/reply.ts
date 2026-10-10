@@ -13,11 +13,11 @@ import {
   visibleWidth,
 } from "@amira/tui-kit"
 import { expandTabs } from "../diff-view.ts"
-import { replyRows } from "../format.ts"
+import { replyRows, stampRows, timestampIn, timestampRoom } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { apiNode, imageFallback, nodeRows, type ReplyRenderers } from "../markdown-nodes.ts"
 import { ReplyAlternatives } from "../reply-alternatives.ts"
-import type { CopyRow } from "../text-selection.ts"
+import { type CopyRow, sliceCells } from "../text-selection.ts"
 import {
   Block,
   type BlockEnv,
@@ -156,6 +156,7 @@ export class ReplyBlock extends Block {
     source: string,
     streaming: boolean,
     private hyperlinks: boolean,
+    readonly timestamp?: number,
   ) {
     super()
     this.source = source
@@ -186,13 +187,17 @@ export class ReplyBlock extends Block {
     this.lastGlyphs = env.glyphs ?? defaultGlyphs
     this.lastAssistant = glyphs.assistant
     const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
+    const firstRowWidth = Math.max(
+      1,
+      timestampRoom(env.width, this.timestamp) - visibleWidth(glyphs.assistant),
+    )
     // Folded, images are their alt text.
     const images = this.folded ? undefined : env.images
     // Folded, its code is cut short: extensions do not render it.
     const renders = this.folded ? undefined : env.renders
     this.lastImages = images
     this.lastRenders = renders
-    const opts: MarkdownStreamOptions = { hyperlinks: this.hyperlinks, glyphs: env.glyphs }
+    const opts: MarkdownStreamOptions = { hyperlinks: this.hyperlinks, glyphs: env.glyphs, firstRowWidth }
     if (images || renders?.renders.source) opts.nodes = this.nodes(env.theme, images, renders?.renders)
     const imageRows = images ? images.store.maxRows() : 0
     const generation = renders ? renders.renders.generation : -1
@@ -233,7 +238,8 @@ export class ReplyBlock extends Block {
       const { text } = foldMarkdown(this.source, this.folded)
       rows = renderMarkdown(text, width, env.theme, opts)
     }
-    return this.layOut(replyRows(rows), images !== undefined)
+    const lines = this.layOut(replyRows(rows), images !== undefined)
+    return stampRows(lines, env.theme, env.width, this.timestamp)
   }
 
   /**
@@ -402,6 +408,13 @@ export class ReplyBlock extends Block {
       for (let k = 0; k < im.image.rows && im.line + k < rows.length; k++)
         rows[im.line + k] = k ? { from: 0, text, repeats: true } : { from: 0, text }
     }
+    const stamp = timestampIn(lines)
+    if (stamp && plain[0] !== undefined) {
+      const first = rows[0]!
+      first.to = stamp.to
+      if (!first.skip && first.text === undefined && first.exact === undefined)
+        first.exact = sliceCells(plain[0], first.from, stamp.to)
+    }
     return rows
   }
 
@@ -425,14 +438,20 @@ export class ReplyBlock extends Block {
 
   override printLines(env: BlockEnv): string[] {
     const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
+    const firstRowWidth = Math.max(
+      1,
+      timestampRoom(env.width, this.timestamp) - visibleWidth(glyphs.assistant),
+    )
     const { text } = foldMarkdown(this.source, false)
-    return replyRows(
+    const lines = replyRows(
       renderMarkdown(text, width, env.theme, {
         hyperlinks: this.hyperlinks,
         glyphs: env.glyphs,
         nodes: this.nodes(env.theme, undefined, env.renders?.renders, true),
+        firstRowWidth,
       }),
     )
+    return stampRows(lines, env.theme, env.width, this.timestamp)
   }
 }
 

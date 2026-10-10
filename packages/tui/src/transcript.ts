@@ -55,6 +55,7 @@ export class Transcript {
 
   /** The lines to commit for a whole block: a blank line first when the rule wants one. */
   block(kind: BlockKind, lines: string[]): string[] {
+    if (!lines.length) return []
     const gap = this.gapBefore(kind)
     this.#last = kind
     this.#open = undefined

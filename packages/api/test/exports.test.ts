@@ -197,3 +197,8 @@ test("the additive provider-stream event contract preserves optional timing meta
     ]
   `)
 })
+
+test("the canonical theme glyph export includes the layout symbols", async () => {
+  const { DEFAULT_THEME_GLYPHS } = await import("../src/index.ts")
+  expect(DEFAULT_THEME_GLYPHS).toMatchSnapshot()
+})
