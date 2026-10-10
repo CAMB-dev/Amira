@@ -33,6 +33,7 @@ Type a request and press Enter. By default, during a turn Enter steers it and Al
 - [Sub-agents and worktrees](docs/subagents.md)
 - [Using and writing extensions](docs/extensions.md)
 - [Keybindings](docs/keybindings.md)
+- [Themes](docs/themes.md)
 - [Settings reference](docs/settings.md)
 
 ## License

@@ -307,7 +307,8 @@ These live under `tui` in `settings.json`, the user's or a project's (`.amira/se
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `tui.mode` | `"fullscreen"` | `"fullscreen"` draws on the alternate screen: Amira scrolls, finds, folds and copies the conversation, redraws all of it when the window changes size, and prints it to the normal screen when it exits (also after a crash). `"inline"` leaves finished output in the terminal's own scrollback, for SSH, tmux, or native scrolling and selection. The `--inline` and `--fullscreen` flags win |
-| `tui.theme` | `"auto"` | `"auto"` follows the terminal background (dark if unknown); `"dark"` and `"light"` choose a palette explicitly; `"terminal"` uses the terminal's own ANSI colors |
+| `tui.theme` | `"auto"` | A [theme name](themes.md), or `"auto"` to follow the terminal background (dark if unknown); `"dark"` and `"light"` choose Amira's palette explicitly; `"terminal"` uses the terminal's own ANSI colors |
+| `tui.themeVariant` | `"auto"` | Named-theme appearance: `"auto"` follows the terminal background; `"dark"` or `"light"` forces that appearance. Missing variants use Amira's default palette for that appearance |
 | `tui.colorDepth` | `"auto"` | Color depth: `"auto"` detects terminal support; `"truecolor"`, `"256"` and `"16"` override it. Use strings, not numbers, for `"256"` and `"16"` |
 | `tui.title` | `true` | Set the terminal title to `Amira · <folder> · <session title> ⎇ <branch>` when a session title exists, marked with `●` while a turn runs; the previous title comes back on exit. The title bar draws it in the system's font, so `⎇` is safe there; the status in the input box's border leaves it out (Cascadia Code and Mono lack it) |
 | `tui.progress` | `true` | Show a busy indicator on the tab and taskbar while a turn runs, and a paused one while a dialog waits (OSC 9;4: Windows Terminal, ConEmu, VS Code, Ghostty) |

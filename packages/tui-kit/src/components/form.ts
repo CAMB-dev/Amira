@@ -261,7 +261,7 @@ export class Form implements Component {
     const description = this.opts.description
       ? wrapText(this.opts.description, width).map((l) => theme.muted(l))
       : []
-    const rule = theme.border("─".repeat(width))
+    const rule = theme.border((ctx.glyphs?.rule ?? "─").repeat(width))
     const footer = this.footer(width, ctx)
     // Too few rows for everything: drop the description, then the rules; keep a body row.
     if (1 + description.length + 1 + footer.length + 2 <= ctx.rows) header = [...header, ...description, rule]
@@ -755,7 +755,7 @@ export class Form implements Component {
 
   private footer(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
-    const out = [theme.border("─".repeat(width))]
+    const out = [theme.border((ctx.glyphs?.rule ?? "─").repeat(width))]
     for (const n of this.opts.notice?.() ?? []) out.push(theme.warning(truncateToWidth(n, width, "…")))
     if (this.confirming) {
       out.push(theme.warning(truncateToWidth("Discard your changes? y discard · n keep editing", width, "…")))

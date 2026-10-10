@@ -93,7 +93,8 @@ export class ReplyRenderers {
   private cache = new Map<string, Entry>()
   private version = -1
 
-  readonly theme: MarkdownRenderContext["theme"]
+  theme: MarkdownRenderContext["theme"]
+  private themeVersion = 0
 
   constructor(
     readonly source: MarkdownRenderSource | undefined,
@@ -102,9 +103,16 @@ export class ReplyRenderers {
     this.theme = { dark: background !== "light" }
   }
 
+  /** Rebuild extension renderings on every palette change, even within the same variant. */
+  setTheme(background: "dark" | "light"): void {
+    this.theme = { dark: background !== "light" }
+    this.themeVersion++
+    this.cache.clear()
+  }
+
   /** Changes whenever what nodes render as may have: a renderer came or went. */
   get generation(): number {
-    return this.source?.version ?? 0
+    return (this.source?.version ?? 0) + this.themeVersion
   }
 
   claimsCode(lang: string): boolean {
@@ -205,7 +213,7 @@ export interface InlineNodesOptions {
  * time, after which the node goes as Markdown renders it. Live, it shows as Markdown.
  */
 export function inlineNodes(opts: InlineNodesOptions): MarkdownNodes {
-  const { renders, theme } = opts
+  const { renders } = opts
   return {
     images: true,
     claimsCode: (lang) => renders.claimsCode(lang),
@@ -218,7 +226,7 @@ export function inlineNodes(opts: InlineNodesOptions): MarkdownNodes {
         theme: renders.theme,
       })
       return r.result && "segments" in r.result
-        ? nodeRows(r.result.segments, theme, width, true).join("")
+        ? nodeRows(r.result.segments, opts.theme, width, true).join("")
         : fallback
     },
     render(node, rows, col, width, commit) {
@@ -243,17 +251,17 @@ export function inlineNodes(opts: InlineNodesOptions): MarkdownNodes {
       if (r.done) {
         const out = r.result
         if (!out) return node.type === "image" ? image({ url: node.url }) : rows
-        if ("lines" in out) return nodeRows(out.lines, theme, room).map((row) => indent + row)
+        if ("lines" in out) return nodeRows(out.lines, opts.theme, room).map((row) => indent + row)
         if ("segments" in out) return rows
-        return image(out.image, imageFallback(out, bare(), theme, room))
+        return image(out.image, imageFallback(out, bare(), opts.theme, room))
       }
       if (!commit) return rows
       let fallback = bare()
       const load = r.promise.then((out): PendingResult | undefined | Promise<PendingResult | undefined> => {
         if (!out) return node.type === "image" && store ? store.inline({ url: node.url }, room) : undefined
-        if ("lines" in out) return nodeRows(out.lines, theme, room)
+        if ("lines" in out) return nodeRows(out.lines, opts.theme, room)
         if ("segments" in out) return undefined
-        fallback = imageFallback(out, fallback, theme, room)
+        fallback = imageFallback(out, fallback, opts.theme, room)
         return store ? store.inline(out.image, room) : fallback
       })
       return [indent + pendingBlock(load, () => fallback, r.waitMs)]

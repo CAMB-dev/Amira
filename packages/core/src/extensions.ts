@@ -46,6 +46,7 @@ import { ImageProviderRegistry, MarkdownRendererRegistry, ServiceRegistry } from
 import { SkillRegistry } from "./skills.ts"
 import { StatusRegistry } from "./status-registry.ts"
 import { overBudget } from "./subagents/budget.ts"
+import { ThemeRegistry } from "./theme-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
 import { ToolRendererRegistry } from "./tool-renderers.ts"
 import { UiRequests } from "./ui-requests.ts"
@@ -110,6 +111,8 @@ export interface ExtensionHostOptions {
   commands?: CommandRegistry
   /** Where `$` skills go. Default: a new registry. */
   skills?: SkillRegistry
+  /** Where named terminal themes go. Default: a new registry reporting warning notices. */
+  themes?: ThemeRegistry
   /** Where input handlers go. Default: a new registry. */
   inputs?: InputRegistry
   /** Where extension dialogs go. Default: a new one on `bus`. */
@@ -149,6 +152,7 @@ export class ExtensionHost {
   readonly views: ViewRegistry
   readonly commands: CommandRegistry
   readonly skills: SkillRegistry
+  readonly themes: ThemeRegistry
   readonly inputs: InputRegistry
   readonly ui: UiRequests
   /** Renderers of Markdown nodes (D88). */
@@ -170,6 +174,16 @@ export class ExtensionHost {
     this.views = opts.views ?? new ViewRegistry()
     this.commands = opts.commands ?? new CommandRegistry()
     this.skills = opts.skills ?? new SkillRegistry()
+    this.themes =
+      opts.themes ??
+      new ThemeRegistry((text, origin) => {
+        opts.bus.emit(
+          "extension.notice",
+          { source: origin ?? "themes", text, level: "warning" },
+          this.#meta(),
+        )
+      })
+    this.themes.subscribe(() => this.#requestRender())
     this.inputs = opts.inputs ?? new InputRegistry()
     this.ui = opts.ui ?? new UiRequests(opts.bus, opts.sessionId ? { sessionId: opts.sessionId } : {})
     this.markdown = new MarkdownRendererRegistry((source, error) => void this.#fail(source, error))
@@ -536,6 +550,10 @@ export class ExtensionHost {
           this.#fail(source, err instanceof Error ? err.message : String(err))
           return () => {}
         }
+      },
+      registerTheme: (theme) => {
+        if (!active) return () => {}
+        return track(this.themes.register(theme, "extension", source))
       },
       registerInputHandler: (handler) => {
         try {

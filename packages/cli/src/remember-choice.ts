@@ -13,7 +13,7 @@ export function rememberingControl(
   cwd: string,
   home = amiraHome(),
   probe = git,
-): { control: SessionControl; flush: () => Promise<void> } {
+): { control: SessionControl; rememberTheme: (name: string) => void; flush: () => Promise<void> } {
   const warn = (a: Agent, error: string) =>
     a.bus.emit("extension.error", { source: "settings", error }, { sessionId: a.sessionId })
   const projects = new Map<string, Promise<string | undefined>>()
@@ -36,7 +36,7 @@ export function rememberingControl(
     }
     return existsSync(project) ? path.join(project, "settings.local.json") : undefined
   }
-  const save = () => {
+  const save = (theme?: string) => {
     const a = agent()
     if (a.parentSessionId || a.depth > 0) return
     // Capture the choice now, not after a probe or another queued save finishes.
@@ -47,7 +47,17 @@ export function rememberingControl(
     }
     const write = (file: string) => {
       try {
-        updateSettingsFile(file, (settings) => ({ ...settings, ...choice }), { preserveFormatting: true })
+        updateSettingsFile(
+          file,
+          (settings) => {
+            if (theme === undefined) return { ...settings, ...choice }
+            const tui = settings.tui
+            if (tui !== undefined && (typeof tui !== "object" || tui === null || Array.isArray(tui)))
+              throw new Error("tui must be an object")
+            return { ...settings, tui: { ...tui, theme } }
+          },
+          { preserveFormatting: true },
+        )
       } catch (err) {
         const why = (err instanceof Error ? err.message : String(err)).replace(/[\r\n]+\s*/g, " ")
         warn(a, `Choice not saved: ${why}`)
@@ -68,6 +78,7 @@ export function rememberingControl(
     })
   }
   return {
+    rememberTheme: (name) => save(name),
     flush: () => pending,
     control: {
       ...control,

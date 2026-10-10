@@ -1,5 +1,6 @@
 import { cursor, erase, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
+import type { Glyphs } from "./glyphs.ts"
 import { findImageMarker, imageState, onImageSettled, placeImage, releaseImage } from "./images/placement.ts"
 import type { ImageBlock } from "./images/types.ts"
 import { defaultTheme, isColorEnabled, stripColors, type Theme } from "./style.ts"
@@ -13,6 +14,7 @@ export interface RendererOptions {
   frameIntervalMs?: number
   /** Handed to components in the render context. Defaults to `defaultTheme`. */
   theme?: Theme
+  glyphs?: Glyphs
   /** Whether colors reach the terminal. Defaults to `isColorEnabled()`, which follows NO_COLOR. */
   color?: boolean
   /**
@@ -92,6 +94,7 @@ export class LiveRenderer {
     this.historyLimit = Math.max(0, opts.historyLines ?? 1000)
     this.context = {
       theme: opts.theme ?? defaultTheme,
+      glyphs: opts.glyphs,
       color: opts.color ?? isColorEnabled(),
       rows: terminal.rows,
     }

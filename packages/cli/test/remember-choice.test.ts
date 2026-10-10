@@ -102,6 +102,39 @@ test("interactive commands save both choices on each change, and the last change
   }
 })
 
+test("theme choices preserve nested settings and share the ordered choice writer", async () => {
+  const original =
+    '{\n  "tui": { "theme": "amira", "colorDepth": "256", "themeVariant": "light" },\n  "model": "mock/first"\n}\n'
+  for (const file of [globalFile(), localFile()]) writeFileSync(file, original)
+  const { commands } = await start()
+  commands.rememberTheme("amber")
+  commands.rememberTheme("lavender")
+  await commands.flushChoices()
+  for (const file of [globalFile(), localFile()]) {
+    expect(readFileSync(file, "utf8")).toBe(original.replace('"amira"', '"lavender"'))
+  }
+})
+
+test.each(["-p", "--rpc"])("%s never saves a theme choice", async (mode) => {
+  const flags = mode === "-p" ? [mode, "hello"] : [mode]
+  const { commands } = await start(flags)
+  commands.rememberTheme("amber")
+  await commands.flushChoices()
+  expect(existsSync(globalFile())).toBe(false)
+  expect(existsSync(localFile())).toBe(false)
+})
+
+test.each([false, true])("theme project write requires git ignore (ignored=%s)", async (ignored) => {
+  execFileSync("git", ["init", "--quiet", cwd])
+  if (ignored) writeFileSync(path.join(cwd, ".gitignore"), ".amira/settings.local.json\n")
+  const { commands } = await start()
+  commands.rememberTheme("burnt")
+  await commands.flushChoices()
+  expect(json(globalFile())).toEqual({ tui: { theme: "burnt" } })
+  expect(existsSync(localFile())).toBe(ignored)
+  if (ignored) expect(json(localFile())).toEqual({ tui: { theme: "burnt" } })
+})
+
 test("picker selections use the same remembered interactive controls", async () => {
   const { session, commands } = await start()
   const picks = ["mock/second", "high"]
@@ -195,6 +228,7 @@ test("extensions and child agents never save, even in an interactive host", asyn
   try {
     commands.control.setModel("mock/second")
     commands.control.setThinking("max")
+    commands.rememberTheme("amber")
     await commands.flushChoices()
     expect(existsSync(globalFile())).toBe(false)
     expect(existsSync(localFile())).toBe(false)

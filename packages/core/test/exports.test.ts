@@ -53,6 +53,7 @@ test("the public core exports stay stable", async () => {
     "StatusRegistry",
     "SummaryError",
     "TOOL_SEARCH",
+    "ThemeRegistry",
     "ToolConflictError",
     "ToolRegistry",
     "ToolRendererRegistry",

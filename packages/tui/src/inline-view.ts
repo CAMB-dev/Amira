@@ -79,10 +79,17 @@ const INPUT_ACTIONS = (Object.keys(ACTIONS) as Action[]).filter((a) => ACTIONS[a
  * outlive their committed call, and the bottom area below them.
  */
 export function createInlineView(host: ViewHost): TranscriptView {
-  const { terminal, theme, presenters } = host
+  const { terminal, presenters } = host
+  let theme = host.theme
   // The reply is Markdown: its finished blocks go to the scrollback as they close; images and
   // what extensions render (D88) as they are ready.
-  const nodes = inlineNodes({ renders: host.renders, images: () => host.images?.(), theme })
+  const nodes = inlineNodes({
+    renders: host.renders,
+    images: () => host.images?.(),
+    get theme() {
+      return theme
+    },
+  })
   const streaming = new MarkdownStream({
     hyperlinks: host.hyperlinks,
     nodes,
@@ -258,7 +265,6 @@ export function createInlineView(host: ViewHost): TranscriptView {
   // before it in view. Its finished blocks, and rows past that, go to the scrollback as they
   // are finished (MarkdownStream), indented like the committed reply and spaced by the
   // transcript's rule. A dialog gets what the rest leaves, so its title is never cut off the top.
-  const gutter = glyphs.assistant
   const root = new View((width, ctx) => {
     // Lines committed since the last frame go out with this one: one redraw, not one each.
     if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
@@ -283,7 +289,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
           commit: (rows) => commit(transcript.continue("assistant", replyRows(rows))),
         }
       : ctx
-    const reply = streaming.render(Math.max(1, width - visibleWidth(gutter)), replyCtx)
+    const reply = streaming.render(Math.max(1, width - visibleWidth(glyphs.assistant)), replyCtx)
     const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
     return [...dialog, ...lead, ...replyRows(reply), ...tools, "", ...rest]
   })
@@ -292,6 +298,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     frameIntervalMs: FRAME_MS,
     theme,
+    glyphs: host.glyphs,
     // "auto" assumes a re-wrapping terminal, as Windows Terminal, VS Code and most others are.
     reflow: reflow !== "off",
   })
@@ -303,6 +310,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
   const fullScreen = new FullScreenRenderer(terminal, host.overlay, {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     theme,
+    glyphs: host.glyphs,
     frameIntervalMs: 33,
   })
 
@@ -442,6 +450,15 @@ export function createInlineView(host: ViewHost): TranscriptView {
     start: () => renderer.start(),
     requestRender: () => renderer.requestRender(),
     render: () => renderer.render(),
+    setTheme(next, nextGlyphs) {
+      theme = next
+      host.theme = next
+      host.glyphs = nextGlyphs
+      renderer.context = { ...renderer.context, theme: next, glyphs: nextGlyphs }
+      fullScreen.context = { ...fullScreen.context, theme: next, glyphs: nextGlyphs }
+      if (fullScreen.isOpen) fullScreen.redraw()
+      else renderer.redraw()
+    },
     redraw: () => renderer.redraw(),
     openOverlay(pointer = false) {
       renderer.suspend()
@@ -477,7 +494,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
     banner: (line) =>
       commit([
         ...(transcript.last === undefined ? [""] : []),
-        ...transcript.block("banner", wrapText(line, Math.max(1, terminal.columns))),
+        ...transcript.block(
+          "banner",
+          wrapText(typeof line === "function" ? line(theme) : line, Math.max(1, terminal.columns)),
+        ),
       ]),
     user: (m) => commitBlock("user", userLines(theme, m, terminal.columns)),
     replyDelta(text) {
@@ -497,7 +517,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       flushDialog()
       // The rows still live are committed as they are shown; earlier ones already were.
       const early = streaming.committedRows > 0
-      const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(gutter)))
+      const rows = streaming.take(Math.max(1, terminal.columns - visibleWidth(glyphs.assistant)))
       if (rows.length) commit(transcript.continue("assistant", replyRows(rows)))
       transcript.end()
       // Thinking that came after the text (or with none) goes after it.
@@ -559,6 +579,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
           transcript,
           hyperlinks: host.hyperlinks,
           nodes,
+          glyphs: host.glyphs,
           ...toolOptions(),
           ...(compactionInfo ? { compactionInfo } : {}),
         }),

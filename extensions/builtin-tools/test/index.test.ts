@@ -23,6 +23,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     },
     registerCommand: () => () => {},
     registerSkill: () => () => {},
+    registerTheme: () => () => {},
     registerInputHandler: () => () => {},
     registerStatusItem: () => () => {},
     registerToolRenderer: (name) => {

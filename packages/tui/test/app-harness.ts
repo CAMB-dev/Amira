@@ -30,7 +30,7 @@ import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.t
 import statusExtension from "../../../extensions/status/src/index.ts"
 import terminalStatusExtension from "../../../extensions/terminal-status/src/index.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
-import { runInteractive } from "../src/app.ts"
+import { type InteractiveOptions, runInteractive } from "../src/app.ts"
 import { type FileSource, fileList } from "../src/file-index.ts"
 import type { ClipboardContent } from "../src/image-input.ts"
 import type { Keybindings } from "../src/keybindings.ts"
@@ -96,6 +96,8 @@ export interface SetupOptions {
   env?: Record<string, string | undefined>
   keybindings?: Keybindings
   settings?: TuiSettings
+  themes?: InteractiveOptions["themes"]
+  saveTheme?: InteractiveOptions["saveTheme"]
   /** Start without a model (NO_MODEL); "none" also configures no provider. */
   noModel?: "none" | "unpicked"
   /** The startup notice, as the CLI passes it when there is no model. */
@@ -215,6 +217,8 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
     bindTerminal: (terminal) => host.bindTerminal(terminal),
     agent,
     status: host.status,
+    themes: o.themes,
+    saveTheme: o.saveTheme,
     panels: host.panels,
     ui: host.ui,
     ...(commands ? { commands } : {}),

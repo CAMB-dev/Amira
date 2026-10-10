@@ -32,6 +32,11 @@ export class PaneFind {
 
   constructor(private readonly view: FindView) {}
 
+  /** Keep the query and current match, but find it again after a theme/glyph redraw. */
+  invalidate(): void {
+    this.findStamp = ""
+  }
+
   refresh(env: BlockEnv): void {
     // The matches follow the text: another width, blocks that came or changed, a reply streaming.
     if (this.findQuery && (this.findWidth !== env.width || this.findStamp !== this.stamp())) this.runFind()

@@ -250,10 +250,13 @@ export interface TuiSettings {
    */
   mode?: "fullscreen" | "inline"
   /**
-   * "auto" follows the terminal background (dark if unknown); "dark" and "light" choose a
-   * palette explicitly; "terminal" uses the terminal's own ANSI colors. See DEFAULT_TUI_THEME.
+   * A theme name, or "auto" for Amira following the terminal background (dark if unknown).
+   * "dark" and "light" choose Amira explicitly; "terminal" uses the terminal's ANSI colors.
+   * See DEFAULT_TUI_THEME.
    */
-  theme?: "auto" | "dark" | "light" | "terminal"
+  theme?: string
+  /** Named themes follow the background by default; force an appearance with dark or light. */
+  themeVariant?: "auto" | "dark" | "light"
   /**
    * "auto" detects terminal color support; "truecolor", "256" and "16" override the color
    * depth. See DEFAULT_TUI_COLOR_DEPTH.
