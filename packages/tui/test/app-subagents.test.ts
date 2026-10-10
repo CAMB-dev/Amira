@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { type ChildSession, defineTool, type SpawnGroup, textResult } from "@amira/api"
-import { parallel, setup, waitFor } from "./app-harness.ts"
+import { closeImageApp, parallel, setup, waitFor } from "./app-harness.ts"
 
 function delegateTool(role = "explorer") {
   return defineTool<{ titles: string[] }>({
@@ -38,23 +38,23 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   // The first one runs its tool; the second waits for the slot.
   await waitFor(
     () =>
-      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}├ ◆ US market trend · explorer · \d+s · 4\.1k tok\n {5}│ └ ● read a\.ts\n {5}└ ◆ Add status bar test · coder · queued\n/m.test(
+      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend · explorer · \d+s · 4\.1k tok\n {5}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\.ts\n {5}└ Add status bar test · coder · queued\n/m.test(
         live(),
       ),
     "rows under the call",
   )
   // No list of sub-agents at the bottom of the live region: only the activity line is there.
-  expect(live().match(/◆/g)).toHaveLength(2)
+  expect(live().match(/(?:├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend|└ Add status bar test) ·/g)).toHaveLength(2)
   await shows("all done")
   await idle()
   const text = all()
   // Each one's rows became its end line, committed with the call right under its head, in order.
   expect(text).toMatch(
-    /^ {2}└ delegate {2}✓ trend is up \(\+1 line\) · \d+\.\ds\n {5}├ ◆ US market trend ✓ explorer · \d+\.\ds · 4\.1k tok · trend is up\n {5}├ ◆ Add status bar test ✓ coder · \d+\.\ds · 1\.2k tok · test added$/m,
+    /^ {2}└ delegate {2}✓ trend is up \(\+1 line\) · \d+\.\ds\n {5}├ ✓ US market trend · explorer · \d+\.\ds · 4\.1k tok · trend is up\n {5}├ ✓ Add status bar test · coder · \d+\.\ds · 1\.2k tok · test added$/m,
   )
-  expect(text.match(/◆ US market trend/g)).toHaveLength(1)
+  expect(text.match(/✓ US market trend ·/g)).toHaveLength(1)
   // Nothing is left of them in the live region below the transcript.
-  expect(live().split("  all done")[1]).not.toContain("◆")
+  expect(live().split("  all done")[1]).not.toMatch(/[├└] (?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓✗⊘]|Add status bar test)/)
   // The children's replies only show as their commander's tool result, not as replies of their own.
   expect(text).not.toMatch(/^ {2}trend is up$/m)
   terminal.send("\x03")
@@ -135,7 +135,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   // The child is done and so is its call, but both wait below the running slow call.
   await waitFor(
     () =>
-      /^ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s\n {2}└ delegate {2}✓ child answer\n {5}└ ◆ Look around ✓ [^\n]*child answer/m.test(
+      /^ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s\n {2}└ delegate {2}✓ child answer\n {5}└ ✓ Look around · explorer · \d+\.\ds · 0 tok · child answer/m.test(
         live(),
       ),
     "held",
@@ -145,9 +145,9 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   await idle()
   const text = all()
   expect(text).toMatch(
-    /^ {2}├ slow big\.log {2}✓ slow result\n {2}└ delegate {2}✓ child answer\n {5}├ ◆ Look around ✓ [^\n]*child answer$/m,
+    /^ {2}├ slow big\.log {2}✓ slow result\n {2}└ delegate {2}✓ child answer\n {5}├ ✓ Look around · explorer · \d+\.\ds · 0 tok · child answer$/m,
   )
-  expect(text.match(/◆ Look around ✓/g)).toHaveLength(1)
+  expect(text.match(/✓ Look around ·/g)).toHaveLength(1)
   terminal.send("\x03")
   await exited
 })
@@ -171,7 +171,7 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   terminal.send("go\r")
   await waitFor(
     () =>
-      /^ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {2}│ {2}└ ◆ First pass · [^\n]*\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}└ ◆ Second pass · /m.test(
+      /^ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {2}│ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] First pass · explorer · \d+s · 0 tok\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Second pass · explorer · \d+s · 0 tok$/m.test(
         live(),
       ),
     "each under its own call",
@@ -179,7 +179,7 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /^ {2}├ delegate {2}✓ one\n {2}│ {2}├ ◆ First pass ✓ explorer · \d+\.\ds · 0 tok · one\n {2}└ delegate {2}✓ two\n {5}├ ◆ Second pass ✓ explorer · \d+\.\ds · 0 tok · two$/m,
+    /^ {2}├ delegate {2}✓ one\n {2}│ {2}├ ✓ First pass · explorer · \d+\.\ds · 0 tok · one\n {2}└ delegate {2}✓ two\n {5}├ ✓ Second pass · explorer · \d+\.\ds · 0 tok · two$/m,
   )
   terminal.send("\x03")
   await exited
@@ -200,7 +200,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   terminal.send("go\r")
   await waitFor(
     () =>
-      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}└ ◆ Outer task · explorer · \d+s · 0 tok\n {7}└ ● delegate\n {7}└ ◆ Inner check · explorer · \d+s · 0 tok\n/m.test(
+      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Outer task · explorer · \d+s · 0 tok\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Inner check · explorer · \d+s · 0 tok\n/m.test(
         live(),
       ),
     "nested rows",
@@ -208,7 +208,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /^ {2}└ delegate {2}✓ outer done · \d+\.\ds\n {5}├ ◆ Outer task ✓ explorer [^\n]*outer done\n {5}│ └ ◆ Inner check ✓ explorer [^\n]*inner done$/m,
+    /^ {2}└ delegate {2}✓ outer done · \d+\.\ds\n {5}├ ✓ Outer task · explorer · \d+\.\ds · 0 tok · outer done\n {5}│ └ ✓ Inner check · explorer · \d+\.\ds · 0 tok · inner done$/m,
   )
   terminal.send("\x03")
   await exited
@@ -247,7 +247,7 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
     "test",
   )
   terminal.send("go\r")
-  await waitFor(() => live().includes("◆ Stop me · explorer"), "both running")
+  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Stop me · explorer · \d+s · 0 tok/.test(live()), "both running")
   terminal.send("\x1b[27u")
   // The one it stopped may not have ended yet when the turn does.
   await waitFor(() => /Interrupted · [12] sub-agents? still running · \/agents/.test(all()), "the interrupt")
@@ -255,10 +255,10 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   await idle()
   await bus.flush()
   await waitFor(() => !live().includes("running in background"), "the rows gone")
-  expect(all()).toMatch(/└ ◆ Stop me ⊘ explorer · [^\n]*stopped/)
-  expect(all().match(/◆ Stop me ⊘/g)).toHaveLength(1)
+  expect(all()).toMatch(/└ ⊘ Stop me · explorer · \d+\.\ds · 0 tok · stopped/)
+  expect(all().match(/⊘ Stop me ·/g)).toHaveLength(1)
   // The survivor's notice (the agent extension's) reports it; no line of its own here.
-  expect(all()).not.toContain("◆ Keep going ✓")
+  expect(all()).not.toContain("✓ Keep going ·")
   terminal.send("\x03")
   await exited
 })
@@ -314,7 +314,7 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   expect(all()).toMatch(/^ {2}└ launch {2}✓ Started in the background$/m)
   await waitFor(
     () =>
-      /● launch · 1 sub-agent · running in background · \d+s\n {2}└ ◆ Scan the logs · explorer · \d+s · 0 tok\n {4}└ ● scan logs\/app\.log\n/.test(
+      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] launch · 1 sub-agent · running in background · \d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \d+s · 0 tok\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log\n/m.test(
         live(),
       ),
     "background rows",
@@ -329,7 +329,7 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   await bus.flush()
   await waitFor(() => !live().includes("running in background"), "the rows gone")
   // Its end is reported by its notice (the agent extension's), not by an end line of its own.
-  expect(all()).not.toContain("◆ Scan the logs ✓")
+  expect(all()).not.toContain("✓ Scan the logs ·")
   terminal.send("\x03")
   await exited
 })
@@ -385,14 +385,14 @@ test("a compact spawn group shows as one line with its owner's status, not a row
   await idle()
   await waitFor(
     () =>
-      /● flow · 3 sub-agents · running in background · \d+s\n {2}└ ◆ workflow demo · Explore · 0\/3 agents\n/.test(
+      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] flow · 3 sub-agents · running in background · \d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/3 agents\n/m.test(
         live(),
       ),
     "one line for the group",
   )
   expect(live()).not.toContain("Scan api")
   group!.setStatus("Verify · 2/3 agents")
-  await waitFor(() => live().includes("◆ workflow demo · Verify · 2/3 agents"), "the new status")
+  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Verify · 2\/3 agents/.test(live()), "the new status")
   release()
   await group!.ended()
   await bus.flush()
@@ -401,4 +401,110 @@ test("a compact spawn group shows as one line with its owner's status, not a row
   expect(all()).not.toContain("Scan core")
   terminal.send("\x03")
   await exited
+})
+
+for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: a command-started background group uses the host spinner on its tree rows`, async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let group: SpawnGroup | undefined
+    let child: ChildSession | undefined
+    const s = await setup([{ toolCalls: [{ name: "hold", args: {} }] }, { text: "step done" }], {
+      cols: 90,
+      rows: 24,
+      tree: true,
+      settings: { mode },
+      commands: [
+        {
+          name: "flow",
+          description: "",
+          run: (_args, ctx) => {
+            group = s.agent.tree!.createGroup(s.agent, { name: "workflow demo", compact: true })
+            group.setStatus("Explore · 0/1 agents")
+            child = group.spawn({ role: "explorer", title: "Scan api", prompt: "step" })
+            ctx.print("Started group")
+          },
+        },
+      ],
+    })
+    s.agent.tools.register(
+      defineTool({
+        name: "hold",
+        ...parallel,
+        execute: async () => {
+          await gate
+          return textResult("held")
+        },
+      }),
+      "test",
+    )
+    try {
+      s.terminal.send("/flow\r")
+      await s.shows("Started group")
+      await waitFor(
+        () =>
+          /^ {2}└ ([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) in the background\n {5}└ \1 workflow demo · Explore · 0\/1 agents$/m.test(
+            s.live(),
+          ),
+        "the background tree",
+      )
+      expect(s.live().match(/^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] in the background$/gm)).toHaveLength(1)
+      expect(s.live().match(/workflow demo/g)).toHaveLength(1)
+      expect(s.live()).not.toContain("Scan api")
+      if (mode === "inline") {
+        expect(s.live()).toMatch(
+          /^ {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/1 agents\n\n \/work\/proj /m,
+        )
+      }
+      release()
+      await child!.result()
+      group!.end()
+      await group!.ended()
+      await s.bus.flush()
+      if (mode === "inline") {
+        await waitFor(() => !s.live().includes("workflow demo"), "the group gone")
+      } else {
+        await waitFor(
+          () => /^ {2}└ ✓ in the background\n {5}└ ✓ workflow demo · Explore · 0\/1 agents$/m.test(s.live()),
+          "the ended background tree",
+        )
+      }
+    } finally {
+      release()
+      group?.end()
+      await group?.ended()
+      await closeImageApp(s)
+    }
+  })
+}
+
+test("inline: commands and streaming replies leave one blank row above the metadata header", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const s = await setup(
+    [{ text: "Streaming reply still arriving at the terminal", hold: { chunks: 2, until: gate } }],
+    {
+      cols: 90,
+      commands: [{ name: "print", description: "", run: (_args, ctx) => ctx.print("Command output") }],
+    },
+  )
+  try {
+    s.terminal.send("/print\r")
+    await s.shows("Command output")
+    await s.idle()
+    expect(s.all()).toMatch(/^ {2}└ Command output\n\n \/work\/proj /m)
+    s.terminal.send("go\r")
+    await waitFor(() => s.live().includes("Streaming reply"), "the streaming reply")
+    expect(s.agent.status).not.toBe("idle")
+    expect(s.live()).toMatch(/^ {2}Streaming reply[^\n]*\n\n \/work\/proj /m)
+    release()
+    await s.idle()
+  } finally {
+    release()
+    await closeImageApp(s)
+  }
 })

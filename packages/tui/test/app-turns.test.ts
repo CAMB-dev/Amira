@@ -419,7 +419,7 @@ test("a resumed session shows its thinking folded and marks a reply that was int
     ],
   })
   await waitFor(() => all().includes("⊘ Interrupted"), "history")
-  expect(all()).toContain("› go\n\n  ∴ Thought  ctrl+o to expand\n\n  Half an ans\n\n⊘ Interrupted")
+  expect(all()).toContain("› go\n\n  ∴ Thought\n\n  Half an ans\n\n⊘ Interrupted")
   terminal.send("\x03")
   await exited
 })
@@ -861,7 +861,7 @@ test("a Markdown reply streams block by block: every row once, in order, never c
   expect(text.replace(/ +\d{2}:\d{2}(?=\n|$)/g, "")).toContain(
     `› go\n\n  ${markers[0]} heading\n\n  Some bold`,
   )
-  expect(text).toContain("\n  ╭─ ts\n  │ const")
+  expect(text).toContain(`\n  ╭─ ts${"─".repeat(32)}╮\n  │ const`)
   expect(text).not.toMatch(/\n +\n/)
   terminal.send("\x03")
   await exited
@@ -960,8 +960,8 @@ test("a reply with only thinking shows that it thought, not that there was no re
   const { terminal, idle, all, exited } = await setup([{ thinking: "hmm" }])
   terminal.send("go\r")
   await waitFor(
-    () => /^ {2}∴ Thought for \d+(?:\.\d+)?s {2}ctrl\+o to expand +(?:[01]\d|2[0-3]):[0-5]\d$/m.test(all()),
-    "timestamped thinking summary",
+    () => /^ {2}∴ Thought for \d+(?:\.\d+)?s$/m.test(all()),
+    "thinking summary without a timestamp",
   )
   await idle()
   expect(all()).not.toContain("No reply")
@@ -976,9 +976,7 @@ test("a reply's thinking goes before its text", async () => {
   terminal.send("go\r")
   await shows("Answer.")
   await idle()
-  expect(all()).toMatch(
-    /^ {2}∴ Thought for \d+(?:\.\d+)?s {2}ctrl\+o to expand +(?:[01]\d|2[0-3]):[0-5]\d\n\n {2}Answer\. +(?:[01]\d|2[0-3]):[0-5]\d$/m,
-  )
+  expect(all()).toMatch(/^ {2}∴ Thought for \d+(?:\.\d+)?s\n\n {2}Answer\. +(?:[01]\d|2[0-3]):[0-5]\d$/m)
   terminal.send("\x03")
   await exited
 })

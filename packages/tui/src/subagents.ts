@@ -132,10 +132,11 @@ export function nodeRows(
   t: Theme,
   last = true,
   indent?: string,
+  spinner?: string,
 ): string[] {
   return n.end
     ? [subagentEndLine(n, n.end, width, t, last, indent)]
-    : subagentRows(n, now, width, t, last, indent)
+    : subagentRows(n, now, width, t, last, indent, spinner)
 }
 
 /**
@@ -182,6 +183,7 @@ export function treeRows(
   t: Theme,
   groups?: SpawnGroups,
   closeTop = true,
+  spinner?: string,
 ): string[] {
   const items: (SubagentNode | { group: SpawnGroupInfo; depth: number })[] = []
   const folded = new Set<string>()
@@ -197,7 +199,7 @@ export function treeRows(
   return items.flatMap((item, i) => {
     const { last, indent } = layout[i]!
     return "group" in item
-      ? [spawnGroupRow(item.group, item.depth, width, t, last, indent)]
-      : nodeRows(item, now, width, t, last, indent)
+      ? [spawnGroupRow(item.group, item.depth, width, t, last, indent, spinner)]
+      : nodeRows(item, now, width, t, last, indent, spinner)
   })
 }

@@ -239,7 +239,7 @@ async function run(argv: string[]): Promise<number> {
       commands,
       registerCommand: (c) => host.commands.register(c, "builtin:tui"),
       themes: host.themes,
-      saveTheme: (name) => commands.rememberTheme(name),
+      saveTheme: (name, variant) => commands.rememberTheme(name, variant),
       toolRenderers: host.renderers,
       views: host.views,
       imageProviders: host.images,

@@ -107,18 +107,20 @@ test("theme choices preserve nested settings and share the ordered choice writer
     '{\n  "tui": { "theme": "amira", "colorDepth": "256", "themeVariant": "light" },\n  "model": "mock/first"\n}\n'
   for (const file of [globalFile(), localFile()]) writeFileSync(file, original)
   const { commands } = await start()
-  commands.rememberTheme("amber")
-  commands.rememberTheme("lavender")
+  commands.rememberTheme("amber", "dark")
+  commands.rememberTheme("lavender", "auto")
   await commands.flushChoices()
   for (const file of [globalFile(), localFile()]) {
-    expect(readFileSync(file, "utf8")).toBe(original.replace('"amira"', '"lavender"'))
+    expect(readFileSync(file, "utf8")).toBe(
+      original.replace('"amira"', '"lavender"').replace('"light"', '"auto"'),
+    )
   }
 })
 
 test.each(["-p", "--rpc"])("%s never saves a theme choice", async (mode) => {
   const flags = mode === "-p" ? [mode, "hello"] : [mode]
   const { commands } = await start(flags)
-  commands.rememberTheme("amber")
+  commands.rememberTheme("amber", "dark")
   await commands.flushChoices()
   expect(existsSync(globalFile())).toBe(false)
   expect(existsSync(localFile())).toBe(false)
@@ -128,11 +130,11 @@ test.each([false, true])("theme project write requires git ignore (ignored=%s)",
   execFileSync("git", ["init", "--quiet", cwd])
   if (ignored) writeFileSync(path.join(cwd, ".gitignore"), ".amira/settings.local.json\n")
   const { commands } = await start()
-  commands.rememberTheme("burnt")
+  commands.rememberTheme("burnt", "light")
   await commands.flushChoices()
-  expect(json(globalFile())).toEqual({ tui: { theme: "burnt" } })
+  expect(json(globalFile())).toEqual({ tui: { theme: "burnt", themeVariant: "light" } })
   expect(existsSync(localFile())).toBe(ignored)
-  if (ignored) expect(json(localFile())).toEqual({ tui: { theme: "burnt" } })
+  if (ignored) expect(json(localFile())).toEqual({ tui: { theme: "burnt", themeVariant: "light" } })
 })
 
 test("picker selections use the same remembered interactive controls", async () => {
@@ -228,7 +230,7 @@ test("extensions and child agents never save, even in an interactive host", asyn
   try {
     commands.control.setModel("mock/second")
     commands.control.setThinking("max")
-    commands.rememberTheme("amber")
+    commands.rememberTheme("amber", "dark")
     await commands.flushChoices()
     expect(existsSync(globalFile())).toBe(false)
     expect(existsSync(localFile())).toBe(false)

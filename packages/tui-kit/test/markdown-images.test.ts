@@ -135,10 +135,19 @@ test("a claimed code block is held until it closes, shown live as code, then com
   const { ctx, committed } = committing()
   m.append("Here:\n\n```diagram big\nA --> B\n")
   // Live: the code so far, no bottom yet; nothing of it committed, and nothing asked for yet.
-  expect(m.render(30, ctx).map(stripAnsi)).toEqual(["", "╭─ diagram", "│ A --> B"])
+  expect(m.render(30, ctx).map(stripAnsi)).toEqual([
+    "",
+    `╭─ diagram${"─".repeat(19)}╮`,
+    `│ A --> B${" ".repeat(20)}│`,
+  ])
   expect(committed).toEqual(["Here:"])
   m.append("B --> C")
-  expect(m.render(30, ctx).map(stripAnsi)).toEqual(["", "╭─ diagram", "│ A --> B", "│ B --> C"])
+  expect(m.render(30, ctx).map(stripAnsi)).toEqual([
+    "",
+    `╭─ diagram${"─".repeat(19)}╮`,
+    `│ A --> B${" ".repeat(20)}│`,
+    `│ B --> C${" ".repeat(20)}│`,
+  ])
   expect(calls).toEqual([])
   m.append("\n```\nafter")
   m.render(30, ctx)
@@ -147,7 +156,12 @@ test("a claimed code block is held until it closes, shown live as code, then com
     {
       code: "A --> B\nB --> C",
       info: "diagram big",
-      fallback: ["╭─ diagram", "│ A --> B", "│ B --> C", "╰─"],
+      fallback: [
+        `╭─ diagram${"─".repeat(19)}╮`,
+        `│ A --> B${" ".repeat(20)}│`,
+        `│ B --> C${" ".repeat(20)}│`,
+        `╰${"─".repeat(28)}╯`,
+      ],
       col: 0,
       commit: true,
     },
@@ -158,7 +172,7 @@ test("a claimed code block is held until it closes, shown live as code, then com
   const c2 = committing()
   plainCode.append("```js\nx()\n")
   plainCode.render(30, c2.ctx)
-  expect(c2.committed.map(stripAnsi)).toEqual(["╭─ js", "│ x()"])
+  expect(c2.committed.map(stripAnsi)).toEqual([`╭─ js${"─".repeat(24)}╮`, `│ x()${" ".repeat(24)}│`])
 })
 
 test("a claimed block never commits in parts: taller than the live region, its end shows live", () => {
@@ -167,7 +181,11 @@ test("a claimed block never commits in parts: taller than the live region, its e
   const { ctx, committed } = committing()
   m.maxRows = 3
   m.append(`\`\`\`diagram\n${Array.from({ length: 8 }, (_, i) => `line ${i}`).join("\n")}\n`)
-  expect(m.render(30, ctx).map(stripAnsi)).toEqual(["│ line 5", "│ line 6", "│ line 7"])
+  expect(m.render(30, ctx).map(stripAnsi)).toEqual([
+    `│ line 5${" ".repeat(21)}│`,
+    `│ line 6${" ".repeat(21)}│`,
+    `│ line 7${" ".repeat(21)}│`,
+  ])
   expect(committed).toEqual([])
   m.append("```\n")
   m.render(30, ctx)
@@ -185,7 +203,11 @@ test("a claimed block the text ends inside is rendered too; in a list it keeps i
   const none = diagrams(() => undefined)
   const n = new MarkdownStream({ hyperlinks: false, highlight: false, nodes: none.nodes })
   n.append("```diagram\nA\n```")
-  expect(n.take(30).map(stripAnsi)).toEqual(["╭─ diagram", "│ A", "╰─"])
+  expect(n.take(30).map(stripAnsi)).toEqual([
+    `╭─ diagram${"─".repeat(19)}╮`,
+    `│ A${" ".repeat(26)}│`,
+    `╰${"─".repeat(28)}╯`,
+  ])
 })
 
 test("through the renderer: a rendering still on its way holds what follows, then goes in its place", async () => {

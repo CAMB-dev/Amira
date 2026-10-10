@@ -81,14 +81,14 @@ export const OUTPUT_LINES = DEFAULT_SHELL_OUTPUT_LINES
 function treeHead(theme: Theme, last = false): string {
   const arm = last ? glyphs.treeLast : glyphs.treeBranch
   const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
-  return (themeToken(theme, "dim") ?? theme.muted)(arm + " ".repeat(cells - visibleWidth(arm)))
+  return theme.muted(arm + " ".repeat(cells - visibleWidth(arm)))
 }
 
 /** Internal rail prefix for a tool's sub-agent rows as well as its own output. */
 export function treeContinuation(theme: Theme, last = false): string {
   const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
   if (last) return " ".repeat(cells + 2)
-  const pipe = (themeToken(theme, "dim") ?? theme.muted)(glyphs.treePipe)
+  const pipe = theme.muted(glyphs.treePipe)
   return `  ${pipe}${" ".repeat(Math.max(0, cells - visibleWidth(pipe)))}`
 }
 
@@ -318,6 +318,19 @@ function withoutMark(result: string, mark: string): string {
   return hasMark(result, mark) ? result.slice(mark.length).trimStart() : result
 }
 
+/** Diff counts carry their own meaning instead of inheriting the successful call's green. */
+function diffResult(result: string, theme: Theme): string {
+  const stats = /(^|\s)(\+\d+)(\s+(?:\/\s*)?)([-−]\d+)(?=\s|$)/g
+  let at = 0
+  let shown = ""
+  for (const match of result.matchAll(stats)) {
+    shown += theme.success(result.slice(at, match.index) + match[1])
+    shown += theme.success(match[2]!) + theme.muted(match[3]!) + theme.error(match[4]!)
+    at = match.index + match[0].length
+  }
+  return at ? shown + theme.success(result.slice(at)) : theme.success(result)
+}
+
 /**
  * The committed lines of a finished call: its head with a fitting compact result, otherwise
  * continuation result rows, and, as `detail` allows, a body. A call that did not run to
@@ -404,7 +417,7 @@ export function finishedToolLines(
   }
 
   const marked = hasMark(result, mark) ? result : `${mark}${result ? ` ${result}` : ""}`
-  const resultText = `${style(marked)}${theme.muted(time)}`
+  const resultText = `${outcome === "done" ? diffResult(marked, theme) : style(marked)}${theme.muted(time)}`
   // A compact result may share the head even when output follows. Diff/output rows and
   // multiline/expanded results retain their rails below; callers insert child rows at 1.
   if (

@@ -1,12 +1,20 @@
 import { expect, test } from "bun:test"
-import { defaultGlyphs, type Glyphs, stripAnsi, visibleWidth } from "@amira/tui-kit"
+import { bg256, defaultGlyphs, type Glyphs, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import type { BlockEnv } from "../src/blocks/base.ts"
 import { codeFrames, ReplyBlock } from "../src/blocks/reply.ts"
 import { glyphs } from "../src/glyphs.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
 
-const ascii: Glyphs = { ...defaultGlyphs, codeTop: "+-", codeSide: "|", codeBottom: "+-" }
+const ascii: Glyphs = {
+  ...defaultGlyphs,
+  codeTop: "+-",
+  codeSide: "|",
+  codeBottom: "+-",
+  boxTopRight: "+",
+  boxBottomRight: "+",
+  rule: "-",
+}
 
 const env = (markdownGlyphs: Glyphs, width = 24): BlockEnv => ({
   theme: plain.theme,
@@ -20,13 +28,38 @@ const env = (markdownGlyphs: Glyphs, width = 24): BlockEnv => ({
   nodes: new Map(),
 })
 
-test("code frames keep their default shape and detect custom ASCII frames at an indent", () => {
-  expect(codeFrames(["  ╭─ ts", "  │ code", "  ╰─"])).toEqual([{ top: 0, bottom: 2, rows: [1], col: 4 }])
-  expect(codeFrames(["+- ts", "| code", "+-"], ascii)).toEqual([{ top: 0, bottom: 2, rows: [1], col: 2 }])
-  expect(codeFrames(["..  +- ts", "..  | code", "..  +-"], ascii, "..")).toEqual([
+test("closed code frames preserve detection prefixes, including ASCII frames at an indent", () => {
+  expect(codeFrames(["  ╭─ ts────╮", "  │ code   │", "  ╰────────╯"])).toEqual([
+    { top: 0, bottom: 2, rows: [1], col: 4 },
+  ])
+  expect(codeFrames(["+- ts----+", "| code   |", "+--------+"], ascii)).toEqual([
+    { top: 0, bottom: 2, rows: [1], col: 2 },
+  ])
+  expect(codeFrames(["..  +- ts----+", "..  | code   |", "..  +--------+"], ascii, "..")).toEqual([
     { top: 0, bottom: 2, rows: [1], col: 6 },
   ])
-  expect(codeFrames(["..+- ts", "..| partial"], ascii, "..")).toEqual([{ top: 0, rows: [1], col: 4 }])
+  expect(codeFrames(["..+- ts----+", "..| partial|"], ascii, "..")).toEqual([{ top: 0, rows: [1], col: 4 }])
+})
+
+test("code-first replies keep their full surface inside the reply inset instead of reserving a clock", () => {
+  const theme = { ...plain.theme, codeBg: bg256(234) }
+  for (const streaming of [false, true]) {
+    const reply = new ReplyBlock("```ts\nx\n\n```", streaming, false, 0)
+    const e = { ...env(ascii), theme }
+    for (const lines of [reply.lines(e), reply.printLines(e)]) {
+      expect(lines.map(stripAnsi)).toEqual([
+        `${glyphs.assistant}+- ts${"-".repeat(16)}+`,
+        `${glyphs.assistant}| x${" ".repeat(18)}|`,
+        `${glyphs.assistant}|${" ".repeat(20)}|`,
+        `${glyphs.assistant}+${"-".repeat(20)}+`,
+      ])
+      for (const row of lines) {
+        expect(visibleWidth(row)).toBe(24)
+        expect(row).toStartWith(`${glyphs.assistant}\x1b[48;5;234m`)
+        expect(row).toEndWith("\x1b[49m")
+      }
+    }
+  }
 })
 
 test("custom ASCII frames support code navigation and copying wrapped code with tabs", () => {
@@ -124,6 +157,21 @@ test("code frames keep display columns separate from surrogate glyph character o
   }
 })
 
+test("unmatched closed code rows copy their text without padding or the right frame", () => {
+  const reply = new ReplyBlock("```\noriginal\n```", false, false)
+  reply.lines(env(ascii))
+  const lines = [
+    `${glyphs.assistant}+- x----+`,
+    `${glyphs.assistant}| shown |`,
+    `${glyphs.assistant}+-------+`,
+  ]
+  expect(reply.copyRows(lines, lines)).toEqual([
+    { from: 0, skip: true },
+    { from: 4, to: 9, exact: "shown" },
+    { from: 0, skip: true },
+  ])
+})
+
 test("copy rows retain the glyphs used for rendering after the assistant prefix changes", () => {
   const assistant = glyphs.assistant
   glyphs.assistant = ".."
@@ -134,7 +182,7 @@ test("copy rows retain the glyphs used for rendering after the assistant prefix 
     glyphs.assistant = "different"
     const copied = reply.copyRows(rows, lines)
     expect(copied[0]!.skip).toBe(true)
-    expect(copied[1]).toEqual({ from: 4, exact: "code" })
+    expect(copied[1]).toEqual({ from: 4, to: 8, exact: "code" })
     const quote = rows.findIndex((row) => row.includes("quoted"))
     expect(copied[quote]!.from).toBe(4)
   } finally {

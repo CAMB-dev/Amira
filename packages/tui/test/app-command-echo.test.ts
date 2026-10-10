@@ -1,7 +1,19 @@
 import { expect, test } from "bun:test"
 import { userMessage } from "@amira/ai"
+import { defaultTheme, stripAnsi, surfaceTheme } from "@amira/tui-kit"
+import { commandEchoLines, userLines } from "../src/format.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
 import { closeImageApp, setup, waitFor } from "./app-harness.ts"
+
+test("commands use plain muted rows while actual model messages retain the user band", () => {
+  const theme = { ...defaultTheme, ...surfaceTheme("dark") }
+  expect(commandEchoLines(theme, "/theme", 40)).toEqual([`  ${theme.muted("› /theme")}`])
+  const wrapped = commandEchoLines(theme, "/theme a long command line", 17).map(stripAnsi)
+  expect(wrapped).toEqual(["  › /theme a long", "    command line"])
+  const rows = userLines(theme, userMessage("Hello model"), 40)
+  expect(stripAnsi(rows[0]!)).toBe(`  › Hello model${" ".repeat(25)}`)
+  expect(rows[0]).toContain("\x1b[48;")
+})
 
 for (const mode of ["fullscreen", "inline"] as const) {
   for (const name of ["swarm", "workflow"]) {

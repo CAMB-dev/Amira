@@ -27,6 +27,8 @@ export interface BlockEnv {
   spinner: string
   /** How much of finished tool calls is shown, unless a block was folded or unfolded. */
   detail: ToolDetailLevel
+  /** Bound key that switches summary detail to full, expanding retained thinking. */
+  reasoningExpandKey?: string
   presenters: PresenterSource | undefined
   hyperlinks: boolean
   /** Every sub-agent seen, by id; tool calls draw theirs from here. */
