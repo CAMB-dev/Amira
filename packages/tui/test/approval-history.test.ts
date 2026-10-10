@@ -9,7 +9,7 @@ import { defaultTheme, stripAnsi } from "@amira/tui-kit"
 import { historyLines } from "../src/history.ts"
 import { finishedToolLines } from "../src/tool-view.ts"
 
-test("denied approval keeps the live blocked glyph after a session resumes without changing model history", async () => {
+test("denied approval keeps the live blocked styling after a session resumes without changing model history", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "amira-approval-history-"))
   const requests: { messages: { role: string; content: unknown }[] }[] = []
   const ai = createAi({
@@ -76,13 +76,20 @@ test("denied approval keeps the live blocked glyph after a session resumes witho
       { name: end.data.name, args: {}, result: end.data.result, rejected: end.data.rejected },
       "summary",
       80,
-    ).map(stripAnsi)
-    expect(live).toEqual(["⊘ publish", "  └ Tool call not approved: the user said no"])
+      { last: true },
+    )
+    expect(live.map(stripAnsi)).toEqual(["  └ publish  ⊘ Tool call not approved: the user said no"])
+    expect(live[0]).toContain(defaultTheme.muted("publish"))
+    expect(live[0]).toBe(
+      `  ${defaultTheme.muted("└")} ${defaultTheme.muted("publish")}  ${defaultTheme.muted("⊘ Tool call not approved: the user said no")}${defaultTheme.muted("")}`,
+    )
 
     await agent.dispose("switch")
     resumed = new Agent({ ...options, session: SessionStore.open(session.file) })
-    const history = historyLines(defaultTheme, resumed.messages, { width: 80 }).map(stripAnsi)
-    const toolRow = history.findIndex((line) => line.includes("⊘ publish") || line.includes("✗ publish"))
+    const history = historyLines(defaultTheme, resumed.messages, { width: 80 })
+    const toolRow = history.findIndex(
+      (line) => stripAnsi(line) === "  └ publish  ⊘ Tool call not approved: the user said no",
+    )
     expect(history.slice(toolRow, toolRow + live.length)).toEqual(live)
     expect(resumed.messages.find((message) => message.role === "toolResult")).toMatchObject({
       isError: true,

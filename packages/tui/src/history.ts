@@ -17,7 +17,16 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
-import { compactionReason, compactionSizes, reasoningLines, replyRows, userLines } from "./format.ts"
+import {
+  compactionReason,
+  compactionSizes,
+  messageTimestamp,
+  reasoningLines,
+  replyRows,
+  timestampRoom,
+  timestampRow,
+  userLines,
+} from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import {
@@ -77,14 +86,20 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
   const detail = opts.detail ?? "summary"
   const toolOpts = opts.outputLines !== undefined ? { outputLines: opts.outputLines } : {}
   /** Successful exploring calls in a row, to go as one "Explored" row, as they did live. */
-  let exploring: { call: FinishedCall; presenter: ToolPresenter | undefined }[] = []
+  let exploring: { call: FinishedCall; presenter: ToolPresenter | undefined; last: boolean }[] = []
   const flush = () => {
     if (!exploring.length) return
     const [first] = exploring
     const lines =
       exploring.length === 1
-        ? finishedToolLines(theme, first!.presenter, first!.call, detail, opts.width, toolOpts)
-        : exploredLines(theme, exploring, detail === "full", detail, opts.width, toolOpts)
+        ? finishedToolLines(theme, first!.presenter, first!.call, detail, opts.width, {
+            ...toolOpts,
+            last: exploring.at(-1)?.last,
+          })
+        : exploredLines(theme, exploring, detail === "full", detail, opts.width, {
+            ...toolOpts,
+            last: exploring.at(-1)?.last,
+          })
     exploring = []
     out.push(...t.block("tool", lines))
   }
@@ -106,25 +121,39 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     } else if (m.role === "assistant") {
       // The sources the reply cited follow its last text, as they did live.
       const sources = replyCitations(m.content)
+      const timestamp = messageTimestamp(m)
+      const firstText = m.content.findIndex((b) => b.type === "text" && b.text.trim() !== "")
+      const lastTool = m.content.findLastIndex((b) => b.type === "toolCall" || b.type === "serverTool")
       const lastText = m.content.findLastIndex((b) => b.type === "text" && b.text.trim() !== "")
       for (const [i, b] of m.content.entries()) {
         if (b.type === "thinking" && (b.text.trim() || b.redacted)) {
-          block("reasoning", reasoningLines(theme, b.text, { expanded: detail === "full" }, opts.width))
+          block(
+            "reasoning",
+            reasoningLines(theme, b.text, { expanded: detail === "full", timestamp }, opts.width),
+          )
         } else if (b.type === "text" && b.text.trim()) {
           // Markdown, as the reply showed when it streamed in.
+          const at = i === firstText ? timestamp : undefined
           const width = Math.max(1, opts.width - visibleWidth(gutter))
+          const firstRowWidth = Math.max(1, timestampRoom(opts.width, at) - visibleWidth(gutter))
           const text = i === lastText ? b.text + sources : b.text
+          const markdown = { ...markdownOptions(opts), firstRowWidth }
           const rows = opts.nodes
-            ? committedMarkdown(text, width, theme, markdownOptions(opts))
-            : renderMarkdown(text, width, theme, markdownOptions(opts))
-          block("assistant", replyRows(rows))
+            ? committedMarkdown(text, width, theme, markdown)
+            : renderMarkdown(text, width, theme, markdown)
+          const lines = replyRows(rows)
+          if (lines.length) lines[0] = timestampRow(lines[0]!, theme, opts.width, at)
+          block("assistant", lines)
         } else if (b.type === "serverTool") {
           // A search the provider ran shows as the tool row it was live.
           const { rejected, ...call } = serverToolCall(b)
           const finished: FinishedCall = { ...call, ...(rejected ? { rejected } : {}) }
           block(
             "tool",
-            finishedToolLines(theme, opts.presenters?.get(b.name), finished, detail, opts.width, toolOpts),
+            finishedToolLines(theme, opts.presenters?.get(b.name), finished, detail, opts.width, {
+              ...toolOpts,
+              last: i === lastTool,
+            }),
           )
         } else if (b.type === "toolCall") {
           const result = results.get(b.id) ?? { content: [], isError: true }
@@ -138,8 +167,15 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
             result,
             ...(rejected ? { rejected } : {}),
           }
-          if (explorationOf(presenter, call)) exploring.push({ call, presenter })
-          else block("tool", finishedToolLines(theme, presenter, call, detail, opts.width, toolOpts))
+          if (explorationOf(presenter, call)) exploring.push({ call, presenter, last: i === lastTool })
+          else
+            block(
+              "tool",
+              finishedToolLines(theme, presenter, call, detail, opts.width, {
+                ...toolOpts,
+                last: i === lastTool,
+              }),
+            )
         }
       }
       // How the reply ended, when it did not end well: as the live transcript said it.

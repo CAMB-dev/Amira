@@ -206,7 +206,7 @@ test("the six built-ins keep the specified accent and heading colors without cha
   }
 })
 
-test("ascii supplies every flat glyph key, only ASCII, and matching cell widths", () => {
+test("ascii supplies every flat glyph key, only ASCII, and exact supported cell widths", () => {
   const theme = builtinThemes.find((theme) => theme.name === "ascii")!
   expect(Object.keys(theme.glyphs ?? {}).sort()).toEqual(Object.keys(DEFAULT_THEME_GLYPHS).sort())
   for (const [key, value] of Object.entries(theme.glyphs ?? {})) {
@@ -215,10 +215,20 @@ test("ascii supplies every flat glyph key, only ASCII, and matching cell widths"
     const fallback = Array.isArray(defaults) ? defaults : [defaults]
     for (const [index, glyph] of values.entries()) {
       expect([...glyph].every((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126)).toBe(true)
-      if (key !== "warning")
-        expect(textCells(glyph)).toBe(textCells(fallback[Math.min(index, fallback.length - 1)]!))
+      if (key === "treeBranch" || key === "treeLast") expect(textCells(glyph)).toBe(2)
+      else if (key === "warning") expect(textCells(glyph)).toBe(1)
+      else expect(textCells(glyph)).toBe(textCells(fallback[Math.min(index, fallback.length - 1)]!))
     }
   }
+  expect(theme.glyphs?.treeBranch).toBe("|-")
+  expect(theme.glyphs?.treeLast).toBe("`-")
+  expect(theme.glyphs?.treePipe).toBe("|")
+  expect(theme.glyphs?.toolDone).toBe("v")
+  expect(theme.glyphs?.toolFailed).toBe("x")
+  expect(theme.glyphs?.toolInterrupted).toBe("o")
+  expect(theme.glyphs?.toolBlocked).toBe("o")
+  expect(theme.glyphs?.toolUnknown).toBe("?")
+  expect(theme.glyphs?.toolInvalid).toBe("?")
   expect(theme.glyphs?.codeTop).toBe("+-")
   expect(theme.glyphs?.codeBottom).toBe("`-")
   expect(theme.glyphs?.image).toBe("[]")

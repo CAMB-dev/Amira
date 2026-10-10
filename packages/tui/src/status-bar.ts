@@ -74,7 +74,22 @@ function fitItems(
 
 function join(xs: readonly StatusEntry[], theme: Theme): string {
   const dim = themeToken(theme, "dim") ?? theme.muted
-  return xs.map((x) => toneStyle(x.tone, theme)(x.text)).join(dim(separator()))
+  return xs
+    .map((x) => {
+      const style = toneStyle(x.tone, theme)
+      const split = x.id === "model" ? x.text.lastIndexOf(separator()) : -1
+      if (split < 0) return style(x.text)
+      const model = x.text.slice(0, split)
+      const thinking = / (\([^()]+\))$/.exec(model)
+      const name = thinking ? model.slice(0, thinking.index) : model
+      return (
+        style(name) +
+        (thinking ? theme.muted(` ${thinking[1]}`) : "") +
+        dim(separator()) +
+        theme.muted(x.text.slice(split + separator().length))
+      )
+    })
+    .join(dim(separator()))
 }
 
 /**

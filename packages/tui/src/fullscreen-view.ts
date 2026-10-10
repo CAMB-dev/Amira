@@ -16,6 +16,7 @@ import {
   type BlockImages,
   type BlockRenders,
   DetailNoticeBlock,
+  ExploredBlock,
   exploredRun,
   fixedLine,
   LinesBlock,
@@ -24,7 +25,7 @@ import {
   ToolBlock,
   userBlock,
 } from "./blocks.ts"
-import { commandEchoLines } from "./format.ts"
+import { commandEchoLines, messageTimestamp } from "./format.ts"
 import { createFindSelect } from "./fullscreen/find-select.ts"
 import { historyBlocks } from "./fullscreen/history-blocks.ts"
 import { createMouse } from "./fullscreen/mouse.ts"
@@ -83,6 +84,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   }
   /** Rows of the transcript in the last frame, for mouse clicks. */
   let paneRows = 0
+  let paneTop = 0
 
   /**
    * Images of replies, drawn in the transcript where the terminal can (D83) while an image
@@ -139,15 +141,19 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     const selected = pane.selected
     for (const b of run.replaces) pane.remove(b)
     if (selected && run.replaces.includes(selected)) pane.selected = run.group
+    markToolTrees()
   }
 
   const root = new View((width, ctx) => {
     // Covered by a full-screen overlay, the transcript's images are not placed: they are cleared.
     if (overlay) return host.overlay.render(width, ctx)
+    const header = host.header?.(width, ctx) ?? []
+    if (header.length) header.push("")
+    paneTop = header.length
     const barRows = findSelect.finding || pane.selected ? 1 : 0
-    const budget = Math.max(1, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - barRows)
+    const budget = Math.max(1, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - barRows - paneTop)
     const bottom = host.bottom(width, ctx, budget)
-    paneRows = Math.max(1, ctx.rows - bottom.length - barRows - 1)
+    paneRows = Math.max(1, ctx.rows - bottom.length - barRows - 1 - paneTop)
     const rows = pane.render(env(width), paneRows)
     // Rendering refreshes matches as text streams in; the bar uses this frame's counts.
     const bar = findSelect.finding
@@ -155,8 +161,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       : pane.selected
         ? [findSelect.selectBar(width)]
         : []
-    // The transcript is at the top of the screen: its rows are the screen's.
-    for (const p of pane.placements) ctx.place?.(p)
+    // Image coordinates are transcript-relative; the fixed header stays above them.
+    for (const p of pane.placements) ctx.place?.({ ...p, row: p.row + paneTop })
     // The row under the transcript says how much is below.
     const n = pane.rowsBelow
     const rowsBelow = `${n} row${n === 1 ? "" : "s"} below`
@@ -169,7 +175,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           width,
           glyphs.more,
         )
-    return [...rows, below, ...bar, ...bottom]
+    return [...header, ...rows, below, ...bar, ...bottom]
   })
   const renderer = new FullScreenRenderer(terminal, root, {
     synchronizedOutput: host.capabilities.synchronizedOutput,
@@ -181,6 +187,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const mouseHandlers = createMouse({
     pane,
     paneRows: () => paneRows,
+    paneTop: () => paneTop,
     requestRender: () => renderer.requestRender(),
     showNote: (text) => host.showNote(text),
     terminal,
@@ -191,8 +198,16 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     return end ? ` · ${end} follows` : ""
   }
 
+  function markToolTrees(): void {
+    const visible = pane.blocks.filter((b) => !(b instanceof ToolBlock) || b.started)
+    for (const [i, b] of visible.entries()) {
+      if (b instanceof ToolBlock || b instanceof ExploredBlock) b.last = visible[i + 1]?.kind !== "tool"
+    }
+  }
+
   function add(block: Block): void {
     pane.add(block)
+    markToolTrees()
     renderer.requestRender()
   }
 
@@ -303,7 +318,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     user(m) {
       // A message sent: the selection has done its work (and Esc goes back to stopping turns).
       pane.clearText()
-      add(userBlock(m))
+      add(userBlock(m, messageTimestamp(m) ?? Date.now()))
     },
     reasoningDelta(text) {
       if (!text) return
@@ -322,8 +337,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     replyDelta(text) {
       endReasoning()
       if (!reply) {
-        reply = new ReplyBlock("", true, host.hyperlinks)
+        reply = new ReplyBlock("", true, host.hyperlinks, Date.now())
         pane.add(reply)
+        markToolTrees()
       }
       reply.append(text)
       pane.changed()
@@ -344,6 +360,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         stepCalls.push(b)
         pane.add(b)
       }
+      markToolTrees()
       return shown
     },
     toolStart(id, name, args, at) {
@@ -358,6 +375,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       b.args = args
       b.startedAt = at
       b.touch()
+      markToolTrees()
       pane.changed()
     },
     toolUpdate(id, partial) {
@@ -410,6 +428,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         terminal,
       }))
         pane.add(b)
+      markToolTrees()
       renderer.requestRender()
     },
     leaveSession() {

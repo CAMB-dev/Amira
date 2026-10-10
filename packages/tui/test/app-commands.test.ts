@@ -146,7 +146,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
       expect(s.all().match(/› \/swarm goal/g)).toHaveLength(1)
       expect(s.all()).not.toContain(longPrompt)
       // The note of what it loaded hangs under the echo, as the command's own output would.
-      expect(s.all()).toContain("› /swarm goal\n\n  └ Coordinating workers")
+      expect(s.all()).toContain("› /swarm goal\n  └ Coordinating workers")
       expect(s.agent.messages[0]).toEqual(
         userMessage(longPrompt, { text: "/swarm goal", note: "Coordinating workers" }),
       )
@@ -381,7 +381,7 @@ test("a command that sends a long prompt shows as typed, with its note, while th
   await s.idle()
   const text = s.all()
   expect(text.match(/› \/review-pr 123/g)).toHaveLength(1)
-  expect(text).toContain("› /review-pr 123\n\n  └ Loaded skill review-pr (40 lines)")
+  expect(text).toContain("› /review-pr 123\n  └ Loaded skill review-pr (40 lines)")
   expect(text).not.toContain("instruction line")
   const sent = s.mock.requests[0]!.messages[0]!
   expect(sent).toEqual({ role: "user", content: [{ type: "text", text: long }] })
@@ -405,7 +405,7 @@ test("typing $ opens the skill list; Enter runs the skill, shown as typed with i
   terminal.send("123\r")
   await shows("Reviewing.")
   await idle()
-  expect(all()).toContain("› $review-pr 123\n  └ Loaded skill review-pr (3 lines)")
+  expect(all()).toMatch(/› \$review-pr 123 +\d{2}:\d{2}\n {4}└ Loaded skill review-pr \(3 lines\)/)
   expect(all()).not.toContain("SKILL review-pr BODY")
   expect(mock.requests[0]!.messages[0]).toEqual({
     role: "user",
@@ -518,7 +518,7 @@ test("the $ list takes its keys from the keybindings like the / list", async () 
   terminal.send("\x19")
   await shows("Deployed.")
   await idle()
-  expect(all()).toContain("› $deploy\n  └ Loaded skill deploy (3 lines)")
+  expect(all()).toMatch(/› \$deploy +\d{2}:\d{2}\n {4}└ Loaded skill deploy \(3 lines\)/)
   terminal.send("\x03")
   await exited
 })

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { DEFAULT_THEME_GLYPHS } from "@amira/api"
 import { defaultGlyphs, graphemes, textWidth } from "@amira/tui-kit"
 import { glyphs } from "../src/glyphs.ts"
 
@@ -17,6 +18,18 @@ test("no glyph is an emoji drawn without asking for it", () => {
       g.codePointAt(0)! > 0x7f && /\p{Emoji}/u.test(g) && !g.includes("\uFE0F") && textWidth(g) !== 1,
   )
   expect(bare).toEqual([])
+})
+
+test("tool tree connectors match their canonical widths in Unicode and ASCII", () => {
+  for (const [name, ascii, width] of [
+    ["treeBranch", "|-", 2],
+    ["treeLast", "`-", 2],
+    ["treePipe", "|", 1],
+  ] as const) {
+    expect(glyphs[name]).toBe(DEFAULT_THEME_GLYPHS[name])
+    expect(textWidth(glyphs[name])).toBe(1)
+    expect(textWidth(ascii)).toBe(width)
+  }
 })
 
 test("glyphs are one cell each, except the emoji ones: the warning and the image", () => {

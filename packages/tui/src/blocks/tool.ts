@@ -7,15 +7,17 @@ import {
   type ToolResult,
   toolResultText,
 } from "@amira/api"
-import { truncateToWidth } from "@amira/tui-kit"
+import { truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { glyphs } from "../glyphs.ts"
 import { childrenOf, isActive, type SubagentNode, subtree, treeRows } from "../subagents.ts"
+import { type CopyRow, chromeRows } from "../text-selection.ts"
 import {
   explorationOf,
   exploredLines,
   type FinishedCall,
   finishedToolLines,
   runningToolLines,
+  treeContinuation,
 } from "../tool-view.ts"
 import { Block, type BlockEnv } from "./base.ts"
 
@@ -45,6 +47,19 @@ export class ToolBlock extends Block {
     | undefined
   /** Set by folding it: how much of it shows, whatever the global level. */
   folding: ToolDetailLevel | undefined
+
+  #last = false
+
+  /** Views mark the last tool in a step/turn; changing it invalidates cached rows. */
+  get last(): boolean {
+    return this.#last
+  }
+
+  set last(value: boolean) {
+    if (value === this.#last) return
+    this.#last = value
+    this.touch()
+  }
 
   constructor(
     readonly callId: string,
@@ -83,6 +98,10 @@ export class ToolBlock extends Block {
     if (!this.started) return []
     const presenter = env.presenters?.get(this.name)
     const { theme, width, now } = env
+    const continuation = treeContinuation(theme, this.last)
+    const treeWidth = Math.max(0, width - visibleWidth(continuation))
+    const nested = (rows: string[]) =>
+      rows.map((row) => truncateToWidth(`${continuation}${row}`, width, glyphs.more))
     if (!this.end) {
       const call = {
         name: this.name,
@@ -91,12 +110,15 @@ export class ToolBlock extends Block {
         ...(this.partial ? { partial: this.partial } : {}),
       }
       return [
-        ...runningToolLines(theme, presenter, call, now, env.spinner, width),
-        ...treeRows(tree, now, width, theme, env.groups),
+        ...runningToolLines(theme, presenter, call, now, env.spinner, width, { last: this.last }),
+        ...nested(treeRows(tree, now, treeWidth, theme, env.groups)),
       ]
     }
     const detail = this.detail(env)
-    const opts = env.outputLines !== undefined ? { outputLines: env.outputLines } : {}
+    const opts = {
+      last: this.last,
+      ...(env.outputLines !== undefined ? { outputLines: env.outputLines } : {}),
+    }
     const lines = finishedToolLines(theme, presenter, this.finished(), detail, width, opts)
     let rows: string[]
     if (detail === "collapsed" && this.folding === "collapsed" && tree.length) {
@@ -108,15 +130,16 @@ export class ToolBlock extends Block {
       rows = [
         truncateToWidth(
           `  ${theme.muted(glyphs.treeBranch)} ${theme.accent(glyphs.subagent)} ${theme.muted(text)}`,
-          width,
+          treeWidth,
           glyphs.more,
         ),
       ]
     } else {
-      // The call's own result line comes after them, so only a nested one can close a level.
-      rows = treeRows(tree, now, width, theme, env.groups, false)
+      // Compact results live on the head; continuation results and output follow these rows.
+      // Only a nested sub-agent can close a level before the call's own continuation.
+      rows = treeRows(tree, now, treeWidth, theme, env.groups, false)
     }
-    lines.splice(1, 0, ...rows)
+    lines.splice(1, 0, ...nested(rows))
     return lines
   }
 
@@ -131,6 +154,17 @@ export class ToolBlock extends Block {
       ...(end.approval ? { approval: end.approval } : {}),
       interrupted: end.interrupted ?? false,
     }
+  }
+
+  override copyRows(plain: readonly string[]): CopyRow[] {
+    const rows = chromeRows(plain)
+    const prefix = 4 + Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
+    if (this.last) {
+      for (let i = 1; i < rows.length; i++) {
+        if (plain[i]!.startsWith(" ".repeat(prefix))) rows[i]!.from = Math.max(rows[i]!.from, prefix)
+      }
+    }
+    return rows
   }
 
   copyText(): string {
@@ -183,12 +217,25 @@ export class ToolBlock extends Block {
 
 /**
  * Successful calls in a row that only looked around (read, searched, listed files), as one
- * row: "● Explored · Read a.ts, b.ts · Search foo". Unfolded, each call under it.
+ * row: "├ Explored · Read a.ts, b.ts · Search foo". Unfolded, each call under it.
  */
 export class ExploredBlock extends Block {
   readonly kind = "tool"
   /** Set by folding it: how much of it shows, whatever the global level. */
   folding: ToolDetailLevel | undefined
+
+  #last = false
+
+  /** Views mark the last tool in a step/turn; changing it invalidates cached rows. */
+  get last(): boolean {
+    return this.#last
+  }
+
+  set last(value: boolean) {
+    if (value === this.#last) return
+    this.#last = value
+    this.touch()
+  }
 
   constructor(readonly calls: ToolBlock[]) {
     super()
@@ -199,7 +246,10 @@ export class ExploredBlock extends Block {
   }
 
   lines(env: BlockEnv): string[] {
-    const opts = env.outputLines !== undefined ? { outputLines: env.outputLines } : {}
+    const opts = {
+      last: this.last,
+      ...(env.outputLines !== undefined ? { outputLines: env.outputLines } : {}),
+    }
     const calls = this.calls.map((b) => ({ call: b.finished(), presenter: env.presenters?.get(b.name) }))
     // Unfolded, each call shows as calls do now (all of it at the "full" level).
     const expanded = this.detail(env) === "full"
@@ -267,6 +317,7 @@ export function exploredRun(
   if (run.length < 2) return undefined
   const calls = run.flatMap((b) => (b instanceof ExploredBlock ? b.calls : [b]))
   const group = new ExploredBlock(calls)
+  group.last = run[run.length - 1]!.last
   // A row the user folded keeps how it was folded.
   const folded = run.find((b): b is ExploredBlock => b instanceof ExploredBlock && b.folding !== undefined)
   if (folded) group.folding = folded.folding
@@ -283,7 +334,9 @@ export function groupExplored(list: Block[], env: BlockEnv): Block[] {
         ...(prev instanceof ExploredBlock ? prev.calls : [prev]),
         ...(b instanceof ExploredBlock ? b.calls : [b]),
       ]
-      out[out.length - 1] = new ExploredBlock(calls)
+      const group = new ExploredBlock(calls)
+      group.last = b.last
+      out[out.length - 1] = group
     } else out.push(b)
   }
   return out

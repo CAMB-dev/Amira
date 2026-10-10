@@ -6,6 +6,7 @@ import { userBlock } from "../blocks/base.ts"
 import { ReasoningBlock, SummaryBlock } from "../blocks/reasoning.ts"
 import { ReplyBlock } from "../blocks/reply.ts"
 import { groupExplored, ToolBlock } from "../blocks/tool.ts"
+import { messageTimestamp } from "../format.ts"
 import { summaryText } from "../history.ts"
 import { replyCitations, serverToolCall } from "../server-tools.ts"
 import { type NoticeLevel, replyEndNotice } from "../transcript.ts"
@@ -36,12 +37,21 @@ export function historyBlocks(
     else if (m.role === "assistant") {
       // The sources the reply cited follow its last text, as they did live.
       const sources = replyCitations(m.content)
+      const timestamp = messageTimestamp(m)
+      const firstText = m.content.findIndex((b) => b.type === "text" && b.text.trim() !== "")
       const lastText = m.content.findLastIndex((b) => b.type === "text" && b.text.trim() !== "")
       for (const [i, b] of m.content.entries()) {
         if (b.type === "thinking" && (b.text.trim() || b.redacted))
-          blocks.push(new ReasoningBlock(b.text, undefined))
+          blocks.push(new ReasoningBlock(b.text, undefined, timestamp))
         else if (b.type === "text" && b.text.trim())
-          blocks.push(new ReplyBlock(i === lastText ? b.text + sources : b.text, false, deps.hyperlinks))
+          blocks.push(
+            new ReplyBlock(
+              i === lastText ? b.text + sources : b.text,
+              false,
+              deps.hyperlinks,
+              i === firstText ? timestamp : undefined,
+            ),
+          )
         else if (b.type === "serverTool") {
           // A search the provider ran shows as the tool row it was live.
           const { rejected, ...call } = serverToolCall(b)

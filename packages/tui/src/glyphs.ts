@@ -1,6 +1,6 @@
 /**
  * Every symbol the TUI draws, in one place, so a styling pass can swap them without touching
- * the layout code. Colors come from the theme (tokens such as accent and muted). Each is one
+ * the layout code. Colors come from the theme (tokens such as accent and muted). Most are one
  * cell wide in the terminals Amira supports (Windows Terminal, VS Code, and common Unix ones),
  * so none has an emoji form (the Unicode Emoji property) that terminals would draw from the
  * emoji font, two cells wide (see `textWidth` in tui-kit), with one exception: the warning is
@@ -14,7 +14,7 @@ const defaults = {
   /** Indents every row of the assistant's replies, setting them apart from everything else. */
   assistant: "  ",
   /** Tool calls: finished, failed, and ended without running to completion. */
-  toolDone: "●",
+  toolDone: "✓",
   toolRunning: "●",
   toolFailed: "✗",
   toolInterrupted: "⊘",
@@ -27,8 +27,14 @@ const defaults = {
    * font draws it wider than a cell, out of line with the "│" below it.
    */
   result: "└",
-  /** A row of a tree with more rows after it at the same level. */
+  /** A row of a tool tree with more rows after it at the same level (one cell; ASCII themes may use two). */
   treeBranch: "├",
+  /** The last tool at its level (one cell; ASCII themes may use two). */
+  treeLast: "└",
+  /** Continues a tool tree beside result, output and diff rows (one cell). */
+  treePipe: "│",
+  /** Output tokens on the turn status row. */
+  turnOutput: "⇣",
   /** Starts each live output line of a running tool. */
   output: "│",
   /** A sub-agent, and how its run ended. */
@@ -79,9 +85,7 @@ const defaults = {
   /** Marks the terminal title while a turn runs. */
   working: "●",
   /**
-   * Before the branch in the terminal title, which the title bar draws in the system's font.
-   * Not for the grid: Cascadia Code and Mono lack "⎇" (U+2387) and the fallback font draws it
-   * out of line, so the status shows the branch without a symbol.
+   * Before the branch in the header and terminal title. Font-limited themes can replace it.
    */
   branch: "⎇",
   /** Between items of a hint or the title. */

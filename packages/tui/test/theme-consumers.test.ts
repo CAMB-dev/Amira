@@ -29,10 +29,30 @@ test("tool summaries use path and command tokens without changing their text", (
     const call = { name: "tool", args, result: textResult("done") }
     const rows = finishedToolLines(theme, undefined, call, "collapsed", 80)
     expect(rows[0]).toContain(style(summary))
-    expect(stripAnsi(rows[0]!)).toBe(`● tool ${summary}`)
+    expect(stripAnsi(rows[0]!)).toBe(`  ├ tool ${summary}  ✓ done`)
+    expect(rows[0]).toContain(theme.dim("├"))
+    expect(rows[0]).toContain(theme.fg2("tool"))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain(theme.success("✓ done"))
     const rejected = finishedToolLines(theme, undefined, { ...call, rejected: "blocked" }, "collapsed", 80)
     expect(rejected[0]).toContain(theme.muted(summary))
+    expect(rejected[0]).toContain(theme.muted("tool"))
     expect(rejected[0]).not.toContain(style(summary))
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]).toContain(theme.muted("⊘ done"))
+    const failed = finishedToolLines(
+      theme,
+      undefined,
+      { ...call, result: textResult("failed", true) },
+      "collapsed",
+      80,
+    )
+    expect(failed[0]).toContain(theme.fg2("tool"))
+    expect(failed[0]).toContain(style(summary))
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toContain(theme.error("✗ failed"))
+    const expanded = finishedToolLines(theme, undefined, call, "full", 80)
+    expect(expanded[1]).toBe(`  ${theme.dim("│")}  ${theme.success("✓ done")}${theme.muted("")}`)
     const running = runningToolLines(theme, undefined, { ...call, startedAt: 0 }, 1000, "⠋", 80)
     expect(running[0]).toContain(style(summary))
     expect(running[0]).toContain(theme.shimmer("⠋"))
@@ -59,9 +79,9 @@ test("file headers and program output use path and secondary foreground tokens",
 
 test("reasoning labels use thinking while expanded text retains muted italics", () => {
   const rows = reasoningLines(theme, "a thought", { thinking: true, expanded: true }, 80)
-  expect(rows[0]).toBe(`${theme.thinking("∴")} ${theme.thinking("Thinking")}`)
+  expect(rows[0]).toBe(`  ${theme.thinking("∴")} ${theme.thinking("Thinking")}`)
   expect(rows[1]).toContain(theme.muted(italic("a thought")))
-  expect(rows.map(stripAnsi)).toEqual(["∴ Thinking", "  a thought"])
+  expect(rows.map(stripAnsi)).toEqual(["  ∴ Thinking", "    a thought"])
 })
 
 test("the editor border follows focus without changing the frame", () => {

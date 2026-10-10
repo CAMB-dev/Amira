@@ -9,11 +9,11 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { userLines, userText } from "../format.ts"
+import { messageTimestamp, timestampIn, userLines, userText } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import type { ReplyRenderers } from "../markdown-nodes.ts"
 import type { SpawnGroups, SubagentNode } from "../subagents.ts"
-import { type CopyRow, chromeRows, gutterRows } from "../text-selection.ts"
+import { type CopyRow, chromeRows, gutterRows, sliceCells } from "../text-selection.ts"
 import type { PresenterSource } from "../tool-view.ts"
 import { type BlockKind, type NoticeLevel, noticeDetailLines, noticeLines } from "../transcript.ts"
 
@@ -123,6 +123,10 @@ export abstract class Block {
   abstract readonly kind: BlockKind
   /** Bumped whenever what the block shows changes, so its cached lines are drawn again. */
   version = 0
+  /** Visible revision for this rendering; hidden content need not invalidate collapsed rows. */
+  cacheVersion(_env: BlockEnv): number | string {
+    return this.version
+  }
   /** Its position in the transcript, kept by the transcript. */
   index = -1
 
@@ -200,32 +204,35 @@ const BLOCK_LABELS: Record<BlockKind, string> = {
 
 /** A block drawn by a function of the width: the banner, notices, echoes, separators. */
 export class LinesBlock extends Block {
+  private lastLines: readonly string[] = []
+
   constructor(
     readonly kind: BlockKind,
     private draw: (width: number, theme: Theme) => string[],
     private copy?: string,
+    readonly timestamp?: number,
   ) {
     super()
   }
 
   lines(env: BlockEnv): string[] {
-    return this.draw(env.width, env.theme)
+    const lines = this.draw(env.width, env.theme)
+    this.lastLines = lines
+    return lines
   }
 
   copyText(): string {
     return this.copy ?? ""
   }
 
-  override copyRows(plain: readonly string[]): CopyRow[] {
+  override copyRows(plain: readonly string[], lines: readonly string[] = this.lastLines): CopyRow[] {
     if (this.kind !== "user" && this.kind !== "command") return chromeRows(plain)
     // A message or a command echo sits behind "› ", its rows lined up after it.
-    const gutter = visibleWidth(glyphs.user) + 1
+    const gutter = visibleWidth(glyphs.user) + 3
     const rows: CopyRow[] = gutterRows(plain, gutter)
-    // On the band behind them its blank rows above and below are chrome too (and the fill
-    // that runs each row to the edge is trailing blanks, which never copy).
-    const last = plain.length - 1
-    if (last > 0 && !plain[0]!.trim()) rows[0] = { from: 0, skip: true }
-    if (last > 0 && !plain[last]!.trim()) rows[last] = { from: 0, skip: true }
+    const stamp = timestampIn(lines)
+    if (stamp && plain[0] !== undefined)
+      rows[0] = { from: gutter, to: stamp.to, exact: sliceCells(plain[0], gutter, stamp.to) }
     return rows
   }
 }
@@ -280,7 +287,7 @@ export function fixedLine(kind: BlockKind, line: string): LinesBlock {
   return new LinesBlock(kind, (width) => wrapText(line, Math.max(1, width)), stripAnsi(line))
 }
 
-export function userBlock(message: UserMessage): LinesBlock {
+export function userBlock(message: UserMessage, at = messageTimestamp(message)): LinesBlock {
   const text = message.display?.text.trim() || userText(message)
-  return new LinesBlock("user", (width, theme) => userLines(theme, message, width), text)
+  return new LinesBlock("user", (width, theme) => userLines(theme, message, width, at), text, at)
 }

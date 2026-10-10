@@ -25,6 +25,8 @@ export function mathRows(s: BlockState, env: Env): string[] {
   copy.blankPending = false
   copy.emitted = false
   const rows: string[] = []
+  const firstWidth = env.rowWidth?.() ?? env.width
+  env = { ...env, rowWidth: () => (rows.length ? env.width : firstWidth) }
   replay(copy, s.math.lines, env, (r) => rows.push(...r))
   finish(copy, legacy(env), (r) => rows.push(...r))
   return rows

@@ -45,9 +45,10 @@ import {
 import { interactiveTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
-import { compactionNotice } from "./format.ts"
+import { compactionNotice, rememberMessageTime } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
+import { headerLine } from "./header.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "./image-input.ts"
 import { createInlineView } from "./inline-view.ts"
 import { defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
@@ -172,6 +173,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   function canRewind(): boolean {
     return commands?.control.rewind !== undefined
   }
+  let workspace: EventMap["workspace.changed"] | undefined
+  const header: NonNullable<ViewHost["header"]> = (width, ctx) => [
+    headerLine(
+      {
+        cwd: tildePath(agent.cwd, env),
+        ...(workspace?.cwd === agent.cwd
+          ? { branch: workspace.branch ?? workspace.head, dirty: workspace.dirty }
+          : {}),
+        title: agent.session?.title,
+        cost: opts.status.snapshot().find((i) => i.id === "cost")?.text,
+        used: agent.contextTokens,
+        limit: agent.model.contextWindow,
+      },
+      width,
+      ctx,
+    ),
+  ]
   const bottomArea = createBottomArea({
     agent: () => agent,
     activity: () => activity,
@@ -185,6 +203,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     hasCancellable: () => commandRunner.hasCancellable(),
     canRewind,
     status: opts.status,
+    header,
     panels: opts.panels,
     editor,
     keys,
@@ -229,6 +248,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     sessionId: () => agent.sessionId,
     detail: () => detail,
     bottom: bottomArea.layout,
+    header,
     overlay: new View((width, ctx) => overlays.render(width, ctx)),
     editorEmpty: () => editor.isEmpty,
     showNote,
@@ -343,6 +363,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     // Sub-agents share the bus; only this session's turn events drive the transcript.
     if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
     switch (e.type) {
+      case "workspace.changed":
+        workspace = e.data
+        break
+      case "session.title":
+        break
       case "turn.start": {
         const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting, and takes held ones along.
@@ -637,6 +662,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       id: a.sessionId,
       resumed: a.messages.length > 0,
       ...(updatedAt !== undefined ? { updatedAt } : {}),
+    }
+    for (const entry of a.session?.branch() ?? []) {
+      if (entry.type === "message") rememberMessageTime(entry.message, entry.ts)
     }
     view.openSession(boundary, a.messages, switched, (m) => a.compactionInfo(m))
   }

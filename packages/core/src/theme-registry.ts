@@ -217,8 +217,9 @@ function validGlyph(value: unknown, fallback: string, key: string, warn: (text: 
   }
   const width = textCells(value)
   const expected = textCells(fallback)
-  // Warning layouts already measure their prefix instead of assuming the default two cells.
-  if (width !== expected && (key !== "warning" || width === 0)) {
+  // Warnings and tree layouts measure their prefixes; ASCII tree arms may use two cells.
+  const tree = (key === "treeBranch" || key === "treeLast") && (width === 1 || width === 2)
+  if (!tree && width !== expected && (key !== "warning" || width === 0)) {
     warn(
       `glyph ${key} measures ${width} cells with @amira/text-width; the default measures ${expected}. Terminal/font widths may differ; ignored`,
     )
