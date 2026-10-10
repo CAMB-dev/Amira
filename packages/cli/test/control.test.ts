@@ -487,7 +487,12 @@ test("the extensions a /reload loads again pick up the session where it is (the 
   )
   await agent.prompt("hello")
   await agent.bus.flush()
-  const items = () => session.host.status.snapshot().map((s) => [s.id, s.text])
+  // token-speed appears only when the mock turn took measurable time; it is timing, not state.
+  const items = () =>
+    session.host.status
+      .snapshot()
+      .filter((s) => s.id !== "token-speed")
+      .map((s) => [s.id, s.text])
   const before = items()
   expect(before).toEqual([
     ["model", "m"],
