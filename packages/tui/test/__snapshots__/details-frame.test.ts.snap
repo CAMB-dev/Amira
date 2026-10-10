@@ -1,17 +1,17 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`width-100 fullscreen details frames: verb groups and sticky prompt while scrolled: verb-grouped tree 1`] = `
-" ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  │  124k / 200k
-  › Polish the transcript details.…                                                          20:09
+" ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  │  124K / 200K
+  › Polish the transcript details.…                                                        8:09 PM
   Transcript detail 16.
 
   Transcript detail 17.
 
   Transcript detail 18.
 
-  ├ Read 3 files (a.ts, b.ts, c.ts) · Searched 2 patterns (TODO, FIXME)  ▸
-  ├ edit a.ts  ✓ +0 -0
-  └ bash bun test  ✓ 412 pass (+1 line)
+  ├ Read 3 files · Searched 2 patterns  ▸
+  ├ Edited a.ts  +0 / -0
+  └ Ran bun test  ✓ 412 pass (+1 line)
      412 pass
      0 fail
 
@@ -22,8 +22,8 @@ exports[`width-100 fullscreen details frames: verb groups and sticky prompt whil
 `;
 
 exports[`width-100 fullscreen details frames: verb groups and sticky prompt while scrolled: sticky while scrolled 1`] = `
-" ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  │  124k / 200k
-  › Polish the transcript details.…                                                          20:09
+" ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  │  124K / 200K
+  › Polish the transcript details.…                                                        8:09 PM
   Transcript detail 15.
 
   Transcript detail 16.
@@ -32,9 +32,9 @@ exports[`width-100 fullscreen details frames: verb groups and sticky prompt whil
 
   Transcript detail 18.
 
-  ├ Read 3 files (a.ts, b.ts, c.ts) · Searched 2 patterns (TODO, FIXME)  ▸
-  ├ edit a.ts  ✓ +0 -0
-  └ bash bun test  ✓ 412 pass (+1 line)
+  ├ Read 3 files · Searched 2 patterns  ▸
+  ├ Edited a.ts  +0 / -0
+  └ Ran bun test  ✓ 412 pass (+1 line)
   ↓ 2 rows below · Ctrl+End follows
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ › Message Amira                                                                                  │

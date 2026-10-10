@@ -7,6 +7,7 @@ import { ExploredBlock, exploredRun, groupExplored, ToolBlock } from "../src/blo
 import { glyphs, setGlyphs } from "../src/glyphs.ts"
 import { historyLines } from "../src/history.ts"
 import { explorationOf, exploredLine, exploredLines, type FinishedCall } from "../src/tool-view.ts"
+import { TranscriptPane } from "../src/transcript-pane.ts"
 
 const plain = (rows: string[]) => rows.map(stripAnsi)
 const env: BlockEnv = {
@@ -63,7 +64,7 @@ test("read, search, glob, list and fetch have exploration metadata without a pre
   ).toBeUndefined()
 })
 
-test("counts use successful calls but displayed targets are unique, in first-action order", () => {
+test("counts include repeat targets, in first-action order, without displaying targets", () => {
   const actions = [
     { verb: "Read", target: "a.ts" },
     { verb: "Search", target: "TODO" },
@@ -75,7 +76,7 @@ test("counts use successful calls but displayed targets are unique, in first-act
     { verb: "Fetch", target: "https://example.com" },
   ]
   expect(stripAnsi(exploredLine(defaultTheme, actions, 240, { last: true }))).toBe(
-    "  └ Read 3 files (a.ts, b.ts) · Searched 1 pattern (TODO) · Globbed 1 pattern (*.ts) · Listed 2 directories (src, test) · Fetched 1 page (https://example.com)  ▸",
+    "  └ Read 3 files · Searched 1 pattern · Globbed 1 pattern · Listed 2 directories · Fetched 1 page  ▸",
   )
   for (const [verb, noun] of [
     ["Read", "file"],
@@ -84,11 +85,11 @@ test("counts use successful calls but displayed targets are unique, in first-act
     ["List", "directory"],
     ["Fetch", "page"],
   ]) {
-    expect(stripAnsi(exploredLine(monoTheme, [{ verb: verb!, target: "a" }], 80))).toContain(`1 ${noun} (a)`)
+    expect(stripAnsi(exploredLine(monoTheme, [{ verb: verb!, target: "a" }], 80))).toContain(`1 ${noun}`)
   }
 })
 
-test("folded disclosure is muted and complete path lists give way before counts", () => {
+test("folded rows stay count-only and fully muted, including verbs and disclosure", () => {
   const actions = [
     { verb: "Read", target: "界".repeat(30) },
     { verb: "Read", target: "b.ts" },
@@ -96,7 +97,13 @@ test("folded disclosure is muted and complete path lists give way before counts"
   const narrow = exploredLine(defaultTheme, actions, 29)
   expect(narrow).toContain(defaultTheme.muted("▸"))
   expect(stripAnsi(narrow)).toBe("  ├ Read 2 files  ▸")
-  expect(stripAnsi(exploredLine(monoTheme, actions, 120))).toContain(`(${"界".repeat(30)}, b.ts)`)
+  const wide = exploredLine(defaultTheme, actions, 120)
+  expect(stripAnsi(wide)).toBe("  ├ Read 2 files  ▸")
+  expect(wide).toContain(defaultTheme.muted("Read 2 files"))
+  expect(wide).toBe(
+    `  ${defaultTheme.muted("├")} ${defaultTheme.muted("Read 2 files")}  ${defaultTheme.muted("▸")}`,
+  )
+  expect(wide).not.toContain("b.ts")
   for (const width of [1, 3, 8, 28, 100]) {
     expect(visibleWidth(exploredLine(defaultTheme, actions, width))).toBeLessThanOrEqual(width)
   }
@@ -203,6 +210,26 @@ test("resumed history and tool blocks use the same folded and full exploration r
   }
 })
 
+test("folded find searches counts; unfolding restores target search without changing raw block copy", () => {
+  const a = block("a")
+  const b = block("b")
+  const group = new ExploredBlock([a, b])
+  const copied = 'read {"path":"a.ts"}\nfirst\nsecond\nthird\n\nread {"path":"b.ts"}\nfirst\nsecond\nthird'
+  expect(group.copyText()).toBe(copied)
+  const pane = new TranscriptPane()
+  pane.add(group)
+  pane.render(env, 20)
+  pane.find("a.ts")
+  expect(pane.matchCount).toBe(0)
+  pane.find("Read 2 files")
+  expect(pane.matchCount).toBe(1)
+  group.toggleFold(env)
+  pane.render(env, 20)
+  pane.find("a.ts")
+  expect(pane.matchCount).toBe(1)
+  expect(group.copyText()).toBe(copied)
+})
+
 test("fold disclosure follows the ASCII theme and measures custom glyph widths", async () => {
   const previous = { ...glyphs }
   try {
@@ -213,7 +240,7 @@ test("fold disclosure follows the ASCII theme and measures custom glyph widths",
       { verb: "Read", target: "a.ts" },
       { verb: "Read", target: "a.ts" },
     ]
-    expect(stripAnsi(exploredLine(monoTheme, actions, 100))).toBe("  |- Read 2 files (a.ts)  >")
+    expect(stripAnsi(exploredLine(monoTheme, actions, 100))).toBe("  |- Read 2 files  >")
     setGlyphs({ folded: "[+]" })
     const narrow = exploredLine(defaultTheme, actions, 23)
     expect(narrow).toContain(defaultTheme.muted("[+]"))

@@ -30,6 +30,7 @@ import { commandEchoLines, messageTimestamp } from "./format.ts"
 import { createFindSelect } from "./fullscreen/find-select.ts"
 import { historyBlocks } from "./fullscreen/history-blocks.ts"
 import { createMouse } from "./fullscreen/mouse.ts"
+import { runningBoundary } from "./fullscreen/running-boundary.ts"
 import { createSubagentBlocks } from "./fullscreen/subagent-blocks.ts"
 import { glyphs } from "./glyphs.ts"
 import { sessionBoundary } from "./history.ts"
@@ -57,6 +58,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const { terminal, keys } = host
   let theme = host.theme
   const pane = new TranscriptPane()
+  const boundary = runningBoundary(pane)
   /** Tool calls by id, for their sub-agents; kept after their turn. */
   const callBlocks = new Map<string, ToolBlock>()
   const subagents = createSubagentBlocks({
@@ -209,6 +211,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   }
 
   function markToolTrees(): void {
+    boundary.update(stepCalls)
     const visible = pane.blocks.filter((b) => !(b instanceof ToolBlock) || b.started)
     for (const [i, b] of visible.entries()) {
       if (b instanceof ToolBlock || b instanceof ExploredBlock || b instanceof SubagentGroupBlock)
@@ -232,6 +235,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
 
   /** Ends the calls of the step that never finished: unstarted ones go, running ones read as cut short. */
   function settleStep(): void {
+    boundary.clear()
     for (const b of stepCalls) {
       if (!b.started) pane.remove(b)
       else if (!b.end) {
@@ -249,6 +253,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
    * sets it apart from the command that started Amira above it and the shell's prompt below.
    */
   function printout(): string {
+    boundary.clear()
     const color = isColorEnabled()
     const lines = pane.printout(env(terminal.columns))
     const rows = lines.map((l) => `${presentEmoji(closeStyles(color ? l : stripColors(l)))}\r\n`).join("")
@@ -403,7 +408,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       b.end = end
       b.touch()
       pane.changed()
+      boundary.clear()
       regroup(b)
+      markToolTrees()
       return true
     },
     turnEnd() {

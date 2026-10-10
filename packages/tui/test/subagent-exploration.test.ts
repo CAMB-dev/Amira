@@ -61,7 +61,7 @@ test("/agents groups calls across steps, counts repeat targets and unfolds with 
     s.result("b", "read", "second result\nsecond body"),
   )
   const folded = s.render()
-  expect(folded).toContain("  └ Read 2 files (a.ts) · Searched 1 pattern (TODO)  ▸")
+  expect(folded).toContain("  └ Read 2 files · Searched 1 pattern  ▸")
   expect(folded.join("\n")).not.toContain("Explored")
   expect(folded.join("\n")).not.toContain("first result")
   expect(s.viewer.handleInput(toggle)).toBe(true)
@@ -76,7 +76,7 @@ test("/agents groups calls across steps, counts repeat targets and unfolds with 
   expect(full.join("\n")).not.toContain("▸")
   expect(full.indexOf("  Finished checking.")).toBeGreaterThan(full.indexOf("  └ web_search TODO"))
   s.viewer.handleInput(toggle)
-  expect(s.render()).toContain("  └ Read 2 files (a.ts) · Searched 1 pattern (TODO)  ▸")
+  expect(s.render()).toContain("  └ Read 2 files · Searched 1 pattern  ▸")
 })
 
 test("/agents keeps errors, rejections, edits and commands between successful runs", () => {
@@ -103,8 +103,8 @@ test("/agents keeps errors, rejections, edits and commands between successful ru
     s.result("d", "read", "fourth"),
   )
   const rows = s.render()
-  const first = rows.indexOf("  ├ Read 2 files (a.ts, b.ts)  ▸")
-  const last = rows.indexOf("  └ Read 2 files (c.ts, d.ts)  ▸")
+  const first = rows.indexOf("  ├ Read 2 files  ▸")
+  const last = rows.indexOf("  └ Read 2 files  ▸")
   expect(first).toBeGreaterThanOrEqual(0)
   expect(last).toBeGreaterThan(first)
   expect(rows.slice(first + 1, last)).toEqual([

@@ -65,7 +65,7 @@ test("a conversation: user message, tool call and reply end up in the transcript
       "",
       "  The file has three lines.",
       "",
-      ` /work/proj${" ".repeat(40)}0 / 128k`,
+      ` /work/proj${" ".repeat(40)}0 / 128K`,
       "╭",
     ].join("\n"),
   )
@@ -376,7 +376,9 @@ test("the built-in presenters: an edit shows its diff with line numbers", async 
   await shows("ok")
   await idle()
   expect(all()).toContain(
-    ["  └ edit src/a.ts  ✓ +1 -1", "     11   keep", "     12 - old", "     12 + new", "", "  ok"].join("\n"),
+    ["  └ Edited src/a.ts  +1 / -1", "     11   keep", "     12 - old", "     12 + new", "", "  ok"].join(
+      "\n",
+    ),
   )
   terminal.send("\x03")
   await exited
@@ -399,8 +401,8 @@ test("successful reads in a row, over steps too, go to the scrollback as one Exp
   terminal.send("go\r")
   await shows("done")
   await idle()
-  expect(all()).toContain("  └ Read 3 files (a.ts, b.ts, c.ts)  ▸\n\n  done")
-  expect(all()).not.toContain("  └ read a.ts")
+  expect(all()).toContain("  └ Read 3 files  ▸\n\n  done")
+  expect(all()).not.toContain("  └ Read a.ts")
   terminal.send("\x03")
   await exited
 })
@@ -426,7 +428,7 @@ test("Ctrl+O unfolds held exploration calls immediately in inline mode", async (
     s.terminal.send("go\r")
     await waitFor(() => s.live().includes("Read 2 files"), "folded exploration")
     s.terminal.send("\x0f")
-    await waitFor(() => s.live().includes("read a.ts") && s.live().includes("read b.ts"), "expanded calls")
+    await waitFor(() => s.live().includes("Read a.ts") && s.live().includes("Read b.ts"), "expanded calls")
     expect(s.live()).not.toContain("Read 2 files")
     release()
     await s.shows("done")
@@ -485,16 +487,20 @@ test("a resumed session shows a boundary with its id, then its history like the 
   })
   await waitFor(() => all().includes("── resumed"), "history")
   expect(all()).toContain(`── resumed ${agent.sessionId} ${"─".repeat(38)}\n\n\n  › count`)
-  expect(all()).toContain(["  › count", "", "", "  └ glob *.ts  ✓ 2 files", "", "  Two."].join("\n"))
+  expect(all()).toContain(["  › count", "", "", "  └ Found *.ts  ✓ 2 files", "", "  Two."].join("\n"))
   terminal.send("\x03")
   await exited
 })
 
 test("the activity line shows what the turn does, its time and output tokens; the hint how to interrupt", async () => {
-  const { terminal, live, idle, exited } = await setup([{ text: "x".repeat(200), delayMs: 20 }])
+  const { terminal, live, idle, exited } = await setup([{ text: "x".repeat(200), delayMs: 20 }], {
+    cols: 100,
+  })
   terminal.send("go\r")
   await waitFor(() => activity("Responding").test(live()), "activity")
-  expect(live()).toContain(`Enter steer · ${QUEUE_HINT} queue`)
+  expect(live().split("\n")).toContain(
+    ` shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys  │  enter steer  │  ${QUEUE_HINT.toLowerCase()} queue`,
+  )
   await idle()
   expect(live()).not.toContain("Esc stop")
   terminal.send("\x03")
@@ -646,7 +652,7 @@ test("a message sent during /compact counts its own time and tokens, not the las
   const compacted = agent.compact()
   await waitFor(() => live().includes("Compacting the conversation…"), "compacting")
   terminal.send("q2\r")
-  await waitFor(() => /› q2|Enter steer/.test(live()), "sent")
+  await waitFor(() => /› q2|enter steer/.test(live()), "sent")
   // The prompt waits for the compaction; its activity line starts from zero meanwhile.
   expect(live()).toMatch(activity("Compacting the conversation", false))
   expect(live()).toMatch(/Compacting the conversation… 0s +0s {3}Esc stop$/m)
@@ -729,11 +735,13 @@ test("the status bar shows items from the status extension", async () => {
 })
 
 test("Ctrl+C clears a non-empty editor before quitting; Ctrl+D quits on an empty editor", async () => {
-  const { terminal, live, exited } = await setup([])
+  const { terminal, live, exited } = await setup([], { cols: 80 })
   terminal.send("draft")
   await waitFor(() => live().includes("draft"), "draft")
-  // With text in the input the hint says how to break a line, not how to see the keys.
-  expect(live()).toContain("Enter send · Shift+Enter newline")
+  // With text in the input, newline is additional; the key reference remains visible.
+  expect(live()).toMatch(
+    /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}\? keys {2}│ {2}shift\+enter newline$/m,
+  )
   terminal.send("\x03")
   await waitFor(() => !live().includes("draft"), "cleared")
   terminal.send("\x04")
@@ -886,7 +894,7 @@ test("a Markdown reply streams block by block: every row once, in order, never c
   check.final(screen)
   const text = all()
   expect(text).toContain(`${markers[0]} heading`)
-  expect(text).not.toContain("# L1")
+  expect(text).toContain("# L1")
   expect(text).toContain("  Some bold L2 and code L3 here.")
   expect(text).toContain("• item")
   expect(text).toContain("╭─ ts")
@@ -894,7 +902,7 @@ test("a Markdown reply streams block by block: every row once, in order, never c
   expect(text).toMatch(/col +│ other/)
   // One painted padding row after the prompt, then one unpainted inter-block gap.
   expect(text.replace(/ +\d{2}:\d{2}(?=\n|$)/g, "")).toContain(
-    `› go\n\n\n  ${markers[0]} heading\n\n  Some bold`,
+    `› go\n\n\n  # ${markers[0]} heading\n\n  Some bold`,
   )
   expect(text).toContain(`\n  ╭─ ts${"─".repeat(32)}╮\n  │ const`)
   expect(text).not.toMatch(/\n +\n/)
@@ -953,7 +961,7 @@ test("the editor sits in a rounded box with the status in its border, and the ca
     "│ › héllo 你好               │",
     "╰──────────────── m1 · auto ─╯",
   ])
-  expect(rows[top + 3]).toBe("Enter send")
+  expect(rows[top + 3]).toBe(" shift+tab mode")
   // Border, space, prompt, "héllo " and two wide characters.
   expect({ x: screen.x, y: screen.y }).toEqual({ x: 2 + 2 + 6 + 4, y: top + 1 })
   terminal.send("\x03")
@@ -1098,12 +1106,23 @@ test("running tools show as lines with their arguments and are replaced by the r
 })
 
 test("Enter while working steers the turn; the message joins it before the next model call", async () => {
-  const { terminal, live, all, shows, idle, exited } = await setup([
-    { text: "looking", delayMs: 40, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
-    (req) => ({ text: `saw ${lastUserText(req)}` }),
-  ])
+  const { terminal, live, all, shows, idle, exited } = await setup(
+    [
+      { text: "looking", delayMs: 40, toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+      (req) => ({ text: `saw ${lastUserText(req)}` }),
+    ],
+    { cols: 100 },
+  )
   terminal.send("go\r")
-  await waitFor(() => live().includes(`Enter steer · ${QUEUE_HINT} queue`), "steer hint")
+  await waitFor(
+    () =>
+      live()
+        .split("\n")
+        .includes(
+          ` shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys  │  enter steer  │  ${QUEUE_HINT.toLowerCase()} queue`,
+        ),
+    "steer hint",
+  )
   terminal.send("also B\r")
   await shows("saw also B")
   await idle()
@@ -1124,10 +1143,18 @@ test('with tui.submitWhileWorking "queue", Enter queues while working and the qu
     ],
     { settings: { submitWhileWorking: "queue" }, cols: 80 },
   )
-  // Idle, Enter just sends.
-  await waitFor(() => live().includes("Enter send"), "idle hint")
+  // Idle, Enter still sends; only the fixed base keys appear in the hint.
+  await waitFor(() => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}\? keys$/m.test(live()), "idle hint")
   terminal.send("go\r")
-  await waitFor(() => live().includes(`Enter queue · ${QUEUE_HINT} steer`), "the swapped hint")
+  await waitFor(
+    () =>
+      /^ shift\+tab mode {2}│ {2}esc stop {2}│ {2}ctrl\+o detail {2}│ {2}\? keys {2}│ {2}enter queue$/m.test(
+        live(),
+      ),
+    "the swapped hint",
+  )
+  // At 80 columns the lower-priority queue binding gives way, but still steers below.
+  expect(live()).not.toContain(`${QUEUE_HINT.toLowerCase()} steer`)
   terminal.send("after it\r")
   await shows("queued › after it")
   terminal.send("now B\x11")
@@ -1207,7 +1234,7 @@ test("Esc with a steering message waiting stops the turn and sends the message a
   await shows("01234567")
   terminal.send("keep this\r")
   await waitFor(() => live().includes("steering › keep this"), "steering line")
-  expect(live()).toContain("Esc send queued")
+  expect(live()).toMatch(/^ shift\+tab mode {2}│ {2}esc send queued {2}│ {2}ctrl\+o detail$/m)
   terminal.send("\x1b[27u")
   await shows("⊘ Interrupted")
   await shows("saw keep this")

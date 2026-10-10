@@ -15,6 +15,7 @@ import {
   toolResultText,
 } from "@amira/api"
 import {
+  bold,
   type StyleFn,
   stripAnsi,
   type Theme,
@@ -138,7 +139,7 @@ function jsonSummary(text: string): string | undefined {
 }
 
 /** How a tool no presenter knows is shown: the arguments, the first line of the result and the rest. */
-export const fallbackPresenter: Required<Omit<ToolPresenter, "explore">> = {
+export const fallbackPresenter: Required<Omit<ToolPresenter, "explore" | "verbs">> = {
   summary: (args) => summarizeArgs(args),
   result: (call) => {
     const json = !call.result.isError && jsonSummary(call.text)
@@ -237,9 +238,12 @@ function headLine(
   name: string,
   summary: string,
   width: number,
-  opts: { right?: string; muted?: boolean; nameStyle?: StyleFn; summaryStyle?: StyleFn } = {},
+  opts: { right?: string; muted?: boolean; verb?: string; nameStyle?: StyleFn; summaryStyle?: StyleFn } = {},
 ): string {
-  const label = nameLabel(theme, name, opts.nameStyle ?? themeToken(theme, "fg2") ?? theme.text)
+  const verb = opts.verb ? oneLine(opts.verb) : ""
+  const label = verb
+    ? (opts.nameStyle ?? ((s) => bold(theme.text(s))))(verb)
+    : nameLabel(theme, name, opts.nameStyle ?? themeToken(theme, "fg2") ?? theme.text)
   const right = opts.right ?? ""
   const reserved = right ? visibleWidth(right) + 1 : 0
   const fitsRight = right !== "" && width - reserved >= 12
@@ -318,14 +322,16 @@ function withoutMark(result: string, mark: string): string {
   return hasMark(result, mark) ? result.slice(mark.length).trimStart() : result
 }
 
+const DIFF_COUNTS = /(^|\s)(\+\d+)\s+(?:\/\s*)?([-−]\d+)(?=\s|$)/
+
 /** Diff counts carry their own meaning instead of inheriting the successful call's green. */
 function diffResult(result: string, theme: Theme): string {
-  const stats = /(^|\s)(\+\d+)(\s+(?:\/\s*)?)([-−]\d+)(?=\s|$)/g
+  const stats = new RegExp(DIFF_COUNTS, "g")
   let at = 0
   let shown = ""
   for (const match of result.matchAll(stats)) {
     shown += theme.success(result.slice(at, match.index) + match[1])
-    shown += theme.success(match[2]!) + theme.muted(match[3]!) + theme.error(match[4]!)
+    shown += theme.success(match[2]!) + theme.muted(" / ") + theme.error(match[3]!)
     at = match.index + match[0].length
   }
   return at ? shown + theme.success(result.slice(at)) : theme.success(result)
@@ -358,6 +364,7 @@ export function finishedToolLines(
   const out = [
     headLine(theme, treeHead(theme, opts.last), call.name, summary, width, {
       muted: !ran,
+      verb: ran || cutShort ? presenter?.verbs?.past : undefined,
       summaryStyle: summaryStyle(theme, call.args),
       ...(ran ? {} : { nameStyle: theme.muted }),
     }),
@@ -416,7 +423,12 @@ export function finishedToolLines(
       body = []
   }
 
-  const marked = hasMark(result, mark) ? result : `${mark}${result ? ` ${result}` : ""}`
+  const diffOutcome = outcome === "done" && typeof call.args.command !== "string" && DIFF_COUNTS.test(result)
+  const marked = diffOutcome
+    ? withoutMark(result, mark)
+    : hasMark(result, mark)
+      ? result
+      : `${mark}${result ? ` ${result}` : ""}`
   const resultText = `${outcome === "done" ? diffResult(marked, theme) : style(marked)}${theme.muted(time)}`
   // A compact result may share the head even when output follows. Diff/output rows and
   // multiline/expanded results retain their rails below; callers insert child rows at 1.
@@ -479,6 +491,7 @@ export function runningToolLines(
     width,
     {
       right,
+      verb: presenter?.verbs?.running,
       summaryStyle: summaryStyle(theme, call.args),
     },
   )
@@ -571,38 +584,27 @@ const EXPLORATION_LABELS: Record<string, [string, string, string?]> = {
   fetch: ["Fetched", "page"],
 }
 
-/** One counted row, in first-action order; counts are calls, with targets included when they fit. */
+/** One muted, count-only row in first-action order; counts are calls, not unique targets. */
 export function exploredLine(
   theme: Theme,
   explored: ToolExploration[],
   width: number,
   opts: Pick<ToolViewOptions, "last" | "expanded"> = {},
 ): string {
-  const byVerb = new Map<string, string[]>()
+  const byVerb = new Map<string, number>()
   for (const e of explored) {
     const verb = Object.hasOwn(EXPLORATION_LABELS, e.verb.toLowerCase()) ? e.verb.toLowerCase() : e.verb
-    const targets = byVerb.get(verb) ?? []
-    targets.push(e.target)
-    byVerb.set(verb, targets)
+    byVerb.set(verb, (byVerb.get(verb) ?? 0) + 1)
   }
   const s = theme.muted(` ${glyphs.separator} `)
-  const verbStyle = themeToken(theme, "fg2") ?? theme.text
-  const targetStyle = themeToken(theme, "path") ?? theme.text
   const lead = `  ${treeHead(theme, opts.last)} `
   const tail = opts.expanded ? "" : `  ${theme.muted(glyphs.folded)}`
-  const entries = [...byVerb].map(([verb, targets]) => {
+  const parts = [...byVerb].map(([verb, count]) => {
     const [label, noun, many] = Object.hasOwn(EXPLORATION_LABELS, verb)
       ? EXPLORATION_LABELS[verb]!
       : [verb, "target"]
-    return { count: verbStyle(`${label} ${plural(targets.length, noun, many)}`), targets }
+    return theme.muted(`${label} ${plural(count, noun, many)}`)
   })
-  const parts = entries.map((entry) => entry.count)
-  for (const [i, entry] of entries.entries()) {
-    const listed = `${entry.count} ${targetStyle(`(${[...new Set(entry.targets)].join(", ")})`)}`
-    const candidate = [...parts]
-    candidate[i] = listed
-    if (visibleWidth(lead + candidate.join(s) + tail) <= width) parts[i] = listed
-  }
   const room = Math.max(0, width - visibleWidth(tail))
   return truncateToWidth(truncateToWidth(lead + parts.join(s), room, glyphs.more) + tail, width, glyphs.more)
 }

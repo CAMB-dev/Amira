@@ -671,15 +671,16 @@ test("renderTools groups only consecutive exploration and preserves exact host s
     expect(text.join("\n")).toContain("✗ missing")
     expect(text.join("\n")).toContain("⊘ denied")
     expect(text.join("\n")).toContain("✓ command result")
-    expect(text.join("\n")).toContain("✓ +1 -1")
+    expect(text.join("\n")).toContain("+1 / -1")
+    expect(text.join("\n")).not.toContain("✓ +1")
     expect(rows.some((row) => row.includes(theme.error("✗ missing")))).toBe(true)
     if (level === "full") {
       expect(text.filter((row) => row === "  ├ read a.ts")).toHaveLength(2)
       expect(text.join("\n")).not.toContain("▸")
       expect(text.filter((row) => row.trim().endsWith("second"))).toHaveLength(2)
     } else {
-      expect(text[0]).toBe("  ├ Read 2 files (a.ts)  ▸")
-      expect(text.at(-1)).toBe("  └ Listed 2 directories (src, test)  ▸")
+      expect(text[0]).toBe("  ├ Read 2 files  ▸")
+      expect(text.at(-1)).toBe("  └ Listed 2 directories  ▸")
       expect(rows[2]).toContain(theme.muted("▸"))
     }
     if (level !== "collapsed") {

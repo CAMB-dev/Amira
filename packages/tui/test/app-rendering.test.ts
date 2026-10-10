@@ -390,9 +390,13 @@ test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at
           () => active !== undefined && live().includes("fetching 42%"),
           `${mode}/${cols}: fetching`,
         )
-        expect(live()).toContain("Esc cancel command")
+        expect(live().split("\n")).toContain(
+          cols === 120
+            ? " shift+tab mode  │  esc cancel command  │  ctrl+o detail  │  ? keys  │  enter send"
+            : " shift+tab mode  │  esc cancel command  │  ctrl+o detail",
+        )
         // One key in the hint, as while a turn runs; Ctrl+C cancels too.
-        expect(live()).not.toContain("Ctrl+C cancel command")
+        expect(live()).not.toContain("ctrl+c cancel command")
         terminal.send("draft stays available")
         await waitFor(() => live().includes("draft stays available"), `${mode}/${cols}: responsive draft`)
         progress({ name: "fixture", phase: "extracting", detail: "local fixture repository" })
@@ -586,7 +590,9 @@ test("live panels sit above the input in both modes, fold with Ctrl+T and follow
     await waitFor(() => !live().includes("› test it"), `${mode}: folded`)
     expect(live()).toContain("Todos 1/3")
     // Folded, the hint says how to unfold them.
-    expect(live()).toContain("Ctrl+T unfold panels")
+    expect(live()).toMatch(
+      /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}\? keys {2}│ {2}ctrl\+t unfold panels$/m,
+    )
     terminal.send("\x14")
     items = ["✓ write the parser", "✓ test it", "› ship it"]
     // A change shows at the next redraw the extension asks for.
@@ -622,7 +628,7 @@ test("live panels give way on a short screen: folded, then cut, the input box al
     // Folded to its header, since the whole list does not fit; the input box and hints stay.
     expect(live()).not.toContain("step 1")
     expect(rows.some((r) => r.startsWith("╰"))).toBe(true)
-    expect(rows.some((r) => r.includes("Enter send · ? keys"))).toBe(true)
+    expect(rows).toContain(" shift+tab mode  │  ctrl+o detail  │  ? keys")
     terminal.send("\x04")
     await exited
   }
@@ -647,10 +653,10 @@ test("the status goes under a dialog that takes the input box's place, and back 
       },
     )
     await waitFor(
-      () => /^ ⎇ main\* {2}\/work\/proj +0 \/ 128k$/m.test(live()) && /^╰─+ m1 · auto ─╯$/m.test(live()),
+      () => /^ ⎇ main\* {2}\/work\/proj +0 \/ 128K$/m.test(live()) && /^╰─+ m1 · auto ─╯$/m.test(live()),
       `${mode}: header and input status`,
     )
-    expect(live()).toMatch(/^ ⎇ main\* {2}\/work\/proj +0 \/ 128k$/m)
+    expect(live()).toMatch(/^ ⎇ main\* {2}\/work\/proj +0 \/ 128K$/m)
     const answer = host.ui.api("x").confirm("Proceed?")
     await waitFor(() => live().includes("Proceed?"), `${mode}: the dialog`)
     const rows = live().split("\n")
@@ -658,8 +664,8 @@ test("the status goes under a dialog that takes the input box's place, and back 
     expect(rows.some((r) => r.startsWith("╰"))).toBe(false)
     const status = rows.findIndex((r) => /^ {51}m1 · auto$/.test(r))
     expect(status).toBeGreaterThan(rows.findIndex((r) => r.includes("Proceed?")))
-    expect(live()).not.toContain("Enter send")
-    expect(live()).toMatch(/^ ⎇ main\* {2}\/work\/proj +0 \/ 128k$/m)
+    expect(live()).not.toContain("shift+tab mode")
+    expect(live()).toMatch(/^ ⎇ main\* {2}\/work\/proj +0 \/ 128K$/m)
     terminal.send("\x1b[27u")
     expect(await answer).toBeUndefined()
     await waitFor(() => /^╰─+ m1 · auto ─╯$/m.test(live()), `${mode}: back in the border`)
@@ -705,17 +711,17 @@ test("the right-aligned model stays in the border; workspace, cost and context f
       for (const row of live().split("\n")) expect(row.length).toBeLessThanOrEqual(cols)
       expect(line).toBe(cols === 12 ? "╰── m1 ·… ─╯" : `╰${"─".repeat(cols - 14)} m1 · auto ─╯`)
       const header = {
-        100: ` ⎇ feat/x*  /work/proj${" ".repeat(55)}$0.042  │  109k / 128k`,
-        44: " ⎇ feat/x*  …/proj   $0.042  │  109k / 128k",
-        34: " ⎇ feat/x… $0.042  │  109k / 128k",
-        12: " 109k / 128k",
+        100: ` ⎇ feat/x*  /work/proj${" ".repeat(55)}$0.042  │  109K / 128K`,
+        44: " ⎇ feat/x*  …/proj   $0.042  │  109K / 128K",
+        34: " ⎇ feat/x… $0.042  │  109K / 128K",
+        12: " 109K / 128K",
       }[cols]!
       const rows = live().split("\n")
       const headerRow = mode === "fullscreen" ? 0 : rows.findIndex((r) => r.startsWith("╭")) - 1
       expect(rows[headerRow]).toBe(header)
       // Fullscreen reserves the header and its separator; inline keeps it against the composer.
       if (mode === "fullscreen") expect(rows[1]).toBe("")
-      for (const item of ["109k", "$0.042", "feat/x*", "/work/proj"]) expect(line).not.toContain(item)
+      for (const item of ["109K", "$0.042", "feat/x*", "/work/proj"]) expect(line).not.toContain(item)
       terminal.send("\x03")
       await exited
     }
@@ -726,7 +732,10 @@ test("? opens the key reference on an empty input; it lists every action with it
   for (const mode of ["inline", "fullscreen"] as const) {
     const keys = new Keybindings({ ...defaultKeys({ vscode: false }), queue: ["ctrl+t"] })
     const { terminal, live, exited } = await setup([], { settings: { mode }, keybindings: keys, rows: 20 })
-    await waitFor(() => live().includes("Enter send · ? keys"), `${mode}: the hint`)
+    await waitFor(
+      () => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}\? keys$/m.test(live()),
+      `${mode}: the hint`,
+    )
     terminal.send("?")
     await waitFor(() => live().includes("? Keys"), `${mode}: the reference`)
     const text = live()
@@ -744,7 +753,10 @@ test("? opens the key reference on an empty input; it lists every action with it
     // The transcript's keys are listed only where the full-screen view has them.
     expect(live().includes("Text selected with the mouse")).toBe(mode === "fullscreen")
     terminal.send("\x1b[27u")
-    await waitFor(() => live().includes("Enter send · ? keys"), `${mode}: closed`)
+    await waitFor(
+      () => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}\? keys$/m.test(live()),
+      `${mode}: closed`,
+    )
     expect(live()).not.toContain("? Keys")
     // With text in the input, ? is typed.
     terminal.send("a?")
