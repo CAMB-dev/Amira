@@ -320,7 +320,8 @@ test("subagent view requests renders for child activity and parent-reported chil
       s.bus.emit("message.start", { model: { provider: "mock", model: "m1" } }, s.meta),
     )
     await expectRender(() => s.bus.emit("message.delta", { kind: "thinking", text: "reason" }, s.meta))
-    expect(s.render()).toContain("… thinking")
+    expect(s.render().split("\n")[0]).toContain(" · running · ")
+    expect(s.render()).not.toContain("… thinking")
     await expectRender(() => s.bus.emit("message.delta", { kind: "text", text: "child reply" }, s.meta))
     expect(s.render()).toContain("child reply")
     await expectRender(() =>
@@ -358,7 +359,7 @@ test("subagent view requests renders for child activity and parent-reported chil
     await expectRender(() =>
       s.bus.emit("subagent.state", { childSessionId: "a", state: "paused", turns: 1 }, meta),
     )
-    expect(s.render()).toContain("… paused")
+    expect(s.render().split("\n")[0]).toContain(" · paused · ")
     await expectRender(() => s.bus.emit("message.delta", { kind: "text", text: "partial reply" }, s.meta))
     s.list[0]!.status = "done"
     await expectRender(() =>
@@ -421,14 +422,15 @@ test("streaming before opening is visible, thinking changes live, and snapshots 
   s.bus.emit("message.start", { model: { provider: "mock", model: "m1" } }, s.meta)
   s.bus.emit("message.delta", { kind: "thinking", text: "reason" }, s.meta)
   await s.bus.flush()
-  expect(s.render()).toContain("… thinking")
+  expect(s.render().split("\n")[0]).toContain(" · running · ")
+  expect(s.render()).not.toContain("… thinking")
   expect(s.render()).not.toContain("parent history")
   s.bus.emit("message.delta", { kind: "text", text: "streamed " }, s.meta)
   s.bus.emit("message.delta", { kind: "text", text: "reply" }, s.meta)
   s.bus.emit("message.delta", { kind: "text", text: "main session reply" }, { sessionId: s.agent.sessionId })
   await s.bus.flush()
   expect(s.render()).toContain("streamed reply")
-  expect(s.render()).toContain("… working")
+  expect(s.render()).not.toContain("… working")
   expect(s.render()).not.toContain("main session reply")
   const reply: AssistantMessage = {
     role: "assistant",
@@ -468,12 +470,12 @@ test("queued, idle, finished, failed and stopped children retain their status, u
     text: "task: Task a",
   })
   s.list[0]!.status = "queued"
-  expect(s.render()).toContain("waiting for a free slot")
+  expect(s.render().split("\n")[0]).toContain(" · queued · ")
   s.list[0]!.status = "idle"
-  expect(s.render()).toContain("idle, waiting for a message")
+  expect(s.render().split("\n")[0]).toContain(" · idle · ")
   expect(s.definition.keys?.map((key) => key.key)).toContain("x")
   s.list[0]!.status = "paused"
-  expect(s.render()).toContain("… paused")
+  expect(s.render().split("\n")[0]).toContain(" · paused · ")
   expect(s.render()).not.toContain("… working")
   expect(s.definition.keys?.map((key) => key.key)).toContain("x")
   s.list[0]!.status = "error"
@@ -537,8 +539,8 @@ test("the extension associates nested children with calls and delegates complete
   expect(lines.map(lineText)).toContain("presented agent")
   const child = lines.filter((line) => lineText(line).includes("◆ Child b"))
   expect(child).toHaveLength(1)
-  expect(lineText(child[0]!)).toStartWith("  ◆ Child b")
-  expect(child[0]?.kind === "segments" && child[0].parts[0]).toEqual({ kind: "text", text: "  " })
+  expect(lineText(child[0]!)).toStartWith("  │  ◆ Child b")
+  expect(child[0]?.kind === "segments" && child[0].parts[0]).toEqual({ kind: "text", text: "  │  " })
 })
 
 const statuses: {
@@ -695,26 +697,22 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   const before = s.screen.mainText
   s.terminal.send("/agents view\r")
   await waitFor(() => s.screen.inAltScreen, "the viewer")
-  await waitFor(() => s.view().includes("● wait"), "the transcript")
+  await waitFor(() => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the transcript")
   const lines = s.screen.lines
   expect(lines[0]).toMatch(/^◆ Check explorer · running · \d+s · 1\.5k tok · .+ 1 of 1$/)
   expect(lines[1]).toBe("task: task for the explorer")
-  // The task on the user's band, a row of it above and below (blank on this screen).
-  expect(lines.slice(3, 13)).toEqual([
+  // Shared transcript rendering: one gap, closed tool groups, and inset reply text.
+  expect(lines.slice(3, 9)).toEqual([
+    "  › task for the explorer",
     "",
-    "› task for the explorer",
+    "  └ read a.ts  ✓ contents of a.ts (+2 lines)",
     "",
+    "  Now waiting.",
     "",
-    "● read a.ts",
-    "  └ contents of a.ts (+2 lines)",
-    "",
-    "Now waiting.",
-    "",
-    "● wait",
   ])
-  expect(s.view()).toContain("└ running\n")
-  // One ellipsis, not two.
-  expect(s.view()).toContain("… working\n")
+  expect(lines[9]).toMatch(/^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/)
+  expect(s.view()).not.toContain("└ running")
+  expect(s.view()).not.toContain("… working")
   expect(lines.at(-1)).toContain("following")
   const atOpen = s.screen.mainText
   expect(atOpen).toContain(before.split("\n")[0]!)
@@ -729,7 +727,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "the inline UI")
   const main = s.screen.mainText
-  const order = ["› go", "› /agents view", "● delegate", "└ child final answer", "all done"].map((t) =>
+  const order = ["› go", "› /agents view", "  └ delegate", "✓ child final answer", "all done"].map((t) =>
     main.indexOf(t),
   )
   expect(order.every((i) => i >= 0)).toBe(true)
@@ -754,8 +752,11 @@ test("elapsed time redraws every second while no child event arrives", async () 
   s.terminal.send("go\r")
   await waitFor(s.isWaiting, "the waiting child")
   s.terminal.send("/agents view\r")
-  await waitFor(() => s.view().includes("● wait"), "the view")
+  await waitFor(() => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the view")
   const before = s.screen.lines[0]!
+  const spin = () => s.view().match(/^ {2}└ ([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) wait/m)?.[1]
+  const firstFrame = spin()
+  await waitFor(() => spin() !== firstFrame, "the overlay spinner frame", 400)
   await waitFor(() => s.screen.lines[0] !== before, "the elapsed tick", 2500)
   expect(s.screen.lines[0]).toMatch(/^◆ Check explorer · running · \d+s/)
   s.release()
@@ -778,7 +779,7 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   s.terminal.send("go\r")
   await waitFor(s.isWaiting, "the child to block")
   s.terminal.send("/agents view\r")
-  await waitFor(() => s.view().includes("● wait"), "the viewer")
+  await waitFor(() => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the viewer")
   // The generic footer lists a view's keys before the scroll keys (dropped first when narrow).
   expect(s.screen.lines.at(-1)).toContain("following · ←→ switch · x stop · p print · ")
   expect(s.screen.lines.at(-1)).toMatch(/ · Esc close$/)
@@ -852,13 +853,13 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   expect(s.screen.lines.at(-1)).toContain("following")
   s.terminal.send("\x1b[5~") // PgUp
   await waitFor(() => !s.screen.lines.at(-1)!.includes("following"), "scrolled up")
-  expect(s.screen.lines.at(-1)).toMatch(/^\d+–\d+ of 46 · /)
+  expect(s.screen.lines.at(-1)).toMatch(/^\d+–\d+ of 44 · /)
   expect(s.view()).not.toContain("── done ──")
   s.terminal.send("\x1b[H") // Home
-  await waitFor(() => s.screen.lines[4] === "› task for the explorer", "the top")
-  expect(s.screen.lines.at(-1)).toMatch(/^1–16 of 46 · /)
+  await waitFor(() => s.screen.lines[3] === "  › task for the explorer", "the top")
+  expect(s.screen.lines.at(-1)).toMatch(/^1–16 of 44 · /)
   s.terminal.send("\x1b[B") // ↓
-  await waitFor(() => s.screen.lines[3] === "› task for the explorer", "one row down")
+  await waitFor(() => s.screen.lines[3] === "" && s.screen.lines[4] === "  answer line 1", "one row down")
   s.terminal.send("\x1b[F") // End
   await waitFor(() => s.screen.lines.at(-1)!.includes("following"), "the end")
   s.resize(70, 12)
@@ -867,7 +868,7 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   expect(s.screen.lines[0]).toMatch(/^◆ Check explorer/)
   expect(s.screen.lines.at(-2)).toBe("── done ──")
   expect(s.screen.lines.at(-3)).toBe("")
-  expect(s.screen.lines.at(-4)).toBe("answer line 40")
+  expect(s.screen.lines.at(-4)).toBe("  answer line 40")
   s.terminal.send("q")
   await waitFor(() => !s.screen.inAltScreen, "closed")
   s.terminal.send("\x03")
@@ -949,13 +950,106 @@ test("/agents picks a sub-agent in an inline dialog and opens the live view on i
   await waitFor(() => s.view().includes("task: task for the explorer"), "the viewer drawn")
   // p leaves it with a snapshot of the one shown printed into the scrollback.
   s.terminal.send("p")
-  await waitFor(() => s.screen.mainText.includes("● read b.ts"), "the transcript")
+  await waitFor(() => s.screen.mainText.includes("  └ read b.ts  ✓ contents"), "the transcript")
   const main = s.screen.mainText
   expect(main).toMatch(/◆ Check explorer · explorer · s_\w+ · done · \d+s/)
   expect(main).toContain("› task for the explorer")
-  expect(main).toContain("  └ contents of b.ts (+2 lines)")
-  expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("● read b.ts"))
+  expect(main).toContain("  └ read b.ts  ✓ contents of b.ts (+2 lines)")
+  expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("  └ read b.ts"))
   expect(s.screen.inAltScreen).toBe(false)
   s.terminal.send("\x03")
   await s.exited
+})
+
+test("viewer tool groups close before replies and reuse host reply/running renderers", async () => {
+  const s = await snapshotView()
+  s.histories.get("a")!.push(
+    {
+      role: "assistant",
+      model: { provider: "mock", model: "m1" },
+      content: [
+        { type: "toolCall", id: "c1", name: "read", args: { path: "a.ts" } },
+        { type: "toolCall", id: "c2", name: "read", args: { path: "b.ts" } },
+        { type: "text", text: "**Now waiting.**" },
+        { type: "toolCall", id: "c3", name: "wait", args: {} },
+      ],
+    },
+    { role: "toolResult", toolCallId: "c1", toolName: "read", ...textResult("first"), isError: false },
+    { role: "toolResult", toolCallId: "c2", toolName: "read", ...textResult("second"), isError: false },
+  )
+  const tools: boolean[] = []
+  const replies: string[] = []
+  const running: boolean[] = []
+  const rows = s.definition
+    .render(s.data, {
+      width: 80,
+      now: 6500,
+      renderTool: (_name, _call, _detail, options) => {
+        tools.push(options?.last ?? false)
+        return [{ kind: "code", text: "tool" }]
+      },
+      renderReply: (text) => {
+        replies.push(text)
+        return [{ kind: "code", text: "  Now waiting." }]
+      },
+      renderRunningTool: (_name, _call, options) => {
+        running.push(options?.last ?? false)
+        return [{ kind: "code", text: "  └ ⠋ wait" }]
+      },
+    })
+    .map(lineText)
+  expect(tools).toEqual([false, true])
+  expect(replies).toEqual(["**Now waiting.**"])
+  expect(running).toEqual([true])
+  expect(rows).toEqual(["Task a", "", "tool", "tool", "", "  Now waiting.", "", "  └ ⠋ wait", ""])
+  s.host.unload("builtin:agent")
+})
+
+test("restyled viewer frame uses the main transcript renderers and keeps its own chrome", async () => {
+  const s = await snapshotView()
+  s.histories.get("a")!.push(
+    {
+      role: "assistant",
+      model: { provider: "mock", model: "m1" },
+      content: [{ type: "toolCall", id: "read", name: "read", args: { path: "a.ts" } }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "read",
+      toolName: "read",
+      ...textResult("contents of a.ts\nline 2\nline 3"),
+      isError: false,
+    },
+    {
+      role: "assistant",
+      model: { provider: "mock", model: "m1" },
+      content: [
+        { type: "text", text: "**Now waiting.**" },
+        { type: "toolCall", id: "wait", name: "wait", args: {} },
+      ],
+    },
+  )
+  expect(s.render()).toMatchSnapshot()
+  s.host.unload("builtin:agent")
+})
+
+test("viewer streams partial tool output through the host's running renderer", async () => {
+  const s = await snapshotView()
+  s.histories.get("a")!.push({
+    role: "assistant",
+    model: { provider: "mock", model: "m1" },
+    content: [{ type: "toolCall", id: "live", name: "bash", args: { command: "build" } }],
+  })
+  s.bus.emit("tool.execute.start", { toolCallId: "live", name: "bash", args: { command: "build" } }, s.meta)
+  s.bus.emit(
+    "tool.execute.update",
+    { toolCallId: "live", name: "bash", partial: textResult("one\ntwo") },
+    s.meta,
+  )
+  await s.bus.flush()
+  const rows = s.render().split("\n")
+  expect(rows).toContain("     one")
+  expect(rows).toContain("     two")
+  expect(rows.some((row) => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash build/.test(row))).toBe(true)
+  s.host.unload("builtin:agent")
 })

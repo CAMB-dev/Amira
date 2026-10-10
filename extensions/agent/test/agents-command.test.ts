@@ -5,9 +5,12 @@ import os from "node:os"
 import path from "node:path"
 import {
   type AnyEvent,
+  type AssistantMessage,
   defineTool,
   type FrontendView,
+  type Message,
   type SessionControl,
+  type SubagentInfo,
   textResult,
   type UiRequest,
 } from "@amira/api"
@@ -166,7 +169,8 @@ test("/agents stop all still stops paused children", async () => {
   expect(tree.pause(child.id)).toBe(true)
   try {
     const { text } = await run("/agents 1")
-    expect(text).toContain("… paused")
+    expect(text.split("\n")[0]).toContain(" · paused · ")
+    expect(text).not.toContain("… paused")
     expect(text).not.toContain("… still running")
   } finally {
     expect((await run("/agents stop all")).ok).toBe(true)
@@ -194,22 +198,20 @@ test("/agents lists the sub-agents; where the frontend has no live view, it prin
   const lines = text.split("\n")
   expect(lines[0]).toMatch(/^◆ Fix the bug · coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021$/)
   expect(lines.slice(1)).toEqual([
-    "› fix the bug",
-    "  in a.ts",
+    "  › fix the bug",
+    "    in a.ts",
     "",
-    "● read a.ts",
-    "  └ contents of a.ts (+2 lines)",
+    "  └ read a.ts  ✓ contents of a.ts (+2 lines)",
     "",
-    "Let me ask an explorer. …",
+    "  Let me ask an explorer. …",
     "",
-    "● agent",
-    expect.stringMatching(/^ {2}└ ## Find its uses · explorer · s_\w+ · done/),
+    expect.stringMatching(/^ {2}└ agent {2}✓ ## Find its uses · explorer · s_\w+ · done/),
     expect.stringMatching(
-      /^ {2}◆ Find its uses · explorer · s_\w+ · done · \d+s · 0 tok · where is it used$/,
+      /^ {5}◆ Find its uses · explorer · s_\w+ · done · \d+s · 0 tok · where is it used$/,
     ),
     "",
-    "Fixed the bug.",
-    "All tests pass.",
+    "  Fixed the bug.",
+    "  All tests pass.",
   ])
 })
 
@@ -235,7 +237,7 @@ test("/agents in the TUI: Enter opens the live view on the one chosen, p prints 
   expect(views).toEqual([{ kind: "subagent", data: { sessionId: control.subagents()[1]!.id } }])
   // p prints the transcript as it is now, as Enter used to.
   const printed = await pick((options) => ({ option: options[1], key: "p" }))
-  expect(printed.text).toContain("› where is it used")
+  expect(printed.text).toContain("  › where is it used")
   expect(views).toHaveLength(1)
   // The view cannot be shown now: Enter prints instead.
   screen.free = false
@@ -248,7 +250,7 @@ test("/agents <n|id> prints one directly; unknown ones are an error", async () =
   const { root, run, control } = await setup(nested)
   await root.prompt("go")
   const [coder, explorer] = control.subagents()
-  expect((await run("/agents 2")).text).toContain("› where is it used")
+  expect((await run("/agents 2")).text).toContain("  › where is it used")
   expect((await run(`/agents ${coder!.id}`)).text).toContain("Fixed the bug.")
   expect((await run(`/agents ${explorer!.id.slice(0, 2)}`)).ok).toBe(false)
   expect((await run(`/agents ${explorer!.id.slice(0, 7)}`)).text).toContain("Used in b.ts.")
@@ -285,21 +287,18 @@ test("a running sub-agent shows its transcript so far", async () => {
   )
   const turn = root.prompt("go")
   const deadline = Date.now() + 3000
-  while (!control.subagents()[0]?.id || !(await run("/agents 1")).text.includes("└ running")) {
+  while (!control.subagents()[0]?.id || !(await run("/agents 1")).text.includes("  └ ⠋ slow the disk")) {
     if (Date.now() > deadline) throw new Error("the child never called its tool")
     await Bun.sleep(10)
   }
   const { text } = await run("/agents 1")
   expect(text.split("\n")).toEqual([
     expect.stringMatching(/^◆ Do look · agent · s_\w+ · running · \d+s · 0 tok$/),
-    "› look",
+    "  › look",
     "",
-    "Checking.",
+    "  Checking.",
     "",
-    "● slow the disk",
-    "  └ running",
-    "",
-    "… still running",
+    "  └ ⠋ slow the disk",
   ])
   release()
   await turn
@@ -542,6 +541,86 @@ test("with sub-agents too, the kept worktrees follow them under a heading of the
   expect((await running).text).toBe("")
 }, 60_000)
 
+test("plain transcripts group visible tools, keep outcomes inline and start at the fork's own task", () => {
+  const info: SubagentInfo = {
+    id: "s_child",
+    parentSessionId: "p",
+    depth: 1,
+    role: "agent",
+    title: "Look around",
+    task: "fallback task",
+    status: "running",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  }
+  const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
+    role: "assistant",
+    model: { provider: "mock", model: "big" },
+    content,
+  })
+  const messages: Message[] = [
+    { role: "user", content: [{ type: "text", text: "parent task" }] },
+    assistant([{ type: "toolCall", id: "old", name: "parent_tool", args: {} }]),
+    { role: "user", content: [{ type: "text", text: "own task\nsecond line" }] },
+    assistant([{ type: "toolCall", id: "read", name: "read", args: { path: "a.ts" } }]),
+    {
+      role: "toolResult",
+      toolCallId: "read",
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "contents\nsecond" }],
+    },
+    assistant([
+      { type: "thinking", text: "hidden" },
+      { type: "text", text: " " },
+      { type: "toolCall", id: "fail", name: "fail", args: {} },
+      { type: "toolCall", id: "deny", name: "deny", args: {} },
+    ]),
+    {
+      role: "toolResult",
+      toolCallId: "fail",
+      toolName: "fail",
+      isError: true,
+      content: [{ type: "text", text: "bad" }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "deny",
+      toolName: "deny",
+      isError: true,
+      rejected: "blocked",
+      content: [{ type: "text", text: "not approved" }],
+    },
+    assistant([
+      { type: "text", text: "Checking.\nMore detail." },
+      { type: "serverTool", id: "search", name: "web_search", input: { query: "news" }, status: "done" },
+      { type: "serverTool", id: "open", name: "open_page", input: {}, status: "failed" },
+      { type: "serverTool", id: "pending", name: "web_search", input: {}, status: "running" },
+      { type: "toolCall", id: "wait", name: "wait", args: {} },
+    ]),
+  ]
+  const rows = transcriptText(info, messages, [], 0).split("\n").slice(1)
+  expect(rows).toEqual([
+    "  › own task",
+    "    second line",
+    "",
+    "  ├ read a.ts  ✓ contents (+1 line)",
+    "  ├ fail  ✗ bad",
+    "  └ deny  ⊘ not approved",
+    "",
+    "  Checking. …",
+    "",
+    "  ├ web_search news  ✓ done",
+    "  ├ open_page  ✗ failed",
+    "  ├ ⠋ web_search",
+    "  └ ⠋ wait",
+  ])
+  expect(
+    transcriptText({ ...info, status: "done" }, messages, [], 0)
+      .split("\n")
+      .slice(-2),
+  ).toEqual(["  ├ web_search  ⊘ did not finish", "  └ wait  ⊘ no result"])
+})
+
 test("findSubagent takes a number, an id or a unique start of one", () => {
   const info = (id: string) => ({
     id,
@@ -559,6 +638,12 @@ test("findSubagent takes a number, an id or a unique start of one", () => {
   expect(findSubagent(list, "s_a")).toBeUndefined()
   expect(findSubagent(list, "s_ab")?.id).toBe("s_ab22")
   expect(transcriptText({ ...list[0]!, status: "error", error: "boom" }, [], list)).toContain("✗ boom")
+  expect(
+    transcriptText({ ...list[0]!, note: "stopped early" }, [], list)
+      .split("\n")
+      .slice(1),
+  ).toEqual(["  › (no task)", "", "⊘ stopped early"])
+  expect(transcriptText(list[0]!, [], list).split("\n").slice(1)).toEqual(["  › (no task)", "", "(no reply)"])
   // One that never started has no time to show.
   expect(subagentSummary({ ...list[0]!, status: "aborted" }, 0)).toBe(
     "Look around · agent · s_aa11 · stopped · 0 tok · ",
